@@ -62,11 +62,11 @@ Core commands:
 
 ```sh
 sigil command --select "find wav files"
-sigil previous-command --select
+sigil command --previous --select
 sigil fix
 sigil fix --previous
 sigil question "what is tldraw?"
-sigil follow-up "how would that work in practice?"
+sigil question --follow-up "how would that work in practice?"
 sigil session show
 sigil session path
 sigil session list

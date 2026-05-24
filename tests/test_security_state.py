@@ -83,8 +83,13 @@ class CliHelpTests(unittest.TestCase):
         result = CliRunner().invoke(cli, ["--help"])
         self.assertEqual(result.exit_code, 0)
         self.assertIn('sigil command --select "find large files"', result.output)
+        self.assertIn("sigil command --previous --select", result.output)
         self.assertIn(
             'sigil question --json "what changed in this repo?"', result.output
+        )
+        self.assertIn(
+            'sigil question --follow-up "summarize that as a command"',
+            result.output,
         )
         self.assertIn("sigil session show --json", result.output)
         self.assertIn("https://github.com/rlouf/sigil", result.output)

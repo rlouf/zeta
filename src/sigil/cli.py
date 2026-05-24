@@ -33,7 +33,9 @@ def cli() -> None:
     \b
     Examples:
       sigil command --select "find large files"
+      sigil command --previous --select
       sigil question --json "what changed in this repo?"
+      sigil question --follow-up "summarize that as a command"
       sigil session show --json
 
     \b
@@ -43,11 +45,47 @@ def cli() -> None:
 
 
 @cli.command("command")
-@click.argument("prompt")
+@click.argument("prompt", required=False)
+@click.option("--previous", is_flag=True)
 @click.option("--select", "select_candidate", is_flag=True)
 @click.option("--json", "json_output", is_flag=True)
-def cmd_command(prompt: str, select_candidate: bool, json_output: bool) -> int:
+def cmd_command(
+    prompt: str | None,
+    previous_command: bool,
+    select_candidate: bool,
+    json_output: bool,
+) -> int:
     """Generate command candidates and optionally run the selector UI."""
+    if previous_command:
+        prompt, candidates, security = previous()
+        continued = append_event(
+            {"type": "command_continued", "prompt": prompt, **security}
+        )
+        security = {**security, "inputs": [continued["id"]]}
+        print(
+            f"{MUTED}❯ sigil ,, · inherited: {inherited_label(security)}{RESET}",
+            file=sys.stderr,
+        )
+        if json_output:
+            print(
+                json.dumps(
+                    {"prompt": prompt, "commands": candidates, **security},
+                    ensure_ascii=False,
+                )
+            )
+            return 0
+        command = (
+            select(prompt, candidates, security)
+            if select_candidate
+            else candidates[0]["command"]
+        )
+        if command:
+            append_event({"type": "command_selected", "command": command, **security})
+            print(command)
+        return 0
+    if prompt is None:
+        raise click.UsageError("PROMPT is required unless --previous is set.")
+
     candidates = generate(prompt)
     source = normalize_security(read_json("last-command.json") or {})
     security = make_security(
@@ -75,53 +113,13 @@ def cmd_command(prompt: str, select_candidate: bool, json_output: bool) -> int:
     return 0
 
 
-@cli.command("previous-command")
-@click.option("--select", "select_candidate", is_flag=True)
-@click.option("--json", "json_output", is_flag=True)
-def cmd_previous_command(select_candidate: bool, json_output: bool) -> int:
-    """Reopen the previous command candidates for the current shell session."""
-    prompt, candidates, security = previous()
-    continued = append_event(
-        {"type": "command_continued", "prompt": prompt, **security}
-    )
-    security = {**security, "inputs": [continued["id"]]}
-    print(
-        f"{MUTED}❯ sigil ,, · inherited: {inherited_label(security)}{RESET}",
-        file=sys.stderr,
-    )
-    if json_output:
-        print(
-            json.dumps(
-                {"prompt": prompt, "commands": candidates, **security},
-                ensure_ascii=False,
-            )
-        )
-        return 0
-    command = (
-        select(prompt, candidates, security)
-        if select_candidate
-        else candidates[0]["command"]
-    )
-    if command:
-        append_event({"type": "command_selected", "command": command, **security})
-        print(command)
-    return 0
-
-
 @cli.command("question")
 @click.argument("question")
+@click.option("--follow-up", is_flag=True)
 @click.option("--json", "json_output", is_flag=True)
-def cmd_question(question: str, json_output: bool) -> int:
+def cmd_question(question: str, follow_up: bool, json_output: bool) -> int:
     """Answer a fresh shell question and reset the session transcript."""
-    return ask(question, json_output=json_output)
-
-
-@cli.command("follow-up")
-@click.argument("question")
-@click.option("--json", "json_output", is_flag=True)
-def cmd_follow_up(question: str, json_output: bool) -> int:
-    """Continue the current session transcript with a follow-up question."""
-    return ask(question, follow_up=True, json_output=json_output)
+    return ask(question, follow_up=follow_up, json_output=json_output)
 
 
 @cli.command("render-pi-stream", hidden=True)

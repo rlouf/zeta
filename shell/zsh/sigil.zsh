@@ -26,7 +26,7 @@ sigil_command() {
 
 sigil_previous_command() {
   local selected
-  selected="$("$__sigil_bin" previous-command --select)" || return $?
+  selected="$("$__sigil_bin" command --previous --select)" || return $?
   [[ -n "$selected" ]] && print -z -- "$selected"
 }
 
@@ -35,7 +35,7 @@ sigil_question() {
 }
 
 sigil_follow_up() {
-  "$__sigil_bin" follow-up "$*"
+  "$__sigil_bin" question --follow-up "$*"
 }
 
 sigil_fix() {

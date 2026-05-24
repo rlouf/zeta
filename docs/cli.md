@@ -38,7 +38,7 @@ Stable fields:
 - `commands[].command`: runnable shell command proposal.
 - `commands[].note`: short explanation.
 
-## `sigil previous-command --json`
+## `sigil command --previous --json`
 
 Reopens the current session's previous command candidates.
 
@@ -115,7 +115,7 @@ Stable fields:
 - `type`: currently always `"answer"`.
 - `question`: user-visible question text.
 - `prompt`: expanded prompt sent to Pi. For follow-ups, this includes context.
-- `follow_up`: whether this was invoked through `sigil follow-up --json`.
+- `follow_up`: whether this was invoked through `sigil question --follow-up --json`.
 - `answer`: concatenated assistant text.
 - `answer_event_id`: event id for the stored answer, or `null` if no answer text
   was emitted.
@@ -123,7 +123,7 @@ Stable fields:
 - `malformed_events`: count of malformed Pi JSON event lines ignored.
 - `security`: trust metadata applied to the answer and tool trace.
 
-`sigil follow-up --json` uses the same shape with `follow_up: true`.
+`sigil question --follow-up --json` uses the same shape with `follow_up: true`.
 
 ## `sigil session --json`
 

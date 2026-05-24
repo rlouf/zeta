@@ -222,6 +222,19 @@ def main(argv: list[str] | None = None) -> int:
     except click.Abort:
         click.echo("Aborted!", err=True)
         return 1
+    except FileNotFoundError as error:
+        program = error.filename or "required executable"
+        click.echo(f"sigil: missing executable: {program}", err=True)
+        click.echo("Install it or make sure it is on PATH, then retry.", err=True)
+        return 127
+    except PermissionError as error:
+        target = error.filename or "requested path"
+        click.echo(f"sigil: permission denied: {target}", err=True)
+        click.echo(
+            "Check the path permissions or set SIGIL_STATE_DIR to a writable directory.",
+            err=True,
+        )
+        return 1
     return int(result or 0)
 
 

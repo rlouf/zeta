@@ -88,6 +88,7 @@ def stream_events(
     started_text = False
     answer_chunks: list[str] = []
     tool_events: list[dict[str, object]] = []
+    malformed_events = 0
     security = env_security()
     interactive_stderr = is_interactive(stderr)
     color_enabled = should_color(stderr)
@@ -143,6 +144,7 @@ def stream_events(
             try:
                 event = json.loads(raw_line)
             except Exception:
+                malformed_events += 1
                 continue
 
             if event.get("type") == "tool_execution_start":
@@ -241,6 +243,7 @@ def stream_events(
                         "answer": answer,
                         "answer_event_id": answer_event_id,
                         "tools": tool_events,
+                        "malformed_events": malformed_events,
                         "security": security,
                     },
                     ensure_ascii=False,
@@ -248,4 +251,10 @@ def stream_events(
                 + "\n"
             )
             stdout.flush()
+        elif malformed_events:
+            noun = "event" if malformed_events == 1 else "events"
+            print(
+                f"sigil: ignored {malformed_events} malformed Pi {noun}",
+                file=stderr,
+            )
     return 0

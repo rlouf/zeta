@@ -64,9 +64,15 @@ def generate(prompt: str) -> list[dict[str, str]]:
     print(f"{MUTED}⟳ thinking…{RESET}", end="", file=sys.stderr, flush=True)
     try:
         data = chat_json(COMMAND_SYSTEM, prompt, COMMAND_SCHEMA)
+    except RuntimeError as exc:
+        print("\r\033[K", end="", file=sys.stderr)
+        print(f"{LOVE}✗ qwen request failed{RESET}", file=sys.stderr)
+        print(f"  {exc}", file=sys.stderr)
+        print("  Check that the local model server is still running.", file=sys.stderr)
+        raise SystemExit(1) from exc
     except Exception:
         print("\r\033[K", end="", file=sys.stderr)
-        print(f"{LOVE}✗ request failed{RESET}", file=sys.stderr)
+        print(f"{LOVE}✗ could not generate command candidates{RESET}", file=sys.stderr)
         raise SystemExit(1)
     print("\r\033[K", end="", file=sys.stderr)
 

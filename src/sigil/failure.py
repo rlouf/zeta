@@ -84,9 +84,15 @@ def generate_fixes() -> tuple[str, list[dict[str, str]], dict[str, Any]]:
     )
     try:
         data = chat_json(FIX_SYSTEM, user, COMMAND_SCHEMA)
+    except RuntimeError as exc:
+        print("\r\033[K", end="", file=sys.stderr)
+        print(f"{LOVE}✗ qwen request failed{RESET}", file=sys.stderr)
+        print(f"  {exc}", file=sys.stderr)
+        print("  Check that the local model server is still running.", file=sys.stderr)
+        raise SystemExit(1) from exc
     except Exception:
         print("\r\033[K", end="", file=sys.stderr)
-        print(f"{LOVE}✗ request failed{RESET}", file=sys.stderr)
+        print(f"{LOVE}✗ could not generate fix candidates{RESET}", file=sys.stderr)
         raise SystemExit(1)
     print("\r\033[K", end="", file=sys.stderr)
 

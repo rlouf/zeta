@@ -11,7 +11,7 @@ from unittest.mock import patch
 
 from click.testing import CliRunner
 
-from sigil.cli import cli
+from sigil.cli import cli, main
 from sigil.commands import previous, select
 from sigil.pi_stream import should_color, stream_events
 from sigil.security import (
@@ -88,6 +88,22 @@ class CliHelpTests(unittest.TestCase):
         )
         self.assertIn("sigil session show --json", result.output)
         self.assertIn("https://github.com/rlouf/sigil", result.output)
+
+    def test_main_rewrites_missing_executable_errors(self) -> None:
+        stderr = StringIO()
+        missing = FileNotFoundError(2, "No such file or directory", "pi")
+        with patch("sigil.cli.cli.main", side_effect=missing):
+            with redirect_stderr(stderr):
+                self.assertEqual(main(["question", "hello"]), 127)
+        self.assertIn("missing executable: pi", stderr.getvalue())
+
+    def test_main_rewrites_permission_errors(self) -> None:
+        stderr = StringIO()
+        denied = PermissionError(1, "Operation not permitted", "/nope/events.jsonl")
+        with patch("sigil.cli.cli.main", side_effect=denied):
+            with redirect_stderr(stderr):
+                self.assertEqual(main(["question", "hello"]), 1)
+        self.assertIn("permission denied: /nope/events.jsonl", stderr.getvalue())
 
 
 class SelectionTests(unittest.TestCase):
@@ -331,12 +347,61 @@ class StateTests(unittest.TestCase):
                 self.assertEqual(payload["question"], "what is sigil?")
                 self.assertEqual(payload["answer"], "answer")
                 self.assertEqual(payload["security"]["taint"], ["web"])
+                self.assertEqual(payload["malformed_events"], 0)
                 self.assertEqual(payload["tools"][0]["tool"], "web_search")
                 self.assertEqual(stderr.getvalue(), "")
                 self.assertEqual(
                     read_jsonl("last-question.jsonl")[-1]["content"], "answer"
                 )
                 self.assertEqual(len(read_jsonl("last-tools.jsonl")), 2)
+            finally:
+                for key, value in saved.items():
+                    if value is None:
+                        os.environ.pop(key, None)
+                    else:
+                        os.environ[key] = value
+
+    def test_pi_stream_json_output_counts_malformed_events(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            saved = {
+                key: os.environ.get(key)
+                for key in [
+                    "SIGIL_STATE_DIR",
+                    "SIGIL_SESSION_ID",
+                    "SIGIL_QUESTION",
+                    "SIGIL_PROMPT",
+                    "SIGIL_FOLLOW_UP",
+                ]
+            }
+            os.environ["SIGIL_STATE_DIR"] = tmp
+            os.environ["SIGIL_SESSION_ID"] = "test"
+            os.environ["SIGIL_QUESTION"] = "question"
+            os.environ["SIGIL_PROMPT"] = "question"
+            os.environ["SIGIL_FOLLOW_UP"] = "0"
+            try:
+                stdin = StringIO(
+                    "not json\n"
+                    + json.dumps(
+                        {
+                            "type": "message_update",
+                            "assistantMessageEvent": {
+                                "type": "text_delta",
+                                "delta": "answer",
+                            },
+                        }
+                    )
+                    + "\n"
+                )
+                stdout = StringIO()
+                self.assertEqual(
+                    stream_events(
+                        stdin=stdin, stdout=stdout, stderr=StringIO(), json_output=True
+                    ),
+                    0,
+                )
+                payload = json.loads(stdout.getvalue())
+                self.assertEqual(payload["malformed_events"], 1)
+                self.assertEqual(payload["answer"], "answer")
             finally:
                 for key, value in saved.items():
                     if value is None:

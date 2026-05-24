@@ -30,6 +30,7 @@ def run_shell(
     env["SIGIL_BIN"] = str(stub)
     env["SIGIL_STUB_LOG"] = str(tmp / "calls.log")
     env["SIGIL_SESSION_ID"] = "shell-test"
+    env["ZLE_LOG"] = str(tmp / "zle.log")
     return subprocess.run(
         [shell, "-c", script],
         cwd=ROOT,
@@ -222,6 +223,39 @@ def test_zsh_wrappers_call_current_cli_contract() -> None:
 
 
 @pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
+def test_zsh_command_routes_do_not_quote_the_visible_buffer() -> None:
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp = Path(tmp_dir)
+        stub = make_stub(tmp)
+        result = run_shell(
+            "zsh",
+            textwrap.dedent(
+                '                    function zle { print -- "$1:$BUFFER" >> "$ZLE_LOG"; }\n                    source shell/zsh/sigil.zsh\n                    BUFFER=", hello"\n                    __sigil_accept_line\n                    print -- "command_buffer=$BUFFER"\n                    BUFFER=",,"\n                    __sigil_accept_line\n                    print -- "previous_buffer=$BUFFER"\n                    '
+            ),
+            tmp,
+            stub,
+        )
+        assert_success(result)
+        assert read_log(tmp) == [
+            "command --select hello",
+            "command --previous --select",
+        ]
+        assert "command_buffer=echo generated" in result.stdout
+        assert "previous_buffer=echo previous" in result.stdout
+        zle_lines = [
+            line
+            for line in (tmp / "zle.log").read_text(encoding="utf-8").splitlines()
+            if not line.startswith("-N:")
+        ]
+        assert zle_lines == [
+            "-I:, hello",
+            "reset-prompt:echo generated",
+            "-I:,,",
+            "reset-prompt:echo previous",
+        ]
+
+
+@pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
 def test_zsh_accept_line_inserts_fix_proposals_without_executing() -> None:
     with tempfile.TemporaryDirectory() as tmp_dir:
         tmp = Path(tmp_dir)
@@ -293,6 +327,34 @@ def test_zsh_does_not_record_failed_sigil_commands() -> None:
         )
         assert_success(result)
         assert read_log(tmp) == []
+
+
+@pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
+def test_zsh_question_routes_do_not_quote_the_visible_buffer() -> None:
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp = Path(tmp_dir)
+        stub = make_stub(tmp)
+        result = run_shell(
+            "zsh",
+            textwrap.dedent(
+                '                    function zle { print -- "$1:$BUFFER" >> "$ZLE_LOG"; }\n                    source shell/zsh/sigil.zsh\n                    BUFFER="? hello"\n                    __sigil_accept_line\n                    BUFFER="?? hello"\n                    __sigil_accept_line\n                    '
+            ),
+            tmp,
+            stub,
+        )
+        assert_success(result)
+        assert read_log(tmp) == ["question hello", "question --follow-up hello"]
+        zle_lines = [
+            line
+            for line in (tmp / "zle.log").read_text(encoding="utf-8").splitlines()
+            if not line.startswith("-N:")
+        ]
+        assert zle_lines == [
+            "-I:? hello",
+            "reset-prompt:",
+            "-I:?? hello",
+            "reset-prompt:",
+        ]
 
 
 @pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")

@@ -24,10 +24,18 @@ sigil_command() {
   [[ -n "$selected" ]] && print -z -- "$selected"
 }
 
+__sigil_select_command() {
+  "$__sigil_bin" command --select "$*"
+}
+
 sigil_previous_command() {
   local selected
   selected="$("$__sigil_bin" command --previous --select)" || return $?
   [[ -n "$selected" ]] && print -z -- "$selected"
+}
+
+__sigil_select_previous_command() {
+  "$__sigil_bin" command --previous --select
 }
 
 sigil_question() {
@@ -105,10 +113,26 @@ __sigil_accept_line() {
       zle reset-prompt
       return
     elif [[ "$b" == ,,* ]]; then
-      BUFFER=",,"
+      local selected
+      zle -I
+      BUFFER=""
+      selected="$(__sigil_select_previous_command)" || { zle reset-prompt; return }
+      BUFFER="$selected"
+      CURSOR=${#BUFFER}
+      zle reset-prompt
+      return
     else
       rest="${b#,}"; rest="${rest## }"
-      [[ -n "$rest" ]] && BUFFER=", ${(qqq)rest}"
+      if [[ -n "$rest" ]]; then
+        local selected
+        zle -I
+        BUFFER=""
+        selected="$(__sigil_select_command "$rest")" || { zle reset-prompt; return }
+        BUFFER="$selected"
+        CURSOR=${#BUFFER}
+        zle reset-prompt
+        return
+      fi
     fi
   elif [[ "$b" == @.* ]]; then
     rest="${b#@.}"; rest="${rest## }"
@@ -150,7 +174,6 @@ __sigil_accept_line() {
   elif [[ "$b" == \?\?* ]]; then
     rest="${b#\?\?}"; rest="${rest## }"
     if [[ -n "$rest" ]]; then
-      BUFFER="?? ${(qqq)rest}"
       zle -I
       BUFFER=""
       sigil_follow_up "$rest"
@@ -160,7 +183,6 @@ __sigil_accept_line() {
   elif [[ "$b" == \?* ]]; then
     rest="${b#\?}"; rest="${rest## }"
     if [[ -n "$rest" ]]; then
-      BUFFER="? ${(qqq)rest}"
       zle -I
       BUFFER=""
       sigil_question "$rest"

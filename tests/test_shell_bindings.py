@@ -241,6 +241,24 @@ def test_zsh_accept_line_inserts_fix_proposals_without_executing() -> None:
 
 
 @pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
+def test_zsh_fix_function_inserts_instead_of_printing_to_stdout() -> None:
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp = Path(tmp_dir)
+        stub = make_stub(tmp)
+        result = run_shell(
+            "zsh",
+            textwrap.dedent(
+                "                    source shell/zsh/sigil.zsh\n                    sigil_fix\n                    print -- done\n                    "
+            ),
+            tmp,
+            stub,
+        )
+        assert_success(result)
+        assert read_log(tmp) == ["fix"]
+        assert result.stdout == "done\n"
+
+
+@pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
 def test_zsh_blocks_execute_and_promotion_routes_before_cli() -> None:
     with tempfile.TemporaryDirectory() as tmp_dir:
         tmp = Path(tmp_dir)

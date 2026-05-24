@@ -2,6 +2,7 @@ from __future__ import annotations
 import pytest
 import json
 import os
+import subprocess
 import tempfile
 from contextlib import redirect_stderr
 from io import StringIO
@@ -273,7 +274,10 @@ def test_summary_json_is_read_only_session_inspection() -> None:
 
 def test_select_rejects_multiple_candidates_without_interactive_stdin() -> None:
     stderr = StringIO()
-    with patch("sys.stdin", StringIO("")):
+    with (
+        patch("sys.stdin", StringIO("")),
+        patch("sigil.commands.selector_has_terminal", return_value=False),
+    ):
         with redirect_stderr(stderr):
             with pytest.raises(SystemExit) as raised:
                 select(
@@ -285,6 +289,32 @@ def test_select_rejects_multiple_candidates_without_interactive_stdin() -> None:
                 )
     assert raised.value.code == 2
     assert "--select requires an interactive terminal" in stderr.getvalue()
+
+
+def test_select_uses_fzf_when_controlling_tty_exists() -> None:
+    calls = []
+
+    def fake_run(args, **kwargs):
+        calls.append(args)
+        if args == ["fzf", "--version"]:
+            return subprocess.CompletedProcess(args, 0)
+        return subprocess.CompletedProcess(args, 0, stdout="2\tgit status\tshown\n")
+
+    with (
+        patch("sys.stdin", StringIO("")),
+        patch("sigil.commands.selector_has_terminal", return_value=True),
+        patch("sigil.commands.subprocess.run", side_effect=fake_run),
+    ):
+        selected = select(
+            "status",
+            [
+                {"command": "git status --short", "note": "short status"},
+                {"command": "git status", "note": "full status"},
+            ],
+        )
+
+    assert selected == "git status"
+    assert calls[0] == ["fzf", "--version"]
 
 
 def test_select_returns_single_candidate_without_interactive_stdin() -> None:

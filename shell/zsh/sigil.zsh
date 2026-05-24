@@ -38,16 +38,24 @@ sigil_follow_up() {
   "$__sigil_bin" question --follow-up "$*"
 }
 
+__sigil_select_fix() {
+  "$__sigil_bin" fix
+}
+
+__sigil_select_previous_fix() {
+  "$__sigil_bin" fix --previous
+}
+
 sigil_fix() {
   local selected
-  selected="$("$__sigil_bin" fix)" || return $?
-  [[ -n "$selected" ]] && print -r -- "$selected"
+  selected="$(__sigil_select_fix)" || return $?
+  [[ -n "$selected" ]] && print -z -- "$selected"
 }
 
 sigil_previous_fix() {
   local selected
-  selected="$("$__sigil_bin" fix --previous)" || return $?
-  [[ -n "$selected" ]] && print -r -- "$selected"
+  selected="$(__sigil_select_previous_fix)" || return $?
+  [[ -n "$selected" ]] && print -z -- "$selected"
 }
 
 sigil_summary() {
@@ -119,7 +127,7 @@ __sigil_accept_line() {
     BUFFER="^^"
     zle -I
     BUFFER=""
-    selected="$(sigil_previous_fix)" || { zle reset-prompt; return }
+    selected="$(__sigil_select_previous_fix)" || { zle reset-prompt; return }
     BUFFER="$selected"
     CURSOR=${#BUFFER}
     zle reset-prompt
@@ -129,7 +137,7 @@ __sigil_accept_line() {
     BUFFER="^"
     zle -I
     BUFFER=""
-    selected="$(sigil_fix)" || { zle reset-prompt; return }
+    selected="$(__sigil_select_fix)" || { zle reset-prompt; return }
     BUFFER="$selected"
     CURSOR=${#BUFFER}
     zle reset-prompt

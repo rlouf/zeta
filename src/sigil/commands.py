@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import subprocess
 import sys
-from typing import Any
+from typing import Any, TextIO
 
 from .ansi import LOVE, MUTED, RESET
 from .qwen import chat_json, ensure_server
@@ -131,7 +131,7 @@ def select(
     metadata = normalize_security(metadata or {})
     if len(candidates) == 1:
         return candidates[0]["command"]
-    if not sys.stdin.isatty():
+    if not selector_has_terminal():
         print(
             f"{LOVE}✗ --select requires an interactive terminal; "
             f"rerun without --select to print candidates{RESET}",
@@ -187,31 +187,58 @@ def select(
     return selected[1]
 
 
+def selector_has_terminal() -> bool:
+    """Return whether a selector can talk to the user's terminal."""
+    if sys.stdin.isatty():
+        return True
+    try:
+        with open("/dev/tty", encoding="utf-8"):
+            return True
+    except OSError:
+        return False
+
+
+def selector_input() -> TextIO:
+    """Return an input stream for the fallback selector."""
+    if sys.stdin.isatty():
+        return sys.stdin
+    return open("/dev/tty", encoding="utf-8")
+
+
 def select_numbered(
     prompt: str,
     candidates: list[dict[str, str]],
     metadata: dict[str, Any] | None = None,
+    input_stream: TextIO | None = None,
 ) -> str | None:
     """Fallback selector for environments without fzf."""
+    close_input = False
+    if input_stream is None:
+        input_stream = selector_input()
+        close_input = input_stream is not sys.stdin
     prefix = candidate_prefix(metadata or {})
-    print(f"{MUTED}commands for {prompt}{RESET}", file=sys.stderr)
-    for index, item in enumerate(candidates, start=1):
-        print(f"  {index}  {prefix} {item['command']}", file=sys.stderr)
-        if item.get("note"):
-            print(f"     {MUTED}{item['note']}{RESET}", file=sys.stderr)
-    print(
-        f"  pick 1-{len(candidates)}  ↵=1  q=cancel › ",
-        end="",
-        file=sys.stderr,
-        flush=True,
-    )
-    choice = sys.stdin.readline().strip()
-    if choice == "q":
-        print(f"{MUTED}cancelled{RESET}", file=sys.stderr)
+    try:
+        print(f"{MUTED}commands for {prompt}{RESET}", file=sys.stderr)
+        for index, item in enumerate(candidates, start=1):
+            print(f"  {index}  {prefix} {item['command']}", file=sys.stderr)
+            if item.get("note"):
+                print(f"     {MUTED}{item['note']}{RESET}", file=sys.stderr)
+        print(
+            f"  pick 1-{len(candidates)}  ↵=1  q=cancel › ",
+            end="",
+            file=sys.stderr,
+            flush=True,
+        )
+        choice = input_stream.readline().strip()
+        if choice == "q":
+            print(f"{MUTED}cancelled{RESET}", file=sys.stderr)
+            return None
+        if not choice:
+            choice = "1"
+        if choice.isdigit() and 1 <= int(choice) <= len(candidates):
+            return candidates[int(choice) - 1]["command"]
+        print(f"{LOVE}invalid choice{RESET}", file=sys.stderr)
         return None
-    if not choice:
-        choice = "1"
-    if choice.isdigit() and 1 <= int(choice) <= len(candidates):
-        return candidates[int(choice) - 1]["command"]
-    print(f"{LOVE}invalid choice{RESET}", file=sys.stderr)
-    return None
+    finally:
+        if close_input:
+            input_stream.close()

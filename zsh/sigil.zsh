@@ -1,10 +1,7 @@
 # Sigil zsh bindings. Core behavior lives in the `sigil` executable.
 
-typeset -g __sigil_root="${${(%):-%x}:A:h:h}"
 if [[ -n "${SIGIL_BIN:-}" ]]; then
   typeset -g __sigil_bin="$SIGIL_BIN"
-elif [[ -x "$__sigil_root/bin/sigil" ]]; then
-  typeset -g __sigil_bin="$__sigil_root/bin/sigil"
 elif command -v sigil >/dev/null 2>&1; then
   typeset -g __sigil_bin="sigil"
 else

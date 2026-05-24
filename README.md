@@ -6,7 +6,7 @@ Status: this is currently a "works on my machine" repo. If you are interested
 in an easier-to-install version, please open an issue.
 
 Sigil is structured as a shell-agnostic core with thin shell bindings. The zsh
-layer owns prompt interception and buffer insertion; the executable owns model
+layer owns prompt interception and buffer insertion; the Python CLI owns model
 calls, selection UI, Pi streaming, rendering, and persistent state.
 
 ## Grammar
@@ -53,8 +53,6 @@ adds an idempotent source block to `~/.zshrc`.
 ## Layout
 
 ```text
-bin/sigil              shell-agnostic CLI
-bin/stream-pi-json     Pi JSON event filter
 scripts/install.zsh    zsh binding installer
 sigil/                 Python core runtime
 zsh/sigil.zsh          zsh bindings only

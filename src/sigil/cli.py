@@ -6,9 +6,10 @@ instead of reimplementing model calls, selectors, rendering, or state handling.
 
 from __future__ import annotations
 
-import argparse
 import json
 import sys
+
+import click
 
 from .ansi import MUTED, RESET
 from .commands import generate, previous, select
@@ -20,9 +21,18 @@ from .session import clear_current_session, current_session_snapshot, known_sess
 from .state import append_event, read_json
 
 
-def cmd_command(args: argparse.Namespace) -> int:
+@click.group(context_settings={"help_option_names": ["-h", "--help"]})
+def cli() -> None:
+    """Punctuation-native LLM interaction for the shell."""
+
+
+@cli.command("command")
+@click.argument("prompt")
+@click.option("--select", "select_candidate", is_flag=True)
+@click.option("--json", "json_output", is_flag=True)
+def cmd_command(prompt: str, select_candidate: bool, json_output: bool) -> int:
     """Generate command candidates and optionally run the selector UI."""
-    candidates = generate(args.prompt)
+    candidates = generate(prompt)
     source = normalize_security(read_json("last-command.json") or {})
     security = make_security(
         glyph=",",
@@ -33,11 +43,11 @@ def cmd_command(args: argparse.Namespace) -> int:
         input_records=[source],
         fresh_human=True,
     )
-    if args.json:
-        print(json.dumps({"prompt": args.prompt, "commands": candidates}, ensure_ascii=False))
+    if json_output:
+        print(json.dumps({"prompt": prompt, "commands": candidates}, ensure_ascii=False))
         return 0
-    if args.select:
-        command = select(args.prompt, candidates, security)
+    if select_candidate:
+        command = select(prompt, candidates, security)
         if command:
             append_event({"type": "command_selected", "command": command, **security})
             print(command)
@@ -47,7 +57,10 @@ def cmd_command(args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_previous_command(args: argparse.Namespace) -> int:
+@cli.command("previous-command")
+@click.option("--select", "select_candidate", is_flag=True)
+@click.option("--json", "json_output", is_flag=True)
+def cmd_previous_command(select_candidate: bool, json_output: bool) -> int:
     """Reopen the previous command candidates for the current shell session."""
     prompt, candidates, security = previous()
     continued = append_event({"type": "command_continued", "prompt": prompt, **security})
@@ -56,24 +69,34 @@ def cmd_previous_command(args: argparse.Namespace) -> int:
         f"{MUTED}❯ sigil ,, · inherited: {inherited_label(security)}{RESET}",
         file=sys.stderr,
     )
-    if args.json:
+    if json_output:
         print(json.dumps({"prompt": prompt, "commands": candidates, **security}, ensure_ascii=False))
         return 0
-    command = select(prompt, candidates, security) if args.select else candidates[0]["command"]
+    command = select(prompt, candidates, security) if select_candidate else candidates[0]["command"]
     if command:
         append_event({"type": "command_selected", "command": command, **security})
         print(command)
     return 0
 
 
-def cmd_question(args: argparse.Namespace) -> int:
+@cli.command("question")
+@click.argument("question")
+def cmd_question(question: str) -> int:
     """Answer a fresh shell question and reset the session transcript."""
-    return ask(args.question)
+    return ask(question)
 
 
-def cmd_follow_up(args: argparse.Namespace) -> int:
+@cli.command("follow-up")
+@click.argument("question")
+def cmd_follow_up(question: str) -> int:
     """Continue the current session transcript with a follow-up question."""
-    return ask(args.question, follow_up=True)
+    return ask(question, follow_up=True)
+
+
+@cli.command("render-pi-stream", hidden=True)
+def cmd_render_pi_stream() -> int:
+    """Render Pi's JSON event stream for the question pipeline."""
+    return stream_events()
 
 
 def print_json(value: object) -> None:
@@ -81,26 +104,34 @@ def print_json(value: object) -> None:
     print(json.dumps(value, ensure_ascii=False, indent=2))
 
 
-def cmd_session(args: argparse.Namespace) -> int:
+@cli.command("session")
+@click.argument(
+    "session_command",
+    required=False,
+    default="show",
+    type=click.Choice(["show", "path", "list", "clear"]),
+)
+@click.option("--json", "json_output", is_flag=True)
+def cmd_session(session_command: str, json_output: bool) -> int:
     """Inspect or clear the current shell session state."""
-    if args.session_command == "path":
+    if session_command == "path":
         paths = session_paths()
-        if args.json:
+        if json_output:
             print_json(paths)
         else:
             print(paths["session"])
         return 0
-    if args.session_command == "list":
+    if session_command == "list":
         sessions = known_sessions()
-        if args.json:
+        if json_output:
             print_json(sessions)
         else:
             for session in sessions:
                 print(f"{session['session_id']}\t{session['path']}")
         return 0
-    if args.session_command == "clear":
+    if session_command == "clear":
         removed = clear_current_session()
-        if args.json:
+        if json_output:
             print_json({"removed": removed})
         else:
             if removed:
@@ -111,7 +142,7 @@ def cmd_session(args: argparse.Namespace) -> int:
         return 0
 
     snapshot = current_session_snapshot()
-    if args.json:
+    if json_output:
         print_json(snapshot)
     else:
         print(f"session {snapshot['session_id']}")
@@ -128,13 +159,23 @@ def cmd_session(args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_failure_record(args: argparse.Namespace) -> int:
+@cli.group("failure")
+def failure_group() -> None:
+    """Failure state commands used by shell bindings."""
+
+
+@failure_group.command("record")
+@click.option("--status", type=int, required=True)
+@click.option("--cwd")
+@click.argument("command")
+def cmd_failure_record(command: str, status: int, cwd: str | None) -> int:
     """Record a failed shell command for later repair."""
-    record_failure(args.command, args.status, args.cwd)
+    record_failure(command, status, cwd)
     return 0
 
 
-def cmd_fix(args: argparse.Namespace) -> int:
+@cli.command("fix")
+def cmd_fix() -> int:
     """Suggest fixes for the last recorded failed shell command."""
     command = select_fix()
     if command:
@@ -143,7 +184,8 @@ def cmd_fix(args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_previous_fix(args: argparse.Namespace) -> int:
+@cli.command("previous-fix")
+def cmd_previous_fix() -> int:
     """Reopen previous repair candidates."""
     command = select_previous_fix()
     if command:
@@ -154,58 +196,15 @@ def cmd_previous_fix(args: argparse.Namespace) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     """Parse the shell-agnostic Sigil CLI surface."""
-    if argv is None:
-        argv = sys.argv[1:]
-    if argv and argv[0] == "render-pi-stream":
-        if len(argv) > 1:
-            print("usage: sigil render-pi-stream", file=sys.stderr)
-            return 2
-        return stream_events()
-
-    parser = argparse.ArgumentParser(prog="sigil")
-    sub = parser.add_subparsers(dest="command_name", required=True)
-
-    command = sub.add_parser("command")
-    command.add_argument("prompt")
-    command.add_argument("--select", action="store_true")
-    command.add_argument("--json", action="store_true")
-    command.set_defaults(func=cmd_command)
-
-    previous_command = sub.add_parser("previous-command")
-    previous_command.add_argument("--select", action="store_true")
-    previous_command.add_argument("--json", action="store_true")
-    previous_command.set_defaults(func=cmd_previous_command)
-
-    question = sub.add_parser("question")
-    question.add_argument("question")
-    question.set_defaults(func=cmd_question)
-
-    follow_up = sub.add_parser("follow-up")
-    follow_up.add_argument("question")
-    follow_up.set_defaults(func=cmd_follow_up)
-
-    session = sub.add_parser("session")
-    session.add_argument("session_command", nargs="?", choices=("show", "path", "list", "clear"), default="show")
-    session.add_argument("--json", action="store_true")
-    session.set_defaults(func=cmd_session)
-
-    failure = sub.add_parser("failure")
-    failure_sub = failure.add_subparsers(dest="failure_command", required=True)
-
-    failure_record = failure_sub.add_parser("record")
-    failure_record.add_argument("--status", type=int, required=True)
-    failure_record.add_argument("--cwd")
-    failure_record.add_argument("command")
-    failure_record.set_defaults(func=cmd_failure_record)
-
-    fix = sub.add_parser("fix")
-    fix.set_defaults(func=cmd_fix)
-
-    previous_fix = sub.add_parser("previous-fix")
-    previous_fix.set_defaults(func=cmd_previous_fix)
-
-    args = parser.parse_args(argv)
-    return int(args.func(args))
+    try:
+        result = cli.main(args=argv, prog_name="sigil", standalone_mode=False)
+    except click.ClickException as error:
+        error.show()
+        return error.exit_code
+    except click.Abort:
+        click.echo("Aborted!", err=True)
+        return 1
+    return int(result or 0)
 
 
 if __name__ == "__main__":

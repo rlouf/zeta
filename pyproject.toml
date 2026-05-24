@@ -12,7 +12,9 @@ license = "MIT"
 authors = [
   { name = "Rémi Louf" }
 ]
-dependencies = []
+dependencies = [
+  "click>=8.1",
+]
 
 [project.urls]
 Homepage = "https://github.com/rlouf/sigil"

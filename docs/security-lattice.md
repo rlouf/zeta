@@ -166,8 +166,8 @@ no promotion mutation
 no bang unless sandbox exists
 ```
 
-The zsh binding blocks `?!`, `,!`, `@`, and `@!` before they can become parser
-routes. The Python security helpers also expose checks for future routes:
+The zsh and Bash bindings block `?!`, `,!`, `@`, and `@!` before they can become
+parser routes. The Python security helpers also expose checks for future routes:
 
 ```text
 reject_promotion(...)

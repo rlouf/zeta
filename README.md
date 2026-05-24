@@ -45,14 +45,21 @@ Current rough install:
 ```sh
 uv tool install git+https://github.com/rlouf/sigil
 curl -fsSL https://raw.githubusercontent.com/rlouf/sigil/main/shell/zsh/install.zsh | zsh
+# or
+curl -fsSL https://raw.githubusercontent.com/rlouf/sigil/main/shell/bash/install.bash | bash
 ```
 
 The installer downloads the zsh binding to `~/.sigil/shell/zsh/sigil.zsh` and
 adds an idempotent source block to `~/.zshrc`.
 
+The Bash installer downloads the binding to `~/.sigil/shell/bash/sigil.bash`
+and adds an idempotent source block to `~/.bashrc`.
+
 ## Layout
 
 ```text
+shell/bash/install.bash  Bash binding installer
+shell/bash/sigil.bash    Bash binding
 shell/zsh/install.zsh  zsh binding installer
 shell/zsh/sigil.zsh    zsh binding
 src/sigil/             Python core runtime
@@ -121,6 +128,30 @@ Source the zsh entrypoint from `.zshrc`:
 ```zsh
 source "$HOME/.sigil/shell/zsh/sigil.zsh"
 ```
+
+## Bash
+
+Source the Bash entrypoint from `.bashrc`:
+
+```bash
+source "$HOME/.sigil/shell/bash/sigil.bash"
+```
+
+Bash supports the same glyph functions:
+
+```bash
+, find wav files
+,,
+? what is tldraw?
+?? how would that work in practice?
+^
+^^
+```
+
+Because Bash has no zsh-style `print -z` buffer stack, direct `,` and `^`
+commands print the selected proposal and add it to history. To get the zsh-like
+"replace the current prompt buffer, but do not execute it" flow, type a Sigil
+glyph expression at the prompt and press `Ctrl-X ,`.
 
 ## Requirements
 

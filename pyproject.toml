@@ -23,4 +23,4 @@ Issues = "https://github.com/rlouf/sigil/issues"
 sigil = "sigil.cli:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["sigil"]
+packages = ["src/sigil"]

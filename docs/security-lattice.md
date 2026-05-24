@@ -5,8 +5,8 @@ proposal, continue a prior interaction, read local or web material, or eventuall
 request boxed writes/execution. The security lattice is the ABI that keeps those
 steps explicit.
 
-The implementation lives in `sigil/security.py`. Event writers in
-`sigil/state.py` normalize the fields for global events and per-session JSONL
+The implementation lives in `src/sigil/security.py`. Event writers in
+`src/sigil/state.py` normalize the fields for global events and per-session JSONL
 state.
 
 ## Primitives

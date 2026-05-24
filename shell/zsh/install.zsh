@@ -9,9 +9,9 @@ zshrc="${ZDOTDIR:-$HOME}/.zshrc"
 mkdir -p "$install_dir"
 
 if command -v curl >/dev/null 2>&1; then
-  curl -fsSL "$repo_url/zsh/sigil.zsh" -o "$binding_path"
+  curl -fsSL "$repo_url/shell/zsh/sigil.zsh" -o "$binding_path"
 else
-  print -u2 "sigil install: curl is required to fetch zsh/sigil.zsh"
+  print -u2 "sigil install: curl is required to fetch shell/zsh/sigil.zsh"
   exit 1
 fi
 

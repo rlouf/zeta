@@ -64,7 +64,7 @@ Core commands:
 sigil command --select "find wav files"
 sigil previous-command --select
 sigil fix
-sigil previous-fix
+sigil fix --previous
 sigil question "what is tldraw?"
 sigil follow-up "how would that work in practice?"
 sigil session show

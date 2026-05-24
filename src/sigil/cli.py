@@ -180,35 +180,21 @@ def cmd_session(session_command: str, json_output: bool) -> int:
     return 0
 
 
-@cli.group("failure")
-def failure_group() -> None:
-    """Failure state commands used by shell bindings."""
-
-
-@failure_group.command("record")
+@cli.command("record-failure", hidden=True)
 @click.option("--status", type=int, required=True)
 @click.option("--cwd")
 @click.argument("command")
-def cmd_failure_record(command: str, status: int, cwd: str | None) -> int:
+def cmd_record_failure(command: str, status: int, cwd: str | None) -> int:
     """Record a failed shell command for later repair."""
     record_failure(command, status, cwd)
     return 0
 
 
 @cli.command("fix")
-def cmd_fix() -> int:
+@click.option("--previous", is_flag=True)
+def cmd_fix(previous: bool) -> int:
     """Suggest fixes for the last recorded failed shell command."""
-    command = select_fix()
-    if command:
-        append_event({"type": "fix_selected", "command": command})
-        print(command)
-    return 0
-
-
-@cli.command("previous-fix")
-def cmd_previous_fix() -> int:
-    """Reopen previous repair candidates."""
-    command = select_previous_fix()
+    command = select_previous_fix() if previous else select_fix()
     if command:
         append_event({"type": "fix_selected", "command": command})
         print(command)

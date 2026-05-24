@@ -46,7 +46,7 @@ sigil_fix() {
 
 sigil_previous_fix() {
   local selected
-  selected="$("$__sigil_bin" previous-fix)" || return $?
+  selected="$("$__sigil_bin" fix --previous)" || return $?
   [[ -n "$selected" ]] && print -r -- "$selected"
 }
 
@@ -70,7 +70,7 @@ __sigil_precmd() {
     case "$__sigil_preexec_command" in
       ,*|\?*|\^*|@*) __sigil_preexec_command=""; return ;;
     esac
-    "$__sigil_bin" failure record --status "$exit_status" --cwd "$PWD" "$__sigil_preexec_command" >/dev/null 2>&1
+    "$__sigil_bin" record-failure --status "$exit_status" --cwd "$PWD" "$__sigil_preexec_command" >/dev/null 2>&1
   fi
   __sigil_preexec_command=""
 }

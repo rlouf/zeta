@@ -8,7 +8,7 @@ from io import StringIO
 from pathlib import Path
 
 from sigil.commands import previous
-from sigil.pi_stream import stream_events
+from sigil.pi_stream import should_color, stream_events
 from sigil.security import (
     SecurityViolation,
     inherit_security,
@@ -17,6 +17,11 @@ from sigil.security import (
     reject_promotion,
 )
 from sigil.state import append_event, append_jsonl, read_jsonl, write_json, write_jsonl
+
+
+class TtyStringIO(StringIO):
+    def isatty(self) -> bool:
+        return True
 
 
 class SecurityTests(unittest.TestCase):
@@ -296,6 +301,60 @@ class StateTests(unittest.TestCase):
                         os.environ.pop(key, None)
                     else:
                         os.environ[key] = value
+
+    def test_pi_stream_non_tty_status_has_no_control_codes_or_color(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            saved = {
+                key: os.environ.get(key)
+                for key in [
+                    "SIGIL_STATE_DIR",
+                    "SIGIL_SESSION_ID",
+                    "SIGIL_CAPTURE_TRACE",
+                ]
+            }
+            os.environ["SIGIL_STATE_DIR"] = tmp
+            os.environ["SIGIL_SESSION_ID"] = "test"
+            os.environ["SIGIL_CAPTURE_TRACE"] = "1"
+            try:
+                stdin = StringIO(
+                    json.dumps(
+                        {
+                            "type": "tool_execution_start",
+                            "toolName": "web_search",
+                            "args": {"query": "sigil"},
+                        }
+                    )
+                    + "\n"
+                )
+                stderr = StringIO()
+                self.assertEqual(
+                    stream_events(stdin=stdin, stdout=StringIO(), stderr=stderr), 0
+                )
+
+                status = stderr.getvalue()
+                self.assertIn("web_search", status)
+                self.assertNotIn("\033", status)
+                self.assertNotIn("\r", status)
+            finally:
+                for key, value in saved.items():
+                    if value is None:
+                        os.environ.pop(key, None)
+                    else:
+                        os.environ[key] = value
+
+    def test_no_color_disables_tty_color(self) -> None:
+        saved = os.environ.get("NO_COLOR")
+        try:
+            os.environ.pop("NO_COLOR", None)
+            self.assertTrue(should_color(TtyStringIO()))
+            os.environ["NO_COLOR"] = "1"
+            self.assertFalse(should_color(TtyStringIO()))
+            self.assertFalse(should_color(StringIO()))
+        finally:
+            if saved is None:
+                os.environ.pop("NO_COLOR", None)
+            else:
+                os.environ["NO_COLOR"] = saved
 
 
 if __name__ == "__main__":

@@ -20,6 +20,23 @@ from .security import normalize_capability, normalize_integrity
 from .state import append_event, append_jsonl
 
 
+def is_interactive(stream: TextIO) -> bool:
+    """Return whether a stream is attached to an interactive terminal."""
+    return bool(getattr(stream, "isatty", lambda: False)())
+
+
+def should_color(stream: TextIO) -> bool:
+    """Return whether terminal color should be emitted to a stream."""
+    return is_interactive(stream) and "NO_COLOR" not in os.environ
+
+
+def muted(text: str, *, enabled: bool) -> str:
+    """Apply muted terminal styling when color is enabled."""
+    if not enabled:
+        return text
+    return f"{MUTED}{text}{RESET}"
+
+
 def clear_status(stderr: TextIO) -> None:
     """Erase the transient spinner/status line before printing durable output."""
     stderr.write("\r\033[K")
@@ -72,7 +89,9 @@ def stream_events(
     answer_chunks: list[str] = []
     tool_events: list[dict[str, object]] = []
     security = env_security()
-    spinner_running = not json_output
+    interactive_stderr = is_interactive(stderr)
+    color_enabled = should_color(stderr)
+    spinner_running = not json_output and interactive_stderr
     spinner_paused = False
     spinner_lock = threading.Lock()
     spinner_thread: threading.Thread | None = None
@@ -87,7 +106,9 @@ def stream_events(
                     return
                 paused = spinner_paused
             if not paused:
-                stderr.write(f"\r\033[K{MUTED}❯ {frames[i % len(frames)]}{RESET}")
+                stderr.write(
+                    f"\r\033[K{muted(f'❯ {frames[i % len(frames)]}', enabled=color_enabled)}"
+                )
                 stderr.flush()
                 i += 1
             time.sleep(0.35)
@@ -113,7 +134,7 @@ def stream_events(
             spinner_paused = False
         spinner_thread.join()
 
-    if not json_output:
+    if spinner_running:
         spinner_thread = threading.Thread(target=spinner, daemon=True)
         spinner_thread.start()
 
@@ -125,7 +146,7 @@ def stream_events(
                 continue
 
             if event.get("type") == "tool_execution_start":
-                if not json_output:
+                if spinner_running:
                     pause_spinner()
                 tool = event.get("toolName", "")
                 detail = summarize(tool, event.get("args"))
@@ -141,12 +162,19 @@ def stream_events(
                     append_jsonl("last-tools.jsonl", trace_event)
                 append_event(trace_event)
                 if not json_output:
+                    status = f"❯ {tool}  {detail}" if detail else f"❯ {tool}"
                     if detail:
                         print(
-                            f"{MUTED}❯ {tool}  {detail}{RESET}", file=stderr, flush=True
+                            muted(status, enabled=color_enabled),
+                            file=stderr,
+                            flush=True,
                         )
-                    else:
-                        print(f"{MUTED}❯ {tool}{RESET}", file=stderr, flush=True)
+                    elif interactive_stderr:
+                        print(
+                            muted(status, enabled=color_enabled),
+                            file=stderr,
+                            flush=True,
+                        )
                 continue
 
             if event.get("type") == "tool_execution_end":
@@ -159,7 +187,7 @@ def stream_events(
                 if os.environ.get("SIGIL_CAPTURE_TRACE") == "1":
                     append_jsonl("last-tools.jsonl", trace_event)
                 append_event(trace_event)
-                if not json_output:
+                if spinner_running:
                     resume_spinner()
                 continue
 

@@ -135,7 +135,9 @@ def previous_fix() -> tuple[str, list[dict[str, str]], dict[str, Any]]:
     if not isinstance(data, dict) or not data.get("commands"):
         print(f"{LOVE}✗ no previous fix suggestions{RESET}", file=sys.stderr)
         raise SystemExit(1)
-    security = inherit_security(glyph="^^", input_records=[normalize_security(data)], capability="propose")
+    security = inherit_security(
+        glyph="^^", input_records=[normalize_security(data)], capability="propose"
+    )
     return str(data.get("prompt", "")), list(data["commands"]), security
 
 

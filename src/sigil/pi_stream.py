@@ -13,7 +13,7 @@ import os
 import sys
 import threading
 import time
-from typing import TextIO
+from typing import TextIO, cast
 
 from .ansi import MUTED, RESET
 from .security import normalize_capability, normalize_integrity
@@ -30,26 +30,25 @@ def summarize(tool: str, args: object) -> str:
     """Extract a short human-readable label for a tool call."""
     if not isinstance(args, dict):
         return ""
+    tool_args = cast(dict[str, object], args)
     if tool == "read":
-        return str(args.get("path") or args.get("file_path") or "")
+        return str(tool_args.get("path") or tool_args.get("file_path") or "")
     if tool == "web_search":
-        return str(args.get("query") or args.get("q") or "")
+        return str(tool_args.get("query") or tool_args.get("q") or "")
     return " ".join(
-        f"{k}={v}" for k, v in args.items() if isinstance(v, (str, int, float, bool))
+        f"{k}={v}"
+        for k, v in tool_args.items()
+        if isinstance(v, (str, int, float, bool))
     )
 
 
 def env_security() -> dict[str, object]:
     """Recover trust metadata passed from the parent `sigil question` process."""
     taint = [
-        item
-        for item in os.environ.get("SIGIL_SECURITY_TAINT", "").split(",")
-        if item
+        item for item in os.environ.get("SIGIL_SECURITY_TAINT", "").split(",") if item
     ]
     inputs = [
-        item
-        for item in os.environ.get("SIGIL_SECURITY_INPUTS", "").split(",")
-        if item
+        item for item in os.environ.get("SIGIL_SECURITY_INPUTS", "").split(",") if item
     ]
     return {
         "glyph": os.environ.get("SIGIL_SECURITY_GLYPH", "?"),
@@ -61,14 +60,22 @@ def env_security() -> dict[str, object]:
     }
 
 
-def stream_events(stdin: TextIO = sys.stdin, stdout: TextIO = sys.stdout, stderr: TextIO = sys.stderr) -> int:
+def stream_events(
+    stdin: TextIO = sys.stdin,
+    stdout: TextIO = sys.stdout,
+    stderr: TextIO = sys.stderr,
+    *,
+    json_output: bool = False,
+) -> int:
     """Filter Pi's event stream into terminal output and Sigil state files."""
     started_text = False
     answer_chunks: list[str] = []
+    tool_events: list[dict[str, object]] = []
     security = env_security()
-    spinner_running = True
+    spinner_running = not json_output
     spinner_paused = False
     spinner_lock = threading.Lock()
+    spinner_thread: threading.Thread | None = None
 
     def spinner() -> None:
         frames = ["thinking", "thinking.", "thinking..", "thinking..."]
@@ -99,13 +106,16 @@ def stream_events(stdin: TextIO = sys.stdin, stdout: TextIO = sys.stdout, stderr
 
     def stop_spinner() -> None:
         nonlocal spinner_running, spinner_paused
+        if spinner_thread is None:
+            return
         with spinner_lock:
             spinner_running = False
             spinner_paused = False
         spinner_thread.join()
 
-    spinner_thread = threading.Thread(target=spinner, daemon=True)
-    spinner_thread.start()
+    if not json_output:
+        spinner_thread = threading.Thread(target=spinner, daemon=True)
+        spinner_thread.start()
 
     try:
         for raw_line in stdin:
@@ -115,7 +125,8 @@ def stream_events(stdin: TextIO = sys.stdin, stdout: TextIO = sys.stdout, stderr
                 continue
 
             if event.get("type") == "tool_execution_start":
-                pause_spinner()
+                if not json_output:
+                    pause_spinner()
                 tool = event.get("toolName", "")
                 detail = summarize(tool, event.get("args"))
                 trace_event = {
@@ -125,21 +136,31 @@ def stream_events(stdin: TextIO = sys.stdin, stdout: TextIO = sys.stdout, stderr
                     "args": event.get("args"),
                     **security,
                 }
+                tool_events.append(trace_event)
                 if os.environ.get("SIGIL_CAPTURE_TRACE") == "1":
                     append_jsonl("last-tools.jsonl", trace_event)
                 append_event(trace_event)
-                if detail:
-                    print(f"{MUTED}❯ {tool}  {detail}{RESET}", file=stderr, flush=True)
-                else:
-                    print(f"{MUTED}❯ {tool}{RESET}", file=stderr, flush=True)
+                if not json_output:
+                    if detail:
+                        print(
+                            f"{MUTED}❯ {tool}  {detail}{RESET}", file=stderr, flush=True
+                        )
+                    else:
+                        print(f"{MUTED}❯ {tool}{RESET}", file=stderr, flush=True)
                 continue
 
             if event.get("type") == "tool_execution_end":
-                trace_event = {"type": "tool_end", "tool": event.get("toolName", ""), **security}
+                trace_event = {
+                    "type": "tool_end",
+                    "tool": event.get("toolName", ""),
+                    **security,
+                }
+                tool_events.append(trace_event)
                 if os.environ.get("SIGIL_CAPTURE_TRACE") == "1":
                     append_jsonl("last-tools.jsonl", trace_event)
                 append_event(trace_event)
-                resume_spinner()
+                if not json_output:
+                    resume_spinner()
                 continue
 
             if event.get("type") != "message_update":
@@ -147,22 +168,29 @@ def stream_events(stdin: TextIO = sys.stdin, stdout: TextIO = sys.stdout, stderr
 
             update = event.get("assistantMessageEvent") or {}
             if update.get("type") == "text_delta":
-                if not started_text:
+                if not json_output and not started_text:
                     stop_spinner()
                     stdout.write("\n")
                     started_text = True
                 delta = update.get("delta", "")
                 answer_chunks.append(delta)
-                stdout.write(delta)
-                stdout.flush()
+                if not json_output:
+                    stdout.write(delta)
+                    stdout.flush()
     finally:
         if spinner_running:
             stop_spinner()
         answer = "".join(answer_chunks)
+        answer_event_id = None
         if answer:
             answer_event = append_event(
-                {"type": "answer_done", "bytes": len(answer.encode("utf-8")), **security}
+                {
+                    "type": "answer_done",
+                    "bytes": len(answer.encode("utf-8")),
+                    **security,
+                }
             )
+            answer_event_id = answer_event["id"]
             if os.environ.get("SIGIL_CAPTURE_ANSWER") == "1":
                 append_jsonl(
                     "last-question.jsonl",
@@ -173,4 +201,23 @@ def stream_events(stdin: TextIO = sys.stdin, stdout: TextIO = sys.stdout, stderr
                         **security,
                     },
                 )
+        if json_output:
+            stdout.write(
+                json.dumps(
+                    {
+                        "ok": True,
+                        "type": "answer",
+                        "question": os.environ.get("SIGIL_QUESTION", ""),
+                        "prompt": os.environ.get("SIGIL_PROMPT", ""),
+                        "follow_up": os.environ.get("SIGIL_FOLLOW_UP") == "1",
+                        "answer": answer,
+                        "answer_event_id": answer_event_id,
+                        "tools": tool_events,
+                        "security": security,
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n"
+            )
+            stdout.flush()
     return 0

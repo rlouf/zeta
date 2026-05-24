@@ -26,3 +26,11 @@ sigil = "sigil.cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/sigil"]
+
+[dependency-groups]
+dev = [
+    "pre-commit>=4.6.0",
+    "pytest>=9.0.3",
+    "ruff>=0.15.14",
+    "ty>=0.0.39",
+]

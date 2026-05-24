@@ -7,7 +7,7 @@ into executable or writable authority.
 
 from __future__ import annotations
 
-from typing import Any, Literal, Sequence
+from typing import Any, Literal, Sequence, cast
 
 Integrity = Literal["human", "local_model", "local_file", "web", "unknown"]
 Capability = Literal["none", "propose", "read", "write_boxed", "exec_boxed"]
@@ -34,20 +34,21 @@ CAPABILITIES = frozenset(CAPABILITY_ORDER)
 
 class SecurityViolation(ValueError):
     """Raised when a state transition would increase trust without consent."""
+
     pass
 
 
 def normalize_integrity(value: object) -> Integrity:
     """Map arbitrary stored values into the known integrity lattice."""
     if isinstance(value, str) and value in INTEGRITIES:
-        return value  # type: ignore[return-value]
+        return cast(Integrity, value)
     return "unknown"
 
 
 def normalize_capability(value: object) -> Capability:
     """Map arbitrary stored values into the known capability lattice."""
     if isinstance(value, str) and value in CAPABILITIES:
-        return value  # type: ignore[return-value]
+        return cast(Capability, value)
     return "none"
 
 

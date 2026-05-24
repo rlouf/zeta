@@ -62,7 +62,9 @@ def write_json(name: str, value: Any) -> None:
     root.mkdir(parents=True, exist_ok=True)
     tmp = root / f"{name}.tmp"
     final = root / name
-    tmp.write_text(json.dumps(value, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    tmp.write_text(
+        json.dumps(value, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
     tmp.replace(final)
 
 
@@ -103,7 +105,9 @@ def write_jsonl(name: str, events: list[dict[str, Any]]) -> list[dict[str, Any]]
                 }
             )
             payloads.append(payload)
-            f.write(json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n")
+            f.write(
+                json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n"
+            )
     tmp.replace(final)
     return payloads
 

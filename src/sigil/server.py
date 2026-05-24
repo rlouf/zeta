@@ -53,5 +53,7 @@ def start_qwen_for_pi() -> bool:
             return True
         time.sleep(1)
 
-    print(f"pi: local Qwen server did not become ready; see {log_path}", file=sys.stderr)
+    print(
+        f"pi: local Qwen server did not become ready; see {log_path}", file=sys.stderr
+    )
     return False

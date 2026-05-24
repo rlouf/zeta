@@ -17,7 +17,12 @@ from .failure import record_failure, select_fix, select_previous_fix
 from .pi_stream import stream_events
 from .question import ask
 from .security import inherited_label, make_security, normalize_security, record_id
-from .session import clear_current_session, current_session_snapshot, known_sessions, session_paths
+from .session import (
+    clear_current_session,
+    current_session_snapshot,
+    known_sessions,
+    session_paths,
+)
 from .state import append_event, read_json
 
 
@@ -44,7 +49,9 @@ def cmd_command(prompt: str, select_candidate: bool, json_output: bool) -> int:
         fresh_human=True,
     )
     if json_output:
-        print(json.dumps({"prompt": prompt, "commands": candidates}, ensure_ascii=False))
+        print(
+            json.dumps({"prompt": prompt, "commands": candidates}, ensure_ascii=False)
+        )
         return 0
     if select_candidate:
         command = select(prompt, candidates, security)
@@ -63,16 +70,27 @@ def cmd_command(prompt: str, select_candidate: bool, json_output: bool) -> int:
 def cmd_previous_command(select_candidate: bool, json_output: bool) -> int:
     """Reopen the previous command candidates for the current shell session."""
     prompt, candidates, security = previous()
-    continued = append_event({"type": "command_continued", "prompt": prompt, **security})
+    continued = append_event(
+        {"type": "command_continued", "prompt": prompt, **security}
+    )
     security = {**security, "inputs": [continued["id"]]}
     print(
         f"{MUTED}❯ sigil ,, · inherited: {inherited_label(security)}{RESET}",
         file=sys.stderr,
     )
     if json_output:
-        print(json.dumps({"prompt": prompt, "commands": candidates, **security}, ensure_ascii=False))
+        print(
+            json.dumps(
+                {"prompt": prompt, "commands": candidates, **security},
+                ensure_ascii=False,
+            )
+        )
         return 0
-    command = select(prompt, candidates, security) if select_candidate else candidates[0]["command"]
+    command = (
+        select(prompt, candidates, security)
+        if select_candidate
+        else candidates[0]["command"]
+    )
     if command:
         append_event({"type": "command_selected", "command": command, **security})
         print(command)
@@ -81,22 +99,25 @@ def cmd_previous_command(select_candidate: bool, json_output: bool) -> int:
 
 @cli.command("question")
 @click.argument("question")
-def cmd_question(question: str) -> int:
+@click.option("--json", "json_output", is_flag=True)
+def cmd_question(question: str, json_output: bool) -> int:
     """Answer a fresh shell question and reset the session transcript."""
-    return ask(question)
+    return ask(question, json_output=json_output)
 
 
 @cli.command("follow-up")
 @click.argument("question")
-def cmd_follow_up(question: str) -> int:
+@click.option("--json", "json_output", is_flag=True)
+def cmd_follow_up(question: str, json_output: bool) -> int:
     """Continue the current session transcript with a follow-up question."""
-    return ask(question, follow_up=True)
+    return ask(question, follow_up=True, json_output=json_output)
 
 
 @cli.command("render-pi-stream", hidden=True)
-def cmd_render_pi_stream() -> int:
+@click.option("--json", "json_output", is_flag=True)
+def cmd_render_pi_stream(json_output: bool) -> int:
     """Render Pi's JSON event stream for the question pipeline."""
-    return stream_events()
+    return stream_events(json_output=json_output)
 
 
 def print_json(value: object) -> None:

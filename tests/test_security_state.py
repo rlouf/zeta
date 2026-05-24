@@ -30,7 +30,12 @@ class SecurityTests(unittest.TestCase):
         inherited = inherit_security(
             glyph="??",
             input_records=[
-                {"event_id": "question-1", "integrity": "web", "capability": "read", "taint": ["web"]},
+                {
+                    "event_id": "question-1",
+                    "integrity": "web",
+                    "capability": "read",
+                    "taint": ["web"],
+                },
                 {"event_id": "legacy-1"},
             ],
             capability="read",
@@ -93,10 +98,14 @@ class StateTests(unittest.TestCase):
 
                 written = write_jsonl("last-tools.jsonl", [{"type": "tool_start"}])
                 self.assertEqual(written[0]["taint"], ["legacy"])
-                self.assertEqual(read_jsonl("last-tools.jsonl")[0]["integrity"], "unknown")
+                self.assertEqual(
+                    read_jsonl("last-tools.jsonl")[0]["integrity"], "unknown"
+                )
 
                 events_path = Path(tmp) / "events.jsonl"
-                stored = json.loads(events_path.read_text(encoding="utf-8").splitlines()[0])
+                stored = json.loads(
+                    events_path.read_text(encoding="utf-8").splitlines()[0]
+                )
                 self.assertEqual(stored["taint"], ["legacy"])
             finally:
                 if old_state_dir is None:
@@ -120,7 +129,9 @@ class StateTests(unittest.TestCase):
                     {
                         "id": "legacy-command",
                         "prompt": "status",
-                        "commands": [{"command": "git status --short", "note": "show changes"}],
+                        "commands": [
+                            {"command": "git status --short", "note": "show changes"}
+                        ],
                     },
                 )
                 prompt, candidates, security = previous()
@@ -147,12 +158,16 @@ class StateTests(unittest.TestCase):
                     "SIGIL_STATE_DIR",
                     "SIGIL_SESSION_ID",
                     "SIGIL_CAPTURE_ANSWER",
+                    "SIGIL_CAPTURE_TRACE",
                     "SIGIL_SECURITY_GLYPH",
                     "SIGIL_SECURITY_INTEGRITY",
                     "SIGIL_SECURITY_CAPABILITY",
                     "SIGIL_SECURITY_TAINT",
                     "SIGIL_SECURITY_PROVISIONAL",
                     "SIGIL_SECURITY_INPUTS",
+                    "SIGIL_QUESTION",
+                    "SIGIL_PROMPT",
+                    "SIGIL_FOLLOW_UP",
                 ]
             }
             os.environ["SIGIL_STATE_DIR"] = tmp
@@ -177,7 +192,9 @@ class StateTests(unittest.TestCase):
                     )
                     + "\n"
                 )
-                self.assertEqual(stream_events(stdin=stdin, stdout=StringIO(), stderr=StringIO()), 0)
+                self.assertEqual(
+                    stream_events(stdin=stdin, stdout=StringIO(), stderr=StringIO()), 0
+                )
                 answer = read_jsonl("last-question.jsonl")[0]
                 self.assertEqual(answer["inputs"], ["question-event"])
                 self.assertTrue(answer["event_id"])
@@ -185,6 +202,94 @@ class StateTests(unittest.TestCase):
                 self.assertEqual(answer["capability"], "read")
                 self.assertEqual(answer["taint"], ["web"])
                 self.assertTrue(answer["provisional"])
+            finally:
+                for key, value in saved.items():
+                    if value is None:
+                        os.environ.pop(key, None)
+                    else:
+                        os.environ[key] = value
+
+    def test_pi_stream_json_output_is_machine_readable(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            saved = {
+                key: os.environ.get(key)
+                for key in [
+                    "SIGIL_STATE_DIR",
+                    "SIGIL_SESSION_ID",
+                    "SIGIL_CAPTURE_ANSWER",
+                    "SIGIL_CAPTURE_TRACE",
+                    "SIGIL_SECURITY_GLYPH",
+                    "SIGIL_SECURITY_INTEGRITY",
+                    "SIGIL_SECURITY_CAPABILITY",
+                    "SIGIL_SECURITY_TAINT",
+                    "SIGIL_SECURITY_PROVISIONAL",
+                    "SIGIL_SECURITY_INPUTS",
+                    "SIGIL_QUESTION",
+                    "SIGIL_PROMPT",
+                    "SIGIL_FOLLOW_UP",
+                ]
+            }
+            os.environ["SIGIL_STATE_DIR"] = tmp
+            os.environ["SIGIL_SESSION_ID"] = "test"
+            os.environ["SIGIL_CAPTURE_ANSWER"] = "1"
+            os.environ["SIGIL_CAPTURE_TRACE"] = "1"
+            os.environ["SIGIL_SECURITY_GLYPH"] = "?"
+            os.environ["SIGIL_SECURITY_INTEGRITY"] = "web"
+            os.environ["SIGIL_SECURITY_CAPABILITY"] = "read"
+            os.environ["SIGIL_SECURITY_TAINT"] = "web"
+            os.environ["SIGIL_SECURITY_PROVISIONAL"] = "1"
+            os.environ["SIGIL_SECURITY_INPUTS"] = "question-event"
+            os.environ["SIGIL_QUESTION"] = "what is sigil?"
+            os.environ["SIGIL_PROMPT"] = "what is sigil?"
+            os.environ["SIGIL_FOLLOW_UP"] = "0"
+            try:
+                stdin = StringIO(
+                    "\n".join(
+                        [
+                            json.dumps(
+                                {
+                                    "type": "tool_execution_start",
+                                    "toolName": "web_search",
+                                    "args": {"query": "sigil"},
+                                }
+                            ),
+                            json.dumps(
+                                {"type": "tool_execution_end", "toolName": "web_search"}
+                            ),
+                            json.dumps(
+                                {
+                                    "type": "message_update",
+                                    "assistantMessageEvent": {
+                                        "type": "text_delta",
+                                        "delta": "answer",
+                                    },
+                                }
+                            ),
+                        ]
+                    )
+                    + "\n"
+                )
+                stdout = StringIO()
+                stderr = StringIO()
+                self.assertEqual(
+                    stream_events(
+                        stdin=stdin, stdout=stdout, stderr=stderr, json_output=True
+                    ),
+                    0,
+                )
+
+                payload = json.loads(stdout.getvalue())
+                self.assertTrue(payload["ok"])
+                self.assertEqual(payload["type"], "answer")
+                self.assertEqual(payload["question"], "what is sigil?")
+                self.assertEqual(payload["answer"], "answer")
+                self.assertEqual(payload["security"]["taint"], ["web"])
+                self.assertEqual(payload["tools"][0]["tool"], "web_search")
+                self.assertEqual(stderr.getvalue(), "")
+                self.assertEqual(
+                    read_jsonl("last-question.jsonl")[-1]["content"], "answer"
+                )
+                self.assertEqual(len(read_jsonl("last-tools.jsonl")), 2)
             finally:
                 for key, value in saved.items():
                     if value is None:

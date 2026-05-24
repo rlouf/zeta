@@ -1,2 +1,1 @@
 """Core runtime for Sigil."""
-

@@ -40,7 +40,10 @@ def ensure_server() -> bool:
     if qwen_port_open():
         return True
     print("", file=sys.stderr)
-    print(f"{LOVE}✗ qwen: no local server reachable at {qwen_url()}{RESET}", file=sys.stderr)
+    print(
+        f"{LOVE}✗ qwen: no local server reachable at {qwen_url()}{RESET}",
+        file=sys.stderr,
+    )
     print("", file=sys.stderr)
     print(f"{MUTED}  Start it with your helper script:", file=sys.stderr)
     print("      ~/.config/pi/run-qwen36-q8.sh &", file=sys.stderr)
@@ -48,7 +51,10 @@ def ensure_server() -> bool:
     print("  ...or launch llama-server yourself:", file=sys.stderr)
     print("      llama-server \\", file=sys.stderr)
     print(f"        -m {qwen_model_path()} \\", file=sys.stderr)
-    print(f"        --alias {qwen_model()} --host 127.0.0.1 --port 8080 \\", file=sys.stderr)
+    print(
+        f"        --alias {qwen_model()} --host 127.0.0.1 --port 8080 \\",
+        file=sys.stderr,
+    )
     print(f"        -ngl 99 -c 262144 -fa on --reasoning auto{RESET}", file=sys.stderr)
     print("", file=sys.stderr)
     return False

@@ -14,6 +14,7 @@ from click.testing import CliRunner
 from sigil.cli import cli, main
 from sigil.commands import previous, select
 from sigil.pi_stream import should_color, stream_events
+from sigil.question import renderer_command
 from sigil.security import (
     SecurityViolation,
     inherit_security,
@@ -188,6 +189,36 @@ class SelectionTests(unittest.TestCase):
                 [{"command": "git status --short", "note": "short status"}],
             )
         self.assertEqual(selected, "git status --short")
+
+
+class QuestionRendererTests(unittest.TestCase):
+    def test_renderer_defaults_to_glow_notty_when_available(self) -> None:
+        with patch(
+            "sigil.question.shutil.which", return_value="/opt/homebrew/bin/glow"
+        ):
+            with patch.dict(os.environ, {}, clear=True):
+                self.assertEqual(
+                    renderer_command(),
+                    ["glow", "--style", "notty", "--width", "88", "-"],
+                )
+
+    def test_renderer_uses_env_overrides(self) -> None:
+        with patch(
+            "sigil.question.shutil.which", return_value="/opt/homebrew/bin/glow"
+        ):
+            with patch.dict(
+                os.environ,
+                {"SIGIL_GLOW_STYLE": "tokyo-night", "SIGIL_GLOW_WIDTH": "100"},
+                clear=True,
+            ):
+                self.assertEqual(
+                    renderer_command(),
+                    ["glow", "--style", "tokyo-night", "--width", "100", "-"],
+                )
+
+    def test_renderer_falls_back_to_cat_without_glow(self) -> None:
+        with patch("sigil.question.shutil.which", return_value=None):
+            self.assertEqual(renderer_command(), ["cat"])
 
 
 class StateTests(unittest.TestCase):

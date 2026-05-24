@@ -76,6 +76,10 @@ Stable fields are the same as `sigil command --json`, plus trust metadata:
 Runs the Pi question pipeline and emits one JSON object instead of rendering
 Markdown through `glow`.
 
+Non-JSON question output is rendered with `glow --style notty --width 88` when
+Glow is available, otherwise `cat`. Override this with `SIGIL_GLOW_STYLE` and
+`SIGIL_GLOW_WIDTH`.
+
 ```json
 {
   "ok": true,

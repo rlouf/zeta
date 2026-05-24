@@ -232,6 +232,8 @@ Environment knobs:
 QWEN_URL=http://127.0.0.1:8080/v1/chat/completions
 QWEN_MODEL=qwen3.6-27b-q8-local
 QWEN_MODEL_PATH=/path/to/model.gguf
+SIGIL_GLOW_STYLE=notty
+SIGIL_GLOW_WIDTH=88
 ```
 
 By convention this repo expects the helper script

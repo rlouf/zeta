@@ -25,6 +25,17 @@ from .state import append_event, append_jsonl, read_jsonl, write_jsonl
 QUESTION_SYSTEM_PROMPT = (
     "Answer concisely. You are responding to a quick question typed at a shell prompt."
 )
+DEFAULT_GLOW_STYLE = "notty"
+DEFAULT_GLOW_WIDTH = "88"
+
+
+def renderer_command() -> list[str]:
+    """Return the Markdown renderer command for interactive question answers."""
+    if not shutil.which("glow"):
+        return ["cat"]
+    style = os.environ.get("SIGIL_GLOW_STYLE") or DEFAULT_GLOW_STYLE
+    width = os.environ.get("SIGIL_GLOW_WIDTH") or DEFAULT_GLOW_WIDTH
+    return ["glow", "--style", style, "--width", width, "-"]
 
 
 def discussion_turns() -> list[dict[str, object]]:
@@ -130,7 +141,7 @@ def ask(
     )
     if json_output:
         filter_cmd.append("--json")
-    renderer_cmd = ["glow", "-s", "dark", "-"] if shutil.which("glow") else ["cat"]
+    renderer_cmd = renderer_command()
     filter_env = {
         **os.environ,
         "SIGIL_CAPTURE_ANSWER": "1",

@@ -91,6 +91,8 @@ class CliHelpTests(unittest.TestCase):
             'sigil question --follow-up "summarize that as a command"',
             result.output,
         )
+        self.assertIn("sigil install zsh", result.output)
+        self.assertIn("sigil doctor", result.output)
         self.assertIn("sigil session show --json", result.output)
         self.assertIn("https://github.com/rlouf/sigil", result.output)
 
@@ -109,6 +111,17 @@ class CliHelpTests(unittest.TestCase):
             with redirect_stderr(stderr):
                 self.assertEqual(main(["question", "hello"]), 1)
         self.assertIn("permission denied: /nope/events.jsonl", stderr.getvalue())
+
+    def test_command_json_invokes_fresh_command_route(self) -> None:
+        with patch(
+            "sigil.cli.generate",
+            return_value=[{"command": "git status --short", "note": "show status"}],
+        ):
+            result = CliRunner().invoke(cli, ["command", "--json", "status"])
+        self.assertEqual(result.exit_code, 0, result.output)
+        payload = json.loads(result.output)
+        self.assertEqual(payload["prompt"], "status")
+        self.assertEqual(payload["commands"][0]["command"], "git status --short")
 
 
 class SelectionTests(unittest.TestCase):

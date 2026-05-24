@@ -27,6 +27,9 @@ sigil = "sigil.cli:main"
 [tool.hatch.build.targets.wheel]
 packages = ["src/sigil"]
 
+[tool.hatch.build.targets.wheel.force-include]
+"shell" = "sigil/shell"
+
 [dependency-groups]
 dev = [
     "pre-commit>=4.6.0",

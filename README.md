@@ -63,51 +63,52 @@ The full trust model is documented in
 
 ## Install
 
-Current rough install for early users:
+Install the Python command, then install the shell binding you use:
 
 ```sh
 uv tool install git+https://github.com/rlouf/sigil
+sigil install zsh
+sigil doctor
+```
+
+For Bash:
+
+```sh
+uv tool install git+https://github.com/rlouf/sigil
+sigil install bash
+sigil doctor --shell bash
+```
+
+`install` copies the bundled binding to `~/.sigil/shell/<shell>/` and adds an
+idempotent source block to `.zshrc` or `.bashrc`. Running it again updates the
+binding without duplicating the rc block.
+
+Manual install still works if you want to inspect each step before sourcing
+shell code:
+
+```sh
 curl -fsSL https://raw.githubusercontent.com/rlouf/sigil/main/shell/zsh/install.zsh | zsh
 # or
 curl -fsSL https://raw.githubusercontent.com/rlouf/sigil/main/shell/bash/install.bash | bash
 ```
 
-Manual install, if you want to inspect each step before sourcing shell code:
+`sigil doctor` checks the local pieces:
 
 ```sh
-uv tool install git+https://github.com/rlouf/sigil
-
-mkdir -p ~/.sigil/shell/zsh
-curl -fsSL https://raw.githubusercontent.com/rlouf/sigil/main/shell/zsh/sigil.zsh \
-  -o ~/.sigil/shell/zsh/sigil.zsh
-printf '\n# Sigil\nsource "$HOME/.sigil/shell/zsh/sigil.zsh"\n' >> ~/.zshrc
+sigil
+fzf
+glow
+pi
+QWEN_URL / local model endpoint
+QWEN_MODEL
+state directory writability
+shell support
+installed shell binding
+loaded shell binding
 ```
 
-For Bash, replace the last three lines with:
-
-```sh
-mkdir -p ~/.sigil/shell/bash
-curl -fsSL https://raw.githubusercontent.com/rlouf/sigil/main/shell/bash/sigil.bash \
-  -o ~/.sigil/shell/bash/sigil.bash
-printf '\n# Sigil\nsource "$HOME/.sigil/shell/bash/sigil.bash"\n' >> ~/.bashrc
-```
-
-The installer downloads the zsh binding to `~/.sigil/shell/zsh/sigil.zsh` and
-adds an idempotent source block to `~/.zshrc`. It also warns if `sigil`, `fzf`,
-`glow`, `pi`, or the local model endpoint are not available.
-
-The Bash installer downloads the binding to `~/.sigil/shell/bash/sigil.bash`
-and adds an idempotent source block to `~/.bashrc`. It performs the same checks.
-
-After install, verify the local pieces:
-
-```sh
-command -v sigil fzf glow pi
-python3 -c 'import socket; socket.create_connection(("127.0.0.1", 8080), timeout=1).close()'
-```
-
-The endpoint check is expected to fail unless your local OpenAI-compatible model
-server is already running. Sigil will also check this before command generation.
+The endpoint check is expected to warn unless your local OpenAI-compatible model
+server is already running.
 
 ## Layout
 
@@ -128,6 +129,8 @@ sigil fix
 sigil fix --previous
 sigil question "what is tldraw?"
 sigil question --follow-up "how would that work in practice?"
+sigil install zsh
+sigil doctor
 sigil session show
 sigil session path
 sigil session list

@@ -12,6 +12,8 @@ written to stdout.
 ```sh
 sigil command --select "find large files"
 sigil question --json "what changed in this repo?"
+sigil install zsh
+sigil doctor
 sigil session show --json
 ```
 
@@ -151,3 +153,53 @@ user-facing API:
 
 They exist so shell bindings can keep a small, explicit boundary with the Python
 runtime.
+
+## `sigil install`
+
+Installs or updates a shell binding from the installed Sigil package and adds an
+idempotent source block to the shell rc file.
+
+```sh
+sigil install zsh
+sigil install bash
+```
+
+Useful options:
+
+```sh
+sigil install bash --install-dir ~/.sigil/shell/bash --rc ~/.bashrc
+sigil install zsh --json
+```
+
+The JSON form reports:
+
+- `shell`: installed shell binding.
+- `binding_path`: binding file written by Sigil.
+- `rc_path`: rc file inspected or updated.
+- `source_path`: bundled binding source copied from.
+- `wrote_rc`: whether Sigil appended a source block.
+
+## `sigil doctor`
+
+Checks local install readiness:
+
+```sh
+sigil doctor
+sigil doctor --shell bash
+sigil doctor --json
+```
+
+Doctor checks:
+
+- `sigil`, `fzf`, `glow`, and `pi` are on `PATH`.
+- the local model endpoint is reachable from `QWEN_URL`, or the default local
+  endpoint.
+- `QWEN_MODEL` is set when the endpoint needs an explicit model name.
+- Sigil's state directory is writable.
+- the selected shell is supported.
+- the selected shell binding is installed.
+- the current environment looks like it inherited a loaded binding.
+
+The JSON form returns an ordered list of checks with `name`, `status`, `detail`,
+and optional `hint`. `doctor` exits nonzero when any check has `status: "fail"`;
+warnings do not change the exit code.

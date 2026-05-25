@@ -5,6 +5,7 @@ import json
 import pytest
 from click.testing import CliRunner
 
+from _patch import patch
 from sigil.cli import cli
 from sigil.operators import create_invocation, parse_operator_token
 
@@ -64,6 +65,67 @@ def test_op_cli_json_reports_parsed_invocation() -> None:
         "stdin": "diff --git a/file b/file\n",
         "mode": "pipeline",
     }
+
+
+def test_op_cli_json_does_not_run_operator() -> None:
+    with patch("sigil.operators.chat_text", side_effect=AssertionError("no model")):
+        result = CliRunner().invoke(
+            cli,
+            ["op", "--json", "??", "review"],
+            input="diff\n",
+        )
+    assert result.exit_code == 0, result.output
+
+
+def test_op_cli_runs_piped_inspect_operator() -> None:
+    calls = {}
+
+    def fake_chat_text(system: str, user: str, *, max_tokens: int = 1200) -> str:
+        calls["system"] = system
+        calls["user"] = user
+        calls["max_tokens"] = max_tokens
+        return "risk summary\n"
+
+    with (
+        patch("sigil.operators.ensure_server", return_value=True),
+        patch("sigil.operators.chat_text", side_effect=fake_chat_text),
+        patch("sigil.operators.append_event", return_value={}),
+    ):
+        result = CliRunner().invoke(
+            cli,
+            ["op", "??", "review", "risky", "changes"],
+            input="diff --git a/file b/file\n",
+        )
+    assert result.exit_code == 0, result.output
+    assert result.output == "risk summary\n"
+    assert "Depth: 2" in str(calls["system"])
+    assert "Prompt: review risky changes" in str(calls["user"])
+    assert "diff --git a/file b/file" in str(calls["user"])
+    assert calls["max_tokens"] == 1200
+
+
+def test_op_cli_runs_piped_propose_operator() -> None:
+    calls = {}
+
+    def fake_chat_text(system: str, user: str, *, max_tokens: int = 1200) -> str:
+        calls["system"] = system
+        calls["user"] = user
+        return "executive summary"
+
+    with (
+        patch("sigil.operators.ensure_server", return_value=True),
+        patch("sigil.operators.chat_text", side_effect=fake_chat_text),
+        patch("sigil.operators.append_event", return_value={}),
+    ):
+        result = CliRunner().invoke(
+            cli,
+            ["op", ",", "draft", "an", "executive", "summary"],
+            input="meeting notes\n",
+        )
+    assert result.exit_code == 0, result.output
+    assert result.output == "executive summary\n"
+    assert "Synthesize or propose" in str(calls["system"])
+    assert "Prompt: draft an executive summary" in str(calls["user"])
 
 
 def test_op_cli_rejects_mixed_glyphs() -> None:

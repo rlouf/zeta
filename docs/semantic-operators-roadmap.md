@@ -275,7 +275,8 @@ behavior remains unchanged.
 
 ### Milestone 2: piped inspect and propose
 
-Status: implemented for Bash and zsh wrapper dispatch.
+Status: implemented for Bash and zsh wrapper dispatch, plus piped `?` / `??`
+inspect and `,` / `,,` propose runtime output.
 
 Support:
 

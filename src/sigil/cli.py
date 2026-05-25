@@ -23,7 +23,7 @@ from .install import (
     doctor_checks,
     install_shell,
 )
-from .operators import create_invocation
+from .operators import create_invocation, run_invocation
 from .pi_stream import stream_events
 from .question import ask
 from .security import (
@@ -139,12 +139,17 @@ def cmd_op(glyph: str, prompt_parts: tuple[str, ...], json_output: bool) -> int:
     except ValueError as exc:
         raise click.BadParameter(str(exc), param_hint="glyph") from exc
 
-    payload = invocation.to_dict()
     if json_output:
-        print_json_line(payload)
+        print_json_line(invocation.to_dict())
         return 0
 
-    print(f"{payload['glyph']} {payload['name']} depth={payload['depth']}")
+    try:
+        output = run_invocation(invocation)
+    except RuntimeError as exc:
+        print(f"sigil op: {exc}", file=sys.stderr)
+        return 1
+    if output:
+        print(output)
     return 0
 
 

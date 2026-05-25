@@ -90,3 +90,30 @@ def chat_json(system: str, user: str, schema: dict[str, Any]) -> dict[str, Any]:
         raise RuntimeError(f"qwen request failed: {exc}") from exc
     content = payload["choices"][0]["message"]["content"]
     return json.loads(content)
+
+
+def chat_text(system: str, user: str, *, max_tokens: int = 1200) -> str:
+    """Request plain text from the local model server."""
+    body = {
+        "model": qwen_model(),
+        "messages": [
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ],
+        "temperature": 0.2,
+        "max_tokens": max_tokens,
+        "chat_template_kwargs": {"enable_thinking": False},
+    }
+    data = json.dumps(body).encode("utf-8")
+    req = urllib.request.Request(
+        qwen_url(),
+        data=data,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=120) as resp:
+            payload = json.loads(resp.read().decode("utf-8"))
+    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"qwen request failed: {exc}") from exc
+    return str(payload["choices"][0]["message"]["content"])

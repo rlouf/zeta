@@ -18,7 +18,15 @@ if [[ -z "${SIGIL_SESSION_ID:-}" ]]; then
   fi
 fi
 
+__sigil_stdin_is_pipe() {
+  [[ -p /dev/stdin ]]
+}
+
 sigil_command() {
+  if __sigil_stdin_is_pipe; then
+    "$__sigil_bin" op "," "$@"
+    return $?
+  fi
   local selected
   selected="$("$__sigil_bin" command --select "$*")" || return $?
   [[ -n "$selected" ]] && print -z -- "$selected"
@@ -29,6 +37,10 @@ __sigil_select_command() {
 }
 
 sigil_previous_command() {
+  if __sigil_stdin_is_pipe; then
+    "$__sigil_bin" op ",," "$@"
+    return $?
+  fi
   local selected
   selected="$("$__sigil_bin" command --previous --select)" || return $?
   [[ -n "$selected" ]] && print -z -- "$selected"
@@ -39,10 +51,18 @@ __sigil_select_previous_command() {
 }
 
 sigil_question() {
+  if __sigil_stdin_is_pipe; then
+    "$__sigil_bin" op "?" "$@"
+    return $?
+  fi
   "$__sigil_bin" question "$*"
 }
 
 sigil_follow_up() {
+  if __sigil_stdin_is_pipe; then
+    "$__sigil_bin" op "??" "$@"
+    return $?
+  fi
   "$__sigil_bin" question --follow-up "$*"
 }
 
@@ -55,12 +75,20 @@ __sigil_select_previous_fix() {
 }
 
 sigil_fix() {
+  if __sigil_stdin_is_pipe; then
+    "$__sigil_bin" op "^" "$@"
+    return $?
+  fi
   local selected
   selected="$(__sigil_select_fix)" || return $?
   [[ -n "$selected" ]] && print -z -- "$selected"
 }
 
 sigil_previous_fix() {
+  if __sigil_stdin_is_pipe; then
+    "$__sigil_bin" op "^^" "$@"
+    return $?
+  fi
   local selected
   selected="$(__sigil_select_previous_fix)" || return $?
   [[ -n "$selected" ]] && print -z -- "$selected"

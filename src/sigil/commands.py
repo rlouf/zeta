@@ -15,8 +15,8 @@ from .qwen import chat_json, ensure_server
 from .security import (
     candidate_prefix,
     inherit_security,
-    make_security,
-    normalize_security,
+    create_trust_metadata,
+    normalize_trust_record,
 )
 from .state import append_event, read_json, write_json
 
@@ -85,7 +85,7 @@ def generate(prompt: str) -> list[dict[str, str]]:
         print(f"{LOVE}✗ no candidates{RESET}", file=sys.stderr)
         raise SystemExit(1)
 
-    security = make_security(
+    security = create_trust_metadata(
         glyph=",",
         integrity="local_model",
         capability="propose",
@@ -117,7 +117,7 @@ def previous() -> tuple[str, list[dict[str, str]], dict[str, Any]]:
         print(f"{LOVE}✗ no previous command suggestions{RESET}", file=sys.stderr)
         raise SystemExit(1)
     security = inherit_security(
-        glyph=",,", input_records=[normalize_security(data)], capability="propose"
+        glyph=",,", input_records=[normalize_trust_record(data)], capability="propose"
     )
     return str(data.get("prompt", "")), list(data["commands"]), security
 
@@ -128,7 +128,7 @@ def select(
     metadata: dict[str, Any] | None = None,
 ) -> str | None:
     """Return the command selected by the user, preferring the fzf UI."""
-    metadata = normalize_security(metadata or {})
+    metadata = normalize_trust_record(metadata or {})
     if len(candidates) == 1:
         return candidates[0]["command"]
     if not selector_has_terminal():

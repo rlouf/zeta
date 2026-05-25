@@ -14,7 +14,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from .security import normalize_security
+from .security import normalize_trust_record
 
 
 def state_dir() -> Path:
@@ -42,7 +42,7 @@ def append_event(event: dict[str, Any]) -> dict[str, Any]:
     """Append a global audit/debug event with session and trust metadata."""
     root = state_dir()
     root.mkdir(parents=True, exist_ok=True)
-    payload = normalize_security(
+    payload = normalize_trust_record(
         {
             "id": str(uuid.uuid4()),
             "time": time.time(),
@@ -72,7 +72,7 @@ def append_jsonl(name: str, event: dict[str, Any]) -> dict[str, Any]:
     """Append a session-scoped JSONL event."""
     root = session_dir()
     root.mkdir(parents=True, exist_ok=True)
-    payload = normalize_security(
+    payload = normalize_trust_record(
         {
             "id": str(uuid.uuid4()),
             "time": time.time(),
@@ -95,7 +95,7 @@ def write_jsonl(name: str, events: list[dict[str, Any]]) -> list[dict[str, Any]]
     payloads = []
     with tmp.open("w", encoding="utf-8") as f:
         for event in events:
-            payload = normalize_security(
+            payload = normalize_trust_record(
                 {
                     "id": str(uuid.uuid4()),
                     "time": time.time(),
@@ -124,7 +124,7 @@ def read_jsonl(name: str) -> list[dict[str, Any]]:
         except Exception:
             continue
         if isinstance(event, dict):
-            events.append(normalize_security(event))
+            events.append(normalize_trust_record(event))
     return events
 
 
@@ -138,5 +138,5 @@ def read_json(name: str) -> Any | None:
     except Exception:
         return None
     if isinstance(value, dict):
-        return normalize_security(value)
+        return normalize_trust_record(value)
     return value

@@ -70,7 +70,7 @@ def normalize_inputs(value: object) -> list[str]:
     return [str(item) for item in value if isinstance(item, str) and item]
 
 
-def normalize_security(record: dict[str, Any]) -> dict[str, Any]:
+def normalize_trust_record(record: dict[str, Any]) -> dict[str, Any]:
     """Return a record with complete trust metadata fields."""
     legacy = "integrity" not in record and "taint" not in record
     normalized = dict(record)
@@ -99,7 +99,7 @@ def cap_capability(requested: Capability, invocation_cap: Capability) -> Capabil
     return invocation_cap
 
 
-def make_security(
+def create_trust_metadata(
     *,
     glyph: str,
     integrity: Integrity,
@@ -143,7 +143,7 @@ def inherit_security(
     """Derive trust metadata from prior records without increasing integrity."""
     normalized_inputs = [record_id(record) for record in input_records]
     normalized_inputs = [item for item in normalized_inputs if item]
-    inherited = [normalize_security(record) for record in input_records]
+    inherited = [normalize_trust_record(record) for record in input_records]
     taint = set(extra_taint)
     is_provisional = False
     for record in inherited:
@@ -194,7 +194,7 @@ def reject_promotion(
 
 def ensure_no_auto_run(metadata: dict[str, Any]) -> None:
     """Prevent web-tainted state from becoming an automatic execution source."""
-    normalized = normalize_security(metadata)
+    normalized = normalize_trust_record(metadata)
     if "web" in normalized["taint"] and normalized["capability"] != "none":
         raise SecurityViolation("web-tainted state cannot be auto-run")
 
@@ -207,7 +207,7 @@ def require_sandbox_for_bang(*, sandbox_exists: bool) -> None:
 
 def inherited_label(metadata: dict[str, Any]) -> str:
     """Return a compact label for inherited trust shown in terminal status."""
-    normalized = normalize_security(metadata)
+    normalized = normalize_trust_record(metadata)
     taint = normalized["taint"]
     if "legacy" in taint:
         return "legacy"
@@ -222,7 +222,7 @@ def inherited_label(metadata: dict[str, Any]) -> str:
 
 def candidate_prefix(metadata: dict[str, Any]) -> str:
     """Return the trust prefix shown beside selectable command candidates."""
-    normalized = normalize_security(metadata)
+    normalized = normalize_trust_record(metadata)
     if "legacy" in normalized["taint"]:
         return "[legacy/low-trust]"
     if "web" in normalized["taint"]:

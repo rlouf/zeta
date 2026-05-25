@@ -17,7 +17,7 @@ from typing import Any
 from .ansi import LOVE, MUTED, RESET
 from .commands import COMMAND_SCHEMA, select
 from .qwen import chat_json, ensure_server
-from .security import inherit_security, make_security, normalize_security
+from .security import inherit_security, create_trust_metadata, normalize_trust_record
 from .state import append_event, read_json, write_json
 
 FIX_SYSTEM = (
@@ -96,7 +96,7 @@ def record_failure(
     stdout_text = truncate_snippet(stdout_snippet)
     stderr_text = truncate_snippet(stderr_snippet)
     context = cwd_context(failure_cwd)
-    security = make_security(
+    security = create_trust_metadata(
         glyph="^",
         integrity="human",
         capability="propose",
@@ -181,7 +181,7 @@ def fix_prompt(failure: dict[str, Any]) -> str:
 
 def generate_fixes() -> tuple[str, list[dict[str, str]], dict[str, Any]]:
     """Generate repair candidates for the current session's last failure."""
-    failure = normalize_security(last_failure())
+    failure = normalize_trust_record(last_failure())
     if not ensure_server():
         raise SystemExit(1)
 
@@ -211,7 +211,7 @@ def generate_fixes() -> tuple[str, list[dict[str, str]], dict[str, Any]]:
         print(f"{LOVE}✗ no fix candidates{RESET}", file=sys.stderr)
         raise SystemExit(1)
 
-    security = make_security(
+    security = create_trust_metadata(
         glyph="^",
         integrity="local_model",
         capability="propose",
@@ -248,7 +248,7 @@ def previous_fix() -> tuple[str, list[dict[str, str]], dict[str, Any]]:
         print(f"{LOVE}✗ no previous fix suggestions{RESET}", file=sys.stderr)
         raise SystemExit(1)
     security = inherit_security(
-        glyph="^^", input_records=[normalize_security(data)], capability="propose"
+        glyph="^^", input_records=[normalize_trust_record(data)], capability="propose"
     )
     return str(data.get("prompt", "")), list(data["commands"]), security
 

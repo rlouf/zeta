@@ -25,7 +25,12 @@ from .install import (
 )
 from .pi_stream import stream_events
 from .question import ask
-from .security import inherited_label, make_security, normalize_security, record_id
+from .security import (
+    inherited_label,
+    create_trust_metadata,
+    normalize_trust_record,
+    record_id,
+)
 from .session import (
     clear_current_session,
     current_session_snapshot,
@@ -65,12 +70,7 @@ def cmd_command(
             file=sys.stderr,
         )
         if json_output:
-            print(
-                json.dumps(
-                    {"prompt": prompt, "commands": candidates, **security},
-                    ensure_ascii=False,
-                )
-            )
+            print_json_line({"prompt": prompt, "commands": candidates, **security})
             return 0
         command = (
             select(prompt, candidates, security)
@@ -85,8 +85,8 @@ def cmd_command(
         raise click.UsageError("PROMPT is required unless --previous is set.")
 
     candidates = generate(prompt)
-    source = normalize_security(read_json("last-command.json") or {})
-    security = make_security(
+    source = normalize_trust_record(read_json("last-command.json") or {})
+    security = create_trust_metadata(
         glyph=",",
         integrity="local_model",
         capability="propose",
@@ -96,9 +96,7 @@ def cmd_command(
         fresh_human=True,
     )
     if json_output:
-        print(
-            json.dumps({"prompt": prompt, "commands": candidates}, ensure_ascii=False)
-        )
+        print_json_line({"prompt": prompt, "commands": candidates})
         return 0
     if select_candidate:
         command = select(prompt, candidates, security)
@@ -129,7 +127,7 @@ def run_install_shell(
     """Install or update a Sigil shell binding."""
     result = install_shell(shell, install_dir=install_dir, rc_path=rc_path)
     if json_output:
-        print_json(
+        pretty_print_json(
             {
                 "shell": result.shell,
                 "binding_path": result.binding_path,
@@ -231,9 +229,12 @@ def cmd_render_pi_stream(json_output: bool) -> int:
     return stream_events(json_output=json_output)
 
 
-def print_json(value: object) -> None:
-    """Print inspection data in a stable machine-readable shape."""
+def pretty_print_json(value: object) -> None:
     print(json.dumps(value, ensure_ascii=False, indent=2))
+
+
+def print_json_line(value: object) -> None:
+    print(json.dumps(value, ensure_ascii=False))
 
 
 @cli.group("events")
@@ -248,7 +249,7 @@ def cmd_events_lineage(event_id: str | None, json_output: bool) -> int:
     """Show the provenance chain for an event."""
     lineage = event_lineage(event_id)
     if json_output:
-        print_json(lineage)
+        pretty_print_json(lineage)
         return 0 if lineage["nodes"] else 1
 
     if not lineage["nodes"]:
@@ -281,7 +282,7 @@ def cmd_summary(json_output: bool, limit: int) -> int:
     """Summarize the current session without mutating state."""
     summary = session_summary(limit=max(0, limit))
     if json_output:
-        print_json(summary)
+        pretty_print_json(summary)
         return 0
 
     continuity = summary["continuity"]
@@ -321,14 +322,14 @@ def cmd_session(session_command: str, json_output: bool) -> int:
     if session_command == "path":
         paths = session_paths()
         if json_output:
-            print_json(paths)
+            pretty_print_json(paths)
         else:
             print(paths["session"])
         return 0
     if session_command == "list":
         sessions = known_sessions()
         if json_output:
-            print_json(sessions)
+            pretty_print_json(sessions)
         else:
             for session in sessions:
                 print(f"{session['session_id']}\t{session['path']}")
@@ -336,7 +337,7 @@ def cmd_session(session_command: str, json_output: bool) -> int:
     if session_command == "clear":
         removed = clear_current_session()
         if json_output:
-            print_json({"removed": removed})
+            pretty_print_json({"removed": removed})
         else:
             if removed:
                 for path in removed:
@@ -347,7 +348,7 @@ def cmd_session(session_command: str, json_output: bool) -> int:
 
     snapshot = current_session_snapshot()
     if json_output:
-        print_json(snapshot)
+        pretty_print_json(snapshot)
     else:
         print(f"session {snapshot['session_id']}")
         print(snapshot["path"])

@@ -19,8 +19,8 @@ from sigil.question import ask, renderer_command
 from sigil.security import (
     SecurityViolation,
     inherit_security,
-    make_security,
-    normalize_security,
+    create_trust_metadata,
+    normalize_trust_record,
     reject_promotion,
 )
 from sigil.state import append_event, append_jsonl, read_jsonl, write_json, write_jsonl
@@ -32,7 +32,7 @@ class TtyStringIO(StringIO):
 
 
 def test_legacy_record_is_low_trust() -> None:
-    record = normalize_security({"type": "old"})
+    record = normalize_trust_record({"type": "old"})
     assert record["integrity"] == "unknown"
     assert record["taint"] == ["legacy"]
     assert record["capability"] == "none"
@@ -59,14 +59,14 @@ def test_continuation_descends_to_lowest_integrity_and_keeps_inputs() -> None:
 
 def test_integrity_promotion_requires_fresh_human_input() -> None:
     with pytest.raises(SecurityViolation):
-        make_security(
+        create_trust_metadata(
             glyph="??",
             integrity="local_model",
             capability="propose",
             taint=["model"],
             input_records=[{"integrity": "web", "taint": ["web"]}],
         )
-    security = make_security(
+    security = create_trust_metadata(
         glyph=",",
         integrity="local_model",
         capability="propose",

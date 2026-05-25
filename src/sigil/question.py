@@ -15,8 +15,8 @@ from .ansi import MUTED, RESET
 from .security import (
     inherit_security,
     inherited_label,
-    make_security,
-    normalize_security,
+    create_trust_metadata,
+    normalize_trust_record,
 )
 from .server import start_qwen_for_pi
 from .state import append_event, append_jsonl, read_jsonl, write_jsonl
@@ -75,7 +75,7 @@ def ask(
     previous_turns = discussion_turns() if follow_up else []
     prompt = continuation_prompt(question, previous_turns) if follow_up else question
     if follow_up:
-        input_records = [normalize_security(turn) for turn in previous_turns]
+        input_records = [normalize_trust_record(turn) for turn in previous_turns]
         security = inherit_security(
             glyph="??",
             input_records=input_records,
@@ -84,7 +84,7 @@ def ask(
             provisional=True,
         )
     else:
-        security = make_security(
+        security = create_trust_metadata(
             glyph="?",
             integrity="web",
             capability="read",

@@ -11,7 +11,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from .security import normalize_security
+from .security import normalize_trust_record
 from .state import session_dir, session_id, state_dir
 
 SESSION_FILES = (
@@ -84,7 +84,7 @@ def read_event_log() -> list[dict[str, Any]]:
         except json.JSONDecodeError:
             continue
         if isinstance(event, dict):
-            events.append(normalize_security(event))
+            events.append(normalize_trust_record(event))
     return events
 
 

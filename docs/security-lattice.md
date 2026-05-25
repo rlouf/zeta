@@ -165,6 +165,11 @@ cwd/git context. These are inputs to model-authored repair proposals, so `^` and
 `^^` remain `local_model / propose / model-tainted` and still insert only the
 selected command for human review.
 
+When repair output is a unified diff, Sigil stores it as a patch preview. The
+preview can be checked with `sigil patch check`; applying it requires
+`sigil patch apply --yes` and records a `write_boxed` event linked to the patch
+preview.
+
 ## Enforcement Before New Glyphs
 
 The lattice exists before higher-risk glyphs are added. Current enforcement is

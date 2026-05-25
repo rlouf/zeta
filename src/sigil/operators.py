@@ -6,6 +6,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Literal, cast
 
+from .patches import store_patch_preview
 from .policy import ExecutionPolicy, PolicyDecision, evaluate_policy
 from .qwen import chat_text, ensure_server
 from .security import create_trust_metadata
@@ -140,7 +141,7 @@ def run_invocation(
         taint=["model"],
         fresh_human=True,
     )
-    append_event(
+    event = append_event(
         {
             "type": "operator_completed",
             "operator": invocation.to_dict(),
@@ -150,6 +151,14 @@ def run_invocation(
             **security,
         }
     )
+    if invocation.base == "^":
+        store_patch_preview(
+            patch_text=output,
+            operator=invocation.to_dict(),
+            operator_event=event,
+            decision=decision,
+            security=security,
+        )
     return OperatorResult(output=output, decision=decision)
 
 

@@ -12,6 +12,24 @@ from _patch import patch
 from sigil.cli import cli
 from sigil.operators import create_invocation, parse_operator_token
 from sigil.policy import ExecutionPolicy, classify_output, evaluate_policy
+from sigil.state import read_json, write_json
+
+PATCH_TEXT = """diff --git a/example.txt b/example.txt
+--- a/example.txt
++++ b/example.txt
+@@ -1 +1 @@
+-old
++new
+"""
+
+
+def read_global_events(root: Path) -> list[dict[str, object]]:
+    path = root / "events.jsonl"
+    return [
+        json.loads(line)
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
 
 
 @pytest.mark.parametrize(
@@ -166,6 +184,104 @@ def test_op_cli_runs_piped_repair_preview_with_file_context() -> None:
     assert "stdin targets:\nexample.py" in str(calls["user"])
     assert "--- example.py\nold" in str(calls["user"])
     assert calls["max_tokens"] == 1200
+
+
+def test_repair_operator_stores_unified_diff_patch_preview() -> None:
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        old_state_dir = os.environ.get("SIGIL_STATE_DIR")
+        old_session_id = os.environ.get("SIGIL_SESSION_ID")
+        old_cwd = os.getcwd()
+        state_root = Path(tmp_dir) / "state"
+        os.environ["SIGIL_STATE_DIR"] = str(state_root)
+        os.environ["SIGIL_SESSION_ID"] = "test"
+        os.chdir(tmp_dir)
+        try:
+            Path("example.txt").write_text("old\n", encoding="utf-8")
+            with (
+                patch("sigil.operators.ensure_server", return_value=True),
+                patch("sigil.operators.chat_text", return_value=PATCH_TEXT),
+            ):
+                result = CliRunner().invoke(
+                    cli,
+                    ["op", "^^", "update", "example"],
+                    input="example.txt\n",
+                )
+            stored = read_json("last-patch.json")
+            events = read_global_events(state_root)
+        finally:
+            os.chdir(old_cwd)
+            if old_state_dir is None:
+                os.environ.pop("SIGIL_STATE_DIR", None)
+            else:
+                os.environ["SIGIL_STATE_DIR"] = old_state_dir
+            if old_session_id is None:
+                os.environ.pop("SIGIL_SESSION_ID", None)
+            else:
+                os.environ["SIGIL_SESSION_ID"] = old_session_id
+
+    assert result.exit_code == 0, result.output
+    assert result.stdout == PATCH_TEXT
+    assert isinstance(stored, dict)
+    assert stored["patch"] == PATCH_TEXT.rstrip()
+    assert stored["operator"]["glyph"] == "^^"
+    assert stored["taint"] == ["model"]
+    assert [event["type"] for event in events] == [
+        "operator_completed",
+        "patch_preview_stored",
+    ]
+
+
+def test_patch_apply_requires_yes_and_records_application() -> None:
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp = Path(tmp_dir)
+        work = tmp / "work"
+        work.mkdir()
+        old_state_dir = os.environ.get("SIGIL_STATE_DIR")
+        old_session_id = os.environ.get("SIGIL_SESSION_ID")
+        state_root = tmp / "state"
+        os.environ["SIGIL_STATE_DIR"] = str(state_root)
+        os.environ["SIGIL_SESSION_ID"] = "test"
+        try:
+            target = work / "example.txt"
+            target.write_text("old\n", encoding="utf-8")
+            write_json(
+                "last-patch.json",
+                {
+                    "patch": PATCH_TEXT,
+                    "cwd": str(work),
+                    "event_id": "patch-event",
+                    "glyph": "^^",
+                    "integrity": "local_model",
+                    "capability": "propose",
+                    "taint": ["model"],
+                },
+            )
+
+            blocked = CliRunner().invoke(cli, ["patch", "apply"])
+            checked = CliRunner().invoke(cli, ["patch", "check"])
+            applied = CliRunner().invoke(cli, ["patch", "apply", "--yes"])
+            applied_text = target.read_text(encoding="utf-8")
+            events = read_global_events(state_root)
+        finally:
+            if old_state_dir is None:
+                os.environ.pop("SIGIL_STATE_DIR", None)
+            else:
+                os.environ["SIGIL_STATE_DIR"] = old_state_dir
+            if old_session_id is None:
+                os.environ.pop("SIGIL_SESSION_ID", None)
+            else:
+                os.environ["SIGIL_SESSION_ID"] = old_session_id
+
+    assert blocked.exit_code == 2
+    assert "pass --yes" in blocked.stderr
+    assert checked.exit_code == 0, checked.output
+    assert checked.stdout == "patch applies cleanly\n"
+    assert applied.exit_code == 0, applied.output
+    assert applied.stdout == "patch applied\n"
+    assert applied_text == "new\n"
+    assert [event["type"] for event in events] == ["patch_checked", "patch_applied"]
+    assert "patch" not in events[0]
+    assert events[-1]["capability"] == "write_boxed"
 
 
 def test_policy_classifies_destructive_shell_output() -> None:

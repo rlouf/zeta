@@ -117,6 +117,9 @@ sigil op "," "find wav files"
 sigil op "??" "review risky changes"
 sigil op "^^" "generate cleanup patch"
 sigil op --dry-run ",,," "clean build outputs"
+sigil patch show
+sigil patch check
+sigil patch apply --yes
 sigil install zsh
 sigil doctor
 sigil events lineage
@@ -145,6 +148,7 @@ events.jsonl                                 append-only global event log
 sessions/<session-id>/last-command.json      latest command candidates for `,,`
 sessions/<session-id>/last-failure.json      latest failed shell command
 sessions/<session-id>/last-fix.json          latest fix candidates for `^^`
+sessions/<session-id>/last-patch.json        latest repair patch preview
 sessions/<session-id>/last-question.jsonl    question transcript; reset by `?`
 sessions/<session-id>/last-tools.jsonl       latest Pi tool trace
 ```
@@ -153,6 +157,11 @@ Failure records include command, status, cwd, safe cwd/git context, and optional
 bounded stdout/stderr snippets when a wrapper provides them. Fix suggestions
 show their rationale on stderr or in the selector, while stdout remains only the
 selected command.
+
+Repair operators that emit a unified diff store it as the current patch preview.
+`sigil patch show` prints that preview, `sigil patch check` validates it with
+`git apply --check`, and `sigil patch apply --yes` applies it explicitly with
+`git apply`.
 
 Events and session JSONL entries include these trust fields:
 

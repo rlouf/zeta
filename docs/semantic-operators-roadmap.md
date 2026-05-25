@@ -339,6 +339,13 @@ and `--dry-run` / `--yes --policy allow` are available at the CLI boundary. No
 executor exists yet, so even acknowledged depth-3 output is still emitted as a
 preview.
 
+### Milestone 7: patch application workflow
+
+Status: implemented. Repair operators that emit unified diffs store a patch
+preview in session state. `sigil patch show` prints it, `sigil patch check`
+validates it with `git apply --check`, and `sigil patch apply --yes` applies it
+explicitly with `git apply` while recording provenance events.
+
 ## `@@` status
 
 `@@` search over past Sigil memory is not yet implemented. Session state can be

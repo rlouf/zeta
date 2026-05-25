@@ -14,6 +14,8 @@ sigil op "," "find large files"
 sigil op "??" "what changed in this repo?"
 sigil op "^^" "generate a cleanup patch"
 sigil op --dry-run ",,," "clean build outputs"
+sigil patch check
+sigil patch apply --yes
 sigil install zsh
 sigil doctor
 sigil events lineage
@@ -69,6 +71,34 @@ Current policy behavior:
 
 The policy classifier records broad action classes such as `execute`,
 `file_write`, `network`, `delete`, and `privileged` in the event log.
+
+## `sigil patch`
+
+Repair operators store unified diffs as the current session's patch preview.
+Patch application is separate from `^` / `^^` so model output remains visible
+before any file write.
+
+```sh
+sigil patch show
+sigil patch check
+sigil patch apply --yes
+```
+
+`show` prints the stored diff. `check` runs `git apply --check` in the working
+directory where the preview was created. `apply` requires `--yes` and then runs
+`git apply`; without `--yes`, it exits with status `2` and does not modify
+files.
+
+The JSON form is available for every subcommand:
+
+```sh
+sigil patch show --json
+sigil patch check --json
+sigil patch apply --yes --json
+```
+
+`check` and `apply` record audit events with the patch event id, command,
+status, cwd, and bounded stdout/stderr snippets.
 
 ## `sigil events lineage --json`
 

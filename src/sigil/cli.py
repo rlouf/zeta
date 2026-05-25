@@ -23,6 +23,13 @@ from .install import (
     install_shell,
 )
 from .operators import create_invocation, run_invocation
+from .patches import (
+    apply_patch,
+    check_patch,
+    last_patch,
+    record_patch_apply,
+    record_patch_check,
+)
 from .policy import ExecutionPolicy
 from .pi_stream import stream_events
 from .session import (
@@ -178,6 +185,63 @@ def cmd_doctor(shell_name: str, json_output: bool) -> int:
 def cmd_render_pi_stream(json_output: bool) -> int:
     """Render Pi's JSON event stream for the question pipeline."""
     return stream_events(json_output=json_output)
+
+
+@cli.command("patch")
+@click.argument(
+    "patch_command",
+    required=False,
+    default="show",
+    type=click.Choice(["show", "check", "apply"]),
+)
+@click.option("--json", "json_output", is_flag=True)
+@click.option("--yes", is_flag=True, help="Apply the stored patch preview.")
+def cmd_patch(patch_command: str, json_output: bool, yes: bool) -> int:
+    """Inspect, validate, or explicitly apply the latest patch preview."""
+    try:
+        record = last_patch()
+    except ValueError as exc:
+        raise click.ClickException(str(exc)) from exc
+
+    if patch_command == "show":
+        if json_output:
+            pretty_print_json(record)
+        else:
+            print(
+                str(record["patch"]),
+                end="" if str(record["patch"]).endswith("\n") else "\n",
+            )
+        return 0
+
+    if patch_command == "check":
+        result = check_patch(record)
+        record_patch_check(record, result)
+        if json_output:
+            pretty_print_json(result.to_dict())
+        elif result.ok:
+            print("patch applies cleanly")
+        else:
+            print(result.stderr or "patch check failed", file=sys.stderr, end="")
+        if not result.ok:
+            raise click.exceptions.Exit(result.status or 1)
+        return 0
+
+    if not yes:
+        print(
+            "sigil patch apply: pass --yes to apply the stored patch", file=sys.stderr
+        )
+        raise click.exceptions.Exit(2)
+    result = apply_patch(record)
+    record_patch_apply(record, result)
+    if json_output:
+        pretty_print_json(result.to_dict())
+    elif result.ok:
+        print("patch applied")
+    else:
+        print(result.stderr or "patch apply failed", file=sys.stderr, end="")
+    if not result.ok:
+        raise click.exceptions.Exit(result.status or 1)
+    return 0
 
 
 def pretty_print_json(value: object) -> None:

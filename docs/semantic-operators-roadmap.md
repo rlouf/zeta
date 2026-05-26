@@ -24,8 +24,8 @@ Implemented grammar:
 ```text
 ,   recommend a concrete next action
 ,,  generate and execute a shell command
-?   local inspect question
-??  web-authorized question discussion
+?   web-authorized question
+??  web-authorized question continuation
 ^   recommend a repair for the last failed command or targets
 ^^  preview and confirm generated repair application
 ```
@@ -180,16 +180,17 @@ Examples:
 The trust lattice should cap what each depth can do. More punctuation may mean
 more effort or autonomy, but it must not silently grant destructive authority.
 
-### 6. Separate old question behavior from inspect semantics
+### 6. Question glyphs use the shared operator route
 
-Today `?` means "inspect or analyze." The web-authorized question route lives on
-`??`.
+Current `?` and `??` both enter through `sigil op`, then delegate to the
+web-authorized Pi question route. `?` starts a fresh question transcript; `??`
+continues it.
 
 The stable migration is:
 
-1. Keep interactive `?` on the shared operator runtime.
-2. Keep `??` as the explicit web-authorized question route.
-3. Implement any future deeper inspect forms through the shared operator runtime.
+1. Keep interactive `?` and `??` on the shared operator runtime.
+2. Keep both read-only and web-tainted.
+3. Implement any future deeper inspect forms without adding execute authority.
 
 This avoids breaking existing usage while moving toward the README semantics.
 
@@ -306,8 +307,8 @@ Keep output on stdout so normal Unix composition works.
 Status: implemented. Shell glyph wrappers and prompt dispatch now use `sigil op`
 directly; the public verb CLI routes remain available.
 
-Interactive `?`, comma, and repair glyphs use the operator core. `??` remains
-the explicit web-authorized question route.
+Interactive question, comma, and repair glyphs use the operator core. Question
+glyphs delegate from that core to the explicit web-authorized question route.
 
 ### Milestone 6: comma autonomy
 

@@ -46,7 +46,7 @@ the long-form verbs.
 ^   -> sigil op "^"
 ^^  -> sigil op "^^"
 ?   -> sigil op "?"
-??  -> sigil ask --follow-up
+??  -> sigil op "??"
 ```
 
 Sigil records every invocation with trust metadata. This is the core trust
@@ -65,8 +65,8 @@ The default glyph aliases map to:
 ,,  human prompt -> generated command run  local_model / exec_boxed / model-tainted
 ^   failed command/files -> repair proposal local_model / propose / model-tainted
 ^^  generated repair apply after confirm    local_model -> write/exec boxed
-?   local inspect question                 local_model / read / model-tainted
-??  web-authorized question                inherits prior question taint / provisional
+?   web-authorized question                web / read / provisional
+??  web-authorized follow-up               inherits prior question taint / provisional
 ```
 
 This matters because only the explicit comma execution route crosses into
@@ -252,8 +252,10 @@ When glyphs are enabled, Bash also supports:
 `,` prints a recommended command plus explanation and adds the command to shell
 history. Non-piped `,,` executes the generated command immediately. Piped comma
 routes ask before using the input, and piped `,,` asks again before execution.
-`^` prints a repair proposal. `^^` previews a generated patch or command and asks
-before applying or executing it.
+`?` answers through the web-authorized read route; `??` continues the same
+question transcript through that route. Piped question routes ask before using
+the input. `^` prints a repair proposal. `^^` previews a generated patch or
+command and asks before applying or executing it.
 
 ## Requirements
 

@@ -80,8 +80,8 @@ The implemented grammar is:
 ```text
 ,   recommend a concrete next action
 ,,  generate and execute a shell command
-?   local inspect question
-??  web-authorized question discussion
+?   web-authorized question
+??  web-authorized question continuation
 ^   recommend a repair for the last failure or stdin targets
 ^^  preview and confirm generated repair application
 ```
@@ -110,11 +110,11 @@ It maps to the lattice as follows:
     capability=propose, then write_boxed or exec_boxed after confirmation
     taint=["model"]
 
-?   local inspect question
-    integrity=local_model
+?   question
+    integrity=web
     capability=read
-    taint=["model"]
-    provisional=false
+    taint=["web"]
+    provisional=true
 
 ??  question continuation
     inherits previous question transcript integrity and taint
@@ -123,8 +123,8 @@ It maps to the lattice as follows:
     provisional=true
 ```
 
-The `?` route uses the local inspect operator. The `??` route invokes Pi with
-`read,web_search`, so it is web-tainted by construction. Both routes are
+The `?` and `??` routes both enter through `sigil op` and then invoke Pi with
+`read,web_search`, so they are web-tainted by construction. Both routes are
 read-only and have no execute path.
 
 ## Visible Descent
@@ -157,10 +157,9 @@ legacy before the user recalls it for review.
 Continuations inherit maximum taint and minimum integrity from their inputs.
 
 For question routes, `last-question.jsonl` stores user and assistant transcript
-turns with their originating event IDs. Local `?` reads that transcript for
-same-terminal continuity. Web-authorized `??` consumes those transcript records,
-inherits their taint and integrity, and records the consumed IDs in the new
-question event.
+turns with their originating event IDs. Fresh `?` starts a new web-authorized
+question transcript. `??` consumes prior transcript records, inherits their
+taint and integrity, and records the consumed IDs in the new question event.
 
 This means the event log can reconstruct every continuation input instead of
 relying on shell globals or implicit session memory.

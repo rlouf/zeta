@@ -13,7 +13,7 @@ from _patch import patch
 from sigil.cli import cli
 from sigil.operators import create_invocation, parse_operator_token
 from sigil.policy import ExecutionPolicy, classify_output, evaluate_policy
-from sigil.state import read_json, read_jsonl, write_json
+from sigil.state import read_json, write_json
 
 PATCH_TEXT = """diff --git a/example.txt b/example.txt
 --- a/example.txt
@@ -100,19 +100,16 @@ def test_op_cli_json_does_not_run_operator() -> None:
     assert result.exit_code == 0, result.output
 
 
-def test_op_cli_runs_piped_inspect_operator() -> None:
-    calls = {}
+def test_op_cli_runs_piped_question_operator_through_web_route() -> None:
+    calls = []
 
-    def fake_chat_text(system: str, user: str, *, max_tokens: int = 1200) -> str:
-        calls["system"] = system
-        calls["user"] = user
-        calls["max_tokens"] = max_tokens
-        return "risk summary\n"
+    def fake_ask(*args: object, **kwargs: object) -> int:
+        calls.append((args, kwargs))
+        return 0
 
     with (
-        patch("sigil.operators.ensure_server", return_value=True),
-        patch("sigil.operators.chat_text", side_effect=fake_chat_text),
-        patch("sigil.operators.append_event", return_value={}),
+        patch("sigil.cli.confirm_piped_input", return_value=True),
+        patch("sigil.cli.ask", side_effect=fake_ask),
     ):
         result = CliRunner().invoke(
             cli,
@@ -120,57 +117,31 @@ def test_op_cli_runs_piped_inspect_operator() -> None:
             input="diff --git a/file b/file\n",
         )
     assert result.exit_code == 0, result.output
-    assert result.output == "risk summary\n"
-    assert "Depth: 2" in str(calls["system"])
-    assert "Prompt: review risky changes" in str(calls["user"])
-    assert "diff --git a/file b/file" in str(calls["user"])
-    assert calls["max_tokens"] == 1200
+    assert calls == [
+        (
+            ("review risky changes\n\nPiped input:\ndiff --git a/file b/file\n",),
+            {"follow_up": True},
+        )
+    ]
 
 
-def test_inspect_operator_continues_question_transcript() -> None:
+def test_question_operators_share_web_route_for_fresh_and_follow_up() -> None:
     calls = []
 
-    def fake_chat_text(system: str, user: str, *, max_tokens: int = 1200) -> str:
-        del system, max_tokens
-        calls.append(user)
-        return "first answer" if len(calls) == 1 else "second answer"
+    def fake_ask(*args: object, **kwargs: object) -> int:
+        calls.append((args, kwargs))
+        return 0
 
-    with tempfile.TemporaryDirectory() as tmp_dir:
-        old_state_dir = os.environ.get("SIGIL_STATE_DIR")
-        old_session_id = os.environ.get("SIGIL_SESSION_ID")
-        os.environ["SIGIL_STATE_DIR"] = tmp_dir
-        os.environ["SIGIL_SESSION_ID"] = "question-session"
-        try:
-            with (
-                patch("sigil.operators.ensure_server", return_value=True),
-                patch("sigil.operators.chat_text", side_effect=fake_chat_text),
-            ):
-                first = CliRunner().invoke(cli, ["op", "?", "first", "question"])
-                second = CliRunner().invoke(cli, ["op", "?", "second", "question"])
-            turns = read_jsonl("last-question.jsonl")
-        finally:
-            if old_state_dir is None:
-                os.environ.pop("SIGIL_STATE_DIR", None)
-            else:
-                os.environ["SIGIL_STATE_DIR"] = old_state_dir
-            if old_session_id is None:
-                os.environ.pop("SIGIL_SESSION_ID", None)
-            else:
-                os.environ["SIGIL_SESSION_ID"] = old_session_id
+    with patch("sigil.cli.ask", side_effect=fake_ask):
+        first = CliRunner().invoke(cli, ["op", "?", "first", "question"])
+        second = CliRunner().invoke(cli, ["op", "??", "second", "question"])
 
     assert first.exit_code == 0, first.output
     assert second.exit_code == 0, second.output
-    assert "Previous question transcript" not in calls[0]
-    assert "Previous question transcript" in calls[1]
-    assert "user:\nfirst question" in calls[1]
-    assert "assistant:\nfirst answer" in calls[1]
-    assert [turn["role"] for turn in turns] == [
-        "user",
-        "assistant",
-        "user",
-        "assistant",
+    assert calls == [
+        (("first question",), {"follow_up": False}),
+        (("second question",), {"follow_up": True}),
     ]
-    assert turns[-1]["content"] == "second answer"
 
 
 def test_op_cli_runs_piped_recommend_operator() -> None:
@@ -564,12 +535,31 @@ def test_op_cli_dry_run_double_comma_does_not_execute() -> None:
     assert "dry-run" in result.stderr
 
 
+def test_op_cli_dry_run_question_does_not_call_web_route() -> None:
+    with patch("sigil.cli.ask", side_effect=AssertionError("no web")):
+        result = CliRunner().invoke(cli, ["op", "--dry-run", "?", "status"])
+
+    assert result.exit_code == 0
+    assert "read+web question route" in result.output
+
+
 def test_op_cli_denies_piped_comma_before_model_call() -> None:
     with (
         patch("sigil.cli.confirm_piped_input", return_value=False),
         patch("sigil.operators.chat_json", side_effect=AssertionError("no model")),
     ):
         result = CliRunner().invoke(cli, ["op", ",", "summarize"], input="notes\n")
+
+    assert result.exit_code == 2
+    assert "piped input declined" in result.stderr
+
+
+def test_op_cli_denies_piped_question_before_web_call() -> None:
+    with (
+        patch("sigil.cli.confirm_piped_input", return_value=False),
+        patch("sigil.cli.ask", side_effect=AssertionError("no web")),
+    ):
+        result = CliRunner().invoke(cli, ["op", "?", "review"], input="diff\n")
 
     assert result.exit_code == 2
     assert "piped input declined" in result.stderr
@@ -664,12 +654,12 @@ def test_op_cli_accepts_piped_double_comma_execution() -> None:
 
 
 def test_verb_commands_run_piped_stream_operators() -> None:
-    calls = []
+    ask_calls = []
     json_calls = []
 
-    def fake_chat_text(system: str, user: str, *, max_tokens: int = 1200) -> str:
-        calls.append((system, user, max_tokens))
-        return "stream result"
+    def fake_ask(*args: object, **kwargs: object) -> int:
+        ask_calls.append((args, kwargs))
+        return 0
 
     def fake_chat_json(
         system: str, user: str, schema: dict[str, object]
@@ -681,8 +671,8 @@ def test_verb_commands_run_piped_stream_operators() -> None:
 
     with (
         patch("sigil.operators.ensure_server", return_value=True),
-        patch("sigil.operators.chat_text", side_effect=fake_chat_text),
         patch("sigil.operators.chat_json", side_effect=fake_chat_json),
+        patch("sigil.cli.ask", side_effect=fake_ask),
         patch("sigil.cli.confirm_piped_input", return_value=True),
         patch("sigil.operators.append_event", return_value={}),
     ):
@@ -705,10 +695,10 @@ def test_verb_commands_run_piped_stream_operators() -> None:
     assert ask_result.exit_code == 0, ask_result.output
     assert command_result.exit_code == 0, command_result.output
     assert fix_result.exit_code == 0, fix_result.output
-    assert ask_result.output == "stream result\n"
+    assert ask_result.output == ""
     assert command_result.output == "stream result\nbecause stdin\n"
     assert fix_result.output == "repair summary\nbecause stdin\n"
-    assert "Operator: ? (inspect)" in calls[0][1]
+    assert ask_calls == [(("review\n\nPiped input:\ndiff\n",), {"follow_up": False})]
     assert "Operator: , (recommend)" in json_calls[0][1]
     assert "Operator: ^ (repair)" in json_calls[1][1]
 

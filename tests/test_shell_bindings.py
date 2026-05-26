@@ -23,8 +23,6 @@ def make_stub(tmp: Path) -> Path:
               "command draft executive summary") printf '%s\n' "stream command" ;;
               "fix") printf '%s\n' "echo fix" ;;
               "ask hello") printf '%s\n' "answer" ;;
-              "ask --follow-up hello") printf '%s\n' "follow-up" ;;
-              "ask --follow-up review risky changes") printf '%s\n' "stream follow-up" ;;
               "op , hello") printf '%s\n%s\n' "echo recommended" "because it is safe" ;;
               "op , draft executive summary") printf '%s\n%s\n' "echo stream recommended" "because stdin matters" ;;
               op*) printf '%s\n' "op:$*" ;;
@@ -85,13 +83,14 @@ def test_bash_wrappers_call_current_cli_contract() -> None:
             "op , hello",
             "op ,, hello",
             "op ? hello",
-            "ask --follow-up hello",
+            "op ?? hello",
             "op ^",
             "op ^^",
         ]
         assert "echo recommended" in result.stdout
         assert "because it is safe" in result.stdout
         assert "op:op ,, hello" in result.stdout
+        assert "op:op ?? hello" in result.stdout
         assert "op:op ^" in result.stdout
         assert "op:op ^^" in result.stdout
         assert "history=echo recommended" in result.stdout
@@ -162,7 +161,7 @@ def test_bash_wrappers_dispatch_piped_stdin_to_operator_runtime() -> None:
         )
         assert_success(result)
         assert read_log(tmp) == [
-            "ask --follow-up review risky changes",
+            "op ?? review risky changes",
             "op , draft executive summary",
             "op ,, run it",
             "op ^^ rename symbol",
@@ -239,13 +238,14 @@ def test_zsh_wrappers_call_current_cli_contract() -> None:
             "op , hello",
             "op ,, hello",
             "op ? hello",
-            "ask --follow-up hello",
+            "op ?? hello",
             "op ^",
             "op ^^",
         ]
         assert "echo recommended" in result.stdout
         assert "because it is safe" in result.stdout
         assert "op:op ,, hello" in result.stdout
+        assert "op:op ?? hello" in result.stdout
         assert "op:op ^" in result.stdout
         assert "op:op ^^" in result.stdout
         assert "history=echo recommended" in result.stdout
@@ -266,12 +266,12 @@ def test_zsh_wrappers_dispatch_piped_stdin_to_operator_runtime() -> None:
         )
         assert_success(result)
         assert read_log(tmp) == [
-            "ask --follow-up review risky changes",
+            "op ?? review risky changes",
             "op , draft executive summary",
             "op ,, run it",
             "op ^^ rename symbol",
         ]
-        assert "stream follow-up" in result.stdout
+        assert "op:op ?? review risky changes" in result.stdout
         assert "echo stream recommended" in result.stdout
         assert "because stdin matters" in result.stdout
         assert "op:op ,, run it" in result.stdout
@@ -293,7 +293,7 @@ def test_zsh_glyph_aliases_dispatch_piped_stdin_before_globbing() -> None:
         )
         assert_success(result)
         assert read_log(tmp) == [
-            "ask --follow-up review risky changes",
+            "op ?? review risky changes",
             "op , draft executive summary",
             "op ,, run it",
         ]

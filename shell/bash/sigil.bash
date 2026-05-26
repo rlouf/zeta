@@ -68,7 +68,7 @@ sigil_question() {
 }
 
 sigil_follow_up() {
-  "$__sigil_bin" ask --follow-up "$*"
+  "$__sigil_bin" op "??" "$@"
 }
 
 sigil_fix() {

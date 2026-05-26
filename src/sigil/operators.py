@@ -460,7 +460,7 @@ def inspect_user_prompt(invocation: OperatorInvocation) -> str:
 
 
 def inspect_turns() -> list[dict[str, object]]:
-    """Load same-session question turns visible to local inspect."""
+    """Load same-session question turns visible to inspect prompts."""
     return [
         turn
         for turn in read_jsonl(QUESTION_TRANSCRIPT)
@@ -474,7 +474,7 @@ def append_inspect_turns(
     event: dict[str, object],
     security: dict[str, object],
 ) -> None:
-    """Record local inspect turns for same-terminal continuity."""
+    """Record inspect turns for same-terminal continuity."""
     event_id = str(event.get("id") or "")
     prompt = invocation.prompt or default_prompt(invocation)
     if invocation.stdin:

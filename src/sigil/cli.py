@@ -83,6 +83,9 @@ def run_stream_operator(
             print("sigil op: piped input declined", file=sys.stderr)
             raise click.exceptions.Exit(2)
 
+    if invocation.base == "?":
+        return run_question_operator(invocation)
+
     try:
         result = run_invocation(
             invocation,
@@ -219,6 +222,15 @@ def cmd_op(
             print("sigil op: piped input declined", file=sys.stderr)
             raise click.exceptions.Exit(2)
 
+    if invocation.base == "?":
+        if dry_run:
+            print(
+                "sigil op: ? dry-run: would call read+web question route",
+                file=sys.stderr,
+            )
+            return 0
+        return run_question_operator(invocation)
+
     try:
         result = run_invocation(
             invocation,
@@ -245,7 +257,7 @@ def cmd_op(
 def should_confirm_piped_input(invocation: object) -> bool:
     """Return whether an operator needs piped-input confirmation."""
     return (
-        getattr(invocation, "base", None) in {",", "^"}
+        getattr(invocation, "base", None) in {"?", ",", "^"}
         and getattr(invocation, "mode", None) == "pipeline"
         and bool(getattr(invocation, "stdin", ""))
     )
@@ -275,6 +287,20 @@ def confirm_piped_input(stdin_text: str) -> bool:
     print(stdin_preview(stdin_text), file=sys.stderr)
     print("", file=sys.stderr)
     return confirm_on_tty("Use this input? [y/N] ")
+
+
+def run_question_operator(invocation: object) -> int:
+    """Run question glyphs through the web-authorized ask route."""
+    question = str(getattr(invocation, "prompt", "") or "")
+    stdin_text = str(getattr(invocation, "stdin", "") or "")
+    if stdin_text:
+        question = question_with_stdin(question, stdin_text)
+    if not question:
+        question = "Answer the current shell question."
+    return ask(
+        question,
+        follow_up=getattr(invocation, "depth", 0) >= 2,
+    )
 
 
 def stdin_preview(text: str) -> str:

@@ -26,8 +26,8 @@ Implemented grammar:
 ,,  generate and execute a shell command
 ?   local inspect question
 ??  web-authorized question discussion
-^   suggest fixes for the last failed command
-^^  deeper repair pass
+^   recommend a repair for the last failed command or targets
+^^  preview and confirm generated repair application
 ```
 
 Important existing foundations:
@@ -155,12 +155,12 @@ Current semantics:
 comma depth 1: recommend one concrete next action
 comma depth 2: generate and execute one shell command
 other depth 1: quick, low-context, no mutation
-other depth 2: deeper, can inspect more local context, still preview-first
+repair depth 2: preview a generated repair, then apply only after confirmation
 ```
 
-Piped input is treated as opaque context. Comma routes preview piped input and
-require confirmation before using it; piped comma depth 2 also requires command
-confirmation before execution.
+Piped input is treated as opaque context. Comma and repair routes preview piped
+input and require confirmation before using it; piped comma depth 2 also
+requires command confirmation before execution.
 
 Examples:
 
@@ -172,8 +172,8 @@ Examples:
 ,      recommend best approach
 ,,     infer and execute
 
-^      suggest repair
-^^     apply likely repair only through preview/patch workflow
+^      recommend repair
+^^     preview and confirm generated repair application
 ^^^    iterate until success only inside a boxed execution policy
 ```
 
@@ -327,10 +327,11 @@ semantics are explicit: `,` recommends and `,,` executes.
 
 ### Milestone 7: patch application workflow
 
-Status: implemented. Repair operators that emit unified diffs store a patch
-preview in session state. `sigil patch show` prints it, `sigil patch check`
-validates it with `git apply --check`, and `sigil patch apply --yes` applies it
-explicitly with `git apply` while recording provenance events.
+Status: implemented. Double repair operators that emit unified diffs store a
+patch preview in session state, show it, and ask before applying it. `sigil
+patch show` prints the latest preview, `sigil patch check` validates it with
+`git apply --check`, and `sigil patch apply --yes` applies it explicitly with
+`git apply` while recording provenance events.
 
 ## `@@` status
 

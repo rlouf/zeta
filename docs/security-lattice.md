@@ -82,8 +82,8 @@ The implemented grammar is:
 ,,  generate and execute a shell command
 ?   local inspect question
 ??  web-authorized question discussion
-^   preview a repair for the last failure or stdin targets
-^^  run a deeper repair preview pass
+^   recommend a repair for the last failure or stdin targets
+^^  preview and confirm generated repair application
 ```
 
 It maps to the lattice as follows:
@@ -100,14 +100,14 @@ It maps to the lattice as follows:
     capability=exec_boxed
     taint=["model"]
 
-^   failed command/files -> repair preview
+^   failed command/files -> repair proposal
     integrity=local_model
     capability=propose
     taint=["model"]
 
-^^  failed command/files -> deeper repair preview
+^^  failed command/files -> confirmed repair application
     integrity=local_model
-    capability=propose
+    capability=propose, then write_boxed or exec_boxed after confirmation
     taint=["model"]
 
 ?   local inspect question
@@ -171,14 +171,15 @@ Session state files can be inspected with `sigil session show` for debugging.
 This does not call a model, append events, or create executable shell text.
 
 Failure repair records may include bounded stdout/stderr snippets and safe local
-cwd/git context. These are inputs to model-authored repair proposals, so `^` and
-`^^` remain `local_model / propose / model-tainted` and only print repair
-previews.
+cwd/git context. These are inputs to model-authored repair proposals, so `^`
+remains `local_model / propose / model-tainted`. `^^` starts with the same
+model-authored proposal, then requires confirmation before crossing into
+`write_boxed` for patch application or `exec_boxed` for a repair command.
 
-When repair output is a unified diff, Sigil stores it as a patch preview. The
-preview can be checked with `sigil patch check`; applying it requires
-`sigil patch apply --yes` and records a `write_boxed` event linked to the patch
-preview.
+When double repair output is a unified diff, Sigil stores it as a patch preview
+before confirmation. The preview can also be checked later with `sigil patch
+check`; applying it later requires `sigil patch apply --yes` and records a
+`write_boxed` event linked to the patch preview.
 
 ## Enforcement Before New Glyphs
 

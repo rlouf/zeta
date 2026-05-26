@@ -20,8 +20,8 @@ streaming, rendering, and persistent state.
 ```text
 sigil command "find wav files"              generate command candidates
 sigil fix                                   suggest fixes for the last failure
-sigil op "^"                                repair from stdin or last failure
-sigil op "^^"                               deeper repair pass
+sigil op "^"                                recommend a repair
+sigil op "^^"                               preview and confirm repair apply
 sigil ask "what changed in this repo?"      answer a question with Pi
 sigil ask --follow-up "what should I run?"  continue the prior answer
 ```
@@ -63,8 +63,8 @@ The default glyph aliases map to:
 ```text
 ,   human prompt -> model recommendation   local_model / propose / model-tainted
 ,,  human prompt -> generated command run  local_model / exec_boxed / model-tainted
-^   failed command/files -> repair preview  local_model / propose / model-tainted
-^^  failed command/files -> deeper repair   local_model / propose / model-tainted
+^   failed command/files -> repair proposal local_model / propose / model-tainted
+^^  generated repair apply after confirm    local_model -> write/exec boxed
 ?   local inspect question                 local_model / read / model-tainted
 ??  web-authorized question                inherits prior question taint / provisional
 ```
@@ -161,7 +161,9 @@ sigil session clear
 
 The shell bindings call `sigil op` for glyph behavior. `,` prints one
 recommended command with an explanation and adds the command to shell history;
-`,,` asks for one shell command and executes it. When either comma route receives
+`,,` asks for one shell command and executes it. `^` prints one repair action
+with an explanation. `^^` generates a patch or repair command, shows the preview,
+and asks before applying or executing it. When comma or repair routes receive
 piped input, Sigil previews that input and asks for confirmation before using it;
 piped `,,` also asks before executing the generated command.
 
@@ -188,10 +190,10 @@ bounded stdout/stderr snippets when a wrapper provides them. Fix suggestions
 show their rationale on stderr or in the selector, while stdout remains only the
 selected command.
 
-Repair operators that emit a unified diff store it as the current patch preview.
-`sigil patch show` prints that preview, `sigil patch check` validates it with
-`git apply --check`, and `sigil patch apply --yes` applies it explicitly with
-`git apply`.
+Double repair operators that emit a unified diff store it as the current patch
+preview before confirmation. `sigil patch show` prints that preview,
+`sigil patch check` validates it with `git apply --check`, and `sigil patch
+apply --yes` applies it explicitly with `git apply`.
 
 Events and session JSONL entries include these trust fields:
 
@@ -243,7 +245,8 @@ When glyphs are enabled, Bash also supports:
 `,` prints a recommended command plus explanation and adds the command to shell
 history. Non-piped `,,` executes the generated command immediately. Piped comma
 routes ask before using the input, and piped `,,` asks again before execution.
-`^` and `^^` print repair previews.
+`^` prints a repair proposal. `^^` previews a generated patch or command and asks
+before applying or executing it.
 
 ## Requirements
 

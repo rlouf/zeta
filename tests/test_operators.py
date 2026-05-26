@@ -165,11 +165,16 @@ def test_op_cli_runs_piped_recommend_operator() -> None:
 def test_op_cli_runs_piped_repair_preview_with_file_context() -> None:
     calls = {}
 
-    def fake_chat_text(system: str, user: str, *, max_tokens: int = 1200) -> str:
+    def fake_chat_json(
+        system: str, user: str, schema: dict[str, object]
+    ) -> dict[str, str]:
         calls["system"] = system
         calls["user"] = user
-        calls["max_tokens"] = max_tokens
-        return "--- a/example.py\n+++ b/example.py\n@@\n-old\n+new"
+        calls["schema"] = schema
+        return {
+            "repair": "Update example.py so old becomes new.",
+            "explanation": "The target file contains the old symbol.",
+        }
 
     with tempfile.TemporaryDirectory() as tmp_dir:
         old_cwd = os.getcwd()
@@ -178,24 +183,29 @@ def test_op_cli_runs_piped_repair_preview_with_file_context() -> None:
             Path("example.py").write_text("old\n", encoding="utf-8")
             with (
                 patch("sigil.operators.ensure_server", return_value=True),
-                patch("sigil.operators.chat_text", side_effect=fake_chat_text),
+                patch("sigil.operators.chat_json", side_effect=fake_chat_json),
+                patch("sigil.cli.confirm_piped_input", return_value=True),
                 patch("sigil.operators.append_event", return_value={}),
             ):
                 result = CliRunner().invoke(
                     cli,
-                    ["op", "^^", "rename", "old", "to", "new"],
+                    ["op", "^", "rename", "old", "to", "new"],
                     input="example.py\n",
                 )
         finally:
             os.chdir(old_cwd)
 
     assert result.exit_code == 0, result.output
-    assert result.output.startswith("--- a/example.py\n+++ b/example.py\n")
+    assert result.output == (
+        "Update example.py so old becomes new.\n"
+        "The target file contains the old symbol.\n"
+    )
     assert "repair operator" in str(calls["system"])
     assert "Prompt: rename old to new" in str(calls["user"])
     assert "stdin targets:\nexample.py" in str(calls["user"])
     assert "--- example.py\nold" in str(calls["user"])
-    assert calls["max_tokens"] == 1200
+    assert "repair" in str(calls["schema"])
+    assert "explanation" in str(calls["schema"])
 
 
 def test_repair_operator_stores_unified_diff_patch_preview() -> None:
@@ -211,7 +221,12 @@ def test_repair_operator_stores_unified_diff_patch_preview() -> None:
             Path("example.txt").write_text("old\n", encoding="utf-8")
             with (
                 patch("sigil.operators.ensure_server", return_value=True),
-                patch("sigil.operators.chat_text", return_value=PATCH_TEXT),
+                patch(
+                    "sigil.operators.chat_json",
+                    return_value={"kind": "patch", "repair": PATCH_TEXT},
+                ),
+                patch("sigil.cli.confirm_piped_input", return_value=True),
+                patch("sigil.operators.confirm_repair_application", return_value=False),
             ):
                 result = CliRunner().invoke(
                     cli,
@@ -231,16 +246,99 @@ def test_repair_operator_stores_unified_diff_patch_preview() -> None:
             else:
                 os.environ["SIGIL_SESSION_ID"] = old_session_id
 
-    assert result.exit_code == 0, result.output
+    assert result.exit_code == 2, result.output
     assert result.stdout == PATCH_TEXT
+    assert "repair application declined" in result.stderr
     assert isinstance(stored, dict)
-    assert stored["patch"] == PATCH_TEXT.rstrip()
+    assert stored["patch"] == PATCH_TEXT
     assert stored["operator"]["glyph"] == "^^"
     assert stored["taint"] == ["model"]
     assert [event["type"] for event in events] == [
         "operator_completed",
         "patch_preview_stored",
     ]
+
+
+def test_double_repair_applies_confirmed_patch() -> None:
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        old_state_dir = os.environ.get("SIGIL_STATE_DIR")
+        old_session_id = os.environ.get("SIGIL_SESSION_ID")
+        old_cwd = os.getcwd()
+        state_root = Path(tmp_dir) / "state"
+        os.environ["SIGIL_STATE_DIR"] = str(state_root)
+        os.environ["SIGIL_SESSION_ID"] = "test"
+        os.chdir(tmp_dir)
+        try:
+            target = Path("example.txt")
+            target.write_text("old\n", encoding="utf-8")
+            with (
+                patch("sigil.operators.ensure_server", return_value=True),
+                patch(
+                    "sigil.operators.chat_json",
+                    return_value={"kind": "patch", "repair": PATCH_TEXT},
+                ),
+                patch("sigil.operators.confirm_repair_application", return_value=True),
+            ):
+                result = CliRunner().invoke(
+                    cli,
+                    ["op", "^^", "update", "example"],
+                )
+            applied_text = target.read_text(encoding="utf-8")
+            events = read_global_events(state_root)
+        finally:
+            os.chdir(old_cwd)
+            if old_state_dir is None:
+                os.environ.pop("SIGIL_STATE_DIR", None)
+            else:
+                os.environ["SIGIL_STATE_DIR"] = old_state_dir
+            if old_session_id is None:
+                os.environ.pop("SIGIL_SESSION_ID", None)
+            else:
+                os.environ["SIGIL_SESSION_ID"] = old_session_id
+
+    assert result.exit_code == 0, result.output
+    assert result.stdout == PATCH_TEXT
+    assert "patch applied" in result.stderr
+    assert applied_text == "new\n"
+    assert [event["type"] for event in events] == [
+        "operator_completed",
+        "patch_preview_stored",
+        "patch_applied",
+    ]
+    assert events[-1]["capability"] == "write_boxed"
+
+
+def test_double_repair_executes_confirmed_command() -> None:
+    events = []
+
+    def fake_append_event(event: dict[str, object]) -> dict[str, object]:
+        event = {"id": f"event-{len(events)}", **event}
+        events.append(event)
+        return event
+
+    with (
+        patch("sigil.operators.ensure_server", return_value=True),
+        patch(
+            "sigil.operators.chat_json",
+            return_value={"kind": "command", "repair": "touch fixed.txt"},
+        ),
+        patch("sigil.operators.confirm_repair_application", return_value=True),
+        patch(
+            "sigil.operators.subprocess.run",
+            return_value=subprocess.CompletedProcess(
+                ["zsh", "-lc", "touch fixed.txt"], 0, stdout="", stderr=""
+            ),
+        ),
+        patch("sigil.operators.append_event", side_effect=fake_append_event),
+    ):
+        result = CliRunner().invoke(cli, ["op", "^^", "fix", "it"])
+
+    assert result.exit_code == 0, result.output
+    assert result.stdout == "touch fixed.txt\n"
+    assert result.stderr == ""
+    assert events[-1]["type"] == "operator_repair_command_executed"
+    assert events[-1]["command"] == "touch fixed.txt"
+    assert events[-1]["capability"] == "exec_boxed"
 
 
 def test_patch_apply_requires_yes_and_records_application() -> None:
@@ -531,6 +629,8 @@ def test_verb_commands_run_piped_stream_operators() -> None:
         system: str, user: str, schema: dict[str, object]
     ) -> dict[str, str]:
         json_calls.append((system, user, schema))
+        if "Operator: ^ (repair)" in user:
+            return {"repair": "repair summary", "explanation": "because stdin"}
         return {"command": "stream result", "explanation": "because stdin"}
 
     with (
@@ -561,10 +661,10 @@ def test_verb_commands_run_piped_stream_operators() -> None:
     assert fix_result.exit_code == 0, fix_result.output
     assert ask_result.output == "stream result\n"
     assert command_result.output == "stream result\nbecause stdin\n"
-    assert fix_result.output == "stream result\n"
+    assert fix_result.output == "repair summary\nbecause stdin\n"
     assert "Operator: ? (inspect)" in calls[0][1]
     assert "Operator: , (recommend)" in json_calls[0][1]
-    assert "Operator: ^ (repair)" in calls[1][1]
+    assert "Operator: ^ (repair)" in json_calls[1][1]
 
 
 def test_op_cli_rejects_mixed_glyphs() -> None:

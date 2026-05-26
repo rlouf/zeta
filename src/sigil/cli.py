@@ -82,7 +82,8 @@ def run_stream_operator(
         result = run_invocation(
             invocation,
             policy=ExecutionPolicy(
-                confirm_execution=should_confirm_execution(invocation)
+                confirm_execution=should_confirm_execution(invocation),
+                confirm_repair=should_confirm_repair(invocation),
             ),
         )
     except RuntimeError as exc:
@@ -95,7 +96,7 @@ def run_stream_operator(
     if result.stderr:
         print(result.stderr, file=sys.stderr, end="")
     if result.output:
-        print(result.output)
+        print(result.output, end="" if result.output.endswith("\n") else "\n")
     if result.exit_code:
         raise click.exceptions.Exit(result.exit_code)
     return 0
@@ -219,6 +220,7 @@ def cmd_op(
             policy=ExecutionPolicy(
                 dry_run=dry_run,
                 confirm_execution=should_confirm_execution(invocation),
+                confirm_repair=should_confirm_repair(invocation),
             ),
         )
     except RuntimeError as exc:
@@ -229,16 +231,16 @@ def cmd_op(
     if result.stderr:
         print(result.stderr, file=sys.stderr, end="")
     if result.output:
-        print(result.output)
+        print(result.output, end="" if result.output.endswith("\n") else "\n")
     if result.exit_code:
         raise click.exceptions.Exit(result.exit_code)
     return 0
 
 
 def should_confirm_piped_input(invocation: object) -> bool:
-    """Return whether a comma operator needs piped-input confirmation."""
+    """Return whether an operator needs piped-input confirmation."""
     return (
-        getattr(invocation, "base", None) == ","
+        getattr(invocation, "base", None) in {",", "^"}
         and getattr(invocation, "mode", None) == "pipeline"
         and bool(getattr(invocation, "stdin", ""))
     )
@@ -247,7 +249,17 @@ def should_confirm_piped_input(invocation: object) -> bool:
 def should_confirm_execution(invocation: object) -> bool:
     """Return whether command execution needs confirmation."""
     return (
-        should_confirm_piped_input(invocation) and getattr(invocation, "depth", 0) >= 2
+        getattr(invocation, "base", None) == ","
+        and should_confirm_piped_input(invocation)
+        and getattr(invocation, "depth", 0) >= 2
+    )
+
+
+def should_confirm_repair(invocation: object) -> bool:
+    """Return whether generated repair application needs confirmation."""
+    return (
+        getattr(invocation, "base", None) == "^"
+        and getattr(invocation, "depth", 0) >= 2
     )
 
 

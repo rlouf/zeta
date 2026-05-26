@@ -52,9 +52,10 @@ Stable fields:
 - `mode`: `pipeline` or `interactive`.
 
 Without `--json`, `sigil op` runs the operator. Piped `?` inspects stdin, `,`
-recommends a concrete next action, `,,` executes a generated shell command, and
-`^` / `^^` generate repair previews. Operator output is written to stdout;
-status and errors go to stderr.
+recommends a concrete next action, `,,` executes a generated shell command, `^`
+recommends a repair action, and `^^` previews a patch or command before asking
+to apply or execute it. Operator output is written to stdout; status and errors
+go to stderr.
 
 ## Verb Pipeline Commands
 
@@ -97,15 +98,19 @@ git diff | sigil op ",," "run the relevant formatter"
 sigil op --dry-run ",," "find all Python files"
 ```
 
-Current comma behavior:
+Current command and repair behavior:
 
 - `,` asks for structured JSON with `command` and `explanation`, prints the
   command followed by the explanation, and the shell binding adds the command to
   shell history.
 - non-piped `,,` asks the model for one shell command, executes it through the
   user's shell, emits command stdout, and forwards command stderr/status.
-- piped comma routes preview stdin and ask before using it; piped `,,` also
-  shows the generated command and asks before execution.
+- `^` asks for structured JSON with `repair` and `explanation`, then prints the
+  repair followed by the explanation.
+- `^^` asks for a concrete patch or repair command, prints it as a preview, and
+  asks before applying the patch or executing the command.
+- piped comma and repair routes preview stdin and ask before using it; piped
+  `,,` also shows the generated command and asks before execution.
 - `--dry-run` prints the generated command without executing it.
 
 The policy classifier records broad action classes such as `execute`,
@@ -113,9 +118,9 @@ The policy classifier records broad action classes such as `execute`,
 
 ## `sigil patch`
 
-Repair operators store unified diffs as the current session's patch preview.
-Patch application is separate from `^` / `^^` so model output remains visible
-before any file write.
+Double repair operators store unified diffs as the current session's patch
+preview before asking to apply them. The explicit patch commands remain
+available for reviewing or applying the latest stored preview later.
 
 ```sh
 sigil patch show

@@ -9,7 +9,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Literal, cast
 
-from .patches import store_patch_preview
+from .patches import apply_patch, last_patch, record_patch_apply, store_patch_preview
 from .policy import ExecutionPolicy, PolicyDecision, evaluate_policy
 from .qwen import chat_json, chat_text, ensure_server
 from .security import create_trust_metadata
@@ -49,6 +49,14 @@ REPAIR_SYSTEM = (
     "commands without a safer dry-run or review step."
 )
 
+REPAIR_APPLY_SYSTEM = (
+    "You are a semantic shell repair operator. Generate exactly one concrete "
+    "repair that Sigil can apply after showing it to the user. Prefer a unified "
+    "diff when file contents are provided. If a diff is not possible, generate "
+    "one directly runnable shell command. Do not include Markdown fences, prose, "
+    "or explanation in the repair field."
+)
+
 RECOMMENDATION_SCHEMA = {
     "type": "object",
     "additionalProperties": False,
@@ -75,6 +83,39 @@ EXECUTABLE_COMMAND_SCHEMA = {
         },
     },
     "required": ["command"],
+}
+
+REPAIR_RECOMMENDATION_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "repair": {
+            "type": "string",
+            "description": "One concrete repair command, patch summary, or patch preview.",
+        },
+        "explanation": {
+            "type": "string",
+            "description": "Brief reason this is the best repair action.",
+        },
+    },
+    "required": ["repair", "explanation"],
+}
+
+REPAIR_APPLICATION_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "kind": {
+            "type": "string",
+            "enum": ["patch", "command"],
+            "description": "Whether repair is a unified diff patch or a shell command.",
+        },
+        "repair": {
+            "type": "string",
+            "description": "A unified diff patch or one directly runnable macOS zsh command.",
+        },
+    },
+    "required": ["kind", "repair"],
 }
 
 
@@ -225,13 +266,70 @@ def run_invocation(
             exit_code=executed.returncode,
         )
     if invocation.base == "^":
-        store_patch_preview(
-            patch_text=output,
-            operator=invocation.to_dict(),
-            operator_event=event,
-            decision=decision,
-            security=security,
-        )
+        if execution_policy.dry_run:
+            return OperatorResult(output=output, decision=decision)
+        stored_patch = None
+        if invocation.depth >= 2:
+            stored_patch = store_patch_preview(
+                patch_text=output,
+                operator=invocation.to_dict(),
+                operator_event=event,
+                decision=decision,
+                security=security,
+            )
+        if invocation.depth >= 2 and execution_policy.confirm_repair:
+            if not confirm_repair_application(output):
+                return OperatorResult(
+                    output=output,
+                    decision=decision,
+                    stderr="sigil op: repair application declined\n",
+                    exit_code=2,
+                )
+            if stored_patch is not None:
+                record = last_patch()
+                applied = apply_patch(record)
+                record_patch_apply(record, applied)
+                if applied.ok:
+                    return OperatorResult(
+                        output=output,
+                        decision=decision,
+                        stderr="sigil op: patch applied\n",
+                    )
+                return OperatorResult(
+                    output=output,
+                    decision=decision,
+                    stderr=applied.stderr or "sigil op: patch apply failed\n",
+                    exit_code=applied.status or 1,
+                )
+            command = executable_command(output)
+            executed = execute_command(command)
+            execute_security = create_trust_metadata(
+                glyph=invocation.glyph,
+                integrity="local_model",
+                capability="exec_boxed",
+                taint=["model"],
+                inputs=[str(event["id"])],
+                input_records=[event],
+                fresh_human=True,
+            )
+            append_event(
+                {
+                    "type": "operator_repair_command_executed",
+                    "operator": invocation.to_dict(),
+                    "command": command,
+                    "status": executed.returncode,
+                    "stdout_snippet": executed.stdout[:MAX_EVENT_OUTPUT_CHARS],
+                    "stderr_snippet": executed.stderr[:MAX_EVENT_OUTPUT_CHARS],
+                    **execute_security,
+                }
+            )
+            return OperatorResult(
+                output=output,
+                decision=decision,
+                command=command,
+                stderr=executed.stderr,
+                exit_code=executed.returncode,
+            )
     return OperatorResult(output=output, decision=decision)
 
 
@@ -240,7 +338,7 @@ def operator_system_prompt(invocation: OperatorInvocation) -> str:
     if invocation.base == "?":
         base = INSPECT_SYSTEM
     elif invocation.base == "^":
-        base = REPAIR_SYSTEM
+        base = REPAIR_SYSTEM if invocation.depth == 1 else REPAIR_APPLY_SYSTEM
     elif invocation.depth == 1:
         base = RECOMMEND_SYSTEM
     else:
@@ -269,6 +367,23 @@ def run_model(invocation: OperatorInvocation, system: str, user: str) -> str:
         if not command:
             raise RuntimeError(",, did not produce a command to execute")
         return command
+    if invocation.base == "^" and invocation.depth == 1:
+        data = chat_json(system, user, REPAIR_RECOMMENDATION_SCHEMA)
+        repair = str(data.get("repair", "")).strip()
+        if not repair:
+            raise RuntimeError("^ did not produce a repair recommendation")
+        explanation = str(data.get("explanation", "")).strip()
+        if not explanation:
+            raise RuntimeError("^ did not produce an explanation")
+        return f"{repair}\n{explanation}"
+    if invocation.base == "^" and invocation.depth >= 2:
+        data = chat_json(system, user, REPAIR_APPLICATION_SCHEMA)
+        kind = str(data.get("kind", "")).strip()
+        raw_repair = str(data.get("repair", ""))
+        repair = raw_repair.strip()
+        if not repair:
+            raise RuntimeError("^^ did not produce a repair to apply")
+        return raw_repair if kind == "patch" else repair
     return chat_text(
         system,
         user,
@@ -282,6 +397,13 @@ def depth_guidance(invocation: OperatorInvocation) -> str:
         if invocation.depth == 1:
             return "Comma means recommend one concrete next action."
         return "Comma depth two or higher means generate a command that Sigil will execute."
+    if invocation.base == "^":
+        if invocation.depth == 1:
+            return "Caret means recommend one concrete repair action."
+        return (
+            "Caret depth two or higher means generate a concrete repair that "
+            "Sigil will preview and apply only after confirmation."
+        )
     return {
         1: "Use a quick pass.",
         2: "Use a deeper pass and call out important caveats.",
@@ -317,6 +439,8 @@ def default_prompt(invocation: OperatorInvocation) -> str:
         if invocation.depth >= 2:
             return "Generate a shell command to execute."
         return "Recommend the best next action."
+    if invocation.base == "^" and invocation.depth >= 2:
+        return "Generate a concrete repair to preview and apply."
     return "Repair the input."
 
 
@@ -337,7 +461,7 @@ def repair_user_prompt(invocation: OperatorInvocation) -> str:
     sections = [
         f"Operator: {invocation.glyph} ({invocation.name})",
         f"Prompt: {prompt}",
-        "Return a preview only. Do not apply changes.",
+        repair_instruction(invocation),
         "stdin targets:\n" + (invocation.stdin if invocation.stdin else "<empty>"),
     ]
     if files:
@@ -353,6 +477,17 @@ def repair_user_prompt(invocation: OperatorInvocation) -> str:
     else:
         sections.append("No readable file snapshots were found from stdin.")
     return "\n\n".join(sections)
+
+
+def repair_instruction(invocation: OperatorInvocation) -> str:
+    """Return application guidance for repair depth."""
+    if invocation.depth >= 2:
+        return (
+            "Return a concrete repair only. Prefer a unified diff. If a diff is "
+            "not possible, return one directly runnable shell command. Sigil "
+            "will show this preview and ask before applying it."
+        )
+    return "Return a preview only. Do not apply changes."
 
 
 def repair_files(lines: list[str]) -> list[tuple[Path, str]]:
@@ -399,6 +534,8 @@ def executable_command(output: str) -> str:
             continue
         if not line or line.startswith("#"):
             continue
+        if line.startswith(("diff --git", "---", "+++", "@@")):
+            continue
         if line.startswith("$ "):
             line = line[2:].strip()
         lines.append(line)
@@ -426,6 +563,15 @@ def confirm_execution(command: str) -> bool:
     print(command, file=sys.stderr)
     print("", file=sys.stderr)
     return confirm_on_tty("Run it? [y/N] ")
+
+
+def confirm_repair_application(repair: str) -> bool:
+    """Ask the user to confirm a generated repair before applying it."""
+    print("Generated repair preview:", file=sys.stderr)
+    print("", file=sys.stderr)
+    print(repair, file=sys.stderr)
+    print("", file=sys.stderr)
+    return confirm_on_tty("Apply this repair? [y/N] ")
 
 
 def confirm_on_tty(prompt: str) -> bool:

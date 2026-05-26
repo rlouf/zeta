@@ -115,6 +115,39 @@ def test_bash_recommendations_print_stdout_and_command_to_history() -> None:
         )
 
 
+def test_bash_exports_tty_for_pipeline_confirmations() -> None:
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp = Path(tmp_dir)
+        stub = make_stub(tmp)
+        result = run_shell(
+            "bash",
+            textwrap.dedent(
+                "                    unset SIGIL_TTY\n                    export TTY=/tmp/sigil-test-tty\n                    source shell/bash/sigil.bash\n                    printf 'sigil_tty=%s\\n' \"$SIGIL_TTY\"\n                    "
+            ),
+            tmp,
+            stub,
+        )
+        assert_success(result)
+        assert result.stdout == "sigil_tty=/tmp/sigil-test-tty\n"
+
+
+@pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
+def test_zsh_exports_tty_for_pipeline_confirmations() -> None:
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp = Path(tmp_dir)
+        stub = make_stub(tmp)
+        result = run_shell(
+            "zsh",
+            textwrap.dedent(
+                '                    unset SIGIL_TTY\n                    export TTY=/tmp/sigil-test-tty\n                    source shell/zsh/sigil.zsh\n                    print -- "sigil_tty=$SIGIL_TTY"\n                    '
+            ),
+            tmp,
+            stub,
+        )
+        assert_success(result)
+        assert result.stdout == "sigil_tty=/tmp/sigil-test-tty\n"
+
+
 def test_bash_wrappers_dispatch_piped_stdin_to_operator_runtime() -> None:
     with tempfile.TemporaryDirectory() as tmp_dir:
         tmp = Path(tmp_dir)

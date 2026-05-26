@@ -18,6 +18,21 @@ if [[ -z "${SIGIL_SESSION_ID:-}" ]]; then
   fi
 fi
 
+if [[ -z "${SIGIL_TTY:-}" ]]; then
+  if [[ -n "${TTY:-}" ]]; then
+    export SIGIL_TTY="$TTY"
+  else
+    __sigil_tty_path="$(tty 2>/dev/null || true)"
+    [[ -n "$__sigil_tty_path" && "$__sigil_tty_path" != "not a tty" ]] && export SIGIL_TTY="$__sigil_tty_path"
+  fi
+fi
+
+if [[ -z "${SIGIL_TTY_FD:-}" ]]; then
+  if exec {__sigil_confirmation_tty_fd}<>/dev/tty 2>/dev/null; then
+    export SIGIL_TTY_FD="$__sigil_confirmation_tty_fd"
+  fi
+fi
+
 __sigil_stdin_is_pipe() {
   [[ -p /dev/stdin ]]
 }

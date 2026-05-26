@@ -21,6 +21,21 @@ if [[ -z "${SIGIL_SESSION_ID:-}" ]]; then
   fi
 fi
 
+if [[ -z "${SIGIL_TTY:-}" ]]; then
+  if [[ -n "${TTY:-}" ]]; then
+    export SIGIL_TTY="$TTY"
+  else
+    __sigil_tty_path="$(tty 2>/dev/null || true)"
+    [[ -n "$__sigil_tty_path" && "$__sigil_tty_path" != "not a tty" ]] && export SIGIL_TTY="$__sigil_tty_path"
+  fi
+fi
+
+if [[ -z "${SIGIL_TTY_FD:-}" ]]; then
+  if exec 9<>/dev/tty 2>/dev/null; then
+    export SIGIL_TTY_FD=9
+  fi
+fi
+
 __sigil_history_insert() {
   [[ -n "${1:-}" ]] || return 0
   builtin history -s "$1" 2>/dev/null || true

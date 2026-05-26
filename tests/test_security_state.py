@@ -11,9 +11,18 @@ from pathlib import Path
 from click.testing import CliRunner
 
 from _patch import patch, patch_dict
-from sigil.cli import cli, main
+from sigil.cli import (
+    cli,
+    confirmation_tty_paths as cli_confirmation_tty_paths,
+    confirm_on_tty as cli_confirm_on_tty,
+    main,
+)
 from sigil.commands import select
 from sigil.failure import generate_fixes, record_failure, select_fix
+from sigil.operators import (
+    confirmation_tty_paths as operator_confirmation_tty_paths,
+    confirm_on_tty as operator_confirm_on_tty,
+)
 from sigil.pi_stream import should_color, stream_events
 from sigil.question import QUESTION_SYSTEM_PROMPT, ask, renderer_command
 from sigil.security import (
@@ -234,6 +243,58 @@ def test_events_lineage_json_follows_transitive_inputs() -> None:
                 os.environ.pop("SIGIL_SESSION_ID", None)
             else:
                 os.environ["SIGIL_SESSION_ID"] = old_session_id
+
+
+def test_confirmation_uses_exported_tty_before_dev_tty() -> None:
+    with patch_dict(
+        os.environ,
+        {"SIGIL_TTY": "/tmp/sigil-tty", "TTY": "/tmp/fallback-tty"},
+        clear=True,
+    ):
+        assert cli_confirmation_tty_paths() == [
+            "/tmp/sigil-tty",
+            "/tmp/fallback-tty",
+            "/dev/tty",
+        ]
+        assert operator_confirmation_tty_paths() == [
+            "/tmp/sigil-tty",
+            "/tmp/fallback-tty",
+            "/dev/tty",
+        ]
+
+
+def test_confirmation_uses_exported_tty_fd_before_paths() -> None:
+    master_fd, slave_fd = os.openpty()
+    try:
+        with (
+            patch_dict(
+                os.environ,
+                {"SIGIL_TTY_FD": str(slave_fd), "SIGIL_TTY": "/tmp/sigil-tty"},
+                clear=True,
+            ),
+            patch("os.open", side_effect=AssertionError("path fallback used")),
+        ):
+            os.write(master_fd, b"yes\n")
+            assert cli_confirm_on_tty("Use it? ")
+            os.write(master_fd, b"yes\n")
+            assert operator_confirm_on_tty("Use it? ")
+    finally:
+        os.close(master_fd)
+        os.close(slave_fd)
+
+
+def test_confirmation_failure_is_visible() -> None:
+    stderr = StringIO()
+    with (
+        patch_dict(os.environ, {}, clear=True),
+        patch("os.open", side_effect=OSError()),
+        redirect_stderr(stderr),
+    ):
+        assert not cli_confirm_on_tty("Use it? ")
+        assert not operator_confirm_on_tty("Use it? ")
+
+    assert stderr.getvalue().count("could not open a terminal") == 2
+    assert "tried /dev/tty" in stderr.getvalue()
 
 
 def test_session_show_and_clear_include_patch_preview() -> None:

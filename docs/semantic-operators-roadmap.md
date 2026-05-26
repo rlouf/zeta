@@ -24,8 +24,8 @@ Implemented grammar:
 ```text
 ,   recommend a concrete next action
 ,,  generate and execute a shell command
-?   answer a question with Pi using read + web search
-??  continue the previous question discussion
+?   local inspect question
+??  web-authorized question discussion
 ^   suggest fixes for the last failed command
 ^^  deeper repair pass
 ```
@@ -182,15 +182,14 @@ more effort or autonomy, but it must not silently grant destructive authority.
 
 ### 6. Separate old question behavior from inspect semantics
 
-Today `?` means "ask Pi with read + web search." In the target model, `?` means
-"inspect or analyze."
+Today `?` means "inspect or analyze." The web-authorized question route lives on
+`??`.
 
 The stable migration is:
 
-1. Keep interactive `?` and `??` using the current question route.
-2. Implement piped `?`, `??`, and `???` through the shared operator runtime.
-3. Move the interactive question route onto the same operator runtime once the
-   stream path is stable.
+1. Keep interactive `?` on the shared operator runtime.
+2. Keep `??` as the explicit web-authorized question route.
+3. Implement any future deeper inspect forms through the shared operator runtime.
 
 This avoids breaking existing usage while moving toward the README semantics.
 
@@ -307,8 +306,8 @@ Keep output on stdout so normal Unix composition works.
 Status: implemented. Shell glyph wrappers and prompt dispatch now use `sigil op`
 directly; the public verb CLI routes remain available.
 
-Interactive `?` still uses the question route; comma and repair glyphs use the
-operator core.
+Interactive `?`, comma, and repair glyphs use the operator core. `??` remains
+the explicit web-authorized question route.
 
 ### Milestone 6: comma autonomy
 

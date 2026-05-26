@@ -80,8 +80,8 @@ The implemented grammar is:
 ```text
 ,   recommend a concrete next action
 ,,  generate and execute a shell command
-?   answer a question with Pi using read + web search
-??  continue the previous question discussion
+?   local inspect question
+??  web-authorized question discussion
 ^   preview a repair for the last failure or stdin targets
 ^^  run a deeper repair preview pass
 ```
@@ -110,11 +110,11 @@ It maps to the lattice as follows:
     capability=propose
     taint=["model"]
 
-?   read + web question
-    integrity=web
+?   local inspect question
+    integrity=local_model
     capability=read
-    taint=["web"]
-    provisional=true
+    taint=["model"]
+    provisional=false
 
 ??  question continuation
     inherits previous question transcript integrity and taint
@@ -123,8 +123,9 @@ It maps to the lattice as follows:
     provisional=true
 ```
 
-The `?` and `??` routes invoke Pi with `read,web_search`. They are therefore
-web-tainted by construction. They are read-only routes and have no execute path.
+The `?` route uses the local inspect operator. The `??` route invokes Pi with
+`read,web_search`, so it is web-tainted by construction. Both routes are
+read-only and have no execute path.
 
 ## Visible Descent
 
@@ -135,7 +136,7 @@ Headers:
 ```text
 ❯ sigil ,  · propose · model-authored
 ❯ sigil ,, · inherited: model
-❯ pi ?     · read+web · no execute path
+❯ sigil ?  · read · model-authored
 ❯ pi ??    · inherited: web · provisional
 ```
 

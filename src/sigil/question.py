@@ -1,7 +1,8 @@
-"""Question and follow-up flow for `?` and `??`.
+"""Question and follow-up flow for the web-authorized ask route.
 
-This module owns discussion continuity. A fresh `?` resets the session question
-transcript; `??` expands the prompt from that transcript before calling Pi.
+This module owns discussion continuity. A fresh `sigil ask` resets the session
+question transcript; `??` expands the prompt from that transcript before calling
+Pi.
 """
 
 from __future__ import annotations

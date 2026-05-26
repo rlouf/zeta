@@ -431,6 +431,44 @@ def test_op_cli_denies_piped_comma_before_model_call() -> None:
     assert "piped input declined" in result.stderr
 
 
+def test_ask_follow_up_denies_piped_input_before_web_call() -> None:
+    with (
+        patch("sigil.cli.confirm_piped_input", return_value=False),
+        patch("sigil.cli.ask", side_effect=AssertionError("no web")),
+    ):
+        result = CliRunner().invoke(
+            cli,
+            ["ask", "--follow-up", "review"],
+            input="diff\n",
+        )
+
+    assert result.exit_code == 2
+    assert "piped input declined" in result.stderr
+
+
+def test_ask_follow_up_sends_confirmed_piped_input_to_web_route() -> None:
+    calls = []
+
+    def fake_ask(*args: object, **kwargs: object) -> int:
+        calls.append((args, kwargs))
+        return 0
+
+    with (
+        patch("sigil.cli.confirm_piped_input", return_value=True),
+        patch("sigil.cli.ask", side_effect=fake_ask),
+    ):
+        result = CliRunner().invoke(
+            cli,
+            ["ask", "--follow-up", "review"],
+            input="diff\n",
+        )
+
+    assert result.exit_code == 0
+    assert calls == [
+        (("review\n\nPiped input:\ndiff\n",), {"follow_up": True, "json_output": False})
+    ]
+
+
 def test_op_cli_confirms_piped_comma_before_model_call() -> None:
     with (
         patch("sigil.cli.confirm_piped_input", return_value=True),

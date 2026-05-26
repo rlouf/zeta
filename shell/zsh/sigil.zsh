@@ -44,18 +44,10 @@ sigil_execute_command() {
 }
 
 sigil_question() {
-  if __sigil_stdin_is_pipe; then
-    "$__sigil_bin" op "?" "$@"
-    return $?
-  fi
-  "$__sigil_bin" ask "$*"
+  "$__sigil_bin" op "?" "$@"
 }
 
 sigil_follow_up() {
-  if __sigil_stdin_is_pipe; then
-    "$__sigil_bin" op "??" "$@"
-    return $?
-  fi
   "$__sigil_bin" ask --follow-up "$*"
 }
 

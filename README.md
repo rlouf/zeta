@@ -45,7 +45,7 @@ the long-form verbs.
 ,,  -> sigil op ",,"
 ^   -> sigil op "^"
 ^^  -> sigil op "^^"
-?   -> sigil ask
+?   -> sigil op "?"
 ??  -> sigil ask --follow-up
 ```
 
@@ -65,8 +65,8 @@ The default glyph aliases map to:
 ,,  human prompt -> generated command run  local_model / exec_boxed / model-tainted
 ^   failed command/files -> repair preview  local_model / propose / model-tainted
 ^^  failed command/files -> deeper repair   local_model / propose / model-tainted
-?   read + web question                    web / read / web-tainted / provisional
-??  question continuation                  inherits prior question taint / provisional
+?   local inspect question                 local_model / read / model-tainted
+??  web-authorized question                inherits prior question taint / provisional
 ```
 
 This matters because only the explicit comma execution route crosses into

@@ -154,9 +154,14 @@ def cmd_ask(question: str | None, follow_up: bool, json_output: bool) -> int:
     """Answer a shell question, optionally continuing the prior answer."""
     stdin_text = piped_stdin_text()
     if stdin_text is not None:
-        glyph = "??" if follow_up else "?"
+        if follow_up:
+            if not confirm_piped_input(stdin_text):
+                print("sigil ask: piped input declined", file=sys.stderr)
+                raise click.exceptions.Exit(2)
+            prompt = question_with_stdin(question or "", stdin_text)
+            return ask(prompt, follow_up=True, json_output=json_output)
         return run_stream_operator(
-            glyph,
+            "?",
             prompt=question or "",
             stdin_text=stdin_text,
             json_output=json_output,
@@ -164,6 +169,13 @@ def cmd_ask(question: str | None, follow_up: bool, json_output: bool) -> int:
     if question is None:
         raise click.UsageError("QUESTION is required unless stdin is piped.")
     return ask(question, follow_up=follow_up, json_output=json_output)
+
+
+def question_with_stdin(question: str, stdin_text: str) -> str:
+    """Attach confirmed piped input to a web-authorized follow-up prompt."""
+    if question:
+        return f"{question}\n\nPiped input:\n{stdin_text}"
+    return f"Piped input:\n{stdin_text}"
 
 
 @cli.command("op", hidden=True)

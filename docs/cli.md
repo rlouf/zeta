@@ -177,8 +177,14 @@ sigil session clear --json
 
 `show` returns the current session id, path, and parsed continuity files.
 `path` returns the global state path, current session path, session id, and
-global event log path. `list` returns known session directories and the files
-present in each. `clear` returns the session files removed.
+global event log path. `list` returns known session directories, files present in
+each, and the latest event cwd/type/time when available. `clear` returns the
+session files removed.
+
+A session is one terminal shell by default. Installed Bash and zsh bindings set
+`SIGIL_SESSION_ID` once when the shell starts, so separate terminal windows or
+tabs keep separate `last-*` continuity. Override `SIGIL_SESSION_ID` or
+`SIGIL_SESSION_DIR` only when you intentionally want to share or pin a session.
 
 ## Optional Glyph Aliases
 

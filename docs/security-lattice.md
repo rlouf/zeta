@@ -168,7 +168,9 @@ Use `sigil events lineage [event-id]` to inspect the recorded provenance chain.
 Without an event id, Sigil shows the latest event from the current shell session.
 
 Session state files can be inspected with `sigil session show` for debugging.
-This does not call a model, append events, or create executable shell text.
+This does not call a model, append events, or create executable shell text. A
+session is one terminal shell by default; `SIGIL_SESSION_ID` or
+`SIGIL_SESSION_DIR` can intentionally override that boundary.
 
 Failure repair records may include bounded stdout/stderr snippets and safe local
 cwd/git context. These are inputs to model-authored repair proposals, so `^`

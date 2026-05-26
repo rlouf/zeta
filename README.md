@@ -185,6 +185,12 @@ sessions/<session-id>/last-question.jsonl    question transcript; reset by `?`
 sessions/<session-id>/last-tools.jsonl       latest Pi tool trace
 ```
 
+By default, a session is one terminal shell: installed Bash and zsh bindings set
+`SIGIL_SESSION_ID` once when the shell starts, so separate terminal windows or
+tabs keep separate continuity. The global `events.jsonl` remains the audit log
+across all sessions. Advanced callers can override the boundary with
+`SIGIL_SESSION_ID` or `SIGIL_SESSION_DIR`.
+
 Failure records include command, status, cwd, safe cwd/git context, and optional
 bounded stdout/stderr snippets when a wrapper provides them. Fix suggestions
 show their rationale on stderr or in the selector, while stdout remains only the
@@ -259,9 +265,10 @@ before applying or executing it.
 
 `pi` is the .txt agent CLI used by the `?` and `??` routes. It is not installed
 by Sigil. Install and configure it separately, then verify `pi --help` works.
-Sigil invokes it as `pi --json --tools read,web_search ...`, then renders the
-event stream through `sigil render-pi-stream` so tool calls, answer text, and
-trust metadata are recorded in Sigil state. `pi` must be on `PATH`, and for the
+Sigil invokes it as `pi --json --tools read,web_search ...` with a prompt-level
+limit of at most one tool call, then renders the event stream through
+`sigil render-pi-stream` so tool calls, answer text, and trust metadata are
+recorded in Sigil state. `pi` must be on `PATH`, and for the
 current local setup it should be able to start or reach the same Qwen endpoint
 used by Sigil.
 

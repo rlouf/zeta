@@ -15,7 +15,7 @@ from sigil.cli import cli, main
 from sigil.commands import select
 from sigil.failure import generate_fixes, record_failure, select_fix
 from sigil.pi_stream import should_color, stream_events
-from sigil.question import ask, renderer_command
+from sigil.question import QUESTION_SYSTEM_PROMPT, ask, renderer_command
 from sigil.security import (
     SecurityViolation,
     inherit_security,
@@ -174,6 +174,82 @@ def test_events_lineage_json_follows_transitive_inputs() -> None:
                 os.environ.pop("SIGIL_SESSION_ID", None)
             else:
                 os.environ["SIGIL_SESSION_ID"] = old_session_id
+
+
+def test_session_show_and_clear_include_patch_preview() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        old_state_dir = os.environ.get("SIGIL_STATE_DIR")
+        old_session_id = os.environ.get("SIGIL_SESSION_ID")
+        os.environ["SIGIL_STATE_DIR"] = tmp
+        os.environ["SIGIL_SESSION_ID"] = "test"
+        session_root = Path(tmp) / "sessions" / "test"
+        session_root.mkdir(parents=True)
+        patch_path = session_root / "last-patch.json"
+        patch_path.write_text(
+            json.dumps({"patch": "diff --git a/a b/a\n", "glyph": "^^"}),
+            encoding="utf-8",
+        )
+        try:
+            shown = CliRunner().invoke(cli, ["session", "show", "--json"])
+            cleared = CliRunner().invoke(cli, ["session", "clear", "--json"])
+            removed = json.loads(cleared.output)
+        finally:
+            if old_state_dir is None:
+                os.environ.pop("SIGIL_STATE_DIR", None)
+            else:
+                os.environ["SIGIL_STATE_DIR"] = old_state_dir
+            if old_session_id is None:
+                os.environ.pop("SIGIL_SESSION_ID", None)
+            else:
+                os.environ["SIGIL_SESSION_ID"] = old_session_id
+
+    assert shown.exit_code == 0, shown.output
+    snapshot = json.loads(shown.output)
+    assert snapshot["files"]["last-patch.json"]["glyph"] == "^^"
+    assert cleared.exit_code == 0, cleared.output
+    assert str(patch_path) in removed["removed"]
+    assert not patch_path.exists()
+
+
+def test_session_list_includes_last_event_context() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        old_state_dir = os.environ.get("SIGIL_STATE_DIR")
+        old_session_id = os.environ.get("SIGIL_SESSION_ID")
+        os.environ["SIGIL_STATE_DIR"] = tmp
+        os.environ["SIGIL_SESSION_ID"] = "alpha"
+        alpha_root = Path(tmp) / "sessions" / "alpha"
+        beta_root = Path(tmp) / "sessions" / "beta"
+        alpha_root.mkdir(parents=True)
+        beta_root.mkdir(parents=True)
+        (alpha_root / "last-failure.json").write_text("{}", encoding="utf-8")
+        try:
+            append_event({"type": "old_alpha", "time": 1.0, "cwd": "/old"})
+            append_event({"type": "new_alpha", "time": 2.0, "cwd": "/repo"})
+            os.environ["SIGIL_SESSION_ID"] = "beta"
+            append_event({"type": "beta_event", "time": 3.0, "cwd": "/other"})
+
+            listed = CliRunner().invoke(cli, ["session", "list", "--json"])
+            text = CliRunner().invoke(cli, ["session", "list"])
+        finally:
+            if old_state_dir is None:
+                os.environ.pop("SIGIL_STATE_DIR", None)
+            else:
+                os.environ["SIGIL_STATE_DIR"] = old_state_dir
+            if old_session_id is None:
+                os.environ.pop("SIGIL_SESSION_ID", None)
+            else:
+                os.environ["SIGIL_SESSION_ID"] = old_session_id
+
+    assert listed.exit_code == 0, listed.output
+    sessions = {session["session_id"]: session for session in json.loads(listed.output)}
+    assert sessions["alpha"]["last_cwd"] == "/repo"
+    assert sessions["alpha"]["last_event_type"] == "new_alpha"
+    assert sessions["alpha"]["last_event_time"] == 2.0
+    assert sessions["alpha"]["files"] == ["last-failure.json"]
+    assert sessions["beta"]["last_cwd"] == "/other"
+    assert text.exit_code == 0, text.output
+    assert "alpha\t/repo\tnew_alpha\t" in text.output
+    assert "beta\t/other\tbeta_event\t" in text.output
 
 
 def test_select_rejects_multiple_candidates_without_interactive_stdin() -> None:
@@ -373,7 +449,12 @@ def test_question_and_follow_up_record_web_taint() -> None:
             assert follow_up_turn["capability"] == "read"
             assert follow_up_turn["taint"] == ["web"]
             assert follow_up_turn["provisional"]
-            assert popen_calls
+            pi_calls = [cmd for cmd in popen_calls if cmd[0] == "pi"]
+            assert pi_calls
+            for cmd in pi_calls:
+                system_prompt = cmd[cmd.index("--append-system-prompt") + 1]
+                assert system_prompt == QUESTION_SYSTEM_PROMPT
+                assert "at most one tool call" in system_prompt
         finally:
             if old_state_dir is None:
                 os.environ.pop("SIGIL_STATE_DIR", None)

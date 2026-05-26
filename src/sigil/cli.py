@@ -515,7 +515,13 @@ def cmd_session(session_command: str, json_output: bool) -> int:
             pretty_print_json(sessions)
         else:
             for session in sessions:
-                print(f"{session['session_id']}\t{session['path']}")
+                parts = [
+                    str(session["session_id"]),
+                    str(session.get("last_cwd") or "-"),
+                    str(session.get("last_event_type") or "-"),
+                    str(session["path"]),
+                ]
+                print("\t".join(parts))
         return 0
     if session_command == "clear":
         removed = clear_current_session()

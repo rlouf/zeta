@@ -18,6 +18,7 @@ SESSION_FILES = (
     "last-question.jsonl",
     "last-tools.jsonl",
     "last-failure.json",
+    "last-patch.json",
 )
 
 
@@ -32,22 +33,46 @@ def session_paths() -> dict[str, str]:
 
 
 def known_sessions() -> list[dict[str, Any]]:
-    """List session directories with coarse file presence metadata."""
+    """List session directories with coarse file presence and event metadata."""
     root = state_dir() / "sessions"
     if not root.exists():
         return []
+    latest_by_session = latest_events_by_session(read_event_log())
     sessions = []
     for path in sorted(root.iterdir(), key=lambda item: item.name):
         if not path.is_dir():
             continue
+        latest = latest_by_session.get(path.name, {})
         sessions.append(
             {
                 "session_id": path.name,
                 "path": str(path),
                 "files": sorted(item.name for item in path.iterdir() if item.is_file()),
+                "last_event_time": latest.get("time"),
+                "last_event_type": latest.get("type"),
+                "last_cwd": latest.get("cwd"),
             }
         )
     return sessions
+
+
+def latest_events_by_session(events: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    """Return the newest event seen for each session id."""
+    latest: dict[str, dict[str, Any]] = {}
+    for event in events:
+        event_session = event.get("session")
+        if not isinstance(event_session, str):
+            continue
+        current = latest.get(event_session)
+        if current is None or event_time(event) >= event_time(current):
+            latest[event_session] = event
+    return latest
+
+
+def event_time(event: dict[str, Any]) -> float:
+    """Return event time as a sortable float, treating malformed times as zero."""
+    value = event.get("time")
+    return value if isinstance(value, int | float) else 0.0
 
 
 def read_session_file(path: Path) -> Any:

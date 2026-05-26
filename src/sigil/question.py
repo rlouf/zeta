@@ -24,7 +24,10 @@ from .state import append_event, append_jsonl, read_jsonl, write_jsonl
 
 
 QUESTION_SYSTEM_PROMPT = (
-    "Answer concisely. You are responding to a quick question typed at a shell prompt."
+    "Answer concisely. You are responding to a quick question typed at a shell "
+    "prompt. Use at most one tool call total. If one tool call is not enough, "
+    "answer with the best available uncertainty and say what single follow-up "
+    "would help."
 )
 DEFAULT_GLOW_STYLE = "notty"
 DEFAULT_GLOW_WIDTH = "88"

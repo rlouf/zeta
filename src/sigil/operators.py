@@ -1,14 +1,17 @@
-"""Semantic operator parsing for future stream-oriented glyph routes."""
+"""Semantic operator parsing for stream-oriented glyph routes."""
 
 from __future__ import annotations
 
+import os
+import subprocess
+import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Literal, cast
 
 from .patches import store_patch_preview
 from .policy import ExecutionPolicy, PolicyDecision, evaluate_policy
-from .qwen import chat_text, ensure_server
+from .qwen import chat_json, chat_text, ensure_server
 from .security import create_trust_metadata
 from .state import append_event
 
@@ -16,7 +19,7 @@ OperatorBase = Literal["?", ",", "^"]
 
 OPERATOR_NAMES: dict[OperatorBase, str] = {
     "?": "inspect",
-    ",": "propose",
+    ",": "recommend",
     "^": "repair",
 }
 
@@ -32,10 +35,10 @@ INSPECT_SYSTEM = (
     "Do not claim to have read files or run commands beyond the provided input."
 )
 
-PROPOSE_SYSTEM = (
-    "You are a semantic shell operator. Synthesize or propose the requested "
-    "output from the input stream. Write only the useful result for stdout. "
-    "Avoid chatty framing unless the prompt asks for explanation."
+RECOMMEND_SYSTEM = (
+    "You are a semantic shell operator. Recommend one concrete next action "
+    "from the input stream and prompt. Be direct and practical. Do not execute "
+    "anything."
 )
 
 REPAIR_SYSTEM = (
@@ -45,6 +48,34 @@ REPAIR_SYSTEM = (
     "Never claim that you applied changes, and do not include destructive "
     "commands without a safer dry-run or review step."
 )
+
+RECOMMENDATION_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "command": {
+            "type": "string",
+            "description": "One concrete shell command to recommend to the user.",
+        },
+        "explanation": {
+            "type": "string",
+            "description": "Brief reason this is the best next action.",
+        },
+    },
+    "required": ["command", "explanation"],
+}
+
+EXECUTABLE_COMMAND_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "command": {
+            "type": "string",
+            "description": "One directly runnable macOS zsh command.",
+        },
+    },
+    "required": ["command"],
+}
 
 
 @dataclass(frozen=True)
@@ -70,6 +101,9 @@ class OperatorResult:
 
     output: str
     decision: PolicyDecision
+    command: str | None = None
+    stderr: str = ""
+    exit_code: int = 0
 
 
 def parse_operator_token(token: str) -> tuple[OperatorBase, int]:
@@ -126,8 +160,7 @@ def run_invocation(
     execution_policy = policy or ExecutionPolicy()
     system = operator_system_prompt(invocation)
     user = operator_user_prompt(invocation)
-    output = chat_text(system, user, max_tokens=max_tokens_for_depth(invocation.depth))
-    output = output.rstrip()
+    output = run_model(invocation, system, user)
     decision = evaluate_policy(
         glyph=invocation.glyph,
         depth=invocation.depth,
@@ -151,6 +184,46 @@ def run_invocation(
             **security,
         }
     )
+    if invocation.base == "," and invocation.depth >= 2:
+        command = executable_command(output)
+        if execution_policy.dry_run:
+            return OperatorResult(output=command, decision=decision, command=command)
+        if execution_policy.confirm_execution and not confirm_execution(command):
+            return OperatorResult(
+                output="",
+                decision=decision,
+                command=command,
+                stderr="sigil op: command execution declined\n",
+                exit_code=2,
+            )
+        executed = execute_command(command)
+        execute_security = create_trust_metadata(
+            glyph=invocation.glyph,
+            integrity="local_model",
+            capability="exec_boxed",
+            taint=["model"],
+            inputs=[str(event["id"])],
+            input_records=[event],
+            fresh_human=True,
+        )
+        append_event(
+            {
+                "type": "operator_command_executed",
+                "operator": invocation.to_dict(),
+                "command": command,
+                "status": executed.returncode,
+                "stdout_snippet": executed.stdout[:MAX_EVENT_OUTPUT_CHARS],
+                "stderr_snippet": executed.stderr[:MAX_EVENT_OUTPUT_CHARS],
+                **execute_security,
+            }
+        )
+        return OperatorResult(
+            output=executed.stdout.rstrip(),
+            decision=decision,
+            command=command,
+            stderr=executed.stderr,
+            exit_code=executed.returncode,
+        )
     if invocation.base == "^":
         store_patch_preview(
             patch_text=output,
@@ -164,18 +237,56 @@ def run_invocation(
 
 def operator_system_prompt(invocation: OperatorInvocation) -> str:
     """Return the system prompt for an operator invocation."""
-    depth_guidance = {
-        1: "Use a quick pass.",
-        2: "Use a deeper pass and call out important caveats.",
-        3: "Use a thorough pass and organize the result for follow-up work.",
-    }.get(invocation.depth, "Use a thorough pass and be explicit about uncertainty.")
     if invocation.base == "?":
         base = INSPECT_SYSTEM
     elif invocation.base == "^":
         base = REPAIR_SYSTEM
+    elif invocation.depth == 1:
+        base = RECOMMEND_SYSTEM
     else:
-        base = PROPOSE_SYSTEM
-    return f"{base}\n\nDepth: {invocation.depth}. {depth_guidance}"
+        base = (
+            "You are a semantic shell operator. Generate exactly one shell "
+            "command to execute for the user's request. Output only the command, "
+            "with no Markdown fences, prose, numbering, or explanation."
+        )
+    return f"{base}\n\nDepth: {invocation.depth}. {depth_guidance(invocation)}"
+
+
+def run_model(invocation: OperatorInvocation, system: str, user: str) -> str:
+    """Run the model with structured outputs for comma operators."""
+    if invocation.base == "," and invocation.depth == 1:
+        data = chat_json(system, user, RECOMMENDATION_SCHEMA)
+        command = str(data.get("command", "")).strip()
+        if not command:
+            raise RuntimeError(", did not produce a command recommendation")
+        explanation = str(data.get("explanation", "")).strip()
+        if not explanation:
+            raise RuntimeError(", did not produce an explanation")
+        return f"{command}\n{explanation}"
+    if invocation.base == "," and invocation.depth >= 2:
+        data = chat_json(system, user, EXECUTABLE_COMMAND_SCHEMA)
+        command = str(data.get("command", "")).strip()
+        if not command:
+            raise RuntimeError(",, did not produce a command to execute")
+        return command
+    return chat_text(
+        system,
+        user,
+        max_tokens=max_tokens_for_depth(invocation.depth),
+    ).rstrip()
+
+
+def depth_guidance(invocation: OperatorInvocation) -> str:
+    """Return operator-specific guidance for repeated glyph depth."""
+    if invocation.base == ",":
+        if invocation.depth == 1:
+            return "Comma means recommend one concrete next action."
+        return "Comma depth two or higher means generate a command that Sigil will execute."
+    return {
+        1: "Use a quick pass.",
+        2: "Use a deeper pass and call out important caveats.",
+        3: "Use a thorough pass and organize the result for follow-up work.",
+    }.get(invocation.depth, "Use a thorough pass and be explicit about uncertainty.")
 
 
 def operator_user_prompt(invocation: OperatorInvocation) -> str:
@@ -203,7 +314,9 @@ def default_prompt(invocation: OperatorInvocation) -> str:
     if invocation.base == "?":
         return "Inspect and summarize the input."
     if invocation.base == ",":
-        return "Propose a useful result from the input."
+        if invocation.depth >= 2:
+            return "Generate a shell command to execute."
+        return "Recommend the best next action."
     return "Repair the input."
 
 
@@ -275,3 +388,53 @@ def max_tokens_for_depth(depth: int) -> int:
     if depth == 2:
         return 1200
     return 1800
+
+
+def executable_command(output: str) -> str:
+    """Extract the shell command from a command-generation response."""
+    lines = []
+    for raw_line in output.splitlines():
+        line = raw_line.strip()
+        if line.startswith("```"):
+            continue
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("$ "):
+            line = line[2:].strip()
+        lines.append(line)
+    if not lines:
+        raise RuntimeError("comma execution did not produce a command to execute")
+    return lines[0]
+
+
+def execute_command(command: str) -> subprocess.CompletedProcess[str]:
+    """Execute a generated shell command through the user's shell."""
+    shell = os.environ.get("SHELL") or "/bin/sh"
+    return subprocess.run(
+        [shell, "-lc", command],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+
+
+def confirm_execution(command: str) -> bool:
+    """Ask the user to confirm a generated command before execution."""
+    print("About to execute:", file=sys.stderr)
+    print("", file=sys.stderr)
+    print(command, file=sys.stderr)
+    print("", file=sys.stderr)
+    return confirm_on_tty("Run it? [y/N] ")
+
+
+def confirm_on_tty(prompt: str) -> bool:
+    """Read a yes/no confirmation from the controlling terminal."""
+    try:
+        with open("/dev/tty", "r+", encoding="utf-8") as tty:
+            tty.write(prompt)
+            tty.flush()
+            answer = tty.readline()
+    except OSError:
+        return False
+    return answer.strip().lower() in {"y", "yes"}

@@ -131,44 +131,6 @@ def event_lineage(event_id: str | None = None) -> dict[str, Any]:
     return {"event_id": selected, "nodes": nodes, "missing_inputs": missing}
 
 
-def session_summary(limit: int = 8) -> dict[str, Any]:
-    """Return a read-only summary of the current Sigil session."""
-    snapshot = current_session_snapshot()
-    files = snapshot["files"]
-    events = [
-        event for event in read_event_log() if event.get("session") == session_id()
-    ][-limit:]
-
-    last_question = files.get("last-question.jsonl") or []
-    last_tools = files.get("last-tools.jsonl") or []
-    summary = {
-        "session_id": snapshot["session_id"],
-        "path": snapshot["path"],
-        "continuity": {
-            "has_command": files.get("last-command.json") is not None,
-            "has_failure": files.get("last-failure.json") is not None,
-            "has_fix": files.get("last-fix.json") is not None,
-            "question_turns": len(last_question)
-            if isinstance(last_question, list)
-            else 0,
-            "tool_events": len(last_tools) if isinstance(last_tools, list) else 0,
-        },
-        "recent_events": [
-            {
-                "id": event.get("id", ""),
-                "type": event.get("type", "event"),
-                "glyph": event.get("glyph", ""),
-                "integrity": event.get("integrity", "unknown"),
-                "capability": event.get("capability", "none"),
-                "taint": event.get("taint", []),
-                "inputs": event.get("inputs", []),
-            }
-            for event in events
-        ],
-    }
-    return summary
-
-
 def current_session_snapshot() -> dict[str, Any]:
     """Return the current session's continuity files as structured data."""
     root = session_dir()

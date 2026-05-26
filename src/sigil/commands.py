@@ -55,8 +55,9 @@ COMMAND_SYSTEM = (
 def generate(prompt: str) -> list[dict[str, str]]:
     """Ask the local model for runnable command candidates.
 
-    The result is stored in session state so `,,` can reopen the same candidates
-    without repeating inference.
+    The result is stored in session state so the legacy
+    `sigil command --previous` selector can reopen the same candidates without
+    repeating inference.
     """
     if not ensure_server():
         raise SystemExit(1)

@@ -12,16 +12,16 @@ distribution name. The installed command is still `sigil`, and this repository
 uses `sigil` everywhere else.
 
 Sigil is structured as a shell-agnostic core with thin shell bindings. The shell
-layer owns glyph dispatch and proposal history insertion; the Python CLI owns
-model calls, selection UI, Pi streaming, rendering, and persistent state.
+layer owns glyph dispatch; the Python CLI owns model calls, selection UI, Pi
+streaming, rendering, and persistent state.
 
 ## Commands
 
 ```text
 sigil command "find wav files"              generate command candidates
-sigil command --previous                    reopen previous command candidates
 sigil fix                                   suggest fixes for the last failure
-sigil fix --previous                        reopen previous fix candidates
+sigil op "^"                                repair from stdin or last failure
+sigil op "^^"                               deeper repair pass
 sigil ask "what changed in this repo?"      answer a question with Pi
 sigil ask --follow-up "what should I run?"  continue the prior answer
 ```
@@ -36,15 +36,15 @@ printf '%s\n' src/sigil/cli.py | sigil fix "preview a small cleanup"
 
 ## Optional Glyphs
 
-Glyphs are a shortcut layer on top of the verbs. Installed shell bindings enable
-them by default. Use `sigil install <shell> --no-glyphs` if you only want the
-long-form verbs.
+Glyphs are a shortcut layer on top of the CLI runtime. Installed shell bindings
+enable them by default. Use `sigil install <shell> --no-glyphs` if you only want
+the long-form verbs.
 
 ```text
-,   -> sigil command
-,,  -> sigil command --previous
-^   -> sigil fix
-^^  -> sigil fix --previous
+,   -> sigil op ","
+,,  -> sigil op ",,"
+^   -> sigil op "^"
+^^  -> sigil op "^^"
 ?   -> sigil ask
 ??  -> sigil ask --follow-up
 ```
@@ -61,25 +61,23 @@ taint:      model, web, legacy
 The default glyph aliases map to:
 
 ```text
-,   human prompt -> local model proposal   local_model / propose / model-tainted
-,,  command continuation                   inherits prior command taint
+,   human prompt -> model recommendation   local_model / propose / model-tainted
+,,  human prompt -> generated command run  local_model / exec_boxed / model-tainted
+^   failed command/files -> repair preview  local_model / propose / model-tainted
+^^  failed command/files -> deeper repair   local_model / propose / model-tainted
 ?   read + web question                    web / read / web-tainted / provisional
 ??  question continuation                  inherits prior question taint / provisional
 ```
 
-This matters because Sigil crosses the shell boundary by writing proposed
-commands to history for explicit recall. Model-authored command suggestions are
-proposals, not executed actions. Web-tainted question answers are read-only and
-provisional, and cannot become an executable proposal path through `??`.
+This matters because only the explicit comma execution route crosses into
+`exec_boxed`. Web-tainted question answers are read-only and provisional, and
+cannot become an executable proposal path through `??`.
 
 Current no-execute guarantees:
 
 ```text
 no ?! parser route
-no auto-run from web-tainted state
 no promotion mutation
-no bang unless sandbox exists
-,,, and ^^^ require --yes --policy allow and still preview only
 ```
 
 The full trust model is documented in
@@ -117,7 +115,6 @@ binding without duplicating the rc block.
 
 ```sh
 sigil
-fzf
 glow
 pi
 QWEN_URL / local model endpoint
@@ -143,12 +140,13 @@ Core commands:
 
 ```sh
 sigil command --select "find wav files"
-sigil command --previous --select
-sigil fix
-sigil fix --previous
+sigil op "," "recommend next cleanup"
+sigil op ",," "run the relevant tests"
+sigil op "^"
+sigil op "^^"
 sigil ask "what is tldraw?"
 sigil ask --follow-up "how would that work in practice?"
-sigil op --dry-run ",,," "clean build outputs"
+sigil op --dry-run ",," "clean build outputs"
 sigil patch show
 sigil patch check
 sigil patch apply --yes
@@ -161,9 +159,11 @@ sigil session list
 sigil session clear
 ```
 
-The shell bindings call `sigil op` for glyph behavior and write selected command
-proposals to shell history. Press Up-arrow to recall, review, edit, or run the
-proposal.
+The shell bindings call `sigil op` for glyph behavior. `,` prints one
+recommended command with an explanation and adds the command to shell history;
+`,,` asks for one shell command and executes it. When either comma route receives
+piped input, Sigil previews that input and asks for confirmation before using it;
+piped `,,` also asks before executing the generated command.
 
 ## State
 
@@ -211,8 +211,8 @@ Events and session JSONL entries include these trust fields:
 Legacy state that predates those fields is treated as low-trust:
 `integrity=unknown`, `capability=none`, and `taint=["legacy"]`.
 
-The event log is the durable substrate for future `@@` and `!!`
-behavior. Shell globals are intentionally not used for session continuity.
+The event log is the durable substrate for session continuity. Shell globals are
+intentionally not used for that state.
 
 ## zsh
 
@@ -235,22 +235,24 @@ When glyphs are enabled, Bash also supports:
 
 ```bash
 , find wav files
-,,
+,, run the relevant tests
 ? what is tldraw?
 ?? how would that work in practice?
 ^
 ^^
 ```
 
-For `,`, `,,`, `^`, and `^^`, the selected proposal is added as the newest shell
-history entry. Press Up-arrow to bring it into the prompt for review. Sigil does
-not execute the proposal automatically.
+`,` prints a recommended command plus explanation and adds the command to shell
+history. Non-piped `,,` executes the generated command immediately. Piped comma
+routes ask before using the input, and piped `,,` asks again before execution.
+`^` and `^^` print repair previews.
 
 ## Requirements
 
 - `python3`
 - `curl`-compatible local llama.cpp/OpenAI endpoint for command generation
-- `fzf` for command selection
+- `fzf` optionally improves `sigil command --select`; a built-in selector is used
+  when it is unavailable
 - `glow` for Markdown rendering
 - `pi` for question answering
 

@@ -22,12 +22,12 @@ and thin Bash/zsh bindings.
 Implemented grammar:
 
 ```text
-,   generate shell command candidates
-,,  reopen the previous command selector
+,   recommend a concrete next action
+,,  generate and execute a shell command
 ?   answer a question with Pi using read + web search
 ??  continue the previous question discussion
 ^   suggest fixes for the last failed command
-^^  reopen previous fix candidates
+^^  deeper repair pass
 ```
 
 Important existing foundations:
@@ -67,16 +67,10 @@ stdin + operator + depth + prompt + cwd + trust metadata -> stdout + event log
 
 ## Migration strategy
 
-### 1. Preserve current behavior
+### 1. Preserve command verbs while moving glyphs
 
-Do not begin by redefining the existing glyphs in the shell bindings.
-
-The current interactive behavior is useful and tested:
-
-- `,` and `^` write selected commands to shell history for human review.
-- `?` and `??` produce read-only answers.
-
-These should remain the compatibility surface while the new runtime is added.
+Keep the long-form `sigil command`, `sigil ask`, and `sigil fix` verbs available
+while glyphs move to the operator runtime.
 
 ### 2. Add an operator runtime
 
@@ -106,11 +100,7 @@ learn separate meanings for `?`, `??`, and `???`.
 
 ### 3. Make shell bindings pipeline-aware
 
-Update Bash and zsh functions so they branch on whether stdin is a terminal.
-
-When stdin is a terminal, keep the current proposal-to-history behavior.
-
-When stdin is piped, call the operator runtime:
+Update Bash and zsh functions to call the operator runtime:
 
 ```sh
 git diff | ?? review risky changes
@@ -159,13 +149,18 @@ asked for structured output.
 
 Repetition should not be implemented as separate ad hoc commands.
 
-Recommended first semantics:
+Current semantics:
 
 ```text
-depth 1: quick, low-context, no mutation
-depth 2: deeper, can inspect more local context, still preview-first
-depth 3: autonomous loop within explicit safety policy
+comma depth 1: recommend one concrete next action
+comma depth 2: generate and execute one shell command
+other depth 1: quick, low-context, no mutation
+other depth 2: deeper, can inspect more local context, still preview-first
 ```
+
+Piped input is treated as opaque context. Comma routes preview piped input and
+require confirmation before using it; piped comma depth 2 also requires command
+confirmation before execution.
 
 Examples:
 
@@ -174,9 +169,8 @@ Examples:
 ??     deeper investigation
 ???    exhaustive analysis
 
-,      propose commands or text
-,,     recommend best approach
-,,,    infer and execute only through explicit execution policy
+,      recommend best approach
+,,     infer and execute
 
 ^      suggest repair
 ^^     apply likely repair only through preview/patch workflow
@@ -249,9 +243,7 @@ autonomy route and the route is allowed by policy.
 Existing protections to preserve:
 
 - no `?!` execution path
-- no auto-run from web-tainted state
 - no promotion mutation
-- no bang execution without a sandbox boundary
 - legacy state remains visibly low-trust
 
 ## Suggested stable milestones
@@ -274,7 +266,7 @@ behavior remains unchanged.
 ### Milestone 2: piped inspect and propose
 
 Status: implemented for Bash and zsh wrapper dispatch, plus piped `?` / `??`
-inspect and `,` / `,,` propose runtime output.
+inspect, `,` recommendation output, and `,,` command execution.
 
 Support:
 
@@ -283,7 +275,8 @@ git diff | ?? review risky changes
 cat notes.txt | , draft an executive summary
 ```
 
-No mutation. No command execution. Record events with trust metadata.
+Single comma has no mutation. Double comma executes and records events with
+trust metadata.
 
 ### Milestone 3: piped repair previews
 
@@ -312,32 +305,26 @@ Keep output on stdout so normal Unix composition works.
 ### Milestone 5: unify interactive glyphs on the operator runtime
 
 Status: implemented. Shell glyph wrappers and prompt dispatch now use `sigil op`
-directly; the old public `command`, `question`, and `fix` CLI routes have been
-removed.
+directly; the public verb CLI routes remain available.
 
-Once stream semantics are stable, make interactive `?`, `,`, and `^` call the
-same operator core where practical.
+Interactive `?` still uses the question route; comma and repair glyphs use the
+operator core.
 
-The proposal-to-history UX can remain. The implementation should converge.
-
-### Milestone 6: gated autonomy
-
-Only after the above is stable, implement higher-autonomy meanings such as:
+### Milestone 6: comma autonomy
 
 ```text
-,,, infer and execute
-^^^ iterate until success
+,    recommend a concrete next action
+,,   execute
 ```
 
-These require explicit execution policy, patch previews, provenance, and tests.
+Double comma executes the generated shell command directly. `--dry-run` remains
+available for inspection, and command execution is recorded with provenance.
 
-### Milestone 6: autonomy policy and execution gates
+### Milestone 6: action classification
 
-Status: implemented as preview-only gates. Operator output is classified into
-action classes, depth-3 operators are blocked unless explicitly acknowledged,
-and `--dry-run` / `--yes --policy allow` are available at the CLI boundary. No
-executor exists yet, so even acknowledged depth-3 output is still emitted as a
-preview.
+Status: implemented. Operator output is classified into action classes for
+audit/debugging, and `--dry-run` is available at the CLI boundary. Comma depth
+semantics are explicit: `,` recommends and `,,` executes.
 
 ### Milestone 7: patch application workflow
 

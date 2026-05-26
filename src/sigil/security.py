@@ -1,8 +1,8 @@
 """Trust metadata for glyph outputs.
 
 Sigil records where a value came from and what it is allowed to do. The goal is
-to make future agentic glyphs compose without silently promoting web/model text
-into executable or writable authority.
+to let glyphs compose without silently promoting web/model text into executable
+or writable authority.
 """
 
 from __future__ import annotations
@@ -90,13 +90,6 @@ def min_integrity(records: Sequence[dict[str, Any]]) -> Integrity:
         (normalize_integrity(record.get("integrity")) for record in records),
         key=lambda integrity: INTEGRITY_ORDER[integrity],
     )
-
-
-def cap_capability(requested: Capability, invocation_cap: Capability) -> Capability:
-    """Prevent a composed operation from exceeding its invocation capability."""
-    if CAPABILITY_ORDER[requested] <= CAPABILITY_ORDER[invocation_cap]:
-        return requested
-    return invocation_cap
 
 
 def create_trust_metadata(
@@ -190,19 +183,6 @@ def reject_promotion(
         raise SecurityViolation(
             f"integrity promotion requires fresh human input: {before_integrity} -> {after_integrity}"
         )
-
-
-def ensure_no_auto_run(metadata: dict[str, Any]) -> None:
-    """Prevent web-tainted state from becoming an automatic execution source."""
-    normalized = normalize_trust_record(metadata)
-    if "web" in normalized["taint"] and normalized["capability"] != "none":
-        raise SecurityViolation("web-tainted state cannot be auto-run")
-
-
-def require_sandbox_for_bang(*, sandbox_exists: bool) -> None:
-    """Reserve future `!` execution for an explicit sandbox boundary."""
-    if not sandbox_exists:
-        raise SecurityViolation("bang execution requires a sandbox")
 
 
 def inherited_label(metadata: dict[str, Any]) -> str:

@@ -293,7 +293,6 @@ def doctor_checks(shell: str | None = None) -> list[DoctorCheck]:
     selected_shell = detect_shell() if shell in (None, "auto") else shell
     checks = [
         check_executable("sigil"),
-        check_executable("fzf"),
         check_executable("glow"),
         check_executable("pi"),
         check_endpoint(),

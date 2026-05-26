@@ -14,7 +14,7 @@ sigil command --select "find large files"
 sigil ask --json "what changed in this repo?"
 git diff | sigil ask "review risky changes"
 printf '%s\n' src/sigil/cli.py | sigil fix "preview a cleanup"
-sigil op --dry-run ",,," "clean build outputs"
+sigil op --dry-run ",," "clean build outputs"
 sigil patch check
 sigil patch apply --yes
 sigil install zsh
@@ -52,8 +52,9 @@ Stable fields:
 - `mode`: `pipeline` or `interactive`.
 
 Without `--json`, `sigil op` runs the operator. Piped `?` / `??` inspect stdin,
-`,` / `,,` synthesize or propose output, and `^` / `^^` generate repair
-previews. Operator output is written to stdout; status and errors go to stderr.
+`,` recommends a concrete next action, `,,` executes a generated shell command,
+and `^` / `^^` generate repair previews. Operator output is written to stdout;
+status and errors go to stderr.
 
 ## Verb Pipeline Commands
 
@@ -87,21 +88,24 @@ Stable fields:
 - `malformed_events`: count of malformed Pi JSON event lines ignored.
 - `security`: trust metadata applied to the answer and tool trace.
 
-Depth-3 operators are treated as higher-autonomy requests and pass through the
-execution policy gate:
+Double comma is the comma execution route:
 
 ```sh
-sigil op ",,," "find and remove generated files"
-sigil op --dry-run ",,," "find and remove generated files"
-sigil op --yes --policy allow ",,," "find and remove generated files"
+sigil op ",," "find all Python files"
+git diff | sigil op ",," "run the relevant formatter"
+sigil op --dry-run ",," "find all Python files"
 ```
 
-Current policy behavior:
+Current comma behavior:
 
-- default depth-3 output is blocked after preview; no commands are run.
-- `--dry-run` classifies the output and exits successfully without execution.
-- `--yes --policy allow` acknowledges the gate, but execution is not implemented
-  yet; Sigil still emits a preview only.
+- `,` asks for structured JSON with `command` and `explanation`, prints the
+  command followed by the explanation, and the shell binding adds the command to
+  shell history.
+- non-piped `,,` asks the model for one shell command, executes it through the
+  user's shell, emits command stdout, and forwards command stderr/status.
+- piped comma routes preview stdin and ask before using it; piped `,,` also
+  shows the generated command and asks before execution.
+- `--dry-run` prints the generated command without executing it.
 
 The policy classifier records broad action classes such as `execute`,
 `file_write`, `network`, `delete`, and `privileged` in the event log.
@@ -172,17 +176,17 @@ present in each. `clear` returns the session files removed.
 
 ## Optional Glyph Aliases
 
-Glyphs are a shell alias layer over the verb commands. Installed shell bindings
+Glyphs are a shell alias layer over the CLI runtime. Installed shell bindings
 enable them by default; use `sigil install <shell> --no-glyphs` for a long-form
 only setup.
 
 ```text
-,   -> sigil command
-,,  -> sigil command --previous
+,   -> sigil op ","
+,,  -> sigil op ",,"
 ?   -> sigil ask
 ??  -> sigil ask --follow-up
-^   -> sigil fix
-^^  -> sigil fix --previous
+^   -> sigil op "^"
+^^  -> sigil op "^^"
 ```
 
 ## Hidden plumbing commands
@@ -199,8 +203,8 @@ runtime.
 
 `record-failure` accepts optional `--stdout-snippet` and `--stderr-snippet`
 fields. The passive shell hooks cannot safely capture arbitrary command output
-by themselves, but terminal wrappers or future execution sandboxes can pass
-bounded snippets through this stable hidden boundary.
+by themselves, but callers that already have bounded snippets can pass them
+through this stable hidden boundary.
 
 ## `sigil install`
 
@@ -240,7 +244,7 @@ sigil doctor --json
 
 Doctor checks:
 
-- `sigil`, `fzf`, `glow`, and `pi` are on `PATH`.
+- `sigil`, `glow`, and `pi` are on `PATH`.
 - the local model endpoint is reachable from `QWEN_URL`, or the default local
   endpoint.
 - `QWEN_MODEL` is set when the endpoint needs an explicit model name.

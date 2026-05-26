@@ -1,8 +1,7 @@
 """Failure recovery for the caret glyph.
 
 `^` turns the last failed shell command into repair candidates. It deliberately
-stops at proposal: selected fixes are written to shell history for review, never
-executed automatically.
+stops at a visible repair preview and never executes automatically.
 """
 
 from __future__ import annotations

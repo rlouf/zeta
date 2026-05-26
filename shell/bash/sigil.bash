@@ -1,7 +1,4 @@
 # Sigil bash bindings. Core behavior lives in the `sigil` executable.
-#
-# Selected proposals are written to shell history. Press Up-arrow to recall,
-# review, edit, or run the proposal with the same motion used for any command.
 
 if [[ -n "${SIGIL_BIN:-}" ]]; then
   __sigil_bin="$SIGIL_BIN"
@@ -40,28 +37,24 @@ __sigil_glyphs_enabled() {
 # ── Command wrappers ─────────────────────────────────────────────────────
 
 sigil_command() {
-  if __sigil_stdin_is_pipe; then
-    "$__sigil_bin" command "$*"
-    return $?
-  fi
-  local selected
-  selected="$("$__sigil_bin" command --select "$*")" || return $?
-  __sigil_history_insert "$selected"
+  local response command
+  response="$("$__sigil_bin" op "," "$@")" || return $?
+  printf '%s\n' "$response"
+  command="${response%%$'\n'*}"
+  __sigil_history_insert "$command"
 }
 
 sigil_previous_command() {
-  if __sigil_stdin_is_pipe; then
-    "$__sigil_bin" command --previous "$*"
-    return $?
-  fi
-  local selected
-  selected="$("$__sigil_bin" command --previous --select)" || return $?
-  __sigil_history_insert "$selected"
+  sigil_execute_command "$@"
+}
+
+sigil_execute_command() {
+  "$__sigil_bin" op ",," "$@"
 }
 
 sigil_question() {
   if __sigil_stdin_is_pipe; then
-    "$__sigil_bin" ask "$*"
+    "$__sigil_bin" op "?" "$@"
     return $?
   fi
   "$__sigil_bin" ask "$*"
@@ -69,37 +62,25 @@ sigil_question() {
 
 sigil_follow_up() {
   if __sigil_stdin_is_pipe; then
-    "$__sigil_bin" ask --follow-up "$*"
+    "$__sigil_bin" op "??" "$@"
     return $?
   fi
   "$__sigil_bin" ask --follow-up "$*"
 }
 
 sigil_fix() {
-  if __sigil_stdin_is_pipe; then
-    "$__sigil_bin" fix "$@"
-    return $?
-  fi
-  local selected
-  selected="$("$__sigil_bin" fix)" || return $?
-  __sigil_history_insert "$selected"
+  "$__sigil_bin" op "^" "$@"
 }
 
 sigil_previous_fix() {
-  if __sigil_stdin_is_pipe; then
-    "$__sigil_bin" fix --previous "$@"
-    return $?
-  fi
-  local selected
-  selected="$("$__sigil_bin" fix --previous)" || return $?
-  __sigil_history_insert "$selected"
+  "$__sigil_bin" op "^^" "$@"
 }
 
 # ── Optional glyph functions ─────────────────────────────────────────────
 
 if __sigil_glyphs_enabled; then
   function , { sigil_command "$*"; }
-  function ,, { sigil_previous_command "$*"; }
+  function ,, { sigil_execute_command "$*"; }
   function ? { sigil_question "$*"; }
   function ?? { sigil_follow_up "$*"; }
   function ^ { sigil_fix "$*"; }
@@ -107,7 +88,7 @@ if __sigil_glyphs_enabled; then
 
   if [[ $- == *i* ]]; then
     alias ,='sigil_command'
-    alias ,,='sigil_previous_command'
+    alias ,,='sigil_execute_command'
     alias '?'='sigil_question'
     alias '??'='sigil_follow_up'
     alias '^'='sigil_fix'

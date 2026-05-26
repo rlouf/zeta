@@ -9,7 +9,6 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
-from typing import Literal, cast
 
 import click
 
@@ -50,6 +49,9 @@ from .session import (
 )
 from .state import append_event, read_json
 
+MAX_CONFIRM_STDIN_CHARS = 4000
+MAX_CONFIRM_STDIN_LINES = 80
+
 
 @click.group(context_settings={"help_option_names": ["-h", "--help"]})
 def cli() -> None:
@@ -78,17 +80,31 @@ def run_stream_operator(
         print_json_line(invocation.to_dict())
         return 0
 
+    if should_confirm_piped_input(invocation):
+        if not confirm_piped_input(stdin_text):
+            print("sigil op: piped input declined", file=sys.stderr)
+            raise click.exceptions.Exit(2)
+
     try:
-        result = run_invocation(invocation)
+        result = run_invocation(
+            invocation,
+            policy=ExecutionPolicy(
+                confirm_execution=should_confirm_execution(invocation)
+            ),
+        )
     except RuntimeError as exc:
         print(f"sigil {invocation.name}: {exc}", file=sys.stderr)
         return 1
-    if result.decision.status != "preview" or invocation.depth >= 3:
+    if result.decision.status != "preview" or (
+        invocation.base == "," and invocation.depth >= 2
+    ):
         print(f"sigil {invocation.name}: {result.decision.message}", file=sys.stderr)
+    if result.stderr:
+        print(result.stderr, file=sys.stderr, end="")
     if result.output:
         print(result.output)
-    if result.decision.status == "blocked":
-        raise click.exceptions.Exit(2)
+    if result.exit_code:
+        raise click.exceptions.Exit(result.exit_code)
     return 0
 
 
@@ -197,24 +213,11 @@ def cmd_ask(question: str | None, follow_up: bool, json_output: bool) -> int:
 @click.argument("prompt_parts", nargs=-1)
 @click.option("--json", "json_output", is_flag=True)
 @click.option("--dry-run", is_flag=True, help="Classify output and skip execution.")
-@click.option(
-    "--yes", is_flag=True, help="Acknowledge higher-autonomy execution gates."
-)
-@click.option(
-    "--policy",
-    "policy_name",
-    type=click.Choice(["preview", "allow"]),
-    default="preview",
-    show_default=True,
-    help="Execution policy for depth-3 operators.",
-)
 def cmd_op(
     glyph: str,
     prompt_parts: tuple[str, ...],
     json_output: bool,
     dry_run: bool,
-    yes: bool,
-    policy_name: str,
 ) -> int:
     """Parse a semantic operator invocation."""
     stdin_is_tty = sys.stdin.isatty()
@@ -235,25 +238,82 @@ def cmd_op(
         print_json_line(invocation.to_dict())
         return 0
 
+    if should_confirm_piped_input(invocation):
+        if not confirm_piped_input(stdin_text):
+            print("sigil op: piped input declined", file=sys.stderr)
+            raise click.exceptions.Exit(2)
+
     try:
         result = run_invocation(
             invocation,
             policy=ExecutionPolicy(
-                yes=yes,
                 dry_run=dry_run,
-                policy=cast(Literal["preview", "allow"], policy_name),
+                confirm_execution=should_confirm_execution(invocation),
             ),
         )
     except RuntimeError as exc:
         print(f"sigil op: {exc}", file=sys.stderr)
         return 1
-    if result.decision.status != "preview" or invocation.depth >= 3:
+    if dry_run:
         print(f"sigil op: {result.decision.message}", file=sys.stderr)
+    if result.stderr:
+        print(result.stderr, file=sys.stderr, end="")
     if result.output:
         print(result.output)
-    if result.decision.status == "blocked":
-        raise click.exceptions.Exit(2)
+    if result.exit_code:
+        raise click.exceptions.Exit(result.exit_code)
     return 0
+
+
+def should_confirm_piped_input(invocation: object) -> bool:
+    """Return whether a comma operator needs piped-input confirmation."""
+    return (
+        getattr(invocation, "base", None) == ","
+        and getattr(invocation, "mode", None) == "pipeline"
+        and bool(getattr(invocation, "stdin", ""))
+    )
+
+
+def should_confirm_execution(invocation: object) -> bool:
+    """Return whether command execution needs confirmation."""
+    return (
+        should_confirm_piped_input(invocation) and getattr(invocation, "depth", 0) >= 2
+    )
+
+
+def confirm_piped_input(stdin_text: str) -> bool:
+    """Show a bounded stdin preview and ask whether it may influence a command."""
+    print("Sigil received piped input:", file=sys.stderr)
+    print("", file=sys.stderr)
+    print(stdin_preview(stdin_text), file=sys.stderr)
+    print("", file=sys.stderr)
+    return confirm_on_tty("Use this input? [y/N] ")
+
+
+def stdin_preview(text: str) -> str:
+    """Return a bounded preview of piped stdin for confirmation prompts."""
+    lines = text.splitlines()
+    preview_lines = lines[:MAX_CONFIRM_STDIN_LINES]
+    preview = "\n".join(preview_lines)
+    truncated = len(lines) > MAX_CONFIRM_STDIN_LINES
+    if len(preview) > MAX_CONFIRM_STDIN_CHARS:
+        preview = preview[:MAX_CONFIRM_STDIN_CHARS]
+        truncated = True
+    if truncated:
+        preview += "\n..."
+    return preview
+
+
+def confirm_on_tty(prompt: str) -> bool:
+    """Read a yes/no confirmation from the controlling terminal."""
+    try:
+        with open("/dev/tty", "r+", encoding="utf-8") as tty:
+            tty.write(prompt)
+            tty.flush()
+            answer = tty.readline()
+    except OSError:
+        return False
+    return answer.strip().lower() in {"y", "yes"}
 
 
 @cli.command("install")

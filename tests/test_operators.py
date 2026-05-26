@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import tempfile
 from pathlib import Path
 
@@ -126,17 +127,24 @@ def test_op_cli_runs_piped_inspect_operator() -> None:
     assert calls["max_tokens"] == 1200
 
 
-def test_op_cli_runs_piped_propose_operator() -> None:
+def test_op_cli_runs_piped_recommend_operator() -> None:
     calls = {}
 
-    def fake_chat_text(system: str, user: str, *, max_tokens: int = 1200) -> str:
+    def fake_chat_json(
+        system: str, user: str, schema: dict[str, object]
+    ) -> dict[str, str]:
         calls["system"] = system
         calls["user"] = user
-        return "executive summary"
+        calls["schema"] = schema
+        return {
+            "command": "uv run pytest",
+            "explanation": "Tests validate the current code path before cleanup.",
+        }
 
     with (
         patch("sigil.operators.ensure_server", return_value=True),
-        patch("sigil.operators.chat_text", side_effect=fake_chat_text),
+        patch("sigil.operators.chat_json", side_effect=fake_chat_json),
+        patch("sigil.cli.confirm_piped_input", return_value=True),
         patch("sigil.operators.append_event", return_value={}),
     ):
         result = CliRunner().invoke(
@@ -145,9 +153,13 @@ def test_op_cli_runs_piped_propose_operator() -> None:
             input="meeting notes\n",
         )
     assert result.exit_code == 0, result.output
-    assert result.output == "executive summary\n"
-    assert "Synthesize or propose" in str(calls["system"])
+    assert result.output == (
+        "uv run pytest\nTests validate the current code path before cleanup.\n"
+    )
+    assert "Recommend one concrete next action" in str(calls["system"])
     assert "Prompt: draft an executive summary" in str(calls["user"])
+    assert "command" in str(calls["schema"])
+    assert "explanation" in str(calls["schema"])
 
 
 def test_op_cli_runs_piped_repair_preview_with_file_context() -> None:
@@ -300,82 +312,194 @@ def test_policy_classifies_unified_diff_as_file_write() -> None:
     assert "execute" not in classification.classes
 
 
-def test_depth_three_policy_blocks_without_explicit_acknowledgement() -> None:
+def test_double_comma_policy_allows_execution_classification() -> None:
     decision = evaluate_policy(
-        glyph=",,,",
-        depth=3,
+        glyph=",,",
+        depth=2,
         output="rm -rf build",
         policy=ExecutionPolicy(),
     )
 
-    assert decision.status == "blocked"
-    assert "No commands were run" in decision.message
+    assert decision.status == "allowed"
+    assert "executes" in decision.message
     assert "delete" in decision.classification.classes
 
 
-def test_depth_three_policy_allows_preview_after_acknowledgement() -> None:
+def test_deeper_comma_policy_matches_runtime_execution() -> None:
     decision = evaluate_policy(
-        glyph=",,,",
-        depth=3,
+        glyph=",,,,",
+        depth=4,
         output="git status --short",
-        policy=ExecutionPolicy(yes=True, policy="allow"),
+        policy=ExecutionPolicy(),
     )
 
     assert decision.status == "allowed"
-    assert "execution is not implemented" in decision.message
+    assert "executes" in decision.message
 
 
-def test_op_cli_blocks_depth_three_without_policy() -> None:
+def test_dry_run_policy_previews_without_execution() -> None:
+    decision = evaluate_policy(
+        glyph=",,",
+        depth=2,
+        output="git status --short",
+        policy=ExecutionPolicy(dry_run=True),
+    )
+
+    assert decision.status == "preview"
+    assert "dry-run" in decision.message
+
+
+def test_op_cli_executes_double_comma_command() -> None:
+    calls = {}
+
+    def fake_run(args: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        calls["args"] = args
+        calls["kwargs"] = kwargs
+        return subprocess.CompletedProcess(args, 0, stdout="done\n", stderr="")
+
+    events = []
+
+    def fake_append_event(event: dict[str, object]) -> dict[str, object]:
+        events.append(event)
+        return {"id": str(len(events)), **event}
+
     with (
         patch("sigil.operators.ensure_server", return_value=True),
-        patch("sigil.operators.chat_text", return_value="rm -rf build"),
-        patch("sigil.operators.append_event", return_value={}),
+        patch(
+            "sigil.operators.chat_json", return_value={"command": "printf 'done\\n'"}
+        ),
+        patch("sigil.operators.subprocess.run", side_effect=fake_run),
+        patch("sigil.operators.append_event", side_effect=fake_append_event),
     ):
-        result = CliRunner().invoke(cli, ["op", ",,,", "clean", "build"])
-
-    assert result.exit_code == 2
-    assert result.stdout == "rm -rf build\n"
-    assert "requested higher autonomy" in result.stderr
-    assert "No commands were run" in result.stderr
-
-
-def test_op_cli_acknowledged_depth_three_still_previews_only() -> None:
-    with (
-        patch("sigil.operators.ensure_server", return_value=True),
-        patch("sigil.operators.chat_text", return_value="git status --short"),
-        patch("sigil.operators.append_event", return_value={}),
-    ):
-        result = CliRunner().invoke(
-            cli,
-            ["op", "--yes", "--policy", "allow", ",,,", "status"],
-        )
+        result = CliRunner().invoke(cli, ["op", ",,", "say", "done"])
 
     assert result.exit_code == 0
-    assert result.stdout == "git status --short\n"
-    assert "execution is not implemented" in result.stderr
+    assert result.stdout == "done\n"
+    assert result.stderr == ""
+    assert calls["args"][-2:] == ["-lc", "printf 'done\\n'"]
+    assert [event["type"] for event in events] == [
+        "operator_completed",
+        "operator_command_executed",
+    ]
+    assert events[-1]["capability"] == "exec_boxed"
 
 
-def test_op_cli_dry_run_depth_three_previews_only() -> None:
+def test_op_cli_returns_executed_command_status_and_stderr() -> None:
     with (
         patch("sigil.operators.ensure_server", return_value=True),
-        patch("sigil.operators.chat_text", return_value="git status --short"),
+        patch("sigil.operators.chat_json", return_value={"command": "false"}),
+        patch(
+            "sigil.operators.subprocess.run",
+            return_value=subprocess.CompletedProcess(
+                ["zsh", "-lc", "false"], 7, stdout="", stderr="nope\n"
+            ),
+        ),
+        patch("sigil.operators.append_event", return_value={"id": "operator-event"}),
+    ):
+        result = CliRunner().invoke(cli, ["op", ",,", "fail"])
+
+    assert result.exit_code == 7
+    assert result.stdout == ""
+    assert result.stderr == "nope\n"
+
+
+def test_op_cli_dry_run_double_comma_does_not_execute() -> None:
+    with (
+        patch("sigil.operators.ensure_server", return_value=True),
+        patch(
+            "sigil.operators.chat_json",
+            return_value={"command": "git status --short"},
+        ),
+        patch("sigil.operators.subprocess.run", side_effect=AssertionError("no exec")),
         patch("sigil.operators.append_event", return_value={}),
     ):
-        result = CliRunner().invoke(cli, ["op", "--dry-run", ",,,", "status"])
+        result = CliRunner().invoke(cli, ["op", "--dry-run", ",,", "status"])
 
     assert result.exit_code == 0
     assert result.stdout == "git status --short\n"
     assert "dry-run" in result.stderr
+
+
+def test_op_cli_denies_piped_comma_before_model_call() -> None:
+    with (
+        patch("sigil.cli.confirm_piped_input", return_value=False),
+        patch("sigil.operators.chat_json", side_effect=AssertionError("no model")),
+    ):
+        result = CliRunner().invoke(cli, ["op", ",", "summarize"], input="notes\n")
+
+    assert result.exit_code == 2
+    assert "piped input declined" in result.stderr
+
+
+def test_op_cli_confirms_piped_comma_before_model_call() -> None:
+    with (
+        patch("sigil.cli.confirm_piped_input", return_value=True),
+        patch(
+            "sigil.operators.chat_json",
+            return_value={"command": "cat notes", "explanation": "uses stdin"},
+        ),
+        patch("sigil.operators.append_event", return_value={}),
+    ):
+        result = CliRunner().invoke(cli, ["op", ",", "summarize"], input="notes\n")
+
+    assert result.exit_code == 0
+    assert result.stdout == "cat notes\nuses stdin\n"
+
+
+def test_op_cli_confirms_piped_double_comma_command_before_execution() -> None:
+    with (
+        patch("sigil.cli.confirm_piped_input", return_value=True),
+        patch("sigil.operators.confirm_execution", return_value=False),
+        patch("sigil.operators.chat_json", return_value={"command": "cat notes"}),
+        patch("sigil.operators.subprocess.run", side_effect=AssertionError("no exec")),
+        patch("sigil.operators.append_event", return_value={"id": "operator-event"}),
+    ):
+        result = CliRunner().invoke(cli, ["op", ",,", "summarize"], input="notes\n")
+
+    assert result.exit_code == 2
+    assert result.stdout == ""
+    assert "command execution declined" in result.stderr
+
+
+def test_op_cli_accepts_piped_double_comma_execution() -> None:
+    with (
+        patch("sigil.operators.ensure_server", return_value=True),
+        patch("sigil.cli.confirm_piped_input", return_value=True),
+        patch("sigil.operators.confirm_execution", return_value=True),
+        patch("sigil.operators.chat_json", return_value={"command": "cat notes"}),
+        patch(
+            "sigil.operators.subprocess.run",
+            return_value=subprocess.CompletedProcess(
+                ["zsh", "-lc", "cat notes"], 0, stdout="done\n", stderr=""
+            ),
+        ),
+        patch("sigil.operators.append_event", return_value={"id": "operator-event"}),
+    ):
+        result = CliRunner().invoke(cli, ["op", ",,", "summarize"], input="notes\n")
+
+    assert result.exit_code == 0
+    assert result.stdout == "done\n"
+
+
 def test_verb_commands_run_piped_stream_operators() -> None:
     calls = []
+    json_calls = []
 
     def fake_chat_text(system: str, user: str, *, max_tokens: int = 1200) -> str:
         calls.append((system, user, max_tokens))
         return "stream result"
 
+    def fake_chat_json(
+        system: str, user: str, schema: dict[str, object]
+    ) -> dict[str, str]:
+        json_calls.append((system, user, schema))
+        return {"command": "stream result", "explanation": "because stdin"}
+
     with (
         patch("sigil.operators.ensure_server", return_value=True),
         patch("sigil.operators.chat_text", side_effect=fake_chat_text),
+        patch("sigil.operators.chat_json", side_effect=fake_chat_json),
+        patch("sigil.cli.confirm_piped_input", return_value=True),
         patch("sigil.operators.append_event", return_value={}),
     ):
         ask_result = CliRunner().invoke(
@@ -398,11 +522,11 @@ def test_verb_commands_run_piped_stream_operators() -> None:
     assert command_result.exit_code == 0, command_result.output
     assert fix_result.exit_code == 0, fix_result.output
     assert ask_result.output == "stream result\n"
-    assert command_result.output == "stream result\n"
+    assert command_result.output == "stream result\nbecause stdin\n"
     assert fix_result.output == "stream result\n"
     assert "Operator: ? (inspect)" in calls[0][1]
-    assert "Operator: , (propose)" in calls[1][1]
-    assert "Operator: ^ (repair)" in calls[2][1]
+    assert "Operator: , (recommend)" in json_calls[0][1]
+    assert "Operator: ^ (repair)" in calls[1][1]
 
 
 def test_op_cli_rejects_mixed_glyphs() -> None:

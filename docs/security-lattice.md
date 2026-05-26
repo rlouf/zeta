@@ -78,24 +78,37 @@ state.
 The implemented grammar is:
 
 ```text
-,   generate shell command candidates
-,,  reopen the previous command selector
+,   recommend a concrete next action
+,,  generate and execute a shell command
 ?   answer a question with Pi using read + web search
 ??  continue the previous question discussion
+^   preview a repair for the last failure or stdin targets
+^^  run a deeper repair preview pass
 ```
 
 It maps to the lattice as follows:
 
 ```text
-,   human prompt -> model proposal
+,   human prompt -> model recommendation
     integrity=local_model
     capability=propose
     taint=["model"]
     provisional=false
 
-,,  previous command continuation
-    inherits previous command integrity and taint
+,,  human prompt -> generated command execution
+    integrity=local_model
+    capability=exec_boxed
+    taint=["model"]
+
+^   failed command/files -> repair preview
+    integrity=local_model
     capability=propose
+    taint=["model"]
+
+^^  failed command/files -> deeper repair preview
+    integrity=local_model
+    capability=propose
+    taint=["model"]
 
 ?   read + web question
     integrity=web
@@ -142,9 +155,10 @@ legacy before the user recalls it for review.
 
 Continuations inherit maximum taint and minimum integrity from their inputs.
 
-For `,,`, `last-command.json` stores the event ID of the previous command
-generation. Reopening the selector creates a `command_continued` event with that
-input ID, and the final `command_selected` event points to the continuation.
+For the legacy `sigil command --previous` selector, `last-command.json` stores
+the event ID of the previous command generation. Reopening the selector creates
+a `command_continued` event with that input ID, and the final
+`command_selected` event points to the continuation.
 
 For `??`, `last-question.jsonl` stores the user and assistant transcript turns
 with their originating event IDs. A follow-up consumes those transcript records,
@@ -162,8 +176,8 @@ This does not call a model, append events, or create executable shell text.
 
 Failure repair records may include bounded stdout/stderr snippets and safe local
 cwd/git context. These are inputs to model-authored repair proposals, so `^` and
-`^^` remain `local_model / propose / model-tainted` and still only write the
-selected command to history for human review.
+`^^` remain `local_model / propose / model-tainted` and only print repair
+previews.
 
 When repair output is a unified diff, Sigil stores it as a patch preview. The
 preview can be checked with `sigil patch check`; applying it requires
@@ -177,24 +191,14 @@ fail-closed:
 
 ```text
 no ?! parser route
-no auto-run from web-tainted state
 no promotion mutation
-no bang unless sandbox exists
 ```
 
 The zsh and Bash bindings do not map `?!`, `,!`, `@`, or `@!` to parser routes.
-The Python security helpers also expose checks for future routes:
-
-```text
-reject_promotion(...)
-ensure_no_auto_run(...)
-require_sandbox_for_bang(...)
-```
-
-Future grammar must use these helpers or stricter equivalents. In particular:
+Current grammar must preserve these constraints:
 
 - `??` after `?` must never produce an executable proposal.
-- `,,` must inherit taint from the prior command event.
+- `,,` must record the generated-command event and the boxed execution event.
 - Legacy state must remain visibly low-trust.
 - Event logs must retain enough input IDs to reconstruct continuations.
 - Tests must fail for any path that increases integrity without fresh human
@@ -204,12 +208,10 @@ Future grammar must use these helpers or stricter equivalents. In particular:
 
 The short version:
 
-- `,` means "ask the local model to propose shell text."
-- `,,` means "show me that same proposal context again, with the same trust."
+- `,` means "ask the local model to recommend one concrete next action."
+- `,,` means "ask the local model for one shell command and execute it."
 - `?` means "answer using read and web search; do not execute."
 - `??` means "continue that read/web discussion; still do not execute."
 
-Sigil writes command text to shell history only where the route is a proposal
-route. Read/web routes produce answers, not commands. Any future write or
-execution route must be boxed, explicit, and lower or preserve integrity unless
-the user provides fresh input.
+Read/web routes produce answers, not commands. Execution routes must be boxed,
+explicit, and lower or preserve integrity unless the user provides fresh input.

@@ -3,7 +3,6 @@ Output docs/demo.gif
 Require uv
 Require python3
 Require zsh
-Require fzf
 
 Set Shell "zsh"
 Set FontSize 18
@@ -26,23 +25,13 @@ Type "clear"
 Enter
 Show
 
-Type ", find files over 10 MB in this repo excluding .git; include one paths-only option and one with human-readable sizes"
+Type ", find files over 10 MB in this repo excluding .git"
 Enter
 Sleep 20s
-Enter
-Sleep 1600ms
-Enter
-Sleep 1800ms
 
-Type ",,"
+Type ",, find files over 10 MB in this repo excluding .git"
 Enter
 Sleep 3500ms
-Down
-Sleep 800ms
-Enter
-Sleep 1200ms
-Enter
-Sleep 1800ms
 
 Type "? Do not use tools. In one sentence, why skip .git in a find command?"
 Enter

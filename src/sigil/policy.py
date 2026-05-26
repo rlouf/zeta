@@ -15,7 +15,7 @@ ActionClass = Literal[
     "delete",
     "privileged",
 ]
-PolicyStatus = Literal["preview", "blocked", "allowed"]
+PolicyStatus = Literal["preview", "allowed"]
 
 WRITE_COMMANDS = {
     "cp",
@@ -64,9 +64,8 @@ class ActionClassification:
 class ExecutionPolicy:
     """Explicit execution policy selected at the CLI boundary."""
 
-    yes: bool = False
     dry_run: bool = False
-    policy: Literal["preview", "allow"] = "preview"
+    confirm_execution: bool = False
 
     def to_dict(self) -> dict[str, object]:
         """Return a JSON-serializable representation."""
@@ -112,36 +111,23 @@ def evaluate_policy(
     output: str,
     policy: ExecutionPolicy,
 ) -> PolicyDecision:
-    """Evaluate whether an operator result may claim higher-autonomy authority."""
+    """Classify an operator result and describe how it will be handled."""
     classification = classify_output(output)
-    autonomy_requested = depth >= 3
-    if not autonomy_requested:
-        return PolicyDecision(
-            status="preview",
-            message="preview only; operator depth does not grant execution authority",
-            classification=classification,
-        )
     if policy.dry_run:
         return PolicyDecision(
             status="preview",
             message=f"{glyph} dry-run: classified output and skipped execution",
             classification=classification,
         )
-    if not policy.yes or policy.policy != "allow":
+    if glyph.startswith(",") and depth >= 2:
         return PolicyDecision(
-            status="blocked",
-            message=(
-                f"{glyph} requested higher autonomy; pass --yes --policy allow "
-                "to acknowledge execution authority. No commands were run."
-            ),
+            status="allowed",
+            message=f"{glyph} executes the generated command",
             classification=classification,
         )
     return PolicyDecision(
-        status="allowed",
-        message=(
-            f"{glyph} acknowledged by policy, but execution is not implemented; "
-            "emitting preview only"
-        ),
+        status="preview",
+        message="stdout-only preview",
         classification=classification,
     )
 

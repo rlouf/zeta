@@ -92,7 +92,6 @@ def test_doctor_reports_expected_checks() -> None:
                             checks = doctor_checks()
     names = {check.name for check in checks}
     assert "executable:sigil" in names
-    assert "executable:fzf" in names
     assert "executable:glow" in names
     assert "executable:pi" in names
     assert "model:endpoint" in names
@@ -107,7 +106,7 @@ def test_doctor_reports_expected_checks() -> None:
 def test_doctor_cli_json_returns_nonzero_for_failures() -> None:
     checks = [
         DoctorCheck("executable:sigil", "ok", "/bin/sigil"),
-        DoctorCheck("executable:fzf", "fail", "fzf is not on PATH"),
+        DoctorCheck("executable:pi", "fail", "pi is not on PATH"),
     ]
     stdout = StringIO()
     with patch("sigil.cli.doctor_checks", return_value=checks):
@@ -115,5 +114,5 @@ def test_doctor_cli_json_returns_nonzero_for_failures() -> None:
             code = main(["doctor", "--json"])
     assert code == 1
     payload = json.loads(stdout.getvalue())
-    assert payload[1]["name"] == "executable:fzf"
+    assert payload[1]["name"] == "executable:pi"
     assert payload[1]["status"] == "fail"

@@ -152,6 +152,7 @@ sigil patch check
 sigil patch apply --yes
 sigil install zsh
 sigil doctor
+sigil events
 sigil events lineage
 sigil session show
 sigil session path

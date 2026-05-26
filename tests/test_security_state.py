@@ -117,6 +117,35 @@ def test_main_rewrites_permission_errors() -> None:
     assert "permission denied: /nope/events.jsonl" in stderr.getvalue()
 
 
+def test_events_default_lists_recent_events() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        old_state_dir = os.environ.get("SIGIL_STATE_DIR")
+        old_session_id = os.environ.get("SIGIL_SESSION_ID")
+        os.environ["SIGIL_STATE_DIR"] = tmp
+        os.environ["SIGIL_SESSION_ID"] = "test"
+        try:
+            first = append_event({"type": "first"})
+            second = append_event({"type": "second", "glyph": ","})
+            text = CliRunner().invoke(cli, ["events", "--limit", "1"])
+            listed = CliRunner().invoke(cli, ["events", "list", "--json"])
+        finally:
+            if old_state_dir is None:
+                os.environ.pop("SIGIL_STATE_DIR", None)
+            else:
+                os.environ["SIGIL_STATE_DIR"] = old_state_dir
+            if old_session_id is None:
+                os.environ.pop("SIGIL_SESSION_ID", None)
+            else:
+                os.environ["SIGIL_SESSION_ID"] = old_session_id
+
+    assert text.exit_code == 0, text.output
+    assert second["id"] in text.output
+    assert "second" in text.output
+    assert first["id"] not in text.output
+    assert listed.exit_code == 0, listed.output
+    assert [event["type"] for event in json.loads(listed.output)] == ["first", "second"]
+
+
 def test_events_lineage_json_follows_transitive_inputs() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         old_state_dir = os.environ.get("SIGIL_STATE_DIR")

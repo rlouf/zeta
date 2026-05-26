@@ -144,6 +144,26 @@ sigil patch apply --yes --json
 `check` and `apply` record audit events with the patch event id, command,
 status, cwd, and bounded stdout/stderr snippets.
 
+## `sigil events --json`
+
+Shows recent records from the read-only global event log.
+
+```sh
+sigil events
+sigil events --limit 50
+sigil events --json
+sigil events list --json
+```
+
+Without `--json`, each event is printed as a tab-separated line:
+
+```text
+id  type  glyph  integrity/capability  session  cwd
+```
+
+The explicit `list` subcommand is an alias for the default `sigil events`
+view.
+
 ## `sigil events lineage --json`
 
 Inspects the read-only global event log and returns the selected event plus the

@@ -5,3 +5,5 @@ __pycache__/
 .ruff_cache/
 dist/
 .DS_Store
+src/sigil/_version.py
+src/sigil_sh.egg-info/

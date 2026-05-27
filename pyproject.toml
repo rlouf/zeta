@@ -1,16 +1,38 @@
 [build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
+requires = ["setuptools>=69", "setuptools-scm>=8"]
+build-backend = "setuptools.build_meta"
 
 [project]
 name = "sigil-sh"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Verb-first LLM interaction for the shell, with optional punctuation shortcuts."
 readme = "README.md"
 requires-python = ">=3.11"
-license = "MIT"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
 authors = [
   { name = "Rémi Louf" }
+]
+keywords = [
+  "ai",
+  "cli",
+  "llm",
+  "shell",
+  "terminal",
+]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Environment :: Console",
+  "Intended Audience :: Developers",
+  "Operating System :: MacOS",
+  "Operating System :: POSIX",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Software Development",
+  "Topic :: System :: Shells",
+  "Topic :: Terminals",
 ]
 dependencies = [
   "click>=8.1",
@@ -24,11 +46,23 @@ Issues = "https://github.com/rlouf/sigil/issues"
 [project.scripts]
 sigil = "sigil.cli:main"
 
-[tool.hatch.build.targets.wheel]
-packages = ["src/sigil"]
+[tool.setuptools]
+package-dir = { "" = "src" }
+include-package-data = true
 
-[tool.hatch.build.targets.wheel.force-include]
-"shell" = "sigil/shell"
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+sigil = [
+  "shell/bash/sigil.bash",
+  "shell/zsh/sigil.zsh",
+]
+
+[tool.setuptools_scm]
+fallback_version = "0.1.0"
+local_scheme = "no-local-version"
+version_file = "src/sigil/_version.py"
 
 [dependency-groups]
 dev = [

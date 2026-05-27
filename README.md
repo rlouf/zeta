@@ -74,34 +74,24 @@ By default, command generation expects a local endpoint at
 
 ## Quick Start
 
-Generate command candidates:
+Once the shell binding is installed, use glyphs directly:
 
 ```sh
-sigil command "find files over 10 MB in this repo excluding .git"
+, find files over 10 MB in this repo excluding .git
+,, run the relevant tests
+? what changed in this repo?
+?? what should I run next?
 ```
 
-Use an interactive selector:
+Use stdin as context:
 
 ```sh
-sigil command --select "show the largest directories"
+git diff | ? review risky changes
+git diff --name-only | , run the relevant tests
 ```
 
-Ask a question:
-
-```sh
-sigil ask "what changed in this repo?"
-sigil ask --follow-up "what should I run next?"
-```
-
-Use piped input as context:
-
-```sh
-git diff | sigil ask "review risky changes"
-git diff --name-only | sigil command "run the relevant tests"
-```
-
-When stdin is piped into command or question routes, Sigil previews the input
-and asks before using it.
+When stdin is piped into comma or question routes, Sigil previews the input and
+asks before using it.
 
 ## Shell Glyphs
 
@@ -145,6 +135,17 @@ sigil events lineage [EVENT_ID] [--json]
 sigil session [show|path|list|clear] [--json]
 sigil install {zsh|bash} [--install-dir DIR] [--rc FILE] [--glyphs|--no-glyphs]
 sigil doctor [--shell auto|zsh|bash] [--json]
+```
+
+Examples:
+
+```sh
+sigil command "find files over 10 MB in this repo excluding .git"
+sigil command --select "show the largest directories"
+sigil ask "what changed in this repo?"
+sigil ask --follow-up "what should I run next?"
+git diff | sigil ask "review risky changes"
+git diff --name-only | sigil command "run the relevant tests"
 ```
 
 See [docs/cli.md](docs/cli.md) for the user-facing CLI contract and JSON

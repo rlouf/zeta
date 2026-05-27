@@ -191,7 +191,7 @@ def test_bash_records_every_non_sigil_turn_via_record_turn() -> None:
         result = run_shell(
             "bash",
             textwrap.dedent(
-                "                    source shell/bash/sigil.bash\n                    __sigil_history_line() { printf '%s\\n' \"ls -la\"; }\n                    true\n                    __sigil_precmd\n                    __sigil_history_line() { printf '%s\\n' \"bad command\"; }\n                    false\n                    __sigil_precmd\n                    __sigil_history_line() { printf '%s\\n' \", should not record\"; }\n                    false\n                    __sigil_precmd\n                    wait\n                    "
+                "                    source shell/bash/sigil.bash\n                    __sigil_history_entry() { printf '1\\t%s\\n' \"ls -la\"; }\n                    true\n                    __sigil_precmd\n                    __sigil_history_entry() { printf '2\\t%s\\n' \"bad command\"; }\n                    false\n                    __sigil_precmd\n                    __sigil_history_entry() { printf '3\\t%s\\n' \", should not record\"; }\n                    false\n                    __sigil_precmd\n                    wait\n                    "
             ),
             tmp,
             stub,
@@ -205,6 +205,41 @@ def test_bash_records_every_non_sigil_turn_via_record_turn() -> None:
         )
 
 
+def test_bash_records_repeated_command_when_history_id_changes() -> None:
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp = Path(tmp_dir)
+        stub = make_stub(tmp)
+        result = run_shell(
+            "bash",
+            textwrap.dedent(
+                "                    source shell/bash/sigil.bash\n                    __sigil_history_entry() { printf '1\\t%s\\n' \"ls\"; }\n                    true\n                    __sigil_precmd\n                    __sigil_history_entry() { printf '2\\t%s\\n' \"ls\"; }\n                    true\n                    __sigil_precmd\n                    wait\n                    "
+            ),
+            tmp,
+            stub,
+        )
+        assert_success(result)
+        assert read_log(tmp) == [
+            f"record-turn --status 0 --cwd {ROOT} ls",
+            f"record-turn --status 0 --cwd {ROOT} ls",
+        ]
+
+
+def test_bash_dedupes_same_history_entry() -> None:
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp = Path(tmp_dir)
+        stub = make_stub(tmp)
+        result = run_shell(
+            "bash",
+            textwrap.dedent(
+                "                    source shell/bash/sigil.bash\n                    __sigil_history_entry() { printf '1\\t%s\\n' \"ls\"; }\n                    true\n                    __sigil_precmd\n                    true\n                    __sigil_precmd\n                    wait\n                    "
+            ),
+            tmp,
+            stub,
+        )
+        assert_success(result)
+        assert read_log(tmp) == [f"record-turn --status 0 --cwd {ROOT} ls"]
+
+
 def test_bash_does_not_record_sigil_commands() -> None:
     with tempfile.TemporaryDirectory() as tmp_dir:
         tmp = Path(tmp_dir)
@@ -212,7 +247,7 @@ def test_bash_does_not_record_sigil_commands() -> None:
         result = run_shell(
             "bash",
             textwrap.dedent(
-                "                    source shell/bash/sigil.bash\n                    __sigil_history_line() { printf '%s\\n' \"sigil bad\"; }\n                    false\n                    __sigil_precmd\n                    wait\n                    "
+                "                    source shell/bash/sigil.bash\n                    __sigil_history_entry() { printf '1\\t%s\\n' \"sigil bad\"; }\n                    false\n                    __sigil_precmd\n                    wait\n                    "
             ),
             tmp,
             stub,
@@ -228,7 +263,7 @@ def test_bash_passes_failure_snippet_env_to_record_turn() -> None:
         result = run_shell(
             "bash",
             textwrap.dedent(
-                '                    source shell/bash/sigil.bash\n                    __sigil_history_line() { printf \'%s\\n\' "bad command"; }\n                    export SIGIL_FAILURE_STDOUT="stdout line"\n                    export SIGIL_FAILURE_STDERR="stderr line"\n                    false\n                    __sigil_precmd\n                    wait\n                    '
+                '                    source shell/bash/sigil.bash\n                    __sigil_history_entry() { printf \'1\\t%s\\n\' "bad command"; }\n                    export SIGIL_FAILURE_STDOUT="stdout line"\n                    export SIGIL_FAILURE_STDERR="stderr line"\n                    false\n                    __sigil_precmd\n                    wait\n                    '
             ),
             tmp,
             stub,

@@ -119,10 +119,18 @@ def record_failure(
 
 def last_failure() -> dict[str, Any]:
     """Load the last recorded failure or exit with a terminal-friendly error."""
-    failure = read_json("last-failure.json")
-    if not isinstance(failure, dict) or not failure.get("command"):
+    failure = last_failure_or_none()
+    if failure is None:
         print(f"{LOVE}✗ no failed command recorded{RESET}", file=sys.stderr)
         raise SystemExit(1)
+    return failure
+
+
+def last_failure_or_none() -> dict[str, Any] | None:
+    """Load the last recorded failure without printing terminal output."""
+    failure = read_json("last-failure.json")
+    if not isinstance(failure, dict) or not failure.get("command"):
+        return None
     return failure
 
 

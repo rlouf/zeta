@@ -23,7 +23,7 @@ from sigil.security import (
     normalize_trust_record,
     reject_promotion,
 )
-from sigil.session import record_turn
+from sigil.session import recent_turns, record_turn
 from sigil.state import append_event, append_jsonl, read_jsonl, write_jsonl
 from sigil.tty import confirmation_tty_paths, confirm_on_tty
 
@@ -808,6 +808,162 @@ def test_record_turn_cli_command_persists_entry() -> None:
         assert len(rows) == 1
         assert rows[0]["command"] == "ls -la"
         assert rows[0]["status"] == 0
+
+
+def test_recent_turns_returns_empty_when_file_missing() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        with patch_dict(
+            os.environ,
+            {"SIGIL_STATE_DIR": tmp, "SIGIL_SESSION_ID": "test"},
+        ):
+            assert recent_turns() == []
+
+
+def test_recent_turns_returns_last_n_entries_in_order() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        with patch_dict(
+            os.environ,
+            {"SIGIL_STATE_DIR": tmp, "SIGIL_SESSION_ID": "test"},
+        ):
+            for index in range(15):
+                record_turn(f"cmd-{index}", 0, "/repo")
+            turns = recent_turns(limit=5)
+        assert [turn["command"] for turn in turns] == [
+            "cmd-10",
+            "cmd-11",
+            "cmd-12",
+            "cmd-13",
+            "cmd-14",
+        ]
+
+
+def test_fresh_ask_prepends_recent_turns_context_to_pi_prompt() -> None:
+
+    class FakeProc:
+        def __init__(self, stdout: StringIO | None = None) -> None:
+            self.stdout = stdout
+
+        def wait(self) -> int:
+            return 0
+
+    with tempfile.TemporaryDirectory() as tmp:
+        with patch_dict(
+            os.environ,
+            {"SIGIL_STATE_DIR": tmp, "SIGIL_SESSION_ID": "test"},
+        ):
+            record_turn("ls -la", 0, "/repo")
+            record_turn("pytest tests/test_foo.py", 1, "/repo")
+            popen_calls: list[list[str]] = []
+
+            def fake_popen(cmd: list[str], *args: object, **kwargs: object) -> FakeProc:
+                popen_calls.append(cmd)
+                if cmd[0] == "pi":
+                    return FakeProc(StringIO(""))
+                return FakeProc()
+
+            with (
+                patch("sigil.question.start_qwen_for_pi", return_value=True),
+                patch("sigil.question.subprocess.Popen", side_effect=fake_popen),
+            ):
+                assert ask("what should I do next?", json_output=True) == 0
+
+    pi_cmd = next(cmd for cmd in popen_calls if cmd[0] == "pi")
+    prompt = pi_cmd[-1]
+    assert "Recent shell activity:" in prompt
+    assert "ls -la" in prompt
+    assert "pytest tests/test_foo.py" in prompt
+    assert "what should I do next?" in prompt
+
+
+def test_follow_up_ask_does_not_include_recent_turns_context() -> None:
+
+    class FakeProc:
+        def __init__(self, stdout: StringIO | None = None) -> None:
+            self.stdout = stdout
+
+        def wait(self) -> int:
+            return 0
+
+    with tempfile.TemporaryDirectory() as tmp:
+        with patch_dict(
+            os.environ,
+            {"SIGIL_STATE_DIR": tmp, "SIGIL_SESSION_ID": "test"},
+        ):
+            record_turn("ls -la", 0, "/repo")
+            write_jsonl(
+                "last-question.jsonl",
+                [
+                    {"role": "user", "content": "first", "event_id": "q1"},
+                    {"role": "assistant", "content": "ans", "event_id": "a1"},
+                ],
+            )
+            popen_calls: list[list[str]] = []
+
+            def fake_popen(cmd: list[str], *args: object, **kwargs: object) -> FakeProc:
+                popen_calls.append(cmd)
+                if cmd[0] == "pi":
+                    return FakeProc(StringIO(""))
+                return FakeProc()
+
+            with (
+                patch("sigil.question.start_qwen_for_pi", return_value=True),
+                patch("sigil.question.subprocess.Popen", side_effect=fake_popen),
+            ):
+                assert ask("follow up", follow_up=True, json_output=True) == 0
+
+    pi_cmd = next(cmd for cmd in popen_calls if cmd[0] == "pi")
+    prompt = pi_cmd[-1]
+    assert "Recent shell activity" not in prompt
+
+
+def test_fresh_ask_omits_recent_turns_section_when_none_recorded() -> None:
+
+    class FakeProc:
+        def __init__(self, stdout: StringIO | None = None) -> None:
+            self.stdout = stdout
+
+        def wait(self) -> int:
+            return 0
+
+    with tempfile.TemporaryDirectory() as tmp:
+        with patch_dict(
+            os.environ,
+            {"SIGIL_STATE_DIR": tmp, "SIGIL_SESSION_ID": "test"},
+        ):
+            popen_calls: list[list[str]] = []
+
+            def fake_popen(cmd: list[str], *args: object, **kwargs: object) -> FakeProc:
+                popen_calls.append(cmd)
+                if cmd[0] == "pi":
+                    return FakeProc(StringIO(""))
+                return FakeProc()
+
+            with (
+                patch("sigil.question.start_qwen_for_pi", return_value=True),
+                patch("sigil.question.subprocess.Popen", side_effect=fake_popen),
+            ):
+                assert ask("hello", json_output=True) == 0
+
+    pi_cmd = next(cmd for cmd in popen_calls if cmd[0] == "pi")
+    prompt = pi_cmd[-1]
+    assert "Recent shell activity" not in prompt
+    assert prompt == "hello"
+
+
+def test_recent_turns_skips_malformed_lines() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        with patch_dict(
+            os.environ,
+            {"SIGIL_STATE_DIR": tmp, "SIGIL_SESSION_ID": "test"},
+        ):
+            record_turn("ls", 0, "/repo")
+            path = Path(tmp) / "sessions" / "test" / "recent-turns.jsonl"
+            path.write_text(
+                path.read_text(encoding="utf-8") + "not json\n",
+                encoding="utf-8",
+            )
+            turns = recent_turns()
+        assert [turn["command"] for turn in turns] == ["ls"]
 
 
 def test_pi_stream_records_web_tainted_answer_inputs() -> None:

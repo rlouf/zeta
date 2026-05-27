@@ -9,10 +9,15 @@ from pathlib import Path
 import pytest
 from click.testing import CliRunner
 
-from _patch import patch
+from _patch import patch, patch_dict
 from sigil.cli import cli
-from sigil.operators import create_invocation, parse_operator_token
+from sigil.operators import (
+    create_invocation,
+    parse_operator_token,
+    proposal_user_prompt,
+)
 from sigil.policy import ExecutionPolicy, classify_output, evaluate_policy
+from sigil.session import record_turn
 from sigil.state import append_jsonl, read_json, read_jsonl, write_json
 
 PATCH_TEXT = """diff --git a/example.txt b/example.txt
@@ -959,3 +964,82 @@ def test_op_cli_rejects_transform_until_colon_operator_exists() -> None:
     result = CliRunner().invoke(cli, ["op", ":json"])
     assert result.exit_code == 2
     assert "unsupported operator: :" in result.output
+
+
+def test_proposal_user_prompt_includes_recent_turns_in_interactive_mode() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        with patch_dict(
+            os.environ,
+            {"SIGIL_STATE_DIR": tmp, "SIGIL_SESSION_ID": "test"},
+        ):
+            record_turn("ls -la", 0, "/repo")
+            record_turn("pytest tests/test_foo.py", 1, "/repo")
+            invocation = create_invocation(
+                ",",
+                prompt="commit message for what just happened",
+                stdin="",
+                mode="interactive",
+            )
+            prompt = proposal_user_prompt(invocation)
+
+    assert "Recent shell activity:" in prompt
+    assert "ls -la" in prompt
+    assert "pytest tests/test_foo.py" in prompt
+    assert "exit 0" in prompt
+    assert "exit 1" in prompt
+
+
+def test_proposal_user_prompt_omits_recent_turns_when_none_recorded() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        with patch_dict(
+            os.environ,
+            {"SIGIL_STATE_DIR": tmp, "SIGIL_SESSION_ID": "test"},
+        ):
+            invocation = create_invocation(
+                ",",
+                prompt="anything",
+                stdin="",
+                mode="interactive",
+            )
+            prompt = proposal_user_prompt(invocation)
+
+    assert "Recent shell activity" not in prompt
+
+
+def test_proposal_user_prompt_reads_missing_failure_context_quietly(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        with patch_dict(
+            os.environ,
+            {"SIGIL_STATE_DIR": tmp, "SIGIL_SESSION_ID": "test"},
+        ):
+            invocation = create_invocation(
+                ",",
+                prompt="anything",
+                stdin="",
+                mode="interactive",
+            )
+            prompt = proposal_user_prompt(invocation)
+
+    captured = capsys.readouterr()
+    assert captured.err == ""
+    assert "No failed command is recorded for interactive proposal." in prompt
+
+
+def test_proposal_user_prompt_omits_recent_turns_in_pipeline_mode() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        with patch_dict(
+            os.environ,
+            {"SIGIL_STATE_DIR": tmp, "SIGIL_SESSION_ID": "test"},
+        ):
+            record_turn("ls -la", 0, "/repo")
+            invocation = create_invocation(
+                ",",
+                prompt="summarize",
+                stdin="some piped input\n",
+                mode="pipeline",
+            )
+            prompt = proposal_user_prompt(invocation)
+
+    assert "Recent shell activity" not in prompt

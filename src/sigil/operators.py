@@ -422,6 +422,9 @@ def proposal_user_prompt(invocation: OperatorInvocation) -> str:
                 label = f"{label} (first {MAX_TARGET_FILE_CHARS} chars)"
             sections.append(f"--- {label}\n{content}")
     if invocation.mode == "interactive":
+        turns_section = recent_turns_context()
+        if turns_section:
+            sections.append(turns_section)
         sections.append(interactive_failure_context())
     return "\n\n".join(section for section in sections if section)
 
@@ -548,13 +551,21 @@ def readable_target_files(lines: list[str]) -> list[tuple[Path, str]]:
 
 def interactive_failure_context() -> str:
     """Return last-failure context for interactive comma proposals."""
-    try:
-        from .failure import failure_context_prompt, last_failure
+    from .failure import failure_context_prompt, last_failure_or_none
 
-        failure = last_failure()
-    except SystemExit:
+    failure = last_failure_or_none()
+    if failure is None:
         return "No failed command is recorded for interactive proposal."
     return "Last failed command context:\n" + failure_context_prompt(failure)
+
+
+def recent_turns_context(limit: int | None = None) -> str:
+    """Return a compact summary of the most recent shell turns, if any."""
+    from .session import recent_turns_context as _recent_turns_context
+
+    if limit is None:
+        return _recent_turns_context()
+    return _recent_turns_context(limit=limit)
 
 
 def max_tokens_for_depth(depth: int) -> int:

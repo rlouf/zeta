@@ -20,6 +20,7 @@ from .security import (
     normalize_trust_record,
 )
 from .server import start_qwen_for_pi
+from .session import recent_turns_context
 from .state import append_event, append_jsonl, read_jsonl, write_jsonl
 
 
@@ -65,6 +66,14 @@ def continuation_prompt(question: str, turns: list[dict[str, object]]) -> str:
     )
 
 
+def prepend_recent_turns(question: str) -> str:
+    """Attach recent shell activity to a fresh question prompt."""
+    context = recent_turns_context()
+    if not context:
+        return question
+    return f"{context}\n\nQuestion:\n{question}"
+
+
 def ask(
     question: str,
     stream_filter: str | None = None,
@@ -77,7 +86,10 @@ def ask(
         return 1
 
     previous_turns = discussion_turns() if follow_up else []
-    prompt = continuation_prompt(question, previous_turns) if follow_up else question
+    if follow_up:
+        prompt = continuation_prompt(question, previous_turns)
+    else:
+        prompt = prepend_recent_turns(question)
     if follow_up:
         input_records = [normalize_trust_record(turn) for turn in previous_turns]
         security = inherit_security(

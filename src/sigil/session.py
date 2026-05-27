@@ -184,6 +184,45 @@ def clear_current_session() -> list[str]:
     return removed
 
 
+RECENT_TURNS_PROMPT_LIMIT = 10
+RECENT_TURN_LINE_CHARS = 120
+
+
+def recent_turns(limit: int = RECENT_TURNS_LIMIT) -> list[dict[str, Any]]:
+    """Return the most recent shell turns recorded by the bindings."""
+    path = session_dir() / RECENT_TURNS_FILE
+    if not path.exists():
+        return []
+    rows: list[dict[str, Any]] = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if not line:
+            continue
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(event, dict):
+            rows.append(normalize_trust_record(event))
+    if limit < len(rows):
+        return rows[-limit:]
+    return rows
+
+
+def recent_turns_context(limit: int = RECENT_TURNS_PROMPT_LIMIT) -> str:
+    """Return a compact summary of the most recent shell turns, if any."""
+    turns = recent_turns(limit=limit)
+    if not turns:
+        return ""
+    lines = ["Recent shell activity:"]
+    for turn in turns:
+        command = str(turn.get("command", "")).rstrip("\n")
+        if len(command) > RECENT_TURN_LINE_CHARS:
+            command = command[:RECENT_TURN_LINE_CHARS] + "…"
+        status = turn.get("status", "?")
+        lines.append(f"  {command} (exit {status})")
+    return "\n".join(lines)
+
+
 def turn_is_skippable(command: str) -> bool:
     """Return True for commands the per-turn buffer should ignore."""
     if not command or not command.strip():

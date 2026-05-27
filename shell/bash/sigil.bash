@@ -10,7 +10,7 @@ fi
 
 __sigil_muted=$'\e[38;2;110;106;134m'
 __sigil_reset=$'\e[0m'
-__sigil_last_recorded_history=""
+__sigil_last_recorded_history_id=""
 
 if [[ -z "${SIGIL_SESSION_ID:-}" ]]; then
   if command -v uuidgen >/dev/null 2>&1; then
@@ -101,24 +101,33 @@ fi
 
 # ── Failure recording ────────────────────────────────────────────────────
 
-__sigil_history_line() {
+__sigil_history_entry() {
   local line
   line="$(HISTTIMEFORMAT= builtin history 1 2>/dev/null)" || return 1
-  if [[ "$line" =~ ^[[:space:]]*[0-9]+[[:space:]]+(.*)$ ]]; then
-    printf '%s\n' "${BASH_REMATCH[1]}"
+  if [[ "$line" =~ ^[[:space:]]*([0-9]+)[[:space:]]+(.*)$ ]]; then
+    printf '%s\t%s\n' "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}"
     return 0
   fi
   return 1
 }
 
+__sigil_history_line() {
+  local entry
+  entry="$(__sigil_history_entry)" || return 1
+  printf '%s\n' "${entry#*$'\t'}"
+}
+
 __sigil_precmd() {
   local exit_status=$?
+  local entry history_id
   local command
   local record_args
 
-  command="$(__sigil_history_line)" || return "$exit_status"
+  entry="$(__sigil_history_entry)" || return "$exit_status"
+  history_id="${entry%%$'\t'*}"
+  command="${entry#*$'\t'}"
   [[ -z "$command" ]] && return "$exit_status"
-  [[ "$command" == "$__sigil_last_recorded_history" ]] && return "$exit_status"
+  [[ -n "$history_id" && "$history_id" == "$__sigil_last_recorded_history_id" ]] && return "$exit_status"
   case "$command" in
     ,*|\?*|sigil\ *|__sigil_*) return "$exit_status" ;;
   esac
@@ -126,7 +135,7 @@ __sigil_precmd() {
   [[ -n "${SIGIL_FAILURE_STDOUT:-}" ]] && record_args+=(--stdout-snippet "$SIGIL_FAILURE_STDOUT")
   [[ -n "${SIGIL_FAILURE_STDERR:-}" ]] && record_args+=(--stderr-snippet "$SIGIL_FAILURE_STDERR")
   "$__sigil_bin" "${record_args[@]}" "$command" >/dev/null 2>&1 || true
-  __sigil_last_recorded_history="$command"
+  __sigil_last_recorded_history_id="$history_id"
   unset SIGIL_FAILURE_STDOUT SIGIL_FAILURE_STDERR
   return "$exit_status"
 }

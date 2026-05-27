@@ -4,8 +4,9 @@ Verb-first LLM interaction for the shell, with optional punctuation shortcuts.
 
 ![15-second Sigil terminal demo](docs/demo.gif)
 
-Status: this is currently a "works on my machine" repo. If you are interested
-in an easier-to-install version, please open an issue.
+Status: Sigil is alpha software. It is ready for early shell users who are
+comfortable with local LLM tooling, explicit confirmations, and occasional
+interface changes.
 
 The Python package is named `sigil-sh` because `sigil` was not available as a
 distribution name. The installed command is still `sigil`.
@@ -24,7 +25,7 @@ The Python package does not expose a public Python API.
 Install the Python command, then install the binding for your shell:
 
 ```sh
-uv tool install git+https://github.com/rlouf/sigil
+uv tool install sigil-sh
 sigil install zsh
 sigil doctor
 ```
@@ -32,9 +33,21 @@ sigil doctor
 For Bash:
 
 ```sh
-uv tool install git+https://github.com/rlouf/sigil
+uv tool install sigil-sh
 sigil install bash
 sigil doctor --shell bash
+```
+
+You can also install the command with `pipx`:
+
+```sh
+pipx install sigil-sh
+```
+
+To try the current main branch before a tagged release:
+
+```sh
+uv tool install git+https://github.com/rlouf/sigil
 ```
 
 `sigil install` copies the bundled binding to `~/.sigil/shell/<shell>/` and

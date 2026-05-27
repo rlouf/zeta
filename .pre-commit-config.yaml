@@ -6,13 +6,15 @@ repos:
         entry: uv run ruff check
         language: system
         types_or: [python, pyi]
+        exclude: ^docs/demos/
       - id: ruff-format
         name: ruff format
         entry: uv run ruff format --check
         language: system
         types_or: [python, pyi]
+        exclude: ^docs/demos/
       - id: ty-check
         name: ty check
-        entry: uv run ty check
+        entry: uv run ty check src tests
         language: system
         pass_filenames: false

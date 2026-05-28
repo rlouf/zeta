@@ -86,7 +86,16 @@ updates the binding without duplicating the rc block.
 - zsh or Bash for shell bindings
 - A local OpenAI-compatible chat completions endpoint for command generation
   and Pi-backed routes (default `http://127.0.0.1:8080/v1/chat/completions`)
-- `pi` for `?`, `??`, `,,`, `,,,`, `@`, and `@@`
+- `pi`, the [pi-mono](https://github.com/earendil-works/pi) coding-agent CLI,
+  for `?`, `??`, `,,`, `,,,`, `@`, and `@@`. Only `,` works without it. Install
+  it with:
+
+  ```sh
+  curl -fsSL https://pi.dev/install.sh | sh
+  # or: npm install -g --ignore-scripts @earendil-works/pi-coding-agent
+  ```
+
+  Then point Pi at your model and confirm Sigil can see it with `sigil doctor`.
 - `glow` for Markdown rendering, optional but recommended
 
 Useful environment variables:

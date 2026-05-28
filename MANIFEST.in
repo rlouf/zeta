@@ -1,0 +1,7 @@
+# Keep the sdist lean. setuptools-scm adds every tracked file by default; the
+# demo recordings and rendered GIFs are dev-only artifacts the package does not
+# need. The shell bindings and Pi extension ship via package-data, not here.
+prune docs/demos
+exclude docs/demo.gif
+exclude docs/demo.tape
+global-exclude .DS_Store

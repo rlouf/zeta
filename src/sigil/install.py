@@ -165,7 +165,7 @@ def detect_shell(env: dict[str, str] | None = None) -> str | None:
     return name if name in SUPPORTED_SHELLS else name
 
 
-def check_executable(name: str) -> DoctorCheck:
+def check_executable(name: str, hint: str | None = None) -> DoctorCheck:
     """Check that an executable is available on PATH."""
     path = shutil.which(name)
     if path:
@@ -174,7 +174,7 @@ def check_executable(name: str) -> DoctorCheck:
         name=f"executable:{name}",
         status="fail",
         detail=f"{name} is not on PATH",
-        hint=f"Install {name} or update PATH.",
+        hint=hint or f"Install {name} or update PATH.",
     )
 
 
@@ -303,8 +303,17 @@ def doctor_checks(shell: str | None = None) -> list[DoctorCheck]:
     selected_shell = detect_shell() if shell in (None, "auto") else shell
     checks = [
         check_executable("sigil"),
-        check_executable("glow"),
-        check_executable("pi"),
+        check_executable(
+            "glow",
+            hint="Install glow for Markdown rendering (optional): "
+            "https://github.com/charmbracelet/glow",
+        ),
+        check_executable(
+            "pi",
+            hint="Install the pi-mono coding agent (required for ? ?? ,, ,,, @ @@): "
+            "curl -fsSL https://pi.dev/install.sh | sh — "
+            "see https://github.com/earendil-works/pi",
+        ),
         check_endpoint(),
         check_model_config(),
         check_state_writable(),

@@ -25,6 +25,8 @@ def answer_for(argv: list[str]) -> str:
     text = " ".join(argv).lower()
     if "risky" in text or "staged" in text or "committed" in text:
         return "Risk is concentrated in parser behavior. Run the focused parser test before pushing."
+    if "why failed" in text or ("failed" in text and "pytest" in text):
+        return "The pytest run failed in the parser test path. Use the focused parser test as the recovery check."
     if "safest" in text or "next command" in text:
         return "Run `uv run pytest tests/test_parser.py`, then review the staged diff once more."
     if "git command fail" in text or "push" in text:

@@ -612,6 +612,79 @@ def test_failure_context_prompt_uses_recorded_failure_without_inventing_output()
                 os.environ["SIGIL_SESSION_ID"] = old_session_id
 
 
+@pytest.mark.parametrize(
+    ("command", "status", "stdout_snippet", "stderr_snippet", "expected"),
+    [
+        (
+            "uv run pytest",
+            1,
+            "tests/test_parser.py::test_parse FAILED",
+            "AssertionError: expected command",
+            "AssertionError: expected command",
+        ),
+        (
+            "missing-tool --version",
+            127,
+            "",
+            "zsh: command not found: missing-tool",
+            "command not found: missing-tool",
+        ),
+        (
+            "git push origin main",
+            128,
+            "",
+            "fatal: Could not read from remote repository.",
+            "Could not read from remote repository",
+        ),
+        (
+            "curl https://example.invalid",
+            6,
+            "",
+            "curl: (6) Could not resolve host: example.invalid",
+            "Could not resolve host",
+        ),
+        (
+            "touch /root/nope",
+            1,
+            "",
+            "touch: /root/nope: Permission denied",
+            "Permission denied",
+        ),
+    ],
+)
+def test_failure_context_prompt_covers_common_failure_fixtures(
+    command: str,
+    status: int,
+    stdout_snippet: str,
+    stderr_snippet: str,
+    expected: str,
+) -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        with patch_dict(
+            os.environ,
+            {"SIGIL_STATE_DIR": tmp, "SIGIL_SESSION_ID": "test"},
+        ):
+            with patch("sigil.failure.cwd_context", return_value={"cwd": "/repo"}):
+                record_failure(
+                    command,
+                    status,
+                    "/repo",
+                    stdout_snippet=stdout_snippet,
+                    stderr_snippet=stderr_snippet,
+                )
+            failure = json.loads(
+                (Path(tmp) / "sessions" / "test" / "last-failure.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            prompt = failure_context_prompt(failure)
+
+    assert f"Failed command: {command}" in prompt
+    assert f"Exit status: {status}" in prompt
+    assert expected in prompt
+    assert "Do not invent missing stdout or stderr." in prompt
+
+
 def test_failure_records_snippets_and_safe_context() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         old_state_dir = os.environ.get("SIGIL_STATE_DIR")

@@ -16,6 +16,10 @@ from typing import Any, cast
 
 def command_for(text: str) -> str:
     lowered = text.lower()
+    if "failed command" in lowered and "pytest" in lowered:
+        return "uv run pytest tests/test_parser.py"
+    if "prompt: fix" in lowered:
+        return "uv run pytest tests/test_parser.py"
     if "10 mb" in lowered or "large" in lowered:
         return "find . -path ./.git -prune -o -type f -size +10M -print"
     if "relevant tests" in lowered or "focused test" in lowered:

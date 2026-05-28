@@ -25,13 +25,21 @@ Type "clear"
 Enter
 Show
 
-Type "git push"
+Type "uv run pytest"
 Enter
 Sleep 900ms
-Type "? why did this git command fail?"
+Type "? why failed"
 Enter
 Sleep 1700ms
-Type "?? what is the safest next command?"
+Type ", fix"
 Enter
-Sleep 1700ms
-
+Sleep 2200ms
+Type ",, run focused test"
+Enter
+Sleep 2400ms
+Type "? explain the risk"
+Enter
+Sleep 1800ms
+Type "sigil status"
+Enter
+Sleep 1200ms

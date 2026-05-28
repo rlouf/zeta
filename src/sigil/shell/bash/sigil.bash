@@ -14,6 +14,14 @@ __sigil_last_recorded_history_id=""
 __sigil_prompt_marker=""
 __sigil_prompt_marker_active=0
 __sigil_prompt_base=""
+__sigil_capture_active=0
+__sigil_capture_stdout_file=""
+__sigil_capture_stderr_file=""
+__sigil_capture_stdout_pipe=""
+__sigil_capture_stderr_pipe=""
+__sigil_capture_stdout_pid=""
+__sigil_capture_stderr_pid=""
+__sigil_in_precmd=0
 
 if [[ -z "${SIGIL_SESSION_ID:-}" ]]; then
   if command -v uuidgen >/dev/null 2>&1; then
@@ -61,6 +69,106 @@ __sigil_glyphs_enabled() {
 __sigil_prompt_marker_enabled() {
   [[ $- == *i* ]] || return 1
   [[ "${SIGIL_ENABLE_PROMPT_MARKER:-1}" != "0" && "${SIGIL_ENABLE_PROMPT_MARKER:-1}" != "false" ]]
+}
+
+__sigil_recordable_command() {
+  local command="${1:-}"
+  [[ -n "$command" ]] || return 1
+  case "$command" in
+    [[:space:]]*|,*|\?*|sigil\ *|__sigil_*)
+      return 1
+      ;;
+  esac
+  return 0
+}
+
+__sigil_turn_capture_enabled() {
+  [[ "${SIGIL_ENABLE_TURN_CAPTURE:-1}" != "0" && "${SIGIL_ENABLE_TURN_CAPTURE:-1}" != "false" ]] || return 1
+  if [[ "${SIGIL_ENABLE_TURN_CAPTURE:-}" != "1" && "${SIGIL_ENABLE_TURN_CAPTURE:-}" != "true" ]]; then
+    [[ $- == *i* ]] || return 1
+  fi
+  command -v mktemp >/dev/null 2>&1 || return 1
+  command -v mkfifo >/dev/null 2>&1 || return 1
+  command -v tee >/dev/null 2>&1 || return 1
+  command -v tail >/dev/null 2>&1 || return 1
+  return 0
+}
+
+__sigil_capture_start() {
+  local command="${1:-}"
+  __sigil_turn_capture_enabled || return 0
+  __sigil_recordable_command "$command" || return 0
+  [[ $__sigil_capture_active -eq 0 ]] || return 0
+
+  local tmp_root="${TMPDIR:-/tmp}"
+  __sigil_capture_stdout_file="$(mktemp "${tmp_root%/}/sigil-stdout.XXXXXX")" || return 0
+  __sigil_capture_stderr_file="$(mktemp "${tmp_root%/}/sigil-stderr.XXXXXX")" || {
+    rm -f "$__sigil_capture_stdout_file"
+    __sigil_capture_stdout_file=""
+    return 0
+  }
+  __sigil_capture_stdout_pipe="$(mktemp "${tmp_root%/}/sigil-stdout-pipe.XXXXXX")" || {
+    __sigil_capture_cleanup
+    return 0
+  }
+  __sigil_capture_stderr_pipe="$(mktemp "${tmp_root%/}/sigil-stderr-pipe.XXXXXX")" || {
+    __sigil_capture_cleanup
+    return 0
+  }
+  rm -f "$__sigil_capture_stdout_pipe" "$__sigil_capture_stderr_pipe"
+  mkfifo "$__sigil_capture_stdout_pipe" || {
+    __sigil_capture_cleanup
+    return 0
+  }
+  mkfifo "$__sigil_capture_stderr_pipe" || {
+    __sigil_capture_cleanup
+    return 0
+  }
+
+  exec 7>&1 || return 0
+  exec 8>&2 || {
+    exec 7>&-
+    return 0
+  }
+  tee "$__sigil_capture_stdout_file" < "$__sigil_capture_stdout_pipe" &
+  __sigil_capture_stdout_pid="$!"
+  tee "$__sigil_capture_stderr_file" < "$__sigil_capture_stderr_pipe" >&2 &
+  __sigil_capture_stderr_pid="$!"
+  exec > "$__sigil_capture_stdout_pipe"
+  exec 2> "$__sigil_capture_stderr_pipe"
+  rm -f "$__sigil_capture_stdout_pipe" "$__sigil_capture_stderr_pipe"
+  __sigil_capture_active=1
+}
+
+__sigil_capture_stop() {
+  [[ $__sigil_capture_active -eq 1 ]] || return 0
+  exec 1>&7
+  exec 2>&8
+  exec 7>&-
+  exec 8>&-
+  [[ -n "$__sigil_capture_stdout_pid" ]] && wait "$__sigil_capture_stdout_pid" 2>/dev/null || true
+  [[ -n "$__sigil_capture_stderr_pid" ]] && wait "$__sigil_capture_stderr_pid" 2>/dev/null || true
+  __sigil_capture_stdout_pid=""
+  __sigil_capture_stderr_pid=""
+  __sigil_capture_active=0
+}
+
+__sigil_capture_file_snippet() {
+  local snippet_path="${1:-}"
+  local bytes="${SIGIL_TURN_CAPTURE_BYTES:-6000}"
+  [[ -n "$snippet_path" && -s "$snippet_path" ]] || return 0
+  tail -c "$bytes" "$snippet_path" 2>/dev/null || true
+}
+
+__sigil_capture_cleanup() {
+  [[ -n "$__sigil_capture_stdout_file" ]] && rm -f "$__sigil_capture_stdout_file"
+  [[ -n "$__sigil_capture_stderr_file" ]] && rm -f "$__sigil_capture_stderr_file"
+  [[ -n "$__sigil_capture_stdout_pipe" ]] && rm -f "$__sigil_capture_stdout_pipe"
+  [[ -n "$__sigil_capture_stderr_pipe" ]] && rm -f "$__sigil_capture_stderr_pipe"
+  __sigil_capture_stdout_file=""
+  __sigil_capture_stderr_file=""
+  __sigil_capture_stdout_pipe=""
+  __sigil_capture_stderr_pipe=""
 }
 
 __sigil_refresh_prompt_marker() {
@@ -166,35 +274,58 @@ __sigil_precmd() {
   local entry history_id
   local command
   local record_args
+  local stdout_snippet stderr_snippet
+
+  __sigil_in_precmd=1
+  __sigil_capture_stop
 
   if ! entry="$(__sigil_history_entry)"; then
+    __sigil_capture_cleanup
     __sigil_refresh_prompt_marker
+    __sigil_in_precmd=0
     return "$exit_status"
   fi
   history_id="${entry%%$'\t'*}"
   command="${entry#*$'\t'}"
   if [[ -z "$command" ]]; then
+    __sigil_capture_cleanup
     __sigil_refresh_prompt_marker
+    __sigil_in_precmd=0
     return "$exit_status"
   fi
   if [[ -n "$history_id" && "$history_id" == "$__sigil_last_recorded_history_id" ]]; then
+    __sigil_capture_cleanup
     __sigil_refresh_prompt_marker
+    __sigil_in_precmd=0
     return "$exit_status"
   fi
-  case "$command" in
-    ,*|\?*|sigil\ *|__sigil_*)
-      __sigil_refresh_prompt_marker
-      return "$exit_status"
-      ;;
-  esac
+  if ! __sigil_recordable_command "$command"; then
+    __sigil_capture_cleanup
+    __sigil_refresh_prompt_marker
+    __sigil_in_precmd=0
+    return "$exit_status"
+  fi
+  stdout_snippet="${SIGIL_FAILURE_STDOUT:-}"
+  stderr_snippet="${SIGIL_FAILURE_STDERR:-}"
+  [[ -n "$stdout_snippet" ]] || stdout_snippet="$(__sigil_capture_file_snippet "$__sigil_capture_stdout_file")"
+  [[ -n "$stderr_snippet" ]] || stderr_snippet="$(__sigil_capture_file_snippet "$__sigil_capture_stderr_file")"
   record_args=(record-turn --status "$exit_status" --cwd "$PWD")
-  [[ -n "${SIGIL_FAILURE_STDOUT:-}" ]] && record_args+=(--stdout-snippet "$SIGIL_FAILURE_STDOUT")
-  [[ -n "${SIGIL_FAILURE_STDERR:-}" ]] && record_args+=(--stderr-snippet "$SIGIL_FAILURE_STDERR")
+  [[ -n "$stdout_snippet" ]] && record_args+=(--stdout-snippet "$stdout_snippet")
+  [[ -n "$stderr_snippet" ]] && record_args+=(--stderr-snippet "$stderr_snippet")
   "$__sigil_bin" "${record_args[@]}" "$command" >/dev/null 2>&1 || true
   __sigil_last_recorded_history_id="$history_id"
   unset SIGIL_FAILURE_STDOUT SIGIL_FAILURE_STDERR
+  __sigil_capture_cleanup
   __sigil_refresh_prompt_marker
+  __sigil_in_precmd=0
   return "$exit_status"
+}
+
+__sigil_debug_trap() {
+  [[ $- == *i* ]] || return 0
+  [[ $__sigil_in_precmd -eq 0 ]] || return 0
+  [[ $__sigil_capture_active -eq 0 ]] || return 0
+  __sigil_capture_start "$BASH_COMMAND"
 }
 
 # ── Installation ─────────────────────────────────────────────────────────
@@ -237,4 +368,12 @@ __sigil_install_prompt_command() {
   fi
 }
 
+__sigil_install_debug_trap() {
+  [[ $- == *i* ]] || return 0
+  __sigil_turn_capture_enabled || return 0
+  [[ -z "$(trap -p DEBUG)" ]] || return 0
+  trap '__sigil_debug_trap' DEBUG
+}
+
 __sigil_install_prompt_command
+__sigil_install_debug_trap

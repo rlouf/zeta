@@ -388,6 +388,10 @@ Installed shell bindings use this state to add a one-character prompt marker:
 `!` means `sigil status` has something worth showing. Disable the marker with
 `SIGIL_ENABLE_PROMPT_MARKER=0`.
 
+The bindings also capture bounded stdout and stderr snippets for ordinary
+interactive shell turns so recovery prompts can use the actual failure output.
+Disable capture with `SIGIL_ENABLE_TURN_CAPTURE=0`.
+
 JSON output:
 
 ```json
@@ -489,6 +493,8 @@ SIGIL_SESSION_ID=my-shell-session
 SIGIL_SESSION_DIR=/custom/session/root
 SIGIL_ENABLE_GLYPHS=0
 SIGIL_ENABLE_PROMPT_MARKER=0
+SIGIL_ENABLE_TURN_CAPTURE=0
+SIGIL_TURN_CAPTURE_BYTES=6000
 SIGIL_BIN=/path/to/sigil
 SIGIL_GLOW_STYLE=notty
 SIGIL_GLOW_WIDTH=88

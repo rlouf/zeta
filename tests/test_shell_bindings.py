@@ -376,6 +376,26 @@ def test_bash_passes_failure_snippet_env_to_record_turn() -> None:
         ]
 
 
+def test_bash_captures_turn_output_for_record_turn() -> None:
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp = Path(tmp_dir)
+        stub = make_stub(tmp)
+        result = run_shell(
+            "bash",
+            textwrap.dedent(
+                "                    source shell/bash/sigil.bash\n                    export SIGIL_ENABLE_TURN_CAPTURE=1\n                    export SIGIL_TURN_CAPTURE_BYTES=200\n                    __sigil_history_entry() { printf '1\\t%s\\n' \"bad command\"; }\n                    __sigil_capture_start \"bad command\"\n                    printf 'stdout line\\n'\n                    printf 'stderr line\\n' >&2\n                    __sigil_capture_stop\n                    false\n                    __sigil_precmd\n                    wait\n                    "
+            ),
+            tmp,
+            stub,
+        )
+        assert_success(result)
+        assert result.stdout == "stdout line\n"
+        assert result.stderr == "stderr line\n"
+        assert read_log(tmp) == [
+            f"record-turn --status 1 --cwd {ROOT} --stdout-snippet stdout line --stderr-snippet stderr line bad command"
+        ]
+
+
 @pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
 def test_zsh_wrappers_call_current_cli_contract() -> None:
     with tempfile.TemporaryDirectory() as tmp_dir:
@@ -542,3 +562,24 @@ def test_zsh_records_every_non_sigil_turn_via_record_turn() -> None:
                 f"record-turn --status 1 --cwd {ROOT} bad command",
             ]
         )
+
+
+@pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
+def test_zsh_captures_turn_output_for_record_turn() -> None:
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp = Path(tmp_dir)
+        stub = make_stub(tmp)
+        result = run_shell(
+            "zsh",
+            textwrap.dedent(
+                "                    source shell/zsh/sigil.zsh\n                    export SIGIL_ENABLE_TURN_CAPTURE=1\n                    export SIGIL_TURN_CAPTURE_BYTES=200\n                    __sigil_preexec \"bad command\"\n                    printf 'stdout line\\n'\n                    printf 'stderr line\\n' >&2\n                    false\n                    __sigil_precmd\n                    wait\n                    "
+            ),
+            tmp,
+            stub,
+        )
+        assert_success(result)
+        assert result.stdout == "stdout line\n"
+        assert result.stderr == "stderr line\n"
+        assert read_log(tmp) == [
+            f"record-turn --status 1 --cwd {ROOT} --stdout-snippet stdout line --stderr-snippet stderr line bad command"
+        ]

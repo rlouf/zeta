@@ -173,15 +173,15 @@ reading docs first.
 - [x] Add redaction for common token, key, password, and bearer patterns.
 - [x] Preserve prompt responsiveness while recording richer turn state.
 - [x] Update failure-context prompts to prefer recent turn output when present.
-- [ ] Add fixtures for common failures: pytest, missing command, git, network,
+- [x] Add fixtures for common failures: pytest, missing command, git, network,
       and permission errors.
 - [x] Make `, fix` work as a first-class phrase in tests.
 - [x] Make `? why failed` explain the last failure without asking for more
       context.
-- [ ] Capture bounded stdout and stderr automatically for ordinary shell turns,
+- [x] Capture bounded stdout and stderr automatically for ordinary shell turns,
       beyond the existing `SIGIL_FAILURE_STDOUT` and `SIGIL_FAILURE_STDERR`
       hook point.
-- [ ] Add a deterministic demo for `, fix` and `? why failed`.
+- [x] Add a deterministic demo for `, fix` and `? why failed`.
 
 ### Command Trust Labels
 

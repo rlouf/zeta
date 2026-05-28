@@ -43,10 +43,12 @@ def run_act_stepper(
     *,
     objective: str,
     stdin_text: str = "",
+    confirm_step: bool,
+    glyph: str,
     dry_run: bool = False,
     verbose: bool = False,
 ) -> int:
-    """Create or resume a confirmed one-step Pi edit action."""
+    """Create or resume a one-step Pi edit action."""
     act = active_act()
     if act is None:
         if not objective:
@@ -56,17 +58,31 @@ def run_act_stepper(
             )
             return 2
         if dry_run:
-            print("sigil act: would create one confirmed Pi edit step")
+            approval = "confirmed" if confirm_step else "auto-approved"
+            print(f"sigil act: would create one {approval} Pi edit step")
             return 0
-        act = create_act(objective=objective, stdin_text=stdin_text)
+        act = create_act(
+            objective=objective,
+            stdin_text=stdin_text,
+            confirm_step=confirm_step,
+            glyph=glyph,
+        )
     elif objective and objective != str(act.get("objective", "")):
         if dry_run:
             print("sigil act: would replace active Pi edit step with a new objective")
             return 0
-        act = create_act(objective=objective, stdin_text=stdin_text)
+        act = create_act(
+            objective=objective,
+            stdin_text=stdin_text,
+            confirm_step=confirm_step,
+            glyph=glyph,
+        )
     elif dry_run:
         print("sigil act: would resume the pending Pi edit step")
         return 0
+    else:
+        act["glyph"] = glyph
+        act["approval"] = "confirm" if confirm_step else "auto"
 
     print_act(act)
     step = next_pending_step(act)
@@ -77,28 +93,32 @@ def run_act_stepper(
         return 0
 
     print_next_step(step)
-    decision = read_step_decision()
-    if decision in {"", "n", "no", "quit", "q"}:
-        return 0
-    if decision == "skip":
-        step["status"] = "skipped"
-        record_step_decision(act, step, "skipped")
-        print(f"skipped step {step['id']}")
-        return 0
-    if decision == "edit":
-        edited = prompt_on_tty("objective> ")
-        if edited is None or not edited.strip():
+    if confirm_step:
+        decision = read_step_decision()
+        if decision in {"", "n", "no", "quit", "q"}:
             return 0
-        act["objective"] = edited.strip()
-        step["edited"] = True
-        confirm = read_step_decision(prompt="run edited Pi step? [y/N] ")
-        if confirm not in {"y", "yes"}:
+        if decision == "skip":
+            step["status"] = "skipped"
+            record_step_decision(act, step, "skipped")
+            print(f"skipped step {step['id']}")
             return 0
-    elif decision not in {"y", "yes"}:
-        return 0
+        if decision == "edit":
+            edited = prompt_on_tty("objective> ")
+            if edited is None or not edited.strip():
+                return 0
+            act["objective"] = edited.strip()
+            step["edited"] = True
+            confirm = read_step_decision(prompt="run edited Pi step? [y/N] ")
+            if confirm not in {"y", "yes"}:
+                return 0
+        elif decision not in {"y", "yes"}:
+            return 0
+        decision_label = "accepted"
+    else:
+        decision_label = "auto_accepted"
 
-    decision_event = record_step_decision(act, step, "accepted")
-    status = run_pi_agent_step(act, step, decision_event, verbose=verbose)
+    decision_event = record_step_decision(act, step, decision_label)
+    status = run_pi_agent_step(act, step, decision_event, glyph=glyph, verbose=verbose)
     step["status"] = "done" if status == 0 else "failed"
     step["exit_code"] = status
     record_step_executed(act, step, status)
@@ -108,10 +128,24 @@ def run_act_stepper(
     return status
 
 
-def create_act(*, objective: str, stdin_text: str = "") -> dict[str, Any]:
+def create_act(
+    *,
+    objective: str,
+    stdin_text: str = "",
+    confirm_step: bool,
+    glyph: str,
+) -> dict[str, Any]:
     """Create a one-step active Pi edit action."""
+    approval = "confirm" if confirm_step else "auto"
+    explanation = (
+        "One confirmed read/edit/write pass, then control returns to the shell."
+        if confirm_step
+        else "One auto-approved read/edit/write pass within policy, then control returns to the shell."
+    )
     act = {
         "act_id": str(uuid.uuid4()),
+        "glyph": glyph,
+        "approval": approval,
         "objective": objective,
         "stdin": stdin_text,
         "status": "active",
@@ -120,7 +154,7 @@ def create_act(*, objective: str, stdin_text: str = "") -> dict[str, Any]:
                 "id": "1",
                 "title": "Run one Pi edit step",
                 "command": f"pi --tools {PI_AGENT_TOOLS}",
-                "explanation": "One confirmed read/edit/write pass, then control returns to the shell.",
+                "explanation": explanation,
                 "status": "pending",
             }
         ],
@@ -224,6 +258,7 @@ def run_pi_agent_step(
     step: dict[str, Any],
     decision_event: dict[str, Any],
     *,
+    glyph: str | None = None,
     verbose: bool = False,
 ) -> int:
     """Run one non-interactive Pi edit step and stream tool events."""
@@ -231,8 +266,9 @@ def run_pi_agent_step(
         return 1
 
     decision_event_id = str(decision_event.get("id") or "")
+    route_glyph = glyph or str(act.get("glyph") or ",,,")
     security = create_trust_metadata(
-        glyph=",,,",
+        glyph=route_glyph,
         integrity="local_model",
         capability="exec_boxed",
         taint=["model"],
@@ -246,8 +282,12 @@ def run_pi_agent_step(
         PI_AGENT_TOOLS if extension_path is not None else PI_AGENT_TOOLS_WITHOUT_BASH
     )
     tool_label = "read+bash-handoff+edit+write" if extension_path else "read+edit+write"
+    approval = str(act.get("approval") or "confirm")
+    step_label = (
+        "one auto-approved step" if approval == "auto" else "one confirmed step"
+    )
     print(
-        f"{MUTED}❯ pi ,,,   · {tool_label} · one confirmed step{RESET}",
+        f"{MUTED}❯ pi {route_glyph:<5} · {tool_label} · {step_label}{RESET}",
         file=sys.stderr,
     )
 
@@ -350,7 +390,7 @@ def record_act_update(event_type: str, act: dict[str, Any]) -> dict[str, Any]:
     if event_type != "act_created" and isinstance(last_event_id, str):
         inputs.append(last_event_id)
     security = create_trust_metadata(
-        glyph=",,,",
+        glyph=str(act.get("glyph") or ",,,"),
         integrity="human"
         if event_type in {"act_created", "act_aborted"}
         else "local_model",
@@ -387,7 +427,7 @@ def record_step_decision(
     if isinstance(act_event_id, str):
         inputs.append(act_event_id)
     security = create_trust_metadata(
-        glyph=",,,",
+        glyph=str(act.get("glyph") or ",,,"),
         integrity="human",
         capability="none",
         taint=[],
@@ -423,7 +463,7 @@ def record_step_executed(
     if isinstance(decision_event_id, str):
         inputs.append(decision_event_id)
     security = create_trust_metadata(
-        glyph=",,,",
+        glyph=str(act.get("glyph") or ",,,"),
         integrity="local_model",
         capability="exec_boxed",
         taint=["model"],

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import os
-import subprocess
 import tempfile
 from io import StringIO
 from pathlib import Path
@@ -229,37 +228,29 @@ def test_op_cli_rejects_non_command_proposals() -> None:
     assert "did not produce a proposal" in result.stderr
 
 
-def test_double_comma_executes_command_proposal() -> None:
-    events = []
+def test_double_comma_runs_confirmed_agent_step() -> None:
+    calls = []
 
-    def fake_append_event(event: dict[str, object]) -> dict[str, object]:
-        event = {"id": f"event-{len(events)}", **event}
-        events.append(event)
-        return event
+    def fake_run_act_stepper(*args: object, **kwargs: object) -> int:
+        calls.append((args, kwargs))
+        return 0
 
-    with (
-        patch("sigil.operators.ensure_server", return_value=True),
-        patch(
-            "sigil.operators.chat_json",
-            return_value={"kind": "command", "body": "touch fixed.txt"},
-        ),
-        patch(
-            "sigil.operators.subprocess.run",
-            return_value=subprocess.CompletedProcess(
-                ["zsh", "-lc", "touch fixed.txt"], 0, stdout="", stderr=""
-            ),
-        ),
-        patch("sigil.operators.append_event", side_effect=fake_append_event),
-    ):
+    with patch("sigil.cli.run_act_stepper", side_effect=fake_run_act_stepper):
         result = CliRunner().invoke(cli, ["op", ",,", "update", "it"])
 
     assert result.exit_code == 0, result.output
-    assert result.stdout == ""
-    assert result.stderr == ""
-    assert events[-1]["type"] == "operator_command_executed"
-    assert events[-1]["command"] == "touch fixed.txt"
-    assert events[-1]["labels"] == ("local", "write")
-    assert events[-1]["capability"] == "exec_boxed"
+    assert calls == [
+        (
+            (),
+            {
+                "objective": "update it",
+                "stdin_text": "",
+                "confirm_step": True,
+                "glyph": ",,",
+                "verbose": False,
+            },
+        )
+    ]
 
 
 def test_policy_classifies_destructive_shell_output() -> None:
@@ -297,7 +288,7 @@ def test_policy_maps_commands_to_trust_labels(
     assert classify_output(command).labels == labels
 
 
-def test_double_comma_policy_allows_execution_classification() -> None:
+def test_double_comma_policy_defers_to_act_runner() -> None:
     decision = evaluate_policy(
         glyph=",,",
         depth=2,
@@ -305,8 +296,8 @@ def test_double_comma_policy_allows_execution_classification() -> None:
         policy=ExecutionPolicy(),
     )
 
-    assert decision.status == "allowed"
-    assert "executes" in decision.message
+    assert decision.status == "preview"
+    assert "act runner" in decision.message
     assert "delete" in decision.classification.classes
 
 
@@ -334,106 +325,64 @@ def test_dry_run_policy_previews_without_execution() -> None:
     assert "dry-run" in decision.message
 
 
-def test_op_cli_executes_double_comma_command() -> None:
-    calls = {}
+def test_op_cli_routes_double_comma_to_agent_stepper() -> None:
+    calls = []
 
-    def fake_run(args: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
-        calls["args"] = args
-        calls["kwargs"] = kwargs
-        return subprocess.CompletedProcess(args, 0, stdout="done\n", stderr="")
+    def fake_run_act_stepper(*args: object, **kwargs: object) -> int:
+        calls.append((args, kwargs))
+        return 0
 
-    events = []
-
-    def fake_append_event(event: dict[str, object]) -> dict[str, object]:
-        events.append(event)
-        return {"id": str(len(events)), **event}
-
-    with (
-        patch("sigil.operators.ensure_server", return_value=True),
-        patch(
-            "sigil.operators.chat_json",
-            return_value={"kind": "command", "body": "printf 'done\\n'"},
-        ),
-        patch("sigil.operators.subprocess.run", side_effect=fake_run),
-        patch("sigil.operators.append_event", side_effect=fake_append_event),
-    ):
+    with patch("sigil.cli.run_act_stepper", side_effect=fake_run_act_stepper):
         result = CliRunner().invoke(cli, ["op", ",,", "say", "done"])
 
     assert result.exit_code == 0
-    assert result.stdout == "done\n"
-    assert result.stderr == ""
-    assert calls["args"][-2:] == ["-lc", "printf 'done\\n'"]
-    assert [event["type"] for event in events] == [
-        "operator_completed",
-        "operator_command_executed",
-    ]
-    assert events[0]["labels"] == ("local", "read-only")
-    assert events[-1]["labels"] == ("local", "read-only")
-    assert events[-1]["capability"] == "exec_boxed"
-
-
-def test_double_comma_confirms_high_risk_command_before_execution() -> None:
-    confirmed = []
-
-    def fake_confirm(command: str, labels: tuple[str, ...] = ()) -> bool:
-        confirmed.append((command, labels))
-        return False
-
-    with (
-        patch("sigil.operators.ensure_server", return_value=True),
-        patch(
-            "sigil.operators.chat_json",
-            return_value={"kind": "command", "body": "git push origin main"},
-        ),
-        patch("sigil.operators.confirm_execution", side_effect=fake_confirm),
-        patch("sigil.operators.subprocess.run", side_effect=AssertionError("no exec")),
-        patch("sigil.operators.append_event", return_value={"id": "operator-event"}),
-    ):
-        result = CliRunner().invoke(cli, ["op", ",,", "publish"])
-
-    assert result.exit_code == 2
     assert result.stdout == ""
-    assert "command execution declined" in result.stderr
-    assert confirmed == [("git push origin main", ("network", "publish", "high-risk"))]
+    assert calls[0][1]["objective"] == "say done"
+    assert calls[0][1]["confirm_step"] is True
+    assert calls[0][1]["glyph"] == ",,"
 
 
-def test_op_cli_returns_executed_command_status_and_stderr() -> None:
-    with (
-        patch("sigil.operators.ensure_server", return_value=True),
-        patch(
-            "sigil.operators.chat_json",
-            return_value={"kind": "command", "body": "false"},
-        ),
-        patch(
-            "sigil.operators.subprocess.run",
-            return_value=subprocess.CompletedProcess(
-                ["zsh", "-lc", "false"], 7, stdout="", stderr="nope\n"
-            ),
-        ),
-        patch("sigil.operators.append_event", return_value={"id": "operator-event"}),
-    ):
+def test_triple_comma_routes_to_auto_approved_agent_stepper() -> None:
+    calls = []
+
+    def fake_run_act_stepper(*args: object, **kwargs: object) -> int:
+        calls.append((args, kwargs))
+        return 0
+
+    with patch("sigil.cli.run_act_stepper", side_effect=fake_run_act_stepper):
+        result = CliRunner().invoke(cli, ["op", ",,,", "publish"])
+
+    assert result.exit_code == 0
+    assert result.stdout == ""
+    assert calls[0][1]["objective"] == "publish"
+    assert calls[0][1]["confirm_step"] is False
+    assert calls[0][1]["glyph"] == ",,,"
+
+
+def test_op_cli_returns_agent_stepper_status() -> None:
+    with patch("sigil.cli.run_act_stepper", return_value=7):
         result = CliRunner().invoke(cli, ["op", ",,", "fail"])
 
     assert result.exit_code == 7
     assert result.stdout == ""
-    assert result.stderr == "nope\n"
+    assert result.stderr == ""
 
 
 def test_op_cli_dry_run_double_comma_does_not_execute() -> None:
-    with (
-        patch("sigil.operators.ensure_server", return_value=True),
-        patch(
-            "sigil.operators.chat_json",
-            return_value={"kind": "command", "body": "git status --short"},
-        ),
-        patch("sigil.operators.subprocess.run", side_effect=AssertionError("no exec")),
-        patch("sigil.operators.append_event", return_value={}),
-    ):
+    calls = []
+
+    def fake_run_act_stepper(*args: object, **kwargs: object) -> int:
+        calls.append((args, kwargs))
+        return 0
+
+    with patch("sigil.cli.run_act_stepper", side_effect=fake_run_act_stepper):
         result = CliRunner().invoke(cli, ["op", "--dry-run", ",,", "status"])
 
     assert result.exit_code == 0
-    assert result.stdout == "git status --short\n"
-    assert "dry-run" in result.stderr
+    assert result.stdout == ""
+    assert calls[0][1]["dry_run"] is True
+    assert calls[0][1]["confirm_step"] is True
+    assert calls[0][1]["glyph"] == ",,"
 
 
 def test_op_cli_dry_run_question_does_not_call_web_route() -> None:
@@ -448,7 +397,6 @@ def test_op_cli_rejects_caret_before_model_or_confirmation() -> None:
     with (
         patch("sigil.cli.confirm_piped_input", side_effect=AssertionError("no prompt")),
         patch("sigil.operators.chat_json", side_effect=AssertionError("no model")),
-        patch("sigil.operators.subprocess.run", side_effect=AssertionError("no exec")),
     ):
         result = CliRunner().invoke(cli, ["op", "^", "status"], input="notes\n")
 
@@ -456,7 +404,7 @@ def test_op_cli_rejects_caret_before_model_or_confirmation() -> None:
     assert "unsupported operator: ^" in result.output
 
 
-def test_triple_comma_creates_act_and_executes_one_confirmed_step() -> None:
+def test_triple_comma_creates_act_and_executes_one_auto_approved_step() -> None:
     with tempfile.TemporaryDirectory() as tmp_dir:
         old_state_dir = os.environ.get("SIGIL_STATE_DIR")
         old_session_id = os.environ.get("SIGIL_SESSION_ID")
@@ -476,7 +424,10 @@ def test_triple_comma_creates_act_and_executes_one_confirmed_step() -> None:
 
         try:
             with (
-                patch("sigil.acts.prompt_on_tty", return_value="y\n"),
+                patch(
+                    "sigil.acts.prompt_on_tty",
+                    side_effect=AssertionError("no prompt"),
+                ),
                 patch("sigil.acts.run_pi_agent_step", side_effect=fake_run_pi),
                 patch("sigil.acts.append_event", side_effect=fake_append_event),
             ):
@@ -496,6 +447,7 @@ def test_triple_comma_creates_act_and_executes_one_confirmed_step() -> None:
     assert "sigil act (active):" in result.output
     assert "pi --tools read,grep,find,ls,bash,edit,write" in result.output
     assert len(pi_calls) == 1
+    assert pi_calls[0][1]["glyph"] == ",,,"
     assert [event["type"] for event in events] == [
         "act_created",
         "act_step_decision",
@@ -510,6 +462,8 @@ def test_triple_comma_creates_act_and_executes_one_confirmed_step() -> None:
     ]
     latest_act = act_events[-1]["act"]
     assert latest_act["status"] == "completed"
+    assert latest_act["approval"] == "auto"
+    assert latest_act["steps"][0]["decision"] == "auto_accepted"
     assert latest_act["steps"][0]["status"] == "done"
 
 
@@ -840,46 +794,46 @@ def test_op_cli_confirms_piped_comma_before_model_call() -> None:
     assert result.stdout == "cat notes\nlocal · read-only\nuses stdin\n"
 
 
-def test_op_cli_confirms_piped_double_comma_command_before_execution() -> None:
+def test_op_cli_confirms_piped_double_comma_before_agent_step() -> None:
+    calls = []
+
+    def fake_run_act_stepper(*args: object, **kwargs: object) -> int:
+        calls.append((args, kwargs))
+        return 0
+
     with (
         patch("sigil.cli.confirm_piped_input", return_value=True),
-        patch("sigil.operators.ensure_server", return_value=True),
-        patch("sigil.operators.confirm_execution", return_value=False),
-        patch(
-            "sigil.operators.chat_json",
-            return_value={"kind": "command", "body": "cat notes"},
-        ),
-        patch("sigil.operators.subprocess.run", side_effect=AssertionError("no exec")),
-        patch("sigil.operators.append_event", return_value={"id": "operator-event"}),
-    ):
-        result = CliRunner().invoke(cli, ["op", ",,", "summarize"], input="notes\n")
-
-    assert result.exit_code == 2
-    assert result.stdout == ""
-    assert "command execution declined" in result.stderr
-
-
-def test_op_cli_accepts_piped_double_comma_execution() -> None:
-    with (
-        patch("sigil.operators.ensure_server", return_value=True),
-        patch("sigil.cli.confirm_piped_input", return_value=True),
-        patch("sigil.operators.confirm_execution", return_value=True),
-        patch(
-            "sigil.operators.chat_json",
-            return_value={"kind": "command", "body": "cat notes"},
-        ),
-        patch(
-            "sigil.operators.subprocess.run",
-            return_value=subprocess.CompletedProcess(
-                ["zsh", "-lc", "cat notes"], 0, stdout="done\n", stderr=""
-            ),
-        ),
-        patch("sigil.operators.append_event", return_value={"id": "operator-event"}),
+        patch("sigil.cli.run_act_stepper", side_effect=fake_run_act_stepper),
     ):
         result = CliRunner().invoke(cli, ["op", ",,", "summarize"], input="notes\n")
 
     assert result.exit_code == 0
-    assert result.stdout == "done\n"
+    assert result.stdout == ""
+    assert calls[0][1]["objective"] == "summarize"
+    assert calls[0][1]["stdin_text"] == "notes\n"
+    assert calls[0][1]["confirm_step"] is True
+    assert calls[0][1]["glyph"] == ",,"
+
+
+def test_op_cli_routes_piped_triple_comma_to_auto_agent_step() -> None:
+    calls = []
+
+    def fake_run_act_stepper(*args: object, **kwargs: object) -> int:
+        calls.append((args, kwargs))
+        return 0
+
+    with (
+        patch("sigil.cli.confirm_piped_input", return_value=True),
+        patch("sigil.cli.run_act_stepper", side_effect=fake_run_act_stepper),
+    ):
+        result = CliRunner().invoke(cli, ["op", ",,,", "summarize"], input="notes\n")
+
+    assert result.exit_code == 0
+    assert result.stdout == ""
+    assert calls[0][1]["objective"] == "summarize"
+    assert calls[0][1]["stdin_text"] == "notes\n"
+    assert calls[0][1]["confirm_step"] is False
+    assert calls[0][1]["glyph"] == ",,,"
 
 
 def test_verb_commands_run_piped_stream_operators() -> None:

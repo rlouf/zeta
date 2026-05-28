@@ -85,16 +85,12 @@ def run_stream_operator(
     try:
         result = run_invocation(
             invocation,
-            policy=ExecutionPolicy(
-                confirm_execution=should_confirm_execution(invocation),
-            ),
+            policy=ExecutionPolicy(),
         )
     except RuntimeError as exc:
         print(f"sigil {invocation.name}: {exc}", file=sys.stderr)
         return 1
-    if result.decision.status != "preview" or (
-        invocation.base == "," and invocation.depth == 2
-    ):
+    if result.decision.status != "preview":
         print(f"sigil {invocation.name}: {result.decision.message}", file=sys.stderr)
     if result.stderr:
         print(result.stderr, file=sys.stderr, end="")
@@ -228,25 +224,35 @@ def cmd_op(
 
     if should_run_act_operator(invocation):
         if dry_run:
-            return run_act_stepper(
+            status = run_act_stepper(
                 objective=prompt,
                 stdin_text=stdin_text,
+                confirm_step=invocation.depth == 2,
+                glyph=invocation.glyph,
                 dry_run=True,
                 verbose=verbose,
             )
+            if status:
+                raise click.exceptions.Exit(status)
+            return 0
         if should_confirm_piped_input(invocation):
             if not confirm_piped_input(stdin_text):
                 print("sigil op: piped input declined", file=sys.stderr)
                 raise click.exceptions.Exit(2)
         try:
-            return run_act_stepper(
+            status = run_act_stepper(
                 objective=prompt,
                 stdin_text=stdin_text,
+                confirm_step=invocation.depth == 2,
+                glyph=invocation.glyph,
                 verbose=verbose,
             )
         except RuntimeError as exc:
             print(f"sigil op: {exc}", file=sys.stderr)
             return 1
+        if status:
+            raise click.exceptions.Exit(status)
+        return 0
 
     if should_confirm_piped_input(invocation):
         if not confirm_piped_input(stdin_text):
@@ -272,7 +278,6 @@ def cmd_op(
             invocation,
             policy=ExecutionPolicy(
                 dry_run=dry_run,
-                confirm_execution=should_confirm_execution(invocation),
             ),
         )
     except RuntimeError as exc:
@@ -298,21 +303,11 @@ def should_confirm_piped_input(invocation: object) -> bool:
     )
 
 
-def should_confirm_execution(invocation: object) -> bool:
-    """Return whether command execution needs confirmation."""
-    return (
-        getattr(invocation, "base", None) == ","
-        and should_confirm_piped_input(invocation)
-        and getattr(invocation, "depth", 0) == 2
-    )
-
-
 def should_run_act_operator(invocation: object) -> bool:
     """Return whether this invocation targets the implemented act runner."""
-    return (
-        getattr(invocation, "base", None) == ","
-        and getattr(invocation, "depth", 0) == 3
-    )
+    return getattr(invocation, "base", None) == "," and getattr(
+        invocation, "depth", 0
+    ) in {2, 3}
 
 
 def confirm_piped_input(stdin_text: str) -> bool:
@@ -390,7 +385,12 @@ def run_act_command(
 ) -> int:
     """Run the act control subcommands."""
     if act_command == "resume":
-        return run_act_stepper(objective="", verbose=verbose)
+        return run_act_stepper(
+            objective="",
+            confirm_step=True,
+            glyph=",,",
+            verbose=verbose,
+        )
     if act_command == "abort":
         act = abort_active_act()
         if json_output:

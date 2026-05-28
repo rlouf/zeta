@@ -136,7 +136,7 @@ def evaluate_policy(
             message=f"{glyph} dry-run: classified output and skipped execution",
             classification=classification,
         )
-    if glyph.startswith(",") and depth == 3:
+    if glyph.startswith(",") and depth > 1:
         return PolicyDecision(
             status="preview",
             message=f"{glyph} is handled by the Pi act runner",
@@ -146,12 +146,6 @@ def evaluate_policy(
         return PolicyDecision(
             status="preview",
             message=f"{glyph} is handled by its depth-three route",
-            classification=classification,
-        )
-    if glyph.startswith(",") and depth == 2:
-        return PolicyDecision(
-            status="allowed",
-            message=f"{glyph} executes the generated command",
             classification=classification,
         )
     return PolicyDecision(

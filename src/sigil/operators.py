@@ -2,9 +2,6 @@
 
 from __future__ import annotations
 
-import os
-import subprocess
-import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Literal, cast
@@ -12,7 +9,6 @@ from .policy import ActionLabel, ExecutionPolicy, PolicyDecision, evaluate_polic
 from .model import chat_json, chat_text, ensure_server
 from .security import create_trust_metadata
 from .state import append_event, append_jsonl, read_jsonl
-from .tty import confirm_on_tty
 
 OperatorBase = Literal["?", ",", "@"]
 
@@ -191,9 +187,9 @@ def run_invocation(
     policy: ExecutionPolicy | None = None,
 ) -> OperatorResult:
     """Run a semantic operator invocation and return stdout text."""
-    if invocation.depth == 3:
+    if invocation.base == "," and invocation.depth > 1:
         raise RuntimeError(
-            f"{invocation.glyph} bounded autonomy loop is reserved but not implemented"
+            f"{invocation.glyph} agent step is handled by the Pi act runner"
         )
     if not ensure_server():
         raise SystemExit(1)
@@ -236,60 +232,6 @@ def run_invocation(
     )
     if invocation.base == "?":
         append_inspect_turns(invocation, output, event, security)
-    if invocation.base == "," and invocation.depth == 2:
-        if proposal is None:
-            command = executable_command(output)
-            proposal = TypedProposal(kind="command", body=command)
-        if execution_policy.dry_run:
-            return OperatorResult(
-                output=proposal.body,
-                decision=decision,
-                command=proposal.body,
-            )
-        command = proposal.body
-        requires_confirmation = execution_policy.confirm_execution or (
-            "high-risk" in decision.classification.labels
-        )
-        if requires_confirmation and not confirm_execution(
-            command,
-            decision.classification.labels,
-        ):
-            return OperatorResult(
-                output="",
-                decision=decision,
-                command=command,
-                stderr="sigil op: command execution declined\n",
-                exit_code=2,
-            )
-        executed = execute_command(command)
-        execute_security = create_trust_metadata(
-            glyph=invocation.glyph,
-            integrity="local_model",
-            capability="exec_boxed",
-            taint=["model"],
-            inputs=[str(event["id"])],
-            input_records=[event],
-            fresh_human=True,
-        )
-        append_event(
-            {
-                "type": "operator_command_executed",
-                "operator": invocation.to_dict(),
-                "command": command,
-                "labels": decision.classification.labels,
-                "status": executed.returncode,
-                "stdout_snippet": executed.stdout[:MAX_EVENT_OUTPUT_CHARS],
-                "stderr_snippet": executed.stderr[:MAX_EVENT_OUTPUT_CHARS],
-                **execute_security,
-            }
-        )
-        return OperatorResult(
-            output=executed.stdout.rstrip(),
-            decision=decision,
-            command=command,
-            stderr=executed.stderr,
-            exit_code=executed.returncode,
-        )
     return OperatorResult(output=output, decision=decision)
 
 
@@ -586,45 +528,3 @@ def max_tokens_for_depth(depth: int) -> int:
 def format_labels(labels: tuple[ActionLabel, ...]) -> str:
     """Return terminal-visible action labels."""
     return " · ".join(labels)
-
-
-def executable_command(output: str) -> str:
-    """Extract the shell command from a command-generation response."""
-    lines = []
-    for raw_line in output.splitlines():
-        line = raw_line.strip()
-        if line.startswith("```"):
-            continue
-        if not line or line.startswith("#"):
-            continue
-        if line.startswith(("diff --git", "---", "+++", "@@")):
-            continue
-        if line.startswith("$ "):
-            line = line[2:].strip()
-        lines.append(line)
-    if not lines:
-        raise RuntimeError("comma execution did not produce a command to execute")
-    return lines[0]
-
-
-def execute_command(command: str) -> subprocess.CompletedProcess[str]:
-    """Execute a generated shell command through the user's shell."""
-    shell = os.environ.get("SHELL") or "/bin/sh"
-    return subprocess.run(
-        [shell, "-lc", command],
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        check=False,
-    )
-
-
-def confirm_execution(command: str, labels: tuple[ActionLabel, ...] = ()) -> bool:
-    """Ask the user to confirm a generated command before execution."""
-    print("About to execute:", file=sys.stderr)
-    print("", file=sys.stderr)
-    print(command, file=sys.stderr)
-    if labels:
-        print(format_labels(labels), file=sys.stderr)
-    print("", file=sys.stderr)
-    return confirm_on_tty("Run it? [y/N] ")

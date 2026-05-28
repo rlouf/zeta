@@ -185,13 +185,13 @@ reading docs first.
 
 ### Command Trust Labels
 
-- [ ] Define a small label vocabulary: local, read-only, write, network,
+- [x] Define a small label vocabulary: local, read-only, write, network,
       publish, delete, privileged, focused, high-risk.
-- [ ] Map existing policy classifications to labels.
-- [ ] Print labels under `,` proposals.
-- [ ] Record labels in operator events.
-- [ ] Make `,,` require explicit confirmation for high-risk labels.
-- [ ] Add tests for read-only, write, network, delete, and privileged commands.
+- [x] Map existing policy classifications to labels.
+- [x] Print labels under `,` proposals.
+- [x] Record labels in operator events.
+- [x] Make `,,` require explicit confirmation for high-risk labels.
+- [x] Add tests for read-only, write, network, delete, and privileged commands.
 
 ### `sigil why`
 

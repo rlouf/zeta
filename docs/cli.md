@@ -193,9 +193,11 @@ Examples:
 
 `,` prints a command proposal. The zsh binding inserts it into the editable
 prompt buffer and adds it to shell history; the Bash binding adds it to history.
-`,,` runs command proposals through your shell. `,,,` asks for confirmation,
-invokes Pi with read/search/edit/write tools, blocks Bash tool execution as a
-handoff, and then returns control to the shell.
+Proposal output includes a terse label line such as `local · read-only ·
+focused` or `network · publish · high-risk`. `,,` runs command proposals
+through your shell and asks for confirmation before high-risk commands. `,,,`
+asks for confirmation, invokes Pi with read/search/edit/write tools, blocks
+Bash tool execution as a handoff, and then returns control to the shell.
 
 To install bindings without glyphs:
 

@@ -175,7 +175,9 @@ Examples:
 
 `,` prints a command proposal. The zsh binding puts it in the editable prompt
 buffer with `print -z` and records it in shell history. Bash records it in
-history. `,,` executes command proposals through your shell.
+history. Proposals include terse labels such as `local · read-only · focused`
+or `network · publish · high-risk`. `,,` executes command proposals through
+your shell and asks before high-risk commands.
 
 `,,,` asks before handing the objective to Pi, gives Pi read/search/edit/write
 tools, and returns control to the shell after one bounded edit pass. Bash

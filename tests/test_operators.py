@@ -194,7 +194,9 @@ def test_op_cli_runs_piped_recommend_operator() -> None:
         )
     assert result.exit_code == 0, result.output
     assert result.output == (
-        "uv run pytest\nTests validate the current code path before cleanup.\n"
+        "uv run pytest\n"
+        "local · read-only\n"
+        "Tests validate the current code path before cleanup.\n"
     )
     assert "Produce one typed proposal" in str(calls["system"])
     assert "Prompt: draft an executive summary" in str(calls["user"])
@@ -248,6 +250,7 @@ def test_double_comma_executes_command_proposal() -> None:
     assert result.stderr == ""
     assert events[-1]["type"] == "operator_command_executed"
     assert events[-1]["command"] == "touch fixed.txt"
+    assert events[-1]["labels"] == ("local", "write")
     assert events[-1]["capability"] == "exec_boxed"
 
 
@@ -258,6 +261,32 @@ def test_policy_classifies_destructive_shell_output() -> None:
     assert "delete" in classification.classes
     assert "network" in classification.classes
     assert "privileged" in classification.classes
+    assert classification.labels == (
+        "local",
+        "network",
+        "read-only",
+        "delete",
+        "privileged",
+        "high-risk",
+    )
+
+
+@pytest.mark.parametrize(
+    ("command", "labels"),
+    [
+        ("uv run pytest tests/test_status.py", ("local", "read-only", "focused")),
+        ("touch fixed.txt", ("local", "write")),
+        ("curl https://example.com", ("network", "read-only")),
+        ("git push origin main", ("network", "publish", "high-risk")),
+        ("rm -rf build", ("local", "delete", "high-risk")),
+        ("sudo chmod 600 secret.txt", ("local", "privileged", "high-risk")),
+    ],
+)
+def test_policy_maps_commands_to_trust_labels(
+    command: str,
+    labels: tuple[str, ...],
+) -> None:
+    assert classify_output(command).labels == labels
 
 
 def test_double_comma_policy_allows_execution_classification() -> None:
@@ -330,7 +359,34 @@ def test_op_cli_executes_double_comma_command() -> None:
         "operator_completed",
         "operator_command_executed",
     ]
+    assert events[0]["labels"] == ("local", "read-only")
+    assert events[-1]["labels"] == ("local", "read-only")
     assert events[-1]["capability"] == "exec_boxed"
+
+
+def test_double_comma_confirms_high_risk_command_before_execution() -> None:
+    confirmed = []
+
+    def fake_confirm(command: str, labels: tuple[str, ...] = ()) -> bool:
+        confirmed.append((command, labels))
+        return False
+
+    with (
+        patch("sigil.operators.ensure_server", return_value=True),
+        patch(
+            "sigil.operators.chat_json",
+            return_value={"kind": "command", "body": "git push origin main"},
+        ),
+        patch("sigil.operators.confirm_execution", side_effect=fake_confirm),
+        patch("sigil.operators.subprocess.run", side_effect=AssertionError("no exec")),
+        patch("sigil.operators.append_event", return_value={"id": "operator-event"}),
+    ):
+        result = CliRunner().invoke(cli, ["op", ",,", "publish"])
+
+    assert result.exit_code == 2
+    assert result.stdout == ""
+    assert "command execution declined" in result.stderr
+    assert confirmed == [("git push origin main", ("network", "publish", "high-risk"))]
 
 
 def test_op_cli_returns_executed_command_status_and_stderr() -> None:
@@ -752,7 +808,7 @@ def test_op_cli_confirms_piped_comma_before_model_call() -> None:
         result = CliRunner().invoke(cli, ["op", ",", "summarize"], input="notes\n")
 
     assert result.exit_code == 0
-    assert result.stdout == "cat notes\nuses stdin\n"
+    assert result.stdout == "cat notes\nlocal · read-only\nuses stdin\n"
 
 
 def test_op_cli_confirms_piped_double_comma_command_before_execution() -> None:
@@ -836,7 +892,7 @@ def test_verb_commands_run_piped_stream_operators() -> None:
     assert ask_result.exit_code == 0, ask_result.output
     assert command_result.exit_code == 0, command_result.output
     assert ask_result.output == ""
-    assert command_result.output == "stream result\nbecause stdin\n"
+    assert command_result.output == "stream result\nlocal · read-only\nbecause stdin\n"
     assert ask_calls == [(("review\n\nPiped input:\ndiff\n",), {"follow_up": False})]
     assert "Operator: , (recommend)" in json_calls[0][1]
 

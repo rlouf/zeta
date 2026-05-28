@@ -8,7 +8,7 @@ import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Literal, cast
-from .policy import ExecutionPolicy, PolicyDecision, evaluate_policy
+from .policy import ActionLabel, ExecutionPolicy, PolicyDecision, evaluate_policy
 from .model import chat_json, chat_text, ensure_server
 from .security import create_trust_metadata
 from .state import append_event, append_jsonl, read_jsonl
@@ -124,11 +124,14 @@ class TypedProposal:
     body: str
     explanation: str = ""
 
-    def display(self) -> str:
+    def display(self, labels: tuple[ActionLabel, ...] = ()) -> str:
         """Return terminal-visible proposal text."""
+        lines = [self.body]
+        if labels:
+            lines.append(format_labels(labels))
         if self.explanation:
-            return f"{self.body}\n{self.explanation}"
-        return self.body
+            lines.append(self.explanation)
+        return "\n".join(lines)
 
 
 def parse_operator_token(token: str) -> tuple[OperatorBase, int]:
@@ -192,16 +195,19 @@ def run_invocation(
     system = operator_system_prompt(invocation)
     user = operator_user_prompt(invocation)
     proposal = run_proposal_model(invocation, system, user)
-    output = (
-        proposal.display()
-        if proposal is not None
-        else run_model(invocation, system, user)
+    policy_output = (
+        proposal.body if proposal is not None else run_model(invocation, system, user)
     )
     decision = evaluate_policy(
         glyph=invocation.glyph,
         depth=invocation.depth,
-        output=output,
+        output=policy_output,
         policy=execution_policy,
+    )
+    output = (
+        proposal.display(decision.classification.labels)
+        if proposal is not None and invocation.depth == 1
+        else policy_output
     )
     security = create_trust_metadata(
         glyph=invocation.glyph,
@@ -217,6 +223,7 @@ def run_invocation(
             "output_snippet": output[:MAX_EVENT_OUTPUT_CHARS],
             "policy": execution_policy.to_dict(),
             "decision": decision.to_dict(),
+            "labels": decision.classification.labels,
             **security,
         }
     )
@@ -233,7 +240,13 @@ def run_invocation(
                 command=proposal.body,
             )
         command = proposal.body
-        if execution_policy.confirm_execution and not confirm_execution(command):
+        requires_confirmation = execution_policy.confirm_execution or (
+            "high-risk" in decision.classification.labels
+        )
+        if requires_confirmation and not confirm_execution(
+            command,
+            decision.classification.labels,
+        ):
             return OperatorResult(
                 output="",
                 decision=decision,
@@ -256,6 +269,7 @@ def run_invocation(
                 "type": "operator_command_executed",
                 "operator": invocation.to_dict(),
                 "command": command,
+                "labels": decision.classification.labels,
                 "status": executed.returncode,
                 "stdout_snippet": executed.stdout[:MAX_EVENT_OUTPUT_CHARS],
                 "stderr_snippet": executed.stderr[:MAX_EVENT_OUTPUT_CHARS],
@@ -562,6 +576,11 @@ def max_tokens_for_depth(depth: int) -> int:
     return 1800
 
 
+def format_labels(labels: tuple[ActionLabel, ...]) -> str:
+    """Return terminal-visible action labels."""
+    return " · ".join(labels)
+
+
 def executable_command(output: str) -> str:
     """Extract the shell command from a command-generation response."""
     lines = []
@@ -593,10 +612,12 @@ def execute_command(command: str) -> subprocess.CompletedProcess[str]:
     )
 
 
-def confirm_execution(command: str) -> bool:
+def confirm_execution(command: str, labels: tuple[ActionLabel, ...] = ()) -> bool:
     """Ask the user to confirm a generated command before execution."""
     print("About to execute:", file=sys.stderr)
     print("", file=sys.stderr)
     print(command, file=sys.stderr)
+    if labels:
+        print(format_labels(labels), file=sys.stderr)
     print("", file=sys.stderr)
     return confirm_on_tty("Run it? [y/N] ")

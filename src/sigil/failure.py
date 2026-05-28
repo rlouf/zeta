@@ -128,10 +128,7 @@ def record_failure(
     context = cwd_context(failure_cwd)
     security = create_trust_metadata(
         glyph="failure",
-        integrity="human",
-        capability="propose",
-        taint=[],
-        fresh_human=True,
+        mode="propose",
     )
     event = append_event(
         {

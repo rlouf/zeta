@@ -7,3 +7,5 @@ dist/
 .DS_Store
 src/sigil/_version.py
 src/sigil_sh.egg-info/
+node_modules/
+package-lock.json

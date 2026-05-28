@@ -29,7 +29,7 @@ repos:
         pass_filenames: false
       - id: complexipy
         name: complexipy
-        entry: uv run complexipy src tests --plain --failed --max-complexity-allowed 91
+        entry: uv run complexipy src tests --plain --failed --max-complexity-allowed 25
         language: system
         require_serial: true
         pass_filenames: false

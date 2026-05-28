@@ -12,7 +12,7 @@ from importlib.resources import files
 from pathlib import Path
 from typing import Any
 
-from .security import create_trust_metadata, normalize_integrity
+from .security import create_trust_metadata, normalize_labels, normalize_mode
 from .state import append_event, read_jsonl, session_dir, write_jsonl
 
 PENDING_BASH_HANDOFF_FILE = "pending-bash-handoff.jsonl"
@@ -69,10 +69,8 @@ def record_bash_handoffs(
     records = []
     source_event_id = str(source_event.get("id") or "")
     glyph = str(source_security.get("glyph") or "?")
-    integrity = normalize_integrity(source_security.get("integrity"))
-    taint = [str(item) for item in source_security.get("taint", [])]
-    if "model" not in taint:
-        taint.append("model")
+    labels = normalize_labels(source_security.get("labels"))
+    mode = normalize_mode(source_security.get("mode"))
 
     for raw in read_pending_bash_handoffs():
         command = str(raw.get("command") or "").strip()
@@ -80,12 +78,10 @@ def record_bash_handoffs(
             continue
         security = create_trust_metadata(
             glyph=glyph,
-            integrity=integrity,
-            capability="propose",
-            taint=taint,
+            mode=mode if mode == "propose" else "propose",
+            labels=labels,
             inputs=[source_event_id] if source_event_id else [],
             input_records=[source_event],
-            provisional=True,
         )
         event = append_event(
             {

@@ -49,6 +49,50 @@ def run_act_stepper(
     verbose: bool = False,
 ) -> int:
     """Create or resume a one-step Pi edit action."""
+    prepared = prepare_act(
+        objective=objective,
+        stdin_text=stdin_text,
+        confirm_step=confirm_step,
+        glyph=glyph,
+        dry_run=dry_run,
+    )
+    if isinstance(prepared, int):
+        return prepared
+    act = prepared
+
+    print_act(act)
+    step = next_pending_step(act)
+    if step is None:
+        act["status"] = "completed"
+        record_act_update("act_completed", act)
+        print("act complete")
+        return 0
+
+    print_next_step(step)
+    proceed, decision_label = confirm_act_step(act, step, confirm_step)
+    if not proceed:
+        return 0
+
+    decision_event = record_step_decision(act, step, decision_label)
+    status = run_pi_agent_step(act, step, decision_event, glyph=glyph, verbose=verbose)
+    step["status"] = "done" if status == 0 else "failed"
+    step["exit_code"] = status
+    record_step_executed(act, step, status)
+    if status == 0:
+        act["status"] = "completed"
+        record_act_update("act_completed", act)
+    return status
+
+
+def prepare_act(
+    *,
+    objective: str,
+    stdin_text: str,
+    confirm_step: bool,
+    glyph: str,
+    dry_run: bool,
+) -> dict[str, Any] | int:
+    """Create, replace, or resume an act; return the act or an exit code."""
     act = active_act()
     if act is None:
         if not objective:
@@ -61,71 +105,58 @@ def run_act_stepper(
             approval = "confirmed" if confirm_step else "auto-approved"
             print(f"sigil act: would create one {approval} Pi edit step")
             return 0
-        act = create_act(
+        return create_act(
             objective=objective,
             stdin_text=stdin_text,
             confirm_step=confirm_step,
             glyph=glyph,
         )
-    elif objective and objective != str(act.get("objective", "")):
+    if objective and objective != str(act.get("objective", "")):
         if dry_run:
             print("sigil act: would replace active Pi edit step with a new objective")
             return 0
-        act = create_act(
+        return create_act(
             objective=objective,
             stdin_text=stdin_text,
             confirm_step=confirm_step,
             glyph=glyph,
         )
-    elif dry_run:
+    if dry_run:
         print("sigil act: would resume the pending Pi edit step")
         return 0
-    else:
-        act["glyph"] = glyph
-        act["approval"] = "confirm" if confirm_step else "auto"
+    act["glyph"] = glyph
+    act["approval"] = "confirm" if confirm_step else "auto"
+    return act
 
-    print_act(act)
-    step = next_pending_step(act)
-    if step is None:
-        act["status"] = "completed"
-        record_act_update("act_completed", act)
-        print("act complete")
-        return 0
 
-    print_next_step(step)
-    if confirm_step:
-        decision = read_step_decision()
-        if decision in {"", "n", "no", "quit", "q"}:
-            return 0
-        if decision == "skip":
-            step["status"] = "skipped"
-            record_step_decision(act, step, "skipped")
-            print(f"skipped step {step['id']}")
-            return 0
-        if decision == "edit":
-            edited = prompt_on_tty("objective> ")
-            if edited is None or not edited.strip():
-                return 0
-            act["objective"] = edited.strip()
-            step["edited"] = True
-            confirm = read_step_decision(prompt="run edited Pi step? [y/N] ")
-            if confirm not in {"y", "yes"}:
-                return 0
-        elif decision not in {"y", "yes"}:
-            return 0
-        decision_label = "accepted"
-    else:
-        decision_label = "auto_accepted"
-
-    decision_event = record_step_decision(act, step, decision_label)
-    status = run_pi_agent_step(act, step, decision_event, glyph=glyph, verbose=verbose)
-    step["status"] = "done" if status == 0 else "failed"
-    step["exit_code"] = status
-    record_step_executed(act, step, status)
-    if status == 0:
-        act["status"] = "completed"
-        record_act_update("act_completed", act)
-    return status
+def confirm_act_step(
+    act: dict[str, Any],
+    step: dict[str, Any],
+    confirm_step: bool,
+) -> tuple[bool, str]:
+    """Confirm one act step; return (proceed, decision_label) and record stops."""
+    if not confirm_step:
+        return True, "auto_accepted"
+    decision = read_step_decision()
+    if decision in {"", "n", "no", "quit", "q"}:
+        return False, ""
+    if decision == "skip":
+        step["status"] = "skipped"
+        record_step_decision(act, step, "skipped")
+        print(f"skipped step {step['id']}")
+        return False, ""
+    if decision == "edit":
+        edited = prompt_on_tty("objective> ")
+        if edited is None or not edited.strip():
+            return False, ""
+        act["objective"] = edited.strip()
+        step["edited"] = True
+        confirm = read_step_decision(prompt="run edited Pi step? [y/N] ")
+        if confirm not in {"y", "yes"}:
+            return False, ""
+    elif decision not in {"y", "yes"}:
+        return False, ""
+    return True, "accepted"
 
 
 def create_act(
@@ -268,12 +299,9 @@ def run_pi_agent_step(
     route_glyph = glyph or str(act.get("glyph") or ",,,")
     security = create_trust_metadata(
         glyph=route_glyph,
-        integrity="local_model",
-        capability="exec_boxed",
-        taint=["model"],
+        mode="execute-write",
         inputs=[decision_event_id] if decision_event_id else [],
         input_records=[decision_event] if decision_event else [],
-        fresh_human=True,
     )
     handoff_path = prepare_bash_handoff()
     extension_path = bash_handoff_extension_path()
@@ -318,12 +346,10 @@ def run_pi_agent_step(
         **os.environ,
         "SIGIL_CAPTURE_ANSWER": "1",
         "SIGIL_CAPTURE_TRACE": "1",
-        "SIGIL_SECURITY_GLYPH": str(security["glyph"]),
-        "SIGIL_SECURITY_INTEGRITY": str(security["integrity"]),
-        "SIGIL_SECURITY_CAPABILITY": str(security["capability"]),
-        "SIGIL_SECURITY_TAINT": ",".join(security["taint"]),
-        "SIGIL_SECURITY_PROVISIONAL": "1" if security["provisional"] else "0",
-        "SIGIL_SECURITY_INPUTS": ",".join(security["inputs"]),
+        "SIGIL_TRUST_GLYPH": str(security["glyph"]),
+        "SIGIL_TRUST_MODE": str(security["mode"]),
+        "SIGIL_TRUST_LABELS": ",".join(security["labels"]),
+        "SIGIL_TRUST_INPUTS": ",".join(security["inputs"]),
         "SIGIL_QUESTION": str(act.get("objective") or ""),
         "SIGIL_PROMPT": pi_agent_prompt(act),
         "SIGIL_FOLLOW_UP": "0",
@@ -398,13 +424,8 @@ def record_act_update(event_type: str, act: dict[str, Any]) -> dict[str, Any]:
         inputs.append(last_event_id)
     security = create_trust_metadata(
         glyph=str(act.get("glyph") or ",,,"),
-        integrity="human"
-        if event_type in {"act_created", "act_aborted"}
-        else "local_model",
-        capability="propose",
-        taint=[] if event_type in {"act_created", "act_aborted"} else ["model"],
+        mode="propose",
         inputs=inputs,
-        fresh_human=True,
     )
     payload = {
         "type": event_type,
@@ -435,11 +456,8 @@ def record_step_decision(
         inputs.append(act_event_id)
     security = create_trust_metadata(
         glyph=str(act.get("glyph") or ",,,"),
-        integrity="human",
-        capability="none",
-        taint=[],
+        mode="propose",
         inputs=inputs,
-        fresh_human=True,
     )
     payload = {
         "type": "act_step_decision",
@@ -471,11 +489,8 @@ def record_step_executed(
         inputs.append(decision_event_id)
     security = create_trust_metadata(
         glyph=str(act.get("glyph") or ",,,"),
-        integrity="local_model",
-        capability="exec_boxed",
-        taint=["model"],
+        mode="execute-write",
         inputs=inputs,
-        fresh_human=True,
     )
     payload = {
         "type": "act_step_executed",

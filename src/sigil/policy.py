@@ -7,15 +7,10 @@ from dataclasses import asdict, dataclass
 from typing import Literal
 
 ActionLabel = Literal[
-    "local",
-    "read-only",
-    "write",
     "network",
     "publish",
     "delete",
     "privileged",
-    "focused",
-    "high-risk",
 ]
 ActionClass = Literal[
     "stdout",
@@ -110,10 +105,6 @@ def classify_output(text: str) -> ActionClassification:
     for line in lines:
         classify_command_line(line, classes, reasons)
         labels.update(command_labels(line))
-    if not labels:
-        labels.add("read-only")
-    if not {"network", "publish"} & labels:
-        labels.add("local")
     return ActionClassification(
         classes=tuple(sorted(classes)),
         reasons=tuple(dict.fromkeys(reasons)),
@@ -226,43 +217,31 @@ def classify_command_line(
 
 
 def command_labels(line: str) -> set[ActionLabel]:
-    """Return user-facing trust labels for one shell command."""
+    """Return user-facing risk labels for one shell command."""
     try:
         parts = shlex.split(line, comments=False, posix=True)
     except ValueError:
-        return {"local", "read-only"}
+        return set()
     if not parts:
-        return {"local", "read-only"}
+        return set()
 
     command = parts[0].split("/")[-1]
     if command == "sudo" and len(parts) > 1:
         nested = " ".join(shlex.quote(part) for part in parts[1:])
         labels = command_labels(nested)
         labels.add("privileged")
-        labels.add("high-risk")
         return labels
 
     labels: set[ActionLabel] = set()
     if is_publish_command(command, parts):
-        labels.update({"network", "publish", "high-risk"})
+        labels.update({"network", "publish"})
     elif is_network_command(command, parts):
         labels.add("network")
-    else:
-        labels.add("local")
 
-    if is_publish_command(command, parts):
-        pass
-    elif is_delete_command(command, parts):
-        labels.update({"delete", "high-risk"})
-    elif command in PRIVILEGED_COMMANDS:
-        labels.update({"privileged", "high-risk"})
-    elif is_write_command(command, parts):
-        labels.add("write")
-    else:
-        labels.add("read-only")
-
-    if is_focused_command(command, parts):
-        labels.add("focused")
+    if is_delete_command(command, parts):
+        labels.add("delete")
+    if command in PRIVILEGED_COMMANDS:
+        labels.add("privileged")
     return labels
 
 
@@ -298,19 +277,6 @@ def is_write_command(command: str, parts: list[str]) -> bool:
     return command in WRITE_COMMANDS
 
 
-def is_focused_command(command: str, parts: list[str]) -> bool:
-    """Return true when a command targets a narrow file/path/test scope."""
-    if command == "uv" and is_read_only_uv_run(parts):
-        return len(parts) > 3
-    if command == "pytest":
-        return len(parts) > 1
-    return any(
-        part.startswith(("tests/", "src/", "./tests/", "./src/"))
-        or part.endswith((".py", ".rs", ".js", ".ts", ".tsx", ".md"))
-        for part in parts[1:]
-    )
-
-
 def is_read_only_uv_run(parts: list[str]) -> bool:
     """Return true for `uv run` commands that only run local checks."""
     return (
@@ -323,15 +289,10 @@ def is_read_only_uv_run(parts: list[str]) -> bool:
 def ordered_labels(labels: set[ActionLabel]) -> tuple[ActionLabel, ...]:
     """Return labels in stable display order."""
     order: tuple[ActionLabel, ...] = (
-        "local",
         "network",
-        "read-only",
-        "write",
-        "publish",
         "delete",
+        "publish",
         "privileged",
-        "focused",
-        "high-risk",
     )
     return tuple(label for label in order if label in labels)
 

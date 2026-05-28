@@ -28,37 +28,16 @@ def run_goal_loop(
     verbose: bool = False,
 ) -> int:
     """Create or resume a bounded goal loop."""
-    goal = active_goal()
-    if goal is None:
-        if not objective:
-            print("sigil goal: no active goal; provide an objective", file=sys.stderr)
-            return 2
-        if dry_run:
-            approval = "confirmed" if confirm_steps else "auto-approved"
-            print(f"sigil goal: would create {approval} goal loop")
-            return 0
-        goal = create_goal_state(
-            objective=objective,
-            stdin_text=stdin_text,
-            confirm_steps=confirm_steps,
-            glyph=glyph,
-        )
-    elif objective and objective != str(goal.get("objective", "")):
-        if dry_run:
-            print("sigil goal: would replace active goal with a new objective")
-            return 0
-        goal = create_goal_state(
-            objective=objective,
-            stdin_text=stdin_text,
-            confirm_steps=confirm_steps,
-            glyph=glyph,
-        )
-    elif dry_run:
-        print("sigil goal: would resume active goal")
-        return 0
-    else:
-        goal["glyph"] = glyph
-        goal["approval"] = "confirm" if confirm_steps else "auto"
+    prepared = prepare_goal(
+        objective=objective,
+        stdin_text=stdin_text,
+        confirm_steps=confirm_steps,
+        glyph=glyph,
+        dry_run=dry_run,
+    )
+    if isinstance(prepared, int):
+        return prepared
+    goal = prepared
 
     max_steps = goal_step_budget(goal)
     while int(goal.get("steps_run", 0) or 0) < max_steps:
@@ -69,63 +48,124 @@ def run_goal_loop(
         print_goal(goal)
         step = create_goal_step(goal)
         print_next_step(step)
-        if confirm_steps:
-            decision = read_goal_decision()
-            if decision in {"", "n", "no", "stop", "q", "quit"}:
-                record_goal_update("goal_checkpoint", goal)
-                return 0
-            if decision == "abort":
-                goal["status"] = "aborted"
-                record_goal_update("goal_aborted", goal)
-                print("goal aborted")
-                return 0
-            if decision not in {"y", "yes"}:
-                record_goal_update("goal_checkpoint", goal)
-                return 0
-            decision_label = "accepted"
-        else:
-            decision_label = "auto_accepted"
-
-        decision_event = record_goal_step_decision(goal, step, decision_label)
-        status = run_pi_agent_step(
-            goal_as_act(goal),
-            step,
-            decision_event,
-            glyph=glyph,
-            verbose=verbose,
+        proceed, decision_label = approve_goal_step(goal, confirm_steps)
+        if not proceed:
+            return 0
+        outcome = execute_goal_step(
+            goal, step, decision_label, glyph=glyph, verbose=verbose
         )
-        step["exit_code"] = status
-        goal["steps_run"] = int(goal.get("steps_run", 0) or 0) + 1
-        if status != 0:
-            step["status"] = "failed"
-            goal["status"] = "blocked"
-            goal["last_status"] = "blocked"
-            goal["last_next"] = f"Pi step exited with status {status}."
-            record_goal_step_executed(goal, step, status)
-            record_goal_update("goal_blocked", goal)
-            return status
-
-        step_status, next_note = latest_step_status()
-        step["status"] = "done"
-        step["reported_status"] = step_status
-        goal["last_status"] = step_status
-        goal["last_next"] = next_note
-        record_goal_step_executed(goal, step, status)
-        if step_status == "complete":
-            goal["status"] = "completed"
-            record_goal_update("goal_completed", goal)
-            print("goal complete")
-            return 0
-        if step_status == "blocked":
-            goal["status"] = "blocked"
-            record_goal_update("goal_blocked", goal)
-            print("goal blocked")
-            return 0
+        if outcome is not None:
+            return outcome
 
     goal["status"] = "budget_hit"
     record_goal_update("goal_budget_hit", goal)
     print("goal budget hit")
     return 0
+
+
+def prepare_goal(
+    *,
+    objective: str,
+    stdin_text: str,
+    confirm_steps: bool,
+    glyph: str,
+    dry_run: bool,
+) -> dict[str, Any] | int:
+    """Create, replace, or resume a goal; return the goal or an exit code."""
+    goal = active_goal()
+    if goal is None:
+        if not objective:
+            print("sigil goal: no active goal; provide an objective", file=sys.stderr)
+            return 2
+        if dry_run:
+            approval = "confirmed" if confirm_steps else "auto-approved"
+            print(f"sigil goal: would create {approval} goal loop")
+            return 0
+        return create_goal_state(
+            objective=objective,
+            stdin_text=stdin_text,
+            confirm_steps=confirm_steps,
+            glyph=glyph,
+        )
+    if objective and objective != str(goal.get("objective", "")):
+        if dry_run:
+            print("sigil goal: would replace active goal with a new objective")
+            return 0
+        return create_goal_state(
+            objective=objective,
+            stdin_text=stdin_text,
+            confirm_steps=confirm_steps,
+            glyph=glyph,
+        )
+    if dry_run:
+        print("sigil goal: would resume active goal")
+        return 0
+    goal["glyph"] = glyph
+    goal["approval"] = "confirm" if confirm_steps else "auto"
+    return goal
+
+
+def approve_goal_step(goal: dict[str, Any], confirm_steps: bool) -> tuple[bool, str]:
+    """Confirm one step; return (proceed, decision_label) and record stops."""
+    if not confirm_steps:
+        return True, "auto_accepted"
+    decision = read_goal_decision()
+    if decision == "abort":
+        goal["status"] = "aborted"
+        record_goal_update("goal_aborted", goal)
+        print("goal aborted")
+        return False, ""
+    if decision not in {"y", "yes"}:
+        record_goal_update("goal_checkpoint", goal)
+        return False, ""
+    return True, "accepted"
+
+
+def execute_goal_step(
+    goal: dict[str, Any],
+    step: dict[str, Any],
+    decision_label: str,
+    *,
+    glyph: str,
+    verbose: bool,
+) -> int | None:
+    """Run one approved step; return an exit code to stop, or None to continue."""
+    decision_event = record_goal_step_decision(goal, step, decision_label)
+    status = run_pi_agent_step(
+        goal_as_act(goal),
+        step,
+        decision_event,
+        glyph=glyph,
+        verbose=verbose,
+    )
+    step["exit_code"] = status
+    goal["steps_run"] = int(goal.get("steps_run", 0) or 0) + 1
+    if status != 0:
+        step["status"] = "failed"
+        goal["status"] = "blocked"
+        goal["last_status"] = "blocked"
+        goal["last_next"] = f"Pi step exited with status {status}."
+        record_goal_step_executed(goal, step, status)
+        record_goal_update("goal_blocked", goal)
+        return status
+
+    step_status, next_note = latest_step_status()
+    step["status"] = "done"
+    step["reported_status"] = step_status
+    goal["last_status"] = step_status
+    goal["last_next"] = next_note
+    record_goal_step_executed(goal, step, status)
+    if step_status == "complete":
+        goal["status"] = "completed"
+        record_goal_update("goal_completed", goal)
+        print("goal complete")
+        return 0
+    if step_status == "blocked":
+        goal["status"] = "blocked"
+        record_goal_update("goal_blocked", goal)
+        print("goal blocked")
+        return 0
+    return None
 
 
 def create_goal_state(
@@ -270,12 +310,7 @@ def record_goal_update(event_type: str, goal: dict[str, Any]) -> dict[str, Any]:
     """Record a goal snapshot in session and global state."""
     security = create_trust_metadata(
         glyph=str(goal.get("glyph") or "@"),
-        integrity="human"
-        if event_type in {"goal_created", "goal_aborted", "goal_checkpoint"}
-        else "local_model",
-        capability="exec_boxed",
-        taint=[] if event_type in {"goal_created", "goal_aborted"} else ["model"],
-        fresh_human=True,
+        mode="execute-write",
     )
     payload = {
         "type": event_type,
@@ -301,11 +336,8 @@ def record_goal_step_decision(
     step["decision"] = decision
     security = create_trust_metadata(
         glyph=str(goal.get("glyph") or "@"),
-        integrity="human",
-        capability="none",
-        taint=[],
+        mode="propose",
         inputs=[str(goal.get("last_event_id"))] if goal.get("last_event_id") else [],
-        fresh_human=True,
     )
     payload = {
         "type": "goal_step_decision",
@@ -330,13 +362,10 @@ def record_goal_step_executed(
     """Record completion of one goal step."""
     security = create_trust_metadata(
         glyph=str(goal.get("glyph") or "@"),
-        integrity="local_model",
-        capability="exec_boxed",
-        taint=["model"],
+        mode="execute-write",
         inputs=[str(step.get("decision_event_id"))]
         if step.get("decision_event_id")
         else [],
-        fresh_human=True,
     )
     payload = {
         "type": "goal_step_executed",

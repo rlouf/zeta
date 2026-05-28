@@ -103,7 +103,7 @@ def test_bash_wrappers_call_current_cli_contract() -> None:
         result = run_shell(
             "bash",
             textwrap.dedent(
-                "                    source shell/bash/sigil.bash\n                    sigil_command hello\n                    sigil_execute_command hello\n                    sigil_question hello\n                    sigil_follow_up hello\n                    printf 'history=%s\\n' \"$(__sigil_history_line)\"\n                    "
+                "                    source src/sigil/shell/bash/sigil.bash\n                    sigil_command hello\n                    sigil_execute_command hello\n                    sigil_question hello\n                    sigil_follow_up hello\n                    printf 'history=%s\\n' \"$(__sigil_history_line)\"\n                    "
             ),
             tmp,
             stub,
@@ -129,7 +129,7 @@ def test_bash_agent_and_goal_wrappers_call_operator_contract() -> None:
         result = run_shell(
             "bash",
             textwrap.dedent(
-                "                    source shell/bash/sigil.bash\n                    sigil_agent_step hello\n                    sigil_agent_step_auto hello\n                    sigil_goal hello\n                    sigil_goal_auto hello\n                    "
+                "                    source src/sigil/shell/bash/sigil.bash\n                    sigil_agent_step hello\n                    sigil_agent_step_auto hello\n                    sigil_goal hello\n                    sigil_goal_auto hello\n                    "
             ),
             tmp,
             stub,
@@ -150,7 +150,7 @@ def test_bash_recommendations_print_stdout_and_command_to_history() -> None:
         result = run_shell(
             "bash",
             textwrap.dedent(
-                "                    source shell/bash/sigil.bash\n                    sigil_command hello\n                    printf 'history=%s\\n' \"$(__sigil_history_line)\"\n                    "
+                "                    source src/sigil/shell/bash/sigil.bash\n                    sigil_command hello\n                    printf 'history=%s\\n' \"$(__sigil_history_line)\"\n                    "
             ),
             tmp,
             stub,
@@ -168,7 +168,7 @@ def test_bash_question_does_not_consume_handoff() -> None:
         result = run_shell(
             "bash",
             textwrap.dedent(
-                "                    source shell/bash/sigil.bash\n                    sigil_command hello\n                    export SIGIL_STUB_HANDOFF='git diff --stat'\n                    sigil_question review\n                    printf 'history=%s\\n' \"$(__sigil_history_line)\"\n                    "
+                "                    source src/sigil/shell/bash/sigil.bash\n                    sigil_command hello\n                    export SIGIL_STUB_HANDOFF='git diff --stat'\n                    sigil_question review\n                    printf 'history=%s\\n' \"$(__sigil_history_line)\"\n                    "
             ),
             tmp,
             stub,
@@ -185,7 +185,7 @@ def test_bash_act_handoff_adds_command_to_history() -> None:
         result = run_shell(
             "bash",
             textwrap.dedent(
-                "                    source shell/bash/sigil.bash\n                    export SIGIL_STUB_HANDOFF='uv run pytest'\n                    sigil_command_loop repair\n                    printf 'history=%s\\n' \"$(__sigil_history_line)\"\n                    "
+                "                    source src/sigil/shell/bash/sigil.bash\n                    export SIGIL_STUB_HANDOFF='uv run pytest'\n                    sigil_command_loop repair\n                    printf 'history=%s\\n' \"$(__sigil_history_line)\"\n                    "
             ),
             tmp,
             stub,
@@ -202,7 +202,7 @@ def test_bash_exports_tty_for_pipeline_confirmations() -> None:
         result = run_shell(
             "bash",
             textwrap.dedent(
-                "                    unset SIGIL_TTY\n                    export TTY=/tmp/sigil-test-tty\n                    source shell/bash/sigil.bash\n                    printf 'sigil_tty=%s\\n' \"$SIGIL_TTY\"\n                    "
+                "                    unset SIGIL_TTY\n                    export TTY=/tmp/sigil-test-tty\n                    source src/sigil/shell/bash/sigil.bash\n                    printf 'sigil_tty=%s\\n' \"$SIGIL_TTY\"\n                    "
             ),
             tmp,
             stub,
@@ -218,7 +218,7 @@ def test_bash_prompt_marker_tracks_status_attention() -> None:
         result = run_shell_args(
             ["bash", "--noprofile", "--norc", "-ic"],
             textwrap.dedent(
-                "                    source shell/bash/sigil.bash\n                    PS1='$ '\n                    export SIGIL_STUB_STATUS=attention\n                    __sigil_refresh_prompt_marker\n                    printf 'attention=%s\\n' \"$PS1\"\n                    export SIGIL_STUB_STATUS=clean\n                    __sigil_refresh_prompt_marker\n                    printf 'clean=%s\\n' \"$PS1\"\n                    export SIGIL_ENABLE_PROMPT_MARKER=0\n                    export SIGIL_STUB_STATUS=attention\n                    __sigil_refresh_prompt_marker\n                    printf 'disabled=%s\\n' \"$PS1\"\n                    "
+                "                    source src/sigil/shell/bash/sigil.bash\n                    PS1='$ '\n                    export SIGIL_STUB_STATUS=attention\n                    __sigil_refresh_prompt_marker\n                    printf 'attention=%s\\n' \"$PS1\"\n                    export SIGIL_STUB_STATUS=clean\n                    __sigil_refresh_prompt_marker\n                    printf 'clean=%s\\n' \"$PS1\"\n                    export SIGIL_ENABLE_PROMPT_MARKER=0\n                    export SIGIL_STUB_STATUS=attention\n                    __sigil_refresh_prompt_marker\n                    printf 'disabled=%s\\n' \"$PS1\"\n                    "
             ),
             tmp,
             stub,
@@ -238,7 +238,7 @@ def test_zsh_exports_tty_for_pipeline_confirmations() -> None:
         result = run_shell(
             "zsh",
             textwrap.dedent(
-                '                    unset SIGIL_TTY\n                    export TTY=/tmp/sigil-test-tty\n                    source shell/zsh/sigil.zsh\n                    print -- "sigil_tty=$SIGIL_TTY"\n                    '
+                '                    unset SIGIL_TTY\n                    export TTY=/tmp/sigil-test-tty\n                    source src/sigil/shell/zsh/sigil.zsh\n                    print -- "sigil_tty=$SIGIL_TTY"\n                    '
             ),
             tmp,
             stub,
@@ -255,7 +255,7 @@ def test_zsh_prompt_marker_tracks_status_attention() -> None:
         result = run_shell_args(
             ["zsh", "-f", "-ic"],
             textwrap.dedent(
-                '                    source shell/zsh/sigil.zsh\n                    PROMPT="$ "\n                    export SIGIL_STUB_STATUS=attention\n                    __sigil_refresh_prompt_marker\n                    print -- "attention=$PROMPT"\n                    export SIGIL_STUB_STATUS=clean\n                    __sigil_refresh_prompt_marker\n                    print -- "clean=$PROMPT"\n                    export SIGIL_ENABLE_PROMPT_MARKER=0\n                    export SIGIL_STUB_STATUS=attention\n                    __sigil_refresh_prompt_marker\n                    print -- "disabled=$PROMPT"\n                    '
+                '                    source src/sigil/shell/zsh/sigil.zsh\n                    PROMPT="$ "\n                    export SIGIL_STUB_STATUS=attention\n                    __sigil_refresh_prompt_marker\n                    print -- "attention=$PROMPT"\n                    export SIGIL_STUB_STATUS=clean\n                    __sigil_refresh_prompt_marker\n                    print -- "clean=$PROMPT"\n                    export SIGIL_ENABLE_PROMPT_MARKER=0\n                    export SIGIL_STUB_STATUS=attention\n                    __sigil_refresh_prompt_marker\n                    print -- "disabled=$PROMPT"\n                    '
             ),
             tmp,
             stub,
@@ -274,7 +274,7 @@ def test_bash_wrappers_dispatch_piped_stdin_to_operator_runtime() -> None:
         result = run_shell(
             "bash",
             textwrap.dedent(
-                "                    source shell/bash/sigil.bash\n                    printf 'diff\\n' | sigil_follow_up review risky changes\n                    printf 'notes\\n' | sigil_command draft executive summary\n                    printf 'cmd\\n' | sigil_execute_command run it\n                    "
+                "                    source src/sigil/shell/bash/sigil.bash\n                    printf 'diff\\n' | sigil_follow_up review risky changes\n                    printf 'notes\\n' | sigil_command draft executive summary\n                    printf 'cmd\\n' | sigil_execute_command run it\n                    "
             ),
             tmp,
             stub,
@@ -296,7 +296,7 @@ def test_bash_records_every_non_sigil_turn_via_record_turn() -> None:
         result = run_shell(
             "bash",
             textwrap.dedent(
-                "                    source shell/bash/sigil.bash\n                    __sigil_history_entry() { printf '1\\t%s\\n' \"ls -la\"; }\n                    true\n                    __sigil_precmd\n                    __sigil_history_entry() { printf '2\\t%s\\n' \"bad command\"; }\n                    false\n                    __sigil_precmd\n                    __sigil_history_entry() { printf '3\\t%s\\n' \", should not record\"; }\n                    false\n                    __sigil_precmd\n                    wait\n                    "
+                "                    source src/sigil/shell/bash/sigil.bash\n                    __sigil_history_entry() { printf '1\\t%s\\n' \"ls -la\"; }\n                    true\n                    __sigil_precmd\n                    __sigil_history_entry() { printf '2\\t%s\\n' \"bad command\"; }\n                    false\n                    __sigil_precmd\n                    __sigil_history_entry() { printf '3\\t%s\\n' \", should not record\"; }\n                    false\n                    __sigil_precmd\n                    wait\n                    "
             ),
             tmp,
             stub,
@@ -317,7 +317,7 @@ def test_bash_records_repeated_command_when_history_id_changes() -> None:
         result = run_shell(
             "bash",
             textwrap.dedent(
-                "                    source shell/bash/sigil.bash\n                    __sigil_history_entry() { printf '1\\t%s\\n' \"ls\"; }\n                    true\n                    __sigil_precmd\n                    __sigil_history_entry() { printf '2\\t%s\\n' \"ls\"; }\n                    true\n                    __sigil_precmd\n                    wait\n                    "
+                "                    source src/sigil/shell/bash/sigil.bash\n                    __sigil_history_entry() { printf '1\\t%s\\n' \"ls\"; }\n                    true\n                    __sigil_precmd\n                    __sigil_history_entry() { printf '2\\t%s\\n' \"ls\"; }\n                    true\n                    __sigil_precmd\n                    wait\n                    "
             ),
             tmp,
             stub,
@@ -336,7 +336,7 @@ def test_bash_dedupes_same_history_entry() -> None:
         result = run_shell(
             "bash",
             textwrap.dedent(
-                "                    source shell/bash/sigil.bash\n                    __sigil_history_entry() { printf '1\\t%s\\n' \"ls\"; }\n                    true\n                    __sigil_precmd\n                    true\n                    __sigil_precmd\n                    wait\n                    "
+                "                    source src/sigil/shell/bash/sigil.bash\n                    __sigil_history_entry() { printf '1\\t%s\\n' \"ls\"; }\n                    true\n                    __sigil_precmd\n                    true\n                    __sigil_precmd\n                    wait\n                    "
             ),
             tmp,
             stub,
@@ -352,7 +352,7 @@ def test_bash_does_not_record_sigil_commands() -> None:
         result = run_shell(
             "bash",
             textwrap.dedent(
-                "                    source shell/bash/sigil.bash\n                    __sigil_history_entry() { printf '1\\t%s\\n' \"sigil bad\"; }\n                    false\n                    __sigil_precmd\n                    wait\n                    "
+                "                    source src/sigil/shell/bash/sigil.bash\n                    __sigil_history_entry() { printf '1\\t%s\\n' \"sigil bad\"; }\n                    false\n                    __sigil_precmd\n                    wait\n                    "
             ),
             tmp,
             stub,
@@ -368,7 +368,7 @@ def test_bash_does_not_capture_or_record_sigil_wrapper_commands() -> None:
         result = run_shell(
             "bash",
             textwrap.dedent(
-                "                    source shell/bash/sigil.bash\n                    export SIGIL_ENABLE_TURN_CAPTURE=1\n                    __sigil_history_entry() { printf '1\\t%s\\n' \"sigil_command hello\"; }\n                    sigil_command hello\n                    __sigil_precmd\n                    wait\n                    "
+                "                    source src/sigil/shell/bash/sigil.bash\n                    export SIGIL_ENABLE_TURN_CAPTURE=1\n                    __sigil_history_entry() { printf '1\\t%s\\n' \"sigil_command hello\"; }\n                    sigil_command hello\n                    __sigil_precmd\n                    wait\n                    "
             ),
             tmp,
             stub,
@@ -385,7 +385,7 @@ def test_bash_passes_failure_snippet_env_to_record_turn() -> None:
         result = run_shell(
             "bash",
             textwrap.dedent(
-                '                    source shell/bash/sigil.bash\n                    __sigil_history_entry() { printf \'1\\t%s\\n\' "bad command"; }\n                    export SIGIL_FAILURE_STDOUT="stdout line"\n                    export SIGIL_FAILURE_STDERR="stderr line"\n                    false\n                    __sigil_precmd\n                    wait\n                    '
+                '                    source src/sigil/shell/bash/sigil.bash\n                    __sigil_history_entry() { printf \'1\\t%s\\n\' "bad command"; }\n                    export SIGIL_FAILURE_STDOUT="stdout line"\n                    export SIGIL_FAILURE_STDERR="stderr line"\n                    false\n                    __sigil_precmd\n                    wait\n                    '
             ),
             tmp,
             stub,
@@ -403,7 +403,7 @@ def test_bash_captures_turn_output_for_record_turn() -> None:
         result = run_shell(
             "bash",
             textwrap.dedent(
-                "                    source shell/bash/sigil.bash\n                    export SIGIL_ENABLE_TURN_CAPTURE=1\n                    export SIGIL_TURN_CAPTURE_BYTES=200\n                    __sigil_history_entry() { printf '1\\t%s\\n' \"bad command\"; }\n                    __sigil_capture_start \"bad command\"\n                    printf 'stdout line\\n'\n                    printf 'stderr line\\n' >&2\n                    __sigil_capture_stop\n                    false\n                    __sigil_precmd\n                    wait\n                    "
+                "                    source src/sigil/shell/bash/sigil.bash\n                    export SIGIL_ENABLE_TURN_CAPTURE=1\n                    export SIGIL_TURN_CAPTURE_BYTES=200\n                    __sigil_history_entry() { printf '1\\t%s\\n' \"bad command\"; }\n                    __sigil_capture_start \"bad command\"\n                    printf 'stdout line\\n'\n                    printf 'stderr line\\n' >&2\n                    __sigil_capture_stop\n                    false\n                    __sigil_precmd\n                    wait\n                    "
             ),
             tmp,
             stub,
@@ -424,7 +424,7 @@ def test_zsh_wrappers_call_current_cli_contract() -> None:
         result = run_shell(
             "zsh",
             textwrap.dedent(
-                '                    source shell/zsh/sigil.zsh\n                    sigil_command hello\n                    sigil_execute_command hello\n                    sigil_question hello\n                    sigil_follow_up hello\n                    print -- "history=${history[$HISTCMD]}"\n                    '
+                '                    source src/sigil/shell/zsh/sigil.zsh\n                    sigil_command hello\n                    sigil_execute_command hello\n                    sigil_question hello\n                    sigil_follow_up hello\n                    print -- "history=${history[$HISTCMD]}"\n                    '
             ),
             tmp,
             stub,
@@ -451,7 +451,7 @@ def test_zsh_question_does_not_consume_handoff() -> None:
         result = run_shell(
             "zsh",
             textwrap.dedent(
-                '                    source shell/zsh/sigil.zsh\n                    sigil_command hello\n                    export SIGIL_STUB_HANDOFF="git diff --stat"\n                    sigil_question review\n                    print -- "history=${history[$HISTCMD]}"\n                    '
+                '                    source src/sigil/shell/zsh/sigil.zsh\n                    sigil_command hello\n                    export SIGIL_STUB_HANDOFF="git diff --stat"\n                    sigil_question review\n                    print -- "history=${history[$HISTCMD]}"\n                    '
             ),
             tmp,
             stub,
@@ -469,7 +469,7 @@ def test_zsh_act_handoff_adds_command_to_history() -> None:
         result = run_shell(
             "zsh",
             textwrap.dedent(
-                '                    source shell/zsh/sigil.zsh\n                    export SIGIL_STUB_HANDOFF="uv run pytest"\n                    sigil_command_loop repair\n                    print -- "history=${history[$HISTCMD]}"\n                    '
+                '                    source src/sigil/shell/zsh/sigil.zsh\n                    export SIGIL_STUB_HANDOFF="uv run pytest"\n                    sigil_command_loop repair\n                    print -- "history=${history[$HISTCMD]}"\n                    '
             ),
             tmp,
             stub,
@@ -487,7 +487,7 @@ def test_zsh_agent_and_goal_wrappers_call_operator_contract() -> None:
         result = run_shell(
             "zsh",
             textwrap.dedent(
-                "                    source shell/zsh/sigil.zsh\n                    sigil_agent_step hello\n                    sigil_agent_step_auto hello\n                    sigil_goal hello\n                    sigil_goal_auto hello\n                    "
+                "                    source src/sigil/shell/zsh/sigil.zsh\n                    sigil_agent_step hello\n                    sigil_agent_step_auto hello\n                    sigil_goal hello\n                    sigil_goal_auto hello\n                    "
             ),
             tmp,
             stub,
@@ -509,7 +509,7 @@ def test_zsh_wrappers_dispatch_piped_stdin_to_operator_runtime() -> None:
         result = run_shell(
             "zsh",
             textwrap.dedent(
-                "                    source shell/zsh/sigil.zsh\n                    printf 'diff\\n' | sigil_follow_up review risky changes\n                    printf 'notes\\n' | sigil_command draft executive summary\n                    printf 'cmd\\n' | sigil_execute_command run it\n                    "
+                "                    source src/sigil/shell/zsh/sigil.zsh\n                    printf 'diff\\n' | sigil_follow_up review risky changes\n                    printf 'notes\\n' | sigil_command draft executive summary\n                    printf 'cmd\\n' | sigil_execute_command run it\n                    "
             ),
             tmp,
             stub,
@@ -534,7 +534,7 @@ def test_zsh_glyph_aliases_dispatch_piped_stdin_before_globbing() -> None:
         result = run_shell(
             "zsh",
             textwrap.dedent(
-                "                    source shell/zsh/sigil.zsh\n                    eval \"printf 'diff\\\\n' | ?? review risky changes\"\n                    eval \"printf 'notes\\\\n' | , draft executive summary\"\n                    eval \"printf 'cmd\\\\n' | ,, run it\"\n                    "
+                "                    source src/sigil/shell/zsh/sigil.zsh\n                    eval \"printf 'diff\\\\n' | ?? review risky changes\"\n                    eval \"printf 'notes\\\\n' | , draft executive summary\"\n                    eval \"printf 'cmd\\\\n' | ,, run it\"\n                    "
             ),
             tmp,
             stub,
@@ -555,7 +555,7 @@ def test_zsh_does_not_record_sigil_commands() -> None:
         result = run_shell(
             "zsh",
             textwrap.dedent(
-                '                    source shell/zsh/sigil.zsh\n                    __sigil_preexec "sigil bad"\n                    false\n                    __sigil_precmd\n                    wait\n                    '
+                '                    source src/sigil/shell/zsh/sigil.zsh\n                    __sigil_preexec "sigil bad"\n                    false\n                    __sigil_precmd\n                    wait\n                    '
             ),
             tmp,
             stub,
@@ -572,7 +572,7 @@ def test_zsh_does_not_capture_or_record_sigil_wrapper_commands() -> None:
         result = run_shell(
             "zsh",
             textwrap.dedent(
-                '                    source shell/zsh/sigil.zsh\n                    export SIGIL_ENABLE_TURN_CAPTURE=1\n                    __sigil_preexec "noglob sigil_command hello"\n                    sigil_command hello\n                    __sigil_precmd\n                    wait\n                    '
+                '                    source src/sigil/shell/zsh/sigil.zsh\n                    export SIGIL_ENABLE_TURN_CAPTURE=1\n                    __sigil_preexec "noglob sigil_command hello"\n                    sigil_command hello\n                    __sigil_precmd\n                    wait\n                    '
             ),
             tmp,
             stub,
@@ -590,7 +590,7 @@ def test_zsh_records_every_non_sigil_turn_via_record_turn() -> None:
         result = run_shell(
             "zsh",
             textwrap.dedent(
-                '                    source shell/zsh/sigil.zsh\n                    __sigil_preexec "ls -la"\n                    true\n                    __sigil_precmd\n                    __sigil_preexec "bad command"\n                    false\n                    __sigil_precmd\n                    __sigil_preexec ", should not record"\n                    false\n                    __sigil_precmd\n                    wait\n                    '
+                '                    source src/sigil/shell/zsh/sigil.zsh\n                    __sigil_preexec "ls -la"\n                    true\n                    __sigil_precmd\n                    __sigil_preexec "bad command"\n                    false\n                    __sigil_precmd\n                    __sigil_preexec ", should not record"\n                    false\n                    __sigil_precmd\n                    wait\n                    '
             ),
             tmp,
             stub,
@@ -612,7 +612,7 @@ def test_zsh_captures_turn_output_for_record_turn() -> None:
         result = run_shell(
             "zsh",
             textwrap.dedent(
-                "                    source shell/zsh/sigil.zsh\n                    export SIGIL_ENABLE_TURN_CAPTURE=1\n                    export SIGIL_TURN_CAPTURE_BYTES=200\n                    __sigil_preexec \"bad command\"\n                    printf 'stdout line\\n'\n                    printf 'stderr line\\n' >&2\n                    false\n                    __sigil_precmd\n                    wait\n                    "
+                "                    source src/sigil/shell/zsh/sigil.zsh\n                    export SIGIL_ENABLE_TURN_CAPTURE=1\n                    export SIGIL_TURN_CAPTURE_BYTES=200\n                    __sigil_preexec \"bad command\"\n                    printf 'stdout line\\n'\n                    printf 'stderr line\\n' >&2\n                    false\n                    __sigil_precmd\n                    wait\n                    "
             ),
             tmp,
             stub,
@@ -633,7 +633,7 @@ def test_zsh_capture_suppresses_notify_until_helper_jobs_are_waited() -> None:
         result = run_shell_args(
             ["zsh", "-f", "-ic"],
             textwrap.dedent(
-                '                    setopt notify\n                    source shell/zsh/sigil.zsh\n                    export SIGIL_ENABLE_TURN_CAPTURE=1\n                    __sigil_capture_start "bad command"\n                    jobs > "$ZLE_LOG"\n                    print -- "during=${options[notify]}"\n                    print -- "stdout line"\n                    print -- "stderr line" >&2\n                    __sigil_capture_stop\n                    print -- "after=${options[notify]}"\n                    wait\n                    '
+                '                    setopt notify\n                    source src/sigil/shell/zsh/sigil.zsh\n                    export SIGIL_ENABLE_TURN_CAPTURE=1\n                    __sigil_capture_start "bad command"\n                    jobs > "$ZLE_LOG"\n                    print -- "during=${options[notify]}"\n                    print -- "stdout line"\n                    print -- "stderr line" >&2\n                    __sigil_capture_stop\n                    print -- "after=${options[notify]}"\n                    wait\n                    '
             ),
             tmp,
             stub,
@@ -657,7 +657,7 @@ def test_zsh_capture_preserves_user_file_descriptors() -> None:
             ["zsh", "-f", "-ic"],
             textwrap.dedent(
                 f"""\
-                source shell/zsh/sigil.zsh
+                source src/sigil/shell/zsh/sigil.zsh
                 export SIGIL_ENABLE_TURN_CAPTURE=1
                 exec 7>{shlex.quote(str(fd7_path))}
                 exec 8>{shlex.quote(str(fd8_path))}
@@ -689,7 +689,7 @@ def test_zsh_history_filter_is_additive_and_covers_glyphs() -> None:
         result = run_shell_args(
             ["zsh", "-f", "-ic"],
             textwrap.dedent(
-                '                    function zshaddhistory() { print -- "user:$1" >> "$ZLE_LOG"; return 0; }\n                    source shell/zsh/sigil.zsh\n                    print -- "hooks=$zshaddhistory_functions"\n                    zshaddhistory "echo hello"\n                    __sigil_zshaddhistory ", hello"; print -- "comma=$?"\n                    __sigil_zshaddhistory "? hello"; print -- "question=$?"\n                    __sigil_zshaddhistory "\\? hello"; print -- "escaped_question=$?"\n                    __sigil_zshaddhistory "@ hello"; print -- "at=$?"\n                    __sigil_zshaddhistory "echo hello"; print -- "echo=$?"\n                    '
+                '                    function zshaddhistory() { print -- "user:$1" >> "$ZLE_LOG"; return 0; }\n                    source src/sigil/shell/zsh/sigil.zsh\n                    print -- "hooks=$zshaddhistory_functions"\n                    zshaddhistory "echo hello"\n                    __sigil_zshaddhistory ", hello"; print -- "comma=$?"\n                    __sigil_zshaddhistory "? hello"; print -- "question=$?"\n                    __sigil_zshaddhistory "\\? hello"; print -- "escaped_question=$?"\n                    __sigil_zshaddhistory "@ hello"; print -- "at=$?"\n                    __sigil_zshaddhistory "echo hello"; print -- "echo=$?"\n                    '
             ),
             tmp,
             stub,
@@ -715,7 +715,7 @@ def test_zsh_capture_helper_status_is_observable() -> None:
             ["zsh", "-f", "-ic"],
             textwrap.dedent(
                 f"""\
-                source shell/zsh/sigil.zsh
+                source src/sigil/shell/zsh/sigil.zsh
                 print -- 1 > {shlex.quote(str(done_path))}
                 __sigil_capture_done_success {shlex.quote(str(done_path))}
                 print -- "failed=$?"

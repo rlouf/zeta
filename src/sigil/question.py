@@ -25,7 +25,7 @@ QUESTION_SYSTEM_PROMPT = (
     "answer with the best available uncertainty and say what single follow-up "
     "would help. If a 'Recent shell activity' block appears in the user "
     "message, it already shows the last few commands. For older sessions or "
-    "full provenance, the read tool can access ~/.sigil/events.jsonl. If a "
+    "audit history, the read tool can access ~/.sigil/events.jsonl. If a "
     "shell command would help, answer with the command text instead of calling "
     "a tool for it."
 )
@@ -136,11 +136,8 @@ def ask(
     prompt = question if append_transcript else prepend_recent_turns(question)
     security = create_trust_metadata(
         glyph=glyph,
-        integrity="web" if use_web else "local_model",
-        capability="read",
-        taint=["web"] if use_web else ["model"],
-        provisional=True,
-        fresh_human=True,
+        mode="read-only",
+        labels=["network"] if use_web else [],
     )
     question_event = append_event(
         {
@@ -198,12 +195,10 @@ def ask(
         **os.environ,
         "SIGIL_CAPTURE_ANSWER": "1",
         "SIGIL_CAPTURE_TRACE": "1",
-        "SIGIL_SECURITY_GLYPH": str(security["glyph"]),
-        "SIGIL_SECURITY_INTEGRITY": str(security["integrity"]),
-        "SIGIL_SECURITY_CAPABILITY": str(security["capability"]),
-        "SIGIL_SECURITY_TAINT": ",".join(security["taint"]),
-        "SIGIL_SECURITY_PROVISIONAL": "1" if security["provisional"] else "0",
-        "SIGIL_SECURITY_INPUTS": question_event["id"] or ",".join(security["inputs"]),
+        "SIGIL_TRUST_GLYPH": str(security["glyph"]),
+        "SIGIL_TRUST_MODE": str(security["mode"]),
+        "SIGIL_TRUST_LABELS": ",".join(security["labels"]),
+        "SIGIL_TRUST_INPUTS": question_event["id"] or ",".join(security["inputs"]),
         "SIGIL_QUESTION": question,
         "SIGIL_PROMPT": prompt,
         "SIGIL_FOLLOW_UP": "1" if append_transcript else "0",

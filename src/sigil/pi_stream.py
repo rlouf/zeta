@@ -13,10 +13,11 @@ import os
 import sys
 import threading
 import time
+from dataclasses import dataclass
 from typing import TextIO, cast
 
 from .ansi import MUTED, RESET
-from .security import normalize_capability, normalize_integrity
+from .security import normalize_labels, normalize_mode
 from .state import append_event, append_jsonl
 
 TOOL_START_EVENT_TYPES = {
@@ -220,21 +221,257 @@ def compact_answer_summary(answer: str, *, limit: int = 180) -> str:
 
 
 def env_security() -> dict[str, object]:
-    """Recover trust metadata passed from the parent operator or ask process."""
-    taint = [
-        item for item in os.environ.get("SIGIL_SECURITY_TAINT", "").split(",") if item
+    """Recover alpha trust fields passed from the parent operator or ask process."""
+    labels = [
+        item for item in os.environ.get("SIGIL_TRUST_LABELS", "").split(",") if item
     ]
     inputs = [
-        item for item in os.environ.get("SIGIL_SECURITY_INPUTS", "").split(",") if item
+        item for item in os.environ.get("SIGIL_TRUST_INPUTS", "").split(",") if item
     ]
     return {
-        "glyph": os.environ.get("SIGIL_SECURITY_GLYPH", "?"),
+        "glyph": os.environ.get("SIGIL_TRUST_GLYPH", "?"),
         "inputs": inputs,
-        "integrity": normalize_integrity(os.environ.get("SIGIL_SECURITY_INTEGRITY")),
-        "capability": normalize_capability(os.environ.get("SIGIL_SECURITY_CAPABILITY")),
-        "taint": taint or ["web"],
-        "provisional": os.environ.get("SIGIL_SECURITY_PROVISIONAL") == "1",
+        "mode": normalize_mode(os.environ.get("SIGIL_TRUST_MODE")),
+        "labels": normalize_labels(labels),
     }
+
+
+class Spinner:
+    """Transient `thinking` status line driven by a background thread."""
+
+    def __init__(self, stderr: TextIO, *, enabled: bool, color: bool) -> None:
+        self._stderr = stderr
+        self._color = color
+        self._running = enabled
+        self._paused = False
+        self._lock = threading.Lock()
+        self._thread: threading.Thread | None = None
+
+    @property
+    def running(self) -> bool:
+        """Return whether the spinner is still active."""
+        return self._running
+
+    def start(self) -> None:
+        """Start the background thread when the spinner is enabled."""
+        if not self._running:
+            return
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+
+    def pause(self) -> None:
+        """Pause animation and clear the current status line."""
+        with self._lock:
+            self._paused = True
+        clear_status(self._stderr)
+
+    def resume(self) -> None:
+        """Resume animation if the spinner is still running."""
+        with self._lock:
+            if self._running:
+                self._paused = False
+
+    def stop(self) -> None:
+        """Stop the background thread and clear the status line."""
+        if self._thread is None:
+            return
+        with self._lock:
+            self._running = False
+            self._paused = False
+        self._thread.join()
+
+    def _run(self) -> None:
+        frames = ["thinking", "thinking.", "thinking..", "thinking..."]
+        i = 0
+        while True:
+            with self._lock:
+                if not self._running:
+                    clear_status(self._stderr)
+                    return
+                paused = self._paused
+            if not paused:
+                self._stderr.write(
+                    f"\r\033[K{muted(f'❯ {frames[i % len(frames)]}', enabled=self._color)}"
+                )
+                self._stderr.flush()
+                i += 1
+            time.sleep(0.35)
+
+
+@dataclass
+class _StreamContext:
+    """Output destinations and rendering flags for one Pi stream."""
+
+    stdout: TextIO
+    stderr: TextIO
+    security: dict[str, object]
+    compact: bool
+    json_output: bool
+    color_enabled: bool
+
+
+def _record_tool_trace(trace_event: dict[str, object]) -> None:
+    """Persist a tool trace event to the trace log and global event log."""
+    if os.environ.get("SIGIL_CAPTURE_TRACE") == "1":
+        append_jsonl("last-tools.jsonl", trace_event)
+    append_event(trace_event)
+
+
+def _render_tool_start(ctx: _StreamContext, tool: str, detail: str) -> None:
+    """Print a tool-start status line to stderr."""
+    if ctx.compact:
+        label = compact_tool_label(tool)
+        short_detail = compact_detail(detail)
+        status = f"  {label:<6} {short_detail}" if short_detail else f"  {label}"
+        print(status, file=ctx.stderr, flush=True)
+        return
+    status = f"❯ {tool}  {detail}" if detail else f"❯ {tool}"
+    print(muted(status, enabled=ctx.color_enabled), file=ctx.stderr, flush=True)
+
+
+def _handle_tool_start(
+    event: dict[str, object],
+    ctx: _StreamContext,
+    spinner: Spinner,
+    tool_events: list[dict[str, object]],
+) -> bool:
+    """Handle a tool-start event; return True when the event was consumed."""
+    tool_start = tool_start_event(event)
+    if tool_start is None:
+        return False
+    if spinner.running:
+        spinner.pause()
+    tool, args = tool_start
+    detail = summarize(tool, args)
+    trace_event = {
+        "type": "tool_start",
+        "tool": tool,
+        "detail": detail,
+        "args": args,
+        **ctx.security,
+    }
+    tool_events.append(trace_event)
+    _record_tool_trace(trace_event)
+    if not ctx.json_output:
+        _render_tool_start(ctx, tool, detail)
+    return True
+
+
+def _handle_tool_end(
+    event: dict[str, object],
+    ctx: _StreamContext,
+    spinner: Spinner,
+    tool_events: list[dict[str, object]],
+) -> bool:
+    """Handle a tool-end event; return True when the event was consumed."""
+    tool_end = tool_end_event(event)
+    if tool_end is None:
+        return False
+    trace_event = {"type": "tool_end", "tool": tool_end, **ctx.security}
+    tool_events.append(trace_event)
+    _record_tool_trace(trace_event)
+    if spinner.running:
+        spinner.resume()
+    return True
+
+
+def _handle_text_delta(
+    event: dict[str, object],
+    ctx: _StreamContext,
+    spinner: Spinner,
+    answer_chunks: list[str],
+    started_text: bool,
+) -> bool:
+    """Stream an assistant text delta; return the updated started_text flag."""
+    if event.get("type") != "message_update":
+        return started_text
+    raw_update = event.get("assistantMessageEvent")
+    if not isinstance(raw_update, dict):
+        return started_text
+    update = cast(dict[str, object], raw_update)
+    if update.get("type") != "text_delta":
+        return started_text
+    delta = str(update.get("delta", ""))
+    if ctx.compact:
+        answer_chunks.append(delta)
+        return started_text
+    if not ctx.json_output and not started_text:
+        spinner.stop()
+        ctx.stdout.write("\n")
+        started_text = True
+    answer_chunks.append(delta)
+    if not ctx.json_output:
+        ctx.stdout.write(delta)
+        ctx.stdout.flush()
+    return started_text
+
+
+def _record_answer(ctx: _StreamContext, answer: str) -> str | None:
+    """Record the finished answer to the event log and transcript."""
+    if not answer:
+        return None
+    answer_event = append_event(
+        {"type": "answer_done", "bytes": len(answer.encode("utf-8")), **ctx.security}
+    )
+    if os.environ.get("SIGIL_CAPTURE_ANSWER") == "1":
+        append_jsonl(
+            "last-question.jsonl",
+            {
+                "role": "assistant",
+                "content": answer,
+                "event_id": answer_event["id"],
+                **ctx.security,
+            },
+        )
+    return answer_event["id"]
+
+
+def _write_json_result(
+    ctx: _StreamContext,
+    answer: str,
+    answer_event_id: str | None,
+    tool_events: list[dict[str, object]],
+    malformed_events: int,
+) -> None:
+    """Write the machine-readable answer envelope to stdout."""
+    ctx.stdout.write(
+        json.dumps(
+            {
+                "ok": True,
+                "type": "answer",
+                "question": os.environ.get("SIGIL_QUESTION", ""),
+                "prompt": os.environ.get("SIGIL_PROMPT", ""),
+                "follow_up": os.environ.get("SIGIL_FOLLOW_UP") == "1",
+                "answer": answer,
+                "answer_event_id": answer_event_id,
+                "tools": tool_events,
+                "malformed_events": malformed_events,
+                "security": ctx.security,
+            },
+            ensure_ascii=False,
+        )
+        + "\n"
+    )
+    ctx.stdout.flush()
+
+
+def _finalize(
+    ctx: _StreamContext,
+    answer_chunks: list[str],
+    tool_events: list[dict[str, object]],
+    malformed_events: int,
+) -> None:
+    """Emit the final answer output once the stream is drained."""
+    answer = "".join(answer_chunks)
+    answer_event_id = _record_answer(ctx, answer)
+    if ctx.json_output:
+        _write_json_result(ctx, answer, answer_event_id, tool_events, malformed_events)
+    elif ctx.compact:
+        ctx.stdout.write(f"done: {compact_answer_summary(answer)}\n")
+        ctx.stdout.flush()
+    elif malformed_events:
+        noun = "event" if malformed_events == 1 else "events"
+        print(f"sigil: ignored {malformed_events} malformed Pi {noun}", file=ctx.stderr)
 
 
 def stream_events(
@@ -250,55 +487,17 @@ def stream_events(
     answer_chunks: list[str] = []
     tool_events: list[dict[str, object]] = []
     malformed_events = 0
-    security = env_security()
-    interactive_stderr = is_interactive(stderr)
-    color_enabled = should_color(stderr)
-    spinner_running = not json_output and not compact and interactive_stderr
-    spinner_paused = False
-    spinner_lock = threading.Lock()
-    spinner_thread: threading.Thread | None = None
-
-    def spinner() -> None:
-        frames = ["thinking", "thinking.", "thinking..", "thinking..."]
-        i = 0
-        while True:
-            with spinner_lock:
-                if not spinner_running:
-                    clear_status(stderr)
-                    return
-                paused = spinner_paused
-            if not paused:
-                stderr.write(
-                    f"\r\033[K{muted(f'❯ {frames[i % len(frames)]}', enabled=color_enabled)}"
-                )
-                stderr.flush()
-                i += 1
-            time.sleep(0.35)
-
-    def pause_spinner() -> None:
-        nonlocal spinner_paused
-        with spinner_lock:
-            spinner_paused = True
-        clear_status(stderr)
-
-    def resume_spinner() -> None:
-        nonlocal spinner_paused
-        with spinner_lock:
-            if spinner_running:
-                spinner_paused = False
-
-    def stop_spinner() -> None:
-        nonlocal spinner_running, spinner_paused
-        if spinner_thread is None:
-            return
-        with spinner_lock:
-            spinner_running = False
-            spinner_paused = False
-        spinner_thread.join()
-
-    if spinner_running:
-        spinner_thread = threading.Thread(target=spinner, daemon=True)
-        spinner_thread.start()
+    ctx = _StreamContext(
+        stdout=stdout,
+        stderr=stderr,
+        security=env_security(),
+        compact=compact,
+        json_output=json_output,
+        color_enabled=should_color(stderr),
+    )
+    spinner_active = not json_output and not compact and is_interactive(stderr)
+    spinner = Spinner(stderr, enabled=spinner_active, color=ctx.color_enabled)
+    spinner.start()
 
     try:
         for raw_line in stdin:
@@ -307,124 +506,14 @@ def stream_events(
             except Exception:
                 malformed_events += 1
                 continue
-
-            tool_start = tool_start_event(event)
-            if tool_start is not None:
-                if spinner_running:
-                    pause_spinner()
-                tool, args = tool_start
-                detail = summarize(tool, args)
-                trace_event = {
-                    "type": "tool_start",
-                    "tool": tool,
-                    "detail": detail,
-                    "args": args,
-                    **security,
-                }
-                tool_events.append(trace_event)
-                if os.environ.get("SIGIL_CAPTURE_TRACE") == "1":
-                    append_jsonl("last-tools.jsonl", trace_event)
-                append_event(trace_event)
-                if compact and not json_output:
-                    label = compact_tool_label(tool)
-                    short_detail = compact_detail(detail)
-                    status = (
-                        f"  {label:<6} {short_detail}" if short_detail else f"  {label}"
-                    )
-                    print(status, file=stderr, flush=True)
-                elif not json_output:
-                    status = f"❯ {tool}  {detail}" if detail else f"❯ {tool}"
-                    print(
-                        muted(status, enabled=color_enabled),
-                        file=stderr,
-                        flush=True,
-                    )
+            if _handle_tool_start(event, ctx, spinner, tool_events):
                 continue
-
-            tool_end = tool_end_event(event)
-            if tool_end is not None:
-                trace_event = {
-                    "type": "tool_end",
-                    "tool": tool_end,
-                    **security,
-                }
-                tool_events.append(trace_event)
-                if os.environ.get("SIGIL_CAPTURE_TRACE") == "1":
-                    append_jsonl("last-tools.jsonl", trace_event)
-                append_event(trace_event)
-                if spinner_running:
-                    resume_spinner()
+            if _handle_tool_end(event, ctx, spinner, tool_events):
                 continue
-
-            if event.get("type") != "message_update":
-                continue
-
-            update = event.get("assistantMessageEvent") or {}
-            if update.get("type") == "text_delta":
-                if compact:
-                    delta = update.get("delta", "")
-                    answer_chunks.append(delta)
-                    continue
-                if not json_output and not started_text:
-                    stop_spinner()
-                    stdout.write("\n")
-                    started_text = True
-                delta = update.get("delta", "")
-                answer_chunks.append(delta)
-                if not json_output:
-                    stdout.write(delta)
-                    stdout.flush()
+            started_text = _handle_text_delta(
+                event, ctx, spinner, answer_chunks, started_text
+            )
     finally:
-        if spinner_running:
-            stop_spinner()
-        answer = "".join(answer_chunks)
-        answer_event_id = None
-        if answer:
-            answer_event = append_event(
-                {
-                    "type": "answer_done",
-                    "bytes": len(answer.encode("utf-8")),
-                    **security,
-                }
-            )
-            answer_event_id = answer_event["id"]
-            if os.environ.get("SIGIL_CAPTURE_ANSWER") == "1":
-                append_jsonl(
-                    "last-question.jsonl",
-                    {
-                        "role": "assistant",
-                        "content": answer,
-                        "event_id": answer_event["id"],
-                        **security,
-                    },
-                )
-        if json_output:
-            stdout.write(
-                json.dumps(
-                    {
-                        "ok": True,
-                        "type": "answer",
-                        "question": os.environ.get("SIGIL_QUESTION", ""),
-                        "prompt": os.environ.get("SIGIL_PROMPT", ""),
-                        "follow_up": os.environ.get("SIGIL_FOLLOW_UP") == "1",
-                        "answer": answer,
-                        "answer_event_id": answer_event_id,
-                        "tools": tool_events,
-                        "malformed_events": malformed_events,
-                        "security": security,
-                    },
-                    ensure_ascii=False,
-                )
-                + "\n"
-            )
-            stdout.flush()
-        elif compact:
-            stdout.write(f"done: {compact_answer_summary(answer)}\n")
-            stdout.flush()
-        elif malformed_events:
-            noun = "event" if malformed_events == 1 else "events"
-            print(
-                f"sigil: ignored {malformed_events} malformed Pi {noun}",
-                file=stderr,
-            )
+        spinner.stop()
+        _finalize(ctx, answer_chunks, tool_events, malformed_events)
     return 0

@@ -24,7 +24,7 @@ exec uv run sigil "\$@"
 EOF
 chmod 755 "$SIGIL_BIN"
 
-source "$_sigil_demo_root/shell/zsh/sigil.zsh"
+source "$_sigil_demo_root/src/sigil/shell/zsh/sigil.zsh"
 
 unset _sigil_demo_file
 unset _sigil_demo_root

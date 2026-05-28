@@ -2,7 +2,7 @@
 
 Sigil should not become an agent dashboard. The goal is to make the shell feel
 like it has the missing agent verbs: propose, execute one bounded action, ask,
-recover, inspect state, and audit provenance.
+recover, inspect state, and audit history.
 
 The product constraint is strict:
 
@@ -11,7 +11,7 @@ The product constraint is strict:
 - No dashboard.
 - No hidden agent place.
 - State appears only through the shell buffer, command output, `sigil status`,
-  `sigil events`, and future provenance commands.
+  `sigil events`, and future audit commands.
 
 ## Target Experience
 
@@ -91,12 +91,12 @@ Examples:
 
 ```text
 uv run pytest tests/test_status.py
-local · read-only · focused
+no risk labels
 ```
 
 ```text
 git push origin main
-network · publish · high-risk
+network · publish
 ```
 
 Implementation direction:
@@ -110,7 +110,7 @@ Definition of done: users can judge a proposed command in one glance.
 
 ## Ladder 4: `sigil why`
 
-Goal: inline provenance for the last meaningful Sigil output.
+Goal: inline audit context for the last meaningful Sigil output.
 
 ```sh
 sigil why
@@ -121,7 +121,7 @@ It should explain:
 - what command, answer, or action it refers to
 - what context was used
 - model route used
-- trust and capability label
+- trust mode and risk labels
 - inherited inputs
 - why this action was selected
 - exact lineage command for deeper audit
@@ -185,12 +185,13 @@ reading docs first.
 
 ### Command Trust Labels
 
-- [x] Define a small label vocabulary: local, read-only, write, network,
-      publish, delete, privileged, focused, high-risk.
+- [x] Define a small risk label vocabulary: network, publish, delete,
+      privileged.
 - [x] Map existing policy classifications to labels.
 - [x] Print labels under `,` proposals.
 - [x] Record labels in operator events.
-- [x] Make `,,` require explicit confirmation for high-risk labels.
+- [x] Make `,,` require explicit confirmation before generated commands become
+      actions.
 - [x] Add tests for read-only, write, network, delete, and privileged commands.
 
 ### `sigil why`
@@ -201,7 +202,7 @@ reading docs first.
       source.
 - [ ] Include the exact `sigil events lineage ...` command for deeper audit.
 - [ ] Keep human output short and non-trace-like.
-- [ ] Add tests for `,`, `,,`, `?`, and `,,,` provenance.
+- [ ] Add tests for `,`, `,,`, `?`, and `,,,` audit context.
 
 ### First-Run Clarity
 

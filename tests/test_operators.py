@@ -270,9 +270,7 @@ def test_op_cli_runs_piped_recommend_operator() -> None:
         )
     assert result.exit_code == 0, result.output
     assert result.output == (
-        "uv run pytest\n"
-        "local · read-only\n"
-        "Tests validate the current code path before cleanup.\n"
+        "uv run pytest\nTests validate the current code path before cleanup.\n"
     )
     assert "Produce one typed proposal" in str(calls["system"])
     assert "Prompt: draft an executive summary" in str(calls["user"])
@@ -329,25 +327,18 @@ def test_policy_classifies_destructive_shell_output() -> None:
     assert "delete" in classification.classes
     assert "network" in classification.classes
     assert "privileged" in classification.classes
-    assert classification.labels == (
-        "local",
-        "network",
-        "read-only",
-        "delete",
-        "privileged",
-        "high-risk",
-    )
+    assert classification.labels == ("network", "delete", "privileged")
 
 
 @pytest.mark.parametrize(
     ("command", "labels"),
     [
-        ("uv run pytest tests/test_status.py", ("local", "read-only", "focused")),
-        ("touch fixed.txt", ("local", "write")),
-        ("curl https://example.com", ("network", "read-only")),
-        ("git push origin main", ("network", "publish", "high-risk")),
-        ("rm -rf build", ("local", "delete", "high-risk")),
-        ("sudo chmod 600 secret.txt", ("local", "privileged", "high-risk")),
+        ("uv run pytest tests/test_status.py", ()),
+        ("touch fixed.txt", ()),
+        ("curl https://example.com", ("network",)),
+        ("git push origin main", ("network", "publish")),
+        ("rm -rf build", ("delete",)),
+        ("sudo chmod 600 secret.txt", ("privileged",)),
     ],
 )
 def test_policy_maps_commands_to_trust_labels(
@@ -663,9 +654,7 @@ def test_act_pi_step_uses_bash_handoff_extension() -> None:
                     {"id": "1"},
                     {
                         "id": "decision",
-                        "integrity": "human",
-                        "capability": "none",
-                        "taint": [],
+                        "mode": "propose",
                     },
                 )
 
@@ -713,9 +702,7 @@ def test_act_pi_step_verbose_keeps_raw_stream_renderer() -> None:
                     {"id": "1"},
                     {
                         "id": "decision",
-                        "integrity": "human",
-                        "capability": "none",
-                        "taint": [],
+                        "mode": "propose",
                     },
                     verbose=True,
                 )
@@ -943,7 +930,7 @@ def test_op_cli_confirms_piped_comma_before_model_call() -> None:
         result = CliRunner().invoke(cli, ["op", ",", "summarize"], input="notes\n")
 
     assert result.exit_code == 0
-    assert result.stdout == "cat notes\nlocal · read-only\nuses stdin\n"
+    assert result.stdout == "cat notes\nuses stdin\n"
 
 
 def test_op_cli_confirms_piped_double_comma_before_agent_step() -> None:
@@ -1027,7 +1014,7 @@ def test_verb_commands_run_piped_stream_operators() -> None:
     assert ask_result.exit_code == 0, ask_result.output
     assert command_result.exit_code == 0, command_result.output
     assert ask_result.output == ""
-    assert command_result.output == "stream result\nlocal · read-only\nbecause stdin\n"
+    assert command_result.output == "stream result\nbecause stdin\n"
     assert ask_calls == [
         (
             ("review\n\nPiped input:\ndiff\n",),

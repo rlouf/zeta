@@ -151,9 +151,8 @@ sigil events
 sigil events lineage
 ```
 
-Sigil stores command suggestions, question answers, and act steps with trust
-metadata so you can inspect where a recommendation came from and what it was
-allowed to do.
+Sigil stores command suggestions, question answers, and act steps with alpha
+trust fields so you can inspect the route, mode, risk labels, and event inputs.
 
 ## Glyph Reference
 
@@ -183,8 +182,7 @@ Examples:
 
 `,` prints a command proposal. The zsh binding puts it in the editable prompt
 buffer with `print -z` and records it in shell history. Bash records it in
-history. Proposals include terse labels such as `local · read-only · focused`
-or `network · publish · high-risk`.
+history. Proposals include terse risk labels such as `network · publish`.
 
 `,,` asks before handing the objective to Pi, gives Pi read/search/edit/write
 tools, and returns control to the shell after one bounded Pi invocation. That
@@ -208,25 +206,25 @@ sigil install zsh --no-glyphs
 
 Sigil's important user rules are:
 
-| Route | Capability | Rule |
+| Route | Mode | Rule |
 | --- | --- | --- |
 | `,` | propose | Model-authored proposal only. |
-| `,,` | exec/write boxed | One confirmed Pi agent step. |
-| `,,,` | exec/write boxed | One auto-approved Pi agent step within policy. |
-| `@` | exec/write boxed | Bounded goal loop with checkpoints. |
-| `@@` | exec/write boxed | Bounded goal loop with routine auto-approval. |
-| `?` | read | Local read-only answer route with no Bash tool. |
-| `??` | read | Read plus web answer route with no Bash tool. |
+| `,,` | execute-write | One confirmed Pi agent step. |
+| `,,,` | execute-write | One auto-approved Pi agent step within policy. |
+| `@` | execute-write | Bounded goal loop with checkpoints. |
+| `@@` | execute-write | Bounded goal loop with routine auto-approval. |
+| `?` | read-only | Local answer route with no Bash tool. |
+| `??` | read-only | Read plus web answer route with no Bash tool. |
 
-Trust records include route, integrity, capability, taint, provisional
-status, and input event ids. Inspect them with:
+Trust records include route, mode, risk labels, and simple input event ids.
+Inspect them with:
 
 ```sh
 sigil events
 sigil events lineage
 ```
 
-For details, see [docs/security-lattice.md](docs/security-lattice.md).
+For details, see [docs/trust-model.md](docs/trust-model.md).
 
 ## CLI
 
@@ -281,7 +279,7 @@ Sigil is:
 - A command-line tool and optional shell binding.
 - A local-model command proposal route.
 - A Pi-backed question and one-step edit route.
-- An evented state layer for shell continuity and provenance.
+- An evented state layer for shell continuity and audit history.
 
 Sigil is not:
 

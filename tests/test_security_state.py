@@ -28,11 +28,9 @@ from sigil.question import (
     renderer_command,
 )
 from sigil.security import (
-    SecurityViolation,
     inherit_security,
     create_trust_metadata,
     normalize_trust_record,
-    reject_promotion,
 )
 from sigil.session import recent_turns, recent_turns_context, record_turn
 from sigil.state import append_event, append_jsonl, read_jsonl, write_jsonl
@@ -44,11 +42,13 @@ class TtyStringIO(StringIO):
         return True
 
 
-def test_legacy_record_is_low_trust() -> None:
+def test_legacy_record_is_alpha_propose_mode() -> None:
     record = normalize_trust_record({"type": "old"})
-    assert record["integrity"] == "unknown"
-    assert record["taint"] == ["legacy"]
-    assert record["capability"] == "none"
+    assert record["mode"] == "propose"
+    assert record["labels"] == []
+    assert "integrity" not in record
+    assert "capability" not in record
+    assert "taint" not in record
 
 
 def test_question_system_prompt_points_pi_at_events_log_for_older_history() -> None:
@@ -56,47 +56,36 @@ def test_question_system_prompt_points_pi_at_events_log_for_older_history() -> N
     assert "at most one tool call" in QUESTION_SYSTEM_PROMPT
 
 
-def test_continuation_descends_to_lowest_integrity_and_keeps_inputs() -> None:
+def test_continuation_keeps_inputs_and_alpha_labels() -> None:
     inherited = inherit_security(
         glyph="??",
         input_records=[
             {
                 "event_id": "question-1",
-                "integrity": "web",
-                "capability": "read",
-                "taint": ["web"],
+                "mode": "read-only",
+                "labels": ["network"],
             },
             {"event_id": "legacy-1"},
         ],
-        capability="read",
+        mode="read-only",
     )
-    assert inherited["integrity"] == "unknown"
+    assert inherited["mode"] == "read-only"
     assert inherited["inputs"] == ["question-1", "legacy-1"]
-    assert inherited["taint"] == ["legacy", "web"]
+    assert inherited["labels"] == ["network"]
 
 
-def test_integrity_promotion_requires_fresh_human_input() -> None:
-    with pytest.raises(SecurityViolation):
-        create_trust_metadata(
-            glyph="??",
-            integrity="local_model",
-            capability="propose",
-            taint=["model"],
-            input_records=[{"integrity": "web", "taint": ["web"]}],
-        )
+def test_create_trust_metadata_keeps_alpha_fields_only() -> None:
     security = create_trust_metadata(
         glyph=",",
-        integrity="local_model",
-        capability="propose",
-        taint=["model"],
-        fresh_human=True,
+        mode="propose",
+        labels=["network", "local", "publish"],
     )
-    assert security["integrity"] == "local_model"
-
-
-def test_reject_promotion_mutation_without_fresh_human() -> None:
-    with pytest.raises(SecurityViolation):
-        reject_promotion({"integrity": "web"}, {"integrity": "local_model"})
+    assert security == {
+        "glyph": ",",
+        "mode": "propose",
+        "labels": ["network", "publish"],
+        "inputs": [],
+    }
 
 
 def test_top_level_help_lists_commands() -> None:
@@ -149,9 +138,7 @@ def test_events_default_lists_recent_events() -> None:
                     "glyph": ",,",
                     "command": "git status --short",
                     "status": 0,
-                    "integrity": "local_model",
-                    "capability": "exec_boxed",
-                    "taint": ["model"],
+                    "mode": "execute-write",
                 }
             )
             text = CliRunner().invoke(cli, ["events", "--limit", "1"])
@@ -178,7 +165,7 @@ def test_events_default_lists_recent_events() -> None:
     ]
     assert str(second["id"])[:8] in text.output
     assert ",, executed" in text.output
-    assert "local_model/exec_boxed" in text.output
+    assert "execute-write" in text.output
     assert "git status --short -> 0" in text.output
     assert first["id"] not in text.output
     assert listed.exit_code == 0, listed.output
@@ -206,9 +193,7 @@ def test_events_lineage_json_follows_transitive_inputs() -> None:
                 {
                     "type": "command_generated",
                     "glyph": ",",
-                    "integrity": "local_model",
-                    "capability": "propose",
-                    "taint": ["model"],
+                    "mode": "propose",
                 }
             )
             child = append_event(
@@ -216,9 +201,7 @@ def test_events_lineage_json_follows_transitive_inputs() -> None:
                     "type": "command_continued",
                     "glyph": ",,",
                     "inputs": [root["id"]],
-                    "integrity": "local_model",
-                    "capability": "propose",
-                    "taint": ["model"],
+                    "mode": "propose",
                 }
             )
             selected = append_event(
@@ -226,9 +209,7 @@ def test_events_lineage_json_follows_transitive_inputs() -> None:
                     "type": "command_selected",
                     "glyph": ",,",
                     "inputs": [child["id"]],
-                    "integrity": "local_model",
-                    "capability": "propose",
-                    "taint": ["model"],
+                    "mode": "propose",
                 }
             )
             result = CliRunner().invoke(
@@ -417,29 +398,28 @@ def test_writers_normalize_metadata() -> None:
         os.environ["SIGIL_SESSION_ID"] = "test"
         try:
             event = append_event({"type": "legacy_shape"})
-            assert event["integrity"] == "unknown"
-            assert event["taint"] == ["legacy"]
+            assert event["mode"] == "propose"
+            assert event["labels"] == []
             turn = append_jsonl(
                 "last-question.jsonl",
                 {
                     "role": "assistant",
                     "content": "answer",
                     "glyph": "?",
-                    "integrity": "web",
-                    "capability": "read",
-                    "taint": ["web"],
+                    "mode": "read-only",
+                    "labels": ["network", "local"],
                     "inputs": [event["id"]],
-                    "provisional": True,
                 },
             )
             assert turn["inputs"] == [event["id"]]
-            assert turn["provisional"]
+            assert turn["mode"] == "read-only"
+            assert turn["labels"] == ["network"]
             written = write_jsonl("last-tools.jsonl", [{"type": "tool_start"}])
-            assert written[0]["taint"] == ["legacy"]
-            assert read_jsonl("last-tools.jsonl")[0]["integrity"] == "unknown"
+            assert written[0]["mode"] == "propose"
+            assert read_jsonl("last-tools.jsonl")[0]["labels"] == []
             events_path = Path(tmp) / "events.jsonl"
             stored = json.loads(events_path.read_text(encoding="utf-8").splitlines()[0])
-            assert stored["taint"] == ["legacy"]
+            assert stored["mode"] == "propose"
         finally:
             if old_state_dir is None:
                 os.environ.pop("SIGIL_STATE_DIR", None)
@@ -451,7 +431,7 @@ def test_writers_normalize_metadata() -> None:
                 os.environ["SIGIL_SESSION_ID"] = old_session_id
 
 
-def test_question_routes_record_source_specific_taint() -> None:
+def test_question_routes_record_alpha_trust_labels() -> None:
 
     class FakeProc:
         def __init__(self, stdout: StringIO | None = None) -> None:
@@ -479,10 +459,8 @@ def test_question_routes_record_source_specific_taint() -> None:
                     assert ask("what is sigil?", json_output=True) == 0
             fresh_turn = read_jsonl("last-question.jsonl")[0]
             assert fresh_turn["glyph"] == "?"
-            assert fresh_turn["integrity"] == "local_model"
-            assert fresh_turn["capability"] == "read"
-            assert fresh_turn["taint"] == ["model"]
-            assert fresh_turn["provisional"]
+            assert fresh_turn["mode"] == "read-only"
+            assert fresh_turn["labels"] == []
             with patch("sigil.question.ensure_model_for_pi", return_value=True):
                 with patch("sigil.question.subprocess.Popen", side_effect=fake_popen):
                     assert (
@@ -497,10 +475,8 @@ def test_question_routes_record_source_specific_taint() -> None:
                     )
             web_turn = read_jsonl("last-question.jsonl")[-1]
             assert web_turn["glyph"] == "??"
-            assert web_turn["integrity"] == "web"
-            assert web_turn["capability"] == "read"
-            assert web_turn["taint"] == ["web"]
-            assert web_turn["provisional"]
+            assert web_turn["mode"] == "read-only"
+            assert web_turn["labels"] == ["network"]
             pi_calls = [cmd for cmd in popen_calls if cmd[0] == "pi"]
             assert len(pi_calls) == 2
             assert pi_calls[0][pi_calls[0].index("--tools") + 1] == "read"
@@ -542,20 +518,19 @@ def test_bash_handoff_records_and_consumes_blocked_command() -> None:
             records = record_bash_handoffs(
                 source_event={
                     "id": "question-event",
-                    "integrity": "web",
-                    "capability": "read",
-                    "taint": ["web"],
+                    "mode": "read-only",
+                    "labels": ["network"],
                 },
                 source_security={
                     "glyph": "?",
-                    "integrity": "web",
-                    "taint": ["web"],
+                    "mode": "read-only",
+                    "labels": ["network"],
                 },
             )
 
             assert records[0]["command"] == "git diff --stat"
-            assert records[0]["capability"] == "propose"
-            assert records[0]["taint"] == ["model", "web"]
+            assert records[0]["mode"] == "propose"
+            assert records[0]["labels"] == ["network"]
             assert records[0]["inputs"] == ["question-event"]
             assert not (
                 Path(tmp) / "sessions/test" / PENDING_BASH_HANDOFF_FILE
@@ -584,8 +559,7 @@ def test_failure_context_prompt_uses_recorded_failure_without_inventing_output()
             )
             prompt = failure_context_prompt(failure)
             assert failure["glyph"] == "failure"
-            assert failure["integrity"] == "human"
-            assert failure["capability"] == "propose"
+            assert failure["mode"] == "propose"
             assert "Failed command: bad command" in prompt
             assert "Working directory: /tmp" in prompt
             assert "Recent stderr: <not captured>" in prompt
@@ -737,7 +711,7 @@ def read_recent_turns(tmp: str) -> list[dict[str, object]]:
     return rows
 
 
-def test_record_turn_appends_command_with_human_read_trust_metadata() -> None:
+def test_record_turn_appends_command_with_read_only_mode() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         with patch_dict(
             os.environ,
@@ -751,9 +725,8 @@ def test_record_turn_appends_command_with_human_read_trust_metadata() -> None:
         assert row["command"] == "ls -la"
         assert row["status"] == 0
         assert row["turn_cwd"] == "/repo"
-        assert row["integrity"] == "human"
-        assert row["capability"] == "read"
-        assert row["taint"] == []
+        assert row["mode"] == "read-only"
+        assert row["labels"] == []
         assert row["glyph"] == "turn"
 
 
@@ -1125,7 +1098,7 @@ def test_recent_turns_skips_malformed_lines() -> None:
         assert [turn["command"] for turn in turns] == ["ls"]
 
 
-def test_pi_stream_records_web_tainted_answer_inputs() -> None:
+def test_pi_stream_records_answer_inputs_and_alpha_labels() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         saved = {
             key: os.environ.get(key)
@@ -1134,12 +1107,10 @@ def test_pi_stream_records_web_tainted_answer_inputs() -> None:
                 "SIGIL_SESSION_ID",
                 "SIGIL_CAPTURE_ANSWER",
                 "SIGIL_CAPTURE_TRACE",
-                "SIGIL_SECURITY_GLYPH",
-                "SIGIL_SECURITY_INTEGRITY",
-                "SIGIL_SECURITY_CAPABILITY",
-                "SIGIL_SECURITY_TAINT",
-                "SIGIL_SECURITY_PROVISIONAL",
-                "SIGIL_SECURITY_INPUTS",
+                "SIGIL_TRUST_GLYPH",
+                "SIGIL_TRUST_MODE",
+                "SIGIL_TRUST_LABELS",
+                "SIGIL_TRUST_INPUTS",
                 "SIGIL_QUESTION",
                 "SIGIL_PROMPT",
                 "SIGIL_FOLLOW_UP",
@@ -1148,12 +1119,10 @@ def test_pi_stream_records_web_tainted_answer_inputs() -> None:
         os.environ["SIGIL_STATE_DIR"] = tmp
         os.environ["SIGIL_SESSION_ID"] = "test"
         os.environ["SIGIL_CAPTURE_ANSWER"] = "1"
-        os.environ["SIGIL_SECURITY_GLYPH"] = "?"
-        os.environ["SIGIL_SECURITY_INTEGRITY"] = "web"
-        os.environ["SIGIL_SECURITY_CAPABILITY"] = "read"
-        os.environ["SIGIL_SECURITY_TAINT"] = "web"
-        os.environ["SIGIL_SECURITY_PROVISIONAL"] = "1"
-        os.environ["SIGIL_SECURITY_INPUTS"] = "question-event"
+        os.environ["SIGIL_TRUST_GLYPH"] = "?"
+        os.environ["SIGIL_TRUST_MODE"] = "read-only"
+        os.environ["SIGIL_TRUST_LABELS"] = "network"
+        os.environ["SIGIL_TRUST_INPUTS"] = "question-event"
         try:
             stdin = StringIO(
                 json.dumps(
@@ -1171,10 +1140,8 @@ def test_pi_stream_records_web_tainted_answer_inputs() -> None:
             answer = read_jsonl("last-question.jsonl")[0]
             assert answer["inputs"] == ["question-event"]
             assert answer["event_id"]
-            assert answer["integrity"] == "web"
-            assert answer["capability"] == "read"
-            assert answer["taint"] == ["web"]
-            assert answer["provisional"]
+            assert answer["mode"] == "read-only"
+            assert answer["labels"] == ["network"]
         finally:
             for key, value in saved.items():
                 if value is None:
@@ -1192,12 +1159,10 @@ def test_pi_stream_json_output_is_machine_readable() -> None:
                 "SIGIL_SESSION_ID",
                 "SIGIL_CAPTURE_ANSWER",
                 "SIGIL_CAPTURE_TRACE",
-                "SIGIL_SECURITY_GLYPH",
-                "SIGIL_SECURITY_INTEGRITY",
-                "SIGIL_SECURITY_CAPABILITY",
-                "SIGIL_SECURITY_TAINT",
-                "SIGIL_SECURITY_PROVISIONAL",
-                "SIGIL_SECURITY_INPUTS",
+                "SIGIL_TRUST_GLYPH",
+                "SIGIL_TRUST_MODE",
+                "SIGIL_TRUST_LABELS",
+                "SIGIL_TRUST_INPUTS",
                 "SIGIL_QUESTION",
                 "SIGIL_PROMPT",
                 "SIGIL_FOLLOW_UP",
@@ -1207,12 +1172,10 @@ def test_pi_stream_json_output_is_machine_readable() -> None:
         os.environ["SIGIL_SESSION_ID"] = "test"
         os.environ["SIGIL_CAPTURE_ANSWER"] = "1"
         os.environ["SIGIL_CAPTURE_TRACE"] = "1"
-        os.environ["SIGIL_SECURITY_GLYPH"] = "?"
-        os.environ["SIGIL_SECURITY_INTEGRITY"] = "web"
-        os.environ["SIGIL_SECURITY_CAPABILITY"] = "read"
-        os.environ["SIGIL_SECURITY_TAINT"] = "web"
-        os.environ["SIGIL_SECURITY_PROVISIONAL"] = "1"
-        os.environ["SIGIL_SECURITY_INPUTS"] = "question-event"
+        os.environ["SIGIL_TRUST_GLYPH"] = "?"
+        os.environ["SIGIL_TRUST_MODE"] = "read-only"
+        os.environ["SIGIL_TRUST_LABELS"] = "network"
+        os.environ["SIGIL_TRUST_INPUTS"] = "question-event"
         os.environ["SIGIL_QUESTION"] = "what is sigil?"
         os.environ["SIGIL_PROMPT"] = "what is sigil?"
         os.environ["SIGIL_FOLLOW_UP"] = "0"
@@ -1256,7 +1219,7 @@ def test_pi_stream_json_output_is_machine_readable() -> None:
             assert payload["type"] == "answer"
             assert payload["question"] == "what is sigil?"
             assert payload["answer"] == "answer"
-            assert payload["security"]["taint"] == ["web"]
+            assert payload["security"]["labels"] == ["network"]
             assert payload["malformed_events"] == 0
             assert payload["tools"][0]["tool"] == "web_search"
             assert stderr.getvalue() == ""

@@ -26,7 +26,7 @@ from .install import (
     doctor_checks,
     install_shell,
 )
-from .operators import create_invocation, run_invocation
+from .operators import OperatorInvocation, create_invocation, run_invocation
 from .acts import abort_active_act, last_act, print_act, run_act_stepper
 from .policy import ExecutionPolicy
 from .pi_stream import stream_events
@@ -228,36 +228,9 @@ def cmd_op(
         return 0
 
     if should_run_act_operator(invocation):
-        if dry_run:
-            status = run_act_stepper(
-                objective=prompt,
-                stdin_text=stdin_text,
-                confirm_step=invocation.depth == 2,
-                glyph=invocation.glyph,
-                dry_run=True,
-                verbose=verbose,
-            )
-            if status:
-                raise click.exceptions.Exit(status)
-            return 0
-        if should_confirm_piped_input(invocation):
-            if not confirm_piped_input(stdin_text):
-                print("sigil op: piped input declined", file=sys.stderr)
-                raise click.exceptions.Exit(2)
-        try:
-            status = run_act_stepper(
-                objective=prompt,
-                stdin_text=stdin_text,
-                confirm_step=invocation.depth == 2,
-                glyph=invocation.glyph,
-                verbose=verbose,
-            )
-        except RuntimeError as exc:
-            print(f"sigil op: {exc}", file=sys.stderr)
-            return 1
-        if status:
-            raise click.exceptions.Exit(status)
-        return 0
+        return dispatch_act_operator(
+            invocation, prompt, stdin_text, dry_run=dry_run, verbose=verbose
+        )
 
     if should_confirm_piped_input(invocation):
         if not confirm_piped_input(stdin_text):
@@ -265,28 +238,93 @@ def cmd_op(
             raise click.exceptions.Exit(2)
 
     if invocation.base == "?":
-        if dry_run:
-            tools = "read+web" if invocation.depth == 2 else "read"
-            print(
-                f"sigil op: {invocation.glyph} dry-run: would call {tools} question route",
-                file=sys.stderr,
-            )
-            return 0
-        return run_question_operator(invocation)
+        return dispatch_question_operator(invocation, dry_run=dry_run)
 
     if invocation.base == "@":
-        status = run_goal_loop(
+        return dispatch_goal_operator(
+            invocation, prompt, stdin_text, dry_run=dry_run, verbose=verbose
+        )
+
+    return dispatch_default_operator(invocation, dry_run=dry_run)
+
+
+def dispatch_act_operator(
+    invocation: OperatorInvocation,
+    prompt: str,
+    stdin_text: str,
+    *,
+    dry_run: bool,
+    verbose: bool,
+) -> int:
+    """Run a `,,`/`,,,` invocation through the Pi act stepper."""
+    if dry_run:
+        status = run_act_stepper(
             objective=prompt,
             stdin_text=stdin_text,
-            confirm_steps=invocation.depth == 1,
+            confirm_step=invocation.depth == 2,
             glyph=invocation.glyph,
-            dry_run=dry_run,
+            dry_run=True,
             verbose=verbose,
         )
         if status:
             raise click.exceptions.Exit(status)
         return 0
+    if should_confirm_piped_input(invocation):
+        if not confirm_piped_input(stdin_text):
+            print("sigil op: piped input declined", file=sys.stderr)
+            raise click.exceptions.Exit(2)
+    try:
+        status = run_act_stepper(
+            objective=prompt,
+            stdin_text=stdin_text,
+            confirm_step=invocation.depth == 2,
+            glyph=invocation.glyph,
+            verbose=verbose,
+        )
+    except RuntimeError as exc:
+        print(f"sigil op: {exc}", file=sys.stderr)
+        return 1
+    if status:
+        raise click.exceptions.Exit(status)
+    return 0
 
+
+def dispatch_question_operator(invocation: OperatorInvocation, *, dry_run: bool) -> int:
+    """Run a `?`/`??` invocation through the question route."""
+    if dry_run:
+        tools = "read+web" if invocation.depth == 2 else "read"
+        print(
+            f"sigil op: {invocation.glyph} dry-run: would call {tools} question route",
+            file=sys.stderr,
+        )
+        return 0
+    return run_question_operator(invocation)
+
+
+def dispatch_goal_operator(
+    invocation: OperatorInvocation,
+    prompt: str,
+    stdin_text: str,
+    *,
+    dry_run: bool,
+    verbose: bool,
+) -> int:
+    """Run an `@`/`@@` invocation through the goal loop."""
+    status = run_goal_loop(
+        objective=prompt,
+        stdin_text=stdin_text,
+        confirm_steps=invocation.depth == 1,
+        glyph=invocation.glyph,
+        dry_run=dry_run,
+        verbose=verbose,
+    )
+    if status:
+        raise click.exceptions.Exit(status)
+    return 0
+
+
+def dispatch_default_operator(invocation: OperatorInvocation, *, dry_run: bool) -> int:
+    """Run a `,`/`?` stdout-only invocation through the operator runtime."""
     try:
         result = run_invocation(
             invocation,
@@ -661,7 +699,14 @@ def event_summary(event: dict[str, object]) -> dict[str, object]:
     session = str(event.get("session") or "")
     event_type = str(event.get("type") or "event")
     glyph = event_glyph(event)
-    trust = f"{event.get('integrity') or 'unknown'}/{event.get('capability') or 'none'}"
+    mode = str(event.get("mode") or "propose")
+    labels = event.get("labels")
+    label_text = (
+        ",".join(str(item) for item in labels)
+        if isinstance(labels, list) and labels
+        else ""
+    )
+    trust = f"{mode}:{label_text}" if label_text else mode
     return {
         "id": event_id or "-",
         "short_id": short_token(event_id),
@@ -736,15 +781,9 @@ def event_action(event: dict[str, object], glyph: str, event_type: str) -> str:
 
 def event_detail(event: dict[str, object], event_type: str) -> str:
     """Return the most useful human summary available on an event."""
-    if event_type == "operator_completed":
-        operator = event.get("operator")
-        if isinstance(operator, dict):
-            operator = cast("dict[str, object]", operator)
-            prompt = clean_summary_text(operator.get("prompt"))
-            output = clean_summary_text(event.get("output_snippet"))
-            name = str(operator.get("name") or "operator")
-            detail = prompt or output
-            return f"{name}: {detail}" if detail else name
+    operator_detail = operator_completed_detail(event, event_type)
+    if operator_detail is not None:
+        return operator_detail
     if event_type == "question":
         return clean_summary_text(event.get("question")) or "question"
     if event_type == "tool_start":
@@ -755,20 +794,39 @@ def event_detail(event: dict[str, object], event_type: str) -> str:
         return clean_summary_text(event.get("tool")) or "tool finished"
     if event_type == "operator_command_executed":
         return command_status_summary(event)
-    if event_type.startswith("act_"):
-        if event_type == "act_step_executed":
-            return command_status_summary(event)
-        return clean_summary_text(event.get("objective")) or clean_summary_text(
-            event.get("command")
-        )
-    if event_type.startswith("plan_"):
-        if event_type == "plan_step_executed":
-            return command_status_summary(event)
-        return clean_summary_text(event.get("objective")) or clean_summary_text(
-            event.get("command")
-        )
+    if event_type.startswith(("act_", "plan_")):
+        return staged_step_detail(event, event_type)
     if event_type == "answer_done":
         return f"{event.get('bytes') or 0} bytes"
+    return fallback_event_detail(event, event_type)
+
+
+def operator_completed_detail(event: dict[str, object], event_type: str) -> str | None:
+    """Return the summary for an operator_completed event, or None."""
+    if event_type != "operator_completed":
+        return None
+    operator = event.get("operator")
+    if not isinstance(operator, dict):
+        return None
+    operator = cast("dict[str, object]", operator)
+    prompt = clean_summary_text(operator.get("prompt"))
+    output = clean_summary_text(event.get("output_snippet"))
+    name = str(operator.get("name") or "operator")
+    detail = prompt or output
+    return f"{name}: {detail}" if detail else name
+
+
+def staged_step_detail(event: dict[str, object], event_type: str) -> str:
+    """Return the summary for an act_/plan_ staged step event."""
+    if event_type in {"act_step_executed", "plan_step_executed"}:
+        return command_status_summary(event)
+    return clean_summary_text(event.get("objective")) or clean_summary_text(
+        event.get("command")
+    )
+
+
+def fallback_event_detail(event: dict[str, object], event_type: str) -> str:
+    """Return the first available command/output snippet or a readable type."""
     for key in ("command", "output_snippet", "stdout_snippet", "stderr_snippet"):
         detail = clean_summary_text(event.get(key))
         if detail:
@@ -803,7 +861,7 @@ def clean_summary_text(value: object, *, limit: int = 96) -> str:
 @click.argument("event_id", required=False)
 @click.option("--json", "json_output", is_flag=True)
 def cmd_events_lineage(event_id: str | None, json_output: bool) -> int:
-    """Show the provenance chain for an event."""
+    """Show the short audit trail for an event."""
     lineage = event_lineage(event_id)
     if json_output:
         pretty_print_json(lineage)
@@ -819,13 +877,12 @@ def cmd_events_lineage(event_id: str | None, json_output: bool) -> int:
         indent = "  " * int(node["depth"])
         event_type = event.get("type", "event")
         glyph = event.get("glyph", "?")
-        integrity = event.get("integrity", "unknown")
-        capability = event.get("capability", "none")
-        taint = ",".join(event.get("taint", [])) or "none"
+        mode = event.get("mode", "propose")
+        labels = ",".join(event.get("labels", [])) or "none"
         inputs = ",".join(event.get("inputs", [])) or "-"
         print(
             f"{indent}{node['id']} {event_type} "
-            f"{glyph} {integrity}/{capability} taint={taint} inputs={inputs}"
+            f"{glyph} mode={mode} labels={labels} inputs={inputs}"
         )
     for missing in lineage["missing_inputs"]:
         print(f"missing input: {missing}")
@@ -843,53 +900,72 @@ def cmd_events_lineage(event_id: str | None, json_output: bool) -> int:
 def cmd_session(session_command: str, json_output: bool) -> int:
     """Inspect or clear the current shell session state."""
     if session_command == "path":
-        paths = session_paths()
-        if json_output:
-            pretty_print_json(paths)
-        else:
-            print(paths["session"])
-        return 0
+        return print_session_path(json_output)
     if session_command == "list":
-        sessions = known_sessions()
-        if json_output:
-            pretty_print_json(sessions)
-        else:
-            for session in sessions:
-                parts = [
-                    str(session["session_id"]),
-                    str(session.get("last_cwd") or "-"),
-                    str(session.get("last_event_type") or "-"),
-                    str(session["path"]),
-                ]
-                print("\t".join(parts))
-        return 0
+        return print_session_list(json_output)
     if session_command == "clear":
-        removed = clear_current_session()
-        if json_output:
-            pretty_print_json({"removed": removed})
-        else:
-            if removed:
-                for path in removed:
-                    print(f"removed {path}")
-            else:
-                print("session already clear")
-        return 0
+        return print_session_clear(json_output)
+    return print_session_snapshot(json_output)
 
+
+def print_session_path(json_output: bool) -> int:
+    """Print the current session state directory."""
+    paths = session_paths()
+    if json_output:
+        pretty_print_json(paths)
+    else:
+        print(paths["session"])
+    return 0
+
+
+def print_session_list(json_output: bool) -> int:
+    """Print all known shell sessions."""
+    sessions = known_sessions()
+    if json_output:
+        pretty_print_json(sessions)
+        return 0
+    for session in sessions:
+        parts = [
+            str(session["session_id"]),
+            str(session.get("last_cwd") or "-"),
+            str(session.get("last_event_type") or "-"),
+            str(session["path"]),
+        ]
+        print("\t".join(parts))
+    return 0
+
+
+def print_session_clear(json_output: bool) -> int:
+    """Clear the current session state and report removed paths."""
+    removed = clear_current_session()
+    if json_output:
+        pretty_print_json({"removed": removed})
+        return 0
+    if removed:
+        for path in removed:
+            print(f"removed {path}")
+    else:
+        print("session already clear")
+    return 0
+
+
+def print_session_snapshot(json_output: bool) -> int:
+    """Print a summary of the current session's state files."""
     snapshot = current_session_snapshot()
     if json_output:
         pretty_print_json(snapshot)
-    else:
-        print(f"session {snapshot['session_id']}")
-        print(snapshot["path"])
-        for name, value in snapshot["files"].items():
-            if value is None:
-                continue
-            if isinstance(value, list):
-                print(f"{name}: {len(value)} entries")
-            elif isinstance(value, dict):
-                print(f"{name}: {len(value)} keys")
-            else:
-                print(f"{name}: present")
+        return 0
+    print(f"session {snapshot['session_id']}")
+    print(snapshot["path"])
+    for name, value in snapshot["files"].items():
+        if value is None:
+            continue
+        if isinstance(value, list):
+            print(f"{name}: {len(value)} entries")
+        elif isinstance(value, dict):
+            print(f"{name}: {len(value)} keys")
+        else:
+            print(f"{name}: present")
     return 0
 
 

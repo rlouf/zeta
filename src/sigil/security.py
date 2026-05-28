@@ -1,127 +1,68 @@
-"""Trust metadata for glyph outputs.
-
-Sigil records where a value came from and what it is allowed to do. The goal is
-to let glyphs compose without silently promoting web/model text into executable
-or writable authority.
-"""
+"""Small alpha trust records for Sigil events."""
 
 from __future__ import annotations
 
 from typing import Any, Literal, Sequence, cast
 
-Integrity = Literal["human", "local_model", "local_file", "web", "unknown"]
-Capability = Literal["none", "propose", "read", "write_boxed", "exec_boxed"]
+TrustMode = Literal["read-only", "propose", "execute-write"]
+RiskLabel = Literal["network", "delete", "publish", "privileged"]
 
-INTEGRITY_ORDER: dict[Integrity, int] = {
-    "unknown": 0,
-    "web": 1,
-    "local_file": 2,
-    "local_model": 3,
-    "human": 4,
-}
-
-CAPABILITY_ORDER: dict[Capability, int] = {
-    "none": 0,
-    "propose": 1,
-    "read": 2,
-    "write_boxed": 3,
-    "exec_boxed": 4,
-}
-
-INTEGRITIES = frozenset(INTEGRITY_ORDER)
-CAPABILITIES = frozenset(CAPABILITY_ORDER)
+TRUST_MODES = frozenset({"read-only", "propose", "execute-write"})
+RISK_LABELS = frozenset({"network", "delete", "publish", "privileged"})
 
 
-class SecurityViolation(ValueError):
-    """Raised when a state transition would increase trust without consent."""
-
-    pass
-
-
-def normalize_integrity(value: object) -> Integrity:
-    """Map arbitrary stored values into the known integrity lattice."""
-    if isinstance(value, str) and value in INTEGRITIES:
-        return cast(Integrity, value)
-    return "unknown"
+def normalize_mode(value: object) -> TrustMode:
+    """Return one of the alpha trust modes."""
+    if isinstance(value, str) and value in TRUST_MODES:
+        return cast(TrustMode, value)
+    return "propose"
 
 
-def normalize_capability(value: object) -> Capability:
-    """Map arbitrary stored values into the known capability lattice."""
-    if isinstance(value, str) and value in CAPABILITIES:
-        return cast(Capability, value)
-    return "none"
-
-
-def normalize_taint(value: object, *, legacy: bool = False) -> list[str]:
-    """Normalize taint labels so old or malformed state stays explicit."""
-    if isinstance(value, list):
-        taint = [str(item) for item in value if isinstance(item, str) and item]
-    else:
-        taint = []
-    if legacy and not taint:
-        taint = ["legacy"]
-    return sorted(set(taint))
+def normalize_labels(value: object) -> list[RiskLabel]:
+    """Keep only user-facing risk labels."""
+    if not isinstance(value, list):
+        return []
+    labels = []
+    for item in value:
+        if isinstance(item, str) and item in RISK_LABELS:
+            labels.append(cast(RiskLabel, item))
+    return sorted(set(labels), key=("network", "delete", "publish", "privileged").index)
 
 
 def normalize_inputs(value: object) -> list[str]:
-    """Normalize provenance links to event IDs."""
+    """Normalize simple event references used by audit views."""
     if not isinstance(value, list):
         return []
     return [str(item) for item in value if isinstance(item, str) and item]
 
 
 def normalize_trust_record(record: dict[str, Any]) -> dict[str, Any]:
-    """Return a record with complete trust metadata fields."""
-    legacy = "integrity" not in record and "taint" not in record
+    """Return a record with only alpha trust fields."""
     normalized = dict(record)
-    normalized["integrity"] = normalize_integrity(record.get("integrity"))
-    normalized["capability"] = normalize_capability(record.get("capability"))
-    normalized["taint"] = normalize_taint(record.get("taint"), legacy=legacy)
-    normalized["inputs"] = normalize_inputs(record.get("inputs"))
-    normalized["provisional"] = bool(record.get("provisional", False))
+    for field in ("capability", "integrity", "taint", "provisional"):
+        normalized.pop(field, None)
+
+    normalized["mode"] = normalize_mode(normalized.get("mode"))
+    normalized["labels"] = normalize_labels(normalized.get("labels"))
+    normalized["inputs"] = normalize_inputs(normalized.get("inputs"))
     return normalized
-
-
-def min_integrity(records: Sequence[dict[str, Any]]) -> Integrity:
-    """Return the lowest integrity among input records."""
-    if not records:
-        return "unknown"
-    return min(
-        (normalize_integrity(record.get("integrity")) for record in records),
-        key=lambda integrity: INTEGRITY_ORDER[integrity],
-    )
 
 
 def create_trust_metadata(
     *,
     glyph: str,
-    integrity: Integrity,
-    capability: Capability,
-    taint: Sequence[str],
+    mode: TrustMode,
+    labels: Sequence[str] = (),
     inputs: Sequence[str] = (),
     input_records: Sequence[dict[str, Any]] = (),
-    provisional: bool = False,
-    fresh_human: bool = False,
 ) -> dict[str, Any]:
-    """Create trust metadata for a freshly produced value.
-
-    Fresh human input is the only path that may intentionally raise integrity.
-    """
-    normalized_inputs = [item for item in inputs if item]
-    normalized_taint = sorted({item for item in taint if item})
-    if input_records and not fresh_human:
-        inherited = min_integrity(input_records)
-        if INTEGRITY_ORDER[integrity] > INTEGRITY_ORDER[inherited]:
-            raise SecurityViolation(
-                f"integrity promotion requires fresh human input: {inherited} -> {integrity}"
-            )
+    """Create alpha trust fields for a freshly produced value."""
+    del input_records
     return {
         "glyph": glyph,
-        "inputs": normalized_inputs,
-        "integrity": integrity,
-        "capability": capability,
-        "taint": normalized_taint,
-        "provisional": provisional,
+        "mode": mode,
+        "labels": normalize_labels(list(labels)),
+        "inputs": [item for item in inputs if item],
     }
 
 
@@ -129,86 +70,43 @@ def inherit_security(
     *,
     glyph: str,
     input_records: Sequence[dict[str, Any]],
-    capability: Capability | None = None,
-    extra_taint: Sequence[str] = (),
-    provisional: bool | None = None,
+    mode: TrustMode = "propose",
+    labels: Sequence[str] = (),
 ) -> dict[str, Any]:
-    """Derive trust metadata from prior records without increasing integrity."""
-    normalized_inputs = [record_id(record) for record in input_records]
-    normalized_inputs = [item for item in normalized_inputs if item]
-    inherited = [normalize_trust_record(record) for record in input_records]
-    taint = set(extra_taint)
-    is_provisional = False
-    for record in inherited:
-        taint.update(record["taint"])
-        is_provisional = is_provisional or bool(record.get("provisional"))
-    return {
-        "glyph": glyph,
-        "inputs": normalized_inputs,
-        "integrity": min_integrity(inherited),
-        "capability": capability or min_capability(inherited),
-        "taint": sorted(taint) or ["legacy"],
-        "provisional": is_provisional if provisional is None else provisional,
-    }
-
-
-def min_capability(records: Sequence[dict[str, Any]]) -> Capability:
-    """Return the lowest capability among input records."""
-    if not records:
-        return "none"
-    return min(
-        (normalize_capability(record.get("capability")) for record in records),
-        key=lambda capability: CAPABILITY_ORDER[capability],
+    """Create a simple audit record that points at prior event ids."""
+    inherited_labels = set(labels)
+    inputs = []
+    for record in input_records:
+        event_id = record_id(record)
+        if event_id:
+            inputs.append(event_id)
+        inherited_labels.update(normalize_labels(record.get("labels")))
+    return create_trust_metadata(
+        glyph=glyph,
+        mode=mode,
+        labels=sorted(inherited_labels),
+        inputs=inputs,
     )
 
 
 def record_id(record: dict[str, Any]) -> str:
-    """Return the stable event identifier used for provenance links."""
+    """Return the event identifier used by audit links."""
     value = record.get("event_id") or record.get("id")
     return str(value) if value else ""
 
 
-def reject_promotion(
-    before: dict[str, Any],
-    after: dict[str, Any],
-    *,
-    fresh_human: bool = False,
-) -> None:
-    """Reject integrity promotion unless fresh human input justifies it."""
-    before_integrity = normalize_integrity(before.get("integrity"))
-    after_integrity = normalize_integrity(after.get("integrity"))
-    if fresh_human:
-        return
-    if INTEGRITY_ORDER[after_integrity] > INTEGRITY_ORDER[before_integrity]:
-        raise SecurityViolation(
-            f"integrity promotion requires fresh human input: {before_integrity} -> {after_integrity}"
-        )
-
-
 def inherited_label(metadata: dict[str, Any]) -> str:
-    """Return a compact label for inherited trust shown in terminal status."""
+    """Return the compact trust label shown in terminal status."""
     normalized = normalize_trust_record(metadata)
-    taint = normalized["taint"]
-    if "legacy" in taint:
-        return "legacy"
-    if "web" in taint:
-        return "web"
-    if "model" in taint:
-        return "model"
-    if normalized["integrity"] == "local_model":
-        return "model"
-    return normalized["integrity"]
+    labels = normalized["labels"]
+    if labels:
+        return ",".join(labels)
+    return str(normalized["mode"])
 
 
 def candidate_prefix(metadata: dict[str, Any]) -> str:
     """Return the trust prefix shown beside selectable command candidates."""
     normalized = normalize_trust_record(metadata)
-    if "legacy" in normalized["taint"]:
-        return "[legacy/low-trust]"
-    if "web" in normalized["taint"]:
-        if normalized["provisional"]:
-            return "[web-tainted/provisional]"
-        return "[web-tainted/read]"
-    if normalized["integrity"] == "local_model":
-        return f"[model/{normalized['capability']}]"
-    return f"[{normalized['integrity']}/{normalized['capability']}]"
+    labels = normalized["labels"]
+    suffix = f":{','.join(labels)}" if labels else ""
+    return f"[{normalized['mode']}{suffix}]"

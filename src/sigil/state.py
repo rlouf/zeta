@@ -39,7 +39,7 @@ def session_dir() -> Path:
 
 
 def append_event(event: dict[str, Any]) -> dict[str, Any]:
-    """Append a global audit/debug event with session and trust metadata."""
+    """Append a global audit/debug event with session and alpha trust fields."""
     root = state_dir()
     root.mkdir(parents=True, exist_ok=True)
     payload = normalize_trust_record(

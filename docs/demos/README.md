@@ -40,4 +40,4 @@ This keeps the recordings focused on the workflow:
 - normal Git and lazygit in the middle of the flow
 - read-only question routes
 - explicit proposal, execution, and act boundaries
-- inspectable event lineage and trust metadata
+- inspectable event history and alpha trust labels

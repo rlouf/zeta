@@ -56,8 +56,8 @@ Implementation notes:
   authorization parameters.
 - Route `?` to `--tools read`.
 - Route `??` to `--tools read,web_search`.
-- Make `?` trust metadata non-web-tainted.
-- Make `??` trust metadata web-tainted.
+- Record `?` as `read-only` without risk labels.
+- Record `??` as `read-only` with the `network` label.
 - Reject `???`.
 
 ## Comma Routes
@@ -163,13 +163,13 @@ mixed glyph tokens such as ,?
       `follow_up`.
 - [x] Route `?` through read-only tools without web search.
 - [x] Route `??` through read plus web search.
-- [x] Update question trust metadata so only `??` is web-tainted.
+- [x] Update question trust fields so only `??` carries the `network` label.
 - [x] Remove glyph-level follow-up and exhaustive-question behavior.
 - [x] Keep or remove `sigil ask --follow-up` as an explicit CLI decision.
 - [x] Refactor the act stepper to accept `confirm_step` and `glyph`.
 - [x] Route `,,` to one confirmed agent step.
 - [x] Route `,,,` to one auto-approved agent step within policy.
-- [x] Ensure `,,,` still blocks on high-risk policy boundaries.
+- [x] Ensure `,,,` still stops at explicit policy boundaries.
 - [x] Extract shared Pi agent-step execution for comma and goal routes.
 - [x] Add `goals.py` or equivalent durable goal-loop module.
 - [x] Add goal state recording in `last-goal.jsonl`.
@@ -181,8 +181,8 @@ mixed glyph tokens such as ,?
 - [x] Update Bash bindings for `?`, `??`, `,`, `,,`, `,,,`, `@`, and `@@`.
 - [x] Remove shell bindings for `???`.
 - [x] Update README glyph reference and examples.
-- [x] Update CLI docs and security lattice docs.
-- [x] Rewrite tests for question routing and trust metadata.
+- [x] Update CLI docs and trust model docs.
+- [x] Rewrite tests for question routing and alpha trust records.
 - [x] Rewrite tests for comma routing.
 - [x] Add parser and shell binding tests for `@` and `@@`.
 - [x] Add tests that `???` and `@@@` fail.

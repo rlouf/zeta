@@ -9,6 +9,13 @@ from .policy import ActionLabel, ExecutionPolicy, PolicyDecision, evaluate_polic
 from .model import chat_json, chat_text, ensure_server
 from .security import create_trust_metadata
 from .state import append_event, append_jsonl, read_jsonl
+from .failure import (
+    failure_context_prompt,
+    is_recovery_prompt,
+    last_failure_or_none,
+)
+from .question import recent_question_context as _recent_question_context
+from .session import recent_turns_context as _recent_turns_context
 
 OperatorBase = Literal["?", ",", "@"]
 
@@ -214,18 +221,14 @@ def run_invocation(
     )
     security = create_trust_metadata(
         glyph=invocation.glyph,
-        integrity="local_model",
-        capability=capability_for_operator(invocation),
-        taint=["model"],
-        fresh_human=True,
+        mode=mode_for_operator(invocation),
+        labels=decision.classification.labels,
     )
     event = append_event(
         {
             "type": "operator_completed",
             "operator": invocation.to_dict(),
             "output_snippet": output[:MAX_EVENT_OUTPUT_CHARS],
-            "policy": execution_policy.to_dict(),
-            "decision": decision.to_dict(),
             "labels": decision.classification.labels,
             **security,
         }
@@ -385,12 +388,7 @@ def inspect_user_prompt(invocation: OperatorInvocation) -> str:
             f"{turn['role']}:\n{turn['content']}" for turn in turns
         )
         sections.append(f"Previous question transcript:\n{transcript}")
-    stdin_text = invocation.stdin
-    if len(stdin_text) > MAX_STDIN_CHARS:
-        stdin_text = stdin_text[-MAX_STDIN_CHARS:]
-        stdin_label = f"stdin (last {MAX_STDIN_CHARS} chars)"
-    else:
-        stdin_label = "stdin"
+    stdin_text, stdin_label = bounded_stdin(invocation.stdin)
     sections.append(f"{stdin_label}:\n{stdin_text}")
     return "\n\n".join(sections)
 
@@ -449,12 +447,12 @@ def default_prompt(invocation: OperatorInvocation) -> str:
     return "Recommend the best next action."
 
 
-def capability_for_operator(
+def mode_for_operator(
     invocation: OperatorInvocation,
-) -> Literal["read", "propose"]:
-    """Return the trust capability for an operator invocation."""
+) -> Literal["read-only", "propose"]:
+    """Return the alpha trust mode for an operator invocation."""
     if invocation.base == "?":
-        return "read"
+        return "read-only"
     return "propose"
 
 
@@ -475,8 +473,6 @@ def readable_target_files(lines: list[str]) -> list[tuple[Path, str]]:
 
 def interactive_failure_context() -> str:
     """Return last-failure context for interactive comma proposals."""
-    from .failure import failure_context_prompt, last_failure_or_none
-
     failure = last_failure_or_none()
     if failure is None:
         return "No failed command is recorded for interactive proposal."
@@ -485,8 +481,6 @@ def interactive_failure_context() -> str:
 
 def recovery_prompt(prompt: str) -> str:
     """Return an explicit recovery objective for short failure prompts."""
-    from .failure import is_recovery_prompt, last_failure_or_none
-
     if not is_recovery_prompt(prompt):
         return ""
     failure = last_failure_or_none()
@@ -501,15 +495,11 @@ def recovery_prompt(prompt: str) -> str:
 
 def recent_question_context() -> str:
     """Return a compact summary of the recent question transcript, if any."""
-    from .question import recent_question_context as _recent_question_context
-
     return _recent_question_context()
 
 
 def recent_turns_context(limit: int | None = None) -> str:
     """Return a compact summary of the most recent shell turns, if any."""
-    from .session import recent_turns_context as _recent_turns_context
-
     if limit is None:
         return _recent_turns_context()
     return _recent_turns_context(limit=limit)

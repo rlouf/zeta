@@ -127,10 +127,8 @@ The JSON form is one object:
   "malformed_events": 0,
   "security": {
     "glyph": "?",
-    "integrity": "local_model",
-    "capability": "read",
-    "taint": ["model"],
-    "provisional": true
+    "mode": "read-only",
+    "labels": []
   }
 }
 ```
@@ -146,7 +144,7 @@ Stable fields:
 - `answer_event_id`: stored answer event id, or `null`.
 - `tools`: ordered Pi tool trace events.
 - `malformed_events`: malformed Pi JSON event lines ignored.
-- `security`: trust metadata recorded for the answer.
+- `security`: alpha trust fields recorded for the answer.
 
 With piped stdin and `--json`, a fresh `sigil ask` currently emits pipeline
 metadata instead of calling Pi:
@@ -196,8 +194,8 @@ Examples:
 
 `,` prints a command proposal. The zsh binding inserts it into the editable
 prompt buffer and adds it to shell history; the Bash binding adds it to history.
-Proposal output includes a terse label line such as `local · read-only ·
-focused` or `network · publish · high-risk`. `,,` asks before running one Pi
+Proposal output includes a terse risk label line such as `network · publish`.
+`,,` asks before running one Pi
 agent turn with read/search/edit/write tools. A turn is one Pi invocation and
 may include zero or more tool calls. `,,,` runs the same one-turn route without
 routine confirmation. `@` and `@@` repeat bounded turns toward a

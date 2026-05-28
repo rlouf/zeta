@@ -68,10 +68,7 @@ def generate(prompt: str) -> tuple[dict[str, str], dict[str, Any]]:
 
     security = create_trust_metadata(
         glyph=",",
-        integrity="local_model",
-        capability="propose",
-        taint=["model"],
-        fresh_human=True,
+        mode="propose",
     )
     event = append_event(
         {
@@ -83,11 +80,8 @@ def generate(prompt: str) -> tuple[dict[str, str], dict[str, Any]]:
     )
     selection_security = create_trust_metadata(
         glyph=",",
-        integrity="local_model",
-        capability="propose",
-        taint=["model"],
+        mode="propose",
         inputs=[str(event["id"])],
         input_records=[event],
-        fresh_human=True,
     )
     return proposal, selection_security

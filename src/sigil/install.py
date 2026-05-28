@@ -65,7 +65,7 @@ def binding_source(shell: str) -> Path:
     except FileNotFoundError:
         pass
 
-    source_checkout = Path(__file__).resolve().parents[2] / "shell" / shell
+    source_checkout = Path(__file__).resolve().parent / "shell" / shell
     source_checkout = source_checkout / spec.binding_name
     if source_checkout.exists():
         return source_checkout

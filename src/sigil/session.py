@@ -272,10 +272,7 @@ def record_turn(
     stderr_text = truncate_snippet(stderr_snippet)
     security = create_trust_metadata(
         glyph="turn",
-        integrity="human",
-        capability="read",
-        taint=[],
-        fresh_human=True,
+        mode="read-only",
     )
     entry = {
         "id": _new_event_id(),

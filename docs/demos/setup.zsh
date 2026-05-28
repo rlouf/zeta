@@ -106,7 +106,7 @@ git config user.name "Sigil Demo"
 git add .
 git commit -q -m "initial demo project"
 
-source "$_sigil_demo_root/shell/zsh/sigil.zsh"
+source "$_sigil_demo_root/src/sigil/shell/zsh/sigil.zsh"
 
 # VHS drives the foreground command through stdin. The fd opened by the shell
 # binding points at a terminal device VHS cannot answer reliably, so use stdin

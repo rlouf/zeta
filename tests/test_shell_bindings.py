@@ -121,22 +121,24 @@ def test_bash_wrappers_call_current_cli_contract() -> None:
         assert "history=echo recommended" in result.stdout
 
 
-def test_bash_triple_wrappers_call_reserved_loop_contract() -> None:
+def test_bash_agent_and_goal_wrappers_call_operator_contract() -> None:
     with tempfile.TemporaryDirectory() as tmp_dir:
         tmp = Path(tmp_dir)
         stub = make_stub(tmp)
         result = run_shell(
             "bash",
             textwrap.dedent(
-                "                    source shell/bash/sigil.bash\n                    sigil_command_loop hello\n                    sigil_question_loop hello\n                    "
+                "                    source shell/bash/sigil.bash\n                    sigil_agent_step hello\n                    sigil_agent_step_auto hello\n                    sigil_goal hello\n                    sigil_goal_auto hello\n                    "
             ),
             tmp,
             stub,
         )
         assert_success(result)
         assert read_log(tmp) == [
+            "op ,, hello",
             "op ,,, hello",
-            "op ??? hello",
+            "op @ hello",
+            "op @@ hello",
         ]
 
 
@@ -477,22 +479,24 @@ def test_zsh_act_handoff_adds_command_to_history() -> None:
 
 
 @pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
-def test_zsh_triple_wrappers_call_reserved_loop_contract() -> None:
+def test_zsh_agent_and_goal_wrappers_call_operator_contract() -> None:
     with tempfile.TemporaryDirectory() as tmp_dir:
         tmp = Path(tmp_dir)
         stub = make_stub(tmp)
         result = run_shell(
             "zsh",
             textwrap.dedent(
-                "                    source shell/zsh/sigil.zsh\n                    sigil_command_loop hello\n                    sigil_question_loop hello\n                    "
+                "                    source shell/zsh/sigil.zsh\n                    sigil_agent_step hello\n                    sigil_agent_step_auto hello\n                    sigil_goal hello\n                    sigil_goal_auto hello\n                    "
             ),
             tmp,
             stub,
         )
         assert_success(result)
         assert read_log(tmp) == [
+            "op ,, hello",
             "op ,,, hello",
-            "op ??? hello",
+            "op @ hello",
+            "op @@ hello",
         ]
 
 

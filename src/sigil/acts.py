@@ -369,17 +369,27 @@ def run_pi_agent_step(
 
 def pi_agent_prompt(act: dict[str, Any]) -> str:
     """Build the prompt for one Pi edit step."""
+    is_goal = act.get("kind") == "goal"
     sections = [
-        "Run one bounded Sigil edit step.",
+        "Run one bounded Sigil goal step."
+        if is_goal
+        else "Run one bounded Sigil edit step.",
         f"Working directory: {os.getcwd()}",
         f"Objective: {act.get('objective')}",
     ]
     stdin_text = str(act.get("stdin") or "")
     if stdin_text:
         sections.append(f"Confirmed piped input:\n{stdin_text}")
-    sections.append(
-        "After the step, stop. Do not commit. Leave review to the user in Git/lazygit."
-    )
+    if is_goal:
+        sections.append(
+            "After the step, stop. Do not commit. End with exactly one "
+            "SIGIL_STATUS line set to continue, complete, or blocked, followed "
+            "by one SIGIL_NEXT line with the next checkpoint or blocker."
+        )
+    else:
+        sections.append(
+            "After the step, stop. Do not commit. Leave review to the user in Git/lazygit."
+        )
     return "\n\n".join(sections)
 
 

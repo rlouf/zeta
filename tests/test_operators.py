@@ -16,6 +16,7 @@ from sigil.operators import (
     parse_operator_token,
     proposal_user_prompt,
 )
+from sigil.goals import parse_step_status, run_goal_loop
 from sigil.policy import ExecutionPolicy, classify_output, evaluate_policy
 from sigil.session import record_turn
 from sigil.state import append_jsonl, read_jsonl
@@ -118,6 +119,66 @@ def test_op_cli_json_does_not_run_operator() -> None:
     assert result.exit_code == 0, result.output
 
 
+def test_op_cli_routes_at_to_confirmed_goal_loop() -> None:
+    calls = []
+
+    def fake_run_goal_loop(*args: object, **kwargs: object) -> int:
+        calls.append((args, kwargs))
+        return 0
+
+    with patch("sigil.cli.run_goal_loop", side_effect=fake_run_goal_loop):
+        result = CliRunner().invoke(cli, ["op", "@", "fix", "tests"])
+
+    assert result.exit_code == 0
+    assert calls == [
+        (
+            (),
+            {
+                "objective": "fix tests",
+                "stdin_text": "",
+                "confirm_steps": True,
+                "glyph": "@",
+                "dry_run": False,
+                "verbose": False,
+            },
+        )
+    ]
+
+
+def test_op_cli_routes_double_at_to_auto_goal_loop() -> None:
+    calls = []
+
+    def fake_run_goal_loop(*args: object, **kwargs: object) -> int:
+        calls.append((args, kwargs))
+        return 0
+
+    with patch("sigil.cli.run_goal_loop", side_effect=fake_run_goal_loop):
+        result = CliRunner().invoke(cli, ["op", "@@", "fix", "tests"])
+
+    assert result.exit_code == 0
+    assert calls[0][1]["objective"] == "fix tests"
+    assert calls[0][1]["confirm_steps"] is False
+    assert calls[0][1]["glyph"] == "@@"
+
+
+def test_op_cli_confirms_piped_at_before_goal_loop() -> None:
+    calls = []
+
+    def fake_run_goal_loop(*args: object, **kwargs: object) -> int:
+        calls.append((args, kwargs))
+        return 0
+
+    with (
+        patch("sigil.cli.confirm_piped_input", return_value=True),
+        patch("sigil.cli.run_goal_loop", side_effect=fake_run_goal_loop),
+    ):
+        result = CliRunner().invoke(cli, ["op", "@", "fix"], input="diff\n")
+
+    assert result.exit_code == 0
+    assert calls[0][1]["stdin_text"] == "diff\n"
+    assert calls[0][1]["confirm_steps"] is True
+
+
 def test_op_cli_runs_piped_double_question_operator_through_web_route() -> None:
     calls = []
 
@@ -171,6 +232,14 @@ def test_triple_question_is_rejected() -> None:
 
     assert result.exit_code == 2
     assert "? operator depth must be 1 or 2" in result.output
+
+
+def test_triple_at_is_rejected() -> None:
+    with patch("sigil.cli.run_goal_loop", side_effect=AssertionError("no goal")):
+        result = CliRunner().invoke(cli, ["op", "@@@", "fix"])
+
+    assert result.exit_code == 2
+    assert "@ operator depth must be 1 or 2" in result.output
 
 
 def test_op_cli_runs_piped_recommend_operator() -> None:
@@ -476,6 +545,88 @@ def test_piped_triple_comma_denies_input_before_act_generation() -> None:
 
     assert result.exit_code == 2
     assert "piped input declined" in result.stderr
+
+
+def test_parse_goal_step_status_lines() -> None:
+    assert parse_step_status("done\nSIGIL_STATUS: complete\nSIGIL_NEXT: review") == (
+        "complete",
+        "review",
+    )
+    assert parse_step_status("SIGIL_STATUS: continue") == ("continue", "")
+    assert parse_step_status("no status") is None
+
+
+def test_goal_loop_runs_until_complete() -> None:
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        with patch_dict(
+            os.environ,
+            {"SIGIL_STATE_DIR": tmp_dir, "SIGIL_SESSION_ID": "goal-session"},
+        ):
+            pi_calls = []
+
+            def fake_run_pi(*args: object, **kwargs: object) -> int:
+                pi_calls.append((args, kwargs))
+                append_jsonl(
+                    "last-question.jsonl",
+                    {
+                        "role": "assistant",
+                        "content": "done\nSIGIL_STATUS: complete\nSIGIL_NEXT: review",
+                    },
+                )
+                return 0
+
+            with (
+                patch("sigil.goals.prompt_on_tty", return_value="y\n"),
+                patch("sigil.goals.run_pi_agent_step", side_effect=fake_run_pi),
+            ):
+                result = run_goal_loop(
+                    objective="fix tests",
+                    confirm_steps=True,
+                    glyph="@",
+                )
+            goal_events = read_jsonl("last-goal.jsonl")
+
+    assert result == 0
+    assert len(pi_calls) == 1
+    assert pi_calls[0][1]["glyph"] == "@"
+    assert goal_events[-1]["type"] == "goal_completed"
+    assert goal_events[-1]["goal"]["status"] == "completed"
+    assert goal_events[-1]["goal"]["last_status"] == "complete"
+
+
+def test_auto_goal_loop_stops_on_unclear_status_without_prompting() -> None:
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        with patch_dict(
+            os.environ,
+            {"SIGIL_STATE_DIR": tmp_dir, "SIGIL_SESSION_ID": "goal-session"},
+        ):
+
+            def fake_run_pi(*args: object, **kwargs: object) -> int:
+                del args, kwargs
+                append_jsonl(
+                    "last-question.jsonl",
+                    {"role": "assistant", "content": "no structured status"},
+                )
+                return 0
+
+            with (
+                patch(
+                    "sigil.goals.prompt_on_tty",
+                    side_effect=AssertionError("no prompt"),
+                ),
+                patch("sigil.goals.run_pi_agent_step", side_effect=fake_run_pi),
+            ):
+                result = run_goal_loop(
+                    objective="fix tests",
+                    confirm_steps=False,
+                    glyph="@@",
+                )
+            goal_events = read_jsonl("last-goal.jsonl")
+
+    assert result == 0
+    assert goal_events[-1]["type"] == "goal_blocked"
+    assert goal_events[-1]["goal"]["status"] == "blocked"
+    assert goal_events[-1]["goal"]["approval"] == "auto"
 
 
 def test_act_pi_step_uses_bash_handoff_extension() -> None:

@@ -75,7 +75,7 @@ __sigil_recordable_command() {
   local command="${1:-}"
   [[ -n "$command" ]] || return 1
   case "$command" in
-    [[:space:]]*|,*|\?*|sigil\ *|sigil_*|noglob\ sigil_*|command\ sigil_*|__sigil_*)
+    [[:space:]]*|,*|\?*|@*|sigil\ *|sigil_*|noglob\ sigil_*|command\ sigil_*|__sigil_*)
       return 1
       ;;
   esac
@@ -208,46 +208,73 @@ sigil_command() {
   __sigil_history_insert "$command"
 }
 
-sigil_execute_command() {
+sigil_agent_step() {
   "$__sigil_bin" op ",," "$@"
+  local status=$?
+  __sigil_insert_pending_handoff
+  return "$status"
 }
 
-sigil_command_loop() {
+sigil_agent_step_auto() {
   "$__sigil_bin" op ",,," "$@"
   local status=$?
   __sigil_insert_pending_handoff
   return "$status"
 }
 
+sigil_execute_command() {
+  sigil_agent_step "$@"
+}
+
+sigil_command_loop() {
+  sigil_agent_step_auto "$@"
+}
+
 sigil_question() {
   "$__sigil_bin" op "?" "$@"
 }
 
-sigil_follow_up() {
+sigil_web_question() {
   "$__sigil_bin" op "??" "$@"
 }
 
-sigil_question_loop() {
-  "$__sigil_bin" op "???" "$@"
+sigil_follow_up() {
+  sigil_web_question "$@"
+}
+
+sigil_goal() {
+  "$__sigil_bin" op "@" "$@"
+  local status=$?
+  __sigil_insert_pending_handoff
+  return "$status"
+}
+
+sigil_goal_auto() {
+  "$__sigil_bin" op "@@" "$@"
+  local status=$?
+  __sigil_insert_pending_handoff
+  return "$status"
 }
 
 # ── Optional glyph functions ─────────────────────────────────────────────
 
 if __sigil_glyphs_enabled; then
   function , { sigil_command "$*"; }
-  function ,, { sigil_execute_command "$*"; }
-  function ,,, { sigil_command_loop "$*"; }
+  function ,, { sigil_agent_step "$*"; }
+  function ,,, { sigil_agent_step_auto "$*"; }
   function ? { sigil_question "$*"; }
-  function ?? { sigil_follow_up "$*"; }
-  function ??? { sigil_question_loop "$*"; }
+  function ?? { sigil_web_question "$*"; }
+  function @ { sigil_goal "$*"; }
+  function @@ { sigil_goal_auto "$*"; }
 
   if [[ $- == *i* ]]; then
     alias ,='sigil_command'
-    alias ,,='sigil_execute_command'
-    alias ,,,='sigil_command_loop'
+    alias ,,='sigil_agent_step'
+    alias ,,,='sigil_agent_step_auto'
     alias '?'='sigil_question'
-    alias '??'='sigil_follow_up'
-    alias '???'='sigil_question_loop'
+    alias '??'='sigil_web_question'
+    alias @='sigil_goal'
+    alias @@='sigil_goal_auto'
   fi
 fi
 

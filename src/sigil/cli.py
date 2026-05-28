@@ -16,6 +16,7 @@ import click
 
 from .commands import generate
 from .failure import record_failure
+from .goals import run_goal_loop
 from .handoff import consume_latest_bash_handoff, latest_bash_handoff
 from .install import (
     SUPPORTED_SHELLS,
@@ -270,8 +271,17 @@ def cmd_op(
         return run_question_operator(invocation)
 
     if invocation.base == "@":
-        print("sigil op: @ goal routes are not implemented yet", file=sys.stderr)
-        raise click.exceptions.Exit(1)
+        status = run_goal_loop(
+            objective=prompt,
+            stdin_text=stdin_text,
+            confirm_steps=invocation.depth == 1,
+            glyph=invocation.glyph,
+            dry_run=dry_run,
+            verbose=verbose,
+        )
+        if status:
+            raise click.exceptions.Exit(status)
+        return 0
 
     try:
         result = run_invocation(
@@ -297,7 +307,7 @@ def cmd_op(
 def should_confirm_piped_input(invocation: object) -> bool:
     """Return whether an operator needs piped-input confirmation."""
     return (
-        getattr(invocation, "base", None) == ","
+        getattr(invocation, "base", None) in {",", "@"}
         and getattr(invocation, "mode", None) == "pipeline"
         and bool(getattr(invocation, "stdin", ""))
     )

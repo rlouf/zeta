@@ -363,7 +363,11 @@ def operator_user_prompt(invocation: OperatorInvocation) -> str:
 
 def proposal_user_prompt(invocation: OperatorInvocation) -> str:
     """Return a proposal prompt with stdin, file, and failure context."""
-    prompt = invocation.prompt or default_prompt(invocation)
+    prompt = (
+        recovery_prompt(invocation.prompt)
+        or invocation.prompt
+        or default_prompt(invocation)
+    )
     stdin_text, stdin_label = bounded_stdin(invocation.stdin)
     sections = [
         f"Operator: {invocation.glyph} ({invocation.name})",
@@ -515,6 +519,22 @@ def interactive_failure_context() -> str:
     if failure is None:
         return "No failed command is recorded for interactive proposal."
     return "Last failed command context:\n" + failure_context_prompt(failure)
+
+
+def recovery_prompt(prompt: str) -> str:
+    """Return an explicit recovery objective for short failure prompts."""
+    from .failure import is_recovery_prompt, last_failure_or_none
+
+    if not is_recovery_prompt(prompt):
+        return ""
+    failure = last_failure_or_none()
+    if failure is None:
+        return ""
+    return (
+        "Suggest the smallest safe next shell command to recover from the last "
+        "failed command. Use the recorded stderr/stdout and cwd context; do not "
+        "invent missing output."
+    )
 
 
 def recent_question_context() -> str:

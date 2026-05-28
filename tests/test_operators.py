@@ -876,6 +876,32 @@ def test_proposal_user_prompt_includes_recent_turns_in_interactive_mode() -> Non
     assert "exit 1" in prompt
 
 
+def test_proposal_user_prompt_fix_targets_last_failure() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        with patch_dict(
+            os.environ,
+            {"SIGIL_STATE_DIR": tmp, "SIGIL_SESSION_ID": "test"},
+        ):
+            record_turn(
+                "pytest tests/test_foo.py",
+                1,
+                "/repo",
+                stderr_snippet="AssertionError: no",
+            )
+            invocation = create_invocation(
+                ",",
+                prompt="fix",
+                stdin="",
+                mode="interactive",
+            )
+            prompt = proposal_user_prompt(invocation)
+
+    assert "Prompt: Suggest the smallest safe next shell command" in prompt
+    assert "Last failed command context:" in prompt
+    assert "Failed command: pytest tests/test_foo.py" in prompt
+    assert "AssertionError: no" in prompt
+
+
 def test_proposal_user_prompt_omits_recent_turns_when_none_recorded() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         with patch_dict(

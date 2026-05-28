@@ -188,6 +188,7 @@ def clear_current_session() -> list[str]:
 
 RECENT_TURNS_PROMPT_LIMIT = 10
 RECENT_TURN_LINE_CHARS = 120
+RECENT_TURN_SNIPPET_CHARS = 500
 
 
 def recent_turns(limit: int = RECENT_TURNS_LIMIT) -> list[dict[str, Any]]:
@@ -222,7 +223,23 @@ def recent_turns_context(limit: int = RECENT_TURNS_PROMPT_LIMIT) -> str:
             command = command[:RECENT_TURN_LINE_CHARS] + "…"
         status = turn.get("status", "?")
         lines.append(f"  {command} (exit {status})")
+        stderr = compact_turn_snippet(turn.get("stderr_snippet"))
+        stdout = compact_turn_snippet(turn.get("stdout_snippet"))
+        if stderr:
+            lines.append(f"    stderr: {stderr}")
+        if stdout:
+            lines.append(f"    stdout: {stdout}")
     return "\n".join(lines)
+
+
+def compact_turn_snippet(value: object) -> str:
+    """Return one compact line of captured command output."""
+    if not isinstance(value, str) or not value:
+        return ""
+    text = " ".join(value.split())
+    if len(text) <= RECENT_TURN_SNIPPET_CHARS:
+        return text
+    return text[-RECENT_TURN_SNIPPET_CHARS:]
 
 
 def turn_is_skippable(command: str) -> bool:
@@ -249,6 +266,10 @@ def record_turn(
         return
 
     turn_cwd = cwd or os.getcwd()
+    from .failure import truncate_snippet
+
+    stdout_text = truncate_snippet(stdout_snippet)
+    stderr_text = truncate_snippet(stderr_snippet)
     security = create_trust_metadata(
         glyph="turn",
         integrity="human",
@@ -265,6 +286,10 @@ def record_turn(
         "turn_cwd": turn_cwd,
         **security,
     }
+    if stdout_text:
+        entry["stdout_snippet"] = stdout_text
+    if stderr_text:
+        entry["stderr_snippet"] = stderr_text
     _append_recent_turn(entry)
 
     if status != 0:
@@ -274,8 +299,8 @@ def record_turn(
             command,
             status,
             turn_cwd,
-            stdout_snippet=stdout_snippet,
-            stderr_snippet=stderr_snippet,
+            stdout_snippet=stdout_text,
+            stderr_snippet=stderr_text,
         )
 
 

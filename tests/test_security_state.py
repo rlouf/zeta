@@ -13,7 +13,7 @@ from click.testing import CliRunner
 from _patch import patch, patch_dict
 from sigil.cli import cli, main
 from sigil.commands import select
-from sigil.failure import failure_context_prompt, record_failure
+from sigil.failure import failure_context_prompt, record_failure, truncate_snippet
 from sigil.handoff import (
     LAST_BASH_HANDOFF_FILE,
     PENDING_BASH_HANDOFF_FILE,
@@ -30,7 +30,7 @@ from sigil.security import (
     normalize_trust_record,
     reject_promotion,
 )
-from sigil.session import recent_turns, record_turn
+from sigil.session import recent_turns, recent_turns_context, record_turn
 from sigil.state import append_event, append_jsonl, read_jsonl, write_jsonl
 from sigil.tty import confirmation_tty_paths, confirm_on_tty
 
@@ -709,6 +709,15 @@ def test_failure_records_snippets_and_safe_context() -> None:
                 os.environ["SIGIL_SESSION_ID"] = old_session_id
 
 
+def test_failure_snippets_are_redacted_before_storage() -> None:
+    assert (
+        truncate_snippet("Authorization: Bearer secret-token")
+        == "Authorization: Bearer [REDACTED]"
+    )
+    assert truncate_snippet("API_KEY=abc123") == "API_KEY=[REDACTED]"
+    assert truncate_snippet("aws AKIA1234567890ABCDEF") == "aws [REDACTED_AWS_KEY]"
+
+
 def read_recent_turns(tmp: str) -> list[dict[str, object]]:
     path = Path(tmp) / "sessions" / "test" / "recent-turns.jsonl"
     if not path.exists():
@@ -830,6 +839,45 @@ def test_record_turn_fans_out_to_record_failure_on_nonzero_status() -> None:
         assert failure["stderr_snippet"] == "captured stderr"
 
 
+def test_record_turn_persists_redacted_snippets_in_recent_turns() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        with patch_dict(
+            os.environ,
+            {"SIGIL_STATE_DIR": tmp, "SIGIL_SESSION_ID": "test"},
+        ):
+            record_turn(
+                "pytest tests",
+                1,
+                "/repo",
+                stdout_snippet="API_KEY=abc123",
+                stderr_snippet="Authorization: Bearer secret-token",
+            )
+
+        rows = read_recent_turns(tmp)
+        assert rows[0]["stdout_snippet"] == "API_KEY=[REDACTED]"
+        assert rows[0]["stderr_snippet"] == "Authorization: Bearer [REDACTED]"
+
+
+def test_recent_turns_context_includes_compact_snippets() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        with patch_dict(
+            os.environ,
+            {"SIGIL_STATE_DIR": tmp, "SIGIL_SESSION_ID": "test"},
+        ):
+            record_turn(
+                "pytest tests",
+                1,
+                "/repo",
+                stdout_snippet="collected 1 item",
+                stderr_snippet="AssertionError: expected true",
+            )
+            context = recent_turns_context()
+
+    assert "pytest tests (exit 1)" in context
+    assert "stderr: AssertionError: expected true" in context
+    assert "stdout: collected 1 item" in context
+
+
 def test_record_turn_does_not_record_failure_on_zero_status() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         with patch_dict(
@@ -925,6 +973,47 @@ def test_fresh_ask_prepends_recent_turns_context_to_pi_prompt() -> None:
     assert "ls -la" in prompt
     assert "pytest tests/test_foo.py" in prompt
     assert "what should I do next?" in prompt
+
+
+def test_fresh_ask_why_failed_includes_last_failure_context() -> None:
+    class FakeProc:
+        def __init__(self, stdout: StringIO | None = None) -> None:
+            self.stdout = stdout
+
+        def wait(self) -> int:
+            return 0
+
+    with tempfile.TemporaryDirectory() as tmp:
+        with patch_dict(
+            os.environ,
+            {"SIGIL_STATE_DIR": tmp, "SIGIL_SESSION_ID": "test"},
+        ):
+            record_turn(
+                "pytest tests/test_foo.py",
+                1,
+                "/repo",
+                stderr_snippet="AssertionError: no",
+            )
+            popen_calls: list[list[str]] = []
+
+            def fake_popen(cmd: list[str], *args: object, **kwargs: object) -> FakeProc:
+                popen_calls.append(cmd)
+                if cmd[0] == "pi":
+                    return FakeProc(StringIO(""))
+                return FakeProc()
+
+            with (
+                patch("sigil.question.ensure_model_for_pi", return_value=True),
+                patch("sigil.question.subprocess.Popen", side_effect=fake_popen),
+            ):
+                assert ask("why failed", json_output=True) == 0
+
+    pi_cmd = next(cmd for cmd in popen_calls if cmd[0] == "pi")
+    prompt = pi_cmd[-1]
+    assert "Last failed command context:" in prompt
+    assert "Failed command: pytest tests/test_foo.py" in prompt
+    assert "Recent stderr:" in prompt
+    assert "AssertionError: no" in prompt
 
 
 def test_follow_up_ask_does_not_include_recent_turns_context() -> None:

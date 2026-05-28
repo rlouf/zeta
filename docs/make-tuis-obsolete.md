@@ -167,16 +167,21 @@ reading docs first.
 
 ### Recovery Loop
 
-- [ ] Extend recent turn records with bounded stdout and stderr snippets.
-- [ ] Keep leading-space commands out of captured turn state.
-- [ ] Add redaction for common token, key, password, and bearer patterns.
-- [ ] Preserve prompt responsiveness while recording richer turn state.
-- [ ] Update failure-context prompts to prefer recent turn output when present.
+- [x] Extend recent turn records with bounded stdout and stderr snippets when
+      the shell provides them.
+- [x] Keep leading-space commands out of captured turn state.
+- [x] Add redaction for common token, key, password, and bearer patterns.
+- [x] Preserve prompt responsiveness while recording richer turn state.
+- [x] Update failure-context prompts to prefer recent turn output when present.
 - [ ] Add fixtures for common failures: pytest, missing command, git, network,
       and permission errors.
-- [ ] Make `, fix` work as a first-class phrase in tests and demos.
-- [ ] Make `? why failed` explain the last failure without asking for more
+- [x] Make `, fix` work as a first-class phrase in tests.
+- [x] Make `? why failed` explain the last failure without asking for more
       context.
+- [ ] Capture bounded stdout and stderr automatically for ordinary shell turns,
+      beyond the existing `SIGIL_FAILURE_STDOUT` and `SIGIL_FAILURE_STDERR`
+      hook point.
+- [ ] Add a deterministic demo for `, fix` and `? why failed`.
 
 ### Command Trust Labels
 

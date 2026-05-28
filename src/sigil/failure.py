@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 import sys
 import time
@@ -15,15 +16,58 @@ from .state import append_event, read_json, write_json
 
 MAX_SNIPPET_CHARS = 4000
 MAX_CONTEXT_LINES = 40
+SECRET_PATTERNS = (
+    (
+        re.compile(r"(?i)(authorization:\s*bearer\s+)([A-Za-z0-9._~+/=-]+)"),
+        r"\1[REDACTED]",
+    ),
+    (
+        re.compile(
+            r"(?i)\b([A-Z0-9_]*(?:TOKEN|SECRET|PASSWORD|API_KEY)[A-Z0-9_]*=)(\S+)"
+        ),
+        r"\1[REDACTED]",
+    ),
+    (
+        re.compile(r"\b(AKIA[0-9A-Z]{16})\b"),
+        "[REDACTED_AWS_KEY]",
+    ),
+)
+RECOVERY_PROMPTS = {
+    "fix",
+    "fix it",
+    "suggest a fix",
+    "recover",
+    "why failed",
+    "why did it fail",
+    "why did that fail",
+    "what failed",
+}
 
 
 def truncate_snippet(value: str | None, limit: int = MAX_SNIPPET_CHARS) -> str:
     """Bound captured command output before storing or sending to the model."""
     if not value:
         return ""
-    if len(value) <= limit:
-        return value
-    return value[-limit:]
+    redacted = redact_snippet(value)
+    if len(redacted) <= limit:
+        return redacted
+    return redacted[-limit:]
+
+
+def redact_snippet(value: str) -> str:
+    """Redact common secret-bearing output patterns."""
+    redacted = value
+    for pattern, replacement in SECRET_PATTERNS:
+        redacted = pattern.sub(replacement, redacted)
+    return redacted
+
+
+def is_recovery_prompt(prompt: str) -> bool:
+    """Return true for short prompts that refer to the latest failure."""
+    normalized = " ".join(prompt.strip().lower().split())
+    if normalized in RECOVERY_PROMPTS:
+        return True
+    return normalized.startswith(("fix ", "why failed ", "why did it fail "))
 
 
 def run_context_command(args: list[str], cwd: str) -> str:

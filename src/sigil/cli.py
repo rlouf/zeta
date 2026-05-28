@@ -196,17 +196,11 @@ def question_with_stdin(question: str, stdin_text: str) -> str:
 @click.argument("prompt_parts", nargs=-1)
 @click.option("--json", "json_output", is_flag=True)
 @click.option("--dry-run", is_flag=True, help="Classify output and skip execution.")
-@click.option(
-    "--verbose",
-    is_flag=True,
-    help="Compatibility flag; agent steps already stream raw Pi output.",
-)
 def cmd_op(
     glyph: str,
     prompt_parts: tuple[str, ...],
     json_output: bool,
     dry_run: bool,
-    verbose: bool,
 ) -> int:
     """Parse a semantic operator invocation."""
     stdin_is_tty = sys.stdin.isatty()
@@ -228,9 +222,7 @@ def cmd_op(
         return 0
 
     if should_run_act_operator(invocation):
-        return dispatch_act_operator(
-            invocation, prompt, stdin_text, dry_run=dry_run, verbose=verbose
-        )
+        return dispatch_act_operator(invocation, prompt, stdin_text, dry_run=dry_run)
 
     if should_confirm_piped_input(invocation):
         if not confirm_piped_input(stdin_text):
@@ -241,9 +233,7 @@ def cmd_op(
         return dispatch_question_operator(invocation, dry_run=dry_run)
 
     if invocation.base == "@":
-        return dispatch_goal_operator(
-            invocation, prompt, stdin_text, dry_run=dry_run, verbose=verbose
-        )
+        return dispatch_goal_operator(invocation, prompt, stdin_text, dry_run=dry_run)
 
     return dispatch_default_operator(invocation, dry_run=dry_run)
 
@@ -254,7 +244,6 @@ def dispatch_act_operator(
     stdin_text: str,
     *,
     dry_run: bool,
-    verbose: bool,
 ) -> int:
     """Run a `,,`/`,,,` invocation through the Pi act stepper."""
     if dry_run:
@@ -264,7 +253,6 @@ def dispatch_act_operator(
             confirm_step=invocation.depth == 2,
             glyph=invocation.glyph,
             dry_run=True,
-            verbose=verbose,
         )
         if status:
             raise click.exceptions.Exit(status)
@@ -279,7 +267,6 @@ def dispatch_act_operator(
             stdin_text=stdin_text,
             confirm_step=invocation.depth == 2,
             glyph=invocation.glyph,
-            verbose=verbose,
         )
     except RuntimeError as exc:
         print(f"sigil op: {exc}", file=sys.stderr)
@@ -307,7 +294,6 @@ def dispatch_goal_operator(
     stdin_text: str,
     *,
     dry_run: bool,
-    verbose: bool,
 ) -> int:
     """Run an `@`/`@@` invocation through the goal loop."""
     status = run_goal_loop(
@@ -316,7 +302,6 @@ def dispatch_goal_operator(
         confirm_steps=invocation.depth == 1,
         glyph=invocation.glyph,
         dry_run=dry_run,
-        verbose=verbose,
     )
     if status:
         raise click.exceptions.Exit(status)
@@ -412,44 +397,18 @@ def stdin_preview(text: str) -> str:
     type=click.Choice(["show", "resume", "abort"]),
 )
 @click.option("--json", "json_output", is_flag=True)
-@click.option(
-    "--verbose",
-    is_flag=True,
-    help="Compatibility flag; agent steps already stream raw Pi output.",
-)
-def cmd_act(act_command: str, json_output: bool, verbose: bool) -> int:
+def cmd_act(act_command: str, json_output: bool) -> int:
     """Inspect, resume, or abort the current Pi edit action."""
-    return run_act_command(act_command, json_output, verbose=verbose)
+    return run_act_command(act_command, json_output)
 
 
-@cli.command("plan", hidden=True)
-@click.argument(
-    "act_command",
-    required=False,
-    default="show",
-    type=click.Choice(["show", "resume", "abort"]),
-)
-@click.option("--json", "json_output", is_flag=True)
-@click.option(
-    "--verbose",
-    is_flag=True,
-    help="Compatibility flag; agent steps already stream raw Pi output.",
-)
-def cmd_plan(act_command: str, json_output: bool, verbose: bool) -> int:
-    """Compatibility alias for `sigil act`."""
-    return run_act_command(act_command, json_output, verbose=verbose)
-
-
-def run_act_command(
-    act_command: str, json_output: bool, *, verbose: bool = False
-) -> int:
+def run_act_command(act_command: str, json_output: bool) -> int:
     """Run the act control subcommands."""
     if act_command == "resume":
         return run_act_stepper(
             objective="",
             confirm_step=True,
             glyph=",,",
-            verbose=verbose,
         )
     if act_command == "abort":
         act = abort_active_act()

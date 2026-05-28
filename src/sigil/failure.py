@@ -5,12 +5,10 @@ from __future__ import annotations
 import os
 import re
 import subprocess
-import sys
 import time
 from pathlib import Path
 from typing import Any
 
-from .ansi import LOVE, RESET
 from .security import create_trust_metadata
 from .state import append_event, read_json, write_json
 
@@ -156,15 +154,6 @@ def record_failure(
             **security,
         },
     )
-
-
-def last_failure() -> dict[str, Any]:
-    """Load the last recorded failure or exit with a terminal-friendly error."""
-    failure = last_failure_or_none()
-    if failure is None:
-        print(f"{LOVE}✗ no failed command recorded{RESET}", file=sys.stderr)
-        raise SystemExit(1)
-    return failure
 
 
 def last_failure_or_none() -> dict[str, Any] | None:

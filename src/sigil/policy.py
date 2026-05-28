@@ -72,7 +72,6 @@ class ExecutionPolicy:
     """Explicit execution policy selected at the CLI boundary."""
 
     dry_run: bool = False
-    confirm_execution: bool = False
 
     def to_dict(self) -> dict[str, object]:
         """Return a JSON-serializable representation."""

@@ -139,7 +139,6 @@ def test_op_cli_routes_at_to_confirmed_goal_loop() -> None:
                 "confirm_steps": True,
                 "glyph": "@",
                 "dry_run": False,
-                "verbose": False,
             },
         )
     ]
@@ -314,7 +313,6 @@ def test_double_comma_runs_confirmed_agent_step() -> None:
                 "stdin_text": "",
                 "confirm_step": True,
                 "glyph": ",,",
-                "verbose": False,
             },
         )
     ]
@@ -669,7 +667,7 @@ def test_act_pi_step_uses_bash_handoff_extension() -> None:
     assert "SIGIL_BASH_HANDOFF_PATH" in filter_env
 
 
-def test_act_pi_step_verbose_keeps_raw_stream_renderer() -> None:
+def test_act_pi_step_keeps_raw_stream_renderer() -> None:
     class FakeProc:
         def __init__(self, stdout: object | None = None) -> None:
             self.stdout = stdout
@@ -704,7 +702,6 @@ def test_act_pi_step_verbose_keeps_raw_stream_renderer() -> None:
                         "id": "decision",
                         "mode": "propose",
                     },
-                    verbose=True,
                 )
 
     assert result == 0

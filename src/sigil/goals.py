@@ -14,7 +14,6 @@ from .tty import prompt_on_tty
 
 LAST_GOAL = "last-goal.jsonl"
 DEFAULT_MAX_GOAL_STEPS = 5
-GoalStatus = Literal["active", "completed", "blocked", "budget_hit", "aborted"]
 StepStatus = Literal["continue", "complete", "blocked"]
 
 
@@ -25,7 +24,6 @@ def run_goal_loop(
     confirm_steps: bool,
     glyph: str,
     dry_run: bool = False,
-    verbose: bool = False,
 ) -> int:
     """Create or resume a bounded goal loop."""
     prepared = prepare_goal(
@@ -51,9 +49,7 @@ def run_goal_loop(
         proceed, decision_label = approve_goal_step(goal, confirm_steps)
         if not proceed:
             return 0
-        outcome = execute_goal_step(
-            goal, step, decision_label, glyph=glyph, verbose=verbose
-        )
+        outcome = execute_goal_step(goal, step, decision_label, glyph=glyph)
         if outcome is not None:
             return outcome
 
@@ -127,7 +123,6 @@ def execute_goal_step(
     decision_label: str,
     *,
     glyph: str,
-    verbose: bool,
 ) -> int | None:
     """Run one approved step; return an exit code to stop, or None to continue."""
     decision_event = record_goal_step_decision(goal, step, decision_label)
@@ -136,7 +131,6 @@ def execute_goal_step(
         step,
         decision_event,
         glyph=glyph,
-        verbose=verbose,
     )
     step["exit_code"] = status
     goal["steps_run"] = int(goal.get("steps_run", 0) or 0) + 1

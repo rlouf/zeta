@@ -90,20 +90,3 @@ def record_id(record: dict[str, Any]) -> str:
     """Return the event identifier used by audit links."""
     value = record.get("event_id") or record.get("id")
     return str(value) if value else ""
-
-
-def inherited_label(metadata: dict[str, Any]) -> str:
-    """Return the compact trust label shown in terminal status."""
-    normalized = normalize_trust_record(metadata)
-    labels = normalized["labels"]
-    if labels:
-        return ",".join(labels)
-    return str(normalized["mode"])
-
-
-def candidate_prefix(metadata: dict[str, Any]) -> str:
-    """Return the trust prefix shown beside selectable command candidates."""
-    normalized = normalize_trust_record(metadata)
-    labels = normalized["labels"]
-    suffix = f":{','.join(labels)}" if labels else ""
-    return f"[{normalized['mode']}{suffix}]"

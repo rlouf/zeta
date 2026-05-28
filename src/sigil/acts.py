@@ -21,7 +21,6 @@ from .state import append_event, append_jsonl, read_jsonl
 from .tty import prompt_on_tty
 
 LAST_ACT = "last-act.jsonl"
-LEGACY_LAST_PLAN = "last-plan.jsonl"
 MAX_EVENT_OUTPUT_CHARS = 4000
 PI_AGENT_TOOLS = "read,grep,find,ls,bash,edit,write"
 PI_AGENT_TOOLS_WITHOUT_BASH = "read,grep,find,ls,edit,write"
@@ -46,7 +45,6 @@ def run_act_stepper(
     confirm_step: bool,
     glyph: str,
     dry_run: bool = False,
-    verbose: bool = False,
 ) -> int:
     """Create or resume a one-step Pi edit action."""
     prepared = prepare_act(
@@ -74,7 +72,7 @@ def run_act_stepper(
         return 0
 
     decision_event = record_step_decision(act, step, decision_label)
-    status = run_pi_agent_step(act, step, decision_event, glyph=glyph, verbose=verbose)
+    status = run_pi_agent_step(act, step, decision_event, glyph=glyph)
     step["status"] = "done" if status == 0 else "failed"
     step["exit_code"] = status
     record_step_executed(act, step, status)
@@ -227,22 +225,15 @@ def abort_active_act() -> dict[str, Any] | None:
 
 
 def read_act_events() -> list[dict[str, Any]]:
-    """Read current act state, accepting the previous plan file as fallback."""
-    events = read_jsonl(LAST_ACT)
-    if events:
-        return events
-    return read_jsonl(LEGACY_LAST_PLAN)
+    """Read current act state events."""
+    return read_jsonl(LAST_ACT)
 
 
 def event_act(event: dict[str, Any]) -> dict[str, Any] | None:
-    """Return the act payload, normalizing legacy plan snapshots."""
+    """Return the act payload from an event, if present."""
     act = event.get("act")
     if isinstance(act, dict):
         return act
-    legacy_plan = event.get("plan")
-    if isinstance(legacy_plan, dict):
-        legacy_plan.setdefault("act_id", legacy_plan.get("plan_id"))
-        return legacy_plan
     return None
 
 
@@ -289,7 +280,6 @@ def run_pi_agent_step(
     decision_event: dict[str, Any],
     *,
     glyph: str | None = None,
-    verbose: bool = False,
 ) -> int:
     """Run one non-interactive Pi edit step and stream tool events."""
     if not ensure_model_for_pi():

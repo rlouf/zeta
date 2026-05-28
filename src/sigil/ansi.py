@@ -1,9 +1,5 @@
 """Shared terminal colors for Sigil's deliberately small text UI."""
 
 MUTED = "\033[38;2;110;106;134m"
-SUBTLE = "\033[38;2;144;140;170m"
-IRIS = "\033[38;2;196;167;231m"
-FOAM = "\033[38;2;156;207;216m"
-GOLD = "\033[38;2;246;193;119m"
 LOVE = "\033[38;2;235;111;146m"
 RESET = "\033[0m"

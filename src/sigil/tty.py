@@ -48,12 +48,6 @@ def prompt_on_tty(prompt: str) -> str | None:
     return None
 
 
-def confirm_on_fd(fd: int, prompt: str) -> bool:
-    """Ask for confirmation on an already-open terminal-like file descriptor."""
-    answer = prompt_on_fd(fd, prompt)
-    return answer.strip().lower() in {"y", "yes"}
-
-
 def prompt_on_fd(fd: int, prompt: str) -> str:
     """Read one line from an already-open terminal-like file descriptor."""
     os.write(fd, prompt.encode("utf-8"))

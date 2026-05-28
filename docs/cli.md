@@ -174,8 +174,8 @@ Glyphs are installed shell functions over the CLI runtime. Install them with
 
 ```text
 ,    recommend one command
-,,   run one agent step, confirming effects
-,,,  run one agent step, auto-approving routine effects within policy
+,,   run one agent turn, confirming effects
+,,,  run one agent turn, auto-approving routine effects within policy
 ?    answer from local read-only context
 ??   answer from local context plus web search
 @    run a bounded goal loop with checkpoints
@@ -198,8 +198,9 @@ Examples:
 prompt buffer and adds it to shell history; the Bash binding adds it to history.
 Proposal output includes a terse label line such as `local · read-only ·
 focused` or `network · publish · high-risk`. `,,` asks before running one Pi
-agent step with read/search/edit/write tools. `,,,` runs the same one-step
-route without routine confirmation. `@` and `@@` repeat bounded steps toward a
+agent turn with read/search/edit/write tools. A turn is one Pi invocation and
+may include zero or more tool calls. `,,,` runs the same one-turn route without
+routine confirmation. `@` and `@@` repeat bounded turns toward a
 durable goal, stopping on completion, blockage, budget exhaustion, or policy
 boundaries. Bash tool execution is blocked and exposed as a handoff.
 

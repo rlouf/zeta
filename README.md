@@ -33,8 +33,8 @@ suggesting, executing, and explaining. Sigil keeps those routes separate.
 | Need | Glyph | What happens |
 | --- | --- | --- |
 | "Give me the command." | `,` | Proposes one command. Nothing runs. |
-| "Do one agent step." | `,,` | Runs one Pi read/edit/write step after confirmation. |
-| "Do one routine step." | `,,,` | Runs one Pi read/edit/write step without routine confirmation, within policy. |
+| "Do one agent turn." | `,,` | Runs one Pi invocation after confirmation. |
+| "Do one routine turn." | `,,,` | Runs one Pi invocation without routine confirmation, within policy. |
 | "Answer from local context." | `?` | Read-only answer with the read tool. No shell is exposed. |
 | "Answer with web." | `??` | Read-only answer with read and web search tools. |
 | "Work toward a goal." | `@` | Runs a bounded goal loop with checkpoints. |
@@ -162,8 +162,8 @@ Installed zsh and Bash bindings expose these shortcuts:
 | Glyph | Name | Behavior |
 | --- | --- | --- |
 | `,` | recommend | Recommend one command. |
-| `,,` | step | Run one agent step, confirming effects. |
-| `,,,` | auto step | Run one agent step, auto-approving routine effects within policy. |
+| `,,` | step | Run one agent turn, confirming effects. |
+| `,,,` | auto step | Run one agent turn, auto-approving routine effects within policy. |
 | `?` | answer | Answer from local read-only context. |
 | `??` | web answer | Answer from local context plus web search. |
 | `@` | goal | Run a bounded goal loop with checkpoints. |
@@ -187,9 +187,10 @@ history. Proposals include terse labels such as `local · read-only · focused`
 or `network · publish · high-risk`.
 
 `,,` asks before handing the objective to Pi, gives Pi read/search/edit/write
-tools, and returns control to the shell after one bounded step. `,,,` runs the
-same one-step route without routine confirmation. Bash calls inside those steps
-are blocked and handed off. `@` and `@@` repeat bounded Pi steps toward a
+tools, and returns control to the shell after one bounded Pi invocation. That
+invocation may include zero or more tool calls. `,,,` runs the same one-turn
+route without routine confirmation. Bash calls inside those turns are blocked
+and handed off. `@` and `@@` repeat bounded Pi turns toward a
 durable goal until completion, blockage, budget exhaustion, or interruption.
 Agent steps always stream Pi's raw tool calls and prose through `glow` or
 `cat`; they do not replace the final answer with a compact summary.

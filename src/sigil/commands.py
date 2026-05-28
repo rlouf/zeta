@@ -1,64 +1,52 @@
-"""Command-generation flow for the comma glyph.
+"""Single-command proposal for the comma glyph.
 
-This module owns the model prompt, candidate normalization, trust metadata, and
-selector behavior. Shell bindings only ask it for a selected command.
+Sigil , asks the local model for one typed proposal: a runnable shell command
+with a brief explanation.  Shell bindings only ask it for that proposal.
 """
 
 from __future__ import annotations
 
-import subprocess
 import sys
-from typing import Any, TextIO
+from typing import Any
 
 from .ansi import LOVE, MUTED, RESET
 from .model import chat_json, ensure_server
-from .security import (
-    candidate_prefix,
-    create_trust_metadata,
-    normalize_trust_record,
-)
+from .security import create_trust_metadata
 from .state import append_event
 
-COMMAND_SCHEMA: dict[str, Any] = {
+PROPOSAL_SCHEMA: dict[str, Any] = {
     "type": "object",
     "additionalProperties": False,
     "properties": {
-        "commands": {
-            "type": "array",
-            "minItems": 1,
-            "maxItems": 4,
-            "items": {
-                "type": "object",
-                "additionalProperties": False,
-                "properties": {
-                    "command": {"type": "string"},
-                    "note": {"type": "string"},
-                },
-                "required": ["command", "note"],
-            },
-        }
+        "command": {
+            "type": "string",
+            "description": "One directly runnable macOS zsh command.",
+        },
+        "note": {
+            "type": "string",
+            "description": "Brief reason this is the best next action.",
+        },
     },
-    "required": ["commands"],
+    "required": ["command", "note"],
 }
 
 COMMAND_SYSTEM = (
     "You generate commands for macOS zsh with the default BSD userland. "
     "Use only BSD/macOS-compatible syntax - no GNU-specific flags or tools "
     "(e.g. no 'find -printf', no 'sed -i' without a backup suffix, no 'date -d', "
-    "no 'readlink -f', prefer 'stat -f' over 'stat -c'). Return 2-4 candidate "
-    "commands, best first, each with a terse one-line note. Commands must be "
-    "directly runnable."
+    "no 'readlink -f', prefer 'stat -f' over 'stat -c'). "
+    "Return exactly one directly runnable command with a terse one-line note."
 )
 
 
-def generate(prompt: str) -> tuple[list[dict[str, str]], dict[str, Any]]:
-    """Ask the local model for runnable command candidates."""
+def generate(prompt: str) -> tuple[dict[str, str], dict[str, Any]]:
+    """Ask the local model for a single command proposal."""
     if not ensure_server():
         raise SystemExit(1)
     print(f"{MUTED}❯ sigil ,  · propose · model-authored{RESET}", file=sys.stderr)
     print(f"{MUTED}⟳ thinking…{RESET}", end="", file=sys.stderr, flush=True)
     try:
-        data = chat_json(COMMAND_SYSTEM, prompt, COMMAND_SCHEMA)
+        data = chat_json(COMMAND_SYSTEM, prompt, PROPOSAL_SCHEMA)
     except RuntimeError as exc:
         print("\r\033[K", end="", file=sys.stderr)
         print(f"{LOVE}✗ model request failed{RESET}", file=sys.stderr)
@@ -67,18 +55,16 @@ def generate(prompt: str) -> tuple[list[dict[str, str]], dict[str, Any]]:
         raise SystemExit(1) from exc
     except Exception:
         print("\r\033[K", end="", file=sys.stderr)
-        print(f"{LOVE}✗ could not generate command candidates{RESET}", file=sys.stderr)
+        print(f"{LOVE}✗ could not generate command proposal{RESET}", file=sys.stderr)
         raise SystemExit(1)
     print("\r\033[K", end="", file=sys.stderr)
 
-    candidates = [
-        {"command": str(item.get("command", "")), "note": str(item.get("note", ""))}
-        for item in data.get("commands", [])
-        if item.get("command")
-    ]
-    if not candidates:
-        print(f"{LOVE}✗ no candidates{RESET}", file=sys.stderr)
+    command = str(data.get("command", "")).strip()
+    if not command:
+        print(f"{LOVE}✗ no command generated{RESET}", file=sys.stderr)
         raise SystemExit(1)
+
+    proposal = {"command": command, "note": str(data.get("note", "")).strip()}
 
     security = create_trust_metadata(
         glyph=",",
@@ -91,7 +77,7 @@ def generate(prompt: str) -> tuple[list[dict[str, str]], dict[str, Any]]:
         {
             "type": "command_generated",
             "prompt": prompt,
-            "commands": candidates,
+            "command": command,
             **security,
         }
     )
@@ -104,126 +90,4 @@ def generate(prompt: str) -> tuple[list[dict[str, str]], dict[str, Any]]:
         input_records=[event],
         fresh_human=True,
     )
-    return candidates, selection_security
-
-
-def select(
-    prompt: str,
-    candidates: list[dict[str, str]],
-    metadata: dict[str, Any] | None = None,
-) -> str | None:
-    """Return the command selected by the user, preferring the fzf UI."""
-    metadata = normalize_trust_record(metadata or {})
-    if len(candidates) == 1:
-        return candidates[0]["command"]
-    if not selector_has_terminal():
-        print(
-            f"{LOVE}✗ --select requires an interactive terminal; "
-            f"rerun without --select to print candidates{RESET}",
-            file=sys.stderr,
-        )
-        raise SystemExit(2)
-
-    try:
-        subprocess.run(
-            ["fzf", "--version"],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            check=True,
-        )
-    except Exception:
-        return select_numbered(prompt, candidates, metadata)
-
-    records = []
-    prefix = candidate_prefix(metadata)
-    for index, item in enumerate(candidates, start=1):
-        command = item["command"].replace("\t", " ")
-        note = item.get("note", "").replace("\t", " ")
-        records.append(
-            f"{index}\t{command}\t{prefix} {command}\n{MUTED}  {note}{RESET}\n\0"
-        )
-    proc = subprocess.run(
-        [
-            "fzf",
-            "--read0",
-            "--height=16",
-            "--layout=reverse",
-            "--border=rounded",
-            "--color=current-bg:-1,current-fg:15,gutter:0,pointer:0",
-            "--ansi",
-            "--prompt=command › ",
-            "--pointer= ",
-            "--marker=+",
-            "--gap=1",
-            "--gap-line= ",
-            "--delimiter=\t",
-            "--with-nth=3",
-        ],
-        input="".join(records),
-        text=True,
-        stdout=subprocess.PIPE,
-    )
-    if proc.returncode != 0:
-        print(f"{MUTED}cancelled{RESET}", file=sys.stderr)
-        return None
-    selected = proc.stdout.split("\t", 2)
-    if len(selected) < 2:
-        return None
-    return selected[1]
-
-
-def selector_has_terminal() -> bool:
-    """Return whether a selector can talk to the user's terminal."""
-    if sys.stdin.isatty():
-        return True
-    try:
-        with open("/dev/tty", encoding="utf-8"):
-            return True
-    except OSError:
-        return False
-
-
-def selector_input() -> TextIO:
-    """Return an input stream for the fallback selector."""
-    if sys.stdin.isatty():
-        return sys.stdin
-    return open("/dev/tty", encoding="utf-8")
-
-
-def select_numbered(
-    prompt: str,
-    candidates: list[dict[str, str]],
-    metadata: dict[str, Any] | None = None,
-    input_stream: TextIO | None = None,
-) -> str | None:
-    """Fallback selector for environments without fzf."""
-    close_input = False
-    if input_stream is None:
-        input_stream = selector_input()
-        close_input = input_stream is not sys.stdin
-    prefix = candidate_prefix(metadata or {})
-    try:
-        print(f"{MUTED}commands for {prompt}{RESET}", file=sys.stderr)
-        for index, item in enumerate(candidates, start=1):
-            print(f"  {index}  {prefix} {item['command']}", file=sys.stderr)
-            if item.get("note"):
-                print(f"     {MUTED}{item['note']}{RESET}", file=sys.stderr)
-        print(
-            f"  pick 1-{len(candidates)}  ↵=1  q=cancel › ",
-            end="",
-            file=sys.stderr,
-            flush=True,
-        )
-        choice = input_stream.readline().strip()
-        if choice == "q":
-            print(f"{MUTED}cancelled{RESET}", file=sys.stderr)
-            return None
-        if not choice:
-            choice = "1"
-        if choice.isdigit() and 1 <= int(choice) <= len(candidates):
-            return candidates[int(choice) - 1]["command"]
-        print(f"{LOVE}invalid choice{RESET}", file=sys.stderr)
-        return None
-    finally:
-        if close_input:
-            input_stream.close()
+    return proposal, selection_security

@@ -14,7 +14,7 @@ from typing import cast
 
 import click
 
-from .commands import generate, select
+from .commands import generate
 from .failure import record_failure
 from .handoff import consume_latest_bash_handoff, latest_bash_handoff
 from .install import (
@@ -39,7 +39,6 @@ from .session import (
     record_turn,
     session_paths,
 )
-from .state import append_event
 from .status import current_status, format_status
 from .tty import confirm_on_tty
 
@@ -116,14 +115,12 @@ def piped_stdin_text() -> str | None:
 
 @cli.command("command")
 @click.argument("prompt", required=False)
-@click.option("--select", "select_candidate", is_flag=True)
 @click.option("--json", "json_output", is_flag=True)
 def cmd_command(
     prompt: str | None,
-    select_candidate: bool,
     json_output: bool,
 ) -> int:
-    """Generate command candidates and optionally run the selector UI."""
+    """Generate a single command proposal."""
     stdin_text = piped_stdin_text()
     if stdin_text is not None:
         return run_stream_operator(
@@ -136,18 +133,11 @@ def cmd_command(
     if prompt is None:
         raise click.UsageError("PROMPT is required unless stdin is piped.")
 
-    candidates, security = generate(prompt)
+    proposal, security = generate(prompt)
     if json_output:
-        print_json_line({"prompt": prompt, "commands": candidates})
+        print_json_line({"prompt": prompt, "command": proposal})
         return 0
-    if select_candidate:
-        command = select(prompt, candidates, security)
-        if command:
-            append_event({"type": "command_selected", "command": command, **security})
-            print(command)
-        return 0
-    for item in candidates:
-        print(item["command"])
+    print(proposal["command"])
     return 0
 
 

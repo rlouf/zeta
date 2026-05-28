@@ -2,7 +2,6 @@ from __future__ import annotations
 import pytest
 import json
 import os
-import subprocess
 import tempfile
 from contextlib import redirect_stderr
 from io import StringIO
@@ -12,7 +11,6 @@ from click.testing import CliRunner
 
 from _patch import patch, patch_dict
 from sigil.cli import cli, main
-from sigil.commands import select
 from sigil.failure import failure_context_prompt, record_failure, truncate_snippet
 from sigil.handoff import (
     LAST_BASH_HANDOFF_FILE,
@@ -368,59 +366,6 @@ def test_session_list_includes_last_event_context() -> None:
     assert text.exit_code == 0, text.output
     assert "alpha\t/repo\tnew_alpha\t" in text.output
     assert "beta\t/other\tbeta_event\t" in text.output
-
-
-def test_select_rejects_multiple_candidates_without_interactive_stdin() -> None:
-    stderr = StringIO()
-    with (
-        patch("sys.stdin", StringIO("")),
-        patch("sigil.commands.selector_has_terminal", return_value=False),
-    ):
-        with redirect_stderr(stderr):
-            with pytest.raises(SystemExit) as raised:
-                select(
-                    "status",
-                    [
-                        {"command": "git status --short", "note": "short status"},
-                        {"command": "git status", "note": "full status"},
-                    ],
-                )
-    assert raised.value.code == 2
-    assert "--select requires an interactive terminal" in stderr.getvalue()
-
-
-def test_select_uses_fzf_when_controlling_tty_exists() -> None:
-    calls = []
-
-    def fake_run(args, **kwargs):
-        calls.append(args)
-        if args == ["fzf", "--version"]:
-            return subprocess.CompletedProcess(args, 0)
-        return subprocess.CompletedProcess(args, 0, stdout="2\tgit status\tshown\n")
-
-    with (
-        patch("sys.stdin", StringIO("")),
-        patch("sigil.commands.selector_has_terminal", return_value=True),
-        patch("sigil.commands.subprocess.run", side_effect=fake_run),
-    ):
-        selected = select(
-            "status",
-            [
-                {"command": "git status --short", "note": "short status"},
-                {"command": "git status", "note": "full status"},
-            ],
-        )
-
-    assert selected == "git status"
-    assert calls[0] == ["fzf", "--version"]
-
-
-def test_select_returns_single_candidate_without_interactive_stdin() -> None:
-    with patch("sys.stdin", StringIO("")):
-        selected = select(
-            "status", [{"command": "git status --short", "note": "short status"}]
-        )
-    assert selected == "git status --short"
 
 
 def test_renderer_defaults_to_glow_notty_when_available() -> None:

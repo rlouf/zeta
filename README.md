@@ -7,9 +7,9 @@
 
 Natural-language shell assistant.
 
-Sigil turns short terminal intents into explicit, inspectable shell actions. Ask
-for one command, run one confirmed command, or ask a read-only question without
-leaving your prompt.
+Sigil turns short terminal intents into explicit, inspectable shell actions.
+Ask for one command, run one confirmed command, or ask a read-only question
+without leaving your prompt.
 
 ![15-second Sigil terminal demo](docs/demo.gif)
 
@@ -26,15 +26,15 @@ changes.
 
 ## Why Sigil?
 
-Most shell assistants blur together three very different operations: suggesting,
-executing, and explaining. Sigil keeps those routes separate.
+Most shell assistants blur together three very different operations:
+suggesting, executing, and explaining. Sigil keeps those routes separate.
 
-| Need | Route | What happens |
+| Need | Glyph | What happens |
 | --- | --- | --- |
 | "Give me the command." | `,` | Proposes one command. Nothing runs. |
 | "Do the next step." | `,,` | Runs one generated command. |
 | "Make one edit pass." | `,,,` | Runs one confirmed Pi read/edit/write action, then returns control. |
-| "Answer this." | `?` | Uses Pi with read and web tools only. No Bash tool is exposed. |
+| "Answer this." | `?` | Read-only question with read and web tools. No shell is exposed. |
 | "Continue that answer." | `??` | Follows up in the same terminal session. |
 
 The result is a shell workflow with small blast radius, durable state, and a
@@ -58,7 +58,7 @@ sigil install bash
 sigil doctor --shell bash
 ```
 
-You can also install the command with `pipx`:
+You can also install with `pipx`:
 
 ```sh
 pipx install sigil-sh
@@ -79,21 +79,13 @@ updates the binding without duplicating the rc block.
 
 ## Requirements
 
-Sigil expects:
-
 - Python 3.11+
 - zsh or Bash for shell bindings
 - A local OpenAI-compatible chat completions endpoint for command generation
-  and Pi-backed routes
-- `pi` for `sigil ask`, `?`, `??`, `???`, and `,,,`
+  and Pi-backed routes (default `http://127.0.0.1:8080/v1/chat/completions`)
+- `pi` for `?`, `??`, `???`, and `,,,`
 - `glow` for Markdown rendering, optional but recommended
-- `fzf` for `sigil command --select`, optional
-
-By default, command generation expects a local OpenAI-compatible endpoint at:
-
-```sh
-http://127.0.0.1:8080/v1/chat/completions
-```
+- `fzf` for `,` with `--select`, optional
 
 Useful environment variables:
 
@@ -102,13 +94,14 @@ SIGIL_MODEL_URL=http://127.0.0.1:8080/v1/chat/completions
 SIGIL_MODEL_NAME=local-model
 SIGIL_MODEL_PATH=/path/to/model.gguf
 SIGIL_STATE_DIR=$HOME/.sigil
+SIGIL_ENABLE_PROMPT_MARKER=0
 SIGIL_GLOW_STYLE=notty
 SIGIL_GLOW_WIDTH=88
 ```
 
 ## Quick Start
 
-Once the shell binding is installed, use glyphs directly:
+Once the shell binding is installed, use the glyphs directly:
 
 ```sh
 # Propose one command. In zsh, the command is inserted into the prompt buffer.
@@ -131,9 +124,9 @@ git diff | ? review risky changes
 git diff --name-only | , run the relevant tests
 ```
 
-When stdin is piped into comma routes, Sigil previews the input and asks before
-using it. Question routes use piped input directly because they have no execute
-path and do not expose Bash to Pi.
+When stdin is piped into comma routes, Sigil previews the input and asks
+before using it. Question routes use piped input directly because they have
+no execute path.
 
 ## A Typical Flow
 
@@ -158,7 +151,7 @@ allowed to do.
 
 ## Glyph Reference
 
-Installed zsh and Bash bindings expose these optional shortcuts:
+Installed zsh and Bash bindings expose these shortcuts:
 
 | Glyph | Name | Behavior |
 | --- | --- | --- |
@@ -185,11 +178,10 @@ buffer with `print -z` and records it in shell history. Bash records it in
 history. `,,` executes command proposals through your shell.
 
 `,,,` asks before handing the objective to Pi, gives Pi read/search/edit/write
-tools, and returns control to the shell after one bounded edit pass. Bash calls
-inside that pass are blocked and handed off.
-By default, Sigil shows a compact tool trace and a short completion summary;
-use `,,, --verbose ...` or `sigil act resume --verbose` for Pi's raw tool
-stream and prose.
+tools, and returns control to the shell after one bounded edit pass. Bash
+calls inside that pass are blocked and handed off. By default, Sigil shows a
+compact tool trace and a short completion summary; use `,,, --verbose ...`
+for Pi's raw tool stream and prose.
 
 Question routes do not expose Bash. If an answer recommends a command, it is
 plain answer text, not a tool call or terminal handoff.
@@ -198,53 +190,6 @@ To install the CLI without punctuation shortcuts:
 
 ```sh
 sigil install zsh --no-glyphs
-```
-
-## CLI
-
-The glyphs are thin shell functions over a regular CLI:
-
-```text
-sigil command [--select] [--json] [PROMPT]
-sigil ask [--follow-up] [--json] [QUESTION]
-sigil act [show|resume|abort] [--json] [--verbose]
-sigil events [--limit N] [--json] [--raw]
-sigil events lineage [EVENT_ID] [--json]
-sigil session [show|path|list|clear] [--json]
-sigil status [--json]
-sigil install {zsh|bash} [--install-dir DIR] [--rc FILE] [--glyphs|--no-glyphs]
-sigil doctor [--shell auto|zsh|bash] [--json]
-```
-
-Copy-pasteable examples:
-
-```sh
-sigil command "find files over 10 MB in this repo excluding .git"
-sigil command --select "show the largest directories"
-sigil ask "what changed in this repo?"
-sigil ask --follow-up "what should I run next?"
-git diff | sigil ask "review risky changes"
-git diff --name-only | sigil command "run the relevant tests"
-sigil status
-```
-
-See [docs/cli.md](docs/cli.md) for the user-facing CLI contract and JSON
-examples.
-
-## Acts
-
-Run one confirmed Pi edit action with the triple-comma glyph:
-
-```sh
-,,, migrate this package to the new API and run the tests
-```
-
-Inspect or control the action state:
-
-```sh
-sigil act show
-sigil act resume
-sigil act abort
 ```
 
 ## Trust Model
@@ -258,41 +203,56 @@ Sigil's important user rules are:
 | `,,,` | exec/write boxed | One confirmed Pi edit action at a time. |
 | `?`, `??`, `???` | read | Read/web question routes with no Bash tool. |
 
-Trust records include route, integrity, capability, taint, provisional status,
-and input event ids. Inspect them with:
+Trust records include route, integrity, capability, taint, provisional
+status, and input event ids. Inspect them with:
 
 ```sh
 sigil events
 sigil events lineage
-sigil session show --json
 ```
 
 For details, see [docs/security-lattice.md](docs/security-lattice.md).
 
-## State
+## CLI
 
-Sigil writes state under `~/.sigil/` by default. Set `SIGIL_STATE_DIR` to move
-it.
+The glyphs are thin shell functions over a regular CLI:
 
 ```text
-events.jsonl                              global event log
-sessions/<session-id>/last-failure.json   latest failed shell command
-sessions/<session-id>/last-act.jsonl      confirmed Pi edit action snapshots
-sessions/<session-id>/last-question.jsonl same-session question transcript
-sessions/<session-id>/last-bash-handoff.jsonl latest blocked Bash handoff
-sessions/<session-id>/last-tools.jsonl    latest Pi tool trace
-sessions/<session-id>/recent-turns.jsonl  recent shell turns recorded by bindings
+sigil command [--select] [--json] [PROMPT]
+sigil events [--limit N] [--json] [--raw]
+sigil events lineage [EVENT_ID] [--json]
+sigil session [show|list|clear] [--json]
+sigil status [--json]
+sigil install {zsh|bash} [--install-dir DIR] [--rc FILE] [--glyphs|--no-glyphs]
+sigil doctor [--shell auto|zsh|bash] [--json]
 ```
 
+Copy-pasteable examples:
+
+```sh
+sigil command "find files over 10 MB in this repo excluding .git"
+sigil command --select "show the largest directories"
+git diff --name-only | sigil command "run the relevant tests"
+sigil status
+sigil events
+```
+
+See [docs/cli.md](docs/cli.md) for the user-facing CLI contract and JSON
+examples.
+
+## State
+
+Sigil writes event-sourced state under `~/.sigil/` by default. Set
+`SIGIL_STATE_DIR` to move it.
+
 Installed Bash and zsh bindings set `SIGIL_SESSION_ID` once when the shell
-starts, so separate terminal windows keep separate continuity. You can override
-the boundary with `SIGIL_SESSION_ID` or `SIGIL_SESSION_DIR`.
+starts, so separate terminal windows keep separate continuity. Override the
+boundary with `SIGIL_SESSION_ID` or `SIGIL_SESSION_DIR`.
 
 Inspect state without calling a model:
 
 ```sh
 sigil session show
-sigil session path
 sigil session list
 sigil session clear
 sigil events
@@ -335,9 +295,9 @@ Render deterministic demo GIFs:
 scripts/render-demo-gifs.sh
 ```
 
-Demo tapes live in [docs/demos](docs/demos/). They run the real Sigil CLI from
-this checkout while shimming only external dependencies such as the model
-server, `pi`, and `uv`.
+Demo tapes live in [docs/demos](docs/demos/). They run the real Sigil CLI
+from this checkout while shimming only external dependencies such as the
+model server, `pi`, and `uv`.
 
 ## License
 

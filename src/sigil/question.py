@@ -19,7 +19,7 @@ from .security import (
     create_trust_metadata,
     normalize_trust_record,
 )
-from .server import ensure_model_for_pi
+from .model import ensure_model_for_pi
 from .session import recent_turns_context
 from .state import append_event, append_jsonl, read_jsonl, write_jsonl
 

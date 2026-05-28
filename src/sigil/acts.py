@@ -16,7 +16,7 @@ from .handoff import (
 )
 from .question import renderer_command
 from .security import create_trust_metadata
-from .server import ensure_model_for_pi
+from .model import ensure_model_for_pi
 from .state import append_event, append_jsonl, read_jsonl
 from .tty import prompt_on_tty
 

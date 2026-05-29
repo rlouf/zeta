@@ -126,7 +126,7 @@ def test_op_cli_routes_at_to_confirmed_goal_loop() -> None:
         calls.append((args, kwargs))
         return 0
 
-    with patch("sigil.cli.run_goal_loop", side_effect=fake_run_goal_loop):
+    with patch("sigil.cli.operators.run_goal_loop", side_effect=fake_run_goal_loop):
         result = CliRunner().invoke(cli, ["op", "@", "fix", "tests"])
 
     assert result.exit_code == 0
@@ -151,7 +151,7 @@ def test_op_cli_routes_double_at_to_auto_goal_loop() -> None:
         calls.append((args, kwargs))
         return 0
 
-    with patch("sigil.cli.run_goal_loop", side_effect=fake_run_goal_loop):
+    with patch("sigil.cli.operators.run_goal_loop", side_effect=fake_run_goal_loop):
         result = CliRunner().invoke(cli, ["op", "@@", "fix", "tests"])
 
     assert result.exit_code == 0
@@ -168,8 +168,8 @@ def test_op_cli_confirms_piped_at_before_goal_loop() -> None:
         return 0
 
     with (
-        patch("sigil.cli.confirm_piped_input", return_value=True),
-        patch("sigil.cli.run_goal_loop", side_effect=fake_run_goal_loop),
+        patch("sigil.cli.operators.confirm_piped_input", return_value=True),
+        patch("sigil.cli.operators.run_goal_loop", side_effect=fake_run_goal_loop),
     ):
         result = CliRunner().invoke(cli, ["op", "@", "fix"], input="diff\n")
 
@@ -186,8 +186,11 @@ def test_op_cli_runs_piped_double_question_operator_through_web_route() -> None:
         return 0
 
     with (
-        patch("sigil.cli.confirm_piped_input", side_effect=AssertionError("no prompt")),
-        patch("sigil.cli.ask", side_effect=fake_ask),
+        patch(
+            "sigil.cli.operators.confirm_piped_input",
+            side_effect=AssertionError("no prompt"),
+        ),
+        patch("sigil.cli.operators.ask", side_effect=fake_ask),
     ):
         result = CliRunner().invoke(
             cli,
@@ -214,7 +217,7 @@ def test_question_operators_use_source_specific_routes() -> None:
         calls.append((args, kwargs))
         return 0
 
-    with patch("sigil.cli.ask", side_effect=fake_ask):
+    with patch("sigil.cli.operators.ask", side_effect=fake_ask):
         first = CliRunner().invoke(cli, ["op", "?", "first", "question"])
         second = CliRunner().invoke(cli, ["op", "??", "second", "question"])
 
@@ -233,7 +236,7 @@ def test_question_operators_use_source_specific_routes() -> None:
 
 
 def test_triple_question_is_rejected() -> None:
-    with patch("sigil.cli.ask", side_effect=AssertionError("no ask")):
+    with patch("sigil.cli.operators.ask", side_effect=AssertionError("no ask")):
         result = CliRunner().invoke(cli, ["op", "???", "explain", "this"])
 
     assert result.exit_code == 2
@@ -241,7 +244,9 @@ def test_triple_question_is_rejected() -> None:
 
 
 def test_triple_at_is_rejected() -> None:
-    with patch("sigil.cli.run_goal_loop", side_effect=AssertionError("no goal")):
+    with patch(
+        "sigil.cli.operators.run_goal_loop", side_effect=AssertionError("no goal")
+    ):
         result = CliRunner().invoke(cli, ["op", "@@@", "fix"])
 
     assert result.exit_code == 2
@@ -266,7 +271,7 @@ def test_op_cli_runs_piped_recommend_operator() -> None:
     with (
         patch("sigil.operators.ensure_server", return_value=True),
         patch("sigil.operators.chat_json", side_effect=fake_chat_json),
-        patch("sigil.cli.confirm_piped_input", return_value=True),
+        patch("sigil.cli.operators.confirm_piped_input", return_value=True),
         patch("sigil.operators.append_event", return_value={}),
     ):
         result = CliRunner().invoke(
@@ -308,7 +313,7 @@ def test_double_comma_runs_confirmed_agent_step() -> None:
         calls.append((args, kwargs))
         return 0
 
-    with patch("sigil.cli.run_act_stepper", side_effect=fake_run_act_stepper):
+    with patch("sigil.cli.operators.run_act_stepper", side_effect=fake_run_act_stepper):
         result = CliRunner().invoke(cli, ["op", ",,", "update", "it"])
 
     assert result.exit_code == 0, result.output
@@ -397,7 +402,7 @@ def test_op_cli_routes_double_comma_to_agent_stepper() -> None:
         calls.append((args, kwargs))
         return 0
 
-    with patch("sigil.cli.run_act_stepper", side_effect=fake_run_act_stepper):
+    with patch("sigil.cli.operators.run_act_stepper", side_effect=fake_run_act_stepper):
         result = CliRunner().invoke(cli, ["op", ",,", "say", "done"])
 
     assert result.exit_code == 0
@@ -414,7 +419,7 @@ def test_triple_comma_routes_to_auto_approved_agent_stepper() -> None:
         calls.append((args, kwargs))
         return 0
 
-    with patch("sigil.cli.run_act_stepper", side_effect=fake_run_act_stepper):
+    with patch("sigil.cli.operators.run_act_stepper", side_effect=fake_run_act_stepper):
         result = CliRunner().invoke(cli, ["op", ",,,", "publish"])
 
     assert result.exit_code == 0
@@ -425,7 +430,7 @@ def test_triple_comma_routes_to_auto_approved_agent_stepper() -> None:
 
 
 def test_op_cli_returns_agent_stepper_status() -> None:
-    with patch("sigil.cli.run_act_stepper", return_value=7):
+    with patch("sigil.cli.operators.run_act_stepper", return_value=7):
         result = CliRunner().invoke(cli, ["op", ",,", "fail"])
 
     assert result.exit_code == 7
@@ -440,7 +445,7 @@ def test_op_cli_dry_run_double_comma_does_not_execute() -> None:
         calls.append((args, kwargs))
         return 0
 
-    with patch("sigil.cli.run_act_stepper", side_effect=fake_run_act_stepper):
+    with patch("sigil.cli.operators.run_act_stepper", side_effect=fake_run_act_stepper):
         result = CliRunner().invoke(cli, ["op", "--dry-run", ",,", "status"])
 
     assert result.exit_code == 0
@@ -451,7 +456,7 @@ def test_op_cli_dry_run_double_comma_does_not_execute() -> None:
 
 
 def test_op_cli_dry_run_question_does_not_call_web_route() -> None:
-    with patch("sigil.cli.ask", side_effect=AssertionError("no web")):
+    with patch("sigil.cli.operators.ask", side_effect=AssertionError("no web")):
         result = CliRunner().invoke(cli, ["op", "--dry-run", "?", "status"])
 
     assert result.exit_code == 0
@@ -460,7 +465,10 @@ def test_op_cli_dry_run_question_does_not_call_web_route() -> None:
 
 def test_op_cli_rejects_caret_before_model_or_confirmation() -> None:
     with (
-        patch("sigil.cli.confirm_piped_input", side_effect=AssertionError("no prompt")),
+        patch(
+            "sigil.cli.operators.confirm_piped_input",
+            side_effect=AssertionError("no prompt"),
+        ),
         patch("sigil.operators.chat_json", side_effect=AssertionError("no model")),
     ):
         result = CliRunner().invoke(cli, ["op", "^", "status"], input="notes\n")
@@ -534,7 +542,7 @@ def test_triple_comma_creates_act_and_executes_one_auto_approved_step() -> None:
 
 def test_piped_triple_comma_denies_input_before_act_generation() -> None:
     with (
-        patch("sigil.cli.confirm_piped_input", return_value=False),
+        patch("sigil.cli.operators.confirm_piped_input", return_value=False),
         patch("sigil.acts.run_pi_agent_step", side_effect=AssertionError("no pi")),
     ):
         result = CliRunner().invoke(cli, ["op", ",,,", "ship"], input="notes\n")
@@ -822,7 +830,7 @@ def test_act_show_and_abort_use_last_act_state() -> None:
 
 def test_op_cli_denies_piped_comma_before_model_call() -> None:
     with (
-        patch("sigil.cli.confirm_piped_input", return_value=False),
+        patch("sigil.cli.operators.confirm_piped_input", return_value=False),
         patch("sigil.operators.chat_json", side_effect=AssertionError("no model")),
     ):
         result = CliRunner().invoke(cli, ["op", ",", "summarize"], input="notes\n")
@@ -839,8 +847,11 @@ def test_op_cli_sends_piped_question_without_confirmation() -> None:
         return 0
 
     with (
-        patch("sigil.cli.confirm_piped_input", side_effect=AssertionError("no prompt")),
-        patch("sigil.cli.ask", side_effect=fake_ask),
+        patch(
+            "sigil.cli.operators.confirm_piped_input",
+            side_effect=AssertionError("no prompt"),
+        ),
+        patch("sigil.cli.operators.ask", side_effect=fake_ask),
     ):
         result = CliRunner().invoke(cli, ["op", "?", "review"], input="diff\n")
 
@@ -861,8 +872,11 @@ def test_ask_follow_up_sends_piped_input_without_confirmation() -> None:
         return 0
 
     with (
-        patch("sigil.cli.confirm_piped_input", side_effect=AssertionError("no prompt")),
-        patch("sigil.cli.ask", side_effect=fake_ask),
+        patch(
+            "sigil.cli.operators.confirm_piped_input",
+            side_effect=AssertionError("no prompt"),
+        ),
+        patch("sigil.cli.ask.ask", side_effect=fake_ask),
     ):
         result = CliRunner().invoke(
             cli,
@@ -893,8 +907,11 @@ def test_ask_follow_up_sends_confirmed_piped_input_to_web_route() -> None:
         return 0
 
     with (
-        patch("sigil.cli.confirm_piped_input", side_effect=AssertionError("no prompt")),
-        patch("sigil.cli.ask", side_effect=fake_ask),
+        patch(
+            "sigil.cli.operators.confirm_piped_input",
+            side_effect=AssertionError("no prompt"),
+        ),
+        patch("sigil.cli.ask.ask", side_effect=fake_ask),
     ):
         result = CliRunner().invoke(
             cli,
@@ -919,7 +936,7 @@ def test_ask_follow_up_sends_confirmed_piped_input_to_web_route() -> None:
 
 def test_op_cli_confirms_piped_comma_before_model_call() -> None:
     with (
-        patch("sigil.cli.confirm_piped_input", return_value=True),
+        patch("sigil.cli.operators.confirm_piped_input", return_value=True),
         patch("sigil.operators.ensure_server", return_value=True),
         patch(
             "sigil.operators.chat_json",
@@ -945,8 +962,8 @@ def test_op_cli_confirms_piped_double_comma_before_agent_step() -> None:
         return 0
 
     with (
-        patch("sigil.cli.confirm_piped_input", return_value=True),
-        patch("sigil.cli.run_act_stepper", side_effect=fake_run_act_stepper),
+        patch("sigil.cli.operators.confirm_piped_input", return_value=True),
+        patch("sigil.cli.operators.run_act_stepper", side_effect=fake_run_act_stepper),
     ):
         result = CliRunner().invoke(cli, ["op", ",,", "summarize"], input="notes\n")
 
@@ -966,8 +983,8 @@ def test_op_cli_routes_piped_triple_comma_to_auto_agent_step() -> None:
         return 0
 
     with (
-        patch("sigil.cli.confirm_piped_input", return_value=True),
-        patch("sigil.cli.run_act_stepper", side_effect=fake_run_act_stepper),
+        patch("sigil.cli.operators.confirm_piped_input", return_value=True),
+        patch("sigil.cli.operators.run_act_stepper", side_effect=fake_run_act_stepper),
     ):
         result = CliRunner().invoke(cli, ["op", ",,,", "summarize"], input="notes\n")
 
@@ -1000,8 +1017,8 @@ def test_verb_commands_run_piped_stream_operators() -> None:
     with (
         patch("sigil.operators.ensure_server", return_value=True),
         patch("sigil.operators.chat_json", side_effect=fake_chat_json),
-        patch("sigil.cli.ask", side_effect=fake_ask),
-        patch("sigil.cli.confirm_piped_input", return_value=True),
+        patch("sigil.cli.operators.ask", side_effect=fake_ask),
+        patch("sigil.cli.operators.confirm_piped_input", return_value=True),
         patch("sigil.operators.append_event", return_value={}),
     ):
         ask_result = CliRunner().invoke(

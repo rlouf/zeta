@@ -109,7 +109,7 @@ def test_doctor_cli_json_returns_nonzero_for_failures() -> None:
         DoctorCheck("executable:pi", "fail", "pi is not on PATH"),
     ]
     stdout = StringIO()
-    with patch("sigil.cli.doctor_checks", return_value=checks):
+    with patch("sigil.cli.install.doctor_checks", return_value=checks):
         with redirect_stdout(stdout):
             code = main(["doctor", "--json"])
     assert code == 1

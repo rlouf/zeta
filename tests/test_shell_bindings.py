@@ -416,6 +416,22 @@ def test_bash_captures_turn_output_for_record_turn() -> None:
         ]
 
 
+def test_bash_skips_capture_for_tty_oriented_commands() -> None:
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp = Path(tmp_dir)
+        stub = make_stub(tmp)
+        result = run_shell(
+            "bash",
+            textwrap.dedent(
+                '                    source src/sigil/shell/bash/sigil.bash\n                    export SIGIL_ENABLE_TURN_CAPTURE=1\n                    __sigil_capture_start "codex"\n                    printf \'active=%s\\n\' "$__sigil_capture_active"\n                    __sigil_capture_stop\n                    '
+            ),
+            tmp,
+            stub,
+        )
+        assert_success(result)
+        assert result.stdout == "active=0\n"
+
+
 @pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
 def test_zsh_wrappers_call_current_cli_contract() -> None:
     with tempfile.TemporaryDirectory() as tmp_dir:
@@ -623,6 +639,24 @@ def test_zsh_captures_turn_output_for_record_turn() -> None:
         assert read_log(tmp) == [
             f"record-turn --status 1 --cwd {ROOT} --stdout-snippet stdout line --stderr-snippet stderr line bad command"
         ]
+
+
+@pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
+def test_zsh_skips_capture_for_tty_oriented_commands() -> None:
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp = Path(tmp_dir)
+        stub = make_stub(tmp)
+        result = run_shell(
+            "zsh",
+            textwrap.dedent(
+                '                    source src/sigil/shell/zsh/sigil.zsh\n                    export SIGIL_ENABLE_TURN_CAPTURE=1\n                    __sigil_preexec "codex"\n                    print -- "active=$__sigil_capture_active"\n                    false\n                    __sigil_precmd\n                    wait\n                    '
+            ),
+            tmp,
+            stub,
+        )
+        assert_success(result)
+        assert result.stdout == "active=0\n"
+        assert read_log(tmp) == [f"record-turn --status 1 --cwd {ROOT} codex"]
 
 
 @pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")

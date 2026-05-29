@@ -90,6 +90,39 @@ __sigil_recordable_command() {
   return 0
 }
 
+__sigil_command_name() {
+  emulate -L zsh
+  local command="${1:-}"
+  local -a words
+  words=("${(z)command}") || return 1
+  local word
+  for word in "${words[@]}"; do
+    case "$word" in
+      command|exec|noglob|time|env|sudo)
+        continue
+        ;;
+      [A-Za-z_][A-Za-z0-9_]*=*)
+        continue
+        ;;
+    esac
+    print -r -- "${word:t}"
+    return 0
+  done
+  return 1
+}
+
+__sigil_capture_skipped_command() {
+  local name
+  name="$(__sigil_command_name "${1:-}")" || return 1
+  local skip_commands="${SIGIL_TURN_CAPTURE_SKIP_COMMANDS:-codex claude cursor-agent vim nvim vi nano emacs less more man top htop btop ssh python python3 ipython node irb psql mysql sqlite3 redis-cli}"
+  case " $skip_commands " in
+    *" $name "*)
+      return 0
+      ;;
+  esac
+  return 1
+}
+
 __sigil_turn_capture_enabled() {
   [[ "${SIGIL_ENABLE_TURN_CAPTURE:-1}" != "0" && "${SIGIL_ENABLE_TURN_CAPTURE:-1}" != "false" ]] || return 1
   if [[ "${SIGIL_ENABLE_TURN_CAPTURE:-}" != "1" && "${SIGIL_ENABLE_TURN_CAPTURE:-}" != "true" ]]; then
@@ -107,6 +140,7 @@ __sigil_capture_start() {
   local bg_nice_was_set=0
   __sigil_turn_capture_enabled || return 0
   __sigil_recordable_command "$command" || return 0
+  __sigil_capture_skipped_command "$command" && return 0
   [[ $__sigil_capture_active -eq 0 ]] || return 0
 
   local tmp_root="${TMPDIR:-/tmp}"
@@ -281,6 +315,27 @@ __sigil_capture_cleanup() {
   fi
 }
 
+__sigil_record_turn() {
+  local exit_status="$1"
+  local command="$2"
+  local stdout_snippet stderr_snippet
+  stdout_snippet="${SIGIL_FAILURE_STDOUT:-}"
+  stderr_snippet="${SIGIL_FAILURE_STDERR:-}"
+  [[ -n "$stdout_snippet" ]] || stdout_snippet="$(__sigil_capture_file_snippet "$__sigil_capture_stdout_file")"
+  [[ -n "$stderr_snippet" ]] || stderr_snippet="$(__sigil_capture_file_snippet "$__sigil_capture_stderr_file")"
+  local record_args=(record-turn --status "$exit_status" --cwd "$PWD")
+  [[ -n "$stdout_snippet" ]] && record_args+=(--stdout-snippet "$stdout_snippet")
+  [[ -n "$stderr_snippet" ]] && record_args+=(--stderr-snippet "$stderr_snippet")
+  "$__sigil_bin" "${record_args[@]}" "$command" >/dev/null 2>&1 || true
+}
+
+__sigil_precmd_done() {
+  local exit_status="$1"
+  __sigil_capture_cleanup
+  __sigil_refresh_prompt_marker
+  return "$exit_status"
+}
+
 __sigil_refresh_prompt_marker() {
   if ! __sigil_prompt_marker_enabled; then
     if [[ $__sigil_prompt_marker_active -eq 1 ]]; then
@@ -318,18 +373,21 @@ sigil_command() {
   __sigil_prompt_insert "$command"
 }
 
-sigil_agent_step() {
-  "$__sigil_bin" op ",," "$@"
+__sigil_op_with_staged_command() {
+  local op="$1"
+  shift
+  "$__sigil_bin" op "$op" "$@"
   local exit_status=$?
   __sigil_insert_staged_command
   return "$exit_status"
 }
 
+sigil_agent_step() {
+  __sigil_op_with_staged_command ",," "$@"
+}
+
 sigil_agent_step_auto() {
-  "$__sigil_bin" op ",,," "$@"
-  local exit_status=$?
-  __sigil_insert_staged_command
-  return "$exit_status"
+  __sigil_op_with_staged_command ",,," "$@"
 }
 
 sigil_execute_command() {
@@ -353,17 +411,11 @@ sigil_follow_up() {
 }
 
 sigil_goal() {
-  "$__sigil_bin" op "@" "$@"
-  local exit_status=$?
-  __sigil_insert_staged_command
-  return "$exit_status"
+  __sigil_op_with_staged_command "@" "$@"
 }
 
 sigil_goal_auto() {
-  "$__sigil_bin" op "@@" "$@"
-  local exit_status=$?
-  __sigil_insert_staged_command
-  return "$exit_status"
+  __sigil_op_with_staged_command "@@" "$@"
 }
 
 if __sigil_glyphs_enabled; then
@@ -395,31 +447,20 @@ __sigil_preexec() {
 __sigil_precmd() {
   local exit_status=$?
   local command="$__sigil_preexec_command"
-  local stdout_snippet stderr_snippet
   __sigil_capture_stop
   __sigil_preexec_command=""
   if [[ -z "$command" ]]; then
-    __sigil_capture_cleanup
-    __sigil_refresh_prompt_marker
-    return "$exit_status"
+    __sigil_precmd_done "$exit_status"
+    return $?
   fi
   if ! __sigil_recordable_command "$command"; then
-    __sigil_capture_cleanup
-    __sigil_refresh_prompt_marker
-    return "$exit_status"
+    __sigil_precmd_done "$exit_status"
+    return $?
   fi
-  stdout_snippet="${SIGIL_FAILURE_STDOUT:-}"
-  stderr_snippet="${SIGIL_FAILURE_STDERR:-}"
-  [[ -n "$stdout_snippet" ]] || stdout_snippet="$(__sigil_capture_file_snippet "$__sigil_capture_stdout_file")"
-  [[ -n "$stderr_snippet" ]] || stderr_snippet="$(__sigil_capture_file_snippet "$__sigil_capture_stderr_file")"
-  local record_args=(record-turn --status "$exit_status" --cwd "$PWD")
-  [[ -n "$stdout_snippet" ]] && record_args+=(--stdout-snippet "$stdout_snippet")
-  [[ -n "$stderr_snippet" ]] && record_args+=(--stderr-snippet "$stderr_snippet")
-  "$__sigil_bin" "${record_args[@]}" "$command" >/dev/null 2>&1 || true
+  __sigil_record_turn "$exit_status" "$command"
   unset SIGIL_FAILURE_STDOUT SIGIL_FAILURE_STDERR
-  __sigil_capture_cleanup
-  __sigil_refresh_prompt_marker
-  return "$exit_status"
+  __sigil_precmd_done "$exit_status"
+  return $?
 }
 
 add-zsh-hook preexec __sigil_preexec

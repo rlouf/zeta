@@ -7,14 +7,12 @@ read local context, and `??` can also search the web.
 
 from __future__ import annotations
 
-import os
-import shutil
-import subprocess
 import sys
 
 from .ansi import MUTED, RESET
 from .security import create_trust_metadata
 from .model import ensure_model_for_pi
+from .pi_stream import pi_trust_env, run_pi_pipeline
 from .session import recent_turns_context
 from .state import append_event, append_jsonl, read_jsonl, write_jsonl
 
@@ -29,20 +27,9 @@ QUESTION_SYSTEM_PROMPT = (
     "shell command would help, answer with the command text instead of calling "
     "a tool for it."
 )
-DEFAULT_GLOW_STYLE = "notty"
-DEFAULT_GLOW_WIDTH = "88"
 
 PI_QUESTION_TOOLS = "read,grep,find,ls"
 PI_QUESTION_TOOLS_WITH_WEB = f"{PI_QUESTION_TOOLS},web_search"
-
-
-def renderer_command() -> list[str]:
-    """Return the Markdown renderer command for interactive question answers."""
-    if not shutil.which("glow"):
-        return ["cat"]
-    style = os.environ.get("SIGIL_GLOW_STYLE") or DEFAULT_GLOW_STYLE
-    width = os.environ.get("SIGIL_GLOW_WIDTH") or DEFAULT_GLOW_WIDTH
-    return ["glow", "--style", style, "--width", width, "-"]
 
 
 def discussion_turns() -> list[dict[str, object]]:
@@ -172,48 +159,19 @@ def ask(
             prompt,
         ]
     )
-    filter_cmd = (
-        [stream_filter, "render-pi-stream"]
-        if stream_filter
-        else [sys.argv[0], "render-pi-stream"]
+    filter_env = pi_trust_env(
+        security,
+        question=question,
+        prompt=prompt,
+        follow_up="1" if append_transcript else "0",
+        inputs=question_event["id"] or ",".join(security["inputs"]),
     )
-    if json_output:
-        filter_cmd.append("--json")
-    renderer_cmd = renderer_command()
-    filter_env = {
-        **os.environ,
-        "SIGIL_CAPTURE_ANSWER": "1",
-        "SIGIL_CAPTURE_TRACE": "1",
-        "SIGIL_TRUST_GLYPH": str(security["glyph"]),
-        "SIGIL_TRUST_MODE": str(security["mode"]),
-        "SIGIL_TRUST_LABELS": ",".join(security["labels"]),
-        "SIGIL_TRUST_INPUTS": question_event["id"] or ",".join(security["inputs"]),
-        "SIGIL_QUESTION": question,
-        "SIGIL_PROMPT": prompt,
-        "SIGIL_FOLLOW_UP": "1" if append_transcript else "0",
-    }
-
-    pi_proc = subprocess.Popen(pi_cmd, stdout=subprocess.PIPE)
-    filter_stdout = None if json_output else subprocess.PIPE
-    filter_proc = subprocess.Popen(
-        filter_cmd, stdin=pi_proc.stdout, stdout=filter_stdout, env=filter_env
+    exit_code = run_pi_pipeline(
+        pi_cmd,
+        env=filter_env,
+        json_output=json_output,
+        stream_filter=stream_filter,
     )
-    assert pi_proc.stdout is not None
-    pi_proc.stdout.close()
-    if json_output:
-        renderer_code = 0
-    else:
-        renderer_proc = subprocess.Popen(renderer_cmd, stdin=filter_proc.stdout)
-        assert filter_proc.stdout is not None
-        filter_proc.stdout.close()
-        renderer_code = renderer_proc.wait()
-
-    filter_code = filter_proc.wait()
-    pi_code = pi_proc.wait()
     if not json_output:
         print()
-    if pi_code:
-        return pi_code
-    if filter_code:
-        return filter_code
-    return renderer_code
+    return exit_code

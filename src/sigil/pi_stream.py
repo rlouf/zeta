@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
+import subprocess
 import sys
 import threading
 import time
@@ -19,6 +21,84 @@ from typing import TextIO, cast
 from .ansi import MUTED, RESET
 from .security import normalize_labels, normalize_mode
 from .state import append_event, append_jsonl
+
+DEFAULT_GLOW_STYLE = "notty"
+DEFAULT_GLOW_WIDTH = "88"
+
+
+def renderer_command() -> list[str]:
+    """Return the Markdown renderer command for interactive Pi answers."""
+    if not shutil.which("glow"):
+        return ["cat"]
+    style = os.environ.get("SIGIL_GLOW_STYLE") or DEFAULT_GLOW_STYLE
+    width = os.environ.get("SIGIL_GLOW_WIDTH") or DEFAULT_GLOW_WIDTH
+    return ["glow", "--style", style, "--width", width, "-"]
+
+
+def pi_trust_env(
+    security: dict[str, object],
+    *,
+    question: str,
+    prompt: str,
+    follow_up: str,
+    inputs: str | None = None,
+    extra: dict[str, str] | None = None,
+) -> dict[str, str]:
+    """Build the environment passed to the `render-pi-stream` filter."""
+    env = {
+        **os.environ,
+        "SIGIL_CAPTURE_ANSWER": "1",
+        "SIGIL_CAPTURE_TRACE": "1",
+        "SIGIL_TRUST_GLYPH": str(security["glyph"]),
+        "SIGIL_TRUST_MODE": str(security["mode"]),
+        "SIGIL_TRUST_LABELS": ",".join(cast("list[str]", security["labels"])),
+        "SIGIL_TRUST_INPUTS": inputs
+        if inputs is not None
+        else ",".join(cast("list[str]", security["inputs"])),
+        "SIGIL_QUESTION": question,
+        "SIGIL_PROMPT": prompt,
+        "SIGIL_FOLLOW_UP": follow_up,
+    }
+    if extra:
+        env.update(extra)
+    return env
+
+
+def run_pi_pipeline(
+    pi_cmd: list[str],
+    *,
+    env: dict[str, str],
+    json_output: bool = False,
+    stream_filter: str | None = None,
+) -> int:
+    """Run Pi through `render-pi-stream` and the renderer; return the exit code."""
+    filter_cmd = [stream_filter or sys.argv[0], "render-pi-stream"]
+    if json_output:
+        filter_cmd.append("--json")
+
+    pi_proc = subprocess.Popen(pi_cmd, stdout=subprocess.PIPE)
+    filter_stdout = None if json_output else subprocess.PIPE
+    filter_proc = subprocess.Popen(
+        filter_cmd, stdin=pi_proc.stdout, stdout=filter_stdout, env=env
+    )
+    assert pi_proc.stdout is not None
+    pi_proc.stdout.close()
+    if json_output:
+        renderer_code = 0
+    else:
+        renderer_proc = subprocess.Popen(renderer_command(), stdin=filter_proc.stdout)
+        assert filter_proc.stdout is not None
+        filter_proc.stdout.close()
+        renderer_code = renderer_proc.wait()
+
+    filter_code = filter_proc.wait()
+    pi_code = pi_proc.wait()
+    if pi_code:
+        return pi_code
+    if filter_code:
+        return filter_code
+    return renderer_code
+
 
 TOOL_START_EVENT_TYPES = {
     "tool_execution_start",

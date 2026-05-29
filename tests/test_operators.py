@@ -648,8 +648,8 @@ def test_act_pi_step_uses_staged_command_extension() -> None:
 
             with (
                 patch("sigil.acts.ensure_model_for_pi", return_value=True),
-                patch("sigil.acts.subprocess.Popen", side_effect=fake_popen),
-                patch("sigil.acts.renderer_command", return_value=["cat"]),
+                patch("sigil.pi_stream.subprocess.Popen", side_effect=fake_popen),
+                patch("sigil.pi_stream.renderer_command", return_value=["cat"]),
                 patch("sigil.acts.record_staged_commands", return_value=[]),
             ):
                 from sigil.acts import run_pi_agent_step
@@ -696,8 +696,8 @@ def test_act_pi_step_keeps_raw_stream_renderer() -> None:
 
             with (
                 patch("sigil.acts.ensure_model_for_pi", return_value=True),
-                patch("sigil.acts.subprocess.Popen", side_effect=fake_popen),
-                patch("sigil.acts.renderer_command", return_value=["cat"]),
+                patch("sigil.pi_stream.subprocess.Popen", side_effect=fake_popen),
+                patch("sigil.pi_stream.renderer_command", return_value=["cat"]),
                 patch("sigil.acts.record_staged_commands", return_value=[]),
             ):
                 from sigil.acts import run_pi_agent_step

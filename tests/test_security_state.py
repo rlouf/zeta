@@ -19,13 +19,12 @@ from sigil.staged_command import (
     prepare_staged_commands,
     record_staged_commands,
 )
-from sigil.pi_stream import should_color, stream_events
+from sigil.pi_stream import renderer_command, should_color, stream_events
 from sigil.question import (
     QUESTION_SYSTEM_PROMPT,
     ask,
     continuation_prompt,
     discussion_turns,
-    renderer_command,
 )
 from sigil.security import (
     inherit_security,
@@ -353,7 +352,7 @@ def test_session_list_includes_last_event_context() -> None:
 
 
 def test_renderer_defaults_to_glow_notty_when_available() -> None:
-    with patch("sigil.question.shutil.which", return_value="/opt/homebrew/bin/glow"):
+    with patch("sigil.pi_stream.shutil.which", return_value="/opt/homebrew/bin/glow"):
         with patch_dict(os.environ, {}, clear=True):
             assert renderer_command() == [
                 "glow",
@@ -366,7 +365,7 @@ def test_renderer_defaults_to_glow_notty_when_available() -> None:
 
 
 def test_renderer_uses_env_overrides() -> None:
-    with patch("sigil.question.shutil.which", return_value="/opt/homebrew/bin/glow"):
+    with patch("sigil.pi_stream.shutil.which", return_value="/opt/homebrew/bin/glow"):
         with patch_dict(
             os.environ,
             {"SIGIL_GLOW_STYLE": "tokyo-night", "SIGIL_GLOW_WIDTH": "100"},
@@ -383,7 +382,7 @@ def test_renderer_uses_env_overrides() -> None:
 
 
 def test_renderer_falls_back_to_cat_without_glow() -> None:
-    with patch("sigil.question.shutil.which", return_value=None):
+    with patch("sigil.pi_stream.shutil.which", return_value=None):
         assert renderer_command() == ["cat"]
 
 
@@ -452,14 +451,14 @@ def test_question_routes_record_alpha_trust_labels() -> None:
                 return FakeProc()
 
             with patch("sigil.question.ensure_model_for_pi", return_value=True):
-                with patch("sigil.question.subprocess.Popen", side_effect=fake_popen):
+                with patch("sigil.pi_stream.subprocess.Popen", side_effect=fake_popen):
                     assert ask("what is sigil?", json_output=True) == 0
             fresh_turn = read_jsonl("last-question.jsonl")[0]
             assert fresh_turn["glyph"] == "?"
             assert fresh_turn["mode"] == "read-only"
             assert fresh_turn["labels"] == []
             with patch("sigil.question.ensure_model_for_pi", return_value=True):
-                with patch("sigil.question.subprocess.Popen", side_effect=fake_popen):
+                with patch("sigil.pi_stream.subprocess.Popen", side_effect=fake_popen):
                     assert (
                         ask(
                             "what is sigil on the web?",
@@ -944,7 +943,7 @@ def test_fresh_ask_prepends_recent_turns_context_to_pi_prompt() -> None:
 
             with (
                 patch("sigil.question.ensure_model_for_pi", return_value=True),
-                patch("sigil.question.subprocess.Popen", side_effect=fake_popen),
+                patch("sigil.pi_stream.subprocess.Popen", side_effect=fake_popen),
             ):
                 assert ask("what should I do next?", json_output=True) == 0
 
@@ -985,7 +984,7 @@ def test_ask_attaches_active_failure_context_for_unrelated_question() -> None:
 
             with (
                 patch("sigil.question.ensure_model_for_pi", return_value=True),
-                patch("sigil.question.subprocess.Popen", side_effect=fake_popen),
+                patch("sigil.pi_stream.subprocess.Popen", side_effect=fake_popen),
             ):
                 assert ask("what does this repo do", json_output=True) == 0
 
@@ -1027,7 +1026,7 @@ def test_ask_omits_failure_context_after_successful_turn() -> None:
 
             with (
                 patch("sigil.question.ensure_model_for_pi", return_value=True),
-                patch("sigil.question.subprocess.Popen", side_effect=fake_popen),
+                patch("sigil.pi_stream.subprocess.Popen", side_effect=fake_popen),
             ):
                 assert ask("why failed", json_output=True) == 0
 
@@ -1068,7 +1067,7 @@ def test_explicit_follow_up_ask_does_not_include_recent_turns_context() -> None:
 
             with (
                 patch("sigil.question.ensure_model_for_pi", return_value=True),
-                patch("sigil.question.subprocess.Popen", side_effect=fake_popen),
+                patch("sigil.pi_stream.subprocess.Popen", side_effect=fake_popen),
             ):
                 assert (
                     ask(
@@ -1111,7 +1110,7 @@ def test_fresh_ask_omits_recent_turns_section_when_none_recorded() -> None:
 
             with (
                 patch("sigil.question.ensure_model_for_pi", return_value=True),
-                patch("sigil.question.subprocess.Popen", side_effect=fake_popen),
+                patch("sigil.pi_stream.subprocess.Popen", side_effect=fake_popen),
             ):
                 assert ask("hello", json_output=True) == 0
 

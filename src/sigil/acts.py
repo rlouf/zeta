@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import os
-import subprocess
 import sys
 import uuid
 from typing import Any
@@ -14,7 +13,7 @@ from .staged_command import (
     record_staged_commands,
     staged_command_extension_path,
 )
-from .question import renderer_command
+from .pi_stream import pi_trust_env, run_pi_pipeline
 from .security import create_trust_metadata
 from .model import ensure_model_for_pi
 from .state import append_event, append_jsonl, read_jsonl
@@ -333,37 +332,14 @@ def run_pi_agent_step(
             pi_agent_prompt(act),
         ]
     )
-    filter_cmd = [sys.argv[0], "render-pi-stream"]
-    filter_env = {
-        **os.environ,
-        "SIGIL_CAPTURE_ANSWER": "1",
-        "SIGIL_CAPTURE_TRACE": "1",
-        "SIGIL_TRUST_GLYPH": str(security["glyph"]),
-        "SIGIL_TRUST_MODE": str(security["mode"]),
-        "SIGIL_TRUST_LABELS": ",".join(security["labels"]),
-        "SIGIL_TRUST_INPUTS": ",".join(security["inputs"]),
-        "SIGIL_QUESTION": str(act.get("objective") or ""),
-        "SIGIL_PROMPT": pi_agent_prompt(act),
-        "SIGIL_FOLLOW_UP": "0",
-        "SIGIL_STAGED_COMMAND_PATH": str(staged_command_path),
-    }
-
-    pi_proc = subprocess.Popen(pi_cmd, stdout=subprocess.PIPE)
-    filter_proc = subprocess.Popen(
-        filter_cmd,
-        stdin=pi_proc.stdout,
-        stdout=subprocess.PIPE,
-        env=filter_env,
+    filter_env = pi_trust_env(
+        security,
+        question=str(act.get("objective") or ""),
+        prompt=pi_agent_prompt(act),
+        follow_up="0",
+        extra={"SIGIL_STAGED_COMMAND_PATH": str(staged_command_path)},
     )
-    assert pi_proc.stdout is not None
-    pi_proc.stdout.close()
-    renderer_proc = subprocess.Popen(renderer_command(), stdin=filter_proc.stdout)
-    assert filter_proc.stdout is not None
-    filter_proc.stdout.close()
-
-    renderer_code = renderer_proc.wait()
-    filter_code = filter_proc.wait()
-    pi_code = pi_proc.wait()
+    exit_code = run_pi_pipeline(pi_cmd, env=filter_env)
     staged = record_staged_commands(
         source_event=decision_event,
         source_security=security,
@@ -375,11 +351,7 @@ def run_pi_agent_step(
             file=sys.stderr,
         )
     print()
-    if pi_code:
-        return pi_code
-    if filter_code:
-        return filter_code
-    return renderer_code
+    return exit_code
 
 
 def pi_agent_prompt(act: dict[str, Any]) -> str:

@@ -175,7 +175,8 @@ reading docs first.
 - [x] Update failure-context prompts to prefer recent turn output when present.
 - [x] Add fixtures for common failures: pytest, missing command, git, network,
       and permission errors.
-- [x] Make `, fix` work as a first-class phrase in tests.
+- [x] Attach the last failure to `,` and `?` whenever it is the latest shell
+      turn, regardless of how the prompt is phrased.
 - [x] Make `? why failed` explain the last failure without asking for more
       context.
 - [x] Capture bounded stdout and stderr automatically for ordinary shell turns,

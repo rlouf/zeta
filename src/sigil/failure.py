@@ -30,16 +30,6 @@ SECRET_PATTERNS = (
         "[REDACTED_AWS_KEY]",
     ),
 )
-RECOVERY_PROMPTS = {
-    "fix",
-    "fix it",
-    "suggest a fix",
-    "recover",
-    "why failed",
-    "why did it fail",
-    "why did that fail",
-    "what failed",
-}
 
 
 def truncate_snippet(value: str | None, limit: int = MAX_SNIPPET_CHARS) -> str:
@@ -58,14 +48,6 @@ def redact_snippet(value: str) -> str:
     for pattern, replacement in SECRET_PATTERNS:
         redacted = pattern.sub(replacement, redacted)
     return redacted
-
-
-def is_recovery_prompt(prompt: str) -> bool:
-    """Return true for short prompts that refer to the latest failure."""
-    normalized = " ".join(prompt.strip().lower().split())
-    if normalized in RECOVERY_PROMPTS:
-        return True
-    return normalized.startswith(("fix ", "why failed ", "why did it fail "))
 
 
 def run_context_command(args: list[str], cwd: str) -> str:
@@ -162,6 +144,30 @@ def last_failure_or_none() -> dict[str, Any] | None:
     if not isinstance(failure, dict) or not failure.get("command"):
         return None
     return failure
+
+
+def latest_active_failure() -> dict[str, Any] | None:
+    """Return the last failure only when it is still the latest shell turn."""
+    from .session import recent_turns
+
+    failure = last_failure_or_none()
+    if failure is None:
+        return None
+    turns = recent_turns(limit=1)
+    if not turns:
+        return failure
+    status = turns[-1].get("status")
+    if isinstance(status, int) and status != 0:
+        return failure
+    return None
+
+
+def active_failure_context() -> str:
+    """Return last-failure context when the latest shell command failed."""
+    failure = latest_active_failure()
+    if failure is None:
+        return ""
+    return "Last failed command context:\n" + failure_context_prompt(failure)
 
 
 def failure_context_prompt(failure: dict[str, Any]) -> str:

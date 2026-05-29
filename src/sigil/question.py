@@ -70,33 +70,19 @@ def continuation_prompt(question: str, turns: list[dict[str, object]]) -> str:
 
 def prepend_recent_turns(question: str) -> str:
     """Attach recent shell activity to a fresh question prompt."""
+    from .failure import active_failure_context
+
     sections = []
     context = recent_turns_context()
     if context:
         sections.append(context)
-    failure = failure_question_context(question)
+    failure = active_failure_context()
     if failure:
         sections.append(failure)
     if not sections:
         return question
     sections.append(f"Question:\n{question}")
     return "\n\n".join(sections)
-
-
-def failure_question_context(question: str) -> str:
-    """Return explicit last-failure context for failure-oriented questions."""
-    from .failure import (
-        failure_context_prompt,
-        is_recovery_prompt,
-        last_failure_or_none,
-    )
-
-    if not is_recovery_prompt(question):
-        return ""
-    failure = last_failure_or_none()
-    if failure is None:
-        return ""
-    return "Last failed command context:\n" + failure_context_prompt(failure)
 
 
 RECENT_QUESTION_TURNS_LIMIT = 4

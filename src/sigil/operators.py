@@ -9,11 +9,7 @@ from .policy import ActionLabel, ExecutionPolicy, PolicyDecision, evaluate_polic
 from .model import chat_json, chat_text, ensure_server
 from .security import create_trust_metadata
 from .state import append_event, append_jsonl, read_jsonl
-from .failure import (
-    failure_context_prompt,
-    is_recovery_prompt,
-    last_failure_or_none,
-)
+from .failure import active_failure_context
 from .question import recent_question_context as _recent_question_context
 from .session import recent_turns_context as _recent_turns_context
 
@@ -328,11 +324,7 @@ def operator_user_prompt(invocation: OperatorInvocation) -> str:
 
 def proposal_user_prompt(invocation: OperatorInvocation) -> str:
     """Return a proposal prompt with stdin, file, and failure context."""
-    prompt = (
-        recovery_prompt(invocation.prompt)
-        or invocation.prompt
-        or default_prompt(invocation)
-    )
+    prompt = invocation.prompt or default_prompt(invocation)
     stdin_text, stdin_label = bounded_stdin(invocation.stdin)
     sections = [
         f"Operator: {invocation.glyph} ({invocation.name})",
@@ -358,7 +350,7 @@ def proposal_user_prompt(invocation: OperatorInvocation) -> str:
         question_section = recent_question_context()
         if question_section:
             sections.append(question_section)
-        sections.append(interactive_failure_context())
+        sections.append(active_failure_context())
     return "\n\n".join(section for section in sections if section)
 
 
@@ -469,28 +461,6 @@ def readable_target_files(lines: list[str]) -> list[tuple[Path, str]]:
             continue
         files.append((path, content))
     return files
-
-
-def interactive_failure_context() -> str:
-    """Return last-failure context for interactive comma proposals."""
-    failure = last_failure_or_none()
-    if failure is None:
-        return "No failed command is recorded for interactive proposal."
-    return "Last failed command context:\n" + failure_context_prompt(failure)
-
-
-def recovery_prompt(prompt: str) -> str:
-    """Return an explicit recovery objective for short failure prompts."""
-    if not is_recovery_prompt(prompt):
-        return ""
-    failure = last_failure_or_none()
-    if failure is None:
-        return ""
-    return (
-        "Suggest the smallest safe next shell command to recover from the last "
-        "failed command. Use the recorded stderr/stdout and cwd context; do not "
-        "invent missing output."
-    )
 
 
 def recent_question_context() -> str:

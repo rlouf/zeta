@@ -956,7 +956,7 @@ def test_fresh_ask_prepends_recent_turns_context_to_pi_prompt() -> None:
     assert "what should I do next?" in prompt
 
 
-def test_fresh_ask_why_failed_includes_last_failure_context() -> None:
+def test_ask_attaches_active_failure_context_for_unrelated_question() -> None:
     class FakeProc:
         def __init__(self, stdout: StringIO | None = None) -> None:
             self.stdout = stdout
@@ -987,7 +987,7 @@ def test_fresh_ask_why_failed_includes_last_failure_context() -> None:
                 patch("sigil.question.ensure_model_for_pi", return_value=True),
                 patch("sigil.question.subprocess.Popen", side_effect=fake_popen),
             ):
-                assert ask("why failed", json_output=True) == 0
+                assert ask("what does this repo do", json_output=True) == 0
 
     pi_cmd = next(cmd for cmd in popen_calls if cmd[0] == "pi")
     prompt = pi_cmd[-1]
@@ -995,6 +995,45 @@ def test_fresh_ask_why_failed_includes_last_failure_context() -> None:
     assert "Failed command: pytest tests/test_foo.py" in prompt
     assert "Recent stderr:" in prompt
     assert "AssertionError: no" in prompt
+
+
+def test_ask_omits_failure_context_after_successful_turn() -> None:
+    class FakeProc:
+        def __init__(self, stdout: StringIO | None = None) -> None:
+            self.stdout = stdout
+
+        def wait(self) -> int:
+            return 0
+
+    with tempfile.TemporaryDirectory() as tmp:
+        with patch_dict(
+            os.environ,
+            {"SIGIL_STATE_DIR": tmp, "SIGIL_SESSION_ID": "test"},
+        ):
+            record_turn(
+                "pytest tests/test_foo.py",
+                1,
+                "/repo",
+                stderr_snippet="AssertionError: no",
+            )
+            record_turn("git status --short", 0, "/repo")
+            popen_calls: list[list[str]] = []
+
+            def fake_popen(cmd: list[str], *args: object, **kwargs: object) -> FakeProc:
+                popen_calls.append(cmd)
+                if cmd[0] == "pi":
+                    return FakeProc(StringIO(""))
+                return FakeProc()
+
+            with (
+                patch("sigil.question.ensure_model_for_pi", return_value=True),
+                patch("sigil.question.subprocess.Popen", side_effect=fake_popen),
+            ):
+                assert ask("why failed", json_output=True) == 0
+
+    pi_cmd = next(cmd for cmd in popen_calls if cmd[0] == "pi")
+    prompt = pi_cmd[-1]
+    assert "Last failed command context:" not in prompt
 
 
 def test_explicit_follow_up_ask_does_not_include_recent_turns_context() -> None:

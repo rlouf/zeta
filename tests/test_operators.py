@@ -1063,7 +1063,7 @@ def test_proposal_user_prompt_includes_recent_turns_in_interactive_mode() -> Non
     assert "exit 1" in prompt
 
 
-def test_proposal_user_prompt_fix_targets_last_failure() -> None:
+def test_proposal_user_prompt_keeps_prompt_and_attaches_active_failure() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         with patch_dict(
             os.environ,
@@ -1083,10 +1083,60 @@ def test_proposal_user_prompt_fix_targets_last_failure() -> None:
             )
             prompt = proposal_user_prompt(invocation)
 
-    assert "Prompt: Suggest the smallest safe next shell command" in prompt
+    assert "Prompt: fix" in prompt
+    assert "Suggest the smallest safe next shell command" not in prompt
     assert "Last failed command context:" in prompt
     assert "Failed command: pytest tests/test_foo.py" in prompt
     assert "AssertionError: no" in prompt
+
+
+def test_proposal_user_prompt_attaches_active_failure_for_unrelated_prompt() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        with patch_dict(
+            os.environ,
+            {"SIGIL_STATE_DIR": tmp, "SIGIL_SESSION_ID": "test"},
+        ):
+            record_turn(
+                "pytest tests/test_foo.py",
+                1,
+                "/repo",
+                stderr_snippet="AssertionError: no",
+            )
+            invocation = create_invocation(
+                ",",
+                prompt="summarize the repository layout",
+                stdin="",
+                mode="interactive",
+            )
+            prompt = proposal_user_prompt(invocation)
+
+    assert "Prompt: summarize the repository layout" in prompt
+    assert "Last failed command context:" in prompt
+    assert "Failed command: pytest tests/test_foo.py" in prompt
+
+
+def test_proposal_user_prompt_omits_failure_context_after_successful_turn() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        with patch_dict(
+            os.environ,
+            {"SIGIL_STATE_DIR": tmp, "SIGIL_SESSION_ID": "test"},
+        ):
+            record_turn(
+                "pytest tests/test_foo.py",
+                1,
+                "/repo",
+                stderr_snippet="AssertionError: no",
+            )
+            record_turn("git status --short", 0, "/repo")
+            invocation = create_invocation(
+                ",",
+                prompt="fix",
+                stdin="",
+                mode="interactive",
+            )
+            prompt = proposal_user_prompt(invocation)
+
+    assert "Last failed command context:" not in prompt
 
 
 def test_proposal_user_prompt_omits_recent_turns_when_none_recorded() -> None:
@@ -1106,7 +1156,7 @@ def test_proposal_user_prompt_omits_recent_turns_when_none_recorded() -> None:
     assert "Recent shell activity" not in prompt
 
 
-def test_proposal_user_prompt_reads_missing_failure_context_quietly(
+def test_proposal_user_prompt_omits_failure_context_when_none_recorded(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     with tempfile.TemporaryDirectory() as tmp:
@@ -1124,7 +1174,8 @@ def test_proposal_user_prompt_reads_missing_failure_context_quietly(
 
     captured = capsys.readouterr()
     assert captured.err == ""
-    assert "No failed command is recorded for interactive proposal." in prompt
+    assert "No failed command is recorded" not in prompt
+    assert "Last failed command context:" not in prompt
 
 
 def test_proposal_user_prompt_omits_recent_turns_in_pipeline_mode() -> None:

@@ -7,9 +7,9 @@ from dataclasses import asdict, dataclass
 from typing import Any, Literal, cast
 
 from .acts import active_act
-from .failure import last_failure_or_none
+from .failure import latest_active_failure
 from .handoff import latest_bash_handoff
-from .session import read_event_log, recent_turns
+from .session import read_event_log
 from .state import session_id
 
 StatusState = Literal["clean", "attention"]
@@ -105,21 +105,6 @@ def current_status() -> Status:
         actions=(),
         details={},
     )
-
-
-def latest_active_failure() -> dict[str, Any] | None:
-    """Return the last failure only when it is still the latest shell turn."""
-    failure = last_failure_or_none()
-    if failure is None:
-        return None
-    turns = recent_turns(limit=1)
-    if not turns:
-        return failure
-    latest = turns[-1]
-    status = latest.get("status")
-    if isinstance(status, int) and status != 0:
-        return failure
-    return None
 
 
 def attention(

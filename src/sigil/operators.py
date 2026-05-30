@@ -46,13 +46,6 @@ RECOMMEND_SYSTEM = (
     "Do not execute it or claim to have changed anything."
 )
 
-APPLY_SYSTEM = (
-    "You are a semantic shell operator. Generate exactly one typed proposal "
-    "that Sigil can execute after the appropriate boundary checks. "
-    "Use kind=command for one directly runnable shell command. "
-    "Do not include Markdown fences, prose, numbering, or explanation in body."
-)
-
 PROPOSAL_SCHEMA = {
     "type": "object",
     "additionalProperties": False,
@@ -72,23 +65,6 @@ PROPOSAL_SCHEMA = {
         },
     },
     "required": ["kind", "body", "explanation"],
-}
-
-EXECUTABLE_PROPOSAL_SCHEMA = {
-    "type": "object",
-    "additionalProperties": False,
-    "properties": {
-        "kind": {
-            "type": "string",
-            "enum": ["command"],
-            "description": "The proposal kind. Only shell commands are supported.",
-        },
-        "body": {
-            "type": "string",
-            "description": "One directly runnable macOS zsh command.",
-        },
-    },
-    "required": ["kind", "body"],
 }
 
 
@@ -116,6 +92,7 @@ class OperatorResult:
     output: str
     decision: PolicyDecision
     command: str | None = None
+    explanation: str = ""
     stderr: str = ""
     exit_code: int = 0
 
@@ -231,17 +208,17 @@ def run_invocation(
     )
     if invocation.base == "?":
         append_inspect_turns(invocation, output, event, security)
-    return OperatorResult(output=output, decision=decision)
+    return OperatorResult(
+        output=output,
+        decision=decision,
+        command=proposal.body if proposal is not None else None,
+        explanation=proposal.explanation if proposal is not None else "",
+    )
 
 
 def operator_system_prompt(invocation: OperatorInvocation) -> str:
     """Return the system prompt for an operator invocation."""
-    if invocation.base == "?":
-        base = INSPECT_SYSTEM
-    elif invocation.depth == 1:
-        base = RECOMMEND_SYSTEM
-    else:
-        base = APPLY_SYSTEM
+    base = INSPECT_SYSTEM if invocation.base == "?" else RECOMMEND_SYSTEM
     return f"{base}\n\nDepth: {invocation.depth}. {depth_guidance(invocation)}"
 
 
@@ -256,12 +233,6 @@ def run_proposal_model(
         proposal = proposal_from_json(data, explanation_required=True)
         if not proposal:
             raise RuntimeError(", did not produce a proposal")
-        return proposal
-    if invocation.base == "," and invocation.depth == 2:
-        data = chat_json(system, user, EXECUTABLE_PROPOSAL_SCHEMA)
-        proposal = proposal_from_json(data)
-        if not proposal:
-            raise RuntimeError(",, did not produce a command proposal to execute")
         return proposal
     return None
 
@@ -289,11 +260,6 @@ def proposal_from_json(
 
 def run_model(invocation: OperatorInvocation, system: str, user: str) -> str:
     """Run the model for read-only inspect operators."""
-    if invocation.base == ",":
-        proposal = run_proposal_model(invocation, system, user)
-        if proposal is not None:
-            return proposal.display()
-        raise RuntimeError(f"{invocation.glyph} did not produce a proposal")
     return chat_text(
         system,
         user,
@@ -304,11 +270,7 @@ def run_model(invocation: OperatorInvocation, system: str, user: str) -> str:
 def depth_guidance(invocation: OperatorInvocation) -> str:
     """Return operator-specific guidance for repeated glyph depth."""
     if invocation.base == ",":
-        if invocation.depth == 1:
-            return "Comma means recommend one concrete next action."
-        if invocation.depth == 2:
-            return "Comma depth two is handled by the confirmed Pi agent step runner."
-        return "Comma depth three is handled by the auto-approved Pi agent step runner."
+        return "Comma means recommend one concrete next action."
     return {
         1: "Use a quick pass.",
         2: "Use a deeper pass and call out important caveats.",
@@ -329,7 +291,7 @@ def proposal_user_prompt(invocation: OperatorInvocation) -> str:
     sections = [
         f"Operator: {invocation.glyph} ({invocation.name})",
         f"Prompt: {prompt}",
-        proposal_instruction(invocation),
+        proposal_instruction(),
         f"{stdin_label}:\n{stdin_text}",
     ]
     files = readable_target_files(
@@ -361,10 +323,8 @@ def bounded_stdin(stdin: str) -> tuple[str, str]:
     return stdin, "stdin"
 
 
-def proposal_instruction(invocation: OperatorInvocation) -> str:
-    """Return proposal guidance for comma depth."""
-    if invocation.depth == 2:
-        return "Return exactly one executable proposal. Use kind=command."
+def proposal_instruction() -> str:
+    """Return proposal guidance for a comma proposal."""
     return "Return exactly one command proposal. Use kind=command."
 
 
@@ -430,12 +390,6 @@ def default_prompt(invocation: OperatorInvocation) -> str:
     """Return a fallback prompt for bare operator invocations."""
     if invocation.base == "?":
         return "Inspect and summarize the input."
-    if invocation.base == ",":
-        if invocation.depth == 2:
-            return "Generate one command proposal to execute."
-        if invocation.depth == 3:
-            return "Run a bounded autonomy loop."
-        return "Recommend the best next action."
     return "Recommend the best next action."
 
 
@@ -479,9 +433,7 @@ def max_tokens_for_depth(depth: int) -> int:
     """Scale output budget conservatively with operator repetition."""
     if depth <= 1:
         return 700
-    if depth == 2:
-        return 1200
-    return 1800
+    return 1200
 
 
 def format_labels(labels: tuple[ActionLabel, ...]) -> str:

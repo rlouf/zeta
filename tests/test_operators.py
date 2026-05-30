@@ -359,40 +359,26 @@ def test_policy_maps_commands_to_trust_labels(
     assert classify_output(command).labels == labels
 
 
-def test_double_comma_policy_defers_to_act_runner() -> None:
+def test_policy_classifies_stdout_only_preview() -> None:
     decision = evaluate_policy(
-        glyph=",,",
-        depth=2,
+        glyph=",",
+        depth=1,
         output="rm -rf build",
         policy=ExecutionPolicy(),
     )
 
-    assert decision.status == "preview"
-    assert "act runner" in decision.message
+    assert decision.message == "stdout-only preview"
     assert "delete" in decision.classification.classes
-
-
-def test_triple_comma_policy_defers_to_act_runner() -> None:
-    decision = evaluate_policy(
-        glyph=",,,",
-        depth=3,
-        output="git status --short",
-        policy=ExecutionPolicy(),
-    )
-
-    assert decision.status == "preview"
-    assert "act runner" in decision.message
 
 
 def test_dry_run_policy_previews_without_execution() -> None:
     decision = evaluate_policy(
-        glyph=",,",
-        depth=2,
+        glyph=",",
+        depth=1,
         output="git status --short",
         policy=ExecutionPolicy(dry_run=True),
     )
 
-    assert decision.status == "preview"
     assert "dry-run" in decision.message
 
 
@@ -1097,6 +1083,49 @@ def test_verb_commands_run_piped_stream_operators() -> None:
         )
     ]
     assert "Operator: , (propose)" in json_calls[0][1]
+
+
+def test_command_verb_generates_proposal_without_stdin() -> None:
+    with (
+        patch("sigil.operators.ensure_server", return_value=True),
+        patch(
+            "sigil.operators.chat_json",
+            return_value={
+                "kind": "command",
+                "body": "find . -size +10M",
+                "explanation": "Lists large files.",
+            },
+        ),
+        patch("sigil.operators.append_event", return_value={}),
+    ):
+        result = CliRunner().invoke(cli, ["command", "find big files"])
+
+    assert result.exit_code == 0, result.output
+    assert result.output == "find . -size +10M\nLists large files.\n"
+
+
+def test_command_verb_json_emits_proposal_envelope() -> None:
+    with (
+        patch("sigil.operators.ensure_server", return_value=True),
+        patch(
+            "sigil.operators.chat_json",
+            return_value={
+                "kind": "command",
+                "body": "git push origin main",
+                "explanation": "Publishes the branch.",
+            },
+        ),
+        patch("sigil.operators.append_event", return_value={}),
+    ):
+        result = CliRunner().invoke(cli, ["command", "--json", "ship it"])
+
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.output) == {
+        "prompt": "ship it",
+        "command": "git push origin main",
+        "labels": ["network", "publish"],
+        "explanation": "Publishes the branch.",
+    }
 
 
 def test_op_cli_rejects_mixed_glyphs() -> None:

@@ -39,17 +39,16 @@ def run_stream_operator(
     except ValueError as exc:
         raise click.BadParameter(str(exc), param_hint="glyph") from exc
 
-    if json_output:
-        print_json_line(invocation.to_dict())
-        return 0
-
-    if should_confirm_piped_input(invocation):
-        if not confirm_piped_input(stdin_text):
-            print("sigil op: piped input declined", file=sys.stderr)
-            raise click.exceptions.Exit(2)
-
     if invocation.base == "?":
+        if json_output:
+            print_json_line(invocation.to_dict())
+            return 0
         return run_question_operator(invocation)
+
+    if not json_output and should_confirm_piped_input(invocation):
+        if not confirm_piped_input(stdin_text):
+            print("sigil command: piped input declined", file=sys.stderr)
+            raise click.exceptions.Exit(2)
 
     try:
         result = run_invocation(
@@ -59,8 +58,16 @@ def run_stream_operator(
     except RuntimeError as exc:
         print(f"sigil {invocation.name}: {exc}", file=sys.stderr)
         return 1
-    if result.decision.status != "preview":
-        print(f"sigil {invocation.name}: {result.decision.message}", file=sys.stderr)
+    if json_output:
+        print_json_line(
+            {
+                "prompt": prompt,
+                "command": result.command,
+                "labels": list(result.decision.classification.labels),
+                "explanation": result.explanation,
+            }
+        )
+        return 0
     if result.stderr:
         print(result.stderr, file=sys.stderr, end="")
     if result.output:

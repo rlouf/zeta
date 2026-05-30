@@ -20,8 +20,6 @@ ActionClass = Literal[
     "delete",
     "privileged",
 ]
-PolicyStatus = Literal["preview", "allowed"]
-
 WRITE_COMMANDS = {
     "cp",
     "install",
@@ -80,16 +78,14 @@ class ExecutionPolicy:
 
 @dataclass(frozen=True)
 class PolicyDecision:
-    """Policy decision for an operator result."""
+    """Classification of an operator result and how it will be handled."""
 
-    status: PolicyStatus
     message: str
     classification: ActionClassification
 
     def to_dict(self) -> dict[str, object]:
         """Return a JSON-serializable representation."""
         return {
-            "status": self.status,
             "message": self.message,
             "classification": self.classification.to_dict(),
         }
@@ -119,27 +115,14 @@ def evaluate_policy(
     policy: ExecutionPolicy,
 ) -> PolicyDecision:
     """Classify an operator result and describe how it will be handled."""
+    del depth
     classification = classify_output(output)
     if policy.dry_run:
         return PolicyDecision(
-            status="preview",
             message=f"{glyph} dry-run: classified output and skipped execution",
             classification=classification,
         )
-    if glyph.startswith(",") and depth > 1:
-        return PolicyDecision(
-            status="preview",
-            message=f"{glyph} is handled by the Pi act runner",
-            classification=classification,
-        )
-    if depth == 3:
-        return PolicyDecision(
-            status="preview",
-            message=f"{glyph} is handled by its depth-three route",
-            classification=classification,
-        )
     return PolicyDecision(
-        status="preview",
         message="stdout-only preview",
         classification=classification,
     )

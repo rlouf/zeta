@@ -39,7 +39,8 @@ sigil status
 
 ## `sigil command`
 
-Generates one command proposal from a prompt.
+Generates one command proposal from a prompt, using the same comma (`,`)
+proposal route as the glyph.
 
 ```sh
 sigil command "find files over 10 MB"
@@ -47,10 +48,11 @@ sigil command "show the largest directories"
 git diff --name-only | sigil command "run the relevant tests"
 ```
 
-Sigil prints the proposed command to stdout.
+Sigil prints the proposed command to stdout, followed by terse risk labels and a
+short explanation on their own lines when present.
 
-When stdin is piped, Sigil uses the comma proposal route and asks before using
-the piped text.
+When stdin is piped, Sigil asks before using the piped text (except with
+`--json`, which is treated as a machine-mode call and skips the prompt).
 
 JSON output:
 
@@ -59,33 +61,15 @@ sigil command --json "find Python tests"
 ```
 
 ```json
-{"prompt":"find Python tests","command":{"command":"find . -name 'test_*.py' -o -name '*_test.py'","note":"Finds common Python test filenames."}}
+{"prompt":"find Python tests","command":"find . -name 'test_*.py' -o -name '*_test.py'","labels":[],"explanation":"Finds common Python test filenames."}
 ```
 
 Stable fields:
 
 - `prompt`: prompt text.
-- `command.command`: directly runnable shell command.
-- `command.note`: short explanation from the model.
-
-With piped stdin and `--json`, the current command emits pipeline metadata
-instead of calling the model:
-
-```sh
-printf 'README.md\n' | sigil command --json "summarize this target"
-```
-
-```json
-{
-  "glyph": ",",
-  "base": ",",
-  "depth": 1,
-  "name": "propose",
-  "prompt": "summarize this target",
-  "stdin": "README.md\n",
-  "mode": "pipeline"
-}
-```
+- `command`: directly runnable shell command.
+- `labels`: terse risk labels for the command (e.g. `network`, `publish`).
+- `explanation`: short explanation from the model.
 
 ## `sigil ask`
 

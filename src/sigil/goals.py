@@ -7,7 +7,14 @@ import sys
 import uuid
 from typing import Any, Literal
 
-from .acts import PI_AGENT_TOOLS, print_next_step, run_pi_agent_step
+from .acts import (
+    PI_AGENT_TOOLS,
+    edit_step_tools,
+    print_next_step,
+    run_pi_agent_step,
+    set_step_tools,
+    tools_from_step,
+)
 from .state import append_event, append_jsonl, read_jsonl
 from .tty import prompt_on_tty
 
@@ -43,7 +50,7 @@ def run_goal_loop(
         print_goal(goal)
         step = create_goal_step(goal)
         print_next_step(step)
-        proceed, decision_label = approve_goal_step(goal, confirm_steps)
+        proceed, decision_label = approve_goal_step(goal, step, confirm_steps)
         if not proceed:
             return 0
         outcome = execute_goal_step(goal, step, decision_label, glyph=glyph)
@@ -87,7 +94,11 @@ def prepare_goal(
     return goal
 
 
-def approve_goal_step(goal: dict[str, Any], confirm_steps: bool) -> tuple[bool, str]:
+def approve_goal_step(
+    goal: dict[str, Any],
+    step: dict[str, Any],
+    confirm_steps: bool,
+) -> tuple[bool, str]:
     """Confirm one step; return (proceed, decision_label) and record stops."""
     if not confirm_steps:
         return True, "auto_accepted"
@@ -97,6 +108,16 @@ def approve_goal_step(goal: dict[str, Any], confirm_steps: bool) -> tuple[bool, 
         record_goal_update("goal_aborted", goal)
         print("goal aborted")
         return False, ""
+    if decision in {"e", "edit"}:
+        edited_tools = edit_step_tools(step)
+        if edited_tools is None:
+            return False, ""
+        set_step_tools(step, edited_tools)
+        confirm = read_goal_decision(prompt="run edited goal step? [y/N] ")
+        if confirm not in {"y", "yes"}:
+            record_goal_update("goal_checkpoint", goal)
+            return False, ""
+        return True, "accepted"
     if decision not in {"y", "yes"}:
         record_goal_update("goal_checkpoint", goal)
         return False, ""
@@ -115,6 +136,7 @@ def execute_goal_step(
     status = run_pi_agent_step(
         goal_as_act(goal),
         glyph=glyph,
+        tools=tools_from_step(step),
     )
     step["exit_code"] = status
     goal["steps_run"] = goal.get("steps_run", 0) + 1
@@ -236,7 +258,7 @@ def print_goal(goal: dict[str, Any]) -> None:
         print(f"  next: {last_next}")
 
 
-def read_goal_decision(prompt: str = "run next goal step? [y/N/abort] ") -> str:
+def read_goal_decision(prompt: str = "run next goal step? [y/N/e/abort] ") -> str:
     """Read a goal checkpoint decision from the terminal."""
     answer = prompt_on_tty(prompt)
     return "" if answer is None else answer.strip().lower()

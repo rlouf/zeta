@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import os
 import shutil
+import shlex
+import subprocess
 import sys
+import tempfile
 import uuid
 from importlib.resources import files
 from pathlib import Path
@@ -14,7 +17,7 @@ from .ansi import MUTED, RESET
 from .pi_stream import TRACE_LABEL_WIDTH, run_pi_stream
 from .model import ensure_model_for_pi
 from .state import append_event, append_jsonl, read_jsonl
-from .tty import clear_lines_on_tty, prompt_on_tty
+from .tty import clear_lines_on_tty, open_tty_fd, prompt_on_tty
 
 LAST_ACT = "last-act.jsonl"
 MAX_EVENT_OUTPUT_CHARS = 4000
@@ -84,7 +87,7 @@ def run_act_stepper(
         return 0
 
     record_step_decision(act, step, decision_label)
-    status = run_pi_agent_step(act, glyph=glyph)
+    status = run_pi_agent_step(act, glyph=glyph, tools=tools_from_step(step))
     step["status"] = "done" if status == 0 else "failed"
     step["exit_code"] = status
     record_step_executed(act, step, status)
@@ -156,14 +159,12 @@ def confirm_act_step(
         clear_lines_on_tty(shown)
         print(f"skipped step {step['id']}")
         return False, ""
-    if decision == "edit":
-        edited = prompt_on_tty("objective> ")
-        shown += 1
-        if edited is None or not edited.strip():
-            clear_lines_on_tty(shown)
+    if decision in {"e", "edit"}:
+        edited_tools = edit_step_tools(step)
+        if edited_tools is None:
             return False, ""
-        act["objective"] = edited.strip()
-        step["edited"] = True
+        set_step_tools(step, edited_tools)
+        step["edited_tools"] = True
         confirm = read_step_decision(prompt="run edited Pi step? [y/N] ")
         shown += 1
         if confirm not in {"y", "yes"}:
@@ -272,14 +273,124 @@ def print_next_step(step: dict[str, Any]) -> None:
     print(f"❯ {'tools':<{TRACE_LABEL_WIDTH}}  {tools}")
 
 
-def read_step_decision(prompt: str = "run? [y/N] ") -> str:
+def read_step_decision(prompt: str = "run? [y/N/e] ") -> str:
     """Read an act-step decision from the terminal."""
     answer = prompt_on_tty(prompt)
     return "" if answer is None else answer.strip().lower()
 
 
+def edit_step_tools(step: dict[str, Any]) -> list[str] | None:
+    """Open $EDITOR on the step tool list and return the edited tools."""
+    tools = tool_names_from_step(step)
+    edited = edit_tools(tools)
+    if edited is None:
+        return None
+    normalized = normalize_tool_names(edited)
+    known_tools = set(tools)
+    unknown_tools = [tool for tool in normalized if tool not in known_tools]
+    if unknown_tools:
+        print(
+            f"sigil: unknown tool(s): {', '.join(unknown_tools)}",
+            file=sys.stderr,
+        )
+        return None
+    return normalized
+
+
+def edit_tools(tools: list[str]) -> list[str] | None:
+    """Let the user edit tool names, one per line, in their editor."""
+    editor = editor_command()
+    initial_text = "\n".join(tools)
+    if initial_text:
+        initial_text += "\n"
+    with tempfile.NamedTemporaryFile(
+        "w+",
+        encoding="utf-8",
+        prefix="sigil-tools-",
+        suffix=".txt",
+    ) as file:
+        file.write(initial_text)
+        file.flush()
+        try:
+            status = run_editor(editor, file.name)
+        except OSError as exc:
+            print(f"sigil: could not open editor {editor!r}: {exc}", file=sys.stderr)
+            return None
+        if status != 0:
+            print(f"sigil: editor exited with status {status}", file=sys.stderr)
+            return None
+        file.seek(0)
+        return parse_tool_lines(file.read())
+
+
+def editor_command() -> list[str]:
+    """Return the configured editor command."""
+    raw = os.environ.get("VISUAL") or os.environ.get("EDITOR") or "vi"
+    try:
+        return shlex.split(raw) or ["vi"]
+    except ValueError:
+        return [raw]
+
+
+def run_editor(editor: list[str], path: str) -> int:
+    """Run an editor attached to the controlling terminal when available."""
+    command = [*editor, path]
+    fd = open_tty_fd()
+    if fd is None:
+        return subprocess.run(command, check=False).returncode
+    try:
+        return subprocess.run(
+            command,
+            stdin=fd,
+            stdout=fd,
+            stderr=fd,
+            check=False,
+        ).returncode
+    finally:
+        os.close(fd)
+
+
+def parse_tool_lines(text: str) -> list[str]:
+    """Parse edited tool lines, allowing blank lines and comments."""
+    tools = []
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        tools.append(line)
+    return tools
+
+
+def normalize_tool_names(tools: list[str]) -> list[str]:
+    """Deduplicate edited tool names while preserving order."""
+    normalized = []
+    seen = set()
+    for tool in tools:
+        name = tool.strip()
+        if not name or name in seen:
+            continue
+        normalized.append(name)
+        seen.add(name)
+    return normalized
+
+
+def tool_names_from_step(step: dict[str, Any]) -> list[str]:
+    """Return the ordered tool names from a pending step."""
+    return normalize_tool_names(tools_from_step(step).split(","))
+
+
+def set_step_tools(step: dict[str, Any], tools: list[str]) -> None:
+    """Persist an edited tool list on a pending step."""
+    serialized = ",".join(tools)
+    step["tools"] = tools
+    step["command"] = f"pi --tools {serialized}"
+
+
 def tools_from_step(step: dict[str, Any]) -> str:
     """Return the tool list from a step command, if present."""
+    raw_tools = step.get("tools")
+    if isinstance(raw_tools, list):
+        return ",".join(str(tool).strip() for tool in raw_tools if str(tool).strip())
     command = str(step.get("command") or "")
     marker = "--tools "
     if marker not in command:
@@ -291,6 +402,7 @@ def run_pi_agent_step(
     act: dict[str, Any],
     *,
     glyph: str | None = None,
+    tools: str | list[str] | None = None,
 ) -> int:
     """Run one non-interactive Pi edit step and stream tool events."""
     if not ensure_model_for_pi():
@@ -298,10 +410,12 @@ def run_pi_agent_step(
 
     route_glyph = glyph or str(act.get("glyph") or ",,,")
     extension_path = sigil_shell_extension_path()
-    tools = (
-        PI_AGENT_TOOLS if extension_path is not None else PI_AGENT_TOOLS_WITHOUT_SHELL
-    )
-    tool_label = "read+sigil-shell+edit+write" if extension_path else "read+edit+write"
+    enabled_tools = effective_pi_tools(tools, extension_path is not None)
+    tool_label = "+".join(compact_tool_label(tool) for tool in enabled_tools)
+    if not tool_label:
+        tool_label = "no tools"
+    include_sigil_shell = "sigil_shell" in enabled_tools and extension_path is not None
+    serialized_tools = ",".join(enabled_tools)
     approval = str(act.get("approval") or "confirm")
     step_label = (
         "one auto-approved step" if approval == "auto" else "one confirmed step"
@@ -318,9 +432,9 @@ def run_pi_agent_step(
         "json",
         "--no-session",
         "--tools",
-        tools,
+        serialized_tools,
     ]
-    if extension_path is not None:
+    if include_sigil_shell and extension_path is not None:
         pi_cmd.extend(
             [
                 "--extension",
@@ -344,6 +458,32 @@ def run_pi_agent_step(
     )
     print()
     return exit_code
+
+
+def effective_pi_tools(
+    tools: str | list[str] | None,
+    sigil_shell_available: bool,
+) -> list[str]:
+    """Return the tool list to pass to Pi for a step."""
+    if tools is None:
+        tools = (
+            PI_AGENT_TOOLS if sigil_shell_available else PI_AGENT_TOOLS_WITHOUT_SHELL
+        )
+    if isinstance(tools, str):
+        names = tools.split(",")
+    else:
+        names = tools
+    enabled = normalize_tool_names([str(name) for name in names])
+    if not sigil_shell_available:
+        enabled = [tool for tool in enabled if tool != "sigil_shell"]
+    return enabled
+
+
+def compact_tool_label(tool: str) -> str:
+    """Return a compact label for a tool shown in the step banner."""
+    if tool == "sigil_shell":
+        return "sigil-shell"
+    return tool
 
 
 def pi_agent_prompt(act: dict[str, Any]) -> str:

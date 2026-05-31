@@ -449,6 +449,66 @@ def test_triple_comma_creates_act_and_executes_one_auto_approved_step() -> None:
     assert latest_act["steps"][0]["status"] == "done"
 
 
+def test_confirmed_act_can_edit_tools_before_execution() -> None:
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        with patch_dict(
+            os.environ,
+            {"SIGIL_STATE_DIR": tmp_dir, "SIGIL_SESSION_ID": "act-session"},
+        ):
+            pi_calls = []
+
+            def fake_run_pi(*args: object, **kwargs: object) -> int:
+                pi_calls.append((args, kwargs))
+                return 0
+
+            prompts = iter(["e\n", "y\n"])
+
+            def fake_prompt(*args: object, **kwargs: object) -> str:
+                del args, kwargs
+                return next(prompts)
+
+            with (
+                patch("sigil.acts.prompt_on_tty", side_effect=fake_prompt),
+                patch("sigil.acts.edit_tools", return_value=["read", "grep", "edit"]),
+                patch("sigil.acts.run_pi_agent_step", side_effect=fake_run_pi),
+            ):
+                result = CliRunner().invoke(cli, ["op", ",,", "ship", "it"])
+            act_events = read_jsonl("last-act.jsonl")
+
+    assert result.exit_code == 0, result.output
+    assert len(pi_calls) == 1
+    assert pi_calls[0][1]["tools"] == "read,grep,edit"
+    step = act_events[-1]["act"]["steps"][0]
+    assert step["edited_tools"] is True
+    assert step["tools"] == ["read", "grep", "edit"]
+    assert step["command"] == "pi --tools read,grep,edit"
+
+
+def test_confirmed_act_leaves_editor_errors_visible() -> None:
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        with patch_dict(
+            os.environ,
+            {"SIGIL_STATE_DIR": tmp_dir, "SIGIL_SESSION_ID": "act-session"},
+        ):
+            clear_calls = []
+
+            def fake_clear_lines(*args: object, **kwargs: object) -> None:
+                clear_calls.append((args, kwargs))
+
+            with (
+                patch("sigil.acts.prompt_on_tty", return_value="e\n"),
+                patch("sigil.acts.edit_tools", return_value=None),
+                patch("sigil.acts.clear_lines_on_tty", side_effect=fake_clear_lines),
+                patch(
+                    "sigil.acts.run_pi_agent_step", side_effect=AssertionError("no pi")
+                ),
+            ):
+                result = CliRunner().invoke(cli, ["op", ",,", "ship", "it"])
+
+    assert result.exit_code == 0, result.output
+    assert clear_calls == []
+
+
 def test_piped_triple_comma_denies_input_before_act_generation() -> None:
     with (
         patch("sigil.cli.operators.confirm_piped_input", return_value=False),
@@ -505,6 +565,51 @@ def test_goal_loop_runs_until_complete() -> None:
     assert goal_events[-1]["type"] == "goal_completed"
     assert goal_events[-1]["goal"]["status"] == "completed"
     assert goal_events[-1]["goal"]["last_status"] == "complete"
+
+
+def test_goal_loop_can_edit_tools_before_execution() -> None:
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        with patch_dict(
+            os.environ,
+            {"SIGIL_STATE_DIR": tmp_dir, "SIGIL_SESSION_ID": "goal-session"},
+        ):
+            pi_calls = []
+
+            def fake_run_pi(*args: object, **kwargs: object) -> int:
+                pi_calls.append((args, kwargs))
+                append_jsonl(
+                    "last-question.jsonl",
+                    {
+                        "role": "assistant",
+                        "content": "done\nSIGIL_STATUS: complete\nSIGIL_NEXT: review",
+                    },
+                )
+                return 0
+
+            prompts = iter(["e\n", "y\n"])
+
+            def fake_prompt(*args: object, **kwargs: object) -> str:
+                del args, kwargs
+                return next(prompts)
+
+            with (
+                patch("sigil.goals.prompt_on_tty", side_effect=fake_prompt),
+                patch("sigil.acts.edit_tools", return_value=["read", "ls"]),
+                patch("sigil.goals.run_pi_agent_step", side_effect=fake_run_pi),
+            ):
+                result = run_goal_loop(
+                    objective="fix tests",
+                    confirm_steps=True,
+                    glyph="@",
+                )
+            goal_events = read_jsonl("last-goal.jsonl")
+
+    assert result == 0
+    assert len(pi_calls) == 1
+    assert pi_calls[0][1]["tools"] == "read,ls"
+    step = goal_events[-1]["goal"]["steps"][0]
+    assert step["tools"] == ["read", "ls"]
+    assert step["command"] == "pi --tools read,ls"
 
 
 def test_auto_goal_loop_stops_on_unclear_status_without_prompting() -> None:
@@ -585,6 +690,36 @@ def test_act_pi_step_uses_sigil_shell_extension() -> None:
     pi_env = pi_kwargs["env"]
     assert isinstance(pi_env, dict)
     assert "SIGIL_BIN" in pi_env
+
+
+def test_act_pi_step_honors_edited_tools_without_sigil_shell_extension() -> None:
+    captured: dict[str, object] = {}
+
+    def fake_run_pi_stream(pi_cmd: list[str], **kwargs: object) -> int:
+        captured["pi_cmd"] = pi_cmd
+        captured["kwargs"] = kwargs
+        return 0
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        with patch_dict(
+            os.environ,
+            {"SIGIL_STATE_DIR": tmp_dir, "SIGIL_SESSION_ID": "act-session"},
+        ):
+            with (
+                patch("sigil.acts.ensure_model_for_pi", return_value=True),
+                patch("sigil.acts.run_pi_stream", side_effect=fake_run_pi_stream),
+            ):
+                from sigil.acts import run_pi_agent_step
+
+                result = run_pi_agent_step(
+                    {"objective": "repair"},
+                    tools="read,grep,edit",
+                )
+
+    assert result == 0
+    pi_cmd = cast("list[str]", captured["pi_cmd"])
+    assert pi_cmd[pi_cmd.index("--tools") + 1] == "read,grep,edit"
+    assert "--extension" not in pi_cmd
 
 
 def test_act_pi_step_streams_in_full_mode() -> None:

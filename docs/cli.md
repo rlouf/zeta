@@ -192,8 +192,10 @@ Examples:
 `,` prints a command proposal. The zsh binding inserts it into the editable
 prompt buffer and adds it to shell history; the Bash binding adds it to history.
 `,,` asks before running one Pi
-agent turn with read/search/edit/write tools. A turn is one Pi invocation and
-may include zero or more tool calls. `,,,` runs the same one-turn route without
+agent turn with read/search/edit/write tools. At the confirmation prompt, `e`
+opens `$VISUAL` or `$EDITOR` with the available tools, one per line, so tools
+can be removed before execution. A turn is one Pi invocation and may include
+zero or more tool calls. `,,,` runs the same one-turn route without
 routine confirmation. `@` and `@@` repeat bounded turns toward a
 durable goal, stopping on completion, blockage, budget exhaustion, or
 interruption. Bash tool execution is blocked and staged as a command for review.

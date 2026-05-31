@@ -199,9 +199,11 @@ buffer with `print -z` and records it in shell history. Bash records it in
 history.
 
 `,,` asks before handing the objective to Pi, gives Pi read/search/edit/write
-tools, and returns control to the shell after one bounded Pi invocation. That
-invocation may include zero or more tool calls. `,,,` runs the same one-turn
-route without routine confirmation. Shell calls inside those turns go through
+tools, and returns control to the shell after one bounded Pi invocation. At the
+confirmation prompt, `e` opens `$VISUAL` or `$EDITOR` with the available tools,
+one per line, so tools can be removed before execution. That invocation may
+include zero or more tool calls. `,,,` runs the same one-turn route without
+routine confirmation. Shell calls inside those turns go through
 Sigil's `sigil_shell` Pi tool: Sigil prints the proposed command, asks whether
 to run or edit it, streams stdout/stderr to the terminal, records the turn, and
 returns the captured output plus exit status back to Pi so the same turn can

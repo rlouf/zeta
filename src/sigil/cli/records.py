@@ -10,7 +10,7 @@ import click
 from ._base import cli
 from ..failure import record_failure
 from ..session import record_turn
-from ..tty import open_capture_pty, relay_capture
+from ..tty import open_capture_pty, open_tty_mirror, relay_capture
 
 
 @cli.command("record-failure", hidden=True)
@@ -76,7 +76,12 @@ def run_capture_reader(
 ) -> None:
     """Run the detached relay child: mirror the pty master until SIGTERM."""
     os.setsid()
-    if mirror_fd is not None and mirror_fd <= 2:
+    # Prefer the real terminal device so output survives any in-shell fd
+    # redirection; fall back to the fd the shell handed us (tests, no tty).
+    tty_mirror = open_tty_mirror(os.environ.get("SIGIL_TTY"))
+    if tty_mirror is not None:
+        mirror_fd = tty_mirror
+    elif mirror_fd is not None and mirror_fd <= 2:
         mirror_fd = os.dup(mirror_fd)
     devnull = os.open(os.devnull, os.O_RDWR)
     for fd in (0, 1, 2):

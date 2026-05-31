@@ -215,6 +215,20 @@ def relay_capture(
         os.close(slave_fd)
 
 
+def open_tty_mirror(tty_path: str | None) -> int | None:
+    """Open the terminal device for mirrored output, or None when unavailable.
+
+    Writing to the device path is immune to in-shell fd redirection (prompt
+    frameworks, loggers), so captured output still reaches the screen.
+    """
+    if not tty_path:
+        return None
+    try:
+        return os.open(tty_path, os.O_WRONLY | os.O_NOCTTY)
+    except OSError:
+        return None
+
+
 def relay_readable(fd: int, timeout: float) -> bool:
     """Return whether ``fd`` has data, waiting at most ``timeout`` seconds."""
     try:

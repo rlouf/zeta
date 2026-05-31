@@ -75,6 +75,8 @@ def run_shell(
     env["SIGIL_STUB_LOG"] = str(tmp / "calls.log")
     env["SIGIL_SESSION_ID"] = "shell-test"
     env["ZLE_LOG"] = str(tmp / "zle.log")
+    for leaked in ("SIGIL_TTY", "SIGIL_TTY_FD", "TTY"):
+        env.pop(leaked, None)
     return subprocess.run(
         [shell, "-c", script],
         cwd=ROOT,
@@ -94,6 +96,8 @@ def run_shell_args(
     env["SIGIL_STUB_LOG"] = str(tmp / "calls.log")
     env["SIGIL_SESSION_ID"] = "shell-test"
     env["ZLE_LOG"] = str(tmp / "zle.log")
+    for leaked in ("SIGIL_TTY", "SIGIL_TTY_FD", "TTY"):
+        env.pop(leaked, None)
     return subprocess.run(
         [*args, script],
         cwd=ROOT,

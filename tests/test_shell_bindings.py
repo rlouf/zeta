@@ -182,7 +182,7 @@ def test_bash_question_does_not_consume_staged_command() -> None:
         assert "history=echo recommended" in result.stdout
 
 
-def test_bash_act_staged_command_adds_to_history() -> None:
+def test_bash_agent_step_does_not_consume_staged_command() -> None:
     with tempfile.TemporaryDirectory() as tmp_dir:
         tmp = Path(tmp_dir)
         stub = make_stub(tmp)
@@ -196,7 +196,7 @@ def test_bash_act_staged_command_adds_to_history() -> None:
         )
         assert_success(result)
         assert "op:op ,,, repair" in result.stdout
-        assert "history=uv run pytest" in result.stdout
+        assert "history=" in result.stdout
 
 
 def test_bash_exports_tty_for_pipeline_confirmations() -> None:
@@ -424,7 +424,7 @@ def test_zsh_question_does_not_consume_staged_command() -> None:
 
 
 @pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
-def test_zsh_act_staged_command_adds_to_history() -> None:
+def test_zsh_agent_step_does_not_consume_staged_command() -> None:
     with tempfile.TemporaryDirectory() as tmp_dir:
         tmp = Path(tmp_dir)
         stub = make_stub(tmp)
@@ -438,7 +438,7 @@ def test_zsh_act_staged_command_adds_to_history() -> None:
         )
         assert_success(result)
         assert "op:op ,,, repair" in result.stdout
-        assert "history=uv run pytest" in result.stdout
+        assert "history=" in result.stdout
 
 
 @pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")

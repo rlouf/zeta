@@ -427,7 +427,7 @@ def test_triple_comma_creates_act_and_executes_one_auto_approved_step() -> None:
 
     assert result.exit_code == 0, result.output
     assert "objective: ship it" not in result.output
-    assert "❯ tools  read,grep,find,ls,bash,edit,write" in result.output
+    assert "❯ tools  read,grep,find,ls,sigil_shell,edit,write" in result.output
     assert len(pi_calls) == 1
     assert pi_calls[0][1]["glyph"] == ",,,"
     assert [event["type"] for event in events] == [
@@ -542,7 +542,7 @@ def test_auto_goal_loop_stops_on_unclear_status_without_prompting() -> None:
     assert goal_events[-1]["goal"]["approval"] == "auto"
 
 
-def test_act_pi_step_uses_staged_command_extension() -> None:
+def test_act_pi_step_uses_sigil_shell_extension() -> None:
     class FakeProc:
         def __init__(self, stdout: object | None = None) -> None:
             self.stdout = stdout
@@ -567,7 +567,6 @@ def test_act_pi_step_uses_staged_command_extension() -> None:
                 patch("sigil.acts.ensure_model_for_pi", return_value=True),
                 patch("sigil.pi_stream.subprocess.Popen", side_effect=fake_popen),
                 patch("sigil.pi_stream.renderer_command", return_value=["cat"]),
-                patch("sigil.acts.record_staged_commands", return_value=[]),
             ):
                 from sigil.acts import run_pi_agent_step
 
@@ -577,11 +576,15 @@ def test_act_pi_step_uses_staged_command_extension() -> None:
 
     assert result == 0
     pi_cmd, pi_kwargs = next(call for call in popen_calls if call[0][0] == "pi")
-    assert pi_cmd[pi_cmd.index("--tools") + 1] == "read,grep,find,ls,bash,edit,write"
+    assert (
+        pi_cmd[pi_cmd.index("--tools") + 1]
+        == "read,grep,find,ls,sigil_shell,edit,write"
+    )
     assert "--extension" in pi_cmd
+    assert "sigil_shell.ts" in pi_cmd[pi_cmd.index("--extension") + 1]
     pi_env = pi_kwargs["env"]
     assert isinstance(pi_env, dict)
-    assert "SIGIL_STAGED_COMMAND_PATH" in pi_env
+    assert "SIGIL_BIN" in pi_env
 
 
 def test_act_pi_step_streams_in_full_mode() -> None:
@@ -600,7 +603,6 @@ def test_act_pi_step_streams_in_full_mode() -> None:
             with (
                 patch("sigil.acts.ensure_model_for_pi", return_value=True),
                 patch("sigil.acts.run_pi_stream", side_effect=fake_run_pi_stream),
-                patch("sigil.acts.record_staged_commands", return_value=[]),
             ):
                 from sigil.acts import run_pi_agent_step
 
@@ -614,7 +616,7 @@ def test_act_pi_step_streams_in_full_mode() -> None:
     assert not kwargs.get("json_output")
     assert kwargs["tool_output_stdout"]
     pi_env = cast("dict[str, str]", kwargs["pi_env"])
-    assert "SIGIL_STAGED_COMMAND_PATH" in pi_env
+    assert "SIGIL_BIN" in pi_env
 
 
 def test_act_resume_executes_pending_step_without_regenerating() -> None:
@@ -642,7 +644,7 @@ def test_act_resume_executes_pending_step_without_regenerating() -> None:
                             {
                                 "id": "1",
                                 "title": "Run one Pi edit step",
-                                "command": "pi --tools read,grep,find,ls,bash,edit,write",
+                                "command": "pi --tools read,grep,find,ls,sigil_shell,edit,write",
                                 "explanation": "Run the pending edit.",
                                 "status": "pending",
                             },
@@ -669,7 +671,7 @@ def test_act_resume_executes_pending_step_without_regenerating() -> None:
 
     assert result.exit_code == 0, result.output
     assert "objective: ship it" not in result.output
-    assert "❯ tools  read,grep,find,ls,bash,edit,write" in result.output
+    assert "❯ tools  read,grep,find,ls,sigil_shell,edit,write" in result.output
     assert len(pi_calls) == 1
     assert act_events[-1]["act"]["status"] == "completed"
 
@@ -699,7 +701,7 @@ def test_act_replaces_stale_same_objective_act_without_pending_step() -> None:
                             {
                                 "id": "1",
                                 "title": "Run one Pi edit step",
-                                "command": "pi --tools read,grep,find,ls,bash,edit,write",
+                                "command": "pi --tools read,grep,find,ls,sigil_shell,edit,write",
                                 "explanation": "Already handled.",
                                 "status": "done",
                             },
@@ -727,7 +729,7 @@ def test_act_replaces_stale_same_objective_act_without_pending_step() -> None:
 
     assert result.exit_code == 0, result.output
     assert "objective: ship it" not in result.output
-    assert "❯ tools  read,grep,find,ls,bash,edit,write" in result.output
+    assert "❯ tools  read,grep,find,ls,sigil_shell,edit,write" in result.output
     assert len(pi_calls) == 1
     created = [event for event in act_events if event["type"] == "act_created"]
     assert created[-1]["act"]["act_id"] != "stale-act"

@@ -3,16 +3,14 @@
 from __future__ import annotations
 
 import os
+import shutil
 import sys
 import uuid
+from importlib.resources import files
+from pathlib import Path
 from typing import Any
 
 from .ansi import MUTED, RESET
-from .staged_command import (
-    prepare_staged_commands,
-    record_staged_commands,
-    staged_command_extension_path,
-)
 from .pi_stream import TRACE_LABEL_WIDTH, run_pi_stream
 from .model import ensure_model_for_pi
 from .state import append_event, append_jsonl, read_jsonl
@@ -20,20 +18,37 @@ from .tty import clear_lines_on_tty, prompt_on_tty
 
 LAST_ACT = "last-act.jsonl"
 MAX_EVENT_OUTPUT_CHARS = 4000
-PI_AGENT_TOOLS = "read,grep,find,ls,bash,edit,write"
-PI_AGENT_TOOLS_WITHOUT_BASH = "read,grep,find,ls,edit,write"
+SIGIL_SHELL_EXTENSION = "pi_extensions/sigil_shell.ts"
+PI_AGENT_TOOLS = "read,grep,find,ls,sigil_shell,edit,write"
+PI_AGENT_TOOLS_WITHOUT_SHELL = "read,grep,find,ls,edit,write"
 
 PI_AGENT_SYSTEM_PROMPT = (
     "You are Sigil's bounded shell-native edit route. Complete at most one "
     "coherent coding step for the user's objective. Use read/search tools "
     "before editing. Use edit/write only for minimal, relevant file changes. "
-    "If local inspection or focused tests would help, call the bash tool; "
-    "Sigil will block execution and hand the command to the user's terminal for "
-    "review. Do not install dependencies, commit, push, reset, delete unrelated "
+    "If local inspection or focused tests would help, call the sigil_shell "
+    "tool. It asks the user before running a shell command, streams output to "
+    "the terminal, records the turn, and returns stdout/stderr plus exit status "
+    "to you. Do not install dependencies, commit, push, reset, delete unrelated "
     "files, or perform network operations. If the request is ambiguous or "
     "unsafe, stop and say what you need. End with a concise summary of changed "
     "files and the next verification command."
 )
+
+
+def sigil_shell_extension_path() -> Path | None:
+    """Return the bundled Pi shell tool extension path if available."""
+    resource = files("sigil").joinpath(SIGIL_SHELL_EXTENSION)
+    if not resource.is_file():
+        return None
+    return Path(str(resource))
+
+
+def sigil_bin_for_pi() -> str:
+    """Return the CLI path the Pi extension should call for turn recording."""
+    return (
+        os.environ.get("SIGIL_BIN") or shutil.which("sigil") or sys.argv[0] or "sigil"
+    )
 
 
 def run_act_stepper(
@@ -282,14 +297,11 @@ def run_pi_agent_step(
         return 1
 
     route_glyph = glyph or str(act.get("glyph") or ",,,")
-    staged_command_path = prepare_staged_commands()
-    extension_path = staged_command_extension_path()
+    extension_path = sigil_shell_extension_path()
     tools = (
-        PI_AGENT_TOOLS if extension_path is not None else PI_AGENT_TOOLS_WITHOUT_BASH
+        PI_AGENT_TOOLS if extension_path is not None else PI_AGENT_TOOLS_WITHOUT_SHELL
     )
-    tool_label = (
-        "read+staged-command+edit+write" if extension_path else "read+edit+write"
-    )
+    tool_label = "read+sigil-shell+edit+write" if extension_path else "read+edit+write"
     approval = str(act.get("approval") or "confirm")
     step_label = (
         "one auto-approved step" if approval == "auto" else "one confirmed step"
@@ -322,7 +334,7 @@ def run_pi_agent_step(
             pi_agent_prompt(act),
         ]
     )
-    pi_env = {**os.environ, "SIGIL_STAGED_COMMAND_PATH": str(staged_command_path)}
+    pi_env = {**os.environ, "SIGIL_BIN": sigil_bin_for_pi()}
     exit_code = run_pi_stream(
         pi_cmd,
         pi_env=pi_env,
@@ -330,13 +342,6 @@ def run_pi_agent_step(
         prompt=pi_agent_prompt(act),
         tool_output_stdout=True,
     )
-    staged = record_staged_commands(glyph=route_glyph)
-    if staged:
-        latest = str(staged[-1].get("command") or "")
-        print(
-            f"{MUTED}❯ staged command  {latest}{RESET}",
-            file=sys.stderr,
-        )
     print()
     return exit_code
 

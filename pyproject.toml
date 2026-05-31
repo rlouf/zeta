@@ -55,6 +55,7 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 sigil = [
+  "pi_extensions/sigil_shell.ts",
   "pi_extensions/staged_command.ts",
   "shell/bash/sigil.bash",
   "shell/zsh/sigil.zsh",

@@ -201,8 +201,11 @@ history.
 `,,` asks before handing the objective to Pi, gives Pi read/search/edit/write
 tools, and returns control to the shell after one bounded Pi invocation. That
 invocation may include zero or more tool calls. `,,,` runs the same one-turn
-route without routine confirmation. Bash calls inside those turns are blocked
-and handed off. `@` and `@@` repeat bounded Pi turns toward a
+route without routine confirmation. Shell calls inside those turns go through
+Sigil's `sigil_shell` Pi tool: Sigil prints the proposed command, asks whether
+to run or edit it, streams stdout/stderr to the terminal, records the turn, and
+returns the captured output plus exit status back to Pi so the same turn can
+continue. `@` and `@@` repeat bounded Pi turns toward a
 durable goal until completion, blockage, budget exhaustion, or interruption.
 Agent steps always stream Pi's raw tool calls and prose through `glow` or
 `cat`; they do not replace the final answer with a compact summary.

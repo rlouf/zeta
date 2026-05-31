@@ -55,7 +55,7 @@ fi
 
 __sigil_history_insert() {
   # Add a command to zsh history without executing it. Used when Sigil proposes
-  # or stages a command so normal history search can find it later.
+  # a command so normal history search can find it later.
   [[ -n "${1:-}" ]] || return 0
   print -s -- "$1" 2>/dev/null || true
 }
@@ -66,15 +66,6 @@ __sigil_prompt_insert() {
   [[ -n "${1:-}" ]] || return 0
   print -z -- "$1" 2>/dev/null || true
   __sigil_history_insert "$1"
-}
-
-__sigil_insert_staged_command() {
-  # Pi-backed agent routes may refuse to run Bash directly and instead stage a
-  # command for user review. Pop the latest staged command and put it at the
-  # prompt, preserving the "human presses enter" boundary.
-  local command
-  command="$("$__sigil_bin" staged pop 2>/dev/null)" || return 0
-  __sigil_prompt_insert "$command"
 }
 
 __sigil_glyphs_enabled() {
@@ -95,23 +86,20 @@ sigil_command() {
   __sigil_prompt_insert "$command"
 }
 
-__sigil_op_with_staged_command() {
+__sigil_op() {
   # Shared helper for agent/goal routes. They run through the generic operator
-  # CLI, then look for any command Pi staged for explicit user approval.
+  # CLI; command approval for Pi shell tools happens inside that foreground run.
   local op="$1"
   shift
   "$__sigil_bin" op "$op" "$@"
-  local exit_status=$?
-  __sigil_insert_staged_command
-  return "$exit_status"
 }
 
 sigil_agent_step() {
-  __sigil_op_with_staged_command ",," "$@"
+  __sigil_op ",," "$@"
 }
 
 sigil_agent_step_auto() {
-  __sigil_op_with_staged_command ",,," "$@"
+  __sigil_op ",,," "$@"
 }
 
 sigil_question() {
@@ -129,11 +117,11 @@ sigil_run() {
 }
 
 sigil_goal() {
-  __sigil_op_with_staged_command "@" "$@"
+  __sigil_op "@" "$@"
 }
 
 sigil_goal_auto() {
-  __sigil_op_with_staged_command "@@" "$@"
+  __sigil_op "@@" "$@"
 }
 
 # ── Glyph Bindings ───────────────────────────────────────────────────────

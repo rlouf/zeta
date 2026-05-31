@@ -68,12 +68,6 @@ __sigil_history_insert() {
   builtin history -s "$1" 2>/dev/null || true
 }
 
-__sigil_insert_staged_command() {
-  local command
-  command="$("$__sigil_bin" staged pop 2>/dev/null)" || return 0
-  __sigil_history_insert "$command"
-}
-
 __sigil_glyphs_enabled() {
   [[ "${SIGIL_ENABLE_GLYPHS:-1}" != "0" && "${SIGIL_ENABLE_GLYPHS:-1}" != "false" ]]
 }
@@ -118,21 +112,18 @@ sigil_command() {
   __sigil_history_insert "$command"
 }
 
-__sigil_op_with_staged_command() {
+__sigil_op() {
   local op="$1"
   shift
   "$__sigil_bin" op "$op" "$@"
-  local status=$?
-  __sigil_insert_staged_command
-  return "$status"
 }
 
 sigil_agent_step() {
-  __sigil_op_with_staged_command ",," "$@"
+  __sigil_op ",," "$@"
 }
 
 sigil_agent_step_auto() {
-  __sigil_op_with_staged_command ",,," "$@"
+  __sigil_op ",,," "$@"
 }
 
 sigil_question() {
@@ -148,11 +139,11 @@ sigil_run() {
 }
 
 sigil_goal() {
-  __sigil_op_with_staged_command "@" "$@"
+  __sigil_op "@" "$@"
 }
 
 sigil_goal_auto() {
-  __sigil_op_with_staged_command "@@" "$@"
+  __sigil_op "@@" "$@"
 }
 
 # ── Optional glyph functions ─────────────────────────────────────────────

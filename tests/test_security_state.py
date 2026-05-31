@@ -28,7 +28,13 @@ from sigil.question import (
 )
 from sigil.session import recent_turns, recent_turns_context, record_turn
 from sigil.state import append_event, read_jsonl, write_jsonl
-from sigil.tty import clear_lines_on_tty, confirmation_tty_paths, confirm_on_tty
+from sigil.tty import (
+    clear_lines_on_tty,
+    confirmation_tty_paths,
+    confirm_on_tty,
+    open_capture_pty,
+    relay_capture,
+)
 
 
 class TtyStringIO(StringIO):
@@ -1852,3 +1858,75 @@ def test_no_color_disables_tty_color() -> None:
             os.environ.pop("NO_COLOR", None)
         else:
             os.environ["NO_COLOR"] = saved
+
+
+def test_capture_pty_slave_is_a_real_terminal() -> None:
+    master_fd, slave_fd, slave_path = open_capture_pty()
+    try:
+        assert os.isatty(slave_fd)
+        assert slave_path.startswith("/dev/")
+    finally:
+        os.close(slave_fd)
+        os.close(master_fd)
+
+
+def test_capture_relay_mirrors_master_to_sink_and_original_stream(
+    tmp_path: Path,
+) -> None:
+    import threading
+    import time
+
+    master_fd, slave_fd, _ = open_capture_pty()
+    sink = tmp_path / "sink"
+    mirror = tmp_path / "mirror"
+    mirror_fd = os.open(str(mirror), os.O_WRONLY | os.O_CREAT, 0o600)
+    stop = {"value": False}
+    reader = threading.Thread(
+        target=relay_capture,
+        args=(master_fd, str(sink)),
+        kwargs={
+            "mirror_fd": mirror_fd,
+            "should_stop": lambda: stop["value"],
+            "poll_interval": 0.02,
+        },
+    )
+    reader.start()
+    try:
+        os.write(slave_fd, b"hello from a tty\n")
+        time.sleep(0.1)
+    finally:
+        stop["value"] = True
+        reader.join(timeout=2)
+        os.close(slave_fd)
+        os.close(master_fd)
+        os.close(mirror_fd)
+
+    assert b"hello from a tty" in sink.read_bytes()
+    assert b"hello from a tty" in mirror.read_bytes()
+
+
+def test_capture_relay_drains_output_written_before_stop(tmp_path: Path) -> None:
+    import threading
+
+    master_fd, slave_fd, _ = open_capture_pty()
+    sink = tmp_path / "sink"
+    stop = {"value": False}
+    reader = threading.Thread(
+        target=relay_capture,
+        args=(master_fd, str(sink)),
+        kwargs={
+            "mirror_fd": None,
+            "should_stop": lambda: stop["value"],
+            "poll_interval": 0.05,
+        },
+    )
+    os.write(slave_fd, b"late bytes\n")
+    stop["value"] = True
+    reader.start()
+    try:
+        reader.join(timeout=2)
+    finally:
+        os.close(slave_fd)
+        os.close(master_fd)
+
+    assert b"late bytes" in sink.read_bytes()

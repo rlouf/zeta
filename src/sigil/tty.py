@@ -2,8 +2,14 @@
 
 from __future__ import annotations
 
+import fcntl
 import os
+import pty
+import select
 import sys
+import termios
+import time
+from typing import BinaryIO, Callable
 
 
 def confirm_on_tty(prompt: str) -> bool:
@@ -96,3 +102,161 @@ def confirmation_tty_paths() -> list[str]:
             paths.append(value)
     paths.append("/dev/tty")
     return list(dict.fromkeys(paths))
+
+
+CAPTURE_READ_SIZE = 65536
+
+
+def open_capture_pty(reference_fd: int | None = None) -> tuple[int, int, str]:
+    """Open a pty for turn capture, sized to the real terminal.
+
+    Returns ``(master_fd, slave_fd, slave_path)``. The shell redirects a command's
+    stdout or stderr onto ``slave_path`` so the command still sees a tty, while a
+    relay drains ``master_fd``. ``reference_fd`` provides the window size when it
+    is itself a terminal.
+    """
+    master_fd, slave_fd = pty.openpty()
+    set_transparent_output(slave_fd)
+    apply_terminal_winsize(slave_fd, reference_fd)
+    return master_fd, slave_fd, os.ttyname(slave_fd)
+
+
+def set_transparent_output(slave_fd: int) -> None:
+    """Disable pty output post-processing so captured bytes pass through verbatim.
+
+    Without this the slave maps ``\\n`` to ``\\r\\n`` (ONLCR); the real terminal we
+    mirror to applies its own processing, so the capture pty must stay transparent.
+    """
+    try:
+        attrs = termios.tcgetattr(slave_fd)
+    except termios.error:
+        return
+    attrs[1] &= ~termios.OPOST
+    try:
+        termios.tcsetattr(slave_fd, termios.TCSANOW, attrs)
+    except termios.error:
+        pass
+
+
+def apply_terminal_winsize(slave_fd: int, reference_fd: int | None = None) -> None:
+    """Copy a window size onto a capture pty slave from the reference or terminal."""
+    size = fd_winsize(reference_fd) if reference_fd is not None else None
+    if size is None:
+        size = terminal_winsize()
+    if size is None:
+        return
+    try:
+        fcntl.ioctl(slave_fd, termios.TIOCSWINSZ, size)
+    except OSError:
+        pass
+
+
+def fd_winsize(fd: int) -> bytes | None:
+    """Return the packed winsize struct for a terminal fd, or None."""
+    try:
+        return fcntl.ioctl(fd, termios.TIOCGWINSZ, b"\x00" * 8)
+    except OSError:
+        return None
+
+
+def terminal_winsize() -> bytes | None:
+    """Return the real terminal's packed winsize struct, or None when unavailable."""
+    for path in confirmation_tty_paths():
+        try:
+            fd = os.open(path, os.O_RDONLY | os.O_NOCTTY)
+        except OSError:
+            continue
+        try:
+            return fcntl.ioctl(fd, termios.TIOCGWINSZ, b"\x00" * 8)
+        except OSError:
+            continue
+        finally:
+            os.close(fd)
+    return None
+
+
+def relay_capture(
+    master_fd: int,
+    sink_path: str,
+    *,
+    mirror_fd: int | None,
+    should_stop: Callable[[], bool],
+    slave_fd: int | None = None,
+    grace: float = 0.5,
+    poll_interval: float = 0.1,
+) -> None:
+    """Mirror pty-master output to ``mirror_fd`` and a sink file until stopped.
+
+    Reads ``master_fd`` and writes every byte to both ``mirror_fd`` (the command's
+    original output stream) and ``sink_path`` (the captured transcript). The reader
+    holds ``slave_fd`` open just long enough (until the first read or ``grace``
+    seconds) for the shell to take over the slave, then closes it so a later
+    shell-side close — from stopping capture or the shell exiting — surfaces as a
+    master EOF and ends the relay. ``should_stop`` (SIGTERM) forces an early stop.
+    """
+    started = time.monotonic()
+    with open(sink_path, "ab", buffering=0) as sink:
+        while not should_stop():
+            readable = relay_readable(master_fd, poll_interval)
+            if slave_fd is not None and (
+                readable or time.monotonic() - started >= grace
+            ):
+                os.close(slave_fd)
+                slave_fd = None
+            if not readable:
+                continue
+            chunk = relay_read(master_fd)
+            if chunk is None:
+                break
+            if chunk:
+                relay_emit(chunk, sink, mirror_fd)
+        relay_drain(master_fd, sink, mirror_fd)
+    if slave_fd is not None:
+        os.close(slave_fd)
+
+
+def relay_readable(fd: int, timeout: float) -> bool:
+    """Return whether ``fd`` has data, waiting at most ``timeout`` seconds."""
+    try:
+        readable, _, _ = select.select([fd], [], [], timeout)
+    except (InterruptedError, OSError):
+        return False
+    return bool(readable)
+
+
+def relay_read(fd: int) -> bytes | None:
+    """Read one chunk; bytes on data, empty on transient retry, None on hangup.
+
+    An empty ``os.read`` means EOF (the shell closed the slave); a pty hangup can
+    instead raise ``OSError`` (EIO on Linux). Both map to None so the relay stops.
+    """
+    try:
+        data = os.read(fd, CAPTURE_READ_SIZE)
+    except (BlockingIOError, InterruptedError):
+        return b""
+    except OSError:
+        return None
+    return data if data else None
+
+
+def relay_drain(master_fd: int, sink: BinaryIO, mirror_fd: int | None) -> None:
+    """Flush whatever remains in the master after the command has exited."""
+    os.set_blocking(master_fd, False)
+    while True:
+        try:
+            chunk = os.read(master_fd, CAPTURE_READ_SIZE)
+        except (BlockingIOError, InterruptedError, OSError):
+            break
+        if not chunk:
+            break
+        relay_emit(chunk, sink, mirror_fd)
+
+
+def relay_emit(chunk: bytes, sink: BinaryIO, mirror_fd: int | None) -> None:
+    """Write one chunk to the sink file and, when available, the original stream."""
+    sink.write(chunk)
+    if mirror_fd is not None:
+        try:
+            os.write(mirror_fd, chunk)
+        except OSError:
+            pass

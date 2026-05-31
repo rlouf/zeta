@@ -9,22 +9,13 @@ else
 fi
 typeset -g __sigil_muted=$'\e[38;2;110;106;134m'
 typeset -g __sigil_reset=$'\e[0m'
-typeset -g __sigil_prompt_marker=""
-typeset -g __sigil_prompt_marker_active=0
-typeset -g __sigil_prompt_base=""
 typeset -g __sigil_capture_active=0
 typeset -g __sigil_capture_stdout_file=""
 typeset -g __sigil_capture_stderr_file=""
-typeset -g __sigil_capture_stdout_pipe=""
-typeset -g __sigil_capture_stderr_pipe=""
-typeset -g __sigil_capture_stdout_done=""
-typeset -g __sigil_capture_stderr_done=""
 typeset -g __sigil_capture_stdout_fd=""
 typeset -g __sigil_capture_stderr_fd=""
 typeset -g __sigil_capture_stdout_pid=""
 typeset -g __sigil_capture_stderr_pid=""
-typeset -g __sigil_capture_jobs_silenced=0
-typeset -g __sigil_capture_notify_was_set=0
 
 if [[ -z "${SIGIL_SESSION_ID:-}" ]]; then
   if command -v uuidgen >/dev/null 2>&1; then
@@ -72,11 +63,6 @@ __sigil_insert_staged_command() {
 
 __sigil_glyphs_enabled() {
   [[ "${SIGIL_ENABLE_GLYPHS:-1}" != "0" && "${SIGIL_ENABLE_GLYPHS:-1}" != "false" ]]
-}
-
-__sigil_prompt_marker_enabled() {
-  [[ -o interactive ]] || return 1
-  [[ "${SIGIL_ENABLE_PROMPT_MARKER:-1}" != "0" && "${SIGIL_ENABLE_PROMPT_MARKER:-1}" != "false" ]]
 }
 
 __sigil_recordable_command() {
@@ -129,15 +115,15 @@ __sigil_turn_capture_enabled() {
     [[ -o interactive ]] || return 1
   fi
   command -v mktemp >/dev/null 2>&1 || return 1
-  command -v mkfifo >/dev/null 2>&1 || return 1
-  command -v tee >/dev/null 2>&1 || return 1
   command -v tail >/dev/null 2>&1 || return 1
   return 0
 }
 
+# Capture redirects fd 1/2 onto pty slaves (real terminals) instead of pipes, so
+# the running command still passes isatty(). Sigil opens each pty and forks a
+# detached reader that mirrors the pty master to the terminal and a sink file.
 __sigil_capture_start() {
   local command="${1:-}"
-  local bg_nice_was_set=0
   __sigil_turn_capture_enabled || return 0
   __sigil_recordable_command "$command" || return 0
   __sigil_capture_skipped_command "$command" && return 0
@@ -150,85 +136,85 @@ __sigil_capture_start() {
     __sigil_capture_stdout_file=""
     return 0
   }
-  __sigil_capture_stdout_pipe="$(mktemp "${tmp_root%/}/sigil-stdout-pipe.XXXXXX")" || {
-    __sigil_capture_cleanup
-    return 0
-  }
-  __sigil_capture_stderr_pipe="$(mktemp "${tmp_root%/}/sigil-stderr-pipe.XXXXXX")" || {
-    __sigil_capture_cleanup
-    return 0
-  }
-  __sigil_capture_stdout_done="${__sigil_capture_stdout_file}.done"
-  __sigil_capture_stderr_done="${__sigil_capture_stderr_file}.done"
-  rm -f "$__sigil_capture_stdout_done" "$__sigil_capture_stderr_done"
-  rm -f "$__sigil_capture_stdout_pipe" "$__sigil_capture_stderr_pipe"
-  mkfifo "$__sigil_capture_stdout_pipe" || {
-    __sigil_capture_cleanup
-    return 0
-  }
-  mkfifo "$__sigil_capture_stderr_pipe" || {
-    __sigil_capture_cleanup
-    return 0
-  }
 
-  if [[ -o bg_nice ]]; then
-    bg_nice_was_set=1
-    unsetopt bg_nice
-  fi
-  __sigil_capture_silence_jobs
   exec {__sigil_capture_stdout_fd}>&1 || {
-    [[ $bg_nice_was_set -eq 1 ]] && setopt bg_nice
     __sigil_capture_cleanup
     return 0
   }
   exec {__sigil_capture_stderr_fd}>&2 || {
-    exec {__sigil_capture_stdout_fd}>&-
-    __sigil_capture_stdout_fd=""
-    [[ $bg_nice_was_set -eq 1 ]] && setopt bg_nice
+    __sigil_capture_close_saved_fds
     __sigil_capture_cleanup
     return 0
   }
-  {
-    tee "$__sigil_capture_stdout_file" < "$__sigil_capture_stdout_pipe"
-    print -r -- "$?" > "$__sigil_capture_stdout_done"
-  } &!
-  __sigil_capture_stdout_pid="$!"
-  {
-    tee "$__sigil_capture_stderr_file" < "$__sigil_capture_stderr_pipe" >&2
-    print -r -- "$?" > "$__sigil_capture_stderr_done"
-  } &!
-  __sigil_capture_stderr_pid="$!"
-  [[ $bg_nice_was_set -eq 1 ]] && setopt bg_nice
-  if ! exec > "$__sigil_capture_stdout_pipe"; then
+
+  local out_relay err_relay out_slave err_slave
+  out_relay="$("$__sigil_bin" capture-relay --sink "$__sigil_capture_stdout_file" --mirror-fd 4 4>&$__sigil_capture_stdout_fd 2>/dev/null)" || {
+    __sigil_capture_close_saved_fds
+    __sigil_capture_cleanup
+    return 0
+  }
+  err_relay="$("$__sigil_bin" capture-relay --sink "$__sigil_capture_stderr_file" --mirror-fd 4 4>&$__sigil_capture_stderr_fd 2>/dev/null)" || {
+    __sigil_capture_stop_reader "${out_relay##* }"
+    __sigil_capture_close_saved_fds
+    __sigil_capture_cleanup
+    return 0
+  }
+  out_slave="${out_relay%% *}"
+  __sigil_capture_stdout_pid="${out_relay##* }"
+  err_slave="${err_relay%% *}"
+  __sigil_capture_stderr_pid="${err_relay##* }"
+  if [[ -z "$out_slave" || -z "$err_slave" ]]; then
+    __sigil_capture_stop_readers
     __sigil_capture_close_saved_fds
     __sigil_capture_cleanup
     return 0
   fi
-  if ! exec 2> "$__sigil_capture_stderr_pipe"; then
+
+  if ! exec > "$out_slave"; then
+    __sigil_capture_stop_readers
+    __sigil_capture_close_saved_fds
+    __sigil_capture_cleanup
+    return 0
+  fi
+  if ! exec 2> "$err_slave"; then
     __sigil_capture_restore_stdout
+    __sigil_capture_stop_readers
     __sigil_capture_close_saved_fds
     __sigil_capture_cleanup
     return 0
   fi
-  rm -f "$__sigil_capture_stdout_pipe" "$__sigil_capture_stderr_pipe"
   __sigil_capture_active=1
 }
 
 __sigil_capture_stop() {
-  local stdout_ok=0
-  local stderr_ok=0
   [[ $__sigil_capture_active -eq 1 ]] || return 0
+  # Drain and stop the readers while the slaves are still open, then restore: on
+  # some platforms closing a pty slave discards output the reader has not read.
+  __sigil_capture_stop_readers
   __sigil_capture_restore_stdout
   __sigil_capture_restore_stderr
   __sigil_capture_close_saved_fds
-  __sigil_capture_wait_done "$__sigil_capture_stdout_done" && __sigil_capture_done_success "$__sigil_capture_stdout_done" && stdout_ok=1
-  __sigil_capture_wait_done "$__sigil_capture_stderr_done" && __sigil_capture_done_success "$__sigil_capture_stderr_done" && stderr_ok=1
-  [[ $stdout_ok -eq 1 ]] || : > "$__sigil_capture_stdout_file" 2>/dev/null || true
-  [[ $stderr_ok -eq 1 ]] || : > "$__sigil_capture_stderr_file" 2>/dev/null || true
+  __sigil_capture_active=0
+}
+
+# Tell a relay reader to flush and exit, then wait for it so the sink is complete.
+__sigil_capture_stop_reader() {
+  local pid="${1:-}"
+  [[ -n "$pid" ]] || return 0
+  kill -TERM "$pid" 2>/dev/null || return 0
+  local attempts="${SIGIL_CAPTURE_WAIT_ATTEMPTS:-200}"
+  local i
+  for i in {1..$attempts}; do
+    kill -0 "$pid" 2>/dev/null || return 0
+    sleep 0.01
+  done
+}
+
+__sigil_capture_stop_readers() {
+  __sigil_capture_stop_reader "$__sigil_capture_stdout_pid"
+  __sigil_capture_stop_reader "$__sigil_capture_stderr_pid"
   __sigil_capture_stdout_pid=""
   __sigil_capture_stderr_pid=""
-  __sigil_capture_active=0
-  __sigil_capture_restore_jobs
 }
 
 __sigil_capture_restore_stdout() {
@@ -252,43 +238,6 @@ __sigil_capture_close_saved_fds() {
   fi
 }
 
-__sigil_capture_wait_done() {
-  local done_path="${1:-}"
-  local attempts="${SIGIL_CAPTURE_WAIT_ATTEMPTS:-100}"
-  local i
-  [[ -n "$done_path" ]] || return 0
-  for i in {1..$attempts}; do
-    [[ -e "$done_path" ]] && return 0
-    sleep 0.01
-  done
-  return 1
-}
-
-__sigil_capture_done_success() {
-  local done_path="${1:-}"
-  [[ -n "$done_path" && -r "$done_path" ]] || return 1
-  [[ "$(< "$done_path")" == "0" ]]
-}
-
-__sigil_capture_silence_jobs() {
-  __sigil_capture_jobs_silenced=0
-  __sigil_capture_notify_was_set=0
-  if [[ -o notify ]]; then
-    __sigil_capture_notify_was_set=1
-    unsetopt notify
-  fi
-  __sigil_capture_jobs_silenced=1
-}
-
-__sigil_capture_restore_jobs() {
-  [[ $__sigil_capture_jobs_silenced -eq 1 ]] || return 0
-  if [[ $__sigil_capture_notify_was_set -eq 1 ]]; then
-    setopt notify
-  fi
-  __sigil_capture_jobs_silenced=0
-  __sigil_capture_notify_was_set=0
-}
-
 __sigil_capture_file_snippet() {
   local snippet_path="${1:-}"
   local bytes="${SIGIL_TURN_CAPTURE_BYTES:-6000}"
@@ -299,20 +248,9 @@ __sigil_capture_file_snippet() {
 __sigil_capture_cleanup() {
   [[ -n "$__sigil_capture_stdout_file" ]] && rm -f "$__sigil_capture_stdout_file"
   [[ -n "$__sigil_capture_stderr_file" ]] && rm -f "$__sigil_capture_stderr_file"
-  [[ -n "$__sigil_capture_stdout_pipe" ]] && rm -f "$__sigil_capture_stdout_pipe"
-  [[ -n "$__sigil_capture_stderr_pipe" ]] && rm -f "$__sigil_capture_stderr_pipe"
-  [[ -n "$__sigil_capture_stdout_done" ]] && rm -f "$__sigil_capture_stdout_done"
-  [[ -n "$__sigil_capture_stderr_done" ]] && rm -f "$__sigil_capture_stderr_done"
   __sigil_capture_close_saved_fds
   __sigil_capture_stdout_file=""
   __sigil_capture_stderr_file=""
-  __sigil_capture_stdout_pipe=""
-  __sigil_capture_stderr_pipe=""
-  __sigil_capture_stdout_done=""
-  __sigil_capture_stderr_done=""
-  if [[ $__sigil_capture_active -eq 0 ]]; then
-    __sigil_capture_restore_jobs
-  fi
 }
 
 __sigil_record_turn() {
@@ -332,37 +270,7 @@ __sigil_record_turn() {
 __sigil_precmd_done() {
   local exit_status="$1"
   __sigil_capture_cleanup
-  __sigil_refresh_prompt_marker
   return "$exit_status"
-}
-
-__sigil_refresh_prompt_marker() {
-  if ! __sigil_prompt_marker_enabled; then
-    if [[ $__sigil_prompt_marker_active -eq 1 ]]; then
-      PROMPT="$__sigil_prompt_base"
-      PS1="$PROMPT"
-      __sigil_prompt_marker=""
-      __sigil_prompt_marker_active=0
-    fi
-    return 0
-  fi
-
-  local current_prompt="${PROMPT:-${PS1:-}}"
-  if [[ $__sigil_prompt_marker_active -eq 1 ]]; then
-    current_prompt="$__sigil_prompt_base"
-  fi
-  __sigil_prompt_base="$current_prompt"
-
-  if "$__sigil_bin" status --json >/dev/null 2>&1; then
-    __sigil_prompt_marker=""
-    __sigil_prompt_marker_active=0
-  else
-    __sigil_prompt_marker="! "
-    __sigil_prompt_marker_active=1
-  fi
-
-  PROMPT="${__sigil_prompt_marker}${__sigil_prompt_base}"
-  PS1="$PROMPT"
 }
 
 sigil_command() {

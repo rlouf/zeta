@@ -4,11 +4,25 @@ import os
 import shlex
 import shutil
 import subprocess
+import sys
 import tempfile
 import textwrap
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def make_real_sigil(tmp: Path) -> Path:
+    """Write a wrapper that runs the real Sigil CLI for delegated subcommands."""
+    real = tmp / "sigil-real"
+    real.write_text(
+        "#!/usr/bin/env bash\n"
+        f"exec {shlex.quote(sys.executable)} -c "
+        "'import sys; from sigil.cli import main; sys.exit(main())' \"$@\"\n",
+        encoding="utf-8",
+    )
+    real.chmod(0o755)
+    return real
 
 
 def make_stub(tmp: Path) -> Path:
@@ -29,6 +43,9 @@ def make_stub(tmp: Path) -> Path:
               [ -n "${SIGIL_STUB_STAGED:-}" ] || exit 1
               printf '%s\n' "$SIGIL_STUB_STAGED"
               exit 0
+            fi
+            if [ "${1:-}" = "capture-relay" ]; then
+              exec "${SIGIL_REAL_BIN:?}" "$@"
             fi
             printf '%s\n' "$*" >> "$SIGIL_STUB_LOG"
             case "$*" in
@@ -54,6 +71,7 @@ def run_shell(
 ) -> subprocess.CompletedProcess[str]:
     env = os.environ.copy()
     env["SIGIL_BIN"] = str(stub)
+    env["SIGIL_REAL_BIN"] = str(make_real_sigil(tmp))
     env["SIGIL_STUB_LOG"] = str(tmp / "calls.log")
     env["SIGIL_SESSION_ID"] = "shell-test"
     env["ZLE_LOG"] = str(tmp / "zle.log")
@@ -72,6 +90,7 @@ def run_shell_args(
 ) -> subprocess.CompletedProcess[str]:
     env = os.environ.copy()
     env["SIGIL_BIN"] = str(stub)
+    env["SIGIL_REAL_BIN"] = str(make_real_sigil(tmp))
     env["SIGIL_STUB_LOG"] = str(tmp / "calls.log")
     env["SIGIL_SESSION_ID"] = "shell-test"
     env["ZLE_LOG"] = str(tmp / "zle.log")
@@ -211,25 +230,6 @@ def test_bash_exports_tty_for_pipeline_confirmations() -> None:
         assert result.stdout == "sigil_tty=/tmp/sigil-test-tty\n"
 
 
-def test_bash_prompt_marker_tracks_status_attention() -> None:
-    with tempfile.TemporaryDirectory() as tmp_dir:
-        tmp = Path(tmp_dir)
-        stub = make_stub(tmp)
-        result = run_shell_args(
-            ["bash", "--noprofile", "--norc", "-ic"],
-            textwrap.dedent(
-                "                    source src/sigil/shell/bash/sigil.bash\n                    PS1='$ '\n                    export SIGIL_STUB_STATUS=attention\n                    __sigil_refresh_prompt_marker\n                    printf 'attention=%s\\n' \"$PS1\"\n                    export SIGIL_STUB_STATUS=clean\n                    __sigil_refresh_prompt_marker\n                    printf 'clean=%s\\n' \"$PS1\"\n                    export SIGIL_ENABLE_PROMPT_MARKER=0\n                    export SIGIL_STUB_STATUS=attention\n                    __sigil_refresh_prompt_marker\n                    printf 'disabled=%s\\n' \"$PS1\"\n                    "
-            ),
-            tmp,
-            stub,
-        )
-        assert_success(result)
-        assert "attention=! $ " in result.stdout
-        assert "clean=$ " in result.stdout
-        assert "disabled=$ " in result.stdout
-        assert read_log(tmp) == []
-
-
 @pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
 def test_zsh_exports_tty_for_pipeline_confirmations() -> None:
     with tempfile.TemporaryDirectory() as tmp_dir:
@@ -245,26 +245,6 @@ def test_zsh_exports_tty_for_pipeline_confirmations() -> None:
         )
         assert_success(result)
         assert result.stdout == "sigil_tty=/tmp/sigil-test-tty\n"
-
-
-@pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
-def test_zsh_prompt_marker_tracks_status_attention() -> None:
-    with tempfile.TemporaryDirectory() as tmp_dir:
-        tmp = Path(tmp_dir)
-        stub = make_stub(tmp)
-        result = run_shell_args(
-            ["zsh", "-f", "-ic"],
-            textwrap.dedent(
-                '                    source src/sigil/shell/zsh/sigil.zsh\n                    PROMPT="$ "\n                    export SIGIL_STUB_STATUS=attention\n                    __sigil_refresh_prompt_marker\n                    print -- "attention=$PROMPT"\n                    export SIGIL_STUB_STATUS=clean\n                    __sigil_refresh_prompt_marker\n                    print -- "clean=$PROMPT"\n                    export SIGIL_ENABLE_PROMPT_MARKER=0\n                    export SIGIL_STUB_STATUS=attention\n                    __sigil_refresh_prompt_marker\n                    print -- "disabled=$PROMPT"\n                    '
-            ),
-            tmp,
-            stub,
-        )
-        assert_success(result)
-        assert "attention=! $ " in result.stdout
-        assert "clean=$ " in result.stdout
-        assert "disabled=$ " in result.stdout
-        assert read_log(tmp) == []
 
 
 def test_bash_wrappers_dispatch_piped_stdin_to_operator_runtime() -> None:
@@ -660,27 +640,6 @@ def test_zsh_skips_capture_for_tty_oriented_commands() -> None:
 
 
 @pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
-def test_zsh_capture_suppresses_notify_until_helper_jobs_are_waited() -> None:
-    with tempfile.TemporaryDirectory() as tmp_dir:
-        tmp = Path(tmp_dir)
-        stub = make_stub(tmp)
-        result = run_shell_args(
-            ["zsh", "-f", "-ic"],
-            textwrap.dedent(
-                '                    setopt notify\n                    source src/sigil/shell/zsh/sigil.zsh\n                    export SIGIL_ENABLE_TURN_CAPTURE=1\n                    __sigil_capture_start "bad command"\n                    jobs > "$ZLE_LOG"\n                    print -- "during=${options[notify]}"\n                    print -- "stdout line"\n                    print -- "stderr line" >&2\n                    __sigil_capture_stop\n                    print -- "after=${options[notify]}"\n                    wait\n                    '
-            ),
-            tmp,
-            stub,
-        )
-        assert_success(result)
-        assert "during=off" in result.stdout
-        assert "after=on" in result.stdout
-        assert "stdout line" in result.stdout
-        assert result.stderr == "stderr line\n"
-        assert (tmp / "zle.log").read_text(encoding="utf-8") == ""
-
-
-@pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
 def test_zsh_capture_preserves_user_file_descriptors() -> None:
     with tempfile.TemporaryDirectory() as tmp_dir:
         tmp = Path(tmp_dir)
@@ -736,35 +695,3 @@ def test_zsh_history_filter_is_additive_and_covers_glyphs() -> None:
         assert "at=1" in result.stdout
         assert "echo=0" in result.stdout
         assert (tmp / "zle.log").read_text(encoding="utf-8") == "user:echo hello\n"
-
-
-@pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
-def test_zsh_capture_helper_status_is_observable() -> None:
-    with tempfile.TemporaryDirectory() as tmp_dir:
-        tmp = Path(tmp_dir)
-        stub = make_stub(tmp)
-        done_path = tmp / "capture.done"
-        missing_path = tmp / "missing.done"
-        result = run_shell_args(
-            ["zsh", "-f", "-ic"],
-            textwrap.dedent(
-                f"""\
-                source src/sigil/shell/zsh/sigil.zsh
-                print -- 1 > {shlex.quote(str(done_path))}
-                __sigil_capture_done_success {shlex.quote(str(done_path))}
-                print -- "failed=$?"
-                print -- 0 > {shlex.quote(str(done_path))}
-                __sigil_capture_done_success {shlex.quote(str(done_path))}
-                print -- "succeeded=$?"
-                export SIGIL_CAPTURE_WAIT_ATTEMPTS=1
-                __sigil_capture_wait_done {shlex.quote(str(missing_path))}
-                print -- "timeout=$?"
-                """
-            ),
-            tmp,
-            stub,
-        )
-        assert_success(result)
-        assert "failed=1" in result.stdout
-        assert "succeeded=0" in result.stdout
-        assert "timeout=1" in result.stdout

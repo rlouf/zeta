@@ -33,15 +33,8 @@ already has the agent affordances I need."
 
 Goal: the shell tells you whether Sigil has live state without opening anything.
 
-Add prompt integration over `sigil status`:
-
-```text
-$      clean
-! $    attention
-```
-
-`sigil status` remains the explanation path. It should stay cheap: no model
-call, no network, no doctor checks, no mutation.
+`sigil status` is the explanation path: run it to see live state on demand. It
+should stay cheap: no model call, no network, no doctor checks, no mutation.
 
 Initial attention reasons:
 
@@ -128,13 +121,8 @@ reading docs first.
 
 ### Ambient State
 
-- [x] Add a cheap machine-readable `sigil status --json` call path for shell
-      bindings.
-- [x] Add zsh prompt integration that shows `!` when status is `attention`.
-- [x] Add Bash prompt integration with the same marker behavior.
-- [x] Ensure prompt integration never calls the model or network.
-- [x] Add tests for clean and attention prompt states.
-- [x] Document how to disable the prompt marker.
+- [x] Add a cheap machine-readable `sigil status --json` call path.
+- [x] Keep `sigil status` cheap: never call the model or network.
 
 ### Recovery Loop
 

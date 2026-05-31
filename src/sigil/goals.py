@@ -35,7 +35,7 @@ def run_goal_loop(
     goal = prepared
 
     max_steps = goal_step_budget(goal)
-    while int(goal.get("steps_run", 0) or 0) < max_steps:
+    while goal.get("steps_run", 0) < max_steps:
         if str(goal.get("status")) != "active":
             record_goal_update("goal_stopped", goal)
             return 0
@@ -117,7 +117,7 @@ def execute_goal_step(
         glyph=glyph,
     )
     step["exit_code"] = status
-    goal["steps_run"] = int(goal.get("steps_run", 0) or 0) + 1
+    goal["steps_run"] = goal.get("steps_run", 0) + 1
     if status != 0:
         step["status"] = "failed"
         goal["status"] = "blocked"
@@ -202,14 +202,10 @@ def goal_step_budget(goal: dict[str, Any]) -> int:
 def create_goal_step(goal: dict[str, Any]) -> dict[str, Any]:
     """Append and return the next pending goal step."""
     steps = goal.setdefault("steps", [])
-    if not isinstance(steps, list):
-        steps = []
-        goal["steps"] = steps
     step = {
         "id": str(len(steps) + 1),
         "title": "Run one Pi goal step",
         "command": f"pi --tools {PI_AGENT_TOOLS}",
-        "explanation": "One bounded goal step, then report continue, complete, or blocked.",
         "status": "pending",
     }
     steps.append(step)

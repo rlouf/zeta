@@ -109,7 +109,7 @@ def cmd_op(
             raise click.exceptions.Exit(2)
 
     if invocation.base == "?":
-        return dispatch_question_operator(invocation)
+        return run_question_operator(invocation)
 
     if invocation.base == "@":
         return dispatch_goal_operator(invocation, prompt, stdin_text)
@@ -140,11 +140,6 @@ def dispatch_act_operator(
     if status:
         raise click.exceptions.Exit(status)
     return 0
-
-
-def dispatch_question_operator(invocation: OperatorInvocation) -> int:
-    """Run a `?`/`??` invocation through the question route."""
-    return run_question_operator(invocation)
 
 
 def dispatch_goal_operator(
@@ -180,12 +175,12 @@ def dispatch_default_operator(invocation: OperatorInvocation) -> int:
     return 0
 
 
-def run_question_operator(invocation: object) -> int:
+def run_question_operator(invocation: OperatorInvocation) -> int:
     """Run question glyphs through explicitly authorized answer routes."""
-    question = str(getattr(invocation, "prompt", "") or "")
-    stdin_text = str(getattr(invocation, "stdin", "") or "")
-    depth = int(getattr(invocation, "depth", 0) or 0)
-    glyph = str(getattr(invocation, "glyph", "?") or "?")
+    question = invocation.prompt
+    stdin_text = invocation.stdin
+    depth = invocation.depth
+    glyph = invocation.glyph
     if stdin_text:
         question = question_with_stdin(question, stdin_text)
     if not question:

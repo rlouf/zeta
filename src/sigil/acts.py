@@ -170,11 +170,6 @@ def create_act(
 ) -> dict[str, Any]:
     """Create a one-step active Pi edit action."""
     approval = "confirm" if confirm_step else "auto"
-    explanation = (
-        "One confirmed read/edit/write pass, then control returns to the shell."
-        if confirm_step
-        else "One auto-approved read/edit/write pass, then control returns to the shell."
-    )
     act = {
         "act_id": str(uuid.uuid4()),
         "glyph": glyph,
@@ -187,7 +182,6 @@ def create_act(
                 "id": "1",
                 "title": "Run one Pi edit step",
                 "command": f"pi --tools {PI_AGENT_TOOLS}",
-                "explanation": explanation,
                 "status": "pending",
             }
         ],
@@ -428,8 +422,6 @@ def record_step_executed(
         "step_id": step.get("id"),
         "command": step.get("command"),
         "status": status,
-        "stdout_snippet": "",
-        "stderr_snippet": "",
         "act": act,
         "glyph": str(act.get("glyph") or ",,,"),
     }

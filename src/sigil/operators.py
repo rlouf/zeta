@@ -8,8 +8,8 @@ from typing import Literal, cast
 from .model import chat_json, chat_text, ensure_server
 from .state import append_event, append_jsonl, read_jsonl
 from .failure import active_failure_context
-from .question import recent_question_context as _recent_question_context
-from .session import recent_turns_context as _recent_turns_context
+from .question import recent_question_context
+from .session import recent_turns_context
 
 OperatorBase = Literal["?", ",", "@"]
 
@@ -380,18 +380,6 @@ def readable_target_files(lines: list[str]) -> list[tuple[Path, str]]:
             continue
         files.append((path, content))
     return files
-
-
-def recent_question_context() -> str:
-    """Return a compact summary of the recent question transcript, if any."""
-    return _recent_question_context()
-
-
-def recent_turns_context(limit: int | None = None) -> str:
-    """Return a compact summary of the most recent shell turns, if any."""
-    if limit is None:
-        return _recent_turns_context()
-    return _recent_turns_context(limit=limit)
 
 
 def max_tokens_for_depth(depth: int) -> int:

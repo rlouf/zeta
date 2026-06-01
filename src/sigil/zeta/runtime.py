@@ -68,6 +68,15 @@ GREP_SCHEMA: dict[str, Any] = {
     },
 }
 
+LS_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "path": {"type": "string"},
+        "limit": {"type": "integer", "minimum": 1},
+    },
+}
+
 BASH_SCHEMA: dict[str, Any] = {
     "type": "object",
     "additionalProperties": False,
@@ -104,6 +113,7 @@ TOOL_SPECS: dict[str, ToolSpec] = {
     "grep": ToolSpec(
         "grep", "Search text with ripgrep or a Python fallback.", GREP_SCHEMA
     ),
+    "ls": ToolSpec("ls", "List directory contents.", LS_SCHEMA),
     "bash": ToolSpec(
         "bash", "Stage a shell command into the user's prompt.", BASH_SCHEMA, True
     ),
@@ -240,6 +250,8 @@ def analyze_tool(name: str, params: dict[str, Any]) -> dict[str, Any]:
         return analyze_read(params)
     if name == "grep":
         return analyze_grep(params)
+    if name == "ls":
+        return analyze_ls(params)
     if name == "bash":
         return analyze_bash(params)
     if name == "edit":
@@ -268,6 +280,11 @@ def analyze_grep(params: dict[str, Any]) -> dict[str, Any]:
     if not pattern:
         return missing("pattern")
     return analysis(effects=[effect("search", path)])
+
+
+def analyze_ls(params: dict[str, Any]) -> dict[str, Any]:
+    path = str(params.get("path") or ".")
+    return analysis(effects=[effect("read", path)])
 
 
 SHELL_META_PATTERN = re.compile(r"[|&;<>()`$*?{}\[\]~]")
@@ -334,6 +351,8 @@ def run_tool(name: str, params: dict[str, Any]) -> dict[str, Any]:
         return run_read(params)
     if name == "grep":
         return run_grep(params)
+    if name == "ls":
+        return run_ls(params)
     if name == "bash":
         return run_bash(params)
     if name == "edit":
@@ -380,6 +399,29 @@ def run_grep(params: dict[str, Any]) -> dict[str, Any]:
         "ok": True,
         "content": [{"type": "text", "text": text[:MAX_TOOL_RESULT_CHARS]}],
         "metadata": {"pattern": pattern, "path": path},
+    }
+
+
+def run_ls(params: dict[str, Any]) -> dict[str, Any]:
+    path = Path(str(params.get("path") or "."))
+    limit = int(params.get("limit") or 200)
+    try:
+        entries = sorted(
+            path.iterdir(), key=lambda entry: (not entry.is_dir(), entry.name)
+        )
+    except OSError as exc:
+        return error_result("ls-failed", str(exc))
+    lines = []
+    for entry in entries[:limit]:
+        name = entry.name + ("/" if entry.is_dir() else "")
+        lines.append(name)
+    omitted = max(len(entries) - limit, 0)
+    if omitted:
+        lines.append(f"... {omitted} more")
+    return {
+        "ok": True,
+        "content": [{"type": "text", "text": "\n".join(lines)}],
+        "metadata": {"path": str(path), "limit": limit, "entries": len(entries)},
     }
 
 

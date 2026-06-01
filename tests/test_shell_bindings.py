@@ -155,6 +155,7 @@ def test_bash_wrappers_call_current_cli_contract() -> None:
         ]
         assert "echo recommended" in result.stdout
         assert "because it is safe" in result.stdout
+        assert "❯ bash   echo zeta" in result.stdout
         assert "Run zeta handoff." in result.stdout
         assert "op:op ?? hello" in result.stdout
         assert "history=echo zeta" in result.stdout
@@ -434,6 +435,7 @@ def test_zsh_wrappers_call_current_cli_contract() -> None:
         ]
         assert "echo recommended" in result.stdout
         assert "because it is safe" in result.stdout
+        assert "❯ bash   echo zeta" in result.stdout
         assert "Run zeta handoff." in result.stdout
         assert "op:op ?? hello" in result.stdout
         assert "history=echo zeta" in result.stdout

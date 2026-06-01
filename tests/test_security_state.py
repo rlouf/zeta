@@ -42,7 +42,7 @@ class TtyStringIO(StringIO):
 
 def test_question_system_prompt_points_zeta_at_events_log_for_older_history() -> None:
     assert "events.jsonl" in QUESTION_SYSTEM_PROMPT
-    assert "available tools are read and grep only" in QUESTION_SYSTEM_PROMPT
+    assert "available tools are read, grep, and ls only" in QUESTION_SYSTEM_PROMPT
 
 
 def test_top_level_help_lists_commands() -> None:
@@ -338,7 +338,7 @@ def test_question_routes_record_glyph_and_web_tools() -> None:
                     ask(
                         "what is sigil on the web?",
                         glyph="??",
-                        tools="read,grep",
+                        tools="read,grep,ls",
                         use_web=True,
                         json_output=True,
                     )
@@ -348,8 +348,8 @@ def test_question_routes_record_glyph_and_web_tools() -> None:
             assert web_turn["glyph"] == "??"
             assert len(calls) == 2
             assert calls[0][0][0] == QUESTION_SYSTEM_PROMPT
-            assert "available tools are read and grep only" in calls[0][0][0]
-            assert calls[0][1]["allowed_tools"] == ("read", "grep")
+            assert "available tools are read, grep, and ls only" in calls[0][0][0]
+            assert calls[0][1]["allowed_tools"] == ("read", "grep", "ls")
             assert "no web_search tool" in calls[1][0][1]
         finally:
             if old_state_dir is None:
@@ -1046,7 +1046,7 @@ def test_explicit_follow_up_ask_does_not_include_recent_turns_context() -> None:
                     ask(
                         continuation_prompt("follow up", discussion_turns()),
                         glyph="??",
-                        tools="read,grep",
+                        tools="read,grep,ls",
                         use_web=True,
                         append_transcript=True,
                         json_output=True,

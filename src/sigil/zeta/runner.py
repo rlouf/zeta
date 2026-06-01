@@ -8,14 +8,15 @@ from __future__ import annotations
 
 import json
 import sys
-from typing import Any, Iterable
+from typing import Any, Iterable, TextIO
 
 from ..ansi import MUTED, RESET
 from ..model import chat_text, ensure_server
 from ..state import append_event, append_jsonl
 from . import runtime
+from .stream import TRACE_LABEL_WIDTH, muted, should_color, summarize
 
-QUESTION_TOOLS = ("read", "grep")
+QUESTION_TOOLS = ("read", "grep", "ls")
 
 
 def run_text_answer(
@@ -128,6 +129,8 @@ def run_question_answer(
         append_jsonl(
             "last-tools.jsonl", {"type": "tool_start", "tool": name, "args": params}
         )
+        if not json_output:
+            render_tool_start(name, params, output=sys.stdout)
         analysis = runtime.analyze_tool(name, params)
         append_zeta_event(
             "tool_analysis",
@@ -314,6 +317,7 @@ def run_agent_tool_action(action: dict[str, Any], *, glyph: str) -> int | None:
         print("zeta: invalid tool input", file=sys.stderr)
         return 1
     call = append_zeta_event("tool_call", name=name, input=params, glyph=glyph)
+    render_tool_start(name, params, output=sys.stderr)
     analysis = runtime.analyze_tool(name, params)
     append_zeta_event(
         "tool_analysis",
@@ -347,6 +351,13 @@ def print_handoff(handoff: dict[str, Any]) -> None:
         print(f"artifact: {artifact}")
     if command:
         print(command)
+
+
+def render_tool_start(name: str, params: dict[str, Any], *, output: TextIO) -> None:
+    """Print a visible tool-start line using the same shape as the stream renderer."""
+    detail = summarize(name, params)
+    status = f"❯ {name:<{TRACE_LABEL_WIDTH}}  {detail}" if detail else f"❯ {name}"
+    print(muted(status, enabled=should_color(output)), file=output, flush=True)
 
 
 def append_zeta_event(event_type: str, **fields: Any) -> dict[str, Any]:

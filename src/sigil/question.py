@@ -16,16 +16,16 @@ from .zeta.runner import run_question_answer
 
 QUESTION_SYSTEM_PROMPT = (
     "Answer concisely. You are responding to a quick question typed at a shell "
-    "prompt. The available tools are read and grep only. Use them when needed "
-    "to inspect explicitly referenced local files or search local text. Do not "
-    "propose shell commands just to inspect files; read them through the "
-    "available tools. If a 'Recent shell activity' block appears in the user "
-    "message, it already shows the last few commands. For older sessions or "
-    "audit history, the read tool can access ~/.sigil/events.jsonl. Do not "
-    "mutate files or execute commands."
+    "prompt. The available tools are read, grep, and ls only. Use read for "
+    "files, ls for directory contents, and grep to search local text. Do not "
+    "propose shell commands just to inspect files or directories; inspect them "
+    "through the available tools. If a 'Recent shell activity' block appears "
+    "in the user message, it already shows the last few commands. For older "
+    "sessions or audit history, the read tool can access ~/.sigil/events.jsonl. "
+    "Do not mutate files or execute commands."
 )
 
-ZETA_QUESTION_TOOLS = "read,grep"
+ZETA_QUESTION_TOOLS = "read,grep,ls"
 ZETA_QUESTION_TOOLS_WITH_WEB = ZETA_QUESTION_TOOLS
 
 

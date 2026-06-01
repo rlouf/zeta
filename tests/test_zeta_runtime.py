@@ -16,7 +16,7 @@ def test_zeta_tools_list_exposes_v1_builtins() -> None:
     assert result.exit_code == 0
     data = json.loads(result.output)
     names = {tool["name"] for tool in data["tools"]}
-    assert {"read", "grep", "bash", "edit", "write"} <= names
+    assert {"read", "grep", "ls", "bash", "edit", "write"} <= names
     assert data["tools"][0]["origin"] == "builtin"
 
 
@@ -49,6 +49,23 @@ def test_zeta_tool_bash_returns_handoff() -> None:
     data = json.loads(result.output)
     assert data["handoff"]["command"] == "uv run pytest"
     assert data["handoff"]["reason"] == "Run tests."
+
+
+def test_zeta_tool_ls_lists_directory_contents(tmp_path: Path) -> None:
+    (tmp_path / "src").mkdir()
+    (tmp_path / "pyproject.toml").write_text("[project]\n", encoding="utf-8")
+
+    result = CliRunner().invoke(
+        cli,
+        ["tool", "ls"],
+        input=json.dumps({"path": str(tmp_path)}),
+    )
+
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    assert data["ok"] is True
+    assert data["content"][0]["text"].splitlines() == ["src/", "pyproject.toml"]
+    assert data["metadata"]["entries"] == 2
 
 
 def test_zeta_tool_edit_writes_patch_artifact() -> None:
@@ -223,7 +240,9 @@ def test_zeta_question_loop_feeds_current_tool_result_to_next_step(
     )
 
     assert code == 0
-    assert "project metadata" in capsys.readouterr().out
+    output = capsys.readouterr().out
+    assert "❯ read   pyproject.toml" in output
+    assert "project metadata" in output
     assert len(transcripts) == 2
 
 

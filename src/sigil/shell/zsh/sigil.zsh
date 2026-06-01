@@ -120,6 +120,36 @@ __sigil_zeta_append() {
   printf '%s\n' "$1" | "$__zeta_bin" transcript append 2>/dev/null || true
 }
 
+__sigil_zeta_tool_detail() {
+  local name="$1"
+  case "$name" in
+    read|edit|write)
+      __sigil_json_get path
+      ;;
+    bash)
+      __sigil_json_get command
+      ;;
+    grep)
+      __sigil_json_get pattern
+      ;;
+    ls)
+      __sigil_json_get path
+      ;;
+  esac
+}
+
+__sigil_zeta_tool_start() {
+  local name="$1"
+  local input="$2"
+  local detail
+  detail="$(printf '%s\n' "$input" | __sigil_zeta_tool_detail "$name")"
+  if [[ -n "$detail" ]]; then
+    print -r -- "❯ ${(r:5:)name}  $detail"
+  else
+    print -r -- "❯ $name"
+  fi
+}
+
 __sigil_zeta_turn() {
   local objective request events event event_type text name input analysis result command reason artifact
   local tool_call_record tool_call_id
@@ -145,6 +175,7 @@ __sigil_zeta_turn() {
           input="$(printf '%s\n' "$event" | __sigil_json_get input)"
           tool_call_record="$(__sigil_zeta_append "$(printf '{"type":"tool_call","name":%s,"input":%s}' "$(__sigil_json_string "$name")" "$input")")"
           tool_call_id="$(printf '%s\n' "$tool_call_record" | __sigil_json_get id)"
+          __sigil_zeta_tool_start "$name" "$input"
           analysis="$(printf '%s\n' "$input" | "$__zeta_bin" tool "$name" --analyze)" || return $?
           __sigil_zeta_append "$(printf '{"type":"tool_analysis","tool_call_id":%s,"name":%s,"analysis":%s}' "$(__sigil_json_string "$tool_call_id")" "$(__sigil_json_string "$name")" "$analysis")" >/dev/null
           result="$(printf '%s\n' "$input" | "$__zeta_bin" tool "$name")" || return $?

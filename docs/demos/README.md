@@ -4,7 +4,7 @@ This directory contains deterministic VHS recordings for product demos.
 
 The tapes in `docs/demos/tapes/` run the real Sigil CLI from this checkout.
 They use deterministic shims only for external dependencies so GIFs can be
-regenerated without a live model or `pi`. The lazygit demo uses real `lazygit`.
+regenerated without a live model or `zeta`. The lazygit demo uses real `lazygit`.
 
 ## Render
 
@@ -30,7 +30,7 @@ GIFs are written to `docs/demos/gifs/`.
 
 `setup.zsh` creates a temporary Git repo and prepends a temporary `bin/` to
 `PATH`. The `sigil` command in that bin invokes `python3 -m sigil.cli` from the
-checkout. The fake model server, `pi`, and `uv` commands are small Python
+checkout. The fake model server, `zeta`, and `uv` commands are small Python
 programs in this directory. They make model output stable while Sigil itself
 still owns routing, shell glyphs, state, act state, and the event log.
 

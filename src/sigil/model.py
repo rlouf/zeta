@@ -135,13 +135,13 @@ def model_endpoint_open() -> bool:
     return endpoint_reachable(model_url())
 
 
-def ensure_model_for_pi() -> bool:
-    """Check that the local model endpoint is reachable before invoking Pi."""
+def ensure_model_for_zeta() -> bool:
+    """Check that the local model endpoint is reachable before invoking Zeta."""
     if model_endpoint_open():
         return True
     print(
-        f"pi: local model endpoint is not reachable at {model_url()}",
+        f"zeta: local model endpoint is not reachable at {model_url()}",
         file=sys.stderr,
     )
-    print("pi: start the model server or set SIGIL_MODEL_URL", file=sys.stderr)
+    print("zeta: start the model server or set SIGIL_MODEL_URL", file=sys.stderr)
     return False

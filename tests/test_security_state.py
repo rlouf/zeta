@@ -19,7 +19,7 @@ from sigil.staged_command import (
     prepare_staged_commands,
     record_staged_commands,
 )
-from sigil.pi_stream import renderer_command, should_color, stream_events
+from sigil.zeta.stream import renderer_command, should_color, stream_events
 from sigil.question import (
     QUESTION_SYSTEM_PROMPT,
     ask,
@@ -40,9 +40,9 @@ class TtyStringIO(StringIO):
         return True
 
 
-def test_question_system_prompt_points_pi_at_events_log_for_older_history() -> None:
+def test_question_system_prompt_points_zeta_at_events_log_for_older_history() -> None:
     assert "events.jsonl" in QUESTION_SYSTEM_PROMPT
-    assert "at most one tool call" in QUESTION_SYSTEM_PROMPT
+    assert "available tools are read and grep only" in QUESTION_SYSTEM_PROMPT
 
 
 def test_top_level_help_lists_commands() -> None:
@@ -66,11 +66,11 @@ def test_top_level_help_lists_commands() -> None:
 
 def test_main_rewrites_missing_executable_errors() -> None:
     stderr = StringIO()
-    missing = FileNotFoundError(2, "No such file or directory", "pi")
+    missing = FileNotFoundError(2, "No such file or directory", "zeta")
     with patch("sigil.cli.cli.main", side_effect=missing):
         with redirect_stderr(stderr):
             assert main(["ask", "hello"]) == 127
-    assert "missing executable: pi" in stderr.getvalue()
+    assert "missing executable: zeta" in stderr.getvalue()
 
 
 def test_main_rewrites_permission_errors() -> None:
@@ -282,7 +282,7 @@ def test_session_list_includes_last_event_context() -> None:
 
 
 def test_renderer_defaults_to_glow_notty_when_available() -> None:
-    with patch("sigil.pi_stream.shutil.which", return_value="/opt/homebrew/bin/glow"):
+    with patch("sigil.zeta.stream.shutil.which", return_value="/opt/homebrew/bin/glow"):
         with patch_dict(os.environ, {}, clear=True):
             assert renderer_command() == [
                 "glow",
@@ -295,7 +295,7 @@ def test_renderer_defaults_to_glow_notty_when_available() -> None:
 
 
 def test_renderer_uses_env_overrides() -> None:
-    with patch("sigil.pi_stream.shutil.which", return_value="/opt/homebrew/bin/glow"):
+    with patch("sigil.zeta.stream.shutil.which", return_value="/opt/homebrew/bin/glow"):
         with patch_dict(
             os.environ,
             {"SIGIL_GLOW_STYLE": "tokyo-night", "SIGIL_GLOW_WIDTH": "100"},
@@ -312,64 +312,45 @@ def test_renderer_uses_env_overrides() -> None:
 
 
 def test_renderer_falls_back_to_cat_without_glow() -> None:
-    with patch("sigil.pi_stream.shutil.which", return_value=None):
+    with patch("sigil.zeta.stream.shutil.which", return_value=None):
         assert renderer_command() == ["cat"]
 
 
 def test_question_routes_record_glyph_and_web_tools() -> None:
-
-    class FakeProc:
-        def __init__(self, stdout: StringIO | None = None) -> None:
-            self.stdout = stdout
-
-        def wait(self) -> int:
-            return 0
-
     with tempfile.TemporaryDirectory() as tmp:
         old_state_dir = os.environ.get("SIGIL_STATE_DIR")
         old_session_id = os.environ.get("SIGIL_SESSION_ID")
         os.environ["SIGIL_STATE_DIR"] = tmp
         os.environ["SIGIL_SESSION_ID"] = "test"
         try:
-            popen_calls = []
+            calls = []
 
-            def fake_popen(cmd: list[str], *args: object, **kwargs: object) -> FakeProc:
-                popen_calls.append(cmd)
-                if cmd[0] == "pi":
-                    return FakeProc(StringIO(""))
-                return FakeProc()
+            def fake_answer(*args: object, **kwargs: object) -> int:
+                calls.append((args, kwargs))
+                return 0
 
-            with patch("sigil.question.ensure_model_for_pi", return_value=True):
-                with patch("sigil.pi_stream.subprocess.Popen", side_effect=fake_popen):
-                    assert ask("what is sigil?", json_output=True) == 0
+            with patch("sigil.question.run_question_answer", side_effect=fake_answer):
+                assert ask("what is sigil?", json_output=True) == 0
             fresh_turn = read_jsonl("last-question.jsonl")[0]
             assert fresh_turn["glyph"] == "?"
-            with patch("sigil.question.ensure_model_for_pi", return_value=True):
-                with patch("sigil.pi_stream.subprocess.Popen", side_effect=fake_popen):
-                    assert (
-                        ask(
-                            "what is sigil on the web?",
-                            glyph="??",
-                            tools="read,grep,find,ls,web_search",
-                            use_web=True,
-                            json_output=True,
-                        )
-                        == 0
+            with patch("sigil.question.run_question_answer", side_effect=fake_answer):
+                assert (
+                    ask(
+                        "what is sigil on the web?",
+                        glyph="??",
+                        tools="read,grep",
+                        use_web=True,
+                        json_output=True,
                     )
+                    == 0
+                )
             web_turn = read_jsonl("last-question.jsonl")[-1]
             assert web_turn["glyph"] == "??"
-            pi_calls = [cmd for cmd in popen_calls if cmd[0] == "pi"]
-            assert len(pi_calls) == 2
-            assert pi_calls[0][pi_calls[0].index("--tools") + 1] == "read,grep,find,ls"
-            assert (
-                pi_calls[1][pi_calls[1].index("--tools") + 1]
-                == "read,grep,find,ls,web_search"
-            )
-            for cmd in pi_calls:
-                assert "--extension" not in cmd
-                system_prompt = cmd[cmd.index("--append-system-prompt") + 1]
-                assert system_prompt == QUESTION_SYSTEM_PROMPT
-                assert "at most one tool call" in system_prompt
+            assert len(calls) == 2
+            assert calls[0][0][0] == QUESTION_SYSTEM_PROMPT
+            assert "available tools are read and grep only" in calls[0][0][0]
+            assert calls[0][1]["allowed_tools"] == ("read", "grep")
+            assert "no web_search tool" in calls[1][0][1]
         finally:
             if old_state_dir is None:
                 os.environ.pop("SIGIL_STATE_DIR", None)
@@ -389,21 +370,18 @@ def test_question_route_requests_tool_calls_on_stdout() -> None:
         ):
             captured_kwargs: dict[str, object] = {}
 
-            def fake_run_pi_stream(pi_cmd: list[str], **kwargs: object) -> int:
-                assert pi_cmd
+            def fake_answer(*args: object, **kwargs: object) -> int:
+                del args
                 captured_kwargs.update(kwargs)
                 return 0
 
-            with (
-                patch("sigil.question.ensure_model_for_pi", return_value=True),
-                patch("sigil.question.run_pi_stream", side_effect=fake_run_pi_stream),
-            ):
+            with patch("sigil.question.run_question_answer", side_effect=fake_answer):
                 assert ask("inspect pyproject") == 0
 
-    assert captured_kwargs["tool_output_stdout"] is True
+    assert captured_kwargs["question"] == "inspect pyproject"
 
 
-def test_pi_stream_can_render_tool_calls_to_stdout() -> None:
+def test_zeta_stream_can_render_tool_calls_to_stdout() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         with patch_dict(
             os.environ,
@@ -427,7 +405,7 @@ def test_pi_stream_can_render_tool_calls_to_stdout() -> None:
             )
             stdout = StringIO()
             stderr = StringIO()
-            with patch("sigil.pi_stream.open_terminal_output", return_value=None):
+            with patch("sigil.zeta.stream.open_terminal_output", return_value=None):
                 assert (
                     stream_events(
                         stdin=stdin,
@@ -443,7 +421,7 @@ def test_pi_stream_can_render_tool_calls_to_stdout() -> None:
     assert "❯ read" not in stderr.getvalue()
 
 
-def test_pi_stream_can_render_tool_calls_to_terminal_when_stdout_is_redirected() -> (
+def test_zeta_stream_can_render_tool_calls_to_terminal_when_stdout_is_redirected() -> (
     None
 ):
     class NonClosingTtyStringIO(StringIO):
@@ -477,7 +455,7 @@ def test_pi_stream_can_render_tool_calls_to_terminal_when_stdout_is_redirected()
             stdout = StringIO()
             stderr = StringIO()
             terminal = NonClosingTtyStringIO()
-            with patch("sigil.pi_stream.open_terminal_output", return_value=terminal):
+            with patch("sigil.zeta.stream.open_terminal_output", return_value=terminal):
                 assert (
                     stream_events(
                         stdin=stdin,
@@ -961,15 +939,7 @@ def test_recent_turns_returns_last_n_entries_in_order() -> None:
         ]
 
 
-def test_fresh_ask_prepends_recent_turns_context_to_pi_prompt() -> None:
-
-    class FakeProc:
-        def __init__(self, stdout: StringIO | None = None) -> None:
-            self.stdout = stdout
-
-        def wait(self) -> int:
-            return 0
-
+def test_fresh_ask_prepends_recent_turns_context_to_zeta_prompt() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         with patch_dict(
             os.environ,
@@ -977,22 +947,17 @@ def test_fresh_ask_prepends_recent_turns_context_to_pi_prompt() -> None:
         ):
             record_turn("ls -la", 0, "/repo")
             record_turn("pytest tests/test_foo.py", 1, "/repo")
-            popen_calls: list[list[str]] = []
+            captured: dict[str, str] = {}
 
-            def fake_popen(cmd: list[str], *args: object, **kwargs: object) -> FakeProc:
-                popen_calls.append(cmd)
-                if cmd[0] == "pi":
-                    return FakeProc(StringIO(""))
-                return FakeProc()
+            def fake_answer(system: str, prompt: str, **kwargs: object) -> int:
+                del system, kwargs
+                captured["prompt"] = prompt
+                return 0
 
-            with (
-                patch("sigil.question.ensure_model_for_pi", return_value=True),
-                patch("sigil.pi_stream.subprocess.Popen", side_effect=fake_popen),
-            ):
+            with patch("sigil.question.run_question_answer", side_effect=fake_answer):
                 assert ask("what should I do next?", json_output=True) == 0
 
-    pi_cmd = next(cmd for cmd in popen_calls if cmd[0] == "pi")
-    prompt = pi_cmd[-1]
+    prompt = captured["prompt"]
     assert "Recent shell activity:" in prompt
     assert "ls -la" in prompt
     assert "pytest tests/test_foo.py" in prompt
@@ -1000,13 +965,6 @@ def test_fresh_ask_prepends_recent_turns_context_to_pi_prompt() -> None:
 
 
 def test_ask_attaches_active_failure_context_for_unrelated_question() -> None:
-    class FakeProc:
-        def __init__(self, stdout: StringIO | None = None) -> None:
-            self.stdout = stdout
-
-        def wait(self) -> int:
-            return 0
-
     with tempfile.TemporaryDirectory() as tmp:
         with patch_dict(
             os.environ,
@@ -1018,22 +976,17 @@ def test_ask_attaches_active_failure_context_for_unrelated_question() -> None:
                 "/repo",
                 stderr_snippet="AssertionError: no",
             )
-            popen_calls: list[list[str]] = []
+            captured: dict[str, str] = {}
 
-            def fake_popen(cmd: list[str], *args: object, **kwargs: object) -> FakeProc:
-                popen_calls.append(cmd)
-                if cmd[0] == "pi":
-                    return FakeProc(StringIO(""))
-                return FakeProc()
+            def fake_answer(system: str, prompt: str, **kwargs: object) -> int:
+                del system, kwargs
+                captured["prompt"] = prompt
+                return 0
 
-            with (
-                patch("sigil.question.ensure_model_for_pi", return_value=True),
-                patch("sigil.pi_stream.subprocess.Popen", side_effect=fake_popen),
-            ):
+            with patch("sigil.question.run_question_answer", side_effect=fake_answer):
                 assert ask("what does this repo do", json_output=True) == 0
 
-    pi_cmd = next(cmd for cmd in popen_calls if cmd[0] == "pi")
-    prompt = pi_cmd[-1]
+    prompt = captured["prompt"]
     assert "Last failed command context:" in prompt
     assert "Failed command: pytest tests/test_foo.py" in prompt
     assert "Recent stderr:" in prompt
@@ -1041,13 +994,6 @@ def test_ask_attaches_active_failure_context_for_unrelated_question() -> None:
 
 
 def test_ask_omits_failure_context_after_successful_turn() -> None:
-    class FakeProc:
-        def __init__(self, stdout: StringIO | None = None) -> None:
-            self.stdout = stdout
-
-        def wait(self) -> int:
-            return 0
-
     with tempfile.TemporaryDirectory() as tmp:
         with patch_dict(
             os.environ,
@@ -1060,34 +1006,21 @@ def test_ask_omits_failure_context_after_successful_turn() -> None:
                 stderr_snippet="AssertionError: no",
             )
             record_turn("git status --short", 0, "/repo")
-            popen_calls: list[list[str]] = []
+            captured: dict[str, str] = {}
 
-            def fake_popen(cmd: list[str], *args: object, **kwargs: object) -> FakeProc:
-                popen_calls.append(cmd)
-                if cmd[0] == "pi":
-                    return FakeProc(StringIO(""))
-                return FakeProc()
+            def fake_answer(system: str, prompt: str, **kwargs: object) -> int:
+                del system, kwargs
+                captured["prompt"] = prompt
+                return 0
 
-            with (
-                patch("sigil.question.ensure_model_for_pi", return_value=True),
-                patch("sigil.pi_stream.subprocess.Popen", side_effect=fake_popen),
-            ):
+            with patch("sigil.question.run_question_answer", side_effect=fake_answer):
                 assert ask("why failed", json_output=True) == 0
 
-    pi_cmd = next(cmd for cmd in popen_calls if cmd[0] == "pi")
-    prompt = pi_cmd[-1]
+    prompt = captured["prompt"]
     assert "Last failed command context:" not in prompt
 
 
 def test_explicit_follow_up_ask_does_not_include_recent_turns_context() -> None:
-
-    class FakeProc:
-        def __init__(self, stdout: StringIO | None = None) -> None:
-            self.stdout = stdout
-
-        def wait(self) -> int:
-            return 0
-
     with tempfile.TemporaryDirectory() as tmp:
         with patch_dict(
             os.environ,
@@ -1101,23 +1034,19 @@ def test_explicit_follow_up_ask_does_not_include_recent_turns_context() -> None:
                     {"role": "assistant", "content": "ans", "event_id": "a1"},
                 ],
             )
-            popen_calls: list[list[str]] = []
+            captured: dict[str, str] = {}
 
-            def fake_popen(cmd: list[str], *args: object, **kwargs: object) -> FakeProc:
-                popen_calls.append(cmd)
-                if cmd[0] == "pi":
-                    return FakeProc(StringIO(""))
-                return FakeProc()
+            def fake_answer(system: str, prompt: str, **kwargs: object) -> int:
+                del system, kwargs
+                captured["prompt"] = prompt
+                return 0
 
-            with (
-                patch("sigil.question.ensure_model_for_pi", return_value=True),
-                patch("sigil.pi_stream.subprocess.Popen", side_effect=fake_popen),
-            ):
+            with patch("sigil.question.run_question_answer", side_effect=fake_answer):
                 assert (
                     ask(
                         continuation_prompt("follow up", discussion_turns()),
                         glyph="??",
-                        tools="read,grep,find,ls,web_search",
+                        tools="read,grep",
                         use_web=True,
                         append_transcript=True,
                         json_output=True,
@@ -1125,41 +1054,27 @@ def test_explicit_follow_up_ask_does_not_include_recent_turns_context() -> None:
                     == 0
                 )
 
-    pi_cmd = next(cmd for cmd in popen_calls if cmd[0] == "pi")
-    prompt = pi_cmd[-1]
+    prompt = captured["prompt"]
     assert "Recent shell activity" not in prompt
 
 
 def test_fresh_ask_omits_recent_turns_section_when_none_recorded() -> None:
-
-    class FakeProc:
-        def __init__(self, stdout: StringIO | None = None) -> None:
-            self.stdout = stdout
-
-        def wait(self) -> int:
-            return 0
-
     with tempfile.TemporaryDirectory() as tmp:
         with patch_dict(
             os.environ,
             {"SIGIL_STATE_DIR": tmp, "SIGIL_SESSION_ID": "test"},
         ):
-            popen_calls: list[list[str]] = []
+            captured: dict[str, str] = {}
 
-            def fake_popen(cmd: list[str], *args: object, **kwargs: object) -> FakeProc:
-                popen_calls.append(cmd)
-                if cmd[0] == "pi":
-                    return FakeProc(StringIO(""))
-                return FakeProc()
+            def fake_answer(system: str, prompt: str, **kwargs: object) -> int:
+                del system, kwargs
+                captured["prompt"] = prompt
+                return 0
 
-            with (
-                patch("sigil.question.ensure_model_for_pi", return_value=True),
-                patch("sigil.pi_stream.subprocess.Popen", side_effect=fake_popen),
-            ):
+            with patch("sigil.question.run_question_answer", side_effect=fake_answer):
                 assert ask("hello", json_output=True) == 0
 
-    pi_cmd = next(cmd for cmd in popen_calls if cmd[0] == "pi")
-    prompt = pi_cmd[-1]
+    prompt = captured["prompt"]
     assert "Recent shell activity" not in prompt
     assert prompt == "hello"
 
@@ -1180,7 +1095,7 @@ def test_recent_turns_skips_malformed_lines() -> None:
         assert [turn["command"] for turn in turns] == ["ls"]
 
 
-def test_pi_stream_records_answer_turn() -> None:
+def test_zeta_stream_records_answer_turn() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         saved = {
             key: os.environ.get(key) for key in ["SIGIL_STATE_DIR", "SIGIL_SESSION_ID"]
@@ -1220,7 +1135,7 @@ def test_pi_stream_records_answer_turn() -> None:
                     os.environ[key] = value
 
 
-def test_pi_stream_json_output_is_machine_readable() -> None:
+def test_zeta_stream_json_output_is_machine_readable() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         saved = {
             key: os.environ.get(key) for key in ["SIGIL_STATE_DIR", "SIGIL_SESSION_ID"]
@@ -1287,7 +1202,7 @@ def test_pi_stream_json_output_is_machine_readable() -> None:
                     os.environ[key] = value
 
 
-def test_pi_stream_json_output_counts_malformed_events() -> None:
+def test_zeta_stream_json_output_counts_malformed_events() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         saved = {
             key: os.environ.get(key) for key in ["SIGIL_STATE_DIR", "SIGIL_SESSION_ID"]
@@ -1331,7 +1246,7 @@ def test_pi_stream_json_output_counts_malformed_events() -> None:
                     os.environ[key] = value
 
 
-def test_pi_stream_non_tty_status_has_no_control_codes_or_color() -> None:
+def test_zeta_stream_non_tty_status_has_no_control_codes_or_color() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         saved = {
             key: os.environ.get(key) for key in ["SIGIL_STATE_DIR", "SIGIL_SESSION_ID"]
@@ -1371,7 +1286,7 @@ def test_pi_stream_non_tty_status_has_no_control_codes_or_color() -> None:
                     os.environ[key] = value
 
 
-def test_pi_stream_shows_function_call_events() -> None:
+def test_zeta_stream_shows_function_call_events() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         saved = {
             key: os.environ.get(key) for key in ["SIGIL_STATE_DIR", "SIGIL_SESSION_ID"]
@@ -1425,7 +1340,7 @@ def test_pi_stream_shows_function_call_events() -> None:
                     os.environ[key] = value
 
 
-def test_pi_stream_shows_nested_tool_call_updates() -> None:
+def test_zeta_stream_shows_nested_tool_call_updates() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         saved = {
             key: os.environ.get(key) for key in ["SIGIL_STATE_DIR", "SIGIL_SESSION_ID"]
@@ -1468,7 +1383,7 @@ def test_pi_stream_shows_nested_tool_call_updates() -> None:
                     os.environ[key] = value
 
 
-def test_pi_stream_shows_pi_toolcall_end_updates() -> None:
+def test_zeta_stream_shows_zeta_toolcall_end_updates() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         saved = {
             key: os.environ.get(key) for key in ["SIGIL_STATE_DIR", "SIGIL_SESSION_ID"]
@@ -1516,7 +1431,7 @@ def test_pi_stream_shows_pi_toolcall_end_updates() -> None:
                     os.environ[key] = value
 
 
-def test_pi_stream_ignores_partial_toolcall_delta_until_complete() -> None:
+def test_zeta_stream_ignores_partial_toolcall_delta_until_complete() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         saved = {
             key: os.environ.get(key) for key in ["SIGIL_STATE_DIR", "SIGIL_SESSION_ID"]
@@ -1593,7 +1508,7 @@ def test_pi_stream_ignores_partial_toolcall_delta_until_complete() -> None:
                     os.environ[key] = value
 
 
-def test_pi_stream_ignores_toolcall_start_until_complete() -> None:
+def test_zeta_stream_ignores_toolcall_start_until_complete() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         saved = {
             key: os.environ.get(key) for key in ["SIGIL_STATE_DIR", "SIGIL_SESSION_ID"]
@@ -1670,7 +1585,7 @@ def test_pi_stream_ignores_toolcall_start_until_complete() -> None:
                     os.environ[key] = value
 
 
-def test_pi_stream_uses_execution_start_when_toolcall_end_is_missing() -> None:
+def test_zeta_stream_uses_execution_start_when_toolcall_end_is_missing() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         saved = {
             key: os.environ.get(key) for key in ["SIGIL_STATE_DIR", "SIGIL_SESSION_ID"]
@@ -1737,7 +1652,7 @@ def test_pi_stream_uses_execution_start_when_toolcall_end_is_missing() -> None:
                     os.environ[key] = value
 
 
-def test_pi_stream_deduplicates_toolcall_end_and_execution_start() -> None:
+def test_zeta_stream_deduplicates_toolcall_end_and_execution_start() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         saved = {
             key: os.environ.get(key) for key in ["SIGIL_STATE_DIR", "SIGIL_SESSION_ID"]
@@ -1756,7 +1671,9 @@ def test_pi_stream_deduplicates_toolcall_end_and_execution_start() -> None:
                                     "toolCall": {
                                         "id": "call-1",
                                         "name": "read",
-                                        "arguments": {"path": "src/sigil/pi_stream.py"},
+                                        "arguments": {
+                                            "path": "src/sigil/zeta/stream.py"
+                                        },
                                     },
                                 },
                             }
@@ -1766,7 +1683,7 @@ def test_pi_stream_deduplicates_toolcall_end_and_execution_start() -> None:
                                 "type": "tool_execution_start",
                                 "toolCallId": "call-1",
                                 "toolName": "read",
-                                "args": {"path": "src/sigil/pi_stream.py"},
+                                "args": {"path": "src/sigil/zeta/stream.py"},
                             }
                         ),
                     ]
@@ -1795,7 +1712,7 @@ def test_pi_stream_deduplicates_toolcall_end_and_execution_start() -> None:
                     os.environ[key] = value
 
 
-def test_pi_stream_shows_tool_start_without_detail() -> None:
+def test_zeta_stream_shows_tool_start_without_detail() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         saved = {
             key: os.environ.get(key) for key in ["SIGIL_STATE_DIR", "SIGIL_SESSION_ID"]
@@ -1834,7 +1751,7 @@ def test_pi_stream_shows_tool_start_without_detail() -> None:
                     os.environ[key] = value
 
 
-def test_pi_stream_compact_mode_suppresses_prose_and_summarizes() -> None:
+def test_zeta_stream_compact_mode_suppresses_prose_and_summarizes() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         saved = {
             key: os.environ.get(key) for key in ["SIGIL_STATE_DIR", "SIGIL_SESSION_ID"]

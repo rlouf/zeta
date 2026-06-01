@@ -37,8 +37,8 @@ def test_status_reports_active_act_before_other_state() -> None:
                         "steps": [
                             {
                                 "id": "1",
-                                "title": "Run one Pi edit step",
-                                "command": "pi --tools read,edit,write",
+                                "title": "Run one Zeta edit step",
+                                "command": "zeta --tools read,edit,write",
                                 "status": "pending",
                             }
                         ],

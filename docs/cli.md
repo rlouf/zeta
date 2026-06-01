@@ -73,9 +73,9 @@ Stable fields:
 
 ## `sigil ask`
 
-Answers a shell question using Pi. `sigil ask` uses the local read-only answer
-route by default. `--follow-up` remains an explicit long-form continuation path
-and uses the web-authorized answer route.
+Answers a shell question using Zeta. `sigil ask` uses the local read-only answer
+route by default. `--follow-up` remains an explicit long-form continuation path.
+Zeta v1 does not include a web-search tool.
 
 ```sh
 sigil ask "what is this error?"
@@ -117,15 +117,15 @@ Stable fields:
 - `ok`: whether stream rendering completed successfully.
 - `type`: currently `"answer"`.
 - `question`: user-visible question text.
-- `prompt`: prompt sent to Pi. Follow-ups include transcript context.
+- `prompt`: prompt sent to Zeta. Follow-ups include transcript context.
 - `follow_up`: whether `--follow-up` was used.
 - `answer`: concatenated assistant text.
 - `answer_event_id`: stored answer event id, or `null`.
-- `tools`: ordered Pi tool trace events.
-- `malformed_events`: malformed Pi JSON event lines ignored.
+- `tools`: ordered Zeta tool trace events.
+- `malformed_events`: malformed Zeta JSON event lines ignored.
 
 With piped stdin and `--json`, a fresh `sigil ask` currently emits pipeline
-metadata instead of calling Pi:
+metadata instead of calling Zeta:
 
 ```sh
 printf 'hello\n' | sigil ask --json "summarize"
@@ -191,10 +191,10 @@ Examples:
 
 `,` prints a command proposal. The zsh binding inserts it into the editable
 prompt buffer and adds it to shell history; the Bash binding adds it to history.
-`,,` asks before running one Pi
+`,,` asks before running one Zeta
 agent turn with read/search/edit/write tools. At the confirmation prompt, `e`
 opens `$VISUAL` or `$EDITOR` with the available tools, one per line, so tools
-can be removed before execution. A turn is one Pi invocation and may include
+can be removed before execution. A turn is one Zeta invocation and may include
 zero or more tool calls. `,,,` runs the same one-turn route without
 routine confirmation. `@` and `@@` repeat bounded turns toward a
 durable goal, stopping on completion, blockage, budget exhaustion, or
@@ -209,7 +209,7 @@ sigil install zsh --no-glyphs
 
 ## `sigil act`
 
-Inspects or controls the current one-step Pi action used by comma routes.
+Inspects or controls the current one-step Zeta action used by comma routes.
 
 ```sh
 sigil act
@@ -223,7 +223,7 @@ sigil act show --json
 `resume` runs the pending action only after confirmation. If there is no active
 action, it exits with status `2`.
 
-Act output streams Pi's raw tool calls and prose through `glow` or `cat`.
+Act output streams Zeta's raw tool calls and prose through `glow` or `cat`.
 Sigil does not replace the final answer with a compact `done:` summary for
 agent steps.
 
@@ -237,8 +237,8 @@ JSON output for `show` is the stored act object, or `null`:
   "steps": [
     {
       "id": "1",
-      "title": "Run one Pi edit step",
-      "command": "pi --tools read,grep,find,ls,bash,edit,write",
+      "title": "Run one Zeta edit step",
+      "command": "zeta --tools read,grep,bash,edit,write",
       "explanation": "One confirmed read/edit/write pass, then control returns to the shell.",
       "status": "pending"
     }
@@ -413,7 +413,7 @@ sigil doctor --json
 
 Doctor checks:
 
-- `sigil`, `glow`, and `pi` are on `PATH`.
+- `sigil`, `glow`, and `zeta` are on `PATH`.
 - The model endpoint is reachable from `SIGIL_MODEL_URL`, or from the default
   local OpenAI-compatible endpoint.
 - `SIGIL_MODEL_NAME` is set when the endpoint needs an explicit model name.
@@ -445,11 +445,11 @@ By default, Sigil writes state under `~/.sigil/`.
 ```text
 events.jsonl                              global event log
 sessions/<session-id>/last-failure.json   latest failed shell command
-sessions/<session-id>/last-act.jsonl      one-step Pi agent action snapshots
+sessions/<session-id>/last-act.jsonl      one-step Zeta agent action snapshots
 sessions/<session-id>/last-goal.jsonl     bounded goal loop snapshots
 sessions/<session-id>/last-question.jsonl same-session question transcript
 sessions/<session-id>/last-staged-command.jsonl latest blocked command staged for review
-sessions/<session-id>/last-tools.jsonl    latest Pi tool trace
+sessions/<session-id>/last-tools.jsonl    latest Zeta tool trace
 sessions/<session-id>/recent-turns.jsonl  recent shell turns recorded by bindings
 ```
 

@@ -37,7 +37,7 @@ Run one agent step:
 ,, run the formatter for files I changed
 ```
 
-Let Pi take one routine bounded step:
+Let Zeta take one routine bounded step:
 
 ```sh
 ,,, fix the failing parser test
@@ -56,8 +56,8 @@ Pursue a bounded goal:
 The shell remains the review boundary:
 
 - `,` proposes and does not execute.
-- `,,` runs one Pi agent step after confirming effects.
-- `,,,` runs one Pi agent step without routine confirmation.
+- `,,` runs one Zeta agent step after confirming effects.
+- `,,,` runs one Zeta agent step without routine confirmation.
 - `@` runs a bounded goal loop with checkpoints.
 - `@@` runs a bounded goal loop with routine auto-approval.
 - `?` answers from local read-only context.

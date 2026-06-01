@@ -101,10 +101,20 @@ def shell_reference(path: Path) -> str:
     return '"$HOME/' + relative.as_posix() + '"'
 
 
-def source_snippet(binding_path: Path, *, enable_glyphs: bool = True) -> str:
+def source_snippet(
+    binding_path: Path,
+    *,
+    enable_glyphs: bool = True,
+    sigil_bin: str | None = None,
+    zeta_bin: str | None = None,
+) -> str:
     """Return the rc block that loads a Sigil shell binding."""
     reference = shell_reference(binding_path)
     lines = ["", "# Sigil", f"if [[ -r {reference} ]]; then"]
+    if sigil_bin:
+        lines.append(f"  export SIGIL_BIN={shlex.quote(sigil_bin)}")
+    if zeta_bin:
+        lines.append(f"  export ZETA_BIN={shlex.quote(zeta_bin)}")
     if not enable_glyphs:
         lines.append("  export SIGIL_ENABLE_GLYPHS=0")
     else:
@@ -112,6 +122,29 @@ def source_snippet(binding_path: Path, *, enable_glyphs: bool = True) -> str:
     lines.append(f"  source {reference}")
     lines.append("fi")
     return "\n".join(lines) + "\n"
+
+
+def replace_sigil_source_block(
+    rc_text: str,
+    references: set[str],
+    snippet: str,
+) -> tuple[str, bool]:
+    """Replace an existing Sigil rc block that sources this binding."""
+    lines = rc_text.splitlines(keepends=True)
+    for start, line in enumerate(lines):
+        if line.strip() != "# Sigil":
+            continue
+        for stop in range(start + 1, len(lines)):
+            if lines[stop].strip() != "fi":
+                continue
+            block = "".join(lines[start : stop + 1])
+            if not any(reference in block for reference in references):
+                break
+            if block == snippet.lstrip("\n"):
+                return rc_text, False
+            updated = [*lines[:start], snippet, *lines[stop + 1 :]]
+            return "".join(updated), True
+    return rc_text, False
 
 
 def install_shell(
@@ -134,13 +167,21 @@ def install_shell(
     binding_path.write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
     binding_path.chmod(0o644)
 
-    snippet = source_snippet(binding_path, enable_glyphs=enable_glyphs)
+    snippet = source_snippet(
+        binding_path,
+        enable_glyphs=enable_glyphs,
+        sigil_bin=shutil.which("sigil"),
+        zeta_bin=shutil.which("zeta"),
+    )
     rc.parent.mkdir(parents=True, exist_ok=True)
     rc.touch(exist_ok=True)
     rc_text = rc.read_text(encoding="utf-8")
     references = {str(binding_path), f"$HOME/.sigil/shell/{shell}/{spec.binding_name}"}
     wrote_rc = False
-    if not any(reference in rc_text for reference in references):
+    rc_text, wrote_rc = replace_sigil_source_block(rc_text, references, snippet)
+    if wrote_rc:
+        rc.write_text(rc_text, encoding="utf-8")
+    elif not any(reference in rc_text for reference in references):
         with rc.open("a", encoding="utf-8") as f:
             f.write(snippet)
         wrote_rc = True
@@ -309,10 +350,8 @@ def doctor_checks(shell: str | None = None) -> list[DoctorCheck]:
             "https://github.com/charmbracelet/glow",
         ),
         check_executable(
-            "pi",
-            hint="Install the pi-mono coding agent (required for ? ?? ,, ,,, @ @@): "
-            "curl -fsSL https://pi.dev/install.sh | sh — "
-            "see https://github.com/earendil-works/pi",
+            "zeta",
+            hint="Install Sigil with the zeta entrypoint or set ZETA_BIN.",
         ),
         check_endpoint(),
         check_model_config(),

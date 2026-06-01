@@ -158,7 +158,7 @@ mixed glyph tokens such as ,?
 - [x] Route `,,` to one confirmed agent step.
 - [x] Route `,,,` to one auto-approved agent step within policy.
 - [x] Ensure `,,,` still stops at explicit policy boundaries.
-- [x] Extract shared Pi agent-step execution for comma and goal routes.
+- [x] Extract shared Zeta agent-step execution for comma and goal routes.
 - [x] Add `goals.py` or equivalent durable goal-loop module.
 - [x] Add goal state recording in `last-goal.jsonl`.
 - [x] Implement `@` as a confirmed goal loop with checkpoints.

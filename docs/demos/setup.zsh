@@ -1,7 +1,7 @@
 # Setup for deterministic VHS demo recordings.
 #
 # The demos run the real Sigil CLI from this checkout. Only external runtime
-# dependencies are shimmed: the model endpoint, Pi, and uv's test output.
+# dependencies are shimmed: the model endpoint, Zeta, and uv's test output.
 
 emulate zsh
 unsetopt bg_nice
@@ -36,11 +36,11 @@ PYTHONPATH="$_sigil_demo_root/src\${PYTHONPATH:+:\$PYTHONPATH}" exec python3 -m 
 EOF
 chmod 755 "$_sigil_demo_bin/sigil"
 
-cat > "$_sigil_demo_bin/pi" <<EOF
+cat > "$_sigil_demo_bin/zeta" <<EOF
 #!/usr/bin/env sh
-exec python3 "$_sigil_demo_root/docs/demos/fake_pi.py" "\$@"
+exec python3 "$_sigil_demo_root/docs/demos/fake_zeta.py" "\$@"
 EOF
-chmod 755 "$_sigil_demo_bin/pi"
+chmod 755 "$_sigil_demo_bin/zeta"
 
 cat > "$_sigil_demo_bin/uv" <<EOF
 #!/usr/bin/env sh

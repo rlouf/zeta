@@ -1,6 +1,6 @@
-"""Render Pi JSON events while preserving structured state.
+"""Render Zeta JSON events while preserving structured state.
 
-Pi emits machine-readable events. This filter turns tool calls into live grey
+Zeta emits machine-readable events. This filter turns tool calls into live grey
 status lines, streams answer text to stdout for `glow`, and writes only the
 right pieces into session state: assistant turns to the question transcript and
 tool calls to the tool trace.
@@ -18,8 +18,8 @@ import time
 from dataclasses import dataclass
 from typing import TextIO, cast
 
-from .ansi import MUTED, RESET
-from .state import append_event, append_jsonl
+from ..ansi import MUTED, RESET
+from ..state import append_event, append_jsonl
 
 DEFAULT_GLOW_STYLE = "notty"
 DEFAULT_GLOW_WIDTH = "88"
@@ -27,7 +27,7 @@ TRACE_LABEL_WIDTH = 5
 
 
 def renderer_command() -> list[str]:
-    """Return the Markdown renderer command for interactive Pi answers."""
+    """Return the Markdown renderer command for interactive Zeta answers."""
     if not shutil.which("glow"):
         return ["cat"]
     style = os.environ.get("SIGIL_GLOW_STYLE") or DEFAULT_GLOW_STYLE
@@ -35,10 +35,10 @@ def renderer_command() -> list[str]:
     return ["glow", "--style", style, "--width", width, "-"]
 
 
-def run_pi_stream(
-    pi_cmd: list[str],
+def run_zeta_stream(
+    zeta_cmd: list[str],
     *,
-    pi_env: dict[str, str] | None = None,
+    zeta_env: dict[str, str] | None = None,
     question: str = "",
     prompt: str = "",
     follow_up: bool = False,
@@ -48,20 +48,20 @@ def run_pi_stream(
     compact: bool = False,
     tool_output_stdout: bool = False,
 ) -> int:
-    """Run Pi and render its JSON event stream in-process; return Pi's exit code."""
-    pi_proc = subprocess.Popen(
-        pi_cmd,
+    """Run Zeta and render its JSON event stream in-process; return Zeta's exit code."""
+    zeta_proc = subprocess.Popen(
+        zeta_cmd,
         stdout=subprocess.PIPE,
-        env=pi_env,
-        pass_fds=inherited_terminal_fds(pi_env),
+        env=zeta_env,
+        pass_fds=inherited_terminal_fds(zeta_env),
         text=True,
         encoding="utf-8",
         errors="replace",
     )
-    assert pi_proc.stdout is not None
+    assert zeta_proc.stdout is not None
     try:
         stream_events(
-            cast(TextIO, pi_proc.stdout),
+            cast(TextIO, zeta_proc.stdout),
             question=question,
             prompt=prompt,
             follow_up=follow_up,
@@ -72,12 +72,12 @@ def run_pi_stream(
             tool_output_stdout=tool_output_stdout,
         )
     finally:
-        pi_proc.stdout.close()
-    return pi_proc.wait()
+        zeta_proc.stdout.close()
+    return zeta_proc.wait()
 
 
 def inherited_terminal_fds(env: dict[str, str] | None = None) -> tuple[int, ...]:
-    """Return terminal fds that Pi extensions need Python to keep open."""
+    """Return terminal fds that Zeta extensions need Python to keep open."""
     raw = (env or os.environ).get("SIGIL_TTY_FD")
     if not raw:
         return ()
@@ -185,7 +185,7 @@ def summarize(tool: str, args: object) -> str:
 
 
 def event_payload(event: dict[str, object]) -> dict[str, object]:
-    """Return the event object that carries Pi payload fields."""
+    """Return the event object that carries Zeta payload fields."""
     update = event.get("assistantMessageEvent")
     if event.get("type") == "message_update" and isinstance(update, dict):
         return cast(dict[str, object], update)
@@ -193,13 +193,13 @@ def event_payload(event: dict[str, object]) -> dict[str, object]:
 
 
 def event_kind(event: dict[str, object]) -> str:
-    """Return the concrete Pi event kind, including nested message updates."""
+    """Return the concrete Zeta event kind, including nested message updates."""
     payload = event_payload(event)
     return str(payload.get("type") or "")
 
 
 def tool_name(payload: dict[str, object]) -> str:
-    """Extract a tool/function name from known Pi event shapes."""
+    """Extract a tool/function name from known Zeta event shapes."""
     for key in ("toolName", "functionName", "name", "tool"):
         value = payload.get(key)
         if value:
@@ -225,7 +225,7 @@ def tool_name(payload: dict[str, object]) -> str:
 
 
 def tool_args(payload: dict[str, object]) -> object:
-    """Extract tool/function arguments from known Pi event shapes."""
+    """Extract tool/function arguments from known Zeta event shapes."""
     for key in ("args", "input", "arguments"):
         if key in payload:
             return decoded_args(payload.get(key))
@@ -244,7 +244,7 @@ def tool_args(payload: dict[str, object]) -> object:
 
 
 def tool_call_id(payload: dict[str, object]) -> str:
-    """Extract a stable tool-call id from known Pi event shapes."""
+    """Extract a stable tool-call id from known Zeta event shapes."""
     for key in ("toolCallId", "tool_call_id", "id"):
         value = payload.get(key)
         if value:
@@ -346,7 +346,7 @@ def compact_detail(detail: str, *, limit: int = 120) -> str:
 
 
 def compact_answer_summary(answer: str, *, limit: int = 180) -> str:
-    """Return a one-line completion summary from Pi's final answer."""
+    """Return a one-line completion summary from Zeta's final answer."""
     lines = []
     in_fence = False
     for raw_line in answer.splitlines():
@@ -447,7 +447,7 @@ class Spinner:
 
 @dataclass
 class _StreamContext:
-    """Output destinations and rendering flags for one Pi stream."""
+    """Output destinations and rendering flags for one Zeta stream."""
 
     stdout: TextIO
     stderr: TextIO
@@ -627,7 +627,7 @@ def _finalize(
         if malformed_events:
             noun = "event" if malformed_events == 1 else "events"
             print(
-                f"sigil: ignored {malformed_events} malformed Pi {noun}",
+                f"sigil: ignored {malformed_events} malformed Zeta {noun}",
                 file=ctx.stderr,
             )
 
@@ -646,7 +646,7 @@ def stream_events(
     compact: bool = False,
     tool_output_stdout: bool = False,
 ) -> int:
-    """Filter Pi's event stream into terminal output and Sigil state files."""
+    """Filter Zeta's event stream into terminal output and Sigil state files."""
     started_text = False
     answer_chunks: list[str] = []
     tool_events: list[dict[str, object]] = []

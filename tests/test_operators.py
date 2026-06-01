@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import os
 import tempfile
-from io import StringIO
 from pathlib import Path
 from typing import cast
 
@@ -202,7 +201,7 @@ def test_op_cli_runs_piped_double_question_operator_through_web_route() -> None:
             ("review risky changes\n\nPiped input:\ndiff --git a/file b/file\n",),
             {
                 "glyph": "??",
-                "tools": "read,grep,find,ls,web_search",
+                "tools": "read,grep",
                 "use_web": True,
             },
         )
@@ -225,11 +224,11 @@ def test_question_operators_use_source_specific_routes() -> None:
     assert calls == [
         (
             ("first question",),
-            {"glyph": "?", "tools": "read,grep,find,ls", "use_web": False},
+            {"glyph": "?", "tools": "read,grep", "use_web": False},
         ),
         (
             ("second question",),
-            {"glyph": "??", "tools": "read,grep,find,ls,web_search", "use_web": True},
+            {"glyph": "??", "tools": "read,grep", "use_web": True},
         ),
     ]
 
@@ -393,7 +392,7 @@ def test_triple_comma_creates_act_and_executes_one_auto_approved_step() -> None:
         os.environ["SIGIL_STATE_DIR"] = tmp_dir
         os.environ["SIGIL_SESSION_ID"] = "act-session"
         events = []
-        pi_calls = []
+        zeta_calls = []
 
         def fake_append_event(event: dict[str, object]) -> dict[str, object]:
             stored = {"id": f"event-{len(events)}", **event}
@@ -401,7 +400,7 @@ def test_triple_comma_creates_act_and_executes_one_auto_approved_step() -> None:
             return stored
 
         def fake_run_pi(*args: object, **kwargs: object) -> int:
-            pi_calls.append((args, kwargs))
+            zeta_calls.append((args, kwargs))
             return 0
 
         try:
@@ -410,7 +409,7 @@ def test_triple_comma_creates_act_and_executes_one_auto_approved_step() -> None:
                     "sigil.acts.prompt_on_tty",
                     side_effect=AssertionError("no prompt"),
                 ),
-                patch("sigil.acts.run_pi_agent_step", side_effect=fake_run_pi),
+                patch("sigil.acts.run_zeta_agent_step", side_effect=fake_run_pi),
                 patch("sigil.acts.append_event", side_effect=fake_append_event),
             ):
                 result = CliRunner().invoke(cli, ["op", ",,,", "ship", "it"])
@@ -427,9 +426,9 @@ def test_triple_comma_creates_act_and_executes_one_auto_approved_step() -> None:
 
     assert result.exit_code == 0, result.output
     assert "objective: ship it" not in result.output
-    assert "❯ tools  read,grep,find,ls,sigil_shell,edit,write" in result.output
-    assert len(pi_calls) == 1
-    assert pi_calls[0][1]["glyph"] == ",,,"
+    assert "❯ tools  read,grep,bash,edit,write" in result.output
+    assert len(zeta_calls) == 1
+    assert zeta_calls[0][1]["glyph"] == ",,,"
     assert [event["type"] for event in events] == [
         "act_created",
         "act_step_decision",
@@ -455,10 +454,10 @@ def test_confirmed_act_can_edit_tools_before_execution() -> None:
             os.environ,
             {"SIGIL_STATE_DIR": tmp_dir, "SIGIL_SESSION_ID": "act-session"},
         ):
-            pi_calls = []
+            zeta_calls = []
 
             def fake_run_pi(*args: object, **kwargs: object) -> int:
-                pi_calls.append((args, kwargs))
+                zeta_calls.append((args, kwargs))
                 return 0
 
             prompts = iter(["e\n", "y\n"])
@@ -470,18 +469,18 @@ def test_confirmed_act_can_edit_tools_before_execution() -> None:
             with (
                 patch("sigil.acts.prompt_on_tty", side_effect=fake_prompt),
                 patch("sigil.acts.edit_tools", return_value=["read", "grep", "edit"]),
-                patch("sigil.acts.run_pi_agent_step", side_effect=fake_run_pi),
+                patch("sigil.acts.run_zeta_agent_step", side_effect=fake_run_pi),
             ):
                 result = CliRunner().invoke(cli, ["op", ",,", "ship", "it"])
             act_events = read_jsonl("last-act.jsonl")
 
     assert result.exit_code == 0, result.output
-    assert len(pi_calls) == 1
-    assert pi_calls[0][1]["tools"] == "read,grep,edit"
+    assert len(zeta_calls) == 1
+    assert zeta_calls[0][1]["tools"] == "read,grep,edit"
     step = act_events[-1]["act"]["steps"][0]
     assert step["edited_tools"] is True
     assert step["tools"] == ["read", "grep", "edit"]
-    assert step["command"] == "pi --tools read,grep,edit"
+    assert step["command"] == "zeta --tools read,grep,edit"
 
 
 def test_confirmed_act_leaves_editor_errors_visible() -> None:
@@ -500,7 +499,8 @@ def test_confirmed_act_leaves_editor_errors_visible() -> None:
                 patch("sigil.acts.edit_tools", return_value=None),
                 patch("sigil.acts.clear_lines_on_tty", side_effect=fake_clear_lines),
                 patch(
-                    "sigil.acts.run_pi_agent_step", side_effect=AssertionError("no pi")
+                    "sigil.acts.run_zeta_agent_step",
+                    side_effect=AssertionError("no zeta"),
                 ),
             ):
                 result = CliRunner().invoke(cli, ["op", ",,", "ship", "it"])
@@ -512,7 +512,7 @@ def test_confirmed_act_leaves_editor_errors_visible() -> None:
 def test_piped_triple_comma_denies_input_before_act_generation() -> None:
     with (
         patch("sigil.cli.operators.confirm_piped_input", return_value=False),
-        patch("sigil.acts.run_pi_agent_step", side_effect=AssertionError("no pi")),
+        patch("sigil.acts.run_zeta_agent_step", side_effect=AssertionError("no zeta")),
     ):
         result = CliRunner().invoke(cli, ["op", ",,,", "ship"], input="notes\n")
 
@@ -535,10 +535,10 @@ def test_goal_loop_runs_until_complete() -> None:
             os.environ,
             {"SIGIL_STATE_DIR": tmp_dir, "SIGIL_SESSION_ID": "goal-session"},
         ):
-            pi_calls = []
+            zeta_calls = []
 
             def fake_run_pi(*args: object, **kwargs: object) -> int:
-                pi_calls.append((args, kwargs))
+                zeta_calls.append((args, kwargs))
                 append_jsonl(
                     "last-question.jsonl",
                     {
@@ -550,7 +550,7 @@ def test_goal_loop_runs_until_complete() -> None:
 
             with (
                 patch("sigil.goals.prompt_on_tty", return_value="y\n"),
-                patch("sigil.goals.run_pi_agent_step", side_effect=fake_run_pi),
+                patch("sigil.goals.run_zeta_agent_step", side_effect=fake_run_pi),
             ):
                 result = run_goal_loop(
                     objective="fix tests",
@@ -560,8 +560,8 @@ def test_goal_loop_runs_until_complete() -> None:
             goal_events = read_jsonl("last-goal.jsonl")
 
     assert result == 0
-    assert len(pi_calls) == 1
-    assert pi_calls[0][1]["glyph"] == "@"
+    assert len(zeta_calls) == 1
+    assert zeta_calls[0][1]["glyph"] == "@"
     assert goal_events[-1]["type"] == "goal_completed"
     assert goal_events[-1]["goal"]["status"] == "completed"
     assert goal_events[-1]["goal"]["last_status"] == "complete"
@@ -573,10 +573,10 @@ def test_goal_loop_can_edit_tools_before_execution() -> None:
             os.environ,
             {"SIGIL_STATE_DIR": tmp_dir, "SIGIL_SESSION_ID": "goal-session"},
         ):
-            pi_calls = []
+            zeta_calls = []
 
             def fake_run_pi(*args: object, **kwargs: object) -> int:
-                pi_calls.append((args, kwargs))
+                zeta_calls.append((args, kwargs))
                 append_jsonl(
                     "last-question.jsonl",
                     {
@@ -594,8 +594,8 @@ def test_goal_loop_can_edit_tools_before_execution() -> None:
 
             with (
                 patch("sigil.goals.prompt_on_tty", side_effect=fake_prompt),
-                patch("sigil.acts.edit_tools", return_value=["read", "ls"]),
-                patch("sigil.goals.run_pi_agent_step", side_effect=fake_run_pi),
+                patch("sigil.acts.edit_tools", return_value=["read", "bash"]),
+                patch("sigil.goals.run_zeta_agent_step", side_effect=fake_run_pi),
             ):
                 result = run_goal_loop(
                     objective="fix tests",
@@ -605,11 +605,11 @@ def test_goal_loop_can_edit_tools_before_execution() -> None:
             goal_events = read_jsonl("last-goal.jsonl")
 
     assert result == 0
-    assert len(pi_calls) == 1
-    assert pi_calls[0][1]["tools"] == "read,ls"
+    assert len(zeta_calls) == 1
+    assert zeta_calls[0][1]["tools"] == "read,bash"
     step = goal_events[-1]["goal"]["steps"][0]
-    assert step["tools"] == ["read", "ls"]
-    assert step["command"] == "pi --tools read,ls"
+    assert step["tools"] == ["read", "bash"]
+    assert step["command"] == "zeta --tools read,bash"
 
 
 def test_auto_goal_loop_stops_on_unclear_status_without_prompting() -> None:
@@ -632,7 +632,7 @@ def test_auto_goal_loop_stops_on_unclear_status_without_prompting() -> None:
                     "sigil.goals.prompt_on_tty",
                     side_effect=AssertionError("no prompt"),
                 ),
-                patch("sigil.goals.run_pi_agent_step", side_effect=fake_run_pi),
+                patch("sigil.goals.run_zeta_agent_step", side_effect=fake_run_pi),
             ):
                 result = run_goal_loop(
                     objective="fix tests",
@@ -647,111 +647,31 @@ def test_auto_goal_loop_stops_on_unclear_status_without_prompting() -> None:
     assert goal_events[-1]["goal"]["approval"] == "auto"
 
 
-def test_act_pi_step_uses_sigil_shell_extension() -> None:
-    class FakeProc:
-        def __init__(self, stdout: object | None = None) -> None:
-            self.stdout = stdout
-
-        def wait(self) -> int:
-            return 0
-
-    with tempfile.TemporaryDirectory() as tmp_dir:
-        with patch_dict(
-            os.environ,
-            {"SIGIL_STATE_DIR": tmp_dir, "SIGIL_SESSION_ID": "act-session"},
-        ):
-            popen_calls: list[tuple[list[str], dict[str, object]]] = []
-
-            def fake_popen(cmd: list[str], *args: object, **kwargs: object) -> FakeProc:
-                popen_calls.append((cmd, kwargs))
-                if cmd[0] == "pi":
-                    return FakeProc(stdout=StringIO(""))
-                return FakeProc(stdout=StringIO(""))
-
-            with (
-                patch("sigil.acts.ensure_model_for_pi", return_value=True),
-                patch("sigil.pi_stream.subprocess.Popen", side_effect=fake_popen),
-                patch("sigil.pi_stream.renderer_command", return_value=["cat"]),
-            ):
-                from sigil.acts import run_pi_agent_step
-
-                result = run_pi_agent_step(
-                    {"objective": "repair"},
-                )
-
-    assert result == 0
-    pi_cmd, pi_kwargs = next(call for call in popen_calls if call[0][0] == "pi")
-    assert (
-        pi_cmd[pi_cmd.index("--tools") + 1]
-        == "read,grep,find,ls,sigil_shell,edit,write"
-    )
-    assert "--extension" in pi_cmd
-    assert "sigil_shell.ts" in pi_cmd[pi_cmd.index("--extension") + 1]
-    pi_env = pi_kwargs["env"]
-    assert isinstance(pi_env, dict)
-    assert "SIGIL_BIN" in pi_env
-
-
-def test_act_pi_step_honors_edited_tools_without_sigil_shell_extension() -> None:
+def test_act_zeta_step_invokes_zeta_runner() -> None:
     captured: dict[str, object] = {}
 
-    def fake_run_pi_stream(pi_cmd: list[str], **kwargs: object) -> int:
-        captured["pi_cmd"] = pi_cmd
+    def fake_run_agent_step(*args: object, **kwargs: object) -> int:
+        captured["args"] = args
         captured["kwargs"] = kwargs
         return 0
 
-    with tempfile.TemporaryDirectory() as tmp_dir:
-        with patch_dict(
-            os.environ,
-            {"SIGIL_STATE_DIR": tmp_dir, "SIGIL_SESSION_ID": "act-session"},
-        ):
-            with (
-                patch("sigil.acts.ensure_model_for_pi", return_value=True),
-                patch("sigil.acts.run_pi_stream", side_effect=fake_run_pi_stream),
-            ):
-                from sigil.acts import run_pi_agent_step
+    with patch("sigil.acts.run_agent_step", side_effect=fake_run_agent_step):
+        from sigil.acts import run_zeta_agent_step
 
-                result = run_pi_agent_step(
-                    {"objective": "repair"},
-                    tools="read,grep,edit",
-                )
+        result = run_zeta_agent_step(
+            {"objective": "repair", "stdin": "notes", "glyph": ",,"},
+            tools="read,grep,edit",
+        )
 
     assert result == 0
-    pi_cmd = cast("list[str]", captured["pi_cmd"])
-    assert pi_cmd[pi_cmd.index("--tools") + 1] == "read,grep,edit"
-    assert "--extension" not in pi_cmd
-
-
-def test_act_pi_step_streams_in_full_mode() -> None:
-    captured: dict[str, object] = {}
-
-    def fake_run_pi_stream(pi_cmd: list[str], **kwargs: object) -> int:
-        captured["pi_cmd"] = pi_cmd
-        captured["kwargs"] = kwargs
-        return 0
-
-    with tempfile.TemporaryDirectory() as tmp_dir:
-        with patch_dict(
-            os.environ,
-            {"SIGIL_STATE_DIR": tmp_dir, "SIGIL_SESSION_ID": "act-session"},
-        ):
-            with (
-                patch("sigil.acts.ensure_model_for_pi", return_value=True),
-                patch("sigil.acts.run_pi_stream", side_effect=fake_run_pi_stream),
-            ):
-                from sigil.acts import run_pi_agent_step
-
-                result = run_pi_agent_step(
-                    {"objective": "repair"},
-                )
-
-    assert result == 0
+    assert captured["args"] == ("repair",)
     kwargs = cast("dict[str, object]", captured["kwargs"])
-    assert not kwargs.get("compact")
-    assert not kwargs.get("json_output")
-    assert kwargs["tool_output_stdout"]
-    pi_env = cast("dict[str, str]", kwargs["pi_env"])
-    assert "SIGIL_BIN" in pi_env
+    assert kwargs["glyph"] == ",,"
+    assert isinstance(kwargs["system"], str)
+    assert "bounded shell-native edit route" in kwargs["system"]
+    assert kwargs["stdin_text"] == "notes"
+    assert kwargs["goal"] is False
+    assert kwargs["allowed_tools"] == ["read", "grep", "edit"]
 
 
 def test_act_resume_executes_pending_step_without_regenerating() -> None:
@@ -760,10 +680,10 @@ def test_act_resume_executes_pending_step_without_regenerating() -> None:
         old_session_id = os.environ.get("SIGIL_SESSION_ID")
         os.environ["SIGIL_STATE_DIR"] = tmp_dir
         os.environ["SIGIL_SESSION_ID"] = "act-session"
-        pi_calls = []
+        zeta_calls = []
 
         def fake_run_pi(*args: object, **kwargs: object) -> int:
-            pi_calls.append((args, kwargs))
+            zeta_calls.append((args, kwargs))
             return 0
 
         try:
@@ -778,8 +698,8 @@ def test_act_resume_executes_pending_step_without_regenerating() -> None:
                         "steps": [
                             {
                                 "id": "1",
-                                "title": "Run one Pi edit step",
-                                "command": "pi --tools read,grep,find,ls,sigil_shell,edit,write",
+                                "title": "Run one Zeta edit step",
+                                "command": "zeta --tools read,grep,bash,edit,write",
                                 "explanation": "Run the pending edit.",
                                 "status": "pending",
                             },
@@ -790,7 +710,7 @@ def test_act_resume_executes_pending_step_without_regenerating() -> None:
             with (
                 patch("sigil.acts.create_act", side_effect=AssertionError("no create")),
                 patch("sigil.acts.prompt_on_tty", return_value="y\n"),
-                patch("sigil.acts.run_pi_agent_step", side_effect=fake_run_pi),
+                patch("sigil.acts.run_zeta_agent_step", side_effect=fake_run_pi),
             ):
                 result = CliRunner().invoke(cli, ["act", "resume"])
             act_events = read_jsonl("last-act.jsonl")
@@ -806,8 +726,8 @@ def test_act_resume_executes_pending_step_without_regenerating() -> None:
 
     assert result.exit_code == 0, result.output
     assert "objective: ship it" not in result.output
-    assert "❯ tools  read,grep,find,ls,sigil_shell,edit,write" in result.output
-    assert len(pi_calls) == 1
+    assert "❯ tools  read,grep,bash,edit,write" in result.output
+    assert len(zeta_calls) == 1
     assert act_events[-1]["act"]["status"] == "completed"
 
 
@@ -817,10 +737,10 @@ def test_act_replaces_stale_same_objective_act_without_pending_step() -> None:
         old_session_id = os.environ.get("SIGIL_SESSION_ID")
         os.environ["SIGIL_STATE_DIR"] = tmp_dir
         os.environ["SIGIL_SESSION_ID"] = "act-session"
-        pi_calls = []
+        zeta_calls = []
 
         def fake_run_pi(*args: object, **kwargs: object) -> int:
-            pi_calls.append((args, kwargs))
+            zeta_calls.append((args, kwargs))
             return 0
 
         try:
@@ -835,8 +755,8 @@ def test_act_replaces_stale_same_objective_act_without_pending_step() -> None:
                         "steps": [
                             {
                                 "id": "1",
-                                "title": "Run one Pi edit step",
-                                "command": "pi --tools read,grep,find,ls,sigil_shell,edit,write",
+                                "title": "Run one Zeta edit step",
+                                "command": "zeta --tools read,grep,bash,edit,write",
                                 "explanation": "Already handled.",
                                 "status": "done",
                             },
@@ -848,7 +768,7 @@ def test_act_replaces_stale_same_objective_act_without_pending_step() -> None:
                 patch(
                     "sigil.acts.prompt_on_tty", side_effect=AssertionError("no prompt")
                 ),
-                patch("sigil.acts.run_pi_agent_step", side_effect=fake_run_pi),
+                patch("sigil.acts.run_zeta_agent_step", side_effect=fake_run_pi),
             ):
                 result = CliRunner().invoke(cli, ["op", ",,,", "ship", "it"])
             act_events = read_jsonl("last-act.jsonl")
@@ -864,8 +784,8 @@ def test_act_replaces_stale_same_objective_act_without_pending_step() -> None:
 
     assert result.exit_code == 0, result.output
     assert "objective: ship it" not in result.output
-    assert "❯ tools  read,grep,find,ls,sigil_shell,edit,write" in result.output
-    assert len(pi_calls) == 1
+    assert "❯ tools  read,grep,bash,edit,write" in result.output
+    assert len(zeta_calls) == 1
     created = [event for event in act_events if event["type"] == "act_created"]
     assert created[-1]["act"]["act_id"] != "stale-act"
 
@@ -948,7 +868,7 @@ def test_op_cli_sends_piped_question_without_confirmation() -> None:
     assert calls == [
         (
             ("review\n\nPiped input:\ndiff\n",),
-            {"glyph": "?", "tools": "read,grep,find,ls", "use_web": False},
+            {"glyph": "?", "tools": "read,grep", "use_web": False},
         ),
     ]
 
@@ -979,42 +899,7 @@ def test_ask_follow_up_sends_piped_input_without_confirmation() -> None:
             ("review\n\nPiped input:\ndiff\n",),
             {
                 "glyph": "??",
-                "tools": "read,grep,find,ls,web_search",
-                "use_web": True,
-                "append_transcript": True,
-                "json_output": False,
-            },
-        )
-    ]
-
-
-def test_ask_follow_up_sends_confirmed_piped_input_to_web_route() -> None:
-    calls = []
-
-    def fake_ask(*args: object, **kwargs: object) -> int:
-        calls.append((args, kwargs))
-        return 0
-
-    with (
-        patch(
-            "sigil.cli.operators.confirm_piped_input",
-            side_effect=AssertionError("no prompt"),
-        ),
-        patch("sigil.cli.ask.ask", side_effect=fake_ask),
-    ):
-        result = CliRunner().invoke(
-            cli,
-            ["ask", "--follow-up", "review"],
-            input="diff\n",
-        )
-
-    assert result.exit_code == 0
-    assert calls == [
-        (
-            ("review\n\nPiped input:\ndiff\n",),
-            {
-                "glyph": "??",
-                "tools": "read,grep,find,ls,web_search",
+                "tools": "read,grep",
                 "use_web": True,
                 "append_transcript": True,
                 "json_output": False,
@@ -1128,7 +1013,7 @@ def test_verb_commands_run_piped_stream_operators() -> None:
     assert ask_calls == [
         (
             ("review\n\nPiped input:\ndiff\n",),
-            {"glyph": "?", "tools": "read,grep,find,ls", "use_web": False},
+            {"glyph": "?", "tools": "read,grep", "use_web": False},
         )
     ]
     assert "Operator: , (propose)" in json_calls[0][1]

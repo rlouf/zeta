@@ -1,9 +1,8 @@
 # Sigil zsh bindings. Core behavior lives in the `sigil` executable.
 #
 # This file should stay boring: it wires zsh lifecycle hooks and punctuation
-# functions to the CLI, but it should not implement model logic or command
-# execution policy itself. In particular, ordinary shell commands are not
-# wrapped or redirected here.
+# functions to the CLI. The Zeta glyph route is the exception: zsh owns that
+# control loop and calls the Zeta CLI for model, tool, and transcript services.
 
 # ── CLI Resolution ───────────────────────────────────────────────────────
 
@@ -13,9 +12,19 @@
 if [[ -n "${SIGIL_BIN:-}" ]]; then
   typeset -g __sigil_bin="$SIGIL_BIN"
 elif command -v sigil >/dev/null 2>&1; then
-  typeset -g __sigil_bin="sigil"
+  typeset -g __sigil_bin="$(command -v sigil)"
 else
   typeset -g __sigil_bin="sigil"
+fi
+
+if [[ -n "${ZETA_BIN:-}" ]]; then
+  typeset -g __zeta_bin="$ZETA_BIN"
+elif command -v zeta >/dev/null 2>&1; then
+  typeset -g __zeta_bin="$(command -v zeta)"
+elif [[ "$__sigil_bin" == */* && -x "${__sigil_bin:h}/zeta" ]]; then
+  typeset -g __zeta_bin="${__sigil_bin:h}/zeta"
+else
+  typeset -g __zeta_bin="zeta"
 fi
 
 # ── Session And Terminal Context ─────────────────────────────────────────
@@ -68,6 +77,27 @@ __sigil_prompt_insert() {
   __sigil_history_insert "$1"
 }
 
+__sigil_json_string() {
+  python3 -c 'import json, sys; print(json.dumps(sys.argv[1]))' "$1"
+}
+
+__sigil_json_get() {
+  python3 -c '
+import json, sys
+data = json.load(sys.stdin)
+value = data
+for part in sys.argv[1].split("."):
+    if not isinstance(value, dict) or part not in value:
+        value = ""
+        break
+    value = value[part]
+if isinstance(value, (dict, list)):
+    print(json.dumps(value, ensure_ascii=False, separators=(",", ":")))
+elif value is not None:
+    print(value)
+' "$1"
+}
+
 __sigil_glyphs_enabled() {
   # `sigil install --no-glyphs` writes SIGIL_ENABLE_GLYPHS=0 before sourcing this
   # file. The named shell functions remain available either way.
@@ -86,20 +116,75 @@ sigil_command() {
   __sigil_prompt_insert "$command"
 }
 
+__sigil_zeta_append() {
+  printf '%s\n' "$1" | "$__zeta_bin" transcript append 2>/dev/null || true
+}
+
+__sigil_zeta_turn() {
+  local objective request events event event_type text name input analysis result command reason artifact
+  local tool_call_record tool_call_id
+  local step
+  objective="$*"
+  __sigil_zeta_append "$(printf '{"type":"user_message","content":%s}' "$(__sigil_json_string "$objective")")" >/dev/null
+  for step in {1..8}; do
+    request="$(printf '{"objective":%s}' "$(__sigil_json_string "$objective")")"
+    events="$(printf '%s\n' "$request" | "$__zeta_bin" model stream)" || return $?
+    while IFS= read -r event; do
+      [[ -n "$event" ]] || continue
+      event_type="$(printf '%s\n' "$event" | __sigil_json_get type)"
+      case "$event_type" in
+        assistant_delta)
+          text="$(printf '%s\n' "$event" | __sigil_json_get text)"
+          [[ -n "$text" ]] && print -r -- "$text"
+          ;;
+        final)
+          return 0
+          ;;
+        tool_call)
+          name="$(printf '%s\n' "$event" | __sigil_json_get name)"
+          input="$(printf '%s\n' "$event" | __sigil_json_get input)"
+          tool_call_record="$(__sigil_zeta_append "$(printf '{"type":"tool_call","name":%s,"input":%s}' "$(__sigil_json_string "$name")" "$input")")"
+          tool_call_id="$(printf '%s\n' "$tool_call_record" | __sigil_json_get id)"
+          analysis="$(printf '%s\n' "$input" | "$__zeta_bin" tool "$name" --analyze)" || return $?
+          __sigil_zeta_append "$(printf '{"type":"tool_analysis","tool_call_id":%s,"name":%s,"analysis":%s}' "$(__sigil_json_string "$tool_call_id")" "$(__sigil_json_string "$name")" "$analysis")" >/dev/null
+          result="$(printf '%s\n' "$input" | "$__zeta_bin" tool "$name")" || return $?
+          __sigil_zeta_append "$(printf '{"type":"tool_result","tool_call_id":%s,"name":%s,"result":%s}' "$(__sigil_json_string "$tool_call_id")" "$(__sigil_json_string "$name")" "$result")" >/dev/null
+          command="$(printf '%s\n' "$result" | __sigil_json_get handoff.command)"
+          if [[ -n "$command" ]]; then
+            reason="$(printf '%s\n' "$result" | __sigil_json_get handoff.reason)"
+            artifact="$(printf '%s\n' "$result" | __sigil_json_get handoff.artifact)"
+            [[ -n "$reason" ]] && print -r -- "$reason"
+            [[ -n "$artifact" ]] && print -r -- "artifact: $artifact"
+            __sigil_prompt_insert "$command"
+            return 0
+          fi
+          break
+          ;;
+        error)
+          print -r -- "$(printf '%s\n' "$event" | __sigil_json_get message)"
+          return 1
+          ;;
+      esac
+    done <<< "$events"
+  done
+  print -r -- "Zeta stopped after reaching the step budget."
+  return 1
+}
+
 __sigil_op() {
   # Shared helper for agent/goal routes. They run through the generic operator
-  # CLI; command approval for Pi shell tools happens inside that foreground run.
+  # CLI.
   local op="$1"
   shift
   "$__sigil_bin" op "$op" "$@"
 }
 
 sigil_agent_step() {
-  __sigil_op ",," "$@"
+  __sigil_zeta_turn "$@"
 }
 
 sigil_agent_step_auto() {
-  __sigil_op ",,," "$@"
+  __sigil_zeta_turn "$@"
 }
 
 sigil_question() {

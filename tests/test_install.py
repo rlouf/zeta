@@ -43,6 +43,22 @@ def test_install_shell_can_disable_glyph_aliases_in_rc_snippet() -> None:
         assert "export SIGIL_ENABLE_GLYPHS=0" in rc_text
 
 
+def test_install_shell_bakes_resolved_sigil_and_zeta_bins_into_rc() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        bins = {"sigil": "/opt/sigil/bin/sigil", "zeta": "/opt/sigil/bin/zeta"}
+        with patch("sigil.install.shutil.which", side_effect=bins.get):
+            install_shell(
+                "zsh",
+                install_dir=root / "bindings",
+                rc_path=root / ".zshrc",
+            )
+
+        rc_text = (root / ".zshrc").read_text(encoding="utf-8")
+        assert "export SIGIL_BIN=/opt/sigil/bin/sigil" in rc_text
+        assert "export ZETA_BIN=/opt/sigil/bin/zeta" in rc_text
+
+
 def test_install_shell_cli_json_reports_paths() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
@@ -93,7 +109,7 @@ def test_doctor_reports_expected_checks() -> None:
     names = {check.name for check in checks}
     assert "executable:sigil" in names
     assert "executable:glow" in names
-    assert "executable:pi" in names
+    assert "executable:zeta" in names
     assert "model:endpoint" in names
     assert "model:name" in names
     assert "state:writable" in names
@@ -106,7 +122,7 @@ def test_doctor_reports_expected_checks() -> None:
 def test_doctor_cli_json_returns_nonzero_for_failures() -> None:
     checks = [
         DoctorCheck("executable:sigil", "ok", "/bin/sigil"),
-        DoctorCheck("executable:pi", "fail", "pi is not on PATH"),
+        DoctorCheck("executable:zeta", "fail", "zeta is not on PATH"),
     ]
     stdout = StringIO()
     with patch("sigil.cli.install.doctor_checks", return_value=checks):
@@ -114,5 +130,5 @@ def test_doctor_cli_json_returns_nonzero_for_failures() -> None:
             code = main(["doctor", "--json"])
     assert code == 1
     payload = json.loads(stdout.getvalue())
-    assert payload[1]["name"] == "executable:pi"
+    assert payload[1]["name"] == "executable:zeta"
     assert payload[1]["status"] == "fail"

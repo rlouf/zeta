@@ -17,7 +17,7 @@ from ._shared import (
 from ..acts import run_act_stepper
 from ..goals import run_goal_loop
 from ..operators import OperatorInvocation, create_invocation, run_invocation
-from ..question import PI_QUESTION_TOOLS, PI_QUESTION_TOOLS_WITH_WEB, ask
+from ..question import ZETA_QUESTION_TOOLS, ZETA_QUESTION_TOOLS_WITH_WEB, ask
 
 
 def run_stream_operator(
@@ -122,7 +122,7 @@ def dispatch_act_operator(
     prompt: str,
     stdin_text: str,
 ) -> int:
-    """Run a `,,`/`,,,` invocation through the Pi act stepper."""
+    """Run a `,,`/`,,,` invocation through the Zeta act stepper."""
     if should_confirm_piped_input(invocation):
         if not confirm_piped_input(stdin_text):
             print("sigil op: piped input declined", file=sys.stderr)
@@ -189,6 +189,6 @@ def run_question_operator(invocation: OperatorInvocation) -> int:
     return ask(
         question,
         glyph=glyph,
-        tools=PI_QUESTION_TOOLS_WITH_WEB if use_web else PI_QUESTION_TOOLS,
+        tools=ZETA_QUESTION_TOOLS_WITH_WEB if use_web else ZETA_QUESTION_TOOLS,
         use_web=use_web,
     )

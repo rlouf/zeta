@@ -45,6 +45,7 @@ Issues = "https://github.com/rlouf/sigil/issues"
 
 [project.scripts]
 sigil = "sigil.cli:main"
+zeta = "sigil.zeta.cli:main"
 
 [tool.setuptools]
 package-dir = { "" = "src" }
@@ -55,8 +56,6 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 sigil = [
-  "pi_extensions/sigil_shell.ts",
-  "pi_extensions/staged_command.ts",
   "shell/bash/sigil.bash",
   "shell/zsh/sigil.zsh",
 ]

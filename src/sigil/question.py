@@ -9,26 +9,29 @@ from __future__ import annotations
 
 import sys
 
-from .ansi import MUTED, RESET
-from .model import ensure_model_for_pi
-from .pi_stream import run_pi_stream
 from .session import recent_turns_context
 from .state import append_event, append_jsonl, read_jsonl, write_jsonl
+from .zeta.runner import run_question_answer
 
 
 QUESTION_SYSTEM_PROMPT = (
     "Answer concisely. You are responding to a quick question typed at a shell "
-    "prompt. Use at most one tool call total. If one tool call is not enough, "
-    "answer with the best available uncertainty and say what single follow-up "
-    "would help. If a 'Recent shell activity' block appears in the user "
+    "prompt. The available tools are read and grep only. Use them when needed "
+    "to inspect explicitly referenced local files or search local text. Do not "
+    "propose shell commands just to inspect files; read them through the "
+    "available tools. If a 'Recent shell activity' block appears in the user "
     "message, it already shows the last few commands. For older sessions or "
-    "audit history, the read tool can access ~/.sigil/events.jsonl. If a "
-    "shell command would help, answer with the command text instead of calling "
-    "a tool for it."
+    "audit history, the read tool can access ~/.sigil/events.jsonl. Do not "
+    "mutate files or execute commands."
 )
 
-PI_QUESTION_TOOLS = "read,grep,find,ls"
-PI_QUESTION_TOOLS_WITH_WEB = f"{PI_QUESTION_TOOLS},web_search"
+ZETA_QUESTION_TOOLS = "read,grep"
+ZETA_QUESTION_TOOLS_WITH_WEB = ZETA_QUESTION_TOOLS
+
+
+def parse_tools(tools: str) -> tuple[str, ...]:
+    """Parse a comma-separated tool allowlist."""
+    return tuple(tool.strip() for tool in tools.split(",") if tool.strip())
 
 
 def discussion_turns() -> list[dict[str, object]]:
@@ -98,15 +101,12 @@ def ask(
     question: str,
     *,
     glyph: str = "?",
-    tools: str = PI_QUESTION_TOOLS,
+    tools: str = ZETA_QUESTION_TOOLS,
     use_web: bool = False,
     append_transcript: bool = False,
     json_output: bool = False,
 ) -> int:
-    """Run Pi for a question while recording transcript and tool trace state."""
-    if not ensure_model_for_pi():
-        return 1
-
+    """Run Zeta for a question while recording transcript state."""
     prompt = question if append_transcript else prepend_recent_turns(question)
     question_event = append_event(
         {
@@ -130,36 +130,20 @@ def ask(
     else:
         write_jsonl("last-question.jsonl", [question_turn])
     write_jsonl("last-tools.jsonl", [])
-    tool_label = "read+search+web" if use_web else "read+search"
-    print(
-        f"{MUTED}❯ pi {glyph:<5} · {tool_label} · no execute path{RESET}",
-        file=sys.stderr,
-    )
-
-    pi_cmd = [
-        "pi",
-        "-p",
-        "--mode",
-        "json",
-        "--no-session",
-        "--tools",
-        tools,
-    ]
-    pi_cmd.extend(
-        [
-            "--append-system-prompt",
-            QUESTION_SYSTEM_PROMPT,
-            prompt,
-        ]
-    )
-    exit_code = run_pi_stream(
-        pi_cmd,
+    enabled_tools = parse_tools(tools)
+    tool_note = "+".join(enabled_tools) if enabled_tools else "no tools"
+    if use_web:
+        prompt = (
+            f"{prompt}\n\nNote: this Zeta v1 route has no web_search tool; "
+            "answer from available local/context knowledge and say when current "
+            "web verification would be needed."
+        )
+    print(f"❯ zeta {glyph:<5} · {tool_note} · no execute path", file=sys.stderr)
+    return run_question_answer(
+        QUESTION_SYSTEM_PROMPT,
+        prompt,
         question=question,
-        prompt=prompt,
         follow_up=append_transcript,
         json_output=json_output,
-        tool_output_stdout=True,
+        allowed_tools=enabled_tools,
     )
-    if not json_output:
-        print()
-    return exit_code

@@ -1,4 +1,4 @@
-"""The `act` command: inspect, resume, or abort the current Pi edit action."""
+"""The `act` command: inspect, resume, or abort the current Zeta edit action."""
 
 from __future__ import annotations
 
@@ -18,7 +18,7 @@ from ..acts import abort_active_act, last_act, print_act, run_act_stepper
 )
 @click.option("--json", "json_output", is_flag=True)
 def cmd_act(act_command: str, json_output: bool) -> int:
-    """Inspect, resume, or abort the current Pi edit action."""
+    """Inspect, resume, or abort the current Zeta edit action."""
     return run_act_command(act_command, json_output)
 
 

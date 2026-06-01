@@ -160,7 +160,7 @@ def run_invocation(invocation: OperatorInvocation) -> OperatorResult:
     """Run a semantic operator invocation and return stdout text."""
     if invocation.base == "," and invocation.depth > 1:
         raise RuntimeError(
-            f"{invocation.glyph} agent step is handled by the Pi act runner"
+            f"{invocation.glyph} agent step is handled by the Zeta act runner"
         )
     if not ensure_server():
         raise SystemExit(1)

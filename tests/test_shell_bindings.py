@@ -29,8 +29,36 @@ def make_stub(tmp: Path) -> Path:
               printf '%s\n' "$SIGIL_STUB_STAGED"
               exit 0
             fi
+            if [ "$*" = "transcript append" ]; then
+              cat >/dev/null
+              printf '%s\n' '{"id":"evt"}'
+              exit 0
+            fi
             printf '%s\n' "$*" >> "$SIGIL_STUB_LOG"
             case "$*" in
+              "model stream")
+                request="$(cat)"
+                case "$request" in
+                  *repair*) command="uv run pytest"; reason="Run tests." ;;
+                  *"run it"*) command="echo piped"; reason="Run piped handoff." ;;
+                  *) command="echo zeta"; reason="Run zeta handoff." ;;
+                esac
+                printf '{"type":"tool_call","name":"bash","input":{"command":%s,"reason":%s}}\n' \
+                  "$(python3 -c 'import json,sys; print(json.dumps(sys.argv[1]))' "$command")" \
+                  "$(python3 -c 'import json,sys; print(json.dumps(sys.argv[1]))' "$reason")"
+                ;;
+              "tool bash --analyze")
+                cat >/dev/null
+                printf '%s\n' '{"valid":true,"resolved":true,"effects":[{"kind":"execute","resource":"process","target":"echo","certainty":"certain"}],"diagnostics":[]}'
+                ;;
+              "tool bash")
+                params="$(cat)"
+                command="$(printf '%s\n' "$params" | python3 -c 'import json,sys; print(json.load(sys.stdin)["command"])')"
+                reason="$(printf '%s\n' "$params" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("reason","Run command."))')"
+                printf '{"ok":true,"handoff":{"type":"shell_prompt","command":%s,"reason":%s}}\n' \
+                  "$(python3 -c 'import json,sys; print(json.dumps(sys.argv[1]))' "$command")" \
+                  "$(python3 -c 'import json,sys; print(json.dumps(sys.argv[1]))' "$reason")"
+                ;;
               "command draft executive summary") printf '%s\n' "stream command" ;;
               "ask hello") printf '%s\n' "answer" ;;
               "op , hello") printf '%s\n%s\n' "echo recommended" "because it is safe" ;;
@@ -54,6 +82,7 @@ def run_shell(
 ) -> subprocess.CompletedProcess[str]:
     env = os.environ.copy()
     env["SIGIL_BIN"] = str(stub)
+    env["ZETA_BIN"] = str(stub)
     env["SIGIL_STUB_LOG"] = str(tmp / "calls.log")
     env["SIGIL_SESSION_ID"] = "shell-test"
     env["ZLE_LOG"] = str(tmp / "zle.log")
@@ -74,6 +103,7 @@ def run_shell_args(
 ) -> subprocess.CompletedProcess[str]:
     env = os.environ.copy()
     env["SIGIL_BIN"] = str(stub)
+    env["ZETA_BIN"] = str(stub)
     env["SIGIL_STUB_LOG"] = str(tmp / "calls.log")
     env["SIGIL_SESSION_ID"] = "shell-test"
     env["ZLE_LOG"] = str(tmp / "zle.log")
@@ -100,6 +130,10 @@ def read_log(tmp: Path) -> list[str]:
     return path.read_text(encoding="utf-8").splitlines()
 
 
+def zeta_bash_turn_calls() -> list[str]:
+    return ["model stream", "tool bash --analyze", "tool bash"]
+
+
 def test_bash_wrappers_call_current_cli_contract() -> None:
     with tempfile.TemporaryDirectory() as tmp_dir:
         tmp = Path(tmp_dir)
@@ -115,15 +149,15 @@ def test_bash_wrappers_call_current_cli_contract() -> None:
         assert_success(result)
         assert read_log(tmp) == [
             "op , hello",
-            "op ,, hello",
+            *zeta_bash_turn_calls(),
             "op ? hello",
             "op ?? hello",
         ]
         assert "echo recommended" in result.stdout
         assert "because it is safe" in result.stdout
-        assert "op:op ,, hello" in result.stdout
+        assert "Run zeta handoff." in result.stdout
         assert "op:op ?? hello" in result.stdout
-        assert "history=echo recommended" in result.stdout
+        assert "history=echo zeta" in result.stdout
 
 
 def test_bash_agent_and_goal_wrappers_call_operator_contract() -> None:
@@ -140,8 +174,8 @@ def test_bash_agent_and_goal_wrappers_call_operator_contract() -> None:
         )
         assert_success(result)
         assert read_log(tmp) == [
-            "op ,, hello",
-            "op ,,, hello",
+            *zeta_bash_turn_calls(),
+            *zeta_bash_turn_calls(),
             "op @ hello",
             "op @@ hello",
         ]
@@ -195,8 +229,8 @@ def test_bash_agent_step_does_not_consume_staged_command() -> None:
             stub,
         )
         assert_success(result)
-        assert "op:op ,,, repair" in result.stdout
-        assert "history=" in result.stdout
+        assert "Run tests." in result.stdout
+        assert "history=uv run pytest" in result.stdout
 
 
 def test_bash_exports_tty_for_pipeline_confirmations() -> None:
@@ -248,7 +282,7 @@ def test_bash_wrappers_dispatch_piped_stdin_to_operator_runtime() -> None:
         assert read_log(tmp) == [
             "op ?? review risky changes",
             "op , draft executive summary",
-            "op ,, run it",
+            *zeta_bash_turn_calls(),
         ]
         assert "echo stream recommended" in result.stdout
         assert "because stdin matters" in result.stdout
@@ -394,15 +428,15 @@ def test_zsh_wrappers_call_current_cli_contract() -> None:
         assert_success(result)
         assert read_log(tmp) == [
             "op , hello",
-            "op ,, hello",
+            *zeta_bash_turn_calls(),
             "op ? hello",
             "op ?? hello",
         ]
         assert "echo recommended" in result.stdout
         assert "because it is safe" in result.stdout
-        assert "op:op ,, hello" in result.stdout
+        assert "Run zeta handoff." in result.stdout
         assert "op:op ?? hello" in result.stdout
-        assert "history=echo recommended" in result.stdout
+        assert "history=echo zeta" in result.stdout
 
 
 @pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
@@ -437,8 +471,8 @@ def test_zsh_agent_step_does_not_consume_staged_command() -> None:
             stub,
         )
         assert_success(result)
-        assert "op:op ,,, repair" in result.stdout
-        assert "history=" in result.stdout
+        assert "Run tests." in result.stdout
+        assert "history=uv run pytest" in result.stdout
 
 
 @pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
@@ -456,8 +490,8 @@ def test_zsh_agent_and_goal_wrappers_call_operator_contract() -> None:
         )
         assert_success(result)
         assert read_log(tmp) == [
-            "op ,, hello",
-            "op ,,, hello",
+            *zeta_bash_turn_calls(),
+            *zeta_bash_turn_calls(),
             "op @ hello",
             "op @@ hello",
         ]
@@ -480,12 +514,12 @@ def test_zsh_wrappers_dispatch_piped_stdin_to_operator_runtime() -> None:
         assert read_log(tmp) == [
             "op ?? review risky changes",
             "op , draft executive summary",
-            "op ,, run it",
+            *zeta_bash_turn_calls(),
         ]
         assert "op:op ?? review risky changes" in result.stdout
         assert "echo stream recommended" in result.stdout
         assert "because stdin matters" in result.stdout
-        assert "op:op ,, run it" in result.stdout
+        assert "Run piped handoff." in result.stdout
 
 
 @pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
@@ -505,7 +539,7 @@ def test_zsh_glyph_aliases_dispatch_piped_stdin_before_globbing() -> None:
         assert read_log(tmp) == [
             "op ?? review risky changes",
             "op , draft executive summary",
-            "op ,, run it",
+            *zeta_bash_turn_calls(),
         ]
 
 

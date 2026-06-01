@@ -1,57 +1,36 @@
-"""Confirmed one-step Pi edit runner for triple-comma autonomy."""
+"""Confirmed one-step Zeta edit runner for triple-comma autonomy."""
 
 from __future__ import annotations
 
 import os
-import shutil
 import shlex
 import subprocess
 import sys
 import tempfile
 import uuid
-from importlib.resources import files
-from pathlib import Path
 from typing import Any
 
 from .ansi import MUTED, RESET
-from .pi_stream import TRACE_LABEL_WIDTH, run_pi_stream
-from .model import ensure_model_for_pi
 from .state import append_event, append_jsonl, read_jsonl
 from .tty import clear_lines_on_tty, open_tty_fd, prompt_on_tty
+from .zeta.runner import run_agent_step
 
 LAST_ACT = "last-act.jsonl"
 MAX_EVENT_OUTPUT_CHARS = 4000
-SIGIL_SHELL_EXTENSION = "pi_extensions/sigil_shell.ts"
-PI_AGENT_TOOLS = "read,grep,find,ls,sigil_shell,edit,write"
-PI_AGENT_TOOLS_WITHOUT_SHELL = "read,grep,find,ls,edit,write"
+TRACE_LABEL_WIDTH = 5
+ZETA_AGENT_TOOLS = "read,grep,bash,edit,write"
 
-PI_AGENT_SYSTEM_PROMPT = (
+ZETA_AGENT_SYSTEM_PROMPT = (
     "You are Sigil's bounded shell-native edit route. Complete at most one "
     "coherent coding step for the user's objective. Use read/search tools "
     "before editing. Use edit/write only for minimal, relevant file changes. "
-    "If local inspection or focused tests would help, call the sigil_shell "
-    "tool. It asks the user before running a shell command, streams output to "
-    "the terminal, records the turn, and returns stdout/stderr plus exit status "
-    "to you. Do not install dependencies, commit, push, reset, delete unrelated "
-    "files, or perform network operations. If the request is ambiguous or "
-    "unsafe, stop and say what you need. End with a concise summary of changed "
-    "files and the next verification command."
+    "If local inspection or focused tests would help, use the bash handoff "
+    "tool so the user can run, edit, or reject the command. Do not install "
+    "dependencies, commit, push, reset, delete unrelated files, or perform "
+    "network operations. If the request is ambiguous or unsafe, stop and say "
+    "what you need. End with a concise summary of changed files and the next "
+    "verification command."
 )
-
-
-def sigil_shell_extension_path() -> Path | None:
-    """Return the bundled Pi shell tool extension path if available."""
-    resource = files("sigil").joinpath(SIGIL_SHELL_EXTENSION)
-    if not resource.is_file():
-        return None
-    return Path(str(resource))
-
-
-def sigil_bin_for_pi() -> str:
-    """Return the CLI path the Pi extension should call for turn recording."""
-    return (
-        os.environ.get("SIGIL_BIN") or shutil.which("sigil") or sys.argv[0] or "sigil"
-    )
 
 
 def run_act_stepper(
@@ -61,7 +40,7 @@ def run_act_stepper(
     confirm_step: bool,
     glyph: str,
 ) -> int:
-    """Create or resume a one-step Pi edit action."""
+    """Create or resume a one-step Zeta edit action."""
     prepared = prepare_act(
         objective=objective,
         stdin_text=stdin_text,
@@ -87,7 +66,7 @@ def run_act_stepper(
         return 0
 
     record_step_decision(act, step, decision_label)
-    status = run_pi_agent_step(act, glyph=glyph, tools=tools_from_step(step))
+    status = run_zeta_agent_step(act, glyph=glyph, tools=tools_from_step(step))
     step["status"] = "done" if status == 0 else "failed"
     step["exit_code"] = status
     record_step_executed(act, step, status)
@@ -109,7 +88,7 @@ def prepare_act(
     if act is None:
         if not objective:
             print(
-                "sigil act: no active Pi edit step; provide an objective",
+                "sigil act: no active Zeta edit step; provide an objective",
                 file=sys.stderr,
             )
             return 2
@@ -165,7 +144,7 @@ def confirm_act_step(
             return False, ""
         set_step_tools(step, edited_tools)
         step["edited_tools"] = True
-        confirm = read_step_decision(prompt="run edited Pi step? [y/N] ")
+        confirm = read_step_decision(prompt="run edited Zeta step? [y/N] ")
         shown += 1
         if confirm not in {"y", "yes"}:
             clear_lines_on_tty(shown)
@@ -184,7 +163,7 @@ def create_act(
     confirm_step: bool,
     glyph: str,
 ) -> dict[str, Any]:
-    """Create a one-step active Pi edit action."""
+    """Create a one-step active Zeta edit action."""
     approval = "confirm" if confirm_step else "auto"
     act = {
         "act_id": str(uuid.uuid4()),
@@ -196,8 +175,8 @@ def create_act(
         "steps": [
             {
                 "id": "1",
-                "title": "Run one Pi edit step",
-                "command": f"pi --tools {PI_AGENT_TOOLS}",
+                "title": "Run one Zeta edit step",
+                "command": f"zeta --tools {ZETA_AGENT_TOOLS}",
                 "status": "pending",
             }
         ],
@@ -252,7 +231,7 @@ def event_act(event: dict[str, Any]) -> dict[str, Any] | None:
 
 
 def next_pending_step(act: dict[str, Any]) -> dict[str, Any] | None:
-    """Return the pending Pi edit step, if any."""
+    """Return the pending Zeta edit step, if any."""
     steps = act.get("steps")
     if not isinstance(steps, list):
         return None
@@ -268,7 +247,7 @@ def print_act(act: dict[str, Any]) -> None:
 
 
 def print_next_step(step: dict[str, Any]) -> None:
-    """Print the tools available for the next Pi step."""
+    """Print the tools available for the next Zeta step."""
     tools = tools_from_step(step)
     print(f"❯ {'tools':<{TRACE_LABEL_WIDTH}}  {tools}")
 
@@ -383,7 +362,7 @@ def set_step_tools(step: dict[str, Any], tools: list[str]) -> None:
     """Persist an edited tool list on a pending step."""
     serialized = ",".join(tools)
     step["tools"] = tools
-    step["command"] = f"pi --tools {serialized}"
+    step["command"] = f"zeta --tools {serialized}"
 
 
 def tools_from_step(step: dict[str, Any]) -> str:
@@ -398,96 +377,59 @@ def tools_from_step(step: dict[str, Any]) -> str:
     return command.split(marker, 1)[1].split(maxsplit=1)[0]
 
 
-def run_pi_agent_step(
+def run_zeta_agent_step(
     act: dict[str, Any],
     *,
     glyph: str | None = None,
     tools: str | list[str] | None = None,
 ) -> int:
-    """Run one non-interactive Pi edit step and stream tool events."""
-    if not ensure_model_for_pi():
-        return 1
-
+    """Run one non-interactive Zeta edit step."""
     route_glyph = glyph or str(act.get("glyph") or ",,,")
-    extension_path = sigil_shell_extension_path()
-    enabled_tools = effective_pi_tools(tools, extension_path is not None)
+    enabled_tools = effective_zeta_tools(tools)
     tool_label = "+".join(compact_tool_label(tool) for tool in enabled_tools)
     if not tool_label:
         tool_label = "no tools"
-    include_sigil_shell = "sigil_shell" in enabled_tools and extension_path is not None
-    serialized_tools = ",".join(enabled_tools)
     approval = str(act.get("approval") or "confirm")
     step_label = (
         "one auto-approved step" if approval == "auto" else "one confirmed step"
     )
     print(
-        f"{MUTED}❯ pi {route_glyph:<5} · {tool_label} · {step_label}{RESET}",
+        f"{MUTED}❯ zeta {route_glyph:<5} · {tool_label} · {step_label}{RESET}",
         file=sys.stderr,
     )
-
-    pi_cmd = [
-        "pi",
-        "-p",
-        "--mode",
-        "json",
-        "--no-session",
-        "--tools",
-        serialized_tools,
-    ]
-    if include_sigil_shell and extension_path is not None:
-        pi_cmd.extend(
-            [
-                "--extension",
-                str(extension_path),
-            ]
-        )
-    pi_cmd.extend(
-        [
-            "--append-system-prompt",
-            PI_AGENT_SYSTEM_PROMPT,
-            pi_agent_prompt(act),
-        ]
-    )
-    pi_env = {**os.environ, "SIGIL_BIN": sigil_bin_for_pi()}
-    exit_code = run_pi_stream(
-        pi_cmd,
-        pi_env=pi_env,
-        question=str(act.get("objective") or ""),
-        prompt=pi_agent_prompt(act),
-        tool_output_stdout=True,
+    exit_code = run_agent_step(
+        str(act.get("objective") or ""),
+        glyph=route_glyph,
+        system=ZETA_AGENT_SYSTEM_PROMPT,
+        stdin_text=str(act.get("stdin") or ""),
+        goal=act.get("kind") == "goal",
+        allowed_tools=enabled_tools,
     )
     print()
     return exit_code
 
 
-def effective_pi_tools(
+def effective_zeta_tools(
     tools: str | list[str] | None,
-    sigil_shell_available: bool,
 ) -> list[str]:
-    """Return the tool list to pass to Pi for a step."""
+    """Return the tool list to pass to Zeta for a step."""
     if tools is None:
-        tools = (
-            PI_AGENT_TOOLS if sigil_shell_available else PI_AGENT_TOOLS_WITHOUT_SHELL
-        )
+        tools = ZETA_AGENT_TOOLS
     if isinstance(tools, str):
         names = tools.split(",")
     else:
         names = tools
     enabled = normalize_tool_names([str(name) for name in names])
-    if not sigil_shell_available:
-        enabled = [tool for tool in enabled if tool != "sigil_shell"]
     return enabled
 
 
 def compact_tool_label(tool: str) -> str:
     """Return a compact label for a tool shown in the step banner."""
-    if tool == "sigil_shell":
-        return "sigil-shell"
     return tool
 
 
-def pi_agent_prompt(act: dict[str, Any]) -> str:
-    """Build the prompt for one Pi edit step."""
+def zeta_agent_prompt(act: dict[str, Any]) -> str:
+    """Build the prompt for one Zeta edit step."""
     is_goal = act.get("kind") == "goal"
     sections = [
         "Run one bounded Sigil goal step."
@@ -535,7 +477,7 @@ def record_step_decision(
     step: dict[str, Any],
     decision: str,
 ) -> dict[str, Any]:
-    """Record a user decision for one Pi edit step."""
+    """Record a user decision for one Zeta edit step."""
     step["decision"] = decision
     payload = {
         "type": "act_step_decision",
@@ -560,7 +502,7 @@ def record_step_executed(
     step: dict[str, Any],
     status: int,
 ) -> dict[str, Any]:
-    """Record completion of one Pi edit step."""
+    """Record completion of one Zeta edit step."""
     payload = {
         "type": "act_step_executed",
         "act_id": act.get("act_id"),

@@ -156,7 +156,7 @@ reading docs first.
 - [ ] Add exact fix commands or next steps to `doctor` failures.
 - [ ] Keep warnings non-fatal, but make their remediation explicit.
 - [ ] Add JSON fields for remediation commands.
-- [ ] Add tests for missing `pi`, missing `glow`, unreachable model endpoint,
+- [ ] Add tests for missing `zeta`, missing `glow`, unreachable model endpoint,
       missing model name, and unwritable state directory.
 
 ### Demo And Regression

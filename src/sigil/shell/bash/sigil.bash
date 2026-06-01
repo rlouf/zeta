@@ -3,9 +3,19 @@
 if [[ -n "${SIGIL_BIN:-}" ]]; then
   __sigil_bin="$SIGIL_BIN"
 elif command -v sigil >/dev/null 2>&1; then
-  __sigil_bin="sigil"
+  __sigil_bin="$(command -v sigil)"
 else
   __sigil_bin="sigil"
+fi
+
+if [[ -n "${ZETA_BIN:-}" ]]; then
+  __zeta_bin="$ZETA_BIN"
+elif command -v zeta >/dev/null 2>&1; then
+  __zeta_bin="$(command -v zeta)"
+elif [[ "$__sigil_bin" == */* && -x "$(dirname "$__sigil_bin")/zeta" ]]; then
+  __zeta_bin="$(dirname "$__sigil_bin")/zeta"
+else
+  __zeta_bin="zeta"
 fi
 
 __sigil_clear_legacy_capture_state() {
@@ -68,6 +78,27 @@ __sigil_history_insert() {
   builtin history -s "$1" 2>/dev/null || true
 }
 
+__sigil_json_string() {
+  python3 -c 'import json, sys; print(json.dumps(sys.argv[1]))' "$1"
+}
+
+__sigil_json_get() {
+  python3 -c '
+import json, sys
+data = json.load(sys.stdin)
+value = data
+for part in sys.argv[1].split("."):
+    if not isinstance(value, dict) or part not in value:
+        value = ""
+        break
+    value = value[part]
+if isinstance(value, (dict, list)):
+    print(json.dumps(value, ensure_ascii=False, separators=(",", ":")))
+elif value is not None:
+    print(value)
+' "$1"
+}
+
 __sigil_glyphs_enabled() {
   [[ "${SIGIL_ENABLE_GLYPHS:-1}" != "0" && "${SIGIL_ENABLE_GLYPHS:-1}" != "false" ]]
 }
@@ -112,6 +143,61 @@ sigil_command() {
   __sigil_history_insert "$command"
 }
 
+__sigil_zeta_append() {
+  printf '%s\n' "$1" | "$__zeta_bin" transcript append 2>/dev/null || true
+}
+
+__sigil_zeta_turn() {
+  local objective request events event event_type text name input analysis result command reason artifact
+  local tool_call_record tool_call_id
+  local step
+  objective="$*"
+  __sigil_zeta_append "$(printf '{"type":"user_message","content":%s}' "$(__sigil_json_string "$objective")")" >/dev/null
+  for step in 1 2 3 4 5 6 7 8; do
+    request="$(printf '{"objective":%s}' "$(__sigil_json_string "$objective")")"
+    events="$(printf '%s\n' "$request" | "$__zeta_bin" model stream)" || return $?
+    while IFS= read -r event; do
+      [[ -n "$event" ]] || continue
+      event_type="$(printf '%s\n' "$event" | __sigil_json_get type)"
+      case "$event_type" in
+        assistant_delta)
+          text="$(printf '%s\n' "$event" | __sigil_json_get text)"
+          [[ -n "$text" ]] && printf '%s\n' "$text"
+          ;;
+        final)
+          return 0
+          ;;
+        tool_call)
+          name="$(printf '%s\n' "$event" | __sigil_json_get name)"
+          input="$(printf '%s\n' "$event" | __sigil_json_get input)"
+          tool_call_record="$(__sigil_zeta_append "$(printf '{"type":"tool_call","name":%s,"input":%s}' "$(__sigil_json_string "$name")" "$input")")"
+          tool_call_id="$(printf '%s\n' "$tool_call_record" | __sigil_json_get id)"
+          analysis="$(printf '%s\n' "$input" | "$__zeta_bin" tool "$name" --analyze)" || return $?
+          __sigil_zeta_append "$(printf '{"type":"tool_analysis","tool_call_id":%s,"name":%s,"analysis":%s}' "$(__sigil_json_string "$tool_call_id")" "$(__sigil_json_string "$name")" "$analysis")" >/dev/null
+          result="$(printf '%s\n' "$input" | "$__zeta_bin" tool "$name")" || return $?
+          __sigil_zeta_append "$(printf '{"type":"tool_result","tool_call_id":%s,"name":%s,"result":%s}' "$(__sigil_json_string "$tool_call_id")" "$(__sigil_json_string "$name")" "$result")" >/dev/null
+          command="$(printf '%s\n' "$result" | __sigil_json_get handoff.command)"
+          if [[ -n "$command" ]]; then
+            reason="$(printf '%s\n' "$result" | __sigil_json_get handoff.reason)"
+            artifact="$(printf '%s\n' "$result" | __sigil_json_get handoff.artifact)"
+            [[ -n "$reason" ]] && printf '%s\n' "$reason"
+            [[ -n "$artifact" ]] && printf '%s\n' "artifact: $artifact"
+            __sigil_history_insert "$command"
+            return 0
+          fi
+          break
+          ;;
+        error)
+          printf '%s\n' "$(printf '%s\n' "$event" | __sigil_json_get message)"
+          return 1
+          ;;
+      esac
+    done <<< "$events"
+  done
+  printf '%s\n' "Zeta stopped after reaching the step budget."
+  return 1
+}
+
 __sigil_op() {
   local op="$1"
   shift
@@ -119,11 +205,11 @@ __sigil_op() {
 }
 
 sigil_agent_step() {
-  __sigil_op ",," "$@"
+  __sigil_zeta_turn "$@"
 }
 
 sigil_agent_step_auto() {
-  __sigil_op ",,," "$@"
+  __sigil_zeta_turn "$@"
 }
 
 sigil_question() {

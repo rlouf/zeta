@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Small Pi event-stream shim for deterministic Sigil demos."""
+"""Small Zeta event-stream shim for deterministic Sigil demos."""
 
 from __future__ import annotations
 
@@ -84,6 +84,62 @@ def run_act() -> int:
 
 
 def main(argv: list[str]) -> int:
+    if argv[:2] == ["transcript", "append"]:
+        sys.stdin.read()
+        print(json.dumps({"id": "demo-event"}))
+        return 0
+    if argv[:2] == ["model", "stream"]:
+        request = json.loads(sys.stdin.read() or "{}")
+        objective = str(request.get("objective") or request.get("prompt") or "")
+        command = "uv run pytest tests/test_parser.py"
+        reason = "Run the focused parser test."
+        if "diff" in objective or "review" in objective:
+            command = "git diff --stat"
+            reason = "Review the changed files."
+        emit(
+            {
+                "type": "tool_call",
+                "name": "bash",
+                "input": {"command": command, "reason": reason},
+            }
+        )
+        return 0
+    if argv[:2] == ["tool", "bash"]:
+        params = json.loads(sys.stdin.read() or "{}")
+        if "--analyze" in argv:
+            print(
+                json.dumps(
+                    {
+                        "valid": True,
+                        "resolved": True,
+                        "effects": [
+                            {
+                                "kind": "execute",
+                                "resource": "process",
+                                "target": str(params.get("command") or "").split(" ")[
+                                    0
+                                ],
+                                "certainty": "certain",
+                            }
+                        ],
+                        "diagnostics": [],
+                    }
+                )
+            )
+            return 0
+        print(
+            json.dumps(
+                {
+                    "ok": True,
+                    "handoff": {
+                        "type": "shell_prompt",
+                        "command": params.get("command") or "git status --short",
+                        "reason": params.get("reason") or "Run the proposed command.",
+                    },
+                }
+            )
+        )
+        return 0
     if is_act(argv):
         return run_act()
     answer = answer_for(argv)

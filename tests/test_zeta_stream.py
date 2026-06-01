@@ -5,7 +5,7 @@ from io import StringIO
 from typing import cast
 
 from _patch import patch
-from sigil.pi_stream import inherited_terminal_fds, run_pi_stream
+from sigil.zeta.stream import inherited_terminal_fds, run_zeta_stream
 
 
 def test_inherited_terminal_fds_keeps_valid_sigil_tty_fd() -> None:
@@ -22,7 +22,7 @@ def test_inherited_terminal_fds_ignores_missing_sigil_tty_fd() -> None:
     assert inherited_terminal_fds({"SIGIL_TTY_FD": "-1"}) == ()
 
 
-def test_run_pi_stream_passes_sigil_tty_fd_to_pi_process() -> None:
+def test_run_zeta_stream_passes_sigil_tty_fd_to_zeta_process() -> None:
     class FakeProc:
         def __init__(self) -> None:
             self.stdout = StringIO("")
@@ -39,10 +39,10 @@ def test_run_pi_stream_passes_sigil_tty_fd_to_pi_process() -> None:
 
     fd = os.open(os.devnull, os.O_RDONLY)
     try:
-        with patch("sigil.pi_stream.subprocess.Popen", side_effect=fake_popen):
-            result = run_pi_stream(
-                ["pi", "--mode", "json"],
-                pi_env={"SIGIL_TTY_FD": str(fd)},
+        with patch("sigil.zeta.stream.subprocess.Popen", side_effect=fake_popen):
+            result = run_zeta_stream(
+                ["zeta", "--mode", "json"],
+                zeta_env={"SIGIL_TTY_FD": str(fd)},
                 capture_answer=False,
                 capture_trace=False,
             )
@@ -50,6 +50,6 @@ def test_run_pi_stream_passes_sigil_tty_fd_to_pi_process() -> None:
         os.close(fd)
 
     assert result == 0
-    assert captured["cmd"] == ["pi", "--mode", "json"]
+    assert captured["cmd"] == ["zeta", "--mode", "json"]
     kwargs = cast(dict[str, object], captured["kwargs"])
     assert kwargs["pass_fds"] == (fd,)

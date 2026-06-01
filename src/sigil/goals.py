@@ -8,10 +8,10 @@ import uuid
 from typing import Any, Literal
 
 from .acts import (
-    PI_AGENT_TOOLS,
+    ZETA_AGENT_TOOLS,
     edit_step_tools,
     print_next_step,
-    run_pi_agent_step,
+    run_zeta_agent_step,
     set_step_tools,
     tools_from_step,
 )
@@ -133,7 +133,7 @@ def execute_goal_step(
 ) -> int | None:
     """Run one approved step; return an exit code to stop, or None to continue."""
     record_goal_step_decision(goal, step, decision_label)
-    status = run_pi_agent_step(
+    status = run_zeta_agent_step(
         goal_as_act(goal),
         glyph=glyph,
         tools=tools_from_step(step),
@@ -144,7 +144,7 @@ def execute_goal_step(
         step["status"] = "failed"
         goal["status"] = "blocked"
         goal["last_status"] = "blocked"
-        goal["last_next"] = f"Pi step exited with status {status}."
+        goal["last_next"] = f"Zeta step exited with status {status}."
         record_goal_step_executed(goal, step, status)
         record_goal_update("goal_blocked", goal)
         return status
@@ -226,8 +226,8 @@ def create_goal_step(goal: dict[str, Any]) -> dict[str, Any]:
     steps = goal.setdefault("steps", [])
     step = {
         "id": str(len(steps) + 1),
-        "title": "Run one Pi goal step",
-        "command": f"pi --tools {PI_AGENT_TOOLS}",
+        "title": "Run one Zeta goal step",
+        "command": f"zeta --tools {ZETA_AGENT_TOOLS}",
         "status": "pending",
     }
     steps.append(step)
@@ -236,7 +236,7 @@ def create_goal_step(goal: dict[str, Any]) -> dict[str, Any]:
 
 
 def goal_as_act(goal: dict[str, Any]) -> dict[str, Any]:
-    """Return an act-shaped view so the shared Pi step runner can execute it."""
+    """Return an act-shaped view so the shared Zeta step runner can execute it."""
     return {
         "kind": "goal",
         "goal_id": goal.get("goal_id"),
@@ -265,7 +265,7 @@ def read_goal_decision(prompt: str = "run next goal step? [y/N/e/abort] ") -> st
 
 
 def latest_step_status() -> tuple[StepStatus, str]:
-    """Parse the latest captured Pi answer for goal loop status."""
+    """Parse the latest captured Zeta answer for goal loop status."""
     for turn in reversed(read_jsonl("last-question.jsonl")):
         if turn.get("role") != "assistant":
             continue

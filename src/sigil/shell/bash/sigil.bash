@@ -72,6 +72,9 @@ if [[ -z "${SIGIL_TTY_FD:-}" && ( -t 0 || -t 1 || -t 2 ) ]]; then
     export SIGIL_TTY_FD=9
   fi
 fi
+if [[ -z "${ZETA_TTY_FD:-}" && -n "${SIGIL_TTY_FD:-}" ]]; then
+  export ZETA_TTY_FD="$SIGIL_TTY_FD"
+fi
 
 __sigil_history_insert() {
   [[ -n "${1:-}" ]] || return 0
@@ -165,15 +168,23 @@ __sigil_zeta_tool_detail() {
   esac
 }
 
+__sigil_muted_print() {
+  if [[ -t 1 && -z "${NO_COLOR:-}" ]]; then
+    printf '\033[38;2;110;106;134m%s\033[0m\n' "$1"
+  else
+    printf '%s\n' "$1"
+  fi
+}
+
 __sigil_zeta_tool_start() {
   local name="$1"
   local input="$2"
   local detail
   detail="$(printf '%s\n' "$input" | __sigil_zeta_tool_detail "$name")"
   if [[ -n "$detail" ]]; then
-    printf '❯ %-5s  %s\n' "$name" "$detail"
+    __sigil_muted_print "$(printf '❯ %-5s  %s' "$name" "$detail")"
   else
-    printf '❯ %s\n' "$name"
+    __sigil_muted_print "❯ $name"
   fi
 }
 

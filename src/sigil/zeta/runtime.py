@@ -1,4 +1,4 @@
-"""Zeta v1 runtime services used by the Sigil shell loop."""
+"""Zeta v1 runtime services used by the shell loop."""
 
 from __future__ import annotations
 
@@ -537,7 +537,7 @@ def transcript_tail(limit: int = DEFAULT_TAIL_LIMIT) -> list[dict[str, Any]]:
 
 def zeta_system_prompt() -> str:
     return (
-        "You are Zeta, a shell-native agent loop controlled by Sigil's zsh "
+        "You are Zeta, a shell-native agent loop controlled by the user's shell "
         "runtime. Use read and grep for inspection. Use bash, edit, or write "
         "when you need a user-mediated mutation or command handoff. Return one "
         "tool call at a time, or final when done. Keep actions small."

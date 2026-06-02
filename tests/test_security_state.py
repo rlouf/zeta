@@ -298,7 +298,7 @@ def test_renderer_uses_env_overrides() -> None:
     with patch("sigil.zeta.stream.shutil.which", return_value="/opt/homebrew/bin/glow"):
         with patch_dict(
             os.environ,
-            {"SIGIL_GLOW_STYLE": "tokyo-night", "SIGIL_GLOW_WIDTH": "100"},
+            {"ZETA_GLOW_STYLE": "tokyo-night", "ZETA_GLOW_WIDTH": "100"},
             clear=True,
         ):
             assert renderer_command() == [

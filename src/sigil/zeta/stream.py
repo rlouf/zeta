@@ -30,8 +30,8 @@ def renderer_command() -> list[str]:
     """Return the Markdown renderer command for interactive Zeta answers."""
     if not shutil.which("glow"):
         return ["cat"]
-    style = os.environ.get("SIGIL_GLOW_STYLE") or DEFAULT_GLOW_STYLE
-    width = os.environ.get("SIGIL_GLOW_WIDTH") or DEFAULT_GLOW_WIDTH
+    style = os.environ.get("ZETA_GLOW_STYLE") or DEFAULT_GLOW_STYLE
+    width = os.environ.get("ZETA_GLOW_WIDTH") or DEFAULT_GLOW_WIDTH
     return ["glow", "--style", style, "--width", width, "-"]
 
 
@@ -78,7 +78,7 @@ def run_zeta_stream(
 
 def inherited_terminal_fds(env: dict[str, str] | None = None) -> tuple[int, ...]:
     """Return terminal fds that Zeta extensions need Python to keep open."""
-    raw = (env or os.environ).get("SIGIL_TTY_FD")
+    raw = (env or os.environ).get("ZETA_TTY_FD")
     if not raw:
         return ()
     try:
@@ -627,7 +627,7 @@ def _finalize(
         if malformed_events:
             noun = "event" if malformed_events == 1 else "events"
             print(
-                f"sigil: ignored {malformed_events} malformed Zeta {noun}",
+                f"zeta: ignored {malformed_events} malformed Zeta {noun}",
                 file=ctx.stderr,
             )
 
@@ -646,7 +646,7 @@ def stream_events(
     compact: bool = False,
     tool_output_stdout: bool = False,
 ) -> int:
-    """Filter Zeta's event stream into terminal output and Sigil state files."""
+    """Filter Zeta's event stream into terminal output and session state files."""
     started_text = False
     answer_chunks: list[str] = []
     tool_events: list[dict[str, object]] = []

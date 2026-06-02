@@ -6,7 +6,7 @@ from typing import Any, cast
 
 from click.testing import CliRunner
 
-from sigil.zeta import runner as zeta_runner
+from sigil import question as question_runner
 from sigil.zeta import runtime as zeta
 from sigil.zeta.cli import cli
 
@@ -221,12 +221,12 @@ def test_zeta_question_loop_feeds_current_tool_result_to_next_step(
         assert any(event.get("type") == "tool_result" for event in transcript)
         return {"type": "final", "content": "It contains project metadata."}
 
-    monkeypatch.setattr(zeta_runner, "ensure_server", lambda: True)
+    monkeypatch.setattr(question_runner, "ensure_server", lambda: True)
     monkeypatch.setattr(
-        zeta_runner.runtime, "next_model_action", fake_next_model_action
+        question_runner.runtime, "next_model_action", fake_next_model_action
     )
     monkeypatch.setattr(
-        zeta_runner.runtime,
+        question_runner.runtime,
         "run_tool",
         lambda name, params: {
             "ok": True,
@@ -234,7 +234,7 @@ def test_zeta_question_loop_feeds_current_tool_result_to_next_step(
         },
     )
 
-    code = zeta_runner.run_question_answer(
+    code = question_runner.run_question_answer(
         "question system",
         "What does pyproject.toml contain?",
     )
@@ -258,12 +258,12 @@ def test_zeta_question_loop_falls_back_instead_of_budget_message(
         del objective, transcript, kwargs
         return {"type": "tool_call", "name": "read", "input": {"path": "README.md"}}
 
-    monkeypatch.setattr(zeta_runner, "ensure_server", lambda: True)
+    monkeypatch.setattr(question_runner, "ensure_server", lambda: True)
     monkeypatch.setattr(
-        zeta_runner.runtime, "next_model_action", fake_next_model_action
+        question_runner.runtime, "next_model_action", fake_next_model_action
     )
     monkeypatch.setattr(
-        zeta_runner.runtime,
+        question_runner.runtime,
         "run_tool",
         lambda name, params: {
             "ok": True,
@@ -271,12 +271,12 @@ def test_zeta_question_loop_falls_back_instead_of_budget_message(
         },
     )
     monkeypatch.setattr(
-        zeta_runner,
+        question_runner,
         "chat_text",
         lambda system, prompt, max_tokens: "It contains Sigil docs.",
     )
 
-    code = zeta_runner.run_question_answer(
+    code = question_runner.run_question_answer(
         "question system",
         "What does README.md contain?",
         max_steps=1,

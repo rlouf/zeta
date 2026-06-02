@@ -8,21 +8,21 @@ from _patch import patch
 from sigil.zeta.stream import inherited_terminal_fds, run_zeta_stream
 
 
-def test_inherited_terminal_fds_keeps_valid_sigil_tty_fd() -> None:
+def test_inherited_terminal_fds_keeps_valid_zeta_tty_fd() -> None:
     fd = os.open(os.devnull, os.O_RDONLY)
     try:
-        assert inherited_terminal_fds({"SIGIL_TTY_FD": str(fd)}) == (fd,)
+        assert inherited_terminal_fds({"ZETA_TTY_FD": str(fd)}) == (fd,)
     finally:
         os.close(fd)
 
 
-def test_inherited_terminal_fds_ignores_missing_sigil_tty_fd() -> None:
+def test_inherited_terminal_fds_ignores_missing_zeta_tty_fd() -> None:
     assert inherited_terminal_fds({}) == ()
-    assert inherited_terminal_fds({"SIGIL_TTY_FD": "not-a-fd"}) == ()
-    assert inherited_terminal_fds({"SIGIL_TTY_FD": "-1"}) == ()
+    assert inherited_terminal_fds({"ZETA_TTY_FD": "not-a-fd"}) == ()
+    assert inherited_terminal_fds({"ZETA_TTY_FD": "-1"}) == ()
 
 
-def test_run_zeta_stream_passes_sigil_tty_fd_to_zeta_process() -> None:
+def test_run_zeta_stream_passes_zeta_tty_fd_to_zeta_process() -> None:
     class FakeProc:
         def __init__(self) -> None:
             self.stdout = StringIO("")
@@ -42,7 +42,7 @@ def test_run_zeta_stream_passes_sigil_tty_fd_to_zeta_process() -> None:
         with patch("sigil.zeta.stream.subprocess.Popen", side_effect=fake_popen):
             result = run_zeta_stream(
                 ["zeta", "--mode", "json"],
-                zeta_env={"SIGIL_TTY_FD": str(fd)},
+                zeta_env={"ZETA_TTY_FD": str(fd)},
                 capture_answer=False,
                 capture_trace=False,
             )

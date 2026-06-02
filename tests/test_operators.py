@@ -16,7 +16,7 @@ from sigil.operators import (
     parse_operator_token,
     proposal_user_prompt,
 )
-from sigil.goals import parse_step_status, run_goal_loop
+from sigil.goals import latest_step_status, parse_step_status, run_goal_loop
 from sigil.session import record_turn
 from sigil.state import append_jsonl, read_jsonl
 
@@ -521,12 +521,40 @@ def test_piped_triple_comma_denies_input_before_act_generation() -> None:
 
 
 def test_parse_goal_step_status_lines() -> None:
-    assert parse_step_status("done\nSIGIL_STATUS: complete\nSIGIL_NEXT: review") == (
+    assert parse_step_status("done\nZETA_STATUS: complete\nZETA_NEXT: review") == (
         "complete",
         "review",
     )
-    assert parse_step_status("SIGIL_STATUS: continue") == ("continue", "")
+    assert parse_step_status("ZETA_STATUS: continue") == ("continue", "")
+    assert parse_step_status("SIGIL_STATUS: complete\nSIGIL_NEXT: legacy") == (
+        "complete",
+        "legacy",
+    )
     assert parse_step_status("no status") is None
+
+
+def test_latest_goal_step_status_prefers_zeta_transcript() -> None:
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        with patch_dict(
+            os.environ,
+            {"SIGIL_STATE_DIR": tmp_dir, "SIGIL_SESSION_ID": "goal-session"},
+        ):
+            append_jsonl(
+                "last-question.jsonl",
+                {
+                    "role": "assistant",
+                    "content": "old\nZETA_STATUS: blocked\nZETA_NEXT: old",
+                },
+            )
+            append_jsonl(
+                "zeta-transcript.jsonl",
+                {
+                    "type": "assistant_message",
+                    "content": "done\nZETA_STATUS: complete\nZETA_NEXT: review",
+                },
+            )
+
+            assert latest_step_status() == ("complete", "review")
 
 
 def test_goal_loop_runs_until_complete() -> None:
@@ -543,7 +571,7 @@ def test_goal_loop_runs_until_complete() -> None:
                     "last-question.jsonl",
                     {
                         "role": "assistant",
-                        "content": "done\nSIGIL_STATUS: complete\nSIGIL_NEXT: review",
+                        "content": "done\nZETA_STATUS: complete\nZETA_NEXT: review",
                     },
                 )
                 return 0
@@ -581,7 +609,7 @@ def test_goal_loop_can_edit_tools_before_execution() -> None:
                     "last-question.jsonl",
                     {
                         "role": "assistant",
-                        "content": "done\nSIGIL_STATUS: complete\nSIGIL_NEXT: review",
+                        "content": "done\nZETA_STATUS: complete\nZETA_NEXT: review",
                     },
                 )
                 return 0

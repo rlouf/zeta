@@ -1,1 +1,1 @@
-"""Zeta service package embedded in Sigil."""
+"""Zeta service package."""

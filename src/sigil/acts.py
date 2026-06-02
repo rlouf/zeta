@@ -432,9 +432,9 @@ def zeta_agent_prompt(act: dict[str, Any]) -> str:
     """Build the prompt for one Zeta edit step."""
     is_goal = act.get("kind") == "goal"
     sections = [
-        "Run one bounded Sigil goal step."
+        "Run one bounded Zeta goal step."
         if is_goal
-        else "Run one bounded Sigil edit step.",
+        else "Run one bounded Zeta edit step.",
         f"Working directory: {os.getcwd()}",
         f"Objective: {act.get('objective')}",
     ]
@@ -444,8 +444,8 @@ def zeta_agent_prompt(act: dict[str, Any]) -> str:
     if is_goal:
         sections.append(
             "After the step, stop. Do not commit. End with exactly one "
-            "SIGIL_STATUS line set to continue, complete, or blocked, followed "
-            "by one SIGIL_NEXT line with the next checkpoint or blocker."
+            "ZETA_STATUS line set to continue, complete, or blocked, followed "
+            "by one ZETA_NEXT line with the next checkpoint or blocker."
         )
     else:
         sections.append(

@@ -17,6 +17,7 @@ from .acts import (
 )
 from .state import append_event, append_jsonl, read_jsonl
 from .tty import prompt_on_tty
+from .zeta.runtime import TRANSCRIPT as ZETA_TRANSCRIPT
 
 LAST_GOAL = "last-goal.jsonl"
 DEFAULT_MAX_GOAL_STEPS = 5
@@ -266,6 +267,14 @@ def read_goal_decision(prompt: str = "run next goal step? [y/N/e/abort] ") -> st
 
 def latest_step_status() -> tuple[StepStatus, str]:
     """Parse the latest captured Zeta answer for goal loop status."""
+    for event in reversed(read_jsonl(ZETA_TRANSCRIPT)):
+        if event.get("type") != "assistant_message":
+            continue
+        content = str(event.get("content") or "")
+        status = parse_step_status(content)
+        if status is not None:
+            return status
+        return "blocked", "Goal step did not report ZETA_STATUS."
     for turn in reversed(read_jsonl("last-question.jsonl")):
         if turn.get("role") != "assistant":
             continue
@@ -273,12 +282,12 @@ def latest_step_status() -> tuple[StepStatus, str]:
         status = parse_step_status(content)
         if status is not None:
             return status
-        return "blocked", "Goal step did not report SIGIL_STATUS."
+        return "blocked", "Goal step did not report ZETA_STATUS."
     return "blocked", "Goal step did not produce an answer."
 
 
 def parse_step_status(content: str) -> tuple[StepStatus, str] | None:
-    """Parse SIGIL_STATUS and SIGIL_NEXT lines from a goal step answer."""
+    """Parse Zeta status lines from a goal step answer."""
     status: StepStatus | None = None
     next_note = ""
     for raw_line in content.splitlines():
@@ -288,14 +297,14 @@ def parse_step_status(content: str) -> tuple[StepStatus, str] | None:
             continue
         normalized_key = key.strip().upper()
         normalized_value = value.strip()
-        if normalized_key == "SIGIL_STATUS":
+        if normalized_key in {"ZETA_STATUS", "SIGIL_STATUS"}:
             if normalized_value == "continue":
                 status = "continue"
             elif normalized_value == "complete":
                 status = "complete"
             elif normalized_value == "blocked":
                 status = "blocked"
-        elif normalized_key == "SIGIL_NEXT":
+        elif normalized_key in {"ZETA_NEXT", "SIGIL_NEXT"}:
             next_note = normalized_value
     if status is None:
         return None

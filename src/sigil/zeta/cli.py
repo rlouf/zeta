@@ -1,7 +1,7 @@
 """Zeta service CLI.
 
-This CLI provides service commands to the Sigil zsh control loop. It is not the
-interactive agent runtime; Sigil's shell binding owns control flow.
+This CLI provides service commands to a shell-owned control loop. It is not the
+interactive agent runtime; the shell binding owns control flow.
 """
 
 from __future__ import annotations

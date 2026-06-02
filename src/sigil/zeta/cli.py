@@ -131,6 +131,12 @@ def transcript_append() -> int:
     return 0
 
 
+@transcript_group.command("shell-result")
+def transcript_shell_result() -> int:
+    print_json(zeta.append_shell_result())
+    return 0
+
+
 @transcript_group.command("tail")
 @click.option("--limit", default=zeta.DEFAULT_TAIL_LIMIT, show_default=True)
 def transcript_tail(limit: int) -> int:

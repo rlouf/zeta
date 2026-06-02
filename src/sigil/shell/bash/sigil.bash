@@ -228,8 +228,16 @@ __sigil_zeta_tool_start() {
 __sigil_zeta_turn() {
   local objective request events event event_type text name input analysis result command reason artifact
   local tool_call_record tool_call_id
-  local step
+  local step continue_step
   objective="$*"
+  continue_step=0
+  if [[ -z "$objective" ]]; then
+    continue_step=1
+    objective="Continue the active Zeta step. Use recent shell activity as the result of the command(s) the user chose to run after the last handoff. If no relevant shell turn appears, ask for the command result instead of inventing it."
+  fi
+  if [[ "$continue_step" == "1" ]]; then
+    "$__zeta_bin" transcript shell-result >/dev/null 2>&1 || true
+  fi
   __sigil_zeta_append "$(printf '{"type":"user_message","content":%s}' "$(__sigil_json_string "$objective")")" >/dev/null
   for step in 1 2 3 4 5 6 7 8; do
     request="$(printf '{"objective":%s}' "$(__sigil_json_string "$objective")")"

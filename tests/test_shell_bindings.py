@@ -34,11 +34,17 @@ def make_stub(tmp: Path) -> Path:
               printf '%s\n' '{"id":"evt"}'
               exit 0
             fi
+            if [ "$*" = "transcript shell-result" ]; then
+              printf '%s\n' "$*" >> "$SIGIL_STUB_LOG"
+              printf '%s\n' '{"id":"shell-result"}'
+              exit 0
+            fi
             printf '%s\n' "$*" >> "$SIGIL_STUB_LOG"
             case "$*" in
               "model stream")
                 request="$(cat)"
                 case "$request" in
+                  *"Continue the active Zeta step"*) command="echo continued"; reason="Continue after shell handoff." ;;
                   *repair*) command="uv run pytest"; reason="Run tests." ;;
                   *"run it"*) command="echo piped"; reason="Run piped handoff." ;;
                   *) command="echo zeta"; reason="Run zeta handoff." ;;
@@ -232,6 +238,24 @@ def test_bash_agent_step_does_not_consume_staged_command() -> None:
         assert_success(result)
         assert "Run tests." in result.stdout
         assert "history=uv run pytest" in result.stdout
+
+
+def test_bash_bare_agent_step_continues_after_shell_handoff() -> None:
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp = Path(tmp_dir)
+        stub = make_stub(tmp)
+        result = run_shell(
+            "bash",
+            textwrap.dedent(
+                "                    source src/sigil/shell/bash/sigil.bash\n                    sigil_agent_step\n                    printf 'history=%s\\n' \"$(__sigil_history_line)\"\n                    "
+            ),
+            tmp,
+            stub,
+        )
+        assert_success(result)
+        assert read_log(tmp) == ["transcript shell-result", *zeta_bash_turn_calls()]
+        assert "Continue after shell handoff." in result.stdout
+        assert "history=echo continued" in result.stdout
 
 
 def test_bash_exports_tty_for_pipeline_confirmations() -> None:
@@ -475,6 +499,25 @@ def test_zsh_agent_step_does_not_consume_staged_command() -> None:
         assert_success(result)
         assert "Run tests." in result.stdout
         assert "history=uv run pytest" in result.stdout
+
+
+@pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
+def test_zsh_bare_agent_step_continues_after_shell_handoff() -> None:
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp = Path(tmp_dir)
+        stub = make_stub(tmp)
+        result = run_shell(
+            "zsh",
+            textwrap.dedent(
+                '                    source src/sigil/shell/zsh/sigil.zsh\n                    sigil_agent_step\n                    print -- "history=${history[$HISTCMD]}"\n                    '
+            ),
+            tmp,
+            stub,
+        )
+        assert_success(result)
+        assert read_log(tmp) == ["transcript shell-result", *zeta_bash_turn_calls()]
+        assert "Continue after shell handoff." in result.stdout
+        assert "history=echo continued" in result.stdout
 
 
 @pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")

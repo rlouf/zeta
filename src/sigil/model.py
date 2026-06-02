@@ -16,7 +16,7 @@ import urllib.request
 from typing import Any
 from urllib.parse import urlparse
 
-from .ansi import LOVE, MUTED, RESET
+from .tty import LOVE, MUTED, RESET
 
 DEFAULT_MODEL_URL = "http://127.0.0.1:8080/v1/chat/completions"
 DEFAULT_MODEL_NAME = "local-model"

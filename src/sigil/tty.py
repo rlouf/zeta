@@ -5,6 +5,10 @@ from __future__ import annotations
 import os
 import sys
 
+MUTED = "\033[38;2;110;106;134m"
+LOVE = "\033[38;2;235;111;146m"
+RESET = "\033[0m"
+
 
 def confirm_on_tty(prompt: str) -> bool:
     """Read a yes/no confirmation from the controlling terminal."""

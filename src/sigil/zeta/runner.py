@@ -9,9 +9,9 @@ from __future__ import annotations
 import sys
 from typing import Any, Iterable
 
-from ..ansi import MUTED, RESET
 from ..model import ensure_server
 from ..state import append_jsonl
+from ..tty import MUTED, RESET
 from . import runtime
 from .display import render_tool_start
 

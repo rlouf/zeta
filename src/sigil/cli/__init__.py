@@ -16,11 +16,8 @@ from . import (  # noqa: F401  (imported for command registration side effects)
     command,
     events,
     install,
-    operators,
-    records,
     run,
     session,
-    status,
 )
 
 __all__ = ["cli", "main"]

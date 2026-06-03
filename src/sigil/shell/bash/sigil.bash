@@ -20,9 +20,6 @@ else
   __zeta_bin="zeta"
 fi
 
-__sigil_last_recorded_history_id=""
-__sigil_in_precmd=0
-
 if [[ -z "${SIGIL_SESSION_ID:-}" ]]; then
   if command -v uuidgen >/dev/null 2>&1; then
     export SIGIL_SESSION_ID="$(uuidgen)"
@@ -80,40 +77,10 @@ __sigil_glyphs_enabled() {
   [[ "${SIGIL_ENABLE_GLYPHS:-1}" != "0" && "${SIGIL_ENABLE_GLYPHS:-1}" != "false" ]]
 }
 
-__sigil_recordable_command() {
-  local command="${1:-}"
-  [[ -n "$command" ]] || return 1
-  case "$command" in
-    [[:space:]]*|,*|+*|sigil\ *|sigil_*|noglob\ sigil_*|command\ sigil_*|__sigil_*)
-      return 1
-      ;;
-  esac
-  return 0
-}
-
-__sigil_record_turn() {
-  local exit_status="$1"
-  local command="$2"
-  local stdout_snippet stderr_snippet
-  local -a record_args
-  stdout_snippet="${SIGIL_FAILURE_STDOUT:-}"
-  stderr_snippet="${SIGIL_FAILURE_STDERR:-}"
-  record_args=(record-turn --status "$exit_status" --cwd "$PWD")
-  [[ -n "$stdout_snippet" ]] && record_args+=(--stdout-snippet "$stdout_snippet")
-  [[ -n "$stderr_snippet" ]] && record_args+=(--stderr-snippet "$stderr_snippet")
-  "$__sigil_bin" "${record_args[@]}" "$command" >/dev/null 2>&1 || true
-}
-
-__sigil_precmd_done() {
-  local exit_status="$1"
-  __sigil_in_precmd=0
-  return "$exit_status"
-}
-
 # ── Command wrappers ─────────────────────────────────────────────────────
 
 sigil_command() {
-  "$__sigil_bin" op "," "$@"
+  "$__sigil_bin" ask "$@"
 }
 
 __sigil_zeta_append() {
@@ -283,7 +250,7 @@ if __sigil_glyphs_enabled; then
   fi
 fi
 
-# ── Failure recording ────────────────────────────────────────────────────
+# ── History helpers ──────────────────────────────────────────────────────
 
 __sigil_history_entry() {
   local line
@@ -300,77 +267,3 @@ __sigil_history_line() {
   entry="$(__sigil_history_entry)" || return 1
   printf '%s\n' "${entry#*$'\t'}"
 }
-
-__sigil_precmd() {
-  local exit_status=$?
-  local entry history_id
-  local command
-
-  __sigil_in_precmd=1
-
-  if ! entry="$(__sigil_history_entry)"; then
-    __sigil_precmd_done "$exit_status"
-    return $?
-  fi
-  history_id="${entry%%$'\t'*}"
-  command="${entry#*$'\t'}"
-  if [[ -z "$command" ]]; then
-    __sigil_precmd_done "$exit_status"
-    return $?
-  fi
-  if [[ -n "$history_id" && "$history_id" == "$__sigil_last_recorded_history_id" ]]; then
-    __sigil_precmd_done "$exit_status"
-    return $?
-  fi
-  if ! __sigil_recordable_command "$command"; then
-    __sigil_precmd_done "$exit_status"
-    return $?
-  fi
-  __sigil_record_turn "$exit_status" "$command"
-  __sigil_last_recorded_history_id="$history_id"
-  unset SIGIL_FAILURE_STDOUT SIGIL_FAILURE_STDERR
-  __sigil_precmd_done "$exit_status"
-  return $?
-}
-
-# ── Installation ─────────────────────────────────────────────────────────
-
-__sigil_install_prompt_command() {
-  [[ $- == *i* ]] || return 0
-
-  local prompt_decl
-  prompt_decl="$(declare -p PROMPT_COMMAND 2>/dev/null || true)"
-  case "$prompt_decl" in
-    declare\ -a*|declare\ -ax*)
-      local item has_precmd=0
-      local new_prompt_command=()
-      for item in "${PROMPT_COMMAND[@]}"; do
-        [[ "$item" == "__sigil_prompt_setup" ]] && continue
-        [[ "$item" == "__sigil_precmd" ]] && has_precmd=1
-        new_prompt_command+=("$item")
-      done
-      if [[ $has_precmd -eq 1 ]]; then
-        PROMPT_COMMAND=("${new_prompt_command[@]}")
-      else
-        PROMPT_COMMAND=(__sigil_precmd "${new_prompt_command[@]}")
-      fi
-      return 0
-      ;;
-  esac
-
-  local prompt_command="${PROMPT_COMMAND:-}"
-  prompt_command="${prompt_command//__sigil_prompt_setup; /}"
-  prompt_command="${prompt_command//; __sigil_prompt_setup/}"
-  prompt_command="${prompt_command//__sigil_prompt_setup/}"
-
-  case ";${prompt_command};" in
-    *";__sigil_precmd;"*) return 0 ;;
-  esac
-  if [[ -n "$prompt_command" ]]; then
-    PROMPT_COMMAND="__sigil_precmd; ${prompt_command}"
-  else
-    PROMPT_COMMAND="__sigil_precmd"
-  fi
-}
-
-__sigil_install_prompt_command

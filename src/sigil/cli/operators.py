@@ -6,7 +6,6 @@ import sys
 
 import click
 
-from ._base import cli
 from ._shared import confirm_piped_input, print_json_line, question_with_stdin
 from ._shared import should_confirm_piped_input, should_run_act_operator
 from ..acts import run_act_stepper
@@ -14,7 +13,7 @@ from ..operators import OperatorInvocation, create_invocation
 from ..answers import ZETA_ANSWER_TOOLS_WITH_WEB, ask
 
 
-@cli.command("op", hidden=True)
+@click.command("op")
 @click.argument("glyph")
 @click.argument("prompt_parts", nargs=-1)
 @click.option("--json", "json_output", is_flag=True)

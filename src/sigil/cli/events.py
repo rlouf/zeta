@@ -1,4 +1,4 @@
-"""The `events` group plus the hidden staged commands."""
+"""The `events` group."""
 
 from __future__ import annotations
 
@@ -10,36 +10,8 @@ import click
 from ._base import cli
 from ._shared import pretty_print_json
 from ..session import read_event_log
-from ..staged_command import consume_latest_staged_command, latest_staged_command
 
 EVENT_LIST_COLUMNS = ("time", "id", "action", "session", "summary")
-
-
-@cli.command("staged", hidden=True)
-@click.argument(
-    "staged_command",
-    required=False,
-    default="show",
-    type=click.Choice(["show", "pop"]),
-)
-@click.option("--json", "json_output", is_flag=True)
-def cmd_staged(staged_command: str, json_output: bool) -> int:
-    """Inspect or consume the latest staged command."""
-    record = (
-        consume_latest_staged_command()
-        if staged_command == "pop"
-        else latest_staged_command()
-    )
-    if json_output:
-        pretty_print_json(record)
-        return 0 if record else 1
-    if not record:
-        return 1
-    command = str(record.get("command") or "")
-    if command:
-        print(command)
-        return 0
-    return 1
 
 
 @cli.group("events", invoke_without_command=True)

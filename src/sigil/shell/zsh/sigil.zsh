@@ -114,7 +114,7 @@ __sigil_glyphs_enabled() {
 sigil_command() {
   # `, prompt`: read-only assistant answer. It does not stage commands or mutate
   # history; `,,` and `,,,` are the routes that can hand a command back to zsh.
-  "$__sigil_bin" op "," "$@"
+  "$__sigil_bin" ask "$@"
 }
 
 __sigil_zeta_append() {
@@ -291,78 +291,6 @@ fi
 # ── zsh Command Lifecycle Hooks ──────────────────────────────────────────
 
 autoload -Uz add-zsh-hook
-typeset -g __sigil_current_command=""
-
-__sigil_before_command() {
-  # preexec runs before the command executes.
-  # zsh gives us the command line before execution.
-  __sigil_current_command="$1"
-}
-
-add-zsh-hook preexec __sigil_before_command
-
-__sigil_recordable_command() {
-  local command="${1:-}"
-  [[ -n "$command" ]] || return 1
-
-  case "$command" in
-    # Match shell history convention: leading-space commands are private.
-    [[:space:]]*)
-      return 1
-      ;;
-    # Sigil glyph routes are prompts/instructions, not ordinary shell commands.
-    # The CLI paths they call record their own structured events.
-    ,*|+*)
-      return 1
-      ;;
-    # Avoid recursive bookkeeping for direct Sigil calls and internal wrappers.
-    sigil\ *|sigil_*|noglob\ sigil_*|command\ sigil_*|__sigil_*)
-      return 1
-      ;;
-  esac
-
-  return 0
-}
-
-
-__sigil_record_turn() {
-  local exit_status="$1"
-  local command="$2"
-  local stdout_snippet stderr_snippet
-  # Snippets come from explicit paths such as `sigil run` used to record the
-  # output of commands.
-  stdout_snippet="${SIGIL_FAILURE_STDOUT:-}"
-  stderr_snippet="${SIGIL_FAILURE_STDERR:-}"
-  local record_args=(record-turn --status "$exit_status" --cwd "$PWD")
-  [[ -n "$stdout_snippet" ]] && record_args+=(--stdout-snippet "$stdout_snippet")
-  [[ -n "$stderr_snippet" ]] && record_args+=(--stderr-snippet "$stderr_snippet")
-  # Recording must never perturb the user's shell. All CLI output is silenced and
-  # failures are ignored; losing a telemetry event is preferable to breaking the
-  # prompt after every command.
-  "$__sigil_bin" "${record_args[@]}" "$command" >/dev/null 2>&1 || true
-}
-
-__sigil_after_command_before_prompt() {
-  # precmd runs after the command finishes and before the next prompt. At this
-  # point `$?` is the command's exit status and `$PWD` is the final cwd. We pair
-  # those with the command line captured in preexec.
-  local exit_status=$?
-  local command="$__sigil_current_command"
-  __sigil_current_command=""
-  if [[ -z "$command" ]]; then
-    # No preceding command, e.g. first prompt in a new shell.
-    return "$exit_status"
-  fi
-  if ! __sigil_recordable_command "$command"; then
-    # Sigil's own punctuation routes are handled by their explicit CLI paths.
-    return "$exit_status"
-  fi
-  __sigil_record_turn "$exit_status" "$command"
-  unset SIGIL_FAILURE_STDOUT SIGIL_FAILURE_STDERR
-  return "$exit_status"
-}
-
-add-zsh-hook precmd __sigil_after_command_before_prompt
 
 # ── History Filtering ────────────────────────────────────────────────────
 

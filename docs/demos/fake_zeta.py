@@ -143,7 +143,7 @@ def main(argv: list[str]) -> int:
     if is_act(argv):
         return run_act()
     answer = answer_for(argv)
-    emit_text(answer)
+    print(answer)
     return 0
 
 

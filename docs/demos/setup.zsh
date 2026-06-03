@@ -18,6 +18,7 @@ _sigil_demo_uv="$(command -v uv || true)"
 export SIGIL_STATE_DIR="${_sigil_demo_base}/state"
 export SIGIL_SESSION_ID="${_sigil_demo_name}"
 export SIGIL_BIN="${_sigil_demo_bin}/sigil"
+export ZETA_BIN="${_sigil_demo_bin}/zeta"
 export SIGIL_MODEL_NAME="sigil-demo-model"
 export PATH="${_sigil_demo_bin}:$PATH"
 

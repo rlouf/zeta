@@ -33,6 +33,21 @@ def command_for(text: str) -> str:
     return "git status --short"
 
 
+def answer_for(text: str) -> str:
+    lowered = text.lower()
+    if "risky" in lowered or "staged" in lowered or "committed" in lowered:
+        return "Risk is concentrated in parser behavior. Run the focused parser test before pushing."
+    if "why failed" in lowered or ("failed" in lowered and "pytest" in lowered):
+        return "The pytest run failed in the parser test path. Use the focused parser test as the recovery check."
+    if "test first" in lowered:
+        return "Start with `uv run pytest tests/test_parser.py`; it covers the changed parser branch."
+    if "skip .git" in lowered:
+        return "Skipping .git avoids scanning repository internals that can be large and noisy."
+    if "summarize this repository" in lowered:
+        return "This is a small parser project with one focused test path."
+    return "The change is small and bounded to one parser branch."
+
+
 def completion_for(body: dict[str, Any]) -> dict[str, Any]:
     messages = body.get("messages") or []
     text = "\n\n".join(str(message.get("content", "")) for message in messages)
@@ -76,6 +91,13 @@ def completion_for(body: dict[str, Any]) -> dict[str, Any]:
             "kind": "command",
             "body": command_for(text),
             "explanation": "Runs only the relevant local check.",
+        }
+        return chat_response(json.dumps(content))
+
+    if {"type", "content", "name", "input"}.issubset(properties):
+        content = {
+            "type": "final",
+            "content": answer_for(text),
         }
         return chat_response(json.dumps(content))
 

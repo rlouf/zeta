@@ -22,16 +22,12 @@ Type "export PS1='$ '"
 Enter
 Type "source docs/demos/setup.zsh 10-lazygit-review"
 Enter
+Type "sigil_demo_make_parser_change"
+Enter
 Type "clear"
 Enter
 Show
 
-Type ",,, fix the failing parser test by updating the smallest relevant code path"
-Enter
-Sleep 1400ms
-Type "y"
-Enter
-Sleep 3600ms
 Type "lazygit"
 Enter
 Sleep 4500ms
@@ -40,15 +36,6 @@ Sleep 700ms
 Type "git status --short"
 Enter
 Sleep 900ms
-Type "git add src/parser.py tests/test_parser.py"
-Enter
-Sleep 800ms
-Type "git commit -m 'parser: keep numbers as integers'"
-Enter
-Sleep 1400ms
-Type "git show --stat --oneline HEAD"
-Enter
-Sleep 1200ms
-Type ", review the committed changes for risk"
+Type ", review the working tree changes for risk"
 Enter
 Sleep 2600ms

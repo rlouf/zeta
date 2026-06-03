@@ -27,13 +27,5 @@ Show
 
 Type ",,, fix the failing parser test by updating the smallest relevant code path"
 Enter
-Sleep 1200ms
-Type "y"
-Enter
-Sleep 3600ms
-Type "sigil act show"
-Enter
-Sleep 1300ms
-Type "sigil events --limit 8"
 Enter
 Sleep 2200ms

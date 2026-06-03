@@ -6,9 +6,9 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Literal, cast
 from .model import chat_json, chat_text, ensure_server
-from .state import append_event, append_jsonl, read_jsonl
+from .state import ANSWER_TRANSCRIPT, append_event, append_jsonl, read_jsonl
 from .failure import active_failure_context
-from .answers import recent_question_context
+from .answers import recent_answer_context
 from .session import recent_turns_context
 
 OperatorBase = Literal[","]
@@ -25,8 +25,6 @@ MAX_STDIN_CHARS = 120_000
 MAX_EVENT_OUTPUT_CHARS = 4000
 MAX_TARGET_FILES = 16
 MAX_TARGET_FILE_CHARS = 20_000
-QUESTION_TRANSCRIPT = "last-question.jsonl"
-
 INSPECT_SYSTEM = (
     "You are a semantic shell operator. Inspect the input stream and answer the "
     "user's prompt directly. Be concise, concrete, and grounded in stdin. "
@@ -305,9 +303,9 @@ def proposal_user_prompt(invocation: OperatorInvocation) -> str:
         turns_section = recent_turns_context()
         if turns_section:
             sections.append(turns_section)
-        question_section = recent_question_context()
-        if question_section:
-            sections.append(question_section)
+        answer_section = recent_answer_context()
+        if answer_section:
+            sections.append(answer_section)
         sections.append(active_failure_context())
     return "\n\n".join(section for section in sections if section)
 
@@ -335,17 +333,17 @@ def inspect_user_prompt(invocation: OperatorInvocation) -> str:
         transcript = "\n\n".join(
             f"{turn['role']}:\n{turn['content']}" for turn in turns
         )
-        sections.append(f"Previous question transcript:\n{transcript}")
+        sections.append(f"Previous answer transcript:\n{transcript}")
     stdin_text, stdin_label = bounded_stdin(invocation.stdin)
     sections.append(f"{stdin_label}:\n{stdin_text}")
     return "\n\n".join(sections)
 
 
 def inspect_turns() -> list[dict[str, object]]:
-    """Load same-session question turns visible to inspect prompts."""
+    """Load same-session answer turns visible to inspect prompts."""
     return [
         turn
-        for turn in read_jsonl(QUESTION_TRANSCRIPT)
+        for turn in read_jsonl(ANSWER_TRANSCRIPT)
         if turn.get("role") in {"user", "assistant"} and turn.get("content")
     ]
 
@@ -361,7 +359,7 @@ def append_inspect_turns(
     if invocation.stdin:
         prompt = f"{prompt}\n\nstdin:\n{invocation.stdin}"
     append_jsonl(
-        QUESTION_TRANSCRIPT,
+        ANSWER_TRANSCRIPT,
         {
             "role": "user",
             "content": prompt,
@@ -370,7 +368,7 @@ def append_inspect_turns(
     )
     if output:
         append_jsonl(
-            QUESTION_TRANSCRIPT,
+            ANSWER_TRANSCRIPT,
             {
                 "role": "assistant",
                 "content": output,

@@ -2,7 +2,7 @@
 
 Zeta emits machine-readable events. This filter turns tool calls into live grey
 status lines, streams answer text to stdout for `glow`, and writes only the
-right pieces into session state: assistant turns to the question transcript and
+right pieces into session state: assistant turns to the answer transcript and
 tool calls to the tool trace.
 """
 
@@ -18,7 +18,7 @@ import time
 from dataclasses import dataclass
 from typing import TextIO, cast
 
-from ..state import append_event, append_jsonl
+from ..state import ANSWER_TRANSCRIPT, append_event, append_jsonl
 from ..tty import MUTED, RESET
 
 DEFAULT_GLOW_STYLE = "notty"
@@ -570,7 +570,7 @@ def _record_answer(ctx: _StreamContext, answer: str) -> str | None:
     )
     if ctx.capture_answer:
         append_jsonl(
-            "last-question.jsonl",
+            ANSWER_TRANSCRIPT,
             {
                 "role": "assistant",
                 "content": answer,

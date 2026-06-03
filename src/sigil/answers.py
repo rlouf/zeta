@@ -13,12 +13,21 @@ from typing import Any, Iterable
 
 from .model import chat_text, ensure_server
 from .session import recent_turns_context
-from .state import append_event, append_jsonl, read_jsonl, write_jsonl
+from .state import (
+    ANSWER_TRANSCRIPT,
+    append_event,
+    append_jsonl,
+    read_jsonl,
+    write_jsonl,
+)
 from .zeta import runtime
 from .zeta.display import render_tool_start
 
 
-QUESTION_SYSTEM_PROMPT = (
+ANSWER_ROUTE = "answer"
+ANSWER_REQUEST_EVENT = "answer_requested"
+
+ANSWER_SYSTEM_PROMPT = (
     "Answer concisely. You are responding to a quick question typed at a shell "
     "prompt. The available tools are read, grep, and ls only. Use read for "
     "files, ls for directory contents, and grep to search local text. Do not "
@@ -29,9 +38,9 @@ QUESTION_SYSTEM_PROMPT = (
     "Do not mutate files or execute commands."
 )
 
-ZETA_QUESTION_TOOLS = "read,grep,ls"
-ZETA_QUESTION_TOOLS_WITH_WEB = ZETA_QUESTION_TOOLS
-QUESTION_TOOLS = ("read", "grep", "ls")
+ZETA_ANSWER_TOOLS = "read,grep,ls"
+ZETA_ANSWER_TOOLS_WITH_WEB = ZETA_ANSWER_TOOLS
+ANSWER_TOOLS = ("read", "grep", "ls")
 
 
 def parse_tools(tools: str) -> tuple[str, ...]:
@@ -43,26 +52,26 @@ def discussion_turns() -> list[dict[str, object]]:
     """Load user/assistant turns for explicit follow-up commands."""
     return [
         turn
-        for turn in read_jsonl("last-question.jsonl")
+        for turn in read_jsonl(ANSWER_TRANSCRIPT)
         if turn.get("role") in {"user", "assistant"} and turn.get("content")
     ]
 
 
-def continuation_prompt(question: str, turns: list[dict[str, object]]) -> str:
+def continuation_prompt(user_input: str, turns: list[dict[str, object]]) -> str:
     """Build the follow-up prompt from the prior shell discussion."""
     if not turns:
-        return question
+        return user_input
     transcript = "\n\n".join(f"{turn['role']}:\n{turn['content']}" for turn in turns)
     return "\n\n".join(
         [
             "Continue the previous shell discussion.",
             f"Transcript so far:\n{transcript}",
-            f"Follow-up question:\n{question}",
+            f"Follow-up question:\n{user_input}",
         ]
     )
 
 
-def prepend_recent_turns(question: str) -> str:
+def prepend_recent_turns(user_input: str) -> str:
     """Attach recent shell activity to a fresh question prompt."""
     from .failure import active_failure_context
 
@@ -74,25 +83,25 @@ def prepend_recent_turns(question: str) -> str:
     if failure:
         sections.append(failure)
     if not sections:
-        return question
-    sections.append(f"Question:\n{question}")
+        return user_input
+    sections.append(f"Question:\n{user_input}")
     return "\n\n".join(sections)
 
 
-RECENT_QUESTION_TURNS_LIMIT = 4
-RECENT_QUESTION_TURN_CHARS = 500
+RECENT_ANSWER_TURNS_LIMIT = 4
+RECENT_ANSWER_TURN_CHARS = 500
 
 
-def recent_question_context(
-    limit: int = RECENT_QUESTION_TURNS_LIMIT,
-    per_turn_chars: int = RECENT_QUESTION_TURN_CHARS,
+def recent_answer_context(
+    limit: int = RECENT_ANSWER_TURNS_LIMIT,
+    per_turn_chars: int = RECENT_ANSWER_TURN_CHARS,
 ) -> str:
-    """Return a compact summary of the most recent question exchange, if any."""
+    """Return a compact summary of the most recent answer exchange, if any."""
     turns = discussion_turns()
     if not turns:
         return ""
     tail = turns[-limit:]
-    lines = ["Recent question transcript:"]
+    lines = ["Recent answer transcript:"]
     for turn in tail:
         role = str(turn.get("role", "?"))
         content = str(turn.get("content", "")).strip()
@@ -106,34 +115,35 @@ def ask(
     question: str,
     *,
     glyph: str = "ask",
-    tools: str = ZETA_QUESTION_TOOLS,
+    tools: str = ZETA_ANSWER_TOOLS,
     use_web: bool = False,
     append_transcript: bool = False,
     json_output: bool = False,
 ) -> int:
-    """Run Zeta for a question while recording transcript state."""
-    prompt = question if append_transcript else prepend_recent_turns(question)
-    question_event = append_event(
+    """Run Zeta for a shell answer while recording transcript state."""
+    user_input = question
+    prompt = user_input if append_transcript else prepend_recent_turns(user_input)
+    request_event = append_event(
         {
-            "type": "question",
-            "question": question,
+            "type": ANSWER_REQUEST_EVENT,
+            "input": user_input,
             "prompt": prompt,
             "follow_up": append_transcript,
             "glyph": glyph,
         }
     )
-    question_turn = {
+    user_turn = {
         "role": "user",
-        "content": question,
+        "content": user_input,
         "prompt": prompt,
         "follow_up": append_transcript,
-        "event_id": question_event["id"],
+        "event_id": request_event["id"],
         "glyph": glyph,
     }
     if append_transcript:
-        append_jsonl("last-question.jsonl", question_turn)
+        append_jsonl(ANSWER_TRANSCRIPT, user_turn)
     else:
-        write_jsonl("last-question.jsonl", [question_turn])
+        write_jsonl(ANSWER_TRANSCRIPT, [user_turn])
     write_jsonl("last-tools.jsonl", [])
     enabled_tools = parse_tools(tools)
     tool_note = "+".join(enabled_tools) if enabled_tools else "no tools"
@@ -144,10 +154,10 @@ def ask(
             "web verification would be needed."
         )
     print(f"❯ zeta {glyph:<5} · {tool_note} · no execute path", file=sys.stderr)
-    return run_question_answer(
-        QUESTION_SYSTEM_PROMPT,
+    return run_tool_answer(
+        ANSWER_SYSTEM_PROMPT,
         prompt,
-        question=question,
+        input_text=user_input,
         follow_up=append_transcript,
         json_output=json_output,
         allowed_tools=enabled_tools,
@@ -158,30 +168,30 @@ def run_text_answer(
     system: str,
     prompt: str,
     *,
-    question: str = "",
+    input_text: str = "",
     follow_up: bool = False,
     json_output: bool = False,
     max_tokens: int = 1200,
 ) -> int:
-    """Run a plain Zeta model answer and persist question state."""
+    """Run a plain Zeta model answer and persist answer state."""
     if not ensure_server():
         return 1
     answer = chat_text(system, prompt, max_tokens=max_tokens)
     append_event(
         {
             "type": "answer",
-            "question": question,
+            "input": input_text,
             "prompt": prompt,
             "answer": answer,
             "runtime": "zeta",
         }
     )
     append_jsonl(
-        "last-question.jsonl",
+        ANSWER_TRANSCRIPT,
         {
             "role": "assistant",
             "content": answer,
-            "question": question,
+            "input": input_text,
             "prompt": prompt,
             "follow_up": follow_up,
             "runtime": "zeta",
@@ -191,7 +201,7 @@ def run_text_answer(
         print(
             json.dumps(
                 {
-                    "question": question,
+                    "question": input_text,
                     "prompt": prompt,
                     "answer": answer,
                     "runtime": "zeta",
@@ -207,17 +217,17 @@ def run_text_answer(
     return 0
 
 
-def run_question_answer(
+def run_tool_answer(
     system: str,
     prompt: str,
     *,
-    question: str = "",
+    input_text: str = "",
     follow_up: bool = False,
     json_output: bool = False,
     max_steps: int = 4,
-    allowed_tools: Iterable[str] = QUESTION_TOOLS,
+    allowed_tools: Iterable[str] = ANSWER_TOOLS,
 ) -> int:
-    """Run a read-only Zeta question turn and persist question state."""
+    """Run a read-only Zeta answer turn and persist answer state."""
     if not ensure_server():
         return 1
     enabled_tools = tuple(allowed_tools)
@@ -225,7 +235,7 @@ def run_question_answer(
         "type": "user_message",
         "content": prompt,
         "runtime": "zeta",
-        "route": "question",
+        "route": ANSWER_ROUTE,
         "system": system,
         "available_tools": list(enabled_tools),
     }
@@ -255,10 +265,10 @@ def run_question_answer(
             "type": "tool_call",
             "name": name,
             "input": params,
-            "route": "question",
+            "route": ANSWER_ROUTE,
         }
         trace = append_zeta_event(
-            "tool_call", name=name, input=params, route="question"
+            "tool_call", name=name, input=params, route=ANSWER_ROUTE
         )
         turn_events.append({**tool_call, "id": trace["id"]})
         append_jsonl(
@@ -272,7 +282,7 @@ def run_question_answer(
             tool_call_id=trace["id"],
             name=name,
             analysis=analysis,
-            route="question",
+            route=ANSWER_ROUTE,
         )
         result = runtime.run_tool(name, params)
         result_event = {
@@ -280,23 +290,23 @@ def run_question_answer(
             "tool_call_id": trace["id"],
             "name": name,
             "result": result,
-            "route": "question",
+            "route": ANSWER_ROUTE,
         }
         append_zeta_event(
             "tool_result",
             tool_call_id=trace["id"],
             name=name,
             result=result,
-            route="question",
+            route=ANSWER_ROUTE,
         )
         turn_events.append(result_event)
         event = {"type": "tool_end", "tool": name, "result": result}
         append_jsonl("last-tools.jsonl", event)
         tool_events.append(event)
     if not answer:
-        answer = fallback_question_answer(system, prompt, turn_events)
-    record_question_answer(
-        question=question,
+        answer = fallback_answer(system, prompt, turn_events)
+    record_answer(
+        input_text=input_text,
         prompt=prompt,
         answer=answer,
         follow_up=follow_up,
@@ -306,7 +316,7 @@ def run_question_answer(
     return 0
 
 
-def fallback_question_answer(
+def fallback_answer(
     system: str,
     prompt: str,
     turn_events: list[dict[str, Any]],
@@ -326,9 +336,9 @@ def fallback_question_answer(
     return "I could not answer from the available local context."
 
 
-def record_question_answer(
+def record_answer(
     *,
-    question: str,
+    input_text: str,
     prompt: str,
     answer: str,
     follow_up: bool,
@@ -338,18 +348,18 @@ def record_question_answer(
     append_event(
         {
             "type": "answer",
-            "question": question,
+            "input": input_text,
             "prompt": prompt,
             "answer": answer,
             "runtime": "zeta",
         }
     )
     append_jsonl(
-        "last-question.jsonl",
+        ANSWER_TRANSCRIPT,
         {
             "role": "assistant",
             "content": answer,
-            "question": question,
+            "input": input_text,
             "prompt": prompt,
             "follow_up": follow_up,
             "runtime": "zeta",
@@ -359,7 +369,7 @@ def record_question_answer(
         print(
             json.dumps(
                 {
-                    "question": question,
+                    "question": input_text,
                     "prompt": prompt,
                     "answer": answer,
                     "runtime": "zeta",

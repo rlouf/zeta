@@ -65,7 +65,7 @@ They should consume:
 - bounded stderr/stdout
 - recent shell turns
 - relevant git status
-- recent question context
+- recent answer context
 
 Add secret hygiene before capturing command output:
 

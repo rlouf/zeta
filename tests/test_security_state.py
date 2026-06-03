@@ -21,12 +21,17 @@ from sigil.staged_command import (
 )
 from sigil.zeta.stream import renderer_command, should_color, stream_events
 from sigil.answers import (
-    QUESTION_SYSTEM_PROMPT,
+    ANSWER_SYSTEM_PROMPT,
     ask,
     continuation_prompt,
     discussion_turns,
 )
-from sigil.session import recent_turns, recent_turns_context, record_turn
+from sigil.session import (
+    read_event_log,
+    recent_turns,
+    recent_turns_context,
+    record_turn,
+)
 from sigil.state import append_event, read_jsonl, write_jsonl
 from sigil.tty import (
     clear_lines_on_tty,
@@ -41,8 +46,8 @@ class TtyStringIO(StringIO):
 
 
 def test_question_system_prompt_points_zeta_at_events_log_for_older_history() -> None:
-    assert "events.jsonl" in QUESTION_SYSTEM_PROMPT
-    assert "available tools are read, grep, and ls only" in QUESTION_SYSTEM_PROMPT
+    assert "events.jsonl" in ANSWER_SYSTEM_PROMPT
+    assert "available tools are read, grep, and ls only" in ANSWER_SYSTEM_PROMPT
 
 
 def test_top_level_help_lists_commands() -> None:
@@ -329,11 +334,15 @@ def test_question_routes_record_glyph_and_web_tools() -> None:
                 calls.append((args, kwargs))
                 return 0
 
-            with patch("sigil.answers.run_question_answer", side_effect=fake_answer):
+            with patch("sigil.answers.run_tool_answer", side_effect=fake_answer):
                 assert ask("what is sigil?", json_output=True) == 0
-            fresh_turn = read_jsonl("last-question.jsonl")[0]
+            fresh_turn = read_jsonl("last-answer.jsonl")[0]
             assert fresh_turn["glyph"] == "ask"
-            with patch("sigil.answers.run_question_answer", side_effect=fake_answer):
+            request_event = read_event_log()[-1]
+            assert request_event["type"] == "answer_requested"
+            assert request_event["input"] == "what is sigil?"
+            assert "question" not in request_event
+            with patch("sigil.answers.run_tool_answer", side_effect=fake_answer):
                 assert (
                     ask(
                         "what is sigil on the web?",
@@ -344,10 +353,10 @@ def test_question_routes_record_glyph_and_web_tools() -> None:
                     )
                     == 0
                 )
-            web_turn = read_jsonl("last-question.jsonl")[-1]
+            web_turn = read_jsonl("last-answer.jsonl")[-1]
             assert web_turn["glyph"] == ","
             assert len(calls) == 2
-            assert calls[0][0][0] == QUESTION_SYSTEM_PROMPT
+            assert calls[0][0][0] == ANSWER_SYSTEM_PROMPT
             assert "available tools are read, grep, and ls only" in calls[0][0][0]
             assert calls[0][1]["allowed_tools"] == ("read", "grep", "ls")
             assert "no web_search tool" in calls[1][0][1]
@@ -375,10 +384,10 @@ def test_question_route_requests_tool_calls_on_stdout() -> None:
                 captured_kwargs.update(kwargs)
                 return 0
 
-            with patch("sigil.answers.run_question_answer", side_effect=fake_answer):
+            with patch("sigil.answers.run_tool_answer", side_effect=fake_answer):
                 assert ask("inspect pyproject") == 0
 
-    assert captured_kwargs["question"] == "inspect pyproject"
+    assert captured_kwargs["input_text"] == "inspect pyproject"
 
 
 def test_zeta_stream_can_render_tool_calls_to_stdout() -> None:
@@ -956,7 +965,7 @@ def test_fresh_ask_prepends_recent_turns_context_to_zeta_prompt() -> None:
                 captured["prompt"] = prompt
                 return 0
 
-            with patch("sigil.answers.run_question_answer", side_effect=fake_answer):
+            with patch("sigil.answers.run_tool_answer", side_effect=fake_answer):
                 assert ask("what should I do next?", json_output=True) == 0
 
     prompt = captured["prompt"]
@@ -985,7 +994,7 @@ def test_ask_attaches_active_failure_context_for_unrelated_question() -> None:
                 captured["prompt"] = prompt
                 return 0
 
-            with patch("sigil.answers.run_question_answer", side_effect=fake_answer):
+            with patch("sigil.answers.run_tool_answer", side_effect=fake_answer):
                 assert ask("what does this repo do", json_output=True) == 0
 
     prompt = captured["prompt"]
@@ -1015,7 +1024,7 @@ def test_ask_omits_failure_context_after_successful_turn() -> None:
                 captured["prompt"] = prompt
                 return 0
 
-            with patch("sigil.answers.run_question_answer", side_effect=fake_answer):
+            with patch("sigil.answers.run_tool_answer", side_effect=fake_answer):
                 assert ask("why failed", json_output=True) == 0
 
     prompt = captured["prompt"]
@@ -1030,7 +1039,7 @@ def test_explicit_follow_up_ask_does_not_include_recent_turns_context() -> None:
         ):
             record_turn("ls -la", 0, "/repo")
             write_jsonl(
-                "last-question.jsonl",
+                "last-answer.jsonl",
                 [
                     {"role": "user", "content": "first", "event_id": "q1"},
                     {"role": "assistant", "content": "ans", "event_id": "a1"},
@@ -1043,7 +1052,7 @@ def test_explicit_follow_up_ask_does_not_include_recent_turns_context() -> None:
                 captured["prompt"] = prompt
                 return 0
 
-            with patch("sigil.answers.run_question_answer", side_effect=fake_answer):
+            with patch("sigil.answers.run_tool_answer", side_effect=fake_answer):
                 assert (
                     ask(
                         continuation_prompt("follow up", discussion_turns()),
@@ -1073,7 +1082,7 @@ def test_fresh_ask_omits_recent_turns_section_when_none_recorded() -> None:
                 captured["prompt"] = prompt
                 return 0
 
-            with patch("sigil.answers.run_question_answer", side_effect=fake_answer):
+            with patch("sigil.answers.run_tool_answer", side_effect=fake_answer):
                 assert ask("hello", json_output=True) == 0
 
     prompt = captured["prompt"]
@@ -1126,7 +1135,7 @@ def test_zeta_stream_records_answer_turn() -> None:
                 )
                 == 0
             )
-            answer = read_jsonl("last-question.jsonl")[0]
+            answer = read_jsonl("last-answer.jsonl")[0]
             assert answer["content"] == "answer"
             assert answer["event_id"]
         finally:
@@ -1194,7 +1203,7 @@ def test_zeta_stream_json_output_is_machine_readable() -> None:
             assert payload["malformed_events"] == 0
             assert payload["tools"][0]["tool"] == "web_search"
             assert stderr.getvalue() == ""
-            assert read_jsonl("last-question.jsonl")[-1]["content"] == "answer"
+            assert read_jsonl("last-answer.jsonl")[-1]["content"] == "answer"
             assert len(read_jsonl("last-tools.jsonl")) == 2
         finally:
             for key, value in saved.items():
@@ -1814,7 +1823,7 @@ def test_zeta_stream_compact_mode_suppresses_prose_and_summarizes() -> None:
             assert "I will explain too much" not in stdout.getvalue()
             assert (
                 "I will explain too much."
-                in read_jsonl("last-question.jsonl")[-1]["content"]
+                in read_jsonl("last-answer.jsonl")[-1]["content"]
             )
             assert len(read_jsonl("last-tools.jsonl")) == 2
         finally:

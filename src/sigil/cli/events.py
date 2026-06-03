@@ -177,8 +177,9 @@ def event_action(event: dict[str, object], glyph: str, event_type: str) -> str:
         name = str(operator.get("name") or "operator")
         return f"{glyph} {name}"
     labels = {
-        "question": "question",
+        "answer_requested": "answer request",
         "answer_done": "answer",
+        "answer": "answer",
         "tool_start": "tool start",
         "tool_end": "tool end",
         "operator_command_executed": "executed",
@@ -203,8 +204,8 @@ def event_detail(event: dict[str, object], event_type: str) -> str:
     operator_detail = operator_completed_detail(event, event_type)
     if operator_detail is not None:
         return operator_detail
-    if event_type == "question":
-        return clean_summary_text(event.get("question")) or "question"
+    if event_type == "answer_requested":
+        return clean_summary_text(event.get("input")) or "answer request"
     if event_type == "tool_start":
         tool = clean_summary_text(event.get("tool")) or "tool"
         detail = clean_summary_text(event.get("detail"))

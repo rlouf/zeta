@@ -53,7 +53,7 @@ The shell remains the review boundary:
 ## Session Continuity
 
 Installed shell bindings set `SIGIL_SESSION_ID` once when the shell starts.
-That keeps question transcripts, failure context, and act state scoped to one
+That keeps answer transcripts, failure context, and act state scoped to one
 terminal window by default.
 
 Useful inspection commands:

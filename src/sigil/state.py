@@ -14,6 +14,8 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+ANSWER_TRANSCRIPT = "last-answer.jsonl"
+
 
 def state_dir() -> Path:
     """Return the global Sigil state directory."""

@@ -418,7 +418,7 @@ def test_zeta_question_loop_feeds_current_tool_result_to_next_step(
         },
     )
 
-    code = answers_runner.run_question_answer(
+    code = answers_runner.run_tool_answer(
         "question system",
         "What does pyproject.toml contain?",
     )
@@ -460,7 +460,7 @@ def test_zeta_question_loop_falls_back_instead_of_budget_message(
         lambda system, prompt, max_tokens: "It contains Sigil docs.",
     )
 
-    code = answers_runner.run_question_answer(
+    code = answers_runner.run_tool_answer(
         "question system",
         "What does README.md contain?",
         max_steps=1,

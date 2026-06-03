@@ -1070,11 +1070,11 @@ def test_proposal_user_prompt_includes_recent_question_transcript() -> None:
             {"SIGIL_STATE_DIR": tmp, "SIGIL_SESSION_ID": "test"},
         ):
             append_jsonl(
-                "last-question.jsonl",
+                "last-answer.jsonl",
                 {"role": "user", "content": "find the biggest files"},
             )
             append_jsonl(
-                "last-question.jsonl",
+                "last-answer.jsonl",
                 {"role": "assistant", "content": "du -ah . | sort -rh | head -n 10"},
             )
             invocation = create_invocation(
@@ -1085,7 +1085,7 @@ def test_proposal_user_prompt_includes_recent_question_transcript() -> None:
             )
             prompt = proposal_user_prompt(invocation)
 
-    assert "Recent question transcript:" in prompt
+    assert "Recent answer transcript:" in prompt
     assert "find the biggest files" in prompt
     assert "du -ah . | sort -rh | head -n 10" in prompt
 
@@ -1104,7 +1104,7 @@ def test_proposal_user_prompt_omits_question_transcript_when_empty() -> None:
             )
             prompt = proposal_user_prompt(invocation)
 
-    assert "Recent question transcript" not in prompt
+    assert "Recent answer transcript" not in prompt
 
 
 def test_proposal_user_prompt_omits_question_transcript_in_pipeline_mode() -> None:
@@ -1114,11 +1114,11 @@ def test_proposal_user_prompt_omits_question_transcript_in_pipeline_mode() -> No
             {"SIGIL_STATE_DIR": tmp, "SIGIL_SESSION_ID": "test"},
         ):
             append_jsonl(
-                "last-question.jsonl",
+                "last-answer.jsonl",
                 {"role": "user", "content": "find the biggest files"},
             )
             append_jsonl(
-                "last-question.jsonl",
+                "last-answer.jsonl",
                 {"role": "assistant", "content": "du -ah . | sort -rh | head -n 10"},
             )
             invocation = create_invocation(
@@ -1129,4 +1129,4 @@ def test_proposal_user_prompt_omits_question_transcript_in_pipeline_mode() -> No
             )
             prompt = proposal_user_prompt(invocation)
 
-    assert "Recent question transcript" not in prompt
+    assert "Recent answer transcript" not in prompt

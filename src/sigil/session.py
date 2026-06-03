@@ -13,10 +13,10 @@ import time
 from pathlib import Path
 from typing import Any
 
-from .state import session_dir, session_id, state_dir
+from .state import ANSWER_TRANSCRIPT, session_dir, session_id, state_dir
 
 SESSION_FILES = (
-    "last-question.jsonl",
+    ANSWER_TRANSCRIPT,
     "last-tools.jsonl",
     "last-staged-command.jsonl",
     "pending-staged-commands.jsonl",

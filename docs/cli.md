@@ -82,7 +82,7 @@ sigil ask --follow-up "what should I try next?"
 git diff | sigil ask "review this diff"
 ```
 
-A fresh `sigil ask` starts a new same-session question transcript. `--follow-up`
+A fresh `sigil ask` starts a new same-session answer transcript. `--follow-up`
 continues that transcript.
 
 When stdin is piped into a question, Sigil attaches it to the prompt without an
@@ -258,7 +258,7 @@ Without `--json`, each event is printed as a table:
 
 ```text
 time      id        action      session   summary
-12:34:56  7c0d5a11  ? question  2e9a0b3c  what changed?
+12:34:56  7c0d5a11  ? answer request  2e9a0b3c  what changed?
 ```
 
 The summary JSON form returns:
@@ -270,9 +270,9 @@ The summary JSON form returns:
     "short_id": "7c0d5a11",
     "time": 1760000000.0,
     "time_label": "12:34:56",
-    "type": "question",
+    "type": "answer_requested",
     "glyph": "?",
-    "action": "? question",
+    "action": "? answer request",
     "session": "2e9a0b3c-...",
     "short_session": "2e9a0b3c",
     "cwd": "/path/to/repo",
@@ -303,7 +303,7 @@ continuity files:
   "session_id": "2e9a0b3c-...",
   "path": "/Users/me/.sigil/sessions/2e9a0b3c-...",
   "files": {
-    "last-question.jsonl": [],
+    "last-answer.jsonl": [],
     "last-tools.jsonl": [],
     "last-failure.json": null,
     "last-act.jsonl": [],
@@ -436,7 +436,7 @@ By default, Sigil writes state under `~/.sigil/`.
 events.jsonl                              global event log
 sessions/<session-id>/last-failure.json   latest failed shell command
 sessions/<session-id>/last-act.jsonl      one-step Zeta agent action snapshots
-sessions/<session-id>/last-question.jsonl same-session question transcript
+sessions/<session-id>/last-answer.jsonl  same-session answer transcript
 sessions/<session-id>/last-staged-command.jsonl latest blocked command staged for review
 sessions/<session-id>/last-tools.jsonl    latest Zeta tool trace
 sessions/<session-id>/recent-turns.jsonl  recent shell turns recorded by bindings

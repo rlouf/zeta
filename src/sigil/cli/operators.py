@@ -11,7 +11,7 @@ from ._shared import confirm_piped_input, print_json_line, question_with_stdin
 from ._shared import should_confirm_piped_input, should_run_act_operator
 from ..acts import run_act_stepper
 from ..operators import OperatorInvocation, create_invocation
-from ..answers import ZETA_QUESTION_TOOLS_WITH_WEB, ask
+from ..answers import ZETA_ANSWER_TOOLS_WITH_WEB, ask
 
 
 @cli.command("op", hidden=True)
@@ -93,7 +93,7 @@ def dispatch_readonly_operator(
     return ask(
         question,
         glyph=",",
-        tools=ZETA_QUESTION_TOOLS_WITH_WEB,
+        tools=ZETA_ANSWER_TOOLS_WITH_WEB,
         use_web=True,
         json_output=json_output,
     )

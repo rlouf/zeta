@@ -170,7 +170,11 @@ __sigil_zeta_after_command_before_prompt() {
 sigil_command() {
   # `, prompt`: read-only assistant answer. It does not stage commands or mutate
   # history; `,,` and `,,,` are the routes that can hand a command back to zsh.
-  "$__sigil_bin" ask "$@"
+  if [[ "$#" == "0" ]]; then
+    "$__sigil_bin" ask
+  else
+    "$__sigil_bin" ask "$*"
+  fi
 }
 
 __sigil_zeta_append() {
@@ -252,8 +256,39 @@ __sigil_zeta_tool_start() {
   fi
 }
 
+__sigil_zeta_result_summary() {
+  local name="$1"
+  "$__sigil_bin" display tool-result "$name"
+}
+
+__sigil_zeta_shell_result_summary() {
+  "$__sigil_bin" display shell-result
+}
+
+__sigil_zeta_render_result_summary() {
+  local name="$1"
+  local result="$2"
+  local summary line
+  summary="$(printf '%s\n' "$result" | __sigil_zeta_result_summary "$name" 2>/dev/null || true)"
+  [[ -n "$summary" ]] || return 0
+  while IFS= read -r line; do
+    [[ -n "$line" ]] && __sigil_muted_print "  $line"
+  done <<< "$summary"
+}
+
+__sigil_zeta_render_shell_result_summary() {
+  local event="$1"
+  local summary line
+  summary="$(printf '%s\n' "$event" | __sigil_zeta_shell_result_summary 2>/dev/null || true)"
+  [[ -n "$summary" ]] || return 0
+  while IFS= read -r line; do
+    [[ -n "$line" ]] && __sigil_muted_print "$line"
+  done <<< "$summary"
+}
+
 __sigil_zeta_turn() {
-  local objective request events event event_type text name input analysis result command reason artifact
+  local objective request events event event_type text name input analysis result command artifact
+  local shell_result_event
   local tool_call_record tool_call_id
   local step continue_step
   objective="$*"
@@ -264,7 +299,8 @@ __sigil_zeta_turn() {
   fi
   if [[ "$continue_step" == "1" ]]; then
     __sigil_zeta_consume_capture
-    "$__zeta_bin" transcript shell-result >/dev/null 2>&1 || true
+    shell_result_event="$("$__zeta_bin" transcript shell-result 2>/dev/null || true)"
+    [[ -n "$shell_result_event" ]] && __sigil_zeta_render_shell_result_summary "$shell_result_event"
   fi
   __sigil_zeta_append "$(printf '{"type":"user_message","content":%s}' "$(__sigil_json_string "$objective")")" >/dev/null
   for step in {1..8}; do
@@ -291,11 +327,10 @@ __sigil_zeta_turn() {
           __sigil_zeta_append "$(printf '{"type":"tool_analysis","tool_call_id":%s,"name":%s,"analysis":%s}' "$(__sigil_json_string "$tool_call_id")" "$(__sigil_json_string "$name")" "$analysis")" >/dev/null
           result="$(printf '%s\n' "$input" | "$__zeta_bin" tool "$name")" || return $?
           __sigil_zeta_append "$(printf '{"type":"tool_result","tool_call_id":%s,"name":%s,"result":%s}' "$(__sigil_json_string "$tool_call_id")" "$(__sigil_json_string "$name")" "$result")" >/dev/null
+          __sigil_zeta_render_result_summary "$name" "$result"
           command="$(printf '%s\n' "$result" | __sigil_json_get handoff.command)"
           if [[ -n "$command" ]]; then
-            reason="$(printf '%s\n' "$result" | __sigil_json_get handoff.reason)"
             artifact="$(printf '%s\n' "$result" | __sigil_json_get handoff.artifact)"
-            [[ -n "$reason" ]] && print -r -- "$reason"
             [[ -n "$artifact" ]] && print -r -- "artifact: $artifact"
             __sigil_zeta_enable_capture
             __sigil_prompt_insert "$command"

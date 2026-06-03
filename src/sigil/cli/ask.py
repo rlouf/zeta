@@ -8,7 +8,6 @@ from ._base import cli
 from ._shared import piped_stdin_text, question_with_stdin
 from ..answers import (
     ZETA_ANSWER_TOOLS,
-    ZETA_ANSWER_TOOLS_WITH_WEB,
     ask,
     continuation_prompt,
     discussion_turns,
@@ -28,8 +27,7 @@ def cmd_ask(question: str | None, follow_up: bool, json_output: bool) -> int:
         return ask(
             prompt,
             glyph="ask",
-            tools=ZETA_ANSWER_TOOLS_WITH_WEB,
-            use_web=True,
+            tools=ZETA_ANSWER_TOOLS,
             append_transcript=True,
             json_output=json_output,
         )
@@ -39,7 +37,6 @@ def cmd_ask(question: str | None, follow_up: bool, json_output: bool) -> int:
             prompt,
             glyph="ask",
             tools=ZETA_ANSWER_TOOLS,
-            use_web=False,
             json_output=json_output,
         )
     if question is None:
@@ -48,6 +45,5 @@ def cmd_ask(question: str | None, follow_up: bool, json_output: bool) -> int:
         question,
         glyph="ask",
         tools=ZETA_ANSWER_TOOLS,
-        use_web=False,
         json_output=json_output,
     )

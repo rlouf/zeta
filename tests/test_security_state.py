@@ -315,7 +315,7 @@ def test_renderer_falls_back_to_cat_without_glow() -> None:
         assert renderer_command() == ["cat"]
 
 
-def test_question_routes_record_glyph_and_web_tools() -> None:
+def test_question_routes_record_glyph_and_local_tools() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         old_state_dir = os.environ.get("SIGIL_STATE_DIR")
         old_session_id = os.environ.get("SIGIL_SESSION_ID")
@@ -339,21 +339,20 @@ def test_question_routes_record_glyph_and_web_tools() -> None:
             with patch("sigil.answers.run_tool_answer", side_effect=fake_answer):
                 assert (
                     ask(
-                        "what is sigil on the web?",
+                        "what is sigil?",
                         glyph=",",
                         tools="read,grep,ls",
-                        use_web=True,
                         json_output=True,
                     )
                     == 0
                 )
-            web_turn = read_jsonl("last-answer.jsonl")[-1]
-            assert web_turn["glyph"] == ","
+            comma_turn = read_jsonl("last-answer.jsonl")[-1]
+            assert comma_turn["glyph"] == ","
             assert len(calls) == 2
             assert calls[0][0][0] == ANSWER_SYSTEM_PROMPT
             assert "available tools are read, grep, and ls only" in calls[0][0][0]
             assert calls[0][1]["allowed_tools"] == ("read", "grep", "ls")
-            assert "no web_search tool" in calls[1][0][1]
+            assert calls[1][0][1] == "what is sigil?"
         finally:
             if old_state_dir is None:
                 os.environ.pop("SIGIL_STATE_DIR", None)
@@ -1012,7 +1011,6 @@ def test_explicit_follow_up_ask_does_not_include_recent_turns_context() -> None:
                         continuation_prompt("follow up", discussion_turns()),
                         glyph="ask",
                         tools="read,grep,ls",
-                        use_web=True,
                         append_transcript=True,
                         json_output=True,
                     )
@@ -1114,13 +1112,11 @@ def test_zeta_stream_json_output_is_machine_readable() -> None:
                         json.dumps(
                             {
                                 "type": "tool_execution_start",
-                                "toolName": "web_search",
-                                "args": {"query": "sigil"},
+                                "toolName": "grep",
+                                "args": {"pattern": "sigil"},
                             }
                         ),
-                        json.dumps(
-                            {"type": "tool_execution_end", "toolName": "web_search"}
-                        ),
+                        json.dumps({"type": "tool_execution_end", "toolName": "grep"}),
                         json.dumps(
                             {
                                 "type": "message_update",
@@ -1155,7 +1151,7 @@ def test_zeta_stream_json_output_is_machine_readable() -> None:
             assert payload["question"] == "what is sigil?"
             assert payload["answer"] == "answer"
             assert payload["malformed_events"] == 0
-            assert payload["tools"][0]["tool"] == "web_search"
+            assert payload["tools"][0]["tool"] == "grep"
             assert stderr.getvalue() == ""
             assert read_jsonl("last-answer.jsonl")[-1]["content"] == "answer"
             assert len(read_jsonl("last-tools.jsonl")) == 2
@@ -1223,8 +1219,8 @@ def test_zeta_stream_non_tty_status_has_no_control_codes_or_color() -> None:
                 json.dumps(
                     {
                         "type": "tool_execution_start",
-                        "toolName": "web_search",
-                        "args": {"query": "sigil"},
+                        "toolName": "grep",
+                        "args": {"pattern": "sigil"},
                     }
                 )
                 + "\n"
@@ -1240,7 +1236,7 @@ def test_zeta_stream_non_tty_status_has_no_control_codes_or_color() -> None:
                 == 0
             )
             status = stderr.getvalue()
-            assert "web_search" in status
+            assert "grep" in status
             assert "\x1b" not in status
             assert "\r" not in status
         finally:
@@ -1265,14 +1261,14 @@ def test_zeta_stream_shows_function_call_events() -> None:
                         json.dumps(
                             {
                                 "type": "function_call",
-                                "name": "web_search",
-                                "arguments": json.dumps({"query": "sigil ???"}),
+                                "name": "grep",
+                                "arguments": json.dumps({"pattern": "sigil ???"}),
                             }
                         ),
                         json.dumps(
                             {
                                 "type": "function_call_result",
-                                "name": "web_search",
+                                "name": "grep",
                             }
                         ),
                     ]
@@ -1292,11 +1288,11 @@ def test_zeta_stream_shows_function_call_events() -> None:
             status = stderr.getvalue()
             tools = read_jsonl("last-tools.jsonl")
 
-            assert "web_search" in status
+            assert "grep" in status
             assert "sigil ???" in status
             assert [event["type"] for event in tools] == ["tool_start", "tool_end"]
-            assert tools[0]["tool"] == "web_search"
-            assert tools[0]["args"] == {"query": "sigil ???"}
+            assert tools[0]["tool"] == "grep"
+            assert tools[0]["args"] == {"pattern": "sigil ???"}
         finally:
             for key, value in saved.items():
                 if value is None:

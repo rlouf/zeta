@@ -8,6 +8,7 @@ from click.testing import CliRunner
 
 from sigil import answers as answers_runner
 from sigil.session import recent_turns, record_turn
+from sigil import display as sigil_display
 from sigil.zeta import runtime as zeta
 from sigil.zeta.cli import cli
 
@@ -50,6 +51,49 @@ def test_zeta_tool_bash_returns_handoff() -> None:
     data = json.loads(result.output)
     assert data["handoff"]["command"] == "uv run pytest"
     assert data["handoff"]["reason"] == "Run tests."
+
+
+def test_sigil_display_summarizes_tool_results() -> None:
+    assert sigil_display.tool_result_summary(
+        "bash",
+        {"ok": True, "handoff": {"type": "shell_prompt", "command": "uv run pytest"}},
+    ) == ["staged in prompt"]
+    assert sigil_display.tool_result_summary(
+        "read",
+        {"ok": True, "content": [{"type": "text", "text": "a\nb\n"}]},
+    ) == ["2 lines · 4 bytes"]
+    assert sigil_display.tool_result_summary(
+        "grep",
+        {"ok": True, "content": [{"type": "text", "text": "a.py:1:x\nb.py:2:y\n"}]},
+    ) == ["2 matches · 2 files"]
+
+
+def test_sigil_display_summarizes_shell_results() -> None:
+    assert sigil_display.shell_result_summary(
+        {
+            "type": "tool_result",
+            "result": {
+                "outcome": "executed",
+                "executed_command": "uv run pytest",
+                "status": 0,
+                "shell_turns": [{"command": "uv run pytest"}],
+            },
+        }
+    ) == ["❯ shell  captured", "  uv run pytest", "  exit 0 · 1 shell turn"]
+    assert sigil_display.shell_result_summary(
+        {
+            "type": "tool_result",
+            "result": {
+                "outcome": "cancelled",
+                "expected_command": "uv run pytest",
+                "actual_command": "uv run pytest -q",
+            },
+        }
+    ) == [
+        "❯ shell  changed",
+        "  expected: uv run pytest",
+        "  ran:      uv run pytest -q",
+    ]
 
 
 def test_zeta_tool_ls_lists_directory_contents(tmp_path: Path) -> None:

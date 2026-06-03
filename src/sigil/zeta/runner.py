@@ -13,7 +13,7 @@ from ..model import ensure_server
 from ..state import append_jsonl
 from ..tty import MUTED, RESET
 from . import runtime
-from .display import render_tool_start
+from ..display import render_tool_start
 
 
 def run_agent_step(

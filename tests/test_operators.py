@@ -157,7 +157,6 @@ def test_op_cli_runs_piped_comma_through_readonly_route() -> None:
             {
                 "glyph": ",",
                 "tools": "read,grep,ls",
-                "use_web": True,
                 "json_output": False,
             },
         )
@@ -181,7 +180,6 @@ def test_comma_operator_uses_readonly_route() -> None:
             {
                 "glyph": ",",
                 "tools": "read,grep,ls",
-                "use_web": True,
                 "json_output": False,
             },
         ),
@@ -679,7 +677,6 @@ def test_op_cli_does_not_confirm_piped_comma_before_readonly_route() -> None:
             {
                 "glyph": ",",
                 "tools": "read,grep,ls",
-                "use_web": True,
                 "json_output": False,
             },
         )
@@ -734,7 +731,6 @@ def test_ask_follow_up_sends_piped_input_without_confirmation() -> None:
             {
                 "glyph": "ask",
                 "tools": "read,grep,ls",
-                "use_web": True,
                 "append_transcript": True,
                 "json_output": False,
             },
@@ -765,7 +761,6 @@ def test_op_cli_routes_piped_comma_to_readonly_answer() -> None:
             {
                 "glyph": ",",
                 "tools": "read,grep,ls",
-                "use_web": True,
                 "json_output": False,
             },
         )
@@ -859,7 +854,6 @@ def test_verb_commands_run_piped_stream_operators() -> None:
             {
                 "glyph": "ask",
                 "tools": "read,grep,ls",
-                "use_web": False,
                 "json_output": False,
             },
         )

@@ -20,7 +20,7 @@ def piped_stdin_text() -> str | None:
 
 
 def question_with_stdin(question: str, stdin_text: str) -> str:
-    """Attach piped input to a web-authorized question prompt."""
+    """Attach piped input to a question prompt."""
     if question:
         return f"{question}\n\nPiped input:\n{stdin_text}"
     return f"Piped input:\n{stdin_text}"

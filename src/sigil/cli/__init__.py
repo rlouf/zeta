@@ -14,6 +14,7 @@ from . import (  # noqa: F401  (imported for command registration side effects)
     act,
     ask,
     command,
+    display,
     events,
     install,
     run,

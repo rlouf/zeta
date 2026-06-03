@@ -175,8 +175,6 @@ def summarize(tool: str, args: object) -> str:
             or tool_args.get("glob")
             or ""
         )
-    if tool == "web_search":
-        return str(tool_args.get("query") or tool_args.get("q") or "")
     return " ".join(
         f"{k}={v}"
         for k, v in tool_args.items()

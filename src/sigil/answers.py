@@ -40,7 +40,6 @@ ANSWER_SYSTEM_PROMPT = (
 )
 
 ZETA_ANSWER_TOOLS = "read,grep,ls"
-ZETA_ANSWER_TOOLS_WITH_WEB = ZETA_ANSWER_TOOLS
 ANSWER_TOOLS = ("read", "grep", "ls")
 
 
@@ -117,7 +116,6 @@ def ask(
     *,
     glyph: str = "ask",
     tools: str = ZETA_ANSWER_TOOLS,
-    use_web: bool = False,
     append_transcript: bool = False,
     json_output: bool = False,
 ) -> int:
@@ -148,12 +146,6 @@ def ask(
     write_jsonl("last-tools.jsonl", [])
     enabled_tools = parse_tools(tools)
     tool_note = "+".join(enabled_tools) if enabled_tools else "no tools"
-    if use_web:
-        prompt = (
-            f"{prompt}\n\nNote: this Zeta v1 route has no web_search tool; "
-            "answer from available local/context knowledge and say when current "
-            "web verification would be needed."
-        )
     print(f"❯ zeta {glyph:<5} · {tool_note} · no execute path", file=sys.stderr)
     return run_tool_answer(
         ANSWER_SYSTEM_PROMPT,

@@ -6,13 +6,22 @@ CLI-routed act steps on the same Zeta service layer without an external agent.
 
 from __future__ import annotations
 
+import json
 import sys
-from typing import Any, Iterable
+from pathlib import Path
+from typing import Any, Iterable, Literal, TextIO
 
-from .display import render_handoff_lines, render_tool_start, render_zeta_status
+from .display import (
+    render_handoff_lines,
+    render_tool_start,
+    render_zeta_status,
+    tool_result_summary,
+)
 from .model import ensure_server
 from .state import append_jsonl
 from .zeta import runtime
+
+HandoffOutput = Literal["detail", "summary", "none"]
 
 
 def run_agent_step(
@@ -23,17 +32,21 @@ def run_agent_step(
     stdin_text: str = "",
     max_steps: int = 8,
     allowed_tools: Iterable[str] | None = None,
+    handoff_path: str | Path | None = None,
+    handoff_output: HandoffOutput = "detail",
+    trace_output: TextIO | None = None,
 ) -> int:
     """Run a bounded Zeta agent step for CLI routes."""
     if not ensure_server():
         return 1
+    output = trace_output or sys.stderr
     prompt = agent_prompt(objective, stdin_text=stdin_text)
     enabled_tools = enabled_tool_tuple(allowed_tools)
     render_zeta_status(
         glyph,
         enabled_tools,
         "one step",
-        output=sys.stderr,
+        output=output,
         color_enabled=True,
     )
     append_jsonl(
@@ -58,7 +71,13 @@ def run_agent_step(
             content = str(action.get("content") or "")
             record_agent_final(content, glyph=glyph)
             return 0
-        status = run_agent_tool_action(action, glyph=glyph)
+        status = run_agent_tool_action(
+            action,
+            glyph=glyph,
+            handoff_path=handoff_path,
+            handoff_output=handoff_output,
+            output=output,
+        )
         if status is not None:
             return status
     print("Zeta stopped after reaching the step budget.", file=sys.stderr)
@@ -78,14 +97,21 @@ def record_agent_final(content: str, *, glyph: str) -> None:
     append_zeta_event("assistant_message", content=content, glyph=glyph)
 
 
-def run_agent_tool_action(action: dict[str, Any], *, glyph: str) -> int | None:
+def run_agent_tool_action(
+    action: dict[str, Any],
+    *,
+    glyph: str,
+    handoff_path: str | Path | None = None,
+    handoff_output: HandoffOutput = "detail",
+    output: TextIO = sys.stderr,
+) -> int | None:
     name = str(action["name"])
     params = action.get("input")
     if not isinstance(params, dict):
         print("zeta: invalid tool input", file=sys.stderr)
         return 1
     call = append_zeta_event("tool_call", name=name, input=params, glyph=glyph)
-    render_tool_start(name, params, output=sys.stderr)
+    render_tool_start(name, params, output=output)
     analysis = runtime.analyze_tool(name, params)
     append_zeta_event(
         "tool_analysis",
@@ -102,14 +128,41 @@ def run_agent_tool_action(action: dict[str, Any], *, glyph: str) -> int | None:
         result=result,
         glyph=glyph,
     )
+    render_result_summary(name, result, output=output)
     handoff = result.get("handoff")
     if not isinstance(handoff, dict):
         return None
-    print_handoff(handoff)
+    write_handoff(handoff_path, handoff)
+    print_handoff(handoff, mode=handoff_output)
     return 0
 
 
-def print_handoff(handoff: dict[str, Any]) -> None:
+def render_result_summary(
+    name: str,
+    result: dict[str, Any],
+    *,
+    output: TextIO,
+) -> None:
+    for line in tool_result_summary(name, result):
+        print(f"  {line}", file=output)
+
+
+def write_handoff(path: str | Path | None, handoff: dict[str, Any]) -> None:
+    if path is None:
+        return
+    Path(path).write_text(
+        json.dumps(handoff, ensure_ascii=False, separators=(",", ":")) + "\n",
+        encoding="utf-8",
+    )
+
+
+def print_handoff(
+    handoff: dict[str, Any],
+    *,
+    mode: HandoffOutput = "detail",
+) -> None:
+    if mode != "detail":
+        return
     for line in render_handoff_lines(handoff):
         print(line)
 

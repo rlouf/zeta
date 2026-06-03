@@ -9,6 +9,7 @@ from click.testing import CliRunner
 from sigil import answers as answers_runner
 from sigil import display as sigil_display
 from sigil import handoff as sigil_handoff
+from sigil import zeta_runner
 from sigil.cli import cli as sigil_cli
 from sigil.session import recent_turns, record_turn
 from sigil.zeta import runtime as zeta
@@ -210,6 +211,55 @@ def test_zeta_transcript_does_not_expose_shell_handoff_verbs() -> None:
     result = CliRunner().invoke(zeta_cli, ["transcript", "shell-result"])
 
     assert result.exit_code != 0
+
+
+def test_sigil_zeta_step_writes_handoff_file(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    handoff_file = tmp_path / "handoff.json"
+
+    monkeypatch.setattr(zeta_runner, "ensure_server", lambda: True)
+    monkeypatch.setattr(
+        zeta_runner.runtime,
+        "next_model_action",
+        lambda *args, **kwargs: {
+            "type": "tool_call",
+            "name": "bash",
+            "input": {"command": "uv run pytest", "reason": "Run tests."},
+        },
+    )
+    monkeypatch.setattr(
+        zeta_runner.runtime,
+        "analyze_tool",
+        lambda name, params: {"valid": True, "resolved": True},
+    )
+    monkeypatch.setattr(
+        zeta_runner.runtime,
+        "run_tool",
+        lambda name, params: {
+            "ok": True,
+            "handoff": {
+                "type": "shell_prompt",
+                "command": "uv run pytest",
+                "reason": "Run tests.",
+            },
+        },
+    )
+
+    result = CliRunner().invoke(
+        sigil_cli,
+        ["zeta-step", "--handoff-file", str(handoff_file), "repair"],
+    )
+
+    assert result.exit_code == 0
+    assert "❯ bash   uv run pytest" in result.output
+    assert "  staged in prompt" in result.output
+    assert json.loads(handoff_file.read_text(encoding="utf-8")) == {
+        "type": "shell_prompt",
+        "command": "uv run pytest",
+        "reason": "Run tests.",
+    }
 
 
 def test_sigil_transcript_shell_turn_records_recent_turn(

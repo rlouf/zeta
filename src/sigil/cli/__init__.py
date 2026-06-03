@@ -20,6 +20,7 @@ from . import (  # noqa: F401  (imported for command registration side effects)
     run,
     session,
     transcript,
+    zeta_step,
 )
 
 __all__ = ["cli", "main"]

@@ -33,6 +33,54 @@ def make_stub(tmp: Path) -> Path:
               printf '%s\n' '{"ok":true}'
               exit 0
             fi
+            if [ "$1" = "zeta-step" ]; then
+              continue_step=0
+              handoff_file=""
+              objective=""
+              while [ "$#" -gt 0 ]; do
+                case "$1" in
+                  --handoff-file)
+                    handoff_file="$2"
+                    shift 2
+                    ;;
+                  --glyph)
+                    shift 2
+                    ;;
+                  --continue)
+                    continue_step=1
+                    shift
+                    ;;
+                  zeta-step)
+                    shift
+                    ;;
+                  *)
+                    objective="$1"
+                    shift
+                    ;;
+                esac
+              done
+              if [ "$continue_step" = "1" ]; then
+                printf '%s\n' "zeta-step --continue" >> "$SIGIL_STUB_LOG"
+                command="echo continued"
+                reason="Continue after shell handoff."
+              else
+                printf '%s\n' "zeta-step" >> "$SIGIL_STUB_LOG"
+                case "$objective" in
+                  *repair*) command="uv run pytest"; reason="Run tests." ;;
+                  *"run it"*) command="echo piped"; reason="Run piped handoff." ;;
+                  *) command="echo zeta"; reason="Run zeta handoff." ;;
+                esac
+              fi
+              printf '❯ bash   %s\n' "$command"
+              printf '  staged in prompt\n'
+              if [ -n "$handoff_file" ]; then
+                printf '{"type":"shell_prompt","command":%s,"reason":%s}\n' \
+                  "$(python3 -c 'import json,sys; print(json.dumps(sys.argv[1]))' "$command")" \
+                  "$(python3 -c 'import json,sys; print(json.dumps(sys.argv[1]))' "$reason")" \
+                  > "$handoff_file"
+              fi
+              exit 0
+            fi
             if [ "$1" = "display" ]; then
               payload="$(cat)"
               case "$*" in
@@ -51,30 +99,6 @@ def make_stub(tmp: Path) -> Path:
             fi
             printf '%s\n' "$*" >> "$SIGIL_STUB_LOG"
             case "$*" in
-              "model stream")
-                request="$(cat)"
-                case "$request" in
-                  *"Continue the active Zeta step"*) command="echo continued"; reason="Continue after shell handoff." ;;
-                  *repair*) command="uv run pytest"; reason="Run tests." ;;
-                  *"run it"*) command="echo piped"; reason="Run piped handoff." ;;
-                  *) command="echo zeta"; reason="Run zeta handoff." ;;
-                esac
-                printf '{"type":"tool_call","name":"bash","input":{"command":%s,"reason":%s}}\n' \
-                  "$(python3 -c 'import json,sys; print(json.dumps(sys.argv[1]))' "$command")" \
-                  "$(python3 -c 'import json,sys; print(json.dumps(sys.argv[1]))' "$reason")"
-                ;;
-              "tool bash --analyze")
-                cat >/dev/null
-                printf '%s\n' '{"valid":true,"resolved":true,"effects":[{"kind":"execute","resource":"process","target":"echo","certainty":"certain"}],"diagnostics":[]}'
-                ;;
-              "tool bash")
-                params="$(cat)"
-                command="$(printf '%s\n' "$params" | python3 -c 'import json,sys; print(json.load(sys.stdin)["command"])')"
-                reason="$(printf '%s\n' "$params" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("reason","Run command."))')"
-                printf '{"ok":true,"handoff":{"type":"shell_prompt","command":%s,"reason":%s}}\n' \
-                  "$(python3 -c 'import json,sys; print(json.dumps(sys.argv[1]))' "$command")" \
-                  "$(python3 -c 'import json,sys; print(json.dumps(sys.argv[1]))' "$reason")"
-                ;;
               "command draft executive summary") printf '%s\n' "stream command" ;;
               "ask hello") printf '%s\n' "answer" ;;
               "ask draft executive summary") printf '%s\n' "readonly stream answer" ;;
@@ -94,7 +118,6 @@ def run_shell(
 ) -> subprocess.CompletedProcess[str]:
     env = os.environ.copy()
     env["SIGIL_BIN"] = str(stub)
-    env["ZETA_BIN"] = str(stub)
     env["SIGIL_STUB_LOG"] = str(tmp / "calls.log")
     env["SIGIL_SESSION_ID"] = "shell-test"
     env["ZLE_LOG"] = str(tmp / "zle.log")
@@ -115,7 +138,6 @@ def run_shell_args(
 ) -> subprocess.CompletedProcess[str]:
     env = os.environ.copy()
     env["SIGIL_BIN"] = str(stub)
-    env["ZETA_BIN"] = str(stub)
     env["SIGIL_STUB_LOG"] = str(tmp / "calls.log")
     env["SIGIL_SESSION_ID"] = "shell-test"
     env["ZLE_LOG"] = str(tmp / "zle.log")
@@ -142,8 +164,8 @@ def read_log(tmp: Path) -> list[str]:
     return path.read_text(encoding="utf-8").splitlines()
 
 
-def zeta_bash_turn_calls() -> list[str]:
-    return ["model stream", "tool bash --analyze", "tool bash"]
+def zeta_step_calls() -> list[str]:
+    return ["zeta-step"]
 
 
 def shell_turn_payloads(tmp: Path) -> list[dict[str, object]]:
@@ -170,7 +192,7 @@ def test_bash_wrappers_call_current_cli_contract() -> None:
         assert_success(result)
         assert read_log(tmp) == [
             "ask hello",
-            *zeta_bash_turn_calls(),
+            *zeta_step_calls(),
         ]
         assert "answer" in result.stdout
         assert "❯ bash   echo zeta" in result.stdout
@@ -193,8 +215,8 @@ def test_bash_agent_wrappers_call_zeta_loop() -> None:
         )
         assert_success(result)
         assert read_log(tmp) == [
-            *zeta_bash_turn_calls(),
-            *zeta_bash_turn_calls(),
+            *zeta_step_calls(),
+            *zeta_step_calls(),
         ]
 
 
@@ -245,7 +267,7 @@ def test_bash_bare_agent_step_continues_after_shell_handoff() -> None:
             stub,
         )
         assert_success(result)
-        assert read_log(tmp) == ["transcript shell-result", *zeta_bash_turn_calls()]
+        assert read_log(tmp) == ["zeta-step --continue"]
         assert "  staged in prompt" in result.stdout
         assert "Continue after shell handoff." not in result.stdout
         assert "history=echo continued" in result.stdout
@@ -299,7 +321,7 @@ def test_bash_wrappers_dispatch_piped_stdin_to_operator_runtime() -> None:
         assert_success(result)
         assert read_log(tmp) == [
             "ask draft executive summary",
-            *zeta_bash_turn_calls(),
+            *zeta_step_calls(),
         ]
         assert "readonly stream answer" in result.stdout
 
@@ -461,54 +483,6 @@ def test_bash_passes_failure_snippets_during_zeta_handoff_capture() -> None:
         assert payloads[0]["stderr_snippet"] == "stderr line"
 
 
-def test_bash_renders_compact_tool_result_summaries() -> None:
-    with tempfile.TemporaryDirectory() as tmp_dir:
-        tmp = Path(tmp_dir)
-        stub = make_stub(tmp)
-        result = run_shell(
-            "bash",
-            textwrap.dedent(
-                """\
-                source src/sigil/shell/bash/sigil.bash
-                __sigil_zeta_render_result_summary read '{"ok":true,"content":[{"type":"text","text":"a\\nb\\n"}],"metadata":{"path":"README.md"}}'
-                __sigil_zeta_render_result_summary ls '{"ok":true,"content":[{"type":"text","text":"a\\nb"}],"metadata":{"entries":2}}'
-                __sigil_zeta_render_result_summary grep '{"ok":true,"content":[{"type":"text","text":"a.py:1:x\\nb.py:2:y\\n"}],"metadata":{}}'
-                """
-            ),
-            tmp,
-            stub,
-        )
-        assert_success(result)
-        assert "  2 lines · 4 bytes" in result.stdout
-        assert "  2 entries" in result.stdout
-        assert "  2 matches · 2 files" in result.stdout
-
-
-def test_bash_renders_shell_result_summary() -> None:
-    with tempfile.TemporaryDirectory() as tmp_dir:
-        tmp = Path(tmp_dir)
-        stub = make_stub(tmp)
-        result = run_shell(
-            "bash",
-            textwrap.dedent(
-                """\
-                source src/sigil/shell/bash/sigil.bash
-                __sigil_zeta_render_shell_result_summary '{"type":"tool_result","result":{"outcome":"executed","executed_command":"uv run pytest","status":0,"shell_turns":[{"command":"uv run pytest"}]}}'
-                __sigil_zeta_render_shell_result_summary '{"type":"tool_result","result":{"outcome":"cancelled","expected_command":"uv run pytest","actual_command":"uv run pytest -q","shell_turns":[{"command":"uv run pytest -q"}]}}'
-                """
-            ),
-            tmp,
-            stub,
-        )
-        assert_success(result)
-        assert "❯ shell  captured" in result.stdout
-        assert "  uv run pytest" in result.stdout
-        assert "  exit 0 · 1 shell turn" in result.stdout
-        assert "❯ shell  changed" in result.stdout
-        assert "  expected: uv run pytest" in result.stdout
-        assert "  ran:      uv run pytest -q" in result.stdout
-
-
 @pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
 def test_zsh_wrappers_call_current_cli_contract() -> None:
     with tempfile.TemporaryDirectory() as tmp_dir:
@@ -525,7 +499,7 @@ def test_zsh_wrappers_call_current_cli_contract() -> None:
         assert_success(result)
         assert read_log(tmp) == [
             "ask hello",
-            *zeta_bash_turn_calls(),
+            *zeta_step_calls(),
         ]
         assert "answer" in result.stdout
         assert "❯ bash   echo zeta" in result.stdout
@@ -567,7 +541,7 @@ def test_zsh_bare_agent_step_continues_after_shell_handoff() -> None:
             stub,
         )
         assert_success(result)
-        assert read_log(tmp) == ["transcript shell-result", *zeta_bash_turn_calls()]
+        assert read_log(tmp) == ["zeta-step --continue"]
         assert "  staged in prompt" in result.stdout
         assert "Continue after shell handoff." not in result.stdout
         assert "history=echo continued" in result.stdout
@@ -588,8 +562,8 @@ def test_zsh_agent_wrappers_call_zeta_loop() -> None:
         )
         assert_success(result)
         assert read_log(tmp) == [
-            *zeta_bash_turn_calls(),
-            *zeta_bash_turn_calls(),
+            *zeta_step_calls(),
+            *zeta_step_calls(),
         ]
 
 
@@ -609,7 +583,7 @@ def test_zsh_wrappers_dispatch_piped_stdin_to_operator_runtime() -> None:
         assert_success(result)
         assert read_log(tmp) == [
             "ask draft executive summary",
-            *zeta_bash_turn_calls(),
+            *zeta_step_calls(),
         ]
         assert "readonly stream answer" in result.stdout
         assert "  staged in prompt" in result.stdout
@@ -632,7 +606,7 @@ def test_zsh_glyph_aliases_dispatch_piped_stdin_before_globbing() -> None:
         assert_success(result)
         assert read_log(tmp) == [
             "ask draft executive summary",
-            *zeta_bash_turn_calls(),
+            *zeta_step_calls(),
         ]
 
 
@@ -725,56 +699,6 @@ def test_zsh_records_turns_only_after_zeta_handoff() -> None:
         assert payloads[0]["command"] == "echo edited"
         assert payloads[0]["status"] == 0
         assert payloads[0]["cwd"] == str(ROOT)
-
-
-@pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
-def test_zsh_renders_compact_tool_result_summaries() -> None:
-    with tempfile.TemporaryDirectory() as tmp_dir:
-        tmp = Path(tmp_dir)
-        stub = make_stub(tmp)
-        result = run_shell(
-            "zsh",
-            textwrap.dedent(
-                """\
-                source src/sigil/shell/zsh/sigil.zsh
-                __sigil_zeta_render_result_summary read '{"ok":true,"content":[{"type":"text","text":"a\\nb\\n"}],"metadata":{"path":"README.md"}}'
-                __sigil_zeta_render_result_summary ls '{"ok":true,"content":[{"type":"text","text":"a\\nb"}],"metadata":{"entries":2}}'
-                __sigil_zeta_render_result_summary grep '{"ok":true,"content":[{"type":"text","text":"a.py:1:x\\nb.py:2:y\\n"}],"metadata":{}}'
-                """
-            ),
-            tmp,
-            stub,
-        )
-        assert_success(result)
-        assert "  2 lines · 4 bytes" in result.stdout
-        assert "  2 entries" in result.stdout
-        assert "  2 matches · 2 files" in result.stdout
-
-
-@pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
-def test_zsh_renders_shell_result_summary() -> None:
-    with tempfile.TemporaryDirectory() as tmp_dir:
-        tmp = Path(tmp_dir)
-        stub = make_stub(tmp)
-        result = run_shell(
-            "zsh",
-            textwrap.dedent(
-                """\
-                source src/sigil/shell/zsh/sigil.zsh
-                __sigil_zeta_render_shell_result_summary '{"type":"tool_result","result":{"outcome":"executed","executed_command":"uv run pytest","status":0,"shell_turns":[{"command":"uv run pytest"}]}}'
-                __sigil_zeta_render_shell_result_summary '{"type":"tool_result","result":{"outcome":"cancelled","expected_command":"uv run pytest","actual_command":"uv run pytest -q","shell_turns":[{"command":"uv run pytest -q"}]}}'
-                """
-            ),
-            tmp,
-            stub,
-        )
-        assert_success(result)
-        assert "❯ shell  captured" in result.stdout
-        assert "  uv run pytest" in result.stdout
-        assert "  exit 0 · 1 shell turn" in result.stdout
-        assert "❯ shell  changed" in result.stdout
-        assert "  expected: uv run pytest" in result.stdout
-        assert "  ran:      uv run pytest -q" in result.stdout
 
 
 @pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")

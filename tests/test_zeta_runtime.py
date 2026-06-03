@@ -267,9 +267,14 @@ def test_zeta_transcript_shell_result_appends_tool_result(
     assert event["tool_call_id"] == "call-1"
     assert event["name"] == "bash"
     assert event["result"]["ok"] is True
-    assert event["result"]["type"] == "shell_command_result"
+    assert event["result"]["schema"] == "zeta.shell_handoff_result.v1"
+    assert event["result"]["type"] == "shell_handoff_result"
+    assert event["result"]["outcome"] == "executed"
     assert event["result"]["command"] == "uv run pytest"
+    assert event["result"]["expected_command"] == "uv run pytest"
+    assert event["result"]["executed_command"] == "uv run pytest"
     assert event["result"]["status"] == 1
+    assert event["result"]["shell_turns"][0]["command"] == "uv run pytest"
     assert "uv run pytest (exit 1)" in event["result"]["content"][0]["text"]
 
 
@@ -301,9 +306,81 @@ def test_zeta_transcript_shell_result_cancels_modified_handoff(
     assert event["type"] == "tool_result"
     assert event["tool_call_id"] == "call-1"
     assert event["result"]["ok"] is False
-    assert event["result"]["type"] == "shell_call_cancelled"
+    assert event["result"]["schema"] == "zeta.shell_handoff_result.v1"
+    assert event["result"]["type"] == "shell_handoff_result"
+    assert event["result"]["outcome"] == "cancelled"
+    assert event["result"]["cancellation_reason"] == "expected_command_not_executed"
     assert event["result"]["expected_command"] == "uv run pytest"
     assert event["result"]["actual_command"] == "uv run pytest -q"
+    assert event["result"]["shell_turns"][0]["command"] == "uv run pytest -q"
+
+
+def test_zeta_transcript_shell_result_includes_intervening_shell_turns(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("SIGIL_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("SIGIL_SESSION_ID", "zeta-test")
+    zeta.append_transcript(
+        {
+            "type": "tool_result",
+            "tool_call_id": "call-1",
+            "name": "bash",
+            "result": {
+                "ok": True,
+                "handoff": {
+                    "type": "shell_prompt",
+                    "command": "uv run pytest",
+                    "reason": "Run tests.",
+                },
+            },
+        }
+    )
+    record_turn("git status --short", 0, "/repo", stdout_snippet=" M README.md")
+    record_turn("uv run pytest", 0, "/repo", stdout_snippet="191 passed")
+
+    event = zeta.append_shell_result()
+
+    assert event["result"]["outcome"] == "executed"
+    assert event["result"]["executed_command"] == "uv run pytest"
+    assert [turn["command"] for turn in event["result"]["shell_turns"]] == [
+        "git status --short",
+        "uv run pytest",
+    ]
+    assert "1 user shell turn" in event["result"]["content"][0]["text"]
+
+
+def test_zeta_transcript_shell_result_does_not_reuse_resolved_handoff(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("SIGIL_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("SIGIL_SESSION_ID", "zeta-test")
+    zeta.append_transcript(
+        {
+            "type": "tool_result",
+            "tool_call_id": "call-1",
+            "name": "bash",
+            "result": {
+                "ok": True,
+                "handoff": {
+                    "type": "shell_prompt",
+                    "command": "uv run pytest",
+                    "reason": "Run tests.",
+                },
+            },
+        }
+    )
+    record_turn("uv run pytest", 0, "/repo", stdout_snippet="191 passed")
+
+    first = zeta.append_shell_result()
+    second = zeta.append_shell_result()
+
+    assert first["type"] == "tool_result"
+    assert first["result"]["outcome"] == "executed"
+    assert second["type"] == "shell_resume"
+    assert second["result"]["outcome"] == "no_pending_handoff"
+    assert second["result"]["shell_turns"][0]["command"] == "uv run pytest"
 
 
 def test_zeta_question_loop_feeds_current_tool_result_to_next_step(

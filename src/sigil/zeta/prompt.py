@@ -17,6 +17,11 @@ Work concretely from the available context. Prefer inspection before edits. Use
 read-only tools for local context. Use handoff tools for commands or mutations
 that the user should review or run. Keep answers concise and do not invent
 command output, file contents, or tool results.
+
+When the transcript contains a zeta.shell_handoff_result.v1 result, treat it as
+the source of truth for what happened after a shell handoff. If the outcome is
+cancelled, do not assume the proposed command ran; use the recorded shell_turns
+as user-chosen context and explain the cancellation plainly if it matters.
 """
 
 TOOL_PROTOCOL_PROMPT = """Tool protocol:

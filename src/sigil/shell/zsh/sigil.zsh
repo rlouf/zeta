@@ -202,7 +202,7 @@ __sigil_zeta_turn() {
   continue_step=0
   if [[ -z "$objective" ]]; then
     continue_step=1
-    objective="Continue the active Zeta step. Use recent shell activity as the result of the command(s) the user chose to run after the last handoff. If no relevant shell turn appears, ask for the command result instead of inventing it."
+    objective="Continue the active Zeta step. Read the latest zeta.shell_handoff_result.v1 transcript event as the source of truth for what the user ran after the last shell handoff. If the outcome is cancelled, do not assume the proposed command ran; continue from the recorded shell_turns and explain the cancellation plainly if it matters. If no relevant shell turn appears, ask for the command result instead of inventing it."
   fi
   if [[ "$continue_step" == "1" ]]; then
     "$__zeta_bin" transcript shell-result >/dev/null 2>&1 || true

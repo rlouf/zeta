@@ -210,16 +210,15 @@ def test_comma_operator_continues_existing_answer_transcript() -> None:
     assert result.exit_code == 0, result.output
     assert calls == [
         (
-            (
-                "Continue the previous shell discussion.\n\n"
-                "Transcript so far:\nuser:\nfirst question\n\n"
-                "assistant:\nfirst answer\n\n"
-                "Follow-up question:\nfollow up",
-            ),
+            ("follow up",),
             {
                 "glyph": ",",
                 "tools": "read,grep,ls",
                 "append_transcript": True,
+                "history": [
+                    {"role": "user", "content": "first question"},
+                    {"role": "assistant", "content": "first answer"},
+                ],
                 "json_output": False,
             },
         ),
@@ -773,6 +772,7 @@ def test_ask_follow_up_sends_piped_input_without_confirmation() -> None:
                 "glyph": "ask",
                 "tools": "read,grep,ls",
                 "append_transcript": True,
+                "history": [],
                 "json_output": False,
             },
         )

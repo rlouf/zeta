@@ -119,10 +119,12 @@ def ask(
     tools: str = ZETA_ANSWER_TOOLS,
     append_transcript: bool = False,
     json_output: bool = False,
+    history: Iterable[dict[str, object]] = (),
 ) -> int:
     """Run Zeta for a shell answer while recording transcript state."""
     user_input = question
     prompt = user_input if append_transcript else prepend_recent_turns(user_input)
+    history_turns = list(history)
     request_event = append_event(
         {
             "type": ANSWER_REQUEST_EVENT,
@@ -130,6 +132,7 @@ def ask(
             "prompt": prompt,
             "follow_up": append_transcript,
             "glyph": glyph,
+            "history_turns": len(history_turns),
         }
     )
     user_turn = {
@@ -160,6 +163,7 @@ def ask(
         follow_up=append_transcript,
         json_output=json_output,
         allowed_tools=enabled_tools,
+        history=history_turns,
     )
 
 
@@ -226,6 +230,7 @@ def run_tool_answer(
     json_output: bool = False,
     max_steps: int = 4,
     allowed_tools: Iterable[str] = ANSWER_TOOLS,
+    history: Iterable[dict[str, object]] = (),
 ) -> int:
     """Run a read-only Zeta answer turn and persist answer state."""
     if not ensure_server():
@@ -240,7 +245,10 @@ def run_tool_answer(
         "available_tools": list(enabled_tools),
     }
     append_jsonl(runtime.TRANSCRIPT, user_event)
-    turn_events: list[dict[str, Any]] = [user_event]
+    turn_events: list[dict[str, Any]] = [
+        dict(turn) for turn in history if turn.get("role") in {"user", "assistant"}
+    ]
+    turn_events.append(user_event)
     tool_events: list[dict[str, Any]] = []
     answer = ""
     for _ in range(max_steps):

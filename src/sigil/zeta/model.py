@@ -78,14 +78,14 @@ def request_chat_completion(body: dict[str, Any]) -> dict[str, Any]:
     return payload
 
 
-def chat_json(system: str, user: str, schema: dict[str, Any]) -> dict[str, Any]:
-    """Request schema-constrained JSON from the configured model endpoint."""
+def chat_json_messages(
+    messages: list[dict[str, Any]],
+    schema: dict[str, Any],
+) -> dict[str, Any]:
+    """Request schema-constrained JSON from full chat messages."""
     body = {
         "model": model_name(),
-        "messages": [
-            {"role": "system", "content": system},
-            {"role": "user", "content": user},
-        ],
+        "messages": messages,
         "temperature": 0.2,
         "max_tokens": 640,
         "chat_template_kwargs": {"enable_thinking": False},
@@ -97,6 +97,17 @@ def chat_json(system: str, user: str, schema: dict[str, Any]) -> dict[str, Any]:
     payload = request_chat_completion(body)
     content = payload["choices"][0]["message"]["content"]
     return json.loads(content)
+
+
+def chat_json(system: str, user: str, schema: dict[str, Any]) -> dict[str, Any]:
+    """Request schema-constrained JSON from the configured model endpoint."""
+    return chat_json_messages(
+        [
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ],
+        schema,
+    )
 
 
 def chat_text(system: str, user: str, *, max_tokens: int = 1200) -> str:

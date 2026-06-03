@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+from typing import TextIO
 
 import click
 
@@ -41,7 +42,7 @@ def cmd_zeta_step(
     """Run one Python-owned Zeta loop for shell bindings."""
     objective = " ".join(objective_parts)
     if continue_step:
-        render_shell_result(sigil_handoff.append_shell_result())
+        render_shell_result(sigil_handoff.append_shell_result(), output=sys.stderr)
         if not objective:
             objective = CONTINUE_OBJECTIVE
     return run_agent_step(
@@ -49,10 +50,14 @@ def cmd_zeta_step(
         glyph=glyph,
         handoff_path=handoff_file,
         handoff_output="summary",
-        trace_output=sys.stdout,
+        trace_output=sys.stderr,
     )
 
 
-def render_shell_result(event: dict[str, object]) -> None:
+def render_shell_result(
+    event: dict[str, object],
+    *,
+    output: TextIO = sys.stdout,
+) -> None:
     for line in shell_result_summary(event):
-        print(line)
+        print(line, file=output)

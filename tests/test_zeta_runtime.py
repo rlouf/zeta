@@ -277,6 +277,22 @@ def test_sigil_zeta_step_writes_handoff_file(
     }
 
 
+def test_sigil_zeta_step_keeps_trace_off_stdout(monkeypatch) -> None:
+    monkeypatch.setattr(zeta_runner, "ensure_server", lambda: True)
+    monkeypatch.setattr(
+        zeta_runner.runtime,
+        "next_model_action",
+        lambda *args, **kwargs: {"type": "final", "content": "summary"},
+    )
+
+    result = CliRunner().invoke(sigil_cli, ["zeta-step", "summarize"])
+
+    assert result.exit_code == 0
+    assert result.stdout == "\nsummary\n"
+    assert "❯ zeta ,, " in result.stderr
+    assert "❯ zeta ,, " not in result.stdout
+
+
 def test_zeta_agent_step_separates_trace_from_final_answer(
     monkeypatch,
     capsys,
@@ -350,21 +366,22 @@ def test_zeta_next_model_action_accepts_route_specific_system_prompt(
 ) -> None:
     captured: dict[str, object] = {}
 
-    def fake_chat_json(
-        system: str, user: str, schema: dict[str, object]
+    def fake_chat_json_messages(
+        messages: list[dict[str, object]],
+        schema: dict[str, object],
     ) -> dict[str, object]:
-        captured["system"] = system
-        captured["user"] = user
+        captured["messages"] = messages
         captured["schema"] = schema
         return {"type": "final", "content": "done"}
 
     monkeypatch.setattr(zeta, "model_endpoint_open", lambda: True)
-    monkeypatch.setattr(zeta, "chat_json", fake_chat_json)
+    monkeypatch.setattr(zeta, "chat_json_messages", fake_chat_json_messages)
 
     action = zeta.next_model_action("repair", [], system="custom system")
 
     assert action == {"type": "final", "content": "done"}
-    system_prompt = str(captured["system"])
+    messages = cast(list[dict[str, object]], captured["messages"])
+    system_prompt = str(messages[0]["content"])
     assert system_prompt.startswith("custom system")
     assert "Available tools with input JSON Schemas:" in system_prompt
     assert '"name":"read"' in system_prompt
@@ -383,11 +400,11 @@ def test_zeta_system_prompt_is_product_neutral_and_dynamic() -> None:
 def test_zeta_next_model_action_filters_available_tools(monkeypatch) -> None:
     captured: dict[str, object] = {}
 
-    def fake_chat_json(
-        system: str, user: str, schema: dict[str, object]
+    def fake_chat_json_messages(
+        messages: list[dict[str, object]],
+        schema: dict[str, object],
     ) -> dict[str, object]:
-        captured["system"] = system
-        captured["user"] = user
+        captured["messages"] = messages
         captured["schema"] = schema
         return {
             "type": "tool_call",
@@ -396,7 +413,7 @@ def test_zeta_next_model_action_filters_available_tools(monkeypatch) -> None:
         }
 
     monkeypatch.setattr(zeta, "model_endpoint_open", lambda: True)
-    monkeypatch.setattr(zeta, "chat_json", fake_chat_json)
+    monkeypatch.setattr(zeta, "chat_json_messages", fake_chat_json_messages)
 
     action = zeta.next_model_action(
         "What does this pyproject.toml file contain?",
@@ -413,23 +430,25 @@ def test_zeta_next_model_action_filters_available_tools(monkeypatch) -> None:
     properties = cast(dict[str, Any], schema["properties"])
     name_schema = cast(dict[str, Any], properties["name"])
     assert name_schema["enum"] == ["grep", "read"]
-    system_prompt = str(captured["system"])
+    messages = cast(list[dict[str, object]], captured["messages"])
+    system_prompt = str(messages[0]["content"])
     assert '"type":"function"' in system_prompt
     assert '"name":"read"' in system_prompt
     assert '"name":"grep"' in system_prompt
     assert '"parameters":{"type":"object"' in system_prompt
     assert '"schema"' not in system_prompt
     assert '"name":"bash"' not in system_prompt
-    user_prompt = str(captured["user"])
+    user_prompt = str(messages[1]["content"])
     assert "Available tools" not in user_prompt
     assert '"name":"read"' not in user_prompt
 
 
 def test_zeta_next_model_action_rejects_disallowed_tool(monkeypatch) -> None:
-    def fake_chat_json(
-        system: str, user: str, schema: dict[str, object]
+    def fake_chat_json_messages(
+        messages: list[dict[str, object]],
+        schema: dict[str, object],
     ) -> dict[str, object]:
-        del system, user, schema
+        del messages, schema
         return {
             "type": "tool_call",
             "name": "bash",
@@ -437,7 +456,7 @@ def test_zeta_next_model_action_rejects_disallowed_tool(monkeypatch) -> None:
         }
 
     monkeypatch.setattr(zeta, "model_endpoint_open", lambda: True)
-    monkeypatch.setattr(zeta, "chat_json", fake_chat_json)
+    monkeypatch.setattr(zeta, "chat_json_messages", fake_chat_json_messages)
 
     action = zeta.next_model_action("inspect file", [], allowed_tools=("read", "grep"))
 
@@ -445,6 +464,59 @@ def test_zeta_next_model_action_rejects_disallowed_tool(monkeypatch) -> None:
         "type": "final",
         "content": "I could not choose a valid Zeta tool for the next step.",
     }
+
+
+def test_zeta_next_model_action_sends_transcript_as_chat_messages(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_chat_json_messages(
+        messages: list[dict[str, object]],
+        schema: dict[str, object],
+    ) -> dict[str, object]:
+        del schema
+        captured["messages"] = messages
+        return {"type": "final", "content": "done"}
+
+    monkeypatch.setattr(zeta, "model_endpoint_open", lambda: True)
+    monkeypatch.setattr(zeta, "chat_json_messages", fake_chat_json_messages)
+
+    action = zeta.next_model_action(
+        "summarize README",
+        [
+            {"type": "user_message", "content": "can you summarize the README"},
+            {
+                "type": "tool_call",
+                "id": "call-1",
+                "name": "read",
+                "input": {"path": "README.md"},
+            },
+            {
+                "type": "tool_result",
+                "tool_call_id": "call-1",
+                "name": "read",
+                "result": {"ok": True, "content": [{"type": "text", "text": "docs"}]},
+            },
+            {"type": "assistant_message", "content": "summary"},
+        ],
+    )
+
+    assert action == {"type": "final", "content": "done"}
+    messages = cast(list[dict[str, Any]], captured["messages"])
+    assert messages[2] == {
+        "role": "user",
+        "content": "can you summarize the README",
+    }
+    tool_call = messages[3]
+    assert tool_call["role"] == "assistant"
+    assert tool_call["content"] is None
+    tool_calls = cast(list[dict[str, Any]], tool_call["tool_calls"])
+    assert tool_calls[0]["id"] == "call-1"
+    assert tool_calls[0]["function"]["name"] == "read"
+    assert tool_calls[0]["function"]["arguments"] == '{"path":"README.md"}'
+    assert messages[4]["role"] == "tool"
+    assert messages[4]["tool_call_id"] == "call-1"
+    assert '"docs"' in str(messages[4]["content"])
+    assert messages[5] == {"role": "assistant", "content": "summary"}
 
 
 def test_zeta_user_prompt_includes_explicit_context() -> None:
@@ -663,6 +735,49 @@ def test_zeta_question_loop_feeds_current_tool_result_to_next_step(
     assert "\n\nIt contains project metadata.\n" in output
     assert "project metadata" in output
     assert len(transcripts) == 2
+
+
+def test_zeta_question_loop_passes_follow_up_history_as_turns(
+    monkeypatch,
+) -> None:
+    transcripts: list[list[dict[str, Any]]] = []
+
+    def fake_next_model_action(
+        objective: str,
+        transcript: list[dict[str, Any]],
+        **kwargs: object,
+    ) -> dict[str, object]:
+        del objective, kwargs
+        transcripts.append(transcript)
+        return {"type": "final", "content": "follow-up answer"}
+
+    monkeypatch.setattr(answers_runner, "ensure_server", lambda: True)
+    monkeypatch.setattr(
+        answers_runner.runtime, "next_model_action", fake_next_model_action
+    )
+
+    code = answers_runner.run_tool_answer(
+        "question system",
+        "and why?",
+        history=[
+            {"role": "user", "content": "summarize README"},
+            {"role": "assistant", "content": "It is a Sigil README."},
+        ],
+    )
+
+    assert code == 0
+    assert transcripts[0][:3] == [
+        {"role": "user", "content": "summarize README"},
+        {"role": "assistant", "content": "It is a Sigil README."},
+        {
+            "type": "user_message",
+            "content": "and why?",
+            "runtime": "zeta",
+            "route": "answer",
+            "system": "question system",
+            "available_tools": ["read", "grep", "ls"],
+        },
+    ]
 
 
 def test_zeta_question_loop_falls_back_instead_of_budget_message(

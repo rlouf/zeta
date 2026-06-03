@@ -9,7 +9,6 @@ from ._shared import piped_stdin_text, question_with_stdin
 from ..answers import (
     ZETA_ANSWER_TOOLS,
     ask,
-    continuation_prompt,
     discussion_turns,
 )
 
@@ -23,13 +22,14 @@ def cmd_ask(question: str | None, follow_up: bool, json_output: bool) -> int:
     stdin_text = piped_stdin_text()
     if follow_up:
         prompt = question_with_stdin(question or "", stdin_text or "")
-        prompt = continuation_prompt(prompt, discussion_turns())
+        history = discussion_turns()
         return ask(
             prompt,
             glyph="ask",
             tools=ZETA_ANSWER_TOOLS,
             append_transcript=True,
             json_output=json_output,
+            history=history,
         )
     if stdin_text is not None:
         prompt = question_with_stdin(question or "", stdin_text)

@@ -13,7 +13,6 @@ from ..operators import OperatorInvocation, create_invocation
 from ..answers import (
     ZETA_ANSWER_TOOLS,
     ask,
-    continuation_prompt,
     discussion_turns,
 )
 
@@ -93,11 +92,18 @@ def dispatch_readonly_operator(
     turns = discussion_turns()
     append_transcript = bool(turns)
     if append_transcript:
-        question = continuation_prompt(question, turns)
+        return ask(
+            question,
+            glyph=",",
+            tools=ZETA_ANSWER_TOOLS,
+            append_transcript=True,
+            history=turns,
+            json_output=json_output,
+        )
     return ask(
         question,
         glyph=",",
         tools=ZETA_ANSWER_TOOLS,
-        append_transcript=append_transcript,
+        append_transcript=False,
         json_output=json_output,
     )

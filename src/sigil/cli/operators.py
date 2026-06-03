@@ -10,7 +10,12 @@ from ._shared import confirm_piped_input, print_json_line, question_with_stdin
 from ._shared import should_confirm_piped_input, should_run_act_operator
 from ..acts import run_act_stepper
 from ..operators import OperatorInvocation, create_invocation
-from ..answers import ZETA_ANSWER_TOOLS, ask
+from ..answers import (
+    ZETA_ANSWER_TOOLS,
+    ask,
+    continuation_prompt,
+    discussion_turns,
+)
 
 
 def run_operator(
@@ -85,9 +90,14 @@ def dispatch_readonly_operator(
         question = question_with_stdin(question, stdin_text)
     if not question:
         question = "Inspect and summarize the current shell context."
+    turns = discussion_turns()
+    append_transcript = bool(turns)
+    if append_transcript:
+        question = continuation_prompt(question, turns)
     return ask(
         question,
         glyph=",",
         tools=ZETA_ANSWER_TOOLS,
+        append_transcript=append_transcript,
         json_output=json_output,
     )

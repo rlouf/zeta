@@ -157,6 +157,7 @@ def test_op_cli_runs_piped_comma_through_readonly_route() -> None:
             {
                 "glyph": ",",
                 "tools": "read,grep,ls",
+                "append_transcript": False,
                 "json_output": False,
             },
         )
@@ -180,6 +181,45 @@ def test_comma_operator_uses_readonly_route() -> None:
             {
                 "glyph": ",",
                 "tools": "read,grep,ls",
+                "append_transcript": False,
+                "json_output": False,
+            },
+        ),
+    ]
+
+
+def test_comma_operator_continues_existing_answer_transcript() -> None:
+    calls = []
+
+    def fake_ask(*args: object, **kwargs: object) -> int:
+        calls.append((args, kwargs))
+        return 0
+
+    with (
+        patch(
+            "sigil.cli.operators.discussion_turns",
+            return_value=[
+                {"role": "user", "content": "first question"},
+                {"role": "assistant", "content": "first answer"},
+            ],
+        ),
+        patch("sigil.cli.operators.ask", side_effect=fake_ask),
+    ):
+        result = invoke_op([",", "follow", "up"])
+
+    assert result.exit_code == 0, result.output
+    assert calls == [
+        (
+            (
+                "Continue the previous shell discussion.\n\n"
+                "Transcript so far:\nuser:\nfirst question\n\n"
+                "assistant:\nfirst answer\n\n"
+                "Follow-up question:\nfollow up",
+            ),
+            {
+                "glyph": ",",
+                "tools": "read,grep,ls",
+                "append_transcript": True,
                 "json_output": False,
             },
         ),
@@ -677,6 +717,7 @@ def test_op_cli_does_not_confirm_piped_comma_before_readonly_route() -> None:
             {
                 "glyph": ",",
                 "tools": "read,grep,ls",
+                "append_transcript": False,
                 "json_output": False,
             },
         )
@@ -761,6 +802,7 @@ def test_op_cli_routes_piped_comma_to_readonly_answer() -> None:
             {
                 "glyph": ",",
                 "tools": "read,grep,ls",
+                "append_transcript": False,
                 "json_output": False,
             },
         )

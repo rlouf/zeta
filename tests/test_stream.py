@@ -5,7 +5,7 @@ from io import StringIO
 from typing import cast
 
 from _patch import patch
-from sigil.zeta.stream import inherited_terminal_fds, run_zeta_stream
+from sigil.stream import inherited_terminal_fds, run_zeta_stream
 
 
 def test_inherited_terminal_fds_keeps_valid_zeta_tty_fd() -> None:
@@ -39,7 +39,7 @@ def test_run_zeta_stream_passes_zeta_tty_fd_to_zeta_process() -> None:
 
     fd = os.open(os.devnull, os.O_RDONLY)
     try:
-        with patch("sigil.zeta.stream.subprocess.Popen", side_effect=fake_popen):
+        with patch("sigil.stream.subprocess.Popen", side_effect=fake_popen):
             result = run_zeta_stream(
                 ["zeta", "--mode", "json"],
                 zeta_env={"ZETA_TTY_FD": str(fd)},

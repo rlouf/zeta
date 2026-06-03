@@ -18,8 +18,8 @@ import time
 from dataclasses import dataclass
 from typing import TextIO, cast
 
-from ..state import ANSWER_TRANSCRIPT, append_event, append_jsonl
-from ..tty import MUTED, RESET
+from .state import ANSWER_TRANSCRIPT, append_event, append_jsonl
+from .tty import MUTED, RESET
 
 DEFAULT_GLOW_STYLE = "notty"
 DEFAULT_GLOW_WIDTH = "88"

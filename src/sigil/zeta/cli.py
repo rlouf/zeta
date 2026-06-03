@@ -131,22 +131,6 @@ def transcript_append() -> int:
     return 0
 
 
-@transcript_group.command("shell-result")
-def transcript_shell_result() -> int:
-    print_json(zeta.append_shell_result())
-    return 0
-
-
-@transcript_group.command("shell-turn")
-def transcript_shell_turn() -> int:
-    try:
-        turn = zeta.read_json_stdin(sys.stdin)
-    except (json.JSONDecodeError, ValueError) as exc:
-        raise click.BadParameter(str(exc), param_hint="stdin") from exc
-    print_json(zeta.append_shell_turn(turn))
-    return 0
-
-
 @transcript_group.command("tail")
 @click.option("--limit", default=zeta.DEFAULT_TAIL_LIMIT, show_default=True)
 def transcript_tail(limit: int) -> int:

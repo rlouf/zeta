@@ -114,7 +114,7 @@ __sigil_zeta_record_shell_turn() {
     "$(__sigil_json_string "$PWD")" \
     "$(__sigil_json_string "$stdout_snippet")" \
     "$(__sigil_json_string "$stderr_snippet")")"
-  printf '%s\n' "$payload" | "$__zeta_bin" transcript shell-turn >/dev/null 2>&1 || true
+  printf '%s\n' "$payload" | "$__sigil_bin" transcript shell-turn >/dev/null 2>&1 || true
   unset SIGIL_FAILURE_STDOUT SIGIL_FAILURE_STDERR
 }
 
@@ -277,7 +277,7 @@ __sigil_zeta_turn() {
   fi
   if [[ "$continue_step" == "1" ]]; then
     __sigil_zeta_consume_capture
-    shell_result_event="$("$__zeta_bin" transcript shell-result 2>/dev/null || true)"
+    shell_result_event="$("$__sigil_bin" transcript shell-result 2>/dev/null || true)"
     [[ -n "$shell_result_event" ]] && __sigil_zeta_render_shell_result_summary "$shell_result_event"
   fi
   __sigil_zeta_append "$(printf '{"type":"user_message","content":%s}' "$(__sigil_json_string "$objective")")" >/dev/null

@@ -7,14 +7,16 @@ from typing import Any, cast
 from click.testing import CliRunner
 
 from sigil import answers as answers_runner
-from sigil.session import recent_turns, record_turn
 from sigil import display as sigil_display
+from sigil import handoff as sigil_handoff
+from sigil.cli import cli as sigil_cli
+from sigil.session import recent_turns, record_turn
 from sigil.zeta import runtime as zeta
-from sigil.zeta.cli import cli
+from sigil.zeta.cli import cli as zeta_cli
 
 
 def test_zeta_tools_list_exposes_v1_builtins() -> None:
-    result = CliRunner().invoke(cli, ["tools", "list", "--json"])
+    result = CliRunner().invoke(zeta_cli, ["tools", "list", "--json"])
     assert result.exit_code == 0
     data = json.loads(result.output)
     names = {tool["name"] for tool in data["tools"]}
@@ -26,12 +28,12 @@ def test_zeta_tool_read_schema_and_run(tmp_path: Path) -> None:
     target = tmp_path / "note.txt"
     target.write_text("hello zeta\n", encoding="utf-8")
 
-    schema = CliRunner().invoke(cli, ["tool", "read", "--schema"])
+    schema = CliRunner().invoke(zeta_cli, ["tool", "read", "--schema"])
     assert schema.exit_code == 0
     assert json.loads(schema.output)["required"] == ["path"]
 
     result = CliRunner().invoke(
-        cli,
+        zeta_cli,
         ["tool", "read"],
         input=json.dumps({"path": str(target)}),
     )
@@ -43,7 +45,7 @@ def test_zeta_tool_read_schema_and_run(tmp_path: Path) -> None:
 
 def test_zeta_tool_bash_returns_handoff() -> None:
     result = CliRunner().invoke(
-        cli,
+        zeta_cli,
         ["tool", "bash"],
         input=json.dumps({"command": "uv run pytest", "reason": "Run tests."}),
     )
@@ -101,7 +103,7 @@ def test_zeta_tool_ls_lists_directory_contents(tmp_path: Path) -> None:
     (tmp_path / "pyproject.toml").write_text("[project]\n", encoding="utf-8")
 
     result = CliRunner().invoke(
-        cli,
+        zeta_cli,
         ["tool", "ls"],
         input=json.dumps({"path": str(tmp_path)}),
     )
@@ -126,7 +128,7 @@ def test_zeta_tool_ls_can_filter_large_files_without_shelling_out(
     (tmp_path / "small.txt").write_bytes(b"x" * 4)
 
     result = CliRunner().invoke(
-        cli,
+        zeta_cli,
         ["tool", "ls"],
         input=json.dumps(
             {
@@ -149,7 +151,7 @@ def test_zeta_tool_ls_can_filter_large_files_without_shelling_out(
 def test_zeta_tool_edit_writes_patch_artifact() -> None:
     patch = "--- a/a.txt\n+++ b/a.txt\n@@\n-old\n+new\n"
     result = CliRunner().invoke(
-        cli,
+        zeta_cli,
         ["tool", "edit"],
         input=json.dumps({"patch": patch}),
     )
@@ -167,20 +169,26 @@ def test_zeta_transcript_append_and_tail(tmp_path: Path, monkeypatch) -> None:
 
     runner = CliRunner()
     appended = runner.invoke(
-        cli,
+        zeta_cli,
         ["transcript", "append"],
         input=json.dumps({"type": "tool_call", "name": "read"}),
     )
     assert appended.exit_code == 0
 
-    tail = runner.invoke(cli, ["transcript", "tail", "--limit", "1"])
+    tail = runner.invoke(zeta_cli, ["transcript", "tail", "--limit", "1"])
     assert tail.exit_code == 0
     data = json.loads(tail.output)
     assert data["events"][0]["type"] == "tool_call"
     assert data["events"][0]["name"] == "read"
 
 
-def test_zeta_transcript_shell_turn_records_recent_turn(
+def test_zeta_transcript_does_not_expose_shell_handoff_verbs() -> None:
+    result = CliRunner().invoke(zeta_cli, ["transcript", "shell-result"])
+
+    assert result.exit_code != 0
+
+
+def test_sigil_transcript_shell_turn_records_recent_turn(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -188,7 +196,7 @@ def test_zeta_transcript_shell_turn_records_recent_turn(
     monkeypatch.setenv("SIGIL_SESSION_ID", "zeta-test")
 
     result = CliRunner().invoke(
-        cli,
+        sigil_cli,
         ["transcript", "shell-turn"],
         input=json.dumps(
             {
@@ -325,27 +333,27 @@ def test_zeta_next_model_action_rejects_disallowed_tool(monkeypatch) -> None:
     }
 
 
-def test_zeta_user_prompt_includes_recent_shell_activity(
-    tmp_path: Path,
-    monkeypatch,
-) -> None:
-    monkeypatch.setenv("SIGIL_STATE_DIR", str(tmp_path))
-    monkeypatch.setenv("SIGIL_SESSION_ID", "zeta-test")
-    record_turn(
-        "uv run pytest",
-        1,
-        "/repo",
-        stderr_snippet="test failed",
+def test_zeta_user_prompt_includes_explicit_context() -> None:
+    context = "\n".join(
+        [
+            "Recent shell activity:",
+            "- uv run pytest (exit 1)",
+            "  stderr: test failed",
+        ]
     )
 
-    prompt = zeta.zeta_user_prompt("Continue the active Zeta step.", [])
+    prompt = zeta.zeta_user_prompt(
+        "Continue the active Zeta step.",
+        [],
+        context=context,
+    )
 
     assert "Recent shell activity:" in prompt
     assert "uv run pytest (exit 1)" in prompt
     assert "stderr: test failed" in prompt
 
 
-def test_zeta_transcript_shell_result_appends_tool_result(
+def test_sigil_transcript_shell_result_appends_tool_result(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -368,7 +376,7 @@ def test_zeta_transcript_shell_result_appends_tool_result(
     )
     record_turn("uv run pytest", 1, "/repo", stderr_snippet="test failed")
 
-    result = CliRunner().invoke(cli, ["transcript", "shell-result"])
+    result = CliRunner().invoke(sigil_cli, ["transcript", "shell-result"])
 
     assert result.exit_code == 0
     event = json.loads(result.output)
@@ -387,7 +395,7 @@ def test_zeta_transcript_shell_result_appends_tool_result(
     assert "uv run pytest (exit 1)" in event["result"]["content"][0]["text"]
 
 
-def test_zeta_transcript_shell_result_cancels_modified_handoff(
+def test_sigil_transcript_shell_result_cancels_modified_handoff(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -410,7 +418,7 @@ def test_zeta_transcript_shell_result_cancels_modified_handoff(
     )
     record_turn("uv run pytest -q", 1, "/repo", stderr_snippet="test failed")
 
-    event = zeta.append_shell_result()
+    event = sigil_handoff.append_shell_result()
 
     assert event["type"] == "tool_result"
     assert event["tool_call_id"] == "call-1"
@@ -424,7 +432,7 @@ def test_zeta_transcript_shell_result_cancels_modified_handoff(
     assert event["result"]["shell_turns"][0]["command"] == "uv run pytest -q"
 
 
-def test_zeta_transcript_shell_result_includes_intervening_shell_turns(
+def test_sigil_transcript_shell_result_includes_intervening_shell_turns(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -448,7 +456,7 @@ def test_zeta_transcript_shell_result_includes_intervening_shell_turns(
     record_turn("git status --short", 0, "/repo", stdout_snippet=" M README.md")
     record_turn("uv run pytest", 0, "/repo", stdout_snippet="191 passed")
 
-    event = zeta.append_shell_result()
+    event = sigil_handoff.append_shell_result()
 
     assert event["result"]["outcome"] == "executed"
     assert event["result"]["executed_command"] == "uv run pytest"
@@ -459,7 +467,7 @@ def test_zeta_transcript_shell_result_includes_intervening_shell_turns(
     assert "1 user shell turn" in event["result"]["content"][0]["text"]
 
 
-def test_zeta_transcript_shell_result_does_not_reuse_resolved_handoff(
+def test_sigil_transcript_shell_result_does_not_reuse_resolved_handoff(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -482,8 +490,8 @@ def test_zeta_transcript_shell_result_does_not_reuse_resolved_handoff(
     )
     record_turn("uv run pytest", 0, "/repo", stdout_snippet="191 passed")
 
-    first = zeta.append_shell_result()
-    second = zeta.append_shell_result()
+    first = sigil_handoff.append_shell_result()
+    second = sigil_handoff.append_shell_result()
 
     assert first["type"] == "tool_result"
     assert first["result"]["outcome"] == "executed"

@@ -12,7 +12,7 @@ from click.testing import CliRunner
 from _patch import patch, patch_dict
 from sigil.cli import cli, main
 from sigil.failure import failure_context_prompt, record_failure, truncate_snippet
-from sigil.zeta.stream import renderer_command, should_color, stream_events
+from sigil.stream import renderer_command, should_color, stream_events
 from sigil.answers import (
     ANSWER_SYSTEM_PROMPT,
     ask,
@@ -281,7 +281,7 @@ def test_session_list_includes_last_event_context() -> None:
 
 
 def test_renderer_defaults_to_glow_notty_when_available() -> None:
-    with patch("sigil.zeta.stream.shutil.which", return_value="/opt/homebrew/bin/glow"):
+    with patch("sigil.stream.shutil.which", return_value="/opt/homebrew/bin/glow"):
         with patch_dict(os.environ, {}, clear=True):
             assert renderer_command() == [
                 "glow",
@@ -294,7 +294,7 @@ def test_renderer_defaults_to_glow_notty_when_available() -> None:
 
 
 def test_renderer_uses_env_overrides() -> None:
-    with patch("sigil.zeta.stream.shutil.which", return_value="/opt/homebrew/bin/glow"):
+    with patch("sigil.stream.shutil.which", return_value="/opt/homebrew/bin/glow"):
         with patch_dict(
             os.environ,
             {"ZETA_GLOW_STYLE": "tokyo-night", "ZETA_GLOW_WIDTH": "100"},
@@ -311,7 +311,7 @@ def test_renderer_uses_env_overrides() -> None:
 
 
 def test_renderer_falls_back_to_cat_without_glow() -> None:
-    with patch("sigil.zeta.stream.shutil.which", return_value=None):
+    with patch("sigil.stream.shutil.which", return_value=None):
         assert renderer_command() == ["cat"]
 
 
@@ -407,7 +407,7 @@ def test_zeta_stream_can_render_tool_calls_to_stdout() -> None:
             )
             stdout = StringIO()
             stderr = StringIO()
-            with patch("sigil.zeta.stream.open_terminal_output", return_value=None):
+            with patch("sigil.stream.open_terminal_output", return_value=None):
                 assert (
                     stream_events(
                         stdin=stdin,
@@ -457,7 +457,7 @@ def test_zeta_stream_can_render_tool_calls_to_terminal_when_stdout_is_redirected
             stdout = StringIO()
             stderr = StringIO()
             terminal = NonClosingTtyStringIO()
-            with patch("sigil.zeta.stream.open_terminal_output", return_value=terminal):
+            with patch("sigil.stream.open_terminal_output", return_value=terminal):
                 assert (
                     stream_events(
                         stdin=stdin,
@@ -1632,9 +1632,7 @@ def test_zeta_stream_deduplicates_toolcall_end_and_execution_start() -> None:
                                     "toolCall": {
                                         "id": "call-1",
                                         "name": "read",
-                                        "arguments": {
-                                            "path": "src/sigil/zeta/stream.py"
-                                        },
+                                        "arguments": {"path": "src/sigil/stream.py"},
                                     },
                                 },
                             }
@@ -1644,7 +1642,7 @@ def test_zeta_stream_deduplicates_toolcall_end_and_execution_start() -> None:
                                 "type": "tool_execution_start",
                                 "toolCallId": "call-1",
                                 "toolName": "read",
-                                "args": {"path": "src/sigil/zeta/stream.py"},
+                                "args": {"path": "src/sigil/stream.py"},
                             }
                         ),
                     ]

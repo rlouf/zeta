@@ -19,6 +19,7 @@ from . import (  # noqa: F401  (imported for command registration side effects)
     install,
     run,
     session,
+    transcript,
 )
 
 __all__ = ["cli", "main"]

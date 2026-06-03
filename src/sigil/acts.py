@@ -12,7 +12,7 @@ from typing import Any
 
 from .state import append_event, append_jsonl, read_jsonl
 from .tty import MUTED, RESET, clear_lines_on_tty, open_tty_fd, prompt_on_tty
-from .zeta.runner import run_agent_step
+from .zeta_runner import run_agent_step
 
 LAST_ACT = "last-act.jsonl"
 MAX_EVENT_OUTPUT_CHARS = 4000

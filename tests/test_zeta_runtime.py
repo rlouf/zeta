@@ -12,7 +12,24 @@ from sigil import handoff as sigil_handoff
 from sigil.cli import cli as sigil_cli
 from sigil.session import recent_turns, record_turn
 from sigil.zeta import runtime as zeta
+from sigil.zeta import model as zeta_model
 from sigil.zeta.cli import cli as zeta_cli
+
+
+def test_zeta_model_config_uses_zeta_env(monkeypatch) -> None:
+    monkeypatch.setenv("SIGIL_MODEL_URL", "http://legacy.invalid/v1/chat/completions")
+    monkeypatch.setenv("SIGIL_MODEL_NAME", "legacy-model")
+    monkeypatch.delenv("ZETA_MODEL_URL", raising=False)
+    monkeypatch.delenv("ZETA_MODEL_NAME", raising=False)
+
+    assert zeta_model.model_url() == zeta_model.DEFAULT_MODEL_URL
+    assert zeta_model.model_name() == zeta_model.DEFAULT_MODEL_NAME
+
+    monkeypatch.setenv("ZETA_MODEL_URL", "http://zeta.invalid/v1/chat/completions")
+    monkeypatch.setenv("ZETA_MODEL_NAME", "zeta-model")
+
+    assert zeta_model.model_url() == "http://zeta.invalid/v1/chat/completions"
+    assert zeta_model.model_name() == "zeta-model"
 
 
 def test_zeta_tools_list_exposes_v1_builtins() -> None:
@@ -244,7 +261,7 @@ def test_zeta_next_model_action_accepts_route_specific_system_prompt(
         captured["schema"] = schema
         return {"type": "final", "content": "done"}
 
-    monkeypatch.setattr(zeta, "ensure_server", lambda: True)
+    monkeypatch.setattr(zeta, "model_endpoint_open", lambda: True)
     monkeypatch.setattr(zeta, "chat_json", fake_chat_json)
 
     action = zeta.next_model_action("repair", [], system="custom system")
@@ -281,7 +298,7 @@ def test_zeta_next_model_action_filters_available_tools(monkeypatch) -> None:
             "input": {"path": "pyproject.toml"},
         }
 
-    monkeypatch.setattr(zeta, "ensure_server", lambda: True)
+    monkeypatch.setattr(zeta, "model_endpoint_open", lambda: True)
     monkeypatch.setattr(zeta, "chat_json", fake_chat_json)
 
     action = zeta.next_model_action(
@@ -322,7 +339,7 @@ def test_zeta_next_model_action_rejects_disallowed_tool(monkeypatch) -> None:
             "input": {"command": "cat pyproject.toml"},
         }
 
-    monkeypatch.setattr(zeta, "ensure_server", lambda: True)
+    monkeypatch.setattr(zeta, "model_endpoint_open", lambda: True)
     monkeypatch.setattr(zeta, "chat_json", fake_chat_json)
 
     action = zeta.next_model_action("inspect file", [], allowed_tools=("read", "grep"))

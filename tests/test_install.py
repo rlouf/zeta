@@ -88,7 +88,7 @@ def test_doctor_reports_expected_checks() -> None:
     fake_env = {
         "SHELL": "/bin/bash",
         "SIGIL_SESSION_ID": "test-session",
-        "SIGIL_MODEL_NAME": "model-test",
+        "ZETA_MODEL_NAME": "model-test",
     }
     with tempfile.TemporaryDirectory() as tmp:
         with patch_dict(os.environ, fake_env, clear=True):

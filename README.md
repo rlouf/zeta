@@ -90,9 +90,9 @@ updates the binding without duplicating the rc block.
 Useful environment variables:
 
 ```sh
-SIGIL_MODEL_URL=http://127.0.0.1:8080/v1/chat/completions
-SIGIL_MODEL_NAME=local-model
-SIGIL_MODEL_PATH=/path/to/model.gguf
+ZETA_MODEL_URL=http://127.0.0.1:8080/v1/chat/completions
+ZETA_MODEL_NAME=local-model
+ZETA_MODEL_PATH=/path/to/model.gguf
 SIGIL_STATE_DIR=$HOME/.sigil
 SIGIL_RUN_CAPTURE_BYTES=6000
 SIGIL_GLOW_STYLE=notty

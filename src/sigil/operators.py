@@ -5,7 +5,8 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Literal, cast
-from .model import chat_json, chat_text, ensure_server
+from .model import ensure_server
+from .zeta.model import chat_json, chat_text
 from .state import ANSWER_TRANSCRIPT, append_event, append_jsonl, read_jsonl
 from .failure import active_failure_context
 from .answers import recent_answer_context

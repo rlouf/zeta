@@ -11,7 +11,7 @@ import json
 import sys
 from typing import Any, Iterable
 
-from .model import chat_text, ensure_server
+from .model import ensure_server
 from .session import recent_turns_context
 from .state import (
     ANSWER_TRANSCRIPT,
@@ -20,6 +20,7 @@ from .state import (
     read_jsonl,
     write_jsonl,
 )
+from .zeta.model import chat_text
 from .zeta import runtime
 from .display import render_tool_start
 

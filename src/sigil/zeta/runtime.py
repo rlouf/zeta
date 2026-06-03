@@ -6,8 +6,8 @@ import json
 import os
 from typing import Any, Iterable, TextIO, cast
 
-from ..model import chat_json, ensure_server
 from ..state import append_jsonl, read_jsonl
+from .model import chat_json, model_endpoint_open
 from . import tools as tool_registry
 from .prompt import system_prompt
 
@@ -127,7 +127,7 @@ def next_model_action(
     allowed_tools: Iterable[str] | None = None,
     context: str = "",
 ) -> dict[str, Any]:
-    if not ensure_server():
+    if not model_endpoint_open():
         raise RuntimeError("model endpoint is not reachable")
     allowed = set(allowed_tools) if allowed_tools is not None else None
     data = chat_json(

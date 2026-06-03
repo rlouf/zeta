@@ -15,8 +15,8 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
-from .model import DEFAULT_MODEL_URL, model_url
 from .state import state_dir
+from .zeta.model import DEFAULT_MODEL_URL, model_url
 
 
 SUPPORTED_SHELLS = ("zsh", "bash")
@@ -296,8 +296,8 @@ def check_endpoint(env: dict[str, str] | None = None) -> DoctorCheck:
         return DoctorCheck(
             "model:endpoint",
             "fail",
-            f"invalid SIGIL_MODEL_URL: {model_endpoint}",
-            "Set SIGIL_MODEL_URL to an OpenAI-compatible chat completions endpoint.",
+            f"invalid ZETA_MODEL_URL: {model_endpoint}",
+            "Set ZETA_MODEL_URL to an OpenAI-compatible chat completions endpoint.",
         )
     port = parsed.port or (443 if parsed.scheme == "https" else 80)
     try:
@@ -309,7 +309,7 @@ def check_endpoint(env: dict[str, str] | None = None) -> DoctorCheck:
             "model:endpoint",
             "warn",
             f"not reachable at {model_endpoint}",
-            "Start the local model server or set SIGIL_MODEL_URL.",
+            "Start the local model server or set ZETA_MODEL_URL.",
         )
 
 
@@ -322,19 +322,19 @@ def check_model_config(env: dict[str, str] | None = None) -> DoctorCheck:
     return DoctorCheck(
         "model:name",
         "warn",
-        "SIGIL_MODEL_NAME is not set",
-        "Set SIGIL_MODEL_NAME if the endpoint requires an explicit model name.",
+        "ZETA_MODEL_NAME is not set",
+        "Set ZETA_MODEL_NAME if the endpoint requires an explicit model name.",
     )
 
 
 def model_url_from_env(env: Mapping[str, str]) -> str:
     """Return model URL from explicit env values."""
-    return env.get("SIGIL_MODEL_URL") or DEFAULT_MODEL_URL
+    return env.get("ZETA_MODEL_URL") or DEFAULT_MODEL_URL
 
 
 def model_name_from_env(env: Mapping[str, str]) -> str:
     """Return model name from explicit env values."""
-    return env.get("SIGIL_MODEL_NAME") or ""
+    return env.get("ZETA_MODEL_NAME") or ""
 
 
 def check_shell_support(shell: str | None) -> DoctorCheck:

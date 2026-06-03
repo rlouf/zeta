@@ -7,9 +7,9 @@
 
 Natural-language shell assistant.
 
-Sigil turns short terminal intents into explicit, inspectable shell actions.
-Ask from local context, propose one command with an explicit verb, run one
-command, or delegate one agent step without leaving your prompt.
+Sigil turns short terminal intents into explicit, inspectable shell interactions.
+Ask from local context, hand one agent step to Zeta, or run one command with
+captured output without leaving your prompt.
 Sigil is inspired by IRC-style bot commands: lightweight punctuation prefixes
 that let you address an assistant inline without leaving the conversation.
 
@@ -23,7 +23,7 @@ that let you address an assistant inline without leaving the conversation.
 ```
 
 Sigil is alpha software. It is ready for early shell users who are comfortable
-with local LLM tooling, explicit confirmations, and occasional interface
+with local LLM tooling, editable command handoffs, and occasional interface
 changes.
 
 ## Why Sigil?
@@ -34,8 +34,8 @@ suggesting, executing, and explaining. Sigil keeps those routes separate.
 | Need | Glyph | What happens |
 | --- | --- | --- |
 | "Answer from context." | `,` | Read-only answer with local inspection tools. No shell is exposed. |
-| "Do one agent turn." | `,,` | Runs one Zeta invocation after confirmation. |
-| "Do one routine turn." | `,,,` | Runs one Zeta invocation without per-step confirmation. |
+| "Do one agent turn." | `,,` | Runs one shell-owned Zeta turn. Bash calls are staged in your prompt. |
+| "Do another agent turn." | `,,,` | Same Zeta turn route in v1; reserved for a faster routine path. |
 | "Run and capture this command." | `+` | Runs one explicit command, streams output, and records stdout/stderr snippets. |
 
 The result is a shell workflow with small blast radius, durable state, and a
@@ -83,7 +83,7 @@ updates the binding without duplicating the rc block.
 - Python 3.11+
 - zsh or Bash for shell bindings
 - A local OpenAI-compatible chat completions endpoint for command generation
-  and Zeta-backed answer/action routes (default
+  and Zeta-backed answer/agent routes (default
   `http://127.0.0.1:8080/v1/chat/completions`)
 - The `zeta` entrypoint installed with Sigil. `sigil doctor` checks that both
   `sigil` and `zeta` are visible on PATH.
@@ -109,10 +109,7 @@ Once the shell binding is installed, use the glyphs directly:
 # Ask from read-only context.
 , why did the last command fail?
 
-# Propose one command through the explicit CLI verb.
-sigil command "find wav files larger than 50 MB"
-
-# Run one confirmed agent step.
+# Run one shell-owned Zeta step.
 ,, run the relevant tests
 
 # Run one command through Sigil's explicit capture path.
@@ -124,11 +121,11 @@ Use stdin as context:
 
 ```sh
 git diff | , review risky changes
-git diff --name-only | , run the relevant tests
+git diff --name-only | , what should I test?
 ```
 
 Read-only comma uses piped input directly because it has no execute path.
-Agent-step comma routes preview piped input and ask before using it.
+Agent-step routes are driven by the prompt text and the current shell session.
 
 ## A Typical Flow
 
@@ -136,18 +133,19 @@ Agent-step comma routes preview piped input and ask before using it.
 # 1. Ask what changed.
 , summarize this repo state
 
-# 2. Ask for the smallest useful command.
-sigil command "run the focused tests for this change"
+# 2. Ask Zeta to pick the next shell step.
+,, run the focused tests for this change
 
-# 3. Let Sigil run exactly one action.
-,, run the focused tests
+# 3. Edit or run the staged shell command normally.
+uv run pytest tests/test_shell_bindings.py
 
-# 4. Audit what happened.
-sigil events
+# 4. Resume the Zeta turn with the recorded shell result.
+,,
 ```
 
-Sigil stores command suggestions, answer turns, and act steps in an
-inspectable event log so you can review the route each event came from.
+Sigil keeps session state under `~/.sigil/` so Zeta can resume from recent
+answer turns, handoff transcripts, and command results recorded through `+` or a
+Zeta handoff capture window.
 
 ## Glyph Reference
 
@@ -156,15 +154,14 @@ Installed zsh and Bash bindings expose these shortcuts:
 | Glyph | Name | Behavior |
 | --- | --- | --- |
 | `,` | read | Answer from read-only context. |
-| `,,` | step | Run one agent turn, confirming effects. |
-| `,,,` | auto step | Run one agent turn, auto-approving routine effects. |
+| `,,` | step | Run or resume one shell-owned Zeta turn. |
+| `,,,` | auto step | Same v1 Zeta turn route as `,,`. |
 | `+` | run | Run one explicit command and capture stdout/stderr snippets. |
 
 Examples:
 
 ```sh
 , summarize this repo state
-sigil command "find wav files"
 ,, run the relevant tests
 ,,, fix the failing parser test
 + cargo test
@@ -173,17 +170,27 @@ sigil command "find wav files"
 `,` prints a read-only answer. It does not stage commands or write to shell
 history.
 
-`,,` asks before handing the objective to Zeta, gives Zeta read/search/edit/write
-tools, and returns control to the shell after one bounded Zeta invocation. At the
-confirmation prompt, `e` opens `$VISUAL` or `$EDITOR` with the available tools,
-one per line, so tools can be removed before execution. That invocation may
-include zero or more tool calls. `,,,` runs the same one-turn route without
-routine confirmation. Shell calls inside those turns go through Zeta's bash
-handoff tool: Sigil prints the proposed command, asks whether to run or edit it,
-streams stdout/stderr to the terminal, records the turn, and returns the
-captured output plus exit status back to Zeta so the same turn can continue.
-Agent steps always stream Zeta's raw tool calls and prose through `glow` or
-`cat`; they do not replace the final answer with a compact summary.
+`,,` gives the objective to the shell-owned Zeta loop. The loop may call local
+tools such as `read`, `ls`, `grep`, `edit`, and `write`. Tool calls are shown as
+muted trace lines, and tool results are summarized compactly. The full JSON
+result stays in the Zeta transcript for the model.
+
+Shell commands are different. Zeta's `bash` tool does not run invisibly. It
+stages the proposed command into your editable prompt and returns control to the
+shell:
+
+```text
+❯ bash   uv run pytest tests/test_shell_bindings.py
+  staged in prompt
+```
+
+You can run it, edit it, run other shell commands, or reject it. Empty `,,`
+resumes the active Zeta step and attaches the recorded shell turns as the source
+of truth. If you changed the staged command, Zeta receives that as a changed
+handoff rather than assuming the original command ran.
+
+`,,,` currently uses the same v1 Zeta loop as `,,`. It remains a separate glyph
+so a more automatic routine path can be split out later.
 
 Read-only routes do not expose Bash. If an answer recommends a command, it is
 plain answer text, not a tool call or terminal handoff.
@@ -206,11 +213,12 @@ Each route has a fixed effect on your system:
 | Route | Effect | Rule |
 | --- | --- | --- |
 | `,` | read-only | Local answer route with no Bash tool. |
-| `,,` | execute-write | One confirmed Zeta agent step. |
-| `,,,` | execute-write | One auto-approved Zeta agent step. |
+| `,,` | read/write/handoff | One shell-owned Zeta step; Bash is staged in the prompt. |
+| `,,,` | read/write/handoff | Same v1 route as `,,`. |
 | `+` | execute | Explicit local command execution with stdout/stderr capture. |
 
-Every route records what it did to the event log. Inspect it with:
+Sigil stores audit/debug events and per-shell continuity under `~/.sigil/`.
+Inspect the global event log with:
 
 ```sh
 sigil events
@@ -229,17 +237,18 @@ sigil events [--limit N] [--json] [--raw]
 sigil session [show|path|list|clear] [--json]
 sigil install {zsh|bash} [--install-dir DIR] [--rc FILE] [--glyphs|--no-glyphs]
 sigil doctor [--shell auto|zsh|bash] [--json]
+zeta model stream
+zeta tools list --json
+zeta tool {read|ls|grep|bash|edit|write}
+zeta transcript {append|shell-turn|shell-result|tail}
 ```
 
 Copy-pasteable examples:
 
 ```sh
-sigil command "find files over 10 MB in this repo excluding .git"
-sigil command "show the largest directories"
-git diff --name-only | sigil command "run the relevant tests"
 sigil ask "what changed in this repo?"
 sigil run cargo test
-sigil act show
+zeta tools list --json
 sigil events
 ```
 
@@ -270,7 +279,7 @@ Sigil is:
 
 - A command-line tool and optional shell binding.
 - A local-model command proposal route.
-- Zeta-backed read-only answer and one-step edit routes.
+- A shell-owned Zeta loop for one-step read/search/edit/write workflows.
 - An evented state layer for shell continuity and audit history.
 
 Sigil is not:

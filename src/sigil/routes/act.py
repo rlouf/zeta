@@ -24,15 +24,15 @@ MAX_EVENT_OUTPUT_CHARS = 4000
 ZETA_AGENT_TOOLS = "read,grep,bash,edit,write"
 
 ZETA_AGENT_SYSTEM_PROMPT = (
-    "You are Sigil's bounded shell-native edit route. Complete at most one "
-    "coherent coding step for the user's objective. Use read/search tools "
-    "before editing. Use edit/write only for minimal, relevant file changes. "
-    "If local inspection or focused tests would help, use the bash handoff "
-    "tool so the user can run, edit, or reject the command. Do not install "
-    "dependencies, commit, push, reset, delete unrelated files, or perform "
-    "network operations. If the request is ambiguous or unsafe, stop and say "
-    "what you need. End with a concise summary of changed files and the next "
-    "verification command."
+    "You are Sigil's bounded confirmed edit route. Complete the user's "
+    "objective by running tool calls until no more tool calls are needed. "
+    "Read/search tools run immediately for local context. Bash commands "
+    "execute automatically, and edit/write tools apply directly, so only use "
+    "them when they are minimal, relevant, and safe for this local workspace. "
+    "Do not install dependencies, commit, push, reset, delete unrelated files, "
+    "or perform network operations. If the request is ambiguous or unsafe, "
+    "stop and say what you need. End with a concise summary of changed files "
+    "and verification performed or the next verification command."
 )
 
 ZETA_AGENT_AUTO_SYSTEM_PROMPT = (
@@ -400,7 +400,7 @@ def run_zeta_agent_step(
     """Run one non-interactive Zeta edit step."""
     route_glyph = glyph or str(act.get("glyph") or ",,,")
     enabled_tools = effective_zeta_tools(tools)
-    step_label = "auto tool loop" if route_glyph == ",,," else "one confirmed step"
+    step_label = "auto tool loop" if route_glyph == ",,," else "confirmed tool loop"
     render_zeta_status(
         route_glyph,
         enabled_tools,

@@ -49,7 +49,7 @@ def run_agent_step(
     render_zeta_status(
         glyph,
         enabled_tools,
-        "auto loop" if glyph == ",,," else "one step",
+        "auto loop" if glyph in {",,", ",,,"} else "one step",
         output=output,
         color_enabled=True,
     )
@@ -136,8 +136,6 @@ def replay_agent_events(
         if not isinstance(result_payload, dict):
             continue
         render_result_summary(name, result_payload, output=output)
-        if name == "edit" and result_payload.get("ok") is True:
-            status = 0
         handoff = result_payload.get("handoff")
         if not isinstance(handoff, dict):
             continue
@@ -182,13 +180,13 @@ def append_zeta_event(event_type: str, **fields: Any) -> dict[str, Any]:
 
 
 def edit_mode_for_glyph(glyph: str) -> EditMode:
-    if glyph == ",,,":
+    if glyph in {",,", ",,,"}:
         return "direct_replace"
     return "review_patch"
 
 
 def execution_mode_for_glyph(glyph: str) -> ExecutionMode:
-    if glyph == ",,,":
+    if glyph in {",,", ",,,"}:
         return "direct"
     return "handoff"
 
@@ -196,13 +194,13 @@ def execution_mode_for_glyph(glyph: str) -> ExecutionMode:
 def agent_prompt(objective: str, *, glyph: str, stdin_text: str) -> str:
     instruction = (
         "Run the bounded automatic tool loop until no more tool calls are needed."
-        if glyph == ",,,"
+        if glyph in {",,", ",,,"}
         else "Run one bounded edit step."
     )
     sections = [instruction, f"Objective: {objective}"]
     if stdin_text:
         sections.append(f"Confirmed piped input:\n{stdin_text}")
-    if glyph == ",,,":
+    if glyph in {",,", ",,,"}:
         sections.append("When the objective is handled, return a final answer.")
     else:
         sections.append("After the step, stop.")

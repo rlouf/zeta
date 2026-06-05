@@ -32,7 +32,7 @@ suggesting, executing, and explaining. Sigil keeps those routes separate.
 | Need | Glyph | What happens |
 | --- | --- | --- |
 | "Answer from context." | `,` | Read-only answer with local inspection tools. No shell is exposed. |
-| "Do one agent turn." | `,,` | Runs one shell-owned Zeta turn. Bash calls are staged in your prompt. |
+| "Do one agent turn." | `,,` | Confirms, then runs tool calls until no more are needed. |
 | "Do a routine edit step." | `,,,` | Runs one auto-approved Zeta step; exact replacements are applied directly. |
 | "Run and capture this command." | `+` | Runs one explicit command, streams output, and records stdout/stderr snippets. |
 
@@ -154,7 +154,7 @@ Installed zsh and Bash bindings expose these shortcuts:
 | Glyph | Name | Behavior |
 | --- | --- | --- |
 | `,` | read | Answer from read-only context. |
-| `,,` | step | Run or resume one shell-owned Zeta turn. |
+| `,,` | confirmed loop | Confirm, then run tool calls until no more are needed. |
 | `,,,` | auto loop | Run auto-approved tool calls until no more are needed. |
 | `+` | run | Run one explicit command and capture stdout/stderr snippets. |
 
@@ -170,28 +170,13 @@ Examples:
 `,` prints a read-only answer. It does not stage commands or write to shell
 history.
 
-`,,` gives the objective to the shell-owned Zeta loop. The loop may call local
-tools such as `read`, `ls`, `grep`, `edit`, and `write`. Tool calls are shown as
-muted trace lines, and tool results are summarized compactly. The full JSON
-result stays in the Zeta transcript for the model.
+`,,` gives the objective to the confirmed Zeta loop. The loop may call local
+tools such as `read`, `ls`, `grep`, `bash`, `edit`, and `write` until the model
+returns a final answer. Tool calls are shown as muted trace lines, and tool
+results are summarized compactly. The full JSON result stays in the Zeta
+transcript for the model.
 
-Shell commands are different. Zeta's `bash` tool does not run invisibly. It
-stages the proposed command into your editable prompt and returns control to the
-shell:
-
-```text
-❯ bash   uv run pytest tests/test_shell_bindings.py
-  staged in prompt
-```
-
-You can run it, edit it, run other shell commands, or reject it. Empty `,,`
-resumes the active Zeta step and attaches the recorded shell turns as the source
-of truth. If you changed the staged command, Zeta receives that as a changed
-handoff rather than assuming the original command ran.
-
-`,,,` is the routine automatic path. Read-only tools run directly, Bash
-commands execute directly, exact replacements apply directly after Zeta verifies
-the target text matches once, and `write` writes the target file directly.
+`,,,` is the same tool loop without the confirmation step.
 
 Read-only routes do not expose Bash. If an answer recommends a command, it is
 plain answer text, not a tool call or terminal handoff.
@@ -214,7 +199,7 @@ Each route has a fixed effect on your system:
 | Route | Effect | Rule |
 | --- | --- | --- |
 | `,` | read-only | Local answer route with no Bash tool. |
-| `,,` | read/write/handoff | One shell-owned Zeta step; Bash is staged in the prompt. |
+| `,,` | read/write/execute | Confirmed Zeta loop; read-only tools, Bash, edit, and write run directly. |
 | `,,,` | read/write/execute | Auto-approved Zeta step; read-only tools, Bash, edit, and write run directly. |
 | `+` | execute | Explicit local command execution with stdout/stderr capture. |
 

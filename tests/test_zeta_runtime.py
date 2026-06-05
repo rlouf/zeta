@@ -812,6 +812,46 @@ def test_zeta_agent_step_separates_trace_from_final_answer(
     assert captured["context"] == "ctx"
 
 
+def test_zeta_agent_step_prints_final_answer_after_direct_edit(
+    monkeypatch,
+    capsys,
+) -> None:
+    monkeypatch.setattr(zeta_runner, "ensure_server", lambda: True)
+    monkeypatch.setattr(
+        zeta_runner,
+        "run_agent_turn",
+        lambda *args, **kwargs: zeta_agent.AgentTurnResult(
+            final_text="edited and verified",
+            events=[
+                {
+                    "type": "tool_call",
+                    "id": "call-1",
+                    "tool_call_id": "call-1",
+                    "name": "edit",
+                    "input": {"location": "a.txt", "old": "old", "new": "new"},
+                },
+                {
+                    "type": "tool_result",
+                    "tool_call_id": "call-1",
+                    "name": "edit",
+                    "result": {
+                        "ok": True,
+                        "metadata": {"mode": "direct_replace", "location": "a.txt"},
+                    },
+                },
+                {"type": "assistant_message", "content": "edited and verified"},
+            ],
+        ),
+    )
+
+    code = zeta_runner.run_agent_step("edit", glyph=",,")
+
+    assert code == 0
+    output = capsys.readouterr()
+    assert output.out == "\nedited and verified\n"
+    assert "  applied · a.txt" in output.err
+
+
 def test_sigil_transcript_shell_turn_records_recent_turn(
     tmp_path: Path,
     monkeypatch,
@@ -978,9 +1018,9 @@ def test_zeta_agent_direct_mode_continues_after_edit(
 
 
 def test_zeta_step_glyph_selects_edit_mode() -> None:
-    assert zeta_runner.edit_mode_for_glyph(",,") == "review_patch"
+    assert zeta_runner.edit_mode_for_glyph(",,") == "direct_replace"
     assert zeta_runner.edit_mode_for_glyph(",,,") == "direct_replace"
-    assert zeta_runner.execution_mode_for_glyph(",,") == "handoff"
+    assert zeta_runner.execution_mode_for_glyph(",,") == "direct"
     assert zeta_runner.execution_mode_for_glyph(",,,") == "direct"
 
 

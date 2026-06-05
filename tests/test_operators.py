@@ -486,7 +486,7 @@ def test_act_zeta_step_invokes_zeta_runner() -> None:
     kwargs = cast("dict[str, object]", captured["kwargs"])
     assert kwargs["glyph"] == ",,"
     assert isinstance(kwargs["system"], str)
-    assert "bounded shell-native edit route" in kwargs["system"]
+    assert "bounded confirmed edit route" in kwargs["system"]
     assert kwargs["stdin_text"] == "notes"
     assert kwargs["allowed_tools"] == ["read", "grep", "edit"]
 

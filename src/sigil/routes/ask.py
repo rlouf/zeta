@@ -110,7 +110,10 @@ def ask(
 ) -> int:
     """Run Zeta for a shell answer while recording transcript state."""
     user_input = question
-    prompt = user_input if append_transcript else prepend_recent_turns(user_input)
+    expanded_input = runtime.expand_skill_directive(user_input)
+    prompt = (
+        expanded_input if append_transcript else prepend_recent_turns(expanded_input)
+    )
     history_turns = list(history)
     request_event = append_event(
         {

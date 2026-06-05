@@ -6,6 +6,7 @@ import json
 from typing import Iterable
 
 from ..protocols import SHELL_HANDOFF_RESULT_SCHEMA
+from .skills import Skill
 from .tools import model_tool_descriptors
 
 BASE_SYSTEM_PROMPT = f"""You are Zeta, a shell-native coding agent.
@@ -42,10 +43,14 @@ def system_prompt(
     route_prompt: str | None = None,
     *,
     allowed_tools: Iterable[str] | None = None,
+    skills: Iterable[Skill] = (),
 ) -> str:
     """Build the Zeta system prompt with the active tool registry."""
     sections = [clean_prompt(route_prompt) or BASE_SYSTEM_PROMPT.strip()]
     sections.append(TOOL_PROTOCOL_PROMPT.strip())
+    skill_section = skills_prompt(skills)
+    if skill_section:
+        sections.append(skill_section)
     sections.append(tools_prompt(allowed_tools))
     return "\n\n".join(sections)
 
@@ -59,6 +64,28 @@ def tools_prompt(allowed_tools: Iterable[str] | None = None) -> str:
             json.dumps(descriptors, ensure_ascii=False, separators=(",", ":")),
         ]
     )
+
+
+def skills_prompt(skills: Iterable[Skill]) -> str:
+    """Render discoverable skills into the system prompt."""
+    items = list(skills)
+    if not items:
+        return ""
+    lines = [
+        "<available_skills>",
+        "Use `read` to load a skill when the task matches its description.",
+        "Resolve relative skill references against the skill directory.",
+    ]
+    for skill in items:
+        lines.extend(
+            [
+                f"- name: {skill.name}",
+                f"  description: {skill.description}",
+                f"  location: {skill.location}",
+            ]
+        )
+    lines.append("</available_skills>")
+    return "\n".join(lines)
 
 
 def clean_prompt(prompt: str | None) -> str:

@@ -44,7 +44,11 @@ def run_agent_step(
     if not ensure_server():
         return 1
     output = trace_output or sys.stderr
-    prompt = agent_prompt(objective, glyph=glyph, stdin_text=stdin_text)
+    prompt = agent_prompt(
+        runtime.expand_skill_directive(objective),
+        glyph=glyph,
+        stdin_text=stdin_text,
+    )
     enabled_tools = enabled_tool_tuple(allowed_tools)
     render_zeta_status(
         glyph,

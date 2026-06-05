@@ -9,6 +9,11 @@ from typing import Any, Iterable, TextIO
 from . import tools as tool_registry
 from .context import load_project_context
 from .prompt import system_prompt
+from .skills import (
+    available_skills,
+    discover_skills,
+    expand_skill_directive,
+)
 from .transcript import (
     DEFAULT_TAIL_LIMIT,
     TRANSCRIPT,
@@ -31,7 +36,10 @@ __all__ = [
     "allowed_tool_names",
     "analyze_tool",
     "append_transcript",
+    "available_skills",
+    "discover_skills",
     "event_chat_message",
+    "expand_skill_directive",
     "load_project_context",
     "model_tool_descriptors",
     "read_json_stdin",
@@ -92,7 +100,9 @@ def zeta_system_prompt(
     *,
     allowed_tools: Iterable[str] | None = None,
 ) -> str:
-    return system_prompt(route_prompt, allowed_tools=allowed_tools)
+    enabled_tools = allowed_tool_names(allowed_tools)
+    skills = available_skills() if "read" in enabled_tools else []
+    return system_prompt(route_prompt, allowed_tools=enabled_tools, skills=skills)
 
 
 def zeta_context_message(
@@ -100,6 +110,7 @@ def zeta_context_message(
     *,
     context: str = "",
 ) -> str:
+    objective = expand_skill_directive(objective)
     sections = [
         f"Objective:\n{objective}",
         f"cwd:\n{os.getcwd()}",

@@ -392,6 +392,131 @@ def test_zeta_project_context_requires_exact_agents_filename(
     assert "uppercase ignored" not in context
 
 
+def write_skill(
+    root: Path,
+    name: str,
+    *,
+    description: str = "Use this skill.",
+    body: str = "Skill body.\n",
+    metadata_name: str | None = None,
+    disabled: bool = False,
+) -> Path:
+    skill = root / name
+    skill.mkdir(parents=True)
+    metadata = [
+        "---",
+        f"description: {description}",
+    ]
+    if metadata_name is not None:
+        metadata.append(f"name: {metadata_name}")
+    if disabled:
+        metadata.append("disable-model-invocation: true")
+    metadata.append("---")
+    (skill / "SKILL.md").write_text(
+        "\n".join(metadata) + "\n" + body,
+        encoding="utf-8",
+    )
+    return skill
+
+
+def test_zeta_skill_discovery_loads_user_and_project_skills(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    home = tmp_path / "home"
+    project = tmp_path / "repo"
+    child = project / "pkg"
+    child.mkdir(parents=True)
+    write_skill(home / ".zeta" / "skills", "zeta-skill")
+    write_skill(home / ".agents" / "skills", "agents-skill")
+    write_skill(project / ".agents" / "skills", "project-skill")
+    write_skill(child / ".agents" / "skills", "child-skill")
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.chdir(child)
+
+    catalog = zeta.discover_skills()
+
+    assert set(catalog.skills) == {
+        "zeta-skill",
+        "agents-skill",
+        "project-skill",
+        "child-skill",
+    }
+    assert catalog.diagnostics == []
+
+
+def test_zeta_skill_collision_precedence_and_duplicate_canonical_paths(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    home = tmp_path / "home"
+    project = tmp_path / "repo"
+    child = project / "pkg"
+    child.mkdir(parents=True)
+    write_skill(home / ".zeta" / "skills", "shared", description="zeta")
+    write_skill(home / ".agents" / "skills", "shared", description="agents")
+    write_skill(project / ".agents" / "skills", "shared", description="outer")
+    write_skill(child / ".agents" / "skills", "shared", description="inner")
+    original = write_skill(home / ".zeta" / "skills", "dupe")
+    link = home / ".agents" / "skills" / "dupe-link"
+    link.parent.mkdir(parents=True, exist_ok=True)
+    link.symlink_to(original, target_is_directory=True)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.chdir(child)
+
+    catalog = zeta.discover_skills()
+
+    assert catalog.skills["shared"].description == "inner"
+    assert sum(1 for skill in catalog.skills.values() if skill.name == "dupe") == 1
+
+
+def test_zeta_skill_discovery_reports_invalid_metadata(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    home = tmp_path / "home"
+    project = tmp_path / "repo"
+    project.mkdir()
+    write_skill(home / ".zeta" / "skills", "bad-name", metadata_name="Bad_Name")
+    write_skill(home / ".zeta" / "skills", "missing-description", description="")
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.chdir(project)
+
+    catalog = zeta.discover_skills()
+
+    assert catalog.skills == {}
+    assert len(catalog.diagnostics) == 2
+    assert "invalid skill name" in catalog.diagnostics[0].message
+    assert "missing non-empty description" in catalog.diagnostics[1].message
+
+
+def test_zeta_system_prompt_advertises_enabled_skills_only_with_read(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    home = tmp_path / "home"
+    project = tmp_path / "repo"
+    project.mkdir()
+    enabled = write_skill(
+        home / ".zeta" / "skills",
+        "enabled-skill",
+        description="Do enabled work.",
+    )
+    write_skill(home / ".zeta" / "skills", "hidden-skill", disabled=True)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.chdir(project)
+
+    prompt = zeta.zeta_system_prompt(allowed_tools=("read", "ls"))
+    no_read_prompt = zeta.zeta_system_prompt(allowed_tools=("ls",))
+
+    assert "<available_skills>" in prompt
+    assert "name: enabled-skill" in prompt
+    assert "description: Do enabled work." in prompt
+    assert f"location: {enabled}" in prompt
+    assert "hidden-skill" not in prompt
+    assert "<available_skills>" not in no_read_prompt
+
+
 def test_zeta_tools_list_exposes_v1_builtins() -> None:
     result = CliRunner().invoke(zeta_cli, ["tools", "list", "--json"])
     assert result.exit_code == 0
@@ -1032,6 +1157,132 @@ def test_zeta_system_prompt_is_product_neutral_and_dynamic() -> None:
     assert '"name":"read"' in prompt
     assert '"name":"ls"' in prompt
     assert '"name":"bash"' not in prompt
+
+
+def test_zeta_skill_directive_expands_in_context_message(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    home = tmp_path / "home"
+    project = tmp_path / "repo"
+    project.mkdir()
+    skill = write_skill(
+        project / ".agents" / "skills",
+        "reviewer",
+        description="Review code.",
+        body="# Reviewer\nRead references/sample.md first.\n",
+    )
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.chdir(project)
+
+    message = zeta.zeta_context_message("@skill reviewer inspect the patch")
+
+    assert f'<skill name="reviewer" location="{skill}">' in message
+    assert f"References are relative to {skill}." in message
+    assert "# Reviewer\nRead references/sample.md first." in message
+    assert "description: Review code." not in message
+    assert "\n\ninspect the patch\n\ncwd:" in message
+
+
+def test_zeta_skill_directive_leaves_unknown_skill_unchanged(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    home = tmp_path / "home"
+    project = tmp_path / "repo"
+    project.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.chdir(project)
+
+    message = zeta.zeta_context_message("@skill missing inspect")
+
+    assert "Objective:\n@skill missing inspect" in message
+
+
+def test_zeta_skill_directive_expands_through_agent_step_route(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    home = tmp_path / "home"
+    project = tmp_path / "repo"
+    project.mkdir()
+    write_skill(
+        project / ".agents" / "skills",
+        "route-skill",
+        description="Route work.",
+        body="Route skill body.\n",
+    )
+    captured: dict[str, str] = {}
+
+    def fake_chat_completion_messages(
+        messages: list[dict[str, Any]],
+        **kwargs: object,
+    ) -> dict[str, Any]:
+        del kwargs
+        captured["user"] = str(messages[1]["content"])
+        return {"content": "done"}
+
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.chdir(project)
+    monkeypatch.setattr(zeta_runner, "ensure_server", lambda: True)
+    monkeypatch.setattr(zeta_agent, "model_endpoint_open", lambda: True)
+    monkeypatch.setattr(
+        zeta_agent,
+        "chat_completion_messages",
+        fake_chat_completion_messages,
+    )
+
+    code = zeta_runner.run_agent_step("@skill route-skill do route work", glyph=",,")
+
+    assert code == 0
+    assert '<skill name="route-skill"' in captured["user"]
+    assert "Route skill body." in captured["user"]
+    assert "do route work" in captured["user"]
+
+
+def test_zeta_skill_directive_expands_through_answer_route(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    home = tmp_path / "home"
+    project = tmp_path / "repo"
+    project.mkdir()
+    write_skill(
+        project / ".agents" / "skills",
+        "answer-skill",
+        description="Answer work.",
+        body="Answer skill body.\n",
+    )
+    captured: dict[str, str] = {}
+
+    def fake_chat_completion_messages(
+        messages: list[dict[str, Any]],
+        **kwargs: object,
+    ) -> dict[str, Any]:
+        del kwargs
+        captured["user"] = str(messages[1]["content"])
+        return {"content": "answered"}
+
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.chdir(project)
+    monkeypatch.setattr(answers_runner, "ensure_server", lambda: True)
+    monkeypatch.setattr(zeta_agent, "model_endpoint_open", lambda: True)
+    monkeypatch.setattr(
+        zeta_agent,
+        "chat_completion_messages",
+        fake_chat_completion_messages,
+    )
+
+    code = answers_runner.run_tool_answer(
+        "system",
+        "@skill answer-skill do answer work",
+        input_text="@skill answer-skill do answer work",
+    )
+
+    assert code == 0
+    assert '<skill name="answer-skill"' in captured["user"]
+    assert "Answer skill body." in captured["user"]
+    assert "do answer work" in captured["user"]
 
 
 def test_sigil_transcript_shell_result_appends_tool_result(

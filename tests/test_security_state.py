@@ -45,6 +45,15 @@ def test_question_system_prompt_points_zeta_at_events_log_for_older_history() ->
 def test_top_level_help_lists_commands() -> None:
     result = CliRunner().invoke(cli, ["--help"])
     assert result.exit_code == 0
+    assert "Common routes:" in result.output
+    assert ",      read-only answer from local context" in result.output
+    assert ",,     confirmed Zeta tool loop for one agent step" in result.output
+    assert ",,,    auto-approved Zeta tool loop for routine edits" in result.output
+    assert "+      run one explicit command and capture output" in result.output
+    assert "named command:" not in result.output
+    assert "named shell function:" not in result.output
+    assert "Setup and diagnostics:" in result.output
+    assert "sigil doctor" in result.output
     assert "Commands:" in result.output
     for command in [
         "act",
@@ -66,6 +75,13 @@ def test_top_level_help_lists_commands() -> None:
     ]:
         assert f"\n  {command} " not in result.output
     assert "\n  question" not in result.output
+
+
+def test_top_level_without_command_shows_help() -> None:
+    result = CliRunner().invoke(cli, [])
+    assert result.exit_code == 0
+    assert "Common routes:" in result.output
+    assert "Commands:" in result.output
 
 
 def test_main_rewrites_missing_executable_errors() -> None:

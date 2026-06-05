@@ -9,9 +9,38 @@ from __future__ import annotations
 import click
 
 
-@click.group(context_settings={"help_option_names": ["-h", "--help"]})
-def cli() -> None:
-    pass
+@click.group(
+    context_settings={"help_option_names": ["-h", "--help"]},
+    invoke_without_command=True,
+)
+@click.pass_context
+def cli(ctx: click.Context) -> None:
+    """Natural-language shell assistant.
+
+    Sigil installs punctuation glyphs into your shell, plus named commands for
+    setup and inspection.
+
+    Common routes:
+
+    \b
+      ,      read-only answer from local context
+      ,,     confirmed Zeta tool loop for one agent step
+      ,,,    auto-approved Zeta tool loop for routine edits
+      +      run one explicit command and capture output
+
+    Setup and diagnostics:
+
+    \b
+      sigil install zsh      install zsh glyph bindings
+      sigil install bash     install Bash glyph bindings
+      sigil doctor           check install, shell, state, and model endpoint
+      sigil events           inspect recent Sigil activity
+
+    Use "sigil COMMAND --help" for command-specific options.
+    """
+    if ctx.invoked_subcommand is None:
+        click.echo(ctx.get_help())
+        ctx.exit(0)
 
 
 def main(argv: list[str] | None = None) -> int:

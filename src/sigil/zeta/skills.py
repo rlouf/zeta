@@ -9,7 +9,7 @@ from pathlib import Path
 
 SKILL_FILE = "SKILL.md"
 SKILL_NAME_PATTERN = re.compile(r"^[a-z0-9-]+$")
-SKILL_DIRECTIVE_PATTERN = re.compile(r"^\s*@skill\s+(\S+)(?:\s+([\s\S]*))?\s*$")
+SKILL_DIRECTIVE_PATTERN = re.compile(r"^\s*@([a-z0-9-]+):(?:[ \t]*([\s\S]*))?$")
 SKIP_DIRECTORIES = {"node_modules"}
 
 
@@ -70,7 +70,7 @@ def available_skills(cwd: str | Path | None = None) -> list[Skill]:
 
 
 def expand_skill_directive(objective: str, cwd: str | Path | None = None) -> str:
-    """Expand one leading ``@skill NAME`` directive when the skill is known."""
+    """Expand one leading ``@skill-name:`` directive when the skill is known."""
     match = SKILL_DIRECTIVE_PATTERN.match(objective)
     if match is None:
         return objective

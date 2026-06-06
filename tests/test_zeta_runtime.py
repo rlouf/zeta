@@ -25,8 +25,17 @@ from sigil import display as sigil_display
 from sigil.zeta import agent as zeta_agent
 from sigil.zeta import runtime as zeta
 from sigil.zeta import model as zeta_model
+from sigil.zeta import models as zeta_models
 from sigil.zeta.tools import validate_tool_args
 from sigil.zeta.cli import cli as zeta_cli
+
+
+def write_models_config(home: Path, text: str) -> Path:
+    config_dir = home / ".zeta"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    path = config_dir / "models.toml"
+    path.write_text(text, encoding="utf-8")
+    return path
 
 
 def test_zeta_model_config_uses_zeta_env(monkeypatch) -> None:
@@ -41,6 +50,148 @@ def test_zeta_model_config_uses_zeta_env(monkeypatch) -> None:
 
     assert zeta_model.model_url() == "http://zeta.invalid/v1/chat/completions"
     assert zeta_model.model_name() == "zeta-model"
+
+
+def test_zeta_model_profiles_load_user_config(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    home = tmp_path / "home"
+    write_models_config(
+        home,
+        """
+[[models]]
+name = "fast"
+model = "fast-model"
+url = "http://127.0.0.1:8081/v1/chat/completions"
+
+[[models]]
+name = "default-url"
+model = "default-url-model"
+""",
+    )
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("ZETA_MODEL_URL", "http://env.invalid/v1/chat/completions")
+
+    catalog = zeta_models.load_model_profiles()
+    fast = zeta_models.resolve_model_profile("fast", catalog=catalog)
+    default_url = zeta_models.resolve_model_profile("default-url", catalog=catalog)
+
+    assert catalog.diagnostics == []
+    assert fast == zeta_models.ModelSelection(
+        profile="fast",
+        model="fast-model",
+        url="http://127.0.0.1:8081/v1/chat/completions",
+    )
+    assert default_url == zeta_models.ModelSelection(
+        profile="default-url",
+        model="default-url-model",
+        url="http://env.invalid/v1/chat/completions",
+    )
+
+
+def test_zeta_model_profiles_report_invalid_config(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    home = tmp_path / "home"
+    write_models_config(
+        home,
+        """
+[[models]]
+name = "Bad_Name"
+model = "bad"
+""",
+    )
+    monkeypatch.setenv("HOME", str(home))
+
+    catalog = zeta_models.load_model_profiles()
+
+    assert catalog.profiles == {}
+    assert len(catalog.diagnostics) == 1
+    assert "lowercase letters" in catalog.diagnostics[0].message
+
+
+def test_sigil_model_cli_switches_model_per_session(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    home = tmp_path / "home"
+    write_models_config(
+        home,
+        """
+[[models]]
+name = "fast"
+model = "fast-model"
+url = "http://127.0.0.1:8081/v1/chat/completions"
+""",
+    )
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("SIGIL_STATE_DIR", str(tmp_path / "state"))
+    monkeypatch.setenv("SIGIL_SESSION_ID", "one")
+
+    use = CliRunner().invoke(sigil_cli, ["model", "use", "fast"])
+
+    assert use.exit_code == 0, use.output
+    assert "model: fast -> fast-model" in use.output
+    assert zeta_models.active_model_profile() == "fast"
+
+    show = CliRunner().invoke(sigil_cli, ["model", "show"])
+    assert show.exit_code == 0, show.output
+    assert "model: fast -> fast-model" in show.output
+
+    monkeypatch.setenv("SIGIL_SESSION_ID", "two")
+    other_session = CliRunner().invoke(sigil_cli, ["model", "show"])
+    assert other_session.exit_code == 0, other_session.output
+    assert "model: default ->" in other_session.output
+
+    monkeypatch.setenv("SIGIL_SESSION_ID", "one")
+    clear = CliRunner().invoke(sigil_cli, ["model", "clear"])
+    assert clear.exit_code == 0, clear.output
+    assert zeta_models.active_model_profile() is None
+
+
+def test_sigil_model_cli_rejects_unknown_profile(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    home = tmp_path / "home"
+    write_models_config(home, "")
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("SIGIL_STATE_DIR", str(tmp_path / "state"))
+    monkeypatch.setenv("SIGIL_SESSION_ID", "model-test")
+
+    result = CliRunner().invoke(sigil_cli, ["model", "use", "missing"])
+
+    assert result.exit_code != 0
+    assert "unknown model profile: missing" in result.output
+    assert zeta_models.active_model_profile() is None
+
+
+def test_zeta_chat_completion_messages_accepts_request_model(monkeypatch) -> None:
+    captured: dict[str, Any] = {}
+
+    def fake_request(
+        body: dict[str, Any],
+        *,
+        selected_url: str | None = None,
+    ) -> dict[str, Any]:
+        captured["body"] = body
+        captured["selected_url"] = selected_url
+        return {"choices": [{"message": {"content": "done"}}]}
+
+    monkeypatch.setattr(zeta_model, "request_chat_completion", fake_request)
+
+    message = zeta_model.chat_completion_messages(
+        [{"role": "user", "content": "hi"}],
+        selected_model="fast-model",
+        selected_url="http://127.0.0.1:8081/v1/chat/completions",
+    )
+
+    assert message == {"content": "done"}
+    body = cast(dict[str, Any], captured["body"])
+    assert body["model"] == "fast-model"
+    assert captured["selected_url"] == "http://127.0.0.1:8081/v1/chat/completions"
 
 
 def test_zeta_chat_completion_messages_sends_native_tools(monkeypatch) -> None:
@@ -95,6 +246,44 @@ def test_zeta_agent_turn_finalizes_text(monkeypatch) -> None:
     assert result.events == [{"type": "assistant_message", "content": "done"}]
     kwargs = cast(dict[str, Any], captured["kwargs"])
     assert kwargs["tools"][0]["function"]["name"] == "read"
+
+
+def test_zeta_agent_turn_uses_request_model(monkeypatch) -> None:
+    captured: dict[str, Any] = {}
+
+    def fake_model_endpoint_open(selected_url: str | None = None) -> bool:
+        captured["endpoint_url"] = selected_url
+        return True
+
+    def fake_chat_completion_messages(
+        messages: list[dict[str, Any]],
+        **kwargs: object,
+    ) -> dict[str, Any]:
+        captured["messages"] = messages
+        captured["kwargs"] = kwargs
+        return {"content": "done"}
+
+    monkeypatch.setattr(zeta_agent, "model_endpoint_open", fake_model_endpoint_open)
+    monkeypatch.setattr(
+        zeta_agent, "chat_completion_messages", fake_chat_completion_messages
+    )
+
+    result = zeta_agent.run_agent_turn(
+        "answer",
+        [],
+        zeta_agent.AgentConfig(
+            allowed_tools=("read",),
+            max_turns=1,
+            model_name="fast-model",
+            model_url="http://127.0.0.1:8081/v1/chat/completions",
+        ),
+    )
+
+    assert result.final_text == "done"
+    assert captured["endpoint_url"] == "http://127.0.0.1:8081/v1/chat/completions"
+    kwargs = cast(dict[str, Any], captured["kwargs"])
+    assert kwargs["selected_model"] == "fast-model"
+    assert kwargs["selected_url"] == "http://127.0.0.1:8081/v1/chat/completions"
 
 
 def test_zeta_agent_turn_runs_multiple_read_only_tools_in_order(monkeypatch) -> None:
@@ -1381,7 +1570,7 @@ def test_zeta_skill_directive_expands_in_context_message(
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.chdir(project)
 
-    message = zeta.zeta_context_message("@skill reviewer inspect the patch")
+    message = zeta.zeta_context_message("@reviewer: inspect the patch")
 
     assert f'<skill name="reviewer" location="{skill}">' in message
     assert f"References are relative to {skill}." in message
@@ -1400,9 +1589,43 @@ def test_zeta_skill_directive_leaves_unknown_skill_unchanged(
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.chdir(project)
 
-    message = zeta.zeta_context_message("@skill missing inspect")
+    message = zeta.zeta_context_message("@missing: inspect")
 
-    assert "Objective:\n@skill missing inspect" in message
+    assert "Objective:\n@missing: inspect" in message
+
+
+def test_zeta_skill_directive_leaves_old_skill_form_unchanged(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    home = tmp_path / "home"
+    project = tmp_path / "repo"
+    project.mkdir()
+    write_skill(project / ".agents" / "skills", "reviewer")
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.chdir(project)
+
+    message = zeta.zeta_context_message("@skill reviewer inspect")
+
+    assert "Objective:\n@skill reviewer inspect" in message
+    assert '<skill name="reviewer"' not in message
+
+
+def test_zeta_skill_directive_leaves_bare_handle_unchanged(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    home = tmp_path / "home"
+    project = tmp_path / "repo"
+    project.mkdir()
+    write_skill(project / ".agents" / "skills", "reviewer")
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.chdir(project)
+
+    message = zeta.zeta_context_message("@reviewer inspect")
+
+    assert "Objective:\n@reviewer inspect" in message
+    assert '<skill name="reviewer"' not in message
 
 
 def test_zeta_skill_directive_expands_through_agent_step_route(
@@ -1438,12 +1661,64 @@ def test_zeta_skill_directive_expands_through_agent_step_route(
         fake_chat_completion_messages,
     )
 
-    code = zeta_runner.run_agent_step("@skill route-skill do route work", glyph=",,")
+    code = zeta_runner.run_agent_step("@route-skill: do route work", glyph=",,")
 
     assert code == 0
     assert '<skill name="route-skill"' in captured["user"]
     assert "Route skill body." in captured["user"]
     assert "do route work" in captured["user"]
+
+
+def test_zeta_agent_step_route_uses_active_session_model(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    home = tmp_path / "home"
+    write_models_config(
+        home,
+        """
+[[models]]
+name = "coder"
+model = "coder-model"
+url = "http://127.0.0.1:8082/v1/chat/completions"
+""",
+    )
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("SIGIL_STATE_DIR", str(tmp_path / "state"))
+    monkeypatch.setenv("SIGIL_SESSION_ID", "agent-model")
+    zeta_models.set_active_model_profile("coder")
+    captured: dict[str, Any] = {}
+
+    def fake_ensure_server(**kwargs: object) -> bool:
+        captured["server"] = kwargs
+        return True
+
+    def fake_run_agent_turn(
+        objective: str,
+        transcript: list[dict[str, Any]],
+        config: zeta_agent.AgentConfig,
+        **kwargs: object,
+    ) -> zeta_agent.AgentTurnResult:
+        del objective, transcript, kwargs
+        captured["config"] = config
+        return zeta_agent.AgentTurnResult(final_text="done")
+
+    monkeypatch.setattr(zeta_runner, "ensure_server", fake_ensure_server)
+    monkeypatch.setattr(zeta_runner, "run_agent_turn", fake_run_agent_turn)
+
+    code = zeta_runner.run_agent_step("do work", glyph=",,")
+
+    assert code == 0
+    assert capsys.readouterr().out == "\ndone\n"
+    assert captured["server"] == {
+        "selected_url": "http://127.0.0.1:8082/v1/chat/completions",
+        "selected_model": "coder-model",
+    }
+    config = cast(zeta_agent.AgentConfig, captured["config"])
+    assert config.model_profile == "coder"
+    assert config.model_name == "coder-model"
+    assert config.model_url == "http://127.0.0.1:8082/v1/chat/completions"
 
 
 def test_zeta_skill_directive_expands_through_answer_route(
@@ -1481,14 +1756,71 @@ def test_zeta_skill_directive_expands_through_answer_route(
 
     code = answers_runner.run_tool_answer(
         "system",
-        "@skill answer-skill do answer work",
-        input_text="@skill answer-skill do answer work",
+        "@answer-skill: do answer work",
+        input_text="@answer-skill: do answer work",
     )
 
     assert code == 0
     assert '<skill name="answer-skill"' in captured["user"]
     assert "Answer skill body." in captured["user"]
     assert "do answer work" in captured["user"]
+
+
+def test_zeta_answer_route_uses_active_session_model(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    home = tmp_path / "home"
+    write_models_config(
+        home,
+        """
+[[models]]
+name = "fast"
+model = "fast-model"
+url = "http://127.0.0.1:8081/v1/chat/completions"
+""",
+    )
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("SIGIL_STATE_DIR", str(tmp_path / "state"))
+    monkeypatch.setenv("SIGIL_SESSION_ID", "answer-model")
+    zeta_models.set_active_model_profile("fast")
+    captured: dict[str, Any] = {}
+
+    def fake_ensure_server(**kwargs: object) -> bool:
+        captured["server"] = kwargs
+        return True
+
+    def fake_run_agent_turn(
+        objective: str,
+        transcript: list[dict[str, Any]],
+        config: zeta_agent.AgentConfig,
+        **kwargs: object,
+    ) -> zeta_agent.AgentTurnResult:
+        del objective, kwargs
+        captured["transcript"] = transcript
+        captured["config"] = config
+        return zeta_agent.AgentTurnResult(final_text="answered")
+
+    monkeypatch.setattr(answers_runner, "ensure_server", fake_ensure_server)
+    monkeypatch.setattr(answers_runner, "run_agent_turn", fake_run_agent_turn)
+
+    code = answers_runner.run_tool_answer("system", "prompt")
+
+    assert code == 0
+    assert captured["server"] == {
+        "selected_url": "http://127.0.0.1:8081/v1/chat/completions",
+        "selected_model": "fast-model",
+    }
+    config = cast(zeta_agent.AgentConfig, captured["config"])
+    assert config.model_profile == "fast"
+    assert config.model_name == "fast-model"
+    assert config.model_url == "http://127.0.0.1:8081/v1/chat/completions"
+    transcript = cast(list[dict[str, Any]], captured["transcript"])
+    assert transcript[-1]["model"] == {
+        "profile": "fast",
+        "model": "fast-model",
+        "url": "http://127.0.0.1:8081/v1/chat/completions",
+    }
 
 
 def test_sigil_transcript_shell_result_appends_tool_result(
@@ -1812,3 +2144,59 @@ def test_zeta_question_loop_falls_back_instead_of_budget_message(
     assert "\n\nIt contains Sigil docs.\n" in output
     assert "It contains Sigil docs." in output
     assert "question tool budget" not in output
+
+
+def test_zeta_answer_fallback_uses_active_session_model(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    home = tmp_path / "home"
+    write_models_config(
+        home,
+        """
+[[models]]
+name = "fast"
+model = "fast-model"
+url = "http://127.0.0.1:8081/v1/chat/completions"
+""",
+    )
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("SIGIL_STATE_DIR", str(tmp_path / "state"))
+    monkeypatch.setenv("SIGIL_SESSION_ID", "fallback-model")
+    zeta_models.set_active_model_profile("fast")
+    captured: dict[str, Any] = {}
+
+    def fake_run_agent_turn(
+        objective: str,
+        transcript: list[dict[str, Any]],
+        config: zeta_agent.AgentConfig,
+        **kwargs: object,
+    ) -> zeta_agent.AgentTurnResult:
+        del objective, transcript, config, kwargs
+        return zeta_agent.AgentTurnResult(events=[])
+
+    def fake_chat_text(
+        system: str,
+        prompt: str,
+        *,
+        max_tokens: int,
+        selected_model: str | None = None,
+        selected_url: str | None = None,
+    ) -> str:
+        del system, prompt, max_tokens
+        captured["selected_model"] = selected_model
+        captured["selected_url"] = selected_url
+        return "Fallback answer."
+
+    monkeypatch.setattr(answers_runner, "ensure_server", lambda **kwargs: True)
+    monkeypatch.setattr(answers_runner, "run_agent_turn", fake_run_agent_turn)
+    monkeypatch.setattr(answers_runner, "chat_text", fake_chat_text)
+
+    code = answers_runner.run_tool_answer("question system", "Question?", max_steps=1)
+
+    output = capsys.readouterr().out
+    assert code == 0
+    assert "\nFallback answer.\n" in output
+    assert captured["selected_model"] == "fast-model"
+    assert captured["selected_url"] == "http://127.0.0.1:8081/v1/chat/completions"

@@ -66,6 +66,16 @@ def write_json(name: str, value: Any) -> None:
     tmp.replace(final)
 
 
+def remove_json(name: str) -> bool:
+    """Remove a session-scoped JSON document if it exists."""
+    path = session_dir() / name
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        return False
+    return True
+
+
 def append_jsonl(name: str, event: dict[str, Any]) -> dict[str, Any]:
     """Append a session-scoped JSONL event."""
     root = session_dir()

@@ -103,6 +103,41 @@ SIGIL_GLOW_WIDTH=88
 ZETA_BIN=/path/to/zeta
 ```
 
+## Changing Models Mid-Session
+
+Sigil can switch Zeta model profiles for the current terminal session without
+changing global environment variables. Define profiles in `~/.zeta/models.toml`:
+
+```toml
+[[models]]
+name = "fast"
+model = "qwen2.5-coder"
+url = "http://127.0.0.1:8080/v1/chat/completions"
+
+[[models]]
+name = "deep"
+model = "qwen3-coder"
+url = "http://127.0.0.1:8081/v1/chat/completions"
+```
+
+Then select a profile for the active shell session:
+
+```sh
+sigil model list
+sigil model use fast
+, why did the last command fail?
+
+sigil model use deep
+,, refactor the failing path and run the focused tests
+
+sigil model show
+sigil model clear
+```
+
+The selected profile is scoped to the current `SIGIL_SESSION_ID`, so another
+terminal keeps its own model selection. Clearing the profile returns the session
+to `ZETA_MODEL_NAME` and `ZETA_MODEL_URL`.
+
 ## Quick Start
 
 Once the shell binding is installed, use the glyphs directly:

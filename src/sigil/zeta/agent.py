@@ -31,6 +31,9 @@ class AgentConfig:
     stop_on_handoff: bool = True
     edit_mode: EditMode = "review_patch"
     execution_mode: ExecutionMode = "handoff"
+    model_profile: str | None = None
+    model_name: str | None = None
+    model_url: str | None = None
 
 
 @dataclass(frozen=True)
@@ -50,7 +53,11 @@ def run_agent_turn(
     context: str = "",
 ) -> AgentTurnResult:
     """Run a bounded assistant/tool loop without mutating session state."""
-    if not model_endpoint_open():
+    if config.model_url is None:
+        endpoint_open = model_endpoint_open()
+    else:
+        endpoint_open = model_endpoint_open(config.model_url)
+    if not endpoint_open:
         raise RuntimeError("model endpoint is not reachable")
     if config.allowed_tools is None:
         allowed_tools = tuple(allowed_tool_names())
@@ -68,6 +75,8 @@ def run_agent_turn(
             ),
             tools=model_tool_descriptors(allowed_tools),
             tool_choice="auto",
+            selected_model=config.model_name,
+            selected_url=config.model_url,
         )
         message_event = assistant_message_event(assistant)
         if message_event:

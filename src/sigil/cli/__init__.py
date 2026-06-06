@@ -16,6 +16,7 @@ from . import (  # noqa: F401  (imported for command registration side effects)
     display,
     events,
     install,
+    model,
     run,
     session,
     status,

@@ -20,6 +20,7 @@ from ..display import (
 )
 from ..zeta import runtime
 from ..zeta.agent import AgentConfig, AgentTurnResult, run_agent_turn
+from ..zeta.models import active_model_selection, model_selection_event
 from ..zeta.server import ensure_server
 
 HandoffOutput = Literal["detail", "summary", "none"]
@@ -41,7 +42,16 @@ def run_agent_step(
     edit_mode: EditMode | None = None,
 ) -> int:
     """Run a bounded Zeta agent step for CLI routes."""
-    if not ensure_server():
+    selected_model = active_model_selection()
+    server_ready = (
+        ensure_server(
+            selected_url=selected_model.url,
+            selected_model=selected_model.model,
+        )
+        if selected_model is not None
+        else ensure_server()
+    )
+    if not server_ready:
         return 1
     output = trace_output or sys.stderr
     prompt = agent_prompt(
@@ -57,17 +67,17 @@ def run_agent_step(
         output=output,
         color_enabled=True,
     )
-    append_jsonl(
-        runtime.TRANSCRIPT,
-        {
-            "type": "user_message",
-            "content": prompt,
-            "glyph": glyph,
-            "runtime": "zeta",
-            "system": runtime.zeta_system_prompt(system, allowed_tools=enabled_tools),
-            "available_tools": list(enabled_tools),
-        },
-    )
+    user_event: dict[str, Any] = {
+        "type": "user_message",
+        "content": prompt,
+        "glyph": glyph,
+        "runtime": "zeta",
+        "system": runtime.zeta_system_prompt(system, allowed_tools=enabled_tools),
+        "available_tools": list(enabled_tools),
+    }
+    if selected_model is not None:
+        user_event["model"] = model_selection_event(selected_model)
+    append_jsonl(runtime.TRANSCRIPT, user_event)
     context = runtime.load_project_context()
     result = run_agent_turn(
         prompt,
@@ -79,6 +89,11 @@ def run_agent_step(
             stop_on_handoff=True,
             edit_mode=edit_mode or edit_mode_for_glyph(glyph),
             execution_mode=execution_mode_for_glyph(glyph),
+            model_profile=(
+                selected_model.profile if selected_model is not None else None
+            ),
+            model_name=selected_model.model if selected_model is not None else None,
+            model_url=selected_model.url if selected_model is not None else None,
         ),
         context=context,
     )

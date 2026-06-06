@@ -23,6 +23,7 @@ from ..display import render_tool_start, render_zeta_status
 from ..zeta import runtime
 from ..zeta.agent import AgentConfig, AgentTurnResult, run_agent_turn
 from ..zeta.model import chat_text
+from ..zeta.models import ModelSelection, active_model_selection, model_selection_event
 from ..zeta.server import ensure_server
 
 
@@ -110,21 +111,23 @@ def ask(
 ) -> int:
     """Run Zeta for a shell answer while recording transcript state."""
     user_input = question
+    selected_model = active_model_selection()
     expanded_input = runtime.expand_skill_directive(user_input)
     prompt = (
         expanded_input if append_transcript else prepend_recent_turns(expanded_input)
     )
     history_turns = list(history)
-    request_event = append_event(
-        {
-            "type": ANSWER_REQUEST_EVENT,
-            "input": user_input,
-            "prompt": prompt,
-            "follow_up": append_transcript,
-            "glyph": glyph,
-            "history_turns": len(history_turns),
-        }
-    )
+    request_payload: dict[str, Any] = {
+        "type": ANSWER_REQUEST_EVENT,
+        "input": user_input,
+        "prompt": prompt,
+        "follow_up": append_transcript,
+        "glyph": glyph,
+        "history_turns": len(history_turns),
+    }
+    if selected_model is not None:
+        request_payload["model"] = model_selection_event(selected_model)
+    request_event = append_event(request_payload)
     user_turn = {
         "role": "user",
         "content": user_input,
@@ -154,6 +157,7 @@ def ask(
         json_output=json_output,
         allowed_tools=enabled_tools,
         history=history_turns,
+        selected_model=selected_model,
     )
 
 
@@ -167,9 +171,20 @@ def run_tool_answer(
     max_steps: int = 4,
     allowed_tools: Iterable[str] = ANSWER_TOOLS,
     history: Iterable[dict[str, object]] = (),
+    selected_model: ModelSelection | None = None,
 ) -> int:
     """Run a read-only Zeta answer turn and persist answer state."""
-    if not ensure_server():
+    if selected_model is None:
+        selected_model = active_model_selection()
+    server_ready = (
+        ensure_server(
+            selected_url=selected_model.url,
+            selected_model=selected_model.model,
+        )
+        if selected_model is not None
+        else ensure_server()
+    )
+    if not server_ready:
         return 1
     enabled_tools = tuple(allowed_tools)
     user_event: dict[str, Any] = {
@@ -180,6 +195,8 @@ def run_tool_answer(
         "system": system,
         "available_tools": list(enabled_tools),
     }
+    if selected_model is not None:
+        user_event["model"] = model_selection_event(selected_model)
     append_jsonl(runtime.TRANSCRIPT, user_event)
     turn_events: list[dict[str, Any]] = [
         dict(turn) for turn in history if turn.get("role") in {"user", "assistant"}
@@ -193,6 +210,11 @@ def run_tool_answer(
             allowed_tools=enabled_tools,
             max_turns=max_steps,
             stop_on_handoff=True,
+            model_profile=(
+                selected_model.profile if selected_model is not None else None
+            ),
+            model_name=selected_model.model if selected_model is not None else None,
+            model_url=selected_model.url if selected_model is not None else None,
         ),
         context=runtime.load_project_context(),
     )
@@ -200,7 +222,7 @@ def run_tool_answer(
     tool_events = replay_answer_events(result, json_output=json_output)
     answer = result.final_text
     if not answer:
-        answer = fallback_answer(system, prompt, turn_events)
+        answer = fallback_answer(system, prompt, turn_events, selected_model)
     record_answer(
         input_text=input_text,
         prompt=prompt,
@@ -208,6 +230,7 @@ def run_tool_answer(
         follow_up=follow_up,
         tools=tool_events,
         json_output=json_output,
+        model=model_selection_event(selected_model) if selected_model else None,
     )
     return 0
 
@@ -250,6 +273,7 @@ def fallback_answer(
     system: str,
     prompt: str,
     turn_events: list[dict[str, Any]],
+    selected_model: ModelSelection | None = None,
 ) -> str:
     """Answer from the current turn transcript when structured stepping stalls."""
     fallback_prompt = "\n\n".join(
@@ -260,7 +284,16 @@ def fallback_answer(
             f"Current turn transcript JSON:\n{json.dumps(turn_events, ensure_ascii=False)}",
         ]
     )
-    answer = chat_text(system, fallback_prompt, max_tokens=1200).strip()
+    if selected_model is None:
+        answer = chat_text(system, fallback_prompt, max_tokens=1200).strip()
+    else:
+        answer = chat_text(
+            system,
+            fallback_prompt,
+            max_tokens=1200,
+            selected_model=selected_model.model,
+            selected_url=selected_model.url,
+        ).strip()
     if answer:
         return answer
     return "I could not answer from the available local context."
@@ -274,27 +307,28 @@ def record_answer(
     follow_up: bool,
     tools: list[dict[str, Any]],
     json_output: bool,
+    model: dict[str, str] | None,
 ) -> None:
-    append_event(
-        {
-            "type": "answer",
-            "input": input_text,
-            "prompt": prompt,
-            "answer": answer,
-            "runtime": "zeta",
-        }
-    )
-    append_jsonl(
-        ANSWER_TRANSCRIPT,
-        {
-            "role": "assistant",
-            "content": answer,
-            "input": input_text,
-            "prompt": prompt,
-            "follow_up": follow_up,
-            "runtime": "zeta",
-        },
-    )
+    answer_event: dict[str, Any] = {
+        "type": "answer",
+        "input": input_text,
+        "prompt": prompt,
+        "answer": answer,
+        "runtime": "zeta",
+    }
+    assistant_turn: dict[str, Any] = {
+        "role": "assistant",
+        "content": answer,
+        "input": input_text,
+        "prompt": prompt,
+        "follow_up": follow_up,
+        "runtime": "zeta",
+    }
+    if model is not None:
+        answer_event["model"] = model
+        assistant_turn["model"] = model
+    append_event(answer_event)
+    append_jsonl(ANSWER_TRANSCRIPT, assistant_turn)
     if json_output:
         print(
             json.dumps(
@@ -305,6 +339,7 @@ def record_answer(
                     "runtime": "zeta",
                     "tools": tools,
                     "malformed_events": 0,
+                    **({"model": model} if model is not None else {}),
                 },
                 ensure_ascii=False,
                 separators=(",", ":"),

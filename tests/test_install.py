@@ -17,13 +17,13 @@ def test_install_shell_copies_binding_and_updates_rc_idempotently() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
         install_dir = root / "bindings"
-        rc_path = root / ".bashrc"
-        first = install_shell("bash", install_dir=install_dir, rc_path=rc_path)
-        second = install_shell("bash", install_dir=install_dir, rc_path=rc_path)
-        binding_path = install_dir / "sigil.bash"
+        rc_path = root / ".zshrc"
+        first = install_shell(install_dir=install_dir, rc_path=rc_path)
+        second = install_shell(install_dir=install_dir, rc_path=rc_path)
+        binding_path = install_dir / "sigil.zsh"
         assert binding_path.exists()
-        assert "Sigil bash bindings" in binding_path.read_text()
-        assert 'SIGIL_BINDING_LOADED="bash"' in binding_path.read_text()
+        assert "Sigil zsh bindings" in binding_path.read_text()
+        assert 'SIGIL_BINDING_LOADED="zsh"' in binding_path.read_text()
         assert first.wrote_rc
         assert not second.wrote_rc
         assert rc_path.read_text().count("source ") == 1
@@ -34,7 +34,6 @@ def test_install_shell_can_disable_glyph_aliases_in_rc_snippet() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
         result = install_shell(
-            "zsh",
             install_dir=root / "bindings",
             rc_path=root / ".zshrc",
             enable_glyphs=False,
@@ -50,7 +49,6 @@ def test_install_shell_bakes_resolved_runtime_bins_into_rc() -> None:
         bins = {"sigil": "/opt/sigil/bin/sigil", "zeta": "/opt/sigil/bin/zeta"}
         with patch("sigil.install.shutil.which", side_effect=bins.get):
             install_shell(
-                "zsh",
                 install_dir=root / "bindings",
                 rc_path=root / ".zshrc",
             )
@@ -68,7 +66,6 @@ def test_install_shell_cli_json_reports_paths() -> None:
             cli,
             [
                 "install",
-                "zsh",
                 "--install-dir",
                 str(root / "zsh"),
                 "--rc",
@@ -78,7 +75,6 @@ def test_install_shell_cli_json_reports_paths() -> None:
         )
         assert result.exit_code == 0, result.output
         payload = json.loads(result.output)
-        assert payload["shell"] == "zsh"
         assert Path(payload["binding_path"]).exists()
         assert Path(payload["rc_path"]).exists()
         assert payload["wrote_rc"]
@@ -87,7 +83,7 @@ def test_install_shell_cli_json_reports_paths() -> None:
 
 def test_doctor_reports_expected_checks() -> None:
     fake_env = {
-        "SHELL": "/bin/bash",
+        "SHELL": "/bin/zsh",
         "SIGIL_SESSION_ID": "test-session",
         "ZETA_MODEL_NAME": "model-test",
     }
@@ -104,7 +100,7 @@ def test_doctor_reports_expected_checks() -> None:
                         with patch(
                             "sigil.install.check_shell_binding_installed",
                             return_value=DoctorCheck(
-                                "shell:binding-installed", "ok", "/tmp/sigil.bash"
+                                "shell:binding-installed", "ok", "/tmp/sigil.zsh"
                             ),
                         ):
                             checks = doctor_checks()

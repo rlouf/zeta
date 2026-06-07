@@ -9,7 +9,6 @@ import click
 from ._base import cli
 from ._shared import pretty_print_json
 from ..install import (
-    SUPPORTED_SHELLS,
     DoctorCheck,
     checks_exit_code,
     checks_summary,
@@ -20,11 +19,10 @@ from ..install import (
 
 
 @cli.command("install")
-@click.argument("shell", type=click.Choice(SUPPORTED_SHELLS))
 @click.option(
     "--install-dir",
     type=click.Path(path_type=Path, file_okay=False, dir_okay=True),
-    help="Directory where the shell binding should be installed.",
+    help="Directory where the zsh binding should be installed.",
 )
 @click.option(
     "--rc",
@@ -41,15 +39,13 @@ from ..install import (
 )
 @click.option("--json", "json_output", is_flag=True)
 def cmd_install_shell(
-    shell: str,
     install_dir: Path | None,
     rc_path: Path | None,
     enable_glyphs: bool,
     json_output: bool,
 ) -> int:
-    """Install or update a Sigil shell binding."""
+    """Install or update the Sigil zsh binding."""
     result = install_shell(
-        shell,
         install_dir=install_dir,
         rc_path=rc_path,
         enable_glyphs=enable_glyphs,
@@ -57,7 +53,6 @@ def cmd_install_shell(
     if json_output:
         pretty_print_json(
             {
-                "shell": result.shell,
                 "binding_path": result.binding_path,
                 "rc_path": result.rc_path,
                 "source_path": result.source_path,
@@ -67,7 +62,7 @@ def cmd_install_shell(
         )
         return 0
 
-    print(f"installed Sigil {shell} binding at {result.binding_path}")
+    print(f"installed Sigil zsh binding at {result.binding_path}")
     if result.wrote_rc:
         print(f"updated {result.rc_path}")
     else:
@@ -77,18 +72,10 @@ def cmd_install_shell(
 
 
 @cli.command("doctor")
-@click.option(
-    "--shell",
-    "shell_name",
-    type=click.Choice(("auto", *SUPPORTED_SHELLS)),
-    default="auto",
-    show_default=True,
-    help="Shell binding to diagnose.",
-)
 @click.option("--json", "json_output", is_flag=True)
-def cmd_doctor(shell_name: str, json_output: bool) -> int:
+def cmd_doctor(json_output: bool) -> int:
     """Check whether Sigil is installed and ready to use."""
-    checks = doctor_checks(shell=shell_name)
+    checks = doctor_checks()
     if json_output:
         print(checks_to_json(checks))
         return checks_exit_code(checks)

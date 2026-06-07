@@ -35,8 +35,7 @@ def cli(ctx: click.Context) -> None:
     Setup and diagnostics:
 
     \b
-      sigil install zsh      install zsh glyph bindings
-      sigil install bash     install Bash glyph bindings
+      sigil install          install zsh glyph bindings
       sigil doctor           check install, shell, state, and model endpoint
       sigil status           show current session status
       sigil events           inspect recent Sigil activity

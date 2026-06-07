@@ -43,20 +43,12 @@ plain CLI underneath the punctuation.
 
 ## Install
 
-Install the Python command, then install the shell binding:
+Sigil targets zsh. Install the Python command, then install the shell binding:
 
 ```sh
 uv tool install sigil-sh
-sigil install zsh
+sigil install
 sigil doctor
-```
-
-For Bash:
-
-```sh
-uv tool install sigil-sh
-sigil install bash
-sigil doctor --shell bash
 ```
 
 You can also install with `pipx`:
@@ -74,14 +66,14 @@ uv tool install git+https://github.com/rlouf/sigil
 The Python package is named `sigil-sh` because `sigil` was not available as a
 distribution name. The installed command is still `sigil`.
 
-`sigil install` copies the bundled binding to `~/.sigil/shell/<shell>/` and
-adds an idempotent source block to `.zshrc` or `.bashrc`. Running it again
-updates the binding without duplicating the rc block.
+`sigil install` copies the bundled binding to `~/.sigil/shell/zsh/` and adds an
+idempotent source block to `.zshrc`. Running it again updates the binding
+without duplicating the rc block.
 
 ## Requirements
 
 - Python 3.11+
-- zsh or Bash for shell bindings
+- zsh for shell bindings
 - A local OpenAI-compatible chat completions endpoint for command generation
   and Zeta-backed answer/agent routes (default
   `http://127.0.0.1:8080/v1/chat/completions`)
@@ -186,7 +178,7 @@ Zeta handoff capture window.
 
 ## Glyph Reference
 
-Installed zsh and Bash bindings expose these shortcuts:
+Installed zsh bindings expose these shortcuts:
 
 | Glyph | Name | Behavior |
 | --- | --- | --- |
@@ -238,7 +230,7 @@ parsing from the CLI.
 To install the CLI without punctuation shortcuts:
 
 ```sh
-sigil install zsh --no-glyphs
+sigil install --no-glyphs
 ```
 
 ## Route Model
@@ -270,8 +262,8 @@ sigil run [--shell] COMMAND [ARGS...]
 sigil status [--json]
 sigil events [--limit N] [--json] [--raw]
 sigil session [show|path|list|clear] [--json]
-sigil install {zsh|bash} [--install-dir DIR] [--rc FILE] [--glyphs|--no-glyphs]
-sigil doctor [--shell auto|zsh|bash] [--json]
+sigil install [--install-dir DIR] [--rc FILE] [--glyphs|--no-glyphs]
+sigil doctor [--json]
 ```
 
 Sigil also installs a bundled `zeta` entrypoint. It is a service API used by
@@ -296,7 +288,7 @@ sigil events
 Sigil writes event-sourced state under `~/.sigil/` by default. Set
 `SIGIL_STATE_DIR` to move it.
 
-Installed Bash and zsh bindings set `SIGIL_SESSION_ID` once when the shell
+Installed zsh bindings set `SIGIL_SESSION_ID` once when the shell
 starts, so separate terminal windows keep separate continuity. Override the
 boundary with `SIGIL_SESSION_ID` or `SIGIL_SESSION_DIR`.
 

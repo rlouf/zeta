@@ -21,18 +21,11 @@ from .zeta.model import (
 )
 
 
-SUPPORTED_SHELLS = ("zsh", "bash")
-
-
-@dataclass(frozen=True)
-class ShellSpec:
-    name: str
-    binding_name: str
+BINDING_NAME = "sigil.zsh"
 
 
 @dataclass(frozen=True)
 class InstallResult:
-    shell: str
     binding_path: str
     rc_path: str
     source_path: str
@@ -48,18 +41,9 @@ class DoctorCheck:
     hint: str | None = None
 
 
-SPECS = {
-    "zsh": ShellSpec("zsh", "sigil.zsh"),
-    "bash": ShellSpec("bash", "sigil.bash"),
-}
-
-
-def binding_source(shell: str) -> Path:
-    """Return the source binding path from package data or a source checkout."""
-    spec = SPECS[shell]
-    packaged = importlib.resources.files("sigil").joinpath(
-        "shell", shell, spec.binding_name
-    )
+def binding_source() -> Path:
+    """Return the zsh binding source from package data or a source checkout."""
+    packaged = importlib.resources.files("sigil").joinpath("shell", "zsh", BINDING_NAME)
     try:
         with importlib.resources.as_file(packaged) as path:
             if path.exists():
@@ -67,30 +51,25 @@ def binding_source(shell: str) -> Path:
     except FileNotFoundError:
         pass
 
-    source_checkout = Path(__file__).resolve().parent / "shell" / shell
-    source_checkout = source_checkout / spec.binding_name
+    source_checkout = Path(__file__).resolve().parent / "shell" / "zsh" / BINDING_NAME
     if source_checkout.exists():
         return source_checkout
-    raise FileNotFoundError(spec.binding_name)
+    raise FileNotFoundError(BINDING_NAME)
 
 
-def default_install_dir(shell: str, env: dict[str, str] | None = None) -> Path:
-    """Return the install directory for a shell binding."""
+def default_install_dir(env: dict[str, str] | None = None) -> Path:
+    """Return the install directory for the zsh binding."""
     values = env if env is not None else os.environ
     override = values.get("SIGIL_SHELL_DIR")
     if override:
         return Path(override)
-    return Path.home() / ".sigil" / "shell" / shell
+    return Path.home() / ".sigil" / "shell" / "zsh"
 
 
-def default_rc_path(shell: str, env: dict[str, str] | None = None) -> Path:
-    """Return the default rc file path for a shell."""
+def default_rc_path(env: dict[str, str] | None = None) -> Path:
+    """Return the default zsh rc file path."""
     values = env if env is not None else os.environ
-    if shell == "zsh":
-        return Path(values.get("ZDOTDIR") or Path.home()) / ".zshrc"
-    if shell == "bash":
-        return Path(values.get("SIGIL_BASH_RC") or Path.home() / ".bashrc")
-    raise ValueError(f"unsupported shell: {shell}")
+    return Path(values.get("ZDOTDIR") or Path.home()) / ".zshrc"
 
 
 def shell_reference(path: Path) -> str:
@@ -151,21 +130,17 @@ def replace_sigil_source_block(
 
 
 def install_shell(
-    shell: str,
     install_dir: Path | None = None,
     rc_path: Path | None = None,
     *,
     enable_glyphs: bool = True,
 ) -> InstallResult:
-    """Install or update a shell binding and idempotently source it from rc."""
-    if shell not in SPECS:
-        raise ValueError(f"unsupported shell: {shell}")
-    spec = SPECS[shell]
-    install_root = install_dir or default_install_dir(shell)
-    rc = rc_path or default_rc_path(shell)
-    binding_path = install_root / spec.binding_name
+    """Install or update the zsh binding and idempotently source it from rc."""
+    install_root = install_dir or default_install_dir()
+    rc = rc_path or default_rc_path()
+    binding_path = install_root / BINDING_NAME
 
-    source = binding_source(shell)
+    source = binding_source()
     install_root.mkdir(parents=True, exist_ok=True)
     binding_path.write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
     binding_path.chmod(0o644)
@@ -179,7 +154,7 @@ def install_shell(
     rc.parent.mkdir(parents=True, exist_ok=True)
     rc.touch(exist_ok=True)
     rc_text = rc.read_text(encoding="utf-8")
-    references = {str(binding_path), f"$HOME/.sigil/shell/{shell}/{spec.binding_name}"}
+    references = {str(binding_path), f"$HOME/.sigil/shell/zsh/{BINDING_NAME}"}
     wrote_rc = False
     rc_text, wrote_rc = replace_sigil_source_block(rc_text, references, snippet)
     if wrote_rc:
@@ -190,7 +165,6 @@ def install_shell(
         wrote_rc = True
 
     return InstallResult(
-        shell=shell,
         binding_path=str(binding_path),
         rc_path=str(rc),
         source_path=str(source),
@@ -205,8 +179,7 @@ def detect_shell(env: dict[str, str] | None = None) -> str | None:
     shell = values.get("SHELL")
     if not shell:
         return None
-    name = Path(shell).name
-    return name if name in SUPPORTED_SHELLS else name
+    return Path(shell).name
 
 
 def check_executable(name: str, hint: str | None = None) -> DoctorCheck:
@@ -314,41 +287,34 @@ def check_endpoint(env: dict[str, str] | None = None) -> DoctorCheck:
 
 
 def check_shell_support(shell: str | None) -> DoctorCheck:
-    """Check that the selected shell is supported."""
-    if shell in SUPPORTED_SHELLS:
+    """Check that the current shell is zsh, the only supported shell."""
+    if shell == "zsh":
         return DoctorCheck("shell:supported", "ok", shell)
     if shell is None:
         return DoctorCheck(
             "shell:supported",
             "warn",
             "SHELL is not set",
-            "Run sigil doctor --shell zsh or --shell bash.",
+            "Sigil supports zsh; run it in zsh.",
         )
     return DoctorCheck(
         "shell:supported",
         "fail",
         f"{shell} is not supported",
-        "Use zsh or bash, or add a new shell binding.",
+        "Sigil supports zsh; run it in zsh.",
     )
 
 
-def check_shell_binding_installed(shell: str | None) -> DoctorCheck:
-    """Check that the selected shell binding exists in the install location."""
-    if shell not in SUPPORTED_SHELLS:
-        return DoctorCheck(
-            "shell:binding-installed",
-            "warn",
-            "skipped because shell is unsupported or unknown",
-        )
-    spec = SPECS[shell]
-    path = default_install_dir(shell) / spec.binding_name
+def check_shell_binding_installed() -> DoctorCheck:
+    """Check that the zsh binding exists in the install location."""
+    path = default_install_dir() / BINDING_NAME
     if path.exists():
         return DoctorCheck("shell:binding-installed", "ok", str(path))
     return DoctorCheck(
         "shell:binding-installed",
         "fail",
         f"{path} does not exist",
-        f"Run sigil install {shell}.",
+        "Run sigil install.",
     )
 
 
@@ -386,21 +352,20 @@ def check_glyphs_enabled(env: dict[str, str] | None = None) -> DoctorCheck:
         "shell:glyphs-enabled",
         "warn",
         "glyphs disabled",
-        "Run sigil install zsh --glyphs or sigil install bash --glyphs, then restart.",
+        "Run sigil install --glyphs, then restart.",
     )
 
 
-def doctor_checks(shell: str | None = None) -> list[DoctorCheck]:
+def doctor_checks() -> list[DoctorCheck]:
     """Run Sigil environment checks."""
-    selected_shell = detect_shell() if shell in (None, "auto") else shell
     checks = [
         check_sigil_installed(),
         check_zeta_installed(),
         check_endpoint(),
-        check_shell_binding_installed(selected_shell),
+        check_shell_binding_installed(),
         check_shell_binding_loaded(),
         check_glyphs_enabled(),
-        check_shell_support(selected_shell),
+        check_shell_support(detect_shell()),
         check_state_writable(),
     ]
     return checks

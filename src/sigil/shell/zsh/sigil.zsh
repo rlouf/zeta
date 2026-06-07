@@ -240,7 +240,7 @@ __sigil_run_plus_capture_line() {
 }
 
 __sigil_accept_line_with_plus_capture() {
-  local command status
+  local command exit_status
   command="$(__sigil_plus_capture_command "$BUFFER")" || {
     zle __sigil_accept_line_without_plus_capture
     return $?
@@ -251,9 +251,9 @@ __sigil_accept_line_with_plus_capture() {
   zle -I
   print -r --
   __sigil_run_plus_capture_command "$command"
-  status=$?
+  exit_status=$?
   zle reset-prompt
-  return "$status"
+  return "$exit_status"
 }
 
 __sigil_install_plus_capture_widget() {

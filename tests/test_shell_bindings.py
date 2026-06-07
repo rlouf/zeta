@@ -467,6 +467,26 @@ def test_zsh_installs_raw_plus_capture_accept_line_widget() -> None:
 
 
 @pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
+def test_zsh_accept_line_plus_capture_preserves_exit_status() -> None:
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp = Path(tmp_dir)
+        stub = make_stub(tmp)
+        result = run_shell(
+            "zsh",
+            textwrap.dedent(
+                '                    function zle() { return 0; }\n                    source src/sigil/shell/zsh/sigil.zsh\n                    BUFFER="+ echo captured"\n                    __sigil_accept_line_with_plus_capture\n                    print -- "exit=$?"\n                    '
+            ),
+            tmp,
+            stub,
+        )
+        assert_success(result)
+        assert result.stderr == ""
+        assert "read-only variable: status" not in result.stdout
+        assert result.stdout == "\nran:--shell echo captured\nexit=0\n"
+        assert read_log(tmp) == ["run --shell echo captured"]
+
+
+@pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
 def test_zsh_wraps_simple_zeta_handoff_with_run_capture() -> None:
     with tempfile.TemporaryDirectory() as tmp_dir:
         tmp = Path(tmp_dir)

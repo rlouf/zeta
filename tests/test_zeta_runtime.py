@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import sys
 from collections.abc import Callable
+from io import StringIO
 from pathlib import Path
 from typing import Any, cast
 
@@ -30,6 +31,11 @@ from sigil.zeta import models as zeta_models
 from sigil.zeta.tools import grep as grep_tool
 from sigil.zeta.tools import validate_tool_args
 from sigil.zeta.cli import cli as zeta_cli
+
+
+class TtyBuffer(StringIO):
+    def isatty(self) -> bool:
+        return True
 
 
 def write_models_config(home: Path, text: str) -> Path:
@@ -248,6 +254,43 @@ def test_zeta_agent_turn_finalizes_text(monkeypatch) -> None:
     assert result.events == [{"type": "assistant_message", "content": "done"}]
     kwargs = cast(dict[str, Any], captured["kwargs"])
     assert kwargs["tools"][0]["function"]["name"] == "read"
+
+
+def test_zeta_agent_turn_wraps_model_request_in_status(monkeypatch) -> None:
+    events: list[str] = []
+
+    class Status:
+        def __enter__(self) -> object:
+            events.append("start")
+            return self
+
+        def __exit__(self, *exc: object) -> bool:
+            events.append("stop")
+            return False
+
+    def fake_chat_completion_messages(
+        *args: object, **kwargs: object
+    ) -> dict[str, Any]:
+        del args, kwargs
+        assert events == ["start"]
+        return {"content": "done"}
+
+    monkeypatch.setattr(zeta_agent, "model_endpoint_open", lambda: True)
+    monkeypatch.setattr(
+        zeta_agent,
+        "chat_completion_messages",
+        fake_chat_completion_messages,
+    )
+
+    result = zeta_agent.run_agent_turn(
+        "answer",
+        [],
+        zeta_agent.AgentConfig(),
+        model_status=Status,
+    )
+
+    assert result.final_text == "done"
+    assert events == ["start", "stop"]
 
 
 def test_zeta_agent_turn_uses_request_model(monkeypatch) -> None:
@@ -1208,6 +1251,32 @@ def test_sigil_display_summarizes_tool_results() -> None:
             "metadata": {"matches": 10, "files": 3, "truncated": True},
         },
     ) == ["10 matches · 3 files · truncated"]
+
+
+def test_sigil_display_thinking_status_updates_and_clears() -> None:
+    output = TtyBuffer()
+    now = 0.0
+
+    def clock() -> float:
+        return now
+
+    with sigil_display.ThinkingStatus(output, interval=60, clock=clock) as status:
+        now = 10.4
+        status.refresh()
+
+    text = output.getvalue()
+    assert "> Thinking (0s...)" in text
+    assert "> Thinking (10s...)" in text
+    assert text.endswith("\r\x1b[2K")
+
+
+def test_sigil_display_thinking_status_skips_non_tty() -> None:
+    output = StringIO()
+
+    with sigil_display.ThinkingStatus(output):
+        pass
+
+    assert output.getvalue() == ""
 
 
 def test_sigil_display_summarizes_shell_results() -> None:

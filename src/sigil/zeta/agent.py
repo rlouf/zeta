@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+from contextlib import nullcontext
 import json
 from dataclasses import dataclass, field
-from typing import Any, Callable, Iterable, Literal, cast
+from typing import Any, Callable, ContextManager, Iterable, Literal, cast
 
 from ..protocols import is_shell_prompt_handoff
 from . import runtime
@@ -20,6 +21,7 @@ from .tools import (
 EditMode = Literal["review_patch", "direct_replace"]
 ExecutionMode = Literal["handoff", "direct"]
 AgentEventSink = Callable[[dict[str, Any]], None]
+ModelStatusFactory = Callable[[], ContextManager[object]]
 
 
 @dataclass(frozen=True)
@@ -53,6 +55,7 @@ def run_agent_turn(
     *,
     context: str = "",
     event_sink: AgentEventSink | None = None,
+    model_status: ModelStatusFactory | None = None,
 ) -> AgentTurnResult:
     """Run a bounded assistant/tool loop without mutating session state."""
     if config.model_url is None:
@@ -67,19 +70,20 @@ def run_agent_turn(
         allowed_tools = tuple(config.allowed_tools)
     events: list[dict[str, Any]] = []
     for _ in range(config.max_turns):
-        assistant = chat_completion_messages(
-            runtime.zeta_chat_messages(
-                objective,
-                [*transcript, *events],
-                system=config.system_prompt,
-                allowed_tools=allowed_tools,
-                context=context,
-            ),
-            tools=model_tool_descriptors(allowed_tools),
-            tool_choice="auto",
-            selected_model=config.model_name,
-            selected_url=config.model_url,
-        )
+        with model_status_context(model_status):
+            assistant = chat_completion_messages(
+                runtime.zeta_chat_messages(
+                    objective,
+                    [*transcript, *events],
+                    system=config.system_prompt,
+                    allowed_tools=allowed_tools,
+                    context=context,
+                ),
+                tools=model_tool_descriptors(allowed_tools),
+                tool_choice="auto",
+                selected_model=config.model_name,
+                selected_url=config.model_url,
+            )
         message_event = assistant_message_event(assistant)
         if message_event:
             emit_event(events, message_event, event_sink)
@@ -108,6 +112,14 @@ def run_agent_turn(
             if result_event.stop:
                 return AgentTurnResult(events=events)
     return AgentTurnResult(events=events)
+
+
+def model_status_context(
+    factory: ModelStatusFactory | None,
+) -> ContextManager[object]:
+    if factory is None:
+        return nullcontext()
+    return factory()
 
 
 def emit_event(

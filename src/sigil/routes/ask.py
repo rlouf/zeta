@@ -19,7 +19,7 @@ from ..state import (
     read_jsonl,
     write_jsonl,
 )
-from ..display import render_tool_start
+from ..display import ThinkingStatus, render_tool_start, thinking_status_factory
 from ..zeta import runtime
 from ..zeta.agent import AgentConfig, AgentTurnResult, run_agent_turn
 from ..zeta.model import chat_text
@@ -195,6 +195,7 @@ def run_tool_answer(
         dict(turn) for turn in history if turn.get("role") in {"user", "assistant"}
     ]
     append_jsonl(runtime.TRANSCRIPT, user_event)
+    status_enabled = answer_thinking_status_enabled(json_output)
     result = run_agent_turn(
         prompt,
         turn_events,
@@ -211,6 +212,7 @@ def run_tool_answer(
         ),
         context=runtime.load_project_context(),
         event_sink=recorder.record,
+        model_status=thinking_status_factory(sys.stderr, enabled=status_enabled),
     )
     turn_events.extend(result.events)
     tool_events = list(recorder.tool_events)
@@ -223,7 +225,8 @@ def run_tool_answer(
     )
     answer = result.final_text
     if not answer:
-        answer = fallback_answer(system, prompt, turn_events, selected_model)
+        with ThinkingStatus(sys.stderr, enabled=status_enabled):
+            answer = fallback_answer(system, prompt, turn_events, selected_model)
     record_answer(
         input_text=input_text,
         prompt=prompt,
@@ -234,6 +237,12 @@ def run_tool_answer(
         model=model_selection_event(selected_model) if selected_model else None,
     )
     return 0
+
+
+def answer_thinking_status_enabled(json_output: bool) -> bool | None:
+    if json_output:
+        return False
+    return None
 
 
 class AnswerEventRecorder:

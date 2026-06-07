@@ -15,6 +15,7 @@ from ..state import append_jsonl
 from ..display import (
     render_handoff_lines,
     render_tool_start,
+    thinking_status_factory,
     tool_result_summary,
 )
 from ..zeta import runtime
@@ -96,6 +97,7 @@ def run_agent_step(
         ),
         context=context,
         event_sink=recorder.record,
+        model_status=thinking_status_factory(output),
     )
     status = replay_agent_events(
         result,

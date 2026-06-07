@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import os
-from typing import Any, TextIO, cast
+import threading
+import time
+from typing import Any, Callable, TextIO, cast
 
 from .protocols import (
     SHELL_HANDOFF_OUTCOME_CANCELLED,
@@ -13,6 +15,7 @@ from .protocols import (
 from .tty import MUTED, RESET
 
 TRACE_LABEL_WIDTH = 5
+THINKING_STATUS_INTERVAL_SECONDS = 1.0
 
 
 def render_tool_start(
@@ -31,6 +34,76 @@ def render_tool_start(
     status = f"❯ {name:<{TRACE_LABEL_WIDTH}}  {detail}" if detail else f"❯ {name}"
     end = "\n" if newline else ""
     print(muted(status, enabled=should_color(output)), file=output, flush=True, end=end)
+
+
+class ThinkingStatus:
+    """Render an ephemeral thinking timer while a blocking model request runs."""
+
+    def __init__(
+        self,
+        output: TextIO,
+        *,
+        enabled: bool | None = None,
+        interval: float = THINKING_STATUS_INTERVAL_SECONDS,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
+        self.output = output
+        self.enabled = is_interactive(output) if enabled is None else enabled
+        self.interval = interval
+        self.clock = clock
+        self.started_at = 0.0
+        self.last_seconds: int | None = None
+        self.stop = threading.Event()
+        self.thread: threading.Thread | None = None
+        self.lock = threading.Lock()
+
+    def __enter__(self) -> "ThinkingStatus":
+        if not self.enabled:
+            return self
+        self.started_at = self.clock()
+        self.refresh()
+        self.thread = threading.Thread(target=self.run, daemon=True)
+        self.thread.start()
+        return self
+
+    def __exit__(self, *exc: object) -> bool:
+        if not self.enabled:
+            return False
+        self.stop.set()
+        if self.thread is not None:
+            self.thread.join()
+        self.clear()
+        return False
+
+    def run(self) -> None:
+        while not self.stop.wait(self.interval):
+            self.refresh()
+
+    def refresh(self) -> None:
+        seconds = max(int(self.clock() - self.started_at), 0)
+        if seconds == self.last_seconds:
+            return
+        self.last_seconds = seconds
+        self.write(f"\r\x1b[2K{thinking_status_text(seconds)}")
+
+    def clear(self) -> None:
+        self.write("\r\x1b[2K")
+
+    def write(self, text: str) -> None:
+        with self.lock:
+            print(text, file=self.output, end="", flush=True)
+
+
+def thinking_status_text(seconds: int) -> str:
+    return f"> Thinking ({seconds}s...)"
+
+
+def thinking_status_factory(
+    output: TextIO,
+    *,
+    enabled: bool | None = None,
+) -> Callable[[], ThinkingStatus]:
+    return lambda: ThinkingStatus(output, enabled=enabled)
 
 
 def render_handoff_lines(handoff: dict[str, Any]) -> list[str]:

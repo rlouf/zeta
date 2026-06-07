@@ -71,14 +71,7 @@ __sigil_prompt_insert() {
 __sigil_zeta_prompt_command() {
   local command="${1:-}"
   [[ -n "$command" ]] || return 0
-  case "$command" in
-    *[\|\&\;\<\>\(\)\`\$\*\?\{\}\[\]\~]*)
-      print -r -- "$command"
-      ;;
-    *)
-      print -r -- "+ $command"
-      ;;
-  esac
+  print -r -- "+ $command"
 }
 
 __sigil_json_string() {
@@ -219,6 +212,58 @@ sigil_status() {
   "$__sigil_bin" status "$@"
 }
 
+# ── zsh Raw Plus Capture ─────────────────────────────────────────────────
+
+typeset -g __sigil_plus_capture_widget_installed="${__sigil_plus_capture_widget_installed:-0}"
+
+__sigil_plus_capture_command() {
+  local line="${1:-}"
+  if [[ "$line" =~ '^\+[[:space:]]+(.+)$' ]]; then
+    local command="${match[1]}"
+    [[ -n "${command//[[:space:]]/}" ]] || return 1
+    print -r -- "$command"
+    return 0
+  fi
+  return 1
+}
+
+__sigil_run_plus_capture_command() {
+  local command="${1:-}"
+  [[ -n "$command" ]] || return 1
+  SIGIL_RUN_SHELL="${SIGIL_RUN_SHELL:-${SHELL:-zsh}}" "$__sigil_bin" run --shell "$command"
+}
+
+__sigil_run_plus_capture_line() {
+  local command
+  command="$(__sigil_plus_capture_command "${1:-}")" || return 1
+  __sigil_run_plus_capture_command "$command"
+}
+
+__sigil_accept_line_with_plus_capture() {
+  local command status
+  command="$(__sigil_plus_capture_command "$BUFFER")" || {
+    zle __sigil_accept_line_without_plus_capture
+    return $?
+  }
+
+  BUFFER=""
+  CURSOR=0
+  zle -I
+  print -r --
+  __sigil_run_plus_capture_command "$command"
+  status=$?
+  zle reset-prompt
+  return "$status"
+}
+
+__sigil_install_plus_capture_widget() {
+  [[ $- == *i* ]] || return 0
+  [[ "$__sigil_plus_capture_widget_installed" == "1" ]] && return 0
+  zle -A accept-line __sigil_accept_line_without_plus_capture 2>/dev/null || return 0
+  zle -N accept-line __sigil_accept_line_with_plus_capture 2>/dev/null || return 0
+  __sigil_plus_capture_widget_installed=1
+}
+
 # ── Glyph Bindings ───────────────────────────────────────────────────────
 
 if __sigil_glyphs_enabled; then
@@ -241,6 +286,8 @@ if __sigil_glyphs_enabled; then
   alias ',,,'='noglob sigil_agent_step_auto'
   alias -- '+'='noglob sigil_run'
   alias '?'='noglob sigil_status'
+
+  __sigil_install_plus_capture_widget
 fi
 
 # ── zsh Command Lifecycle Hooks ──────────────────────────────────────────

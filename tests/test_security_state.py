@@ -755,6 +755,29 @@ def test_run_cli_streams_output_and_records_snippets() -> None:
         assert failure["stderr_snippet"] == "stderr line\n"
 
 
+def test_run_cli_shell_mode_captures_raw_command_string() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        with patch_dict(
+            os.environ,
+            {
+                "SIGIL_RUN_SHELL": "/bin/sh",
+                "SIGIL_STATE_DIR": tmp,
+                "SIGIL_SESSION_ID": "test",
+            },
+        ):
+            result = CliRunner().invoke(
+                cli,
+                ["run", "--shell", "printf 'stdout line\\n' | cat"],
+            )
+
+        assert result.exit_code == 0
+        assert result.stdout == "stdout line\n"
+        rows = read_recent_turns(tmp)
+        assert rows[-1]["command"] == "printf 'stdout line\\n' | cat"
+        assert rows[-1]["status"] == 0
+        assert rows[-1]["stdout_snippet"] == "stdout line\n"
+
+
 def test_run_cli_requires_a_command() -> None:
     result = CliRunner().invoke(cli, ["run"])
     assert result.exit_code == 2

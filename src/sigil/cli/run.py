@@ -47,8 +47,14 @@ class TailBuffer:
     context_settings={"ignore_unknown_options": True, "allow_extra_args": True},
 )
 @click.pass_context
+@click.option(
+    "--shell",
+    "use_shell",
+    is_flag=True,
+    help="Run the remaining argument text through the configured shell.",
+)
 @click.argument("argv", nargs=-1, type=click.UNPROCESSED)
-def cmd_run(ctx: click.Context, argv: tuple[str, ...]) -> int:
+def cmd_run(ctx: click.Context, use_shell: bool, argv: tuple[str, ...]) -> int:
     """Run a command, stream output live, and record clean output snippets."""
     if not argv:
         raise click.UsageError("missing command to run")
@@ -56,17 +62,12 @@ def cmd_run(ctx: click.Context, argv: tuple[str, ...]) -> int:
     capture_bytes = configured_capture_bytes()
     stdout_tail = TailBuffer(capture_bytes)
     stderr_tail = TailBuffer(capture_bytes)
-    command = shlex.join(argv)
+    command = command_text(argv, use_shell)
 
     try:
-        proc = subprocess.Popen(
-            list(argv),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            stdin=None,
-        )
+        proc = start_process(argv, command, use_shell)
     except FileNotFoundError as error:
-        program = error.filename or argv[0]
+        program = error.filename or missing_program(argv, use_shell)
         stderr = (
             f"sigil: missing executable: {program}\n"
             "Install it or make sure it is on PATH, then retry.\n"
@@ -75,7 +76,7 @@ def cmd_run(ctx: click.Context, argv: tuple[str, ...]) -> int:
         record_turn(command, 127, os.getcwd(), stderr_snippet=stderr)
         ctx.exit(127)
     except PermissionError as error:
-        target = error.filename or argv[0]
+        target = error.filename or missing_program(argv, use_shell)
         stderr = f"sigil: permission denied: {target}\n"
         click.echo(stderr, err=True, nl=False)
         record_turn(command, 126, os.getcwd(), stderr_snippet=stderr)
@@ -115,6 +116,61 @@ def configured_capture_bytes() -> int:
         return max(0, int(raw))
     except ValueError:
         return DEFAULT_CAPTURE_BYTES
+
+
+def command_text(argv: tuple[str, ...], use_shell: bool) -> str:
+    """Return the user-facing command text to run and record."""
+    if use_shell:
+        return " ".join(argv)
+    return shlex.join(argv)
+
+
+def start_process(
+    argv: tuple[str, ...],
+    command: str,
+    use_shell: bool,
+) -> subprocess.Popen[bytes]:
+    """Start a captured command in argv or shell-string mode."""
+    if not use_shell:
+        return subprocess.Popen(
+            list(argv),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            stdin=None,
+            text=False,
+        )
+
+    shell = configured_shell_executable()
+    if shell:
+        return subprocess.Popen(
+            command,
+            shell=True,
+            executable=shell,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            stdin=None,
+            text=False,
+        )
+    return subprocess.Popen(
+        command,
+        shell=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        stdin=None,
+        text=False,
+    )
+
+
+def configured_shell_executable() -> str:
+    """Return the shell executable used for `sigil run --shell`."""
+    return os.environ.get("SIGIL_RUN_SHELL") or os.environ.get("SHELL") or ""
+
+
+def missing_program(argv: tuple[str, ...], use_shell: bool) -> str:
+    """Return the executable name to show in process-start failures."""
+    if use_shell:
+        return configured_shell_executable() or "shell"
+    return argv[0]
 
 
 def mirror_stream(source: BinaryIO, target: TextStream, tail: TailBuffer) -> None:

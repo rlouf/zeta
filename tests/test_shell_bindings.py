@@ -785,6 +785,41 @@ def test_zsh_run_glyph_dispatches_to_sigil_run() -> None:
 
 
 @pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
+def test_zsh_raw_plus_capture_dispatches_shell_command_to_sigil_run() -> None:
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp = Path(tmp_dir)
+        stub = make_stub(tmp)
+        result = run_shell(
+            "zsh",
+            textwrap.dedent(
+                '                    source src/sigil/shell/zsh/sigil.zsh\n                    __sigil_run_plus_capture_line "+ echo captured | cat"\n                    '
+            ),
+            tmp,
+            stub,
+        )
+        assert_success(result)
+        assert result.stdout == "ran:--shell echo captured | cat\n"
+        assert read_log(tmp) == ["run --shell echo captured | cat"]
+
+
+@pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
+def test_zsh_installs_raw_plus_capture_accept_line_widget() -> None:
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp = Path(tmp_dir)
+        stub = make_stub(tmp)
+        result = run_shell_args(
+            ["zsh", "-f", "-ic"],
+            textwrap.dedent(
+                '                    source src/sigil/shell/zsh/sigil.zsh\n                    print -- "widget=${widgets[accept-line]}"\n                    '
+            ),
+            tmp,
+            stub,
+        )
+        assert_success(result)
+        assert "widget=user:__sigil_accept_line_with_plus_capture" in result.stdout
+
+
+@pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
 def test_zsh_wraps_simple_zeta_handoff_with_run_capture() -> None:
     with tempfile.TemporaryDirectory() as tmp_dir:
         tmp = Path(tmp_dir)
@@ -802,7 +837,7 @@ def test_zsh_wraps_simple_zeta_handoff_with_run_capture() -> None:
 
 
 @pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
-def test_zsh_keeps_shell_grammar_handoff_raw() -> None:
+def test_zsh_wraps_shell_grammar_handoff_with_run_capture() -> None:
     with tempfile.TemporaryDirectory() as tmp_dir:
         tmp = Path(tmp_dir)
         stub = make_stub(tmp)
@@ -815,7 +850,7 @@ def test_zsh_keeps_shell_grammar_handoff_raw() -> None:
             stub,
         )
         assert_success(result)
-        assert result.stdout == "history=echo zeta | cat\n"
+        assert result.stdout == "history=+ echo zeta | cat\n"
 
 
 @pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")

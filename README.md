@@ -222,8 +222,18 @@ plain answer text, not a tool call or terminal handoff.
 
 `+` runs the command you provide through `sigil run`, streams stdout/stderr live,
 preserves the exit status, and records bounded stdout/stderr snippets for later
-failure context. It does not use a shell parser; use `sh -c` for pipelines,
-redirection, and shell-only syntax.
+failure context. In interactive zsh, the binding captures the raw `+ ...`
+prompt line before zsh parses it, so pipelines, redirection, and shell grammar
+can be written naturally:
+
+```sh
++ cargo test --all | tee test.log
++ git status --short > status.txt
+```
+
+From Bash or scripts, `sigil run COMMAND [ARGS...]` keeps argv-style execution.
+Use `sigil run --shell 'COMMAND | WITH SHELL GRAMMAR'` when you need shell
+parsing from the CLI.
 
 To install the CLI without punctuation shortcuts:
 
@@ -256,7 +266,7 @@ The glyphs are thin shell functions over a regular CLI:
 
 ```text
 sigil ask [--follow-up] [--json] [QUESTION]
-sigil run COMMAND [ARGS...]
+sigil run [--shell] COMMAND [ARGS...]
 sigil status [--json]
 sigil events [--limit N] [--json] [--raw]
 sigil session [show|path|list|clear] [--json]

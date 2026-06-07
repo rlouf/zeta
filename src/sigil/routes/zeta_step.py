@@ -276,10 +276,10 @@ def execution_mode_for_glyph(glyph: str) -> ExecutionMode:
 
 def route_status_label(glyph: str) -> str:
     if glyph == ",,,":
-        return "auto loop"
+        return "do"
     if glyph == ",,":
-        return "confirmed loop"
-    return "one step"
+        return "propose"
+    return "step"
 
 
 def agent_prompt(objective: str, *, glyph: str, stdin_text: str) -> str:

@@ -1555,7 +1555,7 @@ def test_zeta_agent_step_double_comma_uses_handoff_mode(
     config = cast(zeta_agent.AgentConfig, captured["config"])
     assert config.edit_mode == "review_patch"
     assert config.execution_mode == "handoff"
-    assert "confirmed loop" in capsys.readouterr().err
+    assert "propose" in capsys.readouterr().err
 
 
 def test_zeta_agent_step_double_comma_stages_bash_handoff(

@@ -26,11 +26,11 @@ def cli(ctx: click.Context) -> None:
     Common routes:
 
     \b
-      ,      read-only answer from local context
-      ,,     confirmed Zeta tool loop for one agent step
-      ,,,    auto-approved Zeta tool loop for routine edits
+      ,      ask from local context
+      ,,     propose one reviewed agent step
+      ,,,    do one auto-approved agent step
       +      run one explicit command and capture output
-      ?      show current session status
+      ?      status for the current session
 
     Setup and diagnostics:
 

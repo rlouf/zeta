@@ -97,7 +97,7 @@ def test_create_invocation_names_operator() -> None:
     )
     assert invocation.base == ","
     assert invocation.depth == 1
-    assert invocation.name == "read"
+    assert invocation.name == "ask"
     assert invocation.prompt == "review risky changes"
     assert invocation.stdin == "diff"
     assert invocation.mode == "pipeline"
@@ -114,11 +114,17 @@ def test_op_cli_json_reports_parsed_invocation() -> None:
         "glyph": ",",
         "base": ",",
         "depth": 1,
-        "name": "read",
+        "name": "ask",
         "prompt": "review risky changes",
         "stdin": "diff --git a/file b/file\n",
         "mode": "pipeline",
     }
+
+
+def test_create_invocation_names_comma_depths() -> None:
+    assert create_invocation(",").name == "ask"
+    assert create_invocation(",,").name == "propose"
+    assert create_invocation(",,,").name == "do"
 
 
 def test_op_cli_json_reports_status_invocation() -> None:

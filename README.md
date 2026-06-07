@@ -8,8 +8,8 @@
 Natural-language shell assistant.
 
 Sigil turns short terminal intents into explicit, inspectable shell interactions.
-Ask from local context, hand one agent step to Zeta, or run one command with
-captured output without leaving your prompt.
+Ask from local context, propose one reviewed agent step, do one routine step, or
+run one command with captured output without leaving your prompt.
 Sigil is inspired by IRC-style bot commands: lightweight punctuation prefixes
 that let you address an assistant inline without leaving the conversation.
 
@@ -30,13 +30,13 @@ changes.
 Most shell assistants blur together three very different operations:
 suggesting, executing, and explaining. Sigil keeps those routes separate.
 
-| Need | Glyph | What happens |
+| Verb | Glyph | What happens |
 | --- | --- | --- |
-| "Answer from context." | `,` | Read-only answer with local inspection tools. No shell is exposed. |
-| "Do one agent turn." | `,,` | Confirms, then runs tool calls until no more are needed. |
-| "Do a routine edit step." | `,,,` | Runs one auto-approved Zeta step; exact replacements are applied directly. |
-| "Run and capture this command." | `+` | Runs one explicit command, streams output, and records stdout/stderr snippets. |
-| "Check Sigil status." | `?` | Shows the current session status without calling a model. |
+| ask | `,` | Answer from local context. No shell is exposed. |
+| propose | `,,` | Run the agent until it can stage reviewed shell work or return an answer. |
+| do | `,,,` | Run one auto-approved agent step; exact replacements are applied directly. |
+| run | `+` | Run one explicit command, stream output, and record stdout/stderr snippets. |
+| status | `?` | Show the current session status without calling a model. |
 
 The result is a shell workflow with small blast radius, durable state, and a
 plain CLI underneath the punctuation.
@@ -140,10 +140,10 @@ to `ZETA_MODEL_NAME` and `ZETA_MODEL_URL`.
 Once the shell binding is installed, use the glyphs directly:
 
 ```sh
-# Ask from read-only context.
+# Ask from local context.
 , why did the last command fail?
 
-# Run one shell-owned Zeta step.
+# Propose one reviewed agent step.
 ,, run the relevant tests
 
 # Run one command through Sigil's explicit capture path.
@@ -190,9 +190,9 @@ Installed zsh and Bash bindings expose these shortcuts:
 
 | Glyph | Name | Behavior |
 | --- | --- | --- |
-| `,` | read | Answer from read-only context. |
-| `,,` | confirmed loop | Confirm, then run tool calls until no more are needed. |
-| `,,,` | auto loop | Run auto-approved tool calls until no more are needed. |
+| `,` | ask | Answer from local context. |
+| `,,` | propose | Run until Sigil can stage reviewed shell work or return an answer. |
+| `,,,` | do | Run auto-approved tool calls until no more are needed. |
 | `+` | run | Run one explicit command and capture stdout/stderr snippets. |
 | `?` | status | Show the current session status. |
 
@@ -209,13 +209,13 @@ Examples:
 `,` prints a read-only answer. It does not stage commands or write to shell
 history.
 
-`,,` gives the objective to the confirmed Zeta loop. The loop may call local
+`,,` proposes the next reviewed step. The loop may call local
 tools such as `read`, `ls`, `grep`, `bash`, `edit`, and `write` until the model
 returns a final answer. Tool calls are shown as muted trace lines, and tool
 results are summarized compactly. The full JSON result stays in the Zeta
 transcript for the model.
 
-`,,,` is the same tool loop without the confirmation step.
+`,,,` does the same tool loop without the confirmation step.
 
 Read-only routes do not expose Bash. If an answer recommends a command, it is
 plain answer text, not a tool call or terminal handoff.
@@ -237,10 +237,11 @@ Each route has a fixed effect on your system:
 
 | Route | Effect | Rule |
 | --- | --- | --- |
-| `,` | read-only | Local answer route with no Bash tool. |
-| `,,` | read/write/execute | Confirmed Zeta loop; read-only tools run directly, Bash/edit/write are staged for review. |
-| `,,,` | read/write/execute | Auto-approved Zeta step; read-only tools, Bash, edit, and write run directly. |
-| `+` | execute | Explicit local command execution with stdout/stderr capture. |
+| `,` ask | read-only | Local answer route with no Bash tool. |
+| `,,` propose | read/write/execute | Read-only tools run directly; Bash/edit/write are staged for review. |
+| `,,,` do | read/write/execute | Read-only tools, Bash, edit, and write run directly. |
+| `+` run | execute | Explicit local command execution with stdout/stderr capture. |
+| `?` status | read-only | Current session status without calling a model. |
 
 Sigil stores audit/debug events and per-shell continuity under `~/.sigil/`.
 Inspect the global event log with:

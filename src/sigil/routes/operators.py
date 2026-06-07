@@ -8,8 +8,13 @@ from typing import Literal, cast
 OperatorBase = Literal[",", "?"]
 
 OPERATOR_NAMES: dict[OperatorBase, str] = {
-    ",": "read",
+    ",": "ask",
     "?": "status",
+}
+COMMA_OPERATOR_NAMES = {
+    1: "ask",
+    2: "propose",
+    3: "do",
 }
 
 SUPPORTED_OPERATORS = frozenset(OPERATOR_NAMES)
@@ -75,8 +80,15 @@ def create_invocation(
         glyph=token,
         base=base,
         depth=depth,
-        name=OPERATOR_NAMES[base],
+        name=operator_name(base, depth),
         prompt=prompt,
         stdin=stdin,
         mode=mode,
     )
+
+
+def operator_name(base: OperatorBase, depth: int) -> str:
+    """Return the user-facing verb for a parsed operator."""
+    if base == ",":
+        return COMMA_OPERATOR_NAMES[depth]
+    return OPERATOR_NAMES[base]

@@ -46,11 +46,11 @@ def test_top_level_help_lists_commands() -> None:
     result = CliRunner().invoke(cli, ["--help"])
     assert result.exit_code == 0
     assert "Common routes:" in result.output
-    assert ",      read-only answer from local context" in result.output
-    assert ",,     confirmed Zeta tool loop for one agent step" in result.output
-    assert ",,,    auto-approved Zeta tool loop for routine edits" in result.output
+    assert ",      ask from local context" in result.output
+    assert ",,     propose one reviewed agent step" in result.output
+    assert ",,,    do one auto-approved agent step" in result.output
     assert "+      run one explicit command and capture output" in result.output
-    assert "?      show current session status" in result.output
+    assert "?      status for the current session" in result.output
     assert "named command:" not in result.output
     assert "named shell function:" not in result.output
     assert "Setup and diagnostics:" in result.output

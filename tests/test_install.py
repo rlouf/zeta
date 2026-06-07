@@ -10,16 +10,16 @@ from click.testing import CliRunner
 
 from _patch import patch, patch_dict
 from sigil.cli import cli, main
-from sigil.install import DoctorCheck, doctor_checks, install_shell
+from sigil.install import DoctorCheck, doctor_checks, install_zsh_binding
 
 
-def test_install_shell_copies_binding_and_updates_rc_idempotently() -> None:
+def test_install_zsh_binding_copies_binding_and_updates_rc_idempotently() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
         install_dir = root / "bindings"
         rc_path = root / ".zshrc"
-        first = install_shell(install_dir=install_dir, rc_path=rc_path)
-        second = install_shell(install_dir=install_dir, rc_path=rc_path)
+        first = install_zsh_binding(install_dir=install_dir, rc_path=rc_path)
+        second = install_zsh_binding(install_dir=install_dir, rc_path=rc_path)
         binding_path = install_dir / "sigil.zsh"
         assert binding_path.exists()
         assert "Sigil zsh bindings" in binding_path.read_text()
@@ -30,10 +30,10 @@ def test_install_shell_copies_binding_and_updates_rc_idempotently() -> None:
         assert "export SIGIL_ENABLE_GLYPHS=1" in rc_path.read_text()
 
 
-def test_install_shell_can_disable_glyph_aliases_in_rc_snippet() -> None:
+def test_install_zsh_binding_can_disable_glyph_aliases_in_rc_snippet() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
-        result = install_shell(
+        result = install_zsh_binding(
             install_dir=root / "bindings",
             rc_path=root / ".zshrc",
             enable_glyphs=False,
@@ -43,12 +43,12 @@ def test_install_shell_can_disable_glyph_aliases_in_rc_snippet() -> None:
         assert "export SIGIL_ENABLE_GLYPHS=0" in rc_text
 
 
-def test_install_shell_bakes_resolved_runtime_bins_into_rc() -> None:
+def test_install_zsh_binding_bakes_resolved_runtime_bins_into_rc() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
         bins = {"sigil": "/opt/sigil/bin/sigil", "zeta": "/opt/sigil/bin/zeta"}
         with patch("sigil.install.shutil.which", side_effect=bins.get):
-            install_shell(
+            install_zsh_binding(
                 install_dir=root / "bindings",
                 rc_path=root / ".zshrc",
             )
@@ -59,7 +59,7 @@ def test_install_shell_bakes_resolved_runtime_bins_into_rc() -> None:
         assert "export ZETA_BIN=/opt/sigil/bin/zeta" in rc_text
 
 
-def test_install_shell_cli_json_reports_paths() -> None:
+def test_install_zsh_binding_cli_json_reports_paths() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
         result = CliRunner().invoke(

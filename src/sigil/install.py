@@ -41,7 +41,7 @@ class DoctorCheck:
     hint: str | None = None
 
 
-def binding_source() -> Path:
+def zsh_binding_source() -> Path:
     """Return the zsh binding source from package data or a source checkout."""
     packaged = importlib.resources.files("sigil").joinpath("shell", "zsh", BINDING_NAME)
     try:
@@ -57,7 +57,7 @@ def binding_source() -> Path:
     raise FileNotFoundError(BINDING_NAME)
 
 
-def default_install_dir(env: dict[str, str] | None = None) -> Path:
+def default_zsh_install_dir(env: dict[str, str] | None = None) -> Path:
     """Return the install directory for the zsh binding."""
     values = env if env is not None else os.environ
     override = values.get("SIGIL_SHELL_DIR")
@@ -66,7 +66,7 @@ def default_install_dir(env: dict[str, str] | None = None) -> Path:
     return Path.home() / ".sigil" / "shell" / "zsh"
 
 
-def default_rc_path(env: dict[str, str] | None = None) -> Path:
+def default_zshrc_path(env: dict[str, str] | None = None) -> Path:
     """Return the default zsh rc file path."""
     values = env if env is not None else os.environ
     return Path(values.get("ZDOTDIR") or Path.home()) / ".zshrc"
@@ -129,18 +129,18 @@ def replace_sigil_source_block(
     return rc_text, False
 
 
-def install_shell(
+def install_zsh_binding(
     install_dir: Path | None = None,
     rc_path: Path | None = None,
     *,
     enable_glyphs: bool = True,
 ) -> InstallResult:
     """Install or update the zsh binding and idempotently source it from rc."""
-    install_root = install_dir or default_install_dir()
-    rc = rc_path or default_rc_path()
+    install_root = install_dir or default_zsh_install_dir()
+    rc = rc_path or default_zshrc_path()
     binding_path = install_root / BINDING_NAME
 
-    source = binding_source()
+    source = zsh_binding_source()
     install_root.mkdir(parents=True, exist_ok=True)
     binding_path.write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
     binding_path.chmod(0o644)
@@ -307,7 +307,7 @@ def check_shell_support(shell: str | None) -> DoctorCheck:
 
 def check_shell_binding_installed() -> DoctorCheck:
     """Check that the zsh binding exists in the install location."""
-    path = default_install_dir() / BINDING_NAME
+    path = default_zsh_install_dir() / BINDING_NAME
     if path.exists():
         return DoctorCheck("shell:binding-installed", "ok", str(path))
     return DoctorCheck(

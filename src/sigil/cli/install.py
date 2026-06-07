@@ -14,7 +14,7 @@ from ..install import (
     checks_summary,
     checks_to_json,
     doctor_checks,
-    install_shell,
+    install_zsh_binding,
 )
 
 
@@ -38,14 +38,14 @@ from ..install import (
     help="Enable punctuation aliases in the shell rc snippet.",
 )
 @click.option("--json", "json_output", is_flag=True)
-def cmd_install_shell(
+def cmd_install_zsh_binding(
     install_dir: Path | None,
     rc_path: Path | None,
     enable_glyphs: bool,
     json_output: bool,
 ) -> int:
     """Install or update the Sigil zsh binding."""
-    result = install_shell(
+    result = install_zsh_binding(
         install_dir=install_dir,
         rc_path=rc_path,
         enable_glyphs=enable_glyphs,

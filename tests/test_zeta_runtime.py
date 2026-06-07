@@ -1167,11 +1167,28 @@ def test_sigil_display_summarizes_tool_results() -> None:
             "ok": True,
             "metadata": {"mode": "direct", "status": 0},
         },
-    ) == ["exit 0"]
+    ) == ["succeeded"]
+    assert sigil_display.tool_result_summary(
+        "bash",
+        {
+            "ok": False,
+            "metadata": {"mode": "direct", "status": 2},
+        },
+    ) == ["failed · exit 2"]
     assert sigil_display.tool_result_summary(
         "read",
         {"ok": True, "content": [{"type": "text", "text": "a\nb\n"}]},
     ) == ["2 lines"]
+    assert sigil_display.tool_result_summary(
+        "read",
+        {
+            "ok": False,
+            "error": {
+                "code": "read-failed",
+                "message": "[Errno 2] No such file or directory: 'missing.md'",
+            },
+        },
+    ) == ["read-failed: [Errno 2] No such file or directory: 'missing.md'"]
     assert sigil_display.tool_result_summary(
         "write",
         {

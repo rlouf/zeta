@@ -102,6 +102,8 @@ def tool_result_summary(name: str, result: dict[str, Any]) -> list[str]:
     direct_summary = direct_tool_result_summary(name, metadata)
     if direct_summary:
         return direct_summary
+    if result.get("ok") is False:
+        return failed_tool_result_summary(result)
     text = text_content(result)
     if name == "read":
         return read_result_summary(text)
@@ -111,11 +113,32 @@ def tool_result_summary(name: str, result: dict[str, Any]) -> list[str]:
         return grep_result_summary(text, metadata)
     if name == "edit" and metadata.get("mode") == "direct_replace":
         return edit_result_summary(metadata)
-    if result.get("ok") is False:
-        return [str(result.get("message") or result.get("error") or "failed")]
     if result.get("ok") is True:
         return ["ok"]
     return []
+
+
+def failed_tool_result_summary(result: dict[str, Any]) -> list[str]:
+    message = failed_tool_result_message(result)
+    if message:
+        return [truncate(message)]
+    text = text_content(result).strip()
+    if text:
+        return [truncate(text.splitlines()[0])]
+    return ["failed"]
+
+
+def failed_tool_result_message(result: dict[str, Any]) -> str:
+    error = result.get("error")
+    if isinstance(error, dict):
+        return format_tool_error(error)
+    return str(result.get("message") or "").strip()
+
+
+def format_tool_error(error: dict[str, Any]) -> str:
+    code = str(error.get("code") or "").strip()
+    message = str(error.get("message") or "").strip()
+    return ": ".join(part for part in (code, message) if part)
 
 
 def read_result_summary(text: str) -> list[str]:
@@ -166,7 +189,9 @@ def direct_tool_result_summary(name: str, metadata: dict[str, Any]) -> list[str]
     if name == "bash" and metadata.get("mode") == "direct":
         status = metadata.get("status")
         if isinstance(status, int):
-            return [f"exit {status}"]
+            if status == 0:
+                return ["succeeded"]
+            return [f"failed · exit {status}"]
         return ["executed"]
     if name == "write" and metadata.get("mode") == "direct":
         path = metadata.get("path")

@@ -136,13 +136,13 @@ def test_events_default_lists_recent_events() -> None:
     assert text.exit_code == 0, text.output
     assert text.output.splitlines()[0].split() == [
         "time",
-        "id",
-        "action",
+        "route",
+        "event",
         "session",
-        "summary",
+        "detail",
     ]
-    assert str(second["id"])[:8] in text.output
-    assert ",, executed" in text.output
+    assert str(second["id"])[:8] not in text.output
+    assert ",,     executed command" in text.output
     assert "git status --short -> 0" in text.output
     assert first["id"] not in text.output
     assert listed.exit_code == 0, listed.output
@@ -152,8 +152,9 @@ def test_events_default_lists_recent_events() -> None:
         "operator_command_executed",
     ]
     assert summaries[-1]["short_id"] == str(second["id"])[:8]
-    assert summaries[-1]["action"] == ",, executed"
-    assert summaries[-1]["summary"] == "git status --short -> 0"
+    assert summaries[-1]["route"] == ",,"
+    assert summaries[-1]["event"] == "executed command"
+    assert summaries[-1]["detail"] == "git status --short -> 0"
     assert raw.exit_code == 0, raw.output
     assert "short_id" not in json.loads(raw.output)[0]
 
@@ -186,11 +187,15 @@ def test_events_failure_recorded_label_is_not_prefixed_as_glyph() -> None:
                 os.environ["SIGIL_SESSION_ID"] = old_session_id
 
     assert text.exit_code == 0, text.output
-    assert str(event["id"])[:8] in text.output
+    assert str(event["id"])[:8] not in text.output
     assert "failure recorded" in text.output
     assert "failure failure recorded" not in text.output
+    assert "false -> 1" in text.output
     assert listed.exit_code == 0, listed.output
-    assert json.loads(listed.output)[0]["action"] == "failure recorded"
+    summary = json.loads(listed.output)[0]
+    assert summary["route"] == "-"
+    assert summary["event"] == "failure recorded"
+    assert summary["detail"] == "false -> 1"
 
 
 def test_confirmation_uses_exported_tty_before_dev_tty() -> None:

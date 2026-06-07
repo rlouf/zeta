@@ -11,7 +11,7 @@ from ._base import cli
 from ._shared import pretty_print_json
 from ..session import read_event_log
 
-EVENT_LIST_COLUMNS = ("time", "id", "action", "session", "summary")
+EVENT_LIST_COLUMNS = ("time", "route", "event", "session", "detail")
 ROUTE_GLYPHS = frozenset({",", ",,", ",,,", "?", "ask"})
 
 
@@ -67,29 +67,27 @@ def print_events_table(summaries: list[dict[str, object]]) -> None:
     rows = [
         {
             "time": str(summary["time_label"]),
-            "id": str(summary["short_id"]),
-            "action": str(summary["action"]),
+            "route": str(summary["route"]),
+            "event": str(summary["event"]),
             "session": str(summary["short_session"]),
-            "summary": str(summary["summary"]),
+            "detail": str(summary["detail"]),
         }
         for summary in summaries
     ]
     widths = {
         column: max(len(column), *(len(row[column]) for row in rows))
         for column in EVENT_LIST_COLUMNS
-        if column != "summary"
+        if column != "detail"
     }
     header = "  ".join(
-        column.ljust(widths[column]) if column != "summary" else column
+        column.ljust(widths[column]) if column != "detail" else column
         for column in EVENT_LIST_COLUMNS
     )
     print(header)
     for row in rows:
         print(
             "  ".join(
-                row[column].ljust(widths[column])
-                if column != "summary"
-                else row[column]
+                row[column].ljust(widths[column]) if column != "detail" else row[column]
                 for column in EVENT_LIST_COLUMNS
             )
         )
@@ -100,19 +98,19 @@ def event_summary(event: dict[str, object]) -> dict[str, object]:
     event_id = str(event.get("id") or "")
     session = str(event.get("session") or "")
     event_type = str(event.get("type") or "event")
-    glyph = event_glyph(event)
+    route = event_route(event)
     return {
         "id": event_id or "-",
         "short_id": short_token(event_id),
         "time": event.get("time"),
         "time_label": format_event_time(event.get("time")),
         "type": event_type,
-        "glyph": glyph,
-        "action": event_action(event, glyph, event_type),
+        "route": route,
+        "event": event_label(event, event_type),
         "session": session or "-",
         "short_session": short_token(session),
         "cwd": str(event.get("cwd") or "-"),
-        "summary": event_detail(event, event_type),
+        "detail": event_detail(event, event_type),
     }
 
 
@@ -128,7 +126,7 @@ def format_event_time(value: object) -> str:
     return datetime.fromtimestamp(value).strftime("%Y-%m-%d %H:%M:%S")
 
 
-def event_glyph(event: dict[str, object]) -> str:
+def event_route(event: dict[str, object]) -> str:
     """Return the route glyph for an event, including nested operator events."""
     glyph = event.get("glyph")
     if isinstance(glyph, str) and glyph in ROUTE_GLYPHS:
@@ -142,32 +140,28 @@ def event_glyph(event: dict[str, object]) -> str:
     return "-"
 
 
-def event_action(event: dict[str, object], glyph: str, event_type: str) -> str:
-    """Return a combined glyph plus lifecycle label."""
+def event_label(event: dict[str, object], event_type: str) -> str:
+    """Return the lifecycle label without route information."""
     operator = event.get("operator")
     if event_type == "operator_completed" and isinstance(operator, dict):
         operator = cast("dict[str, object]", operator)
-        name = str(operator.get("name") or "operator")
-        return f"{glyph} {name}"
+        return str(operator.get("name") or "operator")
     labels = {
         "answer_requested": "answer request",
         "answer_done": "answer",
         "answer": "answer",
         "tool_start": "tool start",
         "tool_end": "tool end",
-        "operator_command_executed": "executed",
+        "operator_command_executed": "executed command",
         "plan_created": "plan created",
         "plan_step_decision": "plan decision",
-        "plan_step_executed": "plan executed",
+        "plan_step_executed": "executed command",
         "plan_completed": "plan complete",
         "plan_aborted": "plan aborted",
-        "command_selected": "selected",
+        "command_selected": "staged command",
         "failure_recorded": "failure recorded",
     }
-    label = labels.get(event_type, event_type.replace("_", " "))
-    if glyph == "-":
-        return label
-    return f"{glyph} {label}"
+    return labels.get(event_type, event_type.replace("_", " "))
 
 
 def event_detail(event: dict[str, object], event_type: str) -> str:
@@ -184,6 +178,8 @@ def event_detail(event: dict[str, object], event_type: str) -> str:
     if event_type == "tool_end":
         return clean_summary_text(event.get("tool")) or "tool finished"
     if event_type == "operator_command_executed":
+        return command_status_summary(event)
+    if event_type == "failure_recorded":
         return command_status_summary(event)
     if event_type.startswith("plan_"):
         return staged_step_detail(event, event_type)
@@ -202,9 +198,8 @@ def operator_completed_detail(event: dict[str, object], event_type: str) -> str 
     operator = cast("dict[str, object]", operator)
     prompt = clean_summary_text(operator.get("prompt"))
     output = clean_summary_text(event.get("output_snippet"))
-    name = str(operator.get("name") or "operator")
     detail = prompt or output
-    return f"{name}: {detail}" if detail else name
+    return detail or "-"
 
 
 def staged_step_detail(event: dict[str, object], event_type: str) -> str:

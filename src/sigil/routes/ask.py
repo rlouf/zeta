@@ -21,13 +21,12 @@ from ..state import (
     write_jsonl,
 )
 from ..display import (
-    ContextUsageRenderState,
+    ContextUsageFooter,
     StreamRenderer,
     ThinkingStatus,
     TraceAwareStreamRenderer,
     TraceRenderState,
     create_stream_renderer,
-    render_context_usage,
     render_tool_result_summary,
     render_tool_start,
     thinking_status_factory,
@@ -196,17 +195,22 @@ def run_tool_answer(
     enabled_tools = tuple(allowed_tools)
     trace_state = TraceRenderState()
     base_stream_renderer = create_stream_renderer(sys.stdout, json_output=json_output)
+    context_footer = None if json_output else ContextUsageFooter(sys.stdout)
     stream_renderer = (
-        TraceAwareStreamRenderer(base_stream_renderer, trace_state, sys.stdout)
+        TraceAwareStreamRenderer(
+            base_stream_renderer,
+            trace_state,
+            sys.stdout,
+            before_output=context_footer.clear if context_footer is not None else None,
+        )
         if base_stream_renderer is not None
         else None
     )
-    context_usage_state = ContextUsageRenderState()
     recorder = AnswerEventRecorder(
         json_output=json_output,
         stream_renderer=stream_renderer,
         trace_state=trace_state,
-        context_usage_state=context_usage_state,
+        context_footer=context_footer,
     )
     user_event: dict[str, Any] = {
         "type": "user_message",
@@ -239,7 +243,11 @@ def run_tool_answer(
         ),
         context=runtime.load_project_context(),
         event_sink=recorder.record,
-        model_status=thinking_status_factory(sys.stderr, enabled=status_enabled),
+        model_status=thinking_status_factory(
+            sys.stderr,
+            enabled=status_enabled,
+            before_start=context_footer.clear if context_footer is not None else None,
+        ),
         stream_sink=stream_renderer,
     )
     turn_events.extend(result.events)
@@ -251,13 +259,15 @@ def run_tool_answer(
             skip_event_ids=recorder.recorded_event_ids,
             stream_renderer=stream_renderer,
             trace_state=trace_state,
-            context_usage_state=context_usage_state,
+            context_footer=context_footer,
         )
     )
     answer = result.final_text
     answer_streamed = result.final_text_streamed
     model_telemetry = dict(result.model_telemetry)
     if not answer:
+        if context_footer is not None:
+            context_footer.clear()
         answer, answer_streamed, fallback_telemetry = run_fallback_answer_with_status(
             system,
             prompt,
@@ -280,7 +290,7 @@ def run_tool_answer(
         answer_streamed=answer_streamed,
         stream_renderer=stream_renderer,
         trace_state=trace_state,
-        context_usage_state=context_usage_state,
+        context_footer=context_footer,
     )
     return 0
 
@@ -300,12 +310,12 @@ class AnswerEventRecorder:
         json_output: bool,
         stream_renderer: StreamRenderer | None = None,
         trace_state: TraceRenderState | None = None,
-        context_usage_state: ContextUsageRenderState | None = None,
+        context_footer: ContextUsageFooter | None = None,
     ) -> None:
         self.json_output = json_output
         self.stream_renderer = stream_renderer
         self.trace_state = trace_state
-        self.context_usage_state = context_usage_state
+        self.context_footer = context_footer
         self.recorded_event_ids: set[int] = set()
         self.tool_events: list[dict[str, Any]] = []
 
@@ -316,7 +326,7 @@ class AnswerEventRecorder:
             json_output=self.json_output,
             stream_renderer=self.stream_renderer,
             trace_state=self.trace_state,
-            context_usage_state=self.context_usage_state,
+            context_footer=self.context_footer,
         )
         self.tool_events.extend(tool_events)
 
@@ -328,7 +338,7 @@ def replay_answer_events(
     skip_event_ids: set[int] | frozenset[int] = frozenset(),
     stream_renderer: StreamRenderer | None = None,
     trace_state: TraceRenderState | None = None,
-    context_usage_state: ContextUsageRenderState | None = None,
+    context_footer: ContextUsageFooter | None = None,
 ) -> list[dict[str, Any]]:
     tool_events: list[dict[str, Any]] = []
     for event in result.events:
@@ -339,7 +349,7 @@ def replay_answer_events(
             json_output=json_output,
             stream_renderer=stream_renderer,
             trace_state=trace_state,
-            context_usage_state=context_usage_state,
+            context_footer=context_footer,
         )
         tool_events.extend(event_tool_events)
     return tool_events
@@ -351,7 +361,7 @@ def record_answer_event(
     json_output: bool,
     stream_renderer: StreamRenderer | None = None,
     trace_state: TraceRenderState | None = None,
-    context_usage_state: ContextUsageRenderState | None = None,
+    context_footer: ContextUsageFooter | None = None,
 ) -> list[dict[str, Any]]:
     event_type = str(event.get("type") or "")
     fields = {
@@ -366,6 +376,8 @@ def record_answer_event(
             "last-tools.jsonl", {"type": "tool_start", "tool": name, "args": args}
         )
         if not json_output:
+            if context_footer is not None:
+                context_footer.clear()
             if stream_renderer is not None:
                 stream_renderer.ensure_trace_boundary()
             render_tool_start(name, args, output=sys.stdout, newline=False)
@@ -384,11 +396,8 @@ def record_answer_event(
             output=sys.stdout,
             mark_text_separator=trace_state,
         )
-        render_context_usage(
-            telemetry,
-            output=sys.stdout,
-            render_state=context_usage_state,
-        )
+        if context_footer is not None:
+            context_footer.update(telemetry)
     tool_event = {"type": "tool_end", "tool": name, "result": result_payload}
     append_jsonl("last-tools.jsonl", tool_event)
     return [tool_event]
@@ -592,7 +601,7 @@ def record_answer(
     answer_streamed: bool = False,
     stream_renderer: StreamRenderer | None = None,
     trace_state: TraceRenderState | None = None,
-    context_usage_state: ContextUsageRenderState | None = None,
+    context_footer: ContextUsageFooter | None = None,
 ) -> None:
     telemetry_fields = model_telemetry_fields(model_telemetry)
     answer_event: dict[str, Any] = {
@@ -638,25 +647,17 @@ def record_answer(
     if answer_streamed:
         if stream_renderer is not None:
             stream_renderer.finish()
-        if context_usage_state is not None:
-            context_usage_state.mark_output()
-        render_context_usage(
-            model_telemetry,
-            output=sys.stdout,
-            render_state=context_usage_state,
-        )
+        if context_footer is not None:
+            context_footer.finalize(model_telemetry)
         return
+    if context_footer is not None:
+        context_footer.clear()
     if trace_state is None or not trace_state.render_text_separator(sys.stdout):
         print()
     print(answer)
     print()
-    if context_usage_state is not None:
-        context_usage_state.mark_output()
-    render_context_usage(
-        model_telemetry,
-        output=sys.stdout,
-        render_state=context_usage_state,
-    )
+    if context_footer is not None:
+        context_footer.finalize(model_telemetry)
 
 
 def model_telemetry_fields(

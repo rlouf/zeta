@@ -2195,23 +2195,33 @@ def test_sigil_display_summarizes_current_context_estimate() -> None:
     )
 
 
-def test_sigil_display_context_usage_render_state_reprints_after_output() -> None:
+def test_sigil_display_context_usage_footer_is_ephemeral_for_tty(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("NO_COLOR", "1")
     telemetry = {"usage": {"prompt_tokens": 18_432}}
-    state = sigil_display.ContextUsageRenderState()
+    output = TtyBuffer()
+    footer = sigil_display.ContextUsageFooter(output)
+
+    assert footer.update(telemetry)
+    assert not output.getvalue().endswith("\n")
+    assert output.getvalue() == "\r\x1b[2K◌ context  ≈ 18,432 tokens"
+
+    footer.clear()
+    assert output.getvalue().endswith("\r\x1b[2K")
+    assert footer.finalize(telemetry)
+    assert output.getvalue().endswith("◌ context  ≈ 18,432 tokens\n")
+
+
+def test_sigil_display_context_usage_footer_prints_final_only_for_non_tty() -> None:
+    telemetry = {"usage": {"prompt_tokens": 18_432}}
     output = StringIO()
+    footer = sigil_display.ContextUsageFooter(output)
 
-    assert sigil_display.render_context_usage(
-        telemetry, output=output, render_state=state
-    )
-    assert not sigil_display.render_context_usage(
-        telemetry, output=output, render_state=state
-    )
-    state.mark_output()
-    assert sigil_display.render_context_usage(
-        telemetry, output=output, render_state=state
-    )
-
-    assert output.getvalue().count("◌ context") == 2
+    assert not footer.update(telemetry)
+    assert output.getvalue() == ""
+    assert footer.finalize()
+    assert output.getvalue() == "◌ context  ≈ 18,432 tokens\n"
 
 
 def test_sigil_display_stream_renderer_factory_selects_output_mode() -> None:
@@ -2788,11 +2798,8 @@ def test_zeta_agent_step_renders_context_usage_at_bottom_after_tools(
     assert code == 0
     output = capsys.readouterr().out
     assert ("❯ read   a.md  (1 lines)\n❯ read   b.md  (1 lines)") in output
-    assert output.count("◌ context") == 2
-    assert output.index("❯ read   b.md") < output.index(
-        "◌ context  ≈ 123 / 262,144 tokens"
-    )
-    assert output.index("◌ context  ≈ 123 / 262,144 tokens") < output.index("done")
+    assert output.count("◌ context") == 1
+    assert "◌ context  ≈ 123 / 262,144 tokens" not in output
     assert output.index("done") < output.index("◌ context  ≈ 456 / 262,144 tokens")
 
 
@@ -4248,11 +4255,8 @@ def test_zeta_answer_route_renders_context_usage_at_bottom_after_tools(
     assert code == 0
     output = capsys.readouterr().out
     assert ("❯ read   a.md  (1 lines)\n❯ read   b.md  (1 lines)") in output
-    assert output.count("◌ context") == 2
-    assert output.index("❯ read   b.md") < output.index(
-        "◌ context  ≈ 18,823 / 262,144 tokens"
-    )
-    assert output.rindex("It is a README.") < output.rindex(
+    assert output.count("◌ context") == 1
+    assert output.index("It is a README.") < output.index(
         "◌ context  ≈ 18,823 / 262,144 tokens"
     )
     tools = read_jsonl("last-tools.jsonl")

@@ -110,15 +110,19 @@ class TraceAwareStreamRenderer:
         renderer: StreamRenderer,
         trace_state: TraceRenderState,
         output: TextIO,
+        before_output: Callable[[], None] | None = None,
     ) -> None:
         self.renderer = renderer
         self.trace_state = trace_state
         self.output = output
+        self.before_output = before_output
         self.text_active = False
 
     def content_delta(self, text: str) -> None:
         if not text:
             return
+        if self.before_output is not None:
+            self.before_output()
         if not self.text_active:
             if not self.trace_state.render_text_separator(self.output):
                 print(file=self.output)
@@ -262,37 +266,54 @@ def render_tool_result_summary(
         mark_text_separator.mark_trace_finished()
 
 
-def render_context_usage(
-    telemetry: dict[str, Any] | None,
-    *,
-    output: TextIO,
-    render_state: ContextUsageRenderState | None = None,
-) -> bool:
-    line = context_usage_line(telemetry)
-    if not line:
-        return False
-    if render_state is not None and not render_state.should_render(line):
-        return False
-    print(muted(line, enabled=should_color(output)), file=output, flush=True)
-    return True
+class ContextUsageFooter:
+    """Render context usage as an ephemeral terminal footer during active turns."""
 
-
-class ContextUsageRenderState:
-    """Avoid repeated context footer lines unless visible output moved the footer."""
-
-    def __init__(self) -> None:
+    def __init__(self, output: TextIO, *, enabled: bool | None = None) -> None:
+        self.output = output
+        self.enabled = is_interactive(output) if enabled is None else enabled
         self.last_line = ""
-        self.output_since_render = True
+        self.active = False
 
-    def mark_output(self) -> None:
-        self.output_since_render = True
-
-    def should_render(self, line: str) -> bool:
-        if line == self.last_line and not self.output_since_render:
+    def update(self, telemetry: dict[str, Any] | None) -> bool:
+        """Refresh the active footer without leaving scrollback in TTY mode."""
+        line = context_usage_line(telemetry)
+        if not line:
+            return False
+        if self.active and line == self.last_line:
             return False
         self.last_line = line
-        self.output_since_render = False
+        if not self.enabled:
+            return False
+        self.write(f"\r\x1b[2K{muted(line, enabled=should_color(self.output))}")
+        self.active = True
         return True
+
+    def clear(self) -> None:
+        """Remove the active terminal footer before printing normal output."""
+        if not self.active:
+            return
+        self.write("\r\x1b[2K")
+        self.active = False
+
+    def finalize(self, telemetry: dict[str, Any] | None = None) -> bool:
+        """Leave one final context line in scrollback."""
+        line = context_usage_line(telemetry) or self.last_line
+        if not line:
+            return False
+        self.last_line = line
+        if self.enabled:
+            prefix = "\r\x1b[2K" if self.active else ""
+            self.write(f"{prefix}{muted(line, enabled=should_color(self.output))}\n")
+            self.active = False
+            return True
+        print(
+            muted(line, enabled=should_color(self.output)), file=self.output, flush=True
+        )
+        return True
+
+    def write(self, text: str) -> None:
+        print(text, file=self.output, end="", flush=True)
 
 
 def context_usage_line(telemetry: dict[str, Any] | None) -> str:
@@ -356,12 +377,14 @@ class ThinkingStatus:
         interval: float = THINKING_STATUS_INTERVAL_SECONDS,
         left_padding: int = THINKING_STATUS_LEFT_PADDING,
         clock: Callable[[], float] = time.monotonic,
+        before_start: Callable[[], None] | None = None,
     ) -> None:
         self.output = output
         self.enabled = is_interactive(output) if enabled is None else enabled
         self.interval = interval
         self.left_padding = left_padding
         self.clock = clock
+        self.before_start = before_start
         self.started_at = 0.0
         self.last_seconds: int | None = None
         self.wrote_status = False
@@ -373,6 +396,8 @@ class ThinkingStatus:
     def __enter__(self) -> "ThinkingStatus":
         if not self.enabled:
             return self
+        if self.before_start is not None:
+            self.before_start()
         self.started_at = self.clock()
         self.refresh()
         self.thread = threading.Thread(target=self.run, daemon=True)
@@ -427,8 +452,9 @@ def thinking_status_factory(
     output: TextIO,
     *,
     enabled: bool | None = None,
+    before_start: Callable[[], None] | None = None,
 ) -> Callable[[], ThinkingStatus]:
-    return lambda: ThinkingStatus(output, enabled=enabled)
+    return lambda: ThinkingStatus(output, enabled=enabled, before_start=before_start)
 
 
 def render_handoff_lines(handoff: dict[str, Any]) -> list[str]:

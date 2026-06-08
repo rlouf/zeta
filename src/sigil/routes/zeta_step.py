@@ -13,6 +13,7 @@ from typing import Any, Iterable, Literal, TextIO
 
 from ..state import append_jsonl
 from ..display import (
+    ContextUsageRenderState,
     StreamRenderer,
     TraceAwareStreamRenderer,
     TraceRenderState,
@@ -79,6 +80,7 @@ def run_agent_step(
     append_jsonl(runtime.TRANSCRIPT, user_event)
     context = runtime.load_project_context()
     trace_state = TraceRenderState()
+    context_usage_state = ContextUsageRenderState()
     base_stream_renderer = create_stream_renderer(sys.stdout)
     stream_renderer = (
         TraceAwareStreamRenderer(base_stream_renderer, trace_state, sys.stdout)
@@ -92,6 +94,7 @@ def run_agent_step(
         output=output,
         stream_renderer=stream_renderer,
         trace_state=trace_state,
+        context_usage_state=context_usage_state,
     )
     result = run_agent_turn(
         prompt,
@@ -123,12 +126,17 @@ def run_agent_step(
         skip_event_ids=recorder.recorded_event_ids,
         stream_renderer=stream_renderer,
         trace_state=trace_state,
+        context_usage_state=context_usage_state,
     )
     if status is None:
         status = recorder.status
     if status is not None:
         record_agent_model_telemetry(result.model_telemetry, glyph=glyph)
-        render_context_usage(result.model_telemetry, output=output)
+        render_context_usage(
+            result.model_telemetry,
+            output=output,
+            render_state=context_usage_state,
+        )
         return status
     if result.final_text:
         record_agent_model_telemetry(result.model_telemetry, glyph=glyph)
@@ -139,7 +147,12 @@ def run_agent_step(
             stream_renderer=stream_renderer,
             trace_state=trace_state,
         )
-        render_context_usage(result.model_telemetry, output=output)
+        context_usage_state.mark_output()
+        render_context_usage(
+            result.model_telemetry,
+            output=output,
+            render_state=context_usage_state,
+        )
         return 0
     print("Zeta stopped without a final answer.", file=sys.stderr)
     return 1
@@ -184,6 +197,7 @@ class AgentStepEventRecorder:
         output: TextIO,
         stream_renderer: StreamRenderer | None = None,
         trace_state: TraceRenderState | None = None,
+        context_usage_state: ContextUsageRenderState | None = None,
     ) -> None:
         self.glyph = glyph
         self.handoff_path = handoff_path
@@ -191,6 +205,7 @@ class AgentStepEventRecorder:
         self.output = output
         self.stream_renderer = stream_renderer
         self.trace_state = trace_state
+        self.context_usage_state = context_usage_state
         self.recorded_event_ids: set[int] = set()
         self.status: int | None = None
 
@@ -204,6 +219,7 @@ class AgentStepEventRecorder:
             output=self.output,
             stream_renderer=self.stream_renderer,
             trace_state=self.trace_state,
+            context_usage_state=self.context_usage_state,
         )
         if status is not None:
             self.status = status
@@ -219,6 +235,7 @@ def replay_agent_events(
     skip_event_ids: set[int] | frozenset[int] = frozenset(),
     stream_renderer: StreamRenderer | None = None,
     trace_state: TraceRenderState | None = None,
+    context_usage_state: ContextUsageRenderState | None = None,
 ) -> int | None:
     status: int | None = None
     for event in result.events:
@@ -232,6 +249,7 @@ def replay_agent_events(
             output=output,
             stream_renderer=stream_renderer,
             trace_state=trace_state,
+            context_usage_state=context_usage_state,
         )
         if event_status is not None:
             status = event_status
@@ -247,6 +265,7 @@ def record_agent_event(
     output: TextIO = sys.stderr,
     stream_renderer: StreamRenderer | None = None,
     trace_state: TraceRenderState | None = None,
+    context_usage_state: ContextUsageRenderState | None = None,
 ) -> int | None:
     event_type = str(event.get("type") or "")
     fields = {key: value for key, value in event.items() if key != "type"}
@@ -278,11 +297,17 @@ def record_agent_event(
         mark_text_separator=trace_state,
     )
     handoff = result_payload.get("handoff")
-    if not isinstance(handoff, dict):
-        return None
-    write_handoff(handoff_path, handoff)
-    print_handoff(handoff, mode=handoff_output)
-    return 0
+    status = None
+    if isinstance(handoff, dict):
+        write_handoff(handoff_path, handoff)
+        print_handoff(handoff, mode=handoff_output)
+        status = 0
+    render_context_usage(
+        event_model_telemetry(persisted),
+        output=output,
+        render_state=context_usage_state,
+    )
+    return status
 
 
 def write_handoff(path: str | Path | None, handoff: dict[str, Any]) -> None:
@@ -332,6 +357,13 @@ def model_telemetry_fields(
     if isinstance(context_tokens, int) and not isinstance(context_tokens, bool):
         fields["model_context_tokens"] = context_tokens
     return fields
+
+
+def event_model_telemetry(event: dict[str, Any]) -> dict[str, Any] | None:
+    model_telemetry = event.get("model_telemetry")
+    if isinstance(model_telemetry, dict):
+        return model_telemetry
+    return None
 
 
 def edit_mode_for_glyph(glyph: str) -> EditMode:

@@ -266,11 +266,33 @@ def render_context_usage(
     telemetry: dict[str, Any] | None,
     *,
     output: TextIO,
-) -> None:
+    render_state: ContextUsageRenderState | None = None,
+) -> bool:
     line = context_usage_line(telemetry)
     if not line:
-        return
+        return False
+    if render_state is not None and not render_state.should_render(line):
+        return False
     print(muted(line, enabled=should_color(output)), file=output, flush=True)
+    return True
+
+
+class ContextUsageRenderState:
+    """Avoid repeated context footer lines unless visible output moved the footer."""
+
+    def __init__(self) -> None:
+        self.last_line = ""
+        self.output_since_render = True
+
+    def mark_output(self) -> None:
+        self.output_since_render = True
+
+    def should_render(self, line: str) -> bool:
+        if line == self.last_line and not self.output_since_render:
+            return False
+        self.last_line = line
+        self.output_since_render = False
+        return True
 
 
 def context_usage_line(telemetry: dict[str, Any] | None) -> str:

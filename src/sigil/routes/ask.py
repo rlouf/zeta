@@ -21,6 +21,7 @@ from ..state import (
     write_jsonl,
 )
 from ..display import (
+    ContextUsageRenderState,
     StreamRenderer,
     ThinkingStatus,
     TraceAwareStreamRenderer,
@@ -200,10 +201,12 @@ def run_tool_answer(
         if base_stream_renderer is not None
         else None
     )
+    context_usage_state = ContextUsageRenderState()
     recorder = AnswerEventRecorder(
         json_output=json_output,
         stream_renderer=stream_renderer,
         trace_state=trace_state,
+        context_usage_state=context_usage_state,
     )
     user_event: dict[str, Any] = {
         "type": "user_message",
@@ -248,6 +251,7 @@ def run_tool_answer(
             skip_event_ids=recorder.recorded_event_ids,
             stream_renderer=stream_renderer,
             trace_state=trace_state,
+            context_usage_state=context_usage_state,
         )
     )
     answer = result.final_text
@@ -276,6 +280,7 @@ def run_tool_answer(
         answer_streamed=answer_streamed,
         stream_renderer=stream_renderer,
         trace_state=trace_state,
+        context_usage_state=context_usage_state,
     )
     return 0
 
@@ -295,10 +300,12 @@ class AnswerEventRecorder:
         json_output: bool,
         stream_renderer: StreamRenderer | None = None,
         trace_state: TraceRenderState | None = None,
+        context_usage_state: ContextUsageRenderState | None = None,
     ) -> None:
         self.json_output = json_output
         self.stream_renderer = stream_renderer
         self.trace_state = trace_state
+        self.context_usage_state = context_usage_state
         self.recorded_event_ids: set[int] = set()
         self.tool_events: list[dict[str, Any]] = []
 
@@ -309,6 +316,7 @@ class AnswerEventRecorder:
             json_output=self.json_output,
             stream_renderer=self.stream_renderer,
             trace_state=self.trace_state,
+            context_usage_state=self.context_usage_state,
         )
         self.tool_events.extend(tool_events)
 
@@ -320,6 +328,7 @@ def replay_answer_events(
     skip_event_ids: set[int] | frozenset[int] = frozenset(),
     stream_renderer: StreamRenderer | None = None,
     trace_state: TraceRenderState | None = None,
+    context_usage_state: ContextUsageRenderState | None = None,
 ) -> list[dict[str, Any]]:
     tool_events: list[dict[str, Any]] = []
     for event in result.events:
@@ -330,6 +339,7 @@ def replay_answer_events(
             json_output=json_output,
             stream_renderer=stream_renderer,
             trace_state=trace_state,
+            context_usage_state=context_usage_state,
         )
         tool_events.extend(event_tool_events)
     return tool_events
@@ -341,6 +351,7 @@ def record_answer_event(
     json_output: bool,
     stream_renderer: StreamRenderer | None = None,
     trace_state: TraceRenderState | None = None,
+    context_usage_state: ContextUsageRenderState | None = None,
 ) -> list[dict[str, Any]]:
     event_type = str(event.get("type") or "")
     fields = {
@@ -365,12 +376,18 @@ def record_answer_event(
     result_payload = trace.get("result")
     if not isinstance(result_payload, dict):
         result_payload = {}
+    telemetry = event_model_telemetry(trace)
     if not json_output:
         render_tool_result_summary(
             name,
             result_payload,
             output=sys.stdout,
             mark_text_separator=trace_state,
+        )
+        render_context_usage(
+            telemetry,
+            output=sys.stdout,
+            render_state=context_usage_state,
         )
     tool_event = {"type": "tool_end", "tool": name, "result": result_payload}
     append_jsonl("last-tools.jsonl", tool_event)
@@ -575,6 +592,7 @@ def record_answer(
     answer_streamed: bool = False,
     stream_renderer: StreamRenderer | None = None,
     trace_state: TraceRenderState | None = None,
+    context_usage_state: ContextUsageRenderState | None = None,
 ) -> None:
     telemetry_fields = model_telemetry_fields(model_telemetry)
     answer_event: dict[str, Any] = {
@@ -620,13 +638,25 @@ def record_answer(
     if answer_streamed:
         if stream_renderer is not None:
             stream_renderer.finish()
-        render_context_usage(model_telemetry, output=sys.stdout)
+        if context_usage_state is not None:
+            context_usage_state.mark_output()
+        render_context_usage(
+            model_telemetry,
+            output=sys.stdout,
+            render_state=context_usage_state,
+        )
         return
     if trace_state is None or not trace_state.render_text_separator(sys.stdout):
         print()
     print(answer)
     print()
-    render_context_usage(model_telemetry, output=sys.stdout)
+    if context_usage_state is not None:
+        context_usage_state.mark_output()
+    render_context_usage(
+        model_telemetry,
+        output=sys.stdout,
+        render_state=context_usage_state,
+    )
 
 
 def model_telemetry_fields(
@@ -642,6 +672,13 @@ def model_telemetry_fields(
     if isinstance(context_tokens, int) and not isinstance(context_tokens, bool):
         fields["model_context_tokens"] = context_tokens
     return fields
+
+
+def event_model_telemetry(event: dict[str, Any]) -> dict[str, Any] | None:
+    model_telemetry = event.get("model_telemetry")
+    if isinstance(model_telemetry, dict):
+        return model_telemetry
+    return None
 
 
 class StreamDeltaTracker:

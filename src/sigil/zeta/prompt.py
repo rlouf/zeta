@@ -45,6 +45,11 @@ TOOL_PROTOCOL_PROMPT = """Tool protocol:
 - If no tool is needed, return a final answer.
 """
 
+GREP_TOOL_POLICY = (
+    "Use `grep` to locate occurrences before reading files when the target "
+    "text/symbol is known."
+)
+
 
 def system_prompt(
     route_prompt: str | None = None,
@@ -53,13 +58,24 @@ def system_prompt(
     skills: Iterable[Skill] = (),
 ) -> str:
     """Build the Zeta system prompt with the active tool registry."""
+    active_tools = tuple(allowed_tools) if allowed_tools is not None else None
     sections = [clean_prompt(route_prompt) or BASE_SYSTEM_PROMPT.strip()]
     sections.append(TOOL_PROTOCOL_PROMPT.strip())
+    if tool_available("grep", active_tools):
+        sections.append(f"Tool policy:\n\n- {GREP_TOOL_POLICY}")
     skill_section = skills_prompt(skills)
     if skill_section:
         sections.append(skill_section)
-    sections.append(tools_prompt(allowed_tools))
+    sections.append(tools_prompt(active_tools))
     return "\n\n".join(sections)
+
+
+def tool_available(name: str, allowed_tools: Iterable[str] | None = None) -> bool:
+    for descriptor in model_tool_descriptors(allowed_tools):
+        function = descriptor.get("function")
+        if isinstance(function, dict) and function.get("name") == name:
+            return True
+    return False
 
 
 def tools_prompt(allowed_tools: Iterable[str] | None = None) -> str:

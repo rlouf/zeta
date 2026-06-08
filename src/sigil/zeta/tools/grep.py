@@ -16,13 +16,33 @@ SCHEMA: dict[str, Any] = {
     "additionalProperties": False,
     "required": ["pattern"],
     "properties": {
-        "pattern": {"type": "string"},
-        "path": {"type": "string"},
-        "limit": {"type": "integer", "minimum": 1},
+        "pattern": {
+            "type": "string",
+            "description": "Text or regular expression to search for.",
+        },
+        "path": {
+            "type": "string",
+            "description": (
+                "File or directory to search. Defaults to the current working "
+                "directory."
+            ),
+        },
+        "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Maximum number of matching lines to return.",
+        },
     },
 }
 
-SPEC = ToolSpec("grep", "Search text with ripgrep or a Python fallback.", SCHEMA)
+SPEC = ToolSpec(
+    "grep",
+    (
+        "Search file contents recursively. Use before read when looking for "
+        "symbols, errors, strings, or definitions."
+    ),
+    SCHEMA,
+)
 
 
 def analyze(params: dict[str, Any]) -> dict[str, Any]:

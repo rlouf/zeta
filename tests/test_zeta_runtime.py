@@ -1763,6 +1763,25 @@ def test_zeta_tools_list_exposes_v1_builtins() -> None:
     assert data["tools"][0]["origin"] == "builtin"
 
 
+def test_zeta_grep_metadata_guides_model_tool_choice() -> None:
+    metadata = zeta.tool_metadata("grep")
+    schema = metadata["schema"]
+
+    assert (
+        metadata["description"]
+        == "Search file contents recursively. Use before read when looking for symbols, errors, strings, or definitions."
+    )
+    assert schema["properties"]["pattern"]["description"] == (
+        "Text or regular expression to search for."
+    )
+    assert schema["properties"]["path"]["description"] == (
+        "File or directory to search. Defaults to the current working directory."
+    )
+    assert schema["properties"]["limit"]["description"] == (
+        "Maximum number of matching lines to return."
+    )
+
+
 def write_cli_plugin(
     path: Path,
     *,
@@ -3357,6 +3376,7 @@ def test_zeta_step_glyph_selects_edit_mode() -> None:
 
 def test_zeta_system_prompt_is_product_neutral_and_dynamic() -> None:
     prompt = zeta.zeta_system_prompt(allowed_tools=("read", "ls"))
+    grep_prompt = zeta.zeta_system_prompt(allowed_tools=("read", "grep", "ls"))
 
     assert "Sigil" not in prompt
     assert "Preserve user changes." in prompt
@@ -3365,6 +3385,15 @@ def test_zeta_system_prompt_is_product_neutral_and_dynamic() -> None:
     assert "Available tools:" in prompt
     assert "- read(path, offset?, limit?): Read a UTF-8 text file." in prompt
     assert "- ls(path?, limit?, recursive?, min_size_bytes?, exclude?):" in prompt
+    assert "Use `grep` to locate occurrences" not in prompt
+    assert (
+        "Use `grep` to locate occurrences before reading files when the target "
+        "text/symbol is known."
+    ) in grep_prompt
+    assert (
+        "- grep(pattern, path?, limit?): Search file contents recursively. Use "
+        "before read when looking for symbols, errors, strings, or definitions."
+    ) in grep_prompt
     assert '"parameters"' not in prompt
     assert "- bash(" not in prompt
 

@@ -398,7 +398,7 @@ def record_answer_event(
             mark_text_separator=trace_state,
         )
         if context_footer is not None:
-            context_footer.update(telemetry)
+            context_footer.update_for_tool_result(telemetry, result_payload)
     tool_event = {"type": "tool_end", "tool": name, "result": result_payload}
     append_jsonl("last-tools.jsonl", tool_event)
     return [tool_event]

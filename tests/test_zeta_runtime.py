@@ -836,7 +836,7 @@ def test_zeta_agent_turn_captures_model_telemetry(monkeypatch) -> None:
     }
 
 
-def test_zeta_agent_turn_attaches_model_telemetry_to_last_tool_result(
+def test_zeta_agent_turn_attaches_model_telemetry_to_first_tool_result(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -908,8 +908,8 @@ def test_zeta_agent_turn_attaches_model_telemetry_to_last_tool_result(
     tool_results = [
         event for event in result.events if event.get("type") == "tool_result"
     ]
-    assert "model_telemetry" not in tool_results[0]
-    assert tool_results[1]["model_telemetry"] == tool_telemetry
+    assert tool_results[0]["model_telemetry"] == tool_telemetry
+    assert "model_telemetry" not in tool_results[1]
     assert result.model_telemetry == final_telemetry
 
 
@@ -2190,6 +2190,72 @@ def test_sigil_display_summarizes_current_context_estimate() -> None:
             {"usage": {"prompt_tokens": 18_432, "completion_tokens": 391}}
         )
         == ""
+    )
+    assert (
+        sigil_display.context_usage_line(
+            {"estimated_context_tokens": 200, "model_context_tokens": 1_000}
+        )
+        == "context  [████░░░░░░░░░░░░░░░░] 20% est."
+    )
+
+
+def test_sigil_display_context_usage_footer_estimates_tool_result_tokens() -> None:
+    output = StringIO()
+    footer = sigil_display.ContextUsageFooter(output)
+    base_telemetry = {
+        "usage": {"prompt_tokens": 100, "completion_tokens": 0},
+        "model_context_tokens": 1_000,
+    }
+    result = {"ok": True, "content": [{"type": "text", "text": "x" * 200}]}
+
+    footer.update(base_telemetry)
+    footer.update_for_tool_result(None, result)
+
+    estimated_tokens = 100 + sigil_display.estimated_tool_result_context_tokens(result)
+    assert footer.current_line() == sigil_display.context_usage_line(
+        {
+            "estimated_context_tokens": estimated_tokens,
+            "model_context_tokens": 1_000,
+        }
+    )
+    assert footer.current_line().endswith(" est.")
+    assert output.getvalue() == ""
+
+    real_telemetry = {
+        "usage": {"prompt_tokens": 250, "completion_tokens": 10},
+        "model_context_tokens": 1_000,
+    }
+    footer.finalize(real_telemetry)
+
+    assert output.getvalue() == "context  [█████░░░░░░░░░░░░░░░] 26%\n"
+
+
+def test_sigil_display_tool_result_telemetry_replaces_stale_estimates() -> None:
+    footer = sigil_display.ContextUsageFooter(StringIO())
+    stale_result = {"ok": True, "content": [{"type": "text", "text": "x" * 400}]}
+    fresh_result = {"ok": True, "content": [{"type": "text", "text": "y" * 40}]}
+    fresh_telemetry = {
+        "usage": {"prompt_tokens": 400, "completion_tokens": 20},
+        "model_context_tokens": 1_000,
+    }
+
+    footer.update(
+        {
+            "usage": {"prompt_tokens": 100, "completion_tokens": 0},
+            "model_context_tokens": 1_000,
+        }
+    )
+    footer.update_for_tool_result(None, stale_result)
+    footer.update_for_tool_result(fresh_telemetry, fresh_result)
+
+    expected_tokens = 420 + sigil_display.estimated_tool_result_context_tokens(
+        fresh_result
+    )
+    assert footer.current_line() == sigil_display.context_usage_line(
+        {
+            "estimated_context_tokens": expected_tokens,
+            "model_context_tokens": 1_000,
+        }
     )
     assert sigil_display.context_usage_line({"model_context_tokens": 262_144}) == ""
     assert (

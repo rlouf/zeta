@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import threading
 import time
@@ -27,6 +28,7 @@ THINKING_STATUS_LEFT_PADDING = RICH_STREAM_LEFT_PADDING
 CONTEXT_USAGE_BAR_WIDTH = 20
 CONTEXT_USAGE_BAR_FILLED = "█"
 CONTEXT_USAGE_BAR_EMPTY = "░"
+ESTIMATED_TOKEN_CHARS = 4
 
 
 class StreamRenderer(Protocol):
@@ -277,10 +279,52 @@ class ContextUsageFooter:
         self.enabled = is_interactive(output) if enabled is None else enabled
         self.last_line = ""
         self.active = False
+        self.current_context_tokens: int | None = None
+        self.model_context_tokens: int | None = None
+        self.pending_context_tokens = 0
 
     def update(self, telemetry: dict[str, Any] | None) -> bool:
         """Refresh the active footer without leaving scrollback in TTY mode."""
+        usage = provider_context_usage_tokens(telemetry)
+        if usage is not None:
+            self.current_context_tokens, self.model_context_tokens = usage
+            self.pending_context_tokens = 0
         line = context_usage_line(telemetry)
+        return self.render_line(line)
+
+    def update_for_tool_result(
+        self,
+        telemetry: dict[str, Any] | None,
+        result: dict[str, Any],
+    ) -> bool:
+        """Refresh context usage after a tool result enters the next prompt."""
+        usage = provider_context_usage_tokens(telemetry)
+        if usage is not None:
+            self.current_context_tokens, self.model_context_tokens = usage
+            self.pending_context_tokens = 0
+        self.pending_context_tokens += estimated_tool_result_context_tokens(result)
+        estimated_line = self.estimated_context_usage_line()
+        if estimated_line:
+            return self.render_line(estimated_line)
+        return self.render_line(context_usage_line(telemetry))
+
+    def estimated_context_usage_line(self) -> str:
+        if (
+            self.current_context_tokens is None
+            or self.model_context_tokens is None
+            or self.pending_context_tokens <= 0
+        ):
+            return ""
+        return context_usage_line(
+            {
+                "estimated_context_tokens": (
+                    self.current_context_tokens + self.pending_context_tokens
+                ),
+                "model_context_tokens": self.model_context_tokens,
+            }
+        )
+
+    def render_line(self, line: str) -> bool:
         if not line:
             return False
         if self.active and line == self.last_line:
@@ -304,6 +348,10 @@ class ContextUsageFooter:
 
     def finalize(self, telemetry: dict[str, Any] | None = None) -> bool:
         """Leave one final context line in scrollback."""
+        usage = provider_context_usage_tokens(telemetry)
+        if usage is not None:
+            self.current_context_tokens, self.model_context_tokens = usage
+            self.pending_context_tokens = 0
         line = context_usage_line(telemetry) or self.last_line
         if not line:
             return False
@@ -325,9 +373,43 @@ class ContextUsageFooter:
 def context_usage_line(telemetry: dict[str, Any] | None) -> str:
     if not isinstance(telemetry, dict):
         return ""
+    estimated_context_tokens = usage_token_count(
+        telemetry.get("estimated_context_tokens")
+    )
+    context_tokens: int | None
+    if estimated_context_tokens is not None:
+        context_tokens = estimated_context_tokens
+    else:
+        usage = telemetry.get("usage")
+        if not isinstance(usage, dict):
+            usage = {}
+        prompt_tokens = usage_token_count(usage.get("prompt_tokens"))
+        completion_tokens = usage_token_count(usage.get("completion_tokens"))
+        context_tokens = current_context_token_estimate(
+            prompt_tokens,
+            completion_tokens,
+        )
+    model_context_tokens = usage_token_count(telemetry.get("model_context_tokens"))
+    if (
+        context_tokens is None
+        or model_context_tokens is None
+        or model_context_tokens <= 0
+    ):
+        return ""
+    percent = context_usage_percent(context_tokens, model_context_tokens)
+    bar = context_usage_bar(context_tokens, model_context_tokens)
+    suffix = " est." if estimated_context_tokens is not None else ""
+    return f"context  [{bar}] {percent}%{suffix}"
+
+
+def provider_context_usage_tokens(
+    telemetry: dict[str, Any] | None,
+) -> tuple[int, int] | None:
+    if not isinstance(telemetry, dict):
+        return None
     usage = telemetry.get("usage")
     if not isinstance(usage, dict):
-        usage = {}
+        return None
     prompt_tokens = usage_token_count(usage.get("prompt_tokens"))
     completion_tokens = usage_token_count(usage.get("completion_tokens"))
     context_tokens = current_context_token_estimate(
@@ -340,10 +422,8 @@ def context_usage_line(telemetry: dict[str, Any] | None) -> str:
         or model_context_tokens is None
         or model_context_tokens <= 0
     ):
-        return ""
-    percent = context_usage_percent(context_tokens, model_context_tokens)
-    bar = context_usage_bar(context_tokens, model_context_tokens)
-    return f"context  [{bar}] {percent}%"
+        return None
+    return context_tokens, model_context_tokens
 
 
 def context_usage_percent(context_tokens: int, model_context_tokens: int) -> int:
@@ -383,6 +463,20 @@ def usage_token_count(value: object) -> int | None:
     if value < 0:
         return None
     return value
+
+
+def estimated_tool_result_context_tokens(result: dict[str, Any]) -> int:
+    try:
+        text = json.dumps(result, ensure_ascii=False, separators=(",", ":"))
+    except (TypeError, ValueError):
+        text = text_content(result)
+    return estimated_text_tokens(text)
+
+
+def estimated_text_tokens(text: str) -> int:
+    if not text:
+        return 0
+    return max(1, (len(text) + ESTIMATED_TOKEN_CHARS - 1) // ESTIMATED_TOKEN_CHARS)
 
 
 class ThinkingStatus:

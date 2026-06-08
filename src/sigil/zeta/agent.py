@@ -107,7 +107,6 @@ def run_agent_turn(
                 final_text_streamed=streamed_content,
                 model_telemetry=latest_model_telemetry,
             )
-        last_tool_index = len(tool_calls) - 1
         for index, tool_call in enumerate(tool_calls):
             result_event = handle_tool_call(
                 tool_call,
@@ -115,7 +114,7 @@ def run_agent_turn(
                 index=index,
                 edit_mode=config.edit_mode,
                 execution_mode=config.execution_mode,
-                model_telemetry=(model_telemetry if index == last_tool_index else None),
+                model_telemetry=(model_telemetry if index == 0 else None),
                 event_sink=event_sink,
             )
             events.extend(result_event.events)

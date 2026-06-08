@@ -307,7 +307,10 @@ def record_agent_event(
         print_handoff(handoff, mode=handoff_output)
         status = 0
     if context_footer is not None:
-        context_footer.update(event_model_telemetry(persisted))
+        context_footer.update_for_tool_result(
+            event_model_telemetry(persisted),
+            result_payload,
+        )
     return status
 
 

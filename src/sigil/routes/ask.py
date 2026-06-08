@@ -247,6 +247,7 @@ def run_tool_answer(
             sys.stderr,
             enabled=status_enabled,
             before_start=context_footer.clear if context_footer is not None else None,
+            detail=context_footer.current_line if context_footer is not None else None,
         ),
         stream_sink=stream_renderer,
     )

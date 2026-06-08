@@ -2184,14 +2184,22 @@ def test_sigil_display_summarizes_current_context_estimate() -> None:
         }
     )
 
-    assert line == "◌ context  ≈ 18,823 / 262,144 tokens"
+    assert line == "context  [█░░░░░░░░░░░░░░░░░░░] 7%"
     assert (
-        sigil_display.context_usage_line({"usage": {"prompt_tokens": 18_432}})
-        == "◌ context  ≈ 18,432 tokens"
+        sigil_display.context_usage_line(
+            {"usage": {"prompt_tokens": 18_432, "completion_tokens": 391}}
+        )
+        == ""
     )
+    assert sigil_display.context_usage_line({"model_context_tokens": 262_144}) == ""
     assert (
-        sigil_display.context_usage_line({"model_context_tokens": 262_144})
-        == "◌ context  unavailable / 262,144 tokens"
+        sigil_display.context_usage_line(
+            {
+                "usage": {"prompt_tokens": 18_432},
+                "model_context_tokens": 262_144,
+            }
+        )
+        == ""
     )
 
 
@@ -2199,29 +2207,35 @@ def test_sigil_display_context_usage_footer_is_ephemeral_for_tty(
     monkeypatch,
 ) -> None:
     monkeypatch.setenv("NO_COLOR", "1")
-    telemetry = {"usage": {"prompt_tokens": 18_432}}
+    telemetry = {
+        "usage": {"prompt_tokens": 18_432, "completion_tokens": 391},
+        "model_context_tokens": 262_144,
+    }
     output = TtyBuffer()
     footer = sigil_display.ContextUsageFooter(output)
 
     assert footer.update(telemetry)
     assert not output.getvalue().endswith("\n")
-    assert output.getvalue() == "\r\x1b[2K◌ context  ≈ 18,432 tokens"
+    assert output.getvalue() == "\r\x1b[2Kcontext  [█░░░░░░░░░░░░░░░░░░░] 7%"
 
     footer.clear()
     assert output.getvalue().endswith("\r\x1b[2K")
     assert footer.finalize(telemetry)
-    assert output.getvalue().endswith("◌ context  ≈ 18,432 tokens\n")
+    assert output.getvalue().endswith("context  [█░░░░░░░░░░░░░░░░░░░] 7%\n")
 
 
 def test_sigil_display_context_usage_footer_prints_final_only_for_non_tty() -> None:
-    telemetry = {"usage": {"prompt_tokens": 18_432}}
+    telemetry = {
+        "usage": {"prompt_tokens": 18_432, "completion_tokens": 391},
+        "model_context_tokens": 262_144,
+    }
     output = StringIO()
     footer = sigil_display.ContextUsageFooter(output)
 
     assert not footer.update(telemetry)
     assert output.getvalue() == ""
     assert footer.finalize()
-    assert output.getvalue() == "◌ context  ≈ 18,432 tokens\n"
+    assert output.getvalue() == "context  [█░░░░░░░░░░░░░░░░░░░] 7%\n"
 
 
 def test_sigil_display_stream_renderer_factory_selects_output_mode() -> None:
@@ -2288,7 +2302,8 @@ def test_sigil_display_rich_stream_renderer_finalizes_trace_boundaries() -> None
     assert renderer.live is None
 
 
-def test_sigil_display_thinking_status_updates_and_clears() -> None:
+def test_sigil_display_thinking_status_updates_and_clears(monkeypatch) -> None:
+    monkeypatch.setenv("NO_COLOR", "1")
     output = TtyBuffer()
     now = 0.0
 
@@ -2300,9 +2315,41 @@ def test_sigil_display_thinking_status_updates_and_clears() -> None:
         status.refresh()
 
     text = output.getvalue()
-    assert "\n\r\x1b[2K  > Thinking (0s...)" in text
-    assert "\r\x1b[2K  > Thinking (10s...)" in text
+    assert "\n\r\x1b[2K  thinking 0s" in text
+    assert "\n\r\x1b[2K  thinking 10s" in text
     assert text.endswith("\r\x1b[2K\x1b[1A\r\x1b[2K")
+
+
+def test_sigil_display_thinking_status_is_muted(monkeypatch) -> None:
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    output = TtyBuffer()
+
+    with sigil_display.ThinkingStatus(output, interval=60):
+        pass
+
+    assert f"{sigil_display.MUTED}  thinking 0s{sigil_display.RESET}" in (
+        output.getvalue()
+    )
+
+
+def test_sigil_display_thinking_status_includes_context_detail(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("NO_COLOR", "1")
+    output = TtyBuffer()
+
+    with sigil_display.ThinkingStatus(
+        output,
+        interval=60,
+        detail=lambda: "context  [█░░░░░░░░░░░░░░░░░░░] 7%",
+    ):
+        pass
+
+    assert (
+        "\n\r\x1b[2K  context  [█░░░░░░░░░░░░░░░░░░░] 7%\n  thinking 0s"
+        in output.getvalue()
+    )
+    assert output.getvalue().endswith("\r\x1b[2K\x1b[1A\r\x1b[2K\x1b[1A\r\x1b[2K")
 
 
 def test_sigil_display_thinking_status_skips_non_tty() -> None:
@@ -2690,7 +2737,8 @@ def test_zeta_agent_step_renders_context_usage_on_trace_stream(
     assert code == 0
     output = capsys.readouterr()
     assert output.out == "\ndone\n\n"
-    assert "◌ context  ≈ 18,823 / 262,144 tokens" in output.err
+    assert "context  [█░░░░░░░░░░░░░░░░░░░] 7%" in output.err
+    assert "18,823 / 262,144 tokens" not in output.err
 
 
 def test_zeta_agent_step_renders_context_usage_after_buffered_answer(
@@ -2698,7 +2746,7 @@ def test_zeta_agent_step_renders_context_usage_after_buffered_answer(
     capsys,
 ) -> None:
     telemetry = {
-        "usage": {"prompt_tokens": 18_432},
+        "usage": {"prompt_tokens": 18_432, "completion_tokens": 391},
         "model_context_tokens": 262_144,
     }
 
@@ -2721,7 +2769,7 @@ def test_zeta_agent_step_renders_context_usage_after_buffered_answer(
 
     assert code == 0
     output = capsys.readouterr().out
-    assert output.index("done") < output.index("◌ context  ≈ 18,432 / 262,144 tokens")
+    assert output.index("done") < output.index("context  [█░░░░░░░░░░░░░░░░░░░] 7%")
 
 
 def test_zeta_agent_step_renders_context_usage_at_bottom_after_tools(
@@ -2729,7 +2777,7 @@ def test_zeta_agent_step_renders_context_usage_at_bottom_after_tools(
     capsys,
 ) -> None:
     tool_telemetry = {
-        "usage": {"prompt_tokens": 123},
+        "usage": {"prompt_tokens": 123, "completion_tokens": 4},
         "model_context_tokens": 262_144,
     }
 
@@ -2781,7 +2829,7 @@ def test_zeta_agent_step_renders_context_usage_at_bottom_after_tools(
             final_text="done",
             events=events,
             model_telemetry={
-                "usage": {"prompt_tokens": 456},
+                "usage": {"prompt_tokens": 456, "completion_tokens": 4},
                 "model_context_tokens": 262_144,
             },
         )
@@ -2798,9 +2846,9 @@ def test_zeta_agent_step_renders_context_usage_at_bottom_after_tools(
     assert code == 0
     output = capsys.readouterr().out
     assert ("❯ read   a.md  (1 lines)\n❯ read   b.md  (1 lines)") in output
-    assert output.count("◌ context") == 1
-    assert "◌ context  ≈ 123 / 262,144 tokens" not in output
-    assert output.index("done") < output.index("◌ context  ≈ 456 / 262,144 tokens")
+    assert output.count("context  [") == 1
+    assert "123 / 262,144 tokens" not in output
+    assert output.index("done") < output.index("context  [░░░░░░░░░░░░░░░░░░░░] 0%")
 
 
 def test_zeta_agent_step_does_not_pass_current_user_event_as_transcript(
@@ -3188,7 +3236,7 @@ def test_zeta_agent_step_aligns_thinking_status_after_tool_trace(
     assert code == 0
     assert capsys.readouterr().out == "\nDone.\n\n"
     trace_text = visible_terminal_text(output.getvalue())
-    assert "❯ read   README.md  (1 lines)\n\n  > Thinking (0s...)" in trace_text
+    assert "❯ read   README.md  (1 lines)\n\n  thinking 0s" in trace_text
 
 
 def test_zeta_agent_step_prints_final_answer_after_direct_edit(
@@ -4014,8 +4062,9 @@ def test_zeta_answer_route_prints_context_usage_and_records_telemetry(
     assert code == 0
     output = capsys.readouterr().out
     assert "It contains project metadata." in output
-    assert "◌ context  ≈ 18,823 / 262,144 tokens" in output
-    assert output.index("It contains project metadata.") < output.index("◌ context")
+    assert "context  [█░░░░░░░░░░░░░░░░░░░] 7%" in output
+    assert "18,823 / 262,144 tokens" not in output
+    assert output.index("It contains project metadata.") < output.index("context  [")
     answer_event = read_event_log()[-1]
     assert answer_event["usage"] == telemetry["usage"]
     assert answer_event["model_context_tokens"] == 262_144
@@ -4255,9 +4304,9 @@ def test_zeta_answer_route_renders_context_usage_at_bottom_after_tools(
     assert code == 0
     output = capsys.readouterr().out
     assert ("❯ read   a.md  (1 lines)\n❯ read   b.md  (1 lines)") in output
-    assert output.count("◌ context") == 1
+    assert output.count("context  [") == 1
     assert output.index("It is a README.") < output.index(
-        "◌ context  ≈ 18,823 / 262,144 tokens"
+        "context  [█░░░░░░░░░░░░░░░░░░░] 7%"
     )
     tools = read_jsonl("last-tools.jsonl")
     assert [(tool["type"], tool["tool"]) for tool in tools] == [

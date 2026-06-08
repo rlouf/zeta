@@ -24,6 +24,9 @@ THINKING_STATUS_INTERVAL_SECONDS = 1.0
 RICH_STREAM_REFRESH_SECONDS = 0.125
 RICH_STREAM_LEFT_PADDING = 2
 THINKING_STATUS_LEFT_PADDING = RICH_STREAM_LEFT_PADDING
+CONTEXT_USAGE_BAR_WIDTH = 20
+CONTEXT_USAGE_BAR_FILLED = "█"
+CONTEXT_USAGE_BAR_EMPTY = "░"
 
 
 class StreamRenderer(Protocol):
@@ -296,6 +299,9 @@ class ContextUsageFooter:
         self.write("\r\x1b[2K")
         self.active = False
 
+    def current_line(self) -> str:
+        return self.last_line
+
     def finalize(self, telemetry: dict[str, Any] | None = None) -> bool:
         """Leave one final context line in scrollback."""
         line = context_usage_line(telemetry) or self.last_line
@@ -329,28 +335,45 @@ def context_usage_line(telemetry: dict[str, Any] | None) -> str:
         completion_tokens,
     )
     model_context_tokens = usage_token_count(telemetry.get("model_context_tokens"))
-    if context_tokens is None and model_context_tokens is None:
+    if (
+        context_tokens is None
+        or model_context_tokens is None
+        or model_context_tokens <= 0
+    ):
         return ""
-    context_text = (
-        f"≈ {format_token_count(context_tokens)}"
-        if context_tokens is not None
-        else "unavailable"
+    percent = context_usage_percent(context_tokens, model_context_tokens)
+    bar = context_usage_bar(context_tokens, model_context_tokens)
+    return f"context  [{bar}] {percent}%"
+
+
+def context_usage_percent(context_tokens: int, model_context_tokens: int) -> int:
+    percent = round((context_tokens / model_context_tokens) * 100)
+    return clamp(percent, 0, 100)
+
+
+def context_usage_bar(context_tokens: int, model_context_tokens: int) -> str:
+    progress = context_tokens / model_context_tokens
+    filled_cells = clamp(
+        round(progress * CONTEXT_USAGE_BAR_WIDTH),
+        0,
+        CONTEXT_USAGE_BAR_WIDTH,
     )
-    if model_context_tokens is None:
-        return f"◌ context  {context_text} tokens"
+    empty_cells = CONTEXT_USAGE_BAR_WIDTH - filled_cells
     return (
-        f"◌ context  {context_text} / {format_token_count(model_context_tokens)} tokens"
+        CONTEXT_USAGE_BAR_FILLED * filled_cells + CONTEXT_USAGE_BAR_EMPTY * empty_cells
     )
+
+
+def clamp(value: int, low: int, high: int) -> int:
+    return max(low, min(value, high))
 
 
 def current_context_token_estimate(
     prompt_tokens: int | None,
     completion_tokens: int | None,
 ) -> int | None:
-    if prompt_tokens is None:
+    if prompt_tokens is None or completion_tokens is None:
         return None
-    if completion_tokens is None:
-        return prompt_tokens
     return prompt_tokens + completion_tokens
 
 
@@ -360,10 +383,6 @@ def usage_token_count(value: object) -> int | None:
     if value < 0:
         return None
     return value
-
-
-def format_token_count(value: int) -> str:
-    return f"{value:,}"
 
 
 class ThinkingStatus:
@@ -378,6 +397,7 @@ class ThinkingStatus:
         left_padding: int = THINKING_STATUS_LEFT_PADDING,
         clock: Callable[[], float] = time.monotonic,
         before_start: Callable[[], None] | None = None,
+        detail: Callable[[], str] | None = None,
     ) -> None:
         self.output = output
         self.enabled = is_interactive(output) if enabled is None else enabled
@@ -385,10 +405,11 @@ class ThinkingStatus:
         self.left_padding = left_padding
         self.clock = clock
         self.before_start = before_start
+        self.detail = detail
         self.started_at = 0.0
         self.last_seconds: int | None = None
         self.wrote_status = False
-        self.wrote_separator = False
+        self.rendered_line_count = 0
         self.stop = threading.Event()
         self.thread: threading.Thread | None = None
         self.lock = threading.Lock()
@@ -422,22 +443,35 @@ class ThinkingStatus:
         if seconds == self.last_seconds:
             return
         self.last_seconds = seconds
-        prefix = "\r\x1b[2K"
-        if not self.wrote_status:
-            prefix = "\n\r\x1b[2K"
-            self.wrote_separator = True
+        prefix = ""
+        if self.wrote_status:
+            prefix = clear_terminal_lines(self.rendered_line_count)
+        prefix += "\n\r\x1b[2K"
+        text = self.status_text(seconds)
         self.wrote_status = True
-        self.write(f"{prefix}{thinking_status_text(seconds, self.left_padding)}")
+        self.rendered_line_count = text.count("\n") + 2
+        self.write(f"{prefix}{text}")
+
+    def status_text(self, seconds: int) -> str:
+        color = should_color(self.output)
+        text = muted(
+            thinking_status_text(seconds, self.left_padding),
+            enabled=color,
+        )
+        if self.detail is None:
+            return text
+        detail = self.detail()
+        if not detail:
+            return text
+        detail_text = muted(f"{' ' * self.left_padding}{detail}", enabled=color)
+        return f"{detail_text}\n{text}"
 
     def clear(self) -> None:
         if not self.wrote_status:
             return
-        if self.wrote_separator:
-            self.write("\r\x1b[2K\x1b[1A\r\x1b[2K")
-        else:
-            self.write("\r\x1b[2K")
+        self.write(clear_terminal_lines(self.rendered_line_count))
         self.wrote_status = False
-        self.wrote_separator = False
+        self.rendered_line_count = 0
 
     def write(self, text: str) -> None:
         with self.lock:
@@ -445,7 +479,16 @@ class ThinkingStatus:
 
 
 def thinking_status_text(seconds: int, left_padding: int = 0) -> str:
-    return f"{' ' * left_padding}> Thinking ({seconds}s...)"
+    return f"{' ' * left_padding}thinking {seconds}s"
+
+
+def clear_terminal_lines(line_count: int) -> str:
+    if line_count <= 1:
+        return "\r\x1b[2K"
+    clear_lines = ["\r\x1b[2K"]
+    for _ in range(line_count - 1):
+        clear_lines.append("\x1b[1A\r\x1b[2K")
+    return "".join(clear_lines)
 
 
 def thinking_status_factory(
@@ -453,8 +496,14 @@ def thinking_status_factory(
     *,
     enabled: bool | None = None,
     before_start: Callable[[], None] | None = None,
+    detail: Callable[[], str] | None = None,
 ) -> Callable[[], ThinkingStatus]:
-    return lambda: ThinkingStatus(output, enabled=enabled, before_start=before_start)
+    return lambda: ThinkingStatus(
+        output,
+        enabled=enabled,
+        before_start=before_start,
+        detail=detail,
+    )
 
 
 def render_handoff_lines(handoff: dict[str, Any]) -> list[str]:

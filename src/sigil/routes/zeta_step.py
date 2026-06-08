@@ -121,6 +121,7 @@ def run_agent_step(
         model_status=thinking_status_factory(
             output,
             before_start=context_footer.clear,
+            detail=context_footer.current_line,
         ),
         stream_sink=stream_renderer,
     )

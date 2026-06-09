@@ -1,4 +1,4 @@
-"""Small terminal rendering helpers for Sigil routes."""
+"""Terminal rendering machinery: stream renderers, footer, and status."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ import json
 import os
 import threading
 import time
-from typing import Any, Callable, Protocol, TextIO, cast
+from typing import Any, Callable, Protocol, TextIO
 
 from rich.console import Console
 from rich.constrain import Constrain
@@ -14,12 +14,8 @@ from rich.live import Live
 from rich.markdown import Markdown
 from rich.padding import Padding
 
-from .protocols import (
-    SHELL_HANDOFF_OUTCOME_CANCELLED,
-    SHELL_HANDOFF_OUTCOME_EXECUTED,
-    SHELL_HANDOFF_OUTCOME_NO_PENDING,
-)
-from .tty import MUTED, RESET
+from .summarize import summarize, text_content, tool_result_summary
+from ..tty import MUTED, RESET
 
 TRACE_LABEL_WIDTH = 5
 THINKING_STATUS_INTERVAL_SECONDS = 1.0
@@ -607,21 +603,6 @@ def thinking_status_factory(
     )
 
 
-def render_handoff_lines(handoff: dict[str, Any]) -> list[str]:
-    """Return user-facing lines for a staged tool handoff."""
-    reason = str(handoff.get("reason") or "")
-    command = str(handoff.get("command") or "")
-    artifact = str(handoff.get("artifact") or "")
-    lines = []
-    if reason:
-        lines.append(reason)
-    if artifact:
-        lines.append(f"artifact: {artifact}")
-    if command:
-        lines.append(command)
-    return lines
-
-
 def is_interactive(stream: TextIO) -> bool:
     """Return whether a stream is attached to an interactive terminal."""
     return bool(getattr(stream, "isatty", lambda: False)())
@@ -637,212 +618,3 @@ def muted(text: str, *, enabled: bool) -> str:
     if not enabled:
         return text
     return f"{MUTED}{text}{RESET}"
-
-
-def summarize(tool: str, args: object) -> str:
-    """Extract a short human-readable label for a tool call."""
-    if not isinstance(args, dict):
-        return ""
-    tool_args = cast(dict[str, object], args)
-    fields_by_tool = {
-        "read": ("path", "file_path"),
-        "edit": ("location", "path", "file_path"),
-        "write": ("path", "file_path"),
-        "bash": ("command", "cmd"),
-        "grep": ("pattern", "query", "path", "glob"),
-        "find": ("pattern", "query", "path", "glob"),
-        "ls": ("pattern", "query", "path", "glob"),
-    }
-    for field in fields_by_tool.get(tool, ()):
-        value = tool_args.get(field)
-        if value:
-            return str(value)
-    return " ".join(
-        f"{key}={value}"
-        for key, value in tool_args.items()
-        if isinstance(value, (str, int, float, bool))
-    )
-
-
-def tool_result_summary(name: str, result: dict[str, Any]) -> list[str]:
-    """Return compact user-facing lines for a Zeta tool result."""
-    handoff = result.get("handoff")
-    if isinstance(handoff, dict):
-        return handoff_summary(name, handoff)
-
-    metadata = result.get("metadata")
-    if not isinstance(metadata, dict):
-        metadata = {}
-    direct_summary = direct_tool_result_summary(name, metadata)
-    if direct_summary:
-        return direct_summary
-    if result.get("ok") is False:
-        return failed_tool_result_summary(result)
-    text = text_content(result)
-    if name == "read":
-        return read_result_summary(text)
-    if name == "ls":
-        return ls_result_summary(text, metadata)
-    if name == "grep":
-        return grep_result_summary(text, metadata)
-    if name == "edit" and metadata.get("mode") == "direct_replace":
-        return edit_result_summary(metadata)
-    if result.get("ok") is True:
-        return ["ok"]
-    return []
-
-
-def failed_tool_result_summary(result: dict[str, Any]) -> list[str]:
-    message = failed_tool_result_message(result)
-    if message:
-        return [truncate(message)]
-    text = text_content(result).strip()
-    if text:
-        return [truncate(text.splitlines()[0])]
-    return ["failed"]
-
-
-def failed_tool_result_message(result: dict[str, Any]) -> str:
-    error = result.get("error")
-    if isinstance(error, dict):
-        return format_tool_error(error)
-    return str(result.get("message") or "").strip()
-
-
-def format_tool_error(error: dict[str, Any]) -> str:
-    code = str(error.get("code") or "").strip()
-    message = str(error.get("message") or "").strip()
-    return ": ".join(part for part in (code, message) if part)
-
-
-def read_result_summary(text: str) -> list[str]:
-    return [f"{count_lines(text)} lines"]
-
-
-def ls_result_summary(text: str, metadata: dict[str, Any]) -> list[str]:
-    entries = metadata.get("entries")
-    if isinstance(entries, int):
-        return [f"{entries} entries"]
-    return [f"{count_lines(text)} entries"]
-
-
-def grep_result_summary(text: str, metadata: dict[str, Any]) -> list[str]:
-    match_count = metadata.get("matches")
-    file_count = metadata.get("files")
-    if isinstance(match_count, int):
-        return [grep_metadata_summary(match_count, file_count, metadata)]
-    matches = [line for line in text.splitlines() if line]
-    files = {line.split(":", 1)[0] for line in matches if ":" in line}
-    if files:
-        return [f"{len(matches)} matches · {len(files)} files"]
-    return [f"{len(matches)} matches"]
-
-
-def grep_metadata_summary(
-    matches: int,
-    files: object,
-    metadata: dict[str, Any],
-) -> str:
-    summary = f"{matches} matches"
-    if isinstance(files, int) and files:
-        summary += f" · {files} files"
-    if metadata.get("truncated") is True:
-        summary += " · truncated"
-    return summary
-
-
-def edit_result_summary(metadata: dict[str, Any]) -> list[str]:
-    location = metadata.get("location")
-    if isinstance(location, str) and location:
-        return [f"applied · {location}"]
-    return ["applied"]
-
-
-def direct_tool_result_summary(name: str, metadata: dict[str, Any]) -> list[str]:
-    """Return compact summaries for tools that ran directly."""
-    if name == "bash" and metadata.get("mode") == "direct":
-        status = metadata.get("status")
-        if isinstance(status, int):
-            if status == 0:
-                return ["succeeded"]
-            return [f"failed · exit {status}"]
-        return ["executed"]
-    if name == "write" and metadata.get("mode") == "direct":
-        path = metadata.get("path")
-        if isinstance(path, str) and path:
-            return [f"wrote · {path}"]
-        return ["wrote"]
-    return []
-
-
-def shell_result_summary(event: dict[str, Any]) -> list[str]:
-    """Return compact user-facing lines for a shell handoff result event."""
-    result = event.get("result")
-    if not isinstance(result, dict):
-        return []
-    outcome = str(result.get("outcome") or "")
-    if outcome == SHELL_HANDOFF_OUTCOME_EXECUTED:
-        command = result.get("executed_command") or result.get("command") or ""
-        status = result.get("status")
-        turns = result.get("shell_turns")
-        turn_count = len(turns) if isinstance(turns, list) else 0
-        suffix = f" · {turn_count} shell turn" + ("" if turn_count == 1 else "s")
-        return [
-            "❯ shell  captured",
-            f"  {truncate(command)}",
-            f"  exit {status}{suffix}",
-        ]
-    if outcome == SHELL_HANDOFF_OUTCOME_CANCELLED:
-        expected = result.get("expected_command") or ""
-        actual = result.get("actual_command") or ""
-        lines = [
-            "❯ shell  changed" if actual else "❯ shell  cancelled",
-            f"  expected: {truncate(expected)}",
-        ]
-        if actual:
-            lines.append(f"  ran:      {truncate(actual)}")
-        return lines
-    if outcome == SHELL_HANDOFF_OUTCOME_NO_PENDING:
-        return ["❯ shell  no handoff"]
-    return []
-
-
-def handoff_summary(name: str, handoff: dict[str, Any]) -> list[str]:
-    """Return compact lines for a tool result that stages shell work."""
-    artifact = str(handoff.get("artifact") or "")
-    if name == "bash":
-        return ["staged"]
-    if name == "edit":
-        return [f"staged patch · {artifact}" if artifact else "staged patch"]
-    if name == "write":
-        return [f"staged write · {artifact}" if artifact else "staged write"]
-    if artifact:
-        return [f"staged · {artifact}"]
-    return ["staged"]
-
-
-def text_content(value: dict[str, Any]) -> str:
-    """Return joined text content from a tool result."""
-    parts = value.get("content")
-    if not isinstance(parts, list):
-        return ""
-    return "\n".join(
-        str(part.get("text") or "")
-        for part in parts
-        if isinstance(part, dict) and part.get("type") == "text"
-    )
-
-
-def count_lines(text: str) -> int:
-    """Return the display line count for a string."""
-    if not text:
-        return 0
-    return text.count("\n") + (0 if text.endswith("\n") else 1)
-
-
-def truncate(value: object, limit: int = 96) -> str:
-    """Return a single display line bounded to a fixed width."""
-    text = str(value or "")
-    if len(text) <= limit:
-        return text
-    return text[: limit - 1] + "…"

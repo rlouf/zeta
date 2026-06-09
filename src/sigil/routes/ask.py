@@ -27,6 +27,7 @@ from ._turn import (
     event_model_telemetry,
     model_server_ready,
     model_telemetry_fields,
+    record_turn_abort,
     render_final_text,
 )
 from ..display import (
@@ -203,51 +204,61 @@ def run_tool_answer(
     ]
     runtime.record_event(user_event)
     status_enabled = answer_thinking_status_enabled(json_output)
-    result = run_agent_turn(
-        prompt,
-        turn_events,
-        AgentConfig(
-            system_prompt=system,
-            allowed_tools=enabled_tools,
-            max_turns=max_steps,
-            stop_on_handoff=True,
-            model_profile=(
-                selected_model.profile if selected_model is not None else None
-            ),
-            model_name=selected_model.model if selected_model is not None else None,
-            model_url=selected_model.url if selected_model is not None else None,
-        ),
-        context=runtime.load_project_context(),
-        event_sink=recorder.record,
-        model_status=thinking_status_factory(
-            sys.stderr,
-            enabled=status_enabled,
-            before_start=context_footer.clear if context_footer is not None else None,
-            detail=context_footer.current_line if context_footer is not None else None,
-        ),
-        stream_sink=renderer.stream_renderer,
-    )
-    turn_events.extend(result.events)
-    recorder.replay(result)
-    tool_events = list(recorder.tool_events)
-    answer = result.final_text
-    answer_prompt_traces = result.prompt_traces
-    answer_streamed = result.final_text_streamed
-    model_telemetry = dict(result.model_telemetry)
-    if not answer:
-        if context_footer is not None:
-            context_footer.clear()
-        answer, answer_streamed, fallback_telemetry = run_fallback_answer_with_status(
-            system,
+    try:
+        result = run_agent_turn(
             prompt,
             turn_events,
-            selected_model,
-            status_enabled=status_enabled,
-            stream_renderer=renderer.stream_renderer,
+            AgentConfig(
+                system_prompt=system,
+                allowed_tools=enabled_tools,
+                max_turns=max_steps,
+                stop_on_handoff=True,
+                model_profile=(
+                    selected_model.profile if selected_model is not None else None
+                ),
+                model_name=selected_model.model if selected_model is not None else None,
+                model_url=selected_model.url if selected_model is not None else None,
+            ),
+            context=runtime.load_project_context(),
+            event_sink=recorder.record,
+            model_status=thinking_status_factory(
+                sys.stderr,
+                enabled=status_enabled,
+                before_start=(
+                    context_footer.clear if context_footer is not None else None
+                ),
+                detail=(
+                    context_footer.current_line if context_footer is not None else None
+                ),
+            ),
+            stream_sink=renderer.stream_renderer,
         )
-        if fallback_telemetry:
-            model_telemetry = fallback_telemetry
-        answer_prompt_traces = []
+        turn_events.extend(result.events)
+        recorder.replay(result)
+        tool_events = list(recorder.tool_events)
+        answer = result.final_text
+        answer_prompt_traces = result.prompt_traces
+        answer_streamed = result.final_text_streamed
+        model_telemetry = dict(result.model_telemetry)
+        if not answer:
+            if context_footer is not None:
+                context_footer.clear()
+            answer, answer_streamed, fallback_telemetry = (
+                run_fallback_answer_with_status(
+                    system,
+                    prompt,
+                    turn_events,
+                    selected_model,
+                    status_enabled=status_enabled,
+                    stream_renderer=renderer.stream_renderer,
+                )
+            )
+            if fallback_telemetry:
+                model_telemetry = fallback_telemetry
+            answer_prompt_traces = []
+    except RuntimeError as error:
+        record_answer_abort(error)
+        raise
     record_answer(
         input_text=input_text,
         prompt=prompt,
@@ -262,6 +273,15 @@ def run_tool_answer(
         renderer=renderer,
     )
     return 0
+
+
+def record_answer_abort(error: RuntimeError) -> None:
+    """Mark an aborted answer turn in the timeline and the answer history."""
+    record_turn_abort(error, route=ANSWER_ROUTE)
+    append_jsonl(
+        ANSWER_HISTORY,
+        {"role": "assistant", "content": f"(turn aborted: {error})", "aborted": True},
+    )
 
 
 def answer_thinking_status_enabled(json_output: bool) -> bool | None:

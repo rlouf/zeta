@@ -155,6 +155,16 @@ def record_zeta_event(event_type: str, **fields: Any) -> dict[str, Any]:
     return record_event({"type": event_type, **fields})
 
 
+def record_turn_abort(error: BaseException, **fields: Any) -> dict[str, Any]:
+    """Resolve an aborted turn in the timeline instead of dangling its question."""
+    return record_zeta_event(
+        "turn_aborted",
+        error=str(error),
+        content=f"(turn aborted: {error})",
+        **fields,
+    )
+
+
 def model_telemetry_fields(
     model_telemetry: dict[str, Any] | None,
 ) -> dict[str, Any]:

@@ -14,6 +14,7 @@ from typing import Any, Iterable, Literal, TextIO
 from ._turn import (
     TurnEventRecorder,
     TurnRenderer,
+    record_turn_abort,
     record_zeta_event,
     build_turn_renderer,
     event_model_telemetry,
@@ -82,31 +83,39 @@ def run_agent_step(
         render_output=output,
     )
     context_footer = renderer.context_footer
-    result = run_agent_turn(
-        prompt,
-        prior_timeline,
-        AgentConfig(
-            system_prompt=system,
-            allowed_tools=enabled_tools,
-            max_turns=max_steps,
-            stop_on_handoff=True,
-            edit_mode=edit_mode or edit_mode_for_glyph(glyph),
-            execution_mode=execution_mode_for_glyph(glyph),
-            model_profile=(
-                selected_model.profile if selected_model is not None else None
+    try:
+        result = run_agent_turn(
+            prompt,
+            prior_timeline,
+            AgentConfig(
+                system_prompt=system,
+                allowed_tools=enabled_tools,
+                max_turns=max_steps,
+                stop_on_handoff=True,
+                edit_mode=edit_mode or edit_mode_for_glyph(glyph),
+                execution_mode=execution_mode_for_glyph(glyph),
+                model_profile=(
+                    selected_model.profile if selected_model is not None else None
+                ),
+                model_name=selected_model.model if selected_model is not None else None,
+                model_url=selected_model.url if selected_model is not None else None,
             ),
-            model_name=selected_model.model if selected_model is not None else None,
-            model_url=selected_model.url if selected_model is not None else None,
-        ),
-        context=context,
-        event_sink=recorder.record,
-        model_status=thinking_status_factory(
-            output,
-            before_start=context_footer.clear if context_footer is not None else None,
-            detail=context_footer.current_line if context_footer is not None else None,
-        ),
-        stream_sink=renderer.stream_renderer,
-    )
+            context=context,
+            event_sink=recorder.record,
+            model_status=thinking_status_factory(
+                output,
+                before_start=(
+                    context_footer.clear if context_footer is not None else None
+                ),
+                detail=(
+                    context_footer.current_line if context_footer is not None else None
+                ),
+            ),
+            stream_sink=renderer.stream_renderer,
+        )
+    except RuntimeError as error:
+        record_turn_abort(error, glyph=glyph)
+        raise
     recorder.replay(result)
     status = recorder.status
     if status is not None:

@@ -6,6 +6,7 @@ from click.testing import CliRunner
 
 from _patch import patch
 from sigil.cli import cli, main
+from sigil.cli._base import MODEL_ERROR_EXIT_CODE
 from sigil.cli.ask import DEFAULT_QUESTION
 
 
@@ -105,6 +106,6 @@ def test_main_reports_model_runtime_error(capsys, monkeypatch) -> None:
         code = main(["ask", "why"])
 
     captured = capsys.readouterr()
-    assert code == 1
+    assert code == MODEL_ERROR_EXIT_CODE
     assert "sigil: model request failed: connection reset" in captured.err
     assert "sigil doctor" in captured.err

@@ -6114,3 +6114,55 @@ url = "http://127.0.0.1:8081/v1/chat/completions"
     assert "\nFallback answer.\n" in output
     assert captured["selected_model"] == "fast-model"
     assert captured["selected_url"] == "http://127.0.0.1:8081/v1/chat/completions"
+
+
+def test_zeta_answer_model_failure_records_turn_abort(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("SIGIL_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("SIGIL_SESSION_ID", "zeta-test")
+    monkeypatch.setattr(turn_routes, "ensure_server", lambda: True)
+
+    def failing_run_agent_turn(*args: object, **kwargs: object) -> None:
+        raise RuntimeError("model stream failed: stream ended before [DONE]")
+
+    monkeypatch.setattr(answers_runner, "run_agent_turn", failing_run_agent_turn)
+
+    with pytest.raises(RuntimeError):
+        answers_runner.run_tool_answer("system", "question")
+
+    timeline = zeta.current_timeline()
+    assert timeline[-1]["type"] == "turn_aborted"
+    assert "model stream failed" in timeline[-1]["error"]
+    assert timeline[-2]["type"] == "user_message"
+    messages = zeta_timeline.chat_messages(timeline)
+    assert messages[-1]["role"] == "assistant"
+    assert "turn aborted" in messages[-1]["content"]
+    history = read_jsonl("last-answer.jsonl")
+    assert history[-1]["role"] == "assistant"
+    assert history[-1]["aborted"] is True
+    assert "model stream failed" in history[-1]["content"]
+
+
+def test_zeta_step_model_failure_records_turn_abort(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("SIGIL_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("SIGIL_SESSION_ID", "zeta-test")
+    monkeypatch.setattr(turn_routes, "ensure_server", lambda: True)
+
+    def failing_run_agent_turn(*args: object, **kwargs: object) -> None:
+        raise RuntimeError("model request failed: connection reset")
+
+    monkeypatch.setattr(zeta_runner, "run_agent_turn", failing_run_agent_turn)
+
+    with pytest.raises(RuntimeError):
+        zeta_runner.run_agent_step("do the thing", glyph=",,")
+
+    timeline = zeta.current_timeline()
+    assert timeline[-1]["type"] == "turn_aborted"
+    assert timeline[-1]["glyph"] == ",,"
+    assert "model request failed" in timeline[-1]["error"]
+    assert timeline[-2]["type"] == "user_message"

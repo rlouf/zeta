@@ -600,6 +600,7 @@ def event_chat_message(
     role_by_type = {
         "user_message": "user",
         "assistant_message": "assistant",
+        "turn_aborted": "assistant",
     }
     role = role_by_type.get(event_type)
     if role is None:

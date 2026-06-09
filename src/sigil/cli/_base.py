@@ -10,6 +10,9 @@ import click
 
 from .._version import __version__
 
+# sysexits EX_UNAVAILABLE: the model endpoint is the service that is down.
+MODEL_ERROR_EXIT_CODE = 69
+
 
 @click.group(
     context_settings={"help_option_names": ["-h", "--help"]},
@@ -64,7 +67,7 @@ def main(argv: list[str] | None = None) -> int:
         click.echo(
             "Check the model endpoint with `sigil doctor`, then retry.", err=True
         )
-        return 1
+        return MODEL_ERROR_EXIT_CODE
     except FileNotFoundError as error:
         program = error.filename or "required executable"
         click.echo(f"sigil: missing executable: {program}", err=True)

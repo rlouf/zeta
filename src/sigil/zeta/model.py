@@ -301,26 +301,48 @@ def read_streamed_chat_completion(
     return accumulator.response()
 
 
-def iter_sse_data(lines: Iterable[bytes]) -> Iterator[str]:
-    """Yield joined ``data:`` payloads from a Server-Sent Events byte stream."""
+def iter_sse_data(chunks: Iterable[bytes]) -> Iterator[str]:
+    """Yield joined ``data:`` payloads from a Server-Sent Events byte stream.
+
+    Chunks are buffered until a full line is available, so multibyte UTF-8
+    sequences split across chunks decode correctly; invalid bytes are replaced
+    instead of failing the stream.
+    """
     data_lines: list[str] = []
-    for raw_line in lines:
-        line = raw_line.decode("utf-8").rstrip("\r\n")
-        if line == "":
-            if data_lines:
-                yield "\n".join(data_lines)
-                data_lines = []
-            continue
-        if line.startswith(":"):
-            continue
-        if not line.startswith("data:"):
-            continue
-        data = line[5:]
-        if data.startswith(" "):
-            data = data[1:]
-        data_lines.append(data)
+    buffer = b""
+    for chunk in chunks:
+        buffer += chunk
+        while b"\n" in buffer:
+            raw_line, buffer = buffer.split(b"\n", 1)
+            payload = consume_sse_line(raw_line, data_lines)
+            if payload is not None:
+                yield payload
+    if buffer:
+        payload = consume_sse_line(buffer, data_lines)
+        if payload is not None:
+            yield payload
     if data_lines:
         yield "\n".join(data_lines)
+
+
+def consume_sse_line(raw_line: bytes, data_lines: list[str]) -> str | None:
+    """Consume one SSE line; return the joined event payload on a blank line."""
+    line = raw_line.decode("utf-8", errors="replace").rstrip("\r")
+    if line == "":
+        if data_lines:
+            payload = "\n".join(data_lines)
+            data_lines.clear()
+            return payload
+        return None
+    if line.startswith(":"):
+        return None
+    if not line.startswith("data:"):
+        return None
+    data = line[5:]
+    if data.startswith(" "):
+        data = data[1:]
+    data_lines.append(data)
+    return None
 
 
 def format_stream_error(error: Any) -> str:

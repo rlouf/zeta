@@ -1196,6 +1196,31 @@ def test_zeta_request_chat_completion_streams_final_message(monkeypatch) -> None
     assert payload["choices"][0]["finish_reason"] == "stop"
 
 
+def test_zeta_stream_replaces_invalid_utf8_bytes() -> None:
+    chunk = (
+        b'data: {"choices":[{"index":0,"delta":{"content":"caf\xff"},'
+        b'"finish_reason":"stop"}]}\n'
+    )
+    lines = [chunk, b"\n", b"data: [DONE]\n"]
+
+    payload = zeta_model.read_streamed_chat_completion(iter(lines))
+
+    assert payload["choices"][0]["message"]["content"] == "caf�"
+
+
+def test_zeta_stream_reassembles_chunks_split_mid_character() -> None:
+    frame = (
+        'data: {"choices":[{"index":0,"delta":{"content":"café"},'
+        '"finish_reason":"stop"}]}\n'
+    ).encode("utf-8")
+    split = frame.index(b"\xc3") + 1
+    lines = [frame[:split], frame[split:], b"\n", b"data: [DONE]\n"]
+
+    payload = zeta_model.read_streamed_chat_completion(iter(lines))
+
+    assert payload["choices"][0]["message"]["content"] == "café"
+
+
 def test_zeta_stream_emits_content_deltas_in_order() -> None:
     sink = DeltaSink()
 

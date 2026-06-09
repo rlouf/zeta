@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
 import sys
 from collections.abc import Callable, Iterator
 from io import StringIO
@@ -3375,6 +3376,56 @@ def test_zeta_tool_grep_reports_content_truncation(
     assert data["metadata"]["truncated"] is True
     assert data["metadata"]["match_limit_reached"] is False
     assert data["metadata"]["content_truncated"] is True
+
+
+def test_zeta_tool_grep_fallback_searches_without_ripgrep(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    (tmp_path / "sub").mkdir()
+    (tmp_path / "sub" / "b.txt").write_text("needle two\n", encoding="utf-8")
+    (tmp_path / "a.txt").write_text("needle one\n", encoding="utf-8")
+
+    def missing_rg(*args: object, **kwargs: object) -> None:
+        raise FileNotFoundError("rg")
+
+    monkeypatch.setattr(grep_tool.subprocess, "Popen", missing_rg)
+
+    data = zeta_tools.run_tool("grep", {"path": str(tmp_path), "pattern": "needle"})
+
+    assert data["ok"] is True
+    assert data["metadata"]["matches"] == 2
+    lines = data["content"][0]["text"].splitlines()
+    assert lines[0].endswith("needle one")
+    assert lines[1].endswith("needle two")
+
+
+def test_zeta_tool_grep_fallback_stops_at_limit(tmp_path: Path, monkeypatch) -> None:
+    for index in range(20):
+        (tmp_path / f"file-{index:02}.txt").write_text("needle\n", encoding="utf-8")
+
+    def missing_rg(*args: object, **kwargs: object) -> None:
+        raise FileNotFoundError("rg")
+
+    monkeypatch.setattr(grep_tool.subprocess, "Popen", missing_rg)
+
+    data = zeta_tools.run_tool(
+        "grep", {"path": str(tmp_path), "pattern": "needle", "limit": 3}
+    )
+
+    assert data["metadata"]["matches"] == 3
+    assert data["metadata"]["truncated"] is True
+
+
+@pytest.mark.skipif(shutil.which("rg") is None, reason="ripgrep is not installed")
+def test_zeta_tool_grep_reports_invalid_pattern_error(tmp_path: Path) -> None:
+    (tmp_path / "a.txt").write_text("text\n", encoding="utf-8")
+
+    data = zeta_tools.run_tool("grep", {"path": str(tmp_path), "pattern": "("})
+
+    assert data["ok"] is False
+    assert data["metadata"]["status"] not in {0, 1}
+    assert data["content"][0]["text"]
 
 
 def test_zeta_tool_bash_returns_handoff() -> None:

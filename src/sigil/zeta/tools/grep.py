@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import os
+import signal
 import subprocess
+import tempfile
+from collections.abc import Iterator
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -94,36 +98,48 @@ class GrepResult:
 
 
 def run_ripgrep(pattern: str, path: str, limit: int) -> GrepResult:
-    proc = subprocess.Popen(
-        ["rg", "--line-number", "--color", "never", pattern, path],
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
-    assert proc.stdout is not None
-    lines = []
-    truncated = False
-    for line in proc.stdout:
-        if len(lines) >= limit:
-            truncated = True
-            proc.terminate()
-            break
-        lines.append(line.rstrip("\n"))
-    _, stderr = proc.communicate()
-    status = proc.returncode or 0
+    with tempfile.TemporaryFile() as stderr_spool:
+        proc = subprocess.Popen(
+            ["rg", "--line-number", "--color", "never", pattern, path],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=stderr_spool,
+            start_new_session=True,
+        )
+        assert proc.stdout is not None
+        lines = []
+        truncated = False
+        for line in proc.stdout:
+            if len(lines) >= limit:
+                truncated = True
+                proc.terminate()
+                break
+            lines.append(line.rstrip("\n"))
+        proc.stdout.close()
+        status = wait_for_exit(proc)
+        stderr_spool.seek(0)
+        stderr = stderr_spool.read().decode("utf-8", errors="replace")
     if status not in {0, 1} and not truncated:
-        message = stderr.strip()
-        return GrepResult(message, 0, 0, False, ok=False, status=status)
+        return GrepResult(stderr.strip(), 0, 0, False, ok=False, status=status)
     return grep_result_from_lines(lines, truncated=truncated, status=status)
+
+
+def wait_for_exit(proc: subprocess.Popen[str]) -> int:
+    try:
+        proc.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            proc.kill()
+        proc.wait()
+    return proc.returncode or 0
 
 
 def grep_fallback(pattern: str, root: Path, limit: int) -> GrepResult:
     matches: list[str] = []
     truncated = False
-    paths = [root] if root.is_file() else sorted(root.rglob("*"))
-    for path in paths:
-        if not path.is_file():
-            continue
+    for path in fallback_paths(root):
         try:
             lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
         except OSError:
@@ -137,6 +153,17 @@ def grep_fallback(pattern: str, root: Path, limit: int) -> GrepResult:
         if truncated:
             break
     return grep_result_from_lines(matches, truncated=truncated)
+
+
+def fallback_paths(root: Path) -> Iterator[Path]:
+    """Yield candidate files lazily in a stable order without a global sort."""
+    if root.is_file():
+        yield root
+        return
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames.sort()
+        for name in sorted(filenames):
+            yield Path(dirpath) / name
 
 
 def grep_result_from_lines(

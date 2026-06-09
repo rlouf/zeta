@@ -133,6 +133,7 @@ def transcript_message_components(
                     tool_name=tool_name,
                 ),
                 message=entry.message,
+                links=transcript_message_component_links(entry.event),
             )
         )
         record_tool_call_names(entry.message, tool_call_names)
@@ -160,6 +161,33 @@ def transcript_message_component_data(
     return data
 
 
+def transcript_message_component_links(event: dict[str, Any]) -> tuple[ObjectId, ...]:
+    links: list[ObjectId] = []
+    add_trace_link(links, assistant_message_object_id(event))
+    for trace_field in ("tool_result_object_id", "tool_call_object_id"):
+        add_trace_link(links, trace_object_id(event, trace_field))
+    return tuple(links)
+
+
+def assistant_message_object_id(event: dict[str, Any]) -> ObjectId | None:
+    prompt_trace = event.get("prompt_trace")
+    if not isinstance(prompt_trace, dict):
+        return None
+    return trace_object_id(prompt_trace, "assistant_message_object_id")
+
+
+def trace_object_id(event: dict[str, Any], field: str) -> ObjectId | None:
+    value = event.get(field)
+    if not isinstance(value, str) or not value.startswith("sha256:"):
+        return None
+    return value
+
+
+def add_trace_link(links: list[ObjectId], object_id: ObjectId | None) -> None:
+    if object_id is not None and object_id not in links:
+        links.append(object_id)
+
+
 def record_tool_call_names(
     message: dict[str, Any],
     tool_call_names: dict[str, str],
@@ -184,30 +212,64 @@ def structured_source_event(
 ) -> dict[str, Any]:
     event_type = str(event.get("type") or "")
     if event_type == "tool_result":
-        data: dict[str, Any] = {
-            "type": "tool_result",
-            "tool_call_id": str(event.get("tool_call_id") or ""),
-        }
-        if tool_name:
-            data["tool_name"] = tool_name
-        result = event.get("result")
-        if isinstance(result, dict):
-            data["result"] = result
-        return data
+        return structured_tool_result_event(event, tool_name=tool_name)
     if event_type == "tool_call":
-        return {
-            "type": "tool_call",
-            "id": str(event.get("id") or ""),
-            "tool_call_id": str(event.get("tool_call_id") or ""),
-            "name": str(event.get("name") or ""),
-            "input": event.get("input") if isinstance(event.get("input"), dict) else {},
-        }
+        return structured_tool_call_event(event)
     if event_type == "assistant_message" and isinstance(event.get("tool_calls"), list):
-        return {
-            "type": "assistant_message",
-            "tool_calls": event.get("tool_calls") or [],
-        }
+        return structured_assistant_message_event(event)
     return {}
+
+
+def structured_tool_result_event(
+    event: dict[str, Any],
+    *,
+    tool_name: str = "",
+) -> dict[str, Any]:
+    data: dict[str, Any] = {
+        "type": "tool_result",
+        "tool_call_id": str(event.get("tool_call_id") or ""),
+    }
+    add_trace_object_field(data, event, "tool_result_object_id")
+    add_trace_object_field(data, event, "tool_call_object_id")
+    if tool_name:
+        data["tool_name"] = tool_name
+    result = event.get("result")
+    if isinstance(result, dict):
+        data["result"] = result
+    return data
+
+
+def structured_tool_call_event(event: dict[str, Any]) -> dict[str, Any]:
+    data = {
+        "type": "tool_call",
+        "id": str(event.get("id") or ""),
+        "tool_call_id": str(event.get("tool_call_id") or ""),
+        "name": str(event.get("name") or ""),
+        "input": event.get("input") if isinstance(event.get("input"), dict) else {},
+    }
+    add_trace_object_field(data, event, "tool_call_object_id")
+    return data
+
+
+def structured_assistant_message_event(event: dict[str, Any]) -> dict[str, Any]:
+    data = {
+        "type": "assistant_message",
+        "tool_calls": event.get("tool_calls") or [],
+    }
+    object_id = assistant_message_object_id(event)
+    if object_id is not None:
+        data["assistant_message_object_id"] = object_id
+    return data
+
+
+def add_trace_object_field(
+    data: dict[str, Any],
+    event: dict[str, Any],
+    field_name: str,
+) -> None:
+    object_id = trace_object_id(event, field_name)
+    if object_id is not None:
+        data[field_name] = object_id
 
 
 def non_message_components(

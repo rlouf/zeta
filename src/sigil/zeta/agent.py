@@ -125,7 +125,8 @@ def run_agent_turn(
                 edit_mode=config.edit_mode,
                 execution_mode=config.execution_mode,
                 model_telemetry=(model_telemetry if index == 0 else None),
-                prompt_trace=(prompt_trace if index == 0 else None),
+                prompt_trace=prompt_trace,
+                prompt_builder=builder,
                 event_sink=event_sink,
             )
             events.extend(result_event.events)
@@ -283,6 +284,36 @@ def attach_prompt_trace(event: dict[str, Any], trace: PromptTrace) -> None:
     event["prompt_trace"] = prompt_trace_payload(trace)
 
 
+def attach_tool_call_trace(
+    event: dict[str, Any],
+    *,
+    prompt_trace: PromptTrace | None,
+    prompt_builder: runtime.PromptBuilder | None,
+) -> None:
+    if prompt_trace is None or prompt_builder is None:
+        return
+    object_id = prompt_builder.record_tool_call(prompt_trace, event)
+    if object_id:
+        event["tool_call_object_id"] = object_id
+
+
+def attach_tool_result_trace(
+    event: dict[str, Any],
+    call_event: dict[str, Any],
+    *,
+    prompt_trace: PromptTrace | None,
+    prompt_builder: runtime.PromptBuilder | None,
+) -> None:
+    if prompt_trace is None or prompt_builder is None:
+        return
+    object_id = prompt_builder.record_tool_result(prompt_trace, call_event, event)
+    if object_id:
+        event["tool_result_object_id"] = object_id
+        call_object_id = str(call_event.get("tool_call_object_id") or "")
+        if call_object_id:
+            event["tool_call_object_id"] = call_object_id
+
+
 def handle_tool_call(
     tool_call: dict[str, Any],
     *,
@@ -292,6 +323,7 @@ def handle_tool_call(
     execution_mode: ExecutionMode = "handoff",
     model_telemetry: dict[str, Any] | None = None,
     prompt_trace: PromptTrace | None = None,
+    prompt_builder: runtime.PromptBuilder | None = None,
     event_sink: AgentEventSink | None = None,
 ) -> ToolCallResult:
     call_id = str(tool_call.get("id") or f"call-{index}")
@@ -305,6 +337,7 @@ def handle_tool_call(
             "tool call did not include a function payload",
             model_telemetry=model_telemetry,
             prompt_trace=prompt_trace,
+            prompt_builder=prompt_builder,
             event_sink=event_sink,
         )
     name = str(function.get("name") or "")
@@ -328,6 +361,7 @@ def handle_tool_call(
             call_event=call_event,
             model_telemetry=model_telemetry,
             prompt_trace=prompt_trace,
+            prompt_builder=prompt_builder,
             event_sink=event_sink,
         )
     if name not in allowed_tool_names():
@@ -340,6 +374,7 @@ def handle_tool_call(
             call_event=call_event,
             model_telemetry=model_telemetry,
             prompt_trace=prompt_trace,
+            prompt_builder=prompt_builder,
             event_sink=event_sink,
         )
     if name not in allowed_tools:
@@ -352,6 +387,7 @@ def handle_tool_call(
             call_event=call_event,
             model_telemetry=model_telemetry,
             prompt_trace=prompt_trace,
+            prompt_builder=prompt_builder,
             event_sink=event_sink,
         )
     schema_errors = validate_tool_args(name, params)
@@ -365,6 +401,7 @@ def handle_tool_call(
             call_event=call_event,
             model_telemetry=model_telemetry,
             prompt_trace=prompt_trace,
+            prompt_builder=prompt_builder,
             event_sink=event_sink,
         )
     analysis = analyze_tool(name, params)
@@ -377,21 +414,38 @@ def handle_tool_call(
     if analysis.get("valid") is not True:
         result = tool_error("invalid-analysis", "tool analysis rejected the input")
         events: list[dict[str, Any]] = []
+        attach_tool_call_trace(
+            call_event,
+            prompt_trace=prompt_trace,
+            prompt_builder=prompt_builder,
+        )
         emit_event(events, call_event, event_sink)
         emit_event(events, analysis_event, event_sink)
+        result_event = tool_result_event(
+            call_id,
+            name,
+            result,
+            model_telemetry=model_telemetry,
+            prompt_trace=prompt_trace,
+        )
+        attach_tool_result_trace(
+            result_event,
+            call_event,
+            prompt_trace=prompt_trace,
+            prompt_builder=prompt_builder,
+        )
         emit_event(
             events,
-            tool_result_event(
-                call_id,
-                name,
-                result,
-                model_telemetry=model_telemetry,
-                prompt_trace=prompt_trace,
-            ),
+            result_event,
             event_sink,
         )
         return ToolCallResult(events=events)
     events = []
+    attach_tool_call_trace(
+        call_event,
+        prompt_trace=prompt_trace,
+        prompt_builder=prompt_builder,
+    )
     emit_event(events, call_event, event_sink)
     emit_event(events, analysis_event, event_sink)
     result = run_tool_for_mode(
@@ -406,12 +460,14 @@ def handle_tool_call(
     )
     emit_event(
         events,
-        tool_result_event(
+        traced_tool_result_event(
             call_id,
             name,
             result,
+            call_event=call_event,
             model_telemetry=model_telemetry,
             prompt_trace=prompt_trace,
+            prompt_builder=prompt_builder,
         ),
         event_sink,
     )
@@ -465,6 +521,7 @@ def invalid_tool_result(
     call_event: dict[str, Any] | None = None,
     model_telemetry: dict[str, Any] | None = None,
     prompt_trace: PromptTrace | None = None,
+    prompt_builder: runtime.PromptBuilder | None = None,
     event_sink: AgentEventSink | None = None,
 ) -> ToolCallResult:
     event = call_event or {
@@ -475,19 +532,57 @@ def invalid_tool_result(
         "input": params,
     }
     events: list[dict[str, Any]] = []
+    attach_tool_call_trace(
+        event,
+        prompt_trace=prompt_trace,
+        prompt_builder=prompt_builder,
+    )
+    result_event = tool_result_event(
+        call_id,
+        name,
+        tool_error(code, message),
+        model_telemetry=model_telemetry,
+        prompt_trace=prompt_trace,
+    )
+    attach_tool_result_trace(
+        result_event,
+        event,
+        prompt_trace=prompt_trace,
+        prompt_builder=prompt_builder,
+    )
     emit_event(events, event, event_sink)
     emit_event(
         events,
-        tool_result_event(
-            call_id,
-            name,
-            tool_error(code, message),
-            model_telemetry=model_telemetry,
-            prompt_trace=prompt_trace,
-        ),
+        result_event,
         event_sink,
     )
     return ToolCallResult(events=events)
+
+
+def traced_tool_result_event(
+    call_id: str,
+    name: str,
+    result: dict[str, Any],
+    *,
+    call_event: dict[str, Any],
+    model_telemetry: dict[str, Any] | None = None,
+    prompt_trace: PromptTrace | None = None,
+    prompt_builder: runtime.PromptBuilder | None = None,
+) -> dict[str, Any]:
+    event = tool_result_event(
+        call_id,
+        name,
+        result,
+        model_telemetry=model_telemetry,
+        prompt_trace=prompt_trace,
+    )
+    attach_tool_result_trace(
+        event,
+        call_event,
+        prompt_trace=prompt_trace,
+        prompt_builder=prompt_builder,
+    )
+    return event
 
 
 def tool_result_event(

@@ -107,6 +107,73 @@ class PromptBuilder:
         except Exception:
             return None
 
+    def record_tool_call(
+        self,
+        trace: PromptTrace,
+        event: dict[str, Any],
+    ) -> ObjectId | None:
+        """Record a first-class tool call projected from the model response."""
+        store = self.store()
+        source_id = trace.assistant_message_object_id or trace.prompt_object_id
+        if store is None or not source_id:
+            return None
+        try:
+            call_id = store.put_object(
+                Object(
+                    kind="tool_call",
+                    schema="zeta.tool_call.v1",
+                    data=tool_call_object_data(event),
+                    links=(source_id,),
+                )
+            )
+            store.record_derivation(
+                Derivation(
+                    producer="SigilToolCallProjection:v1",
+                    output_id=call_id,
+                    input_ids=(source_id,),
+                    params=tool_event_derivation_params(event),
+                )
+            )
+            return call_id
+        except Exception:
+            return None
+
+    def record_tool_result(
+        self,
+        trace: PromptTrace,
+        call_event: dict[str, Any],
+        result_event: dict[str, Any],
+    ) -> ObjectId | None:
+        """Record a first-class tool result derived from a tool call."""
+        store = self.store()
+        if store is None:
+            return None
+        call_object_id = str(call_event.get("tool_call_object_id") or "")
+        if not call_object_id:
+            call_object_id = self.record_tool_call(trace, call_event) or ""
+        if not call_object_id:
+            return None
+        try:
+            result_id = store.put_object(
+                Object(
+                    kind="tool_result",
+                    schema="zeta.tool_result.v1",
+                    data=tool_result_object_data(result_event),
+                    links=(call_object_id,),
+                )
+            )
+            store.record_derivation(
+                Derivation(
+                    producer="SigilToolExecution:v1",
+                    output_id=result_id,
+                    input_ids=(call_object_id,),
+                    params=tool_event_derivation_params(result_event),
+                )
+            )
+            return result_id
+        except Exception:
+            return None
+
     def store(self) -> Store | None:
         if self._store_initialized:
             return self._store
@@ -270,3 +337,36 @@ class PromptBuilder:
         )
         store.set_ref("prompt/current", prompt_id)
         return prompt_id
+
+
+def tool_call_object_data(event: dict[str, Any]) -> dict[str, Any]:
+    data: dict[str, Any] = {
+        "tool_call_id": str(event.get("tool_call_id") or event.get("id") or ""),
+        "name": str(event.get("name") or ""),
+        "input": event.get("input") if isinstance(event.get("input"), dict) else {},
+    }
+    arguments = event.get("arguments")
+    if isinstance(arguments, str):
+        data["arguments"] = arguments
+    return data
+
+
+def tool_result_object_data(event: dict[str, Any]) -> dict[str, Any]:
+    data: dict[str, Any] = {
+        "tool_call_id": str(event.get("tool_call_id") or ""),
+        "name": str(event.get("name") or ""),
+    }
+    result = event.get("result")
+    if isinstance(result, dict):
+        data["result"] = result
+    model_telemetry = event.get("model_telemetry")
+    if isinstance(model_telemetry, dict):
+        data["model_telemetry"] = model_telemetry
+    return data
+
+
+def tool_event_derivation_params(event: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "tool_call_id": str(event.get("tool_call_id") or event.get("id") or ""),
+        "name": str(event.get("name") or ""),
+    }

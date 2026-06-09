@@ -170,6 +170,37 @@ def linked_kinds(store: zeta_trace.Store, prompt: zeta_trace.Object) -> list[str
     return kinds
 
 
+def event_by_type(
+    events: list[dict[str, Any]],
+    event_type: str,
+) -> dict[str, Any]:
+    return next(event for event in events if event.get("type") == event_type)
+
+
+def read_tool_call_response(target: Path) -> dict[str, Any]:
+    return {
+        "content": "",
+        "tool_calls": [
+            {
+                "id": "call-1",
+                "type": "function",
+                "function": {
+                    "name": "read",
+                    "arguments": json.dumps({"path": str(target)}),
+                },
+            }
+        ],
+    }
+
+
+def read_tool_payload(target: Path) -> dict[str, Any]:
+    return {
+        "ok": True,
+        "content": [{"type": "text", "text": "README"}],
+        "metadata": {"path": str(target)},
+    }
+
+
 def assert_structural_trim_payload(
     payload: dict[str, Any],
     *,
@@ -231,6 +262,64 @@ def assert_task_state_graph(
     closure = store.graph_closure([prepared.prompt_object_id])
     assert set(task_state.links).issubset(closure)
     return task_state
+
+
+def assert_tool_result_derivation_graph(
+    store: zeta_trace.InMemoryStore,
+    result: zeta_agent.AgentTurnResult,
+    call_event: dict[str, Any],
+    result_event: dict[str, Any],
+) -> None:
+    call_object_id = call_event["tool_call_object_id"]
+    result_object_id = result_event["tool_result_object_id"]
+    assert_tool_call_derivation(store, result, call_object_id)
+    assert_tool_result_derivation(store, call_object_id, result_object_id)
+    assert_prompt_closure_contains_tool_result(
+        store,
+        result,
+        call_object_id,
+        result_object_id,
+    )
+
+
+def assert_tool_call_derivation(
+    store: zeta_trace.InMemoryStore,
+    result: zeta_agent.AgentTurnResult,
+    call_object_id: zeta_trace.ObjectId,
+) -> None:
+    call_object = store.get_object(call_object_id)
+    assert call_object is not None
+    assert call_object.kind == "tool_call"
+    assert call_object.links == (result.prompt_traces[0].assistant_message_object_id,)
+    call_derivation = store.derivations_for_output(call_object_id)[0]
+    assert call_derivation.producer == "SigilToolCallProjection:v1"
+    assert call_derivation.input_ids == call_object.links
+
+
+def assert_tool_result_derivation(
+    store: zeta_trace.InMemoryStore,
+    call_object_id: zeta_trace.ObjectId,
+    result_object_id: zeta_trace.ObjectId,
+) -> None:
+    result_object = store.get_object(result_object_id)
+    assert result_object is not None
+    assert result_object.kind == "tool_result"
+    assert result_object.links == (call_object_id,)
+    result_derivation = store.derivations_for_output(result_object_id)[0]
+    assert result_derivation.producer == "SigilToolExecution:v1"
+    assert result_derivation.input_ids == (call_object_id,)
+
+
+def assert_prompt_closure_contains_tool_result(
+    store: zeta_trace.InMemoryStore,
+    result: zeta_agent.AgentTurnResult,
+    call_object_id: zeta_trace.ObjectId,
+    result_object_id: zeta_trace.ObjectId,
+) -> None:
+    second_prompt_id = result.prompt_traces[1].prompt_object_id
+    second_closure = store.graph_closure([second_prompt_id])
+    assert call_object_id in second_closure
+    assert result_object_id in second_closure
 
 
 def task_state_fixture(
@@ -1783,37 +1872,13 @@ def test_zeta_agent_turn_records_one_prompt_trace_per_model_request(
     target = tmp_path / "README.md"
     target.write_text("README\n", encoding="utf-8")
     store = zeta_trace.InMemoryStore()
-    responses = iter(
-        [
-            {
-                "content": "",
-                "tool_calls": [
-                    {
-                        "id": "call-1",
-                        "type": "function",
-                        "function": {
-                            "name": "read",
-                            "arguments": json.dumps({"path": str(target)}),
-                        },
-                    }
-                ],
-            },
-            {"content": "done"},
-        ]
-    )
-
-    def fake_chat_completion_messages(
-        messages: list[dict[str, Any]],
-        **kwargs: object,
-    ) -> dict[str, Any]:
-        del messages, kwargs
-        return next(responses)
+    responses = iter([read_tool_call_response(target), {"content": "done"}])
 
     monkeypatch.setattr(zeta_agent, "model_endpoint_open", lambda: True)
     monkeypatch.setattr(
         zeta_agent,
         "chat_completion_messages",
-        fake_chat_completion_messages,
+        lambda messages, **kwargs: next(responses),
     )
     monkeypatch.setattr(
         zeta_agent,
@@ -1823,11 +1888,7 @@ def test_zeta_agent_turn_records_one_prompt_trace_per_model_request(
     monkeypatch.setattr(
         zeta_agent,
         "run_tool",
-        lambda name, params: {
-            "ok": True,
-            "content": [{"type": "text", "text": "README"}],
-            "metadata": {"path": str(target)},
-        },
+        lambda name, params: read_tool_payload(target),
     )
 
     result = zeta_agent.run_agent_turn(
@@ -1849,6 +1910,47 @@ def test_zeta_agent_turn_records_one_prompt_trace_per_model_request(
         "assistant",
         "tool",
     ]
+
+
+def test_zeta_agent_turn_records_tool_result_derivation(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    target = tmp_path / "README.md"
+    target.write_text("README\n", encoding="utf-8")
+    store = zeta_trace.InMemoryStore()
+    responses = iter([read_tool_call_response(target), {"content": "done"}])
+
+    monkeypatch.setattr(zeta_agent, "model_endpoint_open", lambda: True)
+    monkeypatch.setattr(
+        zeta_agent,
+        "chat_completion_messages",
+        lambda messages, **kwargs: next(responses),
+    )
+    monkeypatch.setattr(
+        zeta_agent,
+        "analyze_tool",
+        lambda name, params: {"valid": True, "resolved": True},
+    )
+    monkeypatch.setattr(
+        zeta_agent,
+        "run_tool",
+        lambda name, params: read_tool_payload(target),
+    )
+
+    result = zeta_agent.run_agent_turn(
+        "inspect",
+        [],
+        zeta_agent.AgentConfig(allowed_tools=("read",), max_turns=2),
+        prompt_builder=zeta.PromptBuilder(store=store),
+    )
+
+    assert_tool_result_derivation_graph(
+        store,
+        result,
+        event_by_type(result.events, "tool_call"),
+        event_by_type(result.events, "tool_result"),
+    )
 
 
 def test_zeta_agent_turn_wraps_model_request_in_status(monkeypatch) -> None:

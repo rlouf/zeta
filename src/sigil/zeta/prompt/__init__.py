@@ -8,6 +8,7 @@ from .budget import (
     ContextBudget,
     ContextUsage,
     estimated_tokens,
+    estimated_tokens_for_text,
     measure,
     render_stub,
 )
@@ -111,6 +112,7 @@ __all__ = [
     "clean_prompt",
     "component_messages",
     "estimated_tokens",
+    "estimated_tokens_for_text",
     "measure",
     "prompt_component_object",
     "prompt_transform_from_env",

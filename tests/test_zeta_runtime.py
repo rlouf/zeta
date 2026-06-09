@@ -28,7 +28,11 @@ from sigil.session import read_event_log, recent_turns, record_turn
 from sigil.state import read_jsonl
 from sigil import display as sigil_display
 from sigil.zeta import agent as zeta_agent
+from sigil.zeta import prompt as zeta_prompt
 from sigil.zeta import runtime as zeta
+from sigil.zeta import skills as zeta_skills
+from sigil.zeta import tools as zeta_tools
+from sigil.zeta import transcript as zeta_transcript
 from sigil.zeta import model as zeta_model
 from sigil.zeta import models as zeta_models
 from sigil.zeta import trace as zeta_trace
@@ -217,7 +221,7 @@ def assert_structural_trim_payload(
 
 def assert_structural_trim_graph(
     store: zeta_trace.InMemoryStore,
-    prepared: zeta.PreparedPrompt,
+    prepared: zeta_prompt.PreparedPrompt,
     payload: dict[str, Any],
     *,
     metadata: dict[str, Any],
@@ -243,7 +247,7 @@ def assert_structural_trim_graph(
 
 def assert_task_state_graph(
     store: zeta_trace.InMemoryStore,
-    prepared: zeta.PreparedPrompt,
+    prepared: zeta_prompt.PreparedPrompt,
     *,
     source_count: int,
 ) -> zeta_trace.Object:
@@ -466,7 +470,7 @@ def test_sigil_zeta_trace_cli_smoke_with_in_memory_store(monkeypatch) -> None:
         )
     )
     store.set_ref("prompt/current", prompt_id)
-    monkeypatch.setattr(zeta, "default_store", lambda: store)
+    monkeypatch.setattr("sigil.cli.zeta.default_store", lambda: store)
 
     runner = CliRunner()
     show = runner.invoke(sigil_cli, ["zeta", "trace", "show", prompt_id])
@@ -495,7 +499,7 @@ def test_sigil_zeta_trace_cli_smoke_with_sqlite_store(
     store.record_derivation(
         zeta_trace.Derivation(producer="unit:test", output_id=prompt_id)
     )
-    monkeypatch.setattr(zeta, "default_store", lambda: store)
+    monkeypatch.setattr("sigil.cli.zeta.default_store", lambda: store)
 
     result = CliRunner().invoke(sigil_cli, ["zeta", "trace", "prompts"])
 
@@ -563,11 +567,11 @@ def test_zeta_trace_freshness_reports_fresh_stale_and_unknown() -> None:
 
 def test_zeta_prompt_builder_noop_transform_matches_chat_messages() -> None:
     store = zeta_trace.InMemoryStore()
-    tools = zeta.model_tool_descriptors(())
+    tools = zeta_tools.model_tool_descriptors(())
     transcript = [{"role": "user", "content": "prior"}]
     current_events = [{"type": "assistant_message", "content": "current"}]
 
-    prepared = zeta.PromptBuilder(store=store).build(
+    prepared = zeta_prompt.PromptBuilder(store=store).build(
         "inspect",
         transcript,
         allowed_tools=(),
@@ -577,12 +581,15 @@ def test_zeta_prompt_builder_noop_transform_matches_chat_messages() -> None:
         selected_model="unit-model",
     )
 
-    expected_messages = zeta.zeta_chat_messages(
-        "inspect",
-        transcript,
-        allowed_tools=(),
-        context="Project context",
-        current_events=current_events,
+    expected_messages = zeta_prompt.component_messages(
+        zeta_prompt.prompt_components(
+            "inspect",
+            transcript,
+            allowed_tools=(),
+            context="Project context",
+            current_events=current_events,
+            include_non_message_components=False,
+        )
     )
     assert prepared.messages == expected_messages
     assert prepared.payload == zeta_model.chat_completion_request_body(
@@ -595,7 +602,7 @@ def test_zeta_prompt_builder_noop_transform_matches_chat_messages() -> None:
 
 def test_zeta_prompt_builder_links_prompt_components() -> None:
     store = zeta_trace.InMemoryStore()
-    prepared = zeta.PromptBuilder(store=store).build(
+    prepared = zeta_prompt.PromptBuilder(store=store).build(
         "inspect",
         [{"role": "user", "content": "prior"}],
         allowed_tools=("read",),
@@ -604,7 +611,7 @@ def test_zeta_prompt_builder_links_prompt_components() -> None:
             {"type": "assistant_message", "tool_calls": tool_call_fixture("call-1")},
             {"type": "tool_result", "tool_call_id": "call-1", "result": {"ok": True}},
         ],
-        tools=zeta.model_tool_descriptors(("read",)),
+        tools=zeta_tools.model_tool_descriptors(("read",)),
     )
 
     assert prepared.prompt_object_id is not None
@@ -620,7 +627,7 @@ def test_zeta_prompt_builder_links_prompt_components() -> None:
 
 
 def test_zeta_prompt_components_have_representation_and_token_cost() -> None:
-    component = zeta.PromptComponent(
+    component = zeta_prompt.PromptComponent(
         kind="example",
         message={"role": "user", "content": "abcdefgh"},
         source_object_id="sha256:source",
@@ -628,18 +635,18 @@ def test_zeta_prompt_components_have_representation_and_token_cost() -> None:
 
     assert component.representation == "full"
     assert component.source_object_id == "sha256:source"
-    assert zeta.estimated_tokens(component) == 2
+    assert zeta_prompt.estimated_tokens(component) == 2
 
 
 def test_zeta_budget_measure_returns_total_and_breakdown() -> None:
-    usage = zeta.measure(
+    usage = zeta_prompt.measure(
         [
-            zeta.PromptComponent(
+            zeta_prompt.PromptComponent(
                 kind="one",
                 message={"role": "user", "content": "abcd"},
                 object_id="sha256:one",
             ),
-            zeta.PromptComponent(
+            zeta_prompt.PromptComponent(
                 kind="two",
                 message={"role": "user", "content": "abcdefgh"},
                 representation="summary",
@@ -654,14 +661,16 @@ def test_zeta_budget_measure_returns_total_and_breakdown() -> None:
 
 
 def test_zeta_prompt_transform_factory_from_env() -> None:
-    transform = zeta.prompt_transform_from_env(
+    transform = zeta_prompt.prompt_transform_from_env(
         {"ZETA_TRIM": "structural", "ZETA_TRIM_THRESHOLD_TOKENS": "7"}
     )
 
-    assert isinstance(transform, zeta.BudgetThresholdPromptTransform)
-    assert transform.budget == zeta.ContextBudget(7)
-    assert isinstance(transform.transform, zeta.StructuralTrimPromptTransform)
-    assert isinstance(zeta.prompt_transform_from_env({}), zeta.NoOpPromptTransform)
+    assert isinstance(transform, zeta_prompt.BudgetThresholdPromptTransform)
+    assert transform.budget == zeta_prompt.ContextBudget(7)
+    assert isinstance(transform.transform, zeta_prompt.StructuralTrimPromptTransform)
+    assert isinstance(
+        zeta_prompt.prompt_transform_from_env({}), zeta_prompt.NoOpPromptTransform
+    )
 
 
 def test_zeta_chained_transform_applies_in_order() -> None:
@@ -671,30 +680,30 @@ def test_zeta_chained_transform_applies_in_order() -> None:
 
         def apply(
             self,
-            components: list[zeta.PromptComponent],
-        ) -> list[zeta.PromptComponent]:
+            components: list[zeta_prompt.PromptComponent],
+        ) -> list[zeta_prompt.PromptComponent]:
             return [
-                zeta.PromptComponent(
+                zeta_prompt.PromptComponent(
                     kind=component.kind + self.suffix,
                     message=component.message,
                 )
                 for component in components
             ]
 
-    chained = zeta.ChainedTransform((AppendKind("a"), AppendKind("b")))
+    chained = zeta_prompt.ChainedTransform((AppendKind("a"), AppendKind("b")))
 
-    assert chained.apply([zeta.PromptComponent(kind="x")])[0].kind == "xab"
+    assert chained.apply([zeta_prompt.PromptComponent(kind="x")])[0].kind == "xab"
 
 
 def test_zeta_render_stub_contract() -> None:
-    component = zeta.PromptComponent(
+    component = zeta_prompt.PromptComponent(
         kind="tool_result",
         message={"role": "tool", "content": "abcd"},
         object_id="sha256:abc",
     )
 
     assert (
-        zeta.render_stub(component)
+        zeta_prompt.render_stub(component)
         == "[elided tool_result 1~tok id=sha256:abc — content retrievable by id]"
     )
 
@@ -705,13 +714,13 @@ def test_zeta_prompt_components_prefix_order(
 ) -> None:
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.chdir(tmp_path)
-    components = zeta.prompt_components(
+    components = zeta_prompt.prompt_components(
         "inspect",
         [{"role": "user", "content": "prior"}],
         allowed_tools=("read",),
         context="Project context",
         current_events=[{"type": "assistant_message", "content": "current"}],
-        tools=zeta.model_tool_descriptors(("read",)),
+        tools=zeta_tools.model_tool_descriptors(("read",)),
     )
 
     assert [component.kind for component in components[:4]] == [
@@ -728,8 +737,8 @@ def test_zeta_prompt_builder_compaction_transform_preserves_source_links() -> No
 
         def apply(
             self,
-            components: list[zeta.PromptComponent],
-        ) -> list[zeta.PromptComponent]:
+            components: list[zeta_prompt.PromptComponent],
+        ) -> list[zeta_prompt.PromptComponent]:
             sources = [
                 component
                 for component in components
@@ -740,13 +749,13 @@ def test_zeta_prompt_builder_compaction_transform_preserves_source_links() -> No
                 for component in sources
                 if component.object_id is not None
             )
-            compacted = zeta.PromptComponent(
+            compacted = zeta_prompt.PromptComponent(
                 kind="compacted_context",
                 data={"source_count": len(source_ids)},
                 message={"role": "user", "content": "Compacted history"},
                 links=source_ids,
             )
-            output: list[zeta.PromptComponent] = []
+            output: list[zeta_prompt.PromptComponent] = []
             inserted = False
             for component in components:
                 if component.kind != "transcript_message":
@@ -758,7 +767,7 @@ def test_zeta_prompt_builder_compaction_transform_preserves_source_links() -> No
             return output
 
     store = zeta_trace.InMemoryStore()
-    prepared = zeta.PromptBuilder(
+    prepared = zeta_prompt.PromptBuilder(
         store=store,
         transform=CompactTranscript(),
     ).build(
@@ -791,20 +800,20 @@ def test_zeta_prompt_builder_compaction_transform_preserves_source_links() -> No
 def test_zeta_task_state_transform_replaces_transcript_with_structured_state() -> None:
     class FakeExtractor:
         def __init__(self) -> None:
-            self.components: list[zeta.PromptComponent] = []
+            self.components: list[zeta_prompt.PromptComponent] = []
 
         def extract(
             self,
-            components: list[zeta.PromptComponent],
+            components: list[zeta_prompt.PromptComponent],
         ) -> dict[str, Any]:
             self.components = components
             return task_state_fixture(objective="implement task-state extraction")
 
     store = zeta_trace.InMemoryStore()
     extractor = FakeExtractor()
-    prepared = zeta.PromptBuilder(
+    prepared = zeta_prompt.PromptBuilder(
         store=store,
-        transform=zeta.TaskStateExtractionPromptTransform(extractor=extractor),
+        transform=zeta_prompt.TaskStateExtractionPromptTransform(extractor=extractor),
     ).build(
         "continue",
         [
@@ -838,15 +847,17 @@ def test_zeta_task_state_transform_fails_open() -> None:
     class FailingExtractor:
         def extract(
             self,
-            components: list[zeta.PromptComponent],
+            components: list[zeta_prompt.PromptComponent],
         ) -> dict[str, Any]:
             del components
             raise RuntimeError("extractor unavailable")
 
     store = zeta_trace.InMemoryStore()
-    prepared = zeta.PromptBuilder(
+    prepared = zeta_prompt.PromptBuilder(
         store=store,
-        transform=zeta.TaskStateExtractionPromptTransform(extractor=FailingExtractor()),
+        transform=zeta_prompt.TaskStateExtractionPromptTransform(
+            extractor=FailingExtractor()
+        ),
     ).build(
         "continue",
         [{"role": "user", "content": "keep raw transcript"}],
@@ -873,7 +884,7 @@ def test_zeta_prompt_components_keep_source_events() -> None:
         ),
     ]
 
-    components = zeta.prompt_components(
+    components = zeta_prompt.prompt_components(
         "continue",
         transcript,
         allowed_tools=(),
@@ -921,9 +932,9 @@ def test_zeta_structural_trim_compacts_old_bulky_read_or_grep_tool_results(
     store = zeta_trace.InMemoryStore()
     raw_text = "\n".join(f"line {index}: important but bulky" for index in range(80))
 
-    prepared = zeta.PromptBuilder(
+    prepared = zeta_prompt.PromptBuilder(
         store=store,
-        transform=zeta.StructuralTrimPromptTransform(max_content_chars=120),
+        transform=zeta_prompt.StructuralTrimPromptTransform(max_content_chars=120),
     ).build(
         "continue",
         tool_result_transcript(
@@ -960,9 +971,9 @@ def test_zeta_structural_trim_skips_non_read_grep_tool_results() -> None:
     store = zeta_trace.InMemoryStore()
     raw_text = "non-recoverable tool evidence " * 100
 
-    prepared = zeta.PromptBuilder(
+    prepared = zeta_prompt.PromptBuilder(
         store=store,
-        transform=zeta.StructuralTrimPromptTransform(max_content_chars=120),
+        transform=zeta_prompt.StructuralTrimPromptTransform(max_content_chars=120),
     ).build(
         "continue",
         tool_result_transcript(
@@ -990,8 +1001,8 @@ def test_zeta_structural_trim_skips_non_read_grep_tool_results() -> None:
 
 
 def test_zeta_structural_trim_default_is_late_safety_valve() -> None:
-    transform = zeta.StructuralTrimPromptTransform()
-    below = zeta.PromptComponent(
+    transform = zeta_prompt.StructuralTrimPromptTransform()
+    below = zeta_prompt.PromptComponent(
         kind="transcript_message",
         data={
             "source_event": {
@@ -1007,7 +1018,7 @@ def test_zeta_structural_trim_default_is_late_safety_valve() -> None:
         },
         object_id="sha256:below",
     )
-    above = zeta.PromptComponent(
+    above = zeta_prompt.PromptComponent(
         kind="transcript_message",
         data={
             "source_event": {
@@ -1034,9 +1045,9 @@ def test_zeta_structural_trim_preserves_current_tool_results_by_default() -> Non
     store = zeta_trace.InMemoryStore()
     raw_text = "fresh evidence " * 100
 
-    prepared = zeta.PromptBuilder(
+    prepared = zeta_prompt.PromptBuilder(
         store=store,
-        transform=zeta.StructuralTrimPromptTransform(max_content_chars=20),
+        transform=zeta_prompt.StructuralTrimPromptTransform(max_content_chars=20),
     ).build(
         "continue",
         [],
@@ -1072,7 +1083,7 @@ def test_zeta_structural_trim_preserves_current_tool_results_by_default() -> Non
 
 def test_zeta_structural_trim_uses_source_event_without_message_json() -> None:
     raw_text = "invalid json but still bulky " * 20
-    component = zeta.PromptComponent(
+    component = zeta_prompt.PromptComponent(
         kind="transcript_message",
         data={
             "source_event": {
@@ -1094,7 +1105,7 @@ def test_zeta_structural_trim_uses_source_event_without_message_json() -> None:
         object_id="sha256:source",
     )
 
-    trimmed = zeta.StructuralTrimPromptTransform(max_content_chars=20).apply(
+    trimmed = zeta_prompt.StructuralTrimPromptTransform(max_content_chars=20).apply(
         [component]
     )[0]
 
@@ -1753,7 +1764,7 @@ def test_zeta_chat_structured_output_sends_json_schema(monkeypatch) -> None:
 
     extracted = zeta_model.chat_structured_output(
         [{"role": "user", "content": "history"}],
-        schema=zeta.TASK_STATE_SCHEMA,
+        schema=zeta_prompt.TASK_STATE_SCHEMA,
         response_name="zeta_task_state",
         selected_model="state-model",
         selected_url="http://127.0.0.1:8081/v1/chat/completions",
@@ -1765,7 +1776,10 @@ def test_zeta_chat_structured_output_sends_json_schema(monkeypatch) -> None:
     assert body["response_format"]["type"] == "json_schema"
     assert body["response_format"]["json_schema"]["name"] == "zeta_task_state"
     assert body["response_format"]["json_schema"]["strict"] is True
-    assert body["response_format"]["json_schema"]["schema"] == zeta.TASK_STATE_SCHEMA
+    assert (
+        body["response_format"]["json_schema"]["schema"]
+        == zeta_prompt.TASK_STATE_SCHEMA
+    )
     assert captured["selected_url"] == "http://127.0.0.1:8081/v1/chat/completions"
 
 
@@ -1786,7 +1800,7 @@ def test_zeta_chat_structured_output_rejects_invalid_json_schema(
     with pytest.raises(RuntimeError, match="validation"):
         zeta_model.chat_structured_output(
             [{"role": "user", "content": "history"}],
-            schema=zeta.TASK_STATE_SCHEMA,
+            schema=zeta_prompt.TASK_STATE_SCHEMA,
             response_name="zeta_task_state",
         )
 
@@ -1885,7 +1899,7 @@ def test_zeta_agent_turn_stores_prompt_and_assistant_trace(monkeypatch) -> None:
             model_name="unit-model",
         ),
         context="Project context",
-        prompt_builder=zeta.PromptBuilder(store=store),
+        prompt_builder=zeta_prompt.PromptBuilder(store=store),
     )
 
     assert len(result.prompt_traces) == 1
@@ -2059,7 +2073,7 @@ def test_zeta_agent_turn_records_one_prompt_trace_per_model_request(
         "inspect",
         [],
         zeta_agent.AgentConfig(allowed_tools=("read",), max_turns=2),
-        prompt_builder=zeta.PromptBuilder(store=store),
+        prompt_builder=zeta_prompt.PromptBuilder(store=store),
     )
 
     assert result.final_text == "done"
@@ -2106,7 +2120,7 @@ def test_zeta_agent_turn_records_tool_result_derivation(
         "inspect",
         [],
         zeta_agent.AgentConfig(allowed_tools=("read",), max_turns=2),
-        prompt_builder=zeta.PromptBuilder(store=store),
+        prompt_builder=zeta_prompt.PromptBuilder(store=store),
     )
 
     assert_tool_result_derivation_graph(
@@ -2440,11 +2454,14 @@ def test_zeta_chat_messages_keeps_full_history_and_current_events() -> None:
         for index in range(25)
     ]
 
-    messages = zeta.zeta_chat_messages(
-        "inspect",
-        transcript,
-        allowed_tools=(),
-        current_events=current_events,
+    messages = zeta_prompt.component_messages(
+        zeta_prompt.prompt_components(
+            "inspect",
+            transcript,
+            allowed_tools=(),
+            current_events=current_events,
+            include_non_message_components=False,
+        )
     )
     contents = [str(message.get("content") or "") for message in messages]
 
@@ -2875,7 +2892,7 @@ def test_zeta_skill_discovery_loads_user_and_project_skills(
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.chdir(child)
 
-    catalog = zeta.discover_skills()
+    catalog = zeta_skills.discover_skills()
 
     assert set(catalog.skills) == {
         "zeta-skill",
@@ -2905,7 +2922,7 @@ def test_zeta_skill_collision_precedence_and_duplicate_canonical_paths(
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.chdir(child)
 
-    catalog = zeta.discover_skills()
+    catalog = zeta_skills.discover_skills()
 
     assert catalog.skills["shared"].description == "inner"
     assert sum(1 for skill in catalog.skills.values() if skill.name == "dupe") == 1
@@ -2923,7 +2940,7 @@ def test_zeta_skill_discovery_reports_invalid_metadata(
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.chdir(project)
 
-    catalog = zeta.discover_skills()
+    catalog = zeta_skills.discover_skills()
 
     assert catalog.skills == {}
     assert len(catalog.diagnostics) == 2
@@ -2959,14 +2976,14 @@ def test_zeta_system_prompt_advertises_enabled_skills_only_with_read(
 
 
 def test_zeta_tools_list_exposes_v1_builtins() -> None:
-    data = zeta.tools_list()
+    data = zeta_tools.tools_list()
     names = {tool["name"] for tool in data["tools"]}
     assert {"read", "grep", "ls", "bash", "edit", "write"} <= names
     assert data["tools"][0]["origin"] == "builtin"
 
 
 def test_zeta_grep_metadata_guides_model_tool_choice() -> None:
-    metadata = zeta.tool_metadata("grep")
+    metadata = zeta_tools.tool_metadata("grep")
     schema = metadata["schema"]
 
     assert (
@@ -3076,12 +3093,12 @@ def test_zeta_plugin_tool_flows_through_registry(
     write_tools_config(home, [sys.executable, str(script)])
     monkeypatch.setenv("HOME", str(home))
 
-    tools = zeta.tools_list()["tools"]
+    tools = zeta_tools.tools_list()["tools"]
     plugin = next(tool for tool in tools if tool["name"] == "docs_search")
     assert plugin["origin"] == "plugin"
     assert plugin["plugin"] == sys.executable
 
-    descriptors = zeta.model_tool_descriptors(("docs_search",))
+    descriptors = zeta_tools.model_tool_descriptors(("docs_search",))
     assert descriptors == [
         {
             "type": "function",
@@ -3097,11 +3114,11 @@ def test_zeta_plugin_tool_flows_through_registry(
     ]
     assert validate_tool_args("docs_search", {"query": "install"}) == []
 
-    analysis = zeta.analyze_tool("docs_search", {"query": "install"})
+    analysis = zeta_tools.analyze_tool("docs_search", {"query": "install"})
     assert analysis["valid"] is True
     assert analysis["effects"][0]["target"] == "install"
 
-    data = zeta.run_tool("docs_search", {"query": "install"})
+    data = zeta_tools.run_tool("docs_search", {"query": "install"})
     assert data["ok"] is True
     assert data["content"][0]["text"] == "docs:install"
 
@@ -3116,7 +3133,7 @@ def test_zeta_plugin_name_collision_is_ignored(
     write_tools_config(home, [sys.executable, str(script)])
     monkeypatch.setenv("HOME", str(home))
 
-    data = zeta.tools_list()
+    data = zeta_tools.tools_list()
     read_tools = [tool for tool in data["tools"] if tool["name"] == "read"]
     assert len(read_tools) == 1
     assert read_tools[0]["origin"] == "builtin"
@@ -3133,7 +3150,7 @@ def test_zeta_plugin_invalid_metadata_reports_diagnostic(
     write_tools_config(home, [sys.executable, str(script)])
     monkeypatch.setenv("HOME", str(home))
 
-    data = zeta.tools_list()
+    data = zeta_tools.tools_list()
     assert "docs_search" not in {tool["name"] for tool in data["tools"]}
     assert data["diagnostics"][0]["code"] == "plugin-metadata-invalid-json"
 
@@ -3146,7 +3163,7 @@ def test_zeta_plugin_missing_command_reports_diagnostic(
     write_tools_config(home, [str(tmp_path / "missing-tool")])
     monkeypatch.setenv("HOME", str(home))
 
-    data = zeta.tools_list()
+    data = zeta_tools.tools_list()
     assert data["diagnostics"][0]["code"] == "plugin-metadata-failed"
 
 
@@ -3160,7 +3177,7 @@ def test_zeta_plugin_metadata_timeout_reports_diagnostic(
     write_tools_config(home, [sys.executable, str(script)], timeout_ms=10)
     monkeypatch.setenv("HOME", str(home))
 
-    data = zeta.tools_list()
+    data = zeta_tools.tools_list()
     assert data["diagnostics"][0]["code"] == "plugin-metadata-timeout"
 
 
@@ -3174,7 +3191,7 @@ def test_zeta_plugin_nonzero_execution_returns_tool_error(
     write_tools_config(home, [sys.executable, str(script)])
     monkeypatch.setenv("HOME", str(home))
 
-    data = zeta.run_tool("docs_search", {"query": "install"})
+    data = zeta_tools.run_tool("docs_search", {"query": "install"})
     assert data["ok"] is False
     assert data["error"]["code"] == "plugin-run-failed"
     assert "status 7" in data["error"]["message"]
@@ -3184,9 +3201,9 @@ def test_zeta_tool_read_schema_and_run(tmp_path: Path) -> None:
     target = tmp_path / "note.txt"
     target.write_text("hello zeta\n", encoding="utf-8")
 
-    assert zeta.tool_metadata("read")["schema"]["required"] == ["path"]
+    assert zeta_tools.tool_metadata("read")["schema"]["required"] == ["path"]
 
-    data = zeta.run_tool("read", {"path": str(target)})
+    data = zeta_tools.run_tool("read", {"path": str(target)})
     assert data["ok"] is True
     assert data["content"][0]["text"] == "hello zeta\n"
 
@@ -3195,7 +3212,7 @@ def test_zeta_tool_read_offset_and_limit_select_lines(tmp_path: Path) -> None:
     target = tmp_path / "lines.txt"
     target.write_text("one\ntwo\nthree\nfour\nfive\n", encoding="utf-8")
 
-    data = zeta.run_tool("read", {"path": str(target), "offset": 1, "limit": 2})
+    data = zeta_tools.run_tool("read", {"path": str(target), "offset": 1, "limit": 2})
 
     assert data["ok"] is True
     assert data["content"][0]["text"] == "two\nthree\n"
@@ -3207,7 +3224,7 @@ def test_zeta_tool_read_limit_past_end_returns_remaining_lines(tmp_path: Path) -
     target = tmp_path / "short.txt"
     target.write_text("alpha\nbeta\n", encoding="utf-8")
 
-    data = zeta.run_tool("read", {"path": str(target), "offset": 1, "limit": 10})
+    data = zeta_tools.run_tool("read", {"path": str(target), "offset": 1, "limit": 10})
 
     assert data["content"][0]["text"] == "beta\n"
 
@@ -3216,7 +3233,7 @@ def test_zeta_tool_grep_reports_total_limited_metadata(tmp_path: Path) -> None:
     (tmp_path / "a.txt").write_text("needle one\nneedle two\n", encoding="utf-8")
     (tmp_path / "b.txt").write_text("needle three\n", encoding="utf-8")
 
-    data = zeta.run_tool(
+    data = zeta_tools.run_tool(
         "grep", {"path": str(tmp_path), "pattern": "needle", "limit": 2}
     )
 
@@ -3237,7 +3254,7 @@ def test_zeta_tool_grep_reports_content_truncation(
     target.write_text("needle " + ("x" * 80) + "\n", encoding="utf-8")
     monkeypatch.setattr(grep_tool, "MAX_TOOL_RESULT_CHARS", 20)
 
-    data = zeta.run_tool("grep", {"path": str(target), "pattern": "needle"})
+    data = zeta_tools.run_tool("grep", {"path": str(target), "pattern": "needle"})
 
     assert data["ok"] is True
     assert len(data["content"][0]["text"]) == 20
@@ -3249,14 +3266,16 @@ def test_zeta_tool_grep_reports_content_truncation(
 
 
 def test_zeta_tool_bash_returns_handoff() -> None:
-    data = zeta.run_tool("bash", {"command": "uv run pytest", "reason": "Run tests."})
+    data = zeta_tools.run_tool(
+        "bash", {"command": "uv run pytest", "reason": "Run tests."}
+    )
 
     assert data["handoff"]["command"] == "uv run pytest"
     assert data["handoff"]["reason"] == "Run tests."
 
 
 def test_zeta_tool_bash_direct_executes_command() -> None:
-    data = zeta.run_tool(
+    data = zeta_tools.run_tool(
         "bash",
         {"command": "printf direct-bash"},
         execution_mode="direct",
@@ -3272,7 +3291,7 @@ def test_zeta_tool_bash_direct_executes_command() -> None:
 def test_zeta_tool_write_direct_writes_file(tmp_path: Path) -> None:
     target = tmp_path / "direct.txt"
 
-    data = zeta.run_tool(
+    data = zeta_tools.run_tool(
         "write",
         {"path": str(target), "content": "hello\n"},
         execution_mode="direct",
@@ -3630,7 +3649,7 @@ def test_zeta_tool_ls_lists_directory_contents(tmp_path: Path) -> None:
     (tmp_path / "src").mkdir()
     (tmp_path / "pyproject.toml").write_text("[project]\n", encoding="utf-8")
 
-    data = zeta.run_tool("ls", {"path": str(tmp_path)})
+    data = zeta_tools.run_tool("ls", {"path": str(tmp_path)})
 
     assert data["ok"] is True
     assert data["content"][0]["text"].splitlines() == [
@@ -3649,7 +3668,7 @@ def test_zeta_tool_ls_can_filter_large_files_without_shelling_out(
     (tmp_path / "src" / "large.bin").write_bytes(b"x" * 12)
     (tmp_path / "small.txt").write_bytes(b"x" * 4)
 
-    data = zeta.run_tool(
+    data = zeta_tools.run_tool(
         "ls",
         {
             "path": str(tmp_path),
@@ -3669,7 +3688,7 @@ def test_zeta_tool_edit_writes_patch_artifact(tmp_path: Path) -> None:
     target = tmp_path / "a.txt"
     target.write_text("old\n", encoding="utf-8")
 
-    data = zeta.run_tool(
+    data = zeta_tools.run_tool(
         "edit", {"location": str(target), "old": "old\n", "new": "new\n"}
     )
     artifact = Path(data["handoff"]["artifact"])
@@ -3690,7 +3709,7 @@ def test_zeta_tool_edit_accepts_exact_replacement(tmp_path: Path) -> None:
         "reason": "Replace one line.",
     }
 
-    data = zeta.run_tool("edit", payload)
+    data = zeta_tools.run_tool("edit", payload)
 
     assert validate_tool_args("edit", payload) == []
     artifact = Path(data["handoff"]["artifact"])
@@ -3705,7 +3724,7 @@ def test_zeta_tool_edit_direct_replace_writes_file(tmp_path: Path) -> None:
     target = tmp_path / "a.txt"
     target.write_text("hello\nold\nbye\n", encoding="utf-8")
 
-    data = zeta.run_tool(
+    data = zeta_tools.run_tool(
         "edit",
         {"location": str(target), "old": "old\n", "new": "new\n"},
         edit_mode="direct_replace",
@@ -3725,7 +3744,7 @@ def test_zeta_tool_edit_rejects_ambiguous_exact_replacement(tmp_path: Path) -> N
     target = tmp_path / "a.txt"
     target.write_text("old\nold\n", encoding="utf-8")
 
-    data = zeta.run_tool(
+    data = zeta_tools.run_tool(
         "edit", {"location": str(target), "old": "old\n", "new": "new\n"}
     )
 
@@ -3737,7 +3756,9 @@ def test_zeta_tool_edit_marks_no_newline_exact_replacement(tmp_path: Path) -> No
     target = tmp_path / "a.txt"
     target.write_text("old", encoding="utf-8")
 
-    data = zeta.run_tool("edit", {"location": str(target), "old": "old", "new": "new"})
+    data = zeta_tools.run_tool(
+        "edit", {"location": str(target), "old": "old", "new": "new"}
+    )
 
     artifact = Path(data["handoff"]["artifact"])
     patch = artifact.read_text(encoding="utf-8")
@@ -3754,8 +3775,12 @@ def test_zeta_transcript_append_and_tail(tmp_path: Path, monkeypatch) -> None:
     events = zeta.transcript_tail(1)
     assert events[0]["type"] == "tool_call"
     assert events[0]["name"] == "read"
-    assert not (tmp_path / "sessions" / "zeta-test" / zeta.TRANSCRIPT).exists()
-    assert zeta.list_trace_refs()[zeta.current_run_head_ref("zeta-test")]
+    assert not (
+        tmp_path / "sessions" / "zeta-test" / zeta_transcript.TRANSCRIPT
+    ).exists()
+    assert zeta_trace.default_store().refs()[
+        zeta_transcript.current_run_head_ref("zeta-test")
+    ]
 
 
 def test_zeta_transcript_projects_from_ref_and_object(
@@ -3767,28 +3792,31 @@ def test_zeta_transcript_projects_from_ref_and_object(
 
     zeta.append_transcript({"type": "user_message", "content": "first"})
     store = zeta_trace.default_store()
-    first_head = store.get_ref(zeta.current_run_head_ref("zeta-test"))
+    first_head = store.get_ref(zeta_transcript.current_run_head_ref("zeta-test"))
     assert first_head is not None
     store.set_ref("run/custom/head", first_head)
 
     zeta.append_transcript({"type": "assistant_message", "content": "second"})
 
     assert [
-        event["content"] for event in zeta.transcript_from_ref("run/custom/head")
+        event["content"]
+        for event in zeta_transcript.transcript_from_ref("run/custom/head")
     ] == ["first"]
     assert [
         event["content"]
-        for event in zeta.transcript_from_ref(zeta.current_run_head_ref("zeta-test"))
+        for event in zeta_transcript.transcript_from_ref(
+            zeta_transcript.current_run_head_ref("zeta-test")
+        )
     ] == ["first", "second"]
     assert [
         event["content"]
-        for event in zeta.transcript_from_object(first_head, store=store)
+        for event in zeta_transcript.transcript_from_object(first_head, store=store)
     ] == ["first"]
-    assert zeta.transcript_from_ref("run/missing/head") == []
+    assert zeta_transcript.transcript_from_ref("run/missing/head") == []
     assert (
-        zeta.transcript_from_ref(zeta.current_run_head_ref("zeta-test"), limit=1)[0][
-            "content"
-        ]
+        zeta_transcript.transcript_from_ref(
+            zeta_transcript.current_run_head_ref("zeta-test"), limit=1
+        )[0]["content"]
         == "second"
     )
 
@@ -4541,7 +4569,7 @@ def test_sigil_transcript_shell_turn_records_recent_turn(
 
 
 def test_zeta_edit_analysis_reports_location() -> None:
-    data = zeta.analyze_tool(
+    data = zeta_tools.analyze_tool(
         "edit",
         {"location": "src/new.py", "old": "x", "new": "y"},
     )
@@ -4720,7 +4748,7 @@ def test_zeta_skill_directive_expands_in_context_message(
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.chdir(project)
 
-    message = zeta.zeta_context_message("@reviewer: inspect the patch")
+    message = zeta_prompt.zeta_context_message("@reviewer: inspect the patch")
 
     assert f'<skill name="reviewer" location="{skill}">' in message
     assert f"References are relative to {skill}." in message
@@ -4739,7 +4767,7 @@ def test_zeta_skill_directive_leaves_unknown_skill_unchanged(
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.chdir(project)
 
-    message = zeta.zeta_context_message("@missing: inspect")
+    message = zeta_prompt.zeta_context_message("@missing: inspect")
 
     assert "Objective:\n@missing: inspect" in message
 
@@ -4755,7 +4783,7 @@ def test_zeta_skill_directive_leaves_old_skill_form_unchanged(
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.chdir(project)
 
-    message = zeta.zeta_context_message("@skill reviewer inspect")
+    message = zeta_prompt.zeta_context_message("@skill reviewer inspect")
 
     assert "Objective:\n@skill reviewer inspect" in message
     assert '<skill name="reviewer"' not in message
@@ -4772,7 +4800,7 @@ def test_zeta_skill_directive_leaves_bare_handle_unchanged(
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.chdir(project)
 
-    message = zeta.zeta_context_message("@reviewer inspect")
+    message = zeta_prompt.zeta_context_message("@reviewer inspect")
 
     assert "Objective:\n@reviewer inspect" in message
     assert '<skill name="reviewer"' not in message
@@ -5062,7 +5090,7 @@ def test_resolved_shell_handoff_context_keeps_tool_call_with_shell_result(
     record_turn("uv run pytest", 1, "/repo", stderr_snippet="test failed")
 
     sigil_handoff.append_shell_result()
-    messages = zeta.transcript_chat_messages(zeta.transcript_tail())
+    messages = zeta_transcript.transcript_chat_messages(zeta.transcript_tail())
 
     assert messages[0]["role"] == "assistant"
     assert messages[0]["tool_calls"][0]["id"] == "call-1"

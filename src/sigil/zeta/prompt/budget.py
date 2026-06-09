@@ -35,10 +35,14 @@ class ContextUsage:
     components: tuple[ComponentUsage, ...]
 
 
+def estimated_tokens_for_text(text: str) -> int:
+    """Return a cheap, deterministic token estimate for a text payload."""
+    return max(1, (len(text) + 3) // 4) if text else 0
+
+
 def estimated_tokens(component: PromptComponent) -> int:
     """Return a cheap, deterministic token estimate for any prompt component."""
-    text = component_text(component)
-    return max(1, (len(text) + 3) // 4) if text else 0
+    return estimated_tokens_for_text(component_text(component))
 
 
 def measure(components: Iterable[PromptComponent]) -> ContextUsage:

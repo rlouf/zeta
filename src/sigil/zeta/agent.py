@@ -10,7 +10,7 @@ from types import TracebackType
 from typing import Any, Callable, ContextManager, Iterable, Literal, cast
 
 from ..protocols import is_shell_prompt_handoff
-from . import runtime
+from .prompt import PromptBuilder, prompt_transform_from_env
 from .model import (
     ChatCompletionStreamSink,
     chat_completion_messages,
@@ -67,7 +67,7 @@ def run_agent_turn(
     event_sink: AgentEventSink | None = None,
     model_status: ModelStatusFactory | None = None,
     stream_sink: ChatCompletionStreamSink | None = None,
-    prompt_builder: runtime.PromptBuilder | None = None,
+    prompt_builder: PromptBuilder | None = None,
 ) -> AgentTurnResult:
     """Run an assistant/tool loop without mutating session state."""
     if not agent_model_endpoint_open(config):
@@ -76,9 +76,7 @@ def run_agent_turn(
     events: list[dict[str, Any]] = []
     latest_model_telemetry: dict[str, Any] = {}
     prompt_traces: list[PromptTrace] = []
-    builder = prompt_builder or runtime.PromptBuilder(
-        transform=runtime.prompt_transform_from_env()
-    )
+    builder = prompt_builder or PromptBuilder(transform=prompt_transform_from_env())
     tools = model_tool_descriptors(allowed_tools)
     for _ in turn_indices(config.max_turns):
         prepared_prompt = builder.build(
@@ -290,7 +288,7 @@ def attach_tool_call_trace(
     event: dict[str, Any],
     *,
     prompt_trace: PromptTrace | None,
-    prompt_builder: runtime.PromptBuilder | None,
+    prompt_builder: PromptBuilder | None,
 ) -> None:
     if prompt_trace is None or prompt_builder is None:
         return
@@ -304,7 +302,7 @@ def attach_tool_result_trace(
     call_event: dict[str, Any],
     *,
     prompt_trace: PromptTrace | None,
-    prompt_builder: runtime.PromptBuilder | None,
+    prompt_builder: PromptBuilder | None,
 ) -> None:
     if prompt_trace is None or prompt_builder is None:
         return
@@ -325,7 +323,7 @@ def handle_tool_call(
     execution_mode: ExecutionMode = "handoff",
     model_telemetry: dict[str, Any] | None = None,
     prompt_trace: PromptTrace | None = None,
-    prompt_builder: runtime.PromptBuilder | None = None,
+    prompt_builder: PromptBuilder | None = None,
     event_sink: AgentEventSink | None = None,
 ) -> ToolCallResult:
     call_id = str(tool_call.get("id") or f"call-{index}")
@@ -523,7 +521,7 @@ def invalid_tool_result(
     call_event: dict[str, Any] | None = None,
     model_telemetry: dict[str, Any] | None = None,
     prompt_trace: PromptTrace | None = None,
-    prompt_builder: runtime.PromptBuilder | None = None,
+    prompt_builder: PromptBuilder | None = None,
     event_sink: AgentEventSink | None = None,
 ) -> ToolCallResult:
     event = call_event or {
@@ -569,7 +567,7 @@ def traced_tool_result_event(
     call_event: dict[str, Any],
     model_telemetry: dict[str, Any] | None = None,
     prompt_trace: PromptTrace | None = None,
-    prompt_builder: runtime.PromptBuilder | None = None,
+    prompt_builder: PromptBuilder | None = None,
 ) -> dict[str, Any]:
     event = tool_result_event(
         call_id,

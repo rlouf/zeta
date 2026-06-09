@@ -29,7 +29,7 @@ def cmd_ask(question: str | None, follow_up: bool, json_output: bool) -> int:
             prompt,
             glyph="ask",
             tools=ZETA_ANSWER_TOOLS,
-            append_transcript=True,
+            follow_up=True,
             json_output=json_output,
             history=history,
         )

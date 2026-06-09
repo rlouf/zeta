@@ -120,23 +120,21 @@ def ask(
     *,
     glyph: str = "ask",
     tools: str = ZETA_ANSWER_TOOLS,
-    append_transcript: bool = False,
+    follow_up: bool = False,
     json_output: bool = False,
     history: Iterable[dict[str, object]] = (),
 ) -> int:
-    """Run Zeta for a shell answer while recording transcript state."""
+    """Run Zeta for a shell answer while recording answer history."""
     user_input = question
     selected_model = active_model_selection()
     expanded_input = runtime.expand_skill_directive(user_input)
-    prompt = (
-        expanded_input if append_transcript else prepend_recent_turns(expanded_input)
-    )
+    prompt = expanded_input if follow_up else prepend_recent_turns(expanded_input)
     history_turns = list(history)
     request_payload: dict[str, Any] = {
         "type": ANSWER_REQUEST_EVENT,
         "input": user_input,
         "prompt": prompt,
-        "follow_up": append_transcript,
+        "follow_up": follow_up,
         "glyph": glyph,
         "history_turns": len(history_turns),
     }
@@ -147,11 +145,11 @@ def ask(
         "role": "user",
         "content": user_input,
         "prompt": prompt,
-        "follow_up": append_transcript,
+        "follow_up": follow_up,
         "event_id": request_event["id"],
         "glyph": glyph,
     }
-    if append_transcript:
+    if follow_up:
         append_jsonl(ANSWER_HISTORY, user_turn)
     else:
         write_jsonl(ANSWER_HISTORY, [user_turn])
@@ -161,7 +159,7 @@ def ask(
         ANSWER_SYSTEM_PROMPT,
         prompt,
         input_text=user_input,
-        follow_up=append_transcript,
+        follow_up=follow_up,
         json_output=json_output,
         allowed_tools=enabled_tools,
         history=history_turns,

@@ -16,7 +16,7 @@ model-controlled context management.
 Every model prompt is an object derived from other objects.
 
 Those input objects are prompt components: the system prompt, user objective,
-project context, transcript messages, tool descriptors, tool calls, tool
+project context, timeline messages, tool descriptors, tool calls, tool
 results, and any transformed context components.
 
 The prompt object stores the exact final model payload. That means the stored
@@ -32,9 +32,9 @@ derivation: SigilPromptBuilder:v1
 derivation: SigilModelResponse:v1
 ```
 
-This graph is the central abstraction. Zeta session continuity now points into
-the trace store with refs such as `run/<id>/head`; the user-visible transcript
-is a projection from trace objects, not the primary artifact.
+This graph is the central abstraction. Zeta session continuity points into the
+trace store with refs such as `run/<id>/head`; the user-visible chat history is
+a projection from trace objects, not the primary artifact.
 
 ## Objects And Derivations
 
@@ -48,7 +48,7 @@ Examples:
 - `system_prompt`
 - `user_objective`
 - `project_context`
-- `transcript_message`
+- `transcript_message` for messages projected from the run timeline
 - `tool_descriptor_set`
 - `prompt`
 - `assistant_message`
@@ -92,7 +92,7 @@ through the model boundary, and records the assistant message.
 ```text
   system_prompt
   user_objective
-  transcript_history
+  timeline_history
   tool_descriptors
         |
         v
@@ -151,7 +151,7 @@ Turn 2
 
   system_prompt
   user_objective
-  transcript_history
+  timeline_history
   assistant_message A1
   tool_result R1
   tool_descriptors
@@ -174,7 +174,7 @@ The important loop is:
 A1 + R1 become prompt components for P2
 ```
 
-That is what turns an agent run from a linear transcript into a graph of
+That is what turns an agent run from a linear timeline into a graph of
 causes.
 
 ## Two Turns As A Trace Graph
@@ -187,7 +187,7 @@ Turn 1
 
  system_prompt      \
  user_objective      \
- transcript_msg       +--> PromptBuilder --> prompt P1 --> ModelCall --> A1
+ timeline_msg         +--> PromptBuilder --> prompt P1 --> ModelCall --> A1
  tool_descriptors    /          |                                      |
                             derivation:                                v
                          SigilPromptBuilder:v1                   tool_call C1
@@ -204,7 +204,7 @@ Turn 2
 
  system_prompt        \
  user_objective        \
- transcript_history     \
+ timeline_history       \
  assistant_message A1    +--> PromptBuilder --> prompt P2 --> ModelCall --> A2
  tool_result R1         /          |
  tool_descriptors      /      derivation:
@@ -296,7 +296,7 @@ That gives us a clean contract for future context transforms:
 - preserve the ability to inspect or replay the source context
 
 This is why compaction belongs in prompt construction rather than as a
-destructive transcript rewrite.
+destructive timeline rewrite.
 
 ### Future Model-Controlled Context
 
@@ -375,10 +375,10 @@ Prompt trace does not make model execution deterministic. It records the exact
 payload and the observed output. Replaying the model can still differ if the
 model, backend, sampling, or external state differs.
 
-Prompt trace also does not mean the user sees the raw graph. The transcript is
-still useful as a display and compatibility format, but for Zeta it is now a
-projection over trace objects. The canonical continuity pointer is the run head,
-and the canonical model input is the prompt object payload.
+Prompt trace also does not mean the user sees the raw graph. The displayed chat
+history is still useful as a UI projection, but for Zeta it is derived from
+trace objects. The canonical continuity pointer is the run head, and the
+canonical model input is the prompt object payload.
 
 Finally, the system still needs better user-facing tools. The graph exists, but
 the practical workflow should eventually include commands such as:

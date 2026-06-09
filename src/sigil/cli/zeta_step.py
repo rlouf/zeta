@@ -16,7 +16,7 @@ from ..display import shell_result_summary
 
 CONTINUE_OBJECTIVE = (
     "Continue the active Zeta step. Read the latest "
-    f"{SHELL_HANDOFF_RESULT_SCHEMA} transcript event as the source of truth for "
+    f"{SHELL_HANDOFF_RESULT_SCHEMA} timeline event as the source of truth for "
     "what the user ran after the last shell handoff. If the outcome is "
     "cancelled, do not assume the proposed command ran; continue from the "
     "recorded shell_turns and explain the cancellation plainly if it matters. "

@@ -861,7 +861,7 @@ def test_explicit_follow_up_ask_does_not_include_recent_turns_context() -> None:
                         "follow up",
                         glyph="ask",
                         tools="read,grep,ls",
-                        append_transcript=True,
+                        follow_up=True,
                         json_output=True,
                         history=discussion_turns(),
                     )

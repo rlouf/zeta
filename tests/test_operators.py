@@ -65,7 +65,7 @@ def test_ask_follow_up_sends_piped_input_without_confirmation() -> None:
             {
                 "glyph": "ask",
                 "tools": "read,grep,ls",
-                "append_transcript": True,
+                "follow_up": True,
                 "history": [],
                 "json_output": False,
             },

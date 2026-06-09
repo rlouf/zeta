@@ -207,6 +207,55 @@ def assert_structural_trim_graph(
     assert payload["source_object_id"] in closure
 
 
+def assert_task_state_graph(
+    store: zeta_trace.InMemoryStore,
+    prepared: zeta.PreparedPrompt,
+    *,
+    source_count: int,
+) -> zeta_trace.Object:
+    assert prepared.prompt_object_id is not None
+    prompt = store.get_object(prepared.prompt_object_id)
+    assert prompt is not None
+    task_state_ids = linked_ids_by_kind(store, prompt, "task_state")
+    assert len(task_state_ids) == 1
+    task_state = store.get_object(task_state_ids[0])
+    assert task_state is not None
+    assert len(task_state.links) == source_count
+    assert store.derivations_for_output(task_state_ids[0])[0].producer == (
+        "PromptTaskStateExtractor:v1"
+    )
+    closure = store.graph_closure([prepared.prompt_object_id])
+    assert set(task_state.links).issubset(closure)
+    return task_state
+
+
+def task_state_fixture(
+    *,
+    objective: str = "continue the implementation",
+) -> dict[str, Any]:
+    return {
+        "objective": objective,
+        "constraints": [{"text": "Do not touch unrelated notes.md"}],
+        "decisions": [
+            {
+                "text": "Use structured outputs for task-state extraction",
+                "rationale": "The extracted state should be schema-validated",
+            }
+        ],
+        "open_questions": [],
+        "files_touched": [
+            {
+                "path": "src/sigil/zeta/prompt/transforms.py",
+                "operation": "modified",
+                "status": "in_progress",
+                "notes": "Add task-state extraction transform",
+            }
+        ],
+        "pending_tasks": [{"text": "Run regression tests", "priority": "high"}],
+        "failed_attempts": [],
+    }
+
+
 def test_zeta_trace_object_ids_ignore_dict_key_order() -> None:
     first = zeta_trace.Object(
         kind="example",
@@ -481,6 +530,81 @@ def test_zeta_prompt_builder_compaction_transform_preserves_source_links() -> No
     assert derivations[0].producer == "PromptCompactor:v1"
     closure = store.graph_closure([prepared.prompt_object_id])
     assert set(compacted.links).issubset(closure)
+
+
+def test_zeta_task_state_transform_replaces_transcript_with_structured_state() -> None:
+    class FakeExtractor:
+        def __init__(self) -> None:
+            self.components: list[zeta.PromptComponent] = []
+
+        def extract(
+            self,
+            components: list[zeta.PromptComponent],
+        ) -> dict[str, Any]:
+            self.components = components
+            return task_state_fixture(objective="implement task-state extraction")
+
+    store = zeta_trace.InMemoryStore()
+    extractor = FakeExtractor()
+    prepared = zeta.PromptBuilder(
+        store=store,
+        transform=zeta.TaskStateExtractionPromptTransform(extractor=extractor),
+    ).build(
+        "continue",
+        [
+            {"role": "user", "content": "Implement task-state extraction"},
+            {"role": "assistant", "content": "Decision: use structured outputs"},
+            {"role": "user", "content": "Do not touch unrelated notes.md"},
+        ],
+        allowed_tools=(),
+        current_events=[{"type": "assistant_message", "content": "Fresh evidence"}],
+        tools=[],
+    )
+
+    assert len(extractor.components) == 3
+    assert all(
+        component.kind == "transcript_message" for component in extractor.components
+    )
+    contents = [str(message.get("content") or "") for message in prepared.messages]
+    joined = "\n".join(contents)
+    assert "Task state JSON:" in joined
+    assert "implement task-state extraction" in joined
+    assert "Decision: use structured outputs" not in joined
+    assert "Fresh evidence" in joined
+
+    task_state = assert_task_state_graph(store, prepared, source_count=3)
+    assert task_state.data["state"]["constraints"] == [
+        {"text": "Do not touch unrelated notes.md"}
+    ]
+
+
+def test_zeta_task_state_transform_fails_open() -> None:
+    class FailingExtractor:
+        def extract(
+            self,
+            components: list[zeta.PromptComponent],
+        ) -> dict[str, Any]:
+            del components
+            raise RuntimeError("extractor unavailable")
+
+    store = zeta_trace.InMemoryStore()
+    prepared = zeta.PromptBuilder(
+        store=store,
+        transform=zeta.TaskStateExtractionPromptTransform(extractor=FailingExtractor()),
+    ).build(
+        "continue",
+        [{"role": "user", "content": "keep raw transcript"}],
+        allowed_tools=(),
+        tools=[],
+    )
+
+    assert "keep raw transcript" in "\n".join(
+        str(message.get("content") or "") for message in prepared.messages
+    )
+    assert prepared.prompt_object_id is not None
+    prompt = store.get_object(prepared.prompt_object_id)
+    assert prompt is not None
+    assert "task_state" not in linked_kinds(store, prompt)
 
 
 def test_zeta_prompt_components_keep_source_events() -> None:
@@ -1253,6 +1377,61 @@ def test_zeta_chat_completion_messages_sends_native_tools(monkeypatch) -> None:
     assert body["tool_choice"] == "auto"
     assert body["stream_options"] == {"include_usage": True}
     assert "response_format" not in body
+
+
+def test_zeta_chat_structured_output_sends_json_schema(monkeypatch) -> None:
+    captured: dict[str, Any] = {}
+    state = task_state_fixture(objective="extract task state")
+
+    def fake_request(
+        body: dict[str, Any],
+        *,
+        selected_url: str | None = None,
+    ) -> dict[str, Any]:
+        captured["body"] = body
+        captured["selected_url"] = selected_url
+        return {"choices": [{"message": {"content": json.dumps(state)}}]}
+
+    monkeypatch.setattr(zeta_model, "request_chat_completion", fake_request)
+
+    extracted = zeta_model.chat_structured_output(
+        [{"role": "user", "content": "history"}],
+        schema=zeta.TASK_STATE_SCHEMA,
+        response_name="zeta_task_state",
+        selected_model="state-model",
+        selected_url="http://127.0.0.1:8081/v1/chat/completions",
+    )
+
+    assert extracted == state
+    body = cast(dict[str, Any], captured["body"])
+    assert body["model"] == "state-model"
+    assert body["response_format"]["type"] == "json_schema"
+    assert body["response_format"]["json_schema"]["name"] == "zeta_task_state"
+    assert body["response_format"]["json_schema"]["strict"] is True
+    assert body["response_format"]["json_schema"]["schema"] == zeta.TASK_STATE_SCHEMA
+    assert captured["selected_url"] == "http://127.0.0.1:8081/v1/chat/completions"
+
+
+def test_zeta_chat_structured_output_rejects_invalid_json_schema(
+    monkeypatch,
+) -> None:
+    def fake_request(
+        body: dict[str, Any],
+        *,
+        selected_url: str | None = None,
+    ) -> dict[str, Any]:
+        del body
+        del selected_url
+        return {"choices": [{"message": {"content": "{}"}}]}
+
+    monkeypatch.setattr(zeta_model, "request_chat_completion", fake_request)
+
+    with pytest.raises(RuntimeError, match="validation"):
+        zeta_model.chat_structured_output(
+            [{"role": "user", "content": "history"}],
+            schema=zeta.TASK_STATE_SCHEMA,
+            response_name="zeta_task_state",
+        )
 
 
 def test_zeta_chat_completion_messages_reports_model_telemetry(

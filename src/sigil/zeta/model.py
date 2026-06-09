@@ -11,6 +11,9 @@ from collections.abc import Iterable, Iterator, Mapping
 from typing import Any, Callable, Protocol
 from urllib.parse import urlparse, urlunparse
 
+from jsonschema import Draft202012Validator
+from jsonschema.exceptions import ValidationError
+
 DEFAULT_MODEL_URL = "http://127.0.0.1:8080/v1/chat/completions"
 DEFAULT_MODEL_NAME = "local-model"
 DEFAULT_MODEL_IDLE_TIMEOUT_SECONDS = None
@@ -554,6 +557,7 @@ def chat_completion_request_body(
     tool_choice: str | dict[str, Any] = "auto",
     max_tokens: int = 1200,
     selected_model: str | None = None,
+    response_format: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build the OpenAI-compatible chat completions request body."""
     body: dict[str, Any] = {
@@ -567,7 +571,69 @@ def chat_completion_request_body(
     if tools:
         body["tools"] = tools
         body["tool_choice"] = tool_choice
+    if response_format is not None:
+        body["response_format"] = response_format
     return body
+
+
+def json_schema_response_format(
+    *,
+    name: str,
+    schema: dict[str, Any],
+    strict: bool = True,
+) -> dict[str, Any]:
+    """Return an OpenAI-compatible structured-output response format."""
+    return {
+        "type": "json_schema",
+        "json_schema": {
+            "name": name,
+            "strict": strict,
+            "schema": schema,
+        },
+    }
+
+
+def chat_structured_output(
+    messages: list[dict[str, Any]],
+    *,
+    schema: dict[str, Any],
+    response_name: str,
+    max_tokens: int = 1200,
+    selected_model: str | None = None,
+    selected_url: str | None = None,
+) -> dict[str, Any]:
+    """Request one JSON object using structured outputs and validate it."""
+    body = chat_completion_request_body(
+        messages,
+        max_tokens=max_tokens,
+        selected_model=selected_model,
+        response_format=json_schema_response_format(
+            name=response_name,
+            schema=schema,
+        ),
+    )
+    payload = request_chat_completion(body, selected_url=selected_url)
+    message = payload["choices"][0]["message"]
+    if not isinstance(message, dict):
+        raise RuntimeError("model request failed: assistant message was invalid")
+    data = parse_structured_message_content(message.get("content"))
+    try:
+        Draft202012Validator(schema).validate(data)
+    except ValidationError as exc:
+        raise RuntimeError(f"model structured output failed validation: {exc}") from exc
+    return data
+
+
+def parse_structured_message_content(content: Any) -> dict[str, Any]:
+    if not isinstance(content, str):
+        raise RuntimeError("model structured output was not a JSON string")
+    try:
+        data = json.loads(content)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"model structured output was invalid JSON: {exc}") from exc
+    if not isinstance(data, dict):
+        raise RuntimeError("model structured output was not a JSON object")
+    return data
 
 
 def chat_text(

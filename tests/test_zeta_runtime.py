@@ -427,6 +427,7 @@ def test_zeta_trace_sqlite_persists_objects_refs_derivations_and_closure(
     assert reopened.get_ref("prompt/current") == child_id
     assert reopened.derivations_for_output(child_id)[0].producer == "test:v1"
     assert set(reopened.graph_closure([child_id])) == {parent_id, child_id}
+    assert reopened.stats().object_count == 2
 
 
 def test_zeta_trace_conditional_ref_moves_protect_against_stale_writers() -> None:
@@ -443,6 +444,66 @@ def test_zeta_trace_conditional_ref_moves_protect_against_stale_writers() -> Non
     assert store.get_ref("value/current") == first_id
     assert store.move_ref("value/current", second_id, expected_id=first_id) is True
     assert store.get_ref("value/current") == second_id
+
+
+def test_sigil_zeta_trace_cli_smoke_with_in_memory_store(monkeypatch) -> None:
+    store = zeta_trace.InMemoryStore()
+    parent_id = store.put_object(
+        zeta_trace.Object(kind="context", schema="v1", data={"text": "parent"})
+    )
+    prompt_id = store.put_object(
+        zeta_trace.Object(
+            kind="prompt",
+            schema="zeta.prompt.v1",
+            data={"payload": {"messages": []}},
+            links=(parent_id,),
+        )
+    )
+    store.record_derivation(
+        zeta_trace.Derivation(
+            producer="unit:test",
+            output_id=prompt_id,
+            input_ids=(parent_id,),
+        )
+    )
+    store.set_ref("prompt/current", prompt_id)
+    monkeypatch.setattr(zeta, "default_store", lambda: store)
+
+    runner = CliRunner()
+    show = runner.invoke(sigil_cli, ["zeta", "trace", "show", prompt_id])
+    closure = runner.invoke(sigil_cli, ["zeta", "trace", "closure", prompt_id])
+    refs = runner.invoke(sigil_cli, ["zeta", "trace", "refs"])
+    prompts = runner.invoke(sigil_cli, ["zeta", "trace", "prompts"])
+
+    assert show.exit_code == 0
+    assert json.loads(show.output)["derivations"][0]["producer"] == "unit:test"
+    assert closure.exit_code == 0
+    assert json.loads(closure.output)["objects"][0]["id"] == parent_id
+    assert refs.exit_code == 0
+    assert json.loads(refs.output)["refs"]["prompt/current"] == prompt_id
+    assert prompts.exit_code == 0
+    assert json.loads(prompts.output)["prompts"][0]["id"] == prompt_id
+
+
+def test_sigil_zeta_trace_cli_smoke_with_sqlite_store(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    store = zeta_trace.SqliteStore(tmp_path / "trace.sqlite3")
+    prompt_id = store.put_object(
+        zeta_trace.Object(kind="prompt", schema="zeta.prompt.v1", data={})
+    )
+    store.record_derivation(
+        zeta_trace.Derivation(producer="unit:test", output_id=prompt_id)
+    )
+    monkeypatch.setattr(zeta, "default_store", lambda: store)
+
+    result = CliRunner().invoke(sigil_cli, ["zeta", "trace", "prompts"])
+
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    assert data["stats"]["object_count"] == 1
+    assert data["prompts"][0]["id"] == prompt_id
 
 
 def test_zeta_trace_freshness_reports_fresh_stale_and_unknown() -> None:
@@ -557,6 +618,104 @@ def test_zeta_prompt_builder_links_prompt_components() -> None:
     assert "project_context" in kinds
     assert "tool_descriptor_set" in kinds
     assert "tool_result" in kinds
+
+
+def test_zeta_prompt_components_have_representation_and_token_cost() -> None:
+    component = zeta.PromptComponent(
+        kind="example",
+        message={"role": "user", "content": "abcdefgh"},
+        source_object_id="sha256:source",
+    )
+
+    assert component.representation == "full"
+    assert component.source_object_id == "sha256:source"
+    assert zeta.estimated_tokens(component) == 2
+
+
+def test_zeta_budget_measure_returns_total_and_breakdown() -> None:
+    usage = zeta.measure(
+        [
+            zeta.PromptComponent(
+                kind="one",
+                message={"role": "user", "content": "abcd"},
+                object_id="sha256:one",
+            ),
+            zeta.PromptComponent(
+                kind="two",
+                message={"role": "user", "content": "abcdefgh"},
+                representation="summary",
+                object_id="sha256:two",
+            ),
+        ]
+    )
+
+    assert usage.total_tokens == 3
+    assert [component.kind for component in usage.components] == ["one", "two"]
+    assert usage.components[1].representation == "summary"
+
+
+def test_zeta_prompt_transform_factory_from_env() -> None:
+    transform = zeta.prompt_transform_from_env(
+        {"ZETA_TRIM": "structural", "ZETA_TRIM_THRESHOLD_TOKENS": "7"}
+    )
+
+    assert isinstance(transform, zeta.BudgetThresholdPromptTransform)
+    assert transform.budget == zeta.ContextBudget(7)
+    assert isinstance(transform.transform, zeta.StructuralTrimPromptTransform)
+    assert isinstance(zeta.prompt_transform_from_env({}), zeta.NoOpPromptTransform)
+
+
+def test_zeta_chained_transform_applies_in_order() -> None:
+    class AppendKind:
+        def __init__(self, suffix: str) -> None:
+            self.suffix = suffix
+
+        def apply(
+            self,
+            components: list[zeta.PromptComponent],
+        ) -> list[zeta.PromptComponent]:
+            return [
+                zeta.PromptComponent(
+                    kind=component.kind + self.suffix,
+                    message=component.message,
+                )
+                for component in components
+            ]
+
+    chained = zeta.ChainedTransform((AppendKind("a"), AppendKind("b")))
+
+    assert chained.apply([zeta.PromptComponent(kind="x")])[0].kind == "xab"
+
+
+def test_zeta_render_stub_contract() -> None:
+    component = zeta.PromptComponent(
+        kind="tool_result",
+        message={"role": "tool", "content": "abcd"},
+        object_id="sha256:abc",
+    )
+
+    assert (
+        zeta.render_stub(component)
+        == "[elided tool_result 1~tok id=sha256:abc — content retrievable by id]"
+    )
+
+
+def test_zeta_prompt_components_prefix_order() -> None:
+    components = zeta.prompt_components(
+        "inspect",
+        [{"role": "user", "content": "prior"}],
+        allowed_tools=("read",),
+        context="Project context",
+        current_events=[{"type": "assistant_message", "content": "current"}],
+        tools=zeta.model_tool_descriptors(("read",)),
+    )
+
+    assert [component.kind for component in components[:4]] == [
+        "system_prompt",
+        "tool_descriptor_set",
+        "project_context",
+        "transcript_message",
+    ]
 
 
 def test_zeta_prompt_builder_compaction_transform_preserves_source_links() -> None:
@@ -777,21 +936,20 @@ def test_zeta_structural_trim_compacts_old_bulky_read_or_grep_tool_results(
         message for message in prepared.messages if message.get("role") == "tool"
     ]
     assert len(tool_messages) == 1
-    trimmed_payload = json.loads(str(tool_messages[0]["content"]))
+    stub = str(tool_messages[0]["content"])
     assert tool_messages[0]["tool_call_id"] == "call-read"
-    assert_structural_trim_payload(
-        trimmed_payload,
-        call_id="call-read",
-        metadata=metadata,
-        text_lines=80,
-    )
+    assert stub.startswith("[elided transcript_message ")
+    assert " content retrievable by id]" in stub
     assert "line 79" not in str(tool_messages[0]["content"])
-    assert_structural_trim_graph(
-        store,
-        prepared,
-        trimmed_payload,
-        metadata=metadata,
-    )
+    assert prepared.prompt_object_id is not None
+    prompt = store.get_object(prepared.prompt_object_id)
+    assert prompt is not None
+    compacted_ids = linked_ids_by_kind(store, prompt, "compacted_context")
+    assert len(compacted_ids) == 1
+    compacted = store.get_object(compacted_ids[0])
+    assert compacted is not None
+    assert compacted.data["representation"] == "stub"
+    assert compacted.data["source_object_id"] in stub
 
 
 def test_zeta_structural_trim_skips_non_read_grep_tool_results() -> None:
@@ -937,10 +1095,12 @@ def test_zeta_structural_trim_uses_source_event_without_message_json() -> None:
     )[0]
 
     assert trimmed.kind == "compacted_context"
+    assert trimmed.representation == "stub"
     assert trimmed.message is not None
-    payload = json.loads(str(trimmed.message["content"]))
-    assert payload["tool_result"]["metadata"] == {"path": "structured.txt"}
-    assert payload["tool_result"]["content"][0]["text_chars"] == len(raw_text)
+    assert str(trimmed.message["content"]) == (
+        "[elided transcript_message 145~tok id=sha256:source "
+        "— content retrievable by id]"
+    )
 
 
 def test_zeta_model_config_uses_zeta_env(monkeypatch) -> None:

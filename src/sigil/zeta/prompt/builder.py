@@ -1,4 +1,8 @@
-"""Prompt builder and trace recording for Zeta."""
+"""Prompt builder and trace recording for Zeta.
+
+Prompt component order is a public contract for prefix-cache friendliness:
+system_prompt, tool descriptors, project context, then volatile components.
+"""
 
 from __future__ import annotations
 
@@ -6,7 +10,15 @@ from dataclasses import dataclass, replace
 from typing import Any, Iterable
 
 from ..model import chat_completion_request_body
-from ..trace import Derivation, Object, ObjectId, PromptTrace, Store, default_store
+from ..trace import (
+    Derivation,
+    Object,
+    ObjectId,
+    PromptTrace,
+    Store,
+    default_store,
+    warn_trace_failure_once,
+)
 from .components import (
     PromptComponent,
     component_messages,
@@ -104,7 +116,8 @@ class PromptBuilder:
                 assistant_message_object_id=assistant_id,
                 component_object_ids=prepared.component_object_ids,
             )
-        except Exception:
+        except Exception as exc:
+            warn_trace_failure_once("record_assistant_message", exc)
             return None
 
     def record_tool_call(
@@ -135,7 +148,8 @@ class PromptBuilder:
                 )
             )
             return call_id
-        except Exception:
+        except Exception as exc:
+            warn_trace_failure_once("record_tool_call", exc)
             return None
 
     def record_tool_result(
@@ -171,7 +185,8 @@ class PromptBuilder:
                 )
             )
             return result_id
-        except Exception:
+        except Exception as exc:
+            warn_trace_failure_once("record_tool_result", exc)
             return None
 
     def store(self) -> Store | None:
@@ -180,7 +195,8 @@ class PromptBuilder:
         self._store_initialized = True
         try:
             self._store = default_store()
-        except Exception:
+        except Exception as exc:
+            warn_trace_failure_once("default_store", exc)
             self._store = None
         return self._store
 
@@ -204,7 +220,8 @@ class PromptBuilder:
                 max_tokens=max_tokens,
                 selected_model=selected_model,
             )
-        except Exception:
+        except Exception as exc:
+            warn_trace_failure_once("build_prompt", exc)
             messages = component_messages(components)
             return PreparedPrompt(
                 messages=messages,

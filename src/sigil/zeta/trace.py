@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import sqlite3
+import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -15,6 +17,8 @@ from ..state import session_dir
 ObjectId = str
 FreshnessStatus = Literal["fresh", "stale", "unknown"]
 DEFAULT_SQLITE_NAME = "zeta-trace.sqlite3"
+LOGGER = logging.getLogger("sigil.zeta.trace")
+_WARNED_FAILURES: set[str] = set()
 
 
 @dataclass(frozen=True)
@@ -54,6 +58,14 @@ class PromptTrace:
     prompt_object_id: ObjectId
     assistant_message_object_id: ObjectId | None = None
     component_object_ids: tuple[ObjectId, ...] = ()
+
+
+@dataclass(frozen=True)
+class TraceStats:
+    """Basic trace store size statistics."""
+
+    object_count: int
+    total_bytes: int
 
 
 def prompt_trace_payload(trace: PromptTrace) -> dict[str, Any]:
@@ -96,6 +108,9 @@ class Store(Protocol):
     def record_derivation(self, derivation: Derivation) -> str: ...
     def derivations_for_output(self, output_id: ObjectId) -> list[Derivation]: ...
     def graph_closure(self, roots: list[ObjectId]) -> dict[ObjectId, Object]: ...
+    def refs(self) -> dict[str, ObjectId]: ...
+    def prompt_object_ids(self) -> list[ObjectId]: ...
+    def stats(self) -> TraceStats: ...
     def freshness(
         self,
         output_id: ObjectId,
@@ -112,6 +127,14 @@ def default_sqlite_path() -> Path:
 def default_store() -> SqliteStore:
     """Open the default per-session SQLite store."""
     return SqliteStore(default_sqlite_path())
+
+
+def warn_trace_failure_once(operation: str, exc: BaseException) -> None:
+    """Log one warning per operation before fail-open degradation."""
+    if operation in _WARNED_FAILURES:
+        return
+    _WARNED_FAILURES.add(operation)
+    LOGGER.warning("zeta trace disabled for %s after failure: %s", operation, exc)
 
 
 def object_payload(obj: Object) -> dict[str, Any]:
@@ -236,7 +259,7 @@ class InMemoryStore(StoreBase):
 
     def __init__(self) -> None:
         self.objects: dict[ObjectId, Object] = {}
-        self.refs: dict[str, ObjectId] = {}
+        self._refs: dict[str, ObjectId] = {}
         self.derivations: list[Derivation] = []
 
     def put_object(self, obj: Object) -> ObjectId:
@@ -249,10 +272,10 @@ class InMemoryStore(StoreBase):
         return self.objects.get(object_id)
 
     def set_ref(self, name: str, object_id: ObjectId) -> None:
-        self.refs[name] = object_id
+        self._refs[name] = object_id
 
     def get_ref(self, name: str) -> ObjectId | None:
-        return self.refs.get(name)
+        return self._refs.get(name)
 
     def move_ref(
         self,
@@ -261,9 +284,9 @@ class InMemoryStore(StoreBase):
         *,
         expected_id: ObjectId | None,
     ) -> bool:
-        if self.refs.get(name) != expected_id:
+        if self._refs.get(name) != expected_id:
             return False
-        self.refs[name] = object_id
+        self._refs[name] = object_id
         return True
 
     def record_derivation(self, derivation: Derivation) -> str:
@@ -277,6 +300,25 @@ class InMemoryStore(StoreBase):
             if derivation.output_id == output_id
         ]
 
+    def refs(self) -> dict[str, ObjectId]:
+        return dict(sorted(self._refs.items()))
+
+    def prompt_object_ids(self) -> list[ObjectId]:
+        return [
+            object_id_value
+            for object_id_value, obj in reversed(self.objects.items())
+            if obj.kind == "prompt"
+        ]
+
+    def stats(self) -> TraceStats:
+        return TraceStats(
+            object_count=len(self.objects),
+            total_bytes=sum(
+                len(canonical_json(object_payload(obj)).encode("utf-8"))
+                for obj in self.objects.values()
+            ),
+        )
+
 
 class SqliteStore(StoreBase):
     """Synchronous SQLite trace store using the standard library."""
@@ -286,58 +328,63 @@ class SqliteStore(StoreBase):
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.connection = sqlite3.connect(str(path))
         self.connection.row_factory = sqlite3.Row
+        self._write_lock = threading.Lock()
+        self.connection.execute("PRAGMA journal_mode=WAL")
+        self.connection.execute("PRAGMA busy_timeout=5000")
         self._init_schema()
 
     def close(self) -> None:
         self.connection.close()
 
     def _init_schema(self) -> None:
-        self.connection.executescript(
-            """
-            CREATE TABLE IF NOT EXISTS objects (
-              id TEXT PRIMARY KEY,
-              kind TEXT NOT NULL,
-              schema TEXT NOT NULL,
-              data_json TEXT NOT NULL,
-              links_json TEXT NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS refs (
-              name TEXT PRIMARY KEY,
-              object_id TEXT NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS derivations (
-              id TEXT PRIMARY KEY,
-              producer TEXT NOT NULL,
-              output_id TEXT NOT NULL,
-              input_ids_json TEXT NOT NULL,
-              resolved_refs_json TEXT NOT NULL,
-              params_json TEXT NOT NULL,
-              created_at REAL NOT NULL
-            );
-            CREATE INDEX IF NOT EXISTS derivations_output_id_idx
-              ON derivations(output_id, created_at);
-            """
-        )
-        self.connection.commit()
+        with self._write_lock:
+            self.connection.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS objects (
+                  id TEXT PRIMARY KEY,
+                  kind TEXT NOT NULL,
+                  schema TEXT NOT NULL,
+                  data_json TEXT NOT NULL,
+                  links_json TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS refs (
+                  name TEXT PRIMARY KEY,
+                  object_id TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS derivations (
+                  id TEXT PRIMARY KEY,
+                  producer TEXT NOT NULL,
+                  output_id TEXT NOT NULL,
+                  input_ids_json TEXT NOT NULL,
+                  resolved_refs_json TEXT NOT NULL,
+                  params_json TEXT NOT NULL,
+                  created_at REAL NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS derivations_output_id_idx
+                  ON derivations(output_id, created_at);
+                """
+            )
+            self.connection.commit()
 
     def put_object(self, obj: Object) -> ObjectId:
         stored = normalize_object(obj)
         object_id_value = object_id(stored)
-        self.connection.execute(
-            """
-            INSERT OR IGNORE INTO objects
-              (id, kind, schema, data_json, links_json)
-            VALUES (?, ?, ?, ?, ?)
-            """,
-            (
-                object_id_value,
-                stored.kind,
-                stored.schema,
-                canonical_json(stored.data),
-                canonical_json(list(stored.links)),
-            ),
-        )
-        self.connection.commit()
+        with self._write_lock:
+            self.connection.execute(
+                """
+                INSERT OR IGNORE INTO objects
+                  (id, kind, schema, data_json, links_json)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    object_id_value,
+                    stored.kind,
+                    stored.schema,
+                    canonical_json(stored.data),
+                    canonical_json(list(stored.links)),
+                ),
+            )
+            self.connection.commit()
         return object_id_value
 
     def get_object(self, object_id: ObjectId) -> Object | None:
@@ -355,14 +402,15 @@ class SqliteStore(StoreBase):
         )
 
     def set_ref(self, name: str, object_id: ObjectId) -> None:
-        self.connection.execute(
-            """
-            INSERT INTO refs (name, object_id) VALUES (?, ?)
-            ON CONFLICT(name) DO UPDATE SET object_id = excluded.object_id
-            """,
-            (name, object_id),
-        )
-        self.connection.commit()
+        with self._write_lock:
+            self.connection.execute(
+                """
+                INSERT INTO refs (name, object_id) VALUES (?, ?)
+                ON CONFLICT(name) DO UPDATE SET object_id = excluded.object_id
+                """,
+                (name, object_id),
+            )
+            self.connection.commit()
 
     def get_ref(self, name: str) -> ObjectId | None:
         row = self.connection.execute(
@@ -380,47 +428,49 @@ class SqliteStore(StoreBase):
         *,
         expected_id: ObjectId | None,
     ) -> bool:
-        with self.connection:
-            row = self.connection.execute(
-                "SELECT object_id FROM refs WHERE name = ?",
-                (name,),
-            ).fetchone()
-            current_id = None if row is None else str(row["object_id"])
-            if current_id != expected_id:
-                return False
-            if row is None:
-                self.connection.execute(
-                    "INSERT INTO refs (name, object_id) VALUES (?, ?)",
-                    (name, object_id),
-                )
-            else:
-                self.connection.execute(
-                    "UPDATE refs SET object_id = ? WHERE name = ?",
-                    (object_id, name),
-                )
+        with self._write_lock:
+            with self.connection:
+                row = self.connection.execute(
+                    "SELECT object_id FROM refs WHERE name = ?",
+                    (name,),
+                ).fetchone()
+                current_id = None if row is None else str(row["object_id"])
+                if current_id != expected_id:
+                    return False
+                if row is None:
+                    self.connection.execute(
+                        "INSERT INTO refs (name, object_id) VALUES (?, ?)",
+                        (name, object_id),
+                    )
+                else:
+                    self.connection.execute(
+                        "UPDATE refs SET object_id = ? WHERE name = ?",
+                        (object_id, name),
+                    )
         return True
 
     def record_derivation(self, derivation: Derivation) -> str:
         stored = normalize_derivation(derivation)
         id_value = derivation_id(stored)
-        self.connection.execute(
-            """
-            INSERT OR IGNORE INTO derivations
-              (id, producer, output_id, input_ids_json, resolved_refs_json,
-               params_json, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                id_value,
-                stored.producer,
-                stored.output_id,
-                canonical_json(list(stored.input_ids)),
-                canonical_json(stored.resolved_refs),
-                canonical_json(stored.params),
-                time.time(),
-            ),
-        )
-        self.connection.commit()
+        with self._write_lock:
+            self.connection.execute(
+                """
+                INSERT OR IGNORE INTO derivations
+                  (id, producer, output_id, input_ids_json, resolved_refs_json,
+                   params_json, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    id_value,
+                    stored.producer,
+                    stored.output_id,
+                    canonical_json(list(stored.input_ids)),
+                    canonical_json(stored.resolved_refs),
+                    canonical_json(stored.params),
+                    time.time(),
+                ),
+            )
+            self.connection.commit()
         return id_value
 
     def derivations_for_output(self, output_id: ObjectId) -> list[Derivation]:
@@ -443,6 +493,39 @@ class SqliteStore(StoreBase):
             )
             for row in rows
         ]
+
+    def refs(self) -> dict[str, ObjectId]:
+        rows = self.connection.execute(
+            "SELECT name, object_id FROM refs ORDER BY name"
+        ).fetchall()
+        return {str(row["name"]): str(row["object_id"]) for row in rows}
+
+    def prompt_object_ids(self) -> list[ObjectId]:
+        rows = self.connection.execute(
+            """
+            SELECT objects.id
+            FROM objects
+            LEFT JOIN derivations ON derivations.output_id = objects.id
+            WHERE objects.kind = 'prompt'
+            GROUP BY objects.id
+            ORDER BY COALESCE(MAX(derivations.created_at), 0) DESC, objects.id DESC
+            """
+        ).fetchall()
+        return [str(row["id"]) for row in rows]
+
+    def stats(self) -> TraceStats:
+        row = self.connection.execute(
+            """
+            SELECT COUNT(*) AS object_count,
+                   COALESCE(SUM(LENGTH(data_json) + LENGTH(links_json)), 0)
+                     AS total_bytes
+            FROM objects
+            """
+        ).fetchone()
+        return TraceStats(
+            object_count=int(row["object_count"]),
+            total_bytes=int(row["total_bytes"]),
+        )
 
 
 def normalize_object(obj: Object) -> Object:

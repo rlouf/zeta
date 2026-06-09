@@ -219,6 +219,7 @@ def task_state_component(
     message = task_state_message(state)
     return PromptComponent(
         kind="task_state",
+        representation="summary",
         data={
             "method": "task_state_extraction",
             "schema": TASK_STATE_SCHEMA_NAME,

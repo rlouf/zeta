@@ -8,19 +8,29 @@ from typing import Any, Iterable, TextIO
 from . import tools as tool_registry
 from .context import load_project_context
 from .prompt import (
+    BudgetThresholdPromptTransform,
+    ChainedTransform,
+    ComponentUsage,
+    ContextBudget,
+    ContextUsage,
     ModelTaskStateExtractor,
     NoOpPromptTransform,
     PreparedPrompt,
     PromptBuilder,
     PromptComponent,
     PromptTransform,
+    Representation,
     StructuralTrimPromptTransform,
     TASK_STATE_SCHEMA,
     TaskStateExtractionPromptTransform,
     TaskStateExtractor,
     can_read_skill_files,
     component_messages,
+    estimated_tokens,
+    measure,
     prompt_components,
+    prompt_transform_from_env,
+    render_stub,
     system_prompt,
     task_state_extraction_messages,
     task_state_json,
@@ -32,7 +42,17 @@ from .skills import (
     discover_skills,
     expand_skill_directive,
 )
-from .trace import PromptTrace
+from .trace import (
+    Derivation,
+    Object,
+    ObjectId,
+    PromptTrace,
+    Store,
+    TraceStats,
+    default_store,
+    derivation_payload,
+    object_payload,
+)
 from .transcript import (
     DEFAULT_TAIL_LIMIT,
     TRANSCRIPT,
@@ -52,6 +72,12 @@ __all__ = [
     "DEFAULT_TAIL_LIMIT",
     "TOOL_SPECS",
     "TRANSCRIPT",
+    "BudgetThresholdPromptTransform",
+    "ChainedTransform",
+    "ComponentUsage",
+    "ContextBudget",
+    "ContextUsage",
+    "Derivation",
     "allowed_tool_names",
     "analyze_tool",
     "append_transcript",
@@ -59,19 +85,29 @@ __all__ = [
     "discover_skills",
     "event_chat_message",
     "expand_skill_directive",
+    "estimated_tokens",
+    "get_trace_object",
+    "list_trace_closure",
+    "list_trace_prompts",
+    "list_trace_refs",
     "load_project_context",
     "model_tool_descriptors",
     "ModelTaskStateExtractor",
     "NoOpPromptTransform",
+    "Object",
+    "ObjectId",
     "PreparedPrompt",
     "PromptBuilder",
     "PromptComponent",
     "PromptTransform",
     "PromptTrace",
+    "Representation",
     "StructuralTrimPromptTransform",
+    "Store",
     "TASK_STATE_SCHEMA",
     "TaskStateExtractionPromptTransform",
     "TaskStateExtractor",
+    "TraceStats",
     "read_json_stdin",
     "record_tool_call_ids",
     "role_chat_message",
@@ -79,10 +115,14 @@ __all__ = [
     "task_state_extraction_messages",
     "task_state_json",
     "task_state_message",
+    "trace_stats",
+    "measure",
     "tool_call_message",
     "tool_metadata",
     "tool_result_message",
     "tools_list",
+    "prompt_transform_from_env",
+    "render_stub",
     "transcript_chat_messages",
     "transcript_tail",
     "zeta_chat_messages",
@@ -168,3 +208,83 @@ def read_json_stdin(stdin: TextIO) -> dict[str, Any]:
     if not isinstance(data, dict):
         raise ValueError("expected JSON object")
     return data
+
+
+def get_trace_object(
+    object_id: ObjectId,
+    *,
+    store: Store | None = None,
+) -> dict[str, Any] | None:
+    active_store = store or default_store()
+    obj = active_store.get_object(object_id)
+    if obj is None:
+        return None
+    return {
+        "id": object_id,
+        "object": object_payload(obj),
+        "derivations": [
+            derivation_payload(derivation)
+            for derivation in active_store.derivations_for_output(object_id)
+        ],
+    }
+
+
+def list_trace_closure(
+    object_id: ObjectId,
+    *,
+    store: Store | None = None,
+) -> list[dict[str, Any]]:
+    active_store = store or default_store()
+    closure = active_store.graph_closure([object_id])
+    return [
+        {"id": closure_id, "kind": obj.kind, "schema": obj.schema}
+        for closure_id, obj in closure.items()
+        if closure_id != object_id
+    ]
+
+
+def list_trace_refs(*, store: Store | None = None) -> dict[str, ObjectId]:
+    return dict((store or default_store()).refs())
+
+
+def list_trace_prompts(*, store: Store | None = None) -> list[dict[str, Any]]:
+    active_store = store or default_store()
+    prompts = []
+    for prompt_id in active_store.prompt_object_ids():
+        obj = active_store.get_object(prompt_id)
+        if obj is None:
+            continue
+        components = [
+            active_store.get_object(component_id) for component_id in obj.links
+        ]
+        prompt_tokens = 0
+        for component in components:
+            if component is None:
+                continue
+            prompt_tokens += max(
+                1,
+                (
+                    len(
+                        json.dumps(
+                            component.data,
+                            ensure_ascii=False,
+                            sort_keys=True,
+                            separators=(",", ":"),
+                        )
+                    )
+                    + 3
+                )
+                // 4,
+            )
+        prompts.append(
+            {
+                "id": prompt_id,
+                "components": len(obj.links),
+                "estimated_tokens": prompt_tokens,
+            }
+        )
+    return prompts
+
+
+def trace_stats(*, store: Store | None = None) -> TraceStats:
+    return (store or default_store()).stats()

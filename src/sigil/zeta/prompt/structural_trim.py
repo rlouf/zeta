@@ -7,6 +7,7 @@ import hashlib
 import json
 from typing import Any
 
+from .budget import render_stub
 from .components import PromptComponent
 
 STRUCTURAL_TRIM_TOOL_NAMES = frozenset({"read", "grep"})
@@ -59,6 +60,8 @@ def trimmed_component(component: PromptComponent) -> PromptComponent:
     return replace(
         component,
         kind="compacted_context",
+        representation="stub",
+        source_object_id=component.object_id,
         data={
             "method": "structural_trim",
             "source_kind": component.kind,
@@ -114,7 +117,8 @@ def trim_tool_role_message(
     assert component.message is not None
     message = component.message
     content = str(message.get("content") or "")
-    payload = structural_trim_payload(
+    stub = render_stub(component)
+    structural_trim_payload(
         content,
         source_object_id=source_object_id,
         tool_call_id=tool_call_id(component),
@@ -123,7 +127,7 @@ def trim_tool_role_message(
     return {
         "role": "tool",
         "tool_call_id": tool_call_id(component),
-        "content": compact_json(payload),
+        "content": stub,
     }
 
 
@@ -143,7 +147,7 @@ def trim_user_tool_json_message(
         if isinstance(event_payload.get("result"), dict)
         else None
     )
-    payload = structural_trim_payload(
+    structural_trim_payload(
         content,
         source_object_id=source_object_id,
         tool_call_id=tool_call_id(component)
@@ -152,7 +156,7 @@ def trim_user_tool_json_message(
     )
     return {
         "role": "user",
-        "content": "Trimmed tool result JSON:\n" + compact_json(payload),
+        "content": render_stub(component),
     }
 
 

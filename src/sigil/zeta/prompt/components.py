@@ -4,13 +4,15 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
-from typing import Any, Iterable
+from typing import Any, Iterable, Literal
 
 from ..skills import Skill, available_skills, expand_skill_directive
 from ..tools import allowed_tool_names
 from ..trace import Object, ObjectId, Store
 from ..transcript import TranscriptChatMessage, transcript_chat_message_entries
 from .system import system_prompt
+
+Representation = Literal["full", "summary", "stub", "absent"]
 
 
 @dataclass(frozen=True)
@@ -20,6 +22,8 @@ class PromptComponent:
     kind: str
     data: dict[str, Any] = field(default_factory=dict)
     message: dict[str, Any] | None = None
+    representation: Representation = "full"
+    source_object_id: ObjectId | None = None
     links: tuple[ObjectId, ...] = ()
     object_id: ObjectId | None = None
     ref_name: str | None = None
@@ -56,7 +60,11 @@ def prompt_components(
     tools: list[dict[str, Any]] | None = None,
     include_non_message_components: bool = True,
 ) -> list[PromptComponent]:
-    """Return the prompt components in model-message order."""
+    """Return prompt components in stable prefix-cache-friendly order.
+
+    Public ordering contract: system_prompt, tool descriptors, project context,
+    then volatile transcript/objective/current-turn components.
+    """
     enabled_tools = tuple(allowed_tool_names(allowed_tools))
     skills = available_skills() if can_read_skill_files(enabled_tools) else []
     system_content = system_prompt(system, allowed_tools=enabled_tools, skills=skills)
@@ -281,6 +289,17 @@ def non_message_components(
     skills: list[Skill],
 ) -> list[PromptComponent]:
     components: list[PromptComponent] = []
+    if tools is not None:
+        components.append(
+            PromptComponent(
+                kind="tool_descriptor_set",
+                data={
+                    "allowed_tools": list(enabled_tools),
+                    "tools": tools,
+                },
+                ref_name="prompt/current/tool_descriptor_set",
+            )
+        )
     if skills:
         components.append(
             PromptComponent(
@@ -306,17 +325,6 @@ def non_message_components(
                 ref_name="prompt/current/project_context",
             )
         )
-    if tools is not None:
-        components.append(
-            PromptComponent(
-                kind="tool_descriptor_set",
-                data={
-                    "allowed_tools": list(enabled_tools),
-                    "tools": tools,
-                },
-                ref_name="prompt/current/tool_descriptor_set",
-            )
-        )
     return components
 
 
@@ -338,6 +346,9 @@ def prompt_component_object(component: PromptComponent) -> Object:
     data = dict(component.data)
     if component.message is not None and "message" not in data:
         data["message"] = component.message
+    data["representation"] = component.representation
+    if component.source_object_id is not None:
+        data["source_object_id"] = component.source_object_id
     return Object(
         kind=component.kind,
         schema="zeta.prompt_component.v1",

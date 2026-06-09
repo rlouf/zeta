@@ -20,6 +20,7 @@ from . import (  # noqa: F401  (imported for command registration side effects)
     session,
     status,
     transcript,
+    zeta,
     zeta_step,
 )
 

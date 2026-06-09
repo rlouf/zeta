@@ -9,6 +9,7 @@ import time
 from typing import Any, Callable, Protocol, TextIO, cast
 
 from rich.console import Console
+from rich.constrain import Constrain
 from rich.live import Live
 from rich.markdown import Markdown
 from rich.padding import Padding
@@ -169,6 +170,7 @@ class RichStreamRenderer:
             width=width,
             highlight=False,
         )
+        self.width = width
         self.refresh_interval = refresh_interval
         self.left_padding = left_padding
         self.clock = clock
@@ -226,7 +228,12 @@ class RichStreamRenderer:
             self.last_refresh = 0.0
 
     def renderable(self) -> Padding:
-        return Padding(Markdown("".join(self.buffer)), (0, 0, 0, self.left_padding))
+        total_width = self.width or self.console.width
+        content_width = max(1, total_width - self.left_padding)
+        return Padding(
+            Constrain(Markdown("".join(self.buffer)), content_width),
+            (0, 0, 0, self.left_padding),
+        )
 
 
 def render_tool_start(

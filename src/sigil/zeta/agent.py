@@ -76,7 +76,9 @@ def run_agent_turn(
     events: list[dict[str, Any]] = []
     latest_model_telemetry: dict[str, Any] = {}
     prompt_traces: list[PromptTrace] = []
-    builder = prompt_builder or runtime.PromptBuilder()
+    builder = prompt_builder or runtime.PromptBuilder(
+        transform=runtime.prompt_transform_from_env()
+    )
     tools = model_tool_descriptors(allowed_tools)
     for _ in turn_indices(config.max_turns):
         prepared_prompt = builder.build(

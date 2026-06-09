@@ -120,7 +120,7 @@ def run_ripgrep(pattern: str, path: str, limit: int) -> GrepResult:
 def grep_fallback(pattern: str, root: Path, limit: int) -> GrepResult:
     matches: list[str] = []
     truncated = False
-    paths = [root] if root.is_file() else root.rglob("*")
+    paths = [root] if root.is_file() else sorted(root.rglob("*"))
     for path in paths:
         if not path.is_file():
             continue

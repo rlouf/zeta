@@ -178,11 +178,16 @@ uv run pytest tests/test_shell_bindings.py
 ```
 
 Sigil keeps session state under `~/.sigil/` so Zeta can resume from recent
-ask turns, handoff timeline events, and command results recorded through `+`
-or a Zeta handoff capture window. The capture window expires after
-`SIGIL_ZETA_CAPTURE_TURNS` (default 20) recorded commands when a handoff is
-never resumed. Recording has no off switch; non-positive or non-numeric
-values fall back to the default.
+ask turns, handoff timeline events, and command results recorded through `+`.
+
+The zsh binding also records every interactive command: the command line,
+exit status, working directory, and timestamp — never its output. Output is
+only captured when you ask for it explicitly with `+`. As with zsh history,
+a command typed with a leading space is not recorded, and `SIGIL_RECORD=0`
+turns recording off; secrets typed into command arguments are exposed
+exactly as they are in `~/.zsh_history`, and the same escape hatches apply.
+Recording feeds the session log; prompts sent to the model only ever include
+a bounded window of recent commands.
 
 ## Glyph Reference
 

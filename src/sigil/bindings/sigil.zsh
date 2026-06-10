@@ -1,8 +1,8 @@
 # Sigil zsh bindings. Core behavior lives in the `sigil` executable.
 #
 # This file should stay boring: it wires zsh lifecycle hooks and punctuation
-# functions to the CLI. The Zeta glyph workflow keeps prompt insertion and command
-# capture here, but delegates the model/tool loop to Python.
+# functions to the CLI. The Zeta glyph workflow keeps prompt insertion and
+# shell-turn recording here, but delegates the model/tool loop to Python.
 
 # Exported so `sigil doctor`, which runs as a child process, can tell that an
 # ancestor shell loaded the binding.
@@ -69,32 +69,16 @@ __sigil_glyphs_enabled() {
   [[ "${SIGIL_ENABLE_GLYPHS:-1}" != "0" && "${SIGIL_ENABLE_GLYPHS:-1}" != "false" ]]
 }
 
-# ── Zeta Continuation Capture ────────────────────────────────────────────
+# ── Shell Turn Recording ─────────────────────────────────────────────────
 
-# Capture stays open between a handoff and the `,,` that resumes it, and
-# expires after SIGIL_ZETA_CAPTURE_TURNS (default 20) recorded commands so an
-# abandoned handoff does not record ambiently.
-typeset -g __sigil_zeta_capture_active="${__sigil_zeta_capture_active:-0}"
-typeset -g __sigil_zeta_capture_remaining="${__sigil_zeta_capture_remaining:-0}"
+# Every interactive command is recorded at the next prompt: command line,
+# exit status, and cwd — never output. A leading space skips recording (the
+# ignorespace convention); SIGIL_RECORD=0 disables recording entirely.
 typeset -g __sigil_zeta_current_command=""
 
-__sigil_zeta_enable_capture() {
+__sigil_recording_enabled() {
   emulate -L zsh
-  # Recording cannot be disabled: non-numeric or non-positive limits fall
-  # back to the default window.
-  local limit="${SIGIL_ZETA_CAPTURE_TURNS:-20}"
-  if [[ "$limit" != <-> ]] || (( limit <= 0 )); then
-    limit=20
-  fi
-  __sigil_zeta_capture_active=1
-  __sigil_zeta_capture_remaining="$limit"
-}
-
-__sigil_zeta_consume_capture() {
-  emulate -L zsh
-  __sigil_zeta_capture_active=0
-  __sigil_zeta_capture_remaining=0
-  __sigil_zeta_current_command=""
+  [[ "${SIGIL_RECORD:-1}" != "0" && "${SIGIL_RECORD:-1}" != "false" ]]
 }
 
 __sigil_zeta_recordable_command() {
@@ -130,12 +114,8 @@ __sigil_zeta_after_command_before_prompt() {
   emulate -L zsh
   local command="$__sigil_zeta_current_command"
   __sigil_zeta_current_command=""
-  if [[ "$__sigil_zeta_capture_active" == "1" ]] && __sigil_zeta_recordable_command "$command"; then
+  if __sigil_recording_enabled && __sigil_zeta_recordable_command "$command"; then
     __sigil_zeta_record_shell_turn "$command" "$exit_status"
-    (( __sigil_zeta_capture_remaining-- ))
-    if (( __sigil_zeta_capture_remaining <= 0 )); then
-      __sigil_zeta_consume_capture
-    fi
   fi
   return "$exit_status"
 }
@@ -166,7 +146,6 @@ __sigil_zeta_turn() {
   # cleanup zsh still runs on that path.
   {
     if [[ -z "$objective" ]]; then
-      __sigil_zeta_consume_capture
       args+=(--continue)
     else
       args+=("$objective")
@@ -177,7 +156,6 @@ __sigil_zeta_turn() {
       # The handoff file holds the staged command verbatim.
       command="$(<"$handoff_file")"
       if [[ -n "$command" ]]; then
-        __sigil_zeta_enable_capture
         __sigil_prompt_insert "$(__sigil_zeta_prompt_command "$command")"
       fi
     fi

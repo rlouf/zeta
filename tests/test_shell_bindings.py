@@ -650,45 +650,7 @@ def test_zsh_precmd_hook_runs_before_earlier_registered_hooks() -> None:
 
 
 @pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
-def test_zsh_does_not_record_ordinary_turns_ambiently() -> None:
-    with tempfile.TemporaryDirectory() as tmp_dir:
-        tmp = Path(tmp_dir)
-        stub = make_stub(tmp)
-        result = run_shell(
-            "zsh",
-            textwrap.dedent(
-                "                    source src/sigil/bindings/sigil.zsh\n                    true\n                    false\n                    wait\n                    "
-            ),
-            tmp,
-            stub,
-        )
-        assert_success(result)
-        assert read_log(tmp) == []
-
-
-@pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
-def test_zsh_records_turns_only_after_zeta_handoff() -> None:
-    with tempfile.TemporaryDirectory() as tmp_dir:
-        tmp = Path(tmp_dir)
-        stub = make_stub(tmp)
-        result = run_shell(
-            "zsh",
-            textwrap.dedent(
-                '                    source src/sigil/bindings/sigil.zsh\n                    sigil_agent_step hello >/dev/null\n                    __sigil_zeta_before_command "echo edited"\n                    true\n                    __sigil_zeta_after_command_before_prompt\n                    wait\n                    '
-            ),
-            tmp,
-            stub,
-        )
-        assert_success(result)
-        calls = shell_turn_calls(tmp)
-        assert len(calls) == 1
-        assert "--command echo edited" in calls[0]
-        assert "--status 0" in calls[0]
-        assert f"--cwd {ROOT}" in calls[0]
-
-
-@pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
-def test_zsh_capture_window_expires_after_turn_limit() -> None:
+def test_zsh_records_shell_turns_without_a_handoff() -> None:
     with tempfile.TemporaryDirectory() as tmp_dir:
         tmp = Path(tmp_dir)
         stub = make_stub(tmp)
@@ -696,9 +658,34 @@ def test_zsh_capture_window_expires_after_turn_limit() -> None:
             "zsh",
             textwrap.dedent(
                 """\
-                export SIGIL_ZETA_CAPTURE_TURNS=2
                 source src/sigil/bindings/sigil.zsh
-                sigil_agent_step hello >/dev/null
+                __sigil_zeta_before_command "echo recorded"
+                true
+                __sigil_zeta_after_command_before_prompt
+                wait
+                """
+            ),
+            tmp,
+            stub,
+        )
+        assert_success(result)
+        calls = shell_turn_calls(tmp)
+        assert len(calls) == 1
+        assert "--command echo recorded" in calls[0]
+        assert "--status 0" in calls[0]
+        assert f"--cwd {ROOT}" in calls[0]
+
+
+@pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
+def test_zsh_records_every_command_with_no_turn_limit() -> None:
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp = Path(tmp_dir)
+        stub = make_stub(tmp)
+        result = run_shell(
+            "zsh",
+            textwrap.dedent(
+                """\
+                source src/sigil/bindings/sigil.zsh
                 for command in "echo one" "echo two" "echo three"; do
                   __sigil_zeta_before_command "$command"
                   true
@@ -712,16 +699,16 @@ def test_zsh_capture_window_expires_after_turn_limit() -> None:
         )
         assert_success(result)
         calls = shell_turn_calls(tmp)
-        assert len(calls) == 2
+        assert len(calls) == 3
         assert "--command echo one" in calls[0]
         assert "--command echo two" in calls[1]
+        assert "--command echo three" in calls[2]
 
 
 @pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
-def test_zsh_capture_turn_limit_zero_falls_back_to_default() -> None:
-    # Recording is the point of the capture window in this alpha; there is no
-    # off switch. Non-positive or non-numeric limits use the default instead
-    # of recording a single command and expiring.
+def test_zsh_leading_space_skips_recording() -> None:
+    # Privacy parity with zsh's ignorespace convention: a command typed with
+    # a leading space leaves no record.
     with tempfile.TemporaryDirectory() as tmp_dir:
         tmp = Path(tmp_dir)
         stub = make_stub(tmp)
@@ -729,14 +716,13 @@ def test_zsh_capture_turn_limit_zero_falls_back_to_default() -> None:
             "zsh",
             textwrap.dedent(
                 """\
-                export SIGIL_ZETA_CAPTURE_TURNS=0
                 source src/sigil/bindings/sigil.zsh
-                sigil_agent_step hello >/dev/null
-                for command in "echo one" "echo two"; do
-                  __sigil_zeta_before_command "$command"
-                  true
-                  __sigil_zeta_after_command_before_prompt
-                done
+                __sigil_zeta_before_command " echo secret"
+                true
+                __sigil_zeta_after_command_before_prompt
+                __sigil_zeta_before_command "echo recorded"
+                true
+                __sigil_zeta_after_command_before_prompt
                 wait
                 """
             ),
@@ -745,7 +731,67 @@ def test_zsh_capture_turn_limit_zero_falls_back_to_default() -> None:
         )
         assert_success(result)
         calls = shell_turn_calls(tmp)
-        assert len(calls) == 2
+        assert len(calls) == 1
+        assert "--command echo recorded" in calls[0]
+
+
+@pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
+def test_zsh_sigil_record_opt_out_disables_recording() -> None:
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp = Path(tmp_dir)
+        stub = make_stub(tmp)
+        result = run_shell(
+            "zsh",
+            textwrap.dedent(
+                """\
+                source src/sigil/bindings/sigil.zsh
+                export SIGIL_RECORD=0
+                __sigil_zeta_before_command "echo zero"
+                true
+                __sigil_zeta_after_command_before_prompt
+                export SIGIL_RECORD=false
+                __sigil_zeta_before_command "echo false"
+                true
+                __sigil_zeta_after_command_before_prompt
+                export SIGIL_RECORD=1
+                __sigil_zeta_before_command "echo recorded"
+                true
+                __sigil_zeta_after_command_before_prompt
+                wait
+                """
+            ),
+            tmp,
+            stub,
+        )
+        assert_success(result)
+        calls = shell_turn_calls(tmp)
+        assert len(calls) == 1
+        assert "--command echo recorded" in calls[0]
+
+
+@pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
+def test_zsh_records_interactive_commands_end_to_end() -> None:
+    # Through a real interactive shell: preexec/precmd fire on their own and
+    # the recorded turn reaches the CLI before the next prompt.
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp = Path(tmp_dir)
+        stub = make_stub(tmp)
+        run_shell_pty(
+            "zsh",
+            textwrap.dedent(
+                """\
+                source src/sigil/bindings/sigil.zsh
+                echo hi
+                exit
+                """
+            ),
+            tmp,
+            stub,
+        )
+        calls = shell_turn_calls(tmp)
+        assert len(calls) == 1
+        assert "--command echo hi" in calls[0]
+        assert "--status 0" in calls[0]
 
 
 @pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
@@ -762,6 +808,7 @@ def test_zsh_recordable_command_excludes_all_sigil_invocations() -> None:
                 __sigil_zeta_recordable_command "sigil status"; print -- "args=$?"
                 __sigil_zeta_recordable_command "./sigil status"; print -- "relative=$?"
                 __sigil_zeta_recordable_command "/usr/local/bin/sigil status"; print -- "absolute=$?"
+                __sigil_zeta_recordable_command " echo hi"; print -- "space=$?"
                 __sigil_zeta_recordable_command "echo sigil"; print -- "mention=$?"
                 __sigil_zeta_recordable_command "echo hi"; print -- "plain=$?"
                 """
@@ -774,6 +821,7 @@ def test_zsh_recordable_command_excludes_all_sigil_invocations() -> None:
         assert "args=1" in result.stdout
         assert "relative=1" in result.stdout
         assert "absolute=1" in result.stdout
+        assert "space=1" in result.stdout
         assert "mention=0" in result.stdout
         assert "plain=0" in result.stdout
 

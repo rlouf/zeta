@@ -3,8 +3,8 @@
 from .drop_oldest import DropOldestPromptTransform
 from .structural_trim import StructuralTrimPromptTransform
 from .task_state import (
-    ModelTaskStateExtractor,
     TASK_STATE_SCHEMA,
+    ModelTaskStateExtractor,
     TaskStateExtractionPromptTransform,
     TaskStateExtractor,
     task_state_component,

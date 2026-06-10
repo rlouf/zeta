@@ -7,14 +7,6 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any, cast
 
-
-from sigil.protocols import (
-    SHELL_PROMPT_HANDOFF_TYPE,
-)
-from sigil.zeta import agent as zeta_agent
-from sigil.zeta import prompt as zeta_prompt
-from sigil.zeta import model as zeta_model
-from sigil.zeta import trace as zeta_trace
 from _zeta_helpers import (
     DeltaSink,
     assert_tool_result_derivation_graph,
@@ -23,6 +15,14 @@ from _zeta_helpers import (
     read_tool_payload,
     required_stream_sink,
 )
+
+from sigil.protocols import (
+    SHELL_PROMPT_HANDOFF_TYPE,
+)
+from sigil.zeta import agent as zeta_agent
+from sigil.zeta import model as zeta_model
+from sigil.zeta import prompt as zeta_prompt
+from sigil.zeta import trace as zeta_trace
 
 
 def test_zeta_agent_turn_finalizes_text(monkeypatch) -> None:

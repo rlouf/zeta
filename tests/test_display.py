@@ -4,16 +4,16 @@ from __future__ import annotations
 
 from io import StringIO
 
+from _zeta_helpers import (
+    TtyBuffer,
+    visible_terminal_text,
+)
 
+from sigil import display as sigil_display
 from sigil.protocols import (
     SHELL_HANDOFF_OUTCOME_CANCELLED,
     SHELL_HANDOFF_OUTCOME_EXECUTED,
     SHELL_PROMPT_HANDOFF_TYPE,
-)
-from sigil import display as sigil_display
-from _zeta_helpers import (
-    TtyBuffer,
-    visible_terminal_text,
 )
 
 

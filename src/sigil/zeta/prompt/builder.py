@@ -7,9 +7,10 @@ system_prompt, tool descriptors, project context, then volatile components.
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Iterable
 from contextlib import nullcontext
 from dataclasses import dataclass, replace
-from typing import Any, Iterable
+from typing import Any
 
 from ..model import chat_completion_request_body
 from ..skills import Skill, available_skills

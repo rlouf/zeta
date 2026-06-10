@@ -8,11 +8,11 @@ from typing import TextIO
 
 import click
 
-from ._base import cli
-from ..protocols import SHELL_HANDOFF_RESULT_SCHEMA
-from ..routes.zeta_step import run_agent_step
 from .. import handoff as sigil_handoff
 from ..display import shell_result_summary
+from ..protocols import SHELL_HANDOFF_RESULT_SCHEMA
+from ..routes.zeta_step import run_agent_step
+from ._base import cli
 
 CONTINUE_OBJECTIVE = (
     "Continue the active Zeta step. Read the latest "

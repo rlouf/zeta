@@ -7,7 +7,6 @@ from typing import Any
 
 import pytest
 
-
 _MISSING = object()
 
 

@@ -21,7 +21,6 @@ from .zeta.model import (
     request_model_metadata,
 )
 
-
 BINDING_NAME = "sigil.zsh"
 
 

@@ -7,8 +7,6 @@ from typing import Any
 
 import click
 
-from ._base import cli
-from ._shared import pretty_print_json
 from ..zeta.prompt import estimated_tokens_for_text
 from ..zeta.trace import (
     ObjectId,
@@ -17,6 +15,8 @@ from ..zeta.trace import (
     derivation_payload,
     object_payload,
 )
+from ._base import cli
+from ._shared import pretty_print_json
 
 
 @cli.group("zeta")

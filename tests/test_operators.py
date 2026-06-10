@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from io import StringIO
 
+from _patch import patch
 from click.testing import CliRunner
 
-from _patch import patch
 from sigil.cli import cli, main
 from sigil.cli._base import MODEL_ERROR_EXIT_CODE
 from sigil.cli.ask import DEFAULT_QUESTION

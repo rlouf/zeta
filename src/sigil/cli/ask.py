@@ -4,13 +4,13 @@ from __future__ import annotations
 
 import click
 
-from ._base import cli
-from ._shared import piped_stdin_text, question_with_stdin
 from ..routes.ask import (
     ZETA_ANSWER_TOOLS,
     ask,
     discussion_turns,
 )
+from ._base import cli
+from ._shared import piped_stdin_text, question_with_stdin
 
 DEFAULT_QUESTION = "Inspect and summarize the current shell context."
 

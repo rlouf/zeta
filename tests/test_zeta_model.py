@@ -7,12 +7,6 @@ from pathlib import Path
 from typing import Any, cast
 
 import pytest
-from click.testing import CliRunner
-
-from sigil.cli import cli as sigil_cli
-from sigil.zeta import prompt as zeta_prompt
-from sigil.zeta import model as zeta_model
-from sigil.zeta import models as zeta_models
 from _zeta_helpers import (
     DeltaSink,
     FakeStreamingResponse,
@@ -20,6 +14,12 @@ from _zeta_helpers import (
     task_state_fixture,
     write_models_config,
 )
+from click.testing import CliRunner
+
+from sigil.cli import cli as sigil_cli
+from sigil.zeta import model as zeta_model
+from sigil.zeta import models as zeta_models
+from sigil.zeta import prompt as zeta_prompt
 
 
 def test_zeta_model_config_uses_zeta_env(monkeypatch) -> None:
@@ -114,7 +114,7 @@ def test_zeta_stream_reassembles_chunks_split_mid_character() -> None:
     frame = (
         'data: {"choices":[{"index":0,"delta":{"content":"café"},'
         '"finish_reason":"stop"}]}\n'
-    ).encode("utf-8")
+    ).encode()
     split = frame.index(b"\xc3") + 1
     lines = [frame[:split], frame[split:], b"\n", b"data: [DONE]\n"]
 

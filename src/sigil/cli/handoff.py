@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import click
 
+from .. import handoff
 from ._base import cli
 from ._shared import pretty_print_json
-from .. import handoff
 
 
 @cli.group("handoff", hidden=True)

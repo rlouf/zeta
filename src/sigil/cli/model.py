@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import click
 
-from ._base import cli
 from ..zeta import model as zeta_model
 from ..zeta.models import (
     active_model_profile,
@@ -15,6 +14,7 @@ from ..zeta.models import (
     resolve_model_profile,
     set_active_model_profile,
 )
+from ._base import cli
 
 
 @cli.group("model")

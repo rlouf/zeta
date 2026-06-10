@@ -1,5 +1,5 @@
 from __future__ import annotations
-import pytest
+
 import json
 import os
 import subprocess
@@ -11,12 +11,13 @@ from io import BytesIO, StringIO
 from pathlib import Path
 
 import click
+import pytest
+from _patch import patch, patch_dict
 from click.testing import CliRunner
 
-from _patch import patch, patch_dict
 from sigil.cli import cli, main
-from sigil.failure import failure_context_prompt, record_failure, truncate_snippet
 from sigil.display import should_color
+from sigil.failure import failure_context_prompt, record_failure, truncate_snippet
 from sigil.routes.ask import (
     ANSWER_SYSTEM_PROMPT,
     ask,
@@ -194,7 +195,7 @@ def test_append_event_does_not_interleave_large_lines_across_processes() -> None
                 ],
                 env=env,
             )
-            for marker, ready in zip(("a", "b"), ready_gates)
+            for marker, ready in zip(("a", "b"), ready_gates, strict=True)
         ]
         deadline = time.monotonic() + 30
         while not all(gate.exists() for gate in ready_gates):
@@ -688,7 +689,7 @@ def test_record_turn_keeps_all_turns_across_concurrent_processes() -> None:
                 ],
                 env=env,
             )
-            for marker, ready in zip(("a", "b"), ready_gates)
+            for marker, ready in zip(("a", "b"), ready_gates, strict=True)
         ]
         deadline = time.monotonic() + 30
         while not all(gate.exists() for gate in ready_gates):

@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 import json
 import os
 import socket
@@ -9,9 +10,9 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from io import StringIO
 from pathlib import Path
 
+from _patch import patch, patch_dict
 from click.testing import CliRunner
 
-from _patch import patch, patch_dict
 from sigil.cli import cli, main
 from sigil.install import (
     DoctorCheck,
@@ -120,7 +121,7 @@ def test_doctor_reports_expected_checks() -> None:
     assert "shell:binding-installed" in names
     assert "shell:binding-loaded" in names
     assert "shell:glyphs-enabled" in names
-    assert all((check.status == "ok" for check in checks))
+    assert all(check.status == "ok" for check in checks)
 
 
 def test_doctor_reports_disabled_glyphs() -> None:

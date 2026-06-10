@@ -10,10 +10,9 @@ from io import StringIO
 from pathlib import Path
 from typing import Any, cast
 
-
 from sigil.zeta import agent as zeta_agent
-from sigil.zeta import prompt as zeta_prompt
 from sigil.zeta import model as zeta_model
+from sigil.zeta import prompt as zeta_prompt
 from sigil.zeta import trace as zeta_trace
 
 
@@ -67,7 +66,7 @@ def sse_lines(*payloads: dict[str, Any] | str) -> list[bytes]:
     lines: list[bytes] = []
     for payload in payloads:
         data = payload if isinstance(payload, str) else json.dumps(payload)
-        lines.append(f"data: {data}\n".encode("utf-8"))
+        lines.append(f"data: {data}\n".encode())
         lines.append(b"\n")
     return lines
 

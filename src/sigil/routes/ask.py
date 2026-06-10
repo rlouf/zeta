@@ -9,9 +9,16 @@ from __future__ import annotations
 
 import json
 import sys
+from collections.abc import Callable, Iterable
 from types import TracebackType
-from typing import Any, Callable, Iterable
+from typing import Any
 
+from ..display import (
+    StreamRenderer,
+    ThinkingStatus,
+    render_tool_result_summary,
+    thinking_status_factory,
+)
 from ..session import active_failure_context, recent_turns_context
 from ..state import (
     ANSWER_HISTORY,
@@ -20,6 +27,13 @@ from ..state import (
     read_jsonl,
     write_jsonl,
 )
+from ..zeta.agent import AgentConfig, run_agent_turn
+from ..zeta.context import load_project_context
+from ..zeta.model import ChatCompletionStreamSink, chat_text
+from ..zeta.models import ModelSelection, active_model_selection, model_selection_event
+from ..zeta.skills import expand_skill_directive
+from ..zeta.timeline import record_event
+from ..zeta.trace import latest_prompt_trace_fields
 from ._turn import (
     TurnEventRecorder,
     TurnRenderer,
@@ -30,20 +44,6 @@ from ._turn import (
     record_turn_abort,
     render_final_text,
 )
-from ..display import (
-    StreamRenderer,
-    ThinkingStatus,
-    render_tool_result_summary,
-    thinking_status_factory,
-)
-from ..zeta.agent import AgentConfig, run_agent_turn
-from ..zeta.context import load_project_context
-from ..zeta.model import ChatCompletionStreamSink, chat_text
-from ..zeta.models import ModelSelection, active_model_selection, model_selection_event
-from ..zeta.skills import expand_skill_directive
-from ..zeta.timeline import record_event
-from ..zeta.trace import latest_prompt_trace_fields
-
 
 ANSWER_ROUTE = "answer"
 ANSWER_REQUEST_EVENT = "answer_requested"

@@ -6,9 +6,9 @@ from datetime import datetime
 
 import click
 
+from ..session import read_event_log
 from ._base import cli
 from ._shared import pretty_print_json
-from ..session import read_event_log
 
 EVENT_LIST_COLUMNS = ("time", "route", "event", "session", "detail")
 ROUTE_GLYPHS = frozenset({",", ",,", ",,,", "?", "ask"})

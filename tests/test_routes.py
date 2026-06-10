@@ -9,8 +9,17 @@ from pathlib import Path
 from typing import Any, cast
 
 import pytest
+from _zeta_helpers import (
+    TtyBuffer,
+    required_stream_sink,
+    visible_terminal_text,
+    write_models_config,
+    write_skill,
+)
 from click.testing import CliRunner
 
+from sigil import display as sigil_display
+from sigil import handoff as sigil_handoff
 from sigil.cli import cli as sigil_cli
 from sigil.protocols import (
     SHELL_HANDOFF_CANCEL_EXPECTED_NOT_EXECUTED,
@@ -24,20 +33,11 @@ from sigil.protocols import (
 from sigil.routes import _turn as turn_routes
 from sigil.routes import ask as answers_runner
 from sigil.routes import zeta_step as zeta_runner
-from sigil import handoff as sigil_handoff
 from sigil.session import read_event_log, recent_turns, record_turn
 from sigil.state import read_jsonl
-from sigil import display as sigil_display
 from sigil.zeta import agent as zeta_agent
-from sigil.zeta import timeline as zeta_timeline
 from sigil.zeta import models as zeta_models
-from _zeta_helpers import (
-    TtyBuffer,
-    required_stream_sink,
-    visible_terminal_text,
-    write_models_config,
-    write_skill,
-)
+from sigil.zeta import timeline as zeta_timeline
 
 
 def test_sigil_zeta_step_writes_handoff_file(

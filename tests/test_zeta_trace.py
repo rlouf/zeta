@@ -5,15 +5,15 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from _zeta_helpers import (
+    BatchSpyStore,
+)
 from click.testing import CliRunner
 
 from sigil.cli import cli as sigil_cli
 from sigil.zeta import prompt as zeta_prompt
 from sigil.zeta import timeline as zeta_timeline
 from sigil.zeta import trace as zeta_trace
-from _zeta_helpers import (
-    BatchSpyStore,
-)
 
 
 def test_zeta_trace_object_ids_ignore_dict_key_order() -> None:

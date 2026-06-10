@@ -23,7 +23,7 @@ repos:
         pass_filenames: false
       - id: vulture
         name: vulture
-        entry: uv run vulture src tests --min-confidence 80
+        entry: uv run vulture
         language: system
         require_serial: true
         pass_filenames: false

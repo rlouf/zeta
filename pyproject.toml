@@ -75,3 +75,20 @@ dev = [
     "ty>=0.0.39",
     "vulture>=2.16",
 ]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+filterwarnings = [
+  "error",
+  "ignore:This process.*is multi-threaded, use of forkpty:DeprecationWarning",
+]
+
+[tool.ruff]
+extend-exclude = ["docs/demos"]
+
+[tool.ruff.lint]
+extend-select = ["B", "I", "UP"]
+
+[tool.vulture]
+paths = ["src", "tests"]
+min_confidence = 80

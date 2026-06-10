@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import hashlib
 import os
+from collections.abc import Iterable
 from dataclasses import dataclass, field
-from typing import Any, Iterable, Literal
+from typing import Any, Literal
 
 from ..skills import Skill, available_skills, expand_skill_directive
 from ..timeline import ChatMessageEntry, _chat_message_entries, from_message_boundary

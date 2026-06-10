@@ -2,20 +2,20 @@
 
 from __future__ import annotations
 
-from contextlib import nullcontext
 import json
+from collections.abc import Callable, Iterable
+from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass, field
 from types import TracebackType
-from typing import Any, Callable, ContextManager, Iterable, Literal, cast
+from typing import Any, Literal, cast
 
 from ..protocols import is_shell_prompt_handoff
-from .prompt import PromptBuilder, prompt_transform_from_env
 from .model import (
     ChatCompletionStreamSink,
     chat_completion_messages,
     model_endpoint_open,
 )
-from .trace import PromptTrace, prompt_trace_payload
+from .prompt import PromptBuilder, prompt_transform_from_env
 from .tools import (
     allowed_tool_names,
     analyze_tool,
@@ -23,11 +23,12 @@ from .tools import (
     run_tool,
     validate_tool_args,
 )
+from .trace import PromptTrace, prompt_trace_payload
 
 EditMode = Literal["review_patch", "direct_replace"]
 ExecutionMode = Literal["handoff", "direct"]
 AgentEventSink = Callable[[dict[str, Any]], None]
-ModelStatusFactory = Callable[[], ContextManager[object]]
+ModelStatusFactory = Callable[[], AbstractContextManager[object]]
 
 DEFAULT_MAX_TURNS = 25
 
@@ -240,7 +241,7 @@ class ModelTurnStreamSink:
 
 def model_status_context(
     factory: ModelStatusFactory | None,
-) -> ContextManager[object]:
+) -> AbstractContextManager[object]:
     if factory is None:
         return nullcontext()
     return factory()

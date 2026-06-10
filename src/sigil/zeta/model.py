@@ -9,8 +9,8 @@ import socket
 import sys
 import urllib.error
 import urllib.request
-from collections.abc import Iterable, Iterator, Mapping
-from typing import Any, Callable, Protocol
+from collections.abc import Callable, Iterable, Iterator, Mapping
+from typing import Any, Protocol
 from urllib.parse import urlparse, urlunparse
 
 from jsonschema import Draft202012Validator

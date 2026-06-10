@@ -5,7 +5,8 @@ from __future__ import annotations
 import json
 import threading
 import time
-from typing import Any, Callable, Protocol, TextIO
+from collections.abc import Callable
+from typing import Any, Protocol, TextIO
 
 from rich.console import Console
 from rich.constrain import Constrain
@@ -13,9 +14,9 @@ from rich.live import Live
 from rich.markdown import Markdown
 from rich.padding import Padding
 
-from .summarize import summarize, text_content, tool_result_summary
 from ..tty import is_interactive, muted, should_color
 from ..zeta.prompt.budget import estimated_tokens_for_text
+from .summarize import summarize, text_content, tool_result_summary
 
 TRACE_LABEL_WIDTH = 5
 THINKING_STATUS_INTERVAL_SECONDS = 1.0
@@ -504,7 +505,7 @@ class ThinkingStatus:
         self.thread: threading.Thread | None = None
         self.lock = threading.Lock()
 
-    def __enter__(self) -> "ThinkingStatus":
+    def __enter__(self) -> ThinkingStatus:
         if not self.enabled:
             return self
         if self.before_start is not None:

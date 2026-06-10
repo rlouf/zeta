@@ -4,15 +4,14 @@ from __future__ import annotations
 
 import click
 
-from ._base import cli
-from ._shared import pretty_print_json
 from ..session import (
     clear_current_session,
     current_session_snapshot,
     known_sessions,
     session_paths,
 )
-
+from ._base import cli
+from ._shared import pretty_print_json
 
 JSON_HELP = "Emit session state as JSON."
 

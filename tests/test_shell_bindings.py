@@ -1,6 +1,6 @@
 from __future__ import annotations
+
 import errno
-import pytest
 import os
 import pty
 import shutil
@@ -8,6 +8,8 @@ import subprocess
 import tempfile
 import textwrap
 from pathlib import Path
+
+import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from ..tty import MUTED, RESET
 from .render import (
     ContextUsageFooter,
     RichStreamRenderer,
@@ -28,7 +29,6 @@ from .summarize import (
     tool_result_summary,
     truncate,
 )
-from ..tty import MUTED, RESET
 
 __all__ = [
     "MUTED",

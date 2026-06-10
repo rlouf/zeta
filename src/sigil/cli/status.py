@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import click
 
+from ..status import current_status, format_status
 from ._base import cli
 from ._shared import pretty_print_json
-from ..status import current_status, format_status
 
 
 @cli.command("status")

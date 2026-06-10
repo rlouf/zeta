@@ -11,8 +11,8 @@ from typing import BinaryIO, Protocol
 
 import click
 
-from ._base import cli
 from ..session import record_turn
+from ._base import cli
 
 DEFAULT_CAPTURE_BYTES = 6000
 READ_SIZE = 65536
@@ -110,6 +110,8 @@ def cmd_run(ctx: click.Context, use_shell: bool, argv: tuple[str, ...]) -> int:
         status = proc.wait()
     stdout_thread.join()
     stderr_thread.join()
+    proc.stdout.close()
+    proc.stderr.close()
     if status < 0:
         status = 128 - status
 

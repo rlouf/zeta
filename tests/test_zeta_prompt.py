@@ -7,13 +7,6 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-
-from sigil.zeta import context as zeta_context
-from sigil.zeta import prompt as zeta_prompt
-from sigil.zeta import skills as zeta_skills
-from sigil.zeta import tools as zeta_tools
-from sigil.zeta import model as zeta_model
-from sigil.zeta import trace as zeta_trace
 from _zeta_helpers import (
     BatchSpyStore,
     assert_task_state_graph,
@@ -26,6 +19,13 @@ from _zeta_helpers import (
     tool_result_transcript,
     write_skill,
 )
+
+from sigil.zeta import context as zeta_context
+from sigil.zeta import model as zeta_model
+from sigil.zeta import prompt as zeta_prompt
+from sigil.zeta import skills as zeta_skills
+from sigil.zeta import tools as zeta_tools
+from sigil.zeta import trace as zeta_trace
 
 
 def test_zeta_prompt_builder_noop_transform_matches_chat_messages() -> None:

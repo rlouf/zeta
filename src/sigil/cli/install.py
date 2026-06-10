@@ -6,8 +6,6 @@ from pathlib import Path
 
 import click
 
-from ._base import cli
-from ._shared import pretty_print_json
 from ..install import (
     DoctorCheck,
     checks_exit_code,
@@ -16,6 +14,8 @@ from ..install import (
     doctor_checks,
     install_zsh_binding,
 )
+from ._base import cli
+from ._shared import pretty_print_json
 
 
 @cli.command("install")

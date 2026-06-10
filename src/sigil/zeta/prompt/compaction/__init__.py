@@ -1,5 +1,6 @@
 """Prompt transforms that compact context while preserving trace links."""
 
+from .drop_oldest import DropOldestPromptTransform
 from .structural_trim import StructuralTrimPromptTransform
 from .task_state import (
     ModelTaskStateExtractor,
@@ -13,6 +14,7 @@ from .task_state import (
 )
 
 __all__ = [
+    "DropOldestPromptTransform",
     "ModelTaskStateExtractor",
     "StructuralTrimPromptTransform",
     "TASK_STATE_SCHEMA",

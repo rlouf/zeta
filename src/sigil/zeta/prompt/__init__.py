@@ -34,6 +34,7 @@ from .system import (
     tools_prompt,
 )
 from .compaction import (
+    DropOldestPromptTransform,
     ModelTaskStateExtractor,
     StructuralTrimPromptTransform,
     TASK_STATE_SCHEMA,
@@ -66,11 +67,16 @@ def prompt_transform_from_env(
         return BudgetThresholdPromptTransform(
             StructuralTrimPromptTransform(),
             threshold,
+            escalation=(
+                TaskStateExtractionPromptTransform(),
+                DropOldestPromptTransform(max_tokens=threshold),
+            ),
         )
     if mode == "task_state":
         return BudgetThresholdPromptTransform(
             TaskStateExtractionPromptTransform(),
             threshold,
+            escalation=(DropOldestPromptTransform(max_tokens=threshold),),
         )
     return NoOpPromptTransform()
 
@@ -91,6 +97,7 @@ __all__ = [
     "ComponentUsage",
     "ContextUsage",
     "DEFAULT_TRIM_THRESHOLD_TOKENS",
+    "DropOldestPromptTransform",
     "GREP_TOOL_POLICY",
     "ModelTaskStateExtractor",
     "NoOpPromptTransform",

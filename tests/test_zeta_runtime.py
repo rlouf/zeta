@@ -6403,3 +6403,126 @@ def test_zeta_task_state_extraction_is_cached_per_source_set() -> None:
     assert extractor.calls == 1
     assert [c.kind for c in first] == [c.kind for c in second]
     assert any(c.kind == "task_state" for c in second)
+
+
+def big_transcript_components(count: int = 6) -> list[zeta_prompt.PromptComponent]:
+    timeline = [
+        {
+            "role": "user" if index % 2 == 0 else "assistant",
+            "content": f"message {index} " + "x" * 400,
+        }
+        for index in range(count)
+    ]
+    return zeta_prompt.prompt_components("continue", timeline, allowed_tools=())
+
+
+def test_zeta_budget_threshold_escalates_until_under_budget() -> None:
+    class DropHalf:
+        def __init__(self, label: str, calls: list[str]) -> None:
+            self.label = label
+            self.calls = calls
+
+        def apply(
+            self,
+            components: list[zeta_prompt.PromptComponent],
+        ) -> list[zeta_prompt.PromptComponent]:
+            self.calls.append(self.label)
+            transcript = [c for c in components if c.kind == "transcript_message"]
+            keep = {id(c) for c in transcript[len(transcript) // 2 :]}
+            return [
+                c for c in components if c.kind != "transcript_message" or id(c) in keep
+            ]
+
+    components = big_transcript_components(8)
+    over_budget = zeta_prompt.measure(components).total_tokens
+    target = over_budget - 600
+    calls: list[str] = []
+    gate = zeta_prompt.BudgetThresholdPromptTransform(
+        DropHalf("first", calls),
+        target,
+        escalation=(DropHalf("second", calls), DropHalf("third", calls)),
+    )
+
+    output = gate.apply(components)
+
+    assert calls == ["first", "second"]
+    assert zeta_prompt.measure(output).total_tokens <= target
+
+
+def test_zeta_budget_threshold_warns_when_still_over_budget(caplog) -> None:
+    zeta_prompt.transforms.reset_over_budget_warning()
+    components = big_transcript_components(4)
+    gate = zeta_prompt.BudgetThresholdPromptTransform(
+        zeta_prompt.NoOpPromptTransform(),
+        1,
+    )
+
+    with caplog.at_level("WARNING", logger="sigil.zeta.prompt"):
+        output = gate.apply(components)
+
+    assert output
+    assert any("over budget" in record.getMessage() for record in caplog.records)
+
+
+def test_zeta_drop_oldest_removes_transcript_messages_until_budget() -> None:
+    components = big_transcript_components(6)
+    total = zeta_prompt.measure(components).total_tokens
+    target = total - 150
+
+    output = zeta_prompt.DropOldestPromptTransform(max_tokens=target).apply(components)
+
+    assert zeta_prompt.measure(output).total_tokens <= target
+    contents = [
+        str(c.message.get("content") or "") for c in output if c.message is not None
+    ]
+    joined = "\n".join(contents)
+    assert "message 0" not in joined
+    assert "message 5" in joined
+    assert any(c.kind == "system_prompt" for c in output)
+    assert any(c.kind == "user_objective" for c in output)
+
+
+def test_zeta_drop_oldest_drops_tool_results_with_their_call() -> None:
+    timeline = [
+        {
+            "type": "assistant_message",
+            "tool_calls": tool_call_fixture("call-old"),
+        },
+        tool_result_event("call-old", "old result " + "x" * 400, metadata={}),
+        {"role": "user", "content": "newer message"},
+    ]
+    components = zeta_prompt.prompt_components("continue", timeline, allowed_tools=())
+    total = zeta_prompt.measure(components).total_tokens
+
+    output = zeta_prompt.DropOldestPromptTransform(max_tokens=total - 50).apply(
+        components
+    )
+
+    roles = [c.message.get("role") for c in output if c.message is not None]
+    assert "tool" not in roles
+    assert not any(
+        c.message is not None and c.message.get("tool_calls") for c in output
+    )
+    joined = "\n".join(
+        str(c.message.get("content") or "") for c in output if c.message is not None
+    )
+    assert "newer message" in joined
+
+
+def test_zeta_trim_env_modes_build_escalation_ladders() -> None:
+    structural = zeta_prompt.prompt_transform_from_env(
+        {"ZETA_TRIM": "structural", "ZETA_TRIM_THRESHOLD_TOKENS": "7"}
+    )
+    assert isinstance(structural, zeta_prompt.BudgetThresholdPromptTransform)
+    assert [type(t).__name__ for t in structural.escalation] == [
+        "TaskStateExtractionPromptTransform",
+        "DropOldestPromptTransform",
+    ]
+
+    task_state = zeta_prompt.prompt_transform_from_env(
+        {"ZETA_TRIM": "task_state", "ZETA_TRIM_THRESHOLD_TOKENS": "7"}
+    )
+    assert isinstance(task_state, zeta_prompt.BudgetThresholdPromptTransform)
+    assert [type(t).__name__ for t in task_state.escalation] == [
+        "DropOldestPromptTransform",
+    ]

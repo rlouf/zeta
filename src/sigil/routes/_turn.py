@@ -22,7 +22,7 @@ from ..display import (
 from ..zeta.agent import AgentTurnResult
 from ..zeta.model import ensure_server
 from ..zeta.models import ModelSelection
-from ..zeta.runtime import record_event
+from ..zeta.timeline import record_event
 
 
 def model_server_ready(selected_model: ModelSelection | None) -> bool:

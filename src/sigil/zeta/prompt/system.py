@@ -7,8 +7,8 @@ from typing import Any, Iterable
 from jinja2 import Environment, StrictUndefined
 
 from ...protocols import SHELL_HANDOFF_RESULT_SCHEMA
-from ..skills import Skill
-from ..tools import model_tool_descriptors
+from ..skills import Skill, available_skills
+from ..tools import allowed_tool_names, model_tool_descriptors
 
 PROMPT_TEMPLATE_ENV = Environment(
     autoescape=False,
@@ -97,9 +97,29 @@ def system_prompt(
     route_prompt: str | None = None,
     *,
     allowed_tools: Iterable[str] | None = None,
+    skills: Iterable[Skill] | None = None,
+) -> str:
+    """Build the Zeta system prompt from the active tools and available skills."""
+    active_tools = tuple(allowed_tool_names(allowed_tools))
+    active_skills = (
+        tuple(skills)
+        if skills is not None
+        else tuple(available_skills() if can_read_skill_files(active_tools) else ())
+    )
+    return render_system_prompt(
+        route_prompt,
+        allowed_tools=active_tools,
+        skills=active_skills,
+    )
+
+
+def render_system_prompt(
+    route_prompt: str | None = None,
+    *,
+    allowed_tools: Iterable[str] | None = None,
     skills: Iterable[Skill] = (),
 ) -> str:
-    """Build the Zeta system prompt with the active tool registry."""
+    """Render the Zeta system prompt from already-resolved prompt inputs."""
     active_tools = tuple(allowed_tools) if allowed_tools is not None else None
     return render_prompt_template(
         SYSTEM_PROMPT_TEMPLATE,
@@ -111,6 +131,10 @@ def system_prompt(
         skills_prompt=skills_prompt(skills),
         tools_prompt=tools_prompt(active_tools),
     )
+
+
+def can_read_skill_files(enabled_tools: Iterable[str]) -> bool:
+    return "read" in set(enabled_tools)
 
 
 def tool_available(name: str, allowed_tools: Iterable[str] | None = None) -> bool:

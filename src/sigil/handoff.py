@@ -17,7 +17,7 @@ from .protocols import (
     is_shell_handoff_result,
     is_shell_prompt_handoff,
 )
-from .zeta import runtime as zeta_runtime
+from .zeta.timeline import current_timeline, record_event
 
 
 def append_shell_turn(
@@ -39,9 +39,7 @@ def append_shell_turn(
 
 def append_shell_result() -> dict[str, Any]:
     """Append a synthetic tool result for commands run after a shell handoff."""
-    return zeta_runtime.record_event(
-        shell_result_event(zeta_runtime.current_timeline())
-    )
+    return record_event(shell_result_event(current_timeline()))
 
 
 def shell_result_event(timeline: list[dict[str, Any]]) -> dict[str, Any]:

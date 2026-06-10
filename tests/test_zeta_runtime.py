@@ -30,8 +30,8 @@ from sigil.session import read_event_log, recent_turns, record_turn
 from sigil.state import read_jsonl
 from sigil import display as sigil_display
 from sigil.zeta import agent as zeta_agent
+from sigil.zeta import context as zeta_context
 from sigil.zeta import prompt as zeta_prompt
-from sigil.zeta import runtime as zeta
 from sigil.zeta import skills as zeta_skills
 from sigil.zeta import tools as zeta_tools
 from sigil.zeta import timeline as zeta_timeline
@@ -2866,7 +2866,7 @@ def test_zeta_project_context_loads_global_to_local(
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.chdir(child)
 
-    context = zeta.load_project_context()
+    context = zeta_context.load_project_context()
 
     assert context.index("global instructions") < context.index("root instructions")
     assert context.index("root instructions") < context.index("child instructions")
@@ -2886,7 +2886,7 @@ def test_zeta_project_context_requires_exact_agents_filename(
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.chdir(project)
 
-    context = zeta.load_project_context()
+    context = zeta_context.load_project_context()
 
     assert "uppercase ignored" not in context
 
@@ -2902,7 +2902,7 @@ def test_zeta_project_context_ignores_missing_global_directory(
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.chdir(project)
 
-    context = zeta.load_project_context()
+    context = zeta_context.load_project_context()
 
     assert "project instructions" in context
 
@@ -3005,7 +3005,7 @@ def test_zeta_skill_discovery_reports_invalid_metadata(
     assert "missing non-empty description" in catalog.diagnostics[1].message
 
 
-def test_zeta_system_prompt_advertises_enabled_skills_only_with_read(
+def test_system_prompt_advertises_enabled_skills_only_with_read(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -3021,8 +3021,8 @@ def test_zeta_system_prompt_advertises_enabled_skills_only_with_read(
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.chdir(project)
 
-    prompt = zeta.zeta_system_prompt(allowed_tools=("read", "ls"))
-    no_read_prompt = zeta.zeta_system_prompt(allowed_tools=("ls",))
+    prompt = zeta_prompt.system_prompt(allowed_tools=("read", "ls"))
+    no_read_prompt = zeta_prompt.system_prompt(allowed_tools=("ls",))
 
     assert "<available_skills>" in prompt
     assert "name: enabled-skill" in prompt
@@ -3972,9 +3972,9 @@ def test_zeta_timeline_record_and_tail(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("SIGIL_STATE_DIR", str(tmp_path))
     monkeypatch.setenv("SIGIL_SESSION_ID", "zeta-test")
 
-    zeta.record_event({"type": "tool_call", "name": "read"})
+    zeta_timeline.record_event({"type": "tool_call", "name": "read"})
 
-    events = zeta.current_timeline(1)
+    events = zeta_timeline.current_timeline(1)
     assert events[0]["type"] == "tool_call"
     assert events[0]["name"] == "read"
     refs = zeta_trace.default_store().refs()
@@ -3989,13 +3989,13 @@ def test_zeta_timeline_projects_from_ref_and_object(
     monkeypatch.setenv("SIGIL_STATE_DIR", str(tmp_path))
     monkeypatch.setenv("SIGIL_SESSION_ID", "zeta-test")
 
-    zeta.record_event({"type": "user_message", "content": "first"})
+    zeta_timeline.record_event({"type": "user_message", "content": "first"})
     store = zeta_trace.default_store()
     first_head = store.get_ref(zeta_timeline.run_head_ref("zeta-test"))
     assert first_head is not None
     store.set_ref("run/custom/head", first_head)
 
-    zeta.record_event({"type": "assistant_message", "content": "second"})
+    zeta_timeline.record_event({"type": "assistant_message", "content": "second"})
 
     assert [
         event["content"] for event in zeta_timeline.timeline_from_ref("run/custom/head")
@@ -4148,7 +4148,7 @@ def test_zeta_agent_step_separates_trace_from_final_answer(
 
     monkeypatch.setattr(turn_routes, "ensure_server", lambda: True)
     monkeypatch.setattr(zeta_runner, "run_agent_turn", fake_run_agent_turn)
-    monkeypatch.setattr(zeta_runner.runtime, "load_project_context", lambda: "ctx")
+    monkeypatch.setattr(zeta_runner, "load_project_context", lambda: "ctx")
 
     code = zeta_runner.run_agent_step("answer me", glyph=",,")
 
@@ -4329,7 +4329,7 @@ def test_zeta_agent_step_does_not_pass_current_user_event_as_transcript(
 
     assert code == 0
     assert cast(list[dict[str, Any]], captured["transcript"]) == []
-    assert zeta.current_timeline()[-1]["type"] == "user_message"
+    assert zeta_timeline.current_timeline()[-1]["type"] == "user_message"
     assert capsys.readouterr().out == "\ndone\n\n"
 
 
@@ -4906,9 +4906,9 @@ def test_zeta_step_glyph_selects_edit_mode() -> None:
     assert zeta_runner.execution_mode_for_glyph(",,,") == "direct"
 
 
-def test_zeta_system_prompt_is_product_neutral_and_dynamic() -> None:
-    prompt = zeta.zeta_system_prompt(allowed_tools=("read", "ls"))
-    grep_prompt = zeta.zeta_system_prompt(allowed_tools=("read", "grep", "ls"))
+def test_system_prompt_is_product_neutral_and_dynamic() -> None:
+    prompt = zeta_prompt.system_prompt(allowed_tools=("read", "ls"))
+    grep_prompt = zeta_prompt.system_prompt(allowed_tools=("read", "grep", "ls"))
 
     assert "Sigil" not in prompt
     assert "Preserve user changes." in prompt
@@ -5193,7 +5193,7 @@ url = "http://127.0.0.1:8081/v1/chat/completions"
     assert config.model_url == "http://127.0.0.1:8081/v1/chat/completions"
     transcript = cast(list[dict[str, Any]], captured["transcript"])
     assert transcript == []
-    assert zeta.current_timeline()[-1]["model"] == {
+    assert zeta_timeline.current_timeline()[-1]["model"] == {
         "profile": "fast",
         "model": "fast-model",
         "url": "http://127.0.0.1:8081/v1/chat/completions",
@@ -5206,7 +5206,7 @@ def test_append_shell_result_appends_tool_result(
 ) -> None:
     monkeypatch.setenv("SIGIL_STATE_DIR", str(tmp_path))
     monkeypatch.setenv("SIGIL_SESSION_ID", "zeta-test")
-    zeta.record_event(
+    zeta_timeline.record_event(
         {
             "type": "tool_result",
             "tool_call_id": "call-1",
@@ -5246,7 +5246,7 @@ def test_resolved_shell_handoff_context_keeps_tool_call_with_shell_result(
 ) -> None:
     monkeypatch.setenv("SIGIL_STATE_DIR", str(tmp_path))
     monkeypatch.setenv("SIGIL_SESSION_ID", "zeta-test")
-    zeta.record_event(
+    zeta_timeline.record_event(
         {
             "type": "assistant_message",
             "tool_calls": [
@@ -5261,7 +5261,7 @@ def test_resolved_shell_handoff_context_keeps_tool_call_with_shell_result(
             ],
         }
     )
-    zeta.record_event(
+    zeta_timeline.record_event(
         {
             "type": "tool_call",
             "id": "call-1",
@@ -5270,7 +5270,7 @@ def test_resolved_shell_handoff_context_keeps_tool_call_with_shell_result(
             "input": {"command": "uv run pytest"},
         }
     )
-    zeta.record_event(
+    zeta_timeline.record_event(
         {
             "type": "tool_result",
             "tool_call_id": "call-1",
@@ -5288,7 +5288,7 @@ def test_resolved_shell_handoff_context_keeps_tool_call_with_shell_result(
     record_turn("uv run pytest", 1, "/repo", stderr_snippet="test failed")
 
     sigil_handoff.append_shell_result()
-    messages = zeta_timeline.chat_messages(zeta.current_timeline())
+    messages = zeta_timeline.chat_messages(zeta_timeline.current_timeline())
 
     assert messages[0]["role"] == "assistant"
     assert messages[0]["tool_calls"][0]["id"] == "call-1"
@@ -5306,7 +5306,7 @@ def test_sigil_transcript_shell_result_reports_extended_handoff_as_edited(
 ) -> None:
     monkeypatch.setenv("SIGIL_STATE_DIR", str(tmp_path))
     monkeypatch.setenv("SIGIL_SESSION_ID", "zeta-test")
-    zeta.record_event(
+    zeta_timeline.record_event(
         {
             "type": "tool_result",
             "tool_call_id": "call-1",
@@ -5341,7 +5341,7 @@ def test_sigil_transcript_shell_result_matches_despite_whitespace_edits(
 ) -> None:
     monkeypatch.setenv("SIGIL_STATE_DIR", str(tmp_path))
     monkeypatch.setenv("SIGIL_SESSION_ID", "zeta-test")
-    zeta.record_event(
+    zeta_timeline.record_event(
         {
             "type": "tool_result",
             "tool_call_id": "call-1",
@@ -5371,7 +5371,7 @@ def test_sigil_transcript_shell_result_cancels_unrelated_command(
 ) -> None:
     monkeypatch.setenv("SIGIL_STATE_DIR", str(tmp_path))
     monkeypatch.setenv("SIGIL_SESSION_ID", "zeta-test")
-    zeta.record_event(
+    zeta_timeline.record_event(
         {
             "type": "tool_result",
             "tool_call_id": "call-1",
@@ -5409,7 +5409,7 @@ def test_sigil_transcript_shell_result_includes_intervening_shell_turns(
 ) -> None:
     monkeypatch.setenv("SIGIL_STATE_DIR", str(tmp_path))
     monkeypatch.setenv("SIGIL_SESSION_ID", "zeta-test")
-    zeta.record_event(
+    zeta_timeline.record_event(
         {
             "type": "tool_result",
             "tool_call_id": "call-1",
@@ -5444,7 +5444,7 @@ def test_sigil_transcript_shell_result_does_not_reuse_resolved_handoff(
 ) -> None:
     monkeypatch.setenv("SIGIL_STATE_DIR", str(tmp_path))
     monkeypatch.setenv("SIGIL_SESSION_ID", "zeta-test")
-    zeta.record_event(
+    zeta_timeline.record_event(
         {
             "type": "tool_result",
             "tool_call_id": "call-1",
@@ -5932,7 +5932,7 @@ def test_zeta_question_loop_passes_follow_up_history_as_turns(
 
     monkeypatch.setattr(turn_routes, "ensure_server", lambda: True)
     monkeypatch.setattr(answers_runner, "run_agent_turn", fake_run_agent_turn)
-    monkeypatch.setattr(answers_runner.runtime, "load_project_context", lambda: "ctx")
+    monkeypatch.setattr(answers_runner, "load_project_context", lambda: "ctx")
 
     code = answers_runner.run_tool_answer(
         "question system",
@@ -6138,7 +6138,7 @@ def test_zeta_answer_model_failure_records_turn_abort(
     with pytest.raises(RuntimeError):
         answers_runner.run_tool_answer("system", "question")
 
-    timeline = zeta.current_timeline()
+    timeline = zeta_timeline.current_timeline()
     assert timeline[-1]["type"] == "turn_aborted"
     assert "model stream failed" in timeline[-1]["error"]
     assert timeline[-2]["type"] == "user_message"
@@ -6167,7 +6167,7 @@ def test_zeta_step_model_failure_records_turn_abort(
     with pytest.raises(RuntimeError):
         zeta_runner.run_agent_step("do the thing", glyph=",,")
 
-    timeline = zeta.current_timeline()
+    timeline = zeta_timeline.current_timeline()
     assert timeline[-1]["type"] == "turn_aborted"
     assert timeline[-1]["glyph"] == ",,"
     assert "model request failed" in timeline[-1]["error"]
@@ -6180,10 +6180,10 @@ def test_session_clear_removes_zeta_continuity(
 ) -> None:
     monkeypatch.setenv("SIGIL_STATE_DIR", str(tmp_path))
     monkeypatch.setenv("SIGIL_SESSION_ID", "zeta-test")
-    zeta.record_event({"type": "user_message", "content": "hello"})
+    zeta_timeline.record_event({"type": "user_message", "content": "hello"})
     record_turn("ls", 0, "/repo")
     session_root = tmp_path / "sessions" / "zeta-test"
-    assert zeta.current_timeline() != []
+    assert zeta_timeline.current_timeline() != []
     assert session_root.exists()
 
     result = CliRunner().invoke(sigil_cli, ["session", "clear"])
@@ -6191,4 +6191,4 @@ def test_session_clear_removes_zeta_continuity(
     assert result.exit_code == 0
     assert "zeta-trace.sqlite3" in result.output
     assert not session_root.exists()
-    assert zeta.current_timeline() == []
+    assert zeta_timeline.current_timeline() == []

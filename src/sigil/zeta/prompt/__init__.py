@@ -16,7 +16,6 @@ from .builder import PreparedPrompt, PromptBuilder
 from .components import (
     PromptComponent,
     Representation,
-    can_read_skill_files,
     component_messages,
     prompt_component_object,
     prompt_components,
@@ -26,16 +25,18 @@ from .system import (
     BASE_SYSTEM_PROMPT,
     GREP_TOOL_POLICY,
     TOOL_PROTOCOL_PROMPT,
+    can_read_skill_files,
     clean_prompt,
+    render_system_prompt,
     skills_prompt,
     system_prompt,
     tool_available,
     tool_signature,
     tools_prompt,
 )
-from .structural_trim import StructuralTrimPromptTransform
-from .task_state import (
+from .compaction import (
     ModelTaskStateExtractor,
+    StructuralTrimPromptTransform,
     TASK_STATE_SCHEMA,
     TaskStateExtractionPromptTransform,
     TaskStateExtractor,
@@ -116,6 +117,7 @@ __all__ = [
     "prompt_component_object",
     "prompt_transform_from_env",
     "prompt_components",
+    "render_system_prompt",
     "render_stub",
     "skills_prompt",
     "system_prompt",

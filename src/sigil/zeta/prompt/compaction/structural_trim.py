@@ -7,8 +7,8 @@ import hashlib
 import json
 from typing import Any
 
-from .budget import render_stub
-from .components import PromptComponent
+from ..budget import render_stub
+from ..components import PromptComponent
 
 STRUCTURAL_TRIM_TOOL_NAMES = frozenset({"read", "grep"})
 DEFAULT_MAX_CONTENT_CHARS = 120_000

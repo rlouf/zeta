@@ -10,7 +10,7 @@ from ..skills import Skill, available_skills, expand_skill_directive
 from ..timeline import ChatMessageEntry, _chat_message_entries
 from ..tools import allowed_tool_names
 from ..trace import Object, ObjectId
-from .system import system_prompt
+from .system import can_read_skill_files, system_prompt
 
 Representation = Literal["full", "summary", "stub", "absent"]
 
@@ -26,11 +26,6 @@ class PromptComponent:
     source_object_id: ObjectId | None = None
     links: tuple[ObjectId, ...] = ()
     object_id: ObjectId | None = None
-
-
-def can_read_skill_files(enabled_tools: Iterable[str]) -> bool:
-    """Return whether enabled tools let the model inspect skill files."""
-    return "read" in tuple(enabled_tools)
 
 
 def zeta_context_message(

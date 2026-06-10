@@ -27,9 +27,13 @@ from ..display import (
     render_tool_result_summary,
     thinking_status_factory,
 )
-from ..zeta import runtime
 from ..zeta.agent import AgentConfig, run_agent_turn
+from ..zeta.context import load_project_context
 from ..zeta.models import active_model_selection, model_selection_event
+from ..zeta.prompt import system_prompt
+from ..zeta.skills import expand_skill_directive
+from ..zeta.timeline import current_timeline, record_event
+from ..zeta.tools import allowed_tool_names
 from ..zeta.trace import latest_prompt_trace_fields
 
 HandoffOutput = Literal["detail", "summary", "none"]
@@ -56,24 +60,24 @@ def run_agent_step(
         return 1
     output = trace_output or sys.stderr
     prompt = agent_prompt(
-        runtime.expand_skill_directive(objective),
+        expand_skill_directive(objective),
         glyph=glyph,
         stdin_text=stdin_text,
     )
     enabled_tools = enabled_tool_tuple(allowed_tools)
-    prior_timeline = runtime.current_timeline()
+    prior_timeline = current_timeline()
     user_event: dict[str, Any] = {
         "type": "user_message",
         "content": prompt,
         "glyph": glyph,
         "runtime": "zeta",
-        "system": runtime.zeta_system_prompt(system, allowed_tools=enabled_tools),
+        "system": system_prompt(system, allowed_tools=enabled_tools),
         "available_tools": list(enabled_tools),
     }
     if selected_model is not None:
         user_event["model"] = model_selection_event(selected_model)
-    runtime.record_event(user_event)
-    context = runtime.load_project_context()
+    record_event(user_event)
+    context = load_project_context()
     renderer = build_turn_renderer(output)
     recorder = AgentStepEventRecorder(
         renderer,
@@ -149,7 +153,7 @@ def run_agent_step(
 
 def enabled_tool_tuple(allowed_tools: Iterable[str] | None) -> tuple[str, ...]:
     if allowed_tools is None:
-        return tuple(runtime.allowed_tool_names())
+        return tuple(allowed_tool_names())
     return tuple(allowed_tools)
 
 

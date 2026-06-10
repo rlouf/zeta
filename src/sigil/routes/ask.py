@@ -36,10 +36,12 @@ from ..display import (
     render_tool_result_summary,
     thinking_status_factory,
 )
-from ..zeta import runtime
 from ..zeta.agent import AgentConfig, run_agent_turn
+from ..zeta.context import load_project_context
 from ..zeta.model import ChatCompletionStreamSink, chat_text
 from ..zeta.models import ModelSelection, active_model_selection, model_selection_event
+from ..zeta.skills import expand_skill_directive
+from ..zeta.timeline import record_event
 from ..zeta.trace import latest_prompt_trace_fields
 
 
@@ -128,7 +130,7 @@ def ask(
     """Run Zeta for a shell answer while recording answer history."""
     user_input = question
     selected_model = active_model_selection()
-    expanded_input = runtime.expand_skill_directive(user_input)
+    expanded_input = expand_skill_directive(user_input)
     prompt = expanded_input if follow_up else prepend_recent_turns(expanded_input)
     history_turns = list(history)
     request_payload: dict[str, Any] = {
@@ -202,7 +204,7 @@ def run_tool_answer(
     turn_events: list[dict[str, Any]] = [
         dict(turn) for turn in history if turn.get("role") in {"user", "assistant"}
     ]
-    runtime.record_event(user_event)
+    record_event(user_event)
     status_enabled = answer_thinking_status_enabled(json_output)
     try:
         result = run_agent_turn(
@@ -219,7 +221,7 @@ def run_tool_answer(
                 model_name=selected_model.model if selected_model is not None else None,
                 model_url=selected_model.url if selected_model is not None else None,
             ),
-            context=runtime.load_project_context(),
+            context=load_project_context(),
             event_sink=recorder.record,
             model_status=thinking_status_factory(
                 sys.stderr,

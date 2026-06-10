@@ -510,6 +510,36 @@ def test_zsh_records_turns_only_after_zeta_handoff() -> None:
 
 
 @pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
+def test_zsh_capture_window_expires_after_turn_limit() -> None:
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp = Path(tmp_dir)
+        stub = make_stub(tmp)
+        result = run_shell(
+            "zsh",
+            textwrap.dedent(
+                """\
+                export SIGIL_ZETA_CAPTURE_TURNS=2
+                source src/sigil/shell/zsh/sigil.zsh
+                sigil_agent_step hello >/dev/null
+                for command in "echo one" "echo two" "echo three"; do
+                  __sigil_zeta_before_command "$command"
+                  true
+                  __sigil_zeta_after_command_before_prompt
+                done
+                wait
+                """
+            ),
+            tmp,
+            stub,
+        )
+        assert_success(result)
+        calls = shell_turn_calls(tmp)
+        assert len(calls) == 2
+        assert "--command echo one" in calls[0]
+        assert "--command echo two" in calls[1]
+
+
+@pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
 def test_zsh_shell_turn_recording_does_not_spawn_python3() -> None:
     with tempfile.TemporaryDirectory() as tmp_dir:
         tmp = Path(tmp_dir)

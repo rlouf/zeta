@@ -179,7 +179,9 @@ uv run pytest tests/test_shell_bindings.py
 
 Sigil keeps session state under `~/.sigil/` so Zeta can resume from recent
 answer turns, handoff timeline events, and command results recorded through `+`
-or a Zeta handoff capture window.
+or a Zeta handoff capture window. The capture window expires after
+`SIGIL_ZETA_CAPTURE_TURNS` (default 20) recorded commands when a handoff is
+never resumed.
 
 ## Glyph Reference
 

@@ -87,17 +87,25 @@ __sigil_glyphs_enabled() {
 
 # ── Zeta Continuation Capture ────────────────────────────────────────────
 
+# Capture stays open between a handoff and the `,,` that resumes it, but not
+# for the life of the shell: it expires after SIGIL_ZETA_CAPTURE_TURNS (default
+# 20) recorded commands so an abandoned handoff does not record ambiently.
 typeset -g __sigil_zeta_capture_active="${__sigil_zeta_capture_active:-0}"
+typeset -g __sigil_zeta_capture_remaining="${__sigil_zeta_capture_remaining:-0}"
 typeset -g __sigil_zeta_current_command=""
 
 __sigil_zeta_enable_capture() {
   emulate -L zsh
+  local limit="${SIGIL_ZETA_CAPTURE_TURNS:-20}"
+  [[ "$limit" == <-> ]] || limit=20
   __sigil_zeta_capture_active=1
+  __sigil_zeta_capture_remaining="$limit"
 }
 
 __sigil_zeta_consume_capture() {
   emulate -L zsh
   __sigil_zeta_capture_active=0
+  __sigil_zeta_capture_remaining=0
   __sigil_zeta_current_command=""
 }
 
@@ -136,6 +144,10 @@ __sigil_zeta_after_command_before_prompt() {
   __sigil_zeta_current_command=""
   if [[ "$__sigil_zeta_capture_active" == "1" ]] && __sigil_zeta_recordable_command "$command"; then
     __sigil_zeta_record_shell_turn "$command" "$exit_status"
+    (( __sigil_zeta_capture_remaining-- ))
+    if (( __sigil_zeta_capture_remaining <= 0 )); then
+      __sigil_zeta_consume_capture
+    fi
   fi
   return "$exit_status"
 }

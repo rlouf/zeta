@@ -84,6 +84,23 @@ def current_timeline() -> list[dict[str, Any]]:
     return events
 
 
+def last_event_time() -> float | None:
+    """Return the time of the most recently recorded event, if any."""
+    try:
+        store = default_store()
+        event_id = store.get_ref(event_head_ref())
+        if event_id is None:
+            return None
+        obj = store.get_object(event_id)
+        if obj is None:
+            return None
+        value = object_event(obj).get("time")
+        return float(value) if isinstance(value, int | float) else None
+    except Exception as exc:
+        warn_trace_failure_once("last_event_time", exc)
+        return None
+
+
 def timeline_from_ref(
     ref_name: str,
     *,

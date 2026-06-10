@@ -40,7 +40,7 @@ from ..zeta.context import load_project_context
 from ..zeta.model import ChatCompletionStreamSink, chat_text
 from ..zeta.models import ModelSelection, active_model_selection, model_selection_event
 from ..zeta.skills import expand_skill_directive
-from ..zeta.timeline import current_timeline, record_event
+from ..zeta.timeline import current_timeline, last_event_time, record_event
 from ..zeta.trace import latest_prompt_trace_fields
 
 ASK_WORKFLOW = "ask"
@@ -68,12 +68,17 @@ def parse_tools(tools: str) -> tuple[str, ...]:
 
 
 def prepend_recent_turns(user_input: str) -> str:
-    """Attach recent shell activity to a fresh question prompt."""
+    """Attach shell activity newer than the last model response to a question.
+
+    Older activity is already in the timeline the model sees; only the delta
+    since the previous turn is news.
+    """
+    since = last_event_time()
     sections = []
-    context = recent_turns_context()
+    context = recent_turns_context(since=since)
     if context:
         sections.append(context)
-    failure = active_failure_context()
+    failure = active_failure_context(since=since)
     if failure:
         sections.append(failure)
     if not sections:

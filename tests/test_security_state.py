@@ -1106,6 +1106,67 @@ def test_ask_omits_failure_context_after_successful_turn() -> None:
     assert "Last failed command context:" not in prompt
 
 
+def test_fresh_ask_only_includes_shell_activity_since_last_response() -> None:
+    from sigil.zeta import timeline as zeta_timeline
+
+    with tempfile.TemporaryDirectory() as tmp:
+        with patch_dict(
+            os.environ,
+            {"SIGIL_STATE_DIR": tmp, "SIGIL_SESSION_ID": "test"},
+        ):
+            record_turn("ls -la", 0, "/repo")
+            zeta_timeline.record_event(
+                {"type": "assistant_message", "content": "95 files."}
+            )
+            record_turn("git status --short", 0, "/repo")
+            captured: dict[str, str] = {}
+
+            def fake_answer(system: str, prompt: str, **kwargs: object) -> int:
+                del system, kwargs
+                captured["prompt"] = prompt
+                return 0
+
+            with patch("sigil.workflows.ask.run_tool_ask", side_effect=fake_answer):
+                assert ask("and now?", json_output=True) == 0
+
+    prompt = captured["prompt"]
+    assert "git status --short" in prompt
+    assert "ls -la" not in prompt
+
+
+def test_fresh_ask_omits_failure_context_already_seen_by_the_model() -> None:
+    from sigil.zeta import timeline as zeta_timeline
+
+    with tempfile.TemporaryDirectory() as tmp:
+        with patch_dict(
+            os.environ,
+            {"SIGIL_STATE_DIR": tmp, "SIGIL_SESSION_ID": "test"},
+        ):
+            record_turn(
+                "pytest tests/test_foo.py",
+                1,
+                "/repo",
+                stderr_snippet="AssertionError: no",
+            )
+            zeta_timeline.record_event(
+                {"type": "assistant_message", "content": "The fixture is wrong."}
+            )
+            captured: dict[str, str] = {}
+
+            def fake_answer(system: str, prompt: str, **kwargs: object) -> int:
+                del system, kwargs
+                captured["prompt"] = prompt
+                return 0
+
+            with patch("sigil.workflows.ask.run_tool_ask", side_effect=fake_answer):
+                assert ask("how do I fix it?", json_output=True) == 0
+
+    prompt = captured["prompt"]
+    assert "Last failed command context:" not in prompt
+    assert "Recent shell activity" not in prompt
+    assert prompt == "how do I fix it?"
+
+
 def test_fresh_ask_omits_recent_turns_section_when_none_recorded() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         with patch_dict(

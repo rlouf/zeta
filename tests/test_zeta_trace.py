@@ -281,6 +281,22 @@ def test_zeta_timeline_projects_from_ref_and_object(
     assert zeta_timeline.timeline_from_ref("run/missing/head") == []
 
 
+def test_zeta_timeline_last_event_time_tracks_the_newest_event(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("SIGIL_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("SIGIL_SESSION_ID", "zeta-test")
+
+    assert zeta_timeline.last_event_time() is None
+
+    first = zeta_timeline.record_event({"type": "user_message", "content": "hi"})
+    assert zeta_timeline.last_event_time() == first["time"]
+
+    second = zeta_timeline.record_event({"type": "assistant_message", "content": "yo"})
+    assert zeta_timeline.last_event_time() == second["time"]
+
+
 def test_zeta_timeline_projects_deep_event_chains() -> None:
     store = zeta_trace.InMemoryStore()
     previous = ""

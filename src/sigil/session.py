@@ -176,17 +176,27 @@ def latest_active_failure() -> dict[str, Any] | None:
     return None
 
 
-def active_failure_context() -> str:
-    """Return last-failure context when the latest shell command failed."""
+def active_failure_context(since: float | None = None) -> str:
+    """Return last-failure context when the latest shell command failed.
+
+    A failure older than ``since`` returns nothing: the model already saw it.
+    """
     failure = latest_active_failure()
     if failure is None:
+        return ""
+    if since is not None and event_time(failure) <= since:
         return ""
     return "Last failed command context:\n" + failure_context_prompt(failure)
 
 
-def recent_turns_context(limit: int = RECENT_TURNS_PROMPT_LIMIT) -> str:
-    """Return a compact summary of the most recent shell turns, if any."""
+def recent_turns_context(
+    limit: int = RECENT_TURNS_PROMPT_LIMIT,
+    since: float | None = None,
+) -> str:
+    """Return a compact summary of shell turns newer than ``since``, if any."""
     turns = recent_turns(limit=limit)
+    if since is not None:
+        turns = [turn for turn in turns if event_time(turn) > since]
     if not turns:
         return ""
     lines = ["Recent shell activity:"]

@@ -96,6 +96,7 @@ def test_zeta_trace_sqlite_persists_objects_refs_derivations_and_closure(
     assert reopened.derivations_for_output(child_id)[0].producer == "test:v1"
     assert set(reopened.graph_closure([child_id])) == {parent_id, child_id}
     assert reopened.stats().object_count == 2
+    reopened.close()
 
 
 def test_zeta_default_store_reuses_one_store_per_path() -> None:
@@ -188,6 +189,7 @@ def test_sigil_zeta_trace_cli_smoke_with_sqlite_store(
     data = json.loads(result.output)
     assert data["stats"]["object_count"] == 1
     assert data["prompts"][0]["id"] == prompt_id
+    store.close()
 
 
 def test_zeta_chat_messages_keeps_full_history_and_current_events() -> None:
@@ -369,6 +371,8 @@ def test_zeta_sqlite_store_batch_defers_commit(tmp_path: Path) -> None:
         assert reader.get_object(object_id) is None
 
     assert reader.get_object(object_id) is not None
+    store.close()
+    reader.close()
 
 
 def test_zeta_record_event_writes_in_a_single_batch(monkeypatch) -> None:

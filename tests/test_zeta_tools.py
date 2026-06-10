@@ -330,7 +330,7 @@ def test_zeta_tool_bash_direct_executes_command() -> None:
 def test_zeta_tool_bash_direct_replaces_invalid_utf8_output() -> None:
     data = zeta_tools.run_tool(
         "bash",
-        {"command": "printf '\\xff\\xfe'"},
+        {"command": "printf '\\377\\376'"},
         execution_mode="direct",
     )
 

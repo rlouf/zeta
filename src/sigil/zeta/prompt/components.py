@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from typing import Any, Iterable, Literal
 
 from ..skills import Skill, available_skills, expand_skill_directive
-from ..timeline import ChatMessageEntry, _chat_message_entries
+from ..timeline import ChatMessageEntry, _chat_message_entries, from_message_boundary
 from ..tools import allowed_tool_names
 from ..trace import Object, ObjectId
 from .system import can_read_skill_files, system_prompt
@@ -86,7 +86,7 @@ def prompt_components(
         )
     components.extend(
         timeline_message_components(
-            timeline,
+            from_message_boundary(timeline),
             default_kind="transcript_message",
         )
     )

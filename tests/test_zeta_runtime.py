@@ -6534,3 +6534,48 @@ def test_zeta_trim_unknown_mode_warns_loudly(caplog) -> None:
 
     assert isinstance(transform, zeta_prompt.NoOpPromptTransform)
     assert any("ZETA_TRIM" in record.getMessage() for record in caplog.records)
+
+
+def test_zeta_prompt_components_start_prior_timeline_at_message_boundary() -> None:
+    timeline = [
+        {
+            "type": "tool_result",
+            "tool_call_id": "call-cut-off",
+            "name": "read",
+            "result": {"ok": True, "content": [{"type": "text", "text": "orphan"}]},
+        },
+        {"type": "assistant_message", "content": "the answer"},
+    ]
+
+    components = zeta_prompt.prompt_components("continue", timeline, allowed_tools=())
+
+    contents = [
+        str(component.message.get("content") or "")
+        for component in components
+        if component.message is not None
+    ]
+    assert not any(content.startswith("Tool result JSON:") for content in contents)
+    assert any("the answer" in content for content in contents)
+
+
+def test_zeta_orphan_tool_result_rendering_strips_trace_fields() -> None:
+    event = {
+        "type": "tool_result",
+        "tool_call_id": "call-orphan",
+        "name": "read",
+        "result": {"ok": True, "content": [{"type": "text", "text": "data"}]},
+        "tool_result_object_id": "sha256:result",
+        "tool_call_object_id": "sha256:call",
+        "model_telemetry": {"usage": {"prompt_tokens": 10}},
+        "prompt_trace": {"prompt_object_id": "sha256:prompt"},
+    }
+
+    messages = zeta_timeline.chat_messages([event])
+
+    assert len(messages) == 1
+    assert messages[0]["role"] == "user"
+    content = str(messages[0]["content"])
+    assert "data" in content
+    assert "sha256:" not in content
+    assert "model_telemetry" not in content
+    assert "prompt_trace" not in content

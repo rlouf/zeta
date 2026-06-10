@@ -133,6 +133,21 @@ def timeline_from_object(
     return events[-limit:]
 
 
+def from_message_boundary(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Drop leading tool results whose calls fell outside a timeline window.
+
+    The event-count tail can open mid tool exchange; an orphaned result
+    renders as a raw JSON dump in the prompt. Reconciliation reads the raw
+    timeline, so this trim belongs to the model-facing conversion only.
+    """
+    start = 0
+    while start < len(events):
+        if str(events[start].get("type") or "") != "tool_result":
+            break
+        start += 1
+    return events[start:]
+
+
 def run_head_ref(run_id: str | None = None) -> str:
     """Return the mutable ref naming the current trace leaf for a run."""
     return f"run/{run_id or session_id()}/head"
@@ -660,6 +675,19 @@ def tool_call_message(
     }
 
 
+# Bookkeeping the model has no use for: trace linkage and telemetry.
+RENDERED_EVENT_PRIVATE_FIELDS = frozenset(
+    {
+        "prompt_trace",
+        "tool_call_object_id",
+        "tool_result_object_id",
+        "prompt_component_object_id",
+        "source_object_id",
+        "model_telemetry",
+    }
+)
+
+
 def tool_result_message(
     event: dict[str, Any],
     tool_call_ids: set[str],
@@ -675,8 +703,13 @@ def tool_result_message(
                 separators=(",", ":"),
             ),
         }
+    rendered = {
+        key: value
+        for key, value in event.items()
+        if key not in RENDERED_EVENT_PRIVATE_FIELDS
+    }
     return {
         "role": "user",
         "content": "Tool result JSON:\n"
-        + json.dumps(event, ensure_ascii=False, separators=(",", ":")),
+        + json.dumps(rendered, ensure_ascii=False, separators=(",", ":")),
     }

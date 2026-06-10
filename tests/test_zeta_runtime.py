@@ -6225,3 +6225,109 @@ def test_zeta_measure_counts_project_context_once() -> None:
     usage = zeta_prompt.measure(components)
     project_usage = next(c for c in usage.components if c.kind == "project_context")
     assert project_usage.tokens < 50
+
+
+def test_zeta_structural_trim_works_without_trace_ids() -> None:
+    raw_text = "bulky read output " * 20
+    component = zeta_prompt.PromptComponent(
+        kind="transcript_message",
+        data={
+            "source_event": {
+                "type": "tool_result",
+                "tool_call_id": "call-untraced",
+                "tool_name": "read",
+                "result": {
+                    "ok": True,
+                    "content": [{"type": "text", "text": raw_text}],
+                    "metadata": {"path": "big.txt"},
+                },
+            }
+        },
+        message={
+            "role": "tool",
+            "tool_call_id": "call-untraced",
+            "content": raw_text,
+        },
+    )
+
+    trimmed = zeta_prompt.StructuralTrimPromptTransform(max_content_chars=20).apply(
+        [component]
+    )[0]
+
+    assert trimmed.kind == "compacted_context"
+    assert trimmed.links == ()
+    assert trimmed.source_object_id is None
+    assert "source_object_id" not in trimmed.data
+    assert trimmed.message is not None
+    assert "id=unknown" in str(trimmed.message["content"])
+
+
+def test_zeta_structural_trim_embeds_trim_payload_in_component_data() -> None:
+    raw_text = "line one\nline two\nbulky read output " * 10
+    component = zeta_prompt.PromptComponent(
+        kind="transcript_message",
+        data={
+            "source_event": {
+                "type": "tool_result",
+                "tool_call_id": "call-read",
+                "tool_name": "read",
+                "result": {
+                    "ok": True,
+                    "content": [{"type": "text", "text": raw_text}],
+                    "metadata": {"path": "big.txt"},
+                },
+            }
+        },
+        message={"role": "tool", "tool_call_id": "call-read", "content": raw_text},
+        object_id="sha256:source",
+    )
+
+    trimmed = zeta_prompt.StructuralTrimPromptTransform(max_content_chars=20).apply(
+        [component]
+    )[0]
+
+    trim = trimmed.data["trim"]
+    assert trim["trimmed"] is True
+    assert trim["trim_method"] == "structural"
+    assert trim["source_object_id"] == "sha256:source"
+    assert trim["tool_call_id"] == "call-read"
+    assert trim["raw_content_chars"] == len(raw_text)
+    assert str(trim["raw_content_sha256"]).startswith("sha256:")
+    assert trim["tool_result"]["ok"] is True
+    assert trim["tool_result"]["metadata"] == {"path": "big.txt"}
+    assert trim["tool_result"]["content"][0]["text_chars"] == len(raw_text)
+
+
+def test_zeta_task_state_transform_compacts_components_without_trace_ids() -> None:
+    class FakeExtractor:
+        def extract(
+            self,
+            components: list[zeta_prompt.PromptComponent],
+        ) -> dict[str, Any]:
+            del components
+            return task_state_fixture(objective="continue without a store")
+
+    components = zeta_prompt.prompt_components(
+        "continue",
+        [
+            {"role": "user", "content": "Old objective"},
+            {"role": "assistant", "content": "Old decision"},
+        ],
+        allowed_tools=(),
+    )
+    assert all(component.object_id is None for component in components)
+
+    transform = zeta_prompt.TaskStateExtractionPromptTransform(
+        extractor=FakeExtractor()
+    )
+    compacted = transform.apply(components)
+
+    contents = [
+        str(component.message.get("content") or "")
+        for component in compacted
+        if component.message is not None
+    ]
+    joined = "\n".join(contents)
+    assert "Task state JSON:" in joined
+    assert "continue without a store" in joined
+    assert "Old decision" not in joined

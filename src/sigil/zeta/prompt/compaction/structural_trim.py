@@ -37,7 +37,7 @@ class StructuralTrimPromptTransform:
         return trimmed_component(component)
 
     def should_trim(self, component: PromptComponent) -> bool:
-        if component.object_id is None or component.message is None:
+        if component.message is None:
             return False
         if self.preserve_current_tool_results and component.kind == "tool_result":
             return False
@@ -51,25 +51,25 @@ class StructuralTrimPromptTransform:
 
 
 def trimmed_component(component: PromptComponent) -> PromptComponent:
-    assert component.object_id is not None
     assert component.message is not None
-    trimmed_message = trimmed_message_projection(
-        component,
-        source_object_id=component.object_id,
-    )
+    source_id = component.object_id
+    trimmed_message = trimmed_message_projection(component)
+    data: dict[str, Any] = {
+        "method": "structural_trim",
+        "source_kind": component.kind,
+        "trim": structural_trim_payload(component),
+        "message": trimmed_message,
+    }
+    if source_id is not None:
+        data["source_object_id"] = source_id
     return replace(
         component,
         kind="compacted_context",
         representation="stub",
-        source_object_id=component.object_id,
-        data={
-            "method": "structural_trim",
-            "source_kind": component.kind,
-            "source_object_id": component.object_id,
-            "message": trimmed_message,
-        },
+        source_object_id=source_id,
+        data=data,
         message=trimmed_message,
-        links=(component.object_id,),
+        links=(source_id,) if source_id is not None else (),
         object_id=None,
     )
 
@@ -96,63 +96,14 @@ def message_content_length(message: dict[str, Any]) -> int:
     return len(content)
 
 
-def trimmed_message_projection(
-    component: PromptComponent,
-    *,
-    source_object_id: str,
-) -> dict[str, Any]:
+def trimmed_message_projection(component: PromptComponent) -> dict[str, Any]:
     assert component.message is not None
-    message = component.message
-    if message.get("role") == "tool":
-        return trim_tool_role_message(component, source_object_id=source_object_id)
-    return trim_user_tool_json_message(component, source_object_id=source_object_id)
-
-
-def trim_tool_role_message(
-    component: PromptComponent,
-    *,
-    source_object_id: str,
-) -> dict[str, Any]:
-    assert component.message is not None
-    message = component.message
-    content = str(message.get("content") or "")
-    stub = render_stub(component)
-    structural_trim_payload(
-        content,
-        source_object_id=source_object_id,
-        tool_call_id=tool_call_id(component),
-        parsed_result=tool_result(component) or parse_json_object(content),
-    )
-    return {
-        "role": "tool",
-        "tool_call_id": tool_call_id(component),
-        "content": stub,
-    }
-
-
-def trim_user_tool_json_message(
-    component: PromptComponent,
-    *,
-    source_object_id: str,
-) -> dict[str, Any]:
-    assert component.message is not None
-    message = component.message
-    content = str(message.get("content") or "")
-    raw_json = content.removeprefix("Tool result JSON:\n")
-    event = parse_json_object(raw_json)
-    event_payload = event or {}
-    result = (
-        event_payload.get("result")
-        if isinstance(event_payload.get("result"), dict)
-        else None
-    )
-    structural_trim_payload(
-        content,
-        source_object_id=source_object_id,
-        tool_call_id=tool_call_id(component)
-        or str(event_payload.get("tool_call_id") or ""),
-        parsed_result=tool_result(component) or result,
-    )
+    if component.message.get("role") == "tool":
+        return {
+            "role": "tool",
+            "tool_call_id": tool_call_id(component),
+            "content": render_stub(component),
+        }
     return {
         "role": "user",
         "content": render_stub(component),
@@ -192,23 +143,32 @@ def tool_result(component: PromptComponent) -> dict[str, Any] | None:
     return result if isinstance(result, dict) else None
 
 
-def structural_trim_payload(
-    raw_content: str,
-    *,
-    source_object_id: str,
-    tool_call_id: str,
-    parsed_result: dict[str, Any] | None,
-) -> dict[str, Any]:
+def structural_trim_payload(component: PromptComponent) -> dict[str, Any]:
+    """Describe the trimmed content so the trace records what was elided."""
+    assert component.message is not None
+    content = str(component.message.get("content") or "")
+    call_id = tool_call_id(component)
+    parsed_result = tool_result(component)
+    if component.message.get("role") == "tool":
+        parsed_result = parsed_result or parse_json_object(content)
+    else:
+        event_payload = parse_json_object(content.removeprefix("Tool result JSON:\n"))
+        event_payload = event_payload or {}
+        call_id = call_id or str(event_payload.get("tool_call_id") or "")
+        event_result = event_payload.get("result")
+        if parsed_result is None and isinstance(event_result, dict):
+            parsed_result = event_result
     payload: dict[str, Any] = {
         "trimmed": True,
         "trim_method": "structural",
-        "source_object_id": source_object_id,
-        "raw_content_sha256": sha256_text(raw_content),
-        "raw_content_chars": len(raw_content),
-        "raw_content_bytes": len(raw_content.encode("utf-8")),
+        "raw_content_sha256": sha256_text(content),
+        "raw_content_chars": len(content),
+        "raw_content_bytes": len(content.encode("utf-8")),
     }
-    if tool_call_id:
-        payload["tool_call_id"] = tool_call_id
+    if component.object_id is not None:
+        payload["source_object_id"] = component.object_id
+    if call_id:
+        payload["tool_call_id"] = call_id
     if parsed_result is not None:
         payload["tool_result"] = trimmed_tool_result(parsed_result)
     return payload
@@ -254,10 +214,6 @@ def parse_json_object(raw: str) -> dict[str, Any] | None:
     except json.JSONDecodeError:
         return None
     return value if isinstance(value, dict) else None
-
-
-def compact_json(value: dict[str, Any]) -> str:
-    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
 def sha256_text(text: str) -> str:

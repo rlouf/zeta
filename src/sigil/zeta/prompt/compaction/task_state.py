@@ -202,9 +202,7 @@ def task_state_source_components(
     return [
         component
         for component in components
-        if component.kind == "transcript_message"
-        and component.object_id is not None
-        and component.message is not None
+        if component.kind == "transcript_message" and component.message is not None
     ]
 
 
@@ -223,7 +221,7 @@ def task_state_component(
         data={
             "method": "task_state_extraction",
             "schema": TASK_STATE_SCHEMA_NAME,
-            "source_count": len(source_ids),
+            "source_count": len(sources),
             "state": state,
             "message": message,
         },

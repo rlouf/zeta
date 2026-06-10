@@ -5301,7 +5301,7 @@ def test_resolved_shell_handoff_context_keeps_tool_call_with_shell_result(
     assert tool_content["executed_command"] == "uv run pytest"
 
 
-def test_sigil_transcript_shell_result_cancels_modified_handoff(
+def test_sigil_transcript_shell_result_reports_extended_handoff_as_edited(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -5328,6 +5328,69 @@ def test_sigil_transcript_shell_result_cancels_modified_handoff(
 
     assert event["type"] == "tool_result"
     assert event["tool_call_id"] == "call-1"
+    assert event["result"]["ok"] is True
+    assert event["result"]["outcome"] == SHELL_HANDOFF_OUTCOME_EXECUTED
+    assert event["result"]["edited"] is True
+    assert event["result"]["expected_command"] == "uv run pytest"
+    assert event["result"]["executed_command"] == "uv run pytest -q"
+    assert "edited" in event["result"]["content"][0]["text"]
+
+
+def test_sigil_transcript_shell_result_matches_despite_whitespace_edits(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("SIGIL_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("SIGIL_SESSION_ID", "zeta-test")
+    zeta.record_event(
+        {
+            "type": "tool_result",
+            "tool_call_id": "call-1",
+            "name": "bash",
+            "result": {
+                "ok": True,
+                "handoff": {
+                    "type": SHELL_PROMPT_HANDOFF_TYPE,
+                    "command": "uv run pytest",
+                    "reason": "Run tests.",
+                },
+            },
+        }
+    )
+    record_turn("uv  run   pytest ", 0, "/repo", stdout_snippet="191 passed")
+
+    event = sigil_handoff.append_shell_result()
+
+    assert event["result"]["outcome"] == SHELL_HANDOFF_OUTCOME_EXECUTED
+    assert event["result"]["edited"] is False
+    assert event["result"]["executed_command"] == "uv  run   pytest "
+
+
+def test_sigil_transcript_shell_result_cancels_unrelated_command(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("SIGIL_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("SIGIL_SESSION_ID", "zeta-test")
+    zeta.record_event(
+        {
+            "type": "tool_result",
+            "tool_call_id": "call-1",
+            "name": "bash",
+            "result": {
+                "ok": True,
+                "handoff": {
+                    "type": SHELL_PROMPT_HANDOFF_TYPE,
+                    "command": "uv run pytest",
+                    "reason": "Run tests.",
+                },
+            },
+        }
+    )
+    record_turn("git status --short", 0, "/repo")
+
+    event = sigil_handoff.append_shell_result()
+
     assert event["result"]["ok"] is False
     assert event["result"]["schema"] == SHELL_HANDOFF_RESULT_SCHEMA
     assert event["result"]["type"] == SHELL_HANDOFF_RESULT_TYPE
@@ -5337,8 +5400,8 @@ def test_sigil_transcript_shell_result_cancels_modified_handoff(
         == SHELL_HANDOFF_CANCEL_EXPECTED_NOT_EXECUTED
     )
     assert event["result"]["expected_command"] == "uv run pytest"
-    assert event["result"]["actual_command"] == "uv run pytest -q"
-    assert event["result"]["shell_turns"][0]["command"] == "uv run pytest -q"
+    assert event["result"]["actual_command"] == "git status --short"
+    assert event["result"]["shell_turns"][0]["command"] == "git status --short"
 
 
 def test_sigil_transcript_shell_result_includes_intervening_shell_turns(

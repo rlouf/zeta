@@ -88,8 +88,10 @@ def executed_shell_result(
     turn: dict[str, Any],
     turns: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    """Return a tool result for the exact command the model staged."""
+    """Return a tool result for the command the model staged, edited or not."""
     command = str(turn.get("command") or "")
+    expected = str(handoff.get("command") or command)
+    edited = normalize_command(command) != normalize_command(expected)
     status = turn.get("status")
     lines = [f"{command} (exit {status})"]
     stderr = turn.get("stderr_snippet")
@@ -98,6 +100,11 @@ def executed_shell_result(
         lines.append(f"stderr: {stderr}")
     if isinstance(stdout, str) and stdout:
         lines.append(f"stdout: {stdout}")
+    if edited:
+        lines.insert(
+            0,
+            f"The user edited the staged command before running it (staged: {expected}).",
+        )
     preceding_count = turns.index(turn)
     if preceding_count:
         lines.insert(
@@ -109,8 +116,9 @@ def executed_shell_result(
         "schema": SHELL_HANDOFF_RESULT_SCHEMA,
         "type": SHELL_HANDOFF_RESULT_TYPE,
         "outcome": SHELL_HANDOFF_OUTCOME_EXECUTED,
+        "edited": edited,
         "handoff": shell_handoff_summary(handoff),
-        "expected_command": str(handoff.get("command") or command),
+        "expected_command": expected,
         "executed_command": command,
         "command": command,
         "status": status,
@@ -176,13 +184,27 @@ def first_matching_turn(
     expected: str,
     turns: list[dict[str, Any]],
 ) -> dict[str, Any] | None:
-    """Return the first shell turn that exactly executed the handoff command."""
-    if not expected:
+    """Return the first shell turn that ran the handoff command, possibly edited.
+
+    Whitespace differences never count as an edit, and a command the user
+    extended with extra arguments still counts as executed rather than
+    cancelled.
+    """
+    normalized_expected = normalize_command(expected)
+    if not normalized_expected:
         return None
     for turn in turns:
-        if str(turn.get("command") or "") == expected:
+        command = normalize_command(str(turn.get("command") or ""))
+        if command == normalized_expected:
+            return turn
+        if command.startswith(f"{normalized_expected} "):
             return turn
     return None
+
+
+def normalize_command(text: str) -> str:
+    """Collapse whitespace runs so formatting edits do not change matching."""
+    return " ".join(text.split())
 
 
 def latest_unresolved_shell_handoff(

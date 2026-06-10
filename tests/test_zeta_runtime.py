@@ -6579,3 +6579,49 @@ def test_zeta_orphan_tool_result_rendering_strips_trace_fields() -> None:
     assert "sha256:" not in content
     assert "model_telemetry" not in content
     assert "prompt_trace" not in content
+
+
+def test_zeta_project_context_caps_oversized_files(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    home = tmp_path / "home"
+    project = tmp_path / "repo"
+    project.mkdir()
+    (project / "AGENTS.md").write_text(
+        "start marker\n" + "x" * 60_000, encoding="utf-8"
+    )
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.chdir(project)
+
+    context = zeta_context.load_project_context()
+
+    assert "start marker" in context
+    assert "... truncated ..." in context
+    assert len(context) <= zeta_context.MAX_CONTEXT_FILE_CHARS + 200
+
+
+def test_zeta_project_context_caps_total_size(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    home = tmp_path / "home"
+    zeta_home = home / ".zeta"
+    zeta_home.mkdir(parents=True)
+    (zeta_home / "AGENTS.md").write_text(
+        "global rules\n" + "g" * 20_000, encoding="utf-8"
+    )
+    parent = tmp_path / "repo"
+    project = parent / "pkg"
+    project.mkdir(parents=True)
+    (parent / "AGENTS.md").write_text("parent rules\n" + "p" * 20_000, encoding="utf-8")
+    (project / "AGENTS.md").write_text("local rules\n" + "l" * 20_000, encoding="utf-8")
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.chdir(project)
+
+    context = zeta_context.load_project_context()
+
+    assert len(context) <= zeta_context.MAX_CONTEXT_TOTAL_CHARS + 200
+    assert "global rules" in context
+    assert "parent rules" in context
+    assert "local rules" not in context

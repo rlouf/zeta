@@ -1242,3 +1242,23 @@ def test_ask_json_uses_the_shared_indented_shape() -> None:
         payload = json.loads(stdout.getvalue())
         assert payload["answer"] == "indented answer"
         assert stdout.getvalue().startswith("{\n")
+
+
+def test_session_is_a_group_with_show_as_default() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        with patch_dict(
+            os.environ,
+            {"SIGIL_STATE_DIR": tmp, "SIGIL_SESSION_ID": "test"},
+        ):
+            help_result = CliRunner().invoke(cli, ["session", "--help"])
+            bare = CliRunner().invoke(cli, ["session"])
+            explicit = CliRunner().invoke(cli, ["session", "show"])
+
+    assert help_result.exit_code == 0
+    assert "Commands:" in help_result.output
+    for subcommand in ("show", "path", "list", "clear"):
+        assert f"\n  {subcommand} " in help_result.output
+    assert bare.exit_code == 0
+    assert bare.output.startswith("session test")
+    assert explicit.exit_code == 0
+    assert explicit.output == bare.output

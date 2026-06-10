@@ -14,23 +14,44 @@ from ..session import (
 )
 
 
-@cli.command("session")
-@click.argument(
-    "session_command",
-    required=False,
-    default="show",
-    type=click.Choice(["show", "path", "list", "clear"]),
-)
-@click.option("--json", "json_output", is_flag=True, help="Emit session state as JSON.")
-def cmd_session(session_command: str, json_output: bool) -> int:
+JSON_HELP = "Emit session state as JSON."
+
+
+@cli.group("session", invoke_without_command=True)
+@click.option("--json", "json_output", is_flag=True, help=JSON_HELP)
+@click.pass_context
+def cmd_session(ctx: click.Context, json_output: bool) -> None:
     """Inspect or clear the current shell session state."""
-    if session_command == "path":
-        return print_session_path(json_output)
-    if session_command == "list":
-        return print_session_list(json_output)
-    if session_command == "clear":
-        return print_session_clear(json_output)
+    if ctx.invoked_subcommand is None:
+        ctx.exit(print_session_snapshot(json_output))
+
+
+@cmd_session.command("show")
+@click.option("--json", "json_output", is_flag=True, help=JSON_HELP)
+def session_show(json_output: bool) -> int:
+    """Show the current session's continuity files."""
     return print_session_snapshot(json_output)
+
+
+@cmd_session.command("path")
+@click.option("--json", "json_output", is_flag=True, help=JSON_HELP)
+def session_path(json_output: bool) -> int:
+    """Print the current session state directory."""
+    return print_session_path(json_output)
+
+
+@cmd_session.command("list")
+@click.option("--json", "json_output", is_flag=True, help=JSON_HELP)
+def session_list(json_output: bool) -> int:
+    """List all known shell sessions."""
+    return print_session_list(json_output)
+
+
+@cmd_session.command("clear")
+@click.option("--json", "json_output", is_flag=True, help=JSON_HELP)
+def session_clear(json_output: bool) -> int:
+    """Remove the current session's state directory."""
+    return print_session_clear(json_output)
 
 
 def print_session_path(json_output: bool) -> int:

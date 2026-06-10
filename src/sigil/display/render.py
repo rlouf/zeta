@@ -13,6 +13,7 @@ from rich.constrain import Constrain
 from rich.live import Live
 from rich.markdown import Markdown
 from rich.padding import Padding
+from rich.text import Text
 
 from ..zeta.prompt.budget import estimated_tokens_for_text
 from .summarize import summarize, text_content, tool_result_summary
@@ -595,3 +596,88 @@ def thinking_status_factory(
         before_start=before_start,
         detail=detail,
     )
+
+
+TRANSCRIPT_SKIP_EVENT_TYPES = frozenset({"model_usage", "tool_analysis"})
+TRANSCRIPT_PROMPT_ID_CHARS = 8
+
+
+def render_transcript(events: list[dict[str, Any]], *, console: Console) -> None:
+    """Render a session timeline as a conversation transcript."""
+    for event in events:
+        renderables = transcript_event_renderables(event)
+        if not renderables:
+            continue
+        for renderable in renderables:
+            console.print(renderable)
+        console.print()
+
+
+def transcript_event_renderables(event: dict[str, Any]) -> list[Any]:
+    """Map one timeline event to its transcript renderables, if any."""
+    event_type = str(event.get("type") or "")
+    if event_type in TRANSCRIPT_SKIP_EVENT_TYPES:
+        return []
+    if event_type == "user_message":
+        return transcript_message_block("you", "bold cyan", event)
+    if event_type == "assistant_message":
+        return transcript_assistant_block(event)
+    if event_type == "tool_call":
+        return transcript_tool_call_line(event)
+    if event_type == "tool_result":
+        return transcript_tool_result_lines(event)
+    if event_type == "turn_aborted":
+        content = str(event.get("content") or "(turn aborted)")
+        return [Text(content, style="yellow")]
+    role = str(event.get("role") or "")
+    if role:
+        label = "you" if role == "user" else role
+        style = "bold cyan" if role == "user" else "bold"
+        return transcript_message_block(label, style, event)
+    return []
+
+
+def transcript_message_block(
+    label: str,
+    style: str,
+    event: dict[str, Any],
+) -> list[Any]:
+    content = str(event.get("content") or "")
+    if not content:
+        return []
+    return [Text(label, style=style), Text(content)]
+
+
+def transcript_assistant_block(event: dict[str, Any]) -> list[Any]:
+    content = str(event.get("content") or "")
+    if not content:
+        return []
+    header = Text("sigil", style="bold magenta")
+    prompt_id = transcript_prompt_id(event)
+    if prompt_id:
+        header.append(f"  {prompt_id}", style="dim")
+    return [header, Markdown(content)]
+
+
+def transcript_tool_call_line(event: dict[str, Any]) -> list[Any]:
+    name = str(event.get("name") or "")
+    label = summarize(name, event.get("input"))
+    return [Text(f"→ {name} {label}".rstrip(), style="dim")]
+
+
+def transcript_tool_result_lines(event: dict[str, Any]) -> list[Any]:
+    result = event.get("result")
+    if not isinstance(result, dict):
+        return []
+    lines = tool_result_summary(str(event.get("name") or ""), result)
+    if not lines:
+        return []
+    return [Text("\n".join(f"  {line}" for line in lines), style="dim")]
+
+
+def transcript_prompt_id(event: dict[str, Any]) -> str:
+    prompt_trace = event.get("prompt_trace")
+    if not isinstance(prompt_trace, dict):
+        return ""
+    object_id = str(prompt_trace.get("prompt_object_id") or "")
+    return object_id.removeprefix("sha256:")[:TRANSCRIPT_PROMPT_ID_CHARS]

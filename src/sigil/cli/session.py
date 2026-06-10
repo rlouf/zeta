@@ -53,6 +53,14 @@ def session_clear(json_output: bool) -> int:
     return print_session_clear(json_output)
 
 
+@cmd_session.command("transcript")
+@click.option("--limit", type=int, default=None, help="Show only the last N events.")
+@click.option("--json", "json_output", is_flag=True, help=JSON_HELP)
+def session_transcript(limit: int | None, json_output: bool) -> int:
+    """Render the session's agent conversation as a transcript."""
+    return print_session_transcript(limit, json_output)
+
+
 def print_session_path(json_output: bool) -> int:
     """Print the current session state directory."""
     paths = session_paths()
@@ -94,6 +102,33 @@ def print_session_clear(json_output: bool) -> int:
             print(f"removed {path}")
     else:
         print("session already clear")
+    return 0
+
+
+def print_session_transcript(limit: int | None, json_output: bool) -> int:
+    """Render the current session timeline as a conversation."""
+    # Imported lazily: `sigil.cli` must not load zeta or rich at import time.
+    from ..zeta.timeline import current_timeline
+
+    events = current_timeline()
+    if limit is not None and limit > 0:
+        events = events[-limit:]
+    if json_output:
+        pretty_print_json(events)
+        return 0
+    if not events:
+        print("no agent turns recorded in this session")
+        return 0
+    from rich.console import Console
+
+    from ..display.render import render_transcript
+
+    console = Console()
+    if console.is_terminal:
+        with console.pager(styles=True):
+            render_transcript(events, console=console)
+        return 0
+    render_transcript(events, console=console)
     return 0
 
 

@@ -1222,6 +1222,62 @@ def test_ask_json_uses_the_shared_indented_shape() -> None:
         assert stdout.getvalue().startswith("{\n")
 
 
+def test_session_transcript_renders_conversation() -> None:
+    from sigil.zeta import timeline as zeta_timeline
+
+    with tempfile.TemporaryDirectory() as tmp:
+        with patch_dict(
+            os.environ,
+            {"SIGIL_STATE_DIR": tmp, "SIGIL_SESSION_ID": "test"},
+        ):
+            zeta_timeline.record_event(
+                {"type": "user_message", "content": "what is sigil?"}
+            )
+            zeta_timeline.record_event(
+                {"type": "assistant_message", "content": "A shell assistant."}
+            )
+
+            result = CliRunner().invoke(cli, ["session", "transcript"])
+
+    assert result.exit_code == 0
+    assert "what is sigil?" in result.output
+    assert "A shell assistant." in result.output
+
+
+def test_session_transcript_limits_and_dumps_json() -> None:
+    from sigil.zeta import timeline as zeta_timeline
+
+    with tempfile.TemporaryDirectory() as tmp:
+        with patch_dict(
+            os.environ,
+            {"SIGIL_STATE_DIR": tmp, "SIGIL_SESSION_ID": "test"},
+        ):
+            zeta_timeline.record_event({"type": "user_message", "content": "first"})
+            zeta_timeline.record_event(
+                {"type": "assistant_message", "content": "second"}
+            )
+
+            result = CliRunner().invoke(
+                cli, ["session", "transcript", "--limit", "1", "--json"]
+            )
+
+    assert result.exit_code == 0
+    events = json.loads(result.output)
+    assert [event["content"] for event in events] == ["second"]
+
+
+def test_session_transcript_reports_empty_session() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        with patch_dict(
+            os.environ,
+            {"SIGIL_STATE_DIR": tmp, "SIGIL_SESSION_ID": "test"},
+        ):
+            result = CliRunner().invoke(cli, ["session", "transcript"])
+
+    assert result.exit_code == 0
+    assert "no agent turns recorded" in result.output
+
+
 def test_session_is_a_group_with_show_as_default() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         with patch_dict(

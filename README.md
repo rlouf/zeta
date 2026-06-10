@@ -179,6 +179,9 @@ uv run pytest tests/test_shell_bindings.py
 
 Sigil keeps session state under `~/.sigil/` so Zeta can resume from recent
 ask turns, handoff timeline events, and command results recorded through `+`.
+`sigil session transcript` renders that conversation back as a transcript —
+questions, answers, and compact tool traces, with each answer tagged by the
+id of the exact prompt the model saw.
 
 The zsh binding also records every interactive command: the command line,
 exit status, working directory, and timestamp — never its output. Output is
@@ -287,7 +290,7 @@ sigil ask [--json] [QUESTION]
 sigil run [--shell] COMMAND [ARGS...]
 sigil status [--json]
 sigil events [--limit N] [--json] [--raw]
-sigil session [show|path|list|clear] [--json]
+sigil session [show|path|list|clear|transcript] [--json]
 sigil model [list|use|show|clear]
 sigil zeta trace [show|closure|refs|prompts]
 sigil install [--install-dir DIR] [--rc FILE] [--glyphs|--no-glyphs]

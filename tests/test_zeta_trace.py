@@ -247,6 +247,29 @@ def test_zeta_timeline_projects_from_ref_and_object(
     assert zeta_timeline.timeline_from_ref("run/missing/head") == []
 
 
+def test_zeta_timeline_projects_deep_event_chains() -> None:
+    store = zeta_trace.InMemoryStore()
+    previous = ""
+    for index in range(1500):
+        previous = store.put_object(
+            zeta_trace.Object(
+                kind="run_event",
+                schema="zeta.run_event.v1",
+                data={
+                    "event": {"type": "user_message", "content": f"event-{index}"},
+                    "previous_event_object_id": previous,
+                },
+                links=(previous,) if previous else (),
+            )
+        )
+
+    events = zeta_timeline.timeline_from_object(previous, store=store)
+
+    assert len(events) == 1500
+    assert events[0]["content"] == "event-0"
+    assert events[-1]["content"] == "event-1499"
+
+
 def test_zeta_inmemory_store_dedupes_repeated_derivations() -> None:
     store = zeta_trace.InMemoryStore()
     derivation = zeta_trace.Derivation(

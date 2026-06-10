@@ -250,108 +250,49 @@ def timeline_events_from_head(
     *,
     seen: set[ObjectId],
 ) -> list[dict[str, Any]]:
-    if object_id in seen:
-        return []
-    seen.add(object_id)
-    obj = store.get_object(object_id)
-    if obj is None:
-        return []
+    """Walk predecessor links iteratively; chains exceed the recursion limit."""
+    chunks: list[list[dict[str, Any]]] = []
+    current: ObjectId | None = object_id
+    while current and current not in seen:
+        seen.add(current)
+        obj = store.get_object(current)
+        if obj is None:
+            break
+        predecessor, events = timeline_node(store, current, obj)
+        chunks.append(events)
+        current = predecessor
+    events = []
+    for chunk in reversed(chunks):
+        events.extend(chunk)
+    return events
+
+
+def timeline_node(
+    store: Store,
+    object_id: ObjectId,
+    obj: Object,
+) -> tuple[ObjectId | None, list[dict[str, Any]]]:
+    """Return an object's predecessor link and its own timeline events."""
     if obj.kind == RUN_EVENT_KIND:
-        return timeline_events_from_event_object(store, obj, seen=seen)
+        previous_id = str(obj.data.get("previous_event_object_id") or "")
+        event = object_event(obj)
+        return previous_id or None, [event] if event else []
     if obj.kind == "assistant_message":
-        return timeline_events_from_assistant_object(
-            store,
-            object_id,
-            obj,
-            seen=seen,
-        )
+        prompt_id = obj.links[0] if obj.links else ""
+        events = prompt_component_events(store, prompt_id) if prompt_id else []
+        assistant_event = assistant_event_from_object(object_id, obj, prompt_id, store)
+        if assistant_event:
+            events.append(assistant_event)
+        return None, events
     if obj.kind == "tool_call":
-        return timeline_events_from_tool_call_object(
-            store,
-            object_id,
-            obj,
-            seen=seen,
-        )
+        assistant_id = obj.links[0] if obj.links else ""
+        return assistant_id or None, [tool_call_event_from_object(object_id, obj)]
     if obj.kind == "tool_result":
-        return timeline_events_from_tool_result_object(
-            store,
-            object_id,
-            obj,
-            seen=seen,
-        )
-    event = object_event(obj)
-    return [event] if event else []
-
-
-def timeline_events_from_event_object(
-    store: Store,
-    obj: Object,
-    *,
-    seen: set[ObjectId],
-) -> list[dict[str, Any]]:
-    previous_id = str(obj.data.get("previous_event_object_id") or "")
-    events = (
-        timeline_events_from_head(store, previous_id, seen=seen) if previous_id else []
-    )
-    event = object_event(obj)
-    if event:
-        events.append(event)
-    return events
-
-
-def timeline_events_from_assistant_object(
-    store: Store,
-    object_id: ObjectId,
-    obj: Object,
-    *,
-    seen: set[ObjectId],
-) -> list[dict[str, Any]]:
-    prompt_id = obj.links[0] if obj.links else ""
-    events = prompt_component_events(store, prompt_id) if prompt_id else []
-    assistant_event = assistant_event_from_object(object_id, obj, prompt_id, store)
-    if assistant_event:
-        events.append(assistant_event)
-    return events
-
-
-def timeline_events_from_tool_call_object(
-    store: Store,
-    object_id: ObjectId,
-    obj: Object,
-    *,
-    seen: set[ObjectId],
-) -> list[dict[str, Any]]:
-    assistant_id = obj.links[0] if obj.links else ""
-    events = (
-        timeline_events_from_head(store, assistant_id, seen=seen)
-        if assistant_id
-        else []
-    )
-    events.append(tool_call_event_from_object(object_id, obj))
-    return events
-
-
-def timeline_events_from_tool_result_object(
-    store: Store,
-    object_id: ObjectId,
-    obj: Object,
-    *,
-    seen: set[ObjectId],
-) -> list[dict[str, Any]]:
-    event = object_event(obj)
-    if event:
         previous_id = obj.links[0] if obj.links else ""
-        events = (
-            timeline_events_from_head(store, previous_id, seen=seen)
-            if previous_id
-            else []
-        )
-        events.append(event)
-        return events
-    call_id = obj.links[0] if obj.links else ""
-    events = timeline_events_from_head(store, call_id, seen=seen) if call_id else []
-    events.append(tool_result_event_from_object(object_id, obj))
-    return events
+        event = object_event(obj) or tool_result_event_from_object(object_id, obj)
+        return previous_id or None, [event]
+    event = object_event(obj)
+    return None, [event] if event else []
 
 
 def object_event(obj: Object) -> dict[str, Any]:

@@ -8,6 +8,7 @@ from _zeta_helpers import (
     TtyBuffer,
     visible_terminal_text,
 )
+from rich.console import Console
 
 import sigil.display.render as display_render
 import sigil.display.summarize as display_summarize
@@ -358,3 +359,71 @@ def test_sigil_display_summarizes_shell_results() -> None:
         "  expected: uv run pytest",
         "  ran:      uv run pytest -q",
     ]
+
+
+def transcript_console() -> tuple[StringIO, Console]:
+    output = StringIO()
+    return output, Console(file=output, force_terminal=False, width=80)
+
+
+def test_transcript_renders_conversation_blocks() -> None:
+    output, console = transcript_console()
+    events = [
+        {"type": "user_message", "content": "what is sigil?"},
+        {
+            "type": "assistant_message",
+            "content": "It is a **shell assistant**.",
+            "prompt_trace": {"prompt_object_id": "sha256:abcdef1234567890"},
+        },
+        {"type": "tool_call", "name": "read", "input": {"path": "README.md"}},
+        {
+            "type": "tool_result",
+            "name": "read",
+            "result": {
+                "ok": True,
+                "content": [{"type": "text", "text": "line one\nline two"}],
+            },
+        },
+        {"type": "turn_aborted", "content": "(turn aborted: model down)"},
+    ]
+
+    display_render.render_transcript(events, console=console)
+    text = output.getvalue()
+
+    assert "you" in text
+    assert "what is sigil?" in text
+    assert "sigil" in text
+    assert "abcdef12" in text
+    assert "shell assistant" in text
+    assert "**" not in text
+    assert "read README.md" in text
+    assert "2 lines" in text
+    assert "(turn aborted: model down)" in text
+
+
+def test_transcript_skips_noise_and_empty_events() -> None:
+    output, console = transcript_console()
+    events = [
+        {"type": "model_usage", "usage": {"total_tokens": 999}},
+        {"type": "tool_analysis", "valid": True},
+        {"type": "assistant_message", "content": ""},
+        {"role": "user", "content": "prior question"},
+    ]
+
+    display_render.render_transcript(events, console=console)
+    text = output.getvalue()
+
+    assert "999" not in text
+    assert "tool_analysis" not in text
+    assert "prior question" in text
+
+
+def test_transcript_renders_assistant_without_prompt_trace() -> None:
+    output, console = transcript_console()
+
+    display_render.render_transcript(
+        [{"type": "assistant_message", "content": "plain answer"}],
+        console=console,
+    )
+
+    assert "plain answer" in output.getvalue()

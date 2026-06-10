@@ -64,12 +64,12 @@ def measure(components: Iterable[PromptComponent]) -> ContextUsage:
 
 
 def render_stub(component: PromptComponent) -> str:
-    """Render the canonical retrievable-content stub."""
+    """Render the canonical elided-content stub."""
     object_id = component.source_object_id or component.object_id or "unknown"
     n_tokens = estimated_tokens(component)
     return (
         f"[elided {component.kind} {n_tokens}~tok id={object_id} "
-        "\u2014 content retrievable by id]"
+        "\u2014 re-run the original tool call to recover this content]"
     )
 
 

@@ -651,7 +651,7 @@ def test_zeta_render_stub_contract() -> None:
 
     assert (
         zeta_prompt.render_stub(component)
-        == "[elided tool_result 1~tok id=sha256:abc — content retrievable by id]"
+        == "[elided tool_result 1~tok id=sha256:abc — re-run the original tool call to recover this content]"
     )
 
 
@@ -901,7 +901,7 @@ def test_zeta_structural_trim_compacts_old_bulky_read_or_grep_tool_results(
     stub = str(tool_messages[0]["content"])
     assert tool_messages[0]["tool_call_id"] == "call-read"
     assert stub.startswith("[elided transcript_message ")
-    assert " content retrievable by id]" in stub
+    assert " re-run the original tool call to recover this content]" in stub
     assert "line 79" not in str(tool_messages[0]["content"])
     assert prepared.prompt_object_id is not None
     prompt = store.get_object(prepared.prompt_object_id)
@@ -1061,7 +1061,7 @@ def test_zeta_structural_trim_uses_source_event_without_message_json() -> None:
     assert trimmed.message is not None
     assert str(trimmed.message["content"]) == (
         "[elided transcript_message 145~tok id=sha256:source "
-        "— content retrievable by id]"
+        "— re-run the original tool call to recover this content]"
     )
 
 

@@ -60,24 +60,6 @@ __sigil_zeta_prompt_command() {
   print -r -- "+ $command"
 }
 
-__sigil_json_get() {
-  emulate -L zsh
-  python3 -c '
-import json, sys
-data = json.load(sys.stdin)
-value = data
-for part in sys.argv[1].split("."):
-    if not isinstance(value, dict) or part not in value:
-        value = ""
-        break
-    value = value[part]
-if isinstance(value, (dict, list)):
-    print(json.dumps(value, ensure_ascii=False, separators=(",", ":")))
-elif value is not None:
-    print(value)
-' "$1"
-}
-
 __sigil_glyphs_enabled() {
   emulate -L zsh
   # `sigil install --no-glyphs` writes SIGIL_ENABLE_GLYPHS=0 before sourcing this
@@ -184,7 +166,9 @@ __sigil_zeta_turn() {
     "$__sigil_bin" zeta-step --glyph "$glyph" --handoff-file "$handoff_file" "${args[@]}" "$objective"
     step_status=$?
     if [[ "$step_status" == "0" && -s "$handoff_file" ]]; then
-      command="$(__sigil_json_get command < "$handoff_file" 2>/dev/null || true)"
+      # The CLI writes the staged command verbatim; the substitution strips the
+      # trailing newline.
+      command="$(<"$handoff_file")"
       if [[ -n "$command" ]]; then
         __sigil_zeta_enable_capture
         __sigil_prompt_insert "$(__sigil_zeta_prompt_command "$command")"

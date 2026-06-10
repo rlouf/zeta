@@ -4005,7 +4005,7 @@ def test_sigil_zeta_step_writes_handoff_file(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    handoff_file = tmp_path / "handoff.json"
+    handoff_file = tmp_path / "handoff.txt"
 
     monkeypatch.setattr(turn_routes, "ensure_server", lambda: True)
     monkeypatch.setattr(
@@ -4049,11 +4049,7 @@ def test_sigil_zeta_step_writes_handoff_file(
 
     assert result.exit_code == 0
     assert "❯ bash   uv run pytest  (staged)" in result.output
-    assert json.loads(handoff_file.read_text(encoding="utf-8")) == {
-        "type": SHELL_PROMPT_HANDOFF_TYPE,
-        "command": "uv run pytest",
-        "reason": "Run tests.",
-    }
+    assert handoff_file.read_text(encoding="utf-8") == "uv run pytest\n"
 
 
 def test_sigil_zeta_step_keeps_trace_off_stdout(monkeypatch) -> None:
@@ -4371,7 +4367,7 @@ def test_zeta_agent_step_double_comma_stages_bash_handoff(
     monkeypatch,
     capsys,
 ) -> None:
-    handoff_file = tmp_path / "handoff.json"
+    handoff_file = tmp_path / "handoff.txt"
 
     responses = iter(
         [
@@ -4411,9 +4407,7 @@ def test_zeta_agent_step_double_comma_stages_bash_handoff(
     assert "(staged)" in output.err
     assert "exit 0" not in output.err
     assert "Review complete" not in output.out
-    assert json.loads(handoff_file.read_text(encoding="utf-8"))["command"] == (
-        "echo Review complete"
-    )
+    assert handoff_file.read_text(encoding="utf-8") == "echo Review complete\n"
 
 
 def test_zeta_agent_step_prints_tool_start_while_agent_runs(

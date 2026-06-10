@@ -6,7 +6,6 @@ CLI-routed glyph steps on the same Zeta service layer without an external agent.
 
 from __future__ import annotations
 
-import json
 import sys
 from pathlib import Path
 from typing import Any, Iterable, Literal, TextIO
@@ -204,12 +203,13 @@ class AgentStepEventRecorder(TurnEventRecorder):
 
 
 def write_handoff(path: str | Path | None, handoff: dict[str, Any]) -> None:
+    """Write the staged command verbatim for the shell binding to insert."""
     if path is None:
         return
-    Path(path).write_text(
-        json.dumps(handoff, ensure_ascii=False, separators=(",", ":")) + "\n",
-        encoding="utf-8",
-    )
+    command = handoff.get("command")
+    if not isinstance(command, str) or not command:
+        return
+    Path(path).write_text(command + "\n", encoding="utf-8")
 
 
 def print_handoff(

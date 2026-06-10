@@ -66,10 +66,7 @@ def make_stub(tmp: Path) -> Path:
               fi
               printf '❯ bash   %s  (staged)\n' "$command"
               if [ -n "$handoff_file" ]; then
-                printf '{"type":"shell_prompt","command":%s,"reason":%s}\n' \
-                  "$(python3 -c 'import json,sys; print(json.dumps(sys.argv[1]))' "$command")" \
-                  "$(python3 -c 'import json,sys; print(json.dumps(sys.argv[1]))' "$reason")" \
-                  > "$handoff_file"
+                printf '%s\n' "$command" > "$handoff_file"
               fi
               exit 0
             fi
@@ -666,6 +663,29 @@ def test_zsh_shell_turn_recording_does_not_spawn_python3() -> None:
         assert len(calls) == 1
         assert "--command echo hi" in calls[0]
         assert "--status 3" in calls[0]
+        assert not (tmp / "zle.log").exists()
+
+
+@pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
+def test_zsh_zeta_handoff_staging_does_not_spawn_python3() -> None:
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp = Path(tmp_dir)
+        stub = make_stub(tmp)
+        result = run_shell(
+            "zsh",
+            textwrap.dedent(
+                """\
+                source src/sigil/bindings/sigil.zsh
+                function python3() { print -- "python3 used" >> "$ZLE_LOG"; return 127 }
+                sigil_agent_step hello >/dev/null
+                print -- "history=${history[$HISTCMD]}"
+                """
+            ),
+            tmp,
+            stub,
+        )
+        assert_success(result)
+        assert "history=+ echo zeta" in result.stdout
         assert not (tmp / "zle.log").exists()
 
 

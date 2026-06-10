@@ -767,6 +767,10 @@ def test_zeta_task_state_transform_replaces_transcript_with_structured_state() -
             {"role": "user", "content": "Implement task-state extraction"},
             {"role": "assistant", "content": "Decision: use structured outputs"},
             {"role": "user", "content": "Do not touch unrelated notes.md"},
+            {"role": "assistant", "content": "Working on it"},
+            {"role": "user", "content": "Status?"},
+            {"role": "assistant", "content": "Tests pass"},
+            {"role": "user", "content": "Keep going"},
         ],
         allowed_tools=(),
         current_events=[{"type": "assistant_message", "content": "Fresh evidence"}],
@@ -807,7 +811,14 @@ def test_zeta_task_state_transform_fails_open() -> None:
         ),
     ).build(
         "continue",
-        [{"role": "user", "content": "keep raw transcript"}],
+        [
+            {"role": "user", "content": "keep raw transcript"},
+            {"role": "assistant", "content": "noted"},
+            {"role": "user", "content": "two"},
+            {"role": "assistant", "content": "three"},
+            {"role": "user", "content": "four"},
+            {"role": "assistant", "content": "five"},
+        ],
         allowed_tools=(),
         tools=[],
     )
@@ -6312,6 +6323,10 @@ def test_zeta_task_state_transform_compacts_components_without_trace_ids() -> No
         [
             {"role": "user", "content": "Old objective"},
             {"role": "assistant", "content": "Old decision"},
+            {"role": "user", "content": "newer one"},
+            {"role": "assistant", "content": "newer two"},
+            {"role": "user", "content": "newer three"},
+            {"role": "assistant", "content": "newer four"},
         ],
         allowed_tools=(),
     )
@@ -6331,3 +6346,47 @@ def test_zeta_task_state_transform_compacts_components_without_trace_ids() -> No
     assert "Task state JSON:" in joined
     assert "continue without a store" in joined
     assert "Old decision" not in joined
+
+
+def test_zeta_task_state_transform_keeps_newest_messages_verbatim() -> None:
+    class FakeExtractor:
+        def __init__(self) -> None:
+            self.components: list[zeta_prompt.PromptComponent] = []
+
+        def extract(
+            self,
+            components: list[zeta_prompt.PromptComponent],
+        ) -> dict[str, Any]:
+            self.components = components
+            return task_state_fixture(objective="compact the old half")
+
+    timeline = [
+        {"role": "user", "content": "old message one"},
+        {"role": "assistant", "content": "old message two"},
+        {"role": "user", "content": "recent message three"},
+        {"role": "assistant", "content": "recent message four"},
+        {"role": "user", "content": "recent message five"},
+        {"role": "assistant", "content": "recent message six"},
+    ]
+    components = zeta_prompt.prompt_components("continue", timeline, allowed_tools=())
+    extractor = FakeExtractor()
+
+    compacted = zeta_prompt.TaskStateExtractionPromptTransform(
+        extractor=extractor
+    ).apply(components)
+
+    extracted_contents = [
+        str(component.message.get("content") or "")
+        for component in extractor.components
+        if component.message is not None
+    ]
+    assert extracted_contents == ["old message one", "old message two"]
+    joined = "\n".join(
+        str(component.message.get("content") or "")
+        for component in compacted
+        if component.message is not None
+    )
+    assert "Task state JSON:" in joined
+    assert "old message one" not in joined
+    assert "recent message three" in joined
+    assert "recent message six" in joined

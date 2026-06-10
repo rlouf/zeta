@@ -97,7 +97,7 @@ __sigil_zeta_recordable_command() {
   [[ -n "$command" ]] || return 1
   [[ -n "${command//[[:space:]]/}" ]] || return 1
   case "$command" in
-    [[:space:]]*|,*|+*|sigil\ *|zeta\ *|__sigil_*|sigil_*|noglob\ sigil_*|noglob\ ,*|noglob\ +*)
+    [[:space:]]*|,*|+*|sigil\ *|__sigil_*|sigil_*|noglob\ sigil_*|noglob\ ,*)
       return 1
       ;;
   esac

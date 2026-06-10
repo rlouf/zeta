@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
+
+from sigil.zeta.trace import close_default_stores
 
 
 @pytest.fixture(autouse=True)
@@ -10,7 +13,7 @@ def isolate_sigil_state(
     tmp_path: Path,
     tmp_path_factory: pytest.TempPathFactory,
     monkeypatch: pytest.MonkeyPatch,
-) -> None:
+) -> Iterator[None]:
     """Point Sigil state and session dirs at a temp dir for every test.
 
     Without this, helpers like `recent_turns()` and the zeta trace store read
@@ -23,3 +26,5 @@ def isolate_sigil_state(
     monkeypatch.setenv("SIGIL_STATE_DIR", str(tmp_path / "state"))
     monkeypatch.delenv("SIGIL_SESSION_DIR", raising=False)
     monkeypatch.delenv("SIGIL_SESSION_ID", raising=False)
+    yield
+    close_default_stores()

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import atexit
 import hashlib
 import json
 import logging
@@ -103,9 +104,27 @@ def default_sqlite_path() -> Path:
     return session_dir() / DEFAULT_SQLITE_NAME
 
 
+_DEFAULT_STORES: dict[Path, SqliteStore] = {}
+
+
 def default_store() -> SqliteStore:
-    """Open the default per-session SQLite store."""
-    return SqliteStore(default_sqlite_path())
+    """Return the process-wide store for the current session path."""
+    path = default_sqlite_path()
+    store = _DEFAULT_STORES.get(path)
+    if store is None:
+        store = SqliteStore(path)
+        _DEFAULT_STORES[path] = store
+    return store
+
+
+def close_default_stores() -> None:
+    """Close every cached default store; the next call reopens."""
+    while _DEFAULT_STORES:
+        _, store = _DEFAULT_STORES.popitem()
+        store.close()
+
+
+atexit.register(close_default_stores)
 
 
 def warn_trace_failure_once(operation: str, exc: BaseException) -> None:

@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 from pathlib import Path
 
+import pytest
 from _zeta_helpers import (
     BatchSpyStore,
 )
@@ -94,6 +96,38 @@ def test_zeta_trace_sqlite_persists_objects_refs_derivations_and_closure(
     assert reopened.derivations_for_output(child_id)[0].producer == "test:v1"
     assert set(reopened.graph_closure([child_id])) == {parent_id, child_id}
     assert reopened.stats().object_count == 2
+
+
+def test_zeta_default_store_reuses_one_store_per_path() -> None:
+    first = zeta_trace.default_store()
+    second = zeta_trace.default_store()
+
+    assert first is second
+
+
+def test_zeta_default_store_follows_the_session_path(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    first = zeta_trace.default_store()
+    monkeypatch.setenv("SIGIL_STATE_DIR", str(tmp_path / "other-state"))
+
+    second = zeta_trace.default_store()
+
+    assert second is not first
+    assert second.path != first.path
+
+
+def test_zeta_close_default_stores_closes_connections_and_reopens() -> None:
+    store = zeta_trace.default_store()
+
+    zeta_trace.close_default_stores()
+
+    with pytest.raises(sqlite3.ProgrammingError):
+        store.connection.execute("SELECT 1")
+    reopened = zeta_trace.default_store()
+    assert reopened is not store
+    assert reopened.get_ref("run/none/head") is None
 
 
 def test_sigil_zeta_trace_cli_smoke_with_in_memory_store(monkeypatch) -> None:

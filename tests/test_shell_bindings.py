@@ -497,6 +497,36 @@ def test_zsh_binding_preserves_question_mark_globbing() -> None:
 
 
 @pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
+def test_zsh_precmd_hook_runs_before_earlier_registered_hooks() -> None:
+    # $? at precmd entry is only the user command's status for the first hook
+    # in precmd_functions; hooks registered by plugins sourced before sigil
+    # would otherwise clobber it.
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp = Path(tmp_dir)
+        stub = make_stub(tmp)
+        result = run_shell(
+            "zsh",
+            textwrap.dedent(
+                """\
+                autoload -Uz add-zsh-hook
+                theme_precmd() { true }
+                add-zsh-hook precmd theme_precmd
+                source src/sigil/bindings/sigil.zsh
+                source src/sigil/bindings/sigil.zsh
+                print -- "hooks=$precmd_functions"
+                """
+            ),
+            tmp,
+            stub,
+        )
+        assert_success(result)
+        assert (
+            "hooks=__sigil_zeta_after_command_before_prompt theme_precmd"
+            in result.stdout
+        )
+
+
+@pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
 def test_zsh_does_not_record_ordinary_turns_ambiently() -> None:
     with tempfile.TemporaryDirectory() as tmp_dir:
         tmp = Path(tmp_dir)

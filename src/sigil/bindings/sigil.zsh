@@ -294,9 +294,20 @@ fi
 
 # ── zsh Command Lifecycle Hooks ──────────────────────────────────────────
 
-autoload -Uz add-zsh-hook
-add-zsh-hook preexec __sigil_zeta_before_command
-add-zsh-hook precmd __sigil_zeta_after_command_before_prompt
+__sigil_install_lifecycle_hooks() {
+  emulate -L zsh
+  autoload -Uz add-zsh-hook
+  add-zsh-hook preexec __sigil_zeta_before_command
+  add-zsh-hook precmd __sigil_zeta_after_command_before_prompt
+  # $? at precmd entry is the user command's status only for the first hook;
+  # any hook that runs earlier overwrites it with its own return status. Keep
+  # the sigil hook first no matter when this file is sourced.
+  precmd_functions=(
+    __sigil_zeta_after_command_before_prompt
+    ${precmd_functions:#__sigil_zeta_after_command_before_prompt}
+  )
+}
+__sigil_install_lifecycle_hooks
 
 # ── History Filtering ────────────────────────────────────────────────────
 

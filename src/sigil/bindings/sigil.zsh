@@ -4,9 +4,8 @@
 # functions to the CLI. The Zeta glyph route keeps prompt insertion and command
 # capture here, but delegates the model/tool loop to Python.
 
-# Exported on purpose: `sigil doctor` runs as a child process and reads this
-# from its inherited environment to tell whether an ancestor shell loaded the
-# binding (install.py check_shell_binding_loaded).
+# Exported on purpose: `sigil doctor` runs as a child process and uses this to
+# tell whether an ancestor shell loaded the binding.
 export SIGIL_BINDING_LOADED="zsh"
 
 # ── CLI Resolution ───────────────────────────────────────────────────────
@@ -81,8 +80,8 @@ typeset -g __sigil_zeta_current_command=""
 
 __sigil_zeta_enable_capture() {
   emulate -L zsh
-  # Recording is the point of the capture window; there is no off switch in
-  # this alpha. Non-positive or non-numeric limits fall back to the default.
+  # Recording has no off switch in this alpha: bad or non-positive limits
+  # fall back to the default window.
   local limit="${SIGIL_ZETA_CAPTURE_TURNS:-20}"
   if [[ "$limit" != <-> ]] || (( limit <= 0 )); then
     limit=20
@@ -163,8 +162,8 @@ __sigil_zeta_turn() {
   args=()
   objective="$*"
   handoff_file="$(mktemp "${TMPDIR:-/tmp}/sigil-handoff.XXXXXX")" || return 1
-  # Ctrl-C during zeta-step aborts this function mid-flight; the always block
-  # is the only cleanup zsh still runs on that path.
+  # Ctrl-C aborts this function mid-flight; the always block is the only
+  # cleanup zsh still runs on that path.
   {
     if [[ -z "$objective" ]]; then
       __sigil_zeta_consume_capture
@@ -175,8 +174,7 @@ __sigil_zeta_turn() {
     "$__sigil_bin" zeta-step --glyph "$glyph" --handoff-file "$handoff_file" "${args[@]}"
     step_status=$?
     if [[ "$step_status" == "0" && -s "$handoff_file" ]]; then
-      # The CLI writes the staged command verbatim; the substitution strips the
-      # trailing newline.
+      # The handoff file holds the staged command verbatim.
       command="$(<"$handoff_file")"
       if [[ -n "$command" ]]; then
         __sigil_zeta_enable_capture
@@ -213,13 +211,11 @@ sigil_status() {
 
 # ── zsh Raw Plus Capture ─────────────────────────────────────────────────
 
-# The accept-line widget is the only `+` path. It captures the raw buffer
-# before zsh parses it and hands the whole line to `sigil run --shell`, so
-# pipes, redirections, and multiline buffers stay part of the captured
-# command. The command runs inside the line editor, which means no job
-# control: Ctrl-Z cannot suspend it and it never appears in `jobs`. Outside
-# zle (scripts, non-interactive shells) `+` does not dispatch; call
-# `sigil_run` or the CLI directly there.
+# The accept-line widget is the only `+` path: it grabs the raw buffer before
+# zsh parses it and hands the whole line to `sigil run --shell`, keeping
+# pipes, redirections, and multiline buffers intact. The command runs inside
+# the line editor, so job control does not apply (no Ctrl-Z, no `jobs` entry).
+# Outside zle `+` does not dispatch; scripts call `sigil_run` instead.
 typeset -g __sigil_plus_capture_widget_installed="${__sigil_plus_capture_widget_installed:-0}"
 
 __sigil_plus_capture_command() {
@@ -279,9 +275,8 @@ __sigil_install_plus_capture_widget() {
 
 if __sigil_glyphs_enabled; then
   # Function definitions make the punctuation usable in non-alias contexts.
-  # `+` deliberately has neither a function nor an alias: the accept-line
-  # widget is its only path, so a `+ ...` line always keeps shell grammar
-  # intact instead of being parsed by zsh when the widget would not run.
+  # `+` has neither on purpose: the accept-line widget is its only path, so a
+  # `+ ...` line is never parsed by zsh instead.
   function ',' { sigil_command "$@" }
   function ',,' { sigil_agent_step "$@" }
   function ',,,' { sigil_agent_step_auto "$@" }

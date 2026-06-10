@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 ANSWER_HISTORY = "last-answer.jsonl"
+EVENT_LOG_MAX_BYTES = 10 * 1024 * 1024
 
 
 def state_dir() -> Path:
@@ -50,6 +51,20 @@ def append_jsonl_line(path: Path, payload: dict[str, Any]) -> None:
         f.write(line.encode("utf-8"))
 
 
+def rotate_oversized_log(path: Path) -> None:
+    """Move a log aside once it exceeds the size cap, keeping one generation."""
+    try:
+        size = path.stat().st_size
+    except OSError:
+        return
+    if size < EVENT_LOG_MAX_BYTES:
+        return
+    try:
+        path.replace(path.with_name(f"{path.name}.1"))
+    except OSError:
+        pass
+
+
 def append_event(event: dict[str, Any]) -> dict[str, Any]:
     """Append a global audit/debug event with session metadata."""
     root = state_dir()
@@ -61,7 +76,9 @@ def append_event(event: dict[str, Any]) -> dict[str, Any]:
         "session": session_id(),
         **event,
     }
-    append_jsonl_line(root / "events.jsonl", payload)
+    log_path = root / "events.jsonl"
+    rotate_oversized_log(log_path)
+    append_jsonl_line(log_path, payload)
     return payload
 
 

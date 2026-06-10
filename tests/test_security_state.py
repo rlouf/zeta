@@ -150,6 +150,32 @@ def test_append_event_does_not_interleave_large_lines_across_processes() -> None
         assert set(payload) in ({"a"}, {"b"})
 
 
+def test_append_event_rotates_oversized_log(monkeypatch) -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        with patch_dict(
+            os.environ,
+            {"SIGIL_STATE_DIR": tmp, "SIGIL_SESSION_ID": "test"},
+        ):
+            monkeypatch.setattr("sigil.state.EVENT_LOG_MAX_BYTES", 200)
+            append_event({"type": "first", "payload": "x" * 300})
+            append_event({"type": "second"})
+
+        rotated = Path(tmp) / "events.jsonl.1"
+        assert rotated.exists()
+        rotated_types = [
+            json.loads(line)["type"]
+            for line in rotated.read_text(encoding="utf-8").splitlines()
+        ]
+        assert rotated_types == ["first"]
+        current_types = [
+            json.loads(line)["type"]
+            for line in (Path(tmp) / "events.jsonl")
+            .read_text(encoding="utf-8")
+            .splitlines()
+        ]
+        assert current_types == ["second"]
+
+
 def test_events_default_lists_recent_events() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         old_state_dir = os.environ.get("SIGIL_STATE_DIR")

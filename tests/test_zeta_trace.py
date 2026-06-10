@@ -360,6 +360,52 @@ def test_zeta_orphan_tool_result_rendering_strips_trace_fields() -> None:
     assert "prompt_trace" not in content
 
 
+def test_zeta_chat_messages_repairs_truncated_tool_call_arguments() -> None:
+    event = {
+        "type": "assistant_message",
+        "content": "",
+        "tool_calls": [
+            {
+                "id": "call-0",
+                "type": "function",
+                "function": {
+                    "name": "write",
+                    "arguments": '{"path": "doc.md", "content": "cut mid stri',
+                },
+            }
+        ],
+    }
+
+    messages = zeta_timeline.chat_messages([event])
+
+    assert len(messages) == 1
+    call = messages[0]["tool_calls"][0]
+    arguments = json.loads(call["function"]["arguments"])
+    assert arguments["truncated_arguments"].startswith('{"path": "doc.md"')
+    assert call["id"] == "call-0"
+    assert call["function"]["name"] == "write"
+
+
+def test_zeta_chat_messages_keeps_valid_tool_call_arguments() -> None:
+    event = {
+        "type": "assistant_message",
+        "content": "",
+        "tool_calls": [
+            {
+                "id": "call-0",
+                "type": "function",
+                "function": {"name": "read", "arguments": '{"path": "doc.md"}'},
+            }
+        ],
+    }
+
+    messages = zeta_timeline.chat_messages([event])
+
+    assert messages[0]["tool_calls"][0]["function"]["arguments"] == (
+        '{"path": "doc.md"}'
+    )
+
+
 def test_zeta_sqlite_store_batch_defers_commit(tmp_path: Path) -> None:
     store = zeta_trace.SqliteStore(tmp_path / "trace.sqlite3")
     reader = zeta_trace.SqliteStore(tmp_path / "trace.sqlite3")

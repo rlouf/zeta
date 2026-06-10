@@ -407,7 +407,6 @@ def fallback_answer(
         answer = chat_text(
             system,
             fallback_prompt,
-            max_tokens=1200,
             stream_sink=stream_sink,
             telemetry_sink=telemetry_sink,
         ).strip()
@@ -415,7 +414,6 @@ def fallback_answer(
         answer = chat_text(
             system,
             fallback_prompt,
-            max_tokens=1200,
             selected_model=selected_model.model,
             selected_url=selected_model.url,
             stream_sink=stream_sink,

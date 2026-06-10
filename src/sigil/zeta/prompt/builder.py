@@ -12,7 +12,7 @@ from contextlib import nullcontext
 from dataclasses import dataclass, replace
 from typing import Any
 
-from ..model import chat_completion_request_body
+from ..model import DEFAULT_MAX_COMPLETION_TOKENS, chat_completion_request_body
 from ..skills import Skill, available_skills
 from ..tools import allowed_tool_names
 from ..trace import (
@@ -74,7 +74,7 @@ class PromptBuilder:
         current_events: Iterable[dict[str, Any]] = (),
         tools: list[dict[str, Any]] | None = None,
         tool_choice: str | dict[str, Any] = "auto",
-        max_tokens: int = 1200,
+        max_tokens: int = DEFAULT_MAX_COMPLETION_TOKENS,
         selected_model: str | None = None,
     ) -> PreparedPrompt:
         components = prompt_components(

@@ -573,11 +573,37 @@ def event_chat_message(
         return {
             "role": "assistant",
             "content": content or None,
-            "tool_calls": tool_calls,
+            "tool_calls": [renderable_tool_call(call) for call in tool_calls],
         }
     if not content:
         return None
     return {"role": role, "content": content}
+
+
+def renderable_tool_call(call: Any) -> Any:
+    """Repair tool call arguments that are not valid JSON.
+
+    A recorded tool call can carry truncated arguments (a generation cut by
+    max_tokens); chat templates refuse to render them, which would fail every
+    later prompt in the session.
+    """
+    if not isinstance(call, dict):
+        return call
+    function = call.get("function")
+    if not isinstance(function, dict):
+        return call
+    arguments = function.get("arguments")
+    if not isinstance(arguments, str):
+        return call
+    try:
+        json.loads(arguments)
+    except json.JSONDecodeError:
+        repaired = json.dumps(
+            {"truncated_arguments": arguments[:200]},
+            ensure_ascii=False,
+        )
+        return {**call, "function": {**function, "arguments": repaired}}
+    return call
 
 
 def record_tool_call_ids(

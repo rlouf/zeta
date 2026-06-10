@@ -86,6 +86,8 @@ ZETA_MODEL_NAME=local-model
 ZETA_MODEL_PATH=/path/to/model.gguf
 # Client-side stream idle timeout in seconds (default 120); <=0 disables it.
 ZETA_MODEL_IDLE_TIMEOUT_SECONDS=120
+# Limit on connect plus time to first chunk (default 600); <=0 disables it.
+ZETA_MODEL_FIRST_OUTPUT_TIMEOUT_SECONDS=600
 SIGIL_STATE_DIR=$HOME/.sigil
 SIGIL_RUN_CAPTURE_BYTES=6000
 ```
@@ -93,9 +95,12 @@ SIGIL_RUN_CAPTURE_BYTES=6000
 Sigil sends Zeta model requests with OpenAI-compatible streaming enabled
 internally, even though it still renders the final assistant message as one
 response. For local `llama-server`, this gives the server a direct client
-disconnect signal if Sigil aborts a request. `ZETA_MODEL_IDLE_TIMEOUT_SECONDS`
-is only a client-side stream read timeout; `llama-server --timeout` is a
-read/write timeout, not a generation cancellation guarantee.
+disconnect signal if Sigil aborts a request. The two timeouts are client-side
+stream read timeouts: `ZETA_MODEL_FIRST_OUTPUT_TIMEOUT_SECONDS` covers connect
+plus prompt processing (a long prefill sends nothing), and
+`ZETA_MODEL_IDLE_TIMEOUT_SECONDS` bounds silence between chunks once output
+flows; `llama-server --timeout` is a read/write timeout, not a generation
+cancellation guarantee.
 
 ## Changing Models Mid-Session
 

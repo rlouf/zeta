@@ -29,9 +29,10 @@ def visible_terminal_text(text: str) -> str:
 
 
 class FakeStreamingResponse:
-    def __init__(self, lines: list[bytes]) -> None:
+    def __init__(self, lines: list[bytes], fp: Any = None) -> None:
         self.lines = lines
         self.closed = False
+        self.fp = fp
 
     def __enter__(self) -> FakeStreamingResponse:
         return self

@@ -21,7 +21,9 @@ from ..display.tty import LOVE, RESET, muted, should_color
 DEFAULT_MODEL_URL = "http://127.0.0.1:8080/v1/chat/completions"
 DEFAULT_MODEL_NAME = "local-model"
 DEFAULT_MODEL_IDLE_TIMEOUT_SECONDS = 120.0
+DEFAULT_MODEL_FIRST_OUTPUT_TIMEOUT_SECONDS = 600.0
 MODEL_METADATA_TIMEOUT_SECONDS = 0.5
+DEFAULT_MAX_COMPLETION_TOKENS = 8192
 
 USAGE_TOKEN_FIELDS = ("prompt_tokens", "completion_tokens", "total_tokens")
 ModelTelemetrySink = Callable[[dict[str, Any]], None]
@@ -55,23 +57,50 @@ def model_url_from_env(env: Mapping[str, str]) -> str:
     return env.get("ZETA_MODEL_URL") or DEFAULT_MODEL_URL
 
 
-def model_idle_timeout_from_env(env: Mapping[str, str]) -> float | None:
-    """Return the configured client-side model stream idle timeout."""
-    value = env.get("ZETA_MODEL_IDLE_TIMEOUT_SECONDS")
+def stream_timeout_from_env(
+    env: Mapping[str, str],
+    name: str,
+    default: float,
+) -> float | None:
+    """Parse a stream timeout variable; non-positive values disable it."""
+    value = env.get(name)
     if value is None or value.strip() == "":
-        return DEFAULT_MODEL_IDLE_TIMEOUT_SECONDS
+        return default
     try:
         seconds = float(value)
     except ValueError:
-        return DEFAULT_MODEL_IDLE_TIMEOUT_SECONDS
+        return default
     if seconds <= 0:
         return None
     return seconds
 
 
+def model_idle_timeout_from_env(env: Mapping[str, str]) -> float | None:
+    """Return the configured client-side model stream idle timeout."""
+    return stream_timeout_from_env(
+        env,
+        "ZETA_MODEL_IDLE_TIMEOUT_SECONDS",
+        DEFAULT_MODEL_IDLE_TIMEOUT_SECONDS,
+    )
+
+
 def model_idle_timeout() -> float | None:
     """Return the configured client-side model stream idle timeout."""
     return model_idle_timeout_from_env(os.environ)
+
+
+def model_first_output_timeout_from_env(env: Mapping[str, str]) -> float | None:
+    """Return the configured limit on connect plus time to first chunk."""
+    return stream_timeout_from_env(
+        env,
+        "ZETA_MODEL_FIRST_OUTPUT_TIMEOUT_SECONDS",
+        DEFAULT_MODEL_FIRST_OUTPUT_TIMEOUT_SECONDS,
+    )
+
+
+def model_first_output_timeout() -> float | None:
+    """Return the configured limit on connect plus time to first chunk."""
+    return model_first_output_timeout_from_env(os.environ)
 
 
 def model_endpoint_valid(url: str) -> bool:
@@ -260,8 +289,13 @@ def request_chat_completion(
         method="POST",
     )
     try:
-        with urllib.request.urlopen(req, timeout=model_idle_timeout()) as resp:
-            payload = read_streamed_chat_completion(resp, stream_sink=stream_sink)
+        with urllib.request.urlopen(req, timeout=model_first_output_timeout()) as resp:
+            payload = read_streamed_chat_completion(
+                stream_with_idle_timeout(resp, model_idle_timeout()),
+                stream_sink=stream_sink,
+            )
+    except urllib.error.HTTPError as exc:
+        raise RuntimeError(f"model request failed: {http_error_detail(exc)}") from exc
     except (
         OSError,
         TimeoutError,
@@ -272,6 +306,55 @@ def request_chat_completion(
     if not isinstance(payload, dict):
         raise RuntimeError("model request failed: response was not a JSON object")
     return payload
+
+
+def stream_with_idle_timeout(
+    resp: Any,
+    idle_timeout: float | None,
+) -> Iterator[bytes]:
+    """Yield response chunks, tightening the socket timeout after the first.
+
+    The request timeout must cover connect plus prompt processing (a long
+    prefill sends nothing); once output flows, only mid-stream silence should
+    be bounded.
+    """
+    first = True
+    for chunk in resp:
+        yield chunk
+        if first:
+            set_response_socket_timeout(resp, idle_timeout)
+            first = False
+
+
+def set_response_socket_timeout(resp: Any, timeout: float | None) -> None:
+    """Best-effort adjustment of the socket timeout behind an HTTP response."""
+    sock = getattr(getattr(getattr(resp, "fp", None), "raw", None), "_sock", None)
+    settimeout = getattr(sock, "settimeout", None)
+    if settimeout is None:
+        return
+    try:
+        settimeout(timeout)
+    except OSError:
+        return
+
+
+def http_error_detail(error: urllib.error.HTTPError) -> str:
+    """Return an HTTP failure message including the server's error body."""
+    try:
+        body = error.read(2048).decode("utf-8", errors="replace").strip()
+    except OSError:
+        body = ""
+    if not body:
+        return str(error)
+    try:
+        payload = json.loads(body)
+    except json.JSONDecodeError:
+        detail = body
+    else:
+        detail = format_stream_error(
+            payload.get("error", payload) if isinstance(payload, dict) else payload
+        )
+    return f"{error}: {detail}"
 
 
 def read_streamed_chat_completion(
@@ -545,7 +628,7 @@ def chat_completion_messages(
     *,
     tools: list[dict[str, Any]] | None = None,
     tool_choice: str | dict[str, Any] = "auto",
-    max_tokens: int = 1200,
+    max_tokens: int = DEFAULT_MAX_COMPLETION_TOKENS,
     selected_model: str | None = None,
     selected_url: str | None = None,
     stream_sink: ChatCompletionStreamSink | None = None,
@@ -574,6 +657,13 @@ def chat_completion_messages(
     message = payload["choices"][0]["message"]
     if not isinstance(message, dict):
         raise RuntimeError("model request failed: assistant message was invalid")
+    if payload["choices"][0].get("finish_reason") == "length" and message.get(
+        "tool_calls"
+    ):
+        raise RuntimeError(
+            "model request failed: the response hit max_tokens in the middle "
+            "of a tool call, leaving its arguments incomplete"
+        )
     return message
 
 
@@ -582,7 +672,7 @@ def chat_completion_request_body(
     *,
     tools: list[dict[str, Any]] | None = None,
     tool_choice: str | dict[str, Any] = "auto",
-    max_tokens: int = 1200,
+    max_tokens: int = DEFAULT_MAX_COMPLETION_TOKENS,
     selected_model: str | None = None,
     response_format: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
@@ -625,7 +715,7 @@ def chat_structured_output(
     *,
     schema: dict[str, Any],
     response_name: str,
-    max_tokens: int = 1200,
+    max_tokens: int = DEFAULT_MAX_COMPLETION_TOKENS,
     selected_model: str | None = None,
     selected_url: str | None = None,
 ) -> dict[str, Any]:
@@ -667,7 +757,7 @@ def chat_text(
     system: str,
     user: str,
     *,
-    max_tokens: int = 1200,
+    max_tokens: int = DEFAULT_MAX_COMPLETION_TOKENS,
     selected_model: str | None = None,
     selected_url: str | None = None,
     stream_sink: ChatCompletionStreamSink | None = None,

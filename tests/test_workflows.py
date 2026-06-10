@@ -1787,7 +1787,7 @@ def test_zeta_question_loop_falls_back_instead_of_budget_message(
         system: str,
         prompt: str,
         *,
-        max_tokens: int,
+        max_tokens: int = 8192,
         stream_sink: object | None = None,
         telemetry_sink: object | None = None,
     ) -> str:
@@ -1821,7 +1821,7 @@ def test_zeta_answer_fallback_formats_evidence_instead_of_raw_json(
         system: str,
         prompt: str,
         *,
-        max_tokens: int,
+        max_tokens: int = 8192,
         stream_sink: object | None = None,
         telemetry_sink: object | None = None,
     ) -> str:
@@ -1895,7 +1895,7 @@ url = "http://127.0.0.1:8081/v1/chat/completions"
         system: str,
         prompt: str,
         *,
-        max_tokens: int,
+        max_tokens: int = 8192,
         selected_model: str | None = None,
         selected_url: str | None = None,
         stream_sink: object | None = None,

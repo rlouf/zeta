@@ -188,7 +188,7 @@ def run_tool_answer(
     if not model_server_ready(selected_model):
         return 1
     enabled_tools = tuple(allowed_tools)
-    renderer = build_turn_renderer(sys.stdout, json_output=json_output)
+    renderer = build_turn_renderer(sys.stderr, json_output=json_output)
     context_footer = renderer.context_footer
     recorder = AnswerEventRecorder(renderer, json_output=json_output)
     user_event: dict[str, Any] = {
@@ -299,7 +299,7 @@ class AnswerEventRecorder(TurnEventRecorder):
     strip_fields = frozenset({"route"})
 
     def __init__(self, renderer: TurnRenderer, *, json_output: bool) -> None:
-        super().__init__(renderer, render_output=sys.stdout)
+        super().__init__(renderer, render_output=sys.stderr)
         self.json_output = json_output
         self.tool_events: list[dict[str, Any]] = []
 

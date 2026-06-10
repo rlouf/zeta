@@ -1319,10 +1319,10 @@ def test_zeta_question_loop_feeds_current_tool_result_to_next_step(
     )
 
     assert code == 0
-    output = capsys.readouterr().out
-    assert "❯ read   pyproject.toml" in output
-    assert "\n\nIt contains project metadata.\n" in output
-    assert "project metadata" in output
+    output = capsys.readouterr()
+    assert "❯ read   pyproject.toml" in output.err
+    assert "It contains project metadata." in output.out
+    assert "❯" not in output.out
     assert len(transcripts) == 1
 
 
@@ -1360,11 +1360,11 @@ def test_zeta_answer_route_prints_context_usage_and_records_telemetry(
     )
 
     assert code == 0
-    output = capsys.readouterr().out
-    assert "It contains project metadata." in output
-    assert "context  [█░░░░░░░░░░░░░░░░░░░] 7%" in output
-    assert "18,823 / 262,144 tokens" not in output
-    assert output.index("It contains project metadata.") < output.index("context  [")
+    output = capsys.readouterr()
+    assert "It contains project metadata." in output.out
+    assert "context  [█░░░░░░░░░░░░░░░░░░░] 7%" in output.err
+    assert "context  [" not in output.out
+    assert "18,823 / 262,144 tokens" not in output.err
     answer_event = read_event_log()[-1]
     assert answer_event["usage"] == telemetry["usage"]
     assert answer_event["model_context_tokens"] == 262_144
@@ -1526,11 +1526,13 @@ def test_zeta_answer_route_streams_text_before_tool_trace(
     code = answers_runner.run_tool_answer("question system", "Question?")
 
     assert code == 0
-    output = capsys.readouterr().out
-    assert output == (
-        "\nI'll inspect README.\n\n❯ read   README.md  (1 lines)\n\nIt is a README.\n\n"
-    )
-    assert '{"path"' not in output
+    output = capsys.readouterr()
+    assert "I'll inspect README." in output.out
+    assert "It is a README." in output.out
+    assert "❯ read   README.md  (1 lines)" in output.err
+    assert "❯" not in output.out
+    assert '{"path"' not in output.out
+    assert '{"path"' not in output.err
 
 
 def test_zeta_answer_route_renders_context_usage_at_bottom_after_tools(
@@ -1602,10 +1604,12 @@ def test_zeta_answer_route_renders_context_usage_at_bottom_after_tools(
     code = answers_runner.run_tool_answer("question system", "Question?")
 
     assert code == 0
-    output = capsys.readouterr().out
-    assert ("❯ read   a.md  (1 lines)\n❯ read   b.md  (1 lines)") in output
-    assert output.count("context  [") == 1
-    assert output.index("It is a README.") < output.index(
+    output = capsys.readouterr()
+    assert ("❯ read   a.md  (1 lines)\n❯ read   b.md  (1 lines)") in output.err
+    assert output.err.count("context  [") == 1
+    assert "It is a README." in output.out
+    assert "context  [" not in output.out
+    assert output.err.index("❯ read   b.md") < output.err.index(
         "context  [█░░░░░░░░░░░░░░░░░░░] 7%"
     )
     tools = read_jsonl("last-tools.jsonl")
@@ -1666,7 +1670,7 @@ def test_zeta_question_loop_prints_tool_start_while_agent_runs(
             "input": {"path": "README.md"},
         }
         event_sink(tool_call)
-        assert "❯ read   README.md" in capsys.readouterr().out
+        assert "❯ read   README.md" in capsys.readouterr().err
         tool_result = {
             "type": "tool_result",
             "tool_call_id": "call-1",
@@ -1796,7 +1800,7 @@ def test_zeta_question_loop_falls_back_instead_of_budget_message(
 
     output = capsys.readouterr().out
     assert code == 0
-    assert "\n\nIt contains Sigil docs.\n" in output
+    assert "\nIt contains Sigil docs.\n" in output
     assert "It contains Sigil docs." in output
     assert "question tool budget" not in output
 
@@ -1976,3 +1980,54 @@ def test_session_clear_removes_zeta_continuity(
     assert "zeta-trace.sqlite3" in result.output
     assert not session_root.exists()
     assert zeta_timeline.current_timeline() == []
+
+
+def test_zeta_answer_route_keeps_stdout_clean_for_pipes(
+    monkeypatch,
+    capsys,
+) -> None:
+    def fake_run_agent_turn(
+        objective: str,
+        transcript: list[dict[str, Any]],
+        config: zeta_agent.AgentConfig,
+        **kwargs: object,
+    ) -> zeta_agent.AgentTurnResult:
+        del objective, transcript, config
+        event_sink = cast("Callable[[dict[str, Any]], None]", kwargs.get("event_sink"))
+        assert callable(event_sink)
+        events = [
+            {
+                "type": "tool_call",
+                "id": "call-1",
+                "tool_call_id": "call-1",
+                "name": "read",
+                "input": {"path": "README.md"},
+            },
+            {
+                "type": "tool_result",
+                "tool_call_id": "call-1",
+                "name": "read",
+                "result": {"ok": True, "content": [{"type": "text", "text": "A\n"}]},
+            },
+        ]
+        for event in events:
+            event_sink(event)
+        return zeta_agent.AgentTurnResult(
+            final_text="grep-safe answer",
+            events=events,
+            model_telemetry={
+                "usage": {"prompt_tokens": 10, "completion_tokens": 2},
+                "model_context_tokens": 1000,
+            },
+        )
+
+    monkeypatch.setattr(turn_routes, "ensure_server", lambda: True)
+    monkeypatch.setattr(answers_runner, "run_agent_turn", fake_run_agent_turn)
+
+    code = answers_runner.run_tool_answer("question system", "Question?")
+
+    assert code == 0
+    output = capsys.readouterr()
+    assert "grep-safe answer" in output.out
+    assert "❯" not in output.out
+    assert "context  [" not in output.out

@@ -9,10 +9,9 @@ from typing import Any
 from .base import (
     ToolSpec,
     analysis,
-    content_hash,
+    change_hashes,
     effect,
     error_result,
-    file_content_hash,
     handoff,
     missing,
     write_temp,
@@ -56,7 +55,7 @@ def stage(params: dict[str, Any]) -> dict[str, Any]:
         str(params.get("reason") or f"Write {dest}."),
         artifact=str(path),
     )
-    result["metadata"] = write_hashes(dest, content) | {"path": dest}
+    result["metadata"] = change_hashes(dest, content) | {"path": dest}
     return result
 
 
@@ -65,7 +64,7 @@ def run(params: dict[str, Any]) -> dict[str, Any]:
     if not dest:
         return error_result("missing-path", "missing path")
     content = str(params.get("content") or "")
-    hashes = write_hashes(dest, content)
+    hashes = change_hashes(dest, content)
     try:
         Path(dest).write_text(content, encoding="utf-8")
     except OSError as exc:
@@ -75,12 +74,3 @@ def run(params: dict[str, Any]) -> dict[str, Any]:
         "content": [{"type": "text", "text": f"wrote {dest}"}],
         "metadata": {"mode": "direct", "path": dest, **hashes},
     }
-
-
-def write_hashes(dest: str, content: str) -> dict[str, str]:
-    """Hash the current file (when readable) and the content replacing it."""
-    hashes = {"after_hash": content_hash(content)}
-    before_hash = file_content_hash(dest)
-    if before_hash is not None:
-        hashes["before_hash"] = before_hash
-    return hashes

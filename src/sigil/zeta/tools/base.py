@@ -136,6 +136,15 @@ def file_content_hash(path: str | Path) -> str | None:
     return content_hash(data)
 
 
+def change_hashes(path: str, content: str) -> dict[str, str]:
+    """Hash the file as it stands (when readable) and the content replacing it."""
+    hashes = {"after_hash": content_hash(content)}
+    before_hash = file_content_hash(path)
+    if before_hash is not None:
+        hashes["before_hash"] = before_hash
+    return hashes
+
+
 def write_temp(prefix: str, suffix: str, content: str) -> Path:
     fd, raw_path = tempfile.mkstemp(prefix=prefix, suffix=suffix)
     path = Path(raw_path)

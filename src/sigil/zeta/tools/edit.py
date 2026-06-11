@@ -12,10 +12,9 @@ from typing import Any
 from .base import (
     ToolSpec,
     analysis,
-    content_hash,
+    change_hashes,
     effect,
     error_result,
-    file_content_hash,
     handoff,
     missing,
     write_temp,
@@ -57,7 +56,9 @@ def stage(params: dict[str, Any]) -> dict[str, Any]:
         edit.patch,
         str(params.get("reason") or f"Apply exact replacement in {edit.location}."),
     )
-    result["metadata"] = edit_hashes(edit) | {"path": edit.location}
+    result["metadata"] = change_hashes(edit.location, edit.updated) | {
+        "path": edit.location
+    }
     return result
 
 
@@ -65,7 +66,7 @@ def run(params: dict[str, Any]) -> dict[str, Any]:
     edit = prepare_exact_replacement(params)
     if not isinstance(edit, ExactReplacement):
         return edit
-    hashes = edit_hashes(edit)
+    hashes = change_hashes(edit.location, edit.updated)
     try:
         Path(edit.location).write_text(edit.updated, encoding="utf-8")
     except OSError as exc:
@@ -83,15 +84,6 @@ def run(params: dict[str, Any]) -> dict[str, Any]:
             **hashes,
         },
     }
-
-
-def edit_hashes(edit: ExactReplacement) -> dict[str, str]:
-    """Hash the file as it stands and the replacement text."""
-    hashes = {"after_hash": content_hash(edit.updated)}
-    before_hash = file_content_hash(edit.location)
-    if before_hash is not None:
-        hashes["before_hash"] = before_hash
-    return hashes
 
 
 @dataclass(frozen=True)
@@ -147,8 +139,8 @@ def replacement_patch(location: str, old: str, new: str) -> str:
     lines = difflib.unified_diff(
         before,
         after,
-        fromfile=patch_source_path(location),
-        tofile=patch_target_path(location),
+        fromfile=patch_label(location, "a"),
+        tofile=patch_label(location, "b"),
     )
     return "".join(normalize_diff_lines(lines))
 
@@ -164,13 +156,7 @@ def normalize_diff_lines(lines: Iterable[str]) -> list[str]:
     return normalized
 
 
-def patch_source_path(path: str) -> str:
+def patch_label(path: str, prefix: str) -> str:
     if path.startswith("/"):
         return path
-    return f"a/{path}"
-
-
-def patch_target_path(path: str) -> str:
-    if path.startswith("/"):
-        return path
-    return f"b/{path}"
+    return f"{prefix}/{path}"

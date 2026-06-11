@@ -267,16 +267,10 @@ def run_plugin_json(
 
 def plugin_argv(command: tuple[str, ...], mode: PluginMode) -> list[str]:
     argv = list(command)
-    if mode == "metadata":
-        argv.append("--metadata")
-    elif mode == "analyze":
-        argv.append("--analyze")
+    if mode != "run":
+        argv.append(f"--{mode}")
     return argv
 
 
 def plugin_error_code(mode: PluginMode, failure: str) -> str:
-    if mode == "metadata":
-        return f"plugin-metadata-{failure}"
-    if mode == "analyze":
-        return f"plugin-analyze-{failure}"
-    return f"plugin-run-{failure}"
+    return f"plugin-{mode}-{failure}"

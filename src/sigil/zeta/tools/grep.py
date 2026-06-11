@@ -72,7 +72,7 @@ def run(params: dict[str, Any]) -> dict[str, Any]:
     truncated = result.truncated or content_truncated
     return {
         "ok": result.ok,
-        "content": [{"type": "text", "text": text[:MAX_TOOL_RESULT_CHARS]}],
+        "content": [{"type": "text", "text": text}],
         "metadata": {
             "pattern": pattern,
             "path": path,

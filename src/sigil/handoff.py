@@ -153,7 +153,6 @@ def executed_shell_result(
         "cwd": turn.get("cwd"),
         "content": [{"type": "text", "text": "\n".join(lines)}],
         "shell_turns": turns,
-        "turns": turns,
     }
 
 
@@ -185,7 +184,6 @@ def cancelled_shell_result(
         "executed_command": "",
         "content": [{"type": "text", "text": reason}],
         "shell_turns": turns,
-        "turns": turns,
     }
 
 
@@ -204,7 +202,6 @@ def no_pending_handoff_result(turns: list[dict[str, Any]]) -> dict[str, Any]:
             }
         ],
         "shell_turns": shell_turns,
-        "turns": shell_turns,
     }
 
 

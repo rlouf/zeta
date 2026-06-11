@@ -149,14 +149,12 @@ def failure_context_prompt(failure: dict[str, Any]) -> str:
         f"Exit status: {failure.get('status', 'unknown')}",
         f"Working directory: {failure.get('cwd', '')}",
     ]
-    if failure.get("stderr_snippet"):
-        prompt_lines.extend(["", "Recent stderr:", str(failure["stderr_snippet"])])
-    else:
-        prompt_lines.extend(["", "Recent stderr: <not captured>"])
-    if failure.get("stdout_snippet"):
-        prompt_lines.extend(["", "Recent stdout:", str(failure["stdout_snippet"])])
-    else:
-        prompt_lines.extend(["", "Recent stdout: <not captured>"])
+    for stream in ("stderr", "stdout"):
+        snippet = failure.get(f"{stream}_snippet")
+        if snippet:
+            prompt_lines.extend(["", f"Recent {stream}:", str(snippet)])
+        else:
+            prompt_lines.extend(["", f"Recent {stream}: <not captured>"])
     prompt_lines.extend(
         [
             "",

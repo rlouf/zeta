@@ -57,12 +57,15 @@ def is_shell_prompt_handoff(value: object) -> bool:
     )
 
 
-def is_shell_handoff_result(value: object) -> bool:
-    """Return whether a tool result resolves a shell handoff."""
+def _has_schema(value: object, schema: str) -> bool:
     if not isinstance(value, Mapping):
         return False
-    payload = cast(Mapping[str, object], value)
-    return payload.get("schema") == SHELL_HANDOFF_RESULT_SCHEMA
+    return cast(Mapping[str, object], value).get("schema") == schema
+
+
+def is_shell_handoff_result(value: object) -> bool:
+    """Return whether a tool result resolves a shell handoff."""
+    return _has_schema(value, SHELL_HANDOFF_RESULT_SCHEMA)
 
 
 TURN_RECORD_TYPE = "turn"
@@ -168,15 +171,9 @@ def effect_record(
 
 def is_turn_record(value: object) -> bool:
     """Return whether a value is a ledger turn record."""
-    if not isinstance(value, Mapping):
-        return False
-    payload = cast(Mapping[str, object], value)
-    return payload.get("schema") == TURN_RECORD_SCHEMA
+    return _has_schema(value, TURN_RECORD_SCHEMA)
 
 
 def is_effect_record(value: object) -> bool:
     """Return whether a value is a ledger effect record."""
-    if not isinstance(value, Mapping):
-        return False
-    payload = cast(Mapping[str, object], value)
-    return payload.get("schema") == EFFECT_RECORD_SCHEMA
+    return _has_schema(value, EFFECT_RECORD_SCHEMA)

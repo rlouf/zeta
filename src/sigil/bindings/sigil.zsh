@@ -1,7 +1,7 @@
 # Sigil zsh bindings. Core behavior lives in the `sigil` executable.
 #
 # This file should stay boring: it wires zsh lifecycle hooks and punctuation
-# functions to the CLI. The Zeta glyph workflow keeps prompt insertion and
+# functions to the CLI. The agent step workflow keeps prompt insertion and
 # shell-turn recording here, but delegates the model/tool loop to Python.
 
 # Exported so `sigil doctor`, which runs as a child process, can tell that an
@@ -133,9 +133,9 @@ sigil_command() {
   fi
 }
 
-__sigil_zeta_turn() {
+__sigil_step_turn() {
   emulate -L zsh
-  local glyph="$1"
+  local workflow="$1"
   shift || true
   local objective handoff_file step_status command
   local -a args
@@ -150,7 +150,7 @@ __sigil_zeta_turn() {
     else
       args+=("$objective")
     fi
-    "$__sigil_bin" zeta-step --glyph "$glyph" --handoff-file "$handoff_file" "${args[@]}"
+    "$__sigil_bin" step --workflow "$workflow" --handoff-file "$handoff_file" "${args[@]}"
     step_status=$?
     if [[ "$step_status" == "0" && -s "$handoff_file" ]]; then
       # The handoff file holds the staged command verbatim.
@@ -167,12 +167,12 @@ __sigil_zeta_turn() {
 
 sigil_agent_step() {
   emulate -L zsh
-  __sigil_zeta_turn ",," "$@"
+  __sigil_step_turn "propose" "$@"
 }
 
 sigil_agent_step_auto() {
   emulate -L zsh
-  __sigil_zeta_turn ",,," "$@"
+  __sigil_step_turn "do" "$@"
 }
 
 sigil_run() {

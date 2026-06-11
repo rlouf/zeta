@@ -1,7 +1,7 @@
-"""Generic Python workflow for Zeta-backed agent steps.
+"""Generic Python workflow for Zeta-backed assistant steps.
 
 The sourced shell bindings own the primary interactive loop. This module keeps
-CLI glyph steps on the same Zeta service layer without an external agent.
+CLI workflow steps on the same Zeta service layer without an external agent.
 """
 
 from __future__ import annotations
@@ -44,6 +44,7 @@ from ..zeta.trace import latest_prompt_trace_fields
 
 HandoffOutput = Literal["detail", "summary", "none"]
 ExecutionMode = Literal["handoff", "direct"]
+Workflow = Literal["ask", "propose", "do"]
 
 STEP_SYSTEM_PROMPT = f"""You are Zeta, a shell-native coding agent.
 
@@ -75,7 +76,7 @@ as user-chosen context and explain the cancellation plainly if it matters.
 def step(
     objective: str,
     *,
-    workflow: str,
+    workflow: Workflow,
     system: str | None = None,
     prompt: str | None = None,
     stdin_text: str = "",

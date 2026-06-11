@@ -1,4 +1,4 @@
-"""User-facing Zeta inspection commands."""
+"""User-facing trace inspection commands."""
 
 from __future__ import annotations
 
@@ -37,12 +37,7 @@ NARRATIVE_KINDS = ("prompt", "assistant_message")
 BODY_LINE_LIMIT = 8
 
 
-@cli.group("zeta")
-def zeta_group() -> None:
-    """Inspect Zeta runtime state."""
-
-
-@zeta_group.group("trace")
+@cli.group("trace")
 def trace_group() -> None:
     """Inspect the current session trace store."""
 

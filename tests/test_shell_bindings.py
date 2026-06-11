@@ -29,7 +29,7 @@ def make_stub(tmp: Path) -> Path:
               printf '%s\n' '{"ok":true}'
               exit 0
             fi
-            if [ "$1" = "zeta-step" ]; then
+            if [ "$1" = "step" ]; then
               continue_step=0
               handoff_file=""
               objective=""
@@ -40,14 +40,14 @@ def make_stub(tmp: Path) -> Path:
                     handoff_file="$2"
                     shift 2
                     ;;
-                  --glyph)
+                  --workflow)
                     shift 2
                     ;;
                   --continue)
                     continue_step=1
                     shift
                     ;;
-                  zeta-step)
+                  step)
                     shift
                     ;;
                   *)
@@ -58,11 +58,11 @@ def make_stub(tmp: Path) -> Path:
                 esac
               done
               if [ "$continue_step" = "1" ]; then
-                printf '%s\n' "zeta-step --continue argc=$argc" >> "$SIGIL_STUB_LOG"
+                printf '%s\n' "step --continue argc=$argc" >> "$SIGIL_STUB_LOG"
                 command="echo continued"
                 reason="Continue after shell handoff."
               else
-                printf '%s\n' "zeta-step" >> "$SIGIL_STUB_LOG"
+                printf '%s\n' "step" >> "$SIGIL_STUB_LOG"
                 case "$objective" in
                   *interrupt*) kill -INT $PPID; kill -INT $$ ;;
                 esac
@@ -223,8 +223,8 @@ def read_log(tmp: Path) -> list[str]:
     return path.read_text(encoding="utf-8").splitlines()
 
 
-def zeta_step_calls() -> list[str]:
-    return ["zeta-step"]
+def step_calls() -> list[str]:
+    return ["step"]
 
 
 def shell_turn_calls(tmp: Path) -> list[str]:
@@ -247,7 +247,7 @@ def test_zsh_wrappers_call_current_cli_contract() -> None:
         assert_success(result)
         assert read_log(tmp) == [
             "ask hello",
-            *zeta_step_calls(),
+            *step_calls(),
         ]
         assert "answer" in result.stdout
         assert "❯ bash   echo zeta  (staged)" in result.stdout
@@ -290,7 +290,7 @@ def test_zsh_bare_agent_step_continues_after_shell_handoff() -> None:
         assert_success(result)
         # argc=0: a bare continue passes no positional, not an empty string the
         # CLI has to know to ignore.
-        assert read_log(tmp) == ["zeta-step --continue argc=0"]
+        assert read_log(tmp) == ["step --continue argc=0"]
         assert "(staged)" in result.stdout
         assert "Continue after shell handoff." not in result.stdout
         assert "history=+ echo continued" in result.stdout
@@ -311,8 +311,8 @@ def test_zsh_agent_wrappers_call_zeta_loop() -> None:
         )
         assert_success(result)
         assert read_log(tmp) == [
-            *zeta_step_calls(),
-            *zeta_step_calls(),
+            *step_calls(),
+            *step_calls(),
         ]
 
 
@@ -332,7 +332,7 @@ def test_zsh_wrappers_dispatch_piped_stdin_to_operator_runtime() -> None:
         assert_success(result)
         assert read_log(tmp) == [
             "ask draft executive summary",
-            *zeta_step_calls(),
+            *step_calls(),
         ]
         assert "readonly stream answer" in result.stdout
         assert "(staged)" in result.stdout
@@ -355,7 +355,7 @@ def test_zsh_glyph_aliases_dispatch_piped_stdin_before_globbing() -> None:
         assert_success(result)
         assert read_log(tmp) == [
             "ask draft executive summary",
-            *zeta_step_calls(),
+            *step_calls(),
         ]
 
 
@@ -596,7 +596,7 @@ def test_zsh_binding_preserves_question_mark_globbing() -> None:
 @pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
 def test_zsh_interrupted_zeta_step_leaves_no_handoff_file() -> None:
     # Ctrl-C delivers SIGINT to the whole foreground process group, so zsh
-    # itself aborts __sigil_zeta_turn mid-flight. The stub models that by
+    # itself aborts __sigil_step_turn mid-flight. The stub models that by
     # signalling its parent shell and itself. An interactive shell is required:
     # non-interactive zsh dies on SIGINT instead of unwinding to the prompt.
     with tempfile.TemporaryDirectory() as tmp_dir:
@@ -898,7 +898,7 @@ def test_zsh_binding_functions_survive_hostile_user_options() -> None:
         assert "history=+ echo zeta" in result.stdout
         assert read_log(tmp) == [
             "run --shell echo captured | cat",
-            *zeta_step_calls(),
+            *step_calls(),
         ]
 
 

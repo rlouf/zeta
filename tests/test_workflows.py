@@ -52,7 +52,7 @@ from sigil.zeta import trace as zeta_trace
 from sigil.zeta.trace import PromptTrace
 
 
-def test_sigil_zeta_step_writes_handoff_file(
+def test_sigil_step_writes_handoff_file(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -95,7 +95,14 @@ def test_sigil_zeta_step_writes_handoff_file(
 
     result = CliRunner().invoke(
         sigil_cli,
-        ["zeta-step", "--handoff-file", str(handoff_file), "repair"],
+        [
+            "step",
+            "--workflow",
+            "propose",
+            "--handoff-file",
+            str(handoff_file),
+            "repair",
+        ],
     )
 
     assert result.exit_code == 0
@@ -103,7 +110,7 @@ def test_sigil_zeta_step_writes_handoff_file(
     assert handoff_file.read_text(encoding="utf-8") == "uv run pytest\n"
 
 
-def test_sigil_zeta_step_keeps_trace_off_stdout(monkeypatch) -> None:
+def test_sigil_step_keeps_trace_off_stdout(monkeypatch) -> None:
     monkeypatch.setattr(agent_io, "ensure_server", lambda: True)
     monkeypatch.setattr(
         zeta_runner,
@@ -131,7 +138,9 @@ def test_sigil_zeta_step_keeps_trace_off_stdout(monkeypatch) -> None:
         ),
     )
 
-    result = CliRunner().invoke(sigil_cli, ["zeta-step", "summarize"])
+    result = CliRunner().invoke(
+        sigil_cli, ["step", "--workflow", "propose", "summarize"]
+    )
 
     assert result.exit_code == 0
     assert result.stdout == "\nsummary\n\n"
@@ -584,7 +593,7 @@ def test_zeta_agent_step_streams_text_before_tool_trace(
 
 @pytest.mark.parametrize("workflow", ["propose", "do"])
 def test_zeta_agent_step_separates_tool_result_from_later_streamed_text(
-    workflow: str,
+    workflow: zeta_runner.Workflow,
     monkeypatch,
     capsys,
 ) -> None:

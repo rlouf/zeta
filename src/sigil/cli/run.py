@@ -45,6 +45,7 @@ class TailBuffer:
 
 @cli.command(
     "run",
+    hidden=True,
     context_settings={
         "ignore_unknown_options": True,
         "allow_extra_args": True,

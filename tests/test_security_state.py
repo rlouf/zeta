@@ -65,16 +65,16 @@ def test_top_level_help_lists_commands() -> None:
         "doctor",
         "events",
         "install",
-        "run",
         "session",
         "status",
     ]:
-        assert command in result.output
+        assert f"\n  {command} " in result.output
     for command in [
         "command",
         "op",
         "record-turn",
         "record-failure",
+        "run",
         "staged",
     ]:
         assert f"\n  {command} " not in result.output

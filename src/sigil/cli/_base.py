@@ -17,7 +17,7 @@ from .._version import __version__
 MODEL_ERROR_EXIT_CODE = 69
 
 COMMAND_MODULES = {
-    "ask": "sigil.cli.ask",
+    "ask": "sigil.cli.step",
     "blame": "sigil.cli.log",
     "doctor": "sigil.cli.install",
     "events": "sigil.cli.events",
@@ -28,8 +28,8 @@ COMMAND_MODULES = {
     "run": "sigil.cli.run",
     "session": "sigil.cli.session",
     "status": "sigil.cli.status",
-    "zeta": "sigil.cli.zeta",
-    "zeta-step": "sigil.cli.zeta_step",
+    "step": "sigil.cli.step",
+    "trace": "sigil.cli.trace",
 }
 
 

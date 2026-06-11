@@ -8,7 +8,7 @@ from click.testing import CliRunner
 
 from sigil.cli import cli, main
 from sigil.cli._base import MODEL_ERROR_EXIT_CODE
-from sigil.cli.ask import DEFAULT_QUESTION
+from sigil.cli.step import DEFAULT_QUESTION
 
 
 def test_command_verb_is_not_registered() -> None:
@@ -25,7 +25,7 @@ def test_ask_verb_accepts_piped_input() -> None:
         ask_calls.append((args, kwargs))
         return 0
 
-    with patch("sigil.cli.ask.ask", side_effect=fake_ask):
+    with patch("sigil.cli.step.ask", side_effect=fake_ask):
         ask_result = CliRunner().invoke(
             cli,
             ["ask", "review"],
@@ -49,7 +49,7 @@ def test_ask_without_question_uses_default_summary_prompt() -> None:
         calls.append((args, kwargs))
         return 0
 
-    with patch("sigil.cli.ask.ask", side_effect=fake_ask):
+    with patch("sigil.cli.step.ask", side_effect=fake_ask):
         result = CliRunner().invoke(cli, ["ask"])
 
     assert result.exit_code == 0, result.output
@@ -64,7 +64,7 @@ def test_ask_without_question_uses_default_summary_prompt() -> None:
 def test_main_reports_model_runtime_error(capsys, monkeypatch) -> None:
     monkeypatch.setattr("sys.stdin", StringIO(""))
     with patch(
-        "sigil.cli.ask.ask",
+        "sigil.cli.step.ask",
         side_effect=RuntimeError("model request failed: connection reset"),
     ):
         code = main(["ask", "why"])
@@ -76,8 +76,8 @@ def test_main_reports_model_runtime_error(capsys, monkeypatch) -> None:
 
 
 def test_patch_side_effect_raises_exception_classes() -> None:
-    from sigil.cli import ask as ask_module
+    from sigil.cli import step as step_module
 
-    with patch("sigil.cli.ask.ask", side_effect=RuntimeError):
+    with patch("sigil.cli.step.ask", side_effect=RuntimeError):
         with pytest.raises(RuntimeError):
-            ask_module.ask("boom")
+            step_module.ask("boom")

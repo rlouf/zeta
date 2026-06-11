@@ -301,7 +301,7 @@ def render_turn_record(
     prompt_ids = turn.get("prompt_object_ids")
     if isinstance(prompt_ids, list) and prompt_ids:
         shorts = " ".join(short_trace_id(str(value)) for value in prompt_ids)
-        lines.extend(["", "prompts", f"  {shorts}  (sigil zeta trace show ID)"])
+        lines.extend(["", "prompts", f"  {shorts}  (sigil trace show ID)"])
     return lines
 
 

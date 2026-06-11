@@ -177,7 +177,7 @@ def warn_trace_failure_once(operation: str, exc: BaseException) -> None:
     if operation in _WARNED_FAILURES:
         return
     _WARNED_FAILURES.add(operation)
-    LOGGER.warning("zeta trace disabled for %s after failure: %s", operation, exc)
+    LOGGER.warning("trace disabled for %s after failure: %s", operation, exc)
 
 
 def object_payload(obj: Object) -> dict[str, Any]:

@@ -210,7 +210,7 @@ ask turns, handoff timeline events, and command results recorded through `+`.
 `sigil session transcript` renders that conversation back as a transcript —
 questions, answers, and compact tool traces, with each answer tagged by the
 id of the exact prompt the model saw. When the model streams reasoning, the
-transcript shows it as an italic panel above the answer it led to; the live
+transcript shows it as italic text above the answer it led to; the live
 loop never prints reasoning.
 
 The zsh binding also records every interactive command: the command line,
@@ -258,7 +258,7 @@ mode; see the trust note under Workflow Model.
 Read-only workflows do not expose Bash. If an answer recommends a command, it is
 plain answer text, not a tool call or terminal handoff.
 
-`+` runs the command you provide through `sigil run`, streams stdout/stderr live,
+`+` runs the command you provide, streams stdout/stderr live,
 preserves the exit status, and records bounded stdout/stderr snippets for later
 failure context. In interactive zsh, the binding captures the raw `+ ...`
 prompt line before zsh parses it, so pipelines, redirection, and shell grammar
@@ -273,10 +273,6 @@ The capture happens in the line editor (a zle widget), and the command runs
 inside it: job control does not apply, so Ctrl-Z cannot suspend a `+` command
 and it never appears in `jobs`. The widget is also the only `+` path — in
 scripts and non-interactive shells, `+` does not dispatch.
-
-From Bash or scripts, `sigil run COMMAND [ARGS...]` keeps argv-style execution.
-Use `sigil run --shell 'COMMAND | WITH SHELL GRAMMAR'` when you need shell
-parsing from the CLI.
 
 To install the CLI without punctuation shortcuts:
 
@@ -317,7 +313,6 @@ The glyphs are thin shell functions over a regular CLI:
 
 ```text
 sigil ask [QUESTION]
-sigil run [--shell] COMMAND [ARGS...]
 sigil status [--json]
 sigil log [--touched PATH] [--workflow W] [--since T] [--failed] [--cost] [--json]
 sigil log show TURN [--json]
@@ -325,7 +320,7 @@ sigil blame FILE
 sigil events [--limit N] [--json] [--raw]
 sigil session [show|path|list|clear|transcript] [--json]
 sigil model [list|use|show|clear]
-sigil zeta trace [log|show|tree|closure|refs|prompts]  # ids accept refs and unique prefixes
+sigil trace [log|show|tree|closure|refs|prompts]  # ids accept refs and unique prefixes
 sigil install [--install-dir DIR] [--rc FILE] [--glyphs|--no-glyphs]
 sigil doctor [--json]
 ```
@@ -334,26 +329,24 @@ The bundled Zeta agent runtime is an internal Python package; Sigil workflows ru
 it in-process. There is no separate `zeta` command.
 
 From shells without the zsh binding, agent steps can be scripted through the
-same command the binding uses: `sigil zeta-step --glyph ",," "OBJECTIVE"`
-stages reviewed shell work and `sigil zeta-step --continue` resumes a pending
+same command the binding uses: `sigil step --workflow propose "OBJECTIVE"`
+stages reviewed shell work and `sigil step --workflow propose --continue` resumes a pending
 handoff (hidden from `--help` because the binding is the primary surface).
 
 Copy-pasteable examples:
 
 ```sh
 sigil ask "what changed in this repo?"
-sigil run cargo test
 sigil events
 ```
 
 ### Exit Codes
 
-- `sigil run` mirrors the exit status of the command it ran: 127 when the
-  command is missing, 128+N when it died from signal N (so 130 after
-  Ctrl-C).
+- `+` mirrors the exit status of the command it ran: 127 when the command is
+  missing, 128+N when it died from signal N (so 130 after Ctrl-C).
 - `sigil status` (`?`) exits 1 when the session needs attention — the last
   recorded command failed — and 0 when clean.
-- `sigil ask` and `sigil zeta-step` (`,`, `,,`, `,,,`) exit 69 when the
+- `sigil ask` and `sigil step` (`,`, `,,`, `,,,`) exit 69 when the
   model endpoint is down or fails mid-answer (sysexits `EX_UNAVAILABLE`);
   `sigil doctor` diagnoses the endpoint.
 - `sigil model list` exits 1 when the profile config has diagnostics, and
@@ -383,7 +376,7 @@ rotated event log loses no turn, effect, or cost answer. Agent turns are
 additionally bridged into the session's trace graph as `turn` objects
 linking the prompts the model saw and the tool results behind each
 effect; the `turn/<turn_id>` ref makes them addressable through `sigil
-zeta trace show`. Clearing a session removes its continuity files and
+trace show`. Clearing a session removes its continuity files and
 trace store; the ledger index and event log are global and survive
 `sigil session clear`.
 
@@ -406,7 +399,7 @@ session's turns newest first (`--all-sessions` widens, `--touched PATH`,
 `--workflow`, `--since 2d`, `--failed`, and `--cost` narrow or enrich);
 `sigil log show TURN` renders one turn in full — objective, contract,
 model, cost, effects with content hashes, and the prompt ids that feed
-`sigil zeta trace show`. `sigil blame FILE` lists every turn that wrote
+`sigil trace show`. `sigil blame FILE` lists every turn that wrote
 or edited a file through the write/edit tools, with its objective and
 prompt ids; bash commands record what ran rather than which files they
 touched, so they appear in `sigil log`, not in blame. `?` reads the same
@@ -427,7 +420,7 @@ your real delegation history and cites turn ids you can check with
 `sigil log show`. The tool searches every session by default and never
 writes anything.
 
-The trace store underneath is explorable the same way. `sigil zeta trace
+The trace store underneath is explorable the same way. `sigil trace
 log` lists recent prompts and assistant messages, one line per object
 (`--kind`/`--all` widen it to tool calls, results, and run events);
 `trace show ID` renders one object with its body and its derivations in
@@ -437,9 +430,9 @@ full id, or a unique prefix — three commands take you from "what
 happened" to the exact bytes the model saw:
 
 ```sh
-sigil zeta trace log
-sigil zeta trace show 4f9d01c2
-sigil zeta trace tree 4f9d01c2 --down
+sigil trace log
+sigil trace show 4f9d01c2
+sigil trace tree 4f9d01c2 --down
 ```
 
 Because prompts are content-addressed component graphs, two more
@@ -453,8 +446,8 @@ PROFILE` — recording the new answer in the trace so replays are
 themselves inspectable (`--diff` to diff old and new answers):
 
 ```sh
-sigil zeta trace diff 4f9d01c2 81be33aa --stat
-sigil zeta trace replay 4f9d01c2 --model fast --diff
+sigil trace diff 4f9d01c2 81be33aa --stat
+sigil trace replay 4f9d01c2 --model fast --diff
 ```
 
 A worked walkthrough with real output lives in

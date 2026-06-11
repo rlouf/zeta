@@ -665,7 +665,7 @@ def test_zeta_agent_turn_does_not_duplicate_current_objective(monkeypatch) -> No
         message
         for message in messages
         if message.get("role") == "user"
-        and "Objective:\ninspect the repo" in str(message.get("content"))
+        and "inspect the repo\n\ncwd:" in str(message.get("content"))
     ]
     assert len(prompt_messages) == 1
 
@@ -742,7 +742,7 @@ def test_zeta_agent_turn_orders_prior_timeline_before_current_events(
     ]
     assert second_turn[1]["content"] == "What is this vault about?"
     assert second_turn[2]["content"] == "It is a CEO vault."
-    assert "Objective:\nHow would you improve it?" in second_turn[3]["content"]
+    assert "How would you improve it?\n\ncwd:" in second_turn[3]["content"]
     assert second_turn[4]["tool_calls"][0]["id"] == "call-1"
     assert second_turn[5]["tool_call_id"] == "call-1"
 

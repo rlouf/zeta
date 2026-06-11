@@ -213,7 +213,7 @@ def test_zeta_chat_messages_keeps_full_history_and_current_events() -> None:
 
     assert "prior-0" in contents
     assert "prior-24" in contents
-    assert "Objective:\ninspect" in contents[26]
+    assert "inspect\n\ncwd:" in contents[26]
     assert "current-0" in contents
     assert "current-24" in contents
 

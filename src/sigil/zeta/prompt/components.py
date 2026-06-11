@@ -46,7 +46,7 @@ def zeta_context_message(
 ) -> str:
     objective = expand_skill_directive(objective)
     sections = [
-        f"Objective:\n{objective}",
+        objective,
         f"cwd:\n{os.getcwd()}",
     ]
     if context.strip():

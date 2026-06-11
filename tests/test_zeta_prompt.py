@@ -862,7 +862,7 @@ def test_zeta_skill_directive_leaves_unknown_skill_unchanged(
 
     message = zeta_prompt.zeta_context_message("@missing: inspect")
 
-    assert "Objective:\n@missing: inspect" in message
+    assert message.startswith("@missing: inspect\n\ncwd:")
 
 
 def test_zeta_skill_directive_leaves_old_skill_form_unchanged(
@@ -878,7 +878,7 @@ def test_zeta_skill_directive_leaves_old_skill_form_unchanged(
 
     message = zeta_prompt.zeta_context_message("@skill reviewer inspect")
 
-    assert "Objective:\n@skill reviewer inspect" in message
+    assert message.startswith("@skill reviewer inspect\n\ncwd:")
     assert '<skill name="reviewer"' not in message
 
 
@@ -895,7 +895,7 @@ def test_zeta_skill_directive_leaves_bare_handle_unchanged(
 
     message = zeta_prompt.zeta_context_message("@reviewer inspect")
 
-    assert "Objective:\n@reviewer inspect" in message
+    assert message.startswith("@reviewer inspect\n\ncwd:")
     assert '<skill name="reviewer"' not in message
 
 

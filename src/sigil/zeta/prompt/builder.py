@@ -6,7 +6,6 @@ system_prompt, tool descriptors, project context, then volatile components.
 
 from __future__ import annotations
 
-import hashlib
 from collections.abc import Iterable
 from contextlib import nullcontext
 from dataclasses import dataclass, replace
@@ -15,6 +14,7 @@ from typing import Any
 from ..model import DEFAULT_MAX_COMPLETION_TOKENS, chat_completion_request_body
 from ..skills import Skill, available_skills
 from ..tools import allowed_tool_names
+from ..tools.base import content_hash
 from ..trace import (
     Derivation,
     Object,
@@ -275,16 +275,12 @@ class PromptBuilder:
             max_tokens=max_tokens,
             selected_model=selected_model,
         )
+        component_ids = stored_component_ids(components)
         prompt_id = self._store_prompt_object(
             payload,
-            components,
+            component_ids,
             max_tokens=max_tokens,
             selected_model=selected_model,
-        )
-        component_ids = tuple(
-            component.object_id
-            for component in components
-            if component.object_id is not None
         )
         return PreparedPrompt(
             messages=messages,
@@ -340,7 +336,7 @@ class PromptBuilder:
     def _store_prompt_object(
         self,
         payload: dict[str, Any],
-        components: list[PromptComponent],
+        component_ids: tuple[ObjectId, ...],
         *,
         max_tokens: int,
         selected_model: str | None,
@@ -348,11 +344,6 @@ class PromptBuilder:
         store = self.store()
         if store is None:
             return None
-        component_ids = tuple(
-            component.object_id
-            for component in components
-            if component.object_id is not None
-        )
         # The exact payload is reconstructible from the linked components;
         # embedding it here grew the store quadratically with turns.
         prompt_id = store.put_object(
@@ -378,11 +369,18 @@ class PromptBuilder:
         return prompt_id
 
 
+def stored_component_ids(components: list[PromptComponent]) -> tuple[ObjectId, ...]:
+    """Return the trace ids of the components that made it into the store."""
+    return tuple(
+        component.object_id
+        for component in components
+        if component.object_id is not None
+    )
+
+
 def payload_sha256(payload: dict[str, Any]) -> str:
     """Return the content address of a model request payload."""
-    return (
-        "sha256:" + hashlib.sha256(canonical_json(payload).encode("utf-8")).hexdigest()
-    )
+    return content_hash(canonical_json(payload))
 
 
 def tool_call_object_data(event: dict[str, Any]) -> dict[str, Any]:

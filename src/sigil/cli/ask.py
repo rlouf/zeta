@@ -19,15 +19,6 @@ def cmd_ask(question: str | None, json_output: bool) -> int:
     stdin_text = piped_stdin_text()
     if stdin_text is not None:
         prompt = question_with_stdin(question or "", stdin_text)
-        return ask(
-            prompt,
-            glyph="ask",
-            tools=ZETA_ASK_TOOLS,
-            json_output=json_output,
-        )
-    return ask(
-        question or DEFAULT_QUESTION,
-        glyph="ask",
-        tools=ZETA_ASK_TOOLS,
-        json_output=json_output,
-    )
+    else:
+        prompt = question or DEFAULT_QUESTION
+    return ask(prompt, glyph="ask", tools=ZETA_ASK_TOOLS, json_output=json_output)

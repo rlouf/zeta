@@ -306,7 +306,7 @@ sigil status [--json]
 sigil events [--limit N] [--json] [--raw]
 sigil session [show|path|list|clear|transcript] [--json]
 sigil model [list|use|show|clear]
-sigil zeta trace [show|closure|refs|prompts]  # ids accept ref names and unique prefixes
+sigil zeta trace [log|show|tree|closure|refs|prompts]  # ids accept refs and unique prefixes
 sigil install [--install-dir DIR] [--rc FILE] [--glyphs|--no-glyphs]
 sigil doctor [--json]
 ```
@@ -380,6 +380,21 @@ sigil session list
 sigil session clear
 sigil events
 sigil log reindex
+```
+
+The trace store underneath is explorable the same way. `sigil zeta trace
+log` lists recent prompts and assistant messages, one line per object
+(`--kind`/`--all` widen it to tool calls, results, and run events);
+`trace show ID` renders one object with its body and its derivations in
+both directions; `trace tree ID` walks what produced an object
+(`--down` for what came of it). Every ID argument accepts a ref name, a
+full id, or a unique prefix — three commands take you from "what
+happened" to the exact bytes the model saw:
+
+```sh
+sigil zeta trace log
+sigil zeta trace show 4f9d01c2
+sigil zeta trace tree 4f9d01c2 --down
 ```
 
 ## Project Scope

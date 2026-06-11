@@ -7,9 +7,11 @@ from typing import Any
 
 import click
 
+from ..display.summarize import short_trace_id, text_content, trace_object_summary
 from ..zeta.prompt import estimated_tokens_for_text
 from ..zeta.trace import (
     AmbiguousIdError,
+    Object,
     ObjectId,
     Store,
     UnknownIdError,
@@ -20,6 +22,9 @@ from ..zeta.trace import (
 )
 from ._base import cli
 from ._shared import pretty_print_json
+
+NARRATIVE_KINDS = ("prompt", "assistant_message")
+BODY_LINE_LIMIT = 8
 
 
 @cli.group("zeta")
@@ -32,19 +37,140 @@ def trace_group() -> None:
     """Inspect the current session trace store."""
 
 
+@trace_group.command("log")
+@click.option(
+    "--kind",
+    "kinds",
+    multiple=True,
+    help="Only list this object kind (repeatable).",
+)
+@click.option("--all", "all_kinds", is_flag=True, help="List every object kind.")
+@click.option(
+    "--limit",
+    default=20,
+    show_default=True,
+    type=int,
+    help="Maximum number of objects.",
+)
+def trace_log(kinds: tuple[str, ...], all_kinds: bool, limit: int) -> int:
+    """List recent trace objects, newest first.
+
+    Shows prompts and assistant messages by default; --kind and --all
+    widen the listing. Ids are usable with show/closure/tree.
+    """
+    store = default_store()
+    selected = None if all_kinds else (tuple(kinds) or NARRATIVE_KINDS)
+    listed = store.objects(kind=selected, limit=limit)
+    if not listed:
+        click.echo("no trace objects recorded", err=True)
+        return 0
+    for object_id_value, obj in listed:
+        summary = trace_object_summary(obj, get_object=store.get_object)
+        click.echo(format_trace_line(object_id_value, obj.kind, summary))
+    return 0
+
+
+def format_trace_line(object_id: ObjectId, kind: str, summary: str) -> str:
+    """Format the one-line listing shared by trace log and tree nodes."""
+    return f"{short_trace_id(object_id)}  {kind:<19} {summary}".rstrip()
+
+
 @trace_group.command("show")
 @click.argument("object_id")
-def trace_show(object_id: str) -> int:
-    """Show one trace object with its derivations.
+@click.option("--json", "json_output", is_flag=True, help="Emit the raw object JSON.")
+def trace_show(object_id: str, json_output: bool) -> int:
+    """Show one trace object, its body, and both derivation directions.
 
     OBJECT_ID may be a ref name, a full id, or a unique id prefix.
+    Renders a human summary by default; --json keeps the raw record.
     """
     resolved = resolve_cli_object_id(object_id)
-    data = get_trace_object(resolved)
-    if data is None:
+    if json_output:
+        data = get_trace_object(resolved)
+        if data is None:
+            raise click.ClickException(f"trace object not found: {object_id}")
+        pretty_print_json(data)
+        return 0
+    lines = render_trace_object(resolved)
+    if lines is None:
         raise click.ClickException(f"trace object not found: {object_id}")
-    pretty_print_json(data)
+    for line in lines:
+        click.echo(line)
     return 0
+
+
+def render_trace_object(
+    object_id: ObjectId,
+    *,
+    store: Store | None = None,
+) -> list[str] | None:
+    """Render one trace object as human-readable lines."""
+    active_store = store or default_store()
+    obj = active_store.get_object(object_id)
+    if obj is None:
+        return None
+    summary = trace_object_summary(obj, get_object=active_store.get_object)
+    lines = [
+        format_trace_line(object_id, obj.kind, summary),
+        f"id      {object_id}",
+        f"schema  {obj.schema}",
+    ]
+    body = trace_object_body(obj, active_store)
+    if body:
+        lines.extend(["", *body])
+    produced = active_store.derivations_for_output(object_id)
+    if produced:
+        lines.extend(["", "produced by"])
+        for derivation in produced:
+            inputs = " ".join(
+                short_trace_id(input_id) for input_id in derivation.input_ids
+            )
+            lines.append(
+                f"  {derivation.producer}" + (f" ← {inputs}" if inputs else "")
+            )
+    consumed = active_store.derivations_for_input(object_id)
+    if consumed:
+        lines.extend(["", "consumed by"])
+        for derivation in consumed:
+            output = active_store.get_object(derivation.output_id)
+            kind = output.kind if output is not None else "?"
+            lines.append(
+                f"  {derivation.producer} → "
+                f"{short_trace_id(derivation.output_id)} {kind}"
+            )
+    return lines
+
+
+def trace_object_body(obj: Object, store: Store) -> list[str]:
+    """Render the kind-specific body lines for a trace object."""
+    if obj.kind == "prompt":
+        lines = ["components"]
+        for link in obj.links:
+            component = store.get_object(link)
+            if component is None:
+                lines.append(f"  {short_trace_id(link)}  (missing)")
+                continue
+            summary = trace_object_summary(component, get_object=store.get_object)
+            lines.append("  " + format_trace_line(link, component.kind, summary))
+        return lines
+    text = trace_object_text(obj).strip()
+    if not text:
+        return []
+    body = text.splitlines()[:BODY_LINE_LIMIT]
+    if len(text.splitlines()) > BODY_LINE_LIMIT:
+        body.append("…")
+    return body
+
+
+def trace_object_text(obj: Object) -> str:
+    """Return the primary text carried by a trace object, if any."""
+    message = obj.data.get("message")
+    if isinstance(message, dict):
+        return str(message.get("content") or "")
+    result = obj.data.get("result")
+    if isinstance(result, dict):
+        return text_content(result)
+    return ""
 
 
 @trace_group.command("closure")
@@ -56,6 +182,85 @@ def trace_closure(object_id: str) -> int:
     """
     pretty_print_json({"objects": list_trace_closure(resolve_cli_object_id(object_id))})
     return 0
+
+
+@trace_group.command("tree")
+@click.argument("object_id")
+@click.option("--down", is_flag=True, help="Follow consumers instead of producers.")
+@click.option(
+    "--depth",
+    default=3,
+    show_default=True,
+    type=int,
+    help="Maximum object depth below the root.",
+)
+def trace_tree(object_id: str, down: bool, depth: int) -> int:
+    """Render the derivation tree around one trace object.
+
+    OBJECT_ID may be a ref name, a full id, or a unique id prefix.
+    Walks producers by default; --down walks what came of the object.
+    Edges carry the producer name; repeated objects render as `…`.
+    """
+    resolved = resolve_cli_object_id(object_id)
+    for line in render_trace_tree(resolved, down=down, depth=depth):
+        click.echo(line)
+    return 0
+
+
+def render_trace_tree(
+    object_id: ObjectId,
+    *,
+    down: bool,
+    depth: int,
+    store: Store | None = None,
+) -> list[str]:
+    """Render the derivation tree as indented lines with producer edges."""
+    active_store = store or default_store()
+    lines: list[str] = []
+    visited: set[ObjectId] = {object_id}
+
+    def node_line(node_id: ObjectId) -> str:
+        obj = active_store.get_object(node_id)
+        if obj is None:
+            return f"{short_trace_id(node_id)}  (missing)"
+        summary = trace_object_summary(obj, get_object=active_store.get_object)
+        return format_trace_line(node_id, obj.kind, summary)
+
+    def walk(node_id: ObjectId, prefix: str, remaining: int) -> None:
+        if remaining <= 0:
+            return
+        if down:
+            edges = [
+                (derivation.producer, [derivation.output_id])
+                for derivation in active_store.derivations_for_input(node_id)
+            ]
+        else:
+            edges = [
+                (derivation.producer, list(derivation.input_ids))
+                for derivation in active_store.derivations_for_output(node_id)
+            ]
+        for edge_index, (producer, child_ids) in enumerate(edges):
+            last_edge = edge_index == len(edges) - 1
+            lines.append(f"{prefix}{'└─' if last_edge else '├─'} {producer}")
+            child_prefix = prefix + ("   " if last_edge else "│  ")
+            for child_index, child_id in enumerate(child_ids):
+                last_child = child_index == len(child_ids) - 1
+                connector = "└─" if last_child else "├─"
+                seen = child_id in visited
+                marker = " …" if seen else ""
+                lines.append(f"{child_prefix}{connector} {node_line(child_id)}{marker}")
+                if seen:
+                    continue
+                visited.add(child_id)
+                walk(
+                    child_id,
+                    child_prefix + ("   " if last_child else "│  "),
+                    remaining - 1,
+                )
+
+    lines.append(node_line(object_id))
+    walk(object_id, "", depth)
+    return lines
 
 
 def resolve_cli_object_id(token: str, *, store: Store | None = None) -> ObjectId:

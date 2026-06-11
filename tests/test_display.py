@@ -18,6 +18,7 @@ from sigil.protocols import (
     SHELL_HANDOFF_OUTCOME_EXECUTED,
     SHELL_PROMPT_HANDOFF_TYPE,
 )
+from sigil.zeta import trace as zeta_trace
 
 
 def test_sigil_display_summarizes_tool_results() -> None:
@@ -607,3 +608,99 @@ def test_transcript_renders_assistant_without_prompt_trace() -> None:
     )
 
     assert "plain answer" in output.getvalue()
+
+
+def trace_object(kind: str, data: dict, links: tuple = ()) -> zeta_trace.Object:
+    return zeta_trace.Object(
+        kind=kind, schema=f"zeta.{kind}.v1", data=data, links=links
+    )
+
+
+def test_trace_summary_shortens_content_addressed_ids() -> None:
+    assert (
+        display_summarize.short_trace_id("sha256:" + "ab12cd34" + "0" * 56)
+        == "ab12cd34"
+    )
+    assert display_summarize.short_trace_id("ab12cd34ef") == "ab12cd34"
+
+
+def test_trace_summary_counts_prompt_components_and_tokens() -> None:
+    store = zeta_trace.InMemoryStore()
+    component = trace_object(
+        "user_objective", {"message": {"role": "user", "content": "fix the test"}}
+    )
+    component_id = store.put_object(component)
+    prompt = trace_object("prompt", {"payload_sha256": "sha256:feed"}, (component_id,))
+
+    summary = display_summarize.trace_object_summary(
+        prompt, get_object=store.get_object
+    )
+
+    assert summary.startswith("1 component")
+    assert "tok" in summary
+
+
+def test_trace_summary_heads_assistant_text_and_tool_calls() -> None:
+    answered = trace_object(
+        "assistant_message",
+        {"message": {"role": "assistant", "content": "first line\nsecond line"}},
+    )
+    calling = trace_object(
+        "assistant_message",
+        {
+            "message": {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [{"function": {"name": "read"}}],
+            }
+        },
+    )
+
+    assert display_summarize.trace_object_summary(answered) == "first line"
+    assert "read" in display_summarize.trace_object_summary(calling)
+
+
+def test_trace_summary_labels_tool_calls_and_results() -> None:
+    call = trace_object(
+        "tool_call", {"name": "bash", "input": {"command": "uv run pytest"}}
+    )
+    result = trace_object(
+        "tool_result",
+        {
+            "name": "bash",
+            "result": {
+                "ok": True,
+                "content": [{"type": "text", "text": "3 passed"}],
+            },
+        },
+    )
+    failed = trace_object(
+        "tool_result",
+        {
+            "name": "read",
+            "result": {
+                "ok": False,
+                "error": {"code": "not-found", "message": "no file"},
+            },
+        },
+    )
+
+    assert display_summarize.trace_object_summary(call) == "bash uv run pytest"
+    assert display_summarize.trace_object_summary(result) == "bash · ok · 3 passed"
+    assert "not-found" in display_summarize.trace_object_summary(failed)
+
+
+def test_trace_summary_reads_run_event_type_and_component_messages() -> None:
+    event = trace_object(
+        "run_event", {"event": {"type": "user_message"}, "previous_event_object_id": ""}
+    )
+    component = trace_object(
+        "system_prompt", {"message": {"role": "system", "content": "You are Zeta."}}
+    )
+    opaque = trace_object("tool_descriptor_set", {"representation": "tools"})
+
+    assert display_summarize.trace_object_summary(event) == "user_message"
+    assert display_summarize.trace_object_summary(component) == "You are Zeta."
+    assert (
+        display_summarize.trace_object_summary(opaque) == "zeta.tool_descriptor_set.v1"
+    )

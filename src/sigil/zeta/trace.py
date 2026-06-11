@@ -117,7 +117,7 @@ class Store(Protocol):
     def graph_closure(self, roots: list[ObjectId]) -> dict[ObjectId, Object]: ...
     def refs(self) -> dict[str, ObjectId]: ...
     def objects(
-        self, kind: str | None = None, limit: int | None = None
+        self, kind: str | tuple[str, ...] | None = None, limit: int | None = None
     ) -> list[tuple[ObjectId, Object]]: ...
     def prompt_object_ids(self) -> list[ObjectId]: ...
     def stats(self) -> TraceStats: ...
@@ -291,12 +291,13 @@ class InMemoryStore(StoreBase):
         return matches[:limit]
 
     def objects(
-        self, kind: str | None = None, limit: int | None = None
+        self, kind: str | tuple[str, ...] | None = None, limit: int | None = None
     ) -> list[tuple[ObjectId, Object]]:
+        kinds = (kind,) if isinstance(kind, str) else kind
         listed = [
             (object_id_value, obj)
             for object_id_value, obj in reversed(self._objects.items())
-            if kind is None or obj.kind == kind
+            if kinds is None or obj.kind in kinds
         ]
         return listed if limit is None else listed[:limit]
 
@@ -586,11 +587,18 @@ class SqliteStore(StoreBase):
         return {str(row["name"]): str(row["object_id"]) for row in rows}
 
     def objects(
-        self, kind: str | None = None, limit: int | None = None
+        self, kind: str | tuple[str, ...] | None = None, limit: int | None = None
     ) -> list[tuple[ObjectId, Object]]:
-        kind_filter = "WHERE objects.kind = ?" if kind is not None else ""
+        kinds = (kind,) if isinstance(kind, str) else kind
+        kind_filter = ""
+        params: list[Any] = []
+        if kinds is not None:
+            placeholders = ", ".join("?" for _ in kinds)
+            kind_filter = f"WHERE objects.kind IN ({placeholders})"
+            params.extend(kinds)
         limit_clause = "LIMIT ?" if limit is not None else ""
-        params: list[Any] = [value for value in (kind, limit) if value is not None]
+        if limit is not None:
+            params.append(limit)
         rows = self.connection.execute(
             f"""
             SELECT objects.id, objects.kind, objects.schema,

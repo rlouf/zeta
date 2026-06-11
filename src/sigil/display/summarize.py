@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+from collections.abc import Callable
 from typing import Any, cast
 
 from ..protocols import (
@@ -9,6 +11,8 @@ from ..protocols import (
     SHELL_HANDOFF_OUTCOME_EXECUTED,
     SHELL_HANDOFF_OUTCOME_NO_PENDING,
 )
+from ..zeta.prompt.budget import estimated_tokens_for_text
+from ..zeta.trace import Object
 
 
 def summarize(tool: str, args: object) -> str:
@@ -206,6 +210,107 @@ def render_handoff_lines(handoff: dict[str, Any]) -> list[str]:
     if command:
         lines.append(command)
     return lines
+
+
+def short_trace_id(object_id: str) -> str:
+    """Return the short display prefix of a content-addressed id."""
+    return object_id.split(":", 1)[-1][:8]
+
+
+def trace_object_summary(
+    obj: Object,
+    *,
+    get_object: Callable[[str], Object | None] | None = None,
+) -> str:
+    """Return a one-line human summary for a trace object."""
+    if obj.kind == "prompt":
+        return prompt_trace_summary(obj, get_object)
+    if obj.kind == "assistant_message":
+        return assistant_trace_summary(obj.data)
+    if obj.kind == "tool_call":
+        name = str(obj.data.get("name") or "")
+        label = summarize(name, obj.data.get("input"))
+        return truncate(" ".join(part for part in (name, label) if part))
+    if obj.kind == "tool_result":
+        return tool_result_trace_summary(obj.data)
+    if obj.kind == "run_event":
+        event = obj.data.get("event")
+        return str(event.get("type") or "") if isinstance(event, dict) else ""
+    message = obj.data.get("message")
+    if isinstance(message, dict):
+        head = first_line(str(message.get("content") or ""))
+        if head:
+            return head
+    return obj.schema
+
+
+def prompt_trace_summary(
+    obj: Object,
+    get_object: Callable[[str], Object | None] | None,
+) -> str:
+    """Summarize a prompt object as component count plus token estimate."""
+    count = len(obj.links)
+    label = f"{count} component" + ("" if count == 1 else "s")
+    if get_object is None:
+        return label
+    tokens = 0
+    for link in obj.links:
+        component = get_object(link)
+        if component is None:
+            continue
+        tokens += estimated_tokens_for_text(
+            json.dumps(
+                component.data,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+        )
+    return f"{label} · ~{tokens} tok"
+
+
+def assistant_trace_summary(data: dict[str, Any]) -> str:
+    """Summarize an assistant message as its text head or tool-call names."""
+    message = data.get("message")
+    if not isinstance(message, dict):
+        return ""
+    head = first_line(str(message.get("content") or ""))
+    if head:
+        return head
+    tool_calls = message.get("tool_calls")
+    if isinstance(tool_calls, list):
+        names = [
+            str(call.get("function", {}).get("name") or "")
+            for call in tool_calls
+            if isinstance(call, dict)
+        ]
+        names = [name for name in names if name]
+        if names:
+            return "→ " + ", ".join(names)
+    return ""
+
+
+def tool_result_trace_summary(data: dict[str, Any]) -> str:
+    """Summarize a tool result object as name, status, and content head."""
+    name = str(data.get("name") or "")
+    result = data.get("result")
+    if not isinstance(result, dict):
+        return name
+    if result.get("ok") is False:
+        detail = failed_tool_result_message(result)
+        parts = (name, "failed", detail)
+    else:
+        status = "ok" if result.get("ok") is True else ""
+        parts = (name, status, first_line(text_content(result)))
+    return truncate(" · ".join(part for part in parts if part))
+
+
+def first_line(text: str) -> str:
+    """Return the first non-empty display line of a text block."""
+    stripped = text.strip()
+    if not stripped:
+        return ""
+    return truncate(stripped.splitlines()[0])
 
 
 def text_content(value: dict[str, Any]) -> str:

@@ -445,6 +445,9 @@ sigil zeta trace diff 4f9d01c2 81be33aa --stat
 sigil zeta trace replay 4f9d01c2 --model fast --diff
 ```
 
+A worked walkthrough with real output lives in
+[docs/demos/trace-replay.md](docs/demos/trace-replay.md).
+
 ## Project Scope
 
 Sigil is:

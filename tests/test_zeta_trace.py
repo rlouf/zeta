@@ -981,6 +981,30 @@ def test_sigil_zeta_trace_replay_diffs_old_and_new(monkeypatch) -> None:
     assert "+a fresh answer" in result.output
 
 
+def test_sigil_zeta_trace_replay_renders_tool_call_answers(monkeypatch) -> None:
+    store, _, prompt_id, _ = narrative_log_store()
+    monkeypatch.setattr("sigil.cli.zeta.default_store", lambda: store)
+    monkeypatch.setattr(
+        "sigil.cli.zeta.chat_completion_messages",
+        lambda messages, **kwargs: {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": "call-1",
+                    "type": "function",
+                    "function": {"name": "read", "arguments": "{}"},
+                }
+            ],
+        },
+    )
+
+    result = CliRunner().invoke(sigil_cli, ["zeta", "trace", "replay", prompt_id])
+
+    assert result.exit_code == 0
+    assert "→ read" in result.output
+
+
 def test_sigil_zeta_trace_replay_honors_a_named_profile(monkeypatch) -> None:
     store, _, prompt_id, _ = narrative_log_store()
     monkeypatch.setattr("sigil.cli.zeta.default_store", lambda: store)

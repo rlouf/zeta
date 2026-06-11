@@ -8,6 +8,7 @@ from typing import Any
 import click
 
 from ..display.summarize import (
+    assistant_trace_summary,
     estimated_prompt_tokens,
     short_trace_id,
     text_content,
@@ -454,7 +455,7 @@ def trace_replay(object_id: str, model_profile: str | None, diff_output: bool) -
         selection,
         original,
         replay_id,
-        str(message.get("content") or ""),
+        answer_display_text(message),
         diff_output=diff_output,
     ):
         click.echo(line)
@@ -487,8 +488,16 @@ def latest_model_answer(
             continue
         message = obj.data.get("message")
         if isinstance(message, dict):
-            return answer_id, str(message.get("content") or "")
+            return answer_id, answer_display_text(message)
     return None
+
+
+def answer_display_text(message: dict[str, Any]) -> str:
+    """Return an assistant message's text, or its tool calls when text-free."""
+    content = str(message.get("content") or "")
+    if content:
+        return content
+    return assistant_trace_summary({"message": message})
 
 
 def record_replay(

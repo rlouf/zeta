@@ -1221,7 +1221,7 @@ def test_zeta_project_context_caps_oversized_files(
     assert len(context) <= zeta_context.MAX_CONTEXT_FILE_CHARS + 200
 
 
-def test_zeta_project_context_caps_total_size(
+def test_zeta_project_context_total_cap_drops_broadest_first(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -1242,9 +1242,10 @@ def test_zeta_project_context_caps_total_size(
     context = zeta_context.load_project_context()
 
     assert len(context) <= zeta_context.MAX_CONTEXT_TOTAL_CHARS + 200
-    assert "global rules" in context
+    assert "global rules" not in context
     assert "parent rules" in context
-    assert "local rules" not in context
+    assert "local rules" in context
+    assert context.index("parent rules") < context.index("local rules")
 
 
 def test_zeta_prompt_build_writes_in_a_single_batch() -> None:

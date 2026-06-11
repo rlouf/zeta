@@ -33,13 +33,14 @@ def load_project_context(cwd: str | Path | None = None) -> str:
     """Load project instruction files from parent directories, global to local.
 
     Sizes are capped per file and overall so one runaway AGENTS.md cannot
-    swallow the prompt budget.
+    swallow the prompt budget. On total overflow the broadest sections are
+    dropped first: local instructions override broader ones, so they are
+    the last to go.
     """
     current = Path(cwd or os.getcwd()).resolve()
     directories = _context_directories(current)
     sections: list[str] = []
     seen: set[Path] = set()
-    total_chars = 0
     for directory in directories:
         path = _agents_file(directory)
         if path is None:
@@ -60,9 +61,7 @@ def load_project_context(cwd: str | Path | None = None) -> str:
             continue
         if len(text) > MAX_CONTEXT_FILE_CHARS:
             text = text[:MAX_CONTEXT_FILE_CHARS].rstrip() + "\n... truncated ..."
-        section = f"Project context from {path}:\n{text}"
-        if total_chars + len(section) > MAX_CONTEXT_TOTAL_CHARS:
-            break
-        total_chars += len(section)
-        sections.append(section)
+        sections.append(f"Project context from {path}:\n{text}")
+    while sum(len(section) for section in sections) > MAX_CONTEXT_TOTAL_CHARS:
+        sections.pop(0)
     return "\n\n".join(sections)

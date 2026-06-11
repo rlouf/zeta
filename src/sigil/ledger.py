@@ -332,7 +332,7 @@ class LedgerIndex:
             """,
             params,
         ).fetchall()
-        return [json.loads(str(row["record_json"])) for row in rows]
+        return _records(rows)
 
     def effects_for_turn(self, turn_id: str) -> list[dict[str, Any]]:
         rows = self.connection.execute(
@@ -343,7 +343,7 @@ class LedgerIndex:
             """,
             (turn_id,),
         ).fetchall()
-        return [json.loads(str(row["record_json"])) for row in rows]
+        return _records(rows)
 
     def effects_touching(self, path: str) -> list[dict[str, Any]]:
         rows = self.connection.execute(
@@ -354,7 +354,11 @@ class LedgerIndex:
             """,
             (path,),
         ).fetchall()
-        return [json.loads(str(row["record_json"])) for row in rows]
+        return _records(rows)
+
+
+def _records(rows: list[sqlite3.Row]) -> list[dict[str, Any]]:
+    return [json.loads(str(row["record_json"])) for row in rows]
 
 
 def mapping_field(payload: dict[str, Any], key: str) -> dict[str, Any]:

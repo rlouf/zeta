@@ -37,7 +37,7 @@ from .protocols import (
 from .zeta.agent import AgentTurnResult
 from .zeta.model import ensure_server
 from .zeta.models import ModelSelection
-from .zeta.timeline import record_event
+from .zeta.timeline import add_event_link, record_event
 from .zeta.trace import (
     Derivation,
     Object,
@@ -205,8 +205,7 @@ def record_turn_trace_object(
             *(prompt_ids if isinstance(prompt_ids, list) else []),
             *effect_object_ids,
         ]:
-            if object_id and object_id not in links:
-                links.append(object_id)
+            add_event_link(links, object_id)
         with store.batch():
             turn_object_id = store.put_object(
                 Object(

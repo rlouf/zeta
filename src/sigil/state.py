@@ -75,17 +75,29 @@ def rotate_oversized_log(path: Path) -> None:
         pass
 
 
-def append_event(event: dict[str, Any]) -> dict[str, Any]:
-    """Append a global audit/debug event with session metadata."""
-    root = state_dir()
-    root.mkdir(parents=True, exist_ok=True)
-    payload = {
+def _with_envelope(event: dict[str, Any]) -> dict[str, Any]:
+    """Stamp the id/time/cwd/session envelope onto an event payload."""
+    return {
         "id": str(uuid.uuid4()),
         "time": time.time(),
         "cwd": os.getcwd(),
         "session": session_id(),
         **event,
     }
+
+
+def _session_root() -> Path:
+    """Return the session directory, creating it if needed."""
+    root = session_dir()
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
+def append_event(event: dict[str, Any]) -> dict[str, Any]:
+    """Append a global audit/debug event with session metadata."""
+    root = state_dir()
+    root.mkdir(parents=True, exist_ok=True)
+    payload = _with_envelope(event)
     log_path = root / "events.jsonl"
     rotate_oversized_log(log_path)
     append_jsonl_line(log_path, payload)
@@ -115,10 +127,8 @@ def write_text_atomic(path: Path, text: str) -> None:
 
 def write_json(name: str, value: Any) -> None:
     """Atomically write a session-scoped JSON document."""
-    root = session_dir()
-    root.mkdir(parents=True, exist_ok=True)
     write_text_atomic(
-        root / name, json.dumps(value, ensure_ascii=False, indent=2) + "\n"
+        _session_root() / name, json.dumps(value, ensure_ascii=False, indent=2) + "\n"
     )
 
 
@@ -134,36 +144,16 @@ def remove_json(name: str) -> bool:
 
 def append_jsonl(name: str, event: dict[str, Any]) -> dict[str, Any]:
     """Append a session-scoped JSONL event."""
-    root = session_dir()
-    root.mkdir(parents=True, exist_ok=True)
-    payload = {
-        "id": str(uuid.uuid4()),
-        "time": time.time(),
-        "cwd": os.getcwd(),
-        "session": session_id(),
-        **event,
-    }
-    append_jsonl_line(root / name, payload)
+    payload = _with_envelope(event)
+    append_jsonl_line(_session_root() / name, payload)
     return payload
 
 
 def write_jsonl(name: str, events: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Replace a session-scoped JSONL file atomically."""
-    root = session_dir()
-    root.mkdir(parents=True, exist_ok=True)
-    payloads = []
-    for event in events:
-        payloads.append(
-            {
-                "id": str(uuid.uuid4()),
-                "time": time.time(),
-                "cwd": os.getcwd(),
-                "session": session_id(),
-                **event,
-            }
-        )
+    payloads = [_with_envelope(event) for event in events]
     write_text_atomic(
-        root / name,
+        _session_root() / name,
         "".join(
             json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n"
             for payload in payloads

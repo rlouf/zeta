@@ -3,13 +3,12 @@
 from __future__ import annotations
 
 import os
-import shlex
 import signal
 import subprocess
 import time
 from typing import Any
 
-from .base import ToolSpec, analysis, effect, error_result, handoff, missing
+from .base import ToolSpec, error_result, handoff
 
 DEFAULT_TIMEOUT_SECONDS = 120.0
 MAX_OUTPUT_CHARS = 12_000
@@ -31,18 +30,6 @@ SPEC = ToolSpec(
     interactive=True,
     effects=("execute",),
 )
-
-
-def analyze(params: dict[str, Any]) -> dict[str, Any]:
-    command = str(params.get("command") or "").strip()
-    if not command:
-        return missing("command")
-    try:
-        argv = shlex.split(command)
-    except ValueError:
-        argv = []
-    target = argv[0] if argv else command
-    return analysis(effects=[effect("execute", target, resource="process")])
 
 
 def stage(params: dict[str, Any]) -> dict[str, Any]:

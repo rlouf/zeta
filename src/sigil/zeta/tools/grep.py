@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .base import ToolSpec, analysis, effect, error_result, missing
+from .base import ToolSpec, error_result
 
 MAX_TOOL_RESULT_CHARS = 12_000
 
@@ -48,14 +48,6 @@ SPEC = ToolSpec(
     SCHEMA,
     effects=("search",),
 )
-
-
-def analyze(params: dict[str, Any]) -> dict[str, Any]:
-    path = str(params.get("path") or ".")
-    pattern = str(params.get("pattern") or "")
-    if not pattern:
-        return missing("pattern")
-    return analysis(effects=[effect("search", path)])
 
 
 def run(params: dict[str, Any]) -> dict[str, Any]:

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from .base import ToolSpec, analysis, effect, error_result
+from .base import ToolSpec, error_result
 
 if TYPE_CHECKING:
     from ...ledger import LedgerIndex
@@ -71,10 +71,6 @@ SPEC = ToolSpec(
     SCHEMA,
     effects=("read",),
 )
-
-
-def analyze(params: dict[str, Any]) -> dict[str, Any]:
-    return analysis(effects=[effect("read", "ledger", resource="session")])
 
 
 def run(params: dict[str, Any]) -> dict[str, Any]:

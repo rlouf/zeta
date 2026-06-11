@@ -603,7 +603,6 @@ def test_transcript_skips_noise_and_empty_events() -> None:
     output, console = transcript_console()
     events = [
         {"type": "model_usage", "usage": {"total_tokens": 999}},
-        {"type": "tool_analysis", "valid": True},
         {"type": "assistant_message", "content": ""},
         {"role": "user", "content": "prior question"},
     ]
@@ -612,7 +611,6 @@ def test_transcript_skips_noise_and_empty_events() -> None:
     text = output.getvalue()
 
     assert "999" not in text
-    assert "tool_analysis" not in text
     assert "prior question" in text
 
 

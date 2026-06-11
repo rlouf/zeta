@@ -13,7 +13,6 @@ from typing import Any, Literal, get_args
 from ...protocols import shell_handoff_tool_result
 
 EffectKind = Literal["read", "write", "delete", "execute", "search"]
-Resource = Literal["path", "process", "session"]
 
 EFFECT_KINDS = frozenset(get_args(EffectKind))
 READ_ONLY_EFFECT_KINDS = frozenset({"read", "search"})
@@ -44,10 +43,6 @@ class ToolSpec:
             "name": self.name,
             "description": self.description,
             "schema": self.schema,
-            "security": {
-                "analyzer": "self",
-                "analysis_schema": "zeta.analysis.v1",
-            },
             "interactive": self.interactive,
             "effects": list(self.effects),
         }
@@ -61,53 +56,14 @@ class ToolImpl:
     """Executable implementation for one Zeta tool."""
 
     spec: ToolSpec
-    analyze: ToolFunction
     run: ToolFunction
     stage: ToolFunction | None = None
-
-
-def analysis(
-    *,
-    valid: bool = True,
-    resolved: bool = True,
-    effects: list[dict[str, Any]] | None = None,
-    diagnostics: list[dict[str, Any]] | None = None,
-) -> dict[str, Any]:
-    return {
-        "valid": valid,
-        "resolved": resolved,
-        "effects": effects or [],
-        "diagnostics": diagnostics or [],
-    }
-
-
-def effect(
-    kind: EffectKind,
-    target: str,
-    *,
-    resource: Resource = "path",
-    certainty: str = "certain",
-) -> dict[str, str]:
-    return {
-        "kind": kind,
-        "resource": resource,
-        "target": target,
-        "certainty": certainty,
-    }
 
 
 def diagnostic(
     code: str, message: str, *, severity: str = "unsupported"
 ) -> dict[str, str]:
     return {"code": code, "message": message, "severity": severity}
-
-
-def missing(field: str) -> dict[str, Any]:
-    return analysis(
-        valid=False,
-        resolved=False,
-        diagnostics=[diagnostic("missing-field", f"missing {field}", severity="error")],
-    )
 
 
 def error_result(code: str, message: str) -> dict[str, Any]:

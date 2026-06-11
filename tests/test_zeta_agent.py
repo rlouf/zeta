@@ -300,11 +300,6 @@ def test_zeta_agent_turn_records_one_prompt_trace_per_model_request(
     )
     monkeypatch.setattr(
         zeta_agent,
-        "analyze_tool",
-        lambda name, params: {"valid": True, "resolved": True},
-    )
-    monkeypatch.setattr(
-        zeta_agent,
         "run_tool",
         lambda name, params: read_tool_payload(target),
     )
@@ -350,11 +345,6 @@ def test_zeta_agent_turn_records_tool_result_derivation(
         zeta_agent,
         "chat_completion_messages",
         lambda messages, **kwargs: next(responses),
-    )
-    monkeypatch.setattr(
-        zeta_agent,
-        "analyze_tool",
-        lambda name, params: {"valid": True, "resolved": True},
     )
     monkeypatch.setattr(
         zeta_agent,
@@ -564,11 +554,6 @@ def test_zeta_agent_turn_runs_multiple_read_only_tools_in_order(monkeypatch) -> 
         "chat_completion_messages",
         lambda *args, **kwargs: next(responses),
     )
-    monkeypatch.setattr(
-        zeta_agent,
-        "analyze_tool",
-        lambda name, params: {"valid": True, "resolved": True},
-    )
 
     def fake_run_tool(
         name: str, params: dict[str, Any], **kwargs: object
@@ -632,11 +617,6 @@ def test_zeta_agent_turn_streams_text_between_tool_turns(monkeypatch) -> None:
         zeta_agent,
         "chat_completion_messages",
         fake_chat_completion_messages,
-    )
-    monkeypatch.setattr(
-        zeta_agent,
-        "analyze_tool",
-        lambda name, params: {"valid": True, "resolved": True},
     )
     monkeypatch.setattr(
         zeta_agent,
@@ -733,11 +713,6 @@ def test_zeta_agent_turn_orders_prior_timeline_before_current_events(
     )
     monkeypatch.setattr(
         zeta_agent,
-        "analyze_tool",
-        lambda name, params: {"valid": True, "resolved": True},
-    )
-    monkeypatch.setattr(
-        zeta_agent,
         "run_tool",
         lambda name, params: {
             "ok": True,
@@ -792,11 +767,6 @@ def test_zeta_agent_turn_streams_tool_call_before_running_tool(monkeypatch) -> N
             ]
         },
     )
-    monkeypatch.setattr(
-        zeta_agent,
-        "analyze_tool",
-        lambda name, params: {"valid": True, "resolved": True},
-    )
 
     def fake_run_tool(
         name: str, params: dict[str, Any], **kwargs: object
@@ -805,7 +775,6 @@ def test_zeta_agent_turn_streams_tool_call_before_running_tool(monkeypatch) -> N
         assert [event.get("type") for event in streamed] == [
             "assistant_message",
             "tool_call",
-            "tool_analysis",
         ]
         return {"ok": True, "content": [{"type": "text", "text": "README"}]}
 
@@ -822,7 +791,6 @@ def test_zeta_agent_turn_streams_tool_call_before_running_tool(monkeypatch) -> N
     assert [event.get("type") for event in streamed] == [
         "assistant_message",
         "tool_call",
-        "tool_analysis",
         "tool_result",
     ]
 
@@ -851,11 +819,6 @@ def test_zeta_agent_turn_stops_after_handoff_tool(monkeypatch) -> None:
     monkeypatch.setattr(zeta_agent, "model_endpoint_open", lambda: True)
     monkeypatch.setattr(
         zeta_agent, "chat_completion_messages", fake_chat_completion_messages
-    )
-    monkeypatch.setattr(
-        zeta_agent,
-        "analyze_tool",
-        lambda name, params: {"valid": True, "resolved": True},
     )
     monkeypatch.setattr(
         zeta_agent,

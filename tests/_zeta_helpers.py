@@ -395,27 +395,14 @@ if "--metadata" in sys.argv:
     raise SystemExit(0)
 
 params = json.loads(sys.stdin.read() or "{{}}")
-if "--analyze" in sys.argv:
-    print(json.dumps({{
-        "valid": True,
-        "resolved": True,
-        "effects": [{{
-            "kind": "search",
-            "resource": "path",
-            "target": params["query"],
-            "certainty": "certain",
-        }}],
-        "diagnostics": [],
-    }}))
-else:
-    if {fail_run!r}:
-        print("execution failed", file=sys.stderr)
-        raise SystemExit(7)
-    print(json.dumps({{
-        "ok": True,
-        "content": [{{"type": "text", "text": "docs:" + params["query"]}}],
-        "metadata": {{"query": params["query"]}},
-    }}))
+if {fail_run!r}:
+    print("execution failed", file=sys.stderr)
+    raise SystemExit(7)
+print(json.dumps({{
+    "ok": True,
+    "content": [{{"type": "text", "text": "docs:" + params["query"]}}],
+    "metadata": {{"query": params["query"]}},
+}}))
 """
     path.write_text(script, encoding="utf-8")
 

@@ -9,12 +9,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
-from .base import EFFECT_KINDS, ToolSpec, analysis, diagnostic, error_result
+from .base import EFFECT_KINDS, ToolSpec, diagnostic, error_result
 
 DEFAULT_TIMEOUT_MS = 30_000
 MAX_STDERR_LENGTH = 2_000
 
-PluginMode = Literal["metadata", "analyze", "run"]
+PluginMode = Literal["metadata", "run"]
 
 
 @dataclass(frozen=True)
@@ -28,29 +28,6 @@ class CliPluginTool:
     @property
     def label(self) -> str:
         return self.command[0]
-
-    def analyze(self, params: dict[str, Any]) -> dict[str, Any]:
-        result = run_plugin_json(
-            self.command,
-            self.timeout_ms,
-            mode="analyze",
-            params=params,
-        )
-        if result.ok and isinstance(result.value, dict):
-            return result.value
-        if result.ok:
-            result = PluginJsonResult(
-                False,
-                code="plugin-analyze-invalid-result",
-                message="plugin analysis JSON must be an object",
-            )
-        return analysis(
-            valid=False,
-            resolved=False,
-            diagnostics=[
-                diagnostic(result.code, result.message, severity="error"),
-            ],
-        )
 
     def run(self, params: dict[str, Any]) -> dict[str, Any]:
         result = run_plugin_json(

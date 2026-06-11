@@ -583,7 +583,7 @@ def thinking_status_factory(
     )
 
 
-TRANSCRIPT_SKIP_EVENT_TYPES = frozenset({"model_usage", "tool_analysis"})
+TRANSCRIPT_SKIP_EVENT_TYPES = frozenset({"model_usage"})
 
 
 def render_transcript(events: list[dict[str, Any]], *, console: Console) -> None:

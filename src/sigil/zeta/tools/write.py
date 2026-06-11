@@ -8,12 +8,9 @@ from typing import Any
 
 from .base import (
     ToolSpec,
-    analysis,
     change_hashes,
-    effect,
     error_result,
     handoff,
-    missing,
     write_temp,
 )
 
@@ -35,13 +32,6 @@ SPEC = ToolSpec(
     interactive=True,
     effects=("write",),
 )
-
-
-def analyze(params: dict[str, Any]) -> dict[str, Any]:
-    path = str(params.get("path") or "")
-    if not path:
-        return missing("path")
-    return analysis(effects=[effect("write", path)])
 
 
 def stage(params: dict[str, Any]) -> dict[str, Any]:

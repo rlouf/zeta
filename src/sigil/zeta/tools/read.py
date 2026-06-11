@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from .base import ToolSpec, analysis, effect, error_result, missing
+from .base import ToolSpec, error_result
 
 DEFAULT_READ_LIMIT = 2_000
 MAX_READ_CHARS = 50_000
@@ -31,13 +31,6 @@ SCHEMA: dict[str, Any] = {
 }
 
 SPEC = ToolSpec("read", "Read a UTF-8 text file.", SCHEMA, effects=("read",))
-
-
-def analyze(params: dict[str, Any]) -> dict[str, Any]:
-    path = str(params.get("path") or "")
-    if not path:
-        return missing("path")
-    return analysis(effects=[effect("read", path)])
 
 
 def run(params: dict[str, Any]) -> dict[str, Any]:

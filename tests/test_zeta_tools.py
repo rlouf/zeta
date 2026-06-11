@@ -77,10 +77,6 @@ def test_zeta_plugin_tool_flows_through_registry(
     ]
     assert validate_tool_args("docs_search", {"query": "install"}) == []
 
-    analysis = zeta_tools.analyze_tool("docs_search", {"query": "install"})
-    assert analysis["valid"] is True
-    assert analysis["effects"][0]["target"] == "install"
-
     data = zeta_tools.run_tool(
         "docs_search", {"query": "install"}, execution_mode="direct"
     )
@@ -535,24 +531,6 @@ def test_zeta_tool_edit_marks_no_newline_exact_replacement(tmp_path: Path) -> No
     patch = artifact.read_text(encoding="utf-8")
     assert "-old\n\\ No newline at end of file\n" in patch
     assert "+new\n\\ No newline at end of file\n" in patch
-
-
-def test_zeta_edit_analysis_reports_location() -> None:
-    data = zeta_tools.analyze_tool(
-        "edit",
-        {"location": "src/new.py", "old": "x", "new": "y"},
-    )
-    assert data["valid"] is True
-    assert data["resolved"] is True
-    assert [effect["target"] for effect in data["effects"]] == ["src/new.py"]
-
-
-def test_zeta_bash_analysis_accepts_shell_grammar_without_diagnostics() -> None:
-    data = zeta_tools.analyze_tool("bash", {"command": "ls | wc -l && echo $HOME"})
-    assert data["valid"] is True
-    assert data["resolved"] is True
-    assert [item["kind"] for item in data["effects"]] == ["execute"]
-    assert data["diagnostics"] == []
 
 
 def test_zeta_plugin_without_declared_effects_is_refused_in_propose_mode(

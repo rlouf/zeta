@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from .base import ToolSpec, analysis, effect, error_result
+from .base import ToolSpec, error_result
 
 SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -31,11 +31,6 @@ SCHEMA: dict[str, Any] = {
 }
 
 SPEC = ToolSpec("ls", "List files with type and byte sizes.", SCHEMA, effects=("read",))
-
-
-def analyze(params: dict[str, Any]) -> dict[str, Any]:
-    path = str(params.get("path") or ".")
-    return analysis(effects=[effect("read", path)])
 
 
 def run(params: dict[str, Any]) -> dict[str, Any]:

@@ -22,7 +22,7 @@ from .trace import (
 
 RUN_EVENT_KIND = "run_event"
 RUN_HEAD_EVENT_TYPES = {"assistant_message", "tool_call", "tool_result"}
-NON_HEAD_EVENT_TYPES = {"model_usage", "tool_analysis"}
+NON_HEAD_EVENT_TYPES = {"model_usage"}
 
 
 @dataclass(frozen=True)

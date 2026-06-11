@@ -10,19 +10,19 @@ from jsonschema import Draft202012Validator
 from jsonschema.exceptions import SchemaError, ValidationError
 
 from . import bash, edit, grep, ls, query_log, read, write
-from .base import ToolImpl, ToolSpec, diagnostic, error_result
+from .base import ToolImpl, ToolSpec, error_result
 from .plugins import load_cli_plugins, user_tools_config_path
 
 ExecutionMode = Literal["handoff", "direct"]
 
 BUILTIN_TOOL_IMPLS: dict[str, ToolImpl] = {
-    bash.SPEC.name: ToolImpl(bash.SPEC, bash.analyze, bash.run, bash.stage),
-    edit.SPEC.name: ToolImpl(edit.SPEC, edit.analyze, edit.run, edit.stage),
-    grep.SPEC.name: ToolImpl(grep.SPEC, grep.analyze, grep.run),
-    ls.SPEC.name: ToolImpl(ls.SPEC, ls.analyze, ls.run),
-    query_log.SPEC.name: ToolImpl(query_log.SPEC, query_log.analyze, query_log.run),
-    read.SPEC.name: ToolImpl(read.SPEC, read.analyze, read.run),
-    write.SPEC.name: ToolImpl(write.SPEC, write.analyze, write.run, write.stage),
+    bash.SPEC.name: ToolImpl(bash.SPEC, bash.run, bash.stage),
+    edit.SPEC.name: ToolImpl(edit.SPEC, edit.run, edit.stage),
+    grep.SPEC.name: ToolImpl(grep.SPEC, grep.run),
+    ls.SPEC.name: ToolImpl(ls.SPEC, ls.run),
+    query_log.SPEC.name: ToolImpl(query_log.SPEC, query_log.run),
+    read.SPEC.name: ToolImpl(read.SPEC, read.run),
+    write.SPEC.name: ToolImpl(write.SPEC, write.run, write.stage),
 }
 
 BUILTIN_TOOL_SPECS: dict[str, ToolSpec] = {
@@ -54,7 +54,7 @@ def ensure_registry_loaded() -> None:
     TOOL_ORIGINS.clear()
     TOOL_ORIGINS.update({name: {"origin": "builtin"} for name in BUILTIN_TOOL_IMPLS})
     for name, plugin in loaded.tools.items():
-        TOOL_IMPLS[name] = ToolImpl(plugin.spec, plugin.analyze, plugin.run)
+        TOOL_IMPLS[name] = ToolImpl(plugin.spec, plugin.run)
         TOOL_SPECS[name] = plugin.spec
         TOOL_ORIGINS[name] = {"origin": "plugin", "plugin": plugin.label}
     _REGISTRY_DIAGNOSTICS = loaded.diagnostics
@@ -144,21 +144,6 @@ def json_path(parts: Any) -> str:
         else:
             path += f".{part}"
     return path
-
-
-def analyze_tool(name: str, params: dict[str, Any]) -> dict[str, Any]:
-    ensure_registry_loaded()
-    tool = TOOL_IMPLS.get(name)
-    if tool is None:
-        return {
-            "valid": False,
-            "resolved": False,
-            "effects": [],
-            "diagnostics": [
-                diagnostic("unknown-tool", f"unknown tool: {name}", severity="error")
-            ],
-        }
-    return tool.analyze(params)
 
 
 def run_tool(

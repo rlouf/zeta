@@ -18,7 +18,6 @@ from .model import (
 from .prompt import PromptBuilder, prompt_transform_from_env
 from .tools import (
     allowed_tool_names,
-    analyze_tool,
     model_tool_descriptors,
     run_tool,
     validate_tool_args,
@@ -388,13 +387,6 @@ def handle_tool_call(
     schema_errors = validate_tool_args(name, params)
     if schema_errors:
         return reject("schema-mismatch", "; ".join(schema_errors))
-    analysis = analyze_tool(name, params)
-    analysis_event = {
-        "type": "tool_analysis",
-        "tool_call_id": call_id,
-        "name": name,
-        "analysis": analysis,
-    }
     events: list[dict[str, Any]] = []
     attach_tool_call_trace(
         call_event,
@@ -402,18 +394,14 @@ def handle_tool_call(
         prompt_builder=prompt_builder,
     )
     emit_event(events, call_event, event_sink)
-    emit_event(events, analysis_event, event_sink)
-    if analysis.get("valid") is not True:
-        result = tool_error("invalid-analysis", "tool analysis rejected the input")
-    else:
-        try:
-            result = run_tool(
-                name,
-                params,
-                execution_mode=execution_mode,
-            )
-        except Exception as exc:
-            result = tool_error("tool-crashed", f"{type(exc).__name__}: {exc}")
+    try:
+        result = run_tool(
+            name,
+            params,
+            execution_mode=execution_mode,
+        )
+    except Exception as exc:
+        result = tool_error("tool-crashed", f"{type(exc).__name__}: {exc}")
     handoff = result_handoff(result)
     stop = bool(
         execution_mode == "handoff" and name == "edit" and result.get("ok") is True

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from collections.abc import Iterable
 from typing import Any
 
@@ -61,6 +62,8 @@ GREP_TOOL_POLICY = (
 )
 
 SYSTEM_PROMPT_TEMPLATE = """{{ base_prompt }}
+
+{{ date_line }}
 
 {{ tool_protocol }}
 {% if grep_tool_policy %}
@@ -125,6 +128,7 @@ def render_system_prompt(
     return render_prompt_template(
         SYSTEM_PROMPT_TEMPLATE,
         base_prompt=clean_prompt(base_prompt) or BASE_SYSTEM_PROMPT.strip(),
+        date_line=current_date_line(),
         tool_protocol=TOOL_PROTOCOL_PROMPT.strip(),
         grep_tool_policy=GREP_TOOL_POLICY
         if tool_available("grep", active_tools)
@@ -132,6 +136,15 @@ def render_system_prompt(
         skills_prompt=skills_prompt(skills),
         tools_prompt=tools_prompt(active_tools),
     )
+
+
+def current_date_line() -> str:
+    """State today's date so relative time references resolve correctly.
+
+    Date only, never time of day: the system prompt is a content-addressed
+    trace component, and a finer stamp would defeat its deduplication.
+    """
+    return time.strftime("Today is %Y-%m-%d (%A).", time.localtime())
 
 
 def can_read_skill_files(enabled_tools: Iterable[str]) -> bool:

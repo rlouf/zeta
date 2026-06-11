@@ -750,6 +750,18 @@ def test_system_prompt_is_product_neutral_and_dynamic() -> None:
     assert "- bash(" not in prompt
 
 
+def test_system_prompt_states_todays_date() -> None:
+    import time
+
+    prompt = zeta_prompt.system_prompt(allowed_tools=("read",))
+    custom = zeta_prompt.system_prompt("Custom base.", allowed_tools=("read",))
+
+    today = time.strftime("%Y-%m-%d", time.localtime())
+    assert f"Today is {today}" in prompt
+    assert f"Today is {today}" in custom
+    assert prompt == zeta_prompt.system_prompt(allowed_tools=("read",))
+
+
 def test_zeta_skill_directive_expands_in_context_message(
     tmp_path: Path,
     monkeypatch,

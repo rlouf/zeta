@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import time
 from collections.abc import Callable
 from typing import Any, cast
@@ -35,12 +36,24 @@ def summarize(tool: str, args: object) -> str:
     for field in SUMMARY_FIELDS_BY_TOOL.get(tool, ()):
         value = tool_args.get(field)
         if value:
-            return str(value)
+            return display_path(str(value))
     return " ".join(
         f"{key}={value}"
         for key, value in tool_args.items()
         if isinstance(value, (str, int, float, bool))
     )
+
+
+def display_path(value: str) -> str:
+    """Render an absolute path inside the cwd as a relative one."""
+    if not value.startswith("/"):
+        return value
+    cwd = os.getcwd().rstrip("/")
+    if value == cwd:
+        return "."
+    if value.startswith(cwd + "/"):
+        return value[len(cwd) + 1 :]
+    return value
 
 
 def tool_result_summary(name: str, result: dict[str, Any]) -> list[str]:
@@ -149,7 +162,7 @@ def direct_tool_result_summary(name: str, metadata: dict[str, Any]) -> list[str]
     if name == "write" and metadata.get("mode") == "direct":
         path = metadata.get("path")
         if isinstance(path, str) and path:
-            return [f"wrote · {path}"]
+            return [f"wrote · {display_path(path)}"]
         return ["wrote"]
     return []
 

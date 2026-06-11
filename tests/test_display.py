@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from io import StringIO
+from pathlib import Path
 
 from _zeta_helpers import (
     TtyBuffer,
@@ -80,6 +81,22 @@ def test_sigil_display_summarizes_tool_results() -> None:
             "metadata": {"matches": 10, "files": 3, "truncated": True},
         },
     ) == ["10 matches · 3 files · truncated"]
+
+
+def test_sigil_display_renders_tool_paths_relative_to_cwd(
+    tmp_path, monkeypatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    inside = str(Path.cwd() / "docs" / "notes.md")
+
+    assert display_summarize.summarize("read", {"path": inside}) == "docs/notes.md"
+    assert display_summarize.summarize("ls", {"path": str(Path.cwd())}) == "."
+    assert display_summarize.summarize("read", {"path": "/etc/hosts"}) == "/etc/hosts"
+    assert display_summarize.summarize("grep", {"pattern": "^#"}) == "^#"
+    assert display_summarize.tool_result_summary(
+        "write",
+        {"ok": True, "metadata": {"mode": "direct", "path": inside}},
+    ) == ["wrote · docs/notes.md"]
 
 
 def test_sigil_display_summarizes_current_context_estimate() -> None:

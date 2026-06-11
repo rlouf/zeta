@@ -21,6 +21,7 @@ from .failure import (
     record_failure,
     truncate_snippet,
 )
+from .ledger import append_effect_record, append_turn_record
 from .protocols import (
     EFFECT_KIND_COMMAND,
     TURN_OUTCOME_EXECUTED,
@@ -30,7 +31,6 @@ from .protocols import (
     turn_record,
 )
 from .state import (
-    append_event,
     append_jsonl_line,
     read_jsonl,
     read_jsonl_path,
@@ -298,7 +298,7 @@ def record_run_ledger(
     """Append the run-workflow turn and command effect for one shell command."""
     turn_id = str(uuid.uuid4())
     effect_id = str(uuid.uuid4())
-    append_event(
+    append_effect_record(
         effect_record(
             effect_id,
             turn_id=turn_id,
@@ -318,7 +318,7 @@ def record_run_ledger(
         effect_ids=[effect_id],
     )
     turn["cwd"] = cwd
-    append_event(turn)
+    append_turn_record(turn)
 
 
 def _append_recent_turn(entry: dict[str, Any]) -> None:

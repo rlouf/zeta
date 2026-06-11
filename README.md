@@ -357,6 +357,17 @@ executed (with exit status), and staged handoffs with how they resolved.
 Plain shell commands and `+` runs are recorded as `run` turns with a
 command effect. The log rotates at 10MB, keeping one generation.
 
+The ledger is also indexed into `ledger.sqlite3` next to the event log: a
+derived SQLite view (`turns` and `effects` tables) written as records are
+appended and rebuildable at any time with `sigil log reindex`, so a
+rotated event log loses no turn, effect, or cost answer. Agent turns are
+additionally bridged into the session's trace graph as `turn` objects
+linking the prompts the model saw and the tool results behind each
+effect; the `turn/<turn_id>` ref makes them addressable through `sigil
+zeta trace show`. Clearing a session removes its continuity files and
+trace store; the ledger index and event log are global and survive
+`sigil session clear`.
+
 Installed zsh bindings set `SIGIL_SESSION_ID` once when the shell
 starts, so separate terminal windows keep separate continuity. Override the
 boundary with `SIGIL_SESSION_ID` or `SIGIL_SESSION_DIR`.
@@ -368,6 +379,7 @@ sigil session show
 sigil session list
 sigil session clear
 sigil events
+sigil log reindex
 ```
 
 ## Project Scope

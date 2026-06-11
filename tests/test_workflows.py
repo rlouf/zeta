@@ -22,6 +22,7 @@ import sigil.display.render as display_render
 from sigil import agent_io
 from sigil import handoff as sigil_handoff
 from sigil.cli import cli as sigil_cli
+from sigil.ledger import default_ledger_index
 from sigil.protocols import (
     EFFECT_KIND_COMMAND,
     SHELL_HANDOFF_CANCEL_EXPECTED_NOT_EXECUTED,
@@ -48,6 +49,7 @@ from sigil.workflows import step as zeta_runner
 from sigil.zeta import agent as zeta_agent
 from sigil.zeta import models as zeta_models
 from sigil.zeta import timeline as zeta_timeline
+from sigil.zeta import trace as zeta_trace
 from sigil.zeta.trace import PromptTrace
 
 
@@ -2187,6 +2189,9 @@ def test_zeta_step_records_staged_turn_record(monkeypatch) -> None:
     assert effect["command"] == "uv run pytest"
     assert effect["tool_call_id"] == "call-1"
     assert "exit_status" not in effect
+    index = default_ledger_index()
+    assert index.turn(turn["turn_id"]) == turn
+    assert index.effects_for_turn(turn["turn_id"]) == [effect]
 
 
 def test_do_step_records_executed_turn_with_file_effect(monkeypatch) -> None:
@@ -2240,6 +2245,82 @@ def test_do_step_records_executed_turn_with_file_effect(monkeypatch) -> None:
     assert effect["path"] == "a.txt"
     assert effect["before_hash"] == "sha256:before"
     assert effect["after_hash"] == "sha256:after"
+
+
+def test_zeta_step_bridges_turn_record_into_trace_graph(monkeypatch) -> None:
+    prompt_object_id = "sha256:" + "2" * 64
+    tool_result_object_id = "sha256:" + "1" * 64
+    monkeypatch.setattr(agent_io, "ensure_server", lambda: True)
+    monkeypatch.setattr(
+        zeta_runner,
+        "run_agent_turn",
+        lambda *args, **kwargs: zeta_agent.AgentTurnResult(
+            final_text="done",
+            events=[
+                {
+                    "type": "tool_call",
+                    "id": "call-1",
+                    "tool_call_id": "call-1",
+                    "name": "write",
+                    "input": {"path": "a.txt", "content": "hello\n"},
+                },
+                {
+                    "type": "tool_result",
+                    "tool_call_id": "call-1",
+                    "name": "write",
+                    "tool_result_object_id": tool_result_object_id,
+                    "result": {
+                        "ok": True,
+                        "metadata": {"mode": "direct", "path": "a.txt"},
+                    },
+                },
+            ],
+            prompt_traces=[PromptTrace(prompt_object_id=prompt_object_id)],
+        ),
+    )
+
+    code = zeta_runner.run_agent_step("write the file", glyph=",,,")
+
+    assert code == 0
+    (turn,) = ledger_turns()
+    store = zeta_trace.default_store()
+    turn_object_id = zeta_trace.resolve_object_id(store, f"turn/{turn['turn_id']}")
+    turn_object = store.get_object(turn_object_id)
+    assert turn_object is not None
+    assert turn_object.kind == "turn"
+    assert turn_object.schema == "sigil.turn.v1"
+    assert turn_object.data["turn_id"] == turn["turn_id"]
+    assert turn_object.data["effects"] == ledger_effects()
+    assert turn_object.links == (prompt_object_id, tool_result_object_id)
+    derivations = [
+        derivation
+        for derivation in store.derivations_for_input(prompt_object_id)
+        if derivation.producer == "SigilTurnRecord:v1"
+    ]
+    assert [derivation.output_id for derivation in derivations] == [turn_object_id]
+    assert derivations[0].params == {"workflow": "do", "outcome": "executed"}
+
+
+def test_turn_bridge_failure_does_not_break_the_step(monkeypatch) -> None:
+    def broken_store() -> zeta_trace.SqliteStore:
+        raise RuntimeError("trace store unavailable")
+
+    monkeypatch.setattr(agent_io, "ensure_server", lambda: True)
+    monkeypatch.setattr(agent_io, "default_store", broken_store)
+    monkeypatch.setattr(
+        zeta_runner,
+        "run_agent_turn",
+        lambda *args, **kwargs: zeta_agent.AgentTurnResult(
+            final_text="done",
+            events=[{"type": "assistant_message", "content": "done"}],
+        ),
+    )
+
+    code = zeta_runner.run_agent_step("answer", glyph=",,")
+
+    assert code == 0
+    (turn,) = ledger_turns()
+    assert turn["outcome"] == "answered"
 
 
 def test_zeta_step_tags_timeline_events_with_turn_id(monkeypatch) -> None:
@@ -2359,6 +2440,9 @@ def test_record_turn_emits_run_turn_and_command_effect() -> None:
     assert effect["exit_status"] == 1
     assert effect["duration_ms"] == 42
     assert effect["staged"] is False
+    index = default_ledger_index()
+    assert index.turn(turn["turn_id"]) == turn
+    assert index.effects_for_turn(turn["turn_id"]) == [effect]
 
 
 def test_record_turn_marks_clean_exit_executed() -> None:
@@ -2408,6 +2492,7 @@ def test_shell_handoff_resolution_emits_handoff_effect() -> None:
     assert effect["command"] == "uv run pytest"
     assert effect["exit_status"] == 2
     assert effect["staged"] is True
+    assert default_ledger_index().effects_for_turn("turn-stage-1") == [effect]
 
 
 def test_cancelled_handoff_resolution_emits_cancelled_effect() -> None:

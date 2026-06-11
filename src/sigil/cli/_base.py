@@ -22,6 +22,7 @@ COMMAND_MODULES = {
     "events": "sigil.cli.events",
     "handoff": "sigil.cli.handoff",
     "install": "sigil.cli.install",
+    "log": "sigil.cli.log",
     "model": "sigil.cli.model",
     "run": "sigil.cli.run",
     "session": "sigil.cli.session",

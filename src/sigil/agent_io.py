@@ -22,21 +22,29 @@ from .display.render import (
     create_stream_renderer,
     render_tool_start,
 )
+from .ledger import append_effect_record, append_turn_record
 from .protocols import (
     EFFECT_KIND_COMMAND,
     EFFECT_KIND_FILE_EDIT,
     EFFECT_KIND_FILE_WRITE,
+    TURN_RECORD_SCHEMA,
+    TURN_RECORD_TYPE,
     effect_record,
     is_shell_prompt_handoff,
     turn_contract,
     turn_record,
 )
-from .state import append_event
 from .zeta.agent import AgentTurnResult
 from .zeta.model import ensure_server
 from .zeta.models import ModelSelection
 from .zeta.timeline import record_event
-from .zeta.trace import PromptTrace
+from .zeta.trace import (
+    Derivation,
+    Object,
+    PromptTrace,
+    default_store,
+    warn_trace_failure_once,
+)
 
 
 def model_server_ready(selected_model: ModelSelection | None) -> bool:
@@ -104,6 +112,8 @@ class TurnLedger:
         self.agent = agent
         self.started = time.monotonic()
         self.effect_ids: list[str] = []
+        self.effects: list[dict[str, Any]] = []
+        self.effect_object_ids: list[str] = []
         self.model_calls: list[dict[str, Any]] = []
 
     def record_tool_result(self, event: dict[str, Any]) -> None:
@@ -116,7 +126,7 @@ class TurnLedger:
             return
         effect_id = str(uuid.uuid4())
         tool_call_id = str(event.get("tool_call_id") or "")
-        append_event(
+        payload = append_effect_record(
             effect_record(
                 effect_id,
                 turn_id=self.turn_id,
@@ -125,6 +135,10 @@ class TurnLedger:
             )
         )
         self.effect_ids.append(effect_id)
+        self.effects.append(payload)
+        object_id = str(event.get("tool_result_object_id") or "")
+        if object_id:
+            self.effect_object_ids.append(object_id)
 
     def add_model_calls(self, calls: Iterable[dict[str, Any]]) -> None:
         self.model_calls.extend(call for call in calls if call)
@@ -134,8 +148,8 @@ class TurnLedger:
         outcome: str,
         prompt_traces: Iterable[PromptTrace] = (),
     ) -> dict[str, Any]:
-        """Append the turn record closing this turn in the ledger."""
-        return append_event(
+        """Append the turn record closing this turn and bridge it into the graph."""
+        payload = append_turn_record(
             turn_record(
                 self.turn_id,
                 workflow=self.workflow,
@@ -148,6 +162,8 @@ class TurnLedger:
                 effect_ids=self.effect_ids,
             )
         )
+        record_turn_trace_object(payload, self.effects, self.effect_object_ids)
+        return payload
 
     def cost(self) -> dict[str, int]:
         wall_ms = int((time.monotonic() - self.started) * 1000)
@@ -167,6 +183,53 @@ class TurnLedger:
             "model_calls": len(self.model_calls),
             "wall_ms": wall_ms,
         }
+
+
+def record_turn_trace_object(
+    payload: dict[str, Any],
+    effects: list[dict[str, Any]],
+    effect_object_ids: list[str],
+) -> None:
+    """Bridge one turn record into the session trace graph, fail-open.
+
+    The turn object links the prompts the model saw and the tool results
+    that evidence its effects, so `graph_closure` walks objective →
+    prompt(s) → components → tool results in one pass, and the
+    `turn/<turn_id>` ref makes ledger ids resolve like trace ids.
+    """
+    try:
+        store = default_store()
+        prompt_ids = payload.get("prompt_object_ids")
+        links: list[str] = []
+        for object_id in [
+            *(prompt_ids if isinstance(prompt_ids, list) else []),
+            *effect_object_ids,
+        ]:
+            if object_id and object_id not in links:
+                links.append(object_id)
+        with store.batch():
+            turn_object_id = store.put_object(
+                Object(
+                    kind=TURN_RECORD_TYPE,
+                    schema=TURN_RECORD_SCHEMA,
+                    data={**payload, "effects": effects},
+                    links=tuple(links),
+                )
+            )
+            store.record_derivation(
+                Derivation(
+                    producer="SigilTurnRecord:v1",
+                    output_id=turn_object_id,
+                    input_ids=tuple(links),
+                    params={
+                        "workflow": str(payload.get("workflow") or ""),
+                        "outcome": str(payload.get("outcome") or ""),
+                    },
+                )
+            )
+            store.set_ref(f"turn/{payload.get('turn_id')}", turn_object_id)
+    except Exception as exc:
+        warn_trace_failure_once("record_turn_trace_object", exc)
 
 
 def usage_tokens(usage: dict[str, Any], field_name: str) -> int:

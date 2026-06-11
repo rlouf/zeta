@@ -6,6 +6,7 @@ import os
 import uuid
 from typing import Any
 
+from .ledger import append_effect_record
 from .protocols import (
     EFFECT_KIND_HANDOFF,
     SHELL_HANDOFF_CANCEL_EXPECTED_NOT_EXECUTED,
@@ -20,7 +21,6 @@ from .protocols import (
     is_shell_prompt_handoff,
 )
 from .session import event_time, recent_turns, record_turn
-from .state import append_event
 from .zeta.timeline import current_timeline, record_event
 
 
@@ -97,7 +97,7 @@ def record_handoff_effect(
         result.get("executed_command") or result.get("expected_command") or ""
     )
     status = result.get("status")
-    append_event(
+    append_effect_record(
         effect_record(
             str(uuid.uuid4()),
             turn_id=str(handoff.get("turn_id") or ""),

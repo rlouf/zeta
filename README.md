@@ -444,6 +444,19 @@ sigil log show 4f9d01c2
 
 `sigil events` stays the raw event view underneath all of this.
 
+The ledger is also the unit of exchange. `sigil log export` writes a
+self-contained JSON bundle — the matching turn and effect records plus
+each turn's full trace closure (prompts, components, tool results,
+with their derivations and `turn/<id>` refs) — and `sigil log import`
+restores it on another machine: records join the global event log (so
+they survive `log reindex`), objects land in per-session trace stores,
+and every query above answers there too. Re-importing is a no-op.
+
+```sh
+sigil log export --since 2026-06-01 -o week.json
+sigil log import week.json
+```
+
 The ask workflow can read the ledger too: `,` carries a read-only
 `query_log` tool, so `, what did I delegate yesterday?` answers from
 your real delegation history and cites turn ids you can check with

@@ -621,6 +621,86 @@ class SqliteStore(StoreBase):
         ).fetchall()
         return [_derivation_from_row(row) for row in rows]
 
+    def derivation_records_for_output(
+        self, output_id: ObjectId
+    ) -> list[dict[str, Any]]:
+        """Return raw derivation rows for an output, with id and created_at.
+
+        Exports need both fields to rebuild recency ordering elsewhere;
+        the Derivation dataclass deliberately carries neither.
+        """
+        rows = self.connection.execute(
+            """
+            SELECT id, producer, output_id, input_ids_json, params_json, created_at
+            FROM derivations
+            WHERE output_id = ?
+            ORDER BY created_at, id
+            """,
+            (output_id,),
+        ).fetchall()
+        return [
+            {
+                "id": str(row["id"]),
+                "producer": str(row["producer"]),
+                "output_id": str(row["output_id"]),
+                "input_ids": json.loads(str(row["input_ids_json"])),
+                "params": json.loads(str(row["params_json"])),
+                "created_at": float(row["created_at"]),
+            }
+            for row in rows
+        ]
+
+    def import_object(self, object_id_value: ObjectId, obj: Object) -> None:
+        """Insert an object under an exported id instead of recomputing it.
+
+        Redacted objects keep their original content address, so an
+        import must trust the exported id.
+        """
+        stored = normalize_object(obj)
+        with self._write_lock:
+            self.connection.execute(
+                """
+                INSERT OR IGNORE INTO objects
+                  (id, kind, schema, data_json, links_json)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    object_id_value,
+                    stored.kind,
+                    stored.schema,
+                    canonical_json(stored.data),
+                    canonical_json(list(stored.links)),
+                ),
+            )
+            self._commit()
+
+    def import_derivation(
+        self,
+        derivation_id_value: str,
+        derivation: Derivation,
+        created_at: float,
+    ) -> None:
+        """Insert an exported derivation, preserving its original timestamp."""
+        stored = normalize_derivation(derivation)
+        with self._write_lock:
+            self.connection.execute(
+                """
+                INSERT OR IGNORE INTO derivations
+                  (id, producer, output_id, input_ids_json, params_json, created_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    derivation_id_value,
+                    stored.producer,
+                    stored.output_id,
+                    canonical_json(list(stored.input_ids)),
+                    canonical_json(stored.params),
+                    created_at,
+                ),
+            )
+            self._index_derivation_inputs(derivation_id_value, stored.input_ids)
+            self._commit()
+
     def derivations_for_input(self, input_id: ObjectId) -> list[Derivation]:
         rows = self.connection.execute(
             """

@@ -94,6 +94,90 @@ def since_epoch(value: str) -> float:
         ) from error
 
 
+@cmd_log.command("export")
+@click.option(
+    "--since",
+    help="Only turns at or after a time: YYYY-MM-DD, or an age like 2d, 6h, 30m.",
+)
+@click.option("--session", "session_filter", help="Scope to one session id.")
+@click.option(
+    "--output",
+    "-o",
+    "output_path",
+    type=click.Path(dir_okay=False, writable=True),
+    help="Write the bundle to a file instead of stdout.",
+)
+def cmd_log_export(
+    since: str | None,
+    session_filter: str | None,
+    output_path: str | None,
+) -> int:
+    """Export turns and their trace closures as a portable bundle.
+
+    The bundle is self-contained JSON: ledger records plus each turn's
+    prompt and tool-result objects, ready for `sigil log import` on
+    another machine.
+    """
+    import json
+
+    from ..bundle import export_bundle
+
+    bundle = export_bundle(
+        since=since_epoch(since) if since else None,
+        session=session_filter,
+    )
+    text = json.dumps(bundle, ensure_ascii=False, separators=(",", ":"))
+    if output_path is None:
+        click.echo(text)
+    else:
+        from pathlib import Path
+
+        Path(output_path).write_text(text + "\n", encoding="utf-8")
+    objects = sum(
+        len(graph.get("objects") or ()) for graph in bundle["sessions"].values()
+    )
+    click.echo(
+        f"exported {len(bundle['records'])} record(s),"
+        f" {objects} object(s) from {len(bundle['sessions'])} session(s)",
+        err=True,
+    )
+    return 0
+
+
+@cmd_log.command("import")
+@click.argument(
+    "bundle_file",
+    type=click.Path(exists=True, dir_okay=False),
+)
+def cmd_log_import(bundle_file: str) -> int:
+    """Import a bundle produced by `sigil log export`.
+
+    Records land in the global event log and index; trace objects land
+    in per-session stores, so log/blame/trace queries answer here too.
+    Re-importing a bundle is a no-op.
+    """
+    import json
+    from pathlib import Path
+
+    from ..bundle import import_bundle
+
+    try:
+        payload = json.loads(Path(bundle_file).read_text(encoding="utf-8"))
+    except ValueError as error:
+        raise click.ClickException(f"not a JSON bundle: {error}") from error
+    if not isinstance(payload, dict):
+        raise click.ClickException("not a JSON bundle: expected an object")
+    try:
+        counts = import_bundle(payload)
+    except ValueError as error:
+        raise click.ClickException(str(error)) from error
+    click.echo(
+        f"imported {counts['records']} record(s),"
+        f" {counts['objects']} object(s) across {counts['sessions']} session(s)"
+    )
+    return 0
+
+
 @cmd_log.command("reindex")
 def cmd_log_reindex() -> int:
     """Rebuild the ledger index from the event log."""

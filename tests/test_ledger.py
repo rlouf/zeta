@@ -562,6 +562,200 @@ def test_ledger_cli_log_reindex_reports_counts() -> None:
     assert sigil_ledger.default_ledger_index().turn("turn-1") is not None
 
 
+def seed_bundle_state(monkeypatch) -> dict[str, str]:
+    """Record one turn with an effect, bridged into its session trace store."""
+    from sigil.zeta import trace as zeta_trace
+
+    monkeypatch.setenv("SIGIL_SESSION_ID", "bundle-src")
+    index = sigil_ledger.default_ledger_index()
+    turn = append_event(
+        sample_turn_record(
+            "turn-bundle-1",
+            workflow="do",
+            objective="write the deploy notes",
+            time=100.0,
+        )
+    )
+    effect = append_event(
+        sample_effect_record(
+            "effect-bundle-1",
+            turn_id="turn-bundle-1",
+            kind=EFFECT_KIND_FILE_WRITE,
+            path="/tmp/deploy-notes.md",
+        )
+    )
+    index.index_record(turn)
+    index.index_record(effect)
+    store = zeta_trace.SqliteStore(zeta_trace.session_sqlite_path("bundle-src"))
+    prompt_id = store.put_object(
+        zeta_trace.Object(
+            kind="prompt",
+            schema="zeta.prompt.v1",
+            data={"payload": {"text": "the deploy prompt"}},
+        )
+    )
+    turn_object_id = store.put_object(
+        zeta_trace.Object(
+            kind="turn_record",
+            schema="sigil.turn.v1",
+            data={"turn_id": "turn-bundle-1"},
+            links=(prompt_id,),
+        )
+    )
+    store.record_derivation(
+        zeta_trace.Derivation(
+            producer="SigilTurnRecord:v1",
+            output_id=turn_object_id,
+            input_ids=(prompt_id,),
+        )
+    )
+    store.set_ref("turn/turn-bundle-1", turn_object_id)
+    store.close()
+    return {"prompt_id": prompt_id, "turn_object_id": turn_object_id}
+
+
+def test_bundle_export_collects_turns_effects_and_trace_closure(
+    monkeypatch,
+) -> None:
+    from sigil.bundle import export_bundle
+
+    ids = seed_bundle_state(monkeypatch)
+
+    bundle = export_bundle()
+
+    assert bundle["sigil_bundle"] == 1
+    record_ids = {
+        record.get("effect_id") or record.get("turn_id") for record in bundle["records"]
+    }
+    assert record_ids == {"turn-bundle-1", "effect-bundle-1"}
+    graph = bundle["sessions"]["bundle-src"]
+    assert {obj["id"] for obj in graph["objects"]} == set(ids.values())
+    assert graph["refs"] == {"turn/turn-bundle-1": ids["turn_object_id"]}
+    derivation = graph["derivations"][0]
+    assert derivation["producer"] == "SigilTurnRecord:v1"
+    assert isinstance(derivation["created_at"], float)
+
+
+def test_bundle_export_honors_since_and_session_filters(monkeypatch) -> None:
+    from sigil.bundle import export_bundle
+
+    seed_bundle_state(monkeypatch)
+    index = sigil_ledger.default_ledger_index()
+    index.index_record(
+        append_event(sample_turn_record("turn-late", time=900.0))
+        | {"session": "late-session"}
+    )
+
+    recent = export_bundle(since=500.0)
+    scoped = export_bundle(session="bundle-src")
+
+    assert {r["turn_id"] for r in recent["records"]} == {"turn-late"}
+    assert {r.get("effect_id") or r.get("turn_id") for r in scoped["records"]} == {
+        "turn-bundle-1",
+        "effect-bundle-1",
+    }
+
+
+def test_bundle_export_skips_sessions_without_trace_stores(monkeypatch) -> None:
+    from sigil.bundle import export_bundle
+
+    monkeypatch.setenv("SIGIL_SESSION_ID", "no-trace")
+    sigil_ledger.default_ledger_index().index_record(
+        append_event(sample_turn_record("turn-no-trace"))
+    )
+
+    bundle = export_bundle()
+
+    assert [r["turn_id"] for r in bundle["records"]] == ["turn-no-trace"]
+    assert bundle["sessions"] == {}
+
+
+def fresh_state_dir(monkeypatch, tmp_path) -> None:
+    """Re-point sigil state at an empty directory, as on another machine."""
+    from sigil.zeta.trace import close_default_stores
+
+    close_default_stores()
+    sigil_ledger.close_ledger_indexes()
+    monkeypatch.setenv("SIGIL_STATE_DIR", str(tmp_path / "imported-state"))
+
+
+def test_bundle_import_restores_ledger_and_trace_queries(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    from sigil.bundle import export_bundle, import_bundle
+
+    ids = seed_bundle_state(monkeypatch)
+    bundle = export_bundle()
+    fresh_state_dir(monkeypatch, tmp_path)
+
+    import_bundle(bundle)
+
+    runner = CliRunner()
+    log = runner.invoke(sigil_cli, ["log"])
+    show = runner.invoke(sigil_cli, ["log", "show", "turn-bundle-1"])
+    blame = runner.invoke(sigil_cli, ["blame", "/tmp/deploy-notes.md"])
+    trace_show = runner.invoke(
+        sigil_cli,
+        ["trace", "--session", "bundle-src", "show", "--json", ids["prompt_id"]],
+    )
+    assert log.exit_code == 0 and "write the deploy notes" in log.output
+    assert show.exit_code == 0 and "turn-bundle-1" in show.output
+    assert blame.exit_code == 0 and "turn-bun" in blame.output
+    assert trace_show.exit_code == 0
+    assert json.loads(trace_show.output)["id"] == ids["prompt_id"]
+
+
+def test_bundle_import_is_idempotent(monkeypatch, tmp_path) -> None:
+    from sigil.bundle import export_bundle, import_bundle
+
+    seed_bundle_state(monkeypatch)
+    bundle = export_bundle()
+    fresh_state_dir(monkeypatch, tmp_path)
+
+    first = import_bundle(bundle)
+    second = import_bundle(bundle)
+
+    assert first["records"] == 2
+    assert second["records"] == 0
+    log_lines = read_event_log()
+    assert len(log_lines) == 2
+
+
+def test_bundle_import_survives_reindex(monkeypatch, tmp_path) -> None:
+    from sigil.bundle import export_bundle, import_bundle
+
+    seed_bundle_state(monkeypatch)
+    bundle = export_bundle()
+    fresh_state_dir(monkeypatch, tmp_path)
+    import_bundle(bundle)
+    sigil_ledger.close_ledger_indexes()
+    (state_dir() / sigil_ledger.DEFAULT_LEDGER_NAME).unlink()
+
+    result = CliRunner().invoke(sigil_cli, ["log", "reindex"])
+
+    assert result.exit_code == 0
+    assert sigil_ledger.default_ledger_index().turn("turn-bundle-1") is not None
+
+
+def test_sigil_log_export_and_import_round_trip_via_cli(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    seed_bundle_state(monkeypatch)
+    bundle_path = tmp_path / "bundle.json"
+    runner = CliRunner()
+
+    exported = runner.invoke(sigil_cli, ["log", "export", "--output", str(bundle_path)])
+    assert exported.exit_code == 0
+    fresh_state_dir(monkeypatch, tmp_path)
+    imported = runner.invoke(sigil_cli, ["log", "import", str(bundle_path)])
+
+    assert imported.exit_code == 0
+    listed = runner.invoke(sigil_cli, ["log"])
+    assert "write the deploy notes" in listed.output
+
+
 def test_ledger_survives_session_clear() -> None:
     sigil_ledger.append_turn_record(sample_turn_record())
     root = session_dir()

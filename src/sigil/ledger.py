@@ -321,6 +321,15 @@ class LedgerIndex:
             return None
         return json.loads(str(row["record_json"]))
 
+    def effect(self, effect_id: str) -> dict[str, Any] | None:
+        row = self.connection.execute(
+            "SELECT record_json FROM effects WHERE effect_id = ?",
+            (effect_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        return json.loads(str(row["record_json"]))
+
     def turns(self, limit: int | None = None) -> list[dict[str, Any]]:
         limit_clause = "LIMIT ?" if limit is not None else ""
         params: list[Any] = [] if limit is None else [limit]

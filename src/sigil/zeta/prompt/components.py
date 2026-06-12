@@ -103,13 +103,13 @@ def prompt_components(
     components.extend(
         timeline_message_components(
             from_message_boundary(timeline[-TIMELINE_TAIL_LIMIT:]),
-            default_kind="transcript_message",
+            historical=True,
         )
     )
     objective_message = zeta_context_message(objective, context=context)
     components.append(
         PromptComponent(
-            kind="user_objective",
+            kind="user_message",
             data={
                 "objective": objective,
                 "expanded_objective": expand_skill_directive(objective),
@@ -122,7 +122,7 @@ def prompt_components(
     components.extend(
         timeline_message_components(
             list(current_events),
-            default_kind=None,
+            historical=False,
         )
     )
     return components
@@ -131,23 +131,23 @@ def prompt_components(
 def timeline_message_components(
     events: list[dict[str, Any]],
     *,
-    default_kind: str | None,
+    historical: bool,
 ) -> list[PromptComponent]:
     entries = _chat_message_entries(events)
     components = []
     tool_call_names: dict[str, str] = {}
     for message_index, entry in enumerate(entries):
-        kind = default_kind or current_event_component_kind(entry.message)
         tool_name = (
             tool_call_names.get(str(entry.event.get("tool_call_id") or "")) or ""
         )
         components.append(
             PromptComponent(
-                kind=kind,
+                kind=message_component_kind(entry.message),
                 data=timeline_message_component_data(
                     message_index,
                     entry,
                     tool_name=tool_name,
+                    historical=historical,
                 ),
                 message=entry.message,
                 links=timeline_message_component_links(entry.event),
@@ -162,6 +162,7 @@ def timeline_message_component_data(
     entry: ChatMessageEntry,
     *,
     tool_name: str = "",
+    historical: bool = False,
 ) -> dict[str, Any]:
     data = {
         "index": message_index,
@@ -170,6 +171,8 @@ def timeline_message_component_data(
         "source_event_type": str(entry.event.get("type") or ""),
         "source_event_role": str(entry.event.get("role") or ""),
     }
+    if historical:
+        data["historical"] = True
     if tool_name:
         data["source_tool_name"] = tool_name
     source_event_value = structured_source_event(entry.event, tool_name=tool_name)
@@ -304,7 +307,7 @@ def non_message_components(
             )
         )
     if context.strip():
-        # The context text itself ships inside the user_objective message;
+        # The context text itself ships inside the user_message message;
         # this component records provenance without double-counting it.
         content = context.strip()
         components.append(
@@ -319,12 +322,12 @@ def non_message_components(
     return components
 
 
-def current_event_component_kind(message: dict[str, Any]) -> str:
+def message_component_kind(message: dict[str, Any]) -> str:
     if message.get("role") == "tool":
         return "tool_result"
     if message.get("role") == "assistant":
         return "assistant_message"
-    return "transcript_message"
+    return "user_message"
 
 
 def component_messages(components: list[PromptComponent]) -> list[dict[str, Any]]:

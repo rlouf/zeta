@@ -293,7 +293,7 @@ def test_zeta_record_event_stores_prompt_link_not_components(
     store = zeta_trace.default_store()
     component_id = store.put_object(
         zeta_trace.Object(
-            kind="user_objective",
+            kind="user_message",
             schema="zeta.prompt_component.v1",
             data={"message": {"role": "user", "content": "objective"}},
         )
@@ -861,7 +861,7 @@ def narrative_log_store() -> tuple[zeta_trace.InMemoryStore, str, str, str]:
     store = zeta_trace.InMemoryStore()
     component_id = store.put_object(
         zeta_trace.Object(
-            kind="user_objective",
+            kind="user_message",
             schema="zeta.prompt_component.v1",
             data={"message": {"role": "user", "content": "why did it fail?"}},
         )
@@ -918,9 +918,9 @@ def prompt_diff_store() -> tuple[zeta_trace.InMemoryStore, dict[str, str]]:
 
     ids = {
         "system": component("system_prompt", "system", "system text"),
-        "old_objective": component("user_objective", "user", "old objective line"),
-        "new_objective": component("user_objective", "user", "new objective line"),
-        "transcript": component("transcript_message", "user", "shared transcript"),
+        "old_objective": component("user_message", "user", "old objective line"),
+        "new_objective": component("user_message", "user", "new objective line"),
+        "transcript": component("assistant_message", "assistant", "shared transcript"),
     }
     ids["prompt_a"] = store.put_object(
         zeta_trace.Object(
@@ -952,14 +952,14 @@ def test_sigil_zeta_trace_diff_reports_component_changes(monkeypatch) -> None:
     assert result.exit_code == 0
     output = result.output
     changed_line = next(
-        line for line in output.splitlines() if line.startswith("~ user_objective")
+        line for line in output.splitlines() if line.startswith("~ user_message")
     )
     assert zeta_trace_short(ids["old_objective"]) in changed_line
     assert zeta_trace_short(ids["new_objective"]) in changed_line
     assert "-old objective line" in output
     assert "+new objective line" in output
     removed_line = next(
-        line for line in output.splitlines() if line.startswith("- transcript_message")
+        line for line in output.splitlines() if line.startswith("- assistant_message")
     )
     assert zeta_trace_short(ids["transcript"]) in removed_line
     assert "= 1 unchanged" in output
@@ -976,8 +976,8 @@ def test_sigil_zeta_trace_diff_stat_keeps_one_line_per_change(monkeypatch) -> No
     )
 
     assert result.exit_code == 0
-    assert "~ user_objective" in result.output
-    assert "- transcript_message" in result.output
+    assert "~ user_message" in result.output
+    assert "- assistant_message" in result.output
     assert "+new objective line" not in result.output
 
 
@@ -1124,7 +1124,7 @@ def test_sigil_zeta_trace_log_widens_with_kind_and_all(monkeypatch) -> None:
     runner = CliRunner()
 
     only_components = runner.invoke(
-        sigil_cli, ["trace", "log", "--kind", "user_objective"]
+        sigil_cli, ["trace", "log", "--kind", "user_message"]
     )
     everything = runner.invoke(sigil_cli, ["trace", "log", "--all"])
     limited = runner.invoke(sigil_cli, ["trace", "log", "--all", "--limit", "1"])

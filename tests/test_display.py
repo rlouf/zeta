@@ -851,7 +851,7 @@ def test_trace_summary_shortens_content_addressed_ids() -> None:
 def test_trace_summary_counts_prompt_components_and_tokens() -> None:
     store = zeta_trace.InMemoryStore()
     component = trace_object(
-        "user_objective", {"message": {"role": "user", "content": "fix the test"}}
+        "user_message", {"message": {"role": "user", "content": "fix the test"}}
     )
     component_id = store.put_object(component)
     prompt = trace_object("prompt", {"payload_sha256": "sha256:feed"}, (component_id,))

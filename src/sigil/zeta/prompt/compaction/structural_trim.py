@@ -39,7 +39,7 @@ class StructuralTrimPromptTransform:
     def should_trim(self, component: PromptComponent) -> bool:
         if component.message is None:
             return False
-        if self.preserve_current_tool_results and component.kind == "tool_result":
+        if self.preserve_current_tool_results and not component.data.get("historical"):
             return False
         if not is_tool_result_component(component):
             return False

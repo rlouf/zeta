@@ -2,7 +2,7 @@
 
 Every model request Zeta makes is stored as a content-addressed object
 graph: a `prompt` object links the exact components — system prompt,
-objective, transcript messages, tool descriptors — that produced it, and
+objective, timeline messages, tool descriptors — that produced it, and
 records the hash of the final payload. This demo walks the two commands
 that cash that design in: `trace diff` and `trace replay`.
 
@@ -15,10 +15,10 @@ yourself, point `SIGIL_SESSION_ID` at any session with agent turns
 `trace log` is the front door; `--kind prompt` narrows it to requests:
 
 ```text
-$ sigil zeta trace log --kind prompt --limit 3
-df3f195a  prompt              29 components · ~51880 tok
-bcec7dc3  prompt              31 components · ~48320 tok
-fd81e241  prompt              8 components · ~9743 tok
+$ sigil trace log --kind prompt --limit 3
+e4976fc1  prompt              10 components · ~8772 tok
+2fc6c722  prompt              8 components · ~8331 tok
+0c56ad85  prompt              6 components · ~8204 tok
 ```
 
 Every id below is one of these 8-char prefixes — no full hashes to copy.
@@ -30,18 +30,21 @@ the diff only has to look inside components that actually changed.
 `--stat` gives the shape of the change, one line per component:
 
 ```text
-$ sigil zeta trace diff fd81e241 bcec7dc3 --stat
-prompts fd81e241 → bcec7dc3
-~ transcript_message  062c859f → 62194743
-~ transcript_message  4d546c00 → d96f59dc
-~ transcript_message  db8bcdec → de5b5b75
-~ transcript_message  556b9d30 → 02031c00
-~ user_objective      9de7c00c → e228df6f
-+ transcript_message  8c86697a  zeta.prompt_component.v1
-+ transcript_message  bdeaf1d9  {"content":[{"text":"\"\"\"Skill discovery and prompt…
-...
+$ sigil trace diff 0c56ad85 2fc6c722 --stat
+prompts 0c56ad85 → 2fc6c722
+~ user_message        e77d66bd → 40d33f4e
+~ assistant_message   b8e10d8a → 041d8af4
+~ tool_result         f925578e → 903d7161
++ assistant_message   c6026a19  README.md has 553 lines.
++ user_message        3868b48f  Run the automatic tool loop until no more tool calls are needed.
 = 3 unchanged
 ```
+
+These two prompts straddle a step boundary: the objective changed
+(`~ user_message`), and the previous step's exchange moved from
+current-turn components into the historical timeline tail — same
+messages, different component data — which is why the assistant message
+and tool result changed ids rather than disappearing.
 
 Drop `--stat` and changed components render as unified text diffs of
 their stored messages — the regression-hunting view when the same
@@ -54,14 +57,14 @@ from a transcript, from the graph — verifies it against the recorded
 payload hash, and resends it:
 
 ```text
-$ sigil zeta trace replay fd81e241
-prompt   fd81e241  payload verified
+$ sigil trace replay 13b60e1a
+prompt   13b60e1a  payload verified
 model    default -> local-model @ http://127.0.0.1:8080/v1/chat/completions
 
-original 254acd99
+original db5d29fd
 → bash
 
-replay   9113026c
+replay   02e5a395
 → bash
 ```
 
@@ -78,15 +81,18 @@ forward walk from the prompt shows the original answer and every replay
 side by side:
 
 ```text
-$ sigil zeta trace tree fd81e241 --down --depth 1
-fd81e241  prompt              8 components · ~9743 tok
+$ sigil trace tree 13b60e1a --down --depth 1
+13b60e1a  prompt              4 components · ~7761 tok
 ├─ SigilModelResponse:v1
-│  └─ 254acd99  assistant_message   → bash
+│  └─ db5d29fd  assistant_message   → bash
 ├─ SigilRunEvent:v1
-│  └─ f0069587  run_event           assistant_message
-...
-├─ SigilModelReplay:v1
-│  └─ 9113026c  assistant_message   → bash
+│  └─ 07c71b83  run_event           assistant_message
+├─ SigilRunEvent:v1
+│  └─ 5526e09a  run_event           tool_result
+├─ SigilTurnRecord:v1
+│  └─ 1dfb27c6  turn                sigil.turn.v1
+└─ SigilModelReplay:v1
+   └─ 02e5a395  assistant_message   → bash
 ```
 
 That closes the loop the design doc promises: "did the model fail

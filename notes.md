@@ -105,6 +105,40 @@ behavior:
   pty writes can block the shell mid-write and make signals appear
   lost. `InteractiveZsh.settle()` drains while waiting.
 
+## Done 2026-06-12: transcript_message removed, kinds reassert roles
+
+Prompt component kinds are role-derived everywhere — `user_message` /
+`assistant_message` / `tool_result` — for the timeline tail, the
+objective, and current-turn events alike. `transcript_message` is gone,
+and `user_objective` is renamed `user_message`, unifying the component
+kind with the timeline event type it rehydrates to.
+
+The kind was a hidden discriminator: three consumers read
+`transcript_message` as "replayed history, safe to compact". That
+meaning now lives in an explicit `historical: true` entry in component
+data, set only for timeline-tail components:
+
+- `components.py`: `timeline_message_components(events, *,
+  historical: bool)` replaces `default_kind`; kind always comes from
+  `message_component_kind` (ex `current_event_component_kind`),
+  fallback `user_message`.
+- `drop_oldest.py` (`without_oldest_historical_message`) and
+  `task_state_source_components` match the flag instead of the kind.
+  The stop-when-none-left behavior keeps protecting the objective and
+  the live turn.
+- `structural_trim.py` `should_trim`: "preserve current tool results"
+  is `not data["historical"]` — the old `kind == "tool_result"` test
+  only worked because historical tool results had a different kind;
+  kept as-was it would have disabled trimming entirely.
+- `timeline.py`: the `transcript_message` event-type fallback in
+  `normalize_source_event` is deleted (structured source events always
+  carry a type; `chat_message_event` types the rest).
+
+`docs/demos/trace-replay.md` is re-captured against a fresh session
+recorded with the new kinds (two `step --workflow do` turns against
+local llama.cpp); the walkthrough now also uses the current `sigil
+trace` command path instead of the removed `sigil zeta trace`.
+
 ## Display palette stance
 
 The display layer is unapologetically Rose Pine: `tty.py` hardcodes
@@ -680,3 +714,223 @@ Structural facts to build on:
 
 Graduation: "which session was I in when I asked about X last week" is
 answerable from the CLI without opening sqlite3 by hand.
+
+---
+
+# Roadmap: Codex / GPT-5.5 backend
+
+**Status (2026-06-12): steps 1–6 landed**; what remains is the live
+smoke run and the follow-ups below. Deviations from the plan as
+written: usage telemetry keeps OpenAI's full `input_tokens` (no
+cached-token subtraction — context display wants the full count); the
+static context table lives in `responses.py` next to its consumer,
+not in `profiles.py`; and `ModelTaskStateExtractor` still defaults to
+the env model, so task-state compaction under an active codex profile
+goes to the local endpoint (acceptable: compaction is a summarization
+side-channel; revisit with Q3).
+
+Follow-up, held back to avoid colliding with the components/timeline
+refactor in flight: the encrypted-reasoning round-trip is implemented
+and tested in the translator (`_responses_items` on the assistant
+message dict) but not yet engaged by the agent loop —
+`assistant_message_event` (`zeta/agent.py`) drops the field and
+`event_chat_message` (`zeta/timeline.py`) rebuilds messages without
+it, so Codex re-reasons at each tool step. Two small splices wire it:
+copy the field into the event, restore it onto the rebuilt message.
+Functionally correct today (call_id-only function_call items pass the
+backend's pairing validation); costs re-reasoning latency and cache
+hits.
+
+Make sigil a daily driver by letting the comma family run against
+Codex models (gpt-5.5 and friends) on a ChatGPT subscription, the way
+pi does it. Reference implementation: `earendil-works/pi` (ex
+`badlogic/pi-mono` — "aerendil" is Earendil, the company that acquired
+pi in April 2026; the Codex integration is theirs, not a fork's).
+Key files there: `packages/ai/src/providers/openai-codex-responses.ts`,
+`providers/openai-responses-shared.ts`, `utils/oauth/openai-codex.ts`.
+
+Anti-goal: the local-first default does not move. `ZETA_MODEL_URL`
+against llama.cpp stays the zero-config path; Codex is an explicit
+opt-in profile, and the roadmap's "hosted models" non-goal gets an
+amendment, not a deletion — per-event ambient inference stays local.
+
+## Observations
+
+Sigil today, the parts that matter:
+
+- One wire protocol, baked in: OpenAI chat-completions SSE over
+  stdlib urllib. Single entry `chat_completion_messages()`
+  (`zeta/model.py:612`) used by the agent loop (`zeta/agent.py:222`)
+  and trace replay (`cli/trace.py:438`); `chat_structured_output()`
+  (`model.py:707`) used by task-state compaction. Dispatching *inside*
+  these two functions upgrades all callers — replay against a Codex
+  profile included — without touching them.
+- The internal lingua franca is the chat-completions message dict
+  (`role`/`content`/`tool_calls`); the agent loop, timeline bridging,
+  and trace store all consume it. Keep it; translate at the edge.
+- The stream sink protocol (`content_delta`/`reasoning_delta`) and the
+  thinking-effort vocabulary already model what Codex needs; only the
+  wire names differ.
+- Profiles: `~/.zeta/models.toml` `{name, model, url, thinking}` →
+  `ModelSelection`; no auth field anywhere, no secret ever stored —
+  `model_selection_event()` records profile/model/url only.
+- Two llama.cpp-isms break on a hosted backend: `model_endpoint_open`
+  probes the URL for readiness, and `model_context_tokens` reads
+  `/props` / `/v1/models`. Codex needs a static context table
+  (gpt-5.5: 272k) and "ready" = credentials present and unexpired.
+
+What pi's integration actually is (verified against source):
+
+- Endpoint: `POST https://chatgpt.com/backend-api/codex/responses`,
+  SSE (`OpenAI-Beta: responses=experimental`). pi also has a
+  WebSocket transport with input-delta caching; ignore it for v1.
+- Request body: `model`, `stream: true`, `store: false` (the backend
+  *rejects* `store: true`), own system prompt in top-level
+  `instructions` with no system message in `input`,
+  `include: ["reasoning.encrypted_content"]`, `prompt_cache_key` =
+  session id, `reasoning: {effort, summary: "auto"}`, tools as
+  `{type: "function", name, description, parameters, strict: null}`.
+  Statelessness + `prompt_cache_key` means resending full context
+  every step — exactly sigil's current shape.
+- Headers: `Authorization: Bearer <access>`, `chatgpt-account-id`
+  (JWT claim `"https://api.openai.com/auth".chatgpt_account_id`),
+  `originator`, `session-id`.
+- Auth: ChatGPT OAuth, authorization-code + PKCE, client id
+  `app_EMoamEEZ73f0CkXaXp7hrann` (same as Codex CLI), callback
+  `localhost:1455`, refresh via `auth.openai.com/oauth/token`. pi
+  keeps its own `~/.pi/agent/auth.json` with file locking around
+  refresh; it does not reuse `~/.codex/auth.json`.
+- Streaming: Responses events map cleanly onto the sink —
+  `reasoning_summary_text.delta`/`reasoning_text.delta` →
+  `reasoning_delta`, `output_text.delta` → `content_delta`,
+  `function_call_arguments.delta/.done` → tool calls,
+  `response.completed` → usage (cached input tokens reported inside
+  `input_tokens`; subtract for telemetry), `response.failed`/`error`
+  → raised. Quota errors (`usage_limit_reached`) carry `resets_at` —
+  render the friendly "resets in ~N min" line, not a stack trace.
+- Reasoning round-trip: the full reasoning item (with
+  `encrypted_content`) comes back on `output_item.done`; pi stores it
+  opaquely on the message and replays it verbatim in the next
+  request's `input`. Function-call items carry `call_id|item_id`
+  pairs the backend validates.
+- **The risk that decides feasibility: `originator` is whitelisted.**
+  The backend 403s unknown originators; pi sends `originator: pi`
+  legitimately because OpenAI's *Codex for OSS* program approved it
+  (developers.openai.com/community/codex-for-oss). Sigil is not on
+  that list. The honest path is applying to the program; the
+  fallback is presenting as an approved client, which is ToS
+  territory I won't pick by default. This gates the transport stage,
+  not the seam stages — and `openai-responses` with an API key (open
+  question 4) is the same translator minus the gate.
+
+## Contract decisions (proposed)
+
+1. **A `zeta/models/` package is the seam (Remi, 2026-06-12).**
+   `zeta/model.py` and `zeta/models.py` merge into one package:
+   `profiles.py` (today's `models.py` — catalog, selection, the new
+   `api` field), `chat_completions.py` (today's `model.py` —
+   transport, SSE parser, accumulator), `responses.py` (the
+   translator and Codex transport), `codex_auth.py`. The package
+   root re-exports the public surface, and the entry points —
+   `chat_completion_messages` / `chat_structured_output` — dispatch
+   there on the profile's `api` field
+   (`api = "chat-completions" | "codex-responses"`, default the
+   former; absent field changes nothing). `ModelProfile`,
+   `ModelSelection`, and `AgentConfig` carry it. Callers import
+   from `zeta.models`; no compatibility shims. Still no provider
+   registry — two protocols is an `if`, not a framework.
+2. **Translate at the edge, keep the message dict.** A pure module
+   (`zeta/models/responses.py`) converts messages → Responses input items
+   and back. Reasoning items and Responses item ids ride opaquely on
+   the assistant message dict (e.g. `"_responses_items"`), so the
+   agent loop, timeline, and trace store stay protocol-blind. Within
+   one `run_agent_turn` loop the round-trip is exact; across sigil
+   turns v1 drops the encrypted reasoning (the model re-reasons;
+   correctness unaffected) — full persistence is a follow-up, see
+   open question 3.
+3. **Stdlib only, SSE only.** The transport reuses
+   `request_chat_completion`'s machinery: urllib, the existing SSE
+   parser, first-output/idle timeouts. No SDK, no WebSocket.
+4. **Secrets live in an auth store, never in models.toml and never
+   in events.** Proposal: v1 reads `~/.codex/auth.json` (the user
+   already runs Codex CLI; refresh with the shared client id, write
+   back under a lockfile). `sigil model login` PKCE flow only if
+   reuse proves brittle. `doctor`/`?` report auth state, never
+   tokens.
+
+## Work items (each step: tests → impl → docs → pre-commit)
+
+1. Package extraction, purely mechanical: `zeta/model.py` →
+   `zeta/models/chat_completions.py`, `zeta/models.py` →
+   `zeta/models/profiles.py`, public surface re-exported from
+   `zeta/models/__init__.py`; update every import (`agent.py`,
+   `agent_io.py`, `workflows/step.py`, `cli/trace.py`,
+   `prompt/compaction/task_state.py`, tests). No behavior change;
+   suite green before and after.
+2. Profile seam: `api` field parsed and validated in `profiles.py`,
+   threaded through `ModelSelection`/`AgentConfig` and workflow
+   call sites; entry-point dispatch in the package root; readiness
+   (`model_server_ready`, `ensure_server`, `model_endpoint_open`
+   call sites) and context probing dispatch on it (static table for
+   Codex). Behavior identical for existing profiles.
+3. `zeta/models/responses.py`, pure and offline-tested: message/
+   tool-spec/tool-result → input items (system → `instructions`),
+   Responses SSE event stream → sink calls + final message dict with
+   `tool_calls`, usage normalization (cached-token subtraction),
+   reasoning-item round-trip via the opaque field, error/quota
+   mapping. Table-driven tests from recorded pi/Codex event fixtures.
+4. Auth: `zeta/models/codex_auth.py` — read `~/.codex/auth.json`,
+   expiry check, refresh-with-lock, account id from the JWT. Tests
+   with synthetic auth files and a monkeypatched token endpoint.
+5. Transport: request builder (body + headers above, `originator:
+   zeta`, `prompt_cache_key` = sigil session id) wired into the
+   dispatch from step 2; structured output via Responses
+   `text.format` so task-state compaction works unchanged.
+   End-to-end against the real backend behind a manual smoke
+   script, not CI.
+6. Enablement: example profile in the README
+   (`name = "codex"`, `model = "gpt-5.5"`,
+   `api = "codex-responses"`, `thinking = "high"`), `sigil model
+   use codex`, status/doctor output, roadmap.md non-goal amendment,
+   originator note documenting whatever question 1 resolves to.
+
+Graduation: a full day driven through `,`/`,,`/`,,,` on gpt-5.5 —
+live thinking trace renders, tool calls execute, telemetry and ledger
+records land, `trace replay --model` works across both protocols —
+with the local default untouched and no secret anywhere in
+`~/.sigil` state or timeline events.
+
+## Open questions for Remi
+
+1. Originator: apply to Codex for OSS as `sigil` (free, public repo
+   required — sigil already is), and what do we do while the
+   application is pending? This blocks step 4 only.
+2. Auth posture: reuse `~/.codex/auth.json` (v1 proposal — zero new
+   flow, but we share a refresh token with Codex CLI and must not
+   corrupt its file) vs own `sigil model login` PKCE flow with a
+   separate store from day one?
+3. Reasoning persistence: is within-turn round-trip enough for v1,
+   or should assistant timeline events grow a field for raw
+   Responses items so cross-turn context keeps the encrypted
+   reasoning (better cache hits, no re-reasoning)?
+4. Should `api = "openai-responses"` (plain `OPENAI_API_KEY`,
+   api.openai.com) ship alongside? It is the same translator with
+   boring auth and no originator gate — a useful hedge if question 1
+   stalls, at API-token prices instead of the subscription.
+5. Thinking vocabulary: Codex models accept `xhigh`. Extend
+   `THINKING_EFFORTS` or map `high` → `xhigh` per-profile?
+
+### Resolved (Remi, 2026-06-12)
+
+1. Originator: `originator: zeta` (Remi). Application to Codex for
+   OSS in flight; one constant in the transport module either way.
+   The transport step is unblocked.
+6. **Default model is a profile flag; the env layer is gone (Remi,
+   2026-06-12).** `ZETA_MODEL_NAME`/`ZETA_MODEL_URL` are removed.
+   Resolution is session → `default = true` profile (`(config)`) →
+   builtin `local-model` @ 127.0.0.1:8080 (`(builtin)`); at most one
+   profile may claim the flag (extras get a diagnostic, first wins).
+   `check_endpoint` probes the resolved selection and defers codex
+   profiles to the `model:codex-auth` check. The timeouts and
+   `ZETA_MODEL_PATH` stay env vars — they tune the client, not the
+   model identity.

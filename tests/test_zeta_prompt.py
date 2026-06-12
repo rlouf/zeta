@@ -82,8 +82,8 @@ def test_zeta_prompt_builder_links_prompt_components() -> None:
     assert prompt is not None
     kinds = linked_kinds(store, prompt)
     assert "system_prompt" in kinds
-    assert "user_objective" in kinds
-    assert "transcript_message" in kinds
+    assert "user_message" in kinds
+    assert "assistant_message" in kinds
     assert "project_context" in kinds
     assert "tool_descriptor_set" in kinds
     assert "tool_result" in kinds
@@ -141,7 +141,7 @@ def test_zeta_prompt_reconstruction_treats_legacy_prompts_as_no_thinking() -> No
     message = {"role": "user", "content": "objective"}
     component_id = store.put_object(
         zeta_trace.Object(
-            kind="user_objective",
+            kind="user_message",
             schema="zeta.prompt_component.v1",
             data={"message": message},
         )
@@ -182,7 +182,7 @@ def test_zeta_prompt_request_reconstruction_flags_a_changed_component() -> None:
     store = zeta_trace.InMemoryStore()
     component_id = store.put_object(
         zeta_trace.Object(
-            kind="user_objective",
+            kind="user_message",
             schema="zeta.prompt_component.v1",
             data={"message": {"role": "user", "content": "objective"}},
         )
@@ -296,8 +296,9 @@ def test_zeta_prompt_components_prefix_order(
         "system_prompt",
         "tool_descriptor_set",
         "project_context",
-        "transcript_message",
+        "user_message",
     ]
+    assert components[3].data.get("historical") is True
 
 
 def test_zeta_prompt_builder_compaction_transform_preserves_source_links() -> None:
@@ -311,7 +312,7 @@ def test_zeta_prompt_builder_compaction_transform_preserves_source_links() -> No
             sources = [
                 component
                 for component in components
-                if component.kind == "transcript_message"
+                if component.data.get("historical")
             ]
             source_ids = tuple(
                 component.object_id
@@ -327,7 +328,7 @@ def test_zeta_prompt_builder_compaction_transform_preserves_source_links() -> No
             output: list[zeta_prompt.PromptComponent] = []
             inserted = False
             for component in components:
-                if component.kind != "transcript_message":
+                if not component.data.get("historical"):
                     output.append(component)
                     continue
                 if not inserted:
@@ -400,9 +401,7 @@ def test_zeta_task_state_transform_replaces_transcript_with_structured_state() -
     )
 
     assert len(extractor.components) == 3
-    assert all(
-        component.kind == "transcript_message" for component in extractor.components
-    )
+    assert all(component.data.get("historical") for component in extractor.components)
     contents = [str(message.get("content") or "") for message in prepared.messages]
     joined = "\n".join(contents)
     assert "Task state JSON:" in joined
@@ -476,7 +475,8 @@ def test_zeta_prompt_components_keep_source_events() -> None:
         for component in components
         if component.data.get("source_event", {}).get("type") == "tool_result"
     )
-    assert tool_component.kind == "transcript_message"
+    assert tool_component.kind == "tool_result"
+    assert tool_component.data.get("historical") is True
     assert tool_component.data["source_tool_name"] == "read"
     assert tool_component.data["source_event"]["tool_call_id"] == "call-read"
     assert tool_component.data["source_event"]["tool_name"] == "read"
@@ -533,7 +533,7 @@ def test_zeta_structural_trim_compacts_old_bulky_read_or_grep_tool_results(
     assert len(tool_messages) == 1
     stub = str(tool_messages[0]["content"])
     assert tool_messages[0]["tool_call_id"] == "call-read"
-    assert stub.startswith("[elided transcript_message ")
+    assert stub.startswith("[elided tool_result ")
     assert " re-run the original tool call to recover this content]" in stub
     assert "line 79" not in str(tool_messages[0]["content"])
     assert prepared.prompt_object_id is not None
@@ -576,20 +576,21 @@ def test_zeta_structural_trim_skips_non_read_grep_tool_results() -> None:
     assert prepared.prompt_object_id is not None
     prompt = store.get_object(prepared.prompt_object_id)
     assert prompt is not None
-    assert "transcript_message" in linked_kinds(store, prompt)
+    assert "tool_result" in linked_kinds(store, prompt)
     assert "compacted_context" not in linked_kinds(store, prompt)
 
 
 def test_zeta_structural_trim_default_is_late_safety_valve() -> None:
     transform = zeta_prompt.StructuralTrimPromptTransform()
     below = zeta_prompt.PromptComponent(
-        kind="transcript_message",
+        kind="tool_result",
         data={
+            "historical": True,
             "source_event": {
                 "type": "tool_result",
                 "tool_call_id": "call-below",
                 "tool_name": "read",
-            }
+            },
         },
         message={
             "role": "tool",
@@ -599,13 +600,14 @@ def test_zeta_structural_trim_default_is_late_safety_valve() -> None:
         object_id="sha256:below",
     )
     above = zeta_prompt.PromptComponent(
-        kind="transcript_message",
+        kind="tool_result",
         data={
+            "historical": True,
             "source_event": {
                 "type": "tool_result",
                 "tool_call_id": "call-above",
                 "tool_name": "read",
-            }
+            },
         },
         message={
             "role": "tool",
@@ -617,7 +619,7 @@ def test_zeta_structural_trim_default_is_late_safety_valve() -> None:
 
     trimmed = transform.apply([below, above])
 
-    assert trimmed[0].kind == "transcript_message"
+    assert trimmed[0].kind == "tool_result"
     assert trimmed[1].kind == "compacted_context"
 
 
@@ -664,8 +666,9 @@ def test_zeta_structural_trim_preserves_current_tool_results_by_default() -> Non
 def test_zeta_structural_trim_uses_source_event_without_message_json() -> None:
     raw_text = "invalid json but still bulky " * 20
     component = zeta_prompt.PromptComponent(
-        kind="transcript_message",
+        kind="tool_result",
         data={
+            "historical": True,
             "source_event": {
                 "type": "tool_result",
                 "tool_call_id": "call-structured",
@@ -675,7 +678,7 @@ def test_zeta_structural_trim_uses_source_event_without_message_json() -> None:
                     "content": [{"type": "text", "text": raw_text}],
                     "metadata": {"path": "structured.txt"},
                 },
-            }
+            },
         },
         message={
             "role": "tool",
@@ -693,7 +696,7 @@ def test_zeta_structural_trim_uses_source_event_without_message_json() -> None:
     assert trimmed.representation == "stub"
     assert trimmed.message is not None
     assert str(trimmed.message["content"]) == (
-        "[elided transcript_message 145~tok id=sha256:source "
+        "[elided tool_result 145~tok id=sha256:source "
         "— re-run the original tool call to recover this content]"
     )
 
@@ -985,8 +988,9 @@ def test_zeta_measure_counts_project_context_once() -> None:
 def test_zeta_structural_trim_works_without_trace_ids() -> None:
     raw_text = "bulky read output " * 20
     component = zeta_prompt.PromptComponent(
-        kind="transcript_message",
+        kind="tool_result",
         data={
+            "historical": True,
             "source_event": {
                 "type": "tool_result",
                 "tool_call_id": "call-untraced",
@@ -996,7 +1000,7 @@ def test_zeta_structural_trim_works_without_trace_ids() -> None:
                     "content": [{"type": "text", "text": raw_text}],
                     "metadata": {"path": "big.txt"},
                 },
-            }
+            },
         },
         message={
             "role": "tool",
@@ -1020,8 +1024,9 @@ def test_zeta_structural_trim_works_without_trace_ids() -> None:
 def test_zeta_structural_trim_embeds_trim_payload_in_component_data() -> None:
     raw_text = "line one\nline two\nbulky read output " * 10
     component = zeta_prompt.PromptComponent(
-        kind="transcript_message",
+        kind="tool_result",
         data={
+            "historical": True,
             "source_event": {
                 "type": "tool_result",
                 "tool_call_id": "call-read",
@@ -1031,7 +1036,7 @@ def test_zeta_structural_trim_embeds_trim_payload_in_component_data() -> None:
                     "content": [{"type": "text", "text": raw_text}],
                     "metadata": {"path": "big.txt"},
                 },
-            }
+            },
         },
         message={"role": "tool", "tool_call_id": "call-read", "content": raw_text},
         object_id="sha256:source",
@@ -1138,8 +1143,9 @@ def test_zeta_task_state_transform_keeps_newest_messages_verbatim() -> None:
 
 def test_zeta_task_state_extraction_input_omits_duplicate_source_event() -> None:
     component = zeta_prompt.PromptComponent(
-        kind="transcript_message",
+        kind="tool_result",
         data={
+            "historical": True,
             "source_event_type": "tool_result",
             "source_event_role": "",
             "source_event": {
@@ -1198,10 +1204,10 @@ def test_zeta_budget_threshold_escalates_until_under_budget() -> None:
             components: list[zeta_prompt.PromptComponent],
         ) -> list[zeta_prompt.PromptComponent]:
             self.calls.append(self.label)
-            transcript = [c for c in components if c.kind == "transcript_message"]
+            transcript = [c for c in components if c.data.get("historical")]
             keep = {id(c) for c in transcript[len(transcript) // 2 :]}
             return [
-                c for c in components if c.kind != "transcript_message" or id(c) in keep
+                c for c in components if not c.data.get("historical") or id(c) in keep
             ]
 
     components = big_transcript_components(8)
@@ -1235,7 +1241,7 @@ def test_zeta_budget_threshold_warns_when_still_over_budget(caplog) -> None:
     assert any("over budget" in record.getMessage() for record in caplog.records)
 
 
-def test_zeta_drop_oldest_removes_transcript_messages_until_budget() -> None:
+def test_zeta_drop_oldest_removes_historical_messages_until_budget() -> None:
     components = big_transcript_components(6)
     total = zeta_prompt.measure(components).total_tokens
     target = total - 150
@@ -1250,7 +1256,7 @@ def test_zeta_drop_oldest_removes_transcript_messages_until_budget() -> None:
     assert "message 0" not in joined
     assert "message 5" in joined
     assert any(c.kind == "system_prompt" for c in output)
-    assert any(c.kind == "user_objective" for c in output)
+    assert any(c.kind == "user_message" for c in output)
 
 
 def test_zeta_drop_oldest_drops_tool_results_with_their_call() -> None:

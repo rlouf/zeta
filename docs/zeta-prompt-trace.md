@@ -48,15 +48,20 @@ and ordered links to other objects.
 Examples:
 
 - `system_prompt`
-- `user_objective`
+- `user_message`
 - `project_context`
-- `transcript_message` for messages projected from the run timeline
 - `tool_descriptor_set`
 - `prompt`
 - `assistant_message`
 - `tool_call`
 - `tool_result`
 - transformed context objects such as `compacted_context` or `task_state`
+
+Message component kinds are role-derived everywhere: `user_message`,
+`assistant_message`, and `tool_result` name the objective, the replayed
+timeline tail, and the current turn alike. Timeline-tail components carry
+`historical: true` in their data; that flag — not the kind — is what marks
+them as compactable history.
 
 **Refs** are mutable names that point at object ids. They let us talk about
 things like the current prompt or current run head without pretending those
@@ -91,7 +96,7 @@ through the model boundary, and records the assistant message.
 
 ```text
   system_prompt
-  user_objective
+  user_message
   timeline_history
   tool_descriptors
         |
@@ -150,7 +155,7 @@ Turn 2
 ======
 
   system_prompt
-  user_objective
+  user_message
   timeline_history
   assistant_message A1
   tool_result R1
@@ -186,7 +191,7 @@ Turn 1
 ------
 
  system_prompt      \
- user_objective      \
+ user_message         \
  timeline_msg         +--> PromptBuilder --> prompt P1 --> ModelCall --> A1
  tool_descriptors    /          |                                      |
                             derivation:                                v
@@ -203,7 +208,7 @@ Turn 2
 ------
 
  system_prompt        \
- user_objective        \
+ user_message          \
  timeline_history       \
  assistant_message A1    +--> PromptBuilder --> prompt P2 --> ModelCall --> A2
  tool_result R1         /          |
@@ -364,14 +369,14 @@ components and verified by its stored hash.
 The graph is inspectable and exercisable from the CLI:
 
 ```text
-sigil zeta trace log
-sigil zeta trace show OBJECT_ID
-sigil zeta trace tree OBJECT_ID [--down]
-sigil zeta trace closure OBJECT_ID
-sigil zeta trace diff OLD_PROMPT NEW_PROMPT [--stat]
-sigil zeta trace replay PROMPT_ID [--model PROFILE] [--diff]
-sigil zeta trace refs
-sigil zeta trace prompts
+sigil trace log
+sigil trace show OBJECT_ID
+sigil trace tree OBJECT_ID [--down]
+sigil trace closure OBJECT_ID
+sigil trace diff OLD_PROMPT NEW_PROMPT [--stat]
+sigil trace replay PROMPT_ID [--model PROFILE] [--diff]
+sigil trace refs
+sigil trace prompts
 ```
 
 `trace diff` is the component-level comparison this design makes cheap:

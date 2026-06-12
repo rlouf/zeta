@@ -203,7 +203,7 @@ def replace_sources_with_task_state(
     return output
 
 
-# Newest transcript messages stay verbatim: the model needs the live exchange
+# Newest historical messages stay verbatim: the model needs the live exchange
 # word-for-word, not a summary of it.
 TASK_STATE_RECENCY_TAIL = 4
 
@@ -215,7 +215,7 @@ def task_state_source_components(
     matching = [
         component
         for component in components
-        if component.kind == "transcript_message" and component.message is not None
+        if component.data.get("historical") and component.message is not None
     ]
     return matching[:-TASK_STATE_RECENCY_TAIL]
 

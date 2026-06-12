@@ -396,7 +396,7 @@ def prompt_component_event(
     if not isinstance(message, dict):
         return {}
     event = chat_message_event(message)
-    if component.kind == "user_objective":
+    if component.kind == "user_message":
         event["type"] = "user_message"
     source_object_id = component.data.get("source_object_id")
     if isinstance(source_object_id, str) and source_object_id.startswith("sha256:"):
@@ -410,8 +410,6 @@ def normalize_source_event(event: dict[str, Any]) -> None:
     tool_name = event.pop("tool_name", None)
     if tool_name and not event.get("name"):
         event["name"] = tool_name
-    if not event.get("type"):
-        event["type"] = "transcript_message"
 
 
 def chat_message_event(message: dict[str, Any]) -> dict[str, Any]:

@@ -210,7 +210,7 @@ def record_turn_trace_object(
             )
             store.record_derivation(
                 Derivation(
-                    producer="SigilTurnRecord:v1",
+                    producer="TurnRecord",
                     output_id=turn_object_id,
                     input_ids=tuple(links),
                     params={

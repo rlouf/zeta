@@ -76,22 +76,22 @@ original answer and the replay chose the same `bash` tool call. Use
 
 ## 4. Replays are themselves traced
 
-The replay is recorded with a `SigilModelReplay:v1` derivation, so the
+The replay is recorded with a `ModelReplay` derivation, so the
 forward walk from the prompt shows the original answer and every replay
 side by side:
 
 ```text
 $ sigil trace tree 13b60e1a --down --depth 1
 13b60e1a  prompt              4 components · ~7761 tok
-├─ SigilModelResponse:v1
+├─ ModelResponse
 │  └─ db5d29fd  assistant_message   → bash
-├─ SigilRunEvent:v1
+├─ RunEvent
 │  └─ 07c71b83  run_event           assistant_message
-├─ SigilRunEvent:v1
+├─ RunEvent
 │  └─ 5526e09a  run_event           tool_result
-├─ SigilTurnRecord:v1
+├─ TurnRecord
 │  └─ 1dfb27c6  turn                sigil.turn.v1
-└─ SigilModelReplay:v1
+└─ ModelReplay
    └─ 02e5a395  assistant_message   → bash
 ```
 

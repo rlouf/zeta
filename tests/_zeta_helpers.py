@@ -278,7 +278,7 @@ def assert_tool_call_derivation(
     assert call_object.kind == "tool_call"
     assert call_object.links == (result.prompt_traces[0].assistant_message_object_id,)
     call_derivation = store.derivations_for_output(call_object_id)[0]
-    assert call_derivation.producer == "SigilToolCallProjection:v1"
+    assert call_derivation.producer == "ToolCallProjection"
     assert call_derivation.input_ids == call_object.links
 
 
@@ -292,7 +292,7 @@ def assert_tool_result_derivation(
     assert result_object.kind == "tool_result"
     assert result_object.links == (call_object_id,)
     result_derivation = store.derivations_for_output(result_object_id)[0]
-    assert result_derivation.producer == "SigilToolExecution:v1"
+    assert result_derivation.producer == "ToolExecution"
     assert result_derivation.input_ids == (call_object_id,)
 
 

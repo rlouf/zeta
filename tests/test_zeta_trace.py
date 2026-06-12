@@ -889,14 +889,14 @@ def narrative_log_store() -> tuple[zeta_trace.InMemoryStore, str, str, str]:
     )
     store.record_derivation(
         zeta_trace.Derivation(
-            producer="SigilPromptBuilder:v1",
+            producer="PromptBuilder",
             output_id=prompt_id,
             input_ids=(component_id,),
         )
     )
     store.record_derivation(
         zeta_trace.Derivation(
-            producer="SigilModelResponse:v1",
+            producer="ModelResponse",
             output_id=answer_id,
             input_ids=(prompt_id,),
         )
@@ -1014,7 +1014,7 @@ def test_sigil_zeta_trace_replay_records_a_traced_answer(monkeypatch) -> None:
     replays = [
         derivation
         for derivation in store.derivations_for_input(prompt_id)
-        if derivation.producer == "SigilModelReplay:v1"
+        if derivation.producer == "ModelReplay"
     ]
     assert len(replays) == 1
     replay_object = store.get_object(replays[0].output_id)
@@ -1155,9 +1155,9 @@ def test_sigil_zeta_trace_tree_walks_producers_by_default(monkeypatch) -> None:
     assert result.exit_code == 0
     lines = result.output.splitlines()
     assert lines[0].startswith(zeta_trace_short(answer_id))
-    assert "SigilModelResponse:v1" in result.output
+    assert "ModelResponse" in result.output
     assert zeta_trace_short(prompt_id) in result.output
-    assert "SigilPromptBuilder:v1" in result.output
+    assert "PromptBuilder" in result.output
     assert zeta_trace_short(component_id) in result.output
     assert "why did it fail?" in result.output
 
@@ -1171,9 +1171,9 @@ def test_sigil_zeta_trace_tree_walks_consumers_with_down(monkeypatch) -> None:
     assert result.exit_code == 0
     lines = result.output.splitlines()
     assert lines[0].startswith(zeta_trace_short(component_id))
-    assert "SigilPromptBuilder:v1" in result.output
+    assert "PromptBuilder" in result.output
     assert zeta_trace_short(prompt_id) in result.output
-    assert "SigilModelResponse:v1" in result.output
+    assert "ModelResponse" in result.output
     assert zeta_trace_short(answer_id) in result.output
 
 
@@ -1204,9 +1204,9 @@ def test_sigil_zeta_trace_show_renders_humans_first(monkeypatch) -> None:
     assert zeta_trace_short(component_id) in result.output
     assert "why did it fail?" in result.output
     assert "produced by" in result.output
-    assert "SigilPromptBuilder:v1" in result.output
+    assert "PromptBuilder" in result.output
     assert "consumed by" in result.output
-    assert "SigilModelResponse:v1" in result.output
+    assert "ModelResponse" in result.output
     assert zeta_trace_short(answer_id) in result.output
 
 

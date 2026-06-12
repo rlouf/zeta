@@ -116,7 +116,7 @@ class PromptBuilder:
             )
             store.record_derivation(
                 Derivation(
-                    producer="SigilModelResponse:v1",
+                    producer="ModelResponse",
                     output_id=assistant_id,
                     input_ids=(prepared.prompt_object_id,),
                     params={},
@@ -151,7 +151,7 @@ class PromptBuilder:
             )
             store.record_derivation(
                 Derivation(
-                    producer="SigilToolCallProjection:v1",
+                    producer="ToolCallProjection",
                     output_id=call_id,
                     input_ids=(source_id,),
                     params=tool_event_derivation_params(event),
@@ -188,7 +188,7 @@ class PromptBuilder:
             )
             store.record_derivation(
                 Derivation(
-                    producer="SigilToolExecution:v1",
+                    producer="ToolExecution",
                     output_id=result_id,
                     input_ids=(call_object_id,),
                     params=tool_event_derivation_params(result_event),
@@ -363,7 +363,7 @@ class PromptBuilder:
         )
         store.record_derivation(
             Derivation(
-                producer="SigilPromptBuilder:v1",
+                producer="PromptBuilder",
                 output_id=prompt_id,
                 input_ids=component_ids,
                 params={
@@ -460,7 +460,7 @@ def prompt_builder_params(
     prompts were built with thinking disabled, so absence means `"none"`.
     """
     for derivation in store.derivations_for_output(prompt_id):
-        if derivation.producer != "SigilPromptBuilder:v1":
+        if derivation.producer != "PromptBuilder":
             continue
         max_tokens = derivation.params.get("max_tokens")
         selected_model = derivation.params.get("selected_model")

@@ -2081,7 +2081,7 @@ def test_zeta_step_bridges_turn_record_into_trace_graph(monkeypatch) -> None:
     derivations = [
         derivation
         for derivation in store.derivations_for_input(prompt_object_id)
-        if derivation.producer == "SigilTurnRecord:v1"
+        if derivation.producer == "TurnRecord"
     ]
     assert [derivation.output_id for derivation in derivations] == [turn_object_id]
     assert derivations[0].params == {"workflow": "do", "outcome": "executed"}

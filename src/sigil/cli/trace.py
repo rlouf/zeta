@@ -428,7 +428,7 @@ def trace_replay(object_id: str, model_profile: str | None, diff_output: bool) -
     """Resend a stored prompt through the model boundary.
 
     The request is rebuilt from the prompt's linked components and the
-    new answer is recorded with a SigilModelReplay:v1 derivation, so
+    new answer is recorded with a ModelReplay derivation, so
     replays are themselves traced. OBJECT_ID accepts a ref name, full
     id, or unique prefix.
     """
@@ -481,7 +481,7 @@ def latest_model_answer(
     answer_ids = [
         derivation.output_id
         for derivation in store.derivations_for_input(prompt_id)
-        if derivation.producer == "SigilModelResponse:v1"
+        if derivation.producer == "ModelResponse"
     ]
     for answer_id in reversed(answer_ids):
         obj = store.get_object(answer_id)
@@ -520,7 +520,7 @@ def record_replay(
             )
             store.record_derivation(
                 Derivation(
-                    producer="SigilModelReplay:v1",
+                    producer="ModelReplay",
                     output_id=replay_id,
                     input_ids=(prompt_id,),
                     params={"profile": selection.profile, "model": selection.model},

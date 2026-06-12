@@ -161,7 +161,7 @@ def test_zeta_prompt_reconstruction_treats_legacy_prompts_as_no_thinking() -> No
     )
     store.record_derivation(
         zeta_trace.Derivation(
-            producer="SigilPromptBuilder:v1",
+            producer="PromptBuilder",
             output_id=prompt_id,
             input_ids=(component_id,),
             params={

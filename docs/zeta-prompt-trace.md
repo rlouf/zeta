@@ -30,8 +30,8 @@ The model answer is another object derived from that prompt.
 ```text
 prompt components --> prompt object --> assistant_message object
 
-derivation: SigilPromptBuilder:v1
-derivation: SigilModelResponse:v1
+derivation: PromptBuilder
+derivation: ModelResponse
 ```
 
 This graph is the central abstraction. Zeta session continuity points into the
@@ -82,10 +82,10 @@ name, input ids, and parameters.
 
 Examples:
 
-- `SigilPromptBuilder:v1` creates a `prompt` from component objects.
-- `SigilModelResponse:v1` creates an `assistant_message` from a prompt.
-- `SigilToolCallProjection:v1` projects a tool call from an assistant message.
-- `SigilToolExecution:v1` records a tool result from a tool call.
+- `PromptBuilder` creates a `prompt` from component objects.
+- `ModelResponse` creates an `assistant_message` from a prompt.
+- `ToolCallProjection` projects a tool call from an assistant message.
+- `ToolExecution` records a tool result from a tool call.
 - `PromptStructuralTrim:v1` or `PromptTaskStateExtractor:v1` can create
   transformed context components.
 
@@ -195,7 +195,7 @@ Turn 1
  timeline_msg         +--> PromptBuilder --> prompt P1 --> ModelCall --> A1
  tool_descriptors    /          |                                      |
                             derivation:                                v
-                         SigilPromptBuilder:v1                   tool_call C1
+                         PromptBuilder                   tool_call C1
                                                                         |
                                                                         v
                                                                     ToolCall
@@ -213,7 +213,7 @@ Turn 2
  assistant_message A1    +--> PromptBuilder --> prompt P2 --> ModelCall --> A2
  tool_result R1         /          |
  tool_descriptors      /      derivation:
-                         SigilPromptBuilder:v1
+                         PromptBuilder
 ```
 
 Each prompt points to the components used to build it. Each assistant message
@@ -384,6 +384,6 @@ identical component ids are unchanged by construction, so only changed
 components need a text diff. `trace replay` is prompt replay plus model
 replay: it rebuilds the payload from the linked components, verifies the
 stored hash, resends through the model boundary, and records the new
-answer with a `SigilModelReplay:v1` derivation — so a replay is itself a
+answer with a `ModelReplay` derivation — so a replay is itself a
 traced object, visible from `trace tree PROMPT_ID --down` next to the
 original answer.

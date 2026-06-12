@@ -55,7 +55,7 @@ def record_event(event: dict[str, Any]) -> dict[str, Any]:
             )
             store.record_derivation(
                 Derivation(
-                    producer="SigilRunEvent:v1",
+                    producer="RunEvent",
                     output_id=event_id,
                     input_ids=links,
                     params={"type": str(payload.get("type") or "")},

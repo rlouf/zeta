@@ -5,10 +5,13 @@ ledger Stages 1–3 are landed, the trace explorer has its plumbing,
 porcelain, and diff/replay (Stages A–C, graduated live), ask is folded
 into step, the zsh binding is owned end to end (pty harness, zero-fork
 spool, session-per-pty, raw glyph dispatch, `+` completion), and the
-public CLI exit codes are named constants. What remains: web tools
-(proposal below, open questions pending), the tool-contract CLI surface
-(proposal below), ledger Stage 4 (durable/global/portable), and explorer
-Stage D (cross-session scope, search).
+public CLI exit codes are named constants. Explorer Stage D
+(cross-session scope, `trace grep`) and ledger Stage 4 (cross-session
+`sigil log`, export/import bundles) are implemented on
+`worktree-ledger-stage-4-explorer-stage-d`, pending merge; the
+redaction/privacy item was dropped. What remains: web tools (proposal
+below, open questions pending) and the tool-contract CLI surface
+(proposal below).
 
 ## Decisions in force
 
@@ -138,6 +141,29 @@ data, set only for timeline-tail components:
 recorded with the new kinds (two `step --workflow do` turns against
 local llama.cpp); the walkthrough now also uses the current `sigil
 trace` command path instead of the removed `sigil zeta trace`.
+
+## Done 2026-06-12: ledger Stage 4 + explorer Stage D
+
+Implemented on `worktree-ledger-stage-4-explorer-stage-d` (six commits,
+pending merge into main — expect conflicts in `cli/trace.py`,
+`zeta/trace.py`, and this file):
+
+- Session-scoped trace stores (41fa08e): `--session ID` /
+  `--all-sessions` on the trace group; the store path is an explicit
+  parameter, and other sessions' stores open read-only.
+- `trace grep PATTERN [--kind K]` (bbdc51c): SQLite LIKE scan over
+  `data_json`; FTS5 deferred until real usage demands it.
+- Cross-session `sigil log` by default (6a962f7): the machine-wide
+  ledger is the universe, session scoping is a filter.
+- Portable ledger bundles (c9063d7): `sigil log export`/`import` —
+  the exported turn objects plus their graph closure in one
+  self-contained set (`src/sigil/bundle.py`).
+- Redaction/privacy (Stage 4 item 3) dropped (c1bbe66; Remi: really
+  hard to get right). A redaction pass — tombstone replace keeping
+  hash/links, `trace redact`, `[privacy] objectives = "hash"` — was
+  implemented and reverted before commit. If it returns, the open
+  problems are the verdict semantics around `payload_verified`, what
+  counts as the redactable unit, and where the policy config lives.
 
 ## Display palette stance
 
@@ -651,26 +677,9 @@ query surface (`sigil log` with filters, `blame`, `log show`, `?` v2
 with last/staged/today lines) and the `query_log` ask tool with cited
 turn ids. Both graduation checks hold: rotation loses no
 turn/effect/cost answer, and `, what did I delegate yesterday?`
-answers with checkable citations.
-
-## Stage 4 — Durable, global, portable
-
-1. Cross-session by default: `sigil log` queries the machine-wide
-   ledger; session scoping becomes a filter, not the universe (today
-   everything is fragmented per `SIGIL_SESSION_ID`).
-2. `sigil log export --since DATE` → portable bundle: the exported turn
-   objects plus their graph closure (`graph_closure` exists) — prompts,
-   components, tool results, effects in one self-contained set. Requires
-   the Stage 2 bridge; makes every explorer query work on an imported
-   bundle for free. The hinge to the trace-portability bet — the ledger
-   is the natural unit of exchange, not raw transcripts.
-3. Privacy policy as config, not accident: what is retained verbatim
-   (objectives? answers?) vs hash-only; a `redact` operation that holds
-   under the content-addressed model (replace blob, keep hash +
-   tombstone).
-
-Graduation: a bundle exported from one machine answers blame/show/saw
-queries on another, with redaction honored.
+answers with checkable citations. Stage 4 — cross-session by default,
+portable bundles, redaction dropped — is implemented on the worktree
+branch; see the Done section above.
 
 ---
 
@@ -686,7 +695,7 @@ shared with `log show`/`blame`), recency-ordered multi-kind `objects()`,
 the porcelain (`trace log|show|tree`, plain text, shared one-line
 renderers in `display/summarize.py`), and diff/replay (`trace diff`
 with `--stat`, `trace replay` with `--model`/`--diff`, replays recorded
-as `SigilModelReplay:v1` derivations; graduated live, walkthrough in
+as `ModelReplay` derivations; graduated live, walkthrough in
 `docs/demos/trace-replay.md`). Known caveat: when many components of
 the same kind change, kind-ordered diff pairing is positional — exact
 for the same-objective regression-hunt case the roadmap targets,
@@ -702,18 +711,8 @@ Structural facts to build on:
   the exact request is reconstructible from the component closure, which
   is what replay and diff consume.
 
-## Stage D — Scope: cross-session and search
-
-1. `--session ID` (and `--all-sessions` where it makes sense) on the
-   trace group. The store path becomes an explicit parameter
-   (`default_store(session_id=...)`), not ambient state. Read-only opens
-   of other sessions' stores.
-2. `trace grep PATTERN [--kind K]` — SQLite LIKE scan over `data_json`
-   first; upgrade to FTS5 only if real usage demands it, decided
-   together with the shared-index question, not separately.
-
-Graduation: "which session was I in when I asked about X last week" is
-answerable from the CLI without opening sqlite3 by hand.
+Stage D — session scoping and `trace grep` — is implemented on the
+worktree branch; see the Done section above.
 
 ---
 

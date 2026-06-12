@@ -1548,6 +1548,167 @@ def test_interactive_plus_exit_status_reaches_the_prompt() -> None:
 
 
 @pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
+def test_zsh_plus_completion_registered_after_compinit() -> None:
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp = Path(tmp_dir)
+        stub = make_stub(tmp)
+        result = run_shell_args(
+            ["zsh", "-f", "-ic"],
+            textwrap.dedent(
+                """\
+                autoload -Uz compinit
+                compinit -u
+                source src/sigil/bindings/sigil.zsh
+                print -- "comp=${_comps[+]}"
+                """
+            ),
+            tmp,
+            stub,
+        )
+        assert_success(result)
+        assert "comp=_sigil_plus" in result.stdout
+
+
+@pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
+def test_zsh_glyph_functions_remain_defined_for_highlighters() -> None:
+    # Syntax highlighters paint a line valid only when its command word
+    # resolves; the named functions are what keeps `, …` from showing red.
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp = Path(tmp_dir)
+        stub = make_stub(tmp)
+        result = run_shell(
+            "zsh",
+            textwrap.dedent(
+                """\
+                source src/sigil/bindings/sigil.zsh
+                print -- "comma=$+functions[,]"
+                print -- "comma2=$+functions[,,]"
+                print -- "comma3=$+functions[,,,]"
+                print -- "question=$+functions[?]"
+                """
+            ),
+            tmp,
+            stub,
+        )
+        assert_success(result)
+        assert "comma=1" in result.stdout
+        assert "comma2=1" in result.stdout
+        assert "comma3=1" in result.stdout
+        assert "question=1" in result.stdout
+
+
+@pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
+def test_interactive_plus_completes_like_the_underlying_command() -> None:
+    # `+ cat READM<TAB>` must complete the file argument as though the line
+    # started at `cat`.
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp = Path(tmp_dir)
+        stub = make_stub(tmp)
+        shell = InteractiveZsh(tmp, stub)
+        try:
+            shell.run("autoload -Uz compinit; compinit -u")
+            shell.run("source src/sigil/bindings/sigil.zsh")
+            shell.send("+ cat READM\t")
+            shell.expect("README.md")
+            shell.send_control("c")
+            shell.expect_prompt()
+            shell.exit()
+        finally:
+            shell.kill()
+
+
+PLUGIN_WRAPPER = """\
+fake_plugin_widget() {
+  print -r -- "plugin-ran" >> "$ZLE_LOG"
+  zle fake_plugin_orig_accept
+}
+zle -A accept-line fake_plugin_orig_accept
+zle -N accept-line fake_plugin_widget
+"""
+
+
+@pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
+@pytest.mark.parametrize("plugin_first", [True, False])
+def test_interactive_dispatch_chains_with_accept_line_wrappers(
+    plugin_first: bool,
+) -> None:
+    # Plugins like zsh-autosuggestions wrap accept-line too; whichever side
+    # is sourced last wins the widget and must delegate to the other.
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp = Path(tmp_dir)
+        stub = make_stub(tmp)
+        plugin = tmp / "plugin.zsh"
+        plugin.write_text(PLUGIN_WRAPPER, encoding="utf-8")
+        shell = InteractiveZsh(tmp, stub)
+        try:
+            if plugin_first:
+                shell.run(f"source {plugin}")
+                shell.run("source src/sigil/bindings/sigil.zsh")
+            else:
+                shell.run("source src/sigil/bindings/sigil.zsh")
+                shell.run(f"source {plugin}")
+            shell.sendline(", hello")
+            shell.expect("answer")
+            shell.expect_prompt()
+            shell.exit()
+        finally:
+            shell.kill()
+        assert read_log(tmp) == ["ask hello"]
+        assert "plugin-ran" in (tmp / "zle.log").read_text(encoding="utf-8")
+
+
+AUTOSUGGESTIONS = Path(
+    "/opt/homebrew/share/zsh-autosuggestions/zsh-autosuggestions.zsh"
+)
+SYNTAX_HIGHLIGHTING = Path(
+    "/opt/homebrew/share/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh"
+)
+
+
+@pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
+@pytest.mark.skipif(
+    not AUTOSUGGESTIONS.exists(), reason="zsh-autosuggestions is not installed"
+)
+def test_interactive_dispatch_survives_real_autosuggestions() -> None:
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp = Path(tmp_dir)
+        stub = make_stub(tmp)
+        shell = InteractiveZsh(tmp, stub)
+        try:
+            shell.run(f"source {AUTOSUGGESTIONS}")
+            shell.run("source src/sigil/bindings/sigil.zsh")
+            shell.sendline(", what's the deal")
+            shell.expect("answer")
+            shell.expect_prompt()
+            shell.exit()
+        finally:
+            shell.kill()
+        assert read_log(tmp) == ["ask what's the deal"]
+
+
+@pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
+@pytest.mark.skipif(
+    not SYNTAX_HIGHLIGHTING.exists(), reason="zsh-syntax-highlighting is not installed"
+)
+def test_interactive_dispatch_survives_real_syntax_highlighting() -> None:
+    # Per its README, zsh-syntax-highlighting must be sourced last.
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp = Path(tmp_dir)
+        stub = make_stub(tmp)
+        shell = InteractiveZsh(tmp, stub)
+        try:
+            shell.run("source src/sigil/bindings/sigil.zsh")
+            shell.run(f"source {SYNTAX_HIGHLIGHTING}")
+            shell.sendline(", what's the deal")
+            shell.expect("answer")
+            shell.expect_prompt()
+            shell.exit()
+        finally:
+            shell.kill()
+        assert read_log(tmp) == ["ask what's the deal"]
+
+
+@pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
 def test_interactive_harness_times_out_on_missing_marker() -> None:
     with tempfile.TemporaryDirectory() as tmp_dir:
         tmp = Path(tmp_dir)

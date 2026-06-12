@@ -322,6 +322,18 @@ if __sigil_glyphs_enabled; then
   alias '?'='noglob sigil_status'
 
   __sigil_install_glyph_dispatch_widget
+
+  # `+ cargo te<TAB>` completes like `cargo te<TAB>`: drop the glyph word
+  # and re-enter completion, the way sudo/nohup completions do. Needs
+  # compsys: sourced before compinit, `+` keeps default completion.
+  _sigil_plus() {
+    shift words
+    (( CURRENT-- ))
+    _normal
+  }
+  if (( ${+functions[compdef]} )); then
+    compdef _sigil_plus '+' 2>/dev/null || true
+  fi
 fi
 
 # ── zsh Command Lifecycle Hooks ──────────────────────────────────────────

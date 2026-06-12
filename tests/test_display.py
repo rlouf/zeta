@@ -15,7 +15,7 @@ from rich.panel import Panel
 
 import sigil.display.render as display_render
 import sigil.display.summarize as display_summarize
-from sigil.display.tty import MUTED, RESET
+from sigil.display.tty import IRIS, ITALIC, MUTED, RESET
 from sigil.protocols import (
     SHELL_HANDOFF_OUTCOME_CANCELLED,
     SHELL_HANDOFF_OUTCOME_EXECUTED,
@@ -363,7 +363,7 @@ def test_sigil_display_thinking_status_renders_reasoning_tail(monkeypatch) -> No
 
     text = output.getvalue()
     assert "  the user wants a summary\n" in text
-    assert "  so check the recent diff\n  thinking 0s" in text
+    assert "  so check the recent diff\n\n  thinking 0s" in text
 
 
 def test_sigil_display_thinking_status_tail_keeps_last_lines(monkeypatch) -> None:
@@ -379,7 +379,7 @@ def test_sigil_display_thinking_status_tail_keeps_last_lines(monkeypatch) -> Non
     text = output.getvalue()
     assert "step-1" not in text
     assert "step-5" not in text
-    assert "  step-6\n  step-7\n  step-8\n  thinking 0s" in text
+    assert "  step-6\n  step-7\n  step-8\n\n  thinking 0s" in text
 
 
 def test_sigil_display_thinking_status_truncates_long_reasoning_lines(
@@ -401,6 +401,17 @@ def test_sigil_display_thinking_status_truncates_long_reasoning_lines(
     ]
     assert rendered
     assert all(len(line.replace("\r\x1b[2K", "")) < 20 for line in rendered)
+
+
+def test_sigil_display_thinking_tail_renders_iris_italic(monkeypatch) -> None:
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    output = TtyBuffer()
+
+    with display_render.ThinkingStatus(output, interval=60, clock=lambda: 0.0) as s:
+        s.reasoning_delta("pondering")
+        s.refresh()
+
+    assert f"{ITALIC}{IRIS}  pondering{RESET}" in output.getvalue()
 
 
 def test_sigil_display_thinking_status_repaints_on_new_reasoning(monkeypatch) -> None:

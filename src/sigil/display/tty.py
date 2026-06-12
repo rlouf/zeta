@@ -7,6 +7,8 @@ from typing import TextIO
 
 MUTED = "\033[38;2;110;106;134m"
 LOVE = "\033[38;2;235;111;146m"
+IRIS = "\033[38;2;196;167;231m"
+ITALIC = "\033[3m"
 RESET = "\033[0m"
 
 
@@ -25,3 +27,10 @@ def muted(text: str, *, enabled: bool) -> str:
     if not enabled:
         return text
     return f"{MUTED}{text}{RESET}"
+
+
+def iris_italic(text: str, *, enabled: bool) -> str:
+    """Apply italic Rose Pine iris styling when color is enabled."""
+    if not enabled:
+        return text
+    return f"{ITALIC}{IRIS}{text}{RESET}"

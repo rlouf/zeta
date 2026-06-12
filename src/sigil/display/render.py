@@ -20,7 +20,7 @@ from rich.text import Text
 
 from ..zeta.prompt.budget import estimated_tokens_for_text
 from .summarize import short_trace_id, summarize, text_content, tool_result_summary
-from .tty import is_interactive, muted, should_color
+from .tty import iris_italic, is_interactive, muted, should_color
 
 TRACE_LABEL_WIDTH = 5
 THINKING_STATUS_INTERVAL_SECONDS = 1.0
@@ -581,8 +581,11 @@ class ThinkingStatus:
             detail = self.detail()
             if detail:
                 lines.append(muted(f"{' ' * self.left_padding}{detail}", enabled=color))
-        for tail_line in self.reasoning_tail():
-            lines.append(muted(tail_line, enabled=color))
+        tail = self.reasoning_tail()
+        for tail_line in tail:
+            lines.append(iris_italic(tail_line, enabled=color))
+        if tail:
+            lines.append("")
         lines.append(
             muted(thinking_status_text(seconds, self.left_padding), enabled=color)
         )

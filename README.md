@@ -232,15 +232,23 @@ Agent-step workflows are driven by the prompt text and the current shell session
 # 1. Ask what changed.
 , "summarize this repo state"
 
-# 2. Ask Zeta to pick the next shell step.
+# 2. Ask Zeta to pick the next shell step. The staged command lands in
+#    your prompt as an editable `+ …` line.
 ,, "run the focused tests for this change"
 
-# 3. Edit or run the staged shell command normally.
-uv run pytest tests/test_shell_bindings.py
+# 3. Press Enter on the staged line (edit it first if you like).
+#    Executing the staged command resumes the Zeta turn with the
+#    recorded result — no follow-up keystroke needed.
++ uv run pytest tests/test_shell_bindings.py
 
-# 4. Resume the Zeta turn with the recorded shell result.
+# 4. Any other command stays plain capture: explore as long as you
+#    want, then resume explicitly. Zeta sees everything you ran.
 ,,
 ```
+
+Only the staged command (whitespace changes and appended arguments
+included) triggers the automatic resume, and a Ctrl-C'd run never does.
+Set `SIGIL_AUTO_CONTINUE=0` to always resume by hand with a bare `,,`.
 
 Sigil keeps session state under `~/.sigil/` so Zeta can resume from recent
 ask turns, handoff timeline events, and command results recorded through `+`.

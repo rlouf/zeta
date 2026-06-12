@@ -177,6 +177,8 @@ __sigil_step_turn() {
       # The handoff file holds the staged command verbatim.
       command="$(<"$handoff_file")"
       if [[ -n "$command" ]]; then
+        # Running the staged command through `+` resumes this workflow.
+        typeset -g __sigil_resume_workflow="$workflow"
         __sigil_prompt_insert "$(__sigil_zeta_prompt_command "$command")"
       fi
     fi
@@ -222,12 +224,33 @@ sigil_status() {
 typeset -g __sigil_glyph_dispatch_widget_installed="${__sigil_glyph_dispatch_widget_installed:-0}"
 typeset -g __sigil_dispatch_text=""
 typeset -g __sigil_dispatch_line=""
+typeset -g __sigil_resume_workflow=""
 
 __sigil_run_plus_capture_command() {
   emulate -L zsh
   local command="${1:-}"
   [[ -n "$command" ]] || return 1
-  SIGIL_RUN_SHELL="${SIGIL_RUN_SHELL:-${SHELL:-zsh}}" "$__sigil_bin" run --shell "$command"
+  local run_status resume_file=""
+  local -a resume_args
+  resume_args=()
+  # Running the staged handoff command resumes the step that staged it.
+  # The CLI writes the marker only when this command matches the pending
+  # handoff, so unrelated `+` commands stay plain capture.
+  # SIGIL_AUTO_CONTINUE=0 opts out.
+  if [[ "${SIGIL_AUTO_CONTINUE:-1}" != "0" ]]; then
+    resume_file="$(mktemp "${TMPDIR:-/tmp}/sigil-resume.XXXXXX")" 2>/dev/null || resume_file=""
+    [[ -n "$resume_file" ]] && resume_args=(--resume-file "$resume_file")
+  fi
+  {
+    SIGIL_RUN_SHELL="${SIGIL_RUN_SHELL:-${SHELL:-zsh}}" "$__sigil_bin" run "${resume_args[@]}" --shell "$command"
+    run_status=$?
+    if [[ -n "$resume_file" && -s "$resume_file" ]]; then
+      __sigil_step_turn "${__sigil_resume_workflow:-propose}"
+    fi
+  } always {
+    [[ -n "$resume_file" ]] && rm -f "$resume_file"
+  }
+  return "$run_status"
 }
 
 __sigil_glyph_split() {

@@ -28,6 +28,7 @@ def make_stub(tmp: Path) -> Path:
               continue_step=0
               handoff_file=""
               objective=""
+              workflow=""
               argc=0
               while [ "$#" -gt 0 ]; do
                 case "$1" in
@@ -36,6 +37,7 @@ def make_stub(tmp: Path) -> Path:
                     shift 2
                     ;;
                   --workflow)
+                    workflow="$2"
                     shift 2
                     ;;
                   --continue)
@@ -53,7 +55,7 @@ def make_stub(tmp: Path) -> Path:
                 esac
               done
               if [ "$continue_step" = "1" ]; then
-                printf '%s\n' "step --continue argc=$argc" >> "$SIGIL_STUB_LOG"
+                printf '%s\n' "step --continue argc=$argc workflow=$workflow" >> "$SIGIL_STUB_LOG"
                 command="echo continued"
                 reason="Continue after shell handoff."
               else
@@ -73,6 +75,32 @@ def make_stub(tmp: Path) -> Path:
               fi
               exit 0
             fi
+            if [ "$1" = "run" ]; then
+              shift
+              resume_file=""
+              rest=""
+              while [ "$#" -gt 0 ]; do
+                case "$1" in
+                  --resume-file)
+                    resume_file="$2"
+                    shift 2
+                    ;;
+                  *)
+                    rest="$rest $1"
+                    shift
+                    ;;
+                esac
+              done
+              rest="${rest# }"
+              printf '%s\n' "run $rest" >> "$SIGIL_STUB_LOG"
+              if [ -n "$resume_file" ]; then
+                case "$rest" in
+                  *pytest*) printf '%s\n' "${rest#--shell }" > "$resume_file" ;;
+                esac
+              fi
+              printf '%s\n' "ran:$rest"
+              exit 0
+            fi
             printf '%s\n' "$*" >> "$SIGIL_STUB_LOG"
             case "$*" in
               "command draft executive summary") printf '%s\n' "stream command" ;;
@@ -80,7 +108,6 @@ def make_stub(tmp: Path) -> Path:
               "ask draft executive summary") printf '%s\n' "readonly stream answer" ;;
               "ask "*) printf '%s\n' "answer" ;;
               status*) printf '%s\n' "clean" ;;
-              run*) printf '%s\n' "ran:${*:2}" ;;
               *) printf '%s\n' "unexpected:$*" >&2; exit 64 ;;
             esac
             """
@@ -430,7 +457,7 @@ def test_zsh_bare_agent_step_continues_after_shell_handoff() -> None:
         assert_success(result)
         # argc=0: a bare continue passes no positional, not an empty string the
         # CLI has to know to ignore.
-        assert read_log(tmp) == ["step --continue argc=0"]
+        assert read_log(tmp) == ["step --continue argc=0 workflow=propose"]
         assert "(staged)" in result.stdout
         assert "Continue after shell handoff." not in result.stdout
         assert "history=+ echo continued" in result.stdout
@@ -1973,3 +2000,96 @@ def test_shell_harness_does_not_inherit_developer_environment(monkeypatch) -> No
         )
         assert result.returncode == 0
         assert result.stdout == "clean"
+
+
+def test_zsh_plus_staged_command_resumes_step() -> None:
+    # Running the staged handoff command through `+` chains straight into a
+    # continue step; the user does not type a bare `,,` afterwards.
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp = Path(tmp_dir)
+        stub = make_stub(tmp)
+        result = run_shell(
+            "zsh",
+            textwrap.dedent(
+                """\
+                source src/sigil/bindings/sigil.zsh
+                sigil_agent_step "repair it"
+                __sigil_run_plus_capture_command "uv run pytest"
+                """
+            ),
+            tmp,
+            stub,
+        )
+        assert_success(result)
+        assert read_log(tmp) == [
+            "step",
+            "run --shell uv run pytest",
+            "step --continue argc=0 workflow=propose",
+        ]
+
+
+def test_zsh_plus_staged_command_resumes_originating_workflow() -> None:
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp = Path(tmp_dir)
+        stub = make_stub(tmp)
+        result = run_shell(
+            "zsh",
+            textwrap.dedent(
+                """\
+                source src/sigil/bindings/sigil.zsh
+                sigil_agent_step_auto "repair it"
+                __sigil_run_plus_capture_command "uv run pytest"
+                """
+            ),
+            tmp,
+            stub,
+        )
+        assert_success(result)
+        assert read_log(tmp) == [
+            "step",
+            "run --shell uv run pytest",
+            "step --continue argc=0 workflow=do",
+        ]
+
+
+def test_zsh_plus_unrelated_command_does_not_resume() -> None:
+    # The CLI only writes the resume marker for the staged command, so a
+    # foreign `+` command stays plain capture and the handoff stays pending.
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp = Path(tmp_dir)
+        stub = make_stub(tmp)
+        result = run_shell(
+            "zsh",
+            textwrap.dedent(
+                """\
+                source src/sigil/bindings/sigil.zsh
+                sigil_agent_step "repair it"
+                __sigil_run_plus_capture_command "git status"
+                """
+            ),
+            tmp,
+            stub,
+        )
+        assert_success(result)
+        assert read_log(tmp) == ["step", "run --shell git status"]
+
+
+def test_zsh_plus_auto_continue_opt_out() -> None:
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp = Path(tmp_dir)
+        stub = make_stub(tmp)
+        result = run_shell(
+            "zsh",
+            textwrap.dedent(
+                """\
+                source src/sigil/bindings/sigil.zsh
+                export SIGIL_AUTO_CONTINUE=0
+                sigil_agent_step "repair it"
+                __sigil_run_plus_capture_command "uv run pytest"
+                """
+            ),
+            tmp,
+            stub,
+        )
+        assert_success(result)
+        assert read_log(tmp) == ["step", "run --shell uv run pytest"]

@@ -8,14 +8,18 @@ import subprocess
 import sys
 import threading
 import time
+from pathlib import Path
 from typing import BinaryIO, Protocol
 
 import click
 
+from ..handoff import matching_pending_handoff
 from ..session import record_turn
+from ..zeta.timeline import current_timeline
 from ._base import (
     EXIT_COMMAND_NOT_EXECUTABLE,
     EXIT_COMMAND_NOT_FOUND,
+    EXIT_INTERRUPTED,
     EXIT_SIGNAL_BASE,
     cli,
     examples,
@@ -69,8 +73,20 @@ class TailBuffer:
     is_flag=True,
     help="Run the remaining argument text through the configured shell.",
 )
+@click.option(
+    "--resume-file",
+    "resume_file",
+    type=click.Path(dir_okay=False, writable=True, path_type=Path),
+    hidden=True,
+    help="File that receives the command when this run resolves a shell handoff.",
+)
 @click.argument("argv", nargs=-1, type=click.UNPROCESSED)
-def cmd_run(ctx: click.Context, use_shell: bool, argv: tuple[str, ...]) -> int:
+def cmd_run(
+    ctx: click.Context,
+    use_shell: bool,
+    resume_file: Path | None,
+    argv: tuple[str, ...],
+) -> int:
     """Run one command, stream output live, and record output snippets.
 
     The `+` glyph calls this command. It streams stdout and stderr live,
@@ -146,7 +162,21 @@ def cmd_run(ctx: click.Context, use_shell: bool, argv: tuple[str, ...]) -> int:
         stderr_snippet=stderr_tail.text(),
         duration_ms=int((time.monotonic() - started) * 1000),
     )
+    write_handoff_resume(resume_file, command, status)
     ctx.exit(status)
+
+
+def write_handoff_resume(path: Path | None, command: str, status: int) -> None:
+    """Mark a resolved shell handoff so the binding can resume the step.
+
+    A SIGINT'd command never resumes: Ctrl-C is the user's abort gesture,
+    not a result to hand back to the model.
+    """
+    if path is None or status == EXIT_INTERRUPTED:
+        return
+    if not matching_pending_handoff(command, current_timeline()):
+        return
+    path.write_text(command + "\n", encoding="utf-8")
 
 
 def configured_capture_bytes() -> int:

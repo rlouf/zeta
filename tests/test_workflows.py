@@ -2344,3 +2344,137 @@ def test_model_server_ready_skips_probe_for_codex_api(monkeypatch) -> None:
     )
 
     assert agent_io.model_server_ready(selection) is True
+
+
+def test_command_matches_staged_ignores_whitespace_runs() -> None:
+    assert sigil_handoff.command_matches_staged("uv  run   pytest", "uv run pytest")
+
+
+def test_command_matches_staged_accepts_extended_arguments() -> None:
+    assert sigil_handoff.command_matches_staged("uv run pytest", "uv run pytest -q")
+
+
+def test_command_matches_staged_rejects_unrelated_command() -> None:
+    assert not sigil_handoff.command_matches_staged("uv run pytest", "git status")
+
+
+def test_command_matches_staged_rejects_empty_staged_command() -> None:
+    assert not sigil_handoff.command_matches_staged("", "git status")
+
+
+def staged_handoff_event(command: str) -> dict[str, Any]:
+    return {
+        "type": "tool_result",
+        "tool_call_id": "call-resume",
+        "name": "bash",
+        "result": {
+            "ok": True,
+            "handoff": {
+                "type": SHELL_PROMPT_HANDOFF_TYPE,
+                "command": command,
+                "reason": "Run it.",
+            },
+        },
+    }
+
+
+def test_matching_pending_handoff_returns_staged_handoff(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("SIGIL_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("SIGIL_SESSION_ID", "resume-test")
+    zeta_timeline.record_event(staged_handoff_event("uv run pytest"))
+
+    handoff = sigil_handoff.matching_pending_handoff(
+        "uv run pytest -q",
+        zeta_timeline.current_timeline(),
+    )
+
+    assert handoff["command"] == "uv run pytest"
+    assert handoff["tool_call_id"] == "call-resume"
+
+
+def test_matching_pending_handoff_ignores_unrelated_command(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("SIGIL_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("SIGIL_SESSION_ID", "resume-test")
+    zeta_timeline.record_event(staged_handoff_event("uv run pytest"))
+
+    handoff = sigil_handoff.matching_pending_handoff(
+        "git status",
+        zeta_timeline.current_timeline(),
+    )
+
+    assert handoff == {}
+
+
+def test_matching_pending_handoff_without_pending_handoff(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("SIGIL_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("SIGIL_SESSION_ID", "resume-test")
+
+    handoff = sigil_handoff.matching_pending_handoff(
+        "uv run pytest",
+        zeta_timeline.current_timeline(),
+    )
+
+    assert handoff == {}
+
+
+def test_sigil_run_writes_resume_file_for_staged_command(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("SIGIL_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("SIGIL_SESSION_ID", "resume-test")
+    zeta_timeline.record_event(staged_handoff_event("echo staged"))
+    resume_file = tmp_path / "resume"
+
+    result = CliRunner().invoke(
+        sigil_cli,
+        ["run", "--resume-file", str(resume_file), "--shell", "echo staged"],
+    )
+
+    assert result.exit_code == 0
+    assert resume_file.read_text(encoding="utf-8") == "echo staged\n"
+
+
+def test_sigil_run_leaves_resume_file_untouched_for_unrelated_command(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("SIGIL_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("SIGIL_SESSION_ID", "resume-test")
+    zeta_timeline.record_event(staged_handoff_event("echo staged"))
+    resume_file = tmp_path / "resume"
+
+    result = CliRunner().invoke(
+        sigil_cli,
+        ["run", "--resume-file", str(resume_file), "--shell", "echo other"],
+    )
+
+    assert result.exit_code == 0
+    assert not resume_file.exists()
+
+
+def test_sigil_run_skips_resume_for_interrupted_command(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("SIGIL_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("SIGIL_SESSION_ID", "resume-test")
+    zeta_timeline.record_event(staged_handoff_event("exit 130"))
+    resume_file = tmp_path / "resume"
+
+    result = CliRunner().invoke(
+        sigil_cli,
+        ["run", "--resume-file", str(resume_file), "--shell", "exit 130"],
+    )
+
+    assert result.exit_code == 130
+    assert not resume_file.exists()

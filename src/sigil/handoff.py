@@ -191,7 +191,15 @@ def first_matching_turn(
     expected: str,
     turns: list[dict[str, Any]],
 ) -> dict[str, Any] | None:
-    """Return the first shell turn that ran the handoff command, possibly edited.
+    """Return the first shell turn that ran the handoff command, possibly edited."""
+    for turn in turns:
+        if command_matches_staged(expected, str(turn.get("command") or "")):
+            return turn
+    return None
+
+
+def command_matches_staged(expected: str, command: str) -> bool:
+    """Return whether a command counts as executing the staged one.
 
     Whitespace differences never count as an edit, and a command the user
     extended with extra arguments still counts as executed rather than
@@ -199,14 +207,24 @@ def first_matching_turn(
     """
     normalized_expected = normalize_command(expected)
     if not normalized_expected:
-        return None
-    for turn in turns:
-        command = normalize_command(str(turn.get("command") or ""))
-        if command == normalized_expected:
-            return turn
-        if command.startswith(f"{normalized_expected} "):
-            return turn
-    return None
+        return False
+    normalized = normalize_command(command)
+    if normalized == normalized_expected:
+        return True
+    return normalized.startswith(f"{normalized_expected} ")
+
+
+def matching_pending_handoff(
+    command: str,
+    timeline: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Return the pending shell handoff that a just-run command resolves."""
+    handoff = latest_unresolved_shell_handoff(timeline)
+    if not handoff:
+        return {}
+    if not command_matches_staged(str(handoff.get("command") or ""), command):
+        return {}
+    return handoff
 
 
 def normalize_command(text: str) -> str:

@@ -382,7 +382,7 @@ sigil blame FILE
 sigil events [--limit N] [--json] [--raw]
 sigil session [show|path|list|clear|transcript] [--json]
 sigil model [list|use|show|clear]
-sigil trace [log|show|tree|closure|refs|prompts]  # ids accept refs and unique prefixes
+sigil trace [log|grep|show|tree|closure|refs|prompts]  # ids accept refs and unique prefixes
 sigil install [--install-dir DIR] [--rc FILE] [--glyphs|--no-glyphs]
 sigil doctor [--json]
 ```
@@ -460,9 +460,11 @@ sigil events
 sigil log reindex
 ```
 
-The ledger is the query surface over that record. `sigil log` lists the
-session's turns newest first (`--all-sessions` widens, `--touched PATH`,
-`--workflow`, `--since 2d`, `--failed`, and `--cost` narrow or enrich);
+The ledger is the query surface over that record. `sigil log` lists
+your turns across every session newest first, each line carrying its
+session id (`--session ID` narrows to one shell and drops the column;
+`--touched PATH`, `--workflow`, `--since 2d`, `--failed`, and `--cost`
+narrow or enrich);
 `sigil log show TURN` renders one turn in full — objective, contract,
 model, cost, effects with content hashes, and the prompt ids that feed
 `sigil trace show`. `sigil blame FILE` lists every turn that wrote
@@ -479,6 +481,19 @@ sigil log show 4f9d01c2
 ```
 
 `sigil events` stays the raw event view underneath all of this.
+
+The ledger is also the unit of exchange. `sigil log export` writes a
+self-contained JSON bundle — the matching turn and effect records plus
+each turn's full trace closure (prompts, components, tool results,
+with their derivations and `turn/<id>` refs) — and `sigil log import`
+restores it on another machine: records join the global event log (so
+they survive `log reindex`), objects land in per-session trace stores,
+and every query above answers there too. Re-importing is a no-op.
+
+```sh
+sigil log export --since 2026-06-01 -o week.json
+sigil log import week.json
+```
 
 The ask workflow can read the ledger too: `,` carries a read-only
 `query_log` tool, so `, what did I delegate yesterday?` answers from
@@ -518,6 +533,19 @@ sigil trace replay 4f9d01c2 --model fast --diff
 
 A worked walkthrough with real output lives in
 [docs/demos/trace-replay.md](docs/demos/trace-replay.md).
+
+None of this is locked to the current shell. `sigil trace --session ID
+…` reads another session's store (read-only — nothing you inspect can
+mutate it), `trace log --all-sessions` lists every recorded session's
+objects with the session id as a line prefix, and `trace grep PATTERN`
+searches object data — so "which session was I in when I asked about
+X last week" is one command:
+
+```sh
+sigil trace --session ttys004-8812 show 4f9d01c2
+sigil trace log --all-sessions
+sigil trace grep "rollback" --all-sessions
+```
 
 ## Project Scope
 

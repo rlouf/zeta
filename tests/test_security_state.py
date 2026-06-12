@@ -1511,6 +1511,18 @@ def test_session_dir_with_traversal_id_stays_inside_state_dir(
     assert session_dir().resolve().is_relative_to(sessions_root)
 
 
+def test_session_dir_with_explicit_traversal_id_stays_inside_state_dir() -> None:
+    sessions_root = (state_dir() / "sessions").resolve()
+    assert session_dir("../../escape").resolve().is_relative_to(sessions_root)
+
+
+def test_session_dir_with_explicit_id_ignores_session_dir_override(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("SIGIL_SESSION_DIR", "/tmp/elsewhere")
+    assert session_dir("other") == state_dir() / "sessions" / "other"
+
+
 def test_safe_session_id_is_used_verbatim(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("SIGIL_SESSION_ID", "ttys003-1234")
     assert session_id() == "ttys003-1234"

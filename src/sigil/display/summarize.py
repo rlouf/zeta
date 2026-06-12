@@ -233,14 +233,23 @@ def short_trace_id(object_id: str) -> str:
     return object_id.split(":", 1)[-1][:8]
 
 
-def format_turn_line(turn: dict[str, Any], *, show_cost: bool) -> str:
+def format_turn_line(
+    turn: dict[str, Any],
+    *,
+    show_cost: bool,
+    show_session: bool = False,
+) -> str:
     """Format one ledger turn as a log listing line."""
     turn_id = str(turn.get("turn_id") or "")[:8]
     when = format_turn_time(turn.get("time"))
     workflow = str(turn.get("workflow") or "?")
     outcome = str(turn.get("outcome") or "?")
+    session = f"{str(turn.get('session') or '?'):<12} " if show_session else ""
     objective = truncate(first_line(str(turn.get("objective") or "")), 72)
-    line = f"{turn_id:<8}  {when}  {workflow:<7} {outcome:<9} {objective}".rstrip()
+    line = (
+        f"{turn_id:<8}  {when}  {workflow:<7} {outcome:<9} "
+        f"{session}{objective}".rstrip()
+    )
     if show_cost:
         line += turn_cost_suffix(turn.get("cost"))
     return line

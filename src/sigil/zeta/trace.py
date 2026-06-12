@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol, cast
 
-from ..state import session_dir
+from ..state import session_dir, state_dir
 
 ObjectId = str
 DEFAULT_SQLITE_NAME = "zeta-trace.sqlite3"
@@ -98,6 +98,15 @@ class AmbiguousIdError(LookupError):
         self.candidates = candidates
 
 
+class UnknownSessionError(LookupError):
+    """A session id named no recorded trace store."""
+
+    def __init__(self, session_id: str, available: list[str]) -> None:
+        super().__init__(session_id)
+        self.session_id = session_id
+        self.available = available
+
+
 class Store(Protocol):
     """Storage API shared by in-memory and SQLite stores."""
 
@@ -116,6 +125,12 @@ class Store(Protocol):
     def refs(self) -> dict[str, ObjectId]: ...
     def objects(
         self, kind: str | tuple[str, ...] | None = None, limit: int | None = None
+    ) -> list[tuple[ObjectId, Object]]: ...
+    def search_objects(
+        self,
+        pattern: str,
+        kind: str | tuple[str, ...] | None = None,
+        limit: int | None = None,
     ) -> list[tuple[ObjectId, Object]]: ...
     def prompt_object_ids(self) -> list[ObjectId]: ...
     def stats(self) -> TraceStats: ...
@@ -149,11 +164,34 @@ def default_sqlite_path() -> Path:
     return session_dir() / DEFAULT_SQLITE_NAME
 
 
+def session_sqlite_path(session_id: str) -> Path:
+    """Return the trace SQLite path for a named session."""
+    return session_dir(session_id) / DEFAULT_SQLITE_NAME
+
+
+def available_session_ids() -> list[str]:
+    """Return the session ids that have a recorded trace store, sorted."""
+    sessions_root = state_dir() / "sessions"
+    return sorted(
+        path.parent.name for path in sessions_root.glob(f"*/{DEFAULT_SQLITE_NAME}")
+    )
+
+
 _DEFAULT_STORES: dict[Path, SqliteStore] = {}
 
 
-def default_store() -> SqliteStore:
-    """Return the process-wide store for the current session path."""
+def default_store(session_id: str | None = None) -> SqliteStore:
+    """Return the process-wide store for the current session path.
+
+    An explicit session id opens that session's store read-only and
+    uncached; a missing store raises UnknownSessionError with the
+    recorded session ids.
+    """
+    if session_id is not None:
+        path = session_sqlite_path(session_id)
+        if not path.exists():
+            raise UnknownSessionError(session_id, available_session_ids())
+        return SqliteStore(path, read_only=True)
     path = default_sqlite_path()
     store = _DEFAULT_STORES.get(path)
     if store is None:
@@ -212,6 +250,11 @@ def derivation_id(derivation: Derivation) -> str:
         canonical_json(derivation_payload(derivation)).encode()
     ).hexdigest()
     return f"derivation:{digest}"
+
+
+def escape_like(text: str) -> str:
+    """Escape SQLite LIKE wildcards so they match literally."""
+    return text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
 def canonical_json(value: Any) -> str:
@@ -299,6 +342,20 @@ class InMemoryStore(StoreBase):
         ]
         return listed if limit is None else listed[:limit]
 
+    def search_objects(
+        self,
+        pattern: str,
+        kind: str | tuple[str, ...] | None = None,
+        limit: int | None = None,
+    ) -> list[tuple[ObjectId, Object]]:
+        needle = pattern.lower()
+        listed = [
+            (object_id_value, obj)
+            for object_id_value, obj in self.objects(kind=kind)
+            if needle in canonical_json(obj.data).lower()
+        ]
+        return listed if limit is None else listed[:limit]
+
     def set_ref(self, name: str, object_id: ObjectId) -> None:
         self._refs[name] = object_id
 
@@ -363,16 +420,22 @@ def _derivation_from_row(row: sqlite3.Row) -> Derivation:
 class SqliteStore(StoreBase):
     """Synchronous SQLite trace store using the standard library."""
 
-    def __init__(self, path: Path) -> None:
+    def __init__(self, path: Path, *, read_only: bool = False) -> None:
         self.path = path
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.connection = sqlite3.connect(str(path))
+        self.read_only = read_only
+        if read_only:
+            self.connection = sqlite3.connect(f"{path.as_uri()}?mode=ro", uri=True)
+        else:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            self.connection = sqlite3.connect(str(path))
         self.connection.row_factory = sqlite3.Row
         self._write_lock = threading.RLock()
         self._batch_depth = 0
-        self.connection.execute("PRAGMA journal_mode=WAL")
+        if not read_only:
+            self.connection.execute("PRAGMA journal_mode=WAL")
         self.connection.execute("PRAGMA busy_timeout=5000")
-        self._init_schema()
+        if not read_only:
+            self._init_schema()
 
     @contextmanager
     def batch(self) -> Iterator[None]:
@@ -497,10 +560,9 @@ class SqliteStore(StoreBase):
         return _object_from_row(row)
 
     def object_ids_with_prefix(self, prefix: str, limit: int = 16) -> list[ObjectId]:
-        escaped = prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
         rows = self.connection.execute(
             r"SELECT id FROM objects WHERE id LIKE ? ESCAPE '\' ORDER BY id LIMIT ?",
-            (f"{escaped}%", limit),
+            (f"{escape_like(prefix)}%", limit),
         ).fetchall()
         return [str(row["id"]) for row in rows]
 
@@ -559,6 +621,87 @@ class SqliteStore(StoreBase):
         ).fetchall()
         return [_derivation_from_row(row) for row in rows]
 
+    def derivation_records_for_output(
+        self, output_id: ObjectId
+    ) -> list[dict[str, Any]]:
+        """Return raw derivation rows for an output, with id and created_at.
+
+        Exports need both fields to rebuild recency ordering elsewhere;
+        the Derivation dataclass deliberately carries neither.
+        """
+        rows = self.connection.execute(
+            """
+            SELECT id, producer, output_id, input_ids_json, params_json, created_at
+            FROM derivations
+            WHERE output_id = ?
+            ORDER BY created_at, id
+            """,
+            (output_id,),
+        ).fetchall()
+        return [
+            {
+                "id": str(row["id"]),
+                "producer": str(row["producer"]),
+                "output_id": str(row["output_id"]),
+                "input_ids": json.loads(str(row["input_ids_json"])),
+                "params": json.loads(str(row["params_json"])),
+                "created_at": float(row["created_at"]),
+            }
+            for row in rows
+        ]
+
+    def import_object(self, object_id_value: ObjectId, obj: Object) -> None:
+        """Insert an object under an exported id instead of recomputing it.
+
+        Trusting the exported id keeps links and refs exact even if
+        hashing rules ever differ between the exporting and importing
+        versions.
+        """
+        stored = normalize_object(obj)
+        with self._write_lock:
+            self.connection.execute(
+                """
+                INSERT OR IGNORE INTO objects
+                  (id, kind, schema, data_json, links_json)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    object_id_value,
+                    stored.kind,
+                    stored.schema,
+                    canonical_json(stored.data),
+                    canonical_json(list(stored.links)),
+                ),
+            )
+            self._commit()
+
+    def import_derivation(
+        self,
+        derivation_id_value: str,
+        derivation: Derivation,
+        created_at: float,
+    ) -> None:
+        """Insert an exported derivation, preserving its original timestamp."""
+        stored = normalize_derivation(derivation)
+        with self._write_lock:
+            self.connection.execute(
+                """
+                INSERT OR IGNORE INTO derivations
+                  (id, producer, output_id, input_ids_json, params_json, created_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    derivation_id_value,
+                    stored.producer,
+                    stored.output_id,
+                    canonical_json(list(stored.input_ids)),
+                    canonical_json(stored.params),
+                    created_at,
+                ),
+            )
+            self._index_derivation_inputs(derivation_id_value, stored.input_ids)
+            self._commit()
+
     def derivations_for_input(self, input_id: ObjectId) -> list[Derivation]:
         rows = self.connection.execute(
             """
@@ -584,13 +727,34 @@ class SqliteStore(StoreBase):
     def objects(
         self, kind: str | tuple[str, ...] | None = None, limit: int | None = None
     ) -> list[tuple[ObjectId, Object]]:
+        return self._list_objects(kind=kind, limit=limit)
+
+    def search_objects(
+        self,
+        pattern: str,
+        kind: str | tuple[str, ...] | None = None,
+        limit: int | None = None,
+    ) -> list[tuple[ObjectId, Object]]:
+        return self._list_objects(kind=kind, limit=limit, pattern=pattern)
+
+    def _list_objects(
+        self,
+        *,
+        kind: str | tuple[str, ...] | None,
+        limit: int | None,
+        pattern: str | None = None,
+    ) -> list[tuple[ObjectId, Object]]:
         kinds = (kind,) if isinstance(kind, str) else kind
-        kind_filter = ""
+        clauses: list[str] = []
         params: list[Any] = []
         if kinds is not None:
             placeholders = ", ".join("?" for _ in kinds)
-            kind_filter = f"WHERE objects.kind IN ({placeholders})"
+            clauses.append(f"objects.kind IN ({placeholders})")
             params.extend(kinds)
+        if pattern is not None:
+            clauses.append(r"objects.data_json LIKE ? ESCAPE '\'")
+            params.append(f"%{escape_like(pattern)}%")
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
         limit_clause = "LIMIT ?" if limit is not None else ""
         if limit is not None:
             params.append(limit)
@@ -600,7 +764,7 @@ class SqliteStore(StoreBase):
                    objects.data_json, objects.links_json
             FROM objects
             LEFT JOIN derivations ON derivations.output_id = objects.id
-            {kind_filter}
+            {where}
             GROUP BY objects.id
             ORDER BY COALESCE(MAX(derivations.created_at), 0) DESC, objects.id DESC
             {limit_clause}

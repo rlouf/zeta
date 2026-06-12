@@ -29,25 +29,36 @@ def state_dir() -> Path:
     return Path.home() / ".sigil"
 
 
-def session_id() -> str:
-    """Return the current shell session identifier.
+def safe_session_id(raw: str) -> str:
+    """Map a raw session id onto a safe path component.
 
     The id becomes a path component under the state directory, so values
     that could escape it (separators, `..`, control characters) map to a
     deterministic digest instead of being used verbatim.
     """
-    raw = os.environ.get("SIGIL_SESSION_ID") or "default"
     if SESSION_ID_PATTERN.fullmatch(raw) and raw not in {".", ".."}:
         return raw
     return "unsafe-" + hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
 
 
-def session_dir() -> Path:
-    """Return the directory that stores continuity for this shell session."""
-    base = os.environ.get("SIGIL_SESSION_DIR")
-    if base:
-        return Path(base)
-    return state_dir() / "sessions" / session_id()
+def session_id() -> str:
+    """Return the current shell session identifier."""
+    return safe_session_id(os.environ.get("SIGIL_SESSION_ID") or "default")
+
+
+def session_dir(session_id: str | None = None) -> Path:
+    """Return the directory that stores continuity for one shell session.
+
+    Without an explicit id this is the current session, honoring the
+    `SIGIL_SESSION_DIR` override. An explicit id names another session
+    under the state directory; the override never applies to it.
+    """
+    if session_id is None:
+        base = os.environ.get("SIGIL_SESSION_DIR")
+        if base:
+            return Path(base)
+    raw = session_id or os.environ.get("SIGIL_SESSION_ID") or "default"
+    return state_dir() / "sessions" / safe_session_id(raw)
 
 
 def append_jsonl_line(path: Path, payload: dict[str, Any]) -> None:

@@ -1248,6 +1248,112 @@ def test_interactive_commands_recorded_in_order_with_status() -> None:
         assert calls[1]["status"] == "1"
 
 
+def interactive_session_vars(shell: InteractiveZsh) -> dict[str, str]:
+    # The markers are split in the sent line so the input echo cannot match
+    # the expects; only the printed output contains the joined forms.
+    shell.run("source src/sigil/bindings/sigil.zsh")
+    shell.sendline('print -- "si""d=${SIGIL_SESSION_ID}@tt""y=${SIGIL_SESSION_TTY}@"')
+    shell.expect("sid=")
+    start = shell.scanned
+    shell.expect("@tty=")
+    sid = shell.output[start : shell.scanned - len("@tty=")]
+    start = shell.scanned
+    shell.expect("@")
+    tty = shell.output[start : shell.scanned - 1]
+    shell.expect_prompt()
+    return {"sid": sid, "tty": tty}
+
+
+@pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
+def test_interactive_session_id_regenerates_on_foreign_tty() -> None:
+    # The tmux server propagates one shell's exported pair to every pane; an
+    # inherited id whose recorded tty is not this pty must not be reused.
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp = Path(tmp_dir)
+        stub = make_stub(tmp)
+        shell = InteractiveZsh(
+            tmp,
+            stub,
+            env={
+                "SIGIL_SESSION_ID": "stale-pane-id",
+                "SIGIL_SESSION_TTY": "/dev/ttyFAKE0",
+            },
+        )
+        try:
+            values = interactive_session_vars(shell)
+            shell.exit()
+        finally:
+            shell.kill()
+        assert values["sid"] != "stale-pane-id"
+        assert values["sid"]
+        assert values["tty"] != "/dev/ttyFAKE0"
+
+
+@pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
+def test_interactive_session_id_kept_on_same_tty() -> None:
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp = Path(tmp_dir)
+        stub = make_stub(tmp)
+        shell = InteractiveZsh(tmp, stub)
+        try:
+            shell.run('export SIGIL_SESSION_TTY="$TTY"')
+            shell.run("export SIGIL_SESSION_ID=keep-me")
+            values = interactive_session_vars(shell)
+            shell.exit()
+        finally:
+            shell.kill()
+        assert values["sid"] == "keep-me"
+
+
+@pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
+def test_interactive_session_id_kept_without_recorded_tty() -> None:
+    # An id set without a recorded tty is a deliberate override (tests, user
+    # config) and survives sourcing.
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp = Path(tmp_dir)
+        stub = make_stub(tmp)
+        shell = InteractiveZsh(tmp, stub)
+        try:
+            values = interactive_session_vars(shell)
+            shell.exit()
+        finally:
+            shell.kill()
+        assert values["sid"] == "shell-test"
+        assert values["tty"]
+
+
+@pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
+def test_interactive_two_ptys_get_distinct_sessions() -> None:
+    # The tmux scenario end to end: pane B inherits pane A's exported pair
+    # and must end up in its own session.
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp = Path(tmp_dir)
+        stub = make_stub(tmp)
+        first = InteractiveZsh(tmp, stub, env={"SIGIL_SESSION_ID": ""})
+        try:
+            first_values = interactive_session_vars(first)
+            second = InteractiveZsh(
+                tmp,
+                stub,
+                env={
+                    "SIGIL_SESSION_ID": first_values["sid"],
+                    "SIGIL_SESSION_TTY": first_values["tty"],
+                },
+            )
+            try:
+                second_values = interactive_session_vars(second)
+                second.exit()
+            finally:
+                second.kill()
+            first.exit()
+        finally:
+            first.kill()
+        assert first_values["sid"]
+        assert second_values["sid"]
+        assert second_values["sid"] != first_values["sid"]
+        assert second_values["tty"] != first_values["tty"]
+
+
 @pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
 def test_interactive_harness_times_out_on_missing_marker() -> None:
     with tempfile.TemporaryDirectory() as tmp_dir:

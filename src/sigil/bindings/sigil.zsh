@@ -27,6 +27,16 @@ zmodload zsh/datetime 2>/dev/null
 # generated once per shell process and inherited by subprocesses so CLI calls from
 # the same terminal window write to the same session directory. EPOCHREALTIME
 # plus the pid is unique without forking uuidgen.
+#
+# The id is only valid on the pty that created it: tmux servers and nested
+# terminals propagate exported variables across panes, so an inherited id
+# whose recorded tty is not this shell's tty is regenerated. Same-pty
+# subshells keep continuity; an id inherited without a recorded tty is a
+# deliberate override and is kept.
+if [[ -n "${SIGIL_SESSION_ID:-}" && -n "${SIGIL_SESSION_TTY:-}" \
+      && -n "${TTY:-}" && "${SIGIL_SESSION_TTY}" != "${TTY}" ]]; then
+  unset SIGIL_SESSION_ID
+fi
 if [[ -z "${SIGIL_SESSION_ID:-}" ]]; then
   if [[ -n "${EPOCHREALTIME:-}" ]]; then
     export SIGIL_SESSION_ID="${EPOCHREALTIME/./-}-$$"
@@ -35,6 +45,9 @@ if [[ -z "${SIGIL_SESSION_ID:-}" ]]; then
     export SIGIL_SESSION_ID="${__sigil_session_tty:t}-$$"
     unset __sigil_session_tty
   fi
+fi
+if [[ -n "${TTY:-}" ]]; then
+  export SIGIL_SESSION_TTY="$TTY"
 fi
 
 # ── Prompt And History Helpers ───────────────────────────────────────────

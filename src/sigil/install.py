@@ -319,6 +319,42 @@ def check_shell_binding_loaded(env: dict[str, str] | None = None) -> DoctorCheck
     )
 
 
+def current_tty() -> str | None:
+    """Return the controlling terminal's device path, if any."""
+    for fd in (0, 1, 2):
+        try:
+            if os.isatty(fd):
+                return os.ttyname(fd)
+        except OSError:
+            continue
+    return None
+
+
+def check_session_tty(env: dict[str, str] | None = None) -> DoctorCheck:
+    """Check that the inherited session id was created on this terminal.
+
+    The binding regenerates an id whose recorded tty is foreign, so a
+    mismatch surviving to doctor means a stale binding or an environment
+    that crossed terminals without re-sourcing (tmux server, nested shells).
+    """
+    values = env if env is not None else os.environ
+    session = values.get("SIGIL_SESSION_ID")
+    recorded = values.get("SIGIL_SESSION_TTY")
+    if not session or not recorded:
+        return DoctorCheck("shell:session-tty", "ok", "no recorded session tty")
+    tty = current_tty()
+    if not tty:
+        return DoctorCheck("shell:session-tty", "ok", "no controlling terminal")
+    if recorded == tty:
+        return DoctorCheck("shell:session-tty", "ok", f"session bound to {tty}")
+    return DoctorCheck(
+        "shell:session-tty",
+        "warn",
+        f"session {session} was created on {recorded}; this terminal is {tty}",
+        "Re-source the Sigil binding or restart the shell.",
+    )
+
+
 def check_glyphs_enabled(env: dict[str, str] | None = None) -> DoctorCheck:
     """Check whether glyph functions are enabled for the loaded binding."""
     values = env if env is not None else os.environ
@@ -348,6 +384,7 @@ def doctor_checks() -> list[DoctorCheck]:
         check_shell_binding_installed(),
         check_shell_binding_loaded(),
         check_glyphs_enabled(),
+        check_session_tty(),
         check_shell_support(detect_shell()),
         check_state_writable(),
     ]

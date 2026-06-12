@@ -17,6 +17,7 @@ from sigil.cli import cli, main
 from sigil.install import (
     DoctorCheck,
     check_endpoint,
+    check_session_tty,
     doctor_checks,
     install_zsh_binding,
 )
@@ -124,7 +125,46 @@ def test_doctor_reports_expected_checks() -> None:
     assert "shell:binding-installed" in names
     assert "shell:binding-loaded" in names
     assert "shell:glyphs-enabled" in names
+    assert "shell:session-tty" in names
     assert all(check.status == "ok" for check in checks)
+
+
+def test_check_session_tty_warns_when_session_came_from_another_tty() -> None:
+    env = {
+        "SIGIL_SESSION_ID": "pane-a-id",
+        "SIGIL_SESSION_TTY": "/dev/ttyFAKE0",
+    }
+    with patch("sigil.install.current_tty", return_value="/dev/ttys001"):
+        check = check_session_tty(env)
+    assert check.status == "warn"
+    assert "pane-a-id" in check.detail
+    assert "/dev/ttyFAKE0" in check.detail
+    assert "/dev/ttys001" in check.detail
+
+
+def test_check_session_tty_ok_on_matching_tty() -> None:
+    env = {
+        "SIGIL_SESSION_ID": "pane-a-id",
+        "SIGIL_SESSION_TTY": "/dev/ttys001",
+    }
+    with patch("sigil.install.current_tty", return_value="/dev/ttys001"):
+        check = check_session_tty(env)
+    assert check.status == "ok"
+
+
+def test_check_session_tty_ok_without_recorded_tty() -> None:
+    check = check_session_tty({"SIGIL_SESSION_ID": "manual-id"})
+    assert check.status == "ok"
+
+
+def test_check_session_tty_ok_without_controlling_terminal() -> None:
+    env = {
+        "SIGIL_SESSION_ID": "pane-a-id",
+        "SIGIL_SESSION_TTY": "/dev/ttys001",
+    }
+    with patch("sigil.install.current_tty", return_value=None):
+        check = check_session_tty(env)
+    assert check.status == "ok"
 
 
 def test_doctor_reports_disabled_glyphs() -> None:

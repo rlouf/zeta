@@ -212,6 +212,115 @@ def run_shell_pty(
     )
 
 
+class InteractiveZsh:
+    """Drive one interactive zsh over a pty: send lines, await markers.
+
+    The prompt is set to a sentinel after spawn so tests can wait for "the
+    shell is back at the prompt" instead of sleeping. The sentinel is split
+    when sent so the echoed assignment never matches an expect() for it.
+    """
+
+    PROMPT = "SIGIL_PTY_PROMPT> "
+
+    def __init__(
+        self,
+        tmp: Path,
+        stub: Path,
+        env: dict[str, str] | None = None,
+    ) -> None:
+        full_env = shell_env(tmp, stub)
+        if env:
+            full_env.update(env)
+        self.pid, self.fd = pty.fork()
+        if self.pid == 0:
+            os.chdir(ROOT)
+            os.environ.clear()
+            os.environ.update(full_env)
+            os.execlp("zsh", "zsh", "-f", "-i")
+        self.output = ""
+        self.scanned = 0
+        self.closed = False
+        head, tail = self.PROMPT[:5], self.PROMPT[5:]
+        self.sendline(f"PS1='{head}''{tail}'; RPS1=''")
+        self.expect_prompt()
+
+    def send(self, data: str) -> None:
+        os.write(self.fd, data.encode())
+
+    def sendline(self, line: str) -> None:
+        self.send(line + "\n")
+
+    def send_control(self, letter: str) -> None:
+        self.send(chr(ord(letter.upper()) - ord("A") + 1))
+
+    def expect(self, needle: str, timeout_seconds: float = 30.0) -> None:
+        """Consume output until ``needle`` appears past the last match."""
+        deadline = time.monotonic() + timeout_seconds
+        while True:
+            found = self.output.find(needle, self.scanned)
+            if found != -1:
+                self.scanned = found + len(needle)
+                return
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                self.kill()
+                raise TimeoutError(
+                    f"never saw {needle!r}; output so far:\n{self.output}"
+                )
+            ready, _, _ = select.select([self.fd], [], [], min(remaining, 1.0))
+            if not ready:
+                continue
+            try:
+                chunk = os.read(self.fd, 4096)
+            except OSError as exc:
+                if exc.errno == errno.EIO:
+                    raise TimeoutError(
+                        f"shell exited before {needle!r}; output:\n{self.output}"
+                    ) from exc
+                raise
+            if not chunk:
+                raise TimeoutError(
+                    f"shell exited before {needle!r}; output:\n{self.output}"
+                )
+            self.output += chunk.decode(errors="replace")
+
+    def expect_prompt(self, timeout_seconds: float = 30.0) -> None:
+        self.expect(self.PROMPT, timeout_seconds)
+
+    def run(self, line: str, timeout_seconds: float = 30.0) -> None:
+        """Send one line and wait for the next prompt."""
+        self.sendline(line)
+        self.expect_prompt(timeout_seconds)
+
+    def exit(self) -> int:
+        self.sendline("exit")
+        while True:
+            ready, _, _ = select.select([self.fd], [], [], 1.0)
+            if not ready:
+                continue
+            try:
+                chunk = os.read(self.fd, 4096)
+            except OSError:
+                break
+            if not chunk:
+                break
+            self.output += chunk.decode(errors="replace")
+        return self.close()
+
+    def kill(self) -> None:
+        if not self.closed:
+            os.kill(self.pid, signal.SIGKILL)
+            self.close()
+
+    def close(self) -> int:
+        if self.closed:
+            return 0
+        self.closed = True
+        _, status = os.waitpid(self.pid, 0)
+        os.close(self.fd)
+        return os.waitstatus_to_exitcode(status)
+
+
 def assert_success(result: subprocess.CompletedProcess[str]) -> None:
     assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
 
@@ -229,6 +338,13 @@ def step_calls() -> list[str]:
 
 def shell_turn_calls(tmp: Path) -> list[str]:
     return [line for line in read_log(tmp) if line.startswith("handoff shell-turn ")]
+
+
+def dispatch_calls(tmp: Path) -> list[str]:
+    """Stub calls minus shell-turn recording, for dispatch assertions."""
+    return [
+        line for line in read_log(tmp) if not line.startswith("handoff shell-turn ")
+    ]
 
 
 @pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
@@ -975,6 +1091,116 @@ def test_pty_harness_kills_a_wedged_shell() -> None:
                 stub,
                 timeout_seconds=1.0,
             )
+
+
+@pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
+def test_interactive_plus_dispatches_pipeline_through_widget() -> None:
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp = Path(tmp_dir)
+        stub = make_stub(tmp)
+        shell = InteractiveZsh(tmp, stub)
+        try:
+            shell.run("source src/sigil/bindings/sigil.zsh")
+            shell.sendline("+ echo captured | cat")
+            shell.expect("ran:--shell echo captured | cat")
+            shell.expect_prompt()
+            shell.run('print -- "st=$?"')
+            shell.exit()
+        finally:
+            shell.kill()
+        assert "st=0" in shell.output
+        assert dispatch_calls(tmp) == ["run --shell echo captured | cat"]
+
+
+@pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
+def test_interactive_comma_glyph_dispatches_to_ask() -> None:
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp = Path(tmp_dir)
+        stub = make_stub(tmp)
+        shell = InteractiveZsh(tmp, stub)
+        try:
+            shell.run("source src/sigil/bindings/sigil.zsh")
+            shell.sendline(", hello")
+            shell.expect("answer")
+            shell.expect_prompt()
+            shell.exit()
+        finally:
+            shell.kill()
+        assert dispatch_calls(tmp) == ["ask hello"]
+
+
+@pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
+def test_interactive_status_glyph_dispatches_to_status() -> None:
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp = Path(tmp_dir)
+        stub = make_stub(tmp)
+        shell = InteractiveZsh(tmp, stub)
+        try:
+            shell.run("source src/sigil/bindings/sigil.zsh")
+            shell.sendline("?")
+            shell.expect("clean")
+            shell.expect_prompt()
+            shell.exit()
+        finally:
+            shell.kill()
+        assert dispatch_calls(tmp) == ["status"]
+
+
+@pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
+def test_interactive_glyph_line_recallable_with_up_arrow() -> None:
+    # Up-arrow recall must restore the glyph line and re-dispatch on Enter:
+    # behavioral pin via the stub call log, not display scraping.
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp = Path(tmp_dir)
+        stub = make_stub(tmp)
+        shell = InteractiveZsh(tmp, stub)
+        try:
+            shell.run("source src/sigil/bindings/sigil.zsh")
+            shell.sendline(", hello")
+            shell.expect("answer")
+            shell.expect_prompt()
+            shell.send("\x1b[A")
+            shell.send("\n")
+            shell.expect("answer")
+            shell.expect_prompt()
+            shell.exit()
+        finally:
+            shell.kill()
+        assert dispatch_calls(tmp) == ["ask hello", "ask hello"]
+
+
+@pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
+def test_interactive_commands_recorded_in_order_with_status() -> None:
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp = Path(tmp_dir)
+        stub = make_stub(tmp)
+        shell = InteractiveZsh(tmp, stub)
+        try:
+            shell.run("source src/sigil/bindings/sigil.zsh")
+            shell.run("true")
+            shell.run("false")
+            shell.exit()
+        finally:
+            shell.kill()
+        calls = shell_turn_calls(tmp)
+        assert len(calls) == 2
+        assert "--command true" in calls[0]
+        assert "--status 0" in calls[0]
+        assert "--command false" in calls[1]
+        assert "--status 1" in calls[1]
+
+
+@pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
+def test_interactive_harness_times_out_on_missing_marker() -> None:
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp = Path(tmp_dir)
+        stub = make_stub(tmp)
+        shell = InteractiveZsh(tmp, stub)
+        try:
+            with pytest.raises(TimeoutError):
+                shell.expect("never-printed", timeout_seconds=1.0)
+        finally:
+            shell.kill()
 
 
 @pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")

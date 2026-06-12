@@ -75,7 +75,11 @@ behavior:
   survives the final zle render (verified empirically) and is never
   parsed, so the widget sets it to the original buffer and dims the
   rewritten dispatch word with a buffer-relative `region_highlight`
-  entry. Both persist across zle sessions, so a `zle-line-init` hook
+  entry (character offsets, multibyte-safe). The dispatch word is a
+  single `…` in UTF-8 locales — a function delegating to
+  `__sigil_dispatch`, which stays the fallback word elsewhere — so the
+  trailer is one dim character. Both words are excluded from history
+  and from spool recording. Both persist across zle sessions, so a `zle-line-init` hook
   (chained via `add-zle-hook-widget`) clears them. Two related facts:
   the executed line is read from BUFFER *after* the widget chain
   returns — display and execution cannot be made to differ by buffer

@@ -1034,7 +1034,7 @@ def test_zsh_recordable_command_excludes_all_sigil_invocations() -> None:
                 __sigil_zeta_recordable_command "/usr/local/bin/sigil status"; print -- "absolute=$?"
                 __sigil_zeta_recordable_command " echo hi"; print -- "space=$?"
                 __sigil_zeta_recordable_command "echo sigil"; print -- "mention=$?"
-                __sigil_zeta_recordable_command "echo hi"; print -- "plain=$?"
+                __sigil_zeta_recordable_command "…"; print -- "ellipsis=$?"\n                __sigil_zeta_recordable_command "echo hi"; print -- "plain=$?"
                 """
             ),
             tmp,
@@ -1047,6 +1047,7 @@ def test_zsh_recordable_command_excludes_all_sigil_invocations() -> None:
         assert "absolute=1" in result.stdout
         assert "space=1" in result.stdout
         assert "mention=0" in result.stdout
+        assert "ellipsis=1" in result.stdout
         assert "plain=0" in result.stdout
 
 
@@ -1222,7 +1223,7 @@ def test_zsh_history_filter_is_additive_and_covers_glyphs() -> None:
         result = run_shell_args(
             ["zsh", "-f", "-ic"],
             textwrap.dedent(
-                '                    function zshaddhistory() { print -- "user:$1" >> "$ZLE_LOG"; return 0; }\n                    source src/sigil/bindings/sigil.zsh\n                    print -- "hooks=$zshaddhistory_functions"\n                    zshaddhistory "echo hello"\n                    __sigil_zshaddhistory ", hello"; print -- "comma=$?"\n                    __sigil_zshaddhistory "? hello"; print -- "question=$?"\n                    __sigil_zshaddhistory "\\? hello"; print -- "escaped_question=$?"\n                    __sigil_zshaddhistory "+ echo"; print -- "run=$?"\n                    __sigil_zshaddhistory "__sigil_dispatch"; print -- "dispatch=$?"\n                    __sigil_zshaddhistory "@ hello"; print -- "at=$?"\n                    __sigil_zshaddhistory "echo hello"; print -- "echo=$?"\n                    '
+                '                    function zshaddhistory() { print -- "user:$1" >> "$ZLE_LOG"; return 0; }\n                    source src/sigil/bindings/sigil.zsh\n                    print -- "hooks=$zshaddhistory_functions"\n                    zshaddhistory "echo hello"\n                    __sigil_zshaddhistory ", hello"; print -- "comma=$?"\n                    __sigil_zshaddhistory "? hello"; print -- "question=$?"\n                    __sigil_zshaddhistory "\\? hello"; print -- "escaped_question=$?"\n                    __sigil_zshaddhistory "+ echo"; print -- "run=$?"\n                    __sigil_zshaddhistory "__sigil_dispatch"; print -- "dispatch=$?"\n                    __sigil_zshaddhistory "…"; print -- "ellipsis=$?"\n                    __sigil_zshaddhistory "@ hello"; print -- "at=$?"\n                    __sigil_zshaddhistory "echo hello"; print -- "echo=$?"\n                    '
             ),
             tmp,
             stub,
@@ -1238,6 +1239,7 @@ def test_zsh_history_filter_is_additive_and_covers_glyphs() -> None:
         # 1 keeps the rewritten dispatch line out of file and internal
         # history both; the original glyph line was print -s'd instead.
         assert "dispatch=1" in result.stdout
+        assert "ellipsis=1" in result.stdout
         assert "at=0" in result.stdout
         assert "echo=0" in result.stdout
         assert (tmp / "zle.log").read_text(encoding="utf-8") == "user:echo hello\n"
@@ -1352,6 +1354,56 @@ def test_interactive_accepted_glyph_line_keeps_typed_text_with_dim_trailer() -> 
         finally:
             shell.kill()
         assert read_log(tmp) == ["ask what's the deal"]
+
+
+@pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
+def test_interactive_dispatch_word_is_an_ellipsis_under_utf8_locale() -> None:
+    # In a UTF-8 locale the trailer is one dim ellipsis, not the spelled-out
+    # internal name.
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp = Path(tmp_dir)
+        stub = make_stub(tmp)
+        shell = InteractiveZsh(
+            tmp,
+            stub,
+            env={"TERM": "xterm-256color", "LANG": "en_US.UTF-8"},
+        )
+        try:
+            shell.run("source src/sigil/bindings/sigil.zsh")
+            shell.sendline(", what's the deal")
+            shell.expect("\x1b[90m…")
+            shell.expect("answer")
+            shell.expect_prompt()
+            shell.exit()
+        finally:
+            shell.kill()
+        assert "__sigil_dispatch" not in shell.output
+        assert read_log(tmp) == ["ask what's the deal"]
+
+
+@pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
+def test_zsh_dispatch_word_falls_back_without_utf8_locale() -> None:
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp = Path(tmp_dir)
+        stub = make_stub(tmp)
+        result = run_shell(
+            "zsh",
+            textwrap.dedent(
+                """\
+                unset LANG LC_ALL LC_CTYPE
+                source src/sigil/bindings/sigil.zsh
+                print -- "word=$__sigil_dispatch_word"
+                export LANG=en_US.UTF-8
+                source src/sigil/bindings/sigil.zsh
+                print -- "utf8word=$__sigil_dispatch_word"
+                """
+            ),
+            tmp,
+            stub,
+        )
+        assert_success(result)
+        assert "word=__sigil_dispatch" in result.stdout
+        assert "utf8word=…" in result.stdout
 
 
 @pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")

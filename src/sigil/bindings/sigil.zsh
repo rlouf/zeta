@@ -105,7 +105,7 @@ __sigil_zeta_recordable_command() {
   [[ -n "$command" ]] || return 1
   [[ -n "${command//[[:space:]]/}" ]] || return 1
   case "$command" in
-    [[:space:]]*|,*|+*|sigil|sigil\ *|*/sigil|*/sigil\ *|__sigil_*|sigil_*|noglob\ sigil_*|noglob\ ,*)
+    [[:space:]]*|,*|+*|…|sigil|sigil\ *|*/sigil|*/sigil\ *|__sigil_*|sigil_*|noglob\ sigil_*|noglob\ ,*)
       return 1
       ;;
   esac
@@ -293,11 +293,19 @@ __sigil_accept_line_with_glyph_dispatch() {
   # offsets are buffer-relative; appending leaves other plugins' entries
   # alone.
   PREDISPLAY="$BUFFER "
-  BUFFER="__sigil_dispatch"
+  BUFFER="$__sigil_dispatch_word"
   CURSOR=$#BUFFER
   region_highlight+=("0 $#BUFFER fg=8")
   zle __sigil_accept_line_without_glyph_dispatch
 }
+
+# One dim character is all the machinery the finalized line shows; the
+# spelled-out name is the fallback where the locale cannot render it.
+typeset -g __sigil_dispatch_word="__sigil_dispatch"
+if [[ "${LC_ALL:-${LC_CTYPE:-${LANG:-}}}" == *[Uu][Tt][Ff]*8* ]]; then
+  __sigil_dispatch_word="…"
+  function '…' { __sigil_dispatch "$@" }
+fi
 
 __sigil_clear_glyph_display() {
   emulate -L zsh
@@ -384,7 +392,7 @@ if __sigil_glyphs_enabled; then
     emulate -L zsh
     local line="${1%%$'\n'}"
     case "$line" in
-      __sigil_dispatch) return 1 ;;
+      __sigil_dispatch|…) return 1 ;;
       ,*|\?*|+*) return 2 ;;
     esac
     return 0

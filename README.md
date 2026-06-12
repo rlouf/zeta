@@ -237,7 +237,8 @@ Installed zsh bindings expose these shortcuts:
 | `+` | run | Run one explicit command and capture stdout/stderr snippets. |
 | `?` | status | Session status: last failure, last delegation, staged work, today's cost, active model. |
 
-Prompts are always quoted; everything outside the quotes is ordinary shell.
+Glyph lines are ordinary shell commands; quote your prompts and compose
+freely.
 
 Examples:
 
@@ -274,29 +275,29 @@ can be written naturally:
 + git status --short > status.txt
 ```
 
-For `,`, `,,`, `,,,`, and `?`, the prompt is the quoted span and the rest of
-the line is real shell grammar — one rule, no modes. The quoted prompt is
-captured before zsh parses it and is never expanded: apostrophes, `!`, `$`,
-parentheses, and `#` inside the quotes reach the model untouched, so
-`, "explain $PATH"` asks about the literal `$PATH`. Because everything after
-the quotes is ordinary shell, answers compose like any other command:
+`,`, `,,`, `,,,`, and `?` are ordinary commands: zsh parses the line, so
+quoting, expansion, redirects, and pipes are exactly the shell you already
+know. Quote your prompts — it reads better and sidesteps surprises with
+apostrophes and globs — and reach for the shell deliberately when you want
+it. Double quotes interpolate, which is what staying in the shell buys you:
 
 ```sh
+, "explain this error: $(tail -1 err.log)"
+,, "free space on $HOST, largest caches first"
 , "summarize the failing tests" > summary.txt
 , "one-line answer: which port does the dev server use" | pbcopy
 ```
 
-An unquoted prompt never executes and never reaches the model: the binding
-refuses it with a one-line hint and leaves the line in the buffer, so adding
-quotes is one edit away. Bare `,`, `,,`, and `?` carry no prompt and need no
-quotes.
+Single quotes keep a prompt fully literal: `, 'what does $PATH contain?'`
+asks about the name, not your path. One zsh quirk worth knowing: `!`
+immediately before a closing double quote (`, "fix it!"`) trips history
+expansion — use single quotes for prompts with exclamation marks.
 
-Captured lines are handed back to the shell as ordinary foreground commands:
-Ctrl-Z suspends a `+` command, it shows up in `jobs`, `fg` resumes it, and
-`$?` carries its exit status. The accepted line keeps showing exactly what
-you typed, with a dim marker showing where the handed-off dispatch ran. In
-scripts and non-interactive shells the named glyph functions dispatch
-instead; `+` is interactive-only.
+A `+` command runs as an ordinary foreground job: Ctrl-Z suspends it, it
+shows up in `jobs`, `fg` resumes it, and `$?` carries its exit status. The
+accepted `+` line keeps showing exactly what you typed, with a dim marker
+showing where the handed-off dispatch ran. In scripts and non-interactive
+shells the named glyph functions dispatch; `+` is interactive-only.
 
 To install the CLI without punctuation shortcuts:
 

@@ -581,12 +581,11 @@ def test_zsh_plus_glyph_is_widget_only() -> None:
 GLYPH_SPLIT_PROBE = """\
 source src/sigil/bindings/sigil.zsh
 probe() {
-  __sigil_glyph_split "$1"
-  case $? in
-    0) print -r -- "glyph=${reply[1]}:text=${reply[2]}:suffix=${reply[3]}:" ;;
-    2) print -r -- "needquotes" ;;
-    *) print -r -- "nomatch" ;;
-  esac
+  if __sigil_glyph_split "$1"; then
+    print -r -- "text=${reply[1]}:"
+  else
+    print -r -- "nomatch"
+  fi
 }
 """
 
@@ -617,11 +616,11 @@ def test_zsh_glyph_split_parses_each_glyph_and_keeps_text_raw() -> None:
         )
         assert_success(result)
         assert result.stdout.splitlines() == [
-            "needquotes",
-            "needquotes",
-            "glyph=,,,:text=:suffix=:",
-            "needquotes",
-            "glyph=+:text=echo one | cat:suffix=:",
+            "nomatch",
+            "nomatch",
+            "nomatch",
+            "nomatch",
+            "text=echo one | cat:",
             "nomatch",
             "nomatch",
             "nomatch",
@@ -630,11 +629,9 @@ def test_zsh_glyph_split_parses_each_glyph_and_keeps_text_raw() -> None:
 
 
 @pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
-def test_zsh_glyph_split_quoted_prompt_carries_trailing_shell_grammar() -> None:
-    # A leading quoted span ends the prompt; the remainder stays shell
-    # grammar (redirects, pipes) for the dispatch line. Unquoted lines,
-    # unbalanced quotes, and quotes glued to more text stay raw prompts.
-    # + text already is shell grammar and never splits.
+def test_zsh_glyph_split_keeps_plus_text_raw() -> None:
+    # + text is shell grammar for sigil run: quotes, redirects, and pipes
+    # all stay in the captured text, never interpreted by the splitter.
     with tempfile.TemporaryDirectory() as tmp_dir:
         tmp = Path(tmp_dir)
         stub = make_stub(tmp)
@@ -643,14 +640,8 @@ def test_zsh_glyph_split_quoted_prompt_carries_trailing_shell_grammar() -> None:
             GLYPH_SPLIT_PROBE
             + textwrap.dedent(
                 """\
-                probe ', "Summarize this" > summary.txt'
-                probe ', "summarize the log" | wc -l'
-                probe ", 'single quoted' >> out.txt"
-                probe ', "what'"'"'s up"'
-                probe ', "unclosed > f'
-                probe ', "abc"def > f'
-                probe ', what does > mean'
-                probe '+ "quoted bin" > f'
+                probe '+ "quoted bin" --flag > f'
+                probe '+ echo a | tr a-z A-Z'
                 """
             ),
             tmp,
@@ -658,19 +649,13 @@ def test_zsh_glyph_split_quoted_prompt_carries_trailing_shell_grammar() -> None:
         )
         assert_success(result)
         assert result.stdout.splitlines() == [
-            "glyph=,:text=Summarize this:suffix=> summary.txt:",
-            "glyph=,:text=summarize the log:suffix=| wc -l:",
-            "glyph=,:text=single quoted:suffix=>> out.txt:",
-            "glyph=,:text=what's up:suffix=:",
-            "needquotes",
-            "needquotes",
-            "needquotes",
-            'glyph=+:text="quoted bin" > f:suffix=:',
+            'text="quoted bin" --flag > f:',
+            "text=echo a | tr a-z A-Z:",
         ]
 
 
 @pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
-def test_zsh_dispatch_routes_glyph_text_to_the_cli_verbatim() -> None:
+def test_zsh_dispatch_routes_plus_text_to_sigil_run_verbatim() -> None:
     with tempfile.TemporaryDirectory() as tmp_dir:
         tmp = Path(tmp_dir)
         stub = make_stub(tmp)
@@ -679,12 +664,9 @@ def test_zsh_dispatch_routes_glyph_text_to_the_cli_verbatim() -> None:
             textwrap.dedent(
                 """\
                 source src/sigil/bindings/sigil.zsh
-                __sigil_dispatch_glyph=","
-                __sigil_dispatch_text="what's (the) deal!"
-                __sigil_dispatch
-                __sigil_dispatch_glyph="+"
                 __sigil_dispatch_text="echo captured | cat"
                 __sigil_dispatch
+                sigil_command "what's (the) deal!"
                 """
             ),
             tmp,
@@ -692,8 +674,8 @@ def test_zsh_dispatch_routes_glyph_text_to_the_cli_verbatim() -> None:
         )
         assert_success(result)
         assert read_log(tmp) == [
-            "ask what's (the) deal!",
             "run --shell echo captured | cat",
+            "ask what's (the) deal!",
         ]
 
 
@@ -712,8 +694,7 @@ def test_zsh_glyph_split_handles_multiline_buffers() -> None:
                 source src/sigil/bindings/sigil.zsh
                 __sigil_glyph_split "+ echo one
                 echo two" || exit 1
-                __sigil_dispatch_glyph="${reply[1]}"
-                __sigil_dispatch_text="${reply[2]}"
+                __sigil_dispatch_text="${reply[1]}"
                 __sigil_dispatch
                 """
             ),
@@ -1075,7 +1056,7 @@ def test_zsh_recordable_command_excludes_all_sigil_invocations() -> None:
                 __sigil_zeta_recordable_command "/usr/local/bin/sigil status"; print -- "absolute=$?"
                 __sigil_zeta_recordable_command " echo hi"; print -- "space=$?"
                 __sigil_zeta_recordable_command "echo sigil"; print -- "mention=$?"
-                __sigil_zeta_recordable_command "…"; print -- "ellipsis=$?"\n                __sigil_zeta_recordable_command "… | wc -l"; print -- "ellipsis_pipe=$?"\n                __sigil_zeta_recordable_command "echo hi"; print -- "plain=$?"
+                __sigil_zeta_recordable_command "…"; print -- "ellipsis=$?"\n                __sigil_zeta_recordable_command "echo hi"; print -- "plain=$?"
                 """
             ),
             tmp,
@@ -1089,7 +1070,6 @@ def test_zsh_recordable_command_excludes_all_sigil_invocations() -> None:
         assert "space=1" in result.stdout
         assert "mention=0" in result.stdout
         assert "ellipsis=1" in result.stdout
-        assert "ellipsis_pipe=1" in result.stdout
         assert "plain=0" in result.stdout
 
 
@@ -1265,7 +1245,7 @@ def test_zsh_history_filter_is_additive_and_covers_glyphs() -> None:
         result = run_shell_args(
             ["zsh", "-f", "-ic"],
             textwrap.dedent(
-                '                    function zshaddhistory() { print -- "user:$1" >> "$ZLE_LOG"; return 0; }\n                    source src/sigil/bindings/sigil.zsh\n                    print -- "hooks=$zshaddhistory_functions"\n                    zshaddhistory "echo hello"\n                    __sigil_zshaddhistory ", hello"; print -- "comma=$?"\n                    __sigil_zshaddhistory "? hello"; print -- "question=$?"\n                    __sigil_zshaddhistory "\\? hello"; print -- "escaped_question=$?"\n                    __sigil_zshaddhistory "+ echo"; print -- "run=$?"\n                    __sigil_zshaddhistory "__sigil_dispatch"; print -- "dispatch=$?"\n                    __sigil_zshaddhistory "…"; print -- "ellipsis=$?"\n                    __sigil_zshaddhistory "… > out.txt"; print -- "ellipsis_suffix=$?"\n                    __sigil_zshaddhistory "@ hello"; print -- "at=$?"\n                    __sigil_zshaddhistory "echo hello"; print -- "echo=$?"\n                    '
+                '                    function zshaddhistory() { print -- "user:$1" >> "$ZLE_LOG"; return 0; }\n                    source src/sigil/bindings/sigil.zsh\n                    print -- "hooks=$zshaddhistory_functions"\n                    zshaddhistory "echo hello"\n                    __sigil_zshaddhistory ", hello"; print -- "comma=$?"\n                    __sigil_zshaddhistory "? hello"; print -- "question=$?"\n                    __sigil_zshaddhistory "\\? hello"; print -- "escaped_question=$?"\n                    __sigil_zshaddhistory "+ echo"; print -- "run=$?"\n                    __sigil_zshaddhistory "__sigil_dispatch"; print -- "dispatch=$?"\n                    __sigil_zshaddhistory "…"; print -- "ellipsis=$?"\n                    __sigil_zshaddhistory "@ hello"; print -- "at=$?"\n                    __sigil_zshaddhistory "echo hello"; print -- "echo=$?"\n                    '
             ),
             tmp,
             stub,
@@ -1282,7 +1262,6 @@ def test_zsh_history_filter_is_additive_and_covers_glyphs() -> None:
         # history both; the original glyph line was print -s'd instead.
         assert "dispatch=1" in result.stdout
         assert "ellipsis=1" in result.stdout
-        assert "ellipsis_suffix=1" in result.stdout
         assert "at=0" in result.stdout
         assert "echo=0" in result.stdout
         assert (tmp / "zle.log").read_text(encoding="utf-8") == "user:echo hello\n"
@@ -1389,14 +1368,14 @@ def test_interactive_accepted_glyph_line_keeps_typed_text_with_dim_trailer() -> 
         shell = InteractiveZsh(tmp, stub, env={"TERM": "xterm-256color"})
         try:
             shell.run("source src/sigil/bindings/sigil.zsh")
-            shell.sendline(', "what\'s the deal"')
+            shell.sendline("+ echo captured | cat")
             shell.expect("\x1b[90m__sigil_dispatch")
-            shell.expect("answer")
+            shell.expect("ran:--shell echo captured | cat")
             shell.expect_prompt()
             shell.exit()
         finally:
             shell.kill()
-        assert read_log(tmp) == ["ask what's the deal"]
+        assert read_log(tmp) == ["run --shell echo captured | cat"]
 
 
 @pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
@@ -1413,15 +1392,15 @@ def test_interactive_dispatch_word_is_an_ellipsis_under_utf8_locale() -> None:
         )
         try:
             shell.run("source src/sigil/bindings/sigil.zsh")
-            shell.sendline(', "what\'s the deal"')
+            shell.sendline("+ echo captured | cat")
             shell.expect("\x1b[90m…")
-            shell.expect("answer")
+            shell.expect("ran:--shell echo captured | cat")
             shell.expect_prompt()
             shell.exit()
         finally:
             shell.kill()
         assert "__sigil_dispatch" not in shell.output
-        assert read_log(tmp) == ["ask what's the deal"]
+        assert read_log(tmp) == ["run --shell echo captured | cat"]
 
 
 @pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
@@ -1450,25 +1429,59 @@ def test_zsh_dispatch_word_falls_back_without_utf8_locale() -> None:
 
 
 @pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
-def test_interactive_unquoted_prompt_is_refused_with_hint() -> None:
-    # Prompts are mandatory-quoted: an unquoted prompt never executes and
-    # never reaches the model — the widget shows a hint and keeps the line
-    # in the buffer for editing.
+def test_interactive_unquoted_prompt_dispatches_as_argv() -> None:
+    # Comma-family glyphs are ordinary commands: an unquoted prompt is
+    # word-split by zsh and joined back by the function, like any argv.
     with tempfile.TemporaryDirectory() as tmp_dir:
         tmp = Path(tmp_dir)
         stub = make_stub(tmp)
         shell = InteractiveZsh(tmp, stub)
         try:
             shell.run("source src/sigil/bindings/sigil.zsh")
-            shell.sendline(", summarize this > summary.txt")
-            shell.expect("quote the prompt")
-            shell.send_control("c")
+            shell.sendline(", summarize this repo")
+            shell.expect("answer")
             shell.expect_prompt()
-            shell.run(', "summarize this" > /dev/null')
             shell.exit()
         finally:
             shell.kill()
-        assert read_log(tmp) == ["ask summarize this"]
+        assert read_log(tmp) == ["ask summarize this repo"]
+
+
+@pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
+def test_interactive_double_quoted_prompt_expands_like_the_shell() -> None:
+    # Shell semantics all the way down: double quotes interpolate variables
+    # and command substitutions before the prompt reaches the CLI.
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp = Path(tmp_dir)
+        stub = make_stub(tmp)
+        shell = InteractiveZsh(tmp, stub)
+        try:
+            shell.run("source src/sigil/bindings/sigil.zsh")
+            shell.run("box=staging-7")
+            shell.sendline(', "explain the host $box: $(echo from-subst)"')
+            shell.expect("answer")
+            shell.expect_prompt()
+            shell.exit()
+        finally:
+            shell.kill()
+        assert read_log(tmp) == ["ask explain the host staging-7: from-subst"]
+
+
+@pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
+def test_interactive_single_quoted_prompt_stays_literal() -> None:
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp = Path(tmp_dir)
+        stub = make_stub(tmp)
+        shell = InteractiveZsh(tmp, stub)
+        try:
+            shell.run("source src/sigil/bindings/sigil.zsh")
+            shell.sendline(", 'explain $PATH literally'")
+            shell.expect("answer")
+            shell.expect_prompt()
+            shell.exit()
+        finally:
+            shell.kill()
+        assert read_log(tmp) == ["ask explain $PATH literally"]
 
 
 @pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
@@ -1703,15 +1716,16 @@ def test_interactive_comma_with_apostrophe_dispatches_without_quote_prompt() -> 
 
 @pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
 def test_interactive_comma_with_parens_and_bang_dispatches_verbatim() -> None:
-    # Parens would be a parse error and ! fires history expansion; the raw
-    # capture must deliver both untouched.
+    # Single quotes are the shell-native literal form: parens and bangs
+    # inside them reach the model untouched. (In double quotes, zsh's !"
+    # sequence would consume the closing quote.)
     with tempfile.TemporaryDirectory() as tmp_dir:
         tmp = Path(tmp_dir)
         stub = make_stub(tmp)
         shell = InteractiveZsh(tmp, stub)
         try:
             shell.run("source src/sigil/bindings/sigil.zsh")
-            shell.sendline(', "why (really) fix it!"')
+            shell.sendline(", 'why (really) fix it!'")
             shell.expect("answer")
             shell.expect_prompt()
             shell.exit()

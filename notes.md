@@ -64,27 +64,28 @@ behavior:
   binding→CLI recording path, claimed by rename, orphans recovered
   after 60s. Measured recording cost 0.05ms/command (was 35–45ms warm).
 - zshaddhistory return-1 lines *linger* in internal history until the
-  next command executes; the widget therefore does not print -s — the
-  dispatch function inserts the original line while the rejected
-  dispatch line is the one being executed, which replaces the linger.
-  First up-arrow recalls what was typed.
-- The glyph aliases stayed: alias expansion runs before globbing, which
-  is what lets a bare `?` reach the function in eval/script contexts.
-  Interactive lines never reach them (widget first).
-- **Prompts are mandatory-quoted (Remi, 2026-06-12: "more honest, less
-  magical").** The prompt is one complete quoted span — captured raw,
-  never re-parsed, so nothing inside is expanded (`!`, `$`, apostrophes
-  in double quotes are all literal) — and the rest of the line is real
-  shell grammar: `, "summarize" > summary.txt` redirects, `, "x" |
-  wc -l` pipes. An unquoted prompt is refused by the widget with a
-  `zle -M` hint and stays in the buffer for editing; it never executes
-  and never reaches the model. Bare `,`/`,,`/`?` carry no prompt; `+`
-  text is shell grammar and needs no quotes. Scripts and mid-pipeline
-  use go through the functions/aliases as before. Pipeline consequence:
-  the dispatch function runs in a subshell as the first segment, so
-  history insertion and stash clearing happen at the next
-  `zle-line-init` in the parent shell, not in the dispatch function.
-- The accepted glyph line keeps showing what was typed: PREDISPLAY
+  next command executes; the `+` widget therefore does not print -s —
+  the line-init hook inserts the original line at the next prompt in
+  the parent shell, which replaces the linger. First up-arrow recalls
+  what was typed.
+- The glyph aliases are load-bearing: alias expansion runs before
+  globbing, which is what lets a bare `?` reach the function instead of
+  filename generation, and `noglob` keeps unquoted glob characters in
+  prompts literal. With pure command semantics they are the interactive
+  path for the comma family.
+- **Glyphs have pure command semantics (Remi, 2026-06-12, after the
+  three-model comparison below).** `,`/`,,`/`,,,`/`?` are ordinary
+  commands: zsh parses the line, the functions receive argv, shell
+  quoting/expansion/redirects/pipes apply natively. Docs quote every
+  example to teach the habit, and show `$(…)` interpolation as the
+  payoff. The earlier mandatory-quote + refusal design (one commit's
+  worth: bbc4cec) is superseded; the widget now captures only `+`,
+  whose text is raw shell grammar that argv cannot carry (the sudo
+  re-evaluation problem). Sharp edge inherited from zsh, documented in
+  the README: `!` immediately before a closing double quote (`"fix
+  it!"`) is zsh's `!"` history-mechanism sequence and eats the quote —
+  single quotes for prompts with bangs.
+- The accepted `+` line keeps showing what was typed: PREDISPLAY
   survives the final zle render (verified empirically) and is never
   parsed, so the widget sets it to the original buffer and dims the
   rewritten dispatch word with a buffer-relative `region_highlight`
@@ -103,6 +104,102 @@ behavior:
 - Harness lesson: macOS pty buffers are small; a blind sleep between
   pty writes can block the shell mid-write and make signals appear
   lost. `InteractiveZsh.settle()` drains while waiting.
+
+## Decided 2026-06-12: glyph semantics — three models compared
+
+**Resolution: Model 1** (pure command semantics), with quoted examples
+throughout the docs and an expansion example showing what the shell buys.
+The comparison is kept for the record.
+
+Remi asked which behavior is the most Unix-friendly. The yardstick: a
+Unix tool receives argv after the shell parses the line; quoting belongs
+to the shell and is motivated, never required; double quotes interpolate,
+single quotes are literal; composition is pipes and redirects. The three
+candidate models, then a behavior matrix on concrete inputs.
+
+**Model 1 — pure command semantics (most Unix).** Delete the widget for
+the comma family: `,`/`,,`/`,,,`/`?` are ordinary commands reached
+through the existing functions and `noglob` aliases. zsh parses the
+line; the function receives argv. `+` keeps raw capture: argv cannot
+faithfully carry arbitrary shell text (the sudo problem — re-joining
+argv re-evaluates quoting), so the widget machinery survives, scoped to
+`+` only. The dispatch word, stash, PREDISPLAY, dim trailer, line-init
+hook, ellipsis function, and quote-refusal are deleted for the comma
+family.
+
+**Model 2 — current + shell-aligned quotes.** Keep mandatory quoting
+and the refusal hint, but make the span follow shell semantics: double
+quotes interpolate `$VAR` and `$(cmd)` at dispatch time; single quotes
+stay literal. One deliberate deviation remains: history expansion (`!`)
+is never performed inside the span — a safety improvement over the
+shell, not a drift from it (bash users disable it with `set +H` for the
+same reason).
+
+**Model 3 — current as shipped.** Mandatory quoting; the span is always
+literal regardless of quote type. Quoting selects nothing; it is only a
+delimiter. Safest prompts, furthest from shell quoting semantics.
+
+### Behavior matrix
+
+| Input | 1: pure command | 2: aligned quotes | 3: shipped |
+| --- | --- | --- | --- |
+| `, fix the tests` | works, prompt = `fix the tests` | refused with hint | refused with hint |
+| `, what's the deal` | `quote>` continuation prompt | refused with hint | refused with hint |
+| `, "what's the deal"` | works | works | works |
+| `, "fix it!!"` | **`!!` expands**: last command injected into the prompt, history rewritten | literal `!!` | literal `!!` |
+| `, "explain $PATH"` | `$PATH` expands | `$PATH` expands | literal `$PATH` |
+| `, "error: $(tail -1 e.log)"` | command runs, output in prompt | command runs, output in prompt | literal `$(…)` text |
+| `, 'fix it!! $PATH'` | all literal | all literal | all literal |
+| `, summarize > out.txt` | **redirects** (prompt = `summarize`) | refused with hint | refused with hint |
+| `, "summarize" > out.txt` | redirects | redirects | redirects |
+| `, "x" \| wc -l` | pipes | pipes | pipes |
+| `, what do *.log files do` | works (`noglob` alias) | refused | refused |
+| `, why (really)` | **parse error** near `(` | refused | refused |
+| `, what does # mean` | `#` truncates under `interactive_comments` (oh-my-zsh default) | refused | refused |
+| surprise execution in a prompt | backticks/`$(…)` anywhere unquoted or double-quoted | only inside double quotes, explicit | never |
+| bare `,` / `,,` / `?` | works | works | works |
+| `git diff \| , "review"` | works (alias path) | works (alias path) | works (alias path) |
+| `+ cargo test \| tee log` | widget: whole line is the captured command | same | same |
+
+### Consequences beyond parsing
+
+- **Display.** Model 1: nothing decorated for the comma family — the
+  typed line, history, and scrollback are simply real; no trailer. The
+  `…` trailer remains only on `+` lines. Models 2/3: as today.
+- **History.** Model 1: the shell owns it; histexpand rewrites the
+  stored line (the `!!` row above also changes what up-arrow recalls).
+  Models 2/3: the original typed line is restored at line-init.
+- **Provenance.** Model 1 records post-expansion argv — what the model
+  actually received; the typed form is gone if expansion occurred.
+  Models 2/3 record the typed span (model 2: plus whatever `$(…)`
+  produced inside it). All are honest at different layers.
+- **Failure modes.** Model 1's sharp edges are the shell's own:
+  `quote>`, parse errors, histexpand injection — familiar, documented,
+  and identical to every other command. Models 2/3 replace them with
+  one sigil-specific behavior (the refusal hint) that no other tool
+  has.
+- **Code.** Model 1 deletes roughly half the dispatch machinery and its
+  tests (second rework in two days; the pty harness and `+` path stay).
+  Model 2 adds a small, careful expansion step (`$`/`$(…)` only — no
+  globbing, no histexpand) plus tests. Model 3 is zero change.
+- **`jobs` text and Ctrl-Z** behave identically in all three (the
+  empty-text quirk is zsh's function-job behavior, not ours).
+
+### Assessment
+
+Model 1 is the most Unix-friendly without qualification, and it matches
+the project's stated posture (explicit, inspectable, "this file should
+stay boring", CLI as the source of truth). Its real cost is one class
+of accident: silent expansion in double-quoted prompts (`!!`, `$`,
+backticks) sending unintended text to the model — the shell's knives,
+kept sharp. Model 2 keeps exactly one guardrail (no histexpand, plus
+the refusal teaching the quoted form) at the cost of one nonstandard
+behavior. Model 3 is the safest and the least shell-like; its quoting
+is sigil grammar, not zsh grammar.
+
+The honest framing: 1 trusts the user with the shell, 2 files down one
+knife, 3 replaces the knife block. Pick by product identity, not by
+safety argument alone — all three are defensible.
 
 ---
 

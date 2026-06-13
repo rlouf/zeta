@@ -6,7 +6,14 @@ from datetime import datetime
 
 import click
 
-from ..events import Event, Filter, event_store, time_from_timestamp_micros
+from ..events import (
+    Event,
+    Filter,
+    causal_chain,
+    event_store,
+    events_for_turn,
+    time_from_timestamp_micros,
+)
 from ..session import read_events
 from ._base import cli, examples
 from ._shared import pretty_print_json
@@ -15,15 +22,22 @@ EVENT_LIST_COLUMNS = ("time", "workflow", "event", "session", "detail")
 WORKFLOW_GLYPHS = frozenset({",", ",,", ",,,", "?", "ask"})
 
 
-@cli.command(
+@cli.group(
     "events",
+    invoke_without_command=True,
     epilog=examples(
         "sigil events --limit 50",
+        "sigil events --session shell-a",
+        "sigil events list --json",
+        "sigil events trace evt_123 --raw --json",
+        "sigil events descendants evt_123",
+        "sigil events turn turn-123",
         "sigil events --json --raw",
     ),
 )
 @click.option("--json", "json_output", is_flag=True, help="Emit events as JSON.")
 @click.option("--raw", is_flag=True, help="With --json, return raw event payloads.")
+@click.option("--session", "session_id", help="Only show events for one session.")
 @click.option(
     "--limit",
     type=click.IntRange(min=1),
@@ -31,24 +45,143 @@ WORKFLOW_GLYPHS = frozenset({",", ",,", ",,,", "?", "ask"})
     show_default=True,
     help="Number of recent events to show.",
 )
-def cmd_events(json_output: bool, raw: bool, limit: int) -> int:
+@click.pass_context
+def cmd_events(
+    context: click.Context,
+    json_output: bool,
+    raw: bool,
+    session_id: str | None,
+    limit: int,
+) -> int:
     """Inspect Sigil's read-only event journal.
 
     This is the raw view underneath `sigil log`: the most recent audit
     and debug records from the event journal, one row per event.
     """
+    if context.invoked_subcommand is not None:
+        return 0
     if raw and not json_output:
         raise click.UsageError("--raw requires --json")
-    return print_events_list(json_output=json_output, raw=raw, limit=limit)
+    return print_events_list(
+        json_output=json_output,
+        raw=raw,
+        limit=limit,
+        session_id=session_id,
+    )
 
 
-def print_events_list(*, json_output: bool, raw: bool, limit: int) -> int:
+@cmd_events.command("list", epilog=examples("sigil events list --limit 50 --json"))
+@click.option("--json", "json_output", is_flag=True, help="Emit events as JSON.")
+@click.option("--raw", is_flag=True, help="With --json, return raw event payloads.")
+@click.option("--session", "session_id", help="Only show events for one session.")
+@click.option(
+    "--limit",
+    type=click.IntRange(min=1),
+    default=20,
+    show_default=True,
+    help="Number of recent events to show.",
+)
+def cmd_events_list(
+    json_output: bool,
+    raw: bool,
+    session_id: str | None,
+    limit: int,
+) -> int:
+    """List recent events."""
+    if raw and not json_output:
+        raise click.UsageError("--raw requires --json")
+    return print_events_list(
+        json_output=json_output,
+        raw=raw,
+        limit=limit,
+        session_id=session_id,
+    )
+
+
+@cmd_events.command("trace", epilog=examples("sigil events trace evt_123 --json"))
+@click.argument("event_id")
+@click.option("--json", "json_output", is_flag=True, help="Emit events as JSON.")
+@click.option("--raw", is_flag=True, help="With --json, return raw event payloads.")
+def cmd_events_trace(event_id: str, json_output: bool, raw: bool) -> int:
+    """Show the causal chain from root to EVENT_ID."""
+    if raw and not json_output:
+        raise click.UsageError("--raw requires --json")
+    return print_event_sequence(
+        causal_chain(event_id),
+        json_output=json_output,
+        raw=raw,
+        empty_message=f"event not found: {event_id}",
+    )
+
+
+@cmd_events.command("root", epilog=examples("sigil events root evt_123 --json"))
+@click.argument("event_id")
+@click.option("--json", "json_output", is_flag=True, help="Emit event as JSON.")
+@click.option("--raw", is_flag=True, help="With --json, return the raw event payload.")
+def cmd_events_root(event_id: str, json_output: bool, raw: bool) -> int:
+    """Show the root cause for EVENT_ID."""
+    if raw and not json_output:
+        raise click.UsageError("--raw requires --json")
+    chain = causal_chain(event_id)
+    root = chain[0] if chain else None
+    return print_event_item(
+        root,
+        json_output=json_output,
+        raw=raw,
+        empty_message=f"event not found: {event_id}",
+    )
+
+
+@cmd_events.command(
+    "descendants",
+    epilog=examples("sigil events descendants evt_123 --json"),
+)
+@click.argument("event_id")
+@click.option("--json", "json_output", is_flag=True, help="Emit events as JSON.")
+@click.option("--raw", is_flag=True, help="With --json, return raw event payloads.")
+def cmd_events_descendants(event_id: str, json_output: bool, raw: bool) -> int:
+    """Show events caused by EVENT_ID, recursively."""
+    if raw and not json_output:
+        raise click.UsageError("--raw requires --json")
+    return print_event_sequence(
+        event_descendants(event_id),
+        json_output=json_output,
+        raw=raw,
+        empty_message=f"no descendants for event: {event_id}",
+    )
+
+
+@cmd_events.command("turn", epilog=examples("sigil events turn turn-123 --json"))
+@click.argument("turn_id")
+@click.option("--json", "json_output", is_flag=True, help="Emit events as JSON.")
+@click.option("--raw", is_flag=True, help="With --json, return raw event payloads.")
+def cmd_events_turn(turn_id: str, json_output: bool, raw: bool) -> int:
+    """Show events associated with TURN_ID."""
+    if raw and not json_output:
+        raise click.UsageError("--raw requires --json")
+    return print_event_sequence(
+        events_for_turn(turn_id),
+        json_output=json_output,
+        raw=raw,
+        empty_message=f"no events for turn: {turn_id}",
+    )
+
+
+def print_events_list(
+    *,
+    json_output: bool,
+    raw: bool,
+    limit: int,
+    session_id: str | None = None,
+) -> int:
     """Print a bounded recent view of the global event journal."""
     if raw:
-        events = event_store().list_events(Filter())
+        events = event_store().list_events(Filter(session_id=session_id))
         pretty_print_json([normalized_event(event) for event in events[-limit:]])
         return 0
     events = read_events()
+    if session_id is not None:
+        events = [event for event in events if event.session_id == session_id]
     recent = events[-limit:]
     if json_output:
         pretty_print_json([event_summary(event) for event in recent])
@@ -58,6 +191,65 @@ def print_events_list(*, json_output: bool, raw: bool, limit: int) -> int:
         return 0
     print_events_table([event_summary(event) for event in recent])
     return 0
+
+
+def print_event_sequence(
+    events: list[Event],
+    *,
+    json_output: bool,
+    raw: bool,
+    empty_message: str,
+) -> int:
+    if json_output:
+        payload = [
+            normalized_event(event) if raw else event_summary(event) for event in events
+        ]
+        pretty_print_json(payload)
+        return 0
+    if not events:
+        print(empty_message)
+        return 0
+    print_events_table([event_summary(event) for event in events])
+    return 0
+
+
+def print_event_item(
+    event: Event | None,
+    *,
+    json_output: bool,
+    raw: bool,
+    empty_message: str,
+) -> int:
+    if json_output:
+        payload = None
+        if event is not None:
+            payload = normalized_event(event) if raw else event_summary(event)
+        pretty_print_json(payload)
+        return 0
+    if event is None:
+        print(empty_message)
+        return 0
+    print_events_table([event_summary(event)])
+    return 0
+
+
+def event_descendants(event_id: str) -> list[Event]:
+    events = event_store().list_events(Filter())
+    children: dict[str, list[Event]] = {}
+    for event in events:
+        if event.caused_by is not None:
+            children.setdefault(event.caused_by, []).append(event)
+    descendants: list[Event] = []
+    seen: set[str] = {event_id}
+    stack = list(reversed(children.get(event_id, [])))
+    while stack:
+        event = stack.pop()
+        if event.id in seen:
+            continue
+        seen.add(event.id)
+        descendants.append(event)
+        stack.extend(reversed(children.get(event.id, [])))
+    return descendants
 
 
 def normalized_event(event: Event) -> dict[str, object]:
@@ -117,6 +309,8 @@ def event_summary(event: Event) -> dict[str, object]:
     return {
         "id": event_id or "-",
         "short_id": short_token(event_id),
+        "caused_by": event.caused_by,
+        "short_caused_by": short_token(event.caused_by or ""),
         "time": event_time,
         "time_label": format_event_time(event_time),
         "type": event_type,

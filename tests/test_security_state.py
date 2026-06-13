@@ -570,6 +570,111 @@ def test_events_default_lists_recent_events() -> None:
     assert "command" not in raw_events[1]
 
 
+def test_events_list_subcommand_filters_by_session() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        with patch_dict(
+            os.environ,
+            {"SIGIL_STATE_DIR": tmp, "SIGIL_SESSION_ID": "test"},
+        ):
+            append_event({"type": "alpha", "session": "s1", "content": "one"})
+            append_event({"type": "beta", "session": "s2", "content": "two"})
+
+            result = CliRunner().invoke(
+                cli,
+                ["events", "list", "--session", "s2", "--json"],
+            )
+
+    assert result.exit_code == 0, result.output
+    events = json.loads(result.output)
+    assert [event["type"] for event in events] == ["beta"]
+    assert events[0]["session"] == "s2"
+
+
+def test_events_causality_subcommands() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        with patch_dict(
+            os.environ,
+            {"SIGIL_STATE_DIR": tmp, "SIGIL_SESSION_ID": "test"},
+        ):
+            append_event(
+                {
+                    "id": "prompt-event",
+                    "type": "sigil.prompt.submitted",
+                    "turn_id": "turn-1",
+                    "time": 1.0,
+                }
+            )
+            append_event(
+                {
+                    "id": "model-event",
+                    "type": "zeta.model.called",
+                    "turn_id": "turn-1",
+                    "caused_by": "prompt-event",
+                    "time": 2.0,
+                }
+            )
+            append_event(
+                {
+                    "id": "tool-event",
+                    "type": "zeta.tool.called",
+                    "turn_id": "turn-1",
+                    "caused_by": "model-event",
+                    "time": 3.0,
+                }
+            )
+            append_event(
+                {
+                    "id": "turn-event",
+                    "type": "sigil.turn.completed",
+                    "turn_id": "turn-1",
+                    "caused_by": "tool-event",
+                    "time": 4.0,
+                }
+            )
+
+            trace = CliRunner().invoke(cli, ["events", "trace", "turn-event", "--json"])
+            root = CliRunner().invoke(cli, ["events", "root", "turn-event", "--json"])
+            descendants = CliRunner().invoke(
+                cli, ["events", "descendants", "prompt-event", "--json"]
+            )
+            turn = CliRunner().invoke(cli, ["events", "turn", "turn-1", "--json"])
+            raw = CliRunner().invoke(
+                cli, ["events", "trace", "turn-event", "--json", "--raw"]
+            )
+
+    assert trace.exit_code == 0, trace.output
+    assert [event["id"] for event in json.loads(trace.output)] == [
+        "prompt-event",
+        "model-event",
+        "tool-event",
+        "turn-event",
+    ]
+    assert root.exit_code == 0, root.output
+    assert json.loads(root.output)["id"] == "prompt-event"
+    assert descendants.exit_code == 0, descendants.output
+    assert [event["id"] for event in json.loads(descendants.output)] == [
+        "model-event",
+        "tool-event",
+        "turn-event",
+    ]
+    assert turn.exit_code == 0, turn.output
+    assert [event["id"] for event in json.loads(turn.output)] == [
+        "prompt-event",
+        "model-event",
+        "tool-event",
+        "turn-event",
+    ]
+    assert raw.exit_code == 0, raw.output
+    assert json.loads(raw.output)[1]["caused_by"] == "prompt-event"
+
+
+def test_events_subcommands_raw_requires_json() -> None:
+    result = CliRunner().invoke(cli, ["events", "trace", "event-1", "--raw"])
+
+    assert result.exit_code == 2
+    assert "--raw requires --json" in result.output
+
+
 def test_events_failure_recorded_label_is_not_prefixed_as_glyph() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         old_state_dir = os.environ.get("SIGIL_STATE_DIR")

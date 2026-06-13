@@ -464,6 +464,9 @@ sigil session show
 sigil session list
 sigil session clear
 sigil events
+sigil events trace EVENT_ID
+sigil events descendants EVENT_ID
+sigil events turn TURN_ID
 sigil log reindex
 ```
 
@@ -487,7 +490,8 @@ sigil blame src/app.py
 sigil log show 4f9d01c2
 ```
 
-`sigil events` stays the raw event view underneath all of this.
+`sigil events` stays the raw event view underneath all of this. Its `trace`,
+`root`, `descendants`, and `turn` subcommands inspect event causality directly.
 
 The ledger is also the unit of exchange. `sigil log export` writes a
 self-contained JSON bundle — the matching turn and effect records plus

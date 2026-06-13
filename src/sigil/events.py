@@ -312,6 +312,29 @@ class SqliteEventStore:
         ).fetchall()
         return [row_to_event(row) for row in rows]
 
+    def children(self, event_id: str, *, limit: int | None = None) -> list[Event]:
+        return self.list_events(Filter(caused_by=event_id, limit=limit))
+
+    def causal_chain(self, event_id: str) -> list[Event]:
+        chain: list[Event] = []
+        seen: set[str] = set()
+        current = self.get(event_id)
+        while current is not None and current.id not in seen:
+            seen.add(current.id)
+            chain.append(current)
+            if current.caused_by is None:
+                break
+            current = self.get(current.caused_by)
+        chain.reverse()
+        return chain
+
+    def events_for_turn(self, turn_id: str) -> list[Event]:
+        return [
+            event
+            for event in self.list_events(Filter())
+            if event.payload.get("turn_id") == turn_id
+        ]
+
     def _duplicate_for(self, event: Event) -> Event:
         if event.idempotency_key is not None:
             row = self.connection.execute(
@@ -368,6 +391,18 @@ def close_event_stores() -> None:
 
 def publish_event(draft: DraftEvent) -> AppendOutcome:
     return event_store().accept(draft)
+
+
+def event_children(event_id: str, *, limit: int | None = None) -> list[Event]:
+    return event_store().children(event_id, limit=limit)
+
+
+def causal_chain(event_id: str) -> list[Event]:
+    return event_store().causal_chain(event_id)
+
+
+def events_for_turn(turn_id: str) -> list[Event]:
+    return event_store().events_for_turn(turn_id)
 
 
 def row_to_event(row: sqlite3.Row) -> Event:

@@ -64,11 +64,15 @@ def append_indexed(record: dict[str, Any]) -> dict[str, Any]:
 
 
 def test_ledger_append_turn_record_writes_log_and_index() -> None:
-    event = sigil_ledger.append_turn_record(sample_turn_record())
+    event = sigil_ledger.append_turn_record(
+        sample_turn_record(caused_by="prompt-event")
+    )
     payload = sigil_ledger.ledger_event_record(event)
 
     (stored_event,) = read_events()
     assert event.event_type == "sigil.turn.completed"
+    assert event.caused_by == "prompt-event"
+    assert payload["caused_by"] == "prompt-event"
     assert stored_event == event
     assert sigil_ledger.ledger_index().turn("turn-1") == payload
 
@@ -768,6 +772,19 @@ def test_bundle_import_is_idempotent(monkeypatch, tmp_path) -> None:
     log_lines = read_events()
     assert len(log_lines) == 1
     assert log_lines[0].event_type == "sigil.turn.completed"
+
+
+def test_bundle_import_preserves_event_causality(monkeypatch, tmp_path) -> None:
+    from sigil.bundle import export_bundle, import_bundle
+
+    append_indexed(sample_turn_record("turn-causal", caused_by="prompt-event"))
+    bundle = export_bundle()
+    fresh_state_dir(monkeypatch, tmp_path)
+
+    import_bundle(bundle)
+
+    (event,) = read_events()
+    assert event.caused_by == "prompt-event"
 
 
 def test_bundle_import_survives_reindex(monkeypatch, tmp_path) -> None:

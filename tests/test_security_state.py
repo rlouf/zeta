@@ -30,7 +30,10 @@ from sigil.events import (
     EventCursor,
     Filter,
     SqliteEventStore,
+    causal_chain,
+    event_children,
     event_store_path,
+    events_for_turn,
 )
 from sigil.failure import failure_context_prompt, record_failure, truncate_snippet
 from sigil.session import (
@@ -377,6 +380,108 @@ def test_sqlite_event_store_filters_and_cursors() -> None:
     assert [event.id for event in after_first] == [
         event.id for event in store.list_events(Filter()) if event.id != first.id
     ]
+
+
+def test_sqlite_event_store_traverses_causality() -> None:
+    store = SqliteEventStore.in_memory()
+    prompt = store.accept(
+        DraftEvent(
+            event_type="sigil.prompt.submitted",
+            source="sigil",
+            payload={"turn_id": "turn-1"},
+            event_id="prompt-event",
+        )
+    ).event
+    model = store.accept(
+        DraftEvent(
+            event_type="zeta.model.called",
+            source="zeta",
+            payload={"turn_id": "turn-1"},
+            caused_by=prompt.id,
+            event_id="model-event",
+        )
+    ).event
+    tool = store.accept(
+        DraftEvent(
+            event_type="zeta.tool.called",
+            source="zeta",
+            payload={"turn_id": "turn-1"},
+            caused_by=model.id,
+            event_id="tool-event",
+        )
+    ).event
+    store.accept(
+        DraftEvent(
+            event_type="sigil.turn.completed",
+            source="sigil",
+            payload={"turn_id": "turn-1"},
+            caused_by=tool.id,
+            event_id="turn-event",
+        )
+    )
+
+    assert store.children(prompt.id) == [model]
+    assert [event.id for event in store.causal_chain("turn-event")] == [
+        "prompt-event",
+        "model-event",
+        "tool-event",
+        "turn-event",
+    ]
+    assert [event.id for event in store.events_for_turn("turn-1")] == [
+        "prompt-event",
+        "model-event",
+        "tool-event",
+        "turn-event",
+    ]
+
+
+def test_sqlite_event_store_causal_chain_stops_on_cycles() -> None:
+    store = SqliteEventStore.in_memory()
+    store.accept(
+        DraftEvent(
+            event_type="cycle.a",
+            source="test",
+            payload={},
+            caused_by="event-b",
+            event_id="event-a",
+        )
+    )
+    store.accept(
+        DraftEvent(
+            event_type="cycle.b",
+            source="test",
+            payload={},
+            caused_by="event-a",
+            event_id="event-b",
+        )
+    )
+
+    assert [event.id for event in store.causal_chain("event-a")] == [
+        "event-b",
+        "event-a",
+    ]
+
+
+def test_default_event_query_helpers_use_event_store() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        with patch_dict(
+            os.environ,
+            {"SIGIL_STATE_DIR": tmp, "SIGIL_SESSION_ID": "test"},
+        ):
+            prompt = append_event(
+                {"type": "sigil.prompt.submitted", "turn_id": "turn-1"}
+            )
+            model = append_event(
+                {
+                    "type": "zeta.model.called",
+                    "turn_id": "turn-1",
+                    "caused_by": prompt.id,
+                }
+            )
+
+            assert event_children(prompt.id) == [model]
+            assert causal_chain(model.id) == [prompt, model]
+            assert events_for_turn("turn-1") == [prompt, model]
 
 
 def test_sqlite_event_store_append_if_stream_version() -> None:

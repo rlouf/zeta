@@ -426,6 +426,8 @@ def ledger_event_record(event: Event) -> dict[str, Any]:
     )
     if event.session_id is not None:
         record["session"] = event.session_id
+    if event.caused_by is not None:
+        record["caused_by"] = event.caused_by
     return record
 
 

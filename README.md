@@ -426,12 +426,16 @@ handoff (hidden from `--help` because the binding is the primary surface).
 Sigil writes event-sourced state under `~/.sigil/` by default. Set
 `SIGIL_STATE_DIR` to move it.
 
-Every delegation leaves a ledger record in `events.sqlite3`: one
-`sigil.turn` event per turn — which workflow ran, the objective, the
-enforced tool contract, model cost, the outcome, and the ids of the exact
-prompts the model saw — plus one `sigil.effect` event per side effect:
-files written or edited (with before/after content hashes), commands
-executed (with exit status), and staged handoffs with how they resolved.
+Every delegation leaves durable events in `events.sqlite3`: a
+`sigil.prompt.submitted` event for the prompt, `zeta.model.called` and
+`zeta.tool.called` events for runtime calls, and one
+`sigil.turn.completed`, `sigil.turn.failed`, or `sigil.turn.aborted`
+event for the final turn outcome. The turn event records which workflow
+ran, the objective, the enforced tool contract, model cost, the outcome,
+and the ids of the exact prompts the model saw. Tool-call events carry
+effect records for files written or edited (with before/after content
+hashes), commands executed (with exit status), and staged handoffs with
+how they resolved.
 Plain shell commands and `+` runs are recorded as `run` turns with a
 command effect.
 

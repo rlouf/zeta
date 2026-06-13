@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from typing import Any
 
+from .events import Event, event_store, timestamp_micros_from_time
 from .ledger import LedgerIndex, ledger_index
 from .protocols import is_effect_record, is_turn_record
-from .state import append_event
 from .zeta.trace import (
     Derivation,
     Object,
@@ -122,10 +122,35 @@ def import_ledger_records(
                 ),
             )
         else:
-            event = append_event(record)
+            event = event_from_record(record)
+            event_store().append(event)
             index.index_event(event)
         imported += 1
     return imported
+
+
+def event_from_record(record: dict[str, Any]) -> Event:
+    payload = {
+        key: value
+        for key, value in record.items()
+        if key not in {"id", "type", "time", "session", "source", "caused_by"}
+    }
+    return Event(
+        id=str(record["id"]),
+        event_type=str(record["type"]),
+        source=str(record.get("source") or "sigil"),
+        payload=payload,
+        idempotency_key=None,
+        caused_by=(
+            str(record["caused_by"])
+            if isinstance(record.get("caused_by"), str)
+            else None
+        ),
+        session_id=(
+            str(record["session"]) if isinstance(record.get("session"), str) else None
+        ),
+        timestamp_micros=timestamp_micros_from_time(record.get("time")) or 0,
+    )
 
 
 def new_ledger_record(index: LedgerIndex, record: dict[str, Any]) -> bool:

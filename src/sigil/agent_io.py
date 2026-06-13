@@ -17,7 +17,6 @@ from typing import Any, TextIO
 
 from .display.render import (
     PROGRESS_MODE_TRACE,
-    AsyncNarrator,
     ContextUsageFooter,
     TerminalDigestRenderer,
     TraceAwareStreamRenderer,
@@ -76,7 +75,6 @@ def build_turn_renderer(
     footer_output: TextIO,
     *,
     objective: str = "",
-    narrator: AsyncNarrator | None = None,
 ) -> TurnRenderer:
     """Build the trace state, context footer, and stream renderer for a turn."""
     trace_state = TraceRenderState()
@@ -86,7 +84,6 @@ def build_turn_renderer(
         footer_output,
         mode=progress_mode,
         objective=objective,
-        narrator=narrator,
     )
     base_stream_renderer = create_stream_renderer(sys.stdout)
     stream_renderer = TraceAwareStreamRenderer(

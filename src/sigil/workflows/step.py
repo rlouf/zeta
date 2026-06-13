@@ -6,7 +6,6 @@ CLI workflow steps on the same Zeta service layer without an external agent.
 
 from __future__ import annotations
 
-import os
 import sys
 from collections.abc import Callable, Iterable, Sequence
 from pathlib import Path
@@ -26,7 +25,6 @@ from ..agent_io import (
 )
 from ..display.render import (
     PROGRESS_MODE_TRACE,
-    AsyncNarrator,
     render_tool_result_summary,
     thinking_status_factory,
 )
@@ -43,7 +41,6 @@ from ..zeta.agent import AgentConfig, registered_tools, run_agent_turn
 from ..zeta.context import load_project_context
 from ..zeta.models import (
     active_model_selection,
-    chat_structured_output,
     model_selection_event,
 )
 from ..zeta.prompt import system_prompt
@@ -134,8 +131,7 @@ def step(
         user_event["model"] = model_selection_event(selected_model)
     record_event(user_event)
     context = load_project_context()
-    narrator = build_progress_narrator(selected_model)
-    renderer = build_turn_renderer(output, objective=objective, narrator=narrator)
+    renderer = build_turn_renderer(output, objective=objective)
     recorder = AgentStepEventRecorder(
         renderer,
         workflow=workflow,
@@ -281,19 +277,6 @@ class AgentStepEventRecorder(TurnEventRecorder):
                 result_payload,
             )
         return status
-
-
-def build_progress_narrator(selected_model: Any) -> AsyncNarrator | None:
-    """Return the optional async narrator configured for terminal progress."""
-    mode = os.environ.get("SIGIL_NARRATE", "0").lower()
-    if mode not in {"auto", "model"}:
-        return None
-    return AsyncNarrator(
-        chat_structured_output,
-        selected_model=selected_model.model if selected_model is not None else None,
-        selected_url=selected_model.url if selected_model is not None else None,
-        api=selected_model.api if selected_model is not None else None,
-    )
 
 
 def turn_status_detail(renderer: TurnRenderer) -> Callable[[], str]:

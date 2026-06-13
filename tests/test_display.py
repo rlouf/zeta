@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import threading
-import time
 from io import StringIO
 from pathlib import Path
 
@@ -303,65 +301,6 @@ def test_sigil_display_thinking_status_forwards_reasoning_to_progress(
         status.reasoning_delta("I need to understand the workflow path.")
 
     assert seen == ["I need to understand the workflow path."]
-
-
-def test_sigil_display_async_narrator_updates_phase() -> None:
-    output = StringIO()
-    calls = []
-
-    def narrator(messages, *, schema, response_name, max_tokens, **options):
-        del messages, schema, response_name, max_tokens, options
-        calls.append("called")
-        return {
-            "phase": "Reading the code",
-            "summary_lines": ["inspected display and workflow seams"],
-        }
-
-    runner = display_render.AsyncNarrator(
-        narrator,
-        clock=time.monotonic,
-        timeout=1.0,
-    )
-    renderer = display_render.TerminalDigestRenderer(
-        output,
-        narrator=runner,
-        chapter_event_threshold=1,
-    )
-
-    renderer.observe_tool_call("read", {"path": "src/sigil/agent_io.py"})
-    renderer.observe_tool_result("read", {"ok": True})
-    runner.wait()
-    renderer.flush_narration()
-
-    assert calls == ["called"]
-    assert renderer.current_phase == "Reading the code"
-    assert renderer.status_detail().startswith("reading the code")
-
-
-def test_sigil_display_async_narrator_discards_stale_results() -> None:
-    output = StringIO()
-    releases: list[threading.Event] = []
-
-    def narrator(messages, *, schema, response_name, max_tokens, **options):
-        del messages, schema, response_name, max_tokens, options
-        release = threading.Event()
-        releases.append(release)
-        release.wait(1)
-        return {"phase": "Stale", "summary_lines": []}
-
-    runner = display_render.AsyncNarrator(narrator, timeout=1.0)
-    renderer = display_render.TerminalDigestRenderer(output, narrator=runner)
-
-    renderer.observe_tool_call("read", {"path": "README.md"})
-    renderer.observe_tool_result("read", {"ok": True})
-    renderer.observe_tool_call("read", {"path": "pyproject.toml"})
-    renderer.observe_tool_result("read", {"ok": True})
-    for release in releases:
-        release.set()
-    runner.wait()
-    renderer.flush_narration()
-
-    assert renderer.current_phase == "Mapping repo"
 
 
 def test_sigil_display_renders_tool_paths_relative_to_cwd(

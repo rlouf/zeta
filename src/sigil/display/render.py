@@ -42,19 +42,6 @@ PROGRESS_MODES = frozenset(
 TERMINAL_DIGEST_EVENT_THRESHOLD = 6
 TERMINAL_DIGEST_SECONDS_THRESHOLD = 10.0
 TERMINAL_DIGEST_CHAPTER_LINES = 2
-NARRATOR_RESPONSE_SCHEMA = {
-    "type": "object",
-    "additionalProperties": False,
-    "required": ["phase", "summary_lines"],
-    "properties": {
-        "phase": {"type": "string", "maxLength": 48},
-        "summary_lines": {
-            "type": "array",
-            "maxItems": 2,
-            "items": {"type": "string", "maxLength": 96},
-        },
-    },
-}
 
 REASONING_PHASE_PATTERNS = (
     re.compile(
@@ -85,131 +72,6 @@ class ProgressEvent:
     exact: bool = False
 
 
-class AsyncNarrator:
-    """Run optional structured narration in one background request."""
-
-    def __init__(
-        self,
-        structured_output: Callable[..., dict[str, Any]],
-        *,
-        selected_model: str | None = None,
-        selected_url: str | None = None,
-        api: str | None = None,
-        timeout: float = 2.0,
-        clock: Callable[[], float] = time.monotonic,
-    ) -> None:
-        self.structured_output = structured_output
-        self.selected_model = selected_model
-        self.selected_url = selected_url
-        self.api = api
-        self.timeout = timeout
-        self.clock = clock
-        self.generation = 0
-        self.result: dict[str, Any] | None = None
-        self.thread: threading.Thread | None = None
-        self.lock = threading.Lock()
-
-    def submit(
-        self,
-        *,
-        objective: str,
-        events: list[ProgressEvent],
-        previous_phase: str,
-    ) -> None:
-        """Start one narration request if none is already running."""
-        with self.lock:
-            if self.thread is not None and self.thread.is_alive():
-                self.generation += 1
-                return
-            self.generation += 1
-            generation = self.generation
-            self.result = None
-            self.thread = threading.Thread(
-                target=self.run,
-                args=(generation, objective, tuple(events[-8:]), previous_phase),
-                daemon=True,
-            )
-            self.thread.start()
-
-    def run(
-        self,
-        generation: int,
-        objective: str,
-        events: tuple[ProgressEvent, ...],
-        previous_phase: str,
-    ) -> None:
-        started = self.clock()
-        try:
-            data = self.structured_output(
-                narrator_messages(objective, events, previous_phase),
-                schema=NARRATOR_RESPONSE_SCHEMA,
-                response_name="terminal_progress_narration",
-                max_tokens=160,
-                selected_model=self.selected_model,
-                selected_url=self.selected_url,
-                api=self.api,
-            )
-        except Exception:
-            return
-        if self.clock() - started > self.timeout:
-            return
-        if not valid_narrator_result(data):
-            return
-        with self.lock:
-            if generation == self.generation:
-                self.result = data
-
-    def consume(self) -> dict[str, Any] | None:
-        with self.lock:
-            result = self.result
-            self.result = None
-            return result
-
-    def wait(self) -> None:
-        thread = self.thread
-        if thread is not None:
-            thread.join()
-
-
-def narrator_messages(
-    objective: str,
-    events: tuple[ProgressEvent, ...],
-    previous_phase: str,
-) -> list[dict[str, Any]]:
-    lines = "\n".join(f"- {event.line}" for event in events)
-    return [
-        {
-            "role": "system",
-            "content": (
-                "You narrate an AI terminal agent's progress.\n"
-                "Rules:\n"
-                "- One short phase title and up to two summary lines.\n"
-                "- No speculation beyond the events.\n"
-                "- Do not mention internal JSON/tool schemas.\n"
-                "- If nothing meaningful changed, use an empty phase."
-            ),
-        },
-        {
-            "role": "user",
-            "content": (
-                f"Objective:\n{objective}\n\n"
-                f"Recent events:\n{lines}\n\n"
-                f"Previous phase:\n{previous_phase}"
-            ),
-        },
-    ]
-
-
-def valid_narrator_result(data: dict[str, Any]) -> bool:
-    phase = data.get("phase")
-    summary_lines = data.get("summary_lines")
-    if not isinstance(phase, str):
-        return False
-    if not isinstance(summary_lines, list):
-        return False
-    return all(isinstance(line, str) for line in summary_lines)
-
-
 class TerminalDigestRenderer:
     """Render terminal progress as compact lines and bounded chapters."""
 
@@ -223,7 +85,6 @@ class TerminalDigestRenderer:
         chapter_event_threshold: int = TERMINAL_DIGEST_EVENT_THRESHOLD,
         chapter_seconds_threshold: float = TERMINAL_DIGEST_SECONDS_THRESHOLD,
         max_chapter_lines: int = TERMINAL_DIGEST_CHAPTER_LINES,
-        narrator: AsyncNarrator | None = None,
     ) -> None:
         self.output = output
         self.mode = mode if mode in PROGRESS_MODES else PROGRESS_MODE_COMPACT
@@ -233,7 +94,6 @@ class TerminalDigestRenderer:
         self.chapter_event_threshold = chapter_event_threshold
         self.chapter_seconds_threshold = chapter_seconds_threshold
         self.max_chapter_lines = max_chapter_lines
-        self.narrator = narrator
         self.current_phase = ""
         self.intent_phase = ""
         self.current_chapter_phase = ""
@@ -262,7 +122,6 @@ class TerminalDigestRenderer:
         self.observe_event(event)
 
     def observe_event(self, event: ProgressEvent) -> None:
-        self.flush_narration()
         self.events.append(event)
         self.event_count += 1
         self.current_phase = self.intent_phase or event.phase
@@ -273,7 +132,6 @@ class TerminalDigestRenderer:
             self.commands_run.append(event.subject)
         if event.failed:
             self.failures += 1
-        self.maybe_submit_narration()
         self.render_event(event)
 
     def pop_args(self, name: str) -> dict[str, Any]:
@@ -323,27 +181,7 @@ class TerminalDigestRenderer:
             file=self.output,
         )
 
-    def maybe_submit_narration(self) -> None:
-        if self.narrator is None:
-            return
-        self.narrator.submit(
-            objective=self.objective,
-            events=self.events,
-            previous_phase=self.current_phase,
-        )
-
-    def flush_narration(self) -> None:
-        if self.narrator is None:
-            return
-        data = self.narrator.consume()
-        if data is None:
-            return
-        phase = str(data.get("phase") or "").strip()
-        if phase:
-            self.current_phase = phase
-
     def status_detail(self) -> str:
-        self.flush_narration()
         if not self.current_phase and self.event_count == 0:
             return ""
         parts = []
@@ -362,7 +200,6 @@ class TerminalDigestRenderer:
             self.current_phase = phase
 
     def finalize(self, turn: dict[str, Any]) -> None:
-        self.flush_narration()
         line = final_digest_line(turn, self)
         if line:
             print(file=self.output)

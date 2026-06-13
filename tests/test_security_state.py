@@ -440,17 +440,17 @@ def test_events_default_lists_recent_events() -> None:
         "session",
         "detail",
     ]
-    assert str(second["id"])[:8] not in text.output
+    assert second.id[:8] not in text.output
     assert ",,        failure recorded" in text.output
     assert "git status --short -> 0" in text.output
-    assert first["id"] not in text.output
+    assert first.id not in text.output
     assert listed.exit_code == 0, listed.output
     summaries = json.loads(listed.output)
     assert [event["type"] for event in summaries] == [
         "first",
         "failure_recorded",
     ]
-    assert summaries[-1]["short_id"] == str(second["id"])[:8]
+    assert summaries[-1]["short_id"] == second.id[:8]
     assert summaries[-1]["workflow"] == ",,"
     assert summaries[-1]["event"] == "failure recorded"
     assert summaries[-1]["detail"] == "git status --short -> 0"
@@ -493,7 +493,7 @@ def test_events_failure_recorded_label_is_not_prefixed_as_glyph() -> None:
                 os.environ["SIGIL_SESSION_ID"] = old_session_id
 
     assert text.exit_code == 0, text.output
-    assert str(event["id"])[:8] not in text.output
+    assert event.id[:8] not in text.output
     assert "failure recorded" in text.output
     assert "failure failure recorded" not in text.output
     assert "false -> 1" in text.output

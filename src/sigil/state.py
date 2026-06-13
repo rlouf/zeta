@@ -13,7 +13,10 @@ import os
 import re
 import tempfile
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from .events import Event
 
 EVENT_LOG_MAX_BYTES = 10 * 1024 * 1024
 SESSION_ID_PATTERN = re.compile(r"[A-Za-z0-9._-]{1,64}\Z")
@@ -99,11 +102,10 @@ def _session_root() -> Path:
     return root
 
 
-def append_event(event: dict[str, Any]) -> dict[str, Any]:
+def append_event(event: dict[str, Any]) -> Event:
     """Append a global audit/debug event with session metadata."""
     from .events import (
         DraftEvent,
-        event_record,
         publish_event,
         timestamp_micros_from_time,
     )
@@ -131,7 +133,7 @@ def append_event(event: dict[str, Any]) -> dict[str, Any]:
             event_id=event_id,
         )
     )
-    return event_record(outcome.event)
+    return outcome.event
 
 
 def write_text_atomic(path: Path, text: str) -> None:

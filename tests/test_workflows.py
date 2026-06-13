@@ -21,6 +21,7 @@ from click.testing import CliRunner
 import sigil.display.render as display_render
 from sigil import agent_io
 from sigil import handoff as sigil_handoff
+from sigil import ledger as sigil_ledger
 from sigil.cli import cli as sigil_cli
 from sigil.ledger import ledger_index
 from sigil.protocols import (
@@ -1908,11 +1909,19 @@ def test_effect_record_keeps_only_set_optionals() -> None:
 
 
 def ledger_turns() -> list[dict[str, Any]]:
-    return [event for event in read_events() if is_turn_record(event)]
+    return [
+        sigil_ledger.ledger_event_record(event)
+        for event in read_events()
+        if event.event_type == "sigil.turn"
+    ]
 
 
 def ledger_effects() -> list[dict[str, Any]]:
-    return [event for event in read_events() if is_effect_record(event)]
+    return [
+        sigil_ledger.ledger_event_record(event)
+        for event in read_events()
+        if event.event_type == "sigil.effect"
+    ]
 
 
 def test_zeta_step_records_staged_turn_record(monkeypatch) -> None:

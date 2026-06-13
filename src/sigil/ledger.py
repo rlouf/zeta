@@ -12,8 +12,13 @@ import time
 from pathlib import Path
 from typing import Any
 
-from .events import Filter, event_record, event_store, event_store_path
-from .protocols import is_effect_record, is_turn_record
+from .events import (
+    Event,
+    Filter,
+    event_store,
+    event_store_path,
+    time_from_timestamp_micros,
+)
 from .state import append_event
 
 LOGGER = logging.getLogger("sigil.ledger")
@@ -150,17 +155,18 @@ class LedgerIndex:
         )
         self.connection.commit()
 
-    def index_record(self, payload: dict[str, Any]) -> bool:
-        """Index one event payload; non-ledger events return False."""
-        if is_turn_record(payload):
-            self.index_turn_record(payload)
+    def index_event(self, event: Event) -> bool:
+        """Index one durable event; non-ledger events return False."""
+        if event.event_type == "sigil.turn":
+            self.index_turn_event(event)
             return True
-        if is_effect_record(payload):
-            self.index_effect_record(payload)
+        if event.event_type == "sigil.effect":
+            self.index_effect_event(event)
             return True
         return False
 
-    def index_turn_record(self, payload: dict[str, Any]) -> None:
+    def index_turn_event(self, event: Event) -> None:
+        payload = event.payload
         contract = mapping_field(payload, "contract")
         cost = mapping_field(payload, "cost")
         self.connection.execute(
@@ -173,8 +179,8 @@ class LedgerIndex:
             """,
             (
                 str(payload.get("turn_id") or ""),
-                payload.get("time"),
-                payload.get("session"),
+                event_time(event),
+                event.session_id,
                 payload.get("cwd"),
                 payload.get("workflow"),
                 payload.get("objective"),
@@ -184,12 +190,13 @@ class LedgerIndex:
                 cost.get("output_tokens"),
                 cost.get("model_calls"),
                 cost.get("wall_ms"),
-                record_json(payload),
+                event_json(event),
             ),
         )
         self.connection.commit()
 
-    def index_effect_record(self, payload: dict[str, Any]) -> None:
+    def index_effect_event(self, event: Event) -> None:
+        payload = event.payload
         self.connection.execute(
             """
             INSERT OR REPLACE INTO effects
@@ -201,8 +208,8 @@ class LedgerIndex:
             (
                 str(payload.get("effect_id") or ""),
                 payload.get("turn_id"),
-                payload.get("time"),
-                payload.get("session"),
+                event_time(event),
+                event.session_id,
                 payload.get("kind"),
                 1 if payload.get("staged") else 0,
                 payload.get("path"),
@@ -213,7 +220,7 @@ class LedgerIndex:
                 payload.get("resolved_outcome"),
                 payload.get("before_hash"),
                 payload.get("after_hash"),
-                record_json(payload),
+                event_json(event),
             ),
         )
         self.connection.commit()
@@ -381,6 +388,29 @@ def record_json(payload: dict[str, Any]) -> str:
     return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
 
 
+def ledger_event_record(event: Event) -> dict[str, Any]:
+    record = dict(event.payload)
+    record.update(
+        {
+            "id": event.id,
+            "type": event.event_type,
+            "time": time_from_timestamp_micros(event.timestamp_micros),
+        }
+    )
+    if event.session_id is not None:
+        record["session"] = event.session_id
+    return record
+
+
+def event_json(event: Event) -> str:
+    record = ledger_event_record(event)
+    return record_json(record)
+
+
+def event_time(event: Event) -> float:
+    return time_from_timestamp_micros(event.timestamp_micros)
+
+
 _LEDGER_INDEXES: dict[Path, LedgerIndex] = {}
 
 
@@ -404,23 +434,23 @@ def close_ledger_indexes() -> None:
 atexit.register(close_ledger_indexes)
 
 
-def append_turn_record(record: dict[str, Any]) -> dict[str, Any]:
+def append_turn_record(record: dict[str, Any]) -> Event:
     """Append one turn record to the event store and index it."""
-    payload = append_event(record)
-    index_payload("append_turn_record", payload)
-    return payload
+    event = append_event(record)
+    index_event("append_turn_record", event)
+    return event
 
 
-def append_effect_record(record: dict[str, Any]) -> dict[str, Any]:
+def append_effect_record(record: dict[str, Any]) -> Event:
     """Append one effect record to the event store and index it."""
-    payload = append_event(record)
-    index_payload("append_effect_record", payload)
-    return payload
+    event = append_event(record)
+    index_event("append_effect_record", event)
+    return event
 
 
-def index_payload(operation: str, payload: dict[str, Any]) -> None:
+def index_event(operation: str, event: Event) -> None:
     try:
-        ledger_index().index_record(payload)
+        ledger_index().index_event(event)
     except Exception as exc:
         warn_ledger_failure_once(operation, exc)
 
@@ -432,11 +462,10 @@ def reindex(index: LedgerIndex | None = None) -> tuple[int, int]:
     turns = 0
     effects = 0
     for event in event_store().list_events(Filter()):
-        payload = event_record(event)
-        if is_turn_record(payload):
-            target.index_turn_record(payload)
+        if event.event_type == "sigil.turn":
+            target.index_turn_event(event)
             turns += 1
-        elif is_effect_record(payload):
-            target.index_effect_record(payload)
+        elif event.event_type == "sigil.effect":
+            target.index_effect_event(event)
             effects += 1
     return turns, effects

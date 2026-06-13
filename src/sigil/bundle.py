@@ -111,8 +111,8 @@ def import_ledger_records(
     for record in records:
         if not isinstance(record, dict) or not new_ledger_record(index, record):
             continue
-        payload = append_event(record)
-        index.index_record(payload)
+        event = append_event(record)
+        index.index_event(event)
         imported += 1
     return imported
 

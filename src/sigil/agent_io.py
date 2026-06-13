@@ -25,7 +25,7 @@ from .display.render import (
     progress_mode_from_env,
     render_tool_start,
 )
-from .ledger import append_effect_record, append_turn_record
+from .ledger import append_effect_record, append_turn_record, ledger_event_record
 from .protocols import (
     EFFECT_KIND_COMMAND,
     EFFECT_KIND_FILE_EDIT,
@@ -133,7 +133,7 @@ class TurnLedger:
             return
         effect_id = str(uuid.uuid4())
         tool_call_id = str(event.get("tool_call_id") or "")
-        payload = append_effect_record(
+        ledger_event = append_effect_record(
             effect_record(
                 effect_id,
                 turn_id=self.turn_id,
@@ -141,6 +141,7 @@ class TurnLedger:
                 **fields,
             )
         )
+        payload = ledger_event_record(ledger_event)
         self.effect_ids.append(effect_id)
         self.effects.append(payload)
         object_id = str(event.get("tool_result_object_id") or "")
@@ -156,7 +157,7 @@ class TurnLedger:
         prompt_traces: Iterable[PromptTrace] = (),
     ) -> dict[str, Any]:
         """Append the turn record closing this turn and bridge it into the graph."""
-        payload = append_turn_record(
+        event = append_turn_record(
             turn_record(
                 self.turn_id,
                 workflow=self.workflow,
@@ -169,6 +170,7 @@ class TurnLedger:
                 effect_ids=self.effect_ids,
             )
         )
+        payload = ledger_event_record(event)
         record_turn_trace_object(payload, self.effects, self.effect_object_ids)
         return payload
 

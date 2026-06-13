@@ -106,24 +106,26 @@ def print_events_table(summaries: list[dict[str, object]]) -> None:
         )
 
 
-def event_summary(event: dict[str, object]) -> dict[str, object]:
+def event_summary(event: Event) -> dict[str, object]:
     """Return a user-facing summary for one raw event journal entry."""
-    event_id = str(event.get("id") or "")
-    session = str(event.get("session") or "")
-    event_type = str(event.get("type") or "event")
-    workflow = event_workflow(event)
+    payload = event.payload
+    event_id = event.id
+    session = event.session_id or ""
+    event_type = event.event_type
+    event_time = time_from_timestamp_micros(event.timestamp_micros)
+    workflow = event_workflow(payload)
     return {
         "id": event_id or "-",
         "short_id": short_token(event_id),
-        "time": event.get("time"),
-        "time_label": format_event_time(event.get("time")),
+        "time": event_time,
+        "time_label": format_event_time(event_time),
         "type": event_type,
         "workflow": workflow,
         "event": event_label(event_type),
         "session": session or "-",
         "short_session": short_token(session),
-        "cwd": str(event.get("cwd") or "-"),
-        "detail": event_detail(event, event_type),
+        "cwd": str(payload.get("cwd") or "-"),
+        "detail": event_detail(payload, event_type),
     }
 
 

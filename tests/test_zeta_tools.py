@@ -544,7 +544,7 @@ def seed_query_log_ledger(monkeypatch) -> None:
 
     monkeypatch.setenv("SIGIL_SESSION_ID", "query-log-here")
     index = ledger_index()
-    index.index_record(
+    index.index_event(
         append_event(
             {
                 **turn_record(
@@ -564,7 +564,7 @@ def seed_query_log_ledger(monkeypatch) -> None:
             }
         )
     )
-    index.index_record(
+    index.index_event(
         append_event(
             {
                 **turn_record(
@@ -575,11 +575,11 @@ def seed_query_log_ledger(monkeypatch) -> None:
                     outcome="failed",
                 ),
                 "time": 200.0,
+                "session": "query-log-there",
             }
         )
-        | {"session": "query-log-there"}
     )
-    index.index_record(
+    index.index_event(
         append_event(
             effect_record(
                 "effect-edit",

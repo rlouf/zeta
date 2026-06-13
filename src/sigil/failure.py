@@ -127,7 +127,7 @@ def record_failure(
             "stderr_snippet": stderr_text,
             "context": context,
             "time": time.time(),
-            "event_id": event["id"],
+            "event_id": event.id,
             "glyph": "failure",
         },
     )

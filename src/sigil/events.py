@@ -370,19 +370,6 @@ def publish_event(draft: DraftEvent) -> AppendOutcome:
     return event_store().accept(draft)
 
 
-def event_record(event: Event) -> dict[str, Any]:
-    """Project a durable event into the dict shape used by current projections."""
-    record = {
-        "id": event.id,
-        "type": event.event_type,
-        "time": time_from_timestamp_micros(event.timestamp_micros),
-    }
-    if event.session_id is not None:
-        record["session"] = event.session_id
-    record.update(event.payload)
-    return record
-
-
 def row_to_event(row: sqlite3.Row) -> Event:
     payload = json.loads(str(row["payload"]))
     if not isinstance(payload, dict):

@@ -126,7 +126,7 @@ def test_status_reports_last_delegation_and_today_cost(
 ) -> None:
     monkeypatch.setenv("SIGIL_SESSION_ID", "status-ledger")
     index = ledger_index()
-    index.index_record(
+    index.index_event(
         append_event(
             turn_record(
                 "turn-do-1111",
@@ -138,7 +138,7 @@ def test_status_reports_last_delegation_and_today_cost(
             )
         )
     )
-    index.index_record(
+    index.index_event(
         append_event(
             turn_record(
                 "turn-run-2222",
@@ -165,7 +165,7 @@ def test_status_reports_pending_staged_handoff(
 ) -> None:
     monkeypatch.setenv("SIGIL_SESSION_ID", "status-pending")
     index = ledger_index()
-    index.index_record(
+    index.index_event(
         append_event(
             effect_record(
                 "effect-staged",
@@ -203,7 +203,7 @@ def test_status_omits_ledger_lines_for_quiet_sessions(
 def test_status_json_carries_ledger_fields(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("SIGIL_SESSION_ID", "status-json")
     index = ledger_index()
-    index.index_record(
+    index.index_event(
         append_event(
             turn_record(
                 "turn-ask-1",

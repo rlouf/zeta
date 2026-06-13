@@ -15,6 +15,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+from .events import Event, Filter, event_store, time_from_timestamp_micros
 from .failure import (
     failure_context_prompt,
     last_failure_or_none,
@@ -73,35 +74,36 @@ def known_sessions() -> list[dict[str, Any]]:
     for path in sorted(root.iterdir(), key=lambda item: item.name):
         if not path.is_dir():
             continue
-        latest = latest_by_session.get(path.name, {})
+        latest = latest_by_session.get(path.name)
         sessions.append(
             {
                 "session_id": path.name,
                 "path": str(path),
                 "files": sorted(item.name for item in path.iterdir() if item.is_file()),
-                "last_event_time": latest.get("time"),
-                "last_event_type": latest.get("type"),
-                "last_cwd": latest.get("cwd"),
+                "last_event_time": event_time(latest) if latest is not None else None,
+                "last_event_type": latest.event_type if latest is not None else None,
+                "last_cwd": latest.payload.get("cwd") if latest is not None else None,
             }
         )
     return sessions
 
 
-def latest_events_by_session(events: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+def latest_events_by_session(events: list[Event]) -> dict[str, Event]:
     """Return the newest event seen for each session id."""
-    latest: dict[str, dict[str, Any]] = {}
+    latest: dict[str, Event] = {}
     for event in events:
-        event_session = event.get("session")
-        if not isinstance(event_session, str):
+        if event.session_id is None:
             continue
-        current = latest.get(event_session)
+        current = latest.get(event.session_id)
         if current is None or event_time(event) >= event_time(current):
-            latest[event_session] = event
+            latest[event.session_id] = event
     return latest
 
 
-def event_time(event: dict[str, Any]) -> float:
+def event_time(event: Event | dict[str, Any]) -> float:
     """Return event time as a sortable float, treating malformed times as zero."""
+    if isinstance(event, Event):
+        return time_from_timestamp_micros(event.timestamp_micros)
     value = event.get("time")
     return value if isinstance(value, int | float) else 0.0
 
@@ -127,11 +129,9 @@ def read_session_file(path: Path) -> Any:
     return path.read_text(encoding="utf-8")
 
 
-def read_events() -> list[dict[str, Any]]:
+def read_events() -> list[Event]:
     """Read the global event journal."""
-    from .events import Filter, event_record, event_store
-
-    return [event_record(event) for event in event_store().list_events(Filter())]
+    return event_store().list_events(Filter())
 
 
 def current_session_snapshot() -> dict[str, Any]:

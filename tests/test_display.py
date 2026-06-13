@@ -122,7 +122,7 @@ def test_sigil_display_classifies_progress_events() -> None:
         {"path": "src/sigil", "recursive": True, "limit": 50},
     )
     assert event is not None
-    assert event.line == "✓ listed src/sigil (recursive, limit 50) · 30 entries"
+    assert event.line == "✓ listed src/sigil (recursive) · 30 entries"
 
     event = display_render.progress_event_for_tool_result(
         "write",

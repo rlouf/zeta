@@ -541,15 +541,6 @@ def ls_progress_subject(metadata: dict[str, Any], args: dict[str, Any]) -> str:
     recursive = metadata.get("recursive")
     if recursive is True or args.get("recursive") is True:
         details.append("recursive")
-    limit = metadata.get("limit", args.get("limit"))
-    if isinstance(limit, int) and not isinstance(limit, bool) and limit != 200:
-        details.append(f"limit {limit}")
-    min_size = metadata.get("min_size_bytes", args.get("min_size_bytes"))
-    if isinstance(min_size, int) and not isinstance(min_size, bool):
-        details.append(f">= {min_size}B")
-    exclude = metadata.get("exclude", args.get("exclude"))
-    if isinstance(exclude, list) and exclude:
-        details.append(f"exclude {len(exclude)}")
     suffix = f" ({', '.join(details)})" if details else ""
     return f"{subject}{suffix}" if subject else suffix.strip()
 

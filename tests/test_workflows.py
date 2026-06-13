@@ -266,6 +266,7 @@ def test_zeta_agent_step_renders_context_usage_after_buffered_answer(
     assert code == 0
     output = capsys.readouterr().out
     assert output.index("done") < output.index("context  [")
+    assert output.index("Done in") < output.index("context  [")
 
 
 def test_zeta_agent_step_renders_context_usage_at_bottom_after_tools(
@@ -344,7 +345,7 @@ def test_zeta_agent_step_renders_context_usage_at_bottom_after_tools(
     assert ("✓ read a.md · 1 lines\n✓ read b.md · 1 lines") in output
     assert output.count("context  [") == 1
     assert "123 / 262,144 tokens" not in output
-    assert output.index("done") < output.index("context  [░░░░░░░░░░░░░░░░░░░░] 0%")
+    assert output.index("Done in") < output.index("context  [░░░░░░░░░░░░░░░░░░░░] 0%")
 
 
 def test_zeta_agent_step_does_not_pass_current_user_event_as_transcript(
@@ -1585,7 +1586,7 @@ def test_zeta_ask_workflow_renders_context_usage_at_bottom_after_tools(
     assert output.err.count("context  [") == 1
     assert "It is a README." in output.out
     assert "context  [" not in output.out
-    assert output.err.index("✓ read b.md") < output.err.index("context  [")
+    assert output.err.index("Done in") < output.err.index("context  [")
 
 
 def test_zeta_question_loop_prints_tool_start_while_agent_runs(

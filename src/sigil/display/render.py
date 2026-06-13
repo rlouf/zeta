@@ -344,10 +344,13 @@ class TerminalDigestRenderer:
 
     def status_detail(self) -> str:
         self.flush_narration()
+        if not self.current_phase and self.event_count == 0:
+            return ""
         parts = []
         if self.current_phase:
             parts.append(self.current_phase[:1].lower() + self.current_phase[1:])
-        parts.append(f"{self.event_count} events")
+        if self.event_count:
+            parts.append(f"{self.event_count} events")
         if self.last_action:
             parts.append(f"last: {self.last_action}")
         return " · ".join(parts)
@@ -405,12 +408,20 @@ def progress_event_for_tool_result(
     failed = result.get("ok") is False
     summary = progress_result_summary(name, result)
     subject = progress_subject(name, result, args)
-    if name in {"read", "ls"}:
+    if name == "read":
         return ProgressEvent(
             "read",
             "Mapping repo",
             subject,
             success_line("read", subject, summary, failed),
+            failed=failed,
+        )
+    if name == "ls":
+        return ProgressEvent(
+            "list",
+            "Mapping repo",
+            subject,
+            success_line("listed", subject, summary, failed),
             failed=failed,
         )
     if name in {"grep", "find"}:
@@ -1040,10 +1051,8 @@ class ThinkingStatus:
     """Render an ephemeral thinking timer while a blocking model request runs.
 
     When the model streams reasoning, the last few lines show as a muted
-    tail above the timer and are erased with it; a clean exit that saw
-    reasoning leaves one muted `thought for Ns` line in scrollback. The
-    full reasoning is recorded in the trace and rendered by
-    `sigil session transcript`.
+    tail above the timer and are erased with it. The full reasoning is
+    recorded in the trace and rendered by `sigil session transcript`.
     """
 
     def __init__(
@@ -1105,13 +1114,6 @@ class ThinkingStatus:
         if self.thread is not None:
             self.thread.join()
         self.clear()
-        if exc_type is None and self.reasoning_seen:
-            seconds = max(int(self.clock() - self.started_at), 0)
-            line = muted(
-                f"{' ' * self.left_padding}thought for {seconds}s",
-                enabled=should_color(self.output),
-            )
-            self.write(f"{line}\n")
         return False
 
     def reasoning_delta(self, text: str) -> None:

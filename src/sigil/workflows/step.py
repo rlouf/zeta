@@ -192,9 +192,9 @@ def step(
             prompt_traces=result.prompt_traces,
         )
         turn = ledger.finish(TURN_OUTCOME_STAGED, prompt_traces=result.prompt_traces)
+        finalize_progress(renderer, turn)
         if context_footer is not None:
             context_footer.finalize(result.model_telemetry)
-        finalize_progress(renderer, turn)
         return status
     if result.final_text:
         if renderer.stream_renderer is not None:
@@ -215,9 +215,9 @@ def step(
             streamed=result.final_text_streamed,
             renderer=renderer,
         )
+        finalize_progress(renderer, turn)
         if context_footer is not None:
             context_footer.finalize(result.model_telemetry)
-        finalize_progress(renderer, turn)
         return 0
     turn = ledger.finish(TURN_OUTCOME_FAILED, prompt_traces=result.prompt_traces)
     finalize_progress(renderer, turn)

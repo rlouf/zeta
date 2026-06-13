@@ -99,6 +99,16 @@ def test_sigil_display_classifies_progress_events() -> None:
     assert event.line == "✓ read src/sigil/agent_io.py · ok"
 
     event = display_render.progress_event_for_tool_result(
+        "ls",
+        {"ok": True, "metadata": {"path": "src/sigil", "entries": 3}},
+        {"path": "src/sigil"},
+    )
+    assert event is not None
+    assert event.kind == "list"
+    assert event.phase == "Mapping repo"
+    assert event.line == "✓ listed src/sigil · 3 entries"
+
+    event = display_render.progress_event_for_tool_result(
         "write",
         {"ok": True, "metadata": {"mode": "direct", "path": "notes.md"}},
         {"path": "notes.md"},
@@ -131,6 +141,13 @@ def test_sigil_display_terminal_digest_keeps_short_turns_compact() -> None:
 
     assert output.getvalue() == "✓ read README.md · 1 lines\n"
     assert renderer.status_detail() == "mapping repo · 1 events · last: README.md"
+
+
+def test_sigil_display_terminal_digest_has_no_empty_status_detail() -> None:
+    output = StringIO()
+    renderer = display_render.TerminalDigestRenderer(output)
+
+    assert renderer.status_detail() == ""
 
 
 def test_sigil_display_terminal_digest_switches_to_chapters() -> None:
@@ -678,7 +695,7 @@ def test_sigil_display_thinking_status_repaints_on_new_reasoning(monkeypatch) ->
     assert "second thought" in text
 
 
-def test_sigil_display_thinking_status_leaves_thought_summary_line(
+def test_sigil_display_thinking_status_erases_reasoning_without_summary(
     monkeypatch,
 ) -> None:
     monkeypatch.setenv("NO_COLOR", "1")
@@ -690,7 +707,10 @@ def test_sigil_display_thinking_status_leaves_thought_summary_line(
         now = 12.3
         s.refresh()
 
-    assert output.getvalue().endswith("  thought for 12s\n")
+    text = output.getvalue()
+    assert "hmm" in text
+    assert "thought for" not in text
+    assert text.endswith("\r\x1b[2K\x1b[1A\r\x1b[2K\x1b[1A\r\x1b[2K")
 
 
 def test_sigil_display_thinking_status_no_summary_without_reasoning(

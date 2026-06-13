@@ -345,7 +345,7 @@ def test_sqlite_event_store_filters_and_cursors() -> None:
     store = SqliteEventStore.in_memory()
     first = store.accept(
         DraftEvent(
-            event_type="zeta.run.model",
+            event_type="zeta.model.called",
             source="zeta",
             payload={"content": "one"},
             session_id="s1",
@@ -353,7 +353,7 @@ def test_sqlite_event_store_filters_and_cursors() -> None:
     ).event
     second = store.accept(
         DraftEvent(
-            event_type="zeta.run.tool_call",
+            event_type="zeta.tool.called",
             source="zeta",
             payload={"name": "read"},
             caused_by=first.id,
@@ -369,7 +369,7 @@ def test_sqlite_event_store_filters_and_cursors() -> None:
         )
     )
 
-    zeta_events = store.list_events(Filter(event_type_prefix="zeta.run."))
+    zeta_events = store.list_events(Filter(event_type_prefix="zeta."))
     after_first = store.list_events(Filter(after=EventCursor.from_event(first)))
 
     assert [event.id for event in zeta_events] == [first.id, second.id]

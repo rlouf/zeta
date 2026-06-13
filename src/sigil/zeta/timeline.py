@@ -24,12 +24,12 @@ from .trace import (
 RUN_EVENT_KIND = "run_event"
 RUN_HEAD_EVENT_TYPES = {"model", "tool_call", "tool_result"}
 NON_HEAD_EVENT_TYPES = {"model_usage"}
-DURABLE_RUN_EVENT_TYPES = {
-    "model",
-    "model_usage",
-    "tool_call",
-    "turn_aborted",
-    "user_message",
+DURABLE_EVENT_NAMES = {
+    "model": "zeta.model.called",
+    "model_usage": "zeta.run.model_usage",
+    "tool_result": "zeta.tool.called",
+    "turn_aborted": "zeta.run.turn_aborted",
+    "user_message": "zeta.run.user_message",
 }
 
 
@@ -83,17 +83,16 @@ def record_event(event: dict[str, Any]) -> dict[str, Any]:
 
 def record_durable_event(event: dict[str, Any]) -> None:
     event_type = str(event.get("type") or "event")
-    if event_type not in DURABLE_RUN_EVENT_TYPES:
+    durable_event_name = DURABLE_EVENT_NAMES.get(event_type)
+    if durable_event_name is None:
         return
-    payload = {
-        key: value
-        for key, value in event.items()
-        if key not in {"id", "type", "time", "session", "source", "caused_by"}
-    }
+    payload = durable_event_payload(event)
+    if event_type == "tool_result" and "returned_objects" not in payload:
+        return
     try:
         publish_event(
             DraftEvent(
-                event_type=f"zeta.run.{event_type}",
+                event_type=durable_event_name,
                 source="zeta",
                 payload=payload,
                 caused_by=(
@@ -110,8 +109,100 @@ def record_durable_event(event: dict[str, Any]) -> None:
         warn_trace_failure_once("record_durable_event", exc)
 
 
+def durable_event_payload(event: dict[str, Any]) -> dict[str, Any]:
+    payload = {
+        key: value
+        for key, value in event.items()
+        if key
+        not in {
+            "id",
+            "type",
+            "time",
+            "session",
+            "source",
+            "caused_by",
+            "prompt_trace",
+            "tool_call_object_id",
+            "tool_call_object_ids",
+            "tool_result_object_id",
+        }
+    }
+    used_objects, returned_objects = durable_event_object_links(event)
+    if used_objects:
+        payload["used_objects"] = used_objects
+    if returned_objects:
+        payload["returned_objects"] = returned_objects
+    return payload
+
+
+def durable_event_object_links(
+    event: dict[str, Any],
+) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
+    event_type = str(event.get("type") or "")
+    used_objects: list[dict[str, str]] = []
+    returned_objects: list[dict[str, str]] = []
+    if event_type == "model":
+        prompt_trace = event.get("prompt_trace")
+        if isinstance(prompt_trace, dict):
+            add_object_link(
+                used_objects,
+                "prompt",
+                trace_object_id(prompt_trace, "prompt_object_id"),
+            )
+            add_object_link(
+                returned_objects,
+                "assistant_message",
+                trace_object_id(prompt_trace, "assistant_message_object_id"),
+            )
+        add_object_links(
+            returned_objects,
+            "tool_call",
+            event.get("tool_call_object_ids"),
+        )
+        add_object_link(
+            returned_objects,
+            "tool_call",
+            trace_object_id(event, "tool_call_object_id"),
+        )
+    if event_type == "tool_result":
+        add_object_link(
+            used_objects,
+            "tool_call",
+            trace_object_id(event, "tool_call_object_id"),
+        )
+        add_object_link(
+            returned_objects,
+            "tool_result",
+            trace_object_id(event, "tool_result_object_id"),
+        )
+    return used_objects, returned_objects
+
+
+def add_object_links(
+    links: list[dict[str, str]],
+    kind: str,
+    object_ids: Any,
+) -> None:
+    if not isinstance(object_ids, (list, tuple)):
+        return
+    for object_id in object_ids:
+        add_object_link(links, kind, object_id if isinstance(object_id, str) else None)
+
+
+def add_object_link(
+    links: list[dict[str, str]],
+    kind: str,
+    object_id: str | None,
+) -> None:
+    if not object_id:
+        return
+    link = {"kind": kind, "id": object_id}
+    if link not in links:
+        links.append(link)
+
+
 def durable_event_id(event_type: str, event: dict[str, Any]) -> str | None:
-    if event_type == "tool_call":
+    if event_type == "tool_result":
         return None
     event_id = event.get("id")
     return event_id if isinstance(event_id, str) and event_id else None

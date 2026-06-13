@@ -84,6 +84,7 @@ def test_zeta_agent_tool_call_is_caused_by_assistant_event(
 ) -> None:
     target = tmp_path / "README.md"
     target.write_text("hello\n", encoding="utf-8")
+    store = zeta_trace.InMemoryStore()
 
     def fake_chat_completion_messages(
         messages: list[dict[str, Any]],
@@ -112,12 +113,16 @@ def test_zeta_agent_tool_call_is_caused_by_assistant_event(
         "read",
         [],
         zeta_agent.AgentConfig(allowed_tools=("read",), max_turns=1),
+        prompt_builder=zeta_prompt.PromptBuilder(store=store),
     )
 
     assistant = event_by_type(result.events, "model")
     tool_call = event_by_type(result.events, "tool_call")
+    tool_result = event_by_type(result.events, "tool_result")
     assert assistant["id"]
     assert tool_call["caused_by"] == assistant["id"]
+    assert tool_result["caused_by"] == assistant["id"]
+    assert assistant["tool_call_object_ids"] == [tool_call["tool_call_object_id"]]
 
 
 def test_zeta_agent_turn_finalizes_text(monkeypatch) -> None:

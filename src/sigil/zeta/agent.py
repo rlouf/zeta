@@ -106,13 +106,13 @@ def run_agent_turn(
         if model_telemetry:
             latest_model_telemetry = model_telemetry
             model_telemetry_calls.append(model_telemetry)
-        message_event = model_event(assistant)
-        if prompt_trace is not None:
-            attach_prompt_trace(message_event, prompt_trace)
-        assistant_event_id = ensure_event_id(message_event) if message_event else None
-        if message_event:
-            emit_event(events, message_event, event_sink)
-        tool_calls = assistant_tool_calls(assistant)
+        assistant_event_id, tool_calls = record_model_event(
+            assistant,
+            events,
+            prompt_trace=prompt_trace,
+            prompt_builder=builder,
+            event_sink=event_sink,
+        )
         if not tool_calls:
             return AgentTurnResult(
                 final_text=str(assistant.get("content") or ""),
@@ -331,6 +331,32 @@ def assistant_tool_calls(assistant: dict[str, Any]) -> list[dict[str, Any]]:
     return [call for call in raw_tool_calls if isinstance(call, dict)]
 
 
+def record_model_event(
+    assistant: dict[str, Any],
+    events: list[dict[str, Any]],
+    *,
+    prompt_trace: PromptTrace | None,
+    prompt_builder: PromptBuilder,
+    event_sink: AgentEventSink | None,
+) -> tuple[str | None, list[dict[str, Any]]]:
+    event = model_event(assistant)
+    if prompt_trace is not None:
+        attach_prompt_trace(event, prompt_trace)
+    event_id = ensure_event_id(event) if event else None
+    tool_calls = assistant_tool_calls(assistant)
+    tool_call_object_ids = model_tool_call_object_ids(
+        tool_calls,
+        caused_by=event_id,
+        prompt_trace=prompt_trace,
+        prompt_builder=prompt_builder,
+    )
+    if tool_call_object_ids:
+        event["tool_call_object_ids"] = tool_call_object_ids
+    if event:
+        emit_event(events, event, event_sink)
+    return event_id, tool_calls
+
+
 def attach_prompt_trace(event: dict[str, Any], trace: PromptTrace) -> None:
     event["prompt_trace"] = prompt_trace_payload(trace)
 
@@ -363,6 +389,57 @@ def attach_tool_result_trace(
         call_object_id = str(call_event.get("tool_call_object_id") or "")
         if call_object_id:
             event["tool_call_object_id"] = call_object_id
+
+
+def model_tool_call_object_ids(
+    tool_calls: list[dict[str, Any]],
+    *,
+    caused_by: str | None,
+    prompt_trace: PromptTrace | None,
+    prompt_builder: PromptBuilder | None,
+) -> list[str]:
+    object_ids: list[str] = []
+    if prompt_trace is None or prompt_builder is None:
+        return object_ids
+    for index, tool_call in enumerate(tool_calls):
+        call_event = model_tool_call_event(tool_call, index=index, caused_by=caused_by)
+        if not call_event:
+            continue
+        attach_tool_call_trace(
+            call_event,
+            prompt_trace=prompt_trace,
+            prompt_builder=prompt_builder,
+        )
+        object_id = call_event.get("tool_call_object_id")
+        if isinstance(object_id, str):
+            object_ids.append(object_id)
+    return object_ids
+
+
+def model_tool_call_event(
+    tool_call: dict[str, Any],
+    *,
+    index: int,
+    caused_by: str | None,
+) -> dict[str, Any]:
+    call_id = str(tool_call.get("id") or f"call-{index}")
+    function = tool_call.get("function")
+    if not isinstance(function, dict):
+        return {}
+    name = str(function.get("name") or "")
+    arguments = function.get("arguments")
+    params, _ = parse_tool_arguments(arguments)
+    event: dict[str, Any] = {
+        "type": "tool_call",
+        "id": call_id,
+        "tool_call_id": call_id,
+        "name": name,
+        "input": params,
+        "arguments": arguments if isinstance(arguments, str) else json.dumps(params),
+    }
+    if caused_by is not None:
+        event["caused_by"] = caused_by
+    return event
 
 
 def handle_tool_call(
@@ -520,6 +597,8 @@ def invalid_tool_result(
         model_telemetry=model_telemetry,
         prompt_trace=prompt_trace,
     )
+    if isinstance(event.get("caused_by"), str):
+        result_event["caused_by"] = event["caused_by"]
     attach_tool_result_trace(
         result_event,
         event,
@@ -552,6 +631,8 @@ def traced_tool_result_event(
         model_telemetry=model_telemetry,
         prompt_trace=prompt_trace,
     )
+    if isinstance(call_event.get("caused_by"), str):
+        event["caused_by"] = call_event["caused_by"]
     attach_tool_result_trace(
         event,
         call_event,

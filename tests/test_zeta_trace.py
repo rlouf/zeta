@@ -456,9 +456,7 @@ def test_zeta_timeline_record_and_project(tmp_path: Path, monkeypatch) -> None:
     refs = zeta_trace.default_store().refs()
     assert refs[zeta_timeline.run_head_ref("zeta-test")]
     assert refs[zeta_timeline.event_head_ref("zeta-test")]
-    durable_events = event_store().list_events(Filter(event_type="zeta.run.tool_call"))
-    assert durable_events[0].payload["name"] == "read"
-    assert durable_events[0].session_id == "zeta-test"
+    assert event_store().list_events(Filter(event_type="zeta.tool.called")) == []
 
 
 def test_zeta_timeline_tool_result_stays_trace_only(
@@ -480,7 +478,7 @@ def test_zeta_timeline_tool_result_stays_trace_only(
     timeline = zeta_timeline.current_timeline()
     assert timeline[0]["type"] == "tool_result"
     assert timeline[0]["result"] == {"ok": True}
-    assert event_store().list_events(Filter(event_type="zeta.run.tool_result")) == []
+    assert event_store().list_events(Filter(event_type="zeta.tool.called")) == []
 
 
 def test_zeta_timeline_tool_call_is_caused_by_assistant_event(
@@ -515,10 +513,96 @@ def test_zeta_timeline_tool_call_is_caused_by_assistant_event(
     )
 
     assistant = event_store().get("assistant-event-1")
-    tool_calls = event_store().list_events(Filter(event_type="zeta.run.tool_call"))
+    tool_calls = event_store().list_events(Filter(event_type="zeta.tool.called"))
     assert assistant is not None
-    assert assistant.event_type == "zeta.run.model"
-    assert tool_calls[0].caused_by == "assistant-event-1"
+    assert assistant.event_type == "zeta.model.called"
+    assert tool_calls == []
+
+
+def test_zeta_model_called_links_used_and_returned_objects(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("SIGIL_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("SIGIL_SESSION_ID", "zeta-test")
+    store = zeta_trace.default_store()
+    prompt_id = store.put_object(
+        zeta_trace.Object(
+            kind="prompt",
+            schema="zeta.prompt.v1",
+            data={"payload_sha256": "sha256:payload"},
+        )
+    )
+    assistant_id = store.put_object(
+        zeta_trace.Object(
+            kind="assistant_message",
+            schema="zeta.assistant_output.v1",
+            data={"message": {"role": "assistant", "content": "the answer"}},
+            links=(prompt_id,),
+        )
+    )
+    call_id = store.put_object(
+        zeta_trace.Object(
+            kind="tool_call",
+            schema="zeta.tool_call.v1",
+            data={"tool_call_id": "call-1", "name": "read", "input": {}},
+            links=(assistant_id,),
+        )
+    )
+
+    zeta_timeline.record_event(
+        {
+            "type": "model",
+            "id": "model-event-1",
+            "content": "the answer",
+            "prompt_trace": {
+                "prompt_object_id": prompt_id,
+                "assistant_message_object_id": assistant_id,
+            },
+            "tool_call_object_ids": [call_id],
+        }
+    )
+
+    event = event_store().get("model-event-1")
+    assert event is not None
+    assert event.event_type == "zeta.model.called"
+    assert event.payload["used_objects"] == [
+        {"kind": "prompt", "id": prompt_id},
+    ]
+    assert event.payload["returned_objects"] == [
+        {"kind": "assistant_message", "id": assistant_id},
+        {"kind": "tool_call", "id": call_id},
+    ]
+
+
+def test_zeta_tool_called_links_used_and_returned_objects(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("SIGIL_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("SIGIL_SESSION_ID", "zeta-test")
+
+    zeta_timeline.record_event(
+        {
+            "type": "tool_result",
+            "tool_call_id": "call-1",
+            "name": "read",
+            "result": {"ok": True},
+            "tool_call_object_id": "sha256:call",
+            "tool_result_object_id": "sha256:result",
+            "caused_by": "model-event-1",
+        }
+    )
+
+    events = event_store().list_events(Filter(event_type="zeta.tool.called"))
+    assert len(events) == 1
+    assert events[0].caused_by == "model-event-1"
+    assert events[0].payload["used_objects"] == [
+        {"kind": "tool_call", "id": "sha256:call"},
+    ]
+    assert events[0].payload["returned_objects"] == [
+        {"kind": "tool_result", "id": "sha256:result"},
+    ]
 
 
 def test_zeta_timeline_projects_from_ref_and_object(

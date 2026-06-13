@@ -25,11 +25,11 @@ RUN_EVENT_KIND = "run_event"
 RUN_HEAD_EVENT_TYPES = {"assistant_message", "tool_call", "tool_result"}
 NON_HEAD_EVENT_TYPES = {"model_usage"}
 DURABLE_RUN_EVENT_TYPES = {
-    "assistant_message",
-    "model_usage",
-    "tool_call",
-    "turn_aborted",
-    "user_message",
+    "assistant_message": "model",
+    "model_usage": "model_usage",
+    "tool_call": "tool_call",
+    "turn_aborted": "turn_aborted",
+    "user_message": "user_message",
 }
 
 
@@ -83,7 +83,8 @@ def record_event(event: dict[str, Any]) -> dict[str, Any]:
 
 def record_durable_event(event: dict[str, Any]) -> None:
     event_type = str(event.get("type") or "event")
-    if event_type not in DURABLE_RUN_EVENT_TYPES:
+    durable_type = DURABLE_RUN_EVENT_TYPES.get(event_type)
+    if durable_type is None:
         return
     payload = {
         key: value
@@ -93,7 +94,7 @@ def record_durable_event(event: dict[str, Any]) -> None:
     try:
         publish_event(
             DraftEvent(
-                event_type=f"zeta.run.{event_type}",
+                event_type=f"zeta.run.{durable_type}",
                 source="zeta",
                 payload=payload,
                 caused_by=(

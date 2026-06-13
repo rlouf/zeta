@@ -518,7 +518,7 @@ def test_zeta_timeline_tool_call_is_caused_by_assistant_event(
     assistant = event_store().get("assistant-event-1")
     tool_calls = event_store().list_events(Filter(event_type="zeta.run.tool_call"))
     assert assistant is not None
-    assert assistant.event_type == "zeta.run.assistant_message"
+    assert assistant.event_type == "zeta.run.model"
     assert tool_calls[0].caused_by == "assistant-event-1"
 
 

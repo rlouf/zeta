@@ -345,7 +345,7 @@ def test_sqlite_event_store_filters_and_cursors() -> None:
     store = SqliteEventStore.in_memory()
     first = store.accept(
         DraftEvent(
-            event_type="zeta.run.assistant_message",
+            event_type="zeta.run.model",
             source="zeta",
             payload={"content": "one"},
             session_id="s1",

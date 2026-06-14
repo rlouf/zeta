@@ -20,12 +20,15 @@ from _zeta_helpers import (
     write_skill,
 )
 
+from sigil.tools import ensure_builtin_tools_registered
 from sigil.zeta import context as zeta_context
 from sigil.zeta import prompt as zeta_prompt
 from sigil.zeta import skills as zeta_skills
 from sigil.zeta import trace as zeta_trace
 from sigil.zeta.models import chat_completions as zeta_model
 from sigil.zeta.prompt.system import model_tool_descriptors
+
+ensure_builtin_tools_registered()
 
 
 def test_zeta_prompt_builder_noop_transform_matches_chat_messages() -> None:

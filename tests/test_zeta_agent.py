@@ -19,10 +19,13 @@ from _zeta_helpers import (
 from sigil.protocols import (
     SHELL_PROMPT_HANDOFF_TYPE,
 )
+from sigil.tools import ensure_builtin_tools_registered
 from sigil.zeta import agent as zeta_agent
 from sigil.zeta import prompt as zeta_prompt
 from sigil.zeta import trace as zeta_trace
 from sigil.zeta.models import chat_completions as zeta_model
+
+ensure_builtin_tools_registered()
 
 
 def test_zeta_agent_turn_carries_reasoning_into_event(monkeypatch) -> None:

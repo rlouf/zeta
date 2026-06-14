@@ -7,8 +7,6 @@ from typing import Any, Literal
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import SchemaError, ValidationError
 
-from sigil.tools import bash, edit, grep, ls, query_log, read, write
-
 from .base import ToolImpl, error_result
 
 __all__ = ["ExecutionMode", "ToolRegistry", "registry"]
@@ -19,16 +17,8 @@ ExecutionMode = Literal["stage", "direct"]
 class ToolRegistry:
     """Registry for Zeta tools."""
 
-    def __init__(self, *, register_builtins: bool = True) -> None:
+    def __init__(self) -> None:
         self._tools: dict[str, ToolImpl] = {}
-        if register_builtins:
-            self.register("bash", ToolImpl(bash.SPEC, bash.run, bash.stage))
-            self.register("edit", ToolImpl(edit.SPEC, edit.run, edit.stage))
-            self.register("grep", ToolImpl(grep.SPEC, grep.run))
-            self.register("ls", ToolImpl(ls.SPEC, ls.run))
-            self.register("query_log", ToolImpl(query_log.SPEC, query_log.run))
-            self.register("read", ToolImpl(read.SPEC, read.run))
-            self.register("write", ToolImpl(write.SPEC, write.run, write.stage))
 
     def register(self, name: str, tool: ToolImpl) -> None:
         """Register a tool implementation under a model-visible name."""

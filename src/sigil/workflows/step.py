@@ -37,6 +37,7 @@ from ..protocols import (
     TURN_OUTCOME_FAILED,
     TURN_OUTCOME_STAGED,
 )
+from ..tools import ensure_builtin_tools_registered
 from ..zeta.agent import AgentConfig, registered_tools, run_agent_turn
 from ..zeta.context import load_project_context
 from ..zeta.models import (
@@ -109,6 +110,7 @@ def step(
         expand_skill_directive(objective),
         stdin_text=stdin_text,
     )
+    ensure_builtin_tools_registered()
     enabled_tools = registered_tools(allowed_tools)
     ledger = TurnLedger(
         workflow=workflow,

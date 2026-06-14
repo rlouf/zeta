@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import hashlib
 import shutil
 from pathlib import Path
@@ -10,11 +11,14 @@ from typing import Any
 import pytest
 
 from sigil.tools import bash as bash_tool
+from sigil.tools import ensure_builtin_tools_registered, register_builtin_tools
 from sigil.tools import grep as grep_tool
 from sigil.tools import read as read_tool
 from sigil.zeta.tools.base import ToolImpl, ToolSpec
 from sigil.zeta.tools.registry import ToolRegistry
 from sigil.zeta.tools.registry import registry as tool_registry
+
+ensure_builtin_tools_registered()
 
 
 def tool_metadata(name: str) -> dict[str, Any]:
@@ -28,7 +32,7 @@ def test_zeta_tool_registry_registers_and_lists_tools() -> None:
         ToolSpec("unit", "Unit test tool.", {"type": "object"}, effects=("read",)),
         lambda params: {"ok": True, "metadata": params},
     )
-    registry = ToolRegistry(register_builtins=False)
+    registry = ToolRegistry()
 
     registry.register("unit", tool)
 
@@ -37,9 +41,40 @@ def test_zeta_tool_registry_registers_and_lists_tools() -> None:
     assert tool.spec.metadata()["name"] == "unit"
 
 
-def test_zeta_registry_registers_v1_builtins() -> None:
+def test_zeta_tool_registry_starts_empty() -> None:
+    registry = ToolRegistry()
+
+    assert registry.list_tool_names() == []
+
+
+def test_sigil_registers_builtin_tools_explicitly() -> None:
+    registry = ToolRegistry()
+
+    register_builtin_tools(registry)
+
+    assert {"read", "grep", "ls", "bash", "edit", "write", "query_log"} <= set(
+        registry.list_tool_names()
+    )
+
+
+def test_sigil_ensures_shared_zeta_registry_has_builtins() -> None:
+    ensure_builtin_tools_registered()
+
     names = set(tool_registry.list_tool_names())
     assert {"read", "grep", "ls", "bash", "edit", "write"} <= names
+
+
+def test_zeta_tool_registry_does_not_import_sigil_tools() -> None:
+    source = Path("src/sigil/zeta/tools/registry.py").read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    imports = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module is not None:
+            imports.append(node.module)
+        if isinstance(node, ast.Import):
+            imports.extend(alias.name for alias in node.names)
+
+    assert all(not module.startswith("sigil.tools") for module in imports)
 
 
 def test_zeta_grep_metadata_guides_model_tool_choice() -> None:

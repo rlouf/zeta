@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from sigil.zeta.tools.base import ToolSpec, error_result
+from zeta.tools.base import ToolSpec, error_result
 
 DEFAULT_READ_LIMIT = 2_000
 MAX_READ_CHARS = 50_000

@@ -11,7 +11,7 @@ import pytest
 from _zeta_helpers import fake_jwt
 from _zeta_helpers import write_codex_auth_file as write_auth_file
 
-from sigil.zeta.models import codex_auth
+from zeta.models import codex_auth
 
 
 def test_codex_auth_loads_fresh_credentials_without_refresh(

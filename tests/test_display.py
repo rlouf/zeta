@@ -21,7 +21,7 @@ from sigil.protocols import (
     SHELL_HANDOFF_OUTCOME_CANCELLED,
     SHELL_HANDOFF_OUTCOME_EXECUTED,
 )
-from sigil.zeta import trace as zeta_trace
+from zeta import trace as zeta_trace
 
 
 def test_sigil_display_summarizes_tool_results() -> None:

@@ -45,11 +45,11 @@ from sigil.protocols import (
 from sigil.session import read_events, record_turn
 from sigil.workflows import ask as ask_runner
 from sigil.workflows import step as zeta_runner
-from sigil.zeta import agent as zeta_agent
-from sigil.zeta import timeline as zeta_timeline
-from sigil.zeta import trace as zeta_trace
-from sigil.zeta.models import profiles as zeta_models
-from sigil.zeta.trace import PromptTrace
+from zeta import agent as zeta_agent
+from zeta import timeline as zeta_timeline
+from zeta import trace as zeta_trace
+from zeta.models import profiles as zeta_models
+from zeta.trace import PromptTrace
 
 
 def test_sigil_step_writes_handoff_file(

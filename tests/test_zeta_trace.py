@@ -14,10 +14,10 @@ from click.testing import CliRunner
 
 from sigil.cli import cli as sigil_cli
 from sigil.events import Filter, event_store
-from sigil.zeta import prompt as zeta_prompt
-from sigil.zeta import timeline as zeta_timeline
-from sigil.zeta import trace as zeta_trace
-from sigil.zeta.models import profiles as zeta_models
+from zeta import prompt as zeta_prompt
+from zeta import timeline as zeta_timeline
+from zeta import trace as zeta_trace
+from zeta.models import profiles as zeta_models
 
 
 def test_zeta_trace_object_ids_ignore_dict_key_order() -> None:

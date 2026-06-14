@@ -21,12 +21,12 @@ from _zeta_helpers import (
 )
 
 from sigil.tools import ensure_builtin_tools_registered
-from sigil.zeta import context as zeta_context
-from sigil.zeta import prompt as zeta_prompt
-from sigil.zeta import skills as zeta_skills
-from sigil.zeta import trace as zeta_trace
-from sigil.zeta.models import chat_completions as zeta_model
-from sigil.zeta.prompt.system import model_tool_descriptors
+from zeta import context as zeta_context
+from zeta import prompt as zeta_prompt
+from zeta import skills as zeta_skills
+from zeta import trace as zeta_trace
+from zeta.models import chat_completions as zeta_model
+from zeta.prompt.system import model_tool_descriptors
 
 ensure_builtin_tools_registered()
 
@@ -1240,7 +1240,7 @@ def test_zeta_budget_threshold_warns_when_still_over_budget(caplog) -> None:
         1,
     )
 
-    with caplog.at_level("WARNING", logger="sigil.zeta.prompt"):
+    with caplog.at_level("WARNING", logger="zeta.prompt"):
         output = gate.apply(components)
 
     assert output
@@ -1312,7 +1312,7 @@ def test_zeta_trim_env_modes_build_escalation_ladders() -> None:
 
 
 def test_zeta_trim_unknown_mode_warns_loudly(caplog) -> None:
-    with caplog.at_level("WARNING", logger="sigil.zeta.prompt"):
+    with caplog.at_level("WARNING", logger="zeta.prompt"):
         transform = zeta_prompt.prompt_transform_from_env({"ZETA_TRIM": "structurall"})
 
     assert isinstance(transform, zeta_prompt.NoOpPromptTransform)
@@ -1436,11 +1436,9 @@ def test_zeta_prompt_builder_discovers_skills_once_per_turn(monkeypatch) -> None
         return []
 
     monkeypatch.setattr(
-        "sigil.zeta.prompt.components.available_skills", fake_available_skills
+        "zeta.prompt.components.available_skills", fake_available_skills
     )
-    monkeypatch.setattr(
-        "sigil.zeta.prompt.builder.available_skills", fake_available_skills
-    )
+    monkeypatch.setattr("zeta.prompt.builder.available_skills", fake_available_skills)
     builder = zeta_prompt.PromptBuilder(store=zeta_trace.InMemoryStore())
 
     builder.build("question", [], allowed_tools=("read",), tools=[])

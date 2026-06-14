@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from sigil.zeta.tools.base import ToolSpec, error_result
+from zeta.tools.base import ToolSpec, error_result
 
 SCHEMA: dict[str, Any] = {
     "type": "object",

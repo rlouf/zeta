@@ -8,7 +8,7 @@ import subprocess
 import time
 from typing import Any
 
-from sigil.zeta.tools.base import ToolSpec, error_result, proposed_command_effect
+from zeta.tools.base import ToolSpec, error_result, proposed_command_effect
 
 DEFAULT_TIMEOUT_SECONDS = 120.0
 MAX_OUTPUT_CHARS = 12_000

@@ -6,7 +6,7 @@ import os
 
 import click
 
-from ..zeta.models import (
+from zeta.models import (
     clear_active_model_profile,
     default_model_selection,
     load_model_profiles,
@@ -14,6 +14,7 @@ from ..zeta.models import (
     resolve_model_profile,
     set_active_model_profile,
 )
+
 from ._base import cli, examples
 
 

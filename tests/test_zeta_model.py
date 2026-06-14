@@ -21,9 +21,9 @@ from _zeta_helpers import (
 from click.testing import CliRunner
 
 from sigil.cli import cli as sigil_cli
-from sigil.zeta import prompt as zeta_prompt
-from sigil.zeta.models import chat_completions as zeta_model
-from sigil.zeta.models import profiles as zeta_models
+from zeta import prompt as zeta_prompt
+from zeta.models import chat_completions as zeta_model
+from zeta.models import profiles as zeta_models
 
 
 def test_zeta_model_config_ignores_model_env_vars(monkeypatch) -> None:
@@ -1323,7 +1323,7 @@ api = "grpc"
 def test_zeta_models_package_dispatches_default_api_to_chat_completions(
     monkeypatch,
 ) -> None:
-    from sigil.zeta import models as models_pkg
+    from zeta import models as models_pkg
 
     captured: dict[str, Any] = {}
 
@@ -1350,8 +1350,8 @@ def test_zeta_models_package_dispatches_default_api_to_chat_completions(
 
 
 def test_zeta_models_package_routes_codex_api_to_responses(monkeypatch) -> None:
-    from sigil.zeta import models as models_pkg
-    from sigil.zeta.models import responses as zeta_responses
+    from zeta import models as models_pkg
+    from zeta.models import responses as zeta_responses
 
     captured: dict[str, Any] = {}
 
@@ -1383,7 +1383,7 @@ def test_zeta_models_package_routes_codex_api_to_responses(monkeypatch) -> None:
 
 
 def test_zeta_models_package_rejects_unknown_api() -> None:
-    from sigil.zeta import models as models_pkg
+    from zeta import models as models_pkg
 
     with pytest.raises(ValueError, match="grpc"):
         models_pkg.chat_completion_messages(

@@ -15,6 +15,27 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from typing import Any, TextIO
 
+from zeta.agent import AgentConfig, AgentTurnResult, registered_tools, run_agent_turn
+from zeta.context import load_project_context
+from zeta.models import (
+    CODEX_RESPONSES_API,
+    ModelSelection,
+    active_model_selection,
+    ensure_server,
+    model_selection_event,
+)
+from zeta.timeline import add_event_link, current_timeline, record_event
+from zeta.tools.base import proposed_effect
+from zeta.tools.registry import ExecutionMode
+from zeta.tools.registry import registry as tool_registry
+from zeta.trace import (
+    Derivation,
+    Object,
+    PromptTrace,
+    default_store,
+    warn_trace_failure_once,
+)
+
 from .display.render import (
     PROGRESS_MODE_TRACE,
     ContextUsageFooter,
@@ -42,26 +63,6 @@ from .protocols import (
 )
 from .session import session_id
 from .tools import ensure_builtin_tools_registered
-from .zeta.agent import AgentConfig, AgentTurnResult, registered_tools, run_agent_turn
-from .zeta.context import load_project_context
-from .zeta.models import (
-    CODEX_RESPONSES_API,
-    ModelSelection,
-    active_model_selection,
-    ensure_server,
-    model_selection_event,
-)
-from .zeta.timeline import add_event_link, current_timeline, record_event
-from .zeta.tools.base import proposed_effect
-from .zeta.tools.registry import ExecutionMode
-from .zeta.tools.registry import registry as tool_registry
-from .zeta.trace import (
-    Derivation,
-    Object,
-    PromptTrace,
-    default_store,
-    warn_trace_failure_once,
-)
 
 
 def model_server_ready(selected_model: ModelSelection | None) -> bool:

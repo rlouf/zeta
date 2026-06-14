@@ -64,11 +64,11 @@ class TtyStringIO(StringIO):
 
 
 def test_zeta_package_does_not_import_parent_sigil_modules() -> None:
-    zeta_root = Path("src/sigil/zeta")
+    zeta_root = Path("src/zeta")
     violations: list[str] = []
     for path in sorted(zeta_root.rglob("*.py")):
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-        package_parts = ("sigil", "zeta", *path.relative_to(zeta_root).parts[:-1])
+        package_parts = ("zeta", *path.relative_to(zeta_root).parts[:-1])
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):
                 for alias in node.names:
@@ -76,15 +76,7 @@ def test_zeta_package_does_not_import_parent_sigil_modules() -> None:
                         violations.append(f"{path}:{node.lineno}: import {alias.name}")
             if isinstance(node, ast.ImportFrom):
                 resolved = resolved_import_module(package_parts, node)
-                if (
-                    resolved
-                    and resolved[0] == "sigil"
-                    and resolved[:2]
-                    != (
-                        "sigil",
-                        "zeta",
-                    )
-                ):
+                if resolved and resolved[0] == "sigil":
                     module = "." * node.level + (node.module or "")
                     violations.append(f"{path}:{node.lineno}: from {module}")
     assert violations == []
@@ -200,7 +192,7 @@ def test_trace_group_help_explains_id_resolution() -> None:
 
 HEAVY_MODULES_PROBE = (
     "heavy = [name for name in sys.modules if name.startswith('sigil.workflows') "
-    "or name.startswith('sigil.zeta') or name.startswith('rich')]; "
+    "or name.startswith('zeta') or name.startswith('rich')]; "
     "assert not heavy, heavy"
 )
 
@@ -219,7 +211,7 @@ def test_status_dispatch_does_not_load_workflow_modules() -> None:
             "assert code in (0, 1), code; "
             "heavy = [name for name in sys.modules "
             "if name.startswith('sigil.workflows') or name.startswith('rich') "
-            "or name in ('sigil.zeta.models.chat_completions', 'sigil.zeta.agent', 'jsonschema')]; "
+            "or name in ('zeta.models.chat_completions', 'zeta.agent', 'jsonschema')]; "
             "assert not heavy, heavy"
         )
         subprocess.run(
@@ -244,8 +236,8 @@ def test_spool_ingestion_does_not_load_display_or_model() -> None:
             "assert count == 1, count; "
             "heavy = [name for name in sys.modules "
             "if name.startswith('sigil.display') "
-            "or name.startswith('sigil.zeta.agent') "
-            "or name.startswith('sigil.zeta.model') "
+            "or name.startswith('zeta.agent') "
+            "or name.startswith('zeta.model') "
             "or name.startswith('rich')]; "
             "assert not heavy, heavy"
         )
@@ -260,9 +252,9 @@ def test_spool_ingestion_does_not_load_display_or_model() -> None:
 def test_model_selection_import_does_not_load_transport() -> None:
     script = (
         "import sys; "
-        "import sigil.zeta.models; "
+        "import zeta.models; "
         "heavy = [name for name in sys.modules "
-        "if name == 'sigil.zeta.models.chat_completions' or name == 'jsonschema']; "
+        "if name == 'zeta.models.chat_completions' or name == 'jsonschema']; "
         "assert not heavy, heavy"
     )
     subprocess.run([sys.executable, "-c", script], check=True)
@@ -272,7 +264,7 @@ def test_tty_helpers_do_not_load_display_renderer() -> None:
     script = (
         "import sys; "
         "import sigil.display.tty; "
-        "import sigil.zeta.models.chat_completions; "
+        "import zeta.models.chat_completions; "
         "heavy = [name for name in sys.modules "
         "if name == 'sigil.display.render' or name.startswith('rich')]; "
         "assert not heavy, heavy"
@@ -1804,7 +1796,7 @@ def test_ask_omits_failure_context_after_successful_turn() -> None:
 
 
 def test_fresh_ask_only_includes_shell_activity_since_last_response() -> None:
-    from sigil.zeta import timeline as zeta_timeline
+    from zeta import timeline as zeta_timeline
 
     with tempfile.TemporaryDirectory() as tmp:
         with patch_dict(
@@ -1830,7 +1822,7 @@ def test_fresh_ask_only_includes_shell_activity_since_last_response() -> None:
 
 
 def test_fresh_ask_omits_failure_context_already_seen_by_the_model() -> None:
-    from sigil.zeta import timeline as zeta_timeline
+    from zeta import timeline as zeta_timeline
 
     with tempfile.TemporaryDirectory() as tmp:
         with patch_dict(
@@ -1949,7 +1941,7 @@ def test_events_raw_requires_json() -> None:
 
 
 def test_session_transcript_renders_conversation() -> None:
-    from sigil.zeta import timeline as zeta_timeline
+    from zeta import timeline as zeta_timeline
 
     with tempfile.TemporaryDirectory() as tmp:
         with patch_dict(
@@ -1971,7 +1963,7 @@ def test_session_transcript_renders_conversation() -> None:
 
 
 def test_session_transcript_limits_and_dumps_json() -> None:
-    from sigil.zeta import timeline as zeta_timeline
+    from zeta import timeline as zeta_timeline
 
     with tempfile.TemporaryDirectory() as tmp:
         with patch_dict(

@@ -152,7 +152,7 @@ def clear_current_session() -> list[str]:
     the conversation the user just cleared.
     """
     # Imported lazily: `sigil.cli` must not load zeta at import time.
-    from .zeta.trace import close_default_stores
+    from zeta.trace import close_default_stores
 
     root = session_dir()
     if not root.exists():

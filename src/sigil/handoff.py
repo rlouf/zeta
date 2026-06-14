@@ -5,6 +5,9 @@ from __future__ import annotations
 import uuid
 from typing import Any, cast
 
+from zeta.timeline import current_timeline, record_event
+from zeta.tools.base import proposed_effect
+
 from .ledger import append_effect_record
 from .protocols import (
     EFFECT_KIND_HANDOFF,
@@ -20,8 +23,6 @@ from .protocols import (
     is_shell_prompt_handoff,
 )
 from .session import event_time, recent_turns
-from .zeta.timeline import current_timeline, record_event
-from .zeta.tools.base import proposed_effect
 
 
 def append_shell_result() -> dict[str, Any]:

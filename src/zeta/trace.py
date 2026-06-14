@@ -18,7 +18,7 @@ from typing import Any, Protocol, cast
 
 ObjectId = str
 DEFAULT_SQLITE_NAME = "zeta-trace.sqlite3"
-LOGGER = logging.getLogger("sigil.zeta.trace")
+LOGGER = logging.getLogger("zeta.trace")
 _WARNED_FAILURES: set[str] = set()
 _STATE_DIR_FACTORY: StateDirFactory | None = None
 _SESSION_DIR_FACTORY: SessionDirFactory | None = None

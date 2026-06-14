@@ -59,7 +59,7 @@ from .transforms import (
 )
 
 DEFAULT_TRIM_THRESHOLD_TOKENS = 100_000
-LOGGER = logging.getLogger("sigil.zeta.prompt")
+LOGGER = logging.getLogger("zeta.prompt")
 
 
 def prompt_transform_from_env(

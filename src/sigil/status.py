@@ -7,10 +7,11 @@ import time
 from dataclasses import asdict, dataclass
 from typing import Any, Literal
 
+from zeta.models import resolve_active_model
+
 from .ledger import ledger_index, warn_ledger_failure_once
 from .session import latest_active_failure
 from .state import session_id
-from .zeta.models import resolve_active_model
 
 StatusState = Literal["clean", "attention"]
 DELEGATION_WORKFLOWS = ("ask", "propose", "do")

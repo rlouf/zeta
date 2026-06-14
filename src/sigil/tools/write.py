@@ -6,7 +6,7 @@ import shlex
 from pathlib import Path
 from typing import Any
 
-from sigil.zeta.tools.base import (
+from zeta.tools.base import (
     ToolSpec,
     change_hashes,
     error_result,

@@ -8,8 +8,8 @@ from typing import Any
 import pytest
 from _zeta_helpers import FakeStreamingResponse
 
-from sigil.zeta.models import codex_auth
-from sigil.zeta.models import responses as zeta_responses
+from zeta.models import codex_auth
+from zeta.models import responses as zeta_responses
 
 
 def sse_frames(events: list[dict[str, Any]], *, done: bool = False) -> list[bytes]:

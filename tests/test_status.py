@@ -14,7 +14,7 @@ from sigil.protocols import effect_record, turn_contract, turn_record
 from sigil.session import record_turn
 from sigil.state import append_event
 from sigil.status import current_status, format_status
-from sigil.zeta.models import set_active_model_profile
+from zeta.models import set_active_model_profile
 
 
 def test_status_clean_when_no_live_state() -> None:

@@ -168,7 +168,7 @@ def print_session_clear(json_output: bool) -> int:
 def print_session_transcript(limit: int | None, json_output: bool) -> int:
     """Render the current session timeline as a conversation."""
     # Imported lazily: `sigil.cli` must not load zeta or rich at import time.
-    from ..zeta.timeline import current_timeline
+    from zeta.timeline import current_timeline
 
     events = current_timeline()
     if limit is not None and limit > 0:

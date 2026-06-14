@@ -13,9 +13,10 @@ from typing import BinaryIO, Protocol
 
 import click
 
+from zeta.timeline import current_timeline
+
 from ..handoff import matching_pending_handoff
 from ..session import record_turn
-from ..zeta.timeline import current_timeline
 from ._base import (
     EXIT_COMMAND_NOT_EXECUTABLE,
     EXIT_COMMAND_NOT_FOUND,

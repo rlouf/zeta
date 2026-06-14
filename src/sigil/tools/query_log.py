@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from sigil.zeta.tools.base import ToolSpec, error_result
+from zeta.tools.base import ToolSpec, error_result
 
 if TYPE_CHECKING:
     from ..ledger import LedgerIndex

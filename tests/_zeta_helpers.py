@@ -12,10 +12,10 @@ from io import StringIO
 from pathlib import Path
 from typing import Any, cast
 
-from sigil.zeta import agent as zeta_agent
-from sigil.zeta import prompt as zeta_prompt
-from sigil.zeta import trace as zeta_trace
-from sigil.zeta.models import chat_completions as zeta_model
+from zeta import agent as zeta_agent
+from zeta import prompt as zeta_prompt
+from zeta import trace as zeta_trace
+from zeta.models import chat_completions as zeta_model
 
 
 class TtyBuffer(StringIO):
@@ -324,7 +324,7 @@ def task_state_fixture(
         "open_questions": [],
         "files_touched": [
             {
-                "path": "src/sigil/zeta/prompt/transforms.py",
+                "path": "src/zeta/prompt/transforms.py",
                 "operation": "modified",
                 "status": "in_progress",
                 "notes": "Add task-state extraction transform",

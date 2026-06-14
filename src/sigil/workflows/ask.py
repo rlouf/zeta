@@ -8,9 +8,10 @@ the other glyphs remember. A new shell session starts a fresh thread.
 
 from __future__ import annotations
 
+from zeta.skills import expand_skill_directive
+from zeta.timeline import last_event_time
+
 from ..session import active_failure_context, recent_turns_context
-from ..zeta.skills import expand_skill_directive
-from ..zeta.timeline import last_event_time
 from .step import step
 
 ASK_SYSTEM_PROMPT = (

@@ -12,8 +12,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
-from .state import state_dir
-from .zeta.models import (
+from zeta.models import (
     CODEX_RESPONSES_API,
     endpoint_reachable,
     load_model_profiles,
@@ -21,11 +20,13 @@ from .zeta.models import (
     request_model_metadata,
     resolve_active_model,
 )
-from .zeta.models.codex_auth import (
+from zeta.models.codex_auth import (
     access_token_expired,
     codex_auth_path,
     read_auth_tokens,
 )
+
+from .state import state_dir
 
 BINDING_NAME = "sigil.zsh"
 

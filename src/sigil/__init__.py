@@ -4,16 +4,17 @@ from __future__ import annotations
 
 
 def configure_zeta_for_sigil(*, responses: bool = False) -> None:
-    from .events import DraftEvent, publish_event
-    from .session import session_id
-    from .state import session_dir, state_dir
-    from .zeta.models import set_profile_session_dir_factory
-    from .zeta.timeline import (
+    from zeta.models import set_profile_session_dir_factory
+    from zeta.timeline import (
         TimelineDraftEvent,
         set_durable_event_publisher,
         set_session_id_factory,
     )
-    from .zeta.trace import set_trace_path_factories
+    from zeta.trace import set_trace_path_factories
+
+    from .events import DraftEvent, publish_event
+    from .session import session_id
+    from .state import session_dir, state_dir
 
     def publish_timeline_event(draft: TimelineDraftEvent) -> object:
         return publish_event(
@@ -38,6 +39,6 @@ def configure_zeta_for_sigil(*, responses: bool = False) -> None:
         session_dir_factory=session_dir,
     )
     if responses:
-        from .zeta.models import set_responses_session_id_factory
+        from zeta.models import set_responses_session_id_factory
 
         set_responses_session_id_factory(session_id)

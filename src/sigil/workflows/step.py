@@ -11,6 +11,20 @@ from collections.abc import Callable, Iterable, Sequence
 from pathlib import Path
 from typing import Any, Literal, TextIO
 
+from zeta.agent import AgentConfig, registered_tools, run_agent_turn
+from zeta.context import load_project_context
+from zeta.models import (
+    active_model_selection,
+    model_selection_event,
+)
+from zeta.prompt import system_prompt
+from zeta.skills import expand_skill_directive
+from zeta.timeline import current_timeline, record_event
+from zeta.tools.base import proposed_effect
+from zeta.tools.registry import ExecutionMode
+from zeta.tools.registry import registry as tool_registry
+from zeta.trace import latest_prompt_trace_fields
+
 from ..agent_io import (
     TurnEventRecorder,
     TurnLedger,
@@ -39,19 +53,6 @@ from ..protocols import (
     shell_prompt_handoff,
 )
 from ..tools import ensure_builtin_tools_registered
-from ..zeta.agent import AgentConfig, registered_tools, run_agent_turn
-from ..zeta.context import load_project_context
-from ..zeta.models import (
-    active_model_selection,
-    model_selection_event,
-)
-from ..zeta.prompt import system_prompt
-from ..zeta.skills import expand_skill_directive
-from ..zeta.timeline import current_timeline, record_event
-from ..zeta.tools.base import proposed_effect
-from ..zeta.tools.registry import ExecutionMode
-from ..zeta.tools.registry import registry as tool_registry
-from ..zeta.trace import latest_prompt_trace_fields
 
 HandoffOutput = Literal["detail", "summary", "none"]
 Workflow = Literal["ask", "propose", "do"]

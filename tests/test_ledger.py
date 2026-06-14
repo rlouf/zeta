@@ -627,7 +627,7 @@ def test_ledger_cli_log_reindex_reports_counts() -> None:
 
 def seed_bundle_state(monkeypatch) -> dict[str, str]:
     """Record one turn with an effect, bridged into its session trace store."""
-    from sigil.zeta import trace as zeta_trace
+    from zeta import trace as zeta_trace
 
     monkeypatch.setenv("SIGIL_SESSION_ID", "bundle-src")
     turn = append_event(
@@ -729,7 +729,7 @@ def test_bundle_export_skips_sessions_without_trace_stores(monkeypatch) -> None:
 
 def fresh_state_dir(monkeypatch, tmp_path) -> None:
     """Re-point sigil state at an empty directory, as on another machine."""
-    from sigil.zeta.trace import close_default_stores
+    from zeta.trace import close_default_stores
 
     close_default_stores()
     sigil_ledger.close_ledger_indexes()

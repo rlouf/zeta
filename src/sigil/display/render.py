@@ -20,8 +20,9 @@ from rich.padding import Padding
 from rich.panel import Panel
 from rich.text import Text
 
-from ..zeta.prompt.budget import estimated_tokens_for_text
-from ..zeta.tools.base import proposed_effect
+from zeta.prompt.budget import estimated_tokens_for_text
+from zeta.tools.base import proposed_effect
+
 from .summarize import short_trace_id, summarize, text_content, tool_result_summary
 from .tty import iris_italic, is_interactive, muted, should_color
 

@@ -14,9 +14,9 @@ from sigil.tools import bash as bash_tool
 from sigil.tools import ensure_builtin_tools_registered, register_builtin_tools
 from sigil.tools import grep as grep_tool
 from sigil.tools import read as read_tool
-from sigil.zeta.tools.base import ToolImpl, ToolSpec
-from sigil.zeta.tools.registry import ToolRegistry
-from sigil.zeta.tools.registry import registry as tool_registry
+from zeta.tools.base import ToolImpl, ToolSpec
+from zeta.tools.registry import ToolRegistry
+from zeta.tools.registry import registry as tool_registry
 
 ensure_builtin_tools_registered()
 
@@ -65,7 +65,7 @@ def test_sigil_ensures_shared_zeta_registry_has_builtins() -> None:
 
 
 def test_zeta_tool_registry_does_not_import_sigil_tools() -> None:
-    source = Path("src/sigil/zeta/tools/registry.py").read_text(encoding="utf-8")
+    source = Path("src/zeta/tools/registry.py").read_text(encoding="utf-8")
     tree = ast.parse(source)
     imports = []
     for node in ast.walk(tree):

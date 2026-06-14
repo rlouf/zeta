@@ -8,21 +8,14 @@ from typing import Any
 
 import click
 
-from ..display.summarize import (
-    assistant_trace_summary,
-    estimated_prompt_tokens,
-    short_trace_id,
-    text_content,
-    trace_object_summary,
-)
-from ..zeta.models import (
+from zeta.models import (
     ModelSelection,
     chat_completion_messages,
     resolve_active_model,
     resolve_model_profile,
 )
-from ..zeta.prompt import reconstructed_prompt_request
-from ..zeta.trace import (
+from zeta.prompt import reconstructed_prompt_request
+from zeta.trace import (
     AmbiguousIdError,
     Derivation,
     Object,
@@ -37,6 +30,14 @@ from ..zeta.trace import (
     object_payload,
     resolve_object_id,
     warn_trace_failure_once,
+)
+
+from ..display.summarize import (
+    assistant_trace_summary,
+    estimated_prompt_tokens,
+    short_trace_id,
+    text_content,
+    trace_object_summary,
 )
 from ._base import cli, examples
 from ._shared import pretty_print_json

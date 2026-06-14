@@ -4,18 +4,18 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from sigil.zeta.tools.base import ToolImpl
+from zeta.tools.base import ToolImpl
 
 from . import bash, edit, grep, ls, query_log, read, write
 
 if TYPE_CHECKING:
-    from sigil.zeta.tools.registry import ToolRegistry
+    from zeta.tools.registry import ToolRegistry
 
 __all__ = ["ensure_builtin_tools_registered", "register_builtin_tools"]
 
 
 def ensure_builtin_tools_registered() -> None:
-    from sigil.zeta.tools.registry import registry
+    from zeta.tools.registry import registry
 
     register_builtin_tools(registry)
 

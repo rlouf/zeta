@@ -85,10 +85,25 @@ def proposed_command_effect(
 def proposed_effect(result: dict[str, Any]) -> dict[str, Any] | None:
     if result.get("ok") is not True:
         return None
+    effect = effect_payload(result)
+    if effect is None or effect.get("status") != "proposed":
+        return None
+    return effect
+
+
+def effect_resolution(result: dict[str, Any]) -> dict[str, Any] | None:
+    effect = effect_payload(result)
+    if effect is None:
+        return None
+    status = effect.get("status")
+    if status not in {"resolved", "cancelled"}:
+        return None
+    return effect
+
+
+def effect_payload(result: dict[str, Any]) -> dict[str, Any] | None:
     effect = result.get("effect")
     if not isinstance(effect, dict):
-        return None
-    if effect.get("status") != "proposed":
         return None
     return effect
 

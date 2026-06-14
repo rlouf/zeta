@@ -10,9 +10,8 @@ from dataclasses import dataclass
 from typing import Any
 
 from ..events import durable_event, publish_event, timestamp_micros_from_time
-from ..protocols import is_shell_handoff_result, is_shell_prompt_handoff
 from ..state import session_id
-from .tools.base import proposed_effect
+from .tools.base import effect_resolution, proposed_effect
 from .trace import (
     Derivation,
     Object,
@@ -681,7 +680,7 @@ def _chat_message_entries(
 ) -> list[ChatMessageEntry]:
     entries: list[ChatMessageEntry] = []
     tool_call_ids: set[str] = set()
-    resolved_shell_handoffs = resolved_shell_handoff_call_ids(timeline)
+    resolved_effects = resolved_effect_call_ids(timeline)
     for index, event in enumerate(timeline):
         message = role_chat_message(event)
         if message is not None:
@@ -702,7 +701,7 @@ def _chat_message_entries(
             record_tool_call_ids(message, tool_call_ids)
             continue
         if event_type == "tool_result":
-            if is_resolved_shell_prompt_handoff(event, resolved_shell_handoffs):
+            if is_resolved_proposed_effect(event, resolved_effects):
                 continue
             entries.append(
                 ChatMessageEntry(
@@ -712,14 +711,14 @@ def _chat_message_entries(
     return entries
 
 
-def resolved_shell_handoff_call_ids(timeline: list[dict[str, Any]]) -> set[str]:
-    """Return tool call ids that have a real shell handoff outcome."""
+def resolved_effect_call_ids(timeline: list[dict[str, Any]]) -> set[str]:
+    """Return tool call ids that have a proposed-effect resolution."""
     resolved: set[str] = set()
     for event in timeline:
         if str(event.get("type") or "") != "tool_result":
             continue
         result = event.get("result")
-        if not is_shell_handoff_result(result):
+        if not isinstance(result, dict) or effect_resolution(result) is None:
             continue
         tool_call_id = str(event.get("tool_call_id") or "")
         if tool_call_id:
@@ -727,21 +726,19 @@ def resolved_shell_handoff_call_ids(timeline: list[dict[str, Any]]) -> set[str]:
     return resolved
 
 
-def is_resolved_shell_prompt_handoff(
+def is_resolved_proposed_effect(
     event: dict[str, Any],
-    resolved_shell_handoffs: set[str],
+    resolved_effects: set[str],
 ) -> bool:
-    """Return whether this staging handoff was superseded by shell output."""
+    """Return whether this proposal was superseded by a resolution result."""
     tool_call_id = str(event.get("tool_call_id") or "")
-    if not tool_call_id or tool_call_id not in resolved_shell_handoffs:
+    if not tool_call_id or tool_call_id not in resolved_effects:
         return False
     result = event.get("result")
     if not isinstance(result, dict):
         return False
     effect = proposed_effect(result)
-    if effect is not None and effect.get("kind") == "command":
-        return True
-    return is_shell_prompt_handoff(result.get("handoff"))
+    return effect is not None
 
 
 def role_chat_message(event: dict[str, Any]) -> dict[str, Any] | None:

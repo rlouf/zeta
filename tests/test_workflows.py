@@ -32,7 +32,6 @@ from sigil.protocols import (
     SHELL_HANDOFF_OUTCOME_NO_PENDING,
     SHELL_HANDOFF_RESULT_SCHEMA,
     SHELL_HANDOFF_RESULT_TYPE,
-    SHELL_PROMPT_HANDOFF_TYPE,
     TURN_OUTCOME_ABORTED,
     TURN_OUTCOME_EXECUTED,
     TURN_OUTCOME_FAILED,
@@ -1026,8 +1025,9 @@ def test_append_shell_result_appends_tool_result(
             "name": "bash",
             "result": {
                 "ok": True,
-                "handoff": {
-                    "type": SHELL_PROMPT_HANDOFF_TYPE,
+                "effect": {
+                    "kind": "command",
+                    "status": "proposed",
                     "command": "uv run pytest",
                     "reason": "Run tests.",
                 },
@@ -1049,6 +1049,13 @@ def test_append_shell_result_appends_tool_result(
     assert event["result"]["expected_command"] == "uv run pytest"
     assert event["result"]["executed_command"] == "uv run pytest"
     assert event["result"]["status"] == 1
+    assert event["result"]["effect"] == {
+        "kind": "command",
+        "status": "resolved",
+        "outcome": SHELL_HANDOFF_OUTCOME_EXECUTED,
+        "command": "uv run pytest",
+        "proposed_command": "uv run pytest",
+    }
     assert event["result"]["shell_turns"][0]["command"] == "uv run pytest"
     assert "uv run pytest (exit 1)" in event["result"]["content"][0]["text"]
 
@@ -1090,8 +1097,9 @@ def test_resolved_shell_handoff_context_keeps_tool_call_with_shell_result(
             "name": "bash",
             "result": {
                 "ok": True,
-                "handoff": {
-                    "type": SHELL_PROMPT_HANDOFF_TYPE,
+                "effect": {
+                    "kind": "command",
+                    "status": "proposed",
                     "command": "uv run pytest",
                     "reason": "Run tests.",
                 },
@@ -1126,8 +1134,9 @@ def test_sigil_transcript_shell_result_reports_extended_handoff_as_edited(
             "name": "bash",
             "result": {
                 "ok": True,
-                "handoff": {
-                    "type": SHELL_PROMPT_HANDOFF_TYPE,
+                "effect": {
+                    "kind": "command",
+                    "status": "proposed",
                     "command": "uv run pytest",
                     "reason": "Run tests.",
                 },
@@ -1161,8 +1170,9 @@ def test_sigil_transcript_shell_result_matches_despite_whitespace_edits(
             "name": "bash",
             "result": {
                 "ok": True,
-                "handoff": {
-                    "type": SHELL_PROMPT_HANDOFF_TYPE,
+                "effect": {
+                    "kind": "command",
+                    "status": "proposed",
                     "command": "uv run pytest",
                     "reason": "Run tests.",
                 },
@@ -1191,8 +1201,9 @@ def test_sigil_transcript_shell_result_cancels_unrelated_command(
             "name": "bash",
             "result": {
                 "ok": True,
-                "handoff": {
-                    "type": SHELL_PROMPT_HANDOFF_TYPE,
+                "effect": {
+                    "kind": "command",
+                    "status": "proposed",
                     "command": "uv run pytest",
                     "reason": "Run tests.",
                 },
@@ -1207,6 +1218,13 @@ def test_sigil_transcript_shell_result_cancels_unrelated_command(
     assert event["result"]["schema"] == SHELL_HANDOFF_RESULT_SCHEMA
     assert event["result"]["type"] == SHELL_HANDOFF_RESULT_TYPE
     assert event["result"]["outcome"] == SHELL_HANDOFF_OUTCOME_CANCELLED
+    assert event["result"]["effect"] == {
+        "kind": "command",
+        "status": "cancelled",
+        "outcome": SHELL_HANDOFF_OUTCOME_CANCELLED,
+        "command": "uv run pytest",
+        "actual_command": "git status --short",
+    }
     assert (
         event["result"]["cancellation_reason"]
         == SHELL_HANDOFF_CANCEL_EXPECTED_NOT_EXECUTED
@@ -1229,8 +1247,9 @@ def test_sigil_transcript_shell_result_includes_intervening_shell_turns(
             "name": "bash",
             "result": {
                 "ok": True,
-                "handoff": {
-                    "type": SHELL_PROMPT_HANDOFF_TYPE,
+                "effect": {
+                    "kind": "command",
+                    "status": "proposed",
                     "command": "uv run pytest",
                     "reason": "Run tests.",
                 },
@@ -1264,8 +1283,9 @@ def test_sigil_transcript_shell_result_does_not_reuse_resolved_handoff(
             "name": "bash",
             "result": {
                 "ok": True,
-                "handoff": {
-                    "type": SHELL_PROMPT_HANDOFF_TYPE,
+                "effect": {
+                    "kind": "command",
+                    "status": "proposed",
                     "command": "uv run pytest",
                     "reason": "Run tests.",
                 },

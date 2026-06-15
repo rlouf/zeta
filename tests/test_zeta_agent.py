@@ -27,6 +27,7 @@ from zeta import cli as zeta_cli
 from zeta import context as zeta_context
 from zeta import events as zeta_events
 from zeta import prompt as zeta_prompt
+from zeta import rpc as zeta_rpc
 from zeta import timeline as zeta_timeline
 from zeta import trace as zeta_trace
 from zeta.models import chat_completions as zeta_model
@@ -73,7 +74,7 @@ def test_zeta_rpc_initialize_returns_server_metadata() -> None:
         json.dumps({"jsonrpc": "2.0", "id": 1, "method": "initialize"}) + "\n"
     )
     output = StringIO()
-    server = zeta_agent.JsonRpcServer(input_stream, output)
+    server = zeta_rpc.JsonRpcServer(input_stream, output)
 
     server.serve()
 
@@ -174,7 +175,7 @@ def test_zeta_rpc_session_uses_explicit_context(monkeypatch, tmp_path: Path) -> 
         lambda *args, **kwargs: {"content": "done"},
     )
 
-    result = zeta_agent.run_rpc_session(
+    result = zeta_rpc.run_rpc_session(
         {"objective": "answer", "tools": [], "context": ""},
         publish_event=published.append,
         runtime_context=context,
@@ -193,7 +194,7 @@ def test_zeta_rpc_session_uses_explicit_context(monkeypatch, tmp_path: Path) -> 
 
 def test_zeta_rpc_registers_client_tool_on_server_registry() -> None:
     registry = ToolRegistry()
-    server = zeta_agent.JsonRpcServer(StringIO(), StringIO(), tool_registry=registry)
+    server = zeta_rpc.JsonRpcServer(StringIO(), StringIO(), tool_registry=registry)
 
     registered = server.register_client_tools(
         [
@@ -226,7 +227,7 @@ def test_zeta_rpc_registers_client_tools_and_calls_client() -> None:
         + "\n"
     )
     output = StringIO()
-    server = zeta_agent.JsonRpcServer(input_stream, output)
+    server = zeta_rpc.JsonRpcServer(input_stream, output)
     server.register_client_tools(
         [
             {
@@ -281,7 +282,7 @@ def test_zeta_rpc_session_run_streams_events_and_returns_turn(
         lambda *args, **kwargs: {"content": "done"},
     )
 
-    server = zeta_agent.JsonRpcServer(input_stream, output)
+    server = zeta_rpc.JsonRpcServer(input_stream, output)
     server.session_runner = lambda params: run_zeta_rpc_session(
         params,
         publish_event=server.publish_event,

@@ -6,8 +6,8 @@ import sys
 
 import click
 
-from .agent import JsonRpcServer, run_rpc_session
 from .context import default_context
+from .rpc import JsonRpcServer, run_rpc_session
 
 
 @click.group(context_settings={"help_option_names": ["-h", "--help"]})

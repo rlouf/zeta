@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from typing import Any, TextIO
 
 from zeta.agent import AgentConfig, AgentTurnResult, registered_tools, run_agent_turn
-from zeta.context import load_project_context
+from zeta.context import ZetaContext, load_project_context
 from zeta.models import (
     CODEX_RESPONSES_API,
     ModelSelection,
@@ -27,7 +27,6 @@ from zeta.models import (
 from zeta.timeline import add_event_link, current_timeline, record_event
 from zeta.tools.base import proposed_effect
 from zeta.tools.registry import ExecutionMode
-from zeta.tools.registry import registry as tool_registry
 from zeta.trace import (
     Derivation,
     Object,
@@ -387,10 +386,12 @@ class TurnEventRecorder:
         *,
         render_output: TextIO,
         ledger: TurnLedger | None = None,
+        runtime_context: ZetaContext | None = None,
     ) -> None:
         self.renderer = renderer
         self.render_output = render_output
         self.ledger = ledger
+        self.runtime_context = runtime_context
         self.recorded_event_ids: set[int] = set()
         self.status: int | None = None
 
@@ -433,7 +434,12 @@ class TurnEventRecorder:
         }
         if self.ledger is not None:
             fields["turn_id"] = self.ledger.turn_id
-        return record_zeta_event(event_type, **fields, **self.tag_fields)
+        return record_zeta_event(
+            event_type,
+            runtime_context=self.runtime_context,
+            **fields,
+            **self.tag_fields,
+        )
 
     def handle_tool_call(self, name: str, args: dict[str, Any]) -> None:
         self.render_tool_call(name, args)
@@ -474,17 +480,28 @@ def render_final_text(
     print()
 
 
-def record_zeta_event(event_type: str, **fields: Any) -> dict[str, Any]:
+def record_zeta_event(
+    event_type: str,
+    *,
+    runtime_context: ZetaContext | None = None,
+    **fields: Any,
+) -> dict[str, Any]:
     from . import configure_zeta_for_sigil
 
     configure_zeta_for_sigil(responses=True)
-    return record_event({"type": event_type, **fields})
+    return record_event({"type": event_type, **fields}, runtime_context=runtime_context)
 
 
-def record_turn_abort(error: BaseException, **fields: Any) -> dict[str, Any]:
+def record_turn_abort(
+    error: BaseException,
+    *,
+    runtime_context: ZetaContext | None = None,
+    **fields: Any,
+) -> dict[str, Any]:
     """Resolve an aborted turn in the timeline instead of dangling its question."""
     return record_zeta_event(
         "turn_aborted",
+        runtime_context=runtime_context,
         error=str(error),
         content=f"(turn aborted: {error})",
         **fields,
@@ -496,9 +513,10 @@ def run_zeta_rpc_session(
     *,
     publish_event: Callable[[dict[str, Any]], None],
 ) -> dict[str, Any]:
-    from . import configure_zeta_for_sigil
+    from . import configure_zeta_for_sigil, zeta_context_for_sigil
 
     configure_zeta_for_sigil(responses=True)
+    runtime_context = zeta_context_for_sigil()
     objective = str(params.get("objective") or "")
     if not objective:
         raise ValueError("session.run requires objective")
@@ -513,7 +531,10 @@ def run_zeta_rpc_session(
     )
     ensure_builtin_tools_registered()
     selected_model = active_model_selection()
-    enabled_tools = registered_tools(allowed_tools)
+    enabled_tools = registered_tools(
+        allowed_tools,
+        tool_registry=runtime_context.tool_registry,
+    )
     execution_mode: ExecutionMode = "direct" if workflow == "do" else "stage"
     ledger = TurnLedger(
         workflow=workflow,
@@ -522,12 +543,12 @@ def run_zeta_rpc_session(
         staged=any(
             tool.spec.mutates()
             for name in enabled_tools
-            if (tool := tool_registry.get(name)) is not None
+            if (tool := runtime_context.tool_registry.get(name)) is not None
         )
         and execution_mode == "stage",
         agent=model_selection_event(selected_model) if selected_model else None,
     )
-    prior_timeline = current_timeline()
+    prior_timeline = current_timeline(runtime_context=runtime_context)
     user_event = record_event(
         {
             "type": "user_message",
@@ -536,7 +557,8 @@ def run_zeta_rpc_session(
             "runtime": "zeta-rpc",
             "turn_id": ledger.turn_id,
             "available_tools": list(enabled_tools),
-        }
+        },
+        runtime_context=runtime_context,
     )
     ledger.note_root_event(user_event)
     append_prompt_submitted_event(user_event)
@@ -547,7 +569,7 @@ def run_zeta_rpc_session(
         if event_type == "tool_result":
             ledger.attach_tool_result_effect(event)
         event["turn_id"] = ledger.turn_id
-        persisted = record_event(event)
+        persisted = record_event(event, runtime_context=runtime_context)
         ledger.note_runtime_event(persisted)
         publish_event(persisted)
 
@@ -581,11 +603,13 @@ def run_zeta_rpc_session(
                 else load_project_context()
             ),
             event_sink=sink,
+            tool_registry=runtime_context.tool_registry,
             caused_by=ledger.root_event_id,
         )
     except RuntimeError as error:
         record_turn_abort(
             error,
+            runtime_context=runtime_context,
             workflow=workflow,
             caused_by=ledger.causal_parent_event_id(),
         )

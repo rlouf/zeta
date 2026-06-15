@@ -3,6 +3,26 @@
 from __future__ import annotations
 
 
+def zeta_context_for_sigil():
+    from zeta.context import ZetaContext
+    from zeta.events import event_store
+    from zeta.tools.registry import registry
+    from zeta.trace import default_store
+
+    from .session import session_id
+    from .state import session_dir, state_dir
+
+    active_session = session_id()
+    return ZetaContext(
+        session_id=active_session,
+        event_sink=event_store(),
+        trace_store=default_store(),
+        tool_registry=registry,
+        state_dir=state_dir(),
+        session_dir=session_dir(active_session),
+    )
+
+
 def configure_zeta_for_sigil(*, responses: bool = False) -> None:
     from zeta.models import set_profile_session_dir_factory
     from zeta.timeline import set_session_id_factory

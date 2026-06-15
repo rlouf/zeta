@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any, Literal, TextIO
 
 from zeta.agent import AgentConfig, registered_tools, run_agent_turn
-from zeta.context import load_project_context
+from zeta.context import ZetaContext, load_project_context
 from zeta.models import (
     active_model_selection,
     model_selection_event,
@@ -21,8 +21,8 @@ from zeta.prompt import system_prompt
 from zeta.skills import expand_skill_directive
 from zeta.timeline import current_timeline, record_event
 from zeta.tools.base import proposed_effect
-from zeta.tools.registry import ExecutionMode
-from zeta.tools.registry import registry as tool_registry
+from zeta.tools.registry import ExecutionMode, ToolRegistry
+from zeta.tools.registry import registry as _default_tool_registry
 from zeta.trace import latest_prompt_trace_fields
 
 from ..agent_io import (
@@ -104,9 +104,10 @@ def step(
     wrapped in the step instruction scaffolding. The do workflow executes
     directly; every other workflow stages mutations for review.
     """
-    from .. import configure_zeta_for_sigil
+    from .. import configure_zeta_for_sigil, zeta_context_for_sigil
 
     configure_zeta_for_sigil(responses=True)
+    runtime_context = zeta_context_for_sigil()
     system = system or STEP_SYSTEM_PROMPT
     execution_mode: ExecutionMode = "direct" if workflow == "do" else "stage"
     selected_model = active_model_selection()
@@ -118,15 +119,22 @@ def step(
         stdin_text=stdin_text,
     )
     ensure_builtin_tools_registered()
-    enabled_tools = registered_tools(allowed_tools)
+    enabled_tools = registered_tools(
+        allowed_tools,
+        tool_registry=runtime_context.tool_registry,
+    )
     ledger = TurnLedger(
         workflow=workflow,
         objective=objective,
         allowed_tools=enabled_tools,
-        staged=stages_mutations(execution_mode, enabled_tools),
+        staged=stages_mutations(
+            execution_mode,
+            enabled_tools,
+            tool_registry=runtime_context.tool_registry,
+        ),
         agent=model_selection_event(selected_model) if selected_model else None,
     )
-    prior_timeline = current_timeline()
+    prior_timeline = current_timeline(runtime_context=runtime_context)
     user_event: dict[str, Any] = {
         "type": "user_message",
         "content": prompt,
@@ -138,7 +146,7 @@ def step(
     }
     if selected_model is not None:
         user_event["model"] = model_selection_event(selected_model)
-    prompt_event = record_event(user_event)
+    prompt_event = record_event(user_event, runtime_context=runtime_context)
     append_prompt_submitted_event(prompt_event)
     ledger.note_root_event(prompt_event)
     context = load_project_context()
@@ -150,6 +158,7 @@ def step(
         handoff_output=handoff_output,
         render_output=output,
         ledger=ledger,
+        runtime_context=runtime_context,
     )
     context_footer = renderer.context_footer
     try:
@@ -183,11 +192,13 @@ def step(
                 reasoning_observer=progress_reasoning_observer(renderer),
             ),
             stream_sink=renderer.stream_renderer,
+            tool_registry=runtime_context.tool_registry,
             caused_by=ledger.root_event_id,
         )
     except RuntimeError as error:
         record_turn_abort(
             error,
+            runtime_context=runtime_context,
             workflow=workflow,
             caused_by=ledger.causal_parent_event_id(),
         )
@@ -202,6 +213,7 @@ def step(
             result.model_telemetry,
             workflow=workflow,
             prompt_traces=result.prompt_traces,
+            runtime_context=runtime_context,
         )
         turn = ledger.finish(TURN_OUTCOME_STAGED, prompt_traces=result.prompt_traces)
         finalize_progress(renderer, turn)
@@ -215,6 +227,7 @@ def step(
             result.model_telemetry,
             workflow=workflow,
             prompt_traces=result.prompt_traces,
+            runtime_context=runtime_context,
         )
         turn = ledger.finish(
             TURN_OUTCOME_EXECUTED if ledger.effect_ids else TURN_OUTCOME_ANSWERED,
@@ -249,8 +262,14 @@ class AgentStepEventRecorder(TurnEventRecorder):
         handoff_output: HandoffOutput,
         render_output: TextIO,
         ledger: TurnLedger | None = None,
+        runtime_context: ZetaContext | None = None,
     ) -> None:
-        super().__init__(renderer, render_output=render_output, ledger=ledger)
+        super().__init__(
+            renderer,
+            render_output=render_output,
+            ledger=ledger,
+            runtime_context=runtime_context,
+        )
         self.tag_fields = {"workflow": workflow}
         self.handoff_path = handoff_path
         self.handoff_output = handoff_output
@@ -367,17 +386,25 @@ def record_agent_model_telemetry(
     *,
     workflow: str,
     prompt_traces: Sequence[Any] = (),
+    runtime_context: ZetaContext | None = None,
 ) -> None:
     fields = model_telemetry_fields(model_telemetry)
     if not fields:
         return
     fields.update(latest_prompt_trace_fields(prompt_traces))
-    record_zeta_event("model_usage", **fields, workflow=workflow)
+    record_zeta_event(
+        "model_usage",
+        runtime_context=runtime_context,
+        **fields,
+        workflow=workflow,
+    )
 
 
 def stages_mutations(
     execution_mode: ExecutionMode,
     enabled_tools: tuple[str, ...],
+    *,
+    tool_registry: ToolRegistry | None = None,
 ) -> bool:
     """Whether this turn's contract stages mutations for review.
 
@@ -385,10 +412,11 @@ def stages_mutations(
     """
     if execution_mode != "stage":
         return False
+    active_tool_registry = tool_registry or _default_tool_registry
     return any(
         tool.spec.mutates()
         for name in enabled_tools
-        if (tool := tool_registry.get(name)) is not None
+        if (tool := active_tool_registry.get(name)) is not None
     )
 
 

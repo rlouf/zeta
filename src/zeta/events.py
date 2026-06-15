@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import atexit
 import json
 import os
 import sqlite3
@@ -398,39 +397,8 @@ def event_store_path(root: Path | None = None) -> Path:
     return base / EVENT_STORE_NAME
 
 
-_STORES_BY_PATH: dict[Path, SqliteEventStore] = {}
-
-
-def event_store() -> SqliteEventStore:
-    path = event_store_path()
-    store = _STORES_BY_PATH.get(path)
-    if store is None:
-        store = SqliteEventStore(path)
-        _STORES_BY_PATH[path] = store
-    return store
-
-
-def close_event_stores() -> None:
-    while _STORES_BY_PATH:
-        _, store = _STORES_BY_PATH.popitem()
-        store.close()
-
-
-def publish_event(draft: DraftEvent, sink: EventSink | None = None) -> AppendOutcome:
-    target = sink if sink is not None else event_store()
-    return target.accept(draft)
-
-
-def event_children(event_id: str, *, limit: int | None = None) -> list[Event]:
-    return event_store().children(event_id, limit=limit)
-
-
-def causal_chain(event_id: str) -> list[Event]:
-    return event_store().causal_chain(event_id)
-
-
-def events_for_turn(turn_id: str) -> list[Event]:
-    return event_store().events_for_turn(turn_id)
+def publish_event(draft: DraftEvent, *, sink: EventSink) -> AppendOutcome:
+    return sink.accept(draft)
 
 
 def row_to_event(row: sqlite3.Row) -> Event:
@@ -494,6 +462,3 @@ def execute_with_retry(connection: sqlite3.Connection, sql: str) -> None:
             if "locked" not in str(exc).lower() or time.monotonic() >= deadline:
                 raise
             time.sleep(0.01)
-
-
-atexit.register(close_event_stores)

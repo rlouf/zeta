@@ -743,9 +743,6 @@ def test_bundle_export_skips_sessions_without_trace_stores(monkeypatch) -> None:
 
 def fresh_state_dir(monkeypatch, tmp_path) -> None:
     """Re-point sigil state at an empty directory, as on another machine."""
-    from zeta.trace import close_default_stores
-
-    close_default_stores()
     sigil_ledger.close_ledger_indexes()
     monkeypatch.setenv("SIGIL_STATE_DIR", str(tmp_path / "imported-state"))
 

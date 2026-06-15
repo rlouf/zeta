@@ -24,7 +24,6 @@ from .trace import (
     Object,
     ObjectId,
     Store,
-    default_store,
     warn_trace_failure_once,
 )
 
@@ -45,21 +44,21 @@ class ChatMessageEntry:
 def record_event(
     event: dict[str, Any],
     *,
-    runtime_context: ZetaContext | None = None,
+    runtime_context: ZetaContext,
 ) -> dict[str, Any]:
     """Record a Zeta event in the trace store and advance the run head."""
     scoped_event = dict(event)
-    if runtime_context is not None and "session" not in scoped_event:
+    if "session" not in scoped_event:
         scoped_event["session"] = runtime_context.session_id
     payload = event_payload(scoped_event)
     record_durable_event(
         payload,
-        event_sink=runtime_context.event_sink if runtime_context else None,
-        session_id=runtime_context.session_id if runtime_context else None,
+        event_sink=runtime_context.event_sink,
+        session_id=runtime_context.session_id,
     )
     try:
-        store = runtime_context.trace_store if runtime_context else default_store()
-        run_id = runtime_context.session_id if runtime_context else None
+        store = runtime_context.trace_store
+        run_id = runtime_context.session_id
         with store.batch():
             previous_event_id = store.get_ref(event_head_ref(run_id))
             links = event_links(payload, previous_event_id)
@@ -118,11 +117,10 @@ def record_durable_event(
     )
     if draft is None:
         return
+    if event_sink is None:
+        return
     try:
-        if event_sink is not None:
-            publish_event(draft, sink=event_sink)
-        else:
-            publish_event(draft)
+        publish_event(draft, sink=event_sink)
     except Exception as exc:
         warn_trace_failure_once("record_durable_event", exc)
 
@@ -263,12 +261,10 @@ def optional_event_str(value: object) -> str | None:
     return value if isinstance(value, str) else None
 
 
-def current_timeline(
-    *, runtime_context: ZetaContext | None = None
-) -> list[dict[str, Any]]:
+def current_timeline(*, runtime_context: ZetaContext) -> list[dict[str, Any]]:
     try:
-        store = runtime_context.trace_store if runtime_context else default_store()
-        run_id = runtime_context.session_id if runtime_context else None
+        store = runtime_context.trace_store
+        run_id = runtime_context.session_id
         events = timeline_from_ref(run_head_ref(run_id), store=store)
         if not events:
             events = timeline_from_ref(event_head_ref(run_id), store=store)
@@ -278,11 +274,10 @@ def current_timeline(
     return events
 
 
-def last_event_time() -> float | None:
+def last_event_time(*, store: Store, run_id: str | None = None) -> float | None:
     """Return the time of the most recently recorded event, if any."""
     try:
-        store = default_store()
-        event_id = store.get_ref(event_head_ref())
+        event_id = store.get_ref(event_head_ref(run_id))
         if event_id is None:
             return None
         obj = store.get_object(event_id)
@@ -298,15 +293,14 @@ def last_event_time() -> float | None:
 def timeline_from_ref(
     ref_name: str,
     *,
-    store: Store | None = None,
+    store: Store,
 ) -> list[dict[str, Any]]:
     """Project a timeline from the object named by a trace ref."""
     try:
-        active_store = store or default_store()
-        object_id = active_store.get_ref(ref_name)
+        object_id = store.get_ref(ref_name)
         if object_id is None:
             return []
-        return timeline_from_object(object_id, store=active_store)
+        return timeline_from_object(object_id, store=store)
     except Exception as exc:
         warn_trace_failure_once("timeline_from_ref", exc)
         return []
@@ -315,7 +309,7 @@ def timeline_from_ref(
 def timeline_from_object(
     object_id: ObjectId,
     *,
-    store: Store | None = None,
+    store: Store,
 ) -> list[dict[str, Any]]:
     """Project the full timeline by walking backward from a trace object.
 
@@ -324,7 +318,7 @@ def timeline_from_object(
     """
     try:
         return timeline_events_from_head(
-            store or default_store(),
+            store,
             object_id,
             seen=set(),
         )
@@ -358,14 +352,16 @@ def event_head_ref(run_id: str | None = None) -> str:
     return f"run/{run_id or timeline_session_id()}/event_head"
 
 
-def set_run_head(object_id: ObjectId, *, store: Store | None = None) -> None:
+def set_run_head(
+    object_id: ObjectId, *, store: Store, run_id: str | None = None
+) -> None:
     """Move the current run head to a trace object."""
-    (store or default_store()).set_ref(run_head_ref(), object_id)
+    store.set_ref(run_head_ref(run_id), object_id)
 
 
-def run_head(*, store: Store | None = None) -> ObjectId | None:
+def run_head(*, store: Store, run_id: str | None = None) -> ObjectId | None:
     """Return the current run head object id, if any."""
-    return (store or default_store()).get_ref(run_head_ref())
+    return store.get_ref(run_head_ref(run_id))
 
 
 def event_payload(event: dict[str, Any]) -> dict[str, Any]:

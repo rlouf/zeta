@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import atexit
 import hashlib
 import json
 import logging
@@ -184,39 +183,6 @@ def available_session_ids() -> list[str]:
     return sorted(
         path.parent.name for path in sessions_root.glob(f"*/{DEFAULT_SQLITE_NAME}")
     )
-
-
-_DEFAULT_STORES: dict[Path, SqliteStore] = {}
-
-
-def default_store(session_id: str | None = None) -> SqliteStore:
-    """Return the process-wide store for the current session path.
-
-    An explicit session id opens that session's store read-only and
-    uncached; a missing store raises UnknownSessionError with the
-    recorded session ids.
-    """
-    if session_id is not None:
-        path = session_sqlite_path(session_id)
-        if not path.exists():
-            raise UnknownSessionError(session_id, available_session_ids())
-        return SqliteStore(path, read_only=True)
-    path = default_sqlite_path()
-    store = _DEFAULT_STORES.get(path)
-    if store is None:
-        store = SqliteStore(path)
-        _DEFAULT_STORES[path] = store
-    return store
-
-
-def close_default_stores() -> None:
-    """Close every cached default store; the next call reopens."""
-    while _DEFAULT_STORES:
-        _, store = _DEFAULT_STORES.popitem()
-        store.close()
-
-
-atexit.register(close_default_stores)
 
 
 def warn_trace_failure_once(operation: str, exc: BaseException) -> None:

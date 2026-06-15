@@ -29,13 +29,12 @@ ASK_SYSTEM_PROMPT = (
 ASK_TOOLS = ("read", "grep", "ls", "query_log")
 
 
-def prepend_recent_turns(user_input: str) -> str:
+def prepend_recent_turns(user_input: str, *, since: float | None) -> str:
     """Attach shell activity newer than the last model response to a question.
 
     Older activity is already in the timeline the model sees; only the delta
     since the previous turn is news.
     """
-    since = last_event_time()
     sections = []
     context = recent_turns_context(since=since)
     if context:
@@ -55,10 +54,19 @@ def ask(
     tools: tuple[str, ...] = ASK_TOOLS,
 ) -> int:
     """Run Zeta for a shell ask continuing the session timeline."""
+    from .. import zeta_context_for_sigil
+
+    runtime_context = zeta_context_for_sigil()
     return step(
         question,
         workflow="ask",
         system=ASK_SYSTEM_PROMPT,
-        prompt=prepend_recent_turns(expand_skill_directive(question)),
+        prompt=prepend_recent_turns(
+            expand_skill_directive(question),
+            since=last_event_time(
+                store=runtime_context.trace_store,
+                run_id=runtime_context.session_id,
+            ),
+        ),
         allowed_tools=tools,
     )

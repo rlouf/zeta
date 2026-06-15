@@ -17,8 +17,44 @@ from sigil.state import trace_store_path
 from zeta import prompt as zeta_prompt
 from zeta import timeline as zeta_timeline
 from zeta import trace as zeta_trace
-from zeta.events import Filter, event_store
+from zeta.context import ZetaContext, default_context
+from zeta.events import Filter, SqliteEventStore, event_store_path
 from zeta.models import profiles as zeta_models
+
+
+def zeta_event_store() -> SqliteEventStore:
+    return SqliteEventStore(event_store_path())
+
+
+def zeta_runtime_context(
+    trace_store: zeta_trace.Store | None = None,
+) -> ZetaContext:
+    context = default_context()
+    if trace_store is None:
+        return context
+    return ZetaContext(
+        session_id=context.session_id,
+        event_sink=context.event_sink,
+        trace_store=trace_store,
+        tool_registry=context.tool_registry,
+        state_dir=context.state_dir,
+        session_dir=context.session_dir,
+    )
+
+
+def record_zeta_event(
+    event: dict[str, object],
+    *,
+    runtime_context: ZetaContext | None = None,
+) -> dict[str, object]:
+    return zeta_timeline.record_event(
+        event,
+        runtime_context=runtime_context or zeta_runtime_context(),
+    )
+
+
+def current_zeta_timeline() -> list[dict[str, object]]:
+    return zeta_timeline.current_timeline(runtime_context=zeta_runtime_context())
 
 
 def test_zeta_trace_object_ids_ignore_dict_key_order() -> None:
@@ -102,26 +138,6 @@ def test_zeta_trace_sqlite_persists_objects_refs_derivations_and_closure(
     reopened.close()
 
 
-def test_zeta_default_store_reuses_one_store_per_path() -> None:
-    first = zeta_trace.default_store()
-    second = zeta_trace.default_store()
-
-    assert first is second
-
-
-def test_zeta_default_store_follows_the_session_path(
-    monkeypatch,
-    tmp_path: Path,
-) -> None:
-    first = zeta_trace.default_store()
-    monkeypatch.setenv("ZETA_STATE_DIR", str(tmp_path / "other-state"))
-
-    second = zeta_trace.default_store()
-
-    assert second is not first
-    assert second.path != first.path
-
-
 def seed_session_store(session_id: str, text: str) -> str:
     """Write one prompt object into a named session's trace store."""
     path = zeta_trace.session_sqlite_path(session_id)
@@ -168,31 +184,26 @@ def test_zeta_sqlite_store_read_only_rejects_writes(tmp_path: Path) -> None:
     reader.close()
 
 
-def test_zeta_default_store_opens_other_sessions_read_only(monkeypatch) -> None:
+def test_zeta_sqlite_store_opens_other_sessions_read_only(monkeypatch) -> None:
     monkeypatch.setenv("SIGIL_SESSION_ID", "current")
     prompt_id = seed_session_store("other", "from the other session")
 
-    store = zeta_trace.default_store(session_id="other")
+    store = zeta_trace.SqliteStore(
+        zeta_trace.session_sqlite_path("other"),
+        read_only=True,
+    )
 
     assert store.read_only
     assert store.get_object(prompt_id) is not None
     with pytest.raises(sqlite3.OperationalError):
         store.put_object(zeta_trace.Object(kind="prompt", schema="v1", data={}))
-    second = zeta_trace.default_store(session_id="other")
+    second = zeta_trace.SqliteStore(
+        zeta_trace.session_sqlite_path("other"),
+        read_only=True,
+    )
     assert second is not store
     second.close()
     store.close()
-
-
-def test_zeta_default_store_raises_for_unknown_sessions(monkeypatch) -> None:
-    monkeypatch.setenv("SIGIL_SESSION_ID", "current")
-    seed_session_store("known", "seed")
-
-    with pytest.raises(zeta_trace.UnknownSessionError) as excinfo:
-        zeta_trace.default_store(session_id="missing")
-
-    assert excinfo.value.session_id == "missing"
-    assert "known" in excinfo.value.available
 
 
 def test_zeta_available_session_ids_lists_stores_sorted(monkeypatch) -> None:
@@ -337,18 +348,6 @@ def test_sigil_zeta_trace_cli_grep_reports_no_matches(monkeypatch) -> None:
     assert "no trace objects match" in result.output
 
 
-def test_zeta_close_default_stores_closes_connections_and_reopens() -> None:
-    store = zeta_trace.default_store()
-
-    zeta_trace.close_default_stores()
-
-    with pytest.raises(sqlite3.ProgrammingError):
-        store.connection.execute("SELECT 1")
-    reopened = zeta_trace.default_store()
-    assert reopened is not store
-    assert reopened.get_ref("run/none/head") is None
-
-
 def test_sigil_zeta_trace_cli_smoke_with_in_memory_store(monkeypatch) -> None:
     store = zeta_trace.InMemoryStore()
     parent_id = store.put_object(
@@ -458,16 +457,19 @@ def test_zeta_prompt_components_keep_only_the_timeline_tail() -> None:
 def test_zeta_timeline_record_and_project(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("SIGIL_STATE_DIR", str(tmp_path))
     monkeypatch.setenv("ZETA_SESSION_ID", "zeta-test")
+    runtime_context = zeta_runtime_context()
 
-    zeta_timeline.record_event({"type": "tool_call", "name": "read"})
+    record_zeta_event(
+        {"type": "tool_call", "name": "read"}, runtime_context=runtime_context
+    )
 
-    events = zeta_timeline.current_timeline()
+    events = zeta_timeline.current_timeline(runtime_context=runtime_context)
     assert events[0]["type"] == "tool_call"
     assert events[0]["name"] == "read"
-    refs = zeta_trace.default_store().refs()
+    refs = runtime_context.trace_store.refs()
     assert refs[zeta_timeline.run_head_ref("zeta-test")]
     assert refs[zeta_timeline.event_head_ref("zeta-test")]
-    assert event_store().list_events(Filter(event_type="zeta.tool.called")) == []
+    assert zeta_event_store().list_events(Filter(event_type="zeta.tool.called")) == []
 
 
 def test_zeta_timeline_tool_result_stays_trace_only(
@@ -476,20 +478,22 @@ def test_zeta_timeline_tool_result_stays_trace_only(
 ) -> None:
     monkeypatch.setenv("SIGIL_STATE_DIR", str(tmp_path))
     monkeypatch.setenv("ZETA_SESSION_ID", "zeta-test")
+    runtime_context = zeta_runtime_context()
 
-    zeta_timeline.record_event(
+    record_zeta_event(
         {
             "type": "tool_result",
             "tool_call_id": "call-1",
             "name": "read",
             "result": {"ok": True},
-        }
+        },
+        runtime_context=runtime_context,
     )
 
-    timeline = zeta_timeline.current_timeline()
+    timeline = zeta_timeline.current_timeline(runtime_context=runtime_context)
     assert timeline[0]["type"] == "tool_result"
     assert timeline[0]["result"] == {"ok": True}
-    assert event_store().list_events(Filter(event_type="zeta.tool.called")) == []
+    assert zeta_event_store().list_events(Filter(event_type="zeta.tool.called")) == []
 
 
 def test_zeta_timeline_tool_call_is_caused_by_assistant_event(
@@ -498,8 +502,9 @@ def test_zeta_timeline_tool_call_is_caused_by_assistant_event(
 ) -> None:
     monkeypatch.setenv("SIGIL_STATE_DIR", str(tmp_path))
     monkeypatch.setenv("ZETA_SESSION_ID", "zeta-test")
+    runtime_context = zeta_runtime_context()
 
-    zeta_timeline.record_event(
+    record_zeta_event(
         {
             "type": "model",
             "id": "assistant-event-1",
@@ -510,9 +515,10 @@ def test_zeta_timeline_tool_call_is_caused_by_assistant_event(
                     "function": {"name": "read", "arguments": "{}"},
                 }
             ],
-        }
+        },
+        runtime_context=runtime_context,
     )
-    zeta_timeline.record_event(
+    record_zeta_event(
         {
             "type": "tool_call",
             "id": "call-1",
@@ -520,11 +526,12 @@ def test_zeta_timeline_tool_call_is_caused_by_assistant_event(
             "name": "read",
             "input": {},
             "caused_by": "assistant-event-1",
-        }
+        },
+        runtime_context=runtime_context,
     )
 
-    assistant = event_store().get("assistant-event-1")
-    tool_calls = event_store().list_events(Filter(event_type="zeta.tool.called"))
+    assistant = zeta_event_store().get("assistant-event-1")
+    tool_calls = zeta_event_store().list_events(Filter(event_type="zeta.tool.called"))
     assert assistant is not None
     assert assistant.event_type == "zeta.model.called"
     assert tool_calls == []
@@ -536,7 +543,8 @@ def test_zeta_model_called_links_used_and_returned_objects(
 ) -> None:
     monkeypatch.setenv("SIGIL_STATE_DIR", str(tmp_path))
     monkeypatch.setenv("ZETA_SESSION_ID", "zeta-test")
-    store = zeta_trace.default_store()
+    runtime_context = zeta_runtime_context()
+    store = runtime_context.trace_store
     prompt_id = store.put_object(
         zeta_trace.Object(
             kind="prompt",
@@ -561,7 +569,7 @@ def test_zeta_model_called_links_used_and_returned_objects(
         )
     )
 
-    zeta_timeline.record_event(
+    record_zeta_event(
         {
             "type": "model",
             "id": "model-event-1",
@@ -571,10 +579,11 @@ def test_zeta_model_called_links_used_and_returned_objects(
                 "assistant_message_object_id": assistant_id,
             },
             "tool_call_object_ids": [call_id],
-        }
+        },
+        runtime_context=runtime_context,
     )
 
-    event = event_store().get("model-event-1")
+    event = zeta_event_store().get("model-event-1")
     assert event is not None
     assert event.event_type == "zeta.model.called"
     assert event.payload["used_objects"] == [
@@ -593,7 +602,7 @@ def test_zeta_tool_called_links_used_and_returned_objects(
     monkeypatch.setenv("SIGIL_STATE_DIR", str(tmp_path))
     monkeypatch.setenv("ZETA_SESSION_ID", "zeta-test")
 
-    zeta_timeline.record_event(
+    record_zeta_event(
         {
             "type": "tool_result",
             "tool_call_id": "call-1",
@@ -605,7 +614,7 @@ def test_zeta_tool_called_links_used_and_returned_objects(
         }
     )
 
-    events = event_store().list_events(Filter(event_type="zeta.tool.called"))
+    events = zeta_event_store().list_events(Filter(event_type="zeta.tool.called"))
     assert len(events) == 1
     assert events[0].caused_by == "model-event-1"
     assert events[0].payload["used_objects"] == [
@@ -623,11 +632,11 @@ def test_zeta_user_message_and_abort_stay_trace_only(
     monkeypatch.setenv("SIGIL_STATE_DIR", str(tmp_path))
     monkeypatch.setenv("ZETA_SESSION_ID", "zeta-test")
 
-    zeta_timeline.record_event({"type": "user_message", "content": "hello"})
-    zeta_timeline.record_event({"type": "model_usage", "usage": {"tokens": 1}})
-    zeta_timeline.record_event({"type": "turn_aborted", "content": "stopped"})
+    record_zeta_event({"type": "user_message", "content": "hello"})
+    record_zeta_event({"type": "model_usage", "usage": {"tokens": 1}})
+    record_zeta_event({"type": "turn_aborted", "content": "stopped"})
 
-    assert event_store().list_events(Filter()) == []
+    assert zeta_event_store().list_events(Filter()) == []
 
 
 def test_zeta_timeline_projects_from_ref_and_object(
@@ -636,29 +645,38 @@ def test_zeta_timeline_projects_from_ref_and_object(
 ) -> None:
     monkeypatch.setenv("SIGIL_STATE_DIR", str(tmp_path))
     monkeypatch.setenv("ZETA_SESSION_ID", "zeta-test")
+    runtime_context = zeta_runtime_context()
 
-    zeta_timeline.record_event({"type": "user_message", "content": "first"})
-    store = zeta_trace.default_store()
+    record_zeta_event(
+        {"type": "user_message", "content": "first"},
+        runtime_context=runtime_context,
+    )
+    store = runtime_context.trace_store
     first_head = store.get_ref(zeta_timeline.run_head_ref("zeta-test"))
     assert first_head is not None
     store.set_ref("run/custom/head", first_head)
 
-    zeta_timeline.record_event({"type": "model", "content": "second"})
+    record_zeta_event(
+        {"type": "model", "content": "second"},
+        runtime_context=runtime_context,
+    )
 
     assert [
-        event["content"] for event in zeta_timeline.timeline_from_ref("run/custom/head")
+        event["content"]
+        for event in zeta_timeline.timeline_from_ref("run/custom/head", store=store)
     ] == ["first"]
     assert [
         event["content"]
         for event in zeta_timeline.timeline_from_ref(
-            zeta_timeline.run_head_ref("zeta-test")
+            zeta_timeline.run_head_ref("zeta-test"),
+            store=store,
         )
     ] == ["first", "second"]
     assert [
         event["content"]
         for event in zeta_timeline.timeline_from_object(first_head, store=store)
     ] == ["first"]
-    assert zeta_timeline.timeline_from_ref("run/missing/head") == []
+    assert zeta_timeline.timeline_from_ref("run/missing/head", store=store) == []
 
 
 def test_zeta_record_event_stores_prompt_link_not_components(
@@ -667,7 +685,8 @@ def test_zeta_record_event_stores_prompt_link_not_components(
 ) -> None:
     monkeypatch.setenv("SIGIL_STATE_DIR", str(tmp_path))
     monkeypatch.setenv("ZETA_SESSION_ID", "zeta-test")
-    store = zeta_trace.default_store()
+    runtime_context = zeta_runtime_context()
+    store = runtime_context.trace_store
     component_id = store.put_object(
         zeta_trace.Object(
             kind="user_message",
@@ -692,7 +711,7 @@ def test_zeta_record_event_stores_prompt_link_not_components(
         )
     )
 
-    zeta_timeline.record_event(
+    record_zeta_event(
         {
             "type": "model",
             "content": "the answer",
@@ -701,7 +720,8 @@ def test_zeta_record_event_stores_prompt_link_not_components(
                 "assistant_message_object_id": assistant_id,
                 "component_object_ids": [component_id],
             },
-        }
+        },
+        runtime_context=runtime_context,
     )
 
     event_id = store.get_ref(zeta_timeline.event_head_ref("zeta-test"))
@@ -722,7 +742,8 @@ def test_zeta_timeline_rehydrates_assistant_content_from_the_graph(
 ) -> None:
     monkeypatch.setenv("SIGIL_STATE_DIR", str(tmp_path))
     monkeypatch.setenv("ZETA_SESSION_ID", "zeta-test")
-    store = zeta_trace.default_store()
+    runtime_context = zeta_runtime_context()
+    store = runtime_context.trace_store
     prompt_id = store.put_object(
         zeta_trace.Object(
             kind="prompt",
@@ -752,7 +773,7 @@ def test_zeta_timeline_rehydrates_assistant_content_from_the_graph(
         )
     )
 
-    zeta_timeline.record_event(
+    record_zeta_event(
         {
             "type": "model",
             "content": "the answer",
@@ -761,10 +782,11 @@ def test_zeta_timeline_rehydrates_assistant_content_from_the_graph(
                 "prompt_object_id": prompt_id,
                 "assistant_message_object_id": assistant_id,
             },
-        }
+        },
+        runtime_context=runtime_context,
     )
 
-    events = zeta_timeline.current_timeline()
+    events = zeta_timeline.current_timeline(runtime_context=runtime_context)
     assert events[-1]["type"] == "model"
     assert events[-1]["content"] == "the answer"
     assert events[-1]["tool_calls"] == tool_calls
@@ -776,7 +798,8 @@ def test_zeta_timeline_rehydrates_assistant_reasoning_from_the_graph(
 ) -> None:
     monkeypatch.setenv("SIGIL_STATE_DIR", str(tmp_path))
     monkeypatch.setenv("ZETA_SESSION_ID", "zeta-test")
-    store = zeta_trace.default_store()
+    runtime_context = zeta_runtime_context()
+    store = runtime_context.trace_store
     prompt_id = store.put_object(
         zeta_trace.Object(
             kind="prompt",
@@ -799,7 +822,7 @@ def test_zeta_timeline_rehydrates_assistant_reasoning_from_the_graph(
         )
     )
 
-    zeta_timeline.record_event(
+    record_zeta_event(
         {
             "type": "model",
             "content": "the answer",
@@ -808,10 +831,11 @@ def test_zeta_timeline_rehydrates_assistant_reasoning_from_the_graph(
                 "prompt_object_id": prompt_id,
                 "assistant_message_object_id": assistant_id,
             },
-        }
+        },
+        runtime_context=runtime_context,
     )
 
-    events = zeta_timeline.current_timeline()
+    events = zeta_timeline.current_timeline(runtime_context=runtime_context)
     assert events[-1]["content"] == "the answer"
     assert events[-1]["reasoning"] == "weighing the options"
 
@@ -822,7 +846,8 @@ def test_zeta_timeline_rehydrates_assistant_reasoning_from_the_graph(
     assert "reasoning" not in run_event.data["event"]
 
     fallback = zeta_timeline.timeline_from_ref(
-        zeta_timeline.event_head_ref("zeta-test")
+        zeta_timeline.event_head_ref("zeta-test"),
+        store=store,
     )
     assert fallback[-1]["reasoning"] == "weighing the options"
 
@@ -837,16 +862,23 @@ def test_zeta_timeline_keeps_untraced_assistant_content_inline(
 ) -> None:
     monkeypatch.setenv("SIGIL_STATE_DIR", str(tmp_path))
     monkeypatch.setenv("ZETA_SESSION_ID", "zeta-test")
+    runtime_context = zeta_runtime_context()
 
-    zeta_timeline.record_event({"type": "model", "content": "fallback"})
+    record_zeta_event(
+        {"type": "model", "content": "fallback"},
+        runtime_context=runtime_context,
+    )
 
-    store = zeta_trace.default_store()
+    store = runtime_context.trace_store
     event_id = store.get_ref(zeta_timeline.event_head_ref("zeta-test"))
     assert event_id is not None
     run_event = store.get_object(event_id)
     assert run_event is not None
     assert run_event.data["event"]["content"] == "fallback"
-    assert zeta_timeline.current_timeline()[-1]["content"] == "fallback"
+    assert (
+        zeta_timeline.current_timeline(runtime_context=runtime_context)[-1]["content"]
+        == "fallback"
+    )
 
 
 def test_zeta_timeline_last_event_time_tracks_the_newest_event(
@@ -855,14 +887,39 @@ def test_zeta_timeline_last_event_time_tracks_the_newest_event(
 ) -> None:
     monkeypatch.setenv("SIGIL_STATE_DIR", str(tmp_path))
     monkeypatch.setenv("ZETA_SESSION_ID", "zeta-test")
+    runtime_context = zeta_runtime_context()
 
-    assert zeta_timeline.last_event_time() is None
+    assert (
+        zeta_timeline.last_event_time(
+            store=runtime_context.trace_store,
+            run_id=runtime_context.session_id,
+        )
+        is None
+    )
 
-    first = zeta_timeline.record_event({"type": "user_message", "content": "hi"})
-    assert zeta_timeline.last_event_time() == first["time"]
+    first = record_zeta_event(
+        {"type": "user_message", "content": "hi"},
+        runtime_context=runtime_context,
+    )
+    assert (
+        zeta_timeline.last_event_time(
+            store=runtime_context.trace_store,
+            run_id=runtime_context.session_id,
+        )
+        == first["time"]
+    )
 
-    second = zeta_timeline.record_event({"type": "model", "content": "yo"})
-    assert zeta_timeline.last_event_time() == second["time"]
+    second = record_zeta_event(
+        {"type": "model", "content": "yo"},
+        runtime_context=runtime_context,
+    )
+    assert (
+        zeta_timeline.last_event_time(
+            store=runtime_context.trace_store,
+            run_id=runtime_context.session_id,
+        )
+        == second["time"]
+    )
 
 
 def test_zeta_timeline_projects_deep_event_chains() -> None:
@@ -987,11 +1044,13 @@ def test_zeta_sqlite_store_batch_defers_commit(tmp_path: Path) -> None:
     reader.close()
 
 
-def test_zeta_record_event_writes_in_a_single_batch(monkeypatch) -> None:
+def test_zeta_record_event_writes_in_a_single_batch() -> None:
     store = BatchSpyStore()
-    monkeypatch.setattr(zeta_timeline, "default_store", lambda: store)
 
-    zeta_timeline.record_event({"type": "user_message", "content": "hello"})
+    record_zeta_event(
+        {"type": "user_message", "content": "hello"},
+        runtime_context=zeta_runtime_context(trace_store=store),
+    )
 
     assert store.batches == 1
 

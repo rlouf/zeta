@@ -264,7 +264,7 @@ class AgentStepEventRecorder(TurnEventRecorder):
         handoff_output: HandoffOutput,
         render_output: TextIO,
         ledger: TurnLedger | None = None,
-        runtime_context: ZetaContext | None = None,
+        runtime_context: ZetaContext,
     ) -> None:
         super().__init__(
             renderer,
@@ -388,7 +388,7 @@ def record_agent_model_telemetry(
     *,
     workflow: str,
     prompt_traces: Sequence[Any] = (),
-    runtime_context: ZetaContext | None = None,
+    runtime_context: ZetaContext,
 ) -> None:
     fields = model_telemetry_fields(model_telemetry)
     if not fields:

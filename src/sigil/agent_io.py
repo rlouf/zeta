@@ -391,7 +391,7 @@ class TurnEventRecorder:
         *,
         render_output: TextIO,
         ledger: TurnLedger | None = None,
-        runtime_context: ZetaContext | None = None,
+        runtime_context: ZetaContext,
     ) -> None:
         self.renderer = renderer
         self.render_output = render_output
@@ -488,7 +488,7 @@ def render_final_text(
 def record_zeta_event(
     event_type: str,
     *,
-    runtime_context: ZetaContext | None = None,
+    runtime_context: ZetaContext,
     **fields: Any,
 ) -> dict[str, Any]:
     return record_event({"type": event_type, **fields}, runtime_context=runtime_context)
@@ -497,7 +497,7 @@ def record_zeta_event(
 def record_turn_abort(
     error: BaseException,
     *,
-    runtime_context: ZetaContext | None = None,
+    runtime_context: ZetaContext,
     **fields: Any,
 ) -> dict[str, Any]:
     """Resolve an aborted turn in the timeline instead of dangling its question."""

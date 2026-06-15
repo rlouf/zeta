@@ -26,7 +26,7 @@ from zeta.models.codex_auth import (
     read_auth_tokens,
 )
 
-from .state import state_dir
+from .state import session_dir, state_dir
 
 BINDING_NAME = "sigil.zsh"
 
@@ -253,7 +253,7 @@ def check_endpoint(model_endpoint: str | None = None) -> DoctorCheck:
     `,` then fails; doctor is the place to pay for a real GET /v1/models.
     """
     if model_endpoint is None:
-        selection = resolve_active_model().selection
+        selection = resolve_active_model(session_dir=session_dir()).selection
         if selection.api == CODEX_RESPONSES_API:
             return DoctorCheck(
                 "model:endpoint",

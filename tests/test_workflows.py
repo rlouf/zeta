@@ -43,6 +43,7 @@ from sigil.protocols import (
     turn_record,
 )
 from sigil.session import read_events, record_turn
+from sigil.state import session_dir
 from sigil.workflows import ask as ask_runner
 from sigil.workflows import step as zeta_runner
 from zeta import agent as zeta_agent
@@ -878,7 +879,7 @@ thinking = "low"
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("SIGIL_STATE_DIR", str(tmp_path / "state"))
     monkeypatch.setenv("SIGIL_SESSION_ID", "agent-model")
-    zeta_models.set_active_model_profile("coder")
+    zeta_models.set_active_model_profile("coder", session_dir=session_dir())
     captured: dict[str, Any] = {}
 
     def fake_ensure_server(**kwargs: object) -> bool:
@@ -971,7 +972,7 @@ url = "http://127.0.0.1:8081/v1/chat/completions"
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("SIGIL_STATE_DIR", str(tmp_path / "state"))
     monkeypatch.setenv("SIGIL_SESSION_ID", "answer-model")
-    zeta_models.set_active_model_profile("fast")
+    zeta_models.set_active_model_profile("fast", session_dir=session_dir())
     captured: dict[str, Any] = {}
 
     def fake_ensure_server(**kwargs: object) -> bool:

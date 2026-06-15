@@ -12,7 +12,7 @@ from sigil.cli import cli
 from sigil.ledger import ledger_index
 from sigil.protocols import effect_record, turn_contract, turn_record
 from sigil.session import record_turn
-from sigil.state import append_event
+from sigil.state import append_event, session_dir
 from sigil.status import current_status, format_status
 from zeta.models import set_active_model_profile
 
@@ -57,7 +57,7 @@ url = "http://127.0.0.1:8081/v1/chat/completions"
     )
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("SIGIL_SESSION_ID", "status-model")
-    set_active_model_profile("fast")
+    set_active_model_profile("fast", session_dir=session_dir())
 
     status = current_status()
 
@@ -78,7 +78,7 @@ def test_status_model_line_reports_stale_profile(
     write_models_config(home, "")
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("SIGIL_SESSION_ID", "status-stale-model")
-    set_active_model_profile("gone")
+    set_active_model_profile("gone", session_dir=session_dir())
 
     status = current_status()
 

@@ -21,6 +21,7 @@ from _zeta_helpers import (
 from click.testing import CliRunner
 
 from sigil.cli import cli as sigil_cli
+from sigil.state import session_dir
 from zeta import prompt as zeta_prompt
 from zeta.models import chat_completions as zeta_model
 from zeta.models import profiles as zeta_models
@@ -728,7 +729,7 @@ url = "http://127.0.0.1:8081/v1/chat/completions"
 
     assert use.exit_code == 0, use.output
     assert "model: fast -> fast-model" in use.output
-    assert zeta_models.active_model_profile() == "fast"
+    assert zeta_models.active_model_profile(session_dir=session_dir()) == "fast"
 
     show = CliRunner().invoke(sigil_cli, ["model", "show"])
     assert show.exit_code == 0, show.output
@@ -742,7 +743,7 @@ url = "http://127.0.0.1:8081/v1/chat/completions"
     monkeypatch.setenv("SIGIL_SESSION_ID", "one")
     clear = CliRunner().invoke(sigil_cli, ["model", "clear"])
     assert clear.exit_code == 0, clear.output
-    assert zeta_models.active_model_profile() is None
+    assert zeta_models.active_model_profile(session_dir=session_dir()) is None
 
 
 def test_zeta_models_resolve_active_model_reports_session_source(
@@ -932,7 +933,7 @@ def test_sigil_model_cli_rejects_unknown_profile(
 
     assert result.exit_code != 0
     assert "unknown model profile: missing" in result.output
-    assert zeta_models.active_model_profile() is None
+    assert zeta_models.active_model_profile(session_dir=session_dir()) is None
 
 
 def test_zeta_model_context_tokens_prefers_props(monkeypatch) -> None:
@@ -1475,7 +1476,7 @@ model = "fast-model"
     )
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("SIGIL_SESSION_ID", "list-active-session")
-    zeta_models.set_active_model_profile("fast")
+    zeta_models.set_active_model_profile("fast", session_dir=session_dir())
 
     result = CliRunner().invoke(sigil_cli, ["model", "list"])
 

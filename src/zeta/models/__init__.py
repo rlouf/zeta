@@ -35,7 +35,6 @@ from .profiles import (
     resolve_active_model,
     resolve_model_profile,
     set_active_model_profile,
-    set_profile_session_dir_factory,
     user_models_config_path,
 )
 
@@ -101,7 +100,6 @@ __all__ = [
     "resolve_active_model",
     "resolve_model_profile",
     "set_active_model_profile",
-    "set_profile_session_dir_factory",
     "set_responses_session_id_factory",
     "user_models_config_path",
 ]

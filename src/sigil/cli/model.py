@@ -16,6 +16,7 @@ from zeta.models import (
     set_active_model_profile,
 )
 
+from ..state import session_dir
 from ._base import cli, examples
 
 
@@ -48,11 +49,8 @@ def cmd_model_list() -> int:
     With no profiles configured, prints the builtin local default. Exits 1 when
     the profile config has diagnostics.
     """
-    from .. import configure_zeta_for_sigil
-
-    configure_zeta_for_sigil()
     catalog = load_model_profiles()
-    active = resolve_active_model().selection
+    active = resolve_active_model(session_dir=session_dir()).selection
     for diagnostic in catalog.diagnostics:
         click.echo(f"model config: {diagnostic.message}", err=True)
     if not catalog.profiles:
@@ -111,16 +109,13 @@ def cmd_model_use(name: str) -> int:
     NAME is a profile from ~/.zeta/models.toml. The selection sticks until
     `sigil model clear`; other sessions are unaffected.
     """
-    from .. import configure_zeta_for_sigil
-
-    configure_zeta_for_sigil()
     catalog = load_model_profiles()
     for diagnostic in catalog.diagnostics:
         click.echo(f"model config: {diagnostic.message}", err=True)
     selection = resolve_model_profile(name, catalog=catalog)
     if selection is None:
         raise click.ClickException(f"unknown model profile: {name}")
-    set_active_model_profile(selection.profile)
+    set_active_model_profile(selection.profile, session_dir=session_dir())
     click.echo(f"model: {selection.profile} -> {selection.model} @ {selection.url}")
     if not os.environ.get("SIGIL_SESSION_ID"):
         click.echo(
@@ -141,10 +136,7 @@ def cmd_model_show() -> int:
     `sigil model use`, (config) for the `default = true` profile, (builtin)
     for the no-configuration fallback.
     """
-    from .. import configure_zeta_for_sigil
-
-    configure_zeta_for_sigil()
-    resolution = resolve_active_model()
+    resolution = resolve_active_model(session_dir=session_dir())
     if resolution.stale_profile is not None:
         click.echo(
             f"model: {resolution.stale_profile} is no longer configured", err=True
@@ -167,10 +159,7 @@ def cmd_model_clear() -> int:
     The session returns to the `default = true` profile, or to the builtin
     local default when no profile claims the flag.
     """
-    from .. import configure_zeta_for_sigil
-
-    configure_zeta_for_sigil()
-    removed = clear_active_model_profile()
+    removed = clear_active_model_profile(session_dir=session_dir())
     if removed:
         click.echo("model: cleared")
     else:

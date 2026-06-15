@@ -107,10 +107,9 @@ def attention(
 
 def active_model_fields() -> dict[str, str]:
     """Return the resolved model the next request will use, with its source."""
-    from . import configure_zeta_for_sigil
+    from .state import session_dir
 
-    configure_zeta_for_sigil()
-    resolution = resolve_active_model()
+    resolution = resolve_active_model(session_dir=session_dir())
     selection = resolution.selection
     fields = {
         "profile": selection.profile,

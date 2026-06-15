@@ -9,7 +9,7 @@ import tempfile
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Literal, Protocol
+from typing import Any, Literal
 
 ACTIVE_MODEL_STATE = "active-model.json"
 MODEL_NAME_PATTERN = re.compile(r"^[a-z0-9-]+$")
@@ -24,29 +24,19 @@ THINKING_EFFORTS = ("none", "minimal", "low", "medium", "high")
 CHAT_COMPLETIONS_API = "chat-completions"
 CODEX_RESPONSES_API = "codex-responses"
 MODEL_APIS = (CHAT_COMPLETIONS_API, CODEX_RESPONSES_API)
-_SESSION_DIR_FACTORY: SessionDirFactory | None = None
 
 
-class SessionDirFactory(Protocol):
-    def __call__(self, session_id: str | None = None) -> Path: ...
-
-
-def set_profile_session_dir_factory(factory: SessionDirFactory | None) -> None:
-    global _SESSION_DIR_FACTORY
-    _SESSION_DIR_FACTORY = factory
-
-
-def profile_session_dir() -> Path:
-    if _SESSION_DIR_FACTORY is not None:
-        return _SESSION_DIR_FACTORY(None)
+def profile_session_dir(session_dir: Path | None = None) -> Path:
+    if session_dir is not None:
+        return session_dir
     root = os.environ.get("ZETA_STATE_DIR")
     session = os.environ.get("ZETA_SESSION_ID") or "default"
     base = Path(root).expanduser() if root else Path.home() / ".zeta"
     return base / "sessions" / session
 
 
-def active_model_state_path() -> Path:
-    return profile_session_dir() / ACTIVE_MODEL_STATE
+def active_model_state_path(session_dir: Path | None = None) -> Path:
+    return profile_session_dir(session_dir) / ACTIVE_MODEL_STATE
 
 
 @dataclass(frozen=True)
@@ -175,9 +165,9 @@ def resolve_model_profile(
     )
 
 
-def active_model_profile() -> str | None:
+def active_model_profile(*, session_dir: Path | None = None) -> str | None:
     """Return the active model profile name for this session, if set."""
-    state = read_json(active_model_state_path())
+    state = read_json(active_model_state_path(session_dir))
     if not isinstance(state, dict):
         return None
     profile = state.get("profile")
@@ -186,10 +176,13 @@ def active_model_profile() -> str | None:
     return profile
 
 
-def active_model_selection() -> ModelSelection | None:
+def active_model_selection(
+    *,
+    session_dir: Path | None = None,
+) -> ModelSelection | None:
     """Return the session's model, falling back to the configured default."""
     catalog = load_model_profiles()
-    profile = active_model_profile()
+    profile = active_model_profile(session_dir=session_dir)
     if profile is not None:
         selection = resolve_model_profile(profile, catalog=catalog)
         if selection is not None:
@@ -207,14 +200,18 @@ def configured_default_selection(
     return resolve_model_profile(catalog.default_profile, catalog=catalog)
 
 
-def set_active_model_profile(name: str) -> None:
+def set_active_model_profile(
+    name: str,
+    *,
+    session_dir: Path | None = None,
+) -> None:
     """Store the active model profile name for this session."""
-    write_json(active_model_state_path(), {"profile": name})
+    write_json(active_model_state_path(session_dir), {"profile": name})
 
 
-def clear_active_model_profile() -> bool:
+def clear_active_model_profile(*, session_dir: Path | None = None) -> bool:
     """Clear the active model profile for this session."""
-    return remove_json(active_model_state_path())
+    return remove_json(active_model_state_path(session_dir))
 
 
 def read_json(path: Path) -> Any:
@@ -254,7 +251,7 @@ def default_model_selection() -> ModelSelection:
     return ModelSelection(profile="default", model=model_name(), url=model_url())
 
 
-def resolve_active_model() -> ModelResolution:
+def resolve_active_model(*, session_dir: Path | None = None) -> ModelResolution:
     """Resolve the model the next request will use, and where it came from.
 
     Session selection wins, then the profile marked ``default = true``,
@@ -264,7 +261,7 @@ def resolve_active_model() -> ModelResolution:
     pretending none was made.
     """
     catalog = load_model_profiles()
-    profile = active_model_profile()
+    profile = active_model_profile(session_dir=session_dir)
     stale_profile: str | None = None
     if profile is not None:
         selection = resolve_model_profile(profile, catalog=catalog)

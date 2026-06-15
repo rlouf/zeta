@@ -886,7 +886,9 @@ def trace_replay(
 def replay_model_selection(model_profile: str | None) -> ModelSelection:
     """Return the model a replay should use, honoring --model."""
     if model_profile is None:
-        return resolve_active_model().selection
+        from ..state import session_dir
+
+        return resolve_active_model(session_dir=session_dir()).selection
     selection = resolve_model_profile(model_profile)
     if selection is None:
         raise click.ClickException(f"unknown model profile: {model_profile}")

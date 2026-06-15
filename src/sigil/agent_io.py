@@ -530,7 +530,7 @@ def run_zeta_rpc_session(
         else None
     )
     ensure_builtin_tools_registered()
-    selected_model = active_model_selection()
+    selected_model = active_model_selection(session_dir=runtime_context.session_dir)
     enabled_tools = registered_tools(
         allowed_tools,
         tool_registry=runtime_context.tool_registry,

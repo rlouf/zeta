@@ -110,7 +110,7 @@ def step(
     runtime_context = zeta_context_for_sigil()
     system = system or STEP_SYSTEM_PROMPT
     execution_mode: ExecutionMode = "direct" if workflow == "do" else "stage"
-    selected_model = active_model_selection()
+    selected_model = active_model_selection(session_dir=runtime_context.session_dir)
     if not model_server_ready(selected_model):
         return 1
     output = trace_output or sys.stderr

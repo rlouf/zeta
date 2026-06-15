@@ -14,6 +14,7 @@ from sigil.tools import bash as bash_tool
 from sigil.tools import ensure_builtin_tools_registered, register_builtin_tools
 from sigil.tools import grep as grep_tool
 from sigil.tools import read as read_tool
+from sigil.tools import web as web_tool
 from zeta.tools.base import ToolImpl, ToolSpec
 from zeta.tools.registry import ToolRegistry
 from zeta.tools.registry import registry as tool_registry
@@ -61,6 +62,8 @@ def test_sigil_registers_builtin_tools_explicitly() -> None:
         "edit",
         "write",
         "query_log",
+        "web_search",
+        "web_fetch",
     } <= set(registry.list_tool_names())
 
 
@@ -68,7 +71,17 @@ def test_sigil_ensures_shared_zeta_registry_has_builtins() -> None:
     ensure_builtin_tools_registered()
 
     names = set(tool_registry.list_tool_names())
-    assert {"read", "grep", "ast_grep", "ls", "bash", "edit", "write"} <= names
+    assert {
+        "read",
+        "grep",
+        "ast_grep",
+        "ls",
+        "bash",
+        "edit",
+        "write",
+        "web_search",
+        "web_fetch",
+    } <= names
 
 
 def test_zeta_tool_registry_does_not_import_sigil_tools() -> None:
@@ -117,6 +130,185 @@ def test_zeta_ast_grep_metadata_guides_model_tool_choice() -> None:
     assert schema["properties"]["pattern"]["description"].startswith(
         "ast-grep structural pattern"
     )
+
+
+def test_sigil_web_search_schema_matches_parallel_contract() -> None:
+    metadata = web_tool.SEARCH_SPEC.metadata()
+    schema = metadata["schema"]
+
+    assert metadata["name"] == "web_search"
+    assert metadata["effects"] == ["search"]
+    assert schema["required"] == ["objective", "search_queries"]
+    assert schema["properties"]["search_queries"]["minItems"] == 2
+    assert schema["properties"]["search_queries"]["maxItems"] == 3
+
+
+def test_sigil_web_fetch_schema_matches_parallel_contract() -> None:
+    metadata = web_tool.FETCH_SPEC.metadata()
+    schema = metadata["schema"]
+
+    assert metadata["name"] == "web_fetch"
+    assert metadata["effects"] == ["search"]
+    assert schema["required"] == ["urls"]
+    assert schema["properties"]["urls"]["minItems"] == 1
+    assert schema["properties"]["urls"]["maxItems"] == 20
+
+
+def test_sigil_web_tools_report_missing_parallel_key(monkeypatch) -> None:
+    monkeypatch.delenv("PARALLEL_API_KEY", raising=False)
+
+    result = web_tool.search(
+        {"objective": "Find docs", "search_queries": ["parallel api", "parallel docs"]}
+    )
+
+    assert result == {
+        "ok": False,
+        "error": {
+            "code": "parallel-api-key-missing",
+            "message": "PARALLEL_API_KEY is not set",
+        },
+    }
+
+
+def test_sigil_web_search_posts_parallel_payload(monkeypatch) -> None:
+    calls: list[tuple[str, dict[str, Any], web_tool.WebConfig]] = []
+
+    def fake_request(
+        endpoint: str, payload: dict[str, Any], config: web_tool.WebConfig
+    ) -> dict[str, Any]:
+        calls.append((endpoint, payload, config))
+        return {
+            "search_id": "search_123",
+            "session_id": "session_abc",
+            "results": [
+                {
+                    "title": "Parallel docs",
+                    "url": "https://docs.parallel.ai/search",
+                    "excerpts": [{"text": "Search API overview"}],
+                }
+            ],
+        }
+
+    monkeypatch.setenv("PARALLEL_API_KEY", "test-key")
+    monkeypatch.setenv("SIGIL_WEB_SEARCH_MODE", "basic")
+    monkeypatch.setattr(web_tool, "parallel_request", fake_request)
+
+    result = web_tool.search(
+        {
+            "objective": "Find Parallel search docs",
+            "search_queries": ["parallel search api", "parallel search docs"],
+        }
+    )
+
+    assert result["ok"] is True
+    assert calls == [
+        (
+            "/v1/search",
+            {
+                "objective": "Find Parallel search docs",
+                "search_queries": ["parallel search api", "parallel search docs"],
+                "mode": "basic",
+                "max_chars_total": web_tool.DEFAULT_MAX_CHARS_TOTAL,
+            },
+            web_tool.WebConfig(
+                api_key="test-key",
+                base_url="https://api.parallel.ai",
+                timeout_sec=30.0,
+                max_preview_bytes=8192,
+                max_preview_lines=100,
+                search_mode="basic",
+            ),
+        )
+    ]
+    text = result["content"][0]["text"]
+    assert "# Web search results" in text
+    assert "[Parallel docs](https://docs.parallel.ai/search)" in text
+    assert "Search API overview" in text
+    assert result["metadata"]["search_id"] == "search_123"
+    assert result["metadata"]["session_id"] == "session_abc"
+    assert result["metadata"]["result_count"] == 1
+
+
+def test_sigil_web_fetch_surfaces_results_and_errors(monkeypatch) -> None:
+    def fake_request(
+        endpoint: str, payload: dict[str, Any], config: web_tool.WebConfig
+    ) -> dict[str, Any]:
+        assert endpoint == "/v1/extract"
+        assert payload == {
+            "urls": ["https://example.com", "https://bad.example"],
+            "objective": "Extract main content",
+            "max_chars_total": web_tool.DEFAULT_MAX_CHARS_TOTAL,
+        }
+        return {
+            "extract_id": "extract_123",
+            "session_id": "session_abc",
+            "results": [
+                {
+                    "url": "https://example.com",
+                    "title": "Example",
+                    "content": "# Example\n\nBody",
+                }
+            ],
+            "errors": [
+                {
+                    "url": "https://bad.example",
+                    "message": "blocked",
+                }
+            ],
+        }
+
+    monkeypatch.setenv("PARALLEL_API_KEY", "test-key")
+    monkeypatch.setattr(web_tool, "parallel_request", fake_request)
+
+    result = web_tool.fetch(
+        {
+            "urls": ["https://example.com", "https://bad.example"],
+            "objective": "Extract main content",
+        }
+    )
+
+    assert result["ok"] is True
+    text = result["content"][0]["text"]
+    assert "# Example" in text
+    assert "## Fetch errors" in text
+    assert "- https://bad.example: blocked" in text
+    assert result["metadata"]["extract_id"] == "extract_123"
+    assert result["metadata"]["url_errors"] == [
+        {"url": "https://bad.example", "message": "blocked"}
+    ]
+
+
+def test_sigil_web_fetch_large_result_writes_artifact(
+    monkeypatch, tmp_path: Path
+) -> None:
+    def fake_request(
+        endpoint: str, payload: dict[str, Any], config: web_tool.WebConfig
+    ) -> dict[str, Any]:
+        return {
+            "results": [
+                {
+                    "url": "https://example.com",
+                    "title": "Example",
+                    "content": "line\n" * 20,
+                }
+            ]
+        }
+
+    monkeypatch.setenv("PARALLEL_API_KEY", "test-key")
+    monkeypatch.setenv("SIGIL_WEB_MAX_PREVIEW_BYTES", "18")
+    monkeypatch.setenv("SIGIL_WEB_MAX_PREVIEW_LINES", "3")
+    monkeypatch.setenv("TMPDIR", str(tmp_path))
+    monkeypatch.setattr(web_tool, "parallel_request", fake_request)
+
+    result = web_tool.fetch({"urls": ["https://example.com"]})
+
+    assert result["ok"] is True
+    assert result["metadata"]["truncated"] is True
+    output_path = Path(result["metadata"]["output_path"])
+    assert output_path.read_text(encoding="utf-8").startswith("# Example")
+    text = result["content"][0]["text"]
+    assert f"<head -3 {output_path}>" in text
+    assert "Use read path=<output_path>" in text
 
 
 def test_zeta_tool_read_schema_and_run(tmp_path: Path) -> None:

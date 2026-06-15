@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING
 
 from zeta.tools.base import ToolImpl
 
-from . import bash, edit, grep, ls, query_log, read, write
+from . import bash, edit, grep, ls, query_log, read, web, write
 
 if TYPE_CHECKING:
     from zeta.tools.registry import ToolRegistry
@@ -35,5 +35,7 @@ def builtin_tools() -> dict[str, ToolImpl]:
         "ls": ToolImpl(ls.SPEC, ls.run),
         "query_log": ToolImpl(query_log.SPEC, query_log.run),
         "read": ToolImpl(read.SPEC, read.run),
+        "web_search": ToolImpl(web.SEARCH_SPEC, web.search),
+        "web_fetch": ToolImpl(web.FETCH_SPEC, web.fetch),
         "write": ToolImpl(write.SPEC, write.run, write.stage),
     }

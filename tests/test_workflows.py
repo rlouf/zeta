@@ -2334,7 +2334,14 @@ def test_ask_records_answered_turn_record(monkeypatch, capsys) -> None:
     assert turn["objective"] == "Why did it fail?"
     assert turn["outcome"] == "answered"
     assert turn["contract"]["staged"] is False
-    assert turn["contract"]["allowed_tools"] == ["read", "grep", "ls", "query_log"]
+    assert turn["contract"]["allowed_tools"] == [
+        "read",
+        "grep",
+        "ls",
+        "query_log",
+        "web_search",
+        "web_fetch",
+    ]
     assert turn["prompt_object_ids"] == ["sha256:ask1"]
     assert turn["cost"]["model_calls"] == 1
     assert ledger_effects() == []

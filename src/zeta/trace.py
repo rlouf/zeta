@@ -20,8 +20,6 @@ ObjectId = str
 DEFAULT_SQLITE_NAME = "zeta-trace.sqlite3"
 LOGGER = logging.getLogger("zeta.trace")
 _WARNED_FAILURES: set[str] = set()
-_STATE_DIR_FACTORY: StateDirFactory | None = None
-_SESSION_DIR_FACTORY: SessionDirFactory | None = None
 
 
 @dataclass(frozen=True)
@@ -137,34 +135,12 @@ class Store(Protocol):
     def stats(self) -> TraceStats: ...
 
 
-class StateDirFactory(Protocol):
-    def __call__(self) -> Path: ...
-
-
-class SessionDirFactory(Protocol):
-    def __call__(self, session_id: str | None = None) -> Path: ...
-
-
-def set_trace_path_factories(
-    *,
-    state_dir_factory: StateDirFactory | None = None,
-    session_dir_factory: SessionDirFactory | None = None,
-) -> None:
-    global _STATE_DIR_FACTORY, _SESSION_DIR_FACTORY
-    _STATE_DIR_FACTORY = state_dir_factory
-    _SESSION_DIR_FACTORY = session_dir_factory
-
-
 def trace_state_dir() -> Path:
-    if _STATE_DIR_FACTORY is not None:
-        return _STATE_DIR_FACTORY()
     root = os.environ.get("ZETA_STATE_DIR")
     return Path(root).expanduser() if root else Path.home() / ".zeta"
 
 
 def trace_session_dir(session_id: str | None = None) -> Path:
-    if _SESSION_DIR_FACTORY is not None:
-        return _SESSION_DIR_FACTORY(session_id)
     session = session_id or os.environ.get("ZETA_SESSION_ID") or "default"
     return trace_state_dir() / "sessions" / session
 

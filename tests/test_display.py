@@ -170,10 +170,10 @@ def test_sigil_display_terminal_digest_quotes_web_search_query() -> None:
         {"ok": True, "metadata": {"result_count": 4}},
     )
 
-    assert (
-        output.getvalue()
-        == '✓ web_search "Remi Louf .txt AI founder Outlines author" · 4 results\n'
-    )
+    assert output.getvalue().splitlines() == [
+        '→ web_search "Remi Louf .txt AI founder Outlines author"',
+        '✓ web_search "Remi Louf .txt AI founder Outlines author" · 4 results',
+    ]
 
 
 def test_sigil_display_terminal_digest_has_no_empty_status_detail() -> None:

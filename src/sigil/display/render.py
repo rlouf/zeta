@@ -41,6 +41,7 @@ PROGRESS_MODE_QUIET = "quiet"
 PROGRESS_MODES = frozenset(
     {PROGRESS_MODE_COMPACT, PROGRESS_MODE_TRACE, PROGRESS_MODE_QUIET}
 )
+SLOW_TOOL_START_NAMES = frozenset({"web_search"})
 TERMINAL_DIGEST_EVENT_THRESHOLD = 6
 TERMINAL_DIGEST_SECONDS_THRESHOLD = 10.0
 TERMINAL_DIGEST_CHAPTER_LINES = 2
@@ -127,6 +128,9 @@ class TerminalDigestRenderer:
         summary = summarize(name, args)
         if summary:
             self.last_action = summary
+        event = progress_event_for_tool_call(name, args)
+        if event is not None:
+            self.observe_event(event)
 
     def observe_tool_result(self, name: str, result: dict[str, Any]) -> None:
         args = self.pop_args(name)
@@ -299,6 +303,23 @@ def progress_event_for_tool_result(
         subject or name,
         success_line(name, subject, summary, failed),
         failed=failed,
+    )
+
+
+def progress_event_for_tool_call(
+    name: str,
+    args: dict[str, Any],
+) -> ProgressEvent | None:
+    if name not in SLOW_TOOL_START_NAMES:
+        return None
+    subject = summarize(name, args)
+    action = " ".join(part for part in (name, subject) if part).strip()
+    return ProgressEvent(
+        "tool_start",
+        "Working",
+        subject,
+        f"→ {action}" if action else f"→ {name}",
+        exact=True,
     )
 
 

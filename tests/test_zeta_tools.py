@@ -83,7 +83,7 @@ def test_zeta_grep_metadata_guides_model_tool_choice() -> None:
 
     assert (
         metadata["description"]
-        == "Search file contents recursively. Use before read when looking for symbols, errors, strings, or definitions."
+        == "Search file contents recursively. Use before read when looking for symbols, errors, strings, or definitions. Successful results include [path#tag] snapshot headers and numbered lines for grounded edits."
     )
     assert schema["properties"]["pattern"]["description"] == (
         "Text or regular expression to search for."
@@ -163,7 +163,8 @@ def test_zeta_tool_read_caps_returned_characters(tmp_path: Path, monkeypatch) ->
 
 
 def test_zeta_tool_grep_reports_total_limited_metadata(tmp_path: Path) -> None:
-    (tmp_path / "a.txt").write_text("needle one\nneedle two\n", encoding="utf-8")
+    first = tmp_path / "a.txt"
+    first.write_text("needle one\nneedle two\n", encoding="utf-8")
     (tmp_path / "b.txt").write_text("needle three\n", encoding="utf-8")
 
     data = tool_registry.run_tool(
@@ -172,8 +173,11 @@ def test_zeta_tool_grep_reports_total_limited_metadata(tmp_path: Path) -> None:
 
     assert data["ok"] is True
     assert data["content"][0]["text"].count("needle") == 2
+    assert data["content"][0]["text"].startswith(f"[{first}#")
+    assert "1:needle one\n2:needle two" in data["content"][0]["text"]
     assert data["metadata"]["matches"] == 2
     assert data["metadata"]["files"] == 1
+    assert data["metadata"]["tags"][str(first)]
     assert data["metadata"]["limit"] == 2
     assert data["metadata"]["truncated"] is True
     assert data["metadata"]["match_limit_reached"] is True
@@ -216,8 +220,26 @@ def test_zeta_tool_grep_fallback_searches_without_ripgrep(
     assert data["ok"] is True
     assert data["metadata"]["matches"] == 2
     lines = data["content"][0]["text"].splitlines()
-    assert lines[0].endswith("needle one")
-    assert lines[1].endswith("needle two")
+    assert lines[0].startswith(f"[{tmp_path / 'a.txt'}#")
+    assert lines[1] == "1:needle one"
+    assert lines[2].startswith(f"[{tmp_path / 'sub' / 'b.txt'}#")
+    assert lines[3] == "1:needle two"
+
+
+def test_zeta_tool_grep_tag_can_ground_hashline_edit(tmp_path: Path) -> None:
+    target = tmp_path / "a.txt"
+    target.write_text("keep\nneedle old\nkeep\n", encoding="utf-8")
+
+    grep = tool_registry.run_tool("grep", {"path": str(target), "pattern": "needle"})
+    tag = grep["metadata"]["tags"][str(target)]
+    data = tool_registry.run_tool(
+        "edit",
+        {"input": f"[{target}#{tag}]\nSWAP 2..2:\n+needle new\n"},
+        execution_mode="direct",
+    )
+
+    assert data["ok"] is True
+    assert target.read_text(encoding="utf-8") == "keep\nneedle new\nkeep\n"
 
 
 def test_zeta_tool_grep_fallback_stops_at_limit(tmp_path: Path, monkeypatch) -> None:

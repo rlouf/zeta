@@ -11,7 +11,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from zeta.tools.base import ToolSpec, error_result
+from sigil.tools.read import snapshot_tag
+from zeta.tools.base import ToolSpec, content_hash, error_result
 
 MAX_TOOL_RESULT_CHARS = 12_000
 
@@ -43,7 +44,8 @@ SPEC = ToolSpec(
     "grep",
     (
         "Search file contents recursively. Use before read when looking for "
-        "symbols, errors, strings, or definitions."
+        "symbols, errors, strings, or definitions. Successful results include "
+        "[path#tag] snapshot headers and numbered lines for grounded edits."
     ),
     SCHEMA,
     effects=("search",),
@@ -60,7 +62,8 @@ def run(params: dict[str, Any]) -> dict[str, Any]:
         result = run_ripgrep(pattern, path, limit)
     except FileNotFoundError:
         result = grep_fallback(pattern, Path(path), limit)
-    text, content_truncated = truncate_content(result.text)
+    text, tags = tagged_result_text(result)
+    text, content_truncated = truncate_content(text)
     truncated = result.truncated or content_truncated
     return {
         "ok": result.ok,
@@ -76,6 +79,7 @@ def run(params: dict[str, Any]) -> dict[str, Any]:
             "content_truncated": content_truncated,
             "max_chars": MAX_TOOL_RESULT_CHARS,
             "status": result.status,
+            "tags": tags,
         },
     }
 
@@ -90,10 +94,25 @@ class GrepResult:
     status: int = 0
 
 
+@dataclass(frozen=True)
+class GrepMatch:
+    path: str
+    line_number: int
+    text: str
+
+
 def run_ripgrep(pattern: str, path: str, limit: int) -> GrepResult:
     with tempfile.TemporaryFile() as stderr_spool:
         proc = subprocess.Popen(
-            ["rg", "--line-number", "--color", "never", pattern, path],
+            [
+                "rg",
+                "--line-number",
+                "--with-filename",
+                "--color",
+                "never",
+                pattern,
+                path,
+            ],
             text=True,
             stdout=subprocess.PIPE,
             stderr=stderr_spool,
@@ -173,6 +192,47 @@ def grep_result_from_lines(
         truncated=truncated,
         status=status,
     )
+
+
+def tagged_result_text(result: GrepResult) -> tuple[str, dict[str, str]]:
+    if not result.ok:
+        return result.text, {}
+    matches = [
+        match for line in result.text.splitlines() if (match := parse_match(line))
+    ]
+    if not matches:
+        return result.text, {}
+    tags: dict[str, str] = {}
+    rendered: list[str] = []
+    current_path: str | None = None
+    for match in matches:
+        if match.path != current_path:
+            tag = tag_for_path(match.path)
+            if tag is None:
+                continue
+            tags[match.path] = tag
+            rendered.append(f"[{match.path}#{tag}]")
+            current_path = match.path
+        rendered.append(f"{match.line_number}:{match.text}")
+    return "\n".join(rendered), tags
+
+
+def parse_match(line: str) -> GrepMatch | None:
+    path, sep, rest = line.partition(":")
+    if not sep:
+        return None
+    raw_line_number, sep, text = rest.partition(":")
+    if not sep or not raw_line_number.isdigit():
+        return None
+    return GrepMatch(path=path, line_number=int(raw_line_number), text=text)
+
+
+def tag_for_path(path: str) -> str | None:
+    try:
+        raw = Path(path).read_bytes()
+    except OSError:
+        return None
+    return snapshot_tag(content_hash(raw))
 
 
 def truncate_content(text: str) -> tuple[str, bool]:

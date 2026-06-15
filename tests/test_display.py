@@ -371,6 +371,17 @@ def test_sigil_display_summarizes_current_context_estimate() -> None:
     )
 
 
+def test_sigil_display_summarizes_context_from_total_tokens() -> None:
+    line = display_render.context_usage_line(
+        {
+            "usage": {"total_tokens": 18_823},
+            "model_context_tokens": 262_144,
+        }
+    )
+
+    assert line == "context  [█░░░░░░░░░░░░░░░░░░░] 7%"
+
+
 def test_sigil_display_context_usage_footer_estimates_tool_result_tokens() -> None:
     output = StringIO()
     footer = display_render.ContextUsageFooter(output)

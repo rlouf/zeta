@@ -865,6 +865,7 @@ def provider_context_usage_tokens(
     context_tokens = current_context_token_estimate(
         prompt_tokens,
         completion_tokens,
+        usage_token_count(usage.get("total_tokens")),
     )
     model_context_tokens = usage_token_count(telemetry.get("model_context_tokens"))
     if (
@@ -901,10 +902,11 @@ def clamp(value: int, low: int, high: int) -> int:
 def current_context_token_estimate(
     prompt_tokens: int | None,
     completion_tokens: int | None,
+    total_tokens: int | None = None,
 ) -> int | None:
-    if prompt_tokens is None or completion_tokens is None:
-        return None
-    return prompt_tokens + completion_tokens
+    if prompt_tokens is not None and completion_tokens is not None:
+        return prompt_tokens + completion_tokens
+    return total_tokens
 
 
 def usage_token_count(value: object) -> int | None:

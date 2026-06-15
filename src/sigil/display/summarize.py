@@ -7,6 +7,7 @@ import os
 import time
 from collections.abc import Callable
 from typing import Any, cast
+from urllib.parse import urlparse
 
 from zeta.prompt.budget import estimated_tokens_for_text
 from zeta.tools.base import proposed_effect
@@ -35,6 +36,10 @@ def summarize(tool: str, args: object) -> str:
     if not isinstance(args, dict):
         return ""
     tool_args = cast(dict[str, object], args)
+    if tool == "web_search":
+        return web_search_call_summary(tool_args)
+    if tool == "web_fetch":
+        return web_fetch_call_summary(tool_args)
     for field in SUMMARY_FIELDS_BY_TOOL.get(tool, ()):
         value = tool_args.get(field)
         if value:
@@ -56,6 +61,39 @@ def display_path(value: str) -> str:
     if value.startswith(cwd + "/"):
         return value[len(cwd) + 1 :]
     return value
+
+
+def web_search_call_summary(args: dict[str, object]) -> str:
+    queries = args.get("search_queries")
+    if isinstance(queries, list):
+        for query in queries:
+            if isinstance(query, str) and query.strip():
+                return truncate(query.strip(), 48)
+    objective = args.get("objective")
+    if isinstance(objective, str) and objective.strip():
+        return truncate(objective.strip(), 48)
+    return ""
+
+
+def web_fetch_call_summary(args: dict[str, object]) -> str:
+    urls = args.get("urls")
+    if isinstance(urls, list):
+        labels = [url_label(url) for url in urls if isinstance(url, str) and url]
+        labels = [label for label in labels if label]
+        if labels:
+            suffix = f" +{len(labels) - 1}" if len(labels) > 1 else ""
+            return truncate(labels[0], 48) + suffix
+    url = args.get("url")
+    if isinstance(url, str) and url:
+        return truncate(url_label(url), 48)
+    return ""
+
+
+def url_label(url: str) -> str:
+    parsed = urlparse(url)
+    if parsed.netloc:
+        return parsed.netloc.removeprefix("www.")
+    return url
 
 
 def tool_result_summary(name: str, result: dict[str, Any]) -> list[str]:
@@ -85,6 +123,8 @@ def tool_result_summary(name: str, result: dict[str, Any]) -> list[str]:
         return grep_result_summary(text, metadata)
     if name == "edit" and metadata.get("mode") == "direct_replace":
         return edit_result_summary(metadata)
+    if name in {"web_search", "web_fetch"}:
+        return web_result_summary(name, metadata)
     if result.get("ok") is True:
         return ["ok"]
     return []
@@ -171,6 +211,55 @@ def direct_tool_result_summary(name: str, metadata: dict[str, Any]) -> list[str]
             return [f"wrote · {display_path(path)}"]
         return ["wrote"]
     return []
+
+
+def web_result_summary(name: str, metadata: dict[str, Any]) -> list[str]:
+    if name == "web_search":
+        return web_search_result_summary(metadata)
+    if name == "web_fetch":
+        return web_fetch_result_summary(metadata)
+    return ["ok"]
+
+
+def web_search_result_summary(metadata: dict[str, Any]) -> list[str]:
+    result_count = metadata.get("result_count")
+    if not isinstance(result_count, int):
+        return ["ok"]
+    noun = "result" if result_count == 1 else "results"
+    suffix = " · truncated" if metadata.get("truncated") is True else ""
+    return [f"{result_count} {noun}{suffix}"]
+
+
+def web_fetch_result_summary(metadata: dict[str, Any]) -> list[str]:
+    parts = []
+    byte_count = metadata.get("bytes")
+    if isinstance(byte_count, int):
+        parts.append(format_bytes(byte_count))
+    line_count = metadata.get("lines")
+    if isinstance(line_count, int):
+        noun = "line" if line_count == 1 else "lines"
+        parts.append(f"{line_count} {noun}")
+    parts.extend(web_fetch_error_parts(metadata))
+    if metadata.get("truncated") is True:
+        parts.append("truncated")
+    return [" · ".join(parts)] if parts else ["ok"]
+
+
+def web_fetch_error_parts(metadata: dict[str, Any]) -> list[str]:
+    errors = metadata.get("url_errors")
+    if not isinstance(errors, list) or not errors:
+        return []
+    noun = "error" if len(errors) == 1 else "errors"
+    return [f"{len(errors)} {noun}"]
+
+
+def format_bytes(count: int) -> str:
+    if count < 1024:
+        return f"{count} B"
+    value = count / 1024
+    if value < 1024:
+        return f"{value:.1f} KB"
+    return f"{value / 1024:.1f} MB"
 
 
 def shell_result_summary(event: dict[str, Any]) -> list[str]:

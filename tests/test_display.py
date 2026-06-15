@@ -338,10 +338,40 @@ def test_sigil_display_renders_tool_paths_relative_to_cwd(
     assert display_summarize.summarize("ls", {"path": str(Path.cwd())}) == "."
     assert display_summarize.summarize("read", {"path": "/etc/hosts"}) == "/etc/hosts"
     assert display_summarize.summarize("grep", {"pattern": "^#"}) == "^#"
+    assert (
+        display_summarize.summarize(
+            "web_search",
+            {
+                "objective": "Find concise public information about Remi Louf",
+                "search_queries": ["Remi Louf public profile", "Remi Louf dottxt"],
+            },
+        )
+        == "Remi Louf public profile"
+    )
+    assert (
+        display_summarize.summarize(
+            "web_fetch",
+            {
+                "urls": [
+                    "https://dottxt.ai",
+                    "https://github.com/dottxt-ai",
+                ],
+            },
+        )
+        == "dottxt.ai +1"
+    )
     assert display_summarize.tool_result_summary(
         "write",
         {"ok": True, "metadata": {"mode": "direct", "path": inside}},
     ) == ["wrote · docs/notes.md"]
+    assert display_summarize.tool_result_summary(
+        "web_search",
+        {"ok": True, "metadata": {"result_count": 8}},
+    ) == ["8 results"]
+    assert display_summarize.tool_result_summary(
+        "web_fetch",
+        {"ok": True, "metadata": {"bytes": 12_345, "lines": 123}},
+    ) == ["12.1 KB · 123 lines"]
 
 
 def test_sigil_display_summarizes_current_context_estimate() -> None:

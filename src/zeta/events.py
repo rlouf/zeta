@@ -13,16 +13,6 @@ from typing import Any, Protocol
 from uuid import uuid4
 
 EVENT_STORE_NAME = "events.sqlite3"
-_EVENT_STORE_PATH_FACTORY: EventStorePathFactory | None = None
-
-
-class EventStorePathFactory(Protocol):
-    def __call__(self) -> Path: ...
-
-
-def set_event_store_path_factory(factory: EventStorePathFactory | None) -> None:
-    global _EVENT_STORE_PATH_FACTORY
-    _EVENT_STORE_PATH_FACTORY = factory
 
 
 @dataclass(frozen=True)
@@ -403,8 +393,6 @@ class SqliteEventStore:
 def event_store_path(root: Path | None = None) -> Path:
     if root is not None:
         return root / EVENT_STORE_NAME
-    if _EVENT_STORE_PATH_FACTORY is not None:
-        return _EVENT_STORE_PATH_FACTORY()
     state_dir = os.environ.get("ZETA_STATE_DIR")
     base = Path(state_dir).expanduser() if state_dir else Path.home() / ".zeta"
     return base / EVENT_STORE_NAME

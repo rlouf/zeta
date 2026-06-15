@@ -104,7 +104,11 @@ def test_zeta_tool_read_schema_and_run(tmp_path: Path) -> None:
 
     data = tool_registry.run_tool("read", {"path": str(target)})
     assert data["ok"] is True
-    assert data["content"][0]["text"] == "hello zeta\n"
+    tag = data["metadata"]["tag"]
+    assert data["content"][0]["text"] == f"[{target}#{tag}]\n1:hello zeta\n"
+    assert data["metadata"]["content_hash"].startswith("sha256:")
+    assert data["metadata"]["line_start"] == 1
+    assert data["metadata"]["line_end"] == 1
 
 
 def test_zeta_tool_read_offset_and_limit_select_lines(tmp_path: Path) -> None:
@@ -116,9 +120,12 @@ def test_zeta_tool_read_offset_and_limit_select_lines(tmp_path: Path) -> None:
     )
 
     assert data["ok"] is True
-    assert data["content"][0]["text"] == "two\nthree\n"
+    tag = data["metadata"]["tag"]
+    assert data["content"][0]["text"] == f"[{target}#{tag}]\n2:two\n3:three\n"
     assert data["metadata"]["offset"] == 1
     assert data["metadata"]["limit"] == 2
+    assert data["metadata"]["line_start"] == 2
+    assert data["metadata"]["line_end"] == 3
 
 
 def test_zeta_tool_read_limit_past_end_returns_remaining_lines(tmp_path: Path) -> None:
@@ -129,7 +136,8 @@ def test_zeta_tool_read_limit_past_end_returns_remaining_lines(tmp_path: Path) -
         "read", {"path": str(target), "offset": 1, "limit": 10}
     )
 
-    assert data["content"][0]["text"] == "beta\n"
+    tag = data["metadata"]["tag"]
+    assert data["content"][0]["text"] == f"[{target}#{tag}]\n2:beta\n"
 
 
 def test_zeta_tool_read_rejects_binary_file(tmp_path: Path) -> None:
@@ -398,6 +406,110 @@ def test_zeta_tool_edit_accepts_exact_replacement(tmp_path: Path) -> None:
     assert data["effect"]["reason"] == "Replace one line."
     assert "-old\n" in patch
     assert "+new\n" in patch
+
+
+def test_zeta_tool_edit_stages_hashline_swap_from_read_tag(tmp_path: Path) -> None:
+    target = tmp_path / "a.txt"
+    target.write_text("hello\nold\nbye\n", encoding="utf-8")
+    read = tool_registry.run_tool("read", {"path": str(target)})
+    tag = read["metadata"]["tag"]
+
+    data = tool_registry.run_tool(
+        "edit",
+        {"input": f"[{target}#{tag}]\nSWAP 2..2:\n+new\n", "reason": "Use tag."},
+    )
+
+    assert data["ok"] is True
+    assert data["effect"]["command"].startswith("git apply ")
+    assert data["effect"]["reason"] == "Use tag."
+    patch = Path(data["effect"]["artifact"]).read_text(encoding="utf-8")
+    assert "-old\n" in patch
+    assert "+new\n" in patch
+    assert target.read_text(encoding="utf-8") == "hello\nold\nbye\n"
+    assert data["metadata"]["mode"] == "hashline"
+    assert data["metadata"]["tag"] == tag
+
+
+def test_zeta_tool_edit_direct_applies_hashline_insert_and_delete(
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "a.txt"
+    target.write_text("one\nthree\nremove\n", encoding="utf-8")
+    tag = tool_registry.run_tool("read", {"path": str(target)})["metadata"]["tag"]
+
+    data = tool_registry.run_tool(
+        "edit",
+        {
+            "input": (
+                f"[{target}#{tag}]\n"
+                "INS.POST 1:\n"
+                "+two\n"
+                "DEL 2..2\n"
+                "INS.PRE 3:\n"
+                "+inserted\n"
+            )
+        },
+        execution_mode="direct",
+    )
+
+    assert data["ok"] is True
+    assert target.read_text(encoding="utf-8") == "one\ntwo\ninserted\nremove\n"
+    assert data["metadata"]["mode"] == "hashline"
+
+
+def test_zeta_tool_edit_rejects_stale_hashline_tag(tmp_path: Path) -> None:
+    target = tmp_path / "a.txt"
+    target.write_text("old\n", encoding="utf-8")
+    tag = tool_registry.run_tool("read", {"path": str(target)})["metadata"]["tag"]
+    target.write_text("changed\n", encoding="utf-8")
+
+    data = tool_registry.run_tool(
+        "edit", {"input": f"[{target}#{tag}]\nSWAP 1..1:\n+new\n"}
+    )
+
+    assert data["ok"] is False
+    assert data["error"]["code"] == "stale-tag"
+    assert target.read_text(encoding="utf-8") == "changed\n"
+
+
+@pytest.mark.parametrize(
+    ("payload", "code"),
+    [
+        ("a.txt\nSWAP 1..1:\n+new\n", "missing-section-header"),
+        ("[a.txt]\nSWAP 1..1:\n+new\n", "missing-tag"),
+        ("[a.txt#abcd]\nMOVE 1..1:\n+new\n", "unknown-operation"),
+        ("[a.txt#abcd]\nSWAP 1..1:\n-new\n", "invalid-body-line"),
+        ("[a.txt#abcd]\nSWAP 4..4:\n+new\n", "line-out-of-range"),
+    ],
+)
+def test_zeta_tool_edit_rejects_malformed_hashline_input(
+    tmp_path: Path, payload: str, code: str
+) -> None:
+    target = tmp_path / "a.txt"
+    target.write_text("old\n", encoding="utf-8")
+    tag = tool_registry.run_tool("read", {"path": str(target)})["metadata"]["tag"]
+    if "a.txt#abcd" in payload:
+        payload = payload.replace("a.txt#abcd", f"{target}#{tag}")
+    else:
+        payload = payload.replace("a.txt", str(target))
+
+    data = tool_registry.run_tool("edit", {"input": payload})
+
+    assert data["ok"] is False
+    assert data["error"]["code"] == code
+
+
+def test_zeta_tool_edit_rejects_hashline_noop(tmp_path: Path) -> None:
+    target = tmp_path / "a.txt"
+    target.write_text("old\n", encoding="utf-8")
+    tag = tool_registry.run_tool("read", {"path": str(target)})["metadata"]["tag"]
+
+    data = tool_registry.run_tool(
+        "edit", {"input": f"[{target}#{tag}]\nSWAP 1..1:\n+old\n"}
+    )
+
+    assert data["ok"] is False
+    assert data["error"]["code"] == "empty-edit"
 
 
 def test_zeta_tool_edit_direct_replace_writes_file(tmp_path: Path) -> None:

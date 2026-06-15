@@ -27,7 +27,6 @@ from zeta.trace import latest_prompt_trace_fields
 
 from ..agent_io import (
     TurnEventRecorder,
-    TurnLedger,
     TurnRenderer,
     build_turn_renderer,
     event_model_telemetry,
@@ -54,6 +53,7 @@ from ..protocols import (
 )
 from ..state import append_prompt_submitted_event
 from ..tools import ensure_builtin_tools_registered
+from ..turn import TurnLedger
 
 HandoffOutput = Literal["detail", "summary", "none"]
 Workflow = Literal["ask", "propose", "do"]

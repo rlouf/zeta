@@ -193,6 +193,7 @@ def step(
                 reasoning_observer=progress_reasoning_observer(renderer),
             ),
             stream_sink=renderer.stream_renderer,
+            trace_store=runtime_context.trace_store,
             tool_registry=runtime_context.tool_registry,
             caused_by=ledger.root_event_id,
         )

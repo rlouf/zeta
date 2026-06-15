@@ -23,7 +23,7 @@ from .timeline import current_timeline, record_event
 from .tools.base import EFFECT_KINDS, EffectKind, ToolImpl, ToolSpec, proposed_effect
 from .tools.registry import ExecutionMode, ToolRegistry
 from .tools.registry import registry as _runtime_tool_registry
-from .trace import PromptTrace, prompt_trace_payload
+from .trace import PromptTrace, Store, prompt_trace_payload
 
 AgentEventSink = Callable[[dict[str, Any]], None]
 ModelStatusFactory = Callable[[], AbstractContextManager[object]]
@@ -73,6 +73,7 @@ def run_agent_turn(
     model_status: ModelStatusFactory | None = None,
     stream_sink: ChatCompletionStreamSink | None = None,
     prompt_builder: PromptBuilder | None = None,
+    trace_store: Store | None = None,
     tool_registry: ToolRegistry | None = None,
     caused_by: str | None = None,
 ) -> AgentTurnResult:
@@ -85,7 +86,10 @@ def run_agent_turn(
     latest_model_telemetry: dict[str, Any] = {}
     model_telemetry_calls: list[dict[str, Any]] = []
     prompt_traces: list[PromptTrace] = []
-    builder = prompt_builder or PromptBuilder(transform=prompt_transform_from_env())
+    builder = prompt_builder or PromptBuilder(
+        store=trace_store,
+        transform=prompt_transform_from_env(),
+    )
     tools = model_tool_descriptors(allowed_tools, tool_registry=active_tool_registry)
     next_model_caused_by = caused_by
     for _ in turn_indices(config.max_turns):
@@ -807,6 +811,7 @@ def run_rpc_session(
             else load_project_context()
         ),
         event_sink=sink,
+        trace_store=runtime_context.trace_store,
         tool_registry=runtime_context.tool_registry,
         caused_by=str(user_event.get("id") or ""),
     )

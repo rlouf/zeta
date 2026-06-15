@@ -21,7 +21,6 @@ from ..trace import (
     PromptTrace,
     Store,
     canonical_json,
-    default_store,
     warn_trace_failure_once,
 )
 from .components import (
@@ -56,7 +55,6 @@ class PromptBuilder:
         transform: PromptTransform | None = None,
     ) -> None:
         self._store = store
-        self._store_initialized = store is not None
         self.transform = transform or NoOpPromptTransform()
         # One builder serves every model call of a turn; skills discovery
         # walks the filesystem, so do it once per tool set instead.
@@ -208,14 +206,6 @@ class PromptBuilder:
         return cached
 
     def store(self) -> Store | None:
-        if self._store_initialized:
-            return self._store
-        self._store_initialized = True
-        try:
-            self._store = default_store()
-        except Exception as exc:
-            warn_trace_failure_once("default_store", exc)
-            self._store = None
         return self._store
 
     def _build_traced_prompt(

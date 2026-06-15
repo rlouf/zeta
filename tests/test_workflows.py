@@ -2219,6 +2219,13 @@ def test_zeta_step_bridges_turn_record_into_trace_graph(monkeypatch) -> None:
 
 
 def test_turn_bridge_failure_does_not_break_the_step(monkeypatch) -> None:
+    class BrokenStore:
+        def get_ref(self, name: str) -> str | None:
+            raise RuntimeError("trace store unavailable")
+
+        def batch(self):
+            raise RuntimeError("trace store unavailable")
+
     class BrokenContext:
         def __init__(self, base) -> None:
             self.session_id = base.session_id
@@ -2226,10 +2233,7 @@ def test_turn_bridge_failure_does_not_break_the_step(monkeypatch) -> None:
             self.tool_registry = base.tool_registry
             self.state_dir = base.state_dir
             self.session_dir = base.session_dir
-
-        @property
-        def trace_store(self) -> zeta_trace.SqliteStore:
-            raise RuntimeError("trace store unavailable")
+            self.trace_store = BrokenStore()
 
     monkeypatch.setattr(agent_io, "ensure_server", lambda: True)
     base_context = sigil.zeta_context_for_sigil()

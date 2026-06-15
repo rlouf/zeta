@@ -606,6 +606,7 @@ def run_zeta_rpc_session(
                 else load_project_context()
             ),
             event_sink=sink,
+            trace_store=runtime_context.trace_store,
             tool_registry=runtime_context.tool_registry,
             caused_by=ledger.root_event_id,
         )

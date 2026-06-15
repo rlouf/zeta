@@ -451,6 +451,7 @@ def test_zeta_agent_tool_call_is_caused_by_assistant_event(
 
 def test_zeta_agent_turn_finalizes_text(monkeypatch) -> None:
     captured: dict[str, Any] = {}
+    store = zeta_trace.InMemoryStore()
 
     def fake_chat_completion_messages(
         messages: list[dict[str, Any]],
@@ -469,6 +470,7 @@ def test_zeta_agent_turn_finalizes_text(monkeypatch) -> None:
         "answer",
         [],
         zeta_agent.AgentConfig(allowed_tools=("read",), max_turns=1),
+        trace_store=store,
     )
 
     assert result.final_text == "done"

@@ -67,6 +67,7 @@ def record_event(
         run_id = runtime_context.session_id
         with store.batch():
             previous_event_id = store.get_ref(event_head_ref(run_id))
+            previous_run_head_id = store.get_ref(run_head_ref(run_id))
             links = event_links(payload, previous_event_id)
             event_id = store.put_object(
                 Object(
@@ -87,12 +88,16 @@ def record_event(
                     params={"type": str(payload.get("type") or "")},
                 )
             )
-            store.set_ref(event_head_ref(run_id), event_id)
+            store.set_ref(event_head_ref(run_id), event_id, expected=previous_event_id)
             head_id = event_domain_object_id(payload) or event_id
             if should_update_run_head(payload):
-                store.set_ref(run_head_ref(run_id), head_id)
-            elif store.get_ref(run_head_ref(run_id)) is None:
-                store.set_ref(run_head_ref(run_id), head_id)
+                store.set_ref(
+                    run_head_ref(run_id),
+                    head_id,
+                    expected=previous_run_head_id,
+                )
+            elif previous_run_head_id is None:
+                store.set_ref(run_head_ref(run_id), head_id, expected=None)
     except Exception as exc:
         warn_trace_failure_once("record_event", exc)
     return payload

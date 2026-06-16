@@ -20,6 +20,7 @@ DEFAULT_SQLITE_NAME = "zeta-trace.sqlite3"
 ZETA_SQLITE_NAME = "zeta.sqlite3"
 LOGGER = logging.getLogger("zeta.trace")
 _WARNED_FAILURES: set[str] = set()
+_REF_EXPECTED_UNSET = object()
 
 
 @dataclass(frozen=True)
@@ -106,6 +107,24 @@ class UnknownSessionError(LookupError):
         self.available = available
 
 
+class RefConflictError(RuntimeError):
+    """A mutable ref did not match the caller's observed value."""
+
+    def __init__(
+        self,
+        name: str,
+        *,
+        expected: ObjectId | None,
+        actual: ObjectId | None,
+    ) -> None:
+        super().__init__(
+            f"ref {name!r} changed: expected {expected!r}, found {actual!r}"
+        )
+        self.name = name
+        self.expected = expected
+        self.actual = actual
+
+
 class Store(Protocol):
     """Storage API shared by in-memory and SQLite stores."""
 
@@ -114,7 +133,13 @@ class Store(Protocol):
     def object_ids_with_prefix(
         self, prefix: str, limit: int = 16
     ) -> list[ObjectId]: ...
-    def set_ref(self, name: str, object_id: ObjectId) -> None: ...
+    def set_ref(
+        self,
+        name: str,
+        object_id: ObjectId,
+        *,
+        expected: ObjectId | None | object = _REF_EXPECTED_UNSET,
+    ) -> None: ...
     def get_ref(self, name: str) -> ObjectId | None: ...
     def batch(self) -> AbstractContextManager[None]: ...
     def record_derivation(self, derivation: Derivation) -> str: ...
@@ -374,7 +399,21 @@ class InMemoryStore(StoreBase):
         ]
         return listed if limit is None else listed[:limit]
 
-    def set_ref(self, name: str, object_id: ObjectId) -> None:
+    def set_ref(
+        self,
+        name: str,
+        object_id: ObjectId,
+        *,
+        expected: ObjectId | None | object = _REF_EXPECTED_UNSET,
+    ) -> None:
+        if expected is not _REF_EXPECTED_UNSET:
+            actual = self._refs.get(name)
+            if actual != expected:
+                raise RefConflictError(
+                    name,
+                    expected=cast(ObjectId | None, expected),
+                    actual=actual,
+                )
         self._refs[name] = object_id
 
     def get_ref(self, name: str) -> ObjectId | None:
@@ -638,16 +677,53 @@ class SqliteStore(StoreBase):
         ).fetchall()
         return [str(row["id"]) for row in rows]
 
-    def set_ref(self, name: str, object_id: ObjectId) -> None:
+    def set_ref(
+        self,
+        name: str,
+        object_id: ObjectId,
+        *,
+        expected: ObjectId | None | object = _REF_EXPECTED_UNSET,
+    ) -> None:
         self._ensure_writable()
         with self._write_lock:
-            self.connection.execute(
-                """
-                INSERT INTO refs (scope, name, object_id) VALUES (?, ?, ?)
-                ON CONFLICT(scope, name) DO UPDATE SET object_id = excluded.object_id
-                """,
-                (self.scope, name, object_id),
-            )
+            if expected is _REF_EXPECTED_UNSET:
+                self.connection.execute(
+                    """
+                    INSERT INTO refs (scope, name, object_id) VALUES (?, ?, ?)
+                    ON CONFLICT(scope, name) DO UPDATE
+                    SET object_id = excluded.object_id
+                    """,
+                    (self.scope, name, object_id),
+                )
+            elif expected is None:
+                cursor = self.connection.execute(
+                    """
+                    INSERT INTO refs (scope, name, object_id) VALUES (?, ?, ?)
+                    ON CONFLICT(scope, name) DO NOTHING
+                    """,
+                    (self.scope, name, object_id),
+                )
+                if cursor.rowcount != 1:
+                    raise RefConflictError(
+                        name,
+                        expected=None,
+                        actual=self.get_ref(name),
+                    )
+            else:
+                cursor = self.connection.execute(
+                    """
+                    UPDATE refs
+                    SET object_id = ?
+                    WHERE scope = ? AND name = ? AND object_id = ?
+                    """,
+                    (object_id, self.scope, name, expected),
+                )
+                if cursor.rowcount != 1:
+                    raise RefConflictError(
+                        name,
+                        expected=cast(ObjectId, expected),
+                        actual=self.get_ref(name),
+                    )
             self._commit()
 
     def get_ref(self, name: str) -> ObjectId | None:

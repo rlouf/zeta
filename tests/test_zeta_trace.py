@@ -56,6 +56,49 @@ def current_zeta_timeline() -> list[dict[str, object]]:
     return zeta_timeline.current_timeline(runtime_context=zeta_runtime_context())
 
 
+@pytest.mark.parametrize(
+    "store",
+    [
+        pytest.param(zeta_trace.InMemoryStore(), id="memory"),
+        pytest.param(None, id="sqlite"),
+    ],
+)
+def test_zeta_trace_set_ref_compares_expected_value(
+    tmp_path: Path,
+    store: zeta_trace.Store | None,
+) -> None:
+    trace_store = store or zeta_trace.SqliteStore(tmp_path / "trace.sqlite3")
+    trace_store.set_ref("run/test/head", "sha256:first")
+
+    trace_store.set_ref("run/test/head", "sha256:second", expected="sha256:first")
+
+    assert trace_store.get_ref("run/test/head") == "sha256:second"
+    with pytest.raises(zeta_trace.RefConflictError):
+        trace_store.set_ref("run/test/head", "sha256:third", expected="sha256:first")
+    assert trace_store.get_ref("run/test/head") == "sha256:second"
+
+
+@pytest.mark.parametrize(
+    "store",
+    [
+        pytest.param(zeta_trace.InMemoryStore(), id="memory"),
+        pytest.param(None, id="sqlite"),
+    ],
+)
+def test_zeta_trace_set_ref_expected_none_creates_only_when_absent(
+    tmp_path: Path,
+    store: zeta_trace.Store | None,
+) -> None:
+    trace_store = store or zeta_trace.SqliteStore(tmp_path / "trace.sqlite3")
+
+    trace_store.set_ref("run/test/head", "sha256:first", expected=None)
+
+    assert trace_store.get_ref("run/test/head") == "sha256:first"
+    with pytest.raises(zeta_trace.RefConflictError):
+        trace_store.set_ref("run/test/head", "sha256:second", expected=None)
+    assert trace_store.get_ref("run/test/head") == "sha256:first"
+
+
 def test_zeta_trace_object_ids_ignore_dict_key_order() -> None:
     first = zeta_trace.Object(
         kind="example",

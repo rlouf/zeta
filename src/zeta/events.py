@@ -8,7 +8,7 @@ import sqlite3
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Protocol, runtime_checkable
 from uuid import uuid4
 
 EVENT_STORE_NAME = "events.sqlite3"
@@ -19,18 +19,25 @@ ZETA_STORE_NAME = "zeta.sqlite3"
 class EventCursor:
     """Opaque replay position over the event ordering key."""
 
-    timestamp_micros: int
-    id: str
+    seq: int | None = None
+    timestamp_micros: int | None = None
+    id: str | None = None
 
     @classmethod
     def from_event(cls, event: Event) -> EventCursor:
-        return cls(timestamp_micros=event.timestamp_micros, id=event.id)
+        return cls(seq=event.seq)
 
     def encode(self) -> str:
+        if self.seq is not None:
+            return str(self.seq)
         return f"{self.timestamp_micros}:{self.id}"
 
     @classmethod
     def decode(cls, value: str) -> EventCursor | None:
+        try:
+            return cls(seq=int(value))
+        except ValueError:
+            pass
         timestamp, separator, event_id = value.partition(":")
         if not separator:
             return None
@@ -88,6 +95,10 @@ class Event:
     session_id: str | None
     turn_id: str | None
     timestamp_micros: int
+    seq: int = 0
+
+    def cursor(self) -> EventCursor:
+        return EventCursor.from_event(self)
 
 
 @dataclass(frozen=True)
@@ -103,6 +114,14 @@ class EventSink(Protocol):
 
     def accept(self, draft: DraftEvent) -> AppendOutcome:
         """Accept one draft event."""
+
+
+@runtime_checkable
+class EventReader(Protocol):
+    """Readable event log capability."""
+
+    def list_events(self, filter: Filter) -> list[Event]:
+        """List durable events matching the filter."""
 
 
 @dataclass(frozen=True)
@@ -225,10 +244,12 @@ class SqliteEventStore:
             pass
 
     def _init_schema(self) -> None:
+        self._ensure_events_table_has_sequence()
         self.connection.executescript(
             """
             CREATE TABLE IF NOT EXISTS events (
-              id TEXT PRIMARY KEY,
+              seq INTEGER PRIMARY KEY AUTOINCREMENT,
+              id TEXT UNIQUE NOT NULL,
               type TEXT NOT NULL,
               source TEXT NOT NULL,
               payload TEXT NOT NULL,
@@ -246,12 +267,61 @@ class SqliteEventStore:
             CREATE INDEX IF NOT EXISTS idx_events_session_ts
               ON events(session_id, timestamp)
               WHERE session_id IS NOT NULL;
+            CREATE INDEX IF NOT EXISTS idx_events_session_seq
+              ON events(session_id, seq)
+              WHERE session_id IS NOT NULL;
             CREATE INDEX IF NOT EXISTS idx_events_caused_by_ts
               ON events(caused_by, timestamp)
               WHERE caused_by IS NOT NULL;
             CREATE INDEX IF NOT EXISTS idx_events_turn_ts
               ON events(turn_id, timestamp)
               WHERE turn_id IS NOT NULL;
+            CREATE INDEX IF NOT EXISTS idx_events_turn_seq
+              ON events(turn_id, seq)
+              WHERE turn_id IS NOT NULL;
+            """
+        )
+        self.connection.commit()
+
+    def _ensure_events_table_has_sequence(self) -> None:
+        row = self.connection.execute(
+            """
+            SELECT name
+            FROM sqlite_master
+            WHERE type = 'table' AND name = 'events'
+            """
+        ).fetchone()
+        if row is None:
+            return
+        columns = {
+            str(column["name"])
+            for column in self.connection.execute("PRAGMA table_info(events)")
+        }
+        if "seq" in columns:
+            return
+        self.connection.executescript(
+            """
+            ALTER TABLE events RENAME TO events_legacy;
+            CREATE TABLE events (
+              seq INTEGER PRIMARY KEY AUTOINCREMENT,
+              id TEXT UNIQUE NOT NULL,
+              type TEXT NOT NULL,
+              source TEXT NOT NULL,
+              payload TEXT NOT NULL,
+              idempotency_key TEXT,
+              caused_by TEXT,
+              session_id TEXT,
+              turn_id TEXT,
+              timestamp INTEGER NOT NULL
+            ) STRICT;
+            INSERT INTO events
+              (id, type, source, payload, idempotency_key, caused_by, session_id,
+               turn_id, timestamp)
+            SELECT id, type, source, payload, idempotency_key, caused_by, session_id,
+                   turn_id, timestamp
+            FROM events_legacy
+            ORDER BY timestamp ASC, id ASC;
+            DROP TABLE events_legacy;
             """
         )
         self.connection.commit()
@@ -283,13 +353,16 @@ class SqliteEventStore:
         )
         self.connection.commit()
         if cursor.rowcount == 1:
-            return AppendOutcome(event=event, inserted=True)
+            inserted = self.get(event.id)
+            if inserted is None:
+                raise sqlite3.IntegrityError(f"append failed for event {event.id}")
+            return AppendOutcome(event=inserted, inserted=True)
         return AppendOutcome(event=self._duplicate_for(event), inserted=False)
 
     def get(self, event_id: str) -> Event | None:
         row = self.connection.execute(
             """
-            SELECT id, type, source, payload, idempotency_key, caused_by,
+            SELECT seq, id, type, source, payload, idempotency_key, caused_by,
                    session_id, turn_id, timestamp
             FROM events
             WHERE id = ?
@@ -317,14 +390,18 @@ class SqliteEventStore:
             clauses.append("caused_by = ?")
             params.append(filter.caused_by)
         if filter.after is not None:
-            clauses.append("(timestamp > ? OR (timestamp = ? AND id > ?))")
-            params.extend(
-                [
-                    filter.after.timestamp_micros,
-                    filter.after.timestamp_micros,
-                    filter.after.id,
-                ]
-            )
+            if filter.after.seq is not None:
+                clauses.append("seq > ?")
+                params.append(filter.after.seq)
+            else:
+                clauses.append("(timestamp > ? OR (timestamp = ? AND id > ?))")
+                params.extend(
+                    [
+                        filter.after.timestamp_micros,
+                        filter.after.timestamp_micros,
+                        filter.after.id,
+                    ]
+                )
         where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
         limit = ""
         if filter.limit is not None:
@@ -332,11 +409,11 @@ class SqliteEventStore:
             params.append(filter.limit)
         rows = self.connection.execute(
             f"""
-            SELECT id, type, source, payload, idempotency_key, caused_by,
+            SELECT seq, id, type, source, payload, idempotency_key, caused_by,
                    session_id, turn_id, timestamp
             FROM events
             {where}
-            ORDER BY timestamp ASC, id ASC
+            ORDER BY seq ASC
             {limit}
             """,
             params,
@@ -362,11 +439,22 @@ class SqliteEventStore:
     def events_for_turn(self, turn_id: str) -> list[Event]:
         return self.list_events(Filter(turn_id=turn_id))
 
+    def clear_session_events(self, session_id: str, *, event_type_prefix: str) -> int:
+        cursor = self.connection.execute(
+            """
+            DELETE FROM events
+            WHERE session_id = ? AND type LIKE ? ESCAPE '\\'
+            """,
+            (session_id, like_prefix(event_type_prefix)),
+        )
+        self.connection.commit()
+        return int(cursor.rowcount)
+
     def _duplicate_for(self, event: Event) -> Event:
         if event.idempotency_key is not None:
             row = self.connection.execute(
                 """
-                SELECT id, type, source, payload, idempotency_key, caused_by,
+                SELECT seq, id, type, source, payload, idempotency_key, caused_by,
                        session_id, turn_id, timestamp
                 FROM events
                 WHERE id = ? OR idempotency_key = ?
@@ -378,7 +466,7 @@ class SqliteEventStore:
         else:
             row = self.connection.execute(
                 """
-                SELECT id, type, source, payload, idempotency_key, caused_by,
+                SELECT seq, id, type, source, payload, idempotency_key, caused_by,
                        session_id, turn_id, timestamp
                 FROM events
                 WHERE id = ?
@@ -406,6 +494,7 @@ def row_to_event(row: sqlite3.Row) -> Event:
     payload = json.loads(str(row["payload"]))
     if not isinstance(payload, dict):
         payload = {"value": payload}
+    seq = int(row["seq"]) if "seq" in row.keys() else 0
     return Event(
         id=str(row["id"]),
         event_type=str(row["type"]),
@@ -416,6 +505,7 @@ def row_to_event(row: sqlite3.Row) -> Event:
         session_id=optional_str(row["session_id"]),
         turn_id=optional_str(row["turn_id"]),
         timestamp_micros=int(row["timestamp"]),
+        seq=seq,
     )
 
 

@@ -469,10 +469,12 @@ def test_zeta_timeline_record_and_project(tmp_path: Path, monkeypatch) -> None:
     refs = runtime_context.trace_store.refs()
     assert refs[zeta_timeline.run_head_ref("zeta-test")]
     assert refs[zeta_timeline.event_head_ref("zeta-test")]
-    assert zeta_event_store().list_events(Filter(event_type="zeta.tool.called")) == []
+    tool_events = zeta_event_store().list_events(Filter(event_type="zeta.tool.called"))
+    assert len(tool_events) == 1
+    assert tool_events[0].payload["name"] == "read"
 
 
-def test_zeta_timeline_tool_result_stays_trace_only(
+def test_zeta_timeline_tool_result_is_durable(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -493,7 +495,9 @@ def test_zeta_timeline_tool_result_stays_trace_only(
     timeline = zeta_timeline.current_timeline(runtime_context=runtime_context)
     assert timeline[0]["type"] == "tool_result"
     assert timeline[0]["result"] == {"ok": True}
-    assert zeta_event_store().list_events(Filter(event_type="zeta.tool.called")) == []
+    tool_events = zeta_event_store().list_events(Filter(event_type="zeta.tool.called"))
+    assert len(tool_events) == 1
+    assert tool_events[0].payload["result"] == {"ok": True}
 
 
 def test_zeta_timeline_tool_call_is_caused_by_assistant_event(
@@ -534,7 +538,9 @@ def test_zeta_timeline_tool_call_is_caused_by_assistant_event(
     tool_calls = zeta_event_store().list_events(Filter(event_type="zeta.tool.called"))
     assert assistant is not None
     assert assistant.event_type == "zeta.model.called"
-    assert tool_calls == []
+    assert len(tool_calls) == 1
+    assert tool_calls[0].caused_by == "assistant-event-1"
+    assert tool_calls[0].payload["name"] == "read"
 
 
 def test_zeta_model_called_links_used_and_returned_objects(
@@ -625,7 +631,7 @@ def test_zeta_tool_called_links_used_and_returned_objects(
     ]
 
 
-def test_zeta_user_message_and_abort_stay_trace_only(
+def test_zeta_user_message_usage_and_abort_are_durable(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -636,7 +642,48 @@ def test_zeta_user_message_and_abort_stay_trace_only(
     record_zeta_event({"type": "model_usage", "usage": {"tokens": 1}})
     record_zeta_event({"type": "turn_aborted", "content": "stopped"})
 
-    assert zeta_event_store().list_events(Filter()) == []
+    events = zeta_event_store().list_events(Filter())
+    assert [event.event_type for event in events] == [
+        "zeta.user_message",
+        "zeta.model_usage",
+        "zeta.turn_aborted",
+    ]
+    assert [event.payload.get("content") for event in events] == [
+        "hello",
+        None,
+        "stopped",
+    ]
+
+
+def test_zeta_current_timeline_uses_durable_log_before_trace_head(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("SIGIL_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("ZETA_SESSION_ID", "zeta-test")
+    runtime_context = zeta_runtime_context()
+
+    record_zeta_event(
+        {"type": "user_message", "content": "durable"},
+        runtime_context=runtime_context,
+    )
+    stale_id = runtime_context.trace_store.put_object(
+        zeta_trace.Object(
+            kind="run_event",
+            schema="zeta.run_event.v1",
+            data={
+                "event": {"type": "user_message", "content": "stale-trace"},
+                "previous_event_object_id": "",
+            },
+        )
+    )
+    runtime_context.trace_store.set_ref(
+        zeta_timeline.run_head_ref("zeta-test"),
+        stale_id,
+    )
+
+    events = zeta_timeline.current_timeline(runtime_context=runtime_context)
+    assert [event["content"] for event in events] == ["durable"]
 
 
 def test_zeta_timeline_projects_from_ref_and_object(

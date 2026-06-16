@@ -3,6 +3,7 @@ from __future__ import annotations
 import ast
 import json
 import os
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -386,6 +387,7 @@ def test_sqlite_event_store_deduplicates_idempotency_keys(tmp_path: Path) -> Non
     assert [event.id for event in store.list_events(Filter())] == [first.event.id]
     assert first.event.turn_id == "turn-1"
     assert first.event.payload == {"turn_id": "turn-1"}
+    assert first.event.seq == second.event.seq
 
 
 class RecordingEventSink:
@@ -462,6 +464,83 @@ def test_sqlite_event_store_filters_and_cursors(tmp_path: Path) -> None:
     assert [event.id for event in after_first] == [
         event.id for event in store.list_events(Filter()) if event.id != first.id
     ]
+
+
+def test_sqlite_event_store_orders_by_append_sequence(tmp_path: Path) -> None:
+    store = SqliteEventStore(tmp_path / "events.sqlite3")
+    first = store.accept(
+        DraftEvent(
+            event_type="zeta.model.called",
+            source="zeta",
+            payload={"content": "first"},
+            event_id="z-event",
+            timestamp_micros=2,
+        )
+    ).event
+    second = store.accept(
+        DraftEvent(
+            event_type="zeta.model.called",
+            source="zeta",
+            payload={"content": "second"},
+            event_id="a-event",
+            timestamp_micros=1,
+        )
+    ).event
+
+    assert [event.id for event in store.list_events(Filter())] == [
+        "z-event",
+        "a-event",
+    ]
+    assert first.seq < second.seq
+    assert [event.id for event in store.list_events(Filter(after=first.cursor()))] == [
+        "a-event",
+    ]
+
+
+def test_sqlite_event_store_migrates_legacy_rows_to_sequence_order(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "events.sqlite3"
+    connection = sqlite3.connect(path)
+    connection.executescript(
+        """
+        CREATE TABLE events (
+          id TEXT PRIMARY KEY,
+          type TEXT NOT NULL,
+          source TEXT NOT NULL,
+          payload TEXT NOT NULL,
+          idempotency_key TEXT,
+          caused_by TEXT,
+          session_id TEXT,
+          turn_id TEXT,
+          timestamp INTEGER NOT NULL
+        ) STRICT;
+        """
+    )
+    connection.execute(
+        """
+        INSERT INTO events
+          (id, type, source, payload, timestamp)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        ("b-event", "zeta.model.called", "zeta", "{}", 1),
+    )
+    connection.execute(
+        """
+        INSERT INTO events
+          (id, type, source, payload, timestamp)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        ("a-event", "zeta.model.called", "zeta", "{}", 1),
+    )
+    connection.commit()
+    connection.close()
+
+    store = SqliteEventStore(path)
+
+    events = store.list_events(Filter())
+    assert [event.id for event in events] == ["a-event", "b-event"]
+    assert [event.seq for event in events] == [1, 2]
 
 
 def test_sqlite_event_store_traverses_causality(tmp_path: Path) -> None:

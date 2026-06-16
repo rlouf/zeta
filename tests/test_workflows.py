@@ -1963,7 +1963,10 @@ def ledger_effects() -> list[dict[str, Any]]:
 
 def zeta_tool_events() -> list[Any]:
     return [
-        event for event in read_zeta_events() if event.event_type == "zeta.tool.called"
+        event
+        for event in read_zeta_events()
+        if event.event_type == "zeta.tool.called"
+        and event.payload.get("_timeline_type") == "tool_result"
     ]
 
 

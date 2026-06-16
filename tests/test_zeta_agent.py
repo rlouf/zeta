@@ -65,6 +65,61 @@ def test_zeta_agent_turn_carries_reasoning_into_event(monkeypatch) -> None:
     assert result.events[0]["content"] == "done"
 
 
+def test_zeta_tool_result_event_records_error_for_failed_content_result() -> None:
+    event = zeta_agent.tool_result_event(
+        "call-1",
+        "grep",
+        {
+            "ok": False,
+            "content": [
+                {
+                    "type": "text",
+                    "text": "rg: missing: No such file or directory",
+                }
+            ],
+            "metadata": {"status": 2},
+        },
+    )
+
+    assert event["result"]["error"] == {
+        "code": "grep-failed",
+        "message": "rg: missing: No such file or directory",
+    }
+    assert event["result"]["content"][0]["text"].startswith("rg: missing")
+
+
+def test_zeta_tool_result_event_records_bash_exception_summary() -> None:
+    event = zeta_agent.tool_result_event(
+        "call-1",
+        "bash",
+        {
+            "ok": False,
+            "content": [
+                {
+                    "type": "text",
+                    "text": "$ run\nexit 1\nstderr:\nTraceback\nValueError: bad input",
+                }
+            ],
+            "metadata": {"status": 1},
+        },
+    )
+
+    assert event["result"]["error"] == {
+        "code": "bash-failed",
+        "message": "ValueError: bad input",
+    }
+
+
+def test_zeta_tool_result_event_preserves_explicit_error() -> None:
+    event = zeta_agent.tool_result_event(
+        "call-1",
+        "read",
+        {"ok": False, "error": {"code": "read-failed", "message": "missing"}},
+    )
+
+    assert event["result"]["error"] == {"code": "read-failed", "message": "missing"}
+
+
 def rpc_messages(output: StringIO) -> list[dict[str, Any]]:
     return [json.loads(line) for line in output.getvalue().splitlines()]
 
@@ -188,7 +243,7 @@ def test_zeta_rpc_session_uses_explicit_context(monkeypatch, tmp_path: Path) -> 
     ]
     assert [
         event.event_type for event in event_store.list_events(zeta_events.Filter())
-    ] == ["zeta.model.called"]
+    ] == ["zeta.user_message", "zeta.model.called"]
     assert trace_store.get_ref(zeta_timeline.event_head_ref("ctx-session")) is not None
 
 

@@ -200,6 +200,20 @@ def clear_current_session() -> list[str]:
     if hasattr(trace_store, "clear_session"):
         trace_store.clear_session(session_id())  # type: ignore[attr-defined]
         removed.append(str(trace_store.path))  # type: ignore[attr-defined]
+    removed.extend(clear_zeta_event_continuity(context.event_sink))
+    return removed
+
+
+def clear_zeta_event_continuity(event_sink: Any) -> list[str]:
+    removed: list[str] = []
+    if hasattr(event_sink, "clear_session_events"):
+        event_sink.clear_session_events(  # type: ignore[attr-defined]
+            session_id(),
+            event_type_prefix="zeta.",
+        )
+        path = getattr(event_sink, "path", None)
+        if path is not None:
+            removed.append(str(path))
     return removed
 
 

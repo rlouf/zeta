@@ -1305,6 +1305,34 @@ Verification:
   passed.
 - `uv run pre-commit run --all` passed.
 
+### Slice 2: extracted step runner boundary - complete
+
+Moved the existing model/tool loop body behind `run_agent_steps()` while keeping
+the same step sequence and runtime behavior. This gives later slices a stable
+place to replace coarse helper calls with smaller step functions.
+
+Behavior preserved:
+
+- `run_agent_turn()` still owns setup: endpoint check, deadline normalization,
+  capability projection, prompt builder creation, and initial `RunState`.
+- `run_agent_steps()` owns turn iteration, model-turn execution, assistant event
+  recording, capability execution, and terminal result construction.
+- Tool runs now have an asserted in-memory sequence for budget check, prompt
+  build, model call, assistant recording, capability call, capability execution,
+  capability result, and finish.
+
+Verification:
+
+- `uv run pytest tests/test_zeta_agent.py tests/test_zeta_tools.py tests/test_zeta_trace.py -q`
+  passed with 247 tests and 2 skipped.
+- `uv run pytest -q` passed with 823 tests and 4 skipped.
+- `uv run coverage run -m pytest` and `uv run coverage report` passed with
+  93% total coverage.
+- `uv run ty check` passed.
+- `uvx --with radon radon cc src/zeta/agent.py tests/test_zeta_agent.py -s`
+  passed.
+- `uv run pre-commit run --all` passed.
+
 ## 7. Replay, diff, and fork acceptance tests
 
 ### Current read

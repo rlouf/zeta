@@ -181,6 +181,43 @@ def run_agent_turn(
     )
     projection = active_tool_registry.project(allowed_capabilities)
     tools = projection.descriptors
+    return run_agent_steps(
+        objective,
+        timeline,
+        config=config,
+        context=context,
+        allowed_capabilities=allowed_capabilities,
+        projection=projection,
+        tools=tools,
+        state=state,
+        builder=builder,
+        event_sink=event_sink,
+        model_status=model_status,
+        stream_sink=stream_sink,
+        tool_registry=active_tool_registry,
+        cancellation_event=cancellation_event,
+        deadline=deadline,
+    )
+
+
+def run_agent_steps(
+    objective: str,
+    timeline: list[dict[str, Any]],
+    *,
+    config: AgentConfig,
+    context: str,
+    allowed_capabilities: tuple[str, ...],
+    projection: CapabilityProjection,
+    tools: list[dict[str, Any]],
+    state: RunState,
+    builder: PromptBuilder,
+    event_sink: AgentEventSink | None,
+    model_status: ModelStatusFactory | None,
+    stream_sink: ChatCompletionStreamSink | None,
+    tool_registry: CapabilityRegistry,
+    cancellation_event: threading.Event | None,
+    deadline: float | None,
+) -> AgentTurnResult:
     for _ in turn_indices(config.max_turns):
         state.note_step("check_budget")
         check_turn_budget(
@@ -232,7 +269,7 @@ def run_agent_turn(
             prompt_trace=turn.prompt_trace,
             builder=builder,
             event_sink=event_sink,
-            tool_registry=active_tool_registry,
+            tool_registry=tool_registry,
             assistant_event_id=assistant_event_id,
             state=state,
             cancellation_event=cancellation_event,

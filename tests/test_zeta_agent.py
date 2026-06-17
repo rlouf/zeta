@@ -2962,6 +2962,17 @@ def test_zeta_agent_turn_streams_tool_call_before_running_tool(monkeypatch) -> N
         "tool_call",
         "tool_result",
     ]
+    assert [step.step for step in result.steps] == [
+        "check_budget",
+        "build_prompt",
+        "call_model",
+        "record_assistant",
+        "check_budget",
+        "record_capability_call",
+        "execute_capability",
+        "record_capability_result",
+        "finish_run",
+    ]
 
 
 def test_zeta_agent_turn_stops_after_staged_tool(monkeypatch) -> None:

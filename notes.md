@@ -1738,6 +1738,44 @@ Sigil owns:
 - `uv run pytest tests/test_zeta_tools.py tests/test_zeta_agent.py -q`
 - `uv run pytest -q`
 
+### Slice 1: product-neutral history event names - complete
+
+Removed the discovered Sigil-owned naming from Zeta's durable history/event
+contract:
+
+- Zeta turn events now use `zeta.turn.completed`, `zeta.turn.failed`, and
+  `zeta.turn.aborted`;
+- prompt-submitted events now use `zeta.prompt.submitted`;
+- turn/effect record schemas now use `zeta.turn` and `zeta.effect`;
+- Zeta event constructors default to `source="zeta"`;
+- `sigil.state.append_event()` now tags Sigil-originated generic events with
+  `source="sigil"` explicitly at the Sigil boundary.
+
+Tradeoff:
+
+- This makes the Zeta event/history contract product-neutral and keeps Sigil
+  provenance in Sigil's wrapper.
+- Existing internal history event names changed; no compatibility shim was kept,
+  matching the current "no legacy compatibility unless asked" instruction.
+
+Verification:
+
+- `claude -p ...` could not provide a second opinion because the installed CLI
+  returned `401 Invalid authentication credentials`.
+- `gemini -p ...` could not provide a second opinion because `gemini` is not
+  installed in this checkout.
+- `uv run pytest tests/test_history.py tests/test_security_state.py tests/test_workflows.py tests/test_status.py tests/test_zeta_agent.py tests/test_zeta_tools.py -q`
+  passed with 435 tests and 2 skipped.
+- `uv run pytest -q` passed with 829 tests and 4 skipped.
+- `uv run coverage run -m pytest` and `uv run coverage report` passed with
+  93% total coverage.
+- `uv run ty check src tests` passed.
+- `uvx --with radon radon cc src/zeta/history.py src/zeta/events.py src/sigil/state.py tests/test_security_state.py -s`
+  passed.
+- `rg 'sigil\\.prompt|sigil\\.turn|sigil\\.effect|source=str\\(.*sigil|\"sigil\"' src/zeta`
+  returns no matches; the remaining `sigil.read` capability id in
+  `src/zeta/prompt/system.py` is an intentional host-capability boundary.
+
 ## Cross-cutting risks
 
 1. **Synchronous stdio blocks cancellation and timeouts.** Worker execution must

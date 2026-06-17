@@ -1891,8 +1891,8 @@ def test_turn_record_carries_schema_contract_and_optional_blocks() -> None:
         effect_ids=["effect-1"],
     )
 
-    assert record["type"] == "sigil.turn.completed"
-    assert record["schema"] == "sigil.turn"
+    assert record["type"] == "zeta.turn.completed"
+    assert record["schema"] == "zeta.turn"
     assert record["turn_id"] == "turn-1"
     assert record["contract"] == {
         "workflow": "propose",
@@ -1932,8 +1932,8 @@ def test_effect_record_keeps_only_set_optionals() -> None:
         exit_status=0,
     )
 
-    assert record["type"] == "sigil.effect"
-    assert record["schema"] == "sigil.effect"
+    assert record["type"] == "zeta.effect"
+    assert record["schema"] == "zeta.effect"
     assert record["effect_id"] == "effect-1"
     assert record["turn_id"] == "turn-1"
     assert record["command"] == "ls"
@@ -1949,7 +1949,7 @@ def history_turns() -> list[dict[str, Any]]:
     return [
         history_event_record(event)
         for event in read_events()
-        if event.event_type.startswith("sigil.turn.")
+        if event.event_type.startswith("zeta.turn.")
     ]
 
 
@@ -2026,14 +2026,14 @@ def test_zeta_step_threads_durable_event_causality(monkeypatch) -> None:
     events = read_events()
     zeta_events = read_zeta_events()
     (prompt_event,) = [
-        event for event in events if event.event_type == "sigil.prompt.submitted"
+        event for event in events if event.event_type == "zeta.prompt.submitted"
     ]
     (model_event,) = [
         event for event in zeta_events if event.event_type == "zeta.model.called"
     ]
     (tool_event,) = zeta_tool_events()
     (turn_event,) = [
-        event for event in events if event.event_type == "sigil.turn.completed"
+        event for event in events if event.event_type == "zeta.turn.completed"
     ]
     assert captured["prompt_event_id"] == prompt_event.id
     assert model_event.id == "model-event"
@@ -2116,7 +2116,7 @@ def test_zeta_step_records_staged_turn_record(monkeypatch) -> None:
             if key not in {"time", "session", "cwd"}
         }
     ]
-    assert all(event.event_type != "sigil.effect" for event in read_events())
+    assert all(event.event_type != "zeta.effect" for event in read_events())
     history = history_view()
     assert history.turn(turn["turn_id"]) == turn
     assert history.effects_for_turn(turn["turn_id"]) == [effect]
@@ -2215,8 +2215,8 @@ def test_zeta_step_bridges_turn_record_into_trace_graph(monkeypatch) -> None:
     turn_object_id = zeta_trace.resolve_object_id(store, f"turn/{turn['turn_id']}")
     turn_object = store.get_object(turn_object_id)
     assert turn_object is not None
-    assert turn_object.kind == "sigil.turn"
-    assert turn_object.schema == "sigil.turn"
+    assert turn_object.kind == "zeta.turn"
+    assert turn_object.schema == "zeta.turn"
     assert turn_object.data["turn_id"] == turn["turn_id"]
     assert turn_object.data["effects"] == history_effects()
     assert turn_object.links == (prompt_object_id, tool_result_object_id)

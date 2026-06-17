@@ -22,12 +22,12 @@ from .events import (
 
 SINCE_PATTERN = re.compile(r"(\d+)([dhm])")
 SINCE_SCALES = {"d": 86400, "h": 3600, "m": 60}
-TURN_EVENT_COMPLETED = "sigil.turn.completed"
-TURN_EVENT_FAILED = "sigil.turn.failed"
-TURN_EVENT_ABORTED = "sigil.turn.aborted"
-TURN_RECORD_SCHEMA = "sigil.turn"
-EFFECT_RECORD_TYPE = "sigil.effect"
-EFFECT_RECORD_SCHEMA = "sigil.effect"
+TURN_EVENT_COMPLETED = "zeta.turn.completed"
+TURN_EVENT_FAILED = "zeta.turn.failed"
+TURN_EVENT_ABORTED = "zeta.turn.aborted"
+TURN_RECORD_SCHEMA = "zeta.turn"
+EFFECT_RECORD_TYPE = "zeta.effect"
+EFFECT_RECORD_SCHEMA = "zeta.effect"
 
 
 class UnknownTurnError(LookupError):
@@ -195,7 +195,7 @@ class HistoryView:
 def turns_by_id(events: list[Event]) -> dict[str, dict[str, Any]]:
     turns: dict[str, dict[str, Any]] = {}
     for event in events:
-        if not event.event_type.startswith("sigil.turn."):
+        if not event.event_type.startswith("zeta.turn."):
             continue
         record = history_event_record(event)
         turn_id = str(record.get("turn_id") or "")
@@ -334,7 +334,7 @@ def publish_turn_record(
         path,
         DraftEvent(
             event_type=event_type,
-            source=str(record.get("source") or "sigil"),
+            source=str(record.get("source") or "zeta"),
             payload=payload,
             caused_by=(
                 str(record["caused_by"])
@@ -572,7 +572,7 @@ def event_from_record(record: dict[str, Any]) -> Event:
     return Event(
         id=str(record["id"]),
         event_type=str(record["type"]),
-        source=str(record.get("source") or "sigil"),
+        source=str(record.get("source") or "zeta"),
         payload=domain_payload(record),
         idempotency_key=None,
         caused_by=(

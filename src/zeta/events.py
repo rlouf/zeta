@@ -232,14 +232,14 @@ class DurableEventConstructors:
         timestamp_micros: int | None = None,
     ) -> DraftEvent:
         return durable_event_draft(
-            "sigil.prompt.submitted",
-            "sigil",
+            "zeta.prompt.submitted",
+            "zeta",
             payload=payload,
             turn_id=turn_id,
             session_id=session_id,
             caused_by=caused_by,
             event_id=event_id,
-            idempotency_key=turn_idempotency_key("sigil.prompt.submitted", turn_id),
+            idempotency_key=turn_idempotency_key("zeta.prompt.submitted", turn_id),
             timestamp_micros=timestamp_micros,
         )
 
@@ -254,7 +254,7 @@ class DurableEventConstructors:
         timestamp_micros: int | None = None,
     ) -> DraftEvent:
         return self._turn_event(
-            "sigil.turn.completed",
+            "zeta.turn.completed",
             payload=payload,
             turn_id=turn_id,
             session_id=session_id,
@@ -274,7 +274,7 @@ class DurableEventConstructors:
         timestamp_micros: int | None = None,
     ) -> DraftEvent:
         return self._turn_event(
-            "sigil.turn.failed",
+            "zeta.turn.failed",
             payload=payload,
             turn_id=turn_id,
             session_id=session_id,
@@ -294,7 +294,7 @@ class DurableEventConstructors:
         timestamp_micros: int | None = None,
     ) -> DraftEvent:
         return self._turn_event(
-            "sigil.turn.aborted",
+            "zeta.turn.aborted",
             payload=payload,
             turn_id=turn_id,
             session_id=session_id,
@@ -316,7 +316,7 @@ class DurableEventConstructors:
     ) -> DraftEvent:
         return durable_event_draft(
             event_type,
-            "sigil",
+            "zeta",
             payload=payload,
             turn_id=turn_id,
             session_id=session_id,
@@ -340,7 +340,7 @@ def durable_draft_from_payload(
     event_id: str | None,
     timestamp_micros: int | None,
 ) -> DraftEvent | None:
-    if event_type == "sigil.prompt.submitted":
+    if event_type == "zeta.prompt.submitted":
         return durable_event.prompt_submitted(
             payload=payload,
             turn_id=turn_id,
@@ -349,7 +349,7 @@ def durable_draft_from_payload(
             event_id=event_id,
             timestamp_micros=timestamp_micros,
         )
-    if event_type == "sigil.turn.completed":
+    if event_type == "zeta.turn.completed":
         return durable_event.turn_completed(
             payload=payload,
             turn_id=turn_id,
@@ -358,7 +358,7 @@ def durable_draft_from_payload(
             event_id=event_id,
             timestamp_micros=timestamp_micros,
         )
-    if event_type == "sigil.turn.failed":
+    if event_type == "zeta.turn.failed":
         return durable_event.turn_failed(
             payload=payload,
             turn_id=turn_id,
@@ -367,7 +367,7 @@ def durable_draft_from_payload(
             event_id=event_id,
             timestamp_micros=timestamp_micros,
         )
-    if event_type == "sigil.turn.aborted":
+    if event_type == "zeta.turn.aborted":
         return durable_event.turn_aborted(
             payload=payload,
             turn_id=turn_id,
@@ -432,7 +432,7 @@ def event_payload_draft(
         return draft
     return DraftEvent(
         event_type=event_type,
-        source=str(payload.get("source") or "sigil"),
+        source=str(payload.get("source") or "zeta"),
         payload=domain_payload,
         caused_by=caused_by,
         session_id=event_session_id,

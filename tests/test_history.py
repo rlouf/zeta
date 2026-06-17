@@ -58,7 +58,7 @@ def sample_effect_record(
 
 
 def append_history_record(record: dict[str, Any]) -> dict[str, Any]:
-    if record.get("type") == "sigil.effect":
+    if record.get("type") == "zeta.effect":
         return zeta_history.publish_effect_record(
             record,
             path=sigil_state.event_store_path(),
@@ -81,7 +81,7 @@ def test_history_publish_turn_record_writes_log_and_history() -> None:
     payload = zeta_history.history_event_record(event)
 
     (stored_event,) = read_events()
-    assert event.event_type == "sigil.turn.completed"
+    assert event.event_type == "zeta.turn.completed"
     assert event.caused_by == "prompt-event"
     assert payload["caused_by"] == "prompt-event"
     assert stored_event == event
@@ -100,8 +100,8 @@ def test_history_publish_turn_record_uses_outcome_event_names() -> None:
         session_id=session_id(),
     )
 
-    assert failed.event_type == "sigil.turn.failed"
-    assert aborted.event_type == "sigil.turn.aborted"
+    assert failed.event_type == "zeta.turn.failed"
+    assert aborted.event_type == "zeta.turn.aborted"
 
 
 def test_history_publish_effect_record_writes_durable_tool_event() -> None:
@@ -123,7 +123,7 @@ def test_history_uses_latest_turn_record_per_id() -> None:
     append_event(
         sample_turn_record(
             outcome=TURN_OUTCOME_FAILED,
-            type="sigil.turn.failed",
+            type="zeta.turn.failed",
         )
     )
 
@@ -192,7 +192,7 @@ def test_history_history_reads_durable_events() -> None:
 def test_history_history_uses_event_metadata() -> None:
     publish_sigil_draft(
         DraftEvent(
-            event_type="sigil.turn.completed",
+            event_type="zeta.turn.completed",
             source="test",
             payload={
                 "turn_id": "turn-meta",
@@ -594,7 +594,7 @@ def seed_bundle_state(monkeypatch) -> dict[str, str]:
     turn_object_id = store.put_object(
         zeta_trace.Object(
             kind="turn_record",
-            schema="sigil.turn",
+            schema="zeta.turn",
             data={"turn_id": "turn-bundle-1"},
             links=(prompt_id,),
         )
@@ -710,7 +710,7 @@ def test_bundle_import_is_idempotent(monkeypatch, tmp_path) -> None:
     assert second["records"] == 0
     log_lines = read_events()
     assert [event.event_type for event in log_lines] == [
-        "sigil.turn.completed",
+        "zeta.turn.completed",
         "zeta.tool.called",
     ]
 

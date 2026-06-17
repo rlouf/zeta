@@ -67,9 +67,10 @@ def append_event(event: dict[str, Any]) -> Event:
     """Append a global audit/debug event with session metadata."""
     from .sessions import session_id
 
+    payload = {"source": "sigil", **event}
     return publish_event_payload_to_log(
         event_store_path(),
-        event,
+        payload,
         session_id=session_id(),
         cwd=os.getcwd(),
     )
@@ -77,5 +78,5 @@ def append_event(event: dict[str, Any]) -> Event:
 
 def append_prompt_submitted_event(event: dict[str, Any]) -> Event:
     prompt_event = dict(event)
-    prompt_event["type"] = "sigil.prompt.submitted"
+    prompt_event["type"] = "zeta.prompt.submitted"
     return append_event(prompt_event)

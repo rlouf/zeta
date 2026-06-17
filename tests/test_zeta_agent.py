@@ -1952,7 +1952,7 @@ def test_zeta_rpc_session_run_streams_events_and_returns_turn(
     assert [event["type"] for event in published] == [
         "user_message",
         "model",
-        "sigil.turn.completed",
+        "zeta.turn.completed",
     ]
     assert response["id"] == 1
     assert response["result"]["outcome"] == "answered"

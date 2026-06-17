@@ -370,7 +370,7 @@ def test_event_store_path_uses_zeta_state_dir() -> None:
 def test_sqlite_event_store_deduplicates_idempotency_keys(tmp_path: Path) -> None:
     store = SqliteEventStore(tmp_path / "events.sqlite3")
     draft = DraftEvent(
-        event_type="sigil.turn.completed",
+        event_type="zeta.turn.completed",
         source="test",
         payload={"turn_id": "turn-1"},
         idempotency_key="turn:turn-1",
@@ -447,19 +447,19 @@ def test_sqlite_event_store_filters_and_cursors(tmp_path: Path) -> None:
             session_id="s1",
         )
     ).event
-    store.accept(
+    third = store.accept(
         DraftEvent(
-            event_type="sigil.turn.completed",
-            source="sigil",
+            event_type="zeta.turn.completed",
+            source="zeta",
             payload={"turn_id": "turn-1"},
             session_id="s2",
         )
-    )
+    ).event
 
     zeta_events = store.list_events(Filter(event_type_prefix="zeta."))
     after_first = store.list_events(Filter(after=EventCursor.from_event(first)))
 
-    assert [event.id for event in zeta_events] == [first.id, second.id]
+    assert [event.id for event in zeta_events] == [first.id, second.id, third.id]
     assert store.list_events(Filter(session_id="s1", caused_by=first.id)) == [second]
     assert [event.id for event in after_first] == [
         event.id for event in store.list_events(Filter()) if event.id != first.id
@@ -547,7 +547,7 @@ def test_sqlite_event_store_traverses_causality(tmp_path: Path) -> None:
     store = SqliteEventStore(tmp_path / "events.sqlite3")
     prompt = store.accept(
         DraftEvent(
-            event_type="sigil.prompt.submitted",
+            event_type="zeta.prompt.submitted",
             source="sigil",
             payload={"turn_id": "turn-1"},
             turn_id="turn-1",
@@ -576,7 +576,7 @@ def test_sqlite_event_store_traverses_causality(tmp_path: Path) -> None:
     ).event
     store.accept(
         DraftEvent(
-            event_type="sigil.turn.completed",
+            event_type="zeta.turn.completed",
             source="sigil",
             payload={"turn_id": "turn-1"},
             turn_id="turn-1",
@@ -634,7 +634,7 @@ def test_sigil_event_query_helpers_use_zeta_event_log() -> None:
             {"SIGIL_STATE_DIR": tmp, "SIGIL_SESSION_ID": "test"},
         ):
             prompt = append_event(
-                {"type": "sigil.prompt.submitted", "turn_id": "turn-1"}
+                {"type": "zeta.prompt.submitted", "turn_id": "turn-1"}
             )
             model = append_event(
                 {
@@ -725,10 +725,10 @@ def test_durable_event_constructors_set_turn_id_and_idempotency_keys() -> None:
         session_id="s1",
     )
 
-    assert prompt.event_type == "sigil.prompt.submitted"
-    assert prompt.source == "sigil"
+    assert prompt.event_type == "zeta.prompt.submitted"
+    assert prompt.source == "zeta"
     assert prompt.turn_id == "turn-1"
-    assert prompt.idempotency_key == "sigil.prompt.submitted:turn-1"
+    assert prompt.idempotency_key == "zeta.prompt.submitted:turn-1"
     assert model.event_type == "zeta.model.called"
     assert model.source == "zeta"
     assert model.turn_id == "turn-1"
@@ -736,12 +736,12 @@ def test_durable_event_constructors_set_turn_id_and_idempotency_keys() -> None:
     assert model.idempotency_key == "zeta.model.called:model-event"
     assert tool.event_type == "zeta.tool.called"
     assert tool.idempotency_key == "zeta.tool.called:tool-event"
-    assert completed.event_type == "sigil.turn.completed"
-    assert completed.idempotency_key == "sigil.turn.completed:turn-1"
-    assert failed.event_type == "sigil.turn.failed"
-    assert failed.idempotency_key == "sigil.turn.failed:turn-1"
-    assert aborted.event_type == "sigil.turn.aborted"
-    assert aborted.idempotency_key == "sigil.turn.aborted:turn-1"
+    assert completed.event_type == "zeta.turn.completed"
+    assert completed.idempotency_key == "zeta.turn.completed:turn-1"
+    assert failed.event_type == "zeta.turn.failed"
+    assert failed.idempotency_key == "zeta.turn.failed:turn-1"
+    assert aborted.event_type == "zeta.turn.aborted"
+    assert aborted.idempotency_key == "zeta.turn.aborted:turn-1"
     assert not hasattr(durable_event, "model_called")
     assert not hasattr(durable_event, "tool_called")
 
@@ -871,7 +871,7 @@ def test_events_causality_subcommands() -> None:
             append_event(
                 {
                     "id": "prompt-event",
-                    "type": "sigil.prompt.submitted",
+                    "type": "zeta.prompt.submitted",
                     "turn_id": "turn-1",
                     "time": 1.0,
                 }
@@ -897,7 +897,7 @@ def test_events_causality_subcommands() -> None:
             append_event(
                 {
                     "id": "turn-event",
-                    "type": "sigil.turn.completed",
+                    "type": "zeta.turn.completed",
                     "turn_id": "turn-1",
                     "caused_by": "tool-event",
                     "time": 4.0,

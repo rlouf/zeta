@@ -35,7 +35,9 @@ class ToolRegistry:
                 f"invalid schema for tool {name!r}: {exc.message}"
             ) from exc
         if tool.spec.staging_supported and tool.stage is None:
-            raise ValueError(f"tool {name!r} declares staging without an implementation")
+            raise ValueError(
+                f"tool {name!r} declares staging without an implementation"
+            )
         self._tools[name] = tool
 
     def get(self, name: str) -> ToolImpl | None:

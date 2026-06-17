@@ -1245,7 +1245,9 @@ def test_zeta_rpc_events_list_filters_by_session_and_run(tmp_path: Path) -> None
 
     server.serve()
 
-    assert [event["content"] for event in rpc_messages(output)[0]["result"]["events"]] == [
+    assert [
+        event["content"] for event in rpc_messages(output)[0]["result"]["events"]
+    ] == [
         "one",
         "three",
     ]

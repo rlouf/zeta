@@ -104,6 +104,90 @@ plus prompt processing (a long prefill sends nothing), and
 flows; `llama-server --timeout` is a read/write timeout, not a generation
 cancellation guarantee.
 
+## Zeta JSON-RPC Protocol
+
+`zeta rpc --stdio` and `sigil zeta rpc --stdio` serve a newline-delimited
+JSON-RPC 2.0 protocol. Each line is one JSON object. Requests include
+`jsonrpc: "2.0"`, an `id`, a `method`, and optional object `params`.
+Notifications omit `id`. Responses contain either `result` or `error`.
+
+`initialize` returns the server name and protocol version:
+
+```json
+{"server":"zeta","protocol":"0.1"}
+```
+
+Protocol `0.1` is additive while Zeta is alpha software: clients should ignore
+unknown result fields and unknown notification params. Existing `session.run`
+callers that pass only `objective`, `tools`, and `context` still receive
+`outcome` and `final_text`.
+
+### Methods
+
+`session.run` starts a run and returns:
+
+- `run_id`: stable `run_*` id for cancellation, events, and trace refs.
+- `outcome`: `answered`, `staged`, `aborted`, or `failed`.
+- `final_text`: final assistant text when available.
+- `final_event_cursor`: durable event cursor for the last event in the run.
+- `trace`: prompt, assistant message, model event, tool event, tool call, and
+  tool result object ids recorded for the run.
+
+Params are:
+
+- `objective` string, required.
+- `workflow` string: `ask`, `propose`, or `do`; defaults to `propose`.
+- `tools` array of model-visible capability names.
+- `context`, `system`, `max_steps`, `max_wall_seconds`, and model override
+  fields.
+
+`session.cancel` cancels an active run by `run_id`. The result is
+`cancelled: true` for active runs, or `cancelled: false` with `status:
+"unknown"`, `completed`, `cancelled`, or `failed`.
+
+`events.list` returns durable events in append order. Params are optional
+`after` cursor, `limit`, `session_id`, and `run_id`. Results contain `events`
+and `next_cursor`. Event cursors are durable sequence cursors encoded as
+strings; clients resume by passing the last `next_cursor` as `after`.
+
+`events.subscribe` records an in-memory stdio subscription for future
+`events.publish` notifications. Params match `events.list` filters. The result
+contains `subscription_id` and `next_cursor`.
+
+`tools.register` registers client-hosted capabilities. Each capability item
+contains:
+
+- `name`, `description`, and JSON Schema `schema`.
+- `effects`: any of `read`, `search`, `write`, `delete`, or `execute`.
+- `staging_supported`: whether Zeta may call it in staged workflows.
+- `direct_execution_allowed`: whether Zeta may call it in `do`.
+- `interactive`: true for client-hosted capabilities.
+- `timeout_sec`: optional positive timeout for client calls.
+
+Schemas are validated with JSON Schema Draft 2020-12. Missing `effects` count
+as mutating, so an undeclared capability cannot run unreviewed in staged
+workflows.
+
+`tools.respond` answers a server `tools.call` notification. Params include
+`id` and either `result` or `cancelled: true`. `result` must be an object with a
+boolean `ok` field.
+
+### Notifications And Errors
+
+`events.publish` carries a persisted event. Runtime events include `run_id`,
+`turn_id`, `session`, and `cursor` when backed by the durable event store.
+With an active subscription the notification also includes `subscription_id`.
+
+`tools.call` asks the client to execute a registered capability. Params include
+`id`, `name`, `arguments`, `status: "requested"`, and optional `timeout_sec`.
+
+Expected protocol failures use JSON-RPC standard codes with stable Zeta error
+codes in `error.data.code`: `method_not_found`, `missing_objective`,
+`invalid_workflow`, `duplicate_tool`, `invalid_tool_schema`, `invalid_cursor`,
+`invalid_limit`, `invalid_run_id`, `session_run_unavailable`, and
+`events_unavailable`. Unexpected exceptions are returned as `-32603` with
+`internal_error`.
+
 ## Changing Models Mid-Session
 
 Sigil can switch Zeta model profiles for the current terminal session without

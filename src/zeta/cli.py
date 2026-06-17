@@ -7,6 +7,7 @@ import sys
 import click
 
 from .context import default_context
+from .events import EventReader
 from .rpc import JsonRpcServer, run_rpc_session
 
 
@@ -22,11 +23,16 @@ def rpc(stdio: bool) -> int:
     if not stdio:
         raise click.UsageError("only --stdio is supported")
     runtime_context = default_context()
+    event_reader = (
+        runtime_context.event_sink
+        if isinstance(runtime_context.event_sink, EventReader)
+        else None
+    )
     server = JsonRpcServer(
         sys.stdin,
         sys.stdout,
         tool_registry=runtime_context.tool_registry,
-        event_reader=runtime_context.event_sink,
+        event_reader=event_reader,
     )
     server.session_runner = lambda params: run_rpc_session(
         params,

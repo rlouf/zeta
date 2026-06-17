@@ -373,7 +373,9 @@ def client_tool_timeout_sec(item: dict[str, Any]) -> float | None:
     return None
 
 
-def normalized_client_tool_response(raw_result: Any) -> tuple[dict[str, Any], ToolCallStatus]:
+def normalized_client_tool_response(
+    raw_result: Any,
+) -> tuple[dict[str, Any], ToolCallStatus]:
     if not isinstance(raw_result, dict):
         return (
             error_result(
@@ -443,14 +445,22 @@ def event_matches_subscription(
     event: dict[str, Any],
     subscription: EventSubscription,
 ) -> bool:
-    if subscription.session_id is not None and event.get("session") != subscription.session_id:
+    if (
+        subscription.session_id is not None
+        and event.get("session") != subscription.session_id
+    ):
         return False
     if subscription.run_id is not None and event.get("run_id") != subscription.run_id:
         return False
     if subscription.after is None:
         return True
     cursor = EventCursor.decode(str(event.get("cursor") or ""))
-    return cursor is not None and cursor.seq > subscription.after.seq
+    return (
+        cursor is not None
+        and cursor.seq is not None
+        and subscription.after.seq is not None
+        and cursor.seq > subscription.after.seq
+    )
 
 
 class JsonRpcServer:
@@ -498,7 +508,9 @@ class JsonRpcServer:
             self.write_error(None, -32600, "JSON-RPC message must be an object")
         return None
 
-    def read_message_before(self, deadline: float | None) -> dict[str, Any] | object | None:
+    def read_message_before(
+        self, deadline: float | None
+    ) -> dict[str, Any] | object | None:
         if deadline is None:
             return self.read_message()
         remaining = deadline - time.monotonic()
@@ -605,8 +617,10 @@ class JsonRpcServer:
         events = self.event_reader.list_events(
             Filter(session_id=session_id, turn_id=run_id, after=after, limit=limit)
         )
-        next_cursor = events[-1].cursor().encode() if events else (
-            after.encode() if after is not None else None
+        next_cursor = (
+            events[-1].cursor().encode()
+            if events
+            else (after.encode() if after is not None else None)
         )
         return {
             "events": [rpc_event_from_durable_event(event) for event in events],
@@ -688,8 +702,7 @@ class JsonRpcServer:
             return
         state.status = (
             "cancelled"
-            if state.cancellation_event.is_set()
-            and result.get("outcome") == "aborted"
+            if state.cancellation_event.is_set() and result.get("outcome") == "aborted"
             else "completed"
         )
         self.write_response(state.request_id, result)
@@ -852,12 +865,13 @@ class JsonRpcServer:
                     "ok": False,
                     "error": {"code": "client-disconnected", "message": name},
                 }
-            if str(message.get("method") or "") == "tools.respond":
-                params = message.get("params")
-                if isinstance(params, dict):
-                    self.record_tool_response(params)
+            rpc_message = cast(dict[str, Any], message)
+            if str(rpc_message.get("method") or "") == "tools.respond":
+                response_params = rpc_message.get("params")
+                if isinstance(response_params, dict):
+                    self.record_tool_response(response_params)
                 continue
-            self.handle_message(message)
+            self.handle_message(rpc_message)
         return self.tool_responses.pop(call_id)
 
     def publish_event(self, event: dict[str, Any]) -> None:

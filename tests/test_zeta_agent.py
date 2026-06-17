@@ -2648,6 +2648,22 @@ def test_zeta_agent_turn_records_tool_result_derivation(
         event_by_type(result.events, "tool_call"),
         event_by_type(result.events, "tool_result"),
     )
+    for trace in result.prompt_traces:
+        reconstructed = zeta_prompt.reconstructed_prompt_request(
+            store,
+            trace.prompt_object_id,
+        )
+        assert reconstructed is not None
+        assert reconstructed.payload_verified
+        if trace.assistant_message_object_id is None:
+            continue
+        assistant = store.get_object(trace.assistant_message_object_id)
+        assert assistant is not None
+        assert assistant.kind == "assistant_message"
+        assert assistant.links == (trace.prompt_object_id,)
+        derivation = store.derivations_for_output(trace.assistant_message_object_id)[0]
+        assert derivation.producer == "ModelResponse"
+        assert derivation.input_ids == (trace.prompt_object_id,)
 
 
 def test_zeta_agent_turn_wraps_model_request_in_status(monkeypatch) -> None:

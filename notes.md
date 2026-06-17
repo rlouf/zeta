@@ -1559,6 +1559,39 @@ For every completed run in tests:
 - `uv run pytest tests/test_zeta_trace.py tests/test_zeta_agent.py -q`
 - `uv run pytest -q`
 
+### Slice 1: prompt and result graph acceptance - complete
+
+Promoted the existing prompt/result graph behavior into an acceptance assertion
+on a real two-turn agent run:
+
+- every recorded prompt trace reconstructs through
+  `reconstructed_prompt_request()`;
+- every reconstructed prompt verifies against the stored request hash;
+- every assistant output links to the prompt that produced it;
+- every assistant output has a `ModelResponse` derivation from that prompt;
+- the existing tool-result derivation assertion still proves capability results
+  link back to their tool call and appear in the next prompt closure.
+
+Behavior preserved:
+
+- The agent runtime code is unchanged in this slice.
+- The covered run still records the same events and final text.
+
+Verification:
+
+- `uv run ripple tests/test_zeta_agent.py test_zeta_agent_turn_records_tool_result_derivation`
+  could not run because `ripple` is not installed in this checkout.
+- `uv run pytest tests/test_zeta_agent.py -q -k records_tool_result_derivation`
+  passed with 1 test.
+- `uv run pytest tests/test_zeta_trace.py tests/test_zeta_agent.py -q` passed
+  with 175 tests.
+- `uv run pytest -q` passed with 828 tests and 4 skipped.
+- `uv run coverage run -m pytest` and `uv run coverage report` passed with
+  93% total coverage.
+- `uv run ty check src tests` passed.
+- `uvx --with radon radon cc src/zeta/agent.py tests/test_zeta_agent.py -s`
+  passed.
+
 ## 8. Zeta core boundary
 
 ### Current read

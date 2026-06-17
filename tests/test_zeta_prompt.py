@@ -927,6 +927,56 @@ def test_zeta_skill_directive_expands_in_context_message(
     assert "\n\ninspect the patch\n\ncwd:" in message
 
 
+def test_zeta_skill_directive_expands_inline_known_bare_token(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    home = tmp_path / "home"
+    project = tmp_path / "repo"
+    project.mkdir()
+    skill = write_skill(
+        project / ".agents" / "skills",
+        "linear",
+        description="Linear work.",
+        body="# Linear\nFind open issues.\n",
+    )
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.chdir(project)
+
+    message = zeta_prompt.zeta_context_message(
+        "Look into @linear for issues that are outstanding"
+    )
+
+    assert message.startswith(
+        f'<skill name="linear" location="{skill}">\n'
+        f"References are relative to {skill}.\n\n"
+        "# Linear\nFind open issues.\n"
+        "</skill>\n\n"
+        "Look into @linear for issues that are outstanding\n\ncwd:"
+    )
+
+
+def test_zeta_skill_directive_expands_each_inline_skill_once(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    home = tmp_path / "home"
+    project = tmp_path / "repo"
+    project.mkdir()
+    write_skill(project / ".agents" / "skills", "linear")
+    write_skill(project / ".agents" / "skills", "reviewer")
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.chdir(project)
+
+    message = zeta_prompt.zeta_context_message(
+        "Use @linear and @reviewer, then mention @linear again"
+    )
+
+    assert message.count('<skill name="linear"') == 1
+    assert message.count('<skill name="reviewer"') == 1
+    assert "Use @linear and @reviewer, then mention @linear again\n\ncwd:" in message
+
+
 def test_zeta_skill_directive_leaves_unknown_skill_unchanged(
     tmp_path: Path,
     monkeypatch,
@@ -940,6 +990,22 @@ def test_zeta_skill_directive_leaves_unknown_skill_unchanged(
     message = zeta_prompt.zeta_context_message("@missing: inspect")
 
     assert message.startswith("@missing: inspect\n\ncwd:")
+
+
+def test_zeta_skill_directive_leaves_unknown_inline_skill_unchanged(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    home = tmp_path / "home"
+    project = tmp_path / "repo"
+    project.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.chdir(project)
+
+    message = zeta_prompt.zeta_context_message("Look into @missing for issues")
+
+    assert message.startswith("Look into @missing for issues\n\ncwd:")
+    assert "<skill name=" not in message
 
 
 def test_zeta_skill_directive_leaves_old_skill_form_unchanged(
@@ -959,7 +1025,7 @@ def test_zeta_skill_directive_leaves_old_skill_form_unchanged(
     assert '<skill name="reviewer"' not in message
 
 
-def test_zeta_skill_directive_leaves_bare_handle_unchanged(
+def test_zeta_skill_directive_expands_leading_bare_token(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -972,7 +1038,26 @@ def test_zeta_skill_directive_leaves_bare_handle_unchanged(
 
     message = zeta_prompt.zeta_context_message("@reviewer inspect")
 
-    assert message.startswith("@reviewer inspect\n\ncwd:")
+    assert message.startswith('<skill name="reviewer"')
+    assert "@reviewer inspect\n\ncwd:" in message
+
+
+def test_zeta_skill_directive_ignores_non_bare_inline_handles(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    home = tmp_path / "home"
+    project = tmp_path / "repo"
+    project.mkdir()
+    write_skill(project / ".agents" / "skills", "reviewer")
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.chdir(project)
+
+    message = zeta_prompt.zeta_context_message(
+        "Email me@example.com and inspect @reviewer/docs"
+    )
+
+    assert message.startswith("Email me@example.com and inspect @reviewer/docs\n\ncwd:")
     assert '<skill name="reviewer"' not in message
 
 

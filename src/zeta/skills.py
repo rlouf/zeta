@@ -10,6 +10,9 @@ from pathlib import Path
 SKILL_FILE = "SKILL.md"
 SKILL_NAME_PATTERN = re.compile(r"^[a-z0-9-]+$")
 SKILL_DIRECTIVE_PATTERN = re.compile(r"^\s*@([a-z0-9-]+):(?:[ \t]*([\s\S]*))?$")
+SKILL_MENTION_PATTERN = re.compile(
+    r"(?<![A-Za-z0-9._%+-])@([a-z0-9-]+)(?![A-Za-z0-9._%+/-])"
+)
 SKIP_DIRECTORIES = {"node_modules"}
 
 
@@ -70,15 +73,42 @@ def available_skills(cwd: str | Path | None = None) -> list[Skill]:
 
 
 def expand_skill_directive(objective: str, cwd: str | Path | None = None) -> str:
-    """Expand one leading ``@skill-name:`` directive when the skill is known."""
+    """Expand known ``@skill-name`` references into prompt-local skill context."""
+    catalog = discover_skills(cwd)
     match = SKILL_DIRECTIVE_PATTERN.match(objective)
-    if match is None:
+    if match is not None:
+        skill = catalog.skills.get(match.group(1))
+        if skill is None:
+            return objective
+        return skill_expansion([skill], match.group(2) or "")
+    skills = mentioned_skills(objective, catalog)
+    if not skills:
         return objective
-    name = match.group(1)
-    task = match.group(2) or ""
-    skill = discover_skills(cwd).skills.get(name)
-    if skill is None:
-        return objective
+    return skill_expansion(skills, objective)
+
+
+def mentioned_skills(objective: str, catalog: SkillCatalog) -> list[Skill]:
+    skills: list[Skill] = []
+    seen: set[str] = set()
+    for match in SKILL_MENTION_PATTERN.finditer(objective):
+        name = match.group(1)
+        skill = catalog.skills.get(name)
+        if skill is None or name in seen:
+            continue
+        skills.append(skill)
+        seen.add(name)
+    return skills
+
+
+def skill_expansion(skills: list[Skill], task: str) -> str:
+    sections: list[str] = []
+    for skill in skills:
+        sections.append(render_skill_context(skill))
+    sections.append(task)
+    return "\n\n".join(section for section in sections if section)
+
+
+def render_skill_context(skill: Skill) -> str:
     return "\n".join(
         [
             f'<skill name="{skill.name}" location="{skill.location}">',
@@ -86,8 +116,6 @@ def expand_skill_directive(objective: str, cwd: str | Path | None = None) -> str
             "",
             skill.body.strip(),
             "</skill>",
-            "",
-            task,
         ]
     )
 

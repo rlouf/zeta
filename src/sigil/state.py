@@ -17,18 +17,12 @@ from typing import TYPE_CHECKING, Any
 
 from zeta.events import (
     EVENT_STORE_NAME,
-    DraftEvent,
     Filter,
-    durable_event_draft,
     event_log_causal_chain,
     event_log_children,
     event_log_turn_events,
-    model_called_event,
-    publish_event_to_log,
+    publish_event_payload_to_log,
     read_event_log,
-    timestamp_micros_from_time,
-    tool_called_event,
-    turn_idempotency_key,
 )
 
 if TYPE_CHECKING:
@@ -104,7 +98,7 @@ def rotate_oversized_log(path: Path) -> None:
 
 
 def _with_envelope(event: dict[str, Any]) -> dict[str, Any]:
-    """Stamp default cwd onto event domain data."""
+    """Stamp default cwd onto session-local JSONL event data."""
     return {
         "cwd": os.getcwd(),
         **event,
@@ -151,230 +145,18 @@ def events_for_turn(turn_id: str) -> list[Event]:
 
 def append_event(event: dict[str, Any]) -> Event:
     """Append a global audit/debug event with session metadata."""
-    payload = _with_envelope(event)
-    event_id = payload.get("id") if isinstance(payload.get("id"), str) else None
-    event_type = str(payload.get("type") or "event")
-    turn_id = (
-        payload.get("turn_id") if isinstance(payload.get("turn_id"), str) else None
+    return publish_event_payload_to_log(
+        event_store_path(),
+        event,
+        session_id=session_id(),
+        cwd=os.getcwd(),
     )
-    event_session_id = str(payload.get("session") or session_id())
-    event_timestamp = timestamp_micros_from_time(payload.get("time"))
-    caused_by = (
-        str(payload["caused_by"]) if isinstance(payload.get("caused_by"), str) else None
-    )
-    domain_payload = {
-        key: value
-        for key, value in payload.items()
-        if key not in {"id", "type", "time", "session", "source", "caused_by"}
-    }
-    draft = durable_draft_from_payload(
-        durable_event,
-        event_type=event_type,
-        payload=domain_payload,
-        turn_id=turn_id,
-        session_id=event_session_id,
-        caused_by=caused_by,
-        event_id=event_id,
-        timestamp_micros=event_timestamp,
-    )
-    if draft is None:
-        draft = DraftEvent(
-            event_type=event_type,
-            source=str(payload.get("source") or "sigil"),
-            payload=domain_payload,
-            caused_by=caused_by,
-            session_id=event_session_id,
-            turn_id=turn_id,
-            timestamp_micros=event_timestamp,
-            event_id=event_id,
-        )
-    return publish_event_to_log(event_store_path(), draft)
 
 
 def append_prompt_submitted_event(event: dict[str, Any]) -> Event:
     prompt_event = dict(event)
     prompt_event["type"] = "sigil.prompt.submitted"
     return append_event(prompt_event)
-
-
-class DurableEventConstructors:
-    """Factories for Sigil durable events with stable metadata."""
-
-    def prompt_submitted(
-        self,
-        *,
-        payload: dict[str, Any],
-        turn_id: str | None,
-        session_id: str,
-        caused_by: str | None = None,
-        event_id: str | None = None,
-        timestamp_micros: int | None = None,
-    ) -> DraftEvent:
-        return durable_event_draft(
-            "sigil.prompt.submitted",
-            "sigil",
-            payload=payload,
-            turn_id=turn_id,
-            session_id=session_id,
-            caused_by=caused_by,
-            event_id=event_id,
-            idempotency_key=turn_idempotency_key("sigil.prompt.submitted", turn_id),
-            timestamp_micros=timestamp_micros,
-        )
-
-    def turn_completed(
-        self,
-        *,
-        payload: dict[str, Any],
-        turn_id: str | None,
-        session_id: str,
-        caused_by: str | None = None,
-        event_id: str | None = None,
-        timestamp_micros: int | None = None,
-    ) -> DraftEvent:
-        return self._turn_event(
-            "sigil.turn.completed",
-            payload=payload,
-            turn_id=turn_id,
-            session_id=session_id,
-            caused_by=caused_by,
-            event_id=event_id,
-            timestamp_micros=timestamp_micros,
-        )
-
-    def turn_failed(
-        self,
-        *,
-        payload: dict[str, Any],
-        turn_id: str | None,
-        session_id: str,
-        caused_by: str | None = None,
-        event_id: str | None = None,
-        timestamp_micros: int | None = None,
-    ) -> DraftEvent:
-        return self._turn_event(
-            "sigil.turn.failed",
-            payload=payload,
-            turn_id=turn_id,
-            session_id=session_id,
-            caused_by=caused_by,
-            event_id=event_id,
-            timestamp_micros=timestamp_micros,
-        )
-
-    def turn_aborted(
-        self,
-        *,
-        payload: dict[str, Any],
-        turn_id: str | None,
-        session_id: str,
-        caused_by: str | None = None,
-        event_id: str | None = None,
-        timestamp_micros: int | None = None,
-    ) -> DraftEvent:
-        return self._turn_event(
-            "sigil.turn.aborted",
-            payload=payload,
-            turn_id=turn_id,
-            session_id=session_id,
-            caused_by=caused_by,
-            event_id=event_id,
-            timestamp_micros=timestamp_micros,
-        )
-
-    def _turn_event(
-        self,
-        event_type: str,
-        *,
-        payload: dict[str, Any],
-        turn_id: str | None,
-        session_id: str,
-        caused_by: str | None,
-        event_id: str | None,
-        timestamp_micros: int | None,
-    ) -> DraftEvent:
-        return durable_event_draft(
-            event_type,
-            "sigil",
-            payload=payload,
-            turn_id=turn_id,
-            session_id=session_id,
-            caused_by=caused_by,
-            event_id=event_id,
-            idempotency_key=turn_idempotency_key(event_type, turn_id),
-            timestamp_micros=timestamp_micros,
-        )
-
-
-durable_event = DurableEventConstructors()
-
-
-def durable_draft_from_payload(
-    durable_event: Any,
-    *,
-    event_type: str,
-    payload: dict[str, Any],
-    turn_id: str | None,
-    session_id: str,
-    caused_by: str | None,
-    event_id: str | None,
-    timestamp_micros: int | None,
-) -> Any | None:
-    if event_type == "sigil.prompt.submitted":
-        return durable_event.prompt_submitted(
-            payload=payload,
-            turn_id=turn_id,
-            session_id=session_id,
-            caused_by=caused_by,
-            event_id=event_id,
-            timestamp_micros=timestamp_micros,
-        )
-    if event_type == "sigil.turn.completed":
-        return durable_event.turn_completed(
-            payload=payload,
-            turn_id=turn_id,
-            session_id=session_id,
-            caused_by=caused_by,
-            event_id=event_id,
-            timestamp_micros=timestamp_micros,
-        )
-    if event_type == "sigil.turn.failed":
-        return durable_event.turn_failed(
-            payload=payload,
-            turn_id=turn_id,
-            session_id=session_id,
-            caused_by=caused_by,
-            event_id=event_id,
-            timestamp_micros=timestamp_micros,
-        )
-    if event_type == "sigil.turn.aborted":
-        return durable_event.turn_aborted(
-            payload=payload,
-            turn_id=turn_id,
-            session_id=session_id,
-            caused_by=caused_by,
-            event_id=event_id,
-            timestamp_micros=timestamp_micros,
-        )
-    if event_type == "zeta.model.called":
-        return model_called_event(
-            payload=payload,
-            turn_id=turn_id,
-            session_id=session_id,
-            caused_by=caused_by,
-            event_id=event_id,
-            timestamp_micros=timestamp_micros,
-        )
-    if event_type == "zeta.tool.called":
-        return tool_called_event(
-            payload=payload,
-            turn_id=turn_id,
-            session_id=session_id,
-            caused_by=caused_by,
-            event_id=event_id,
-            timestamp_micros=timestamp_micros,
-        )
-    return None
 
 
 def write_text_atomic(path: Path, text: str) -> None:

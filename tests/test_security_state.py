@@ -38,7 +38,6 @@ from sigil.session import (
 from sigil.state import (
     append_event,
     causal_chain,
-    durable_event,
     event_children,
     events_for_turn,
     session_dir,
@@ -55,6 +54,7 @@ from zeta.events import (
     EventCursor,
     Filter,
     SqliteEventStore,
+    durable_event,
     event_store_path,
     model_called_event,
     publish_event,

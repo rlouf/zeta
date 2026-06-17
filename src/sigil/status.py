@@ -10,8 +10,8 @@ from typing import Any, Literal
 
 from zeta.models import resolve_active_model
 
-from .sessions import latest_active_failure
-from .state import history_view, session_id
+from .sessions import latest_active_failure, session_id
+from .state import history_view
 
 StatusState = Literal["clean", "attention"]
 DELEGATION_WORKFLOWS = ("ask", "propose", "do")
@@ -108,7 +108,7 @@ def attention(
 
 def active_model_fields() -> dict[str, str]:
     """Return the resolved model the next request will use, with its source."""
-    from .state import session_dir
+    from .sessions import session_dir
 
     resolution = resolve_active_model(session_dir=session_dir())
     selection = resolution.selection

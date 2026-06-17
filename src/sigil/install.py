@@ -26,7 +26,8 @@ from zeta.models.codex_auth import (
     read_auth_tokens,
 )
 
-from .state import session_dir, state_dir
+from .sessions import session_dir
+from .state import state_dir
 
 BINDING_NAME = "sigil.zsh"
 

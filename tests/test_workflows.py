@@ -37,8 +37,8 @@ from sigil.protocols import (
     TURN_OUTCOME_STAGED,
     turn_contract,
 )
-from sigil.sessions import read_events, record_turn
-from sigil.state import history_view, session_dir
+from sigil.sessions import record_turn, session_dir
+from sigil.state import history_view, read_events
 from sigil.workflows import ask as ask_runner
 from sigil.workflows import step as zeta_runner
 from zeta import agent as zeta_agent

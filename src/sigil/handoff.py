@@ -21,8 +21,8 @@ from .protocols import (
     is_shell_handoff_result,
     is_shell_prompt_handoff,
 )
-from .sessions import event_time, recent_turns
-from .state import event_store_path, session_id
+from .sessions import event_time, recent_turns, session_id
+from .state import event_store_path
 
 
 def append_shell_result() -> dict[str, Any]:

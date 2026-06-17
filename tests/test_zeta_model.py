@@ -21,7 +21,7 @@ from _zeta_helpers import (
 from click.testing import CliRunner
 
 from sigil.cli import cli as sigil_cli
-from sigil.state import session_dir
+from sigil.sessions import session_dir
 from zeta import prompt as zeta_prompt
 from zeta.models import chat_completions as zeta_model
 from zeta.models import profiles as zeta_models

@@ -16,7 +16,7 @@ from ..display.summarize import assistant_trace_summary, short_trace_id
 def replay_model_selection(model_profile: str | None) -> ModelSelection:
     """Return the model a replay should use, honoring --model."""
     if model_profile is None:
-        from ..state import session_dir
+        from ..sessions import session_dir
 
         return resolve_active_model(session_dir=session_dir()).selection
     selection = resolve_model_profile(model_profile)

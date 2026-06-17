@@ -26,7 +26,8 @@ from .protocols import (
     EFFECT_KIND_FILE_WRITE,
     turn_contract,
 )
-from .state import event_store_path, session_id
+from .sessions import session_id
+from .state import event_store_path
 
 
 class TurnRecorder:

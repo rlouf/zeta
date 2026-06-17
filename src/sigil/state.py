@@ -6,9 +6,7 @@ state directory and the frontend event journal.
 
 from __future__ import annotations
 
-import hashlib
 import os
-import re
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -25,8 +23,6 @@ from zeta.events import (
 if TYPE_CHECKING:
     from zeta.events import Event
 
-SESSION_ID_PATTERN = re.compile(r"[A-Za-z0-9._-]{1,64}\Z")
-
 
 def state_dir() -> Path:
     """Return the global Sigil state directory."""
@@ -34,38 +30,6 @@ def state_dir() -> Path:
     if base:
         return Path(base)
     return Path.home() / ".sigil"
-
-
-def _session_path_component(raw: str) -> str:
-    """Map a raw session id onto a safe path component.
-
-    The id becomes a path component under the state directory, so values
-    that could escape it (separators, `..`, control characters) map to a
-    deterministic digest instead of being used verbatim.
-    """
-    if SESSION_ID_PATTERN.fullmatch(raw) and raw not in {".", ".."}:
-        return raw
-    return "unsafe-" + hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
-
-
-def session_id() -> str:
-    """Return the current shell session identifier."""
-    return _session_path_component(os.environ.get("SIGIL_SESSION_ID") or "default")
-
-
-def session_dir(session_id: str | None = None) -> Path:
-    """Return the directory that stores continuity for one shell session.
-
-    Without an explicit id this is the current session, honoring the
-    `SIGIL_SESSION_DIR` override. An explicit id names another session
-    under the state directory; the override never applies to it.
-    """
-    if session_id is None:
-        base = os.environ.get("SIGIL_SESSION_DIR")
-        if base:
-            return Path(base)
-    raw = session_id or os.environ.get("SIGIL_SESSION_ID") or "default"
-    return state_dir() / "sessions" / _session_path_component(raw)
 
 
 def event_store_path() -> Path:
@@ -101,6 +65,8 @@ def events_for_turn(turn_id: str) -> list[Event]:
 
 def append_event(event: dict[str, Any]) -> Event:
     """Append a global audit/debug event with session metadata."""
+    from .sessions import session_id
+
     return publish_event_payload_to_log(
         event_store_path(),
         event,

@@ -17,11 +17,11 @@ from sigil.protocols import (
     TURN_OUTCOME_FAILED,
     turn_contract,
 )
-from sigil.sessions import clear_current_session, read_events
+from sigil.sessions import clear_current_session, session_dir, session_id
 from sigil.state import (
     append_event,
     event_store_path,
-    session_dir,
+    read_events,
     state_dir,
 )
 from zeta import history as zeta_history
@@ -62,7 +62,7 @@ def append_history_record(record: dict[str, Any]) -> dict[str, Any]:
         return zeta_history.publish_effect_record(
             record,
             path=sigil_state.event_store_path(),
-            session_id=sigil_state.session_id(),
+            session_id=session_id(),
         )
     event = append_event(record)
     return zeta_history.history_event_record(event)
@@ -76,7 +76,7 @@ def test_history_publish_turn_record_writes_log_and_history() -> None:
     event = zeta_history.publish_turn_record(
         sample_turn_record(caused_by="prompt-event"),
         path=sigil_state.event_store_path(),
-        session_id=sigil_state.session_id(),
+        session_id=session_id(),
     )
     payload = zeta_history.history_event_record(event)
 
@@ -92,12 +92,12 @@ def test_history_publish_turn_record_uses_outcome_event_names() -> None:
     failed = zeta_history.publish_turn_record(
         sample_turn_record("turn-failed", outcome=TURN_OUTCOME_FAILED),
         path=sigil_state.event_store_path(),
-        session_id=sigil_state.session_id(),
+        session_id=session_id(),
     )
     aborted = zeta_history.publish_turn_record(
         sample_turn_record("turn-aborted", outcome=TURN_OUTCOME_ABORTED),
         path=sigil_state.event_store_path(),
-        session_id=sigil_state.session_id(),
+        session_id=session_id(),
     )
 
     assert failed.event_type == "sigil.turn.failed"
@@ -108,7 +108,7 @@ def test_history_publish_effect_record_writes_durable_tool_event() -> None:
     payload = zeta_history.publish_effect_record(
         sample_effect_record(),
         path=sigil_state.event_store_path(),
-        session_id=sigil_state.session_id(),
+        session_id=session_id(),
     )
 
     (event,) = read_events()
@@ -750,7 +750,7 @@ def test_history_survives_session_clear() -> None:
     zeta_history.publish_turn_record(
         sample_turn_record(),
         path=sigil_state.event_store_path(),
-        session_id=sigil_state.session_id(),
+        session_id=session_id(),
     )
     root = session_dir()
     root.mkdir(parents=True, exist_ok=True)

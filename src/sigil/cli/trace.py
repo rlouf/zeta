@@ -710,7 +710,7 @@ def trace_replay(
         raise click.ClickException(f"not a prompt: {object_id}")
     selection = replay_model_selection(model_profile)
     original = latest_model_answer(store, prompt_id)
-    from ..state import session_id as current_session_id
+    from ..sessions import session_id as current_session_id
 
     message = chat_completion_messages(
         reconstructed.messages,

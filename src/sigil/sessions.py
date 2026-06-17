@@ -7,8 +7,10 @@ shell bindings write through `record_turn`.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+import re
 import shutil
 import tempfile
 import time
@@ -33,8 +35,6 @@ from .protocols import (
 from .state import (
     event_store_path,
     read_events,
-    session_dir,
-    session_id,
     state_dir,
 )
 
@@ -49,7 +49,30 @@ SESSION_FILES = (
 SESSION_METADATA_FILE = "session.json"
 RECENT_TURNS_FILE = "recent-turns.jsonl"
 RECENT_TURNS_LIMIT = 50
+SESSION_ID_PATTERN = re.compile(r"[A-Za-z0-9._-]{1,64}\Z")
 TURN_SKIP_PREFIXES = (",", "sigil ", "__sigil_")
+
+
+def _session_path_component(raw: str) -> str:
+    """Map raw session ids into one safe filesystem component."""
+    if SESSION_ID_PATTERN.fullmatch(raw) and raw not in {".", ".."}:
+        return raw
+    return "unsafe-" + hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
+
+
+def session_id() -> str:
+    """Return the current shell session identifier."""
+    return _session_path_component(os.environ.get("SIGIL_SESSION_ID") or "default")
+
+
+def session_dir(session_id: str | None = None) -> Path:
+    """Return the continuity directory for one shell session."""
+    if session_id is None:
+        base = os.environ.get("SIGIL_SESSION_DIR")
+        if base:
+            return Path(base)
+    raw = session_id or os.environ.get("SIGIL_SESSION_ID") or "default"
+    return state_dir() / "sessions" / _session_path_component(raw)
 
 
 def write_text_atomic(path: Path, text: str) -> None:

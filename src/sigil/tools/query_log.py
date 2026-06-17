@@ -80,7 +80,8 @@ def run(params: dict[str, Any]) -> dict[str, Any]:
     from zeta.history import query_history
 
     from ..display.summarize import format_turn_line
-    from ..state import history_view, session_id
+    from ..sessions import session_id
+    from ..state import history_view
 
     history = history_view()
     turn_token = str(params.get("turn_id") or "")

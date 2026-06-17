@@ -927,7 +927,8 @@ def test_zeta_tool_edit_stage_records_staged_hashes(tmp_path: Path) -> None:
 
 def seed_query_log_history(monkeypatch) -> None:
     from sigil.protocols import turn_contract
-    from sigil.state import append_event, event_store_path, session_id
+    from sigil.sessions import session_id
+    from sigil.state import append_event, event_store_path
     from zeta.history import effect_record, publish_effect_record, turn_record
 
     monkeypatch.setenv("SIGIL_SESSION_ID", "query-log-here")

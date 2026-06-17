@@ -16,7 +16,7 @@ from zeta.models import (
     set_active_model_profile,
 )
 
-from ..state import session_dir
+from ..sessions import session_dir
 from ._base import cli, examples
 
 

@@ -36,7 +36,7 @@ def state_dir() -> Path:
     return Path.home() / ".sigil"
 
 
-def safe_session_id(raw: str) -> str:
+def _session_path_component(raw: str) -> str:
     """Map a raw session id onto a safe path component.
 
     The id becomes a path component under the state directory, so values
@@ -50,7 +50,7 @@ def safe_session_id(raw: str) -> str:
 
 def session_id() -> str:
     """Return the current shell session identifier."""
-    return safe_session_id(os.environ.get("SIGIL_SESSION_ID") or "default")
+    return _session_path_component(os.environ.get("SIGIL_SESSION_ID") or "default")
 
 
 def session_dir(session_id: str | None = None) -> Path:
@@ -65,7 +65,7 @@ def session_dir(session_id: str | None = None) -> Path:
         if base:
             return Path(base)
     raw = session_id or os.environ.get("SIGIL_SESSION_ID") or "default"
-    return state_dir() / "sessions" / safe_session_id(raw)
+    return state_dir() / "sessions" / _session_path_component(raw)
 
 
 def event_store_path() -> Path:

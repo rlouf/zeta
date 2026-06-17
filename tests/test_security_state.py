@@ -2183,12 +2183,12 @@ def test_session_dir_with_explicit_id_ignores_session_dir_override(
     assert session_dir("other") == state_dir() / "sessions" / "other"
 
 
-def test_safe_session_id_is_used_verbatim(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_plain_session_id_is_used_verbatim(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("SIGIL_SESSION_ID", "ttys003-1234")
     assert session_id() == "ttys003-1234"
 
 
-def test_unsafe_session_id_maps_deterministically(
+def test_path_unsafe_session_id_maps_deterministically(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("SIGIL_SESSION_ID", "../../escape")

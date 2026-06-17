@@ -356,6 +356,7 @@ def test_zeta_rpc_session_uses_explicit_context(monkeypatch, tmp_path: Path) -> 
         result["run_id"],
         result["run_id"],
     ]
+    assert [event["cursor"] for event in published] == ["1", "2"]
     assert [event["turn_id"] for event in published] == [
         result["run_id"],
         result["run_id"],
@@ -641,6 +642,109 @@ def test_zeta_rpc_session_run_streams_events_and_returns_turn(
     assert response["id"] == 1
     assert response["result"]["outcome"] == "answered"
     assert response["result"]["turn_id"]
+
+
+def test_zeta_rpc_events_list_pages_in_append_order(tmp_path: Path) -> None:
+    event_store = zeta_events.SqliteEventStore(tmp_path / "events.sqlite3")
+    for content in ("one", "two", "three"):
+        event_store.accept(
+            zeta_events.durable_event_draft(
+                "zeta.user_message",
+                "zeta",
+                payload={
+                    "_timeline_type": "user_message",
+                    "content": content,
+                    "run_id": "run_1",
+                },
+                session_id="session-1",
+                turn_id="run_1",
+                caused_by=None,
+                event_id=None,
+                idempotency_key=None,
+                timestamp_micros=None,
+            )
+        )
+    input_stream = StringIO(
+        json.dumps(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "events.list",
+                "params": {"session_id": "session-1", "run_id": "run_1", "limit": 2},
+            }
+        )
+        + "\n"
+        + json.dumps(
+            {
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "events.list",
+                "params": {
+                    "session_id": "session-1",
+                    "run_id": "run_1",
+                    "after": "2",
+                },
+            }
+        )
+        + "\n"
+    )
+    output = StringIO()
+    server = zeta_rpc.JsonRpcServer(input_stream, output, event_reader=event_store)
+
+    server.serve()
+
+    first, second = rpc_messages(output)
+    assert [event["content"] for event in first["result"]["events"]] == ["one", "two"]
+    assert [event["cursor"] for event in first["result"]["events"]] == ["1", "2"]
+    assert first["result"]["next_cursor"] == "2"
+    assert [event["content"] for event in second["result"]["events"]] == ["three"]
+    assert second["result"]["next_cursor"] == "3"
+
+
+def test_zeta_rpc_events_list_filters_by_session_and_run(tmp_path: Path) -> None:
+    event_store = zeta_events.SqliteEventStore(tmp_path / "events.sqlite3")
+    for session_id, run_id, content in (
+        ("session-1", "run_1", "one"),
+        ("session-2", "run_2", "two"),
+        ("session-1", "run_1", "three"),
+    ):
+        event_store.accept(
+            zeta_events.durable_event_draft(
+                "zeta.user_message",
+                "zeta",
+                payload={
+                    "_timeline_type": "user_message",
+                    "content": content,
+                    "run_id": run_id,
+                },
+                session_id=session_id,
+                turn_id=run_id,
+                caused_by=None,
+                event_id=None,
+                idempotency_key=None,
+                timestamp_micros=None,
+            )
+        )
+    input_stream = StringIO(
+        json.dumps(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "events.list",
+                "params": {"session_id": "session-1", "run_id": "run_1"},
+            }
+        )
+        + "\n"
+    )
+    output = StringIO()
+    server = zeta_rpc.JsonRpcServer(input_stream, output, event_reader=event_store)
+
+    server.serve()
+
+    assert [event["content"] for event in rpc_messages(output)[0]["result"]["events"]] == [
+        "one",
+        "three",
+    ]
 
 
 def test_zeta_agent_turn_uses_explicit_tool_registry(monkeypatch) -> None:

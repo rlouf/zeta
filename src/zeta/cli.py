@@ -26,6 +26,7 @@ def rpc(stdio: bool) -> int:
         sys.stdin,
         sys.stdout,
         tool_registry=runtime_context.tool_registry,
+        event_reader=runtime_context.event_sink,
     )
     server.session_runner = lambda params: run_rpc_session(
         params,

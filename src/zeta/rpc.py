@@ -10,8 +10,8 @@ from typing import Any, TextIO, cast
 
 from .agent import AgentConfig, AgentTurnAborted, registered_tools, run_agent_turn
 from .context import ZetaContext, default_context, load_project_context
-from .events import EventReader, Filter
-from .timeline import current_timeline, record_event
+from .events import Event, EventCursor, EventReader, Filter
+from .timeline import current_timeline, record_event, timeline_event_from_durable_event
 from .tools.base import EFFECT_KINDS, EffectKind, ToolImpl, ToolSpec
 from .tools.registry import ExecutionMode, ToolRegistry
 from .tools.registry import registry as _runtime_tool_registry
@@ -61,14 +61,14 @@ def run_rpc_session(
         },
         runtime_context=runtime_context,
     )
-    publish_event(user_event)
+    publish_event(rpc_event_with_cursor(runtime_context, user_event, run_id))
 
     def sink(event: dict[str, Any]) -> None:
         persisted = record_event(
             rpc_event_with_run_id(event, run_id),
             runtime_context=runtime_context,
         )
-        publish_event(persisted)
+        publish_event(rpc_event_with_cursor(runtime_context, persisted, run_id))
 
     try:
         result = run_agent_turn(
@@ -139,6 +139,42 @@ def final_event_cursor(runtime_context: ZetaContext, run_id: str) -> str | None:
     if not events:
         return None
     return events[-1].cursor().encode()
+
+
+def rpc_event_with_cursor(
+    runtime_context: ZetaContext,
+    event: dict[str, Any],
+    run_id: str,
+) -> dict[str, Any]:
+    durable_event = durable_event_for_rpc_event(runtime_context, event, run_id)
+    if durable_event is None:
+        return event
+    return rpc_event_from_durable_event(durable_event)
+
+
+def durable_event_for_rpc_event(
+    runtime_context: ZetaContext,
+    event: dict[str, Any],
+    run_id: str,
+) -> Event | None:
+    if not isinstance(runtime_context.event_sink, EventReader):
+        return None
+    event_id = event.get("id")
+    if not isinstance(event_id, str):
+        return None
+    events = runtime_context.event_sink.list_events(
+        Filter(session_id=runtime_context.session_id, turn_id=run_id)
+    )
+    for durable_event in events:
+        if durable_event.id == event_id:
+            return durable_event
+    return None
+
+
+def rpc_event_from_durable_event(event: Event) -> dict[str, Any]:
+    projected = timeline_event_from_durable_event(event)
+    projected["cursor"] = event.cursor().encode()
+    return projected
 
 
 def rpc_objective(params: dict[str, Any]) -> str:
@@ -218,6 +254,44 @@ def optional_float_param(params: dict[str, Any], key: str) -> float | None:
     return None
 
 
+def event_cursor_param(value: Any) -> EventCursor | None:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise RpcError(
+            -32602,
+            "invalid_cursor",
+            "Invalid params",
+            {"message": "after must be an event cursor string"},
+        )
+    cursor = EventCursor.decode(value)
+    if cursor is None:
+        raise RpcError(
+            -32602,
+            "invalid_cursor",
+            "Invalid params",
+            {"message": "after must be an event cursor string"},
+        )
+    return cursor
+
+
+def positive_limit_param(value: Any) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise RpcError(
+            -32602,
+            "invalid_limit",
+            "Invalid params",
+            {"message": "limit must be a positive integer"},
+        )
+    return value
+
+
+def optional_string(value: Any) -> str | None:
+    return value if isinstance(value, str) and value else None
+
+
 def rpc_outcome(staged_effect: dict[str, Any] | None, final_text: str) -> str:
     if staged_effect is not None:
         return "staged"
@@ -234,11 +308,13 @@ class JsonRpcServer:
         *,
         session_runner: RpcSessionRunner | None = None,
         tool_registry: ToolRegistry | None = None,
+        event_reader: EventReader | None = None,
     ) -> None:
         self.input = input
         self.output = output
         self.session_runner = session_runner
         self.tool_registry = tool_registry or _runtime_tool_registry
+        self.event_reader = event_reader
         self.tool_responses: dict[str, dict[str, Any]] = {}
         self.client_tools: set[str] = set()
 
@@ -299,6 +375,8 @@ class JsonRpcServer:
         if method == "tools.respond":
             self.record_tool_response(params)
             return None
+        if method == "events.list":
+            return self.list_events(params)
         if method == "session.run":
             if self.session_runner is None:
                 raise RpcError(
@@ -314,6 +392,29 @@ class JsonRpcServer:
             "Method not found",
             {"method": method},
         )
+
+    def list_events(self, params: dict[str, Any]) -> dict[str, Any]:
+        if self.event_reader is None:
+            raise RpcError(
+                -32000,
+                "events_unavailable",
+                "Server error",
+                {"message": "events.list is not configured"},
+            )
+        after = event_cursor_param(params.get("after"))
+        limit = positive_limit_param(params.get("limit"))
+        session_id = optional_string(params.get("session_id"))
+        run_id = optional_string(params.get("run_id"))
+        events = self.event_reader.list_events(
+            Filter(session_id=session_id, turn_id=run_id, after=after, limit=limit)
+        )
+        next_cursor = events[-1].cursor().encode() if events else (
+            after.encode() if after is not None else None
+        )
+        return {
+            "events": [rpc_event_from_durable_event(event) for event in events],
+            "next_cursor": next_cursor,
+        }
 
     def register_client_tools(self, tools: Any) -> list[str]:
         if not isinstance(tools, list):

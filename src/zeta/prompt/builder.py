@@ -11,7 +11,11 @@ from contextlib import nullcontext
 from dataclasses import dataclass, replace
 from typing import Any
 
-from ..models import DEFAULT_MAX_COMPLETION_TOKENS, chat_completion_request_body
+from ..models import (
+    DEFAULT_MAX_COMPLETION_TOKENS,
+    ModelOutput,
+    chat_completion_request_body,
+)
 from ..skills import Skill, available_skills
 from ..tools.base import content_hash
 from ..trace import (
@@ -98,7 +102,7 @@ class PromptBuilder:
     def record_assistant_message(
         self,
         prepared: PreparedPrompt,
-        assistant: dict[str, Any],
+        model_output: ModelOutput,
     ) -> PromptTrace | None:
         store = self.store()
         if store is None or prepared.prompt_object_id is None:
@@ -107,8 +111,8 @@ class PromptBuilder:
             assistant_id = store.put_object(
                 Object(
                     kind="assistant_message",
-                    schema="zeta.assistant_output.v1",
-                    data={"message": assistant},
+                    schema="zeta.model_output.v1",
+                    data=model_output.to_trace_data(),
                     links=(prepared.prompt_object_id,),
                 )
             )

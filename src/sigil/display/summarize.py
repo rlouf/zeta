@@ -473,8 +473,8 @@ def estimated_prompt_tokens(
 
 def assistant_trace_summary(data: dict[str, Any]) -> str:
     """Summarize an assistant message as its text head or tool-call names."""
-    message = data.get("message")
-    if not isinstance(message, dict):
+    message = assistant_trace_message(data)
+    if message is None:
         return ""
     head = first_line(str(message.get("content") or ""))
     if head:
@@ -490,6 +490,19 @@ def assistant_trace_summary(data: dict[str, Any]) -> str:
         if names:
             return "→ " + ", ".join(names)
     return ""
+
+
+def assistant_trace_message(data: dict[str, Any]) -> dict[str, Any] | None:
+    """Return the assistant message projection from old or neutral trace data."""
+    message = data.get("message")
+    if isinstance(message, dict):
+        return message
+    model_output = data.get("model_output")
+    if isinstance(model_output, dict):
+        message = model_output.get("message")
+        if isinstance(message, dict):
+            return message
+    return None
 
 
 def tool_result_trace_summary(data: dict[str, Any]) -> str:

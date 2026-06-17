@@ -13,6 +13,8 @@ from _zeta_helpers import (
 from click.testing import CliRunner
 
 from sigil.cli import cli as sigil_cli
+from sigil.display.summarize import assistant_trace_summary
+from sigil.trace.replay import latest_model_answer
 from zeta import prompt as zeta_prompt
 from zeta import timeline as zeta_timeline
 from zeta import trace as zeta_trace
@@ -1455,6 +1457,54 @@ def prompt_diff_store() -> tuple[zeta_trace.InMemoryStore, dict[str, str]]:
     return store, ids
 
 
+def test_sigil_trace_helpers_read_provider_neutral_model_output() -> None:
+    store = zeta_trace.InMemoryStore()
+    prompt_id = store.put_object(
+        zeta_trace.Object(
+            kind="prompt",
+            schema="zeta.prompt.v1",
+            data={"payload_sha256": "sha256:prompt"},
+        )
+    )
+    answer_id = store.put_object(
+        zeta_trace.Object(
+            kind="assistant_message",
+            schema="zeta.model_output.v1",
+            data={
+                "model_output": {
+                    "message": {
+                        "role": "assistant",
+                        "content": "neutral answer",
+                    }
+                }
+            },
+            links=(prompt_id,),
+        )
+    )
+    store.record_derivation(
+        zeta_trace.Derivation(
+            producer="ModelResponse",
+            output_id=answer_id,
+            input_ids=(prompt_id,),
+        )
+    )
+
+    assert (
+        assistant_trace_summary(
+            {
+                "model_output": {
+                    "message": {
+                        "role": "assistant",
+                        "content": "neutral answer",
+                    }
+                }
+            }
+        )
+        == "neutral answer"
+    )
+    assert latest_model_answer(store, prompt_id) == (answer_id, "neutral answer")
+
+
 def test_sigil_zeta_trace_diff_reports_component_changes(monkeypatch) -> None:
     store, ids = prompt_diff_store()
     monkeypatch.setattr("sigil.cli.trace.current_store", lambda: store)
@@ -1534,7 +1584,9 @@ def test_sigil_zeta_trace_replay_records_a_traced_answer(monkeypatch) -> None:
     replay_object = store.get_object(replays[0].output_id)
     assert replay_object is not None
     assert replay_object.kind == "assistant_message"
+    assert replay_object.schema == "zeta.model_output.v1"
     assert replay_object.data["message"]["content"] == "a fresh answer"
+    assert replay_object.data["model_output"]["message"]["content"] == "a fresh answer"
     assert replay_object.links == (prompt_id,)
     assert replays[0].output_id != answer_id
 

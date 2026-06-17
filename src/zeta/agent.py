@@ -273,7 +273,7 @@ def request_model_turn(
     assistant_message = AssistantMessage.from_provider(model_output.message)
     prompt_trace = builder.record_assistant_message(
         prepared_prompt,
-        assistant_message.to_provider(),
+        model_output,
     )
     state.note_prompt_trace(prompt_trace)
     state.note_model_telemetry(model_telemetry)

@@ -22,6 +22,7 @@ from _zeta_helpers import (
 
 from sigil.tools import ensure_builtin_tools_registered
 from zeta import context as zeta_context
+from zeta import models as zeta_models_api
 from zeta import prompt as zeta_prompt
 from zeta import skills as zeta_skills
 from zeta import trace as zeta_trace
@@ -288,6 +289,58 @@ def test_zeta_prompt_request_reconstructs_and_verifies() -> None:
     assert reconstructed.tools == prepared.tools
     assert reconstructed.selected_model == "unit-model"
     assert reconstructed.payload_verified
+
+
+def test_zeta_prompt_records_provider_neutral_model_output() -> None:
+    store = zeta_trace.InMemoryStore()
+    prepared = zeta_prompt.PromptBuilder(store=store).build(
+        "inspect",
+        [],
+        allowed_capabilities=(),
+    )
+    assert prepared.prompt_object_id is not None
+    output = zeta_models_api.ModelOutput(
+        message={
+            "role": "assistant",
+            "content": "done",
+            "_responses_items": [{"type": "reasoning", "id": "rs_1"}],
+        },
+        finish_reason="stop",
+        usage=zeta_models_api.ModelUsage(
+            prompt_tokens=3,
+            completion_tokens=2,
+            total_tokens=5,
+        ),
+        provider_metadata={"id": "resp_1", "model": "gpt-5.5"},
+        provider_replay_items=({"type": "reasoning", "id": "rs_1"},),
+    )
+
+    trace = zeta_prompt.PromptBuilder(store=store).record_assistant_message(
+        prepared,
+        output,
+    )
+
+    assert trace is not None
+    assistant = store.get_object(str(trace.assistant_message_object_id))
+    assert assistant is not None
+    assert assistant.kind == "assistant_message"
+    assert assistant.schema == "zeta.model_output.v1"
+    assert assistant.data["message"]["content"] == "done"
+    assert assistant.data["model_output"] == {
+        "message": {
+            "role": "assistant",
+            "content": "done",
+            "_responses_items": [{"type": "reasoning", "id": "rs_1"}],
+        },
+        "finish_reason": "stop",
+        "usage": {
+            "prompt_tokens": 3,
+            "completion_tokens": 2,
+            "total_tokens": 5,
+        },
+        "provider_metadata": {"id": "resp_1", "model": "gpt-5.5"},
+        "provider_replay_items": [{"type": "reasoning", "id": "rs_1"}],
+    }
 
 
 def test_zeta_prompt_request_reconstructs_a_no_thinking_prompt() -> None:

@@ -976,7 +976,7 @@ Verification:
 - `uv run coverage run -m pytest` and `uv run coverage report` passed with
   93% total coverage.
 
-### Slice 5: provider-neutral trace payloads
+### Slice 5: provider-neutral trace payloads - complete
 
 Change trace storage from provider-shaped assistant payloads to a
 provider-neutral output plus adapter metadata.
@@ -1006,7 +1006,10 @@ Tests first:
 Verification:
 
 - `uv run pytest tests/test_zeta_prompt.py tests/test_zeta_trace.py tests/test_zeta_responses.py -q`
-- `uv run pytest -q`
+  passed with 165 tests.
+- `uv run pytest -q` passed with 820 tests and 4 skipped.
+- `uv run coverage run -m pytest` and `uv run coverage report` passed with
+  93% total coverage.
 
 ### Slice 6: compatibility cleanup
 

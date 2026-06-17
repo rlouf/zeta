@@ -7,10 +7,19 @@ from typing import Any
 
 import click
 
-from zeta.models import ModelSelection, resolve_active_model, resolve_model_profile
+from zeta.models import (
+    ModelOutput,
+    ModelSelection,
+    resolve_active_model,
+    resolve_model_profile,
+)
 from zeta.trace import Derivation, Object, ObjectId, Store, warn_trace_failure_once
 
-from ..display.summarize import assistant_trace_summary, short_trace_id
+from ..display.summarize import (
+    assistant_trace_message,
+    assistant_trace_summary,
+    short_trace_id,
+)
 
 
 def replay_model_selection(model_profile: str | None) -> ModelSelection:
@@ -39,8 +48,8 @@ def latest_model_answer(
         obj = store.get_object(answer_id)
         if obj is None:
             continue
-        message = obj.data.get("message")
-        if isinstance(message, dict):
+        message = assistant_trace_message(obj.data)
+        if message is not None:
             return answer_id, answer_display_text(message)
     return None
 
@@ -65,8 +74,8 @@ def record_replay(
             replay_id = store.put_object(
                 Object(
                     kind="assistant_message",
-                    schema="zeta.assistant_output.v1",
-                    data={"message": message},
+                    schema="zeta.model_output.v1",
+                    data=ModelOutput(message=message).to_trace_data(),
                     links=(prompt_id,),
                 )
             )

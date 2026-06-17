@@ -135,6 +135,23 @@ class ModelOutput:
             provider_replay_items=provider_replay_items(message),
         )
 
+    def to_trace_data(self) -> dict[str, Any]:
+        model_output: dict[str, Any] = {"message": dict(self.message)}
+        if self.finish_reason is not None:
+            model_output["finish_reason"] = self.finish_reason
+        if self.usage is not None:
+            model_output["usage"] = self.usage.to_mapping()
+        if self.provider_metadata:
+            model_output["provider_metadata"] = dict(self.provider_metadata)
+        if self.provider_replay_items:
+            model_output["provider_replay_items"] = [
+                dict(item) for item in self.provider_replay_items
+            ]
+        return {
+            "message": dict(self.message),
+            "model_output": model_output,
+        }
+
 
 def provider_metadata(payload: dict[str, Any]) -> dict[str, Any]:
     return {

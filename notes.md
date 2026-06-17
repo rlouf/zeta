@@ -782,7 +782,7 @@ Acceptance test for any new transport:
 - no changes to model descriptor generation;
 - only registry registration and adapter invocation code changes.
 
-## 4. Typed Zeta domain records
+## 4. Typed Zeta domain records - complete
 
 ### Second opinion status
 
@@ -1051,7 +1051,7 @@ Verification:
 - `uv run coverage run -m pytest` and `uv run coverage report` passed with
   93% total coverage.
 
-### Slice 6: cleanup and caller audit
+### Slice 6: cleanup and caller audit - complete
 
 Only after the typed records above are in place:
 
@@ -1064,9 +1064,13 @@ Only after the typed records above are in place:
 
 Verification:
 
+- `ripple` found production callers for `assistant_tool_calls()`,
+  `model_tool_call_event()`, `tool_result_event()`, and
+  `component_messages()`, so the compatibility helpers were kept.
 - `uv run pytest tests/test_zeta_agent.py tests/test_zeta_tools.py tests/test_zeta_prompt.py -q`
-- `uv run pytest -q`
-- `uvx --with radon radon cc src tests -s`
+  passed with 228 tests and 2 skipped.
+- `uv run pytest -q` passed with 809 tests and 4 skipped.
+- `uvx --with radon radon cc src tests -s` completed.
 
 ### Verification
 

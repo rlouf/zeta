@@ -191,6 +191,7 @@ def test_zeta_model_tool_call_round_trips_provider_payload_to_event() -> None:
         "type": "tool_call",
         "id": "call-1",
         "tool_call_id": "call-1",
+        "status": "pending",
         "name": "read",
         "input": {"path": "README.md"},
         "arguments": '{"path": "README.md"}',
@@ -277,6 +278,7 @@ def test_zeta_tool_call_runtime_event_round_trips_to_current_dict_shape() -> Non
         "type": "tool_call",
         "id": "call-1",
         "tool_call_id": "call-1",
+        "status": "pending",
         "name": "read",
         "input": {},
         "arguments": "{}",
@@ -298,6 +300,7 @@ def test_zeta_tool_result_runtime_event_round_trips_to_current_dict_shape() -> N
     assert event.to_event() == {
         "type": "tool_result",
         "tool_call_id": "call-1",
+        "status": "completed",
         "name": "read",
         "result": {"ok": True, "content": [{"type": "text", "text": "done"}]},
         "id": "result-1",
@@ -3395,6 +3398,7 @@ def test_zeta_agent_turn_converts_tool_crash_to_error_result(monkeypatch) -> Non
     assert tool_result["result"]["ok"] is False
     assert tool_result["result"]["error"]["code"] == "tool-crashed"
     assert "boom" in tool_result["result"]["error"]["message"]
+    assert tool_result["status"] == "failed"
 
 
 def test_zeta_agent_turn_rejects_schema_mismatch_before_running(monkeypatch) -> None:
@@ -3436,6 +3440,7 @@ def test_zeta_agent_turn_rejects_schema_mismatch_before_running(monkeypatch) -> 
     )
     assert tool_result["result"]["ok"] is False
     assert tool_result["result"]["error"]["code"] == "schema-mismatch"
+    assert tool_result["status"] == "refused"
 
 
 def test_zeta_agent_turn_rejects_disallowed_tool_before_running(monkeypatch) -> None:
@@ -3477,6 +3482,7 @@ def test_zeta_agent_turn_rejects_disallowed_tool_before_running(monkeypatch) -> 
     )
     assert tool_result["result"]["ok"] is False
     assert tool_result["result"]["error"]["code"] == "disallowed-tool"
+    assert tool_result["status"] == "refused"
 
 
 def test_zeta_agent_direct_mode_continues_after_edit(

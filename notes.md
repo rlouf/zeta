@@ -1424,6 +1424,39 @@ Verification:
   passed.
 - `uv run pre-commit run --all` passed.
 
+### Slice 6: capability lifecycle status fields - complete
+
+Made the existing capability event pair explicit as a lifecycle journal without
+adding new event types:
+
+- `tool_call` events now carry `status="pending"`;
+- `tool_result` events now carry terminal status:
+  - `completed` for successful capability results;
+  - `refused` for validation or policy refusals;
+  - `failed` for execution failures.
+
+Behavior preserved:
+
+- There is still exactly one `tool_call` event before execution and one
+  `tool_result` event after each capability outcome.
+- Existing durable event projection continues to use the same event types.
+- Trace object links for calls and results are unchanged.
+
+Verification:
+
+- `uv run ripple src/zeta/agent.py ToolCallRuntimeEvent.to_event` and
+  `uv run ripple src/zeta/agent.py ToolResultRuntimeEvent.to_event` could not
+  run because `ripple` is not installed in this checkout.
+- `uv run pytest tests/test_zeta_agent.py tests/test_zeta_tools.py tests/test_zeta_trace.py -q`
+  passed with 251 tests and 2 skipped.
+- `uv run pytest -q` passed with 827 tests and 4 skipped.
+- `uv run coverage run -m pytest` and `uv run coverage report` passed with
+  93% total coverage.
+- `uv run ty check src tests` passed.
+- `uvx --with radon radon cc src/zeta/agent.py tests/test_zeta_agent.py -s`
+  passed.
+- `uv run pre-commit run --all` passed.
+
 ## 7. Replay, diff, and fork acceptance tests
 
 ### Current read

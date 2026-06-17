@@ -824,6 +824,7 @@ class ToolCallRuntimeEvent:
             "type": "tool_call",
             "id": self.tool_call.call_id,
             "tool_call_id": self.tool_call.call_id,
+            "status": "pending",
             "name": self.tool_call.name,
             "input": self.tool_call.params,
             "arguments": self.tool_call.raw_arguments,
@@ -847,6 +848,7 @@ class ToolResultRuntimeEvent:
         event: dict[str, Any] = {
             "type": "tool_result",
             "tool_call_id": self.call_id,
+            "status": tool_result_status(self.result),
             "name": self.name,
             "result": normalized_tool_result(self.name, self.result),
         }
@@ -1378,6 +1380,26 @@ def tool_result_event(
         model_telemetry=model_telemetry,
         prompt_trace=trace_payload,
     ).to_event()
+
+
+REFUSED_TOOL_ERROR_CODES = {
+    "direct-execution-disallowed",
+    "disallowed-tool",
+    "invalid-json-args",
+    "invalid-tool-call",
+    "schema-mismatch",
+    "staging-unsupported",
+    "unknown-tool",
+}
+
+
+def tool_result_status(result: dict[str, Any]) -> str:
+    if result.get("ok") is True:
+        return "completed"
+    error = result.get("error")
+    if isinstance(error, dict) and error.get("code") in REFUSED_TOOL_ERROR_CODES:
+        return "refused"
+    return "failed"
 
 
 def normalized_tool_result(name: str, result: dict[str, Any]) -> dict[str, Any]:

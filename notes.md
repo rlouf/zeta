@@ -1360,6 +1360,36 @@ Verification:
   passed.
 - `uv run pre-commit run --all` passed.
 
+### Slice 4: model call and assistant recording steps - complete
+
+Split the remaining pieces of `request_model_turn()` into explicit step
+functions:
+
+- `call_model_step()`;
+- `record_assistant_step()`.
+
+Behavior preserved:
+
+- Model call status handling and streaming still flow through
+  `request_assistant_message()`.
+- Assistant trace recording still stores provider-neutral model output linked to
+  the committed prompt.
+- Model telemetry still updates `RunState` exactly once per model call.
+
+Verification:
+
+- `uv run ripple src/zeta/agent.py request_model_turn` could not run because
+  `ripple` is not installed in this checkout.
+- `uv run pytest tests/test_zeta_agent.py tests/test_zeta_tools.py tests/test_zeta_trace.py -q`
+  passed with 250 tests and 2 skipped.
+- `uv run pytest -q` passed with 826 tests and 4 skipped.
+- `uv run coverage run -m pytest` and `uv run coverage report` passed with
+  93% total coverage.
+- `uv run ty check` passed.
+- `uvx --with radon radon cc src/zeta/agent.py tests/test_zeta_agent.py -s`
+  passed.
+- `uv run pre-commit run --all` passed.
+
 ## 7. Replay, diff, and fork acceptance tests
 
 ### Current read

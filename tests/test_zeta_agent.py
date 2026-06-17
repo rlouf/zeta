@@ -573,6 +573,80 @@ def test_zeta_build_prompt_step_returns_committed_model_input() -> None:
     )
 
 
+def test_zeta_call_model_step_returns_output_and_telemetry(monkeypatch) -> None:
+    def fake_request_assistant_message(
+        messages: list[dict[str, Any]],
+        **kwargs: object,
+    ) -> tuple[zeta_models_api.ModelOutput, bool, dict[str, Any]]:
+        assert messages == [{"role": "user", "content": "answer"}]
+        assert kwargs["tools"] == []
+        return (
+            zeta_models_api.ModelOutput(message={"content": "done"}),
+            True,
+            {"usage": {"prompt_tokens": 1}},
+        )
+
+    monkeypatch.setattr(
+        zeta_agent,
+        "request_assistant_message",
+        fake_request_assistant_message,
+    )
+    state = zeta_agent.RunState()
+
+    called = zeta_agent.call_model_step(
+        zeta_models_api.ModelInput(
+            messages=[{"role": "user", "content": "answer"}],
+            tools=[],
+            tool_choice="auto",
+        ),
+        config=zeta_agent.AgentConfig(),
+        state=state,
+        model_status=None,
+        stream_sink=None,
+    )
+
+    assert [step.step for step in state.steps] == ["call_model"]
+    assert called.model_output == zeta_models_api.ModelOutput(
+        message={"content": "done"}
+    )
+    assert called.streamed_content is True
+    assert called.model_telemetry == {"usage": {"prompt_tokens": 1}}
+
+
+def test_zeta_record_assistant_step_links_output_to_prompt() -> None:
+    store = zeta_trace.InMemoryStore()
+    state = zeta_agent.RunState()
+    builder = zeta_prompt.PromptBuilder(store=store)
+    built = zeta_agent.build_prompt_step(
+        "answer",
+        [],
+        config=zeta_agent.AgentConfig(),
+        allowed_capabilities=(),
+        context="",
+        current_events=[],
+        tools=[],
+        state=state,
+        builder=builder,
+    )
+
+    recorded = zeta_agent.record_assistant_step(
+        built.prepared_prompt,
+        zeta_models_api.ModelOutput(message={"content": "done"}),
+        {"usage": {"prompt_tokens": 1}},
+        state=state,
+        builder=builder,
+    )
+
+    assert [step.step for step in state.steps] == [
+        "build_prompt",
+        "record_assistant",
+    ]
+    assert recorded.assistant.content == "done"
+    assert recorded.prompt_trace is not None
+    assert state.prompt_traces == [recorded.prompt_trace]
+    assert state.latest_model_telemetry == {"usage": {"prompt_tokens": 1}}
+
+
 def rpc_messages(output: StringIO) -> list[dict[str, Any]]:
     return [json.loads(line) for line in output.getvalue().splitlines()]
 

@@ -302,6 +302,19 @@ class BuiltPrompt:
 
 
 @dataclass(frozen=True)
+class ModelCall:
+    model_output: ModelOutput
+    streamed_content: bool
+    model_telemetry: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class RecordedAssistant:
+    assistant: AssistantMessage
+    prompt_trace: PromptTrace | None
+
+
+@dataclass(frozen=True)
 class AssistantMessage:
     content: str
     reasoning_content: str
@@ -347,28 +360,25 @@ def request_model_turn(
         state=state,
         builder=builder,
     )
-    state.note_step("call_model")
-    model_output, streamed_content, model_telemetry = request_assistant_message(
-        built_prompt.model_input.messages,
-        tools=built_prompt.model_input.tools or [],
-        tool_choice=built_prompt.model_input.tool_choice,
+    model_call = call_model_step(
+        built_prompt.model_input,
         config=config,
+        state=state,
         model_status=model_status,
         stream_sink=stream_sink,
     )
-    assistant_message = AssistantMessage.from_provider(model_output.message)
-    state.note_step("record_assistant")
-    prompt_trace = builder.record_assistant_message(
+    recorded = record_assistant_step(
         built_prompt.prepared_prompt,
-        model_output,
+        model_call.model_output,
+        model_call.model_telemetry,
+        state=state,
+        builder=builder,
     )
-    state.note_prompt_trace(prompt_trace)
-    state.note_model_telemetry(model_telemetry)
     return ModelTurn(
-        assistant=assistant_message,
-        streamed_content=streamed_content,
-        model_telemetry=model_telemetry,
-        prompt_trace=prompt_trace,
+        assistant=recorded.assistant,
+        streamed_content=model_call.streamed_content,
+        model_telemetry=model_call.model_telemetry,
+        prompt_trace=recorded.prompt_trace,
     )
 
 
@@ -401,6 +411,49 @@ def build_prompt_step(
     model_input = render_model_input(stored_prompt)
     prepared_prompt = prepared_prompt_from(stored_prompt)
     return BuiltPrompt(prepared_prompt=prepared_prompt, model_input=model_input)
+
+
+def call_model_step(
+    model_input: ModelInput,
+    *,
+    config: AgentConfig,
+    state: RunState,
+    model_status: ModelStatusFactory | None,
+    stream_sink: ChatCompletionStreamSink | None,
+) -> ModelCall:
+    state.note_step("call_model")
+    model_output, streamed_content, model_telemetry = request_assistant_message(
+        model_input.messages,
+        tools=model_input.tools or [],
+        tool_choice=model_input.tool_choice,
+        config=config,
+        model_status=model_status,
+        stream_sink=stream_sink,
+    )
+    return ModelCall(
+        model_output=model_output,
+        streamed_content=streamed_content,
+        model_telemetry=model_telemetry,
+    )
+
+
+def record_assistant_step(
+    prepared_prompt: PreparedPrompt,
+    model_output: ModelOutput,
+    model_telemetry: dict[str, Any],
+    *,
+    state: RunState,
+    builder: PromptBuilder,
+) -> RecordedAssistant:
+    assistant = AssistantMessage.from_provider(model_output.message)
+    state.note_step("record_assistant")
+    prompt_trace = builder.record_assistant_message(
+        prepared_prompt,
+        model_output,
+    )
+    state.note_prompt_trace(prompt_trace)
+    state.note_model_telemetry(model_telemetry)
+    return RecordedAssistant(assistant=assistant, prompt_trace=prompt_trace)
 
 
 def run_capability_calls(

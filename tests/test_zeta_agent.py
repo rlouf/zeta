@@ -888,7 +888,7 @@ def test_zeta_rpc_mutating_client_tool_requires_direct_execution_opt_in() -> Non
     }
 
 
-def test_zeta_rpc_rejects_duplicate_client_tool_registration() -> None:
+def test_zeta_rpc_allows_client_alias_to_coexist_with_other_provider() -> None:
     registry = CapabilityRegistry()
     registry.register(_test_capability("ctx_read", run_result={"ok": True}))
     input_stream = StringIO(
@@ -924,17 +924,11 @@ def test_zeta_rpc_rejects_duplicate_client_tool_registration() -> None:
         {
             "jsonrpc": "2.0",
             "id": 1,
-            "error": {
-                "code": -32602,
-                "message": "Invalid params",
-                "data": {
-                    "code": "duplicate_tool",
-                    "message": "tool alias 'ctx_read' is already registered",
-                    "tool": "ctx_read",
-                },
-            },
+            "result": {"registered": ["ctx_read"]},
         }
     ]
+    assert registry.get("test.ctx_read") is not None
+    assert registry.get("rpc.ctx_read") is not None
 
 
 def test_zeta_rpc_rejects_reregistering_client_owned_tool() -> None:

@@ -253,22 +253,8 @@ def model_capability_descriptors(
 ) -> list[dict[str, Any]]:
     """Return provider-facing tool descriptors for the model prompt."""
     active_tool_registry = tool_registry or _runtime_tool_registry
-    descriptors = []
-    for capability_id in enabled_capability_ids(
+    enabled_ids = enabled_capability_ids(
         allowed_capabilities,
         tool_registry=active_tool_registry,
-    ):
-        capability = active_tool_registry.get(capability_id)
-        if capability is None:
-            continue
-        descriptors.append(
-            {
-                "type": "function",
-                "function": {
-                    "name": active_tool_registry.model_alias(capability_id),
-                    "description": capability.spec.description,
-                    "parameters": capability.spec.input_schema,
-                },
-            }
-        )
-    return descriptors
+    )
+    return active_tool_registry.project(enabled_ids).descriptors

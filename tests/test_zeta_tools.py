@@ -42,18 +42,20 @@ def tool_metadata(name: str) -> dict[str, Any]:
 def _test_capability(
     name: str,
     *,
+    provider: str = "test",
     schema: dict[str, Any] | None = None,
     effects: tuple[EffectKind, ...] = (),
+    aliases: tuple[str, ...] | None = None,
     supports_staging: bool = False,
     supports_direct: bool = True,
 ) -> Capability:
     return Capability(
         CapabilitySpec(
-            CapabilityId("test", name),
+            CapabilityId(provider, name),
             "Unit test capability.",
             schema or {"type": "object"},
             effects=effects,
-            aliases=(name,),
+            aliases=aliases or (name,),
         ),
         CapabilityPolicy(
             supports_staging=supports_staging,
@@ -122,6 +124,47 @@ def test_zeta_tool_registry_requires_direct_execution_permission() -> None:
             "message": "capability test.unit does not allow direct execution",
         },
     }
+
+
+def test_zeta_capability_registry_rejects_duplicate_canonical_ids() -> None:
+    registry = CapabilityRegistry()
+    registry.register(_test_capability("read"))
+
+    with pytest.raises(
+        ValueError, match="capability 'test.read' is already registered"
+    ):
+        registry.register(_test_capability("read"))
+
+
+def test_zeta_capability_projection_rejects_ambiguous_aliases() -> None:
+    registry = CapabilityRegistry()
+    registry.register(_test_capability("read", provider="host", aliases=("read",)))
+    registry.register(_test_capability("read", provider="rpc", aliases=("read",)))
+
+    with pytest.raises(ValueError, match="ambiguous capability alias 'read'"):
+        registry.project(("host.read", "rpc.read"))
+
+
+def test_zeta_capability_projection_can_use_qualified_aliases() -> None:
+    registry = CapabilityRegistry()
+    registry.register(_test_capability("read", provider="host", aliases=("read",)))
+    registry.register(_test_capability("read", provider="rpc", aliases=("read",)))
+
+    projection = registry.project(
+        ("host.read", "rpc.read"),
+        alias_overrides={
+            "host.read": "host.read",
+            "rpc.read": "rpc.read",
+        },
+    )
+
+    assert projection.alias_to_id == {
+        "host.read": "host.read",
+        "rpc.read": "rpc.read",
+    }
+    assert [
+        descriptor["function"]["name"] for descriptor in projection.descriptors
+    ] == ["host.read", "rpc.read"]
 
 
 def test_zeta_tool_registry_starts_empty() -> None:

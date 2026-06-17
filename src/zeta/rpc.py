@@ -760,7 +760,6 @@ class JsonRpcServer:
     def register_client_tool(self, name: str, item: dict[str, Any]) -> None:
         capability_id = CapabilityId("rpc", name).canonical()
         existing = self.tool_registry.get(capability_id)
-        existing_alias = self.tool_registry.resolve(name)
         if existing is not None:
             raise RpcError(
                 -32602,
@@ -768,16 +767,6 @@ class JsonRpcServer:
                 "Invalid params",
                 {
                     "message": f"tool {name!r} is already registered",
-                    "tool": name,
-                },
-            )
-        if existing_alias is not None:
-            raise RpcError(
-                -32602,
-                "duplicate_tool",
-                "Invalid params",
-                {
-                    "message": f"tool alias {name!r} is already registered",
                     "tool": name,
                 },
             )

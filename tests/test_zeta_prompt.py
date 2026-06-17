@@ -27,8 +27,53 @@ from zeta import skills as zeta_skills
 from zeta import trace as zeta_trace
 from zeta.models import chat_completions as zeta_model
 from zeta.prompt.system import model_capability_descriptors
+from zeta.tools.base import (
+    Capability,
+    CapabilityId,
+    CapabilityPolicy,
+    CapabilitySpec,
+    FunctionCapabilityExecutor,
+)
+from zeta.tools.registry import CapabilityRegistry
 
 ensure_builtin_tools_registered()
+
+
+def test_model_capability_descriptors_are_generated_from_projection() -> None:
+    registry = CapabilityRegistry()
+    registry.register(
+        Capability(
+            CapabilitySpec(
+                CapabilityId("test", "read"),
+                "Projected read.",
+                {"type": "object"},
+                effects=("read",),
+                aliases=("read",),
+            ),
+            CapabilityPolicy(
+                supports_staging=False,
+                supports_direct=True,
+                trust="builtin",
+            ),
+            FunctionCapabilityExecutor(lambda params: {"ok": True}),
+        )
+    )
+
+    descriptors = model_capability_descriptors(
+        ("test.read",),
+        tool_registry=registry,
+    )
+
+    assert descriptors == [
+        {
+            "type": "function",
+            "function": {
+                "name": "read",
+                "description": "Projected read.",
+                "parameters": {"type": "object"},
+            },
+        }
+    ]
 
 
 def test_zeta_prompt_builder_noop_transform_matches_chat_messages() -> None:

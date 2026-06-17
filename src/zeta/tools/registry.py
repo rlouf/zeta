@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any
 
 from jsonschema import Draft202012Validator
@@ -9,7 +10,13 @@ from jsonschema.exceptions import SchemaError, ValidationError
 
 from .base import Capability, ExecutionMode, error_result
 
-__all__ = ["ExecutionMode", "CapabilityRegistry", "registry"]
+__all__ = ["ExecutionMode", "CapabilityProjection", "CapabilityRegistry", "registry"]
+
+
+@dataclass(frozen=True)
+class CapabilityProjection:
+    alias_to_id: dict[str, str]
+    descriptors: list[dict[str, Any]]
 
 
 class CapabilityRegistry:
@@ -17,7 +24,7 @@ class CapabilityRegistry:
 
     def __init__(self) -> None:
         self._capabilities: dict[str, Capability] = {}
-        self._aliases: dict[str, str] = {}
+        self._aliases: dict[str, list[str]] = {}
 
     def register(self, capability: Capability) -> None:
         """Register a capability implementation under its canonical id."""
@@ -44,9 +51,7 @@ class CapabilityRegistry:
             )
         self._capabilities[capability_id] = capability
         for alias in capability.spec.aliases:
-            if alias in self._aliases:
-                raise ValueError(f"capability alias {alias!r} is already registered")
-            self._aliases[alias] = capability_id
+            self._aliases.setdefault(alias, []).append(capability_id)
 
     def get(self, capability_id: str) -> Capability | None:
         """Get a registered capability implementation by canonical id."""
@@ -61,7 +66,10 @@ class CapabilityRegistry:
     def resolve(self, name: str) -> str | None:
         if name in self._capabilities:
             return name
-        return self._aliases.get(name)
+        matches = self._aliases.get(name, [])
+        if len(matches) != 1:
+            return None
+        return matches[0]
 
     def model_alias(self, capability_id: str) -> str:
         capability = self._capabilities[capability_id]
@@ -70,6 +78,38 @@ class CapabilityRegistry:
     def list_capability_ids(self) -> list[str]:
         """List registered canonical capability ids."""
         return sorted(self._capabilities)
+
+    def list_ids(self) -> list[str]:
+        """List registered canonical capability ids."""
+        return self.list_capability_ids()
+
+    def project(
+        self,
+        enabled_ids: tuple[str, ...],
+        *,
+        alias_overrides: dict[str, str] | None = None,
+    ) -> CapabilityProjection:
+        """Build the per-run model-visible projection for capabilities."""
+        alias_overrides = alias_overrides or {}
+        alias_to_id: dict[str, str] = {}
+        descriptors = []
+        for requested_id in enabled_ids:
+            capability_id = self.resolve(requested_id)
+            if capability_id is None:
+                continue
+            capability = self.get(capability_id)
+            if capability is None:
+                continue
+            alias = alias_overrides.get(capability_id, self.model_alias(capability_id))
+            existing = alias_to_id.get(alias)
+            if existing is not None and existing != capability_id:
+                raise ValueError(
+                    f"ambiguous capability alias {alias!r}: "
+                    f"{existing!r} and {capability_id!r}"
+                )
+            alias_to_id[alias] = capability_id
+            descriptors.append(model_descriptor(alias, capability))
+        return CapabilityProjection(alias_to_id=alias_to_id, descriptors=descriptors)
 
     def validate_capability_args(
         self, capability_id: str, params: dict[str, Any]
@@ -141,6 +181,17 @@ registry = CapabilityRegistry()
 
 def _validation_error_sort_key(error: ValidationError) -> tuple[str, str]:
     return (_json_path(error.absolute_path), error.message)
+
+
+def model_descriptor(alias: str, capability: Capability) -> dict[str, Any]:
+    return {
+        "type": "function",
+        "function": {
+            "name": alias,
+            "description": capability.spec.description,
+            "parameters": capability.spec.input_schema,
+        },
+    }
 
 
 def _format_validation_error(error: ValidationError) -> str:

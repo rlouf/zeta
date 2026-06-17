@@ -21,7 +21,7 @@ from .protocols import (
     is_shell_handoff_result,
     is_shell_prompt_handoff,
 )
-from .session import event_time, recent_turns
+from .sessions import event_time, recent_turns
 from .state import event_store_path, session_id
 
 

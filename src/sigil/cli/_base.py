@@ -105,7 +105,7 @@ def cli(ctx: click.Context) -> None:
     # The binding spools shell turns with zero forks; the CLI is the reader.
     # Recording must never break a command, mirroring the binding's fail-open
     # writes.
-    from ..session import ingest_spooled_turns
+    from ..sessions import ingest_spooled_turns
 
     with suppress(OSError):
         ingest_spooled_turns()

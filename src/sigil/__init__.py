@@ -7,7 +7,7 @@ def zeta_context_for_sigil():
     from zeta.context import context_for_session, zeta_state_dir
     from zeta.tools.registry import registry
 
-    from .session import session_id
+    from .sessions import session_id
     from .state import session_dir
 
     active_session = session_id()

@@ -17,7 +17,7 @@ from sigil.protocols import (
     TURN_OUTCOME_FAILED,
     turn_contract,
 )
-from sigil.session import clear_current_session, read_events
+from sigil.sessions import clear_current_session, read_events
 from sigil.state import (
     append_event,
     event_store_path,

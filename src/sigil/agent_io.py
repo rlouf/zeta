@@ -48,7 +48,7 @@ from .protocols import (
     TURN_OUTCOME_FAILED,
     TURN_OUTCOME_STAGED,
 )
-from .session import session_id
+from .sessions import session_id
 from .state import append_prompt_submitted_event
 from .tools import ensure_builtin_tools_registered
 from .turn import TurnRecorder

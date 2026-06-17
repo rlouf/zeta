@@ -10,7 +10,7 @@ from typing import Any, Literal
 
 from zeta.models import resolve_active_model
 
-from .session import latest_active_failure
+from .sessions import latest_active_failure
 from .state import history_view, session_id
 
 StatusState = Literal["clean", "attention"]

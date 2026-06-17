@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import click
 
-from ..session import (
+from ..sessions import (
     clear_current_session,
     current_session_snapshot,
     known_sessions,

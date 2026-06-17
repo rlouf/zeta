@@ -14,7 +14,7 @@ from typing import BinaryIO, Protocol
 import click
 
 from ..handoff import matching_pending_handoff
-from ..session import record_turn
+from ..sessions import record_turn
 from ._base import (
     EXIT_COMMAND_NOT_EXECUTABLE,
     EXIT_COMMAND_NOT_FOUND,

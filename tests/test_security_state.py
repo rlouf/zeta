@@ -29,7 +29,7 @@ from sigil.cli._base import (
 )
 from sigil.display.tty import should_color
 from sigil.failure import failure_context_prompt, record_failure, truncate_snippet
-from sigil.session import (
+from sigil.sessions import (
     ingest_spooled_turns,
     recent_turns,
     recent_turns_context,
@@ -238,7 +238,7 @@ def test_spool_ingestion_does_not_load_display_or_model() -> None:
         spool.parent.mkdir(parents=True)
         spool.write_text("1700000000.0\x1fecho hi\x1f0\x1f/repo\x1e", encoding="utf-8")
         script = (
-            "import sys; from sigil.session import ingest_spooled_turns; "
+            "import sys; from sigil.sessions import ingest_spooled_turns; "
             "count = ingest_spooled_turns(); "
             "assert count == 1, count; "
             "heavy = [name for name in sys.modules "
@@ -1340,7 +1340,7 @@ RECORD_TURNS_SCRIPT = """
 import os
 import sys
 import time
-from sigil.session import record_turn
+from sigil.sessions import record_turn
 
 marker, ready_path, start_path = sys.argv[1:4]
 open(ready_path, "w").close()

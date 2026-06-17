@@ -375,6 +375,154 @@ def test_zeta_rpc_session_uses_explicit_context(monkeypatch, tmp_path: Path) -> 
     assert "run/ctx-session/event_head" not in trace_store.refs()
 
 
+def test_zeta_rpc_session_result_returns_prompt_trace_refs(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    event_store = zeta_events.SqliteEventStore(tmp_path / "events.sqlite3")
+    trace_store = zeta_trace.InMemoryStore()
+    context = zeta_context.ZetaContext(
+        session_id="ctx-session",
+        event_sink=event_store,
+        trace_store=trace_store,
+        tool_registry=ToolRegistry(),
+        state_dir=tmp_path,
+        session_dir=tmp_path / "sessions" / "ctx-session",
+    )
+
+    monkeypatch.setattr(zeta_agent, "model_endpoint_open", lambda *args: True)
+    monkeypatch.setattr(
+        zeta_agent,
+        "chat_completion_messages",
+        lambda *args, **kwargs: {"content": "done"},
+    )
+
+    result = zeta_rpc.run_rpc_session(
+        {"objective": "answer", "tools": [], "context": ""},
+        publish_event=lambda event: None,
+        runtime_context=context,
+    )
+
+    trace = result["trace"]
+    assert len(trace["prompt_ids"]) == 1
+    assert len(trace["assistant_message_ids"]) == 1
+    assert len(trace["model_event_ids"]) == 1
+    assert trace["tool_call_ids"] == []
+    assert trace["tool_result_ids"] == []
+    assert trace_store.get_object(trace["prompt_ids"][0]) is not None
+    assert trace_store.get_object(trace["assistant_message_ids"][0]) is not None
+
+
+def test_zeta_rpc_tool_run_result_returns_tool_trace_refs(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    event_store = zeta_events.SqliteEventStore(tmp_path / "events.sqlite3")
+    trace_store = zeta_trace.InMemoryStore()
+    registry = ToolRegistry()
+    registry.register(
+        "ctx_echo",
+        ToolImpl(
+            ToolSpec(
+                "ctx_echo",
+                "Echo text.",
+                {"type": "object"},
+                effects=("read",),
+            ),
+            lambda params: {"ok": True, "content": [{"type": "text", "text": "ok"}]},
+        ),
+    )
+    context = zeta_context.ZetaContext(
+        session_id="ctx-session",
+        event_sink=event_store,
+        trace_store=trace_store,
+        tool_registry=registry,
+        state_dir=tmp_path,
+        session_dir=tmp_path / "sessions" / "ctx-session",
+    )
+    responses = iter(
+        [
+            {
+                "tool_calls": [
+                    {
+                        "id": "call-1",
+                        "type": "function",
+                        "function": {
+                            "name": "ctx_echo",
+                            "arguments": json.dumps({"text": "hello"}),
+                        },
+                    }
+                ],
+            },
+            {"content": "done"},
+        ]
+    )
+
+    monkeypatch.setattr(zeta_agent, "model_endpoint_open", lambda *args: True)
+    monkeypatch.setattr(
+        zeta_agent,
+        "chat_completion_messages",
+        lambda *args, **kwargs: next(responses),
+    )
+
+    result = zeta_rpc.run_rpc_session(
+        {"objective": "answer", "tools": ["ctx_echo"], "context": "", "max_steps": 2},
+        publish_event=lambda event: None,
+        runtime_context=context,
+    )
+
+    trace = result["trace"]
+    assert len(trace["prompt_ids"]) == 2
+    assert len(trace["assistant_message_ids"]) == 2
+    assert len(trace["model_event_ids"]) == 2
+    assert len(trace["tool_event_ids"]) == 2
+    assert len(trace["tool_call_ids"]) == 1
+    assert len(trace["tool_result_ids"]) == 1
+    assert trace_store.get_object(trace["tool_call_ids"][0]) is not None
+    assert trace_store.get_object(trace["tool_result_ids"][0]) is not None
+
+
+def test_zeta_rpc_session_trace_refs_degrade_when_trace_data_is_missing(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    event_store = zeta_events.SqliteEventStore(tmp_path / "events.sqlite3")
+    context = zeta_context.ZetaContext(
+        session_id="ctx-session",
+        event_sink=event_store,
+        trace_store=zeta_trace.InMemoryStore(),
+        tool_registry=ToolRegistry(),
+        state_dir=tmp_path,
+        session_dir=tmp_path / "sessions" / "ctx-session",
+    )
+
+    monkeypatch.setattr(zeta_agent, "model_endpoint_open", lambda *args: True)
+    monkeypatch.setattr(
+        zeta_agent,
+        "chat_completion_messages",
+        lambda *args, **kwargs: {"content": "done"},
+    )
+    monkeypatch.setattr(
+        zeta_prompt.PromptBuilder,
+        "record_assistant_message",
+        lambda self, prepared, assistant: None,
+    )
+
+    result = zeta_rpc.run_rpc_session(
+        {"objective": "answer", "tools": [], "context": ""},
+        publish_event=lambda event: None,
+        runtime_context=context,
+    )
+
+    trace = result["trace"]
+    assert trace["prompt_ids"] == []
+    assert trace["assistant_message_ids"] == []
+    assert len(trace["model_event_ids"]) == 1
+    assert trace["tool_event_ids"] == []
+    assert trace["tool_call_ids"] == []
+    assert trace["tool_result_ids"] == []
+
+
 def test_zeta_rpc_sequential_runs_get_distinct_run_ids(
     monkeypatch,
     tmp_path: Path,

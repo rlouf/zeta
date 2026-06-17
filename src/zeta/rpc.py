@@ -8,7 +8,13 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, TextIO, cast
 
-from .agent import AgentConfig, AgentTurnAborted, registered_tools, run_agent_turn
+from .agent import (
+    AgentConfig,
+    AgentTurnAborted,
+    AgentTurnResult,
+    registered_tools,
+    run_agent_turn,
+)
 from .context import ZetaContext, default_context, load_project_context
 from .events import Event, EventCursor, EventReader, Filter
 from .timeline import current_timeline, record_event, timeline_event_from_durable_event
@@ -86,18 +92,20 @@ def run_rpc_session(
             tool_registry=runtime_context.tool_registry,
             caused_by=str(user_event.get("id") or ""),
         )
-    except AgentTurnAborted:
+    except AgentTurnAborted as exc:
         return rpc_session_result(
             "aborted",
             "",
             run_id=run_id,
             runtime_context=runtime_context,
+            agent_result=exc.result,
         )
     return rpc_session_result(
         rpc_outcome(result.staged_effect, result.final_text),
         result.final_text,
         run_id=run_id,
         runtime_context=runtime_context,
+        agent_result=result,
     )
 
 
@@ -118,16 +126,68 @@ def rpc_session_result(
     *,
     run_id: str,
     runtime_context: ZetaContext,
+    agent_result: AgentTurnResult | None = None,
 ) -> dict[str, Any]:
     result: dict[str, Any] = {
         "run_id": run_id,
         "outcome": outcome,
         "final_text": final_text,
+        "trace": rpc_trace_result(agent_result),
     }
     cursor = final_event_cursor(runtime_context, run_id)
     if cursor is not None:
         result["final_event_cursor"] = cursor
     return result
+
+
+def rpc_trace_result(agent_result: AgentTurnResult | None) -> dict[str, list[str]]:
+    trace = empty_rpc_trace_result()
+    if agent_result is None:
+        return trace
+    for prompt_trace in agent_result.prompt_traces:
+        add_unique(trace["prompt_ids"], prompt_trace.prompt_object_id)
+        add_unique(
+            trace["assistant_message_ids"],
+            prompt_trace.assistant_message_object_id,
+        )
+    for event in agent_result.events:
+        event_type = str(event.get("type") or "")
+        if event_type == "model":
+            add_unique(trace["model_event_ids"], event.get("id"))
+            add_unique_list(trace["tool_call_ids"], event.get("tool_call_object_ids"))
+            continue
+        if event_type == "tool_call":
+            add_unique(trace["tool_event_ids"], event.get("id"))
+            add_unique(trace["tool_call_ids"], event.get("tool_call_object_id"))
+            continue
+        if event_type == "tool_result":
+            add_unique(trace["tool_event_ids"], event.get("id"))
+            add_unique(trace["tool_call_ids"], event.get("tool_call_object_id"))
+            add_unique(trace["tool_result_ids"], event.get("tool_result_object_id"))
+    return trace
+
+
+def empty_rpc_trace_result() -> dict[str, list[str]]:
+    return {
+        "prompt_ids": [],
+        "assistant_message_ids": [],
+        "model_event_ids": [],
+        "tool_event_ids": [],
+        "tool_call_ids": [],
+        "tool_result_ids": [],
+    }
+
+
+def add_unique(values: list[str], value: Any) -> None:
+    if isinstance(value, str) and value and value not in values:
+        values.append(value)
+
+
+def add_unique_list(values: list[str], raw_values: Any) -> None:
+    if not isinstance(raw_values, list | tuple):
+        return
+    for value in raw_values:
+        add_unique(values, value)
 
 
 def final_event_cursor(runtime_context: ZetaContext, run_id: str) -> str | None:

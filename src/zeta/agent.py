@@ -681,34 +681,78 @@ def model_tool_call_event(
     index: int,
     caused_by: str | None,
 ) -> dict[str, Any]:
-    call_id = str(tool_call.get("id") or f"call-{index}")
-    function = tool_call.get("function")
-    if not isinstance(function, dict):
+    record = ModelToolCall.from_provider(tool_call, index=index)
+    if record is None:
         return {}
-    name = str(function.get("name") or "")
-    arguments = function.get("arguments")
-    params, _ = parse_tool_arguments(arguments)
-    event: dict[str, Any] = {
-        "type": "tool_call",
-        "id": call_id,
-        "tool_call_id": call_id,
-        "name": name,
-        "input": params,
-        "arguments": arguments if isinstance(arguments, str) else json.dumps(params),
-    }
-    if caused_by is not None:
-        event["caused_by"] = caused_by
-    return event
+    return record.event(caused_by=caused_by)
+
+
+@dataclass(frozen=True)
+class ModelToolCall:
+    call_id: str
+    name: str
+    raw_arguments: str
+    params: dict[str, Any]
+    parse_error: str = ""
+
+    @classmethod
+    def from_provider(
+        cls,
+        tool_call: dict[str, Any],
+        *,
+        index: int,
+    ) -> ModelToolCall | None:
+        call_id = str(tool_call.get("id") or f"call-{index}")
+        function = tool_call.get("function")
+        if not isinstance(function, dict):
+            return None
+        name = str(function.get("name") or "")
+        arguments = function.get("arguments")
+        params, parse_error = parse_tool_arguments(arguments)
+        raw_arguments = arguments if isinstance(arguments, str) else json.dumps(params)
+        return cls(
+            call_id=call_id,
+            name=name,
+            raw_arguments=raw_arguments,
+            params=params,
+            parse_error=parse_error,
+        )
+
+    def event(self, *, caused_by: str | None) -> dict[str, Any]:
+        event: dict[str, Any] = {
+            "type": "tool_call",
+            "id": self.call_id,
+            "tool_call_id": self.call_id,
+            "name": self.name,
+            "input": self.params,
+            "arguments": self.raw_arguments,
+        }
+        if caused_by is not None:
+            event["caused_by"] = caused_by
+        return event
 
 
 @dataclass
 class CapabilityCallInvocation:
-    call_id: str
-    name: str
+    tool_call: ModelToolCall
     capability_id: str
-    params: dict[str, Any]
     call_event: dict[str, Any]
-    parse_error: str = ""
+
+    @property
+    def call_id(self) -> str:
+        return self.tool_call.call_id
+
+    @property
+    def name(self) -> str:
+        return self.tool_call.name
+
+    @property
+    def params(self) -> dict[str, Any]:
+        return self.tool_call.params
+
+    @property
+    def parse_error(self) -> str:
+        return self.tool_call.parse_error
 
 
 def handle_tool_call(
@@ -775,30 +819,13 @@ def tool_call_invocation(
     index: int,
     caused_by: str | None,
 ) -> CapabilityCallInvocation | None:
-    call_id = str(tool_call.get("id") or f"call-{index}")
-    function = tool_call.get("function")
-    if not isinstance(function, dict):
+    record = ModelToolCall.from_provider(tool_call, index=index)
+    if record is None:
         return None
-    name = str(function.get("name") or "")
-    arguments = function.get("arguments")
-    params, parse_error = parse_tool_arguments(arguments)
-    call_event = {
-        "type": "tool_call",
-        "id": call_id,
-        "tool_call_id": call_id,
-        "name": name,
-        "input": params,
-        "arguments": arguments if isinstance(arguments, str) else json.dumps(params),
-    }
-    if caused_by is not None:
-        call_event["caused_by"] = caused_by
     return CapabilityCallInvocation(
-        call_id=call_id,
-        name=name,
+        tool_call=record,
         capability_id="",
-        params=params,
-        call_event=call_event,
-        parse_error=parse_error,
+        call_event=record.event(caused_by=caused_by),
     )
 
 

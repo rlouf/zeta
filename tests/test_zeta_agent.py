@@ -166,6 +166,70 @@ def test_zeta_tool_result_event_preserves_explicit_error() -> None:
     assert event["result"]["error"] == {"code": "read-failed", "message": "missing"}
 
 
+def test_zeta_model_tool_call_round_trips_provider_payload_to_event() -> None:
+    record = zeta_agent.ModelToolCall.from_provider(
+        {
+            "id": "call-1",
+            "type": "function",
+            "function": {
+                "name": "read",
+                "arguments": '{"path": "README.md"}',
+            },
+        },
+        index=0,
+    )
+
+    assert record is not None
+    assert record == zeta_agent.ModelToolCall(
+        call_id="call-1",
+        name="read",
+        raw_arguments='{"path": "README.md"}',
+        params={"path": "README.md"},
+    )
+    assert record.event(caused_by="assistant-1") == {
+        "type": "tool_call",
+        "id": "call-1",
+        "tool_call_id": "call-1",
+        "name": "read",
+        "input": {"path": "README.md"},
+        "arguments": '{"path": "README.md"}',
+        "caused_by": "assistant-1",
+    }
+
+
+def test_zeta_model_tool_call_rejects_missing_function_payload() -> None:
+    assert zeta_agent.ModelToolCall.from_provider({"id": "call-1"}, index=0) is None
+    assert (
+        zeta_agent.model_tool_call_event(
+            {"id": "call-1"},
+            index=0,
+            caused_by="assistant-1",
+        )
+        == {}
+    )
+
+
+def test_zeta_model_tool_call_preserves_invalid_json_error() -> None:
+    tool_call = {
+        "id": "call-1",
+        "type": "function",
+        "function": {"name": "read", "arguments": '{"path":'},
+    }
+
+    record = zeta_agent.ModelToolCall.from_provider(tool_call, index=0)
+    invocation = zeta_agent.tool_call_invocation(
+        tool_call,
+        index=0,
+        caused_by="assistant-1",
+    )
+
+    assert record is not None
+    assert invocation is not None
+    assert record.parse_error == "Expecting value: line 1 column 9 (char 8)"
+    assert invocation.parse_error == record.parse_error
+    assert invocation.call_event == record.event(caused_by="assistant-1")
+
+
 def rpc_messages(output: StringIO) -> list[dict[str, Any]]:
     return [json.loads(line) for line in output.getvalue().splitlines()]
 

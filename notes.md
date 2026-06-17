@@ -854,7 +854,7 @@ Add tests for round-tripping each record through its boundary representation:
 6. Delete dict-shape helper functions only after `ripple` shows no remaining
    callers.
 
-### Slice 1: typed tool-call records inside `zeta.agent`
+### Slice 1: typed tool-call records inside `zeta.agent` - complete
 
 Start with model-emitted tool calls because the conversion is local to
 `src/zeta/agent.py` and already has a small internal record,
@@ -900,8 +900,12 @@ Implementation notes:
 
 Verification:
 
-- `uv run pytest tests/test_zeta_agent.py -q`
-- `uv run pytest tests/test_zeta_agent.py tests/test_zeta_tools.py -q`
+- `uv run pytest tests/test_zeta_agent.py -q` passed with 79 tests.
+- `uv run pytest tests/test_zeta_agent.py tests/test_zeta_tools.py -q` passed
+  with 152 tests and 2 skipped.
+- `uv run pytest -q` passed with 792 tests and 4 skipped.
+- `uv run coverage run -m pytest` and `uv run coverage report` passed with
+  93% total coverage.
 
 ### Slice 2: typed capability result payloads
 

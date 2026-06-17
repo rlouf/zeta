@@ -327,7 +327,7 @@ def test_zeta_model_output_from_responses_payload_preserves_replay_items() -> No
         )
     )
 
-    output = zeta_models_api.ModelOutput.from_chat_completion(payload)
+    output = zeta_responses.model_output_from_responses_payload(payload)
 
     assert output.message["content"] == "done"
     assert output.finish_reason == "stop"
@@ -345,6 +345,47 @@ def test_zeta_model_output_from_responses_payload_preserves_replay_items() -> No
             "content": [{"type": "output_text", "text": "done"}],
         },
     )
+
+
+def test_zeta_responses_codex_completion_returns_adapter_message(monkeypatch) -> None:
+    payload = {
+        "choices": [
+            {
+                "message": {"role": "assistant", "content": "raw"},
+                "finish_reason": "stop",
+            }
+        ]
+    }
+    converted: list[dict[str, Any]] = []
+
+    def fake_request(body: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
+        del body
+        del kwargs
+        return payload
+
+    def fake_model_output(
+        raw_payload: dict[str, Any],
+    ) -> zeta_models_api.ModelOutput:
+        converted.append(raw_payload)
+        return zeta_models_api.ModelOutput(
+            message={"role": "assistant", "content": "converted"},
+            finish_reason="stop",
+        )
+
+    monkeypatch.setattr(zeta_responses, "request_codex_response", fake_request)
+    monkeypatch.setattr(
+        zeta_responses,
+        "model_output_from_responses_payload",
+        fake_model_output,
+    )
+
+    message = zeta_responses.codex_completion_messages(
+        [{"role": "user", "content": "hi"}],
+        selected_model="gpt-5.5",
+    )
+
+    assert message == {"role": "assistant", "content": "converted"}
+    assert converted == [payload]
 
 
 def test_zeta_responses_stream_collects_tool_calls() -> None:

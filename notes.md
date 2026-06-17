@@ -908,7 +908,7 @@ Verification:
 - `uv run coverage run -m pytest` and `uv run coverage report` passed with
   93% total coverage.
 
-### Slice 3: Responses adapter
+### Slice 3: Responses adapter - complete
 
 Move the Responses bridge from "chat-shaped internal payloads" toward the same
 `ModelInput` / `ModelOutput` contract:
@@ -936,7 +936,11 @@ Tests first:
 
 Verification:
 
-- `uv run pytest tests/test_zeta_responses.py tests/test_zeta_agent.py -q`
+- `uv run pytest tests/test_zeta_responses.py tests/test_zeta_agent.py -q` passed
+  with 109 tests.
+- `uv run pytest -q` passed with 816 tests and 4 skipped.
+- `uv run coverage run -m pytest` and `uv run coverage report` passed with
+  93% total coverage.
 
 ### Slice 4: agent model-call boundary
 

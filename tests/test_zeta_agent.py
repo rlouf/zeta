@@ -881,6 +881,194 @@ def test_zeta_rpc_session_run_rejects_invalid_workflow() -> None:
     ]
 
 
+def test_zeta_event_trigger_rule_matches_exact_and_prefix() -> None:
+    exact = zeta_events.TriggerRule(event_type="session.turn.requested")
+    prefix = zeta_events.TriggerRule(event_type_prefix="github.issue.")
+    event = zeta_events.DraftEvent(
+        "session.turn.requested",
+        "test",
+        {},
+        session_id="session-1",
+    ).enrich()
+
+    assert exact.matches(event)
+    assert not prefix.matches(event)
+    assert prefix.matches(
+        zeta_events.DraftEvent(
+            "github.issue.opened",
+            "test",
+            {},
+            session_id="session-1",
+        ).enrich()
+    )
+
+
+def test_zeta_event_dispatcher_persists_unmatched_event(tmp_path: Path) -> None:
+    event_store = zeta_events.SqliteEventStore(tmp_path / "events.sqlite3")
+    published: list[zeta_events.Event] = []
+    dispatcher = zeta_events.EventDispatcher(
+        event_store,
+        publish_event=published.append,
+    )
+
+    outcome = dispatcher.dispatch(
+        zeta_events.DraftEvent(
+            "github.issue.opened",
+            "github",
+            {"title": "Bug"},
+            session_id="repo",
+        )
+    )
+
+    assert outcome.inserted is True
+    assert outcome.work_events == []
+    assert [event.event_type for event in published] == ["github.issue.opened"]
+    assert [
+        event.event_type for event in event_store.list_events(zeta_events.Filter())
+    ] == ["github.issue.opened"]
+
+
+def test_zeta_event_dispatcher_creates_work_for_matching_agent(
+    tmp_path: Path,
+) -> None:
+    event_store = zeta_events.SqliteEventStore(tmp_path / "events.sqlite3")
+    published: list[zeta_events.Event] = []
+    seen: list[zeta_events.AgentRun] = []
+
+    def run_agent(run: zeta_events.AgentRun) -> dict[str, object]:
+        seen.append(run)
+        return {"outcome": "handled"}
+
+    dispatcher = zeta_events.EventDispatcher(
+        event_store,
+        agents=[
+            zeta_events.AgentDefinition(
+                "issue-triage",
+                zeta_events.TriggerRule(event_type_prefix="github.issue."),
+                run=run_agent,
+            )
+        ],
+        publish_event=published.append,
+    )
+
+    outcome = dispatcher.dispatch(
+        zeta_events.DraftEvent(
+            "github.issue.opened",
+            "github",
+            {"title": "Bug"},
+            session_id="repo",
+            idempotency_key="github:event:1",
+        )
+    )
+
+    assert outcome.inserted is True
+    assert len(seen) == 1
+    assert seen[0].agent.agent_id == "issue-triage"
+    assert seen[0].triggering_event.event_type == "github.issue.opened"
+    assert [event.event_type for event in outcome.work_events] == [
+        "runtime.work.pending",
+        "runtime.work.claimed",
+        "runtime.work.completed",
+    ]
+    assert {event.caused_by for event in outcome.work_events} == {outcome.event.id}
+    assert [event.payload["agent_id"] for event in outcome.work_events] == [
+        "issue-triage",
+        "issue-triage",
+        "issue-triage",
+    ]
+    assert outcome.agent_results == [{"outcome": "handled", "final_event_cursor": "4"}]
+    assert [event.event_type for event in published] == [
+        "github.issue.opened",
+        "runtime.work.pending",
+        "runtime.work.claimed",
+        "runtime.work.completed",
+    ]
+
+
+def test_zeta_event_dispatcher_does_not_route_duplicate_events(
+    tmp_path: Path,
+) -> None:
+    event_store = zeta_events.SqliteEventStore(tmp_path / "events.sqlite3")
+    calls = 0
+
+    def run_agent(run: zeta_events.AgentRun) -> dict[str, object]:
+        nonlocal calls
+        calls += 1
+        return {"outcome": "handled"}
+
+    dispatcher = zeta_events.EventDispatcher(
+        event_store,
+        agents=[
+            zeta_events.AgentDefinition(
+                "issue-triage",
+                zeta_events.TriggerRule(event_type="github.issue.opened"),
+                run=run_agent,
+            )
+        ],
+    )
+    draft = zeta_events.DraftEvent(
+        "github.issue.opened",
+        "github",
+        {"title": "Bug"},
+        session_id="repo",
+        idempotency_key="github:event:1",
+    )
+
+    first = dispatcher.dispatch(draft)
+    second = dispatcher.dispatch(draft)
+
+    assert first.inserted is True
+    assert second.inserted is False
+    assert calls == 1
+    assert second.work_events == []
+    assert [
+        event.event_type for event in event_store.list_events(zeta_events.Filter())
+    ] == [
+        "github.issue.opened",
+        "runtime.work.pending",
+        "runtime.work.claimed",
+        "runtime.work.completed",
+    ]
+
+
+def test_zeta_event_dispatcher_records_failed_work(tmp_path: Path) -> None:
+    event_store = zeta_events.SqliteEventStore(tmp_path / "events.sqlite3")
+
+    def fail_agent(run: zeta_events.AgentRun) -> dict[str, object]:
+        del run
+        raise RuntimeError("boom")
+
+    dispatcher = zeta_events.EventDispatcher(
+        event_store,
+        agents=[
+            zeta_events.AgentDefinition(
+                "issue-triage",
+                zeta_events.TriggerRule(event_type="github.issue.opened"),
+                run=fail_agent,
+            )
+        ],
+    )
+
+    outcome = dispatcher.dispatch(
+        zeta_events.DraftEvent(
+            "github.issue.opened",
+            "github",
+            {"title": "Bug"},
+            session_id="repo",
+        )
+    )
+
+    assert [event.event_type for event in outcome.work_events] == [
+        "runtime.work.pending",
+        "runtime.work.claimed",
+        "runtime.work.failed",
+    ]
+    assert outcome.work_events[-1].payload["status"] == "failed"
+    assert outcome.agent_results == [
+        {"outcome": "failed", "error": "boom", "final_event_cursor": "4"}
+    ]
+
+
 def test_zeta_rpc_cli_serves_stdio_initialize() -> None:
     result = CliRunner().invoke(
         zeta_cli.cli,
@@ -944,13 +1132,121 @@ def test_zeta_rpc_cli_runs_pure_session_without_sigil_turn(monkeypatch) -> None:
         for message in messages
         if message.get("method") == "events.publish"
     ]
-    assert [event["type"] for event in published] == ["user_message", "model"]
+    assert [event["type"] for event in published] == [
+        "session.turn.requested",
+        "runtime.work.pending",
+        "runtime.work.claimed",
+        "user_message",
+        "model",
+        "runtime.work.completed",
+    ]
     assert messages[-1]["result"]["outcome"] == "answered"
     assert messages[-1]["result"]["final_text"] == "done"
     assert messages[-1]["result"]["run_id"].startswith("run_")
-    assert {event["run_id"] for event in published} == {
+    assert {event["run_id"] for event in published if "run_id" in event} == {
         messages[-1]["result"]["run_id"]
     }
+
+
+def test_zeta_rpc_events_publish_triggers_session_turn(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    event_store = zeta_events.SqliteEventStore(tmp_path / "events.sqlite3")
+    context = zeta_context.ZetaContext(
+        session_id="ctx-session",
+        event_sink=event_store,
+        trace_store=zeta_trace.InMemoryStore(),
+        tool_registry=CapabilityRegistry(),
+        state_dir=tmp_path,
+        session_dir=tmp_path / "sessions" / "ctx-session",
+    )
+    input_stream = StringIO(
+        json.dumps(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "events.publish",
+                "params": {
+                    "type": "session.turn.requested",
+                    "payload": {
+                        "objective": "answer",
+                        "workflow": "ask",
+                        "tools": [],
+                        "context": "",
+                    },
+                    "session_id": "ctx-session",
+                    "turn_id": "run_event",
+                    "idempotency_key": "session.turn.requested:run_event",
+                },
+            }
+        )
+        + "\n"
+    )
+    output = StringIO()
+    server = zeta_rpc.JsonRpcServer(
+        input_stream,
+        output,
+        event_reader=event_store,
+        event_sink=event_store,
+    )
+    server.event_dispatcher = zeta_rpc.session_event_dispatcher(
+        context,
+        publish_event=server.publish_event,
+    )
+
+    monkeypatch.setattr(zeta_agent, "model_endpoint_open", lambda *args: True)
+    monkeypatch.setattr(
+        zeta_agent,
+        "chat_completion_messages",
+        lambda *args, **kwargs: {"content": "done"},
+    )
+
+    server.serve()
+
+    messages = rpc_messages(output)
+    response = messages[-1]
+    published = [
+        message["params"]["event"]
+        for message in messages
+        if message.get("method") == "events.publish"
+    ]
+
+    assert response["id"] == 1
+    assert response["result"]["inserted"] is True
+    assert response["result"]["event"]["type"] == "session.turn.requested"
+    assert response["result"]["agent_results"][0]["outcome"] == "answered"
+    assert [event["type"] for event in published] == [
+        "session.turn.requested",
+        "runtime.work.pending",
+        "runtime.work.claimed",
+        "user_message",
+        "model",
+        "runtime.work.completed",
+    ]
+    assert [
+        event.event_type for event in event_store.list_events(zeta_events.Filter())
+    ] == [
+        "session.turn.requested",
+        "runtime.work.pending",
+        "runtime.work.claimed",
+        "zeta.user_message",
+        "zeta.model.called",
+        "runtime.work.completed",
+    ]
+    assert [
+        event["type"]
+        for event in server.list_events(
+            {"session_id": "ctx-session", "run_id": "run_event"}
+        )["events"]
+    ] == [
+        "session.turn.requested",
+        "runtime.work.pending",
+        "runtime.work.claimed",
+        "user_message",
+        "model",
+        "runtime.work.completed",
+    ]
 
 
 def test_zeta_rpc_session_uses_explicit_context(monkeypatch, tmp_path: Path) -> None:
@@ -982,29 +1278,44 @@ def test_zeta_rpc_session_uses_explicit_context(monkeypatch, tmp_path: Path) -> 
     assert result["outcome"] == "answered"
     assert result["final_text"] == "done"
     assert result["run_id"].startswith("run_")
-    assert result["final_event_cursor"] == "2"
-    assert [event["session"] for event in published] == [
-        "ctx-session",
-        "ctx-session",
+    assert result["final_event_cursor"] == "6"
+    assert [event["type"] for event in published] == [
+        "session.turn.requested",
+        "runtime.work.pending",
+        "runtime.work.claimed",
+        "user_message",
+        "model",
+        "runtime.work.completed",
     ]
-    assert [event["run_id"] for event in published] == [
-        result["run_id"],
-        result["run_id"],
-    ]
-    assert [event["cursor"] for event in published] == ["1", "2"]
-    assert [event["turn_id"] for event in published] == [
-        result["run_id"],
-        result["run_id"],
-    ]
+    assert {event["session"] for event in published} == {"ctx-session"}
+    assert {event["run_id"] for event in published if "run_id" in event} == {
+        result["run_id"]
+    }
+    assert [event["cursor"] for event in published] == ["1", "2", "3", "4", "5", "6"]
+    assert {event["turn_id"] for event in published} == {result["run_id"]}
     assert [
         event.event_type for event in event_store.list_events(zeta_events.Filter())
-    ] == ["zeta.user_message", "zeta.model.called"]
+    ] == [
+        "session.turn.requested",
+        "runtime.work.pending",
+        "runtime.work.claimed",
+        "zeta.user_message",
+        "zeta.model.called",
+        "runtime.work.completed",
+    ]
     assert [
         event.turn_id
         for event in event_store.list_events(
             zeta_events.Filter(turn_id=result["run_id"])
         )
-    ] == [result["run_id"], result["run_id"]]
+    ] == [
+        result["run_id"],
+        result["run_id"],
+        result["run_id"],
+        result["run_id"],
+        result["run_id"],
+        result["run_id"],
+    ]
     assert trace_store.objects(kind="run_event") == []
     assert "run/ctx-session/head" not in trace_store.refs()
     assert "run/ctx-session/event_head" not in trace_store.refs()
@@ -1187,8 +1498,8 @@ def test_zeta_rpc_sequential_runs_get_distinct_run_ids(
     assert first["run_id"].startswith("run_")
     assert second["run_id"].startswith("run_")
     assert first["run_id"] != second["run_id"]
-    assert first["final_event_cursor"] == "2"
-    assert second["final_event_cursor"] == "4"
+    assert first["final_event_cursor"] == "6"
+    assert second["final_event_cursor"] == "12"
 
 
 def test_zeta_rpc_session_returns_aborted_on_wall_clock_budget(
@@ -1229,19 +1540,29 @@ def test_zeta_rpc_session_returns_aborted_on_wall_clock_budget(
     assert result["outcome"] == "aborted"
     assert result["final_text"] == ""
     assert result["run_id"].startswith("run_")
-    assert result["final_event_cursor"] == "2"
+    assert result["final_event_cursor"] == "6"
     assert [event["type"] for event in published] == [
+        "session.turn.requested",
+        "runtime.work.pending",
+        "runtime.work.claimed",
         "user_message",
         "turn_aborted",
+        "runtime.work.cancelled",
     ]
-    assert [event["run_id"] for event in published] == [
-        result["run_id"],
-        result["run_id"],
-    ]
-    assert published[-1]["reason"] == "deadline_exceeded"
+    assert {event["run_id"] for event in published if "run_id" in event} == {
+        result["run_id"]
+    }
+    assert published[-2]["reason"] == "deadline_exceeded"
     assert [
         event.event_type for event in event_store.list_events(zeta_events.Filter())
-    ] == ["zeta.user_message", "zeta.turn_aborted"]
+    ] == [
+        "session.turn.requested",
+        "runtime.work.pending",
+        "runtime.work.claimed",
+        "zeta.user_message",
+        "zeta.turn_aborted",
+        "runtime.work.cancelled",
+    ]
 
 
 def test_zeta_rpc_cancel_unknown_and_completed_runs() -> None:
@@ -1337,11 +1658,19 @@ def test_zeta_rpc_session_cancel_aborts_active_run(
     }
     assert run_response["result"]["outcome"] == "aborted"
     assert run_response["result"]["run_id"] == "run_cancel"
-    assert published[-1]["type"] == "turn_aborted"
-    assert published[-1]["reason"] == "cancelled"
+    assert published[-1]["type"] == "runtime.work.cancelled"
+    assert published[-2]["type"] == "turn_aborted"
+    assert published[-2]["reason"] == "cancelled"
     assert [
         event.event_type for event in event_store.list_events(zeta_events.Filter())
-    ] == ["zeta.user_message", "zeta.turn_aborted"]
+    ] == [
+        "session.turn.requested",
+        "runtime.work.pending",
+        "runtime.work.claimed",
+        "zeta.user_message",
+        "zeta.turn_aborted",
+        "runtime.work.cancelled",
+    ]
 
 
 def test_zeta_rpc_registers_client_tool_on_server_registry() -> None:

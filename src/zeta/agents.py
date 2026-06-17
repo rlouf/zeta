@@ -239,7 +239,9 @@ def validate_prompt(spec: AgentSpec) -> None:
 def validate_tools(spec: AgentSpec, registry: CapabilityRegistry | None) -> None:
     if registry is None:
         if spec.tools:
-            raise ManifestError(f"agent {spec.slug!r} lists unknown tool {spec.tools[0]!r}")
+            raise ManifestError(
+                f"agent {spec.slug!r} lists unknown tool {spec.tools[0]!r}"
+            )
         return
     for name in spec.tools:
         if name in RESERVED_TOOL_NAMES:
@@ -360,7 +362,9 @@ def agent_runner(
 ) -> Callable[[AgentRun], dict[str, Any]]:
     def run(agent_run: AgentRun) -> dict[str, Any]:
         effective_config = config_for_spec(spec, config)
-        objective = render_prompt(spec, EventEnvelope.from_event(agent_run.triggering_event))
+        objective = render_prompt(
+            spec, EventEnvelope.from_event(agent_run.triggering_event)
+        )
         if callable(timeline):
             run_timeline = cast(TimelineFactory, timeline)(agent_run)
         else:
@@ -483,9 +487,7 @@ def schedule_entry(value: Any, path: Path) -> ScheduleEntry:
 def required_schedule_string(value: Mapping[str, Any], field: str, path: Path) -> str:
     item = value.get(field)
     if not isinstance(item, str):
-        raise SpecError(
-            f"invalid value for 'schedules' in {path}: {field} is required"
-        )
+        raise SpecError(f"invalid value for 'schedules' in {path}: {field} is required")
     return item
 
 

@@ -261,15 +261,21 @@ class EventDispatcher:
                 },
             )
             events.append(failed)
-            return {"outcome": "failed", "error": str(exc)}, events
+            return {
+                "outcome": "failed",
+                "error": str(exc),
+                "final_event_cursor": failed.cursor().encode(),
+            }, events
+        terminal_type = terminal_work_event_type(result)
         completed = self._append_work_event(
-            "runtime.work.completed",
+            terminal_type,
             agent,
             triggering_event,
             work_id,
-            {"status": "completed", "result": result},
+            {"status": terminal_type.rsplit(".", 1)[-1], "result": result},
         )
         events.append(completed)
+        result = {**result, "final_event_cursor": completed.cursor().encode()}
         return result, events
 
     def _append_work_event(
@@ -307,6 +313,13 @@ class EventDispatcher:
 def work_id_for_event(agent: AgentDefinition, event: Event) -> str:
     agent_id = agent.agent_id.replace(":", "_").replace(".", "_")
     return f"work_{event.id}_{agent_id}"
+
+
+def terminal_work_event_type(result: dict[str, Any]) -> str:
+    outcome = result.get("outcome")
+    if outcome in {"aborted", "cancelled"}:
+        return "runtime.work.cancelled"
+    return "runtime.work.completed"
 
 
 def durable_event_draft(

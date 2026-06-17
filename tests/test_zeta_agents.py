@@ -259,4 +259,4 @@ User asked: {{ event.payload.text }}
     assert calls[0]["config"].system_prompt == "Answers workspace questions in Slack."
     assert tuple(calls[0]["config"].allowed_capabilities or ()) == ("Read",)
     assert calls[0]["kwargs"]["caused_by"] == outcome.event.id
-    assert outcome.agent_results == [{"final_text": "done"}]
+    assert outcome.agent_results == [{"final_text": "done", "final_event_cursor": "4"}]

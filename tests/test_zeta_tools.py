@@ -22,6 +22,7 @@ from zeta.tools.base import (
     CapabilitySpec,
     EffectKind,
     InProcessCapabilityExecutor,
+    TrustLevel,
 )
 from zeta.tools.registry import CapabilityRegistry
 from zeta.tools.registry import registry as tool_registry
@@ -49,6 +50,7 @@ def _test_capability(
     run_result: dict[str, Any] | None = None,
     supports_staging: bool = False,
     supports_direct: bool = True,
+    trust: TrustLevel = "host",
 ) -> Capability:
     return Capability(
         CapabilitySpec(
@@ -61,7 +63,7 @@ def _test_capability(
         CapabilityPolicy(
             supports_staging=supports_staging,
             supports_direct=supports_direct,
-            trust="builtin",
+            trust=trust,
         ),
         InProcessCapabilityExecutor(
             lambda params: run_result or {"ok": True, "metadata": params},
@@ -168,7 +170,7 @@ def test_zeta_tool_registry_converts_executor_exception_to_error_result() -> Non
             CapabilityPolicy(
                 supports_staging=False,
                 supports_direct=True,
-                trust="builtin",
+                trust="host",
             ),
             InProcessCapabilityExecutor(crash),
         )
@@ -184,6 +186,47 @@ def test_zeta_tool_registry_converts_executor_exception_to_error_result() -> Non
             "data": {"capability_id": "test.crash"},
         },
     }
+
+
+def test_zeta_tool_registry_rejects_low_trust_mutating_direct_execution() -> None:
+    registry = CapabilityRegistry()
+    registry.register(
+        _test_capability(
+            "write",
+            effects=("write",),
+            run_result={"ok": True, "content": [{"type": "text", "text": "wrote"}]},
+            supports_staging=True,
+            supports_direct=True,
+            trust="client",
+        )
+    )
+
+    result = registry.invoke("write", {}, execution_mode="direct")
+
+    assert result == {
+        "ok": False,
+        "error": {
+            "code": "trust-direct-disallowed",
+            "message": "capability test.write with client trust cannot run mutating effects directly",
+        },
+    }
+
+
+def test_zeta_tool_registry_allows_low_trust_mutating_stage_execution() -> None:
+    registry = CapabilityRegistry()
+    registry.register(
+        _test_capability(
+            "write",
+            effects=("write",),
+            supports_staging=True,
+            supports_direct=True,
+            trust="client",
+        )
+    )
+
+    result = registry.invoke("write", {}, execution_mode="stage")
+
+    assert result == {"ok": True, "effect": {"status": "proposed"}}
 
 
 def test_zeta_in_process_capability_executor_runs_read_capability() -> None:

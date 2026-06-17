@@ -53,7 +53,7 @@ def test_model_capability_descriptors_are_generated_from_projection() -> None:
             CapabilityPolicy(
                 supports_staging=False,
                 supports_direct=True,
-                trust="builtin",
+                trust="host",
             ),
             InProcessCapabilityExecutor(lambda params: {"ok": True}),
         )
@@ -74,6 +74,53 @@ def test_model_capability_descriptors_are_generated_from_projection() -> None:
             },
         }
     ]
+
+
+def test_model_capability_descriptors_omit_low_trust_mutating_auto_enabled_tools() -> (
+    None
+):
+    registry = CapabilityRegistry()
+    registry.register(
+        Capability(
+            CapabilitySpec(
+                CapabilityId("host", "read"),
+                "Host read.",
+                {"type": "object"},
+                effects=("read",),
+                aliases=("read",),
+            ),
+            CapabilityPolicy(
+                supports_staging=False,
+                supports_direct=True,
+                trust="host",
+            ),
+            InProcessCapabilityExecutor(lambda params: {"ok": True}),
+        )
+    )
+    registry.register(
+        Capability(
+            CapabilitySpec(
+                CapabilityId("rpc", "write"),
+                "Client write.",
+                {"type": "object"},
+                effects=("write",),
+                aliases=("write",),
+            ),
+            CapabilityPolicy(
+                supports_staging=True,
+                supports_direct=True,
+                trust="client",
+            ),
+            InProcessCapabilityExecutor(
+                lambda params: {"ok": True},
+                lambda params: {"ok": True, "effect": {"status": "proposed"}},
+            ),
+        )
+    )
+
+    descriptors = model_capability_descriptors(None, tool_registry=registry)
+
+    assert [descriptor["function"]["name"] for descriptor in descriptors] == ["read"]
 
 
 def test_zeta_prompt_builder_noop_transform_matches_chat_messages() -> None:

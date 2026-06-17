@@ -83,6 +83,13 @@ class CapabilityRegistry:
         """List registered canonical capability ids."""
         return self.list_capability_ids()
 
+    def list_auto_enabled_capability_ids(self) -> list[str]:
+        return [
+            capability_id
+            for capability_id in self.list_capability_ids()
+            if capability_auto_enabled(self._capabilities[capability_id])
+        ]
+
     def project(
         self,
         enabled_ids: tuple[str, ...],
@@ -158,6 +165,12 @@ class CapabilityRegistry:
                     "direct-execution-disallowed",
                     f"capability {capability_id} does not allow direct execution",
                 )
+            if low_trust_mutating_capability(capability):
+                return error_result(
+                    "trust-direct-disallowed",
+                    f"capability {capability_id} with {capability.policy.trust} trust "
+                    "cannot run mutating effects directly",
+                )
             return invoke_executor(
                 capability_id,
                 capability,
@@ -180,6 +193,14 @@ class CapabilityRegistry:
 
 
 registry = CapabilityRegistry()
+
+
+def capability_auto_enabled(capability: Capability) -> bool:
+    return not low_trust_mutating_capability(capability)
+
+
+def low_trust_mutating_capability(capability: Capability) -> bool:
+    return capability.policy.trust in {"client", "remote"} and capability.spec.mutates()
 
 
 def invoke_executor(

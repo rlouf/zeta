@@ -14,7 +14,7 @@ EffectKind = Literal["read", "write", "delete", "execute", "search"]
 
 EFFECT_KINDS = frozenset(get_args(EffectKind))
 READ_ONLY_EFFECT_KINDS = frozenset({"read", "search"})
-TrustLevel = Literal["builtin", "client"]
+TrustLevel = Literal["kernel", "host", "client", "remote"]
 
 
 @dataclass(frozen=True)

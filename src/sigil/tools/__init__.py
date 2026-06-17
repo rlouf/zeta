@@ -57,7 +57,7 @@ def builtin_capability(
         CapabilityPolicy(
             supports_staging=typed_stage is not None,
             supports_direct=True,
-            trust="builtin",
+            trust="host",
             timeout_seconds=DEFAULT_TIMEOUT_SECONDS_BY_ALIAS.get(
                 spec.aliases[0] if spec.aliases else "",
             ),

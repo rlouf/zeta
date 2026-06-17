@@ -409,7 +409,7 @@ def registered_capabilities(
     """Filter to registered capabilities, preserving the caller's order."""
     active_tool_registry = tool_registry or _runtime_tool_registry
     if allowed_capabilities is None:
-        return tuple(active_tool_registry.list_capability_ids())
+        return tuple(active_tool_registry.list_auto_enabled_capability_ids())
     enabled = []
     for name in allowed_capabilities:
         capability_id = active_tool_registry.resolve(name)

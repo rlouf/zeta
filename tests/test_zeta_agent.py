@@ -40,6 +40,7 @@ from zeta.tools.base import (
     CapabilitySpec,
     EffectKind,
     InProcessCapabilityExecutor,
+    TrustLevel,
 )
 from zeta.tools.registry import CapabilityRegistry
 
@@ -56,6 +57,7 @@ def _test_capability(
     run_result: dict[str, Any] | None = None,
     supports_staging: bool = False,
     supports_direct: bool = True,
+    trust: TrustLevel = "host",
 ) -> Capability:
     return Capability(
         CapabilitySpec(
@@ -68,7 +70,7 @@ def _test_capability(
         CapabilityPolicy(
             supports_staging=supports_staging,
             supports_direct=supports_direct,
-            trust="builtin",
+            trust=trust,
         ),
         InProcessCapabilityExecutor(
             lambda params: (
@@ -1034,6 +1036,29 @@ def test_zeta_rpc_client_alias_collision_is_rejected_at_projection_time() -> Non
     assert registry.get("rpc.read") is not None
     with pytest.raises(ValueError, match="ambiguous capability alias 'read'"):
         registry.project(("sigil.read", "rpc.read"))
+
+
+def test_zeta_agent_auto_enabled_capabilities_omit_low_trust_mutating_tools() -> None:
+    registry = CapabilityRegistry()
+    registry.register(_test_capability("read", provider="host", aliases=("read",)))
+    registry.register(
+        _test_capability(
+            "write",
+            provider="rpc",
+            effects=("write",),
+            aliases=("write",),
+            supports_staging=True,
+            supports_direct=True,
+            trust="client",
+        )
+    )
+
+    assert zeta_agent.registered_capabilities(None, tool_registry=registry) == (
+        "host.read",
+    )
+    assert zeta_agent.registered_capabilities(("write",), tool_registry=registry) == (
+        "rpc.write",
+    )
 
 
 def test_zeta_rpc_rejects_privileged_client_tool_trust() -> None:

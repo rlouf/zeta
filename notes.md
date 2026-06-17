@@ -1592,6 +1592,41 @@ Verification:
 - `uvx --with radon radon cc src/zeta/agent.py tests/test_zeta_agent.py -s`
   passed.
 
+### Slice 2: pure and aborted replay graph acceptance - complete
+
+Extended the replay graph acceptance checks across two additional run shapes:
+
+- pure answer runs now assert their stored prompt reconstructs, verifies, and
+  matches the model request messages;
+- deadline-aborted runs after a completed tool turn now assert the completed
+  prompt/model/tool graph remains reconstructible even though no follow-up
+  prompt is built;
+- `_zeta_helpers.assert_prompt_trace_replay_graph()` centralizes the prompt
+  reconstruction, assistant-link, and `ModelResponse` derivation invariant for
+  acceptance tests.
+
+Behavior preserved:
+
+- The agent runtime code is unchanged in this slice.
+- Abort behavior still records the same event sequence and `abort_run` step.
+
+Verification:
+
+- `uv run ripple tests/test_zeta_agent.py test_zeta_agent_turn_stores_prompt_and_assistant_trace`
+  and
+  `uv run ripple tests/test_zeta_agent.py test_zeta_agent_turn_aborts_on_deadline_between_model_turns`
+  could not run because `ripple` is not installed in this checkout.
+- `uv run pytest tests/test_zeta_agent.py -q -k 'stores_prompt_and_assistant_trace or records_tool_result_derivation or aborts_on_deadline_between_model_turns'`
+  passed with 3 tests.
+- `uv run pytest tests/test_zeta_trace.py tests/test_zeta_agent.py -q` passed
+  with 175 tests.
+- `uv run pytest -q` passed with 828 tests and 4 skipped.
+- `uv run coverage run -m pytest` and `uv run coverage report` passed with
+  93% total coverage.
+- `uv run ty check src tests` passed.
+- `uvx --with radon radon cc tests/_zeta_helpers.py tests/test_zeta_agent.py -s`
+  passed.
+
 ## 8. Zeta core boundary
 
 ### Current read

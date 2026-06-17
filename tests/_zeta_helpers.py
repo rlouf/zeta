@@ -268,6 +268,28 @@ def assert_tool_result_derivation_graph(
     )
 
 
+def assert_prompt_trace_replay_graph(
+    store: zeta_trace.InMemoryStore,
+    trace: zeta_trace.PromptTrace,
+) -> zeta_prompt.ReconstructedPrompt:
+    reconstructed = zeta_prompt.reconstructed_prompt_request(
+        store,
+        trace.prompt_object_id,
+    )
+    assert reconstructed is not None
+    assert reconstructed.payload_verified
+    if trace.assistant_message_object_id is None:
+        return reconstructed
+    assistant = store.get_object(trace.assistant_message_object_id)
+    assert assistant is not None
+    assert assistant.kind == "assistant_message"
+    assert assistant.links == (trace.prompt_object_id,)
+    derivation = store.derivations_for_output(trace.assistant_message_object_id)[0]
+    assert derivation.producer == "ModelResponse"
+    assert derivation.input_ids == (trace.prompt_object_id,)
+    return reconstructed
+
+
 def assert_tool_call_derivation(
     store: zeta_trace.InMemoryStore,
     result: zeta_agent.AgentTurnResult,

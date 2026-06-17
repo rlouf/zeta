@@ -14,6 +14,9 @@ from typing import Any, cast
 import pytest
 from _zeta_helpers import (
     DeltaSink,
+    assert_prompt_trace_replay_graph,
+    assert_tool_call_derivation,
+    assert_tool_result_derivation,
     assert_tool_result_derivation_graph,
     event_by_type,
     read_tool_call_response,
@@ -2436,6 +2439,8 @@ def test_zeta_agent_turn_stores_prompt_and_assistant_trace(monkeypatch) -> None:
             selected_model="unit-model",
         )
     )
+    reconstructed = assert_prompt_trace_replay_graph(store, trace)
+    assert reconstructed.messages == captured["messages"]
     assistant = store.get_object(cast(str, trace.assistant_message_object_id))
     assert assistant is not None
     assert assistant.kind == "assistant_message"
@@ -2649,21 +2654,7 @@ def test_zeta_agent_turn_records_tool_result_derivation(
         event_by_type(result.events, "tool_result"),
     )
     for trace in result.prompt_traces:
-        reconstructed = zeta_prompt.reconstructed_prompt_request(
-            store,
-            trace.prompt_object_id,
-        )
-        assert reconstructed is not None
-        assert reconstructed.payload_verified
-        if trace.assistant_message_object_id is None:
-            continue
-        assistant = store.get_object(trace.assistant_message_object_id)
-        assert assistant is not None
-        assert assistant.kind == "assistant_message"
-        assert assistant.links == (trace.prompt_object_id,)
-        derivation = store.derivations_for_output(trace.assistant_message_object_id)[0]
-        assert derivation.producer == "ModelResponse"
-        assert derivation.input_ids == (trace.prompt_object_id,)
+        assert_prompt_trace_replay_graph(store, trace)
 
 
 def test_zeta_agent_turn_wraps_model_request_in_status(monkeypatch) -> None:
@@ -3384,6 +3375,7 @@ def test_zeta_agent_turn_aborts_on_deadline_between_model_turns(
 ) -> None:
     target = tmp_path / "README.md"
     target.write_text("README\n", encoding="utf-8")
+    store = zeta_trace.InMemoryStore()
     responses = iter([read_tool_call_response(target), {"content": "too late"}])
     events: list[dict[str, Any]] = []
     monotonic = iter([0.0, 0.0, 0.0, 2.0])
@@ -3411,9 +3403,27 @@ def test_zeta_agent_turn_aborts_on_deadline_between_model_turns(
                 max_wall_seconds=1.0,
             ),
             event_sink=events.append,
+            prompt_builder=zeta_prompt.PromptBuilder(store=store),
         )
 
     assert raised.value.reason == "deadline_exceeded"
+    result = raised.value.result
+    assert len(result.prompt_traces) == 1
+    trace = result.prompt_traces[0]
+    assert_prompt_trace_replay_graph(store, trace)
+    assert trace.assistant_message_object_id is not None
+    tool_call = event_by_type(result.events, "tool_call")
+    tool_result = event_by_type(result.events, "tool_result")
+    assert_tool_call_derivation(
+        store,
+        result,
+        tool_call["tool_call_object_id"],
+    )
+    assert_tool_result_derivation(
+        store,
+        tool_call["tool_call_object_id"],
+        tool_result["tool_result_object_id"],
+    )
     assert raised.value.result.steps[-1].step == "abort_run"
     assert [event["type"] for event in events] == [
         "model",

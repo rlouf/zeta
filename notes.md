@@ -1627,6 +1627,36 @@ Verification:
 - `uvx --with radon radon cc tests/_zeta_helpers.py tests/test_zeta_agent.py -s`
   passed.
 
+### Slice 3: staged mutation replay graph acceptance - complete
+
+Extended replay graph acceptance to a staged mutating capability run:
+
+- the staged `bash` run now records through a trace-backed prompt builder;
+- the prompt/model graph reconstructs and verifies before the run stops on the
+  proposed effect;
+- the staged tool call and staged tool result retain their derivation edge,
+  even though there is no follow-up prompt after the staged stop.
+
+Behavior preserved:
+
+- The agent runtime code is unchanged in this slice.
+- Staged effects still stop the run after the first model request.
+
+Verification:
+
+- `uv run ripple tests/test_zeta_agent.py test_zeta_agent_turn_stops_after_staged_tool`
+  could not run because `ripple` is not installed in this checkout.
+- `uv run pytest tests/test_zeta_agent.py -q -k stops_after_staged_tool` passed
+  with 1 test.
+- `uv run pytest tests/test_zeta_trace.py tests/test_zeta_agent.py -q` passed
+  with 175 tests.
+- `uv run pytest -q` passed with 828 tests and 4 skipped.
+- `uv run coverage run -m pytest` and `uv run coverage report` passed with
+  93% total coverage.
+- `uv run ty check src tests` passed.
+- `uvx --with radon radon cc tests/test_zeta_agent.py tests/_zeta_helpers.py -s`
+  passed.
+
 ## 8. Zeta core boundary
 
 ### Current read

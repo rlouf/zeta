@@ -3191,6 +3191,7 @@ def test_zeta_agent_turn_streams_tool_call_before_running_tool(monkeypatch) -> N
 
 def test_zeta_agent_turn_stops_after_staged_tool(monkeypatch) -> None:
     requests = 0
+    store = zeta_trace.InMemoryStore()
 
     def fake_chat_completion_messages(
         *args: object, **kwargs: object
@@ -3232,6 +3233,7 @@ def test_zeta_agent_turn_stops_after_staged_tool(monkeypatch) -> None:
         "test",
         [],
         zeta_agent.AgentConfig(allowed_capabilities=("bash",), max_turns=3),
+        prompt_builder=zeta_prompt.PromptBuilder(store=store),
     )
 
     assert requests == 1
@@ -3241,6 +3243,16 @@ def test_zeta_agent_turn_stops_after_staged_tool(monkeypatch) -> None:
         "command": "uv run pytest",
         "reason": "Run tests.",
     }
+    assert len(result.prompt_traces) == 1
+    assert_prompt_trace_replay_graph(store, result.prompt_traces[0])
+    tool_call = event_by_type(result.events, "tool_call")
+    tool_result = event_by_type(result.events, "tool_result")
+    assert_tool_call_derivation(store, result, tool_call["tool_call_object_id"])
+    assert_tool_result_derivation(
+        store,
+        tool_call["tool_call_object_id"],
+        tool_result["tool_result_object_id"],
+    )
 
 
 def test_zeta_agent_direct_mode_continues_after_bash(monkeypatch) -> None:

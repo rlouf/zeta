@@ -1080,11 +1080,34 @@ Verification:
 
 ## 5. Provider-neutral model input and output
 
+### Second opinion status
+
+- Tried `claude -p` as required for a complex refactor plan.
+- The installed Claude CLI is not authenticated and returned
+  `401 Invalid authentication credentials`.
+- Tried `gemini -p`; Gemini is not installed in this environment. No usable
+  external critique is folded in here.
+
 ### Current read
 
 Zeta currently keeps Chat Completions-shaped messages internally and translates
 Responses API payloads at the wire boundary. That means provider compatibility
 concerns leak into prompt building, replay, and trace objects.
+
+The current concrete boundaries are:
+
+- `src/zeta/models/chat_completions.py` builds Chat Completions request bodies,
+  streams SSE chunks into Chat-Completions-shaped payloads, and exposes
+  `chat_completion_messages()`.
+- `src/zeta/models/responses.py` takes Chat-Completions-shaped messages and
+  tools, renders Responses request bodies, streams Responses events, then
+  converts the result back into a Chat-Completions-shaped payload. It preserves
+  raw Responses output items in `_responses_items` for replay.
+- `src/zeta/agent.py` calls `chat_completion_messages()` through
+  `request_assistant_message()`, then wraps the returned assistant-message dict
+  in `AssistantMessage`.
+- prompt tracing currently stores the assistant provider payload under
+  `zeta.assistant_output.v1`.
 
 ### Behavior to preserve
 
@@ -1148,6 +1171,192 @@ Provider adapters translate:
 - `uv run pytest tests/test_zeta_model.py tests/test_zeta_responses.py -q`
 - `uv run pytest tests/test_zeta_agent.py tests/test_zeta_prompt.py -q`
 - `uv run pytest -q`
+
+### Slice 1: provider-neutral model records
+
+Introduce records next to the model adapter layer without changing callers yet.
+
+Target records:
+
+- `ModelInput`
+  - `messages`;
+  - `tools`;
+  - `tool_choice`;
+  - `max_tokens`;
+  - `selected_model`;
+  - `selected_url`;
+  - `session_id`;
+  - `thinking`.
+- `ModelOutput`
+  - `message`;
+  - `finish_reason`;
+  - `usage`;
+  - `provider_metadata`;
+  - `provider_replay_items`.
+- `ModelUsage`
+  - prompt/input tokens;
+  - completion/output tokens;
+  - total tokens.
+
+Behavior to preserve:
+
+- Existing Chat Completions dict request bodies remain byte-for-byte equivalent.
+- Existing Responses request bodies remain equivalent, including omission of
+  `max_output_tokens` for Codex.
+- Responses replay items stay opaque and ordered.
+
+Tests first:
+
+- round-trip a Chat Completions input through `ModelInput` and the existing
+  request renderer;
+- round-trip a Responses input through `ModelInput` and the existing request
+  renderer;
+- convert a Chat Completions stream payload into `ModelOutput` while preserving
+  message, finish reason, usage, and metadata;
+- convert a Responses stream payload into `ModelOutput` while preserving
+  `_responses_items`.
+
+Verification:
+
+- `uv run pytest tests/test_zeta_model.py tests/test_zeta_responses.py -q`
+
+### Slice 2: Chat Completions adapter
+
+Make Chat Completions the first explicit adapter:
+
+- add `chat_completion_request_from_input(ModelInput)`;
+- add `model_output_from_chat_completion(payload)`;
+- keep `chat_completion_messages()` returning the current assistant dict until
+  the agent migrates;
+- keep `request_chat_completion()` accepting raw request bodies at its public
+  boundary for now.
+
+Behavior to preserve:
+
+- streaming content and reasoning deltas are unchanged;
+- fragmented tool calls are reassembled in the same order;
+- usage-only chunks still populate telemetry;
+- length-truncated tool calls still fail in the same caller path.
+
+Tests first:
+
+- golden Chat Completions request rendering from `ModelInput`;
+- stream accumulator output converted to `ModelOutput`;
+- `chat_completion_messages()` compatibility return stays unchanged.
+
+Verification:
+
+- `uv run pytest tests/test_zeta_model.py tests/test_zeta_agent.py -q`
+
+### Slice 3: Responses adapter
+
+Move the Responses bridge from "chat-shaped internal payloads" toward the same
+`ModelInput` / `ModelOutput` contract:
+
+- add `responses_request_from_input(ModelInput)`;
+- add `model_output_from_responses_payload(payload)`;
+- keep the existing `responses_request_body()` compatibility wrapper;
+- keep `codex_completion_messages()` returning the current assistant dict until
+  the agent migrates.
+
+Behavior to preserve:
+
+- system messages still become top-level `instructions`;
+- tool messages still become `function_call_output`;
+- assistant replay still prefers raw `_responses_items`;
+- reasoning effort mapping remains unchanged;
+- Responses usage maps onto the current token field names.
+
+Tests first:
+
+- golden Responses request rendering from `ModelInput`;
+- replayed Responses items are passed through verbatim;
+- Responses stream accumulator exposes `ModelOutput` with replay items;
+- `codex_completion_messages()` compatibility return stays unchanged.
+
+Verification:
+
+- `uv run pytest tests/test_zeta_responses.py tests/test_zeta_agent.py -q`
+
+### Slice 4: agent model-call boundary
+
+Update the agent to request and carry `ModelOutput` internally:
+
+- change `request_assistant_message()` to return `ModelOutput`;
+- change `request_model_turn()` to build `AssistantMessage` from
+  `ModelOutput.message`;
+- keep `AssistantMessage.to_provider()` as the compatibility shape for
+  prompt/timeline code until Section 6 renders `ModelInput` directly;
+- continue storing current model telemetry fields.
+
+Behavior to preserve:
+
+- `run_agent_turn()` final text and streaming behavior are unchanged;
+- model events keep the same JSON shape;
+- tool calls still resolve through the capability projection;
+- `request_assistant_message()` only changes its internal return type after
+  all direct tests/callers are adjusted.
+
+Tests first:
+
+- pure answer run finalizes the same final text;
+- reasoning content still appears in the model event;
+- tool-call run still emits the same tool call/result events;
+- model telemetry still attaches to the first tool result.
+
+Verification:
+
+- `uv run pytest tests/test_zeta_agent.py tests/test_zeta_model.py tests/test_zeta_responses.py -q`
+- `uv run pytest -q`
+
+### Slice 5: provider-neutral trace payloads
+
+Change trace storage from provider-shaped assistant payloads to a
+provider-neutral output plus adapter metadata.
+
+Target trace data:
+
+- model output message/content/tool calls;
+- finish reason;
+- usage;
+- provider metadata;
+- provider replay items, including Responses encrypted reasoning items.
+
+Behavior to preserve:
+
+- prompt reconstruction and replay keep passing;
+- Responses replay items remain available when rendering the next request;
+- existing trace CLI rendering keeps showing assistant content and tool calls;
+- legacy trace objects degrade gracefully where possible.
+
+Tests first:
+
+- prompt trace stores provider-neutral output data;
+- reconstructing a prompt with a Responses assistant still replays opaque items;
+- trace CLI rendering still shows assistant/tool-call content;
+- legacy assistant-message objects continue to render or fail open explicitly.
+
+Verification:
+
+- `uv run pytest tests/test_zeta_prompt.py tests/test_zeta_trace.py tests/test_zeta_responses.py -q`
+- `uv run pytest -q`
+
+### Slice 6: compatibility cleanup
+
+Only after the adapter and agent boundaries use `ModelInput` / `ModelOutput`:
+
+- run `ripple` on `chat_completion_messages()`,
+  `codex_completion_messages()`, `responses_request_body()`,
+  `responses_input_items()`, and assistant-message provider conversion helpers;
+- remove compatibility helpers with no production callers;
+- keep public shims where tests or protocol boundaries intentionally assert
+  provider dicts.
+
+Verification:
+
+- `uv run pytest tests/test_zeta_model.py tests/test_zeta_responses.py tests/test_zeta_agent.py tests/test_zeta_prompt.py -q`
+- `uv run pytest -q`
+- `uvx --with radon radon cc src tests -s`
 
 ## 6. Prompt plan, commit, and render
 

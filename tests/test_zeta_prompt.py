@@ -158,6 +158,88 @@ def test_zeta_prompt_builder_noop_transform_matches_chat_messages() -> None:
     )
 
 
+def test_zeta_prompt_component_user_message_boundary_round_trips() -> None:
+    component = zeta_prompt.PromptComponent(
+        kind="user_message",
+        data={"index": 0},
+        message={"role": "user", "content": "inspect"},
+    )
+
+    assert component.message_payload() == {"role": "user", "content": "inspect"}
+    assert component.object_data() == {
+        "index": 0,
+        "message": {"role": "user", "content": "inspect"},
+        "representation": "full",
+    }
+
+
+def test_zeta_prompt_component_assistant_message_boundary_round_trips() -> None:
+    component = zeta_prompt.PromptComponent(
+        kind="assistant_message",
+        data={"source_event_type": "model"},
+        message={"role": "assistant", "content": "done"},
+        representation="summary",
+        source_object_id="assistant-obj",
+    )
+
+    assert component.message_payload() == {"role": "assistant", "content": "done"}
+    assert component.object_data() == {
+        "source_event_type": "model",
+        "message": {"role": "assistant", "content": "done"},
+        "representation": "summary",
+        "source_object_id": "assistant-obj",
+    }
+
+
+def test_zeta_prompt_component_tool_call_boundary_round_trips() -> None:
+    message = {
+        "role": "assistant",
+        "tool_calls": [
+            {
+                "id": "call-1",
+                "type": "function",
+                "function": {"name": "read", "arguments": "{}"},
+            }
+        ],
+    }
+    component = zeta_prompt.PromptComponent(
+        kind="assistant_message",
+        data={"message": message, "source_event_type": "model"},
+        message=message,
+    )
+
+    assert component.message_payload() == message
+    assert component.object_data() == {
+        "message": message,
+        "source_event_type": "model",
+        "representation": "full",
+    }
+
+
+def test_zeta_prompt_component_tool_result_boundary_round_trips() -> None:
+    component = zeta_prompt.PromptComponent(
+        kind="tool_result",
+        data={"source_tool_name": "read"},
+        message={"role": "tool", "tool_call_id": "call-1", "content": "done"},
+        links=("tool-call-obj",),
+    )
+
+    assert component.message_payload() == {
+        "role": "tool",
+        "tool_call_id": "call-1",
+        "content": "done",
+    }
+    assert component.object_data() == {
+        "source_tool_name": "read",
+        "message": {
+            "role": "tool",
+            "tool_call_id": "call-1",
+            "content": "done",
+        },
+        "representation": "full",
+    }
+
+
 def test_zeta_prompt_builder_links_prompt_components() -> None:
     store = zeta_trace.InMemoryStore()
     prepared = zeta_prompt.PromptBuilder(store=store).build(

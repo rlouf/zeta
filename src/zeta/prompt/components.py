@@ -42,6 +42,21 @@ class PromptComponent:
     links: tuple[ObjectId, ...] = ()
     object_id: ObjectId | None = None
 
+    def message_payload(self) -> dict[str, Any] | None:
+        return self.message
+
+    def object_data(self) -> dict[str, Any]:
+        data = dict(self.data)
+        if self.message is not None and "message" not in data:
+            data["message"] = self.message
+        data["representation"] = self.representation
+        if self.source_object_id is not None:
+            data["source_object_id"] = self.source_object_id
+        return data
+
+    def object_links(self) -> tuple[ObjectId, ...]:
+        return self.links
+
 
 def zeta_context_message(
     objective: str,
@@ -338,20 +353,16 @@ def message_component_kind(message: dict[str, Any]) -> str:
 
 def component_messages(components: list[PromptComponent]) -> list[dict[str, Any]]:
     return [
-        component.message for component in components if component.message is not None
+        message
+        for component in components
+        if (message := component.message_payload()) is not None
     ]
 
 
 def prompt_component_object(component: PromptComponent) -> Object:
-    data = dict(component.data)
-    if component.message is not None and "message" not in data:
-        data["message"] = component.message
-    data["representation"] = component.representation
-    if component.source_object_id is not None:
-        data["source_object_id"] = component.source_object_id
     return Object(
         kind=component.kind,
         schema="zeta.prompt_component.v1",
-        data=data,
-        links=component.links,
+        data=component.object_data(),
+        links=component.object_links(),
     )

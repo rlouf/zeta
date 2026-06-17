@@ -1021,7 +1021,7 @@ Verification:
 - `uv run coverage run -m pytest` and `uv run coverage report` passed with
   93% total coverage.
 
-### Slice 5: prompt component boundary records
+### Slice 5: prompt component boundary records - complete
 
 `PromptComponent` already exists. Tighten its boundary conversions before
 attempting broader prompt-plan work.
@@ -1045,8 +1045,11 @@ Tests first:
 
 Verification:
 
-- `uv run pytest tests/test_zeta_prompt.py tests/test_zeta_trace.py -q`
-- `uv run pytest -q`
+- `uv run pytest tests/test_zeta_prompt.py tests/test_zeta_trace.py -q` passed
+  with 142 tests.
+- `uv run pytest -q` passed with 809 tests and 4 skipped.
+- `uv run coverage run -m pytest` and `uv run coverage report` passed with
+  93% total coverage.
 
 ### Slice 6: cleanup and caller audit
 

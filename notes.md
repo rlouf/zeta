@@ -907,7 +907,7 @@ Verification:
 - `uv run coverage run -m pytest` and `uv run coverage report` passed with
   93% total coverage.
 
-### Slice 2: typed capability result payloads
+### Slice 2: typed capability result payloads - complete
 
 The registry already normalizes executor output into one JSON result shape.
 Make that shape explicit without changing builtin or RPC wire payloads.
@@ -941,8 +941,13 @@ Tests first:
 
 Verification:
 
-- `uv run pytest tests/test_display.py tests/test_zeta_tools.py -q`
-- `uv run pytest tests/test_zeta_agent.py tests/test_zeta_tools.py -q`
+- `uv run pytest tests/test_display.py tests/test_zeta_tools.py -q` passed
+  with 135 tests and 2 skipped.
+- `uv run pytest tests/test_zeta_agent.py tests/test_zeta_tools.py -q` passed
+  with 156 tests and 2 skipped.
+- `uv run pytest -q` passed with 796 tests and 4 skipped.
+- `uv run coverage run -m pytest` and `uv run coverage report` passed with
+  93% total coverage.
 
 ### Slice 3: typed runtime event records at the agent boundary
 

@@ -53,6 +53,14 @@ class RpcRunState:
     status: RpcRunStatus = "running"
 
 
+@dataclass(frozen=True)
+class EventSubscription:
+    id: str
+    after: EventCursor | None = None
+    session_id: str | None = None
+    run_id: str | None = None
+
+
 @dataclass
 class RpcError(RuntimeError):
     jsonrpc_code: int
@@ -431,6 +439,20 @@ def rpc_outcome(staged_effect: dict[str, Any] | None, final_text: str) -> str:
     return "failed"
 
 
+def event_matches_subscription(
+    event: dict[str, Any],
+    subscription: EventSubscription,
+) -> bool:
+    if subscription.session_id is not None and event.get("session") != subscription.session_id:
+        return False
+    if subscription.run_id is not None and event.get("run_id") != subscription.run_id:
+        return False
+    if subscription.after is None:
+        return True
+    cursor = EventCursor.decode(str(event.get("cursor") or ""))
+    return cursor is not None and cursor.seq > subscription.after.seq
+
+
 class JsonRpcServer:
     def __init__(
         self,
@@ -453,6 +475,7 @@ class JsonRpcServer:
         self.run_workers: list[threading.Thread] = []
         self.runs_lock = threading.Lock()
         self.output_lock = threading.Lock()
+        self.event_subscriptions: dict[str, EventSubscription] = {}
 
     def serve(self) -> None:
         try:
@@ -547,6 +570,8 @@ class JsonRpcServer:
             return None
         if method == "events.list":
             return self.list_events(params)
+        if method == "events.subscribe":
+            return self.subscribe_events(params)
         if method == "session.cancel":
             return self.cancel_session(params)
         if method == "session.run":
@@ -586,6 +611,21 @@ class JsonRpcServer:
         return {
             "events": [rpc_event_from_durable_event(event) for event in events],
             "next_cursor": next_cursor,
+        }
+
+    def subscribe_events(self, params: dict[str, Any]) -> dict[str, Any]:
+        after = event_cursor_param(params.get("after"))
+        subscription = EventSubscription(
+            id=f"sub_{uuid.uuid4().hex}",
+            after=after,
+            session_id=optional_string(params.get("session_id")),
+            run_id=optional_string(params.get("run_id")),
+        )
+        self.event_subscriptions[subscription.id] = subscription
+        return {
+            "subscribed": True,
+            "subscription_id": subscription.id,
+            "next_cursor": after.encode() if after is not None else None,
         }
 
     def start_session_run(self, request_id: Any, params: dict[str, Any]) -> None:
@@ -821,6 +861,14 @@ class JsonRpcServer:
         return self.tool_responses.pop(call_id)
 
     def publish_event(self, event: dict[str, Any]) -> None:
+        if self.event_subscriptions:
+            for subscription in self.event_subscriptions.values():
+                if event_matches_subscription(event, subscription):
+                    self.write_notification(
+                        "events.publish",
+                        {"subscription_id": subscription.id, "event": event},
+                    )
+            return
         self.write_notification("events.publish", {"event": event})
 
     def write_response(self, request_id: Any, result: Any) -> None:

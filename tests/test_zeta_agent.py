@@ -1251,6 +1251,102 @@ def test_zeta_rpc_events_list_filters_by_session_and_run(tmp_path: Path) -> None
     ]
 
 
+def test_zeta_rpc_events_subscribe_filters_after_cursor() -> None:
+    input_stream = StringIO(
+        json.dumps(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "events.subscribe",
+                "params": {"after": "1"},
+            }
+        )
+        + "\n"
+    )
+    output = StringIO()
+    server = zeta_rpc.JsonRpcServer(input_stream, output)
+
+    server.serve()
+    server.publish_event({"type": "user_message", "content": "old", "cursor": "1"})
+    server.publish_event({"type": "user_message", "content": "new", "cursor": "2"})
+
+    messages = rpc_messages(output)
+    assert messages[0]["result"]["subscription_id"].startswith("sub_")
+    assert [
+        message["params"]["event"]["content"]
+        for message in messages
+        if message.get("method") == "events.publish"
+    ] == ["new"]
+
+
+def test_zeta_rpc_events_subscribe_filters_by_session_and_run() -> None:
+    input_stream = StringIO(
+        json.dumps(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "events.subscribe",
+                "params": {"session_id": "session-1", "run_id": "run_1"},
+            }
+        )
+        + "\n"
+    )
+    output = StringIO()
+    server = zeta_rpc.JsonRpcServer(input_stream, output)
+
+    server.serve()
+    server.publish_event(
+        {
+            "type": "user_message",
+            "content": "wrong-session",
+            "session": "session-2",
+            "run_id": "run_1",
+            "cursor": "1",
+        }
+    )
+    server.publish_event(
+        {
+            "type": "user_message",
+            "content": "wrong-run",
+            "session": "session-1",
+            "run_id": "run_2",
+            "cursor": "2",
+        }
+    )
+    server.publish_event(
+        {
+            "type": "user_message",
+            "content": "match",
+            "session": "session-1",
+            "run_id": "run_1",
+            "cursor": "3",
+        }
+    )
+
+    assert [
+        message["params"]["event"]["content"]
+        for message in rpc_messages(output)
+        if message.get("method") == "events.publish"
+    ] == ["match"]
+
+
+def test_zeta_rpc_publish_event_keeps_default_stream_without_subscription() -> None:
+    output = StringIO()
+    server = zeta_rpc.JsonRpcServer(StringIO(), output)
+
+    server.publish_event({"type": "user_message", "content": "live", "cursor": "1"})
+
+    assert rpc_messages(output) == [
+        {
+            "jsonrpc": "2.0",
+            "method": "events.publish",
+            "params": {
+                "event": {"type": "user_message", "content": "live", "cursor": "1"}
+            },
+        }
+    ]
+
+
 def test_zeta_agent_turn_uses_explicit_tool_registry(monkeypatch) -> None:
     registry = ToolRegistry()
     registry.register(

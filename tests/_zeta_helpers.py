@@ -12,9 +12,9 @@ from io import StringIO
 from pathlib import Path
 from typing import Any, cast
 
-from zeta import agent as zeta_agent
 from zeta import prompt as zeta_prompt
 from zeta import trace as zeta_trace
+from zeta import turn as zeta_agent
 from zeta.models import chat_completions as zeta_model
 
 

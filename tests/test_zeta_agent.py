@@ -28,7 +28,6 @@ from click.testing import CliRunner
 from sigil.agent_io import run_zeta_rpc_session
 from sigil.cli import cli
 from sigil.tools import ensure_builtin_tools_registered
-from zeta import agent as zeta_agent
 from zeta import cli as zeta_cli
 from zeta import context as zeta_context
 from zeta import events as zeta_events
@@ -36,6 +35,7 @@ from zeta import models as zeta_models_api
 from zeta import prompt as zeta_prompt
 from zeta import rpc as zeta_rpc
 from zeta import trace as zeta_trace
+from zeta import turn as zeta_agent
 from zeta.models import chat_completions as zeta_model
 from zeta.tools.base import (
     Capability,

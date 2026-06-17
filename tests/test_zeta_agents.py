@@ -9,7 +9,7 @@ import pytest
 
 from zeta import agents as zeta_agents
 from zeta import events as zeta_events
-from zeta.agent import AgentConfig, AgentTurnResult
+from zeta.agents import AgentConfig
 from zeta.tools.base import (
     Capability,
     CapabilityId,
@@ -18,6 +18,7 @@ from zeta.tools.base import (
     InProcessCapabilityExecutor,
 )
 from zeta.tools.registry import CapabilityRegistry
+from zeta.turn import AgentTurnResult
 
 
 def _write_spec(path: Path, content: str) -> Path:

@@ -7,16 +7,18 @@ import re
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 import yaml
 from jinja2 import Environment, meta
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import SchemaError
 
-from .agent import AgentConfig, AgentTurnResult, run_agent_turn
 from .events import AgentDefinition, AgentRun, Event, TriggerRule
-from .tools.registry import CapabilityRegistry
+from .tools.registry import CapabilityRegistry, ExecutionMode
+
+if TYPE_CHECKING:
+    from .turn import AgentTurnResult
 
 SLUG_PATTERN = re.compile(r"^[a-z0-9_-]+$")
 RESERVED_TOOL_NAMES = frozenset({"__return"})
@@ -32,6 +34,24 @@ BUILT_IN_FRONTMATTER_KEYS = frozenset(
         "schedules",
     }
 )
+
+
+@dataclass(frozen=True)
+class AgentConfig:
+    """Configuration for one Zeta turn."""
+
+    system_prompt: str | None = None
+    allowed_capabilities: Iterable[str] | None = None
+    max_turns: int | None = None
+    stop_on_staged_effect: bool = True
+    execution_mode: ExecutionMode = "stage"
+    model_profile: str | None = None
+    model_name: str | None = None
+    model_url: str | None = None
+    model_session_id: str | None = None
+    thinking: str | None = None
+    model_api: str | None = None
+    max_wall_seconds: float | None = None
 
 
 @dataclass(frozen=True)
@@ -149,7 +169,7 @@ class Manifest:
         validate_extensions(spec, self.extensions or {})
 
 
-AgentTurnRunner = Callable[..., AgentTurnResult]
+AgentTurnRunner = Callable[..., "AgentTurnResult"]
 TimelineFactory = Callable[[AgentRun], list[dict[str, Any]]]
 ContextFactory = Callable[[AgentRun], str]
 
@@ -314,7 +334,7 @@ def compile_agent_definition(
     config: AgentConfig | None = None,
     context: str | ContextFactory = "",
     timeline: Sequence[dict[str, Any]] | TimelineFactory = (),
-    run_turn: AgentTurnRunner = run_agent_turn,
+    run_turn: AgentTurnRunner | None = None,
 ) -> AgentDefinition:
     """Compile a single-accept spec into an in-process runtime agent."""
     if len(spec.accepts) != 1:
@@ -334,7 +354,7 @@ def compile_agent_definitions(
     config: AgentConfig | None = None,
     context: str | ContextFactory = "",
     timeline: Sequence[dict[str, Any]] | TimelineFactory = (),
-    run_turn: AgentTurnRunner = run_agent_turn,
+    run_turn: AgentTurnRunner | None = None,
 ) -> list[AgentDefinition]:
     """Compile one authored spec into runtime definitions for each accepted event."""
     if not spec.accepts:
@@ -347,7 +367,13 @@ def compile_agent_definitions(
             system_prompt=spec.description,
             max_turns=config.max_turns if config is not None else None,
             dispatch_mode="session_scoped" if spec.resumable else "one_shot",
-            run=agent_runner(spec, config, context, timeline, run_turn),
+            run=agent_runner(
+                spec,
+                config,
+                context,
+                timeline,
+                run_turn or default_agent_turn_runner(),
+            ),
         )
         for event_type in spec.accepts
     ]
@@ -405,6 +431,12 @@ def agent_turn_result_mapping(result: AgentTurnResult) -> dict[str, Any]:
     if result.staged_effect is not None:
         payload["staged_effect"] = result.staged_effect
     return payload
+
+
+def default_agent_turn_runner() -> AgentTurnRunner:
+    from .turn import run_agent_turn
+
+    return run_agent_turn
 
 
 def split_frontmatter(content: str, path: Path) -> tuple[dict[str, Any], str]:

@@ -13,13 +13,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, TextIO
 
-from zeta.agent import (
-    AgentConfig,
-    AgentTurnAborted,
-    AgentTurnResult,
-    registered_capabilities,
-    run_agent_turn,
-)
+from zeta.agents import AgentConfig
 from zeta.context import ZetaContext
 from zeta.models import (
     CODEX_RESPONSES_API,
@@ -30,6 +24,12 @@ from zeta.models import (
 )
 from zeta.timeline import current_timeline, record_event
 from zeta.tools.registry import ExecutionMode
+from zeta.turn import (
+    AgentTurnAborted,
+    AgentTurnResult,
+    registered_capabilities,
+    run_agent_turn,
+)
 
 from . import load_project_context
 from .display.render import render_tool_start

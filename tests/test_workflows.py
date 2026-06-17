@@ -41,9 +41,9 @@ from sigil.sessions import record_turn, session_dir
 from sigil.state import history_view, read_events
 from sigil.workflows import ask as ask_runner
 from sigil.workflows import step as zeta_runner
-from zeta import agent as zeta_agent
 from zeta import timeline as zeta_timeline
 from zeta import trace as zeta_trace
+from zeta import turn as zeta_agent
 from zeta.events import Filter, SqliteEventStore, event_store_path
 from zeta.history import (
     effect_record,

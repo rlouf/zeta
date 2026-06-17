@@ -18,10 +18,10 @@ from click.testing import CliRunner
 from sigil.cli import cli as sigil_cli
 from sigil.display.summarize import assistant_trace_summary
 from sigil.trace.replay import latest_model_answer
-from zeta import agent as zeta_agent
 from zeta import prompt as zeta_prompt
 from zeta import timeline as zeta_timeline
 from zeta import trace as zeta_trace
+from zeta import turn as zeta_agent
 from zeta.context import ZetaContext, default_context
 from zeta.events import Filter, SqliteEventStore, event_store_path
 from zeta.models import profiles as zeta_models

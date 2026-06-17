@@ -218,7 +218,7 @@ def test_status_dispatch_does_not_load_workflow_modules() -> None:
             "assert code in (0, 1), code; "
             "heavy = [name for name in sys.modules "
             "if name.startswith('sigil.workflows') or name.startswith('rich') "
-            "or name in ('zeta.models.chat_completions', 'zeta.agent', 'jsonschema')]; "
+            "or name in ('zeta.models.chat_completions', 'zeta.turn', 'jsonschema')]; "
             "assert not heavy, heavy"
         )
         subprocess.run(
@@ -243,7 +243,7 @@ def test_spool_ingestion_does_not_load_display_or_model() -> None:
             "assert count == 1, count; "
             "heavy = [name for name in sys.modules "
             "if name.startswith('sigil.display') "
-            "or name.startswith('zeta.agent') "
+            "or name.startswith('zeta.turn') "
             "or name.startswith('zeta.model') "
             "or name.startswith('rich')]; "
             "assert not heavy, heavy"

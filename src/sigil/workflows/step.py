@@ -11,12 +11,7 @@ from collections.abc import Callable, Iterable, Sequence
 from pathlib import Path
 from typing import Any, Literal, TextIO
 
-from zeta.agent import (
-    AgentConfig,
-    AgentTurnAborted,
-    registered_capabilities,
-    run_agent_turn,
-)
+from zeta.agents import AgentConfig
 from zeta.context import ZetaContext
 from zeta.models import (
     active_model_selection,
@@ -29,6 +24,11 @@ from zeta.tools.base import proposed_effect
 from zeta.tools.registry import CapabilityRegistry, ExecutionMode
 from zeta.tools.registry import registry as _default_tool_registry
 from zeta.trace import latest_prompt_trace_fields
+from zeta.turn import (
+    AgentTurnAborted,
+    registered_capabilities,
+    run_agent_turn,
+)
 
 from .. import load_project_context
 from ..agent_io import (

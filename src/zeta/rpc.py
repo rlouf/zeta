@@ -14,13 +14,7 @@ from typing import Any, Literal, TextIO, cast
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import SchemaError
 
-from .agent import (
-    AgentConfig,
-    AgentTurnAborted,
-    AgentTurnResult,
-    registered_capabilities,
-    run_agent_turn,
-)
+from .agents import AgentConfig
 from .context import ZetaContext, default_context
 from .events import (
     AgentDefinition,
@@ -50,6 +44,12 @@ from .tools.base import (
 )
 from .tools.registry import CapabilityRegistry, ExecutionMode
 from .tools.registry import registry as _runtime_tool_registry
+from .turn import (
+    AgentTurnAborted,
+    AgentTurnResult,
+    registered_capabilities,
+    run_agent_turn,
+)
 
 RpcSessionRunner = Callable[[dict[str, Any]], dict[str, Any]]
 ToolCallStatus = Literal["requested", "responded", "failed", "cancelled", "timed_out"]

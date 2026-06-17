@@ -1,4 +1,4 @@
-"""Headless native-tool-call agent loop for Zeta."""
+"""Headless native-tool-call turn execution for Zeta."""
 
 from __future__ import annotations
 
@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from types import TracebackType
 from typing import Any, Literal, cast
 
+from .agents import AgentConfig
 from .models import (
     CODEX_RESPONSES_API,
     ChatCompletionStreamSink,
@@ -61,24 +62,6 @@ class StepEffect:
 class StepResult:
     step: Step
     effects: tuple[StepEffect, ...] = ()
-
-
-@dataclass(frozen=True)
-class AgentConfig:
-    """Configuration for one Zeta turn."""
-
-    system_prompt: str | None = None
-    allowed_capabilities: Iterable[str] | None = None
-    max_turns: int | None = None
-    stop_on_staged_effect: bool = True
-    execution_mode: ExecutionMode = "stage"
-    model_profile: str | None = None
-    model_name: str | None = None
-    model_url: str | None = None
-    model_session_id: str | None = None
-    thinking: str | None = None
-    model_api: str | None = None
-    max_wall_seconds: float | None = None
 
 
 @dataclass(frozen=True)

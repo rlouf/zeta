@@ -87,37 +87,6 @@ class PromptBuilder:
         # walks the filesystem, so do it once per tool set instead.
         self._skills: dict[tuple[str, ...], list[Skill]] = {}
 
-    def build(
-        self,
-        objective: str,
-        timeline: list[dict[str, Any]],
-        *,
-        system: str | None = None,
-        allowed_capabilities: Iterable[str] | None = None,
-        context: str = "",
-        current_events: Iterable[dict[str, Any]] = (),
-        tools: list[dict[str, Any]] | None = None,
-        tool_choice: str | dict[str, Any] = "auto",
-        max_tokens: int = DEFAULT_MAX_COMPLETION_TOKENS,
-        selected_model: str | None = None,
-        thinking: str | None = None,
-    ) -> PreparedPrompt:
-        plan = self.plan_prompt(
-            objective,
-            timeline,
-            system=system,
-            allowed_capabilities=allowed_capabilities,
-            context=context,
-            current_events=current_events,
-            tools=tools,
-            tool_choice=tool_choice,
-            max_tokens=max_tokens,
-            selected_model=selected_model,
-            thinking=thinking,
-        )
-        stored = self.commit_prompt_plan(plan)
-        return prepared_prompt_from(stored)
-
     def plan_prompt(
         self,
         objective: str,

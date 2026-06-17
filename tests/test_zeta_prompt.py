@@ -40,6 +40,17 @@ from zeta.tools.registry import CapabilityRegistry
 ensure_builtin_tools_registered()
 
 
+def prepare_prompt(
+    builder: zeta_prompt.PromptBuilder,
+    objective: str,
+    timeline: list[dict[str, Any]],
+    **kwargs: Any,
+) -> zeta_prompt.PreparedPrompt:
+    plan = builder.plan_prompt(objective, timeline, **kwargs)
+    stored = builder.commit_prompt_plan(plan)
+    return zeta_prompt.builder.prepared_prompt_from(stored)
+
+
 def test_model_capability_descriptors_are_generated_from_projection() -> None:
     registry = CapabilityRegistry()
     registry.register(
@@ -130,7 +141,8 @@ def test_zeta_prompt_builder_noop_transform_matches_chat_messages() -> None:
     transcript = [{"role": "user", "content": "prior"}]
     current_events = [{"type": "model", "content": "current"}]
 
-    prepared = zeta_prompt.PromptBuilder(store=store).build(
+    prepared = prepare_prompt(
+        zeta_prompt.PromptBuilder(store=store),
         "inspect",
         transcript,
         allowed_capabilities=(),
@@ -243,7 +255,8 @@ def test_zeta_prompt_component_tool_result_boundary_round_trips() -> None:
 
 def test_zeta_prompt_builder_links_prompt_components() -> None:
     store = zeta_trace.InMemoryStore()
-    prepared = zeta_prompt.PromptBuilder(store=store).build(
+    prepared = prepare_prompt(
+        zeta_prompt.PromptBuilder(store=store),
         "inspect",
         [{"role": "user", "content": "prior"}],
         allowed_capabilities=("read",),
@@ -270,7 +283,8 @@ def test_zeta_prompt_builder_links_prompt_components() -> None:
 def test_zeta_prompt_request_reconstructs_and_verifies() -> None:
     store = zeta_trace.InMemoryStore()
     tools = model_capability_descriptors(("read",))
-    prepared = zeta_prompt.PromptBuilder(store=store).build(
+    prepared = prepare_prompt(
+        zeta_prompt.PromptBuilder(store=store),
         "inspect",
         [{"role": "user", "content": "prior"}],
         allowed_capabilities=("read",),
@@ -363,14 +377,7 @@ def test_zeta_prompt_render_model_input_matches_prepared_prompt() -> None:
 
     unstored_input = zeta_prompt.render_model_input(plan)
     stored_input = zeta_prompt.render_model_input(stored)
-    prepared = builder.build(
-        "inspect",
-        [{"role": "user", "content": "prior"}],
-        allowed_capabilities=("read",),
-        tools=tools,
-        selected_model="unit-model",
-        thinking="low",
-    )
+    prepared = zeta_prompt.builder.prepared_prompt_from(stored)
 
     assert unstored_input == stored_input
     assert stored_input == zeta_models_api.ModelInput(
@@ -385,7 +392,8 @@ def test_zeta_prompt_render_model_input_matches_prepared_prompt() -> None:
 
 def test_zeta_prompt_records_provider_neutral_model_output() -> None:
     store = zeta_trace.InMemoryStore()
-    prepared = zeta_prompt.PromptBuilder(store=store).build(
+    prepared = prepare_prompt(
+        zeta_prompt.PromptBuilder(store=store),
         "inspect",
         [],
         allowed_capabilities=(),
@@ -438,7 +446,8 @@ def test_zeta_prompt_records_provider_neutral_model_output() -> None:
 def test_zeta_prompt_request_reconstructs_a_no_thinking_prompt() -> None:
     store = zeta_trace.InMemoryStore()
     tools = model_capability_descriptors(("read",))
-    prepared = zeta_prompt.PromptBuilder(store=store).build(
+    prepared = prepare_prompt(
+        zeta_prompt.PromptBuilder(store=store),
         "inspect",
         [],
         allowed_capabilities=("read",),
@@ -659,10 +668,11 @@ def test_zeta_prompt_builder_compaction_transform_preserves_source_links() -> No
             return output
 
     store = zeta_trace.InMemoryStore()
-    prepared = zeta_prompt.PromptBuilder(
-        store=store,
-        transform=CompactTranscript(),
-    ).build(
+    prepared = prepare_prompt(
+        zeta_prompt.PromptBuilder(
+            store=store,
+            transform=CompactTranscript(),
+        ),
         "continue",
         [
             {"role": "user", "content": "prior user"},
@@ -703,10 +713,13 @@ def test_zeta_task_state_transform_replaces_transcript_with_structured_state() -
 
     store = zeta_trace.InMemoryStore()
     extractor = FakeExtractor()
-    prepared = zeta_prompt.PromptBuilder(
-        store=store,
-        transform=zeta_prompt.TaskStateExtractionPromptTransform(extractor=extractor),
-    ).build(
+    prepared = prepare_prompt(
+        zeta_prompt.PromptBuilder(
+            store=store,
+            transform=zeta_prompt.TaskStateExtractionPromptTransform(
+                extractor=extractor
+            ),
+        ),
         "continue",
         [
             {"role": "user", "content": "Implement task-state extraction"},
@@ -747,12 +760,13 @@ def test_zeta_task_state_transform_fails_open() -> None:
             raise RuntimeError("extractor unavailable")
 
     store = zeta_trace.InMemoryStore()
-    prepared = zeta_prompt.PromptBuilder(
-        store=store,
-        transform=zeta_prompt.TaskStateExtractionPromptTransform(
-            extractor=FailingExtractor()
+    prepared = prepare_prompt(
+        zeta_prompt.PromptBuilder(
+            store=store,
+            transform=zeta_prompt.TaskStateExtractionPromptTransform(
+                extractor=FailingExtractor()
+            ),
         ),
-    ).build(
         "continue",
         [
             {"role": "user", "content": "keep raw transcript"},
@@ -834,10 +848,11 @@ def test_zeta_structural_trim_compacts_old_bulky_read_or_grep_tool_results(
     store = zeta_trace.InMemoryStore()
     raw_text = "\n".join(f"line {index}: important but bulky" for index in range(80))
 
-    prepared = zeta_prompt.PromptBuilder(
-        store=store,
-        transform=zeta_prompt.StructuralTrimPromptTransform(max_content_chars=120),
-    ).build(
+    prepared = prepare_prompt(
+        zeta_prompt.PromptBuilder(
+            store=store,
+            transform=zeta_prompt.StructuralTrimPromptTransform(max_content_chars=120),
+        ),
         "continue",
         tool_result_transcript(
             "call-read",
@@ -873,10 +888,11 @@ def test_zeta_structural_trim_skips_non_read_grep_tool_results() -> None:
     store = zeta_trace.InMemoryStore()
     raw_text = "non-recoverable tool evidence " * 100
 
-    prepared = zeta_prompt.PromptBuilder(
-        store=store,
-        transform=zeta_prompt.StructuralTrimPromptTransform(max_content_chars=120),
-    ).build(
+    prepared = prepare_prompt(
+        zeta_prompt.PromptBuilder(
+            store=store,
+            transform=zeta_prompt.StructuralTrimPromptTransform(max_content_chars=120),
+        ),
         "continue",
         tool_result_transcript(
             "call-bash",
@@ -949,10 +965,11 @@ def test_zeta_structural_trim_preserves_current_tool_results_by_default() -> Non
     store = zeta_trace.InMemoryStore()
     raw_text = "fresh evidence " * 100
 
-    prepared = zeta_prompt.PromptBuilder(
-        store=store,
-        transform=zeta_prompt.StructuralTrimPromptTransform(max_content_chars=20),
-    ).build(
+    prepared = prepare_prompt(
+        zeta_prompt.PromptBuilder(
+            store=store,
+            transform=zeta_prompt.StructuralTrimPromptTransform(max_content_chars=20),
+        ),
         "continue",
         [],
         allowed_capabilities=(),
@@ -1786,10 +1803,11 @@ def test_zeta_project_context_total_cap_drops_broadest_first(
     assert context.index("parent rules") < context.index("local rules")
 
 
-def test_zeta_prompt_build_writes_in_a_single_batch() -> None:
+def test_zeta_prompt_commit_writes_in_a_single_batch() -> None:
     store = BatchSpyStore()
 
-    zeta_prompt.PromptBuilder(store=store).build(
+    prepare_prompt(
+        zeta_prompt.PromptBuilder(store=store),
         "question",
         [{"role": "user", "content": "prior"}],
         allowed_capabilities=(),
@@ -1802,7 +1820,8 @@ def test_zeta_prompt_build_writes_in_a_single_batch() -> None:
 def test_zeta_prompt_object_stores_payload_hash_not_payload() -> None:
     store = zeta_trace.InMemoryStore()
 
-    prepared = zeta_prompt.PromptBuilder(store=store).build(
+    prepared = prepare_prompt(
+        zeta_prompt.PromptBuilder(store=store),
         "question",
         [{"role": "user", "content": "prior"}],
         allowed_capabilities=(),
@@ -1839,7 +1858,7 @@ def test_zeta_prompt_builder_discovers_skills_once_per_turn(monkeypatch) -> None
     monkeypatch.setattr("zeta.prompt.builder.available_skills", fake_available_skills)
     builder = zeta_prompt.PromptBuilder(store=zeta_trace.InMemoryStore())
 
-    builder.build("question", [], allowed_capabilities=("read",), tools=[])
-    builder.build("question", [], allowed_capabilities=("read",), tools=[])
+    prepare_prompt(builder, "question", [], allowed_capabilities=("read",), tools=[])
+    prepare_prompt(builder, "question", [], allowed_capabilities=("read",), tools=[])
 
     assert calls == 1

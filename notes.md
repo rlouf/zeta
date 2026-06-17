@@ -1148,6 +1148,34 @@ Verification:
 - `uvx --with radon radon cc src/zeta/prompt src/zeta/agent.py tests/test_zeta_prompt.py -s`
   passed.
 
+### Slice 3: agent caller migration and wrapper removal - complete
+
+Migrated the agent model-call path from `PromptBuilder.build()` to the explicit
+`plan_prompt()` -> `commit_prompt_plan()` -> `render_model_input()` phases.
+After migrating the remaining test setup callers, removed the compatibility
+wrapper.
+
+Behavior preserved:
+
+- `request_model_turn()` still records prompt traces and assistant traces from
+  the committed prompt graph.
+- Model calls still receive the same messages, tool descriptors, and tool
+  choice through provider-neutral `ModelInput`.
+- Prompt tests use the same explicit phases as production code.
+
+Verification:
+
+- `uv run ripple src/zeta/prompt/builder.py PromptBuilder.build` could not run
+  because `ripple` is not installed in this checkout.
+- `rg -n "\\.build\\(" src tests` found no direct callers.
+- `uv run pytest tests/test_zeta_agent.py tests/test_zeta_prompt.py tests/test_zeta_trace.py -q`
+  passed with 237 tests.
+- `uv run pytest -q` passed with 823 tests and 4 skipped.
+- `uv run coverage run -m pytest` and `uv run coverage report` passed with
+  93% total coverage.
+- `uvx --with radon radon cc src tests -s` passed.
+- `uv run pre-commit run --all` passed.
+
 ## 6. Resumable step engine
 
 ### Current read

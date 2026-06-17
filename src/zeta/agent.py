@@ -19,7 +19,8 @@ from .models import (
     chat_completion_messages,
     model_endpoint_open,
 )
-from .prompt import PromptBuilder, prompt_transform_from_env
+from .prompt import PromptBuilder, prompt_transform_from_env, render_model_input
+from .prompt.builder import prepared_prompt_from
 from .tools.base import proposed_effect
 from .tools.registry import CapabilityProjection, CapabilityRegistry, ExecutionMode
 from .tools.registry import registry as _runtime_tool_registry
@@ -250,7 +251,7 @@ def request_model_turn(
     model_status: ModelStatusFactory | None,
     stream_sink: ChatCompletionStreamSink | None,
 ) -> ModelTurn:
-    prepared_prompt = builder.build(
+    prompt_plan = builder.plan_prompt(
         objective,
         timeline,
         system=config.system_prompt,
@@ -262,10 +263,13 @@ def request_model_turn(
         selected_model=config.model_name,
         thinking=config.thinking,
     )
+    stored_prompt = builder.commit_prompt_plan(prompt_plan)
+    model_input = render_model_input(stored_prompt)
+    prepared_prompt = prepared_prompt_from(stored_prompt)
     model_output, streamed_content, model_telemetry = request_assistant_message(
-        prepared_prompt.messages,
-        tools=prepared_prompt.tools,
-        tool_choice=prepared_prompt.tool_choice,
+        model_input.messages,
+        tools=model_input.tools or [],
+        tool_choice=model_input.tool_choice,
         config=config,
         model_status=model_status,
         stream_sink=stream_sink,

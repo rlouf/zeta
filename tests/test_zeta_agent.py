@@ -6,7 +6,7 @@ import json
 import threading
 import time
 import tomllib
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from io import StringIO
 from pathlib import Path
 from typing import Any, cast
@@ -450,6 +450,50 @@ def test_zeta_request_assistant_message_returns_model_output(monkeypatch) -> Non
 def test_zeta_request_model_turn_builds_assistant_from_model_output(
     monkeypatch,
 ) -> None:
+    class PlanOnlyPromptBuilder(zeta_prompt.PromptBuilder):
+        planned = False
+        committed = False
+
+        def build(self, *args: object, **kwargs: object) -> zeta_prompt.PreparedPrompt:
+            raise AssertionError("request_model_turn should use explicit prompt phases")
+
+        def plan_prompt(
+            self,
+            objective: str,
+            timeline: list[dict[str, Any]],
+            *,
+            system: str | None = None,
+            allowed_capabilities: Iterable[str] | None = None,
+            context: str = "",
+            current_events: Iterable[dict[str, Any]] = (),
+            tools: list[dict[str, Any]] | None = None,
+            tool_choice: str | dict[str, Any] = "auto",
+            max_tokens: int = zeta_model.DEFAULT_MAX_COMPLETION_TOKENS,
+            selected_model: str | None = None,
+            thinking: str | None = None,
+        ) -> zeta_prompt.PromptPlan:
+            self.planned = True
+            return super().plan_prompt(
+                objective,
+                timeline,
+                system=system,
+                allowed_capabilities=allowed_capabilities,
+                context=context,
+                current_events=current_events,
+                tools=tools,
+                tool_choice=tool_choice,
+                max_tokens=max_tokens,
+                selected_model=selected_model,
+                thinking=thinking,
+            )
+
+        def commit_prompt_plan(
+            self,
+            plan: zeta_prompt.PromptPlan,
+        ) -> zeta_prompt.StoredPrompt:
+            self.committed = True
+            return super().commit_prompt_plan(plan)
+
     def fake_request_assistant_message(
         messages: list[dict[str, Any]],
         **kwargs: object,
@@ -474,6 +518,7 @@ def test_zeta_request_model_turn_builds_assistant_from_model_output(
         fake_request_assistant_message,
     )
     state = zeta_agent.AgentTurnState()
+    builder = PlanOnlyPromptBuilder()
 
     turn = zeta_agent.request_model_turn(
         "answer",
@@ -483,11 +528,13 @@ def test_zeta_request_model_turn_builds_assistant_from_model_output(
         context="",
         tools=[],
         state=state,
-        builder=zeta_prompt.PromptBuilder(),
+        builder=builder,
         model_status=None,
         stream_sink=None,
     )
 
+    assert builder.planned
+    assert builder.committed
     assert turn.assistant.content == "done"
     assert turn.assistant.reasoning_content == "thinking"
     assert turn.assistant.to_provider() == {

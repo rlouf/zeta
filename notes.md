@@ -1814,6 +1814,31 @@ Verification:
 - `rg 'load_project_context|MAX_CONTEXT_FILE_CHARS|MAX_CONTEXT_TOTAL_CHARS|AGENTS\\.md|_agents_file|_context_directories' src/zeta`
   returns no matches.
 
+### Section 8 completion audit - complete
+
+The Zeta/Sigil core boundary now satisfies the section requirements:
+
+- Import boundary: `src/zeta` does not import `sigil`, and the package-wide AST
+  test covers all current Zeta Python modules.
+- Sigil policy boundary: Zeta no longer owns Sigil turn/effect event names,
+  Sigil event sources, or project-context discovery.
+- Capability boundary: concrete local capabilities remain registered in
+  `src/sigil/tools` as `sigil.*` capabilities; Zeta only consumes the registry
+  and projection interfaces.
+- Context boundary: pure Zeta RPC only accepts explicit `context`; Sigil callers
+  load project context before invoking Zeta.
+- CLI/RPC behavior: pure `zeta rpc --stdio` and `sigil zeta rpc --stdio`
+  initialization tests still pass.
+
+Verification:
+
+- `uv run pytest tests/test_security_state.py::test_zeta_package_does_not_import_parent_sigil_modules tests/test_zeta_tools.py::test_zeta_tool_registry_does_not_import_sigil_tools tests/test_zeta_agent.py::test_zeta_rpc_cli_runs_pure_session_without_sigil_turn tests/test_zeta_agent.py::test_sigil_zeta_rpc_cli_serves_stdio_initialize tests/test_zeta_tools.py::test_sigil_registers_builtin_tools_explicitly tests/test_zeta_tools.py::test_sigil_ensures_shared_zeta_registry_has_builtins tests/test_zeta_prompt.py -q -k 'project_context or test_zeta_project_context or pure_session_without_sigil_turn or serves_stdio_initialize or builtin_tools or import'`
+  passed with 11 tests.
+- `rg 'import sigil|from sigil|sigil\\.prompt|sigil\\.turn|sigil\\.effect|load_project_context|MAX_CONTEXT_FILE_CHARS|MAX_CONTEXT_TOTAL_CHARS|AGENTS\\.md|_agents_file|_context_directories' src/zeta`
+  returns no matches.
+- `rg 'CapabilityId\\("sigil"|zeta_context_for_sigil|load_project_context|append_prompt_submitted_event' src/sigil src/zeta`
+  shows the remaining Sigil-specific ownership points are in `src/sigil`.
+
 ## Cross-cutting risks
 
 1. **Synchronous stdio blocks cancellation and timeouts.** Worker execution must

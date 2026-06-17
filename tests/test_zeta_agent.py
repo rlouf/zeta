@@ -616,6 +616,106 @@ def test_zeta_rpc_session_returns_aborted_on_wall_clock_budget(
     ] == ["zeta.user_message", "zeta.turn_aborted"]
 
 
+def test_zeta_rpc_cancel_unknown_and_completed_runs() -> None:
+    server = zeta_rpc.JsonRpcServer(StringIO(), StringIO())
+
+    assert server.cancel_session({"run_id": "run_missing"}) == {
+        "cancelled": False,
+        "run_id": "run_missing",
+        "status": "unknown",
+    }
+    server.runs["run_done"] = zeta_rpc.RpcRunState(
+        run_id="run_done",
+        request_id=1,
+        cancellation_event=threading.Event(),
+        status="completed",
+    )
+
+    assert server.cancel_session({"run_id": "run_done"}) == {
+        "cancelled": False,
+        "run_id": "run_done",
+        "status": "completed",
+    }
+
+
+def test_zeta_rpc_session_cancel_aborts_active_run(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    event_store = zeta_events.SqliteEventStore(tmp_path / "events.sqlite3")
+    context = zeta_context.ZetaContext(
+        session_id="ctx-session",
+        event_sink=event_store,
+        trace_store=zeta_trace.InMemoryStore(),
+        tool_registry=ToolRegistry(),
+        state_dir=tmp_path,
+        session_dir=tmp_path / "sessions" / "ctx-session",
+    )
+    input_stream = StringIO(
+        json.dumps(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "session.run",
+                "params": {"objective": "answer", "tools": [], "context": ""},
+            }
+        )
+        + "\n"
+        + json.dumps(
+            {
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "session.cancel",
+                "params": {"run_id": "run_cancel", "reason": "user_request"},
+            }
+        )
+        + "\n"
+    )
+    output = StringIO()
+    server = zeta_rpc.JsonRpcServer(input_stream, output)
+    server.session_runner = lambda params: zeta_rpc.run_rpc_session(
+        params,
+        publish_event=server.publish_event,
+        runtime_context=context,
+    )
+
+    def wait_for_cancel(*args: object, **kwargs: object) -> dict[str, str]:
+        deadline = time.monotonic() + 1.0
+        while time.monotonic() < deadline:
+            run = server.runs.get("run_cancel")
+            if run is not None and run.cancellation_event.is_set():
+                return {"content": "cancel observed"}
+            time.sleep(0.001)
+        raise AssertionError("cancel request was not delivered")
+
+    monkeypatch.setattr(zeta_rpc, "rpc_run_id", lambda: "run_cancel")
+    monkeypatch.setattr(zeta_agent, "model_endpoint_open", lambda *args: True)
+    monkeypatch.setattr(zeta_agent, "chat_completion_messages", wait_for_cancel)
+
+    server.serve()
+
+    messages = rpc_messages(output)
+    cancel_response = next(message for message in messages if message.get("id") == 2)
+    run_response = next(message for message in messages if message.get("id") == 1)
+    published = [
+        message["params"]["event"]
+        for message in messages
+        if message.get("method") == "events.publish"
+    ]
+
+    assert cancel_response["result"] == {
+        "cancelled": True,
+        "run_id": "run_cancel",
+    }
+    assert run_response["result"]["outcome"] == "aborted"
+    assert run_response["result"]["run_id"] == "run_cancel"
+    assert published[-1]["type"] == "turn_aborted"
+    assert published[-1]["reason"] == "cancelled"
+    assert [
+        event.event_type for event in event_store.list_events(zeta_events.Filter())
+    ] == ["zeta.user_message", "zeta.turn_aborted"]
+
+
 def test_zeta_rpc_registers_client_tool_on_server_registry() -> None:
     registry = ToolRegistry()
     server = zeta_rpc.JsonRpcServer(StringIO(), StringIO(), tool_registry=registry)

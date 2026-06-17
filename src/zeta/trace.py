@@ -599,10 +599,11 @@ class SqliteStore(StoreBase):
             self.connection = sqlite3.connect(
                 f"{path.as_uri()}?mode=ro&immutable=1",
                 uri=True,
+                check_same_thread=False,
             )
         else:
             self.path.parent.mkdir(parents=True, exist_ok=True)
-            self.connection = sqlite3.connect(str(path))
+            self.connection = sqlite3.connect(str(path), check_same_thread=False)
         self.connection.row_factory = sqlite3.Row
         self._write_lock = threading.RLock()
         self._batch_depth = 0

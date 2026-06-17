@@ -162,6 +162,13 @@ def run_agent_turn(
             model_status=model_status,
             stream_sink=stream_sink,
         )
+        if cancellation_event is not None and cancellation_event.is_set():
+            check_turn_budget(
+                state,
+                event_sink=event_sink,
+                cancellation_event=cancellation_event,
+                deadline=None,
+            )
         assistant_event_id, tool_calls = record_model_event(
             turn.assistant,
             state.events,

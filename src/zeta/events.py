@@ -462,7 +462,11 @@ class SqliteEventStore:
         self.path = Path(path)
         if self.path != Path(":memory:"):
             self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.connection = sqlite3.connect(str(self.path), timeout=5.0)
+        self.connection = sqlite3.connect(
+            str(self.path),
+            timeout=5.0,
+            check_same_thread=False,
+        )
         self.connection.row_factory = sqlite3.Row
         execute_with_retry(self.connection, "PRAGMA busy_timeout=5000")
         execute_with_retry(self.connection, "PRAGMA case_sensitive_like=ON")

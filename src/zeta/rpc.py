@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import select
+import threading
 import time
 import uuid
 from collections.abc import Callable
@@ -29,7 +30,10 @@ from .tools.registry import registry as _runtime_tool_registry
 
 RpcSessionRunner = Callable[[dict[str, Any]], dict[str, Any]]
 ToolCallStatus = Literal["requested", "responded", "failed", "cancelled", "timed_out"]
+RpcRunStatus = Literal["running", "cancelling", "completed", "cancelled", "failed"]
 READ_TIMEOUT = object()
+RPC_RUN_ID_PARAM = "_zeta_run_id"
+RPC_CANCELLATION_EVENT_PARAM = "_zeta_cancellation_event"
 
 
 @dataclass
@@ -39,6 +43,14 @@ class ClientToolCall:
     arguments: dict[str, Any]
     status: ToolCallStatus = "requested"
     timeout_sec: float | None = None
+
+
+@dataclass
+class RpcRunState:
+    run_id: str
+    request_id: Any
+    cancellation_event: threading.Event
+    status: RpcRunStatus = "running"
 
 
 @dataclass
@@ -62,7 +74,8 @@ def run_rpc_session(
     runtime_context: ZetaContext | None = None,
 ) -> dict[str, Any]:
     runtime_context = runtime_context or default_context()
-    run_id = rpc_run_id()
+    run_id = rpc_run_id_param(params) or rpc_run_id()
+    cancellation_event = rpc_cancellation_event_param(params)
     objective = rpc_objective(params)
     workflow = rpc_workflow(params)
     enabled_tools = registered_tools(
@@ -107,6 +120,7 @@ def run_rpc_session(
             trace_store=runtime_context.trace_store,
             tool_registry=runtime_context.tool_registry,
             caused_by=str(user_event.get("id") or ""),
+            cancellation_event=cancellation_event,
         )
     except AgentTurnAborted as exc:
         return rpc_session_result(
@@ -127,6 +141,18 @@ def run_rpc_session(
 
 def rpc_run_id() -> str:
     return f"run_{uuid.uuid4().hex}"
+
+
+def rpc_run_id_param(params: dict[str, Any]) -> str | None:
+    value = params.get(RPC_RUN_ID_PARAM)
+    return value if isinstance(value, str) and value else None
+
+
+def rpc_cancellation_event_param(params: dict[str, Any]) -> threading.Event | None:
+    value = params.get(RPC_CANCELLATION_EVENT_PARAM)
+    if hasattr(value, "is_set") and hasattr(value, "set"):
+        return cast(threading.Event, value)
+    return None
 
 
 def rpc_event_with_run_id(event: dict[str, Any], run_id: str) -> dict[str, Any]:
@@ -423,10 +449,17 @@ class JsonRpcServer:
         self.tool_responses: dict[str, dict[str, Any]] = {}
         self.tool_calls: dict[str, ClientToolCall] = {}
         self.client_tools: set[str] = set()
+        self.runs: dict[str, RpcRunState] = {}
+        self.run_workers: list[threading.Thread] = []
+        self.runs_lock = threading.Lock()
+        self.output_lock = threading.Lock()
 
     def serve(self) -> None:
-        while (message := self.read_message()) is not None:
-            self.handle_message(message)
+        try:
+            while (message := self.read_message()) is not None:
+                self.handle_message(message)
+        finally:
+            self.join_session_runs()
 
     def read_message(self) -> dict[str, Any] | None:
         for line in self.input:
@@ -472,6 +505,13 @@ class JsonRpcServer:
         params = message.get("params")
         params = params if isinstance(params, dict) else {}
         try:
+            if (
+                method == "session.run"
+                and request_id is not None
+                and self.session_runner is not None
+            ):
+                self.start_session_run(request_id, params)
+                return
             result = self.dispatch(method, params)
         except RpcError as exc:
             if request_id is not None:
@@ -507,6 +547,8 @@ class JsonRpcServer:
             return None
         if method == "events.list":
             return self.list_events(params)
+        if method == "session.cancel":
+            return self.cancel_session(params)
         if method == "session.run":
             if self.session_runner is None:
                 raise RpcError(
@@ -545,6 +587,99 @@ class JsonRpcServer:
             "events": [rpc_event_from_durable_event(event) for event in events],
             "next_cursor": next_cursor,
         }
+
+    def start_session_run(self, request_id: Any, params: dict[str, Any]) -> None:
+        if self.session_runner is None:
+            raise RpcError(
+                -32000,
+                "session_run_unavailable",
+                "Server error",
+                {"message": "session.run is not configured"},
+            )
+        run_id = rpc_run_id()
+        cancellation_event = threading.Event()
+        state = RpcRunState(
+            run_id=run_id,
+            request_id=request_id,
+            cancellation_event=cancellation_event,
+        )
+        with self.runs_lock:
+            self.runs[run_id] = state
+        worker_params = {
+            **params,
+            RPC_RUN_ID_PARAM: run_id,
+            RPC_CANCELLATION_EVENT_PARAM: cancellation_event,
+        }
+        worker = threading.Thread(
+            target=self.complete_session_run,
+            args=(state, worker_params),
+        )
+        self.run_workers.append(worker)
+        worker.start()
+
+    def complete_session_run(
+        self,
+        state: RpcRunState,
+        params: dict[str, Any],
+    ) -> None:
+        try:
+            assert self.session_runner is not None
+            result = self.session_runner(params)
+        except RpcError as exc:
+            state.status = "failed"
+            self.write_error(
+                state.request_id,
+                exc.jsonrpc_code,
+                exc.summary,
+                data=exc.error_data(),
+            )
+            return
+        except Exception as exc:
+            state.status = "failed"
+            self.write_error(
+                state.request_id,
+                -32603,
+                "Internal error",
+                data={
+                    "code": "internal_error",
+                    "message": f"{type(exc).__name__}: {exc}",
+                },
+            )
+            return
+        state.status = (
+            "cancelled"
+            if state.cancellation_event.is_set()
+            and result.get("outcome") == "aborted"
+            else "completed"
+        )
+        self.write_response(state.request_id, result)
+
+    def join_session_runs(self) -> None:
+        for worker in self.run_workers:
+            worker.join()
+
+    def cancel_session(self, params: dict[str, Any]) -> dict[str, Any]:
+        run_id = optional_string(params.get("run_id"))
+        if run_id is None:
+            raise RpcError(
+                -32602,
+                "invalid_run_id",
+                "Invalid params",
+                {"message": "run_id must be a non-empty string"},
+            )
+        with self.runs_lock:
+            state = self.runs.get(run_id)
+            if state is None:
+                return {"cancelled": False, "run_id": run_id, "status": "unknown"}
+            if state.status not in {"running", "cancelling"}:
+                return {
+                    "cancelled": False,
+                    "run_id": run_id,
+                    "status": state.status,
+                }
+            state.status = "cancelling"
+            state.cancellation_event.set()
+        return {"cancelled": True, "run_id": run_id}
 
     def register_client_tools(self, tools: Any) -> list[str]:
         if not isinstance(tools, list):
@@ -708,5 +843,6 @@ class JsonRpcServer:
         self.write_message({"jsonrpc": "2.0", "method": method, "params": params})
 
     def write_message(self, message: dict[str, Any]) -> None:
-        self.output.write(json.dumps(message, separators=(",", ":")) + "\n")
-        self.output.flush()
+        with self.output_lock:
+            self.output.write(json.dumps(message, separators=(",", ":")) + "\n")
+            self.output.flush()

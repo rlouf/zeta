@@ -9,7 +9,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from .state import append_event, read_json, write_json
+from .state import append_event
 
 MAX_SNIPPET_CHARS = 4000
 MAX_CONTEXT_LINES = 40
@@ -101,6 +101,8 @@ def record_failure(
     stderr_snippet: str | None = None,
 ) -> None:
     """Persist the last nonzero shell command for the current session."""
+    from .sessions import write_json
+
     failure_cwd = cwd or os.getcwd()
     stdout_text = truncate_snippet(stdout_snippet)
     stderr_text = truncate_snippet(stderr_snippet)
@@ -135,6 +137,8 @@ def record_failure(
 
 def last_failure_or_none() -> dict[str, Any] | None:
     """Load the last recorded failure without printing terminal output."""
+    from .sessions import read_json
+
     failure = read_json("last-failure.json")
     if not isinstance(failure, dict) or not failure.get("command"):
         return None

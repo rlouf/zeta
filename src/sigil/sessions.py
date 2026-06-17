@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import tempfile
 import time
 import uuid
 from pathlib import Path
@@ -23,12 +24,6 @@ from zeta.history import (
     turn_record,
 )
 
-from .failure import (
-    failure_context_prompt,
-    last_failure_or_none,
-    record_failure,
-    truncate_snippet,
-)
 from .protocols import (
     EFFECT_KIND_COMMAND,
     TURN_OUTCOME_EXECUTED,
@@ -36,14 +31,11 @@ from .protocols import (
     turn_contract,
 )
 from .state import (
-    append_jsonl_line,
     event_store_path,
     read_events,
-    read_jsonl,
     session_dir,
     session_id,
     state_dir,
-    write_text_atomic,
 )
 
 RUN_WORKFLOW = "run"
@@ -58,6 +50,75 @@ SESSION_METADATA_FILE = "session.json"
 RECENT_TURNS_FILE = "recent-turns.jsonl"
 RECENT_TURNS_LIMIT = 50
 TURN_SKIP_PREFIXES = (",", "sigil ", "__sigil_")
+
+
+def write_text_atomic(path: Path, text: str) -> None:
+    """Replace session files without exposing partial writes to readers."""
+    with tempfile.NamedTemporaryFile(
+        "w",
+        encoding="utf-8",
+        dir=path.parent,
+        prefix=f"{path.name}.",
+        suffix=".tmp",
+        delete=False,
+    ) as f:
+        f.write(text)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(f.name, path)
+
+
+def _session_root() -> Path:
+    """Return the session directory, creating it if needed."""
+    root = session_dir()
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
+def write_json(name: str, value: Any) -> None:
+    """Atomically write a session-scoped JSON document."""
+    write_text_atomic(
+        _session_root() / name, json.dumps(value, ensure_ascii=False, indent=2) + "\n"
+    )
+
+
+def read_json(name: str) -> Any | None:
+    """Read a session-scoped JSON document if it exists and parses."""
+    path = session_dir() / name
+    if not path.exists():
+        return None
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    return value
+
+
+def append_jsonl_line(path: Path, payload: dict[str, Any]) -> None:
+    """Append one JSONL payload as a single unbuffered write.
+
+    Concurrent shells append to the same files; one write(2) call per line
+    keeps lines from interleaving regardless of payload size.
+    """
+    line = json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n"
+    with path.open("ab", buffering=0) as f:
+        f.write(line.encode("utf-8"))
+
+
+def read_jsonl(name: str) -> list[dict[str, Any]]:
+    """Read a session-scoped JSONL file, skipping malformed lines."""
+    path = session_dir() / name
+    if not path.exists():
+        return []
+    events: list[dict[str, Any]] = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        try:
+            event = json.loads(line)
+        except Exception:
+            continue
+        if isinstance(event, dict):
+            events.append(event)
+    return events
 
 
 def session_paths() -> dict[str, str]:
@@ -235,6 +296,8 @@ def recent_turns(limit: int = RECENT_TURNS_LIMIT) -> list[dict[str, Any]]:
 
 def latest_active_failure() -> dict[str, Any] | None:
     """Return the last failure only when it is still the latest shell turn."""
+    from .failure import last_failure_or_none
+
     failure = last_failure_or_none()
     if failure is None:
         return None
@@ -252,6 +315,8 @@ def active_failure_context(since: float | None = None) -> str:
 
     A failure older than ``since`` returns nothing: the model already saw it.
     """
+    from .failure import failure_context_prompt
+
     failure = latest_active_failure()
     if failure is None:
         return ""
@@ -322,6 +387,8 @@ def record_turn(
     ``at`` carries the original timestamp for turns recorded after the fact,
     such as spooled binding records; live recording stamps the current time.
     """
+    from .failure import record_failure, truncate_snippet
+
     if turn_is_skippable(command):
         return
 

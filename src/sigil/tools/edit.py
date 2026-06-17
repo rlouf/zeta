@@ -11,7 +11,8 @@ from pathlib import Path
 from typing import Any
 
 from zeta.tools.base import (
-    ToolSpec,
+    CapabilityId,
+    CapabilitySpec,
     change_hashes,
     content_hash,
     error_result,
@@ -35,13 +36,13 @@ SCHEMA: dict[str, Any] = {
     },
 }
 
-SPEC = ToolSpec(
-    "edit",
+SPEC = CapabilitySpec(
+    CapabilityId("sigil", "edit"),
     "Edit a file. Prefer tagged input from read: [path#tag] plus SWAP, DEL, INS.PRE, or INS.POST line operations.",
     SCHEMA,
     interactive=True,
     effects=("write",),
-    staging_supported=True,
+    aliases=("edit",),
 )
 
 HEADER_RE = re.compile(r"^\[(?P<path>.+)\]$")

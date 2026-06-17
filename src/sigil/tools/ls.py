@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from zeta.tools.base import ToolSpec, error_result
+from zeta.tools.base import CapabilityId, CapabilitySpec, error_result
 
 SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -30,7 +30,13 @@ SCHEMA: dict[str, Any] = {
     },
 }
 
-SPEC = ToolSpec("ls", "List files with type and byte sizes.", SCHEMA, effects=("read",))
+SPEC = CapabilitySpec(
+    CapabilityId("sigil", "ls"),
+    "List files with type and byte sizes.",
+    SCHEMA,
+    effects=("read",),
+    aliases=("ls",),
+)
 
 
 def run(params: dict[str, Any]) -> dict[str, Any]:

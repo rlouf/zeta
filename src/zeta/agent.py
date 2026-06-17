@@ -19,9 +19,9 @@ from .models import (
     model_endpoint_open,
 )
 from .prompt import PromptBuilder, prompt_transform_from_env
-from .prompt.system import model_tool_descriptors
+from .prompt.system import model_capability_descriptors
 from .tools.base import proposed_effect
-from .tools.registry import ExecutionMode, ToolRegistry
+from .tools.registry import CapabilityRegistry, ExecutionMode
 from .tools.registry import registry as _runtime_tool_registry
 from .trace import PromptTrace, Store, prompt_trace_payload
 
@@ -37,7 +37,7 @@ class AgentConfig:
     """Configuration for one Zeta turn."""
 
     system_prompt: str | None = None
-    allowed_tools: Iterable[str] | None = None
+    allowed_capabilities: Iterable[str] | None = None
     max_turns: int | None = None
     stop_on_staged_effect: bool = True
     execution_mode: ExecutionMode = "stage"
@@ -126,7 +126,7 @@ def run_agent_turn(
     stream_sink: ChatCompletionStreamSink | None = None,
     prompt_builder: PromptBuilder | None = None,
     trace_store: Store | None = None,
-    tool_registry: ToolRegistry | None = None,
+    tool_registry: CapabilityRegistry | None = None,
     caused_by: str | None = None,
     cancellation_event: threading.Event | None = None,
     deadline: float | None = None,
@@ -136,13 +136,19 @@ def run_agent_turn(
         raise RuntimeError("model endpoint is not reachable")
     deadline = agent_deadline(config, deadline)
     active_tool_registry = tool_registry or _runtime_tool_registry
-    allowed_tools = agent_allowed_tools(config, tool_registry=active_tool_registry)
+    allowed_capabilities = agent_allowed_capabilities(
+        config,
+        tool_registry=active_tool_registry,
+    )
     state = AgentTurnState(next_model_caused_by=caused_by)
     builder = prompt_builder or PromptBuilder(
         store=trace_store,
         transform=prompt_transform_from_env(),
     )
-    tools = model_tool_descriptors(allowed_tools, tool_registry=active_tool_registry)
+    tools = model_capability_descriptors(
+        allowed_capabilities,
+        tool_registry=active_tool_registry,
+    )
     for _ in turn_indices(config.max_turns):
         check_turn_budget(
             state,
@@ -154,7 +160,7 @@ def run_agent_turn(
             objective,
             timeline,
             config=config,
-            allowed_tools=allowed_tools,
+            allowed_capabilities=allowed_capabilities,
             context=context,
             tools=tools,
             state=state,
@@ -182,10 +188,10 @@ def run_agent_turn(
                 final_text=str(turn.assistant.get("content") or ""),
                 final_text_streamed=turn.streamed_content,
             )
-        outcome = run_tool_calls(
+        outcome = run_capability_calls(
             tool_calls,
             config=config,
-            allowed_tools=allowed_tools,
+            allowed_capabilities=allowed_capabilities,
             model_telemetry=turn.model_telemetry,
             prompt_trace=turn.prompt_trace,
             builder=builder,
@@ -214,7 +220,7 @@ def request_model_turn(
     timeline: list[dict[str, Any]],
     *,
     config: AgentConfig,
-    allowed_tools: tuple[str, ...],
+    allowed_capabilities: tuple[str, ...],
     context: str,
     tools: list[dict[str, Any]],
     state: AgentTurnState,
@@ -226,7 +232,7 @@ def request_model_turn(
         objective,
         timeline,
         system=config.system_prompt,
-        allowed_tools=allowed_tools,
+        allowed_capabilities=allowed_capabilities,
         context=context,
         current_events=state.events,
         tools=tools,
@@ -253,16 +259,16 @@ def request_model_turn(
     )
 
 
-def run_tool_calls(
+def run_capability_calls(
     tool_calls: list[dict[str, Any]],
     *,
     config: AgentConfig,
-    allowed_tools: tuple[str, ...],
+    allowed_capabilities: tuple[str, ...],
     model_telemetry: dict[str, Any],
     prompt_trace: PromptTrace | None,
     builder: PromptBuilder,
     event_sink: AgentEventSink | None,
-    tool_registry: ToolRegistry,
+    tool_registry: CapabilityRegistry,
     assistant_event_id: str | None,
     state: AgentTurnState,
     cancellation_event: threading.Event | None,
@@ -277,7 +283,7 @@ def run_tool_calls(
         )
         result_event = handle_tool_call(
             tool_call,
-            allowed_tools=allowed_tools,
+            allowed_capabilities=allowed_capabilities,
             index=index,
             execution_mode=config.execution_mode,
             model_telemetry=(model_telemetry if index == 0 else None),
@@ -384,37 +390,44 @@ def agent_model_endpoint_open(config: AgentConfig) -> bool:
     return model_endpoint_open(config.model_url)
 
 
-def agent_allowed_tools(
+def agent_allowed_capabilities(
     config: AgentConfig,
     *,
-    tool_registry: ToolRegistry | None = None,
+    tool_registry: CapabilityRegistry | None = None,
 ) -> tuple[str, ...]:
-    return registered_tools(config.allowed_tools, tool_registry=tool_registry)
+    return registered_capabilities(
+        config.allowed_capabilities,
+        tool_registry=tool_registry,
+    )
 
 
-def registered_tools(
-    allowed_tools: Iterable[str] | None,
+def registered_capabilities(
+    allowed_capabilities: Iterable[str] | None,
     *,
-    tool_registry: ToolRegistry | None = None,
+    tool_registry: CapabilityRegistry | None = None,
 ) -> tuple[str, ...]:
-    """Filter to registered tools, preserving the caller's order."""
+    """Filter to registered capabilities, preserving the caller's order."""
     active_tool_registry = tool_registry or _runtime_tool_registry
-    if allowed_tools is None:
-        return tuple(active_tool_registry.list_tool_names())
-    available = set(active_tool_registry.list_tool_names())
-    return tuple(name for name in allowed_tools if name in available)
+    if allowed_capabilities is None:
+        return tuple(active_tool_registry.list_capability_ids())
+    enabled = []
+    for name in allowed_capabilities:
+        capability_id = active_tool_registry.resolve(name)
+        if capability_id is not None:
+            enabled.append(capability_id)
+    return tuple(enabled)
 
 
-def run_tool(
-    name: str,
+def invoke_capability(
+    capability_id: str,
     params: dict[str, Any],
     *,
     execution_mode: ExecutionMode = "stage",
-    tool_registry: ToolRegistry | None = None,
+    tool_registry: CapabilityRegistry | None = None,
 ) -> dict[str, Any]:
     active_tool_registry = tool_registry or _runtime_tool_registry
-    return active_tool_registry.run_tool(
-        name,
+    return active_tool_registry.invoke(
+        capability_id,
         params,
         execution_mode=execution_mode,
     )
@@ -528,7 +541,7 @@ def emit_event(
 
 
 @dataclass(frozen=True)
-class ToolCallResult:
+class CapabilityCallResult:
     events: list[dict[str, Any]]
     staged_effect: dict[str, Any] | None = None
     stop: bool = False
@@ -688,10 +701,11 @@ def model_tool_call_event(
     return event
 
 
-@dataclass(frozen=True)
-class ToolCallInvocation:
+@dataclass
+class CapabilityCallInvocation:
     call_id: str
     name: str
+    capability_id: str
     params: dict[str, Any]
     call_event: dict[str, Any]
     parse_error: str = ""
@@ -700,16 +714,16 @@ class ToolCallInvocation:
 def handle_tool_call(
     tool_call: dict[str, Any],
     *,
-    allowed_tools: tuple[str, ...],
+    allowed_capabilities: tuple[str, ...],
     index: int,
     execution_mode: ExecutionMode = "stage",
     model_telemetry: dict[str, Any] | None = None,
     prompt_trace: PromptTrace | None = None,
     prompt_builder: PromptBuilder | None = None,
     event_sink: AgentEventSink | None = None,
-    tool_registry: ToolRegistry | None = None,
+    tool_registry: CapabilityRegistry | None = None,
     caused_by: str | None = None,
-) -> ToolCallResult:
+) -> CapabilityCallResult:
     active_tool_registry = tool_registry or _runtime_tool_registry
     call_id = str(tool_call.get("id") or f"call-{index}")
     invocation = tool_call_invocation(tool_call, index=index, caused_by=caused_by)
@@ -728,7 +742,7 @@ def handle_tool_call(
         )
     validation_error = tool_call_validation_error(
         invocation,
-        allowed_tools=allowed_tools,
+        allowed_capabilities=allowed_capabilities,
         tool_registry=active_tool_registry,
     )
     if validation_error is not None:
@@ -758,7 +772,7 @@ def tool_call_invocation(
     *,
     index: int,
     caused_by: str | None,
-) -> ToolCallInvocation | None:
+) -> CapabilityCallInvocation | None:
     call_id = str(tool_call.get("id") or f"call-{index}")
     function = tool_call.get("function")
     if not isinstance(function, dict):
@@ -776,9 +790,10 @@ def tool_call_invocation(
     }
     if caused_by is not None:
         call_event["caused_by"] = caused_by
-    return ToolCallInvocation(
+    return CapabilityCallInvocation(
         call_id=call_id,
         name=name,
+        capability_id="",
         params=params,
         call_event=call_event,
         parse_error=parse_error,
@@ -786,28 +801,33 @@ def tool_call_invocation(
 
 
 def tool_call_validation_error(
-    invocation: ToolCallInvocation,
+    invocation: CapabilityCallInvocation,
     *,
-    allowed_tools: tuple[str, ...],
-    tool_registry: ToolRegistry,
+    allowed_capabilities: tuple[str, ...],
+    tool_registry: CapabilityRegistry,
 ) -> tuple[str, str] | None:
     if invocation.parse_error:
         return "invalid-json-args", invocation.parse_error
-    if tool_registry.get(invocation.name) is None:
+    capability_id = tool_registry.resolve(invocation.name)
+    if capability_id is None:
         return "unknown-tool", f"unknown tool: {invocation.name}"
-    if invocation.name not in allowed_tools:
+    invocation.capability_id = capability_id
+    if capability_id not in allowed_capabilities:
         return (
             "disallowed-tool",
             f"tool is not allowed in this workflow: {invocation.name}",
         )
-    schema_errors = tool_registry.validate_tool_args(invocation.name, invocation.params)
+    schema_errors = tool_registry.validate_capability_args(
+        capability_id,
+        invocation.params,
+    )
     if schema_errors:
         return "schema-mismatch", "; ".join(schema_errors)
     return None
 
 
 def reject_tool_call(
-    invocation: ToolCallInvocation,
+    invocation: CapabilityCallInvocation,
     code: str,
     message: str,
     *,
@@ -815,7 +835,7 @@ def reject_tool_call(
     prompt_trace: PromptTrace | None,
     prompt_builder: PromptBuilder | None,
     event_sink: AgentEventSink | None,
-) -> ToolCallResult:
+) -> CapabilityCallResult:
     return invalid_tool_result(
         invocation.call_id,
         invocation.name,
@@ -831,15 +851,15 @@ def reject_tool_call(
 
 
 def run_valid_tool_call(
-    invocation: ToolCallInvocation,
+    invocation: CapabilityCallInvocation,
     *,
     execution_mode: ExecutionMode,
     model_telemetry: dict[str, Any] | None,
     prompt_trace: PromptTrace | None,
     prompt_builder: PromptBuilder | None,
     event_sink: AgentEventSink | None,
-    tool_registry: ToolRegistry,
-) -> ToolCallResult:
+    tool_registry: CapabilityRegistry,
+) -> CapabilityCallResult:
     events: list[dict[str, Any]] = []
     attach_tool_call_trace(
         invocation.call_event,
@@ -848,8 +868,8 @@ def run_valid_tool_call(
     )
     emit_event(events, invocation.call_event, event_sink)
     try:
-        result = run_tool(
-            invocation.name,
+        result = invoke_capability(
+            invocation.capability_id,
             invocation.params,
             execution_mode=execution_mode,
             tool_registry=tool_registry,
@@ -883,7 +903,7 @@ def run_valid_tool_call(
         ),
         event_sink,
     )
-    return ToolCallResult(
+    return CapabilityCallResult(
         events=events,
         staged_effect=staged_effect,
         stop=stop,
@@ -917,7 +937,7 @@ def invalid_tool_result(
     prompt_builder: PromptBuilder | None = None,
     event_sink: AgentEventSink | None = None,
     caused_by: str | None = None,
-) -> ToolCallResult:
+) -> CapabilityCallResult:
     event = call_event or {
         "type": "tool_call",
         "id": call_id,
@@ -954,7 +974,7 @@ def invalid_tool_result(
         result_event,
         event_sink,
     )
-    return ToolCallResult(events=events)
+    return CapabilityCallResult(events=events)
 
 
 def traced_tool_result_event(
@@ -1080,13 +1100,16 @@ def tool_call_stages_effect(
     name: str,
     execution_mode: ExecutionMode,
     *,
-    tool_registry: ToolRegistry | None = None,
+    tool_registry: CapabilityRegistry | None = None,
 ) -> bool:
     if execution_mode != "stage":
         return False
     active_tool_registry = tool_registry or _runtime_tool_registry
-    tool = active_tool_registry.get(name)
-    return tool is not None and tool.spec.mutates()
+    capability_id = active_tool_registry.resolve(name)
+    if capability_id is None:
+        return False
+    capability = active_tool_registry.get(capability_id)
+    return capability is not None and capability.spec.mutates()
 
 
 def result_staged_effect(result: dict[str, Any]) -> dict[str, Any] | None:

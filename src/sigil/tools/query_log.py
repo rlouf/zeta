@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from zeta.tools.base import ToolSpec, error_result
+from zeta.tools.base import CapabilityId, CapabilitySpec, error_result
 
 if TYPE_CHECKING:
     from zeta.history import HistoryView
@@ -60,8 +60,8 @@ SCHEMA: dict[str, Any] = {
     },
 }
 
-SPEC = ToolSpec(
-    "query_log",
+SPEC = CapabilitySpec(
+    CapabilityId("sigil", "query_log"),
     (
         "Query the user's turn history: what ran, in which workflow, "
         "what it touched, what it cost, and how it ended. Searches every "
@@ -70,6 +70,7 @@ SPEC = ToolSpec(
     ),
     SCHEMA,
     effects=("read",),
+    aliases=("query_log",),
 )
 
 

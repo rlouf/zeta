@@ -29,7 +29,7 @@ from .components import (
     prompt_component_object,
     prompt_components,
 )
-from .system import can_read_skill_files, enabled_tool_names
+from .system import can_read_skill_files, enabled_capability_ids
 from .transforms import NoOpPromptTransform, PromptTransform
 
 
@@ -66,7 +66,7 @@ class PromptBuilder:
         timeline: list[dict[str, Any]],
         *,
         system: str | None = None,
-        allowed_tools: Iterable[str] | None = None,
+        allowed_capabilities: Iterable[str] | None = None,
         context: str = "",
         current_events: Iterable[dict[str, Any]] = (),
         tools: list[dict[str, Any]] | None = None,
@@ -79,11 +79,11 @@ class PromptBuilder:
             objective,
             timeline,
             system=system,
-            allowed_tools=allowed_tools,
+            allowed_capabilities=allowed_capabilities,
             context=context,
             current_events=current_events,
             tools=tools,
-            skills=self._skills_for(allowed_tools),
+            skills=self._skills_for(allowed_capabilities),
         )
         fallback_tools = tools or []
         return self._build_traced_prompt(
@@ -197,8 +197,8 @@ class PromptBuilder:
             warn_trace_failure_once("record_tool_result", exc)
             return None
 
-    def _skills_for(self, allowed_tools: Iterable[str] | None) -> list[Skill]:
-        enabled = enabled_tool_names(allowed_tools)
+    def _skills_for(self, allowed_capabilities: Iterable[str] | None) -> list[Skill]:
+        enabled = enabled_capability_ids(allowed_capabilities)
         cached = self._skills.get(enabled)
         if cached is None:
             cached = available_skills() if can_read_skill_files(enabled) else []

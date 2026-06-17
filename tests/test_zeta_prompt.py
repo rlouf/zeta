@@ -26,21 +26,21 @@ from zeta import prompt as zeta_prompt
 from zeta import skills as zeta_skills
 from zeta import trace as zeta_trace
 from zeta.models import chat_completions as zeta_model
-from zeta.prompt.system import model_tool_descriptors
+from zeta.prompt.system import model_capability_descriptors
 
 ensure_builtin_tools_registered()
 
 
 def test_zeta_prompt_builder_noop_transform_matches_chat_messages() -> None:
     store = zeta_trace.InMemoryStore()
-    tools = model_tool_descriptors(())
+    tools = model_capability_descriptors(())
     transcript = [{"role": "user", "content": "prior"}]
     current_events = [{"type": "model", "content": "current"}]
 
     prepared = zeta_prompt.PromptBuilder(store=store).build(
         "inspect",
         transcript,
-        allowed_tools=(),
+        allowed_capabilities=(),
         context="Project context",
         current_events=current_events,
         tools=tools,
@@ -51,7 +51,7 @@ def test_zeta_prompt_builder_noop_transform_matches_chat_messages() -> None:
         zeta_prompt.prompt_components(
             "inspect",
             transcript,
-            allowed_tools=(),
+            allowed_capabilities=(),
             context="Project context",
             current_events=current_events,
             include_non_message_components=False,
@@ -71,13 +71,13 @@ def test_zeta_prompt_builder_links_prompt_components() -> None:
     prepared = zeta_prompt.PromptBuilder(store=store).build(
         "inspect",
         [{"role": "user", "content": "prior"}],
-        allowed_tools=("read",),
+        allowed_capabilities=("read",),
         context="Project context",
         current_events=[
             {"type": "model", "tool_calls": tool_call_fixture("call-1")},
             {"type": "tool_result", "tool_call_id": "call-1", "result": {"ok": True}},
         ],
-        tools=model_tool_descriptors(("read",)),
+        tools=model_capability_descriptors(("read",)),
     )
 
     assert prepared.prompt_object_id is not None
@@ -94,11 +94,11 @@ def test_zeta_prompt_builder_links_prompt_components() -> None:
 
 def test_zeta_prompt_request_reconstructs_and_verifies() -> None:
     store = zeta_trace.InMemoryStore()
-    tools = model_tool_descriptors(("read",))
+    tools = model_capability_descriptors(("read",))
     prepared = zeta_prompt.PromptBuilder(store=store).build(
         "inspect",
         [{"role": "user", "content": "prior"}],
-        allowed_tools=("read",),
+        allowed_capabilities=("read",),
         context="Project context",
         tools=tools,
         selected_model="unit-model",
@@ -118,11 +118,11 @@ def test_zeta_prompt_request_reconstructs_and_verifies() -> None:
 
 def test_zeta_prompt_request_reconstructs_a_no_thinking_prompt() -> None:
     store = zeta_trace.InMemoryStore()
-    tools = model_tool_descriptors(("read",))
+    tools = model_capability_descriptors(("read",))
     prepared = zeta_prompt.PromptBuilder(store=store).build(
         "inspect",
         [],
-        allowed_tools=("read",),
+        allowed_capabilities=("read",),
         tools=tools,
         selected_model="unit-model",
         thinking="none",
@@ -289,10 +289,10 @@ def test_zeta_prompt_components_prefix_order(
     components = zeta_prompt.prompt_components(
         "inspect",
         [{"role": "user", "content": "prior"}],
-        allowed_tools=("read",),
+        allowed_capabilities=("read",),
         context="Project context",
         current_events=[{"type": "model", "content": "current"}],
-        tools=model_tool_descriptors(("read",)),
+        tools=model_capability_descriptors(("read",)),
     )
 
     assert [component.kind for component in components[:4]] == [
@@ -349,7 +349,7 @@ def test_zeta_prompt_builder_compaction_transform_preserves_source_links() -> No
             {"role": "user", "content": "prior user"},
             {"role": "assistant", "content": "prior assistant"},
         ],
-        allowed_tools=(),
+        allowed_capabilities=(),
         tools=[],
     )
 
@@ -398,7 +398,7 @@ def test_zeta_task_state_transform_replaces_transcript_with_structured_state() -
             {"role": "assistant", "content": "Tests pass"},
             {"role": "user", "content": "Keep going"},
         ],
-        allowed_tools=(),
+        allowed_capabilities=(),
         current_events=[{"type": "model", "content": "Fresh evidence"}],
         tools=[],
     )
@@ -443,7 +443,7 @@ def test_zeta_task_state_transform_fails_open() -> None:
             {"role": "user", "content": "four"},
             {"role": "assistant", "content": "five"},
         ],
-        allowed_tools=(),
+        allowed_capabilities=(),
         tools=[],
     )
 
@@ -469,7 +469,7 @@ def test_zeta_prompt_components_keep_source_events() -> None:
     components = zeta_prompt.prompt_components(
         "continue",
         transcript,
-        allowed_tools=(),
+        allowed_capabilities=(),
         tools=[],
     )
 
@@ -526,7 +526,7 @@ def test_zeta_structural_trim_compacts_old_bulky_read_or_grep_tool_results(
             metadata=metadata,
             tool_name=tool_name,
         ),
-        allowed_tools=(),
+        allowed_capabilities=(),
         tools=[],
     )
 
@@ -565,7 +565,7 @@ def test_zeta_structural_trim_skips_non_read_grep_tool_results() -> None:
             metadata={"command": "python script.py"},
             tool_name="bash",
         ),
-        allowed_tools=(),
+        allowed_capabilities=(),
         tools=[],
     )
 
@@ -636,7 +636,7 @@ def test_zeta_structural_trim_preserves_current_tool_results_by_default() -> Non
     ).build(
         "continue",
         [],
-        allowed_tools=(),
+        allowed_capabilities=(),
         current_events=[
             {
                 "type": "model",
@@ -849,8 +849,8 @@ def test_system_prompt_advertises_enabled_skills_only_with_read(
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.chdir(project)
 
-    prompt = zeta_prompt.system_prompt(allowed_tools=("read", "ls"))
-    no_read_prompt = zeta_prompt.system_prompt(allowed_tools=("ls",))
+    prompt = zeta_prompt.system_prompt(allowed_capabilities=("read", "ls"))
+    no_read_prompt = zeta_prompt.system_prompt(allowed_capabilities=("ls",))
 
     assert "<available_skills>" in prompt
     assert "name: enabled-skill" in prompt
@@ -861,8 +861,8 @@ def test_system_prompt_advertises_enabled_skills_only_with_read(
 
 
 def test_system_prompt_is_product_neutral_and_dynamic() -> None:
-    prompt = zeta_prompt.system_prompt(allowed_tools=("read", "ls"))
-    grep_prompt = zeta_prompt.system_prompt(allowed_tools=("read", "grep", "ls"))
+    prompt = zeta_prompt.system_prompt(allowed_capabilities=("read", "ls"))
+    grep_prompt = zeta_prompt.system_prompt(allowed_capabilities=("read", "grep", "ls"))
 
     assert "Sigil" not in prompt
     assert "You are Zeta" not in prompt
@@ -893,13 +893,13 @@ def test_system_prompt_is_product_neutral_and_dynamic() -> None:
 def test_system_prompt_states_todays_date() -> None:
     import time
 
-    prompt = zeta_prompt.system_prompt(allowed_tools=("read",))
-    custom = zeta_prompt.system_prompt("Custom base.", allowed_tools=("read",))
+    prompt = zeta_prompt.system_prompt(allowed_capabilities=("read",))
+    custom = zeta_prompt.system_prompt("Custom base.", allowed_capabilities=("read",))
 
     today = time.strftime("%Y-%m-%d", time.localtime())
     assert f"Today is {today}" in prompt
     assert f"Today is {today}" in custom
-    assert prompt == zeta_prompt.system_prompt(allowed_tools=("read",))
+    assert prompt == zeta_prompt.system_prompt(allowed_capabilities=("read",))
 
 
 def test_zeta_skill_directive_expands_in_context_message(
@@ -1049,7 +1049,7 @@ def test_zeta_measure_counts_project_context_once() -> None:
     components = zeta_prompt.prompt_components(
         "inspect",
         [],
-        allowed_tools=("read",),
+        allowed_capabilities=("read",),
         context=context,
     )
 
@@ -1154,7 +1154,7 @@ def test_zeta_task_state_transform_compacts_components_without_trace_ids() -> No
             {"role": "user", "content": "newer three"},
             {"role": "assistant", "content": "newer four"},
         ],
-        allowed_tools=(),
+        allowed_capabilities=(),
     )
     assert all(component.object_id is None for component in components)
 
@@ -1194,7 +1194,9 @@ def test_zeta_task_state_transform_keeps_newest_messages_verbatim() -> None:
         {"role": "user", "content": "recent message five"},
         {"role": "assistant", "content": "recent message six"},
     ]
-    components = zeta_prompt.prompt_components("continue", timeline, allowed_tools=())
+    components = zeta_prompt.prompt_components(
+        "continue", timeline, allowed_capabilities=()
+    )
     extractor = FakeExtractor()
 
     compacted = zeta_prompt.TaskStateExtractionPromptTransform(
@@ -1258,7 +1260,9 @@ def test_zeta_task_state_extraction_is_cached_per_source_set() -> None:
             return task_state_fixture(objective="cached objective")
 
     timeline = [{"role": "user", "content": f"message {index}"} for index in range(6)]
-    components = zeta_prompt.prompt_components("continue", timeline, allowed_tools=())
+    components = zeta_prompt.prompt_components(
+        "continue", timeline, allowed_capabilities=()
+    )
     extractor = CountingExtractor()
     transform = zeta_prompt.TaskStateExtractionPromptTransform(extractor=extractor)
 
@@ -1345,7 +1349,9 @@ def test_zeta_drop_oldest_drops_tool_results_with_their_call() -> None:
         tool_result_event("call-old", "old result " + "x" * 400, metadata={}),
         {"role": "user", "content": "newer message"},
     ]
-    components = zeta_prompt.prompt_components("continue", timeline, allowed_tools=())
+    components = zeta_prompt.prompt_components(
+        "continue", timeline, allowed_capabilities=()
+    )
     total = zeta_prompt.measure(components).total_tokens
 
     output = zeta_prompt.DropOldestPromptTransform(max_tokens=total - 50).apply(
@@ -1401,7 +1407,9 @@ def test_zeta_prompt_components_start_prior_timeline_at_message_boundary() -> No
         {"type": "model", "content": "the answer"},
     ]
 
-    components = zeta_prompt.prompt_components("continue", timeline, allowed_tools=())
+    components = zeta_prompt.prompt_components(
+        "continue", timeline, allowed_capabilities=()
+    )
 
     contents = [
         str(component.message.get("content") or "")
@@ -1465,7 +1473,7 @@ def test_zeta_prompt_build_writes_in_a_single_batch() -> None:
     zeta_prompt.PromptBuilder(store=store).build(
         "question",
         [{"role": "user", "content": "prior"}],
-        allowed_tools=(),
+        allowed_capabilities=(),
         tools=[],
     )
 
@@ -1478,7 +1486,7 @@ def test_zeta_prompt_object_stores_payload_hash_not_payload() -> None:
     prepared = zeta_prompt.PromptBuilder(store=store).build(
         "question",
         [{"role": "user", "content": "prior"}],
-        allowed_tools=(),
+        allowed_capabilities=(),
         tools=[],
     )
 
@@ -1512,7 +1520,7 @@ def test_zeta_prompt_builder_discovers_skills_once_per_turn(monkeypatch) -> None
     monkeypatch.setattr("zeta.prompt.builder.available_skills", fake_available_skills)
     builder = zeta_prompt.PromptBuilder(store=zeta_trace.InMemoryStore())
 
-    builder.build("question", [], allowed_tools=("read",), tools=[])
-    builder.build("question", [], allowed_tools=("read",), tools=[])
+    builder.build("question", [], allowed_capabilities=("read",), tools=[])
+    builder.build("question", [], allowed_capabilities=("read",), tools=[])
 
     assert calls == 1

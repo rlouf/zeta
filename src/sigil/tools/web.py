@@ -14,7 +14,7 @@ from typing import Any
 from zeta.models.chat_completions import iter_sse_data
 from zeta.models.codex_auth import CodexCredentials, load_codex_credentials
 from zeta.models.responses import codex_request_headers, codex_responses_url
-from zeta.tools.base import ToolSpec, error_result
+from zeta.tools.base import CapabilityId, CapabilitySpec, error_result
 
 DEFAULT_TIMEOUT_SEC = 30.0
 DEFAULT_MAX_PREVIEW_BYTES = 8 * 1024
@@ -41,14 +41,15 @@ SEARCH_SCHEMA: dict[str, Any] = {
     },
 }
 
-SEARCH_SPEC = ToolSpec(
-    "web_search",
+SEARCH_SPEC = CapabilitySpec(
+    CapabilityId("sigil", "web_search"),
     (
         "Search public web pages using Codex hosted web search. Provide one "
         "self-contained query; use read for URLs returned by the search."
     ),
     SEARCH_SCHEMA,
     effects=("search",),
+    aliases=("web_search",),
 )
 
 

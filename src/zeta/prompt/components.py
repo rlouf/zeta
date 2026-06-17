@@ -19,7 +19,7 @@ from ..tools.base import content_hash
 from ..trace import Object, ObjectId
 from .system import (
     can_read_skill_files,
-    enabled_tool_names,
+    enabled_capability_ids,
     skill_prompt_items,
     system_prompt,
 )
@@ -63,7 +63,7 @@ def prompt_components(
     timeline: list[dict[str, Any]],
     *,
     system: str | None = None,
-    allowed_tools: Iterable[str] | None = None,
+    allowed_capabilities: Iterable[str] | None = None,
     context: str = "",
     current_events: Iterable[dict[str, Any]] = (),
     tools: list[dict[str, Any]] | None = None,
@@ -75,17 +75,23 @@ def prompt_components(
     Public ordering contract: system_prompt, tool descriptors, project context,
     then volatile timeline/objective/current-turn components.
     """
-    enabled_tools = enabled_tool_names(allowed_tools)
+    enabled_capabilities = enabled_capability_ids(allowed_capabilities)
     if skills is None:
-        skills = available_skills() if can_read_skill_files(enabled_tools) else []
-    system_content = system_prompt(system, allowed_tools=enabled_tools, skills=skills)
+        skills = (
+            available_skills() if can_read_skill_files(enabled_capabilities) else []
+        )
+    system_content = system_prompt(
+        system,
+        allowed_capabilities=enabled_capabilities,
+        skills=skills,
+    )
     components = [
         PromptComponent(
             kind="system_prompt",
             data={
                 "content": system_content,
                 "base_prompt": system,
-                "allowed_tools": list(enabled_tools),
+                "allowed_tools": list(enabled_capabilities),
             },
             message={"role": "system", "content": system_content},
         )
@@ -96,7 +102,7 @@ def prompt_components(
                 objective,
                 context=context,
                 tools=tools,
-                enabled_tools=enabled_tools,
+                enabled_capabilities=enabled_capabilities,
                 skills=skills,
             )
         )
@@ -285,7 +291,7 @@ def non_message_components(
     *,
     context: str,
     tools: list[dict[str, Any]] | None,
-    enabled_tools: tuple[str, ...],
+    enabled_capabilities: tuple[str, ...],
     skills: list[Skill],
 ) -> list[PromptComponent]:
     components: list[PromptComponent] = []
@@ -294,7 +300,7 @@ def non_message_components(
             PromptComponent(
                 kind="tool_descriptor_set",
                 data={
-                    "allowed_tools": list(enabled_tools),
+                    "allowed_tools": list(enabled_capabilities),
                     "tools": tools,
                 },
             )

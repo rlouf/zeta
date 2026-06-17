@@ -1,101 +1,142 @@
-"""Registry for built-in Zeta tools."""
+"""Registry for Zeta capabilities."""
 
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Any
 
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import SchemaError, ValidationError
 
-from .base import ToolImpl, error_result
+from .base import Capability, ExecutionMode, error_result
 
-__all__ = ["ExecutionMode", "ToolRegistry", "registry"]
-
-ExecutionMode = Literal["stage", "direct"]
+__all__ = ["ExecutionMode", "CapabilityRegistry", "registry"]
 
 
-class ToolRegistry:
-    """Registry for Zeta tools."""
+class CapabilityRegistry:
+    """Registry for Zeta capabilities."""
 
     def __init__(self) -> None:
-        self._tools: dict[str, ToolImpl] = {}
+        self._capabilities: dict[str, Capability] = {}
+        self._aliases: dict[str, str] = {}
 
-    def register(self, name: str, tool: ToolImpl) -> None:
-        """Register a tool implementation under a model-visible name."""
-        if tool.spec.name != name:
-            raise ValueError(
-                f"tool spec name {tool.spec.name!r} does not match {name!r}"
-            )
-        if name in self._tools:
-            raise ValueError(f"tool {name!r} is already registered")
+    def register(self, capability: Capability) -> None:
+        """Register a capability implementation under its canonical id."""
+        capability_id = capability.spec.id.canonical()
+        if capability_id in self._capabilities:
+            raise ValueError(f"capability {capability_id!r} is already registered")
         try:
-            Draft202012Validator.check_schema(tool.spec.schema)
+            Draft202012Validator.check_schema(capability.spec.input_schema)
         except SchemaError as exc:
             raise ValueError(
-                f"invalid schema for tool {name!r}: {exc.message}"
+                f"invalid schema for capability {capability_id!r}: {exc.message}"
             ) from exc
-        if tool.spec.staging_supported and tool.stage is None:
+        if capability.policy.supports_staging and not capability.spec.mutates():
             raise ValueError(
-                f"tool {name!r} declares staging without an implementation"
+                f"capability {capability_id!r} declares staging for read-only effects"
             )
-        self._tools[name] = tool
+        if (
+            capability.spec.mutates()
+            and not capability.policy.supports_staging
+            and not capability.policy.supports_direct
+        ):
+            raise ValueError(
+                f"capability {capability_id!r} supports neither staging nor direct execution"
+            )
+        self._capabilities[capability_id] = capability
+        for alias in capability.spec.aliases:
+            if alias in self._aliases:
+                raise ValueError(f"capability alias {alias!r} is already registered")
+            self._aliases[alias] = capability_id
 
-    def get(self, name: str) -> ToolImpl | None:
-        """Get a registered tool implementation by name."""
-        return self._tools.get(name)
+    def get(self, capability_id: str) -> Capability | None:
+        """Get a registered capability implementation by canonical id."""
+        return self._capabilities.get(capability_id)
 
-    def list_tool_names(self) -> list[str]:
-        """List registered tool names."""
-        return sorted(self._tools)
+    def get_by_alias(self, alias: str) -> Capability | None:
+        capability_id = self.resolve(alias)
+        if capability_id is None:
+            return None
+        return self.get(capability_id)
 
-    def validate_tool_args(self, name: str, params: dict[str, Any]) -> list[str]:
-        """Validate params against the tool's JSON Schema."""
-        tool = self.get(name)
-        if tool is None:
-            return [f"unknown tool: {name}"]
+    def resolve(self, name: str) -> str | None:
+        if name in self._capabilities:
+            return name
+        return self._aliases.get(name)
+
+    def model_alias(self, capability_id: str) -> str:
+        capability = self._capabilities[capability_id]
+        return capability.spec.aliases[0] if capability.spec.aliases else capability_id
+
+    def list_capability_ids(self) -> list[str]:
+        """List registered canonical capability ids."""
+        return sorted(self._capabilities)
+
+    def validate_capability_args(
+        self, capability_id: str, params: dict[str, Any]
+    ) -> list[str]:
+        """Validate params against the capability's JSON Schema."""
+        capability_id = self.resolve(capability_id) or capability_id
+        capability = self.get(capability_id)
+        if capability is None:
+            return [f"unknown capability: {capability_id}"]
         try:
-            validator = Draft202012Validator(tool.spec.schema)
+            validator = Draft202012Validator(capability.spec.input_schema)
         except SchemaError as exc:
-            return [f"invalid schema for tool {name}: {exc.message}"]
+            return [f"invalid schema for capability {capability_id}: {exc.message}"]
         errors = sorted(validator.iter_errors(params), key=_validation_error_sort_key)
         return [_format_validation_error(error) for error in errors]
 
-    def run_tool(
+    def invoke(
         self,
-        name: str,
+        capability_id: str,
         params: dict[str, Any],
         *,
         execution_mode: ExecutionMode = "stage",
     ) -> dict[str, Any]:
-        """Run one tool call under the staging contract its spec declares.
+        """Invoke one capability under the staging contract its policy declares.
 
-        Read-only tools always run. Mutating tools run in direct mode; in
-        stage mode they stage their work for review, and a mutating tool
+        Read-only capabilities always run. Mutating capabilities run in direct
+        mode; in stage mode they stage their work for review, and a capability
         without a staging implementation is refused.
         """
-        tool = self.get(name)
-        if tool is None:
-            return error_result("unknown-tool", f"unknown tool: {name}")
-        if not tool.spec.mutates():
-            return tool.run(params)
+        capability_id = self.resolve(capability_id) or capability_id
+        capability = self.get(capability_id)
+        if capability is None:
+            return error_result(
+                "unknown-capability", f"unknown capability: {capability_id}"
+            )
+        if not capability.spec.mutates():
+            return capability.executor.invoke(
+                capability.spec,
+                params,
+                mode=execution_mode,
+            ).payload
         if execution_mode == "direct":
-            if not tool.spec.direct_execution_allowed:
+            if not capability.policy.supports_direct:
                 return error_result(
                     "direct-execution-disallowed",
-                    f"tool {name} does not allow direct execution",
+                    f"capability {capability_id} does not allow direct execution",
                 )
-            return tool.run(params)
-        if tool.stage is None:
-            declared = ", ".join(tool.spec.effects) or "undeclared"
+            return capability.executor.invoke(
+                capability.spec,
+                params,
+                mode=execution_mode,
+            ).payload
+        if not capability.policy.supports_staging:
+            declared = ", ".join(capability.spec.effects) or "undeclared"
             return error_result(
                 "staging-unsupported",
-                f"tool {name} has effects ({declared}) that cannot be staged "
+                f"capability {capability_id} has effects ({declared}) that cannot be staged "
                 "for review; rerun in the do workflow (,,,)",
             )
-        return tool.stage(params)
+        return capability.executor.invoke(
+            capability.spec,
+            params,
+            mode=execution_mode,
+        ).payload
 
 
-registry = ToolRegistry()
+registry = CapabilityRegistry()
 
 
 def _validation_error_sort_key(error: ValidationError) -> tuple[str, str]:

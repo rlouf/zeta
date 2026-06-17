@@ -18,14 +18,23 @@ from .agent import (
     AgentConfig,
     AgentTurnAborted,
     AgentTurnResult,
-    registered_tools,
+    registered_capabilities,
     run_agent_turn,
 )
 from .context import ZetaContext, default_context, load_project_context
 from .events import Event, EventCursor, EventReader, Filter
 from .timeline import current_timeline, record_event, timeline_event_from_durable_event
-from .tools.base import EFFECT_KINDS, EffectKind, ToolImpl, ToolSpec, error_result
-from .tools.registry import ExecutionMode, ToolRegistry
+from .tools.base import (
+    EFFECT_KINDS,
+    Capability,
+    CapabilityId,
+    CapabilityPolicy,
+    CapabilitySpec,
+    EffectKind,
+    FunctionCapabilityExecutor,
+    error_result,
+)
+from .tools.registry import CapabilityRegistry, ExecutionMode
 from .tools.registry import registry as _runtime_tool_registry
 
 RpcSessionRunner = Callable[[dict[str, Any]], dict[str, Any]]
@@ -86,7 +95,7 @@ def run_rpc_session(
     cancellation_event = rpc_cancellation_event_param(params)
     objective = rpc_objective(params)
     workflow = rpc_workflow(params)
-    enabled_tools = registered_tools(
+    enabled_capabilities = registered_capabilities(
         rpc_allowed_tools(params),
         tool_registry=runtime_context.tool_registry,
     )
@@ -98,7 +107,7 @@ def run_rpc_session(
             "content": objective,
             "workflow": workflow,
             "runtime": "zeta-rpc",
-            "available_tools": list(enabled_tools),
+            "available_tools": list(enabled_capabilities),
             "run_id": run_id,
             "turn_id": run_id,
         },
@@ -119,7 +128,7 @@ def run_rpc_session(
             prior_timeline,
             rpc_agent_config(
                 params,
-                enabled_tools=enabled_tools,
+                enabled_capabilities=enabled_capabilities,
                 execution_mode=execution_mode,
                 session_id=runtime_context.session_id,
             ),
@@ -324,13 +333,13 @@ def rpc_allowed_tools(params: dict[str, Any]) -> tuple[str, ...] | None:
 def rpc_agent_config(
     params: dict[str, Any],
     *,
-    enabled_tools: tuple[str, ...],
+    enabled_capabilities: tuple[str, ...],
     execution_mode: ExecutionMode,
     session_id: str,
 ) -> AgentConfig:
     return AgentConfig(
         system_prompt=optional_str_param(params, "system"),
-        allowed_tools=enabled_tools,
+        allowed_capabilities=enabled_capabilities,
         max_turns=params.get("max_steps")
         if isinstance(params.get("max_steps"), int)
         else None,
@@ -470,7 +479,7 @@ class JsonRpcServer:
         output: TextIO,
         *,
         session_runner: RpcSessionRunner | None = None,
-        tool_registry: ToolRegistry | None = None,
+        tool_registry: CapabilityRegistry | None = None,
         event_reader: EventReader | None = None,
     ) -> None:
         self.input = input
@@ -749,7 +758,9 @@ class JsonRpcServer:
         return registered
 
     def register_client_tool(self, name: str, item: dict[str, Any]) -> None:
-        existing = self.tool_registry.get(name)
+        capability_id = CapabilityId("rpc", name).canonical()
+        existing = self.tool_registry.get(capability_id)
+        existing_alias = self.tool_registry.resolve(name)
         if existing is not None:
             raise RpcError(
                 -32602,
@@ -757,6 +768,16 @@ class JsonRpcServer:
                 "Invalid params",
                 {
                     "message": f"tool {name!r} is already registered",
+                    "tool": name,
+                },
+            )
+        if existing_alias is not None:
+            raise RpcError(
+                -32602,
+                "duplicate_tool",
+                "Invalid params",
+                {
+                    "message": f"tool alias {name!r} is already registered",
                     "tool": name,
                 },
             )
@@ -784,15 +805,16 @@ class JsonRpcServer:
             if isinstance(raw_effects, list)
             else ()
         )
-        spec = ToolSpec(
-            name,
+        supports_staging = item.get("staging_supported") is True
+        supports_direct = item.get("direct_execution_allowed") is True
+        timeout_seconds = client_tool_timeout_sec(item)
+        spec = CapabilitySpec(
+            CapabilityId("rpc", name),
             str(item.get("description") or ""),
             schema,
             interactive=True,
             effects=effects,
-            staging_supported=item.get("staging_supported") is True,
-            direct_execution_allowed=item.get("direct_execution_allowed") is True,
-            timeout_sec=client_tool_timeout_sec(item),
+            aliases=(name,),
         )
 
         def run(params: dict[str, Any]) -> dict[str, Any]:
@@ -800,11 +822,22 @@ class JsonRpcServer:
                 str(uuid.uuid4()),
                 name,
                 params,
-                timeout_sec=spec.timeout_sec,
+                timeout_sec=timeout_seconds,
             )
 
-        stage = run if spec.staging_supported else None
-        self.tool_registry.register(name, ToolImpl(spec, run, stage))
+        stage = run if supports_staging else None
+        self.tool_registry.register(
+            Capability(
+                spec,
+                CapabilityPolicy(
+                    supports_staging=supports_staging,
+                    supports_direct=supports_direct,
+                    trust="client",
+                    timeout_seconds=timeout_seconds,
+                ),
+                FunctionCapabilityExecutor(run, stage),
+            )
+        )
         self.client_tools.add(name)
 
     def record_tool_response(self, params: dict[str, Any]) -> None:

@@ -9,7 +9,7 @@ from html import unescape
 from pathlib import Path
 from typing import Any
 
-from zeta.tools.base import ToolSpec, content_hash, error_result
+from zeta.tools.base import CapabilityId, CapabilitySpec, content_hash, error_result
 
 DEFAULT_READ_LIMIT = 2_000
 MAX_READ_CHARS = 50_000
@@ -38,11 +38,12 @@ SCHEMA: dict[str, Any] = {
     },
 }
 
-SPEC = ToolSpec(
-    "read",
+SPEC = CapabilitySpec(
+    CapabilityId("sigil", "read"),
     "Read a UTF-8 text file or public HTTP(S) URL. Returns a [path#tag] snapshot header and numbered lines.",
     SCHEMA,
     effects=("read",),
+    aliases=("read",),
 )
 
 

@@ -15,55 +15,87 @@ from sigil.tools import ensure_builtin_tools_registered, register_builtin_tools
 from sigil.tools import grep as grep_tool
 from sigil.tools import read as read_tool
 from sigil.tools import web as web_tool
-from zeta.tools.base import ToolImpl, ToolSpec
-from zeta.tools.registry import ToolRegistry
+from zeta.tools.base import (
+    Capability,
+    CapabilityId,
+    CapabilityPolicy,
+    CapabilitySpec,
+    EffectKind,
+    FunctionCapabilityExecutor,
+)
+from zeta.tools.registry import CapabilityRegistry
 from zeta.tools.registry import registry as tool_registry
 
 ensure_builtin_tools_registered()
 
 
 def tool_metadata(name: str) -> dict[str, Any]:
-    tool = tool_registry.get(name)
-    assert tool is not None
-    return tool.spec.metadata()
+    capability = tool_registry.get_by_alias(name)
+    assert capability is not None
+    metadata = capability.spec.metadata()
+    metadata["supports_staging"] = capability.policy.supports_staging
+    metadata["supports_direct"] = capability.policy.supports_direct
+    metadata["timeout_seconds"] = capability.policy.timeout_seconds
+    return metadata
 
 
-def test_zeta_tool_registry_registers_and_lists_tools() -> None:
-    tool = ToolImpl(
-        ToolSpec("unit", "Unit test tool.", {"type": "object"}, effects=("read",)),
-        lambda params: {"ok": True, "metadata": params},
-    )
-    registry = ToolRegistry()
-
-    registry.register("unit", tool)
-
-    assert registry.get("unit") is tool
-    assert registry.list_tool_names() == ["unit"]
-    assert tool.spec.metadata()["name"] == "unit"
-
-
-def test_zeta_tool_registry_rejects_invalid_tool_schema() -> None:
-    registry = ToolRegistry()
-    tool = ToolImpl(
-        ToolSpec("bad", "Bad schema.", {"type": "definitely-not-json-schema"}),
-        lambda params: {"ok": True, "metadata": params},
-    )
-
-    with pytest.raises(ValueError, match="invalid schema for tool 'bad'"):
-        registry.register("bad", tool)
-
-
-def test_zeta_tool_registry_refuses_undeclared_effects_in_stage_mode() -> None:
-    registry = ToolRegistry()
-    registry.register(
-        "unit",
-        ToolImpl(
-            ToolSpec("unit", "Unit test tool.", {"type": "object"}),
+def _test_capability(
+    name: str,
+    *,
+    schema: dict[str, Any] | None = None,
+    effects: tuple[EffectKind, ...] = (),
+    supports_staging: bool = False,
+    supports_direct: bool = True,
+) -> Capability:
+    return Capability(
+        CapabilitySpec(
+            CapabilityId("test", name),
+            "Unit test capability.",
+            schema or {"type": "object"},
+            effects=effects,
+            aliases=(name,),
+        ),
+        CapabilityPolicy(
+            supports_staging=supports_staging,
+            supports_direct=supports_direct,
+            trust="builtin",
+        ),
+        FunctionCapabilityExecutor(
             lambda params: {"ok": True, "metadata": params},
+            (lambda params: {"ok": True, "effect": {"status": "proposed"}})
+            if supports_staging
+            else None,
         ),
     )
 
-    result = registry.run_tool("unit", {})
+
+def test_zeta_tool_registry_registers_and_lists_tools() -> None:
+    capability = _test_capability("unit", effects=("read",))
+    registry = CapabilityRegistry()
+
+    registry.register(capability)
+
+    assert registry.get("test.unit") is capability
+    assert registry.list_capability_ids() == ["test.unit"]
+    assert capability.spec.metadata()["id"] == "test.unit"
+
+
+def test_zeta_tool_registry_rejects_invalid_tool_schema() -> None:
+    registry = CapabilityRegistry()
+    capability = _test_capability(
+        "bad",
+        schema={"type": "definitely-not-json-schema"},
+    )
+
+    with pytest.raises(ValueError, match="invalid schema for capability 'test.bad'"):
+        registry.register(capability)
+
+
+def test_zeta_tool_registry_refuses_undeclared_effects_in_stage_mode() -> None:
+    registry = CapabilityRegistry()
+    registry.register(_test_capability("unit"))
+
+    result = registry.invoke("unit", {})
 
     assert result["ok"] is False
     assert result["error"]["code"] == "staging-unsupported"
@@ -71,73 +103,67 @@ def test_zeta_tool_registry_refuses_undeclared_effects_in_stage_mode() -> None:
 
 
 def test_zeta_tool_registry_requires_direct_execution_permission() -> None:
-    registry = ToolRegistry()
+    registry = CapabilityRegistry()
     registry.register(
-        "unit",
-        ToolImpl(
-            ToolSpec(
-                "unit",
-                "Unit test tool.",
-                {"type": "object"},
-                effects=("write",),
-                direct_execution_allowed=False,
-            ),
-            lambda params: {"ok": True, "metadata": params},
-            lambda params: {"ok": True, "effect": {"status": "proposed"}},
-        ),
+        _test_capability(
+            "unit",
+            effects=("write",),
+            supports_staging=True,
+            supports_direct=False,
+        )
     )
 
-    result = registry.run_tool("unit", {}, execution_mode="direct")
+    result = registry.invoke("unit", {}, execution_mode="direct")
 
     assert result == {
         "ok": False,
         "error": {
             "code": "direct-execution-disallowed",
-            "message": "tool unit does not allow direct execution",
+            "message": "capability test.unit does not allow direct execution",
         },
     }
 
 
 def test_zeta_tool_registry_starts_empty() -> None:
-    registry = ToolRegistry()
+    registry = CapabilityRegistry()
 
-    assert registry.list_tool_names() == []
+    assert registry.list_capability_ids() == []
 
 
 def test_sigil_registers_builtin_tools_explicitly() -> None:
-    registry = ToolRegistry()
+    registry = CapabilityRegistry()
 
     register_builtin_tools(registry)
 
     assert {
-        "ast_grep",
-        "read",
-        "grep",
-        "ls",
-        "bash",
-        "edit",
-        "write",
-        "query_log",
-        "web_search",
-    } <= set(registry.list_tool_names())
-    assert "web_fetch" not in set(registry.list_tool_names())
+        "sigil.ast_grep",
+        "sigil.read",
+        "sigil.grep",
+        "sigil.ls",
+        "sigil.bash",
+        "sigil.edit",
+        "sigil.write",
+        "sigil.query_log",
+        "sigil.web_search",
+    } <= set(registry.list_capability_ids())
+    assert "sigil.web_fetch" not in set(registry.list_capability_ids())
 
 
 def test_sigil_ensures_shared_zeta_registry_has_builtins() -> None:
     ensure_builtin_tools_registered()
 
-    names = set(tool_registry.list_tool_names())
+    names = set(tool_registry.list_capability_ids())
     assert {
-        "read",
-        "grep",
-        "ast_grep",
-        "ls",
-        "bash",
-        "edit",
-        "write",
-        "web_search",
+        "sigil.read",
+        "sigil.grep",
+        "sigil.ast_grep",
+        "sigil.ls",
+        "sigil.bash",
+        "sigil.edit",
+        "sigil.write",
+        "sigil.web_search",
     } <= names
-    assert "web_fetch" not in names
+    assert "sigil.web_fetch" not in names
 
 
 def test_zeta_tool_registry_does_not_import_sigil_tools() -> None:
@@ -155,7 +181,7 @@ def test_zeta_tool_registry_does_not_import_sigil_tools() -> None:
 
 def test_zeta_grep_metadata_guides_model_tool_choice() -> None:
     metadata = tool_metadata("grep")
-    schema = metadata["schema"]
+    schema = metadata["input_schema"]
 
     assert (
         metadata["description"]
@@ -174,7 +200,7 @@ def test_zeta_grep_metadata_guides_model_tool_choice() -> None:
 
 def test_zeta_ast_grep_metadata_guides_model_tool_choice() -> None:
     metadata = tool_metadata("ast_grep")
-    schema = metadata["schema"]
+    schema = metadata["input_schema"]
 
     assert metadata["effects"] == ["search"]
     assert metadata["description"] == (
@@ -190,9 +216,10 @@ def test_zeta_ast_grep_metadata_guides_model_tool_choice() -> None:
 
 def test_sigil_web_search_schema_matches_codex_contract() -> None:
     metadata = web_tool.SEARCH_SPEC.metadata()
-    schema = metadata["schema"]
+    schema = metadata["input_schema"]
 
-    assert metadata["name"] == "web_search"
+    assert metadata["id"] == "sigil.web_search"
+    assert metadata["aliases"] == ["web_search"]
     assert metadata["effects"] == ["search"]
     assert schema["required"] == ["query"]
     assert schema["properties"]["query"]["type"] == "string"
@@ -312,9 +339,9 @@ def test_zeta_tool_read_schema_and_run(tmp_path: Path) -> None:
     target = tmp_path / "note.txt"
     target.write_text("hello zeta\n", encoding="utf-8")
 
-    assert tool_metadata("read")["schema"]["required"] == ["path"]
+    assert tool_metadata("read")["input_schema"]["required"] == ["path"]
 
-    data = tool_registry.run_tool("read", {"path": str(target)})
+    data = tool_registry.invoke("read", {"path": str(target)})
     assert data["ok"] is True
     tag = data["metadata"]["tag"]
     assert data["content"][0]["text"] == f"[{target}#{tag}]\n1:hello zeta\n"
@@ -327,9 +354,7 @@ def test_zeta_tool_read_offset_and_limit_select_lines(tmp_path: Path) -> None:
     target = tmp_path / "lines.txt"
     target.write_text("one\ntwo\nthree\nfour\nfive\n", encoding="utf-8")
 
-    data = tool_registry.run_tool(
-        "read", {"path": str(target), "offset": 1, "limit": 2}
-    )
+    data = tool_registry.invoke("read", {"path": str(target), "offset": 1, "limit": 2})
 
     assert data["ok"] is True
     tag = data["metadata"]["tag"]
@@ -344,9 +369,7 @@ def test_zeta_tool_read_limit_past_end_returns_remaining_lines(tmp_path: Path) -
     target = tmp_path / "short.txt"
     target.write_text("alpha\nbeta\n", encoding="utf-8")
 
-    data = tool_registry.run_tool(
-        "read", {"path": str(target), "offset": 1, "limit": 10}
-    )
+    data = tool_registry.invoke("read", {"path": str(target), "offset": 1, "limit": 10})
 
     tag = data["metadata"]["tag"]
     assert data["content"][0]["text"] == f"[{target}#{tag}]\n2:beta\n"
@@ -356,7 +379,7 @@ def test_zeta_tool_read_rejects_binary_file(tmp_path: Path) -> None:
     target = tmp_path / "image.png"
     target.write_bytes(b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR")
 
-    data = tool_registry.run_tool("read", {"path": str(target)})
+    data = tool_registry.invoke("read", {"path": str(target)})
 
     assert data["ok"] is False
     assert data["error"]["code"] == "binary-file"
@@ -367,7 +390,7 @@ def test_zeta_tool_read_caps_returned_characters(tmp_path: Path, monkeypatch) ->
     target = tmp_path / "wide.txt"
     target.write_text("x" * 1_000 + "\n", encoding="utf-8")
 
-    data = tool_registry.run_tool("read", {"path": str(target)})
+    data = tool_registry.invoke("read", {"path": str(target)})
 
     assert data["ok"] is True
     assert len(data["content"][0]["text"]) == 100
@@ -379,7 +402,7 @@ def test_zeta_tool_grep_reports_total_limited_metadata(tmp_path: Path) -> None:
     first.write_text("needle one\nneedle two\n", encoding="utf-8")
     (tmp_path / "b.txt").write_text("needle three\n", encoding="utf-8")
 
-    data = tool_registry.run_tool(
+    data = tool_registry.invoke(
         "grep", {"path": str(tmp_path), "pattern": "needle", "limit": 2}
     )
 
@@ -403,7 +426,7 @@ def test_zeta_tool_grep_reports_content_truncation(
     target.write_text("needle " + ("x" * 80) + "\n", encoding="utf-8")
     monkeypatch.setattr(grep_tool, "MAX_TOOL_RESULT_CHARS", 20)
 
-    data = tool_registry.run_tool("grep", {"path": str(target), "pattern": "needle"})
+    data = tool_registry.invoke("grep", {"path": str(target), "pattern": "needle"})
 
     assert data["ok"] is True
     assert len(data["content"][0]["text"]) == 20
@@ -427,7 +450,7 @@ def test_zeta_tool_grep_fallback_searches_without_ripgrep(
 
     monkeypatch.setattr(grep_tool.subprocess, "Popen", missing_rg)
 
-    data = tool_registry.run_tool("grep", {"path": str(tmp_path), "pattern": "needle"})
+    data = tool_registry.invoke("grep", {"path": str(tmp_path), "pattern": "needle"})
 
     assert data["ok"] is True
     assert data["metadata"]["matches"] == 2
@@ -442,9 +465,9 @@ def test_zeta_tool_grep_tag_can_ground_hashline_edit(tmp_path: Path) -> None:
     target = tmp_path / "a.txt"
     target.write_text("keep\nneedle old\nkeep\n", encoding="utf-8")
 
-    grep = tool_registry.run_tool("grep", {"path": str(target), "pattern": "needle"})
+    grep = tool_registry.invoke("grep", {"path": str(target), "pattern": "needle"})
     tag = grep["metadata"]["tags"][str(target)]
-    data = tool_registry.run_tool(
+    data = tool_registry.invoke(
         "edit",
         {"input": f"[{target}#{tag}]\nSWAP 2..2:\n+needle new\n"},
         execution_mode="direct",
@@ -464,7 +487,7 @@ def test_zeta_tool_ast_grep_returns_tagged_structural_matches(tmp_path: Path) ->
         encoding="utf-8",
     )
 
-    data = tool_registry.run_tool(
+    data = tool_registry.invoke(
         "ast_grep",
         {
             "path": str(target),
@@ -492,7 +515,7 @@ def test_zeta_tool_ast_grep_tag_can_ground_hashline_edit(tmp_path: Path) -> None
         encoding="utf-8",
     )
 
-    result = tool_registry.run_tool(
+    result = tool_registry.invoke(
         "ast_grep",
         {
             "path": str(target),
@@ -501,7 +524,7 @@ def test_zeta_tool_ast_grep_tag_can_ground_hashline_edit(tmp_path: Path) -> None
         },
     )
     tag = result["metadata"]["tags"][str(target)]
-    data = tool_registry.run_tool(
+    data = tool_registry.invoke(
         "edit",
         {"input": f"[{target}#{tag}]\nSWAP 4..4:\n+    return 'ok'\n"},
         execution_mode="direct",
@@ -520,7 +543,7 @@ def test_zeta_tool_grep_fallback_stops_at_limit(tmp_path: Path, monkeypatch) -> 
 
     monkeypatch.setattr(grep_tool.subprocess, "Popen", missing_rg)
 
-    data = tool_registry.run_tool(
+    data = tool_registry.invoke(
         "grep", {"path": str(tmp_path), "pattern": "needle", "limit": 3}
     )
 
@@ -532,7 +555,7 @@ def test_zeta_tool_grep_fallback_stops_at_limit(tmp_path: Path, monkeypatch) -> 
 def test_zeta_tool_grep_reports_invalid_pattern_error(tmp_path: Path) -> None:
     (tmp_path / "a.txt").write_text("text\n", encoding="utf-8")
 
-    data = tool_registry.run_tool("grep", {"path": str(tmp_path), "pattern": "("})
+    data = tool_registry.invoke("grep", {"path": str(tmp_path), "pattern": "("})
 
     assert data["ok"] is False
     assert data["metadata"]["status"] not in {0, 1}
@@ -540,7 +563,7 @@ def test_zeta_tool_grep_reports_invalid_pattern_error(tmp_path: Path) -> None:
 
 
 def test_zeta_tool_bash_returns_proposed_command_effect() -> None:
-    data = tool_registry.run_tool(
+    data = tool_registry.invoke(
         "bash", {"command": "uv run pytest", "reason": "Run tests."}
     )
 
@@ -554,7 +577,7 @@ def test_zeta_tool_bash_returns_proposed_command_effect() -> None:
 
 
 def test_zeta_tool_bash_direct_executes_command() -> None:
-    data = tool_registry.run_tool(
+    data = tool_registry.invoke(
         "bash",
         {"command": "printf direct-bash"},
         execution_mode="direct",
@@ -569,7 +592,7 @@ def test_zeta_tool_bash_direct_executes_command() -> None:
 
 
 def test_zeta_tool_bash_direct_replaces_invalid_utf8_output() -> None:
-    data = tool_registry.run_tool(
+    data = tool_registry.invoke(
         "bash",
         {"command": "printf '\\377\\376'"},
         execution_mode="direct",
@@ -582,7 +605,7 @@ def test_zeta_tool_bash_direct_replaces_invalid_utf8_output() -> None:
 def test_zeta_tool_bash_direct_kills_command_on_timeout(monkeypatch) -> None:
     monkeypatch.setattr(bash_tool, "DEFAULT_TIMEOUT_SECONDS", 0.2)
 
-    data = tool_registry.run_tool(
+    data = tool_registry.invoke(
         "bash",
         {"command": "sleep 5"},
         execution_mode="direct",
@@ -595,7 +618,7 @@ def test_zeta_tool_bash_direct_kills_command_on_timeout(monkeypatch) -> None:
 
 
 def test_zeta_tool_bash_direct_truncates_large_output() -> None:
-    data = tool_registry.run_tool(
+    data = tool_registry.invoke(
         "bash",
         {"command": "head -c 100000 /dev/zero | tr '\\0' 'x'"},
         execution_mode="direct",
@@ -611,7 +634,7 @@ def test_zeta_tool_bash_direct_truncates_large_output() -> None:
 def test_zeta_tool_write_direct_writes_file(tmp_path: Path) -> None:
     target = tmp_path / "direct.txt"
 
-    data = tool_registry.run_tool(
+    data = tool_registry.invoke(
         "write",
         {"path": str(target), "content": "hello\n"},
         execution_mode="direct",
@@ -628,7 +651,7 @@ def test_zeta_tool_ls_lists_directory_contents(tmp_path: Path) -> None:
     (tmp_path / "src").mkdir()
     (tmp_path / "pyproject.toml").write_text("[project]\n", encoding="utf-8")
 
-    data = tool_registry.run_tool("ls", {"path": str(tmp_path)})
+    data = tool_registry.invoke("ls", {"path": str(tmp_path)})
 
     assert data["ok"] is True
     assert data["content"][0]["text"].splitlines() == [
@@ -647,7 +670,7 @@ def test_zeta_tool_ls_can_filter_large_files_without_shelling_out(
     (tmp_path / "src" / "large.bin").write_bytes(b"x" * 12)
     (tmp_path / "small.txt").write_bytes(b"x" * 4)
 
-    data = tool_registry.run_tool(
+    data = tool_registry.invoke(
         "ls",
         {
             "path": str(tmp_path),
@@ -667,7 +690,7 @@ def test_zeta_tool_edit_writes_patch_artifact(tmp_path: Path) -> None:
     target = tmp_path / "a.txt"
     target.write_text("old\n", encoding="utf-8")
 
-    data = tool_registry.run_tool(
+    data = tool_registry.invoke(
         "edit", {"location": str(target), "old": "old\n", "new": "new\n"}
     )
     artifact = Path(data["effect"]["artifact"])
@@ -688,9 +711,9 @@ def test_zeta_tool_edit_accepts_exact_replacement(tmp_path: Path) -> None:
         "reason": "Replace one line.",
     }
 
-    data = tool_registry.run_tool("edit", payload)
+    data = tool_registry.invoke("edit", payload)
 
-    assert tool_registry.validate_tool_args("edit", payload) == []
+    assert tool_registry.validate_capability_args("edit", payload) == []
     artifact = Path(data["effect"]["artifact"])
     patch = artifact.read_text(encoding="utf-8")
     assert data["effect"]["command"].startswith("git apply ")
@@ -702,10 +725,10 @@ def test_zeta_tool_edit_accepts_exact_replacement(tmp_path: Path) -> None:
 def test_zeta_tool_edit_stages_hashline_swap_from_read_tag(tmp_path: Path) -> None:
     target = tmp_path / "a.txt"
     target.write_text("hello\nold\nbye\n", encoding="utf-8")
-    read = tool_registry.run_tool("read", {"path": str(target)})
+    read = tool_registry.invoke("read", {"path": str(target)})
     tag = read["metadata"]["tag"]
 
-    data = tool_registry.run_tool(
+    data = tool_registry.invoke(
         "edit",
         {"input": f"[{target}#{tag}]\nSWAP 2..2:\n+new\n", "reason": "Use tag."},
     )
@@ -726,9 +749,9 @@ def test_zeta_tool_edit_direct_applies_hashline_insert_and_delete(
 ) -> None:
     target = tmp_path / "a.txt"
     target.write_text("one\nthree\nremove\n", encoding="utf-8")
-    tag = tool_registry.run_tool("read", {"path": str(target)})["metadata"]["tag"]
+    tag = tool_registry.invoke("read", {"path": str(target)})["metadata"]["tag"]
 
-    data = tool_registry.run_tool(
+    data = tool_registry.invoke(
         "edit",
         {
             "input": (
@@ -751,10 +774,10 @@ def test_zeta_tool_edit_direct_applies_hashline_insert_and_delete(
 def test_zeta_tool_edit_rejects_stale_hashline_tag(tmp_path: Path) -> None:
     target = tmp_path / "a.txt"
     target.write_text("old\n", encoding="utf-8")
-    tag = tool_registry.run_tool("read", {"path": str(target)})["metadata"]["tag"]
+    tag = tool_registry.invoke("read", {"path": str(target)})["metadata"]["tag"]
     target.write_text("changed\n", encoding="utf-8")
 
-    data = tool_registry.run_tool(
+    data = tool_registry.invoke(
         "edit", {"input": f"[{target}#{tag}]\nSWAP 1..1:\n+new\n"}
     )
 
@@ -778,13 +801,13 @@ def test_zeta_tool_edit_rejects_malformed_hashline_input(
 ) -> None:
     target = tmp_path / "a.txt"
     target.write_text("old\n", encoding="utf-8")
-    tag = tool_registry.run_tool("read", {"path": str(target)})["metadata"]["tag"]
+    tag = tool_registry.invoke("read", {"path": str(target)})["metadata"]["tag"]
     if "a.txt#abcd" in payload:
         payload = payload.replace("a.txt#abcd", f"{target}#{tag}")
     else:
         payload = payload.replace("a.txt", str(target))
 
-    data = tool_registry.run_tool("edit", {"input": payload})
+    data = tool_registry.invoke("edit", {"input": payload})
 
     assert data["ok"] is False
     assert data["error"]["code"] == code
@@ -793,9 +816,9 @@ def test_zeta_tool_edit_rejects_malformed_hashline_input(
 def test_zeta_tool_edit_rejects_hashline_noop(tmp_path: Path) -> None:
     target = tmp_path / "a.txt"
     target.write_text("old\n", encoding="utf-8")
-    tag = tool_registry.run_tool("read", {"path": str(target)})["metadata"]["tag"]
+    tag = tool_registry.invoke("read", {"path": str(target)})["metadata"]["tag"]
 
-    data = tool_registry.run_tool(
+    data = tool_registry.invoke(
         "edit", {"input": f"[{target}#{tag}]\nSWAP 1..1:\n+old\n"}
     )
 
@@ -807,7 +830,7 @@ def test_zeta_tool_edit_direct_replace_writes_file(tmp_path: Path) -> None:
     target = tmp_path / "a.txt"
     target.write_text("hello\nold\nbye\n", encoding="utf-8")
 
-    data = tool_registry.run_tool(
+    data = tool_registry.invoke(
         "edit",
         {"location": str(target), "old": "old\n", "new": "new\n"},
         execution_mode="direct",
@@ -827,7 +850,7 @@ def test_zeta_tool_edit_rejects_non_utf8_file(tmp_path: Path) -> None:
     target = tmp_path / "latin1.txt"
     target.write_bytes(b"caf\xe9 old\n")
 
-    data = tool_registry.run_tool(
+    data = tool_registry.invoke(
         "edit",
         {"location": str(target), "old": "old", "new": "new"},
         execution_mode="direct",
@@ -843,7 +866,7 @@ def test_zeta_tool_edit_direct_reports_write_failure(tmp_path: Path) -> None:
     target.write_text("old\n", encoding="utf-8")
     target.chmod(0o444)
 
-    data = tool_registry.run_tool(
+    data = tool_registry.invoke(
         "edit",
         {"location": str(target), "old": "old\n", "new": "new\n"},
         execution_mode="direct",
@@ -859,7 +882,7 @@ def test_zeta_tool_edit_rejects_ambiguous_exact_replacement(tmp_path: Path) -> N
     target = tmp_path / "a.txt"
     target.write_text("old\nold\n", encoding="utf-8")
 
-    data = tool_registry.run_tool(
+    data = tool_registry.invoke(
         "edit", {"location": str(target), "old": "old\n", "new": "new\n"}
     )
 
@@ -871,7 +894,7 @@ def test_zeta_tool_edit_marks_no_newline_exact_replacement(tmp_path: Path) -> No
     target = tmp_path / "a.txt"
     target.write_text("old", encoding="utf-8")
 
-    data = tool_registry.run_tool(
+    data = tool_registry.invoke(
         "edit", {"location": str(target), "old": "old", "new": "new"}
     )
 
@@ -892,18 +915,18 @@ def test_zeta_builtin_metadata_declares_effects() -> None:
 
 
 def test_zeta_builtin_metadata_declares_execution_capabilities() -> None:
-    assert tool_metadata("bash")["staging_supported"] is True
-    assert tool_metadata("bash")["direct_execution_allowed"] is True
-    assert tool_metadata("bash")["timeout_sec"] == 120.0
-    assert tool_metadata("write")["staging_supported"] is True
-    assert tool_metadata("edit")["staging_supported"] is True
-    assert tool_metadata("read")["staging_supported"] is False
-    assert tool_metadata("read")["direct_execution_allowed"] is True
-    assert tool_metadata("read")["timeout_sec"] is None
+    assert tool_metadata("bash")["supports_staging"] is True
+    assert tool_metadata("bash")["supports_direct"] is True
+    assert tool_metadata("bash")["timeout_seconds"] == 120.0
+    assert tool_metadata("write")["supports_staging"] is True
+    assert tool_metadata("edit")["supports_staging"] is True
+    assert tool_metadata("read")["supports_staging"] is False
+    assert tool_metadata("read")["supports_direct"] is True
+    assert tool_metadata("read")["timeout_seconds"] is None
 
 
 def test_zeta_tool_bash_direct_records_duration() -> None:
-    data = tool_registry.run_tool(
+    data = tool_registry.invoke(
         "bash",
         {"command": "printf timed"},
         execution_mode="direct",
@@ -918,7 +941,7 @@ def test_zeta_tool_write_direct_records_content_hashes(tmp_path: Path) -> None:
     target = tmp_path / "direct.txt"
     target.write_text("old\n", encoding="utf-8")
 
-    data = tool_registry.run_tool(
+    data = tool_registry.invoke(
         "write",
         {"path": str(target), "content": "hello\n"},
         execution_mode="direct",
@@ -933,7 +956,7 @@ def test_zeta_tool_write_stage_records_staged_hashes(tmp_path: Path) -> None:
     target = tmp_path / "staged.txt"
     target.write_text("old\n", encoding="utf-8")
 
-    data = tool_registry.run_tool("write", {"path": str(target), "content": "hello\n"})
+    data = tool_registry.invoke("write", {"path": str(target), "content": "hello\n"})
 
     assert data["effect"]["command"].startswith("cp ")
     metadata = data["metadata"]
@@ -946,7 +969,7 @@ def test_zeta_tool_write_stage_records_staged_hashes(tmp_path: Path) -> None:
 def test_zeta_tool_write_omits_before_hash_for_new_file(tmp_path: Path) -> None:
     target = tmp_path / "fresh.txt"
 
-    data = tool_registry.run_tool(
+    data = tool_registry.invoke(
         "write",
         {"path": str(target), "content": "hello\n"},
         execution_mode="direct",
@@ -961,7 +984,7 @@ def test_zeta_tool_edit_direct_records_content_hashes(tmp_path: Path) -> None:
     target = tmp_path / "a.txt"
     target.write_text("hello\nold\nbye\n", encoding="utf-8")
 
-    data = tool_registry.run_tool(
+    data = tool_registry.invoke(
         "edit",
         {"location": str(target), "old": "old\n", "new": "new\n"},
         execution_mode="direct",
@@ -978,7 +1001,7 @@ def test_zeta_tool_edit_stage_records_staged_hashes(tmp_path: Path) -> None:
     target = tmp_path / "a.txt"
     target.write_text("hello\nold\nbye\n", encoding="utf-8")
 
-    data = tool_registry.run_tool(
+    data = tool_registry.invoke(
         "edit", {"location": str(target), "old": "old\n", "new": "new\n"}
     )
 
@@ -1133,5 +1156,5 @@ def test_zeta_tool_query_log_is_a_readonly_ask_builtin() -> None:
     from sigil.workflows.ask import ASK_TOOLS
 
     assert query_log_tool.SPEC.mutates() is False
-    assert tool_registry.get("query_log") is not None
+    assert tool_registry.get_by_alias("query_log") is not None
     assert "query_log" in ASK_TOOLS

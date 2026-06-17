@@ -473,7 +473,7 @@ def test_zeta_chat_messages_keeps_full_history_and_current_events() -> None:
         zeta_prompt.prompt_components(
             "inspect",
             transcript,
-            allowed_tools=(),
+            allowed_capabilities=(),
             current_events=current_events,
             include_non_message_components=False,
         )
@@ -497,7 +497,7 @@ def test_zeta_prompt_components_keep_only_the_timeline_tail() -> None:
         zeta_prompt.prompt_components(
             "inspect",
             transcript,
-            allowed_tools=(),
+            allowed_capabilities=(),
             include_non_message_components=False,
         )
     )

@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from sigil.tools.read import snapshot_tag
-from zeta.tools.base import ToolSpec, content_hash, error_result
+from zeta.tools.base import CapabilityId, CapabilitySpec, content_hash, error_result
 
 MAX_TOOL_RESULT_CHARS = 12_000
 
@@ -69,8 +69,8 @@ AST_GREP_SCHEMA: dict[str, Any] = {
     },
 }
 
-SPEC = ToolSpec(
-    "grep",
+SPEC = CapabilitySpec(
+    CapabilityId("sigil", "grep"),
     (
         "Search file contents recursively. Use before read when looking for "
         "symbols, errors, strings, or definitions. Successful results include "
@@ -78,10 +78,11 @@ SPEC = ToolSpec(
     ),
     SCHEMA,
     effects=("search",),
+    aliases=("grep",),
 )
 
-AST_GREP_SPEC = ToolSpec(
-    "ast_grep",
+AST_GREP_SPEC = CapabilitySpec(
+    CapabilityId("sigil", "ast_grep"),
     (
         "Search code structurally with ast-grep. Use when looking for syntax "
         "patterns rather than plain text. Results include [path#tag] snapshot "
@@ -89,6 +90,7 @@ AST_GREP_SPEC = ToolSpec(
     ),
     AST_GREP_SCHEMA,
     effects=("search",),
+    aliases=("ast_grep",),
 )
 
 

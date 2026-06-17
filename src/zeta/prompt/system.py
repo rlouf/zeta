@@ -9,7 +9,7 @@ from typing import Any
 from jinja2 import Environment, StrictUndefined
 
 from ..skills import Skill, available_skills
-from ..tools.registry import ToolRegistry
+from ..tools.registry import CapabilityRegistry
 from ..tools.registry import registry as _runtime_tool_registry
 
 PROMPT_TEMPLATE_ENV = Environment(
@@ -74,7 +74,7 @@ Resolve relative skill references against the skill directory.
 def system_prompt(
     base_prompt: str | None = None,
     *,
-    allowed_tools: Iterable[str] | None = None,
+    allowed_capabilities: Iterable[str] | None = None,
     skills: Iterable[Skill] | None = None,
 ) -> str:
     """Assemble the system prompt around the caller's base prompt.
@@ -83,15 +83,17 @@ def system_prompt(
     module only adds the runtime scaffolding: date line, tool protocol,
     skills, and tool descriptors.
     """
-    active_tools = enabled_tool_names(allowed_tools)
+    active_capabilities = enabled_capability_ids(allowed_capabilities)
     active_skills = (
         tuple(skills)
         if skills is not None
-        else tuple(available_skills() if can_read_skill_files(active_tools) else ())
+        else tuple(
+            available_skills() if can_read_skill_files(active_capabilities) else ()
+        )
     )
     return render_system_prompt(
         base_prompt,
-        allowed_tools=active_tools,
+        allowed_capabilities=active_capabilities,
         skills=active_skills,
     )
 
@@ -99,21 +101,23 @@ def system_prompt(
 def render_system_prompt(
     base_prompt: str | None = None,
     *,
-    allowed_tools: Iterable[str] | None = None,
+    allowed_capabilities: Iterable[str] | None = None,
     skills: Iterable[Skill] = (),
 ) -> str:
     """Render the system prompt from already-resolved prompt inputs."""
-    active_tools = tuple(allowed_tools) if allowed_tools is not None else None
+    active_capabilities = (
+        tuple(allowed_capabilities) if allowed_capabilities is not None else None
+    )
     return render_prompt_template(
         SYSTEM_PROMPT_TEMPLATE,
         base_prompt=clean_prompt(base_prompt),
         date_line=current_date_line(),
         tool_protocol=TOOL_PROTOCOL_PROMPT.strip(),
         grep_tool_policy=GREP_TOOL_POLICY
-        if tool_available("grep", active_tools)
+        if capability_available("grep", active_capabilities)
         else "",
         skills_prompt=skills_prompt(skills),
-        tools_prompt=tools_prompt(active_tools),
+        tools_prompt=tools_prompt(active_capabilities),
     )
 
 
@@ -126,32 +130,34 @@ def current_date_line() -> str:
     return time.strftime("Today is %Y-%m-%d (%A).", time.localtime())
 
 
-def can_read_skill_files(enabled_tools: Iterable[str]) -> bool:
-    return "read" in set(enabled_tools)
+def can_read_skill_files(enabled_capabilities: Iterable[str]) -> bool:
+    return "sigil.read" in set(enabled_capabilities)
 
 
-def tool_available(name: str, allowed_tools: Iterable[str] | None = None) -> bool:
-    for descriptor in model_tool_descriptors(allowed_tools):
+def capability_available(
+    name: str, allowed_capabilities: Iterable[str] | None = None
+) -> bool:
+    for descriptor in model_capability_descriptors(allowed_capabilities):
         function = descriptor.get("function")
         if isinstance(function, dict) and function.get("name") == name:
             return True
     return False
 
 
-def tools_prompt(allowed_tools: Iterable[str] | None = None) -> str:
-    """Render active tools from the registry into the system prompt."""
+def tools_prompt(allowed_capabilities: Iterable[str] | None = None) -> str:
+    """Render active capabilities from the registry into the system prompt."""
     return render_prompt_template(
         TOOLS_PROMPT_TEMPLATE,
-        tools=tool_prompt_items(allowed_tools),
+        tools=tool_prompt_items(allowed_capabilities),
     )
 
 
 def tool_prompt_items(
-    allowed_tools: Iterable[str] | None = None,
+    allowed_capabilities: Iterable[str] | None = None,
 ) -> list[dict[str, str]]:
     return [
         tool_prompt_item(descriptor)
-        for descriptor in model_tool_descriptors(allowed_tools)
+        for descriptor in model_capability_descriptors(allowed_capabilities)
     ]
 
 
@@ -223,38 +229,45 @@ def render_prompt_template(template: str, **context: Any) -> str:
 tool_registry = _runtime_tool_registry
 
 
-def enabled_tool_names(
-    allowed_tools: Iterable[str] | None,
+def enabled_capability_ids(
+    allowed_capabilities: Iterable[str] | None,
     *,
-    tool_registry: ToolRegistry | None = None,
+    tool_registry: CapabilityRegistry | None = None,
 ) -> tuple[str, ...]:
     active_tool_registry = tool_registry or _runtime_tool_registry
-    available = active_tool_registry.list_tool_names()
-    if allowed_tools is None:
+    available = active_tool_registry.list_capability_ids()
+    if allowed_capabilities is None:
         return tuple(available)
-    allowed = set(allowed_tools)
-    return tuple(name for name in available if name in allowed)
+    enabled = []
+    for name in allowed_capabilities:
+        capability_id = active_tool_registry.resolve(name)
+        if capability_id is not None and capability_id in available:
+            enabled.append(capability_id)
+    return tuple(enabled)
 
 
-def model_tool_descriptors(
-    allowed_tools: Iterable[str] | None,
+def model_capability_descriptors(
+    allowed_capabilities: Iterable[str] | None,
     *,
-    tool_registry: ToolRegistry | None = None,
+    tool_registry: CapabilityRegistry | None = None,
 ) -> list[dict[str, Any]]:
     """Return provider-facing tool descriptors for the model prompt."""
     active_tool_registry = tool_registry or _runtime_tool_registry
     descriptors = []
-    for name in enabled_tool_names(allowed_tools, tool_registry=active_tool_registry):
-        tool = active_tool_registry.get(name)
-        if tool is None:
+    for capability_id in enabled_capability_ids(
+        allowed_capabilities,
+        tool_registry=active_tool_registry,
+    ):
+        capability = active_tool_registry.get(capability_id)
+        if capability is None:
             continue
         descriptors.append(
             {
                 "type": "function",
                 "function": {
-                    "name": tool.spec.name,
-                    "description": tool.spec.description,
-                    "parameters": tool.spec.schema,
+                    "name": active_tool_registry.model_alias(capability_id),
+                    "description": capability.spec.description,
+                    "parameters": capability.spec.input_schema,
                 },
             }
         )

@@ -33,10 +33,50 @@ from zeta import prompt as zeta_prompt
 from zeta import rpc as zeta_rpc
 from zeta import trace as zeta_trace
 from zeta.models import chat_completions as zeta_model
-from zeta.tools.base import ToolImpl, ToolSpec
-from zeta.tools.registry import ToolRegistry
+from zeta.tools.base import (
+    Capability,
+    CapabilityId,
+    CapabilityPolicy,
+    CapabilitySpec,
+    EffectKind,
+    FunctionCapabilityExecutor,
+)
+from zeta.tools.registry import CapabilityRegistry
 
 ensure_builtin_tools_registered()
+
+
+def _test_capability(
+    name: str,
+    *,
+    schema: dict[str, Any] | None = None,
+    effects: tuple[EffectKind, ...] = ("read",),
+    run_result: dict[str, Any] | None = None,
+    supports_staging: bool = False,
+    supports_direct: bool = True,
+) -> Capability:
+    return Capability(
+        CapabilitySpec(
+            CapabilityId("test", name),
+            f"{name} test capability.",
+            schema or {"type": "object"},
+            effects=effects,
+            aliases=(name,),
+        ),
+        CapabilityPolicy(
+            supports_staging=supports_staging,
+            supports_direct=supports_direct,
+            trust="builtin",
+        ),
+        FunctionCapabilityExecutor(
+            lambda params: (
+                run_result or {"ok": True, "content": [{"type": "text", "text": "ok"}]}
+            ),
+            (lambda params: {"ok": True, "effect": {"status": "proposed"}})
+            if supports_staging
+            else None,
+        ),
+    )
 
 
 def test_zeta_console_script_is_declared() -> None:
@@ -60,7 +100,7 @@ def test_zeta_agent_turn_carries_reasoning_into_event(monkeypatch) -> None:
     result = zeta_agent.run_agent_turn(
         "answer",
         [],
-        zeta_agent.AgentConfig(allowed_tools=("read",), max_turns=1),
+        zeta_agent.AgentConfig(allowed_capabilities=("read",), max_turns=1),
     )
 
     assert result.events[0]["reasoning"] == "weighing the options"
@@ -326,7 +366,7 @@ def test_zeta_rpc_session_uses_explicit_context(monkeypatch, tmp_path: Path) -> 
         session_id="ctx-session",
         event_sink=event_store,
         trace_store=trace_store,
-        tool_registry=ToolRegistry(),
+        tool_registry=CapabilityRegistry(),
         state_dir=tmp_path,
         session_dir=tmp_path / "sessions" / "ctx-session",
     )
@@ -386,7 +426,7 @@ def test_zeta_rpc_session_result_returns_prompt_trace_refs(
         session_id="ctx-session",
         event_sink=event_store,
         trace_store=trace_store,
-        tool_registry=ToolRegistry(),
+        tool_registry=CapabilityRegistry(),
         state_dir=tmp_path,
         session_dir=tmp_path / "sessions" / "ctx-session",
     )
@@ -420,18 +460,12 @@ def test_zeta_rpc_tool_run_result_returns_tool_trace_refs(
 ) -> None:
     event_store = zeta_events.SqliteEventStore(tmp_path / "events.sqlite3")
     trace_store = zeta_trace.InMemoryStore()
-    registry = ToolRegistry()
+    registry = CapabilityRegistry()
     registry.register(
-        "ctx_echo",
-        ToolImpl(
-            ToolSpec(
-                "ctx_echo",
-                "Echo text.",
-                {"type": "object"},
-                effects=("read",),
-            ),
-            lambda params: {"ok": True, "content": [{"type": "text", "text": "ok"}]},
-        ),
+        _test_capability(
+            "ctx_echo",
+            run_result={"ok": True, "content": [{"type": "text", "text": "ok"}]},
+        )
     )
     context = zeta_context.ZetaContext(
         session_id="ctx-session",
@@ -492,7 +526,7 @@ def test_zeta_rpc_session_trace_refs_degrade_when_trace_data_is_missing(
         session_id="ctx-session",
         event_sink=event_store,
         trace_store=zeta_trace.InMemoryStore(),
-        tool_registry=ToolRegistry(),
+        tool_registry=CapabilityRegistry(),
         state_dir=tmp_path,
         session_dir=tmp_path / "sessions" / "ctx-session",
     )
@@ -533,7 +567,7 @@ def test_zeta_rpc_sequential_runs_get_distinct_run_ids(
         session_id="ctx-session",
         event_sink=event_store,
         trace_store=zeta_trace.InMemoryStore(),
-        tool_registry=ToolRegistry(),
+        tool_registry=CapabilityRegistry(),
         state_dir=tmp_path,
         session_dir=tmp_path / "sessions" / "ctx-session",
     )
@@ -572,7 +606,7 @@ def test_zeta_rpc_session_returns_aborted_on_wall_clock_budget(
         session_id="ctx-session",
         event_sink=event_store,
         trace_store=zeta_trace.InMemoryStore(),
-        tool_registry=ToolRegistry(),
+        tool_registry=CapabilityRegistry(),
         state_dir=tmp_path,
         session_dir=tmp_path / "sessions" / "ctx-session",
     )
@@ -647,7 +681,7 @@ def test_zeta_rpc_session_cancel_aborts_active_run(
         session_id="ctx-session",
         event_sink=event_store,
         trace_store=zeta_trace.InMemoryStore(),
-        tool_registry=ToolRegistry(),
+        tool_registry=CapabilityRegistry(),
         state_dir=tmp_path,
         session_dir=tmp_path / "sessions" / "ctx-session",
     )
@@ -717,7 +751,7 @@ def test_zeta_rpc_session_cancel_aborts_active_run(
 
 
 def test_zeta_rpc_registers_client_tool_on_server_registry() -> None:
-    registry = ToolRegistry()
+    registry = CapabilityRegistry()
     server = zeta_rpc.JsonRpcServer(StringIO(), StringIO(), tool_registry=registry)
 
     registered = server.register_client_tools(
@@ -732,12 +766,13 @@ def test_zeta_rpc_registers_client_tool_on_server_registry() -> None:
     )
 
     assert registered == ["ctx_read"]
-    assert registry.get("ctx_read") is not None
+    assert registry.get("rpc.ctx_read") is not None
+    assert registry.get_by_alias("ctx_read") is not None
     assert zeta_agent.tool_registry.get("ctx_read") is None
 
 
 def test_zeta_rpc_registered_client_tool_exposes_capability_metadata() -> None:
-    registry = ToolRegistry()
+    registry = CapabilityRegistry()
     server = zeta_rpc.JsonRpcServer(StringIO(), StringIO(), tool_registry=registry)
 
     registered = server.register_client_tools(
@@ -754,19 +789,22 @@ def test_zeta_rpc_registered_client_tool_exposes_capability_metadata() -> None:
         ]
     )
 
-    tool = registry.get("client.write")
+    capability = registry.get("rpc.client.write")
     assert registered == ["client.write"]
-    assert tool is not None
-    assert tool.spec.metadata() == {
+    assert capability is not None
+    assert capability.spec.metadata() == {
+        "id": "rpc.client.write",
+        "provider": "rpc",
         "name": "client.write",
+        "aliases": ["client.write"],
         "description": "Write through the client.",
-        "schema": {"type": "object"},
+        "input_schema": {"type": "object"},
         "interactive": True,
         "effects": ["write"],
-        "staging_supported": True,
-        "direct_execution_allowed": False,
-        "timeout_sec": 2.5,
     }
+    assert capability.policy.supports_staging is True
+    assert capability.policy.supports_direct is False
+    assert capability.policy.timeout_seconds == 2.5
 
 
 def test_zeta_rpc_rejects_invalid_client_tool_schema() -> None:
@@ -790,7 +828,9 @@ def test_zeta_rpc_rejects_invalid_client_tool_schema() -> None:
         + "\n"
     )
     output = StringIO()
-    server = zeta_rpc.JsonRpcServer(input_stream, output, tool_registry=ToolRegistry())
+    server = zeta_rpc.JsonRpcServer(
+        input_stream, output, tool_registry=CapabilityRegistry()
+    )
 
     server.serve()
 
@@ -802,7 +842,7 @@ def test_zeta_rpc_rejects_invalid_client_tool_schema() -> None:
 
 
 def test_zeta_rpc_mutating_client_tool_without_staging_is_refused_in_propose() -> None:
-    registry = ToolRegistry()
+    registry = CapabilityRegistry()
     server = zeta_rpc.JsonRpcServer(StringIO(), StringIO(), tool_registry=registry)
     server.register_client_tools(
         [
@@ -811,18 +851,19 @@ def test_zeta_rpc_mutating_client_tool_without_staging_is_refused_in_propose() -
                 "description": "Write through the client.",
                 "schema": {"type": "object"},
                 "effects": ["write"],
+                "direct_execution_allowed": True,
             }
         ]
     )
 
-    result = registry.run_tool("client.write", {}, execution_mode="stage")
+    result = registry.invoke("client.write", {}, execution_mode="stage")
 
     assert result["ok"] is False
     assert result["error"]["code"] == "staging-unsupported"
 
 
 def test_zeta_rpc_mutating_client_tool_requires_direct_execution_opt_in() -> None:
-    registry = ToolRegistry()
+    registry = CapabilityRegistry()
     server = zeta_rpc.JsonRpcServer(StringIO(), StringIO(), tool_registry=registry)
     server.register_client_tools(
         [
@@ -831,36 +872,25 @@ def test_zeta_rpc_mutating_client_tool_requires_direct_execution_opt_in() -> Non
                 "description": "Write through the client.",
                 "schema": {"type": "object"},
                 "effects": ["write"],
+                "staging_supported": True,
             }
         ]
     )
 
-    result = registry.run_tool("client.write", {}, execution_mode="direct")
+    result = registry.invoke("client.write", {}, execution_mode="direct")
 
     assert result == {
         "ok": False,
         "error": {
             "code": "direct-execution-disallowed",
-            "message": "tool client.write does not allow direct execution",
+            "message": "capability rpc.client.write does not allow direct execution",
         },
     }
 
 
 def test_zeta_rpc_rejects_duplicate_client_tool_registration() -> None:
-    registry = ToolRegistry()
-    registry.register(
-        "ctx_read",
-        ToolImpl(
-            ToolSpec(
-                "ctx_read",
-                "Read through the host.",
-                {"type": "object"},
-                effects=("read",),
-            ),
-            lambda params: {"ok": True},
-            lambda params: {"ok": True},
-        ),
-    )
+    registry = CapabilityRegistry()
+    registry.register(_test_capability("ctx_read", run_result={"ok": True}))
     input_stream = StringIO(
         json.dumps(
             {
@@ -899,7 +929,7 @@ def test_zeta_rpc_rejects_duplicate_client_tool_registration() -> None:
                 "message": "Invalid params",
                 "data": {
                     "code": "duplicate_tool",
-                    "message": "tool 'ctx_read' is already registered",
+                    "message": "tool alias 'ctx_read' is already registered",
                     "tool": "ctx_read",
                 },
             },
@@ -938,7 +968,7 @@ def test_zeta_rpc_rejects_reregistering_client_owned_tool() -> None:
     server = zeta_rpc.JsonRpcServer(
         input_stream,
         output,
-        tool_registry=ToolRegistry(),
+        tool_registry=CapabilityRegistry(),
     )
 
     server.serve()
@@ -1350,26 +1380,21 @@ def test_zeta_rpc_publish_event_keeps_default_stream_without_subscription() -> N
 
 
 def test_zeta_agent_turn_uses_explicit_tool_registry(monkeypatch) -> None:
-    registry = ToolRegistry()
+    registry = CapabilityRegistry()
     registry.register(
-        "ctx_echo",
-        ToolImpl(
-            ToolSpec(
-                "ctx_echo",
-                "Echo text.",
-                {
-                    "type": "object",
-                    "properties": {"text": {"type": "string"}},
-                    "required": ["text"],
-                    "additionalProperties": False,
-                },
-                effects=("read",),
-            ),
-            lambda params: {
-                "ok": True,
-                "content": [{"type": "text", "text": str(params["text"])}],
+        _test_capability(
+            "ctx_echo",
+            schema={
+                "type": "object",
+                "properties": {"text": {"type": "string"}},
+                "required": ["text"],
+                "additionalProperties": False,
             },
-        ),
+            run_result={
+                "ok": True,
+                "content": [{"type": "text", "text": "from ctx"}],
+            },
+        )
     )
     responses = iter(
         [
@@ -1399,7 +1424,7 @@ def test_zeta_agent_turn_uses_explicit_tool_registry(monkeypatch) -> None:
     result = zeta_agent.run_agent_turn(
         "echo",
         [],
-        zeta_agent.AgentConfig(allowed_tools=("ctx_echo",), max_turns=2),
+        zeta_agent.AgentConfig(allowed_capabilities=("ctx_echo",), max_turns=2),
         tool_registry=registry,
     )
 
@@ -1429,7 +1454,9 @@ def test_zeta_agent_turn_passes_thinking_to_the_model(monkeypatch) -> None:
     zeta_agent.run_agent_turn(
         "answer",
         [],
-        zeta_agent.AgentConfig(allowed_tools=("read",), max_turns=1, thinking="none"),
+        zeta_agent.AgentConfig(
+            allowed_capabilities=("read",), max_turns=1, thinking="none"
+        ),
     )
 
     kwargs = cast(dict[str, Any], captured["kwargs"])
@@ -1476,7 +1503,7 @@ def test_zeta_agent_tool_call_is_caused_by_assistant_event(
     result = zeta_agent.run_agent_turn(
         "read",
         [],
-        zeta_agent.AgentConfig(allowed_tools=("read",), max_turns=1),
+        zeta_agent.AgentConfig(allowed_capabilities=("read",), max_turns=1),
         prompt_builder=zeta_prompt.PromptBuilder(store=store),
         caused_by="prompt-event",
     )
@@ -1511,7 +1538,7 @@ def test_zeta_agent_turn_finalizes_text(monkeypatch) -> None:
     result = zeta_agent.run_agent_turn(
         "answer",
         [],
-        zeta_agent.AgentConfig(allowed_tools=("read",), max_turns=1),
+        zeta_agent.AgentConfig(allowed_capabilities=("read",), max_turns=1),
         trace_store=store,
     )
 
@@ -1545,7 +1572,7 @@ def test_zeta_agent_turn_stores_prompt_and_assistant_trace(monkeypatch) -> None:
         "answer",
         [{"role": "user", "content": "prior"}],
         zeta_agent.AgentConfig(
-            allowed_tools=("read",),
+            allowed_capabilities=("read",),
             max_turns=1,
             model_name="unit-model",
         ),
@@ -1605,7 +1632,7 @@ def test_zeta_agent_turn_captures_model_telemetry(monkeypatch) -> None:
     result = zeta_agent.run_agent_turn(
         "answer",
         [],
-        zeta_agent.AgentConfig(allowed_tools=("read",), max_turns=1),
+        zeta_agent.AgentConfig(allowed_capabilities=("read",), max_turns=1),
     )
 
     assert result.final_text == "done"
@@ -1685,7 +1712,7 @@ def test_zeta_agent_turn_attaches_model_telemetry_to_first_tool_result(
     result = zeta_agent.run_agent_turn(
         "inspect",
         [],
-        zeta_agent.AgentConfig(allowed_tools=("read",), max_turns=2),
+        zeta_agent.AgentConfig(allowed_capabilities=("read",), max_turns=2),
     )
 
     tool_results = [
@@ -1713,14 +1740,14 @@ def test_zeta_agent_turn_records_one_prompt_trace_per_model_request(
     )
     monkeypatch.setattr(
         zeta_agent,
-        "run_tool",
+        "invoke_capability",
         lambda name, params: read_tool_payload(target),
     )
 
     result = zeta_agent.run_agent_turn(
         "inspect",
         [],
-        zeta_agent.AgentConfig(allowed_tools=("read",), max_turns=2),
+        zeta_agent.AgentConfig(allowed_capabilities=("read",), max_turns=2),
         prompt_builder=zeta_prompt.PromptBuilder(store=store),
     )
 
@@ -1761,14 +1788,14 @@ def test_zeta_agent_turn_records_tool_result_derivation(
     )
     monkeypatch.setattr(
         zeta_agent,
-        "run_tool",
+        "invoke_capability",
         lambda name, params: read_tool_payload(target),
     )
 
     result = zeta_agent.run_agent_turn(
         "inspect",
         [],
-        zeta_agent.AgentConfig(allowed_tools=("read",), max_turns=2),
+        zeta_agent.AgentConfig(allowed_capabilities=("read",), max_turns=2),
         prompt_builder=zeta_prompt.PromptBuilder(store=store),
     )
 
@@ -2003,7 +2030,7 @@ def test_zeta_agent_turn_uses_request_model(monkeypatch) -> None:
         "answer",
         [],
         zeta_agent.AgentConfig(
-            allowed_tools=("read",),
+            allowed_capabilities=("read",),
             max_turns=1,
             model_name="fast-model",
             model_url="http://127.0.0.1:8081/v1/chat/completions",
@@ -2052,24 +2079,24 @@ def test_zeta_agent_turn_runs_multiple_read_only_tools_in_order(monkeypatch) -> 
         lambda *args, **kwargs: next(responses),
     )
 
-    def fake_run_tool(
+    def fake_invoke(
         name: str, params: dict[str, Any], **kwargs: object
     ) -> dict[str, Any]:
         ran.append((name, params))
         return {"ok": True, "content": [{"type": "text", "text": name}]}
 
-    monkeypatch.setattr(zeta_agent, "run_tool", fake_run_tool)
+    monkeypatch.setattr(zeta_agent, "invoke_capability", fake_invoke)
 
     result = zeta_agent.run_agent_turn(
         "inspect",
         [],
-        zeta_agent.AgentConfig(allowed_tools=("read", "ls"), max_turns=2),
+        zeta_agent.AgentConfig(allowed_capabilities=("read", "ls"), max_turns=2),
         caused_by="prompt-event",
     )
 
     assert ran == [
-        ("read", {"path": "README.md"}),
-        ("ls", {"path": "src"}),
+        ("sigil.read", {"path": "README.md"}),
+        ("sigil.ls", {"path": "src"}),
     ]
     assert result.final_text == "done"
     assert [
@@ -2126,7 +2153,7 @@ def test_zeta_agent_turn_streams_text_between_tool_turns(monkeypatch) -> None:
     )
     monkeypatch.setattr(
         zeta_agent,
-        "run_tool",
+        "invoke_capability",
         lambda name, params: {
             "ok": True,
             "content": [{"type": "text", "text": "README"}],
@@ -2136,7 +2163,7 @@ def test_zeta_agent_turn_streams_text_between_tool_turns(monkeypatch) -> None:
     result = zeta_agent.run_agent_turn(
         "inspect",
         [],
-        zeta_agent.AgentConfig(allowed_tools=("read",), max_turns=2),
+        zeta_agent.AgentConfig(allowed_capabilities=("read",), max_turns=2),
         stream_sink=sink,
     )
 
@@ -2167,7 +2194,7 @@ def test_zeta_agent_turn_does_not_duplicate_current_objective(monkeypatch) -> No
     result = zeta_agent.run_agent_turn(
         "inspect the repo",
         [],
-        zeta_agent.AgentConfig(allowed_tools=("read",), max_turns=1),
+        zeta_agent.AgentConfig(allowed_capabilities=("read",), max_turns=1),
     )
 
     assert result.final_text == "done"
@@ -2219,7 +2246,7 @@ def test_zeta_agent_turn_orders_prior_timeline_before_current_events(
     )
     monkeypatch.setattr(
         zeta_agent,
-        "run_tool",
+        "invoke_capability",
         lambda name, params: {
             "ok": True,
             "content": [{"type": "text", "text": "Decision log"}],
@@ -2233,7 +2260,7 @@ def test_zeta_agent_turn_orders_prior_timeline_before_current_events(
             {"role": "user", "content": "What is this vault about?"},
             {"role": "assistant", "content": "It is a CEO vault."},
         ],
-        zeta_agent.AgentConfig(allowed_tools=("read",), max_turns=2),
+        zeta_agent.AgentConfig(allowed_capabilities=("read",), max_turns=2),
     )
 
     assert result.final_text == "Improve the decision log."
@@ -2274,7 +2301,7 @@ def test_zeta_agent_turn_streams_tool_call_before_running_tool(monkeypatch) -> N
         },
     )
 
-    def fake_run_tool(
+    def fake_invoke(
         name: str, params: dict[str, Any], **kwargs: object
     ) -> dict[str, Any]:
         del name, params, kwargs
@@ -2284,12 +2311,12 @@ def test_zeta_agent_turn_streams_tool_call_before_running_tool(monkeypatch) -> N
         ]
         return {"ok": True, "content": [{"type": "text", "text": "README"}]}
 
-    monkeypatch.setattr(zeta_agent, "run_tool", fake_run_tool)
+    monkeypatch.setattr(zeta_agent, "invoke_capability", fake_invoke)
 
     result = zeta_agent.run_agent_turn(
         "inspect",
         [],
-        zeta_agent.AgentConfig(allowed_tools=("read",), max_turns=1),
+        zeta_agent.AgentConfig(allowed_capabilities=("read",), max_turns=1),
         event_sink=streamed.append,
     )
 
@@ -2328,7 +2355,7 @@ def test_zeta_agent_turn_stops_after_staged_tool(monkeypatch) -> None:
     )
     monkeypatch.setattr(
         zeta_agent,
-        "run_tool",
+        "invoke_capability",
         lambda name, params, **kwargs: {
             "ok": True,
             "effect": {
@@ -2343,7 +2370,7 @@ def test_zeta_agent_turn_stops_after_staged_tool(monkeypatch) -> None:
     result = zeta_agent.run_agent_turn(
         "test",
         [],
-        zeta_agent.AgentConfig(allowed_tools=("bash",), max_turns=3),
+        zeta_agent.AgentConfig(allowed_capabilities=("bash",), max_turns=3),
     )
 
     assert requests == 1
@@ -2391,7 +2418,7 @@ def test_zeta_agent_direct_mode_continues_after_bash(monkeypatch) -> None:
         "test",
         [],
         zeta_agent.AgentConfig(
-            allowed_tools=("bash",),
+            allowed_capabilities=("bash",),
             execution_mode="direct",
             max_turns=3,
         ),
@@ -2428,13 +2455,13 @@ def test_zeta_agent_turn_stops_after_default_max_turns(monkeypatch) -> None:
         zeta_agent, "chat_completion_messages", fake_chat_completion_messages
     )
     monkeypatch.setattr(
-        zeta_agent, "run_tool", lambda name, params, **kwargs: {"ok": True}
+        zeta_agent, "invoke_capability", lambda name, params, **kwargs: {"ok": True}
     )
 
     result = zeta_agent.run_agent_turn(
         "test",
         [],
-        zeta_agent.AgentConfig(allowed_tools=("ls",)),
+        zeta_agent.AgentConfig(allowed_capabilities=("ls",)),
     )
 
     assert requests == zeta_agent.DEFAULT_MAX_TURNS
@@ -2458,7 +2485,7 @@ def test_zeta_agent_turn_aborts_before_model_when_cancelled(monkeypatch) -> None
         zeta_agent.run_agent_turn(
             "test",
             [],
-            zeta_agent.AgentConfig(allowed_tools=("ls",), max_turns=1),
+            zeta_agent.AgentConfig(allowed_capabilities=("ls",), max_turns=1),
             event_sink=events.append,
             cancellation_event=cancellation,
             caused_by="prompt-event",
@@ -2496,7 +2523,7 @@ def test_zeta_agent_turn_aborts_on_deadline_between_model_turns(
     )
     monkeypatch.setattr(
         zeta_agent,
-        "run_tool",
+        "invoke_capability",
         lambda name, params, **kwargs: read_tool_payload(target),
     )
 
@@ -2505,7 +2532,7 @@ def test_zeta_agent_turn_aborts_on_deadline_between_model_turns(
             "test",
             [],
             zeta_agent.AgentConfig(
-                allowed_tools=("read",),
+                allowed_capabilities=("read",),
                 max_turns=2,
                 max_wall_seconds=1.0,
             ),
@@ -2542,7 +2569,7 @@ def test_zeta_agent_turn_converts_tool_crash_to_error_result(monkeypatch) -> Non
         ]
     )
 
-    def crash_run_tool(name: str, params: dict[str, Any], **kwargs: object) -> dict:
+    def crash_invoke(name: str, params: dict[str, Any], **kwargs: object) -> dict:
         raise ValueError("boom")
 
     def fake_chat_completion_messages(*args: object, **kwargs: object) -> dict:
@@ -2553,12 +2580,12 @@ def test_zeta_agent_turn_converts_tool_crash_to_error_result(monkeypatch) -> Non
     monkeypatch.setattr(
         zeta_agent, "chat_completion_messages", fake_chat_completion_messages
     )
-    monkeypatch.setattr(zeta_agent, "run_tool", crash_run_tool)
+    monkeypatch.setattr(zeta_agent, "invoke_capability", crash_invoke)
 
     result = zeta_agent.run_agent_turn(
         "test",
         [],
-        zeta_agent.AgentConfig(allowed_tools=("read",), max_turns=3),
+        zeta_agent.AgentConfig(allowed_capabilities=("read",), max_turns=3),
     )
 
     assert result.final_text == "recovered"
@@ -2573,7 +2600,7 @@ def test_zeta_agent_turn_converts_tool_crash_to_error_result(monkeypatch) -> Non
 def test_zeta_agent_turn_rejects_schema_mismatch_before_running(monkeypatch) -> None:
     ran = False
 
-    def fail_run_tool(name: str, params: dict[str, Any]) -> dict[str, Any]:
+    def fail_invoke(name: str, params: dict[str, Any]) -> dict[str, Any]:
         nonlocal ran
         ran = True
         return {"ok": True}
@@ -2595,12 +2622,12 @@ def test_zeta_agent_turn_rejects_schema_mismatch_before_running(monkeypatch) -> 
             ]
         },
     )
-    monkeypatch.setattr(zeta_agent, "run_tool", fail_run_tool)
+    monkeypatch.setattr(zeta_agent, "invoke_capability", fail_invoke)
 
     result = zeta_agent.run_agent_turn(
         "inspect",
         [],
-        zeta_agent.AgentConfig(allowed_tools=("read",), max_turns=1),
+        zeta_agent.AgentConfig(allowed_capabilities=("read",), max_turns=1),
     )
 
     assert ran is False
@@ -2614,7 +2641,7 @@ def test_zeta_agent_turn_rejects_schema_mismatch_before_running(monkeypatch) -> 
 def test_zeta_agent_turn_rejects_disallowed_tool_before_running(monkeypatch) -> None:
     ran = False
 
-    def fail_run_tool(name: str, params: dict[str, Any]) -> dict[str, Any]:
+    def fail_invoke(name: str, params: dict[str, Any]) -> dict[str, Any]:
         nonlocal ran
         ran = True
         return {"ok": True}
@@ -2636,12 +2663,12 @@ def test_zeta_agent_turn_rejects_disallowed_tool_before_running(monkeypatch) -> 
             ]
         },
     )
-    monkeypatch.setattr(zeta_agent, "run_tool", fail_run_tool)
+    monkeypatch.setattr(zeta_agent, "invoke_capability", fail_invoke)
 
     result = zeta_agent.run_agent_turn(
         "inspect",
         [],
-        zeta_agent.AgentConfig(allowed_tools=("read",), max_turns=1),
+        zeta_agent.AgentConfig(allowed_capabilities=("read",), max_turns=1),
     )
 
     assert ran is False
@@ -2703,7 +2730,7 @@ def test_zeta_agent_direct_mode_continues_after_edit(
         "edit",
         [],
         zeta_agent.AgentConfig(
-            allowed_tools=("edit",),
+            allowed_capabilities=("edit",),
             execution_mode="direct",
             max_turns=3,
         ),
@@ -2743,7 +2770,7 @@ def test_zeta_agent_turn_passes_api_to_the_model(monkeypatch) -> None:
     zeta_agent.run_agent_turn(
         "answer",
         [],
-        zeta_agent.AgentConfig(allowed_tools=("read",), max_turns=1),
+        zeta_agent.AgentConfig(allowed_capabilities=("read",), max_turns=1),
     )
 
     assert captured["api"] is None

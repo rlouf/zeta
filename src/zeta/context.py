@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .events import EventSink
-    from .tools.registry import ToolRegistry
+    from .tools.registry import CapabilityRegistry
     from .trace import Store
 
 MAX_CONTEXT_FILE_CHARS = 24_000
@@ -23,7 +23,7 @@ class ZetaContext:
     session_id: str
     event_sink: EventSink
     trace_store: Store
-    tool_registry: ToolRegistry
+    tool_registry: CapabilityRegistry
     state_dir: Path
     session_dir: Path
 
@@ -44,7 +44,7 @@ def context_for_session(
     session_id: str,
     state_dir: Path,
     session_dir: Path,
-    tool_registry: ToolRegistry | None = None,
+    tool_registry: CapabilityRegistry | None = None,
 ) -> ZetaContext:
     """Build the default Zeta runtime dependencies for one session."""
     from .events import SqliteEventStore, event_store_path

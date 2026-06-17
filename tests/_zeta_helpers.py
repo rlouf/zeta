@@ -370,7 +370,7 @@ def big_transcript_components(count: int = 6) -> list[zeta_prompt.PromptComponen
         }
         for index in range(count)
     ]
-    return zeta_prompt.prompt_components("continue", timeline, allowed_tools=())
+    return zeta_prompt.prompt_components("continue", timeline, allowed_capabilities=())
 
 
 class BatchSpyStore(zeta_trace.InMemoryStore):

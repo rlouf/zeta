@@ -7,7 +7,8 @@ from pathlib import Path
 from typing import Any
 
 from zeta.tools.base import (
-    ToolSpec,
+    CapabilityId,
+    CapabilitySpec,
     change_hashes,
     error_result,
     proposed_command_effect,
@@ -25,13 +26,13 @@ SCHEMA: dict[str, Any] = {
     },
 }
 
-SPEC = ToolSpec(
-    "write",
+SPEC = CapabilitySpec(
+    CapabilityId("sigil", "write"),
     "Write content directly or stage a proposed cp command.",
     SCHEMA,
     interactive=True,
     effects=("write",),
-    staging_supported=True,
+    aliases=("write",),
 )
 
 

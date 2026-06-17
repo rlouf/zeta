@@ -11,7 +11,12 @@ from collections.abc import Callable, Iterable, Sequence
 from pathlib import Path
 from typing import Any, Literal, TextIO
 
-from zeta.agent import AgentConfig, AgentTurnAborted, registered_tools, run_agent_turn
+from zeta.agent import (
+    AgentConfig,
+    AgentTurnAborted,
+    registered_capabilities,
+    run_agent_turn,
+)
 from zeta.context import ZetaContext, load_project_context
 from zeta.models import (
     active_model_selection,
@@ -21,7 +26,7 @@ from zeta.prompt import system_prompt
 from zeta.skills import expand_skill_directive
 from zeta.timeline import current_timeline, record_event
 from zeta.tools.base import proposed_effect
-from zeta.tools.registry import ExecutionMode, ToolRegistry
+from zeta.tools.registry import CapabilityRegistry, ExecutionMode
 from zeta.tools.registry import registry as _default_tool_registry
 from zeta.trace import latest_prompt_trace_fields
 
@@ -118,18 +123,22 @@ def step(
         stdin_text=stdin_text,
     )
     ensure_builtin_tools_registered()
-    enabled_tools = registered_tools(
+    enabled_capabilities = registered_capabilities(
         allowed_tools,
         tool_registry=runtime_context.tool_registry,
+    )
+    enabled_tool_aliases = tuple(
+        runtime_context.tool_registry.model_alias(capability_id)
+        for capability_id in enabled_capabilities
     )
     turn_recorder = TurnRecorder(
         runtime_context=runtime_context,
         workflow=workflow,
         objective=objective,
-        allowed_tools=enabled_tools,
+        allowed_tools=enabled_tool_aliases,
         staged=stages_mutations(
             execution_mode,
-            enabled_tools,
+            enabled_capabilities,
             tool_registry=runtime_context.tool_registry,
         ),
         agent=model_selection_event(selected_model) if selected_model else None,
@@ -140,8 +149,8 @@ def step(
         "content": prompt,
         "workflow": workflow,
         "runtime": "zeta",
-        "system": system_prompt(system, allowed_tools=enabled_tools),
-        "available_tools": list(enabled_tools),
+        "system": system_prompt(system, allowed_capabilities=enabled_capabilities),
+        "available_tools": list(enabled_tool_aliases),
         "turn_id": turn_recorder.turn_id,
     }
     if selected_model is not None:
@@ -167,7 +176,7 @@ def step(
             prior_timeline,
             AgentConfig(
                 system_prompt=system,
-                allowed_tools=enabled_tools,
+                allowed_capabilities=enabled_capabilities,
                 max_turns=max_steps,
                 stop_on_staged_effect=True,
                 execution_mode=execution_mode,
@@ -432,9 +441,9 @@ def record_agent_model_telemetry(
 
 def stages_mutations(
     execution_mode: ExecutionMode,
-    enabled_tools: tuple[str, ...],
+    enabled_capabilities: tuple[str, ...],
     *,
-    tool_registry: ToolRegistry | None = None,
+    tool_registry: CapabilityRegistry | None = None,
 ) -> bool:
     """Whether this turn's contract stages mutations for review.
 
@@ -442,11 +451,14 @@ def stages_mutations(
     """
     if execution_mode != "stage":
         return False
+    if tool_registry is None:
+        ensure_builtin_tools_registered()
     active_tool_registry = tool_registry or _default_tool_registry
     return any(
-        tool.spec.mutates()
-        for name in enabled_tools
-        if (tool := active_tool_registry.get(name)) is not None
+        capability.spec.mutates()
+        for name in enabled_capabilities
+        if (capability_id := active_tool_registry.resolve(name)) is not None
+        if (capability := active_tool_registry.get(capability_id)) is not None
     )
 
 

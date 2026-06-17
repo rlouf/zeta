@@ -17,7 +17,7 @@ from zeta.agent import (
     AgentConfig,
     AgentTurnAborted,
     AgentTurnResult,
-    registered_tools,
+    registered_capabilities,
     run_agent_turn,
 )
 from zeta.context import ZetaContext, load_project_context
@@ -257,27 +257,31 @@ def run_zeta_rpc_session(
     if workflow not in {"ask", "propose", "do"}:
         raise ValueError("workflow must be ask, propose, or do")
     requested_tools = params.get("tools")
-    allowed_tools = (
+    allowed_capabilities = (
         tuple(str(tool) for tool in requested_tools if isinstance(tool, str))
         if isinstance(requested_tools, list)
         else None
     )
     ensure_builtin_tools_registered()
     selected_model = active_model_selection(session_dir=runtime_context.session_dir)
-    enabled_tools = registered_tools(
-        allowed_tools,
+    enabled_capabilities = registered_capabilities(
+        allowed_capabilities,
         tool_registry=runtime_context.tool_registry,
+    )
+    enabled_tool_aliases = tuple(
+        runtime_context.tool_registry.model_alias(capability_id)
+        for capability_id in enabled_capabilities
     )
     execution_mode: ExecutionMode = "direct" if workflow == "do" else "stage"
     turn_recorder = TurnRecorder(
         runtime_context=runtime_context,
         workflow=workflow,
         objective=objective,
-        allowed_tools=enabled_tools,
+        allowed_tools=enabled_tool_aliases,
         staged=any(
-            tool.spec.mutates()
-            for name in enabled_tools
-            if (tool := runtime_context.tool_registry.get(name)) is not None
+            capability.spec.mutates()
+            for name in enabled_capabilities
+            if (capability := runtime_context.tool_registry.get(name)) is not None
         )
         and execution_mode == "stage",
         agent=model_selection_event(selected_model) if selected_model else None,
@@ -290,7 +294,7 @@ def run_zeta_rpc_session(
             "workflow": workflow,
             "runtime": "zeta-rpc",
             "turn_id": turn_recorder.turn_id,
-            "available_tools": list(enabled_tools),
+            "available_tools": list(enabled_tool_aliases),
         },
         runtime_context=runtime_context,
     )
@@ -315,7 +319,7 @@ def run_zeta_rpc_session(
                 system_prompt=params.get("system")
                 if isinstance(params.get("system"), str)
                 else None,
-                allowed_tools=enabled_tools,
+                allowed_capabilities=enabled_capabilities,
                 max_turns=params.get("max_steps")
                 if isinstance(params.get("max_steps"), int)
                 else None,

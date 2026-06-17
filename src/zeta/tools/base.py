@@ -1,4 +1,4 @@
-"""Shared primitives for built-in Zeta tools."""
+"""Shared primitives for Zeta capabilities."""
 
 from __future__ import annotations
 
@@ -8,31 +8,39 @@ import tempfile
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal, get_args
+from typing import Any, Literal, Protocol, get_args
 
 EffectKind = Literal["read", "write", "delete", "execute", "search"]
 
 EFFECT_KINDS = frozenset(get_args(EffectKind))
 READ_ONLY_EFFECT_KINDS = frozenset({"read", "search"})
+TrustLevel = Literal["builtin", "client"]
 
 
 @dataclass(frozen=True)
-class ToolSpec:
-    """Metadata for one Zeta tool."""
-
+class CapabilityId:
+    provider: str
     name: str
+
+    def canonical(self) -> str:
+        return f"{self.provider}.{self.name}"
+
+
+@dataclass(frozen=True)
+class CapabilitySpec:
+    """Runtime metadata for one Zeta capability."""
+
+    id: CapabilityId
     description: str
-    schema: dict[str, Any]
-    interactive: bool = False
+    input_schema: dict[str, Any]
     effects: tuple[EffectKind, ...] = ()
-    staging_supported: bool = False
-    direct_execution_allowed: bool = True
-    timeout_sec: float | None = None
+    aliases: tuple[str, ...] = ()
+    interactive: bool = False
 
     def mutates(self) -> bool:
-        """Whether the tool declares effects beyond reading.
+        """Whether the capability declares effects beyond reading.
 
-        Undeclared effects count as mutating so an unannotated tool can
+        Undeclared effects count as mutating so an unannotated capability can
         never run unreviewed in propose mode.
         """
         if not self.effects:
@@ -41,27 +49,72 @@ class ToolSpec:
 
     def metadata(self) -> dict[str, Any]:
         return {
-            "name": self.name,
+            "id": self.id.canonical(),
+            "provider": self.id.provider,
+            "name": self.id.name,
+            "aliases": list(self.aliases),
             "description": self.description,
-            "schema": self.schema,
+            "input_schema": self.input_schema,
             "interactive": self.interactive,
             "effects": list(self.effects),
-            "staging_supported": self.staging_supported,
-            "direct_execution_allowed": self.direct_execution_allowed,
-            "timeout_sec": self.timeout_sec,
         }
 
 
-ToolFunction = Callable[[dict[str, Any]], dict[str, Any]]
+@dataclass(frozen=True)
+class CapabilityPolicy:
+    supports_staging: bool
+    supports_direct: bool
+    trust: TrustLevel
+    timeout_seconds: float | None = None
 
 
 @dataclass(frozen=True)
-class ToolImpl:
-    """Executable implementation for one Zeta tool."""
+class CapabilityResult:
+    payload: dict[str, Any]
 
-    spec: ToolSpec
-    run: ToolFunction
-    stage: ToolFunction | None = None
+    @classmethod
+    def from_mapping(cls, value: dict[str, Any]) -> CapabilityResult:
+        return cls(dict(value))
+
+
+class CapabilityExecutor(Protocol):
+    def invoke(
+        self,
+        capability: CapabilitySpec,
+        params: dict[str, Any],
+        *,
+        mode: ExecutionMode,
+    ) -> CapabilityResult: ...
+
+
+ExecutionMode = Literal["stage", "direct"]
+CapabilityFunction = Callable[[dict[str, Any]], dict[str, Any]]
+
+
+@dataclass(frozen=True)
+class FunctionCapabilityExecutor:
+    run: CapabilityFunction
+    stage: CapabilityFunction | None = None
+
+    def invoke(
+        self,
+        capability: CapabilitySpec,
+        params: dict[str, Any],
+        *,
+        mode: ExecutionMode,
+    ) -> CapabilityResult:
+        if mode == "stage" and self.stage is not None and capability.mutates():
+            return CapabilityResult.from_mapping(self.stage(params))
+        return CapabilityResult.from_mapping(self.run(params))
+
+
+@dataclass(frozen=True)
+class Capability:
+    """Executable runtime capability."""
+
+    spec: CapabilitySpec
+    policy: CapabilityPolicy
+    executor: CapabilityExecutor
 
 
 def diagnostic(

@@ -48,9 +48,11 @@ from .system import (
     render_system_prompt,
     skills_prompt,
     system_prompt,
-    tool_available,
     tool_signature,
     tools_prompt,
+)
+from .system import (
+    capability_available as capability_available,
 )
 from .transforms import (
     BudgetThresholdPromptTransform,

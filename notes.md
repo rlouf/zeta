@@ -982,7 +982,7 @@ Verification:
 - `uv run coverage run -m pytest` and `uv run coverage report` passed with
   93% total coverage.
 
-### Slice 4: typed model turn record without provider-neutralizing yet
+### Slice 4: typed model turn record without provider-neutralizing yet - complete
 
 Make `ModelTurn` carry a typed assistant message wrapper while keeping
 Chat-Completions-shaped dicts at the model adapter boundary. This is a local
@@ -1015,8 +1015,11 @@ Tests first:
 
 Verification:
 
-- `uv run pytest tests/test_zeta_agent.py tests/test_zeta_model.py -q`
-- `uv run pytest -q`
+- `uv run pytest tests/test_zeta_agent.py tests/test_zeta_model.py -q` passed
+  with 144 tests.
+- `uv run pytest -q` passed with 805 tests and 4 skipped.
+- `uv run coverage run -m pytest` and `uv run coverage report` passed with
+  93% total coverage.
 
 ### Slice 5: prompt component boundary records
 

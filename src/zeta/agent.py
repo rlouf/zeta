@@ -172,8 +172,9 @@ def run_agent_turn(
                 cancellation_event=cancellation_event,
                 deadline=None,
             )
+        assistant = turn.assistant.to_provider()
         assistant_event_id, tool_calls = record_model_event(
-            turn.assistant,
+            assistant,
             state.events,
             prompt_trace=turn.prompt_trace,
             prompt_builder=builder,
@@ -182,7 +183,7 @@ def run_agent_turn(
         )
         if not tool_calls:
             return state.result(
-                final_text=str(turn.assistant.get("content") or ""),
+                final_text=turn.assistant.content,
                 final_text_streamed=turn.streamed_content,
             )
         outcome = run_capability_calls(
@@ -207,10 +208,32 @@ def run_agent_turn(
 
 @dataclass(frozen=True)
 class ModelTurn:
-    assistant: dict[str, Any]
+    assistant: AssistantMessage
     streamed_content: bool
     model_telemetry: dict[str, Any]
     prompt_trace: PromptTrace | None
+
+
+@dataclass(frozen=True)
+class AssistantMessage:
+    content: str
+    reasoning_content: str
+    tool_calls: tuple[dict[str, Any], ...]
+    provider_payload: dict[str, Any]
+
+    @classmethod
+    def from_provider(cls, assistant: dict[str, Any]) -> AssistantMessage:
+        content = assistant.get("content")
+        reasoning = assistant.get("reasoning_content")
+        return cls(
+            content=content if isinstance(content, str) else "",
+            reasoning_content=reasoning if isinstance(reasoning, str) else "",
+            tool_calls=tuple(assistant_tool_calls(assistant)),
+            provider_payload=dict(assistant),
+        )
+
+    def to_provider(self) -> dict[str, Any]:
+        return dict(self.provider_payload)
 
 
 def request_model_turn(
@@ -246,11 +269,15 @@ def request_model_turn(
         model_status=model_status,
         stream_sink=stream_sink,
     )
-    prompt_trace = builder.record_assistant_message(prepared_prompt, assistant)
+    assistant_message = AssistantMessage.from_provider(assistant)
+    prompt_trace = builder.record_assistant_message(
+        prepared_prompt,
+        assistant_message.to_provider(),
+    )
     state.note_prompt_trace(prompt_trace)
     state.note_model_telemetry(model_telemetry)
     return ModelTurn(
-        assistant=assistant,
+        assistant=assistant_message,
         streamed_content=streamed_content,
         model_telemetry=model_telemetry,
         prompt_trace=prompt_trace,

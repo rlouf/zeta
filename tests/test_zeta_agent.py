@@ -343,6 +343,77 @@ def test_zeta_record_model_event_sends_same_dict_to_sink() -> None:
     assert events[0]["caused_by"] == "parent-1"
 
 
+def test_zeta_assistant_message_round_trips_content_to_model_event() -> None:
+    assistant = zeta_agent.AssistantMessage.from_provider({"content": "done"})
+
+    assert assistant.content == "done"
+    assert assistant.reasoning_content == ""
+    assert assistant.tool_calls == ()
+    assert assistant.to_provider() == {"content": "done"}
+    assert zeta_agent.model_event(assistant.to_provider()) == {
+        "type": "model",
+        "content": "done",
+    }
+
+
+def test_zeta_assistant_message_round_trips_tool_calls() -> None:
+    provider_payload = {
+        "content": "",
+        "tool_calls": [
+            {
+                "id": "call-1",
+                "type": "function",
+                "function": {"name": "read", "arguments": "{}"},
+            },
+            "ignored",
+        ],
+    }
+
+    assistant = zeta_agent.AssistantMessage.from_provider(provider_payload)
+
+    assert assistant.tool_calls == (
+        {
+            "id": "call-1",
+            "type": "function",
+            "function": {"name": "read", "arguments": "{}"},
+        },
+    )
+    assert zeta_agent.assistant_tool_calls(assistant.to_provider()) == [
+        {
+            "id": "call-1",
+            "type": "function",
+            "function": {"name": "read", "arguments": "{}"},
+        }
+    ]
+
+
+def test_zeta_assistant_message_preserves_reasoning_content() -> None:
+    assistant = zeta_agent.AssistantMessage.from_provider(
+        {"content": "done", "reasoning_content": "thinking"}
+    )
+
+    assert assistant.reasoning_content == "thinking"
+    assert zeta_agent.model_event(assistant.to_provider()) == {
+        "type": "model",
+        "reasoning": "thinking",
+        "content": "done",
+    }
+
+
+def test_zeta_model_turn_carries_typed_assistant_message() -> None:
+    assistant = zeta_agent.AssistantMessage.from_provider({"content": "done"})
+    turn = zeta_agent.ModelTurn(
+        assistant=assistant,
+        streamed_content=True,
+        model_telemetry={"input_tokens": 1},
+        prompt_trace=None,
+    )
+
+    assert turn.assistant is assistant
+    assert turn.assistant.to_provider() == {"content": "done"}
+    assert turn.assistant.content == "done"
+
+
 def rpc_messages(output: StringIO) -> list[dict[str, Any]]:
     return [json.loads(line) for line in output.getvalue().splitlines()]
 

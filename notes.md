@@ -1045,6 +1045,13 @@ objects when a store is available. That makes it harder to dry-run prompt
 construction, diff prompt inputs, compare provider renders, or replay a prompt
 without side effects.
 
+### Second opinion status
+
+- Tried `claude -p` as required for a complex refactor plan.
+- The installed Claude CLI is not authenticated and returned
+  `401 Invalid authentication credentials`.
+- Tried `gemini -p`; Gemini is not installed in this checkout.
+
 ### Behavior to preserve
 
 - Prompt component order remains a public prefix-cache contract:
@@ -1094,6 +1101,29 @@ Split prompt building into three explicit phases:
 - `uv run pytest tests/test_zeta_prompt.py tests/test_zeta_trace.py -q`
 - `uv run pytest -q`
 - `uvx --with radon radon cc src tests -s`
+
+### Slice 1: plan, commit, and render API - complete
+
+Introduced `PromptPlan`, `StoredPrompt`, `plan_prompt()`,
+`commit_prompt_plan()`, and `render_model_input()`.
+
+Behavior preserved:
+
+- `PromptBuilder.build()` remains the compatibility wrapper for existing
+  callers.
+- Prompt component order, prompt object hashes, derivations, and refs keep their
+  previous behavior.
+- Fail-open trace storage still returns an unstored prompt shape.
+
+Verification:
+
+- `uv run pytest tests/test_zeta_prompt.py tests/test_zeta_trace.py -q` passed
+  with 147 tests.
+- `uv run pytest -q` passed with 823 tests and 4 skipped.
+- `uv run coverage run -m pytest` and `uv run coverage report` passed with
+  93% total coverage.
+- `uvx --with radon radon cc src/zeta/prompt src/zeta/agent.py tests/test_zeta_prompt.py -s`
+  passed.
 
 ## 6. Resumable step engine
 

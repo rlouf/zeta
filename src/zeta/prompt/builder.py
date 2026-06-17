@@ -13,6 +13,7 @@ from typing import Any
 
 from ..models import (
     DEFAULT_MAX_COMPLETION_TOKENS,
+    ModelInput,
     ModelOutput,
     chat_completion_request_body,
 )
@@ -49,6 +50,28 @@ class PreparedPrompt:
     component_object_ids: tuple[ObjectId, ...] = ()
 
 
+@dataclass(frozen=True)
+class PromptPlan:
+    """Pure prompt components plus render options."""
+
+    components: tuple[PromptComponent, ...]
+    tools: tuple[dict[str, Any], ...]
+    tool_choice: str | dict[str, Any]
+    max_tokens: int
+    selected_model: str | None = None
+    thinking: str | None = None
+
+
+@dataclass(frozen=True)
+class StoredPrompt:
+    """A committed prompt plan with trace object ids."""
+
+    plan: PromptPlan
+    components: tuple[PromptComponent, ...]
+    prompt_object_id: ObjectId | None = None
+    component_object_ids: tuple[ObjectId, ...] = ()
+
+
 class PromptBuilder:
     """Build model prompts and record their trace object graph."""
 
@@ -79,7 +102,7 @@ class PromptBuilder:
         selected_model: str | None = None,
         thinking: str | None = None,
     ) -> PreparedPrompt:
-        components = prompt_components(
+        plan = self.plan_prompt(
             objective,
             timeline,
             system=system,
@@ -87,16 +110,49 @@ class PromptBuilder:
             context=context,
             current_events=current_events,
             tools=tools,
-            skills=self._skills_for(allowed_capabilities),
-        )
-        fallback_tools = tools or []
-        return self._build_traced_prompt(
-            components,
-            tools=fallback_tools,
             tool_choice=tool_choice,
             max_tokens=max_tokens,
             selected_model=selected_model,
             thinking=thinking,
+        )
+        stored = self.commit_prompt_plan(plan)
+        return prepared_prompt_from(stored)
+
+    def plan_prompt(
+        self,
+        objective: str,
+        timeline: list[dict[str, Any]],
+        *,
+        system: str | None = None,
+        allowed_capabilities: Iterable[str] | None = None,
+        context: str = "",
+        current_events: Iterable[dict[str, Any]] = (),
+        tools: list[dict[str, Any]] | None = None,
+        tool_choice: str | dict[str, Any] = "auto",
+        max_tokens: int = DEFAULT_MAX_COMPLETION_TOKENS,
+        selected_model: str | None = None,
+        thinking: str | None = None,
+    ) -> PromptPlan:
+        return plan_prompt(
+            objective,
+            timeline,
+            system=system,
+            allowed_capabilities=allowed_capabilities,
+            context=context,
+            current_events=current_events,
+            tools=tools,
+            tool_choice=tool_choice,
+            max_tokens=max_tokens,
+            selected_model=selected_model,
+            thinking=thinking,
+            skills=self._skills_for(allowed_capabilities),
+        )
+
+    def commit_prompt_plan(self, plan: PromptPlan) -> StoredPrompt:
+        return commit_prompt_plan(
+            plan,
+            self.store(),
+            transform=self.transform,
         )
 
     def record_assistant_message(
@@ -212,166 +268,200 @@ class PromptBuilder:
     def store(self) -> Store | None:
         return self._store
 
-    def _build_traced_prompt(
-        self,
-        components: list[PromptComponent],
-        *,
-        tools: list[dict[str, Any]],
-        tool_choice: str | dict[str, Any],
-        max_tokens: int,
-        selected_model: str | None,
-        thinking: str | None,
-    ) -> PreparedPrompt:
-        try:
-            store = self.store()
-            with store.batch() if store is not None else nullcontext():
-                stored_components = self._store_components(components)
-                transformed_components = self.transform.apply(stored_components)
-                traced_components = self._store_transform_outputs(
-                    transformed_components
-                )
-                return self._prepared_prompt(
-                    traced_components,
-                    tools=tools,
-                    tool_choice=tool_choice,
-                    max_tokens=max_tokens,
-                    selected_model=selected_model,
-                    thinking=thinking,
-                )
-        except Exception as exc:
-            warn_trace_failure_once("build_prompt", exc)
-            messages = component_messages(components)
-            return PreparedPrompt(
-                messages=messages,
-                tools=tools,
-                tool_choice=tool_choice,
-                payload=chat_completion_request_body(
-                    messages,
-                    tools=tools,
-                    tool_choice=tool_choice,
-                    max_tokens=max_tokens,
-                    selected_model=selected_model,
-                    thinking=thinking,
-                ),
+
+def plan_prompt(
+    objective: str,
+    timeline: list[dict[str, Any]],
+    *,
+    system: str | None = None,
+    allowed_capabilities: Iterable[str] | None = None,
+    context: str = "",
+    current_events: Iterable[dict[str, Any]] = (),
+    tools: list[dict[str, Any]] | None = None,
+    tool_choice: str | dict[str, Any] = "auto",
+    max_tokens: int = DEFAULT_MAX_COMPLETION_TOKENS,
+    selected_model: str | None = None,
+    thinking: str | None = None,
+    skills: list[Skill] | None = None,
+) -> PromptPlan:
+    components = prompt_components(
+        objective,
+        timeline,
+        system=system,
+        allowed_capabilities=allowed_capabilities,
+        context=context,
+        current_events=current_events,
+        tools=tools,
+        skills=skills,
+    )
+    return PromptPlan(
+        components=tuple(components),
+        tools=tuple(tools or []),
+        tool_choice=tool_choice,
+        max_tokens=max_tokens,
+        selected_model=selected_model,
+        thinking=thinking,
+    )
+
+
+def commit_prompt_plan(
+    plan: PromptPlan,
+    store: Store | None,
+    *,
+    transform: PromptTransform | None = None,
+) -> StoredPrompt:
+    prompt_transform = transform or NoOpPromptTransform()
+    try:
+        with store.batch() if store is not None else nullcontext():
+            stored_components = store_components(list(plan.components), store)
+            transformed_components = prompt_transform.apply(stored_components)
+            traced_components = store_transform_outputs(
+                transformed_components,
+                store,
+                transform=prompt_transform,
             )
+            component_ids = stored_component_ids(traced_components)
+            prompt_id = store_prompt_object(
+                plan,
+                traced_components,
+                store,
+                component_ids=component_ids,
+            )
+            return StoredPrompt(
+                plan=plan,
+                components=tuple(traced_components),
+                prompt_object_id=prompt_id,
+                component_object_ids=component_ids,
+            )
+    except Exception as exc:
+        warn_trace_failure_once("build_prompt", exc)
+        return StoredPrompt(plan=plan, components=plan.components)
 
-    def _prepared_prompt(
-        self,
-        components: list[PromptComponent],
-        *,
-        tools: list[dict[str, Any]],
-        tool_choice: str | dict[str, Any],
-        max_tokens: int,
-        selected_model: str | None,
-        thinking: str | None,
-    ) -> PreparedPrompt:
-        messages = component_messages(components)
-        payload = chat_completion_request_body(
-            messages,
-            tools=tools,
-            tool_choice=tool_choice,
-            max_tokens=max_tokens,
-            selected_model=selected_model,
-            thinking=thinking,
-        )
-        component_ids = stored_component_ids(components)
-        prompt_id = self._store_prompt_object(
-            payload,
-            component_ids,
-            max_tokens=max_tokens,
-            selected_model=selected_model,
-            thinking=thinking,
-        )
-        return PreparedPrompt(
-            messages=messages,
-            tools=tools,
-            tool_choice=tool_choice,
-            payload=payload,
-            prompt_object_id=prompt_id,
-            component_object_ids=component_ids,
-        )
 
-    def _store_components(
-        self,
-        components: list[PromptComponent],
-    ) -> list[PromptComponent]:
-        store = self.store()
-        if store is None:
-            return list(components)
-        stored = []
-        for component in components:
-            if component.object_id is None:
-                object_id = store.put_object(prompt_component_object(component))
-                stored.append(replace(component, object_id=object_id))
-            else:
-                stored.append(component)
-        return stored
+def render_model_input(prompt: PromptPlan | StoredPrompt) -> ModelInput:
+    plan = prompt.plan if isinstance(prompt, StoredPrompt) else prompt
+    components = (
+        prompt.components if isinstance(prompt, StoredPrompt) else plan.components
+    )
+    return ModelInput(
+        messages=component_messages(list(components)),
+        tools=list(plan.tools),
+        tool_choice=plan.tool_choice,
+        max_tokens=plan.max_tokens,
+        selected_model=plan.selected_model,
+        thinking=plan.thinking,
+    )
 
-    def _store_transform_outputs(
-        self,
-        components: list[PromptComponent],
-    ) -> list[PromptComponent]:
-        store = self.store()
-        if store is None:
-            return list(components)
-        stored = []
-        producer = str(getattr(self.transform, "producer", "") or "")
-        for component in components:
-            is_new_output = component.object_id is None
-            if is_new_output:
-                object_id = store.put_object(prompt_component_object(component))
-                component = replace(component, object_id=object_id)
-            if producer and is_new_output and component.links:
-                store.record_derivation(
-                    Derivation(
-                        producer=producer,
-                        output_id=component.object_id or "",
-                        input_ids=component.links,
-                        params={},
-                    )
-                )
+
+def prepared_prompt_from(prompt: PromptPlan | StoredPrompt) -> PreparedPrompt:
+    model_input = render_model_input(prompt)
+    prompt_id = prompt.prompt_object_id if isinstance(prompt, StoredPrompt) else None
+    component_ids = (
+        prompt.component_object_ids if isinstance(prompt, StoredPrompt) else ()
+    )
+    return PreparedPrompt(
+        messages=model_input.messages,
+        tools=model_input.tools or [],
+        tool_choice=model_input.tool_choice,
+        payload=chat_completion_request_body(
+            model_input.messages,
+            tools=model_input.tools or [],
+            tool_choice=model_input.tool_choice,
+            max_tokens=model_input.max_tokens or DEFAULT_MAX_COMPLETION_TOKENS,
+            selected_model=model_input.selected_model,
+            thinking=model_input.thinking,
+        ),
+        prompt_object_id=prompt_id,
+        component_object_ids=component_ids,
+    )
+
+
+def store_components(
+    components: list[PromptComponent],
+    store: Store | None,
+) -> list[PromptComponent]:
+    if store is None:
+        return list(components)
+    stored = []
+    for component in components:
+        if component.object_id is None:
+            object_id = store.put_object(prompt_component_object(component))
+            stored.append(replace(component, object_id=object_id))
+        else:
             stored.append(component)
-        return stored
+    return stored
 
-    def _store_prompt_object(
-        self,
-        payload: dict[str, Any],
-        component_ids: tuple[ObjectId, ...],
-        *,
-        max_tokens: int,
-        selected_model: str | None,
-        thinking: str | None,
-    ) -> ObjectId | None:
-        store = self.store()
-        if store is None:
-            return None
-        # The exact payload is reconstructible from the linked components;
-        # embedding it here grew the store quadratically with turns.
-        prompt_id = store.put_object(
-            Object(
-                kind="prompt",
-                schema="zeta.prompt.v1",
-                data={"payload_sha256": payload_sha256(payload)},
-                links=component_ids,
+
+def store_transform_outputs(
+    components: list[PromptComponent],
+    store: Store | None,
+    *,
+    transform: PromptTransform,
+) -> list[PromptComponent]:
+    if store is None:
+        return list(components)
+    stored = []
+    producer = str(getattr(transform, "producer", "") or "")
+    for component in components:
+        is_new_output = component.object_id is None
+        if is_new_output:
+            object_id = store.put_object(prompt_component_object(component))
+            component = replace(component, object_id=object_id)
+        if producer and is_new_output and component.links:
+            store.record_derivation(
+                Derivation(
+                    producer=producer,
+                    output_id=component.object_id or "",
+                    input_ids=component.links,
+                    params={},
+                )
             )
-        )
-        store.record_derivation(
-            Derivation(
-                producer="PromptBuilder",
-                output_id=prompt_id,
-                input_ids=component_ids,
-                params={
-                    "max_tokens": max_tokens,
-                    "selected_model": selected_model,
-                    "thinking": thinking,
-                },
-            )
-        )
-        store.set_ref("prompt/current", prompt_id)
-        return prompt_id
+        stored.append(component)
+    return stored
 
 
-def stored_component_ids(components: list[PromptComponent]) -> tuple[ObjectId, ...]:
+def store_prompt_object(
+    plan: PromptPlan,
+    components: list[PromptComponent],
+    store: Store | None,
+    *,
+    component_ids: tuple[ObjectId, ...],
+) -> ObjectId | None:
+    if store is None:
+        return None
+    payload = chat_completion_request_body(
+        component_messages(components),
+        tools=list(plan.tools),
+        tool_choice=plan.tool_choice,
+        max_tokens=plan.max_tokens,
+        selected_model=plan.selected_model,
+        thinking=plan.thinking,
+    )
+    prompt_id = store.put_object(
+        Object(
+            kind="prompt",
+            schema="zeta.prompt.v1",
+            data={"payload_sha256": payload_sha256(payload)},
+            links=component_ids,
+        )
+    )
+    store.record_derivation(
+        Derivation(
+            producer="PromptBuilder",
+            output_id=prompt_id,
+            input_ids=component_ids,
+            params={
+                "max_tokens": plan.max_tokens,
+                "selected_model": plan.selected_model,
+                "thinking": plan.thinking,
+            },
+        )
+    )
+    store.set_ref("prompt/current", prompt_id)
+    return prompt_id
+
+
+def stored_component_ids(components: Iterable[PromptComponent]) -> tuple[ObjectId, ...]:
     """Return the trace ids of the components that made it into the store."""
     return tuple(
         component.object_id

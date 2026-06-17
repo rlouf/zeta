@@ -291,6 +291,88 @@ def test_zeta_prompt_request_reconstructs_and_verifies() -> None:
     assert reconstructed.payload_verified
 
 
+def test_zeta_prompt_plan_is_pure_and_repeatable() -> None:
+    store = BatchSpyStore()
+    tools = model_capability_descriptors(("read",))
+    builder = zeta_prompt.PromptBuilder(store=store)
+
+    first = builder.plan_prompt(
+        "inspect",
+        [{"role": "user", "content": "prior"}],
+        allowed_capabilities=("read",),
+        context="Project context",
+        tools=tools,
+        selected_model="unit-model",
+    )
+    second = builder.plan_prompt(
+        "inspect",
+        [{"role": "user", "content": "prior"}],
+        allowed_capabilities=("read",),
+        context="Project context",
+        tools=tools,
+        selected_model="unit-model",
+    )
+
+    assert first == second
+    assert store.batches == 0
+    assert first.tools == tuple(tools)
+    assert first.selected_model == "unit-model"
+
+
+def test_zeta_prompt_commit_is_object_id_idempotent() -> None:
+    store = zeta_trace.InMemoryStore()
+    builder = zeta_prompt.PromptBuilder(store=store)
+    plan = builder.plan_prompt(
+        "inspect",
+        [{"role": "user", "content": "prior"}],
+        allowed_capabilities=(),
+        tools=[],
+    )
+
+    first = builder.commit_prompt_plan(plan)
+    second = builder.commit_prompt_plan(plan)
+
+    assert first == second
+    assert first.prompt_object_id is not None
+    assert first.component_object_ids
+
+
+def test_zeta_prompt_render_model_input_matches_prepared_prompt() -> None:
+    store = zeta_trace.InMemoryStore()
+    tools = model_capability_descriptors(("read",))
+    builder = zeta_prompt.PromptBuilder(store=store)
+    plan = builder.plan_prompt(
+        "inspect",
+        [{"role": "user", "content": "prior"}],
+        allowed_capabilities=("read",),
+        tools=tools,
+        selected_model="unit-model",
+        thinking="low",
+    )
+    stored = builder.commit_prompt_plan(plan)
+
+    unstored_input = zeta_prompt.render_model_input(plan)
+    stored_input = zeta_prompt.render_model_input(stored)
+    prepared = builder.build(
+        "inspect",
+        [{"role": "user", "content": "prior"}],
+        allowed_capabilities=("read",),
+        tools=tools,
+        selected_model="unit-model",
+        thinking="low",
+    )
+
+    assert unstored_input == stored_input
+    assert stored_input == zeta_models_api.ModelInput(
+        messages=prepared.messages,
+        tools=prepared.tools,
+        tool_choice=prepared.tool_choice,
+        max_tokens=zeta_model.DEFAULT_MAX_COMPLETION_TOKENS,
+        selected_model="unit-model",
+        thinking="low",
+    )
+
+
 def test_zeta_prompt_records_provider_neutral_model_output() -> None:
     store = zeta_trace.InMemoryStore()
     prepared = zeta_prompt.PromptBuilder(store=store).build(

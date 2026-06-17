@@ -8,7 +8,7 @@ from typing import Any
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import SchemaError, ValidationError
 
-from .base import Capability, ExecutionMode, error_result
+from .base import Capability, CapabilityResult, ExecutionMode, error_result
 
 __all__ = ["ExecutionMode", "CapabilityProjection", "CapabilityRegistry", "registry"]
 
@@ -146,10 +146,11 @@ class CapabilityRegistry:
                 "unknown-capability", f"unknown capability: {capability_id}"
             )
         if not capability.spec.mutates():
-            return capability.executor.invoke(
-                capability.spec,
+            return invoke_executor(
+                capability_id,
+                capability,
                 params,
-                mode=execution_mode,
+                execution_mode,
             ).payload
         if execution_mode == "direct":
             if not capability.policy.supports_direct:
@@ -157,10 +158,11 @@ class CapabilityRegistry:
                     "direct-execution-disallowed",
                     f"capability {capability_id} does not allow direct execution",
                 )
-            return capability.executor.invoke(
-                capability.spec,
+            return invoke_executor(
+                capability_id,
+                capability,
                 params,
-                mode=execution_mode,
+                execution_mode,
             ).payload
         if not capability.policy.supports_staging:
             declared = ", ".join(capability.spec.effects) or "undeclared"
@@ -169,14 +171,58 @@ class CapabilityRegistry:
                 f"capability {capability_id} has effects ({declared}) that cannot be staged "
                 "for review; rerun in the do workflow (,,,)",
             )
-        return capability.executor.invoke(
-            capability.spec,
+        return invoke_executor(
+            capability_id,
+            capability,
             params,
-            mode=execution_mode,
+            execution_mode,
         ).payload
 
 
 registry = CapabilityRegistry()
+
+
+def invoke_executor(
+    capability_id: str,
+    capability: Capability,
+    params: dict[str, Any],
+    mode: ExecutionMode,
+) -> CapabilityResult:
+    try:
+        result = capability.executor.invoke(capability.spec, params, mode=mode)
+    except Exception as exc:
+        return CapabilityResult.from_mapping(
+            error_result(
+                "executor-exception",
+                f"{type(exc).__name__}: {exc}",
+                data={"capability_id": capability_id},
+            )
+        )
+    return CapabilityResult.from_mapping(
+        normalize_capability_result_payload(capability_id, result.payload)
+    )
+
+
+def normalize_capability_result_payload(
+    capability_id: str,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    normalized = dict(payload)
+    if isinstance(normalized.get("ok"), bool):
+        if normalized["ok"] is False and not isinstance(normalized.get("error"), dict):
+            normalized["error"] = invalid_capability_result_error(capability_id)
+        return normalized
+    normalized["ok"] = False
+    normalized["error"] = invalid_capability_result_error(capability_id)
+    return normalized
+
+
+def invalid_capability_result_error(capability_id: str) -> dict[str, Any]:
+    return {
+        "code": "invalid-capability-result",
+        "message": "capability result must include boolean ok",
+        "data": {"capability_id": capability_id},
+    }
 
 
 def _validation_error_sort_key(error: ValidationError) -> tuple[str, str]:

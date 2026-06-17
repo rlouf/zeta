@@ -123,8 +123,16 @@ def diagnostic(
     return {"code": code, "message": message, "severity": severity}
 
 
-def error_result(code: str, message: str) -> dict[str, Any]:
-    return {"ok": False, "error": {"code": code, "message": message}}
+def error_result(
+    code: str,
+    message: str,
+    *,
+    data: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    error: dict[str, Any] = {"code": code, "message": message}
+    if data is not None:
+        error["data"] = data
+    return {"ok": False, "error": error}
 
 
 def proposed_command_effect(

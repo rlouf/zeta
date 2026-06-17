@@ -46,6 +46,7 @@ def _test_capability(
     schema: dict[str, Any] | None = None,
     effects: tuple[EffectKind, ...] = (),
     aliases: tuple[str, ...] | None = None,
+    run_result: dict[str, Any] | None = None,
     supports_staging: bool = False,
     supports_direct: bool = True,
 ) -> Capability:
@@ -63,7 +64,7 @@ def _test_capability(
             trust="builtin",
         ),
         InProcessCapabilityExecutor(
-            lambda params: {"ok": True, "metadata": params},
+            lambda params: run_result or {"ok": True, "metadata": params},
             (lambda params: {"ok": True, "effect": {"status": "proposed"}})
             if supports_staging
             else None,
@@ -122,6 +123,65 @@ def test_zeta_tool_registry_requires_direct_execution_permission() -> None:
         "error": {
             "code": "direct-execution-disallowed",
             "message": "capability test.unit does not allow direct execution",
+        },
+    }
+
+
+def test_zeta_tool_registry_normalizes_malformed_executor_result() -> None:
+    registry = CapabilityRegistry()
+    registry.register(
+        _test_capability(
+            "unit",
+            effects=("read",),
+            run_result={"content": [{"type": "text", "text": "raw text"}]},
+        )
+    )
+
+    result = registry.invoke("unit", {})
+
+    assert result == {
+        "ok": False,
+        "content": [{"type": "text", "text": "raw text"}],
+        "error": {
+            "code": "invalid-capability-result",
+            "message": "capability result must include boolean ok",
+            "data": {"capability_id": "test.unit"},
+        },
+    }
+
+
+def test_zeta_tool_registry_converts_executor_exception_to_error_result() -> None:
+    registry = CapabilityRegistry()
+
+    def crash(params: dict[str, Any]) -> dict[str, Any]:
+        raise RuntimeError("boom")
+
+    registry.register(
+        Capability(
+            CapabilitySpec(
+                CapabilityId("test", "crash"),
+                "Crash test capability.",
+                {"type": "object"},
+                effects=("read",),
+                aliases=("crash",),
+            ),
+            CapabilityPolicy(
+                supports_staging=False,
+                supports_direct=True,
+                trust="builtin",
+            ),
+            InProcessCapabilityExecutor(crash),
+        )
+    )
+
+    result = registry.invoke("crash", {})
+
+    assert result == {
+        "ok": False,
+        "error": {
+            "code": "executor-exception",
+            "message": "RuntimeError: boom",
+            "data": {"capability_id": "test.crash"},
         },
     }
 

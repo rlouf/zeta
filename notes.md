@@ -4,14 +4,13 @@
 
 1. Finish the Zeta durable timeline cleanup by removing the trace `run_event`
    chain.
-2. Make the Zeta RPC syscall surface explicit and enforceable.
+2. Finish the remaining Zeta RPC syscall surface hardening.
 3. Make every tool a declared capability and mediate all model-to-tool calls
    through that capability interface.
-4. Make model input/output provider-neutral inside Zeta.
-5. Split prompt construction into plan, commit, and provider render phases.
-6. Rework the agent loop into an explicit resumable step engine.
-7. Promote replay/diff/fork invariants into acceptance tests.
-8. Sharpen the `src/zeta` core boundary from Sigil integration.
+4. Split prompt construction into plan, commit, and provider render phases.
+5. Rework the agent loop into an explicit resumable step engine.
+6. Promote replay/diff/fork invariants into acceptance tests.
+7. Sharpen the `src/zeta` core boundary from Sigil integration.
 
 Do not start a later section until the previous section is complete or Remi
 explicitly changes the order.
@@ -182,26 +181,24 @@ atomicity decision easier to reason about.
 
 ## 2. Zeta RPC syscall surface
 
-### Second opinion status
+### Current state
 
-- Tried `claude -p` as required for a complex protocol/refactor plan.
-- The command produced no output after about 90 seconds and had to be killed.
-  No usable external critique is folded in here.
-
-### Current read
-
-The current RPC layer already has the start of a kernel-like syscall surface:
+The RPC layer now has the start of a kernel-like syscall surface:
 
 - `initialize` returns server metadata and protocol version.
-- `session.run` runs a synchronous agent turn.
+- `session.run` creates an addressable run and returns the final cursor.
+- `session.cancel` can target an active run.
 - `tools.register` registers client-provided tools on the server registry.
 - `tools.call` is emitted by the server when a registered client tool is
   invoked.
 - `tools.respond` lets the client return the result of a prior `tools.call`.
-- `events.publish` streams live persisted runtime events to the client.
+- `events.list` exposes durable event cursors and filtering.
+- `events.subscribe` filters live event publications.
+- `events.publish` persists incoming runtime events and can trigger a registered
+  in-process agent run.
 
-The missing piece is a stable protocol contract with identities, cursors,
-cancellation, trace references, capability metadata, and structured errors.
+The remaining work is to finish the stable protocol contract around trace
+references, capability metadata, and tool-call lifecycle errors.
 
 ### Behavior to preserve
 
@@ -226,95 +223,7 @@ small runtime kernel:
   semantics.
 - errors are structured and stable.
 
-### Slice 1: protocol contract and golden tests
-
-- Add or update a protocol document that defines:
-  - protocol version and compatibility policy;
-  - request/response envelope shape;
-  - notifications vs requests;
-  - method list and schemas;
-  - stable error codes;
-  - event ordering and cursor semantics;
-  - tool capability metadata.
-- Add golden tests for `initialize`, unknown methods, invalid params, and the
-  current happy path.
-- If adding a new docs file is necessary, ask Remi first.
-
-Verification:
-
-- `uv run pytest tests/test_zeta_agent.py -q`
-- `uv run pre-commit run --all` if documentation changed.
-
-### Slice 2: structured RPC errors
-
-- Introduce a narrow internal error type for RPC dispatch with JSON-RPC code,
-  Zeta error code, message, and optional data.
-- Replace generic `-32000` stringification for expected protocol errors.
-- Keep unexpected exceptions grouped under one internal error code.
-
-Test cases:
-
-- unknown method;
-- missing `objective`;
-- invalid `workflow`;
-- duplicate tool registration;
-- invalid tool schema once schema validation lands.
-
-Verification:
-
-- `uv run pytest tests/test_zeta_agent.py -q`
-
-### Slice 3: run identity in `session.run`
-
-- Generate a stable `run_id` at the start of `session.run`.
-- Include `run_id` in:
-  - the persisted user event payload;
-  - every event published during that run;
-  - the final `session.run` result.
-- Prefer a new `run_*` id because it names the RPC execution rather than one
-  event.
-- Return at least:
-  - `run_id`;
-  - `outcome`;
-  - `final_text`;
-  - final event cursor if available.
-- Ensure `run_id` can be indexed or otherwise filtered efficiently before
-  adding `events.list(run_id=...)`.
-
-Test cases:
-
-- all `events.publish` notifications for a run carry the same `run_id`;
-- sequential runs get distinct ids;
-- aborted runs still return their `run_id`.
-
-Verification:
-
-- focused RPC tests in `tests/test_zeta_agent.py`
-- `uv run pytest -q`
-
-### Slice 4: event cursor exposure
-
-- Expose the durable event cursor in published events and `session.run` result.
-- Add `events.list`.
-- Use durable `seq` cursor rather than timestamp/id ordering.
-
-Method shape:
-
-- params: `after`, `limit`, optional `session_id`, optional `run_id`;
-- result: `events`, `next_cursor`.
-
-Test cases:
-
-- `events.list` returns events in append order;
-- `after` resumes without duplication;
-- `limit` returns a stable `next_cursor`;
-- filtering by run/session does not reorder events.
-
-Verification:
-
-- `uv run pytest tests/test_zeta_agent.py tests/test_zeta_trace.py -q`
-
-### Slice 5: trace refs in run result
+### Slice 1: trace refs in run result
 
 - Decide the minimal trace identity clients need:
   - prompt trace ids;
@@ -336,7 +245,7 @@ Verification:
 
 - `uv run pytest tests/test_zeta_agent.py tests/test_zeta_trace.py -q`
 
-### Slice 6: capability contract for `tools.register`
+### Slice 2: capability contract for `tools.register`
 
 - Validate registered tool schemas with `Draft202012Validator.check_schema`.
 - Extend capability metadata to include:
@@ -362,7 +271,7 @@ Verification:
 
 - `uv run pytest tests/test_zeta_tools.py tests/test_zeta_agent.py -q`
 
-### Slice 7: tool call lifecycle hardening
+### Slice 3: tool call lifecycle hardening
 
 - Add stable call identity and lifecycle states around client tool calls:
   - `requested`;
@@ -384,57 +293,6 @@ Test cases:
 Verification:
 
 - `uv run pytest tests/test_zeta_agent.py tests/test_zeta_tools.py -q`
-
-### Slice 8: `session.cancel`
-
-Split cancellation into two sub-slices because active cancellation cannot work on
-a single synchronous stdio loop.
-
-First:
-
-- add an in-memory run table keyed by `run_id`;
-- thread the existing `cancellation_event` support from `run_agent_turn` through
-  `run_rpc_session`;
-- add `session.cancel` result semantics for unknown/completed runs.
-
-Then:
-
-- make `session.run` run in a worker so the server can process `session.cancel`
-  while a run is active;
-- audit `JsonRpcServer` writes and shared `tool_responses` before making the
-  server concurrent.
-
-`session.cancel` shape:
-
-- params: `run_id`, optional `reason`;
-- result: `cancelled: true/false`, `run_id`.
-
-Test cases:
-
-- cancelling an active run publishes a `turn_aborted` event;
-- cancelling an unknown/completed run returns a stable structured result;
-- deadline and explicit cancellation produce different reasons.
-
-Verification:
-
-- `uv run pytest tests/test_zeta_agent.py -q`
-
-### Slice 9: optional event subscription
-
-- Add `events.subscribe` only after `events.list` exists.
-- For stdio, keep it simple: subscribe records a cursor/filter and causes future
-  persisted events to be published to that client.
-- Do not build fanout, sockets, or durable subscriptions yet.
-
-Test cases:
-
-- subscribe after cursor receives only later events;
-- subscription filters by session/run;
-- unsubscribed clients receive no extra notifications.
-
-Verification:
-
-- `uv run pytest tests/test_zeta_agent.py -q`
 
 ## 3. Capabilities and mediation
 
@@ -781,262 +639,7 @@ Acceptance test for any new transport:
 - no changes to model descriptor generation;
 - only registry registration and adapter invocation code changes.
 
-## 4. Provider-neutral model input and output
-
-### Second opinion status
-
-- Tried `claude -p` as required for a complex refactor plan.
-- The installed Claude CLI is not authenticated and returned
-  `401 Invalid authentication credentials`.
-- Tried `gemini -p`; Gemini is not installed in this environment. No usable
-  external critique is folded in here.
-
-### Current read
-
-Zeta currently keeps Chat Completions-shaped messages internally and translates
-Responses API payloads at the wire boundary. That means provider compatibility
-concerns leak into prompt building, replay, and trace objects.
-
-The current concrete boundaries are:
-
-- `src/zeta/models/chat_completions.py` builds Chat Completions request bodies,
-  streams SSE chunks into Chat-Completions-shaped payloads, and exposes
-  `chat_completion_messages()`.
-- `src/zeta/models/responses.py` takes Chat-Completions-shaped messages and
-  tools, renders Responses request bodies, streams Responses events, then
-  converts the result back into a Chat-Completions-shaped payload. It preserves
-  raw Responses output items in `_responses_items` for replay.
-- `src/zeta/agent.py` calls `chat_completion_messages()` through
-  `request_assistant_message()`, then wraps the returned assistant-message dict
-  in `AssistantMessage`.
-- prompt tracing currently stores the assistant provider payload under
-  `zeta.assistant_output.v1`.
-
-### Behavior to preserve
-
-- Current Chat Completions and Codex Responses calls keep working.
-- Responses reasoning replay still preserves raw provider output items when the
-  provider requires them.
-- Tool/capability calls remain visible to the model with provider-compatible
-  names and schemas.
-- Token usage and finish reasons remain available in telemetry and trace.
-
-### Target shape
-
-Define a provider-neutral internal model contract:
-
-- `ModelInput`
-  - instructions/system content;
-  - ordered conversation items;
-  - capability descriptors;
-  - tool choice;
-  - max output tokens;
-  - selected model;
-  - thinking/reasoning policy;
-  - prompt cache/session key.
-- `ModelOutput`
-  - text content;
-  - reasoning summary/content;
-  - capability calls;
-  - finish reason;
-  - usage;
-  - provider request/response metadata;
-  - opaque provider replay items.
-
-Provider adapters translate:
-
-- `ModelInput` -> Chat Completions request;
-- `ModelInput` -> Responses request;
-- Chat Completions response -> `ModelOutput`;
-- Responses stream -> `ModelOutput`.
-
-### Tests first
-
-- Golden tests for Chat Completions request rendering.
-- Golden tests for Responses request rendering.
-- Stream accumulator tests that produce `ModelOutput`, not an internal
-  Chat-Completions-shaped dict.
-- Replay tests proving Responses opaque items are preserved across turns.
-
-### Implementation steps
-
-1. Introduce `ModelInput`, `ModelOutput`, `ModelUsage`, and `ModelFinishReason`.
-2. Make current chat-completions request/response conversion an adapter.
-3. Make current responses request/stream conversion an adapter.
-4. Update `request_assistant_message()` to return `ModelOutput`.
-5. Update prompt tracing to store provider-neutral model output plus adapter
-   metadata.
-6. Keep compatibility shims only at RPC/test boundaries until all callers are
-   migrated.
-
-### Verification
-
-- `uv run pytest tests/test_zeta_model.py tests/test_zeta_responses.py -q`
-- `uv run pytest tests/test_zeta_agent.py tests/test_zeta_prompt.py -q`
-- `uv run pytest -q`
-
-
-### Slice 2: Chat Completions adapter - complete
-
-Make Chat Completions the first explicit adapter:
-
-- add `chat_completion_request_from_input(ModelInput)`;
-- add `model_output_from_chat_completion(payload)`;
-- keep `chat_completion_messages()` returning the current assistant dict until
-  the agent migrates;
-- keep `request_chat_completion()` accepting raw request bodies at its public
-  boundary for now.
-
-Behavior to preserve:
-
-- streaming content and reasoning deltas are unchanged;
-- fragmented tool calls are reassembled in the same order;
-- usage-only chunks still populate telemetry;
-- length-truncated tool calls still fail in the same caller path.
-
-Tests first:
-
-- golden Chat Completions request rendering from `ModelInput`;
-- stream accumulator output converted to `ModelOutput`;
-- `chat_completion_messages()` compatibility return stays unchanged.
-
-Verification:
-
-- `uv run pytest tests/test_zeta_model.py tests/test_zeta_agent.py -q` passed
-  with 148 tests.
-- `uv run pytest -q` passed with 815 tests and 4 skipped.
-- `uv run coverage run -m pytest` and `uv run coverage report` passed with
-  93% total coverage.
-
-### Slice 3: Responses adapter - complete
-
-Move the Responses bridge from "chat-shaped internal payloads" toward the same
-`ModelInput` / `ModelOutput` contract:
-
-- add `responses_request_from_input(ModelInput)`;
-- add `model_output_from_responses_payload(payload)`;
-- keep the existing `responses_request_body()` compatibility wrapper;
-- keep `codex_completion_messages()` returning the current assistant dict until
-  the agent migrates.
-
-Behavior to preserve:
-
-- system messages still become top-level `instructions`;
-- tool messages still become `function_call_output`;
-- assistant replay still prefers raw `_responses_items`;
-- reasoning effort mapping remains unchanged;
-- Responses usage maps onto the current token field names.
-
-Tests first:
-
-- golden Responses request rendering from `ModelInput`;
-- replayed Responses items are passed through verbatim;
-- Responses stream accumulator exposes `ModelOutput` with replay items;
-- `codex_completion_messages()` compatibility return stays unchanged.
-
-Verification:
-
-- `uv run pytest tests/test_zeta_responses.py tests/test_zeta_agent.py -q` passed
-  with 109 tests.
-- `uv run pytest -q` passed with 816 tests and 4 skipped.
-- `uv run coverage run -m pytest` and `uv run coverage report` passed with
-  93% total coverage.
-
-### Slice 4: agent model-call boundary - complete
-
-Update the agent to request and carry `ModelOutput` internally:
-
-- change `request_assistant_message()` to return `ModelOutput`;
-- change `request_model_turn()` to build `AssistantMessage` from
-  `ModelOutput.message`;
-- keep `AssistantMessage.to_provider()` as the compatibility shape for
-  prompt/timeline code until Section 6 renders `ModelInput` directly;
-- continue storing current model telemetry fields.
-
-Behavior to preserve:
-
-- `run_agent_turn()` final text and streaming behavior are unchanged;
-- model events keep the same JSON shape;
-- tool calls still resolve through the capability projection;
-- `request_assistant_message()` only changes its internal return type after
-  all direct tests/callers are adjusted.
-
-Tests first:
-
-- pure answer run finalizes the same final text;
-- reasoning content still appears in the model event;
-- tool-call run still emits the same tool call/result events;
-- model telemetry still attaches to the first tool result.
-
-Verification:
-
-- `uv run pytest tests/test_zeta_agent.py tests/test_zeta_model.py tests/test_zeta_responses.py -q`
-  passed with 171 tests.
-- `uv run pytest -q` passed with 818 tests and 4 skipped.
-- `uv run coverage run -m pytest` and `uv run coverage report` passed with
-  93% total coverage.
-
-### Slice 5: provider-neutral trace payloads - complete
-
-Change trace storage from provider-shaped assistant payloads to a
-provider-neutral output plus adapter metadata.
-
-Target trace data:
-
-- model output message/content/tool calls;
-- finish reason;
-- usage;
-- provider metadata;
-- provider replay items, including Responses encrypted reasoning items.
-
-Behavior to preserve:
-
-- prompt reconstruction and replay keep passing;
-- Responses replay items remain available when rendering the next request;
-- existing trace CLI rendering keeps showing assistant content and tool calls;
-- legacy trace objects degrade gracefully where possible.
-
-Tests first:
-
-- prompt trace stores provider-neutral output data;
-- reconstructing a prompt with a Responses assistant still replays opaque items;
-- trace CLI rendering still shows assistant/tool-call content;
-- legacy assistant-message objects continue to render or fail open explicitly.
-
-Verification:
-
-- `uv run pytest tests/test_zeta_prompt.py tests/test_zeta_trace.py tests/test_zeta_responses.py -q`
-  passed with 165 tests.
-- `uv run pytest -q` passed with 820 tests and 4 skipped.
-- `uv run coverage run -m pytest` and `uv run coverage report` passed with
-  93% total coverage.
-
-### Slice 6: compatibility cleanup - complete
-
-Only after the adapter and agent boundaries use `ModelInput` / `ModelOutput`:
-
-- run `ripple` on `chat_completion_messages()`,
-  `codex_completion_messages()`, `responses_request_body()`,
-  `responses_input_items()`, and assistant-message provider conversion helpers;
-- remove compatibility helpers with no production callers;
-- keep public shims where tests or protocol boundaries intentionally assert
-  provider dicts.
-
-Verification:
-
-- `uv run ripple ...` could not run because `ripple` is not installed in this
-  checkout.
-- `rg` audit found production or protocol-boundary callers for
-  `chat_completion_messages()`, `codex_completion_messages()`,
-  `responses_request_body()`, `responses_input_items()`,
-  `AssistantMessage.from_provider()`, and `AssistantMessage.to_provider()`, so
-  no compatibility helper was removed in this slice.
-- `uv run pytest tests/test_zeta_model.py tests/test_zeta_responses.py tests/test_zeta_agent.py tests/test_zeta_prompt.py -q`
-  passed with 235 tests.
-- `uv run pytest -q` passed with 820 tests and 4 skipped.
-- `uvx --with radon radon cc src tests -s` passed.
-
-## 5. Prompt plan, commit, and render
+## 4. Prompt plan, commit, and render
 
 ### Current read
 
@@ -1095,7 +698,7 @@ Split prompt building into three explicit phases:
 - `uv run pytest -q`
 - `uvx --with radon radon cc src tests -s`
 
-## 6. Resumable step engine
+## 5. Resumable step engine
 
 ### Current read
 
@@ -1184,7 +787,7 @@ that result instead of invoking the capability again.
 - `uvx --with coverage coverage report`
 - `uvx --with radon radon cc src tests -s`
 
-## 7. Replay, diff, and fork acceptance tests
+## 6. Replay, diff, and fork acceptance tests
 
 ### Current read
 
@@ -1226,7 +829,7 @@ For every completed run in tests:
 - `uv run pytest tests/test_zeta_trace.py tests/test_zeta_agent.py -q`
 - `uv run pytest -q`
 
-## 8. Zeta core boundary
+## 7. Zeta core boundary
 
 ### Current read
 

@@ -8,7 +8,7 @@ import click
 
 from .context import default_context
 from .events import EventReader
-from .rpc import JsonRpcServer, run_rpc_session
+from .rpc import JsonRpcServer, run_rpc_session, session_event_dispatcher
 
 
 @click.group(context_settings={"help_option_names": ["-h", "--help"]})
@@ -33,11 +33,16 @@ def rpc(stdio: bool) -> int:
         sys.stdout,
         tool_registry=runtime_context.tool_registry,
         event_reader=event_reader,
+        event_sink=runtime_context.event_sink,
     )
     server.session_runner = lambda params: run_rpc_session(
         params,
         publish_event=server.publish_event,
         runtime_context=runtime_context,
+    )
+    server.event_dispatcher = session_event_dispatcher(
+        runtime_context,
+        publish_event=server.publish_event,
     )
     server.serve()
     return 0

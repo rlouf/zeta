@@ -22,7 +22,20 @@ from .agent import (
     run_agent_turn,
 )
 from .context import ZetaContext, default_context, load_project_context
-from .events import Event, EventCursor, EventReader, Filter
+from .events import (
+    AgentDefinition,
+    AgentRun,
+    DraftEvent,
+    Event,
+    EventCursor,
+    EventDispatcher,
+    EventReader,
+    EventSink,
+    Filter,
+    TriggerRule,
+    event_payload_draft,
+    time_from_timestamp_micros,
+)
 from .timeline import current_timeline, record_event, timeline_event_from_durable_event
 from .tools.base import (
     EFFECT_KINDS,
@@ -118,6 +131,57 @@ def run_rpc_session(
     runtime_context = runtime_context or default_context()
     run_id = rpc_run_id_param(params) or rpc_run_id()
     cancellation_event = rpc_cancellation_event_param(params)
+    draft = session_turn_requested_draft(
+        params,
+        run_id=run_id,
+        runtime_context=runtime_context,
+    )
+    dispatcher = session_event_dispatcher(
+        runtime_context,
+        publish_event=publish_event,
+        cancellation_event=cancellation_event,
+    )
+    outcome = dispatcher.dispatch(draft)
+    if outcome.agent_results:
+        return outcome.agent_results[0]
+    return {
+        "run_id": run_id,
+        "outcome": "duplicate" if not outcome.inserted else "unhandled",
+        "final_text": "",
+        "trace": empty_rpc_trace_result(),
+    }
+
+
+def run_session_turn_from_event(
+    run: AgentRun,
+    *,
+    runtime_context: ZetaContext,
+    publish_event: Callable[[dict[str, Any]], None],
+    cancellation_event: threading.Event | None = None,
+) -> dict[str, Any]:
+    params = dict(run.triggering_event.payload)
+    run_id = run.triggering_event.turn_id or optional_string(params.get("run_id"))
+    if run_id is None:
+        run_id = rpc_run_id()
+    return run_session_turn(
+        params,
+        run_id=run_id,
+        caused_by=run.triggering_event.id,
+        publish_event=publish_event,
+        runtime_context=runtime_context,
+        cancellation_event=cancellation_event,
+    )
+
+
+def run_session_turn(
+    params: dict[str, Any],
+    *,
+    run_id: str,
+    caused_by: str,
+    publish_event: Callable[[dict[str, Any]], None],
+    runtime_context: ZetaContext,
+    cancellation_event: threading.Event | None,
+) -> dict[str, Any]:
     objective = rpc_objective(params)
     workflow = rpc_workflow(params)
     enabled_capabilities = registered_capabilities(
@@ -161,7 +225,7 @@ def run_rpc_session(
             event_sink=sink,
             trace_store=runtime_context.trace_store,
             tool_registry=runtime_context.tool_registry,
-            caused_by=str(user_event.get("id") or ""),
+            caused_by=caused_by,
             cancellation_event=cancellation_event,
         )
     except AgentTurnAborted as exc:
@@ -178,6 +242,68 @@ def run_rpc_session(
         run_id=run_id,
         runtime_context=runtime_context,
         agent_result=result,
+    )
+
+
+def session_event_dispatcher(
+    runtime_context: ZetaContext,
+    *,
+    publish_event: Callable[[dict[str, Any]], None],
+    cancellation_event: threading.Event | None = None,
+) -> EventDispatcher:
+    return EventDispatcher(
+        runtime_context.event_sink,
+        agents=[
+            AgentDefinition(
+                "zeta.session.turn",
+                TriggerRule(event_type="session.turn.requested"),
+                run=lambda run: run_session_turn_from_event(
+                    run,
+                    runtime_context=runtime_context,
+                    publish_event=publish_event,
+                    cancellation_event=cancellation_event,
+                ),
+            )
+        ],
+        publish_event=lambda event: publish_event(rpc_event_from_durable_event(event)),
+    )
+
+
+def session_turn_requested_draft(
+    params: dict[str, Any],
+    *,
+    run_id: str,
+    runtime_context: ZetaContext,
+) -> DraftEvent:
+    objective = rpc_objective(params)
+    workflow = rpc_workflow(params)
+    payload: dict[str, Any] = {
+        "objective": objective,
+        "workflow": workflow,
+        "runtime": "zeta-rpc",
+        "run_id": run_id,
+        "tools": list(rpc_allowed_tools(params) or ()),
+        "context": rpc_context(params),
+    }
+    for key in (
+        "system",
+        "model",
+        "url",
+        "thinking",
+        "api",
+        "max_steps",
+        "max_wall_seconds",
+    ):
+        value = params.get(key)
+        if isinstance(value, str | int | float) and not isinstance(value, bool):
+            payload[key] = value
+    return DraftEvent(
+        "session.turn.requested",
+        "zeta",
+        payload,
+        idempotency_key=f"session.turn.requested:{run_id}",
+        session_id=runtime_context.session_id,
+        turn_id=run_id,
     )
 
 
@@ -317,7 +443,26 @@ def durable_event_for_rpc_event(
 
 def rpc_event_from_durable_event(event: Event) -> dict[str, Any]:
     projected = timeline_event_from_durable_event(event)
+    if not projected:
+        projected = generic_rpc_event_from_durable_event(event)
     projected["cursor"] = event.cursor().encode()
+    return projected
+
+
+def generic_rpc_event_from_durable_event(event: Event) -> dict[str, Any]:
+    projected = {
+        "type": event.event_type,
+        "id": event.id,
+        "source": event.source,
+        "time": time_from_timestamp_micros(event.timestamp_micros),
+        **event.payload,
+    }
+    if event.session_id is not None:
+        projected["session"] = event.session_id
+    if event.turn_id is not None:
+        projected["turn_id"] = event.turn_id
+    if event.caused_by is not None:
+        projected["caused_by"] = event.caused_by
     return projected
 
 
@@ -538,6 +683,43 @@ def client_tool_capability(
     )
 
 
+def rpc_publish_event_draft(params: dict[str, Any]) -> DraftEvent:
+    event = params.get("event")
+    if isinstance(event, dict):
+        session_id = optional_string(params.get("session_id")) or optional_string(
+            event.get("session")
+        )
+        return event_payload_draft(event, session_id=session_id or "")
+    event_type = optional_string(params.get("type"))
+    if event_type is None:
+        raise RpcError(
+            -32602,
+            "missing_event_type",
+            "Invalid params",
+            {"message": "events.publish requires type"},
+        )
+    payload = params.get("payload")
+    if payload is None:
+        payload = {}
+    if not isinstance(payload, dict):
+        raise RpcError(
+            -32602,
+            "invalid_event_payload",
+            "Invalid params",
+            {"message": "events.publish payload must be an object"},
+        )
+    return DraftEvent(
+        event_type,
+        optional_string(params.get("source")) or "zeta",
+        dict(payload),
+        idempotency_key=optional_string(params.get("idempotency_key")),
+        caused_by=optional_string(params.get("caused_by")),
+        session_id=optional_string(params.get("session_id")),
+        turn_id=optional_string(params.get("turn_id")),
+        event_id=optional_string(params.get("id")),
+    )
+
+
 def normalized_client_tool_response(
     raw_result: Any,
 ) -> tuple[dict[str, Any], ToolCallStatus]:
@@ -637,12 +819,17 @@ class JsonRpcServer:
         session_runner: RpcSessionRunner | None = None,
         tool_registry: CapabilityRegistry | None = None,
         event_reader: EventReader | None = None,
+        event_sink: EventSink | None = None,
     ) -> None:
         self.input = input
         self.output = output
         self.session_runner = session_runner
         self.tool_registry = tool_registry or _runtime_tool_registry
         self.event_reader = event_reader
+        self.event_sink = event_sink
+        if self.event_sink is None and hasattr(event_reader, "accept"):
+            self.event_sink = cast(EventSink, event_reader)
+        self.event_dispatcher: EventDispatcher | None = None
         self.tool_responses: dict[str, dict[str, Any]] = {}
         self.tool_calls: dict[str, ClientToolCall] = {}
         self.client_tools: set[str] = set()
@@ -749,6 +936,8 @@ class JsonRpcServer:
             return self.list_events(params)
         if method == "events.subscribe":
             return self.subscribe_events(params)
+        if method == "events.publish":
+            return self.publish_runtime_event(params)
         if method == "session.cancel":
             return self.cancel_session(params)
         if method == "session.run":
@@ -805,6 +994,32 @@ class JsonRpcServer:
             "subscribed": True,
             "subscription_id": subscription.id,
             "next_cursor": after.encode() if after is not None else None,
+        }
+
+    def publish_runtime_event(self, params: dict[str, Any]) -> dict[str, Any]:
+        dispatcher = self.event_dispatcher
+        if dispatcher is None:
+            if self.event_sink is None:
+                raise RpcError(
+                    -32000,
+                    "events_unavailable",
+                    "Server error",
+                    {"message": "events.publish is not configured"},
+                )
+            dispatcher = EventDispatcher(
+                self.event_sink,
+                publish_event=lambda event: self.publish_event(
+                    rpc_event_from_durable_event(event)
+                ),
+            )
+        outcome = dispatcher.dispatch(rpc_publish_event_draft(params))
+        return {
+            "inserted": outcome.inserted,
+            "event": rpc_event_from_durable_event(outcome.event),
+            "work_events": [
+                rpc_event_from_durable_event(event) for event in outcome.work_events
+            ],
+            "agent_results": outcome.agent_results,
         }
 
     def start_session_run(self, request_id: Any, params: dict[str, Any]) -> None:

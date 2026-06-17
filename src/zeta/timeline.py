@@ -26,16 +26,10 @@ from .events import (
 )
 from .tools.base import effect_resolution, proposed_effect
 from .trace import (
-    Derivation,
-    Object,
     ObjectId,
     Store,
     warn_trace_failure_once,
 )
-
-RUN_EVENT_KIND = "run_event"
-RUN_HEAD_EVENT_TYPES = {"model", "tool_call", "tool_result"}
-NON_HEAD_EVENT_TYPES = {"model_usage"}
 
 
 @dataclass(frozen=True)
@@ -52,7 +46,7 @@ def record_event(
     *,
     runtime_context: ZetaContext,
 ) -> dict[str, Any]:
-    """Record a Zeta event in the trace store and advance the run head."""
+    """Record a Zeta event in the durable event log."""
     scoped_event = dict(event)
     if "session" not in scoped_event:
         scoped_event["session"] = runtime_context.session_id
@@ -62,44 +56,6 @@ def record_event(
         event_sink=runtime_context.event_sink,
         session_id=runtime_context.session_id,
     )
-    try:
-        store = runtime_context.trace_store
-        run_id = runtime_context.session_id
-        with store.batch():
-            previous_event_id = store.get_ref(event_head_ref(run_id))
-            previous_run_head_id = store.get_ref(run_head_ref(run_id))
-            links = event_links(payload, previous_event_id)
-            event_id = store.put_object(
-                Object(
-                    kind=RUN_EVENT_KIND,
-                    schema="zeta.run_event.v1",
-                    data={
-                        "event": stored_event_payload(payload),
-                        "previous_event_object_id": previous_event_id or "",
-                    },
-                    links=links,
-                )
-            )
-            store.record_derivation(
-                Derivation(
-                    producer="RunEvent",
-                    output_id=event_id,
-                    input_ids=links,
-                    params={"type": str(payload.get("type") or "")},
-                )
-            )
-            store.set_ref(event_head_ref(run_id), event_id, expected=previous_event_id)
-            head_id = event_domain_object_id(payload) or event_id
-            if should_update_run_head(payload):
-                store.set_ref(
-                    run_head_ref(run_id),
-                    head_id,
-                    expected=previous_run_head_id,
-                )
-            elif previous_run_head_id is None:
-                store.set_ref(run_head_ref(run_id), head_id, expected=None)
-    except Exception as exc:
-        warn_trace_failure_once("record_event", exc)
     return payload
 
 
@@ -298,21 +254,13 @@ def optional_event_str(value: object) -> str | None:
 
 def current_timeline(*, runtime_context: ZetaContext) -> list[dict[str, Any]]:
     try:
-        events = timeline_from_event_reader(
+        return timeline_from_event_reader(
             event_reader(runtime_context.event_sink),
             session_id=runtime_context.session_id,
         )
-        if events:
-            return events
-        store = runtime_context.trace_store
-        run_id = runtime_context.session_id
-        events = timeline_from_ref(run_head_ref(run_id), store=store)
-        if not events:
-            events = timeline_from_ref(event_head_ref(run_id), store=store)
     except Exception as exc:
         warn_trace_failure_once("current_timeline", exc)
         return []
-    return events
 
 
 def last_event_time(*, store: Store, run_id: str | None = None) -> float | None:
@@ -323,14 +271,7 @@ def last_event_time(*, store: Store, run_id: str | None = None) -> float | None:
             event_time = latest_zeta_event_time(reader, session_id=run_id)
             if event_time is not None:
                 return event_time
-        event_id = store.get_ref(event_head_ref(run_id))
-        if event_id is None:
-            return None
-        obj = store.get_object(event_id)
-        if obj is None:
-            return None
-        value = object_event(obj).get("time")
-        return float(value) if isinstance(value, int | float) else None
+        return None
     except Exception as exc:
         warn_trace_failure_once("last_event_time", exc)
         return None
@@ -502,43 +443,6 @@ def durable_prompt_trace(event: dict[str, Any]) -> dict[str, Any]:
     return prompt_trace
 
 
-def timeline_from_ref(
-    ref_name: str,
-    *,
-    store: Store,
-) -> list[dict[str, Any]]:
-    """Project a timeline from the object named by a trace ref."""
-    try:
-        object_id = store.get_ref(ref_name)
-        if object_id is None:
-            return []
-        return timeline_from_object(object_id, store=store)
-    except Exception as exc:
-        warn_trace_failure_once("timeline_from_ref", exc)
-        return []
-
-
-def timeline_from_object(
-    object_id: ObjectId,
-    *,
-    store: Store,
-) -> list[dict[str, Any]]:
-    """Project the full timeline by walking backward from a trace object.
-
-    The projection is unbounded; model-facing truncation lives in the
-    prompt layer next to `from_message_boundary`.
-    """
-    try:
-        return timeline_events_from_head(
-            store,
-            object_id,
-            seen=set(),
-        )
-    except Exception as exc:
-        warn_trace_failure_once("timeline_from_object", exc)
-        return []
-
-
 def from_message_boundary(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Drop leading tool results whose calls fell outside a timeline window.
 
@@ -552,28 +456,6 @@ def from_message_boundary(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
             break
         start += 1
     return events[start:]
-
-
-def run_head_ref(run_id: str | None = None) -> str:
-    """Return the mutable ref naming the current trace leaf for a run."""
-    return f"run/{run_id or timeline_session_id()}/head"
-
-
-def event_head_ref(run_id: str | None = None) -> str:
-    """Return the event-chain fallback ref for a run."""
-    return f"run/{run_id or timeline_session_id()}/event_head"
-
-
-def set_run_head(
-    object_id: ObjectId, *, store: Store, run_id: str | None = None
-) -> None:
-    """Move the current run head to a trace object."""
-    store.set_ref(run_head_ref(run_id), object_id)
-
-
-def run_head(*, store: Store, run_id: str | None = None) -> ObjectId | None:
-    """Return the current run head object id, if any."""
-    return store.get_ref(run_head_ref(run_id))
 
 
 def event_payload(event: dict[str, Any]) -> dict[str, Any]:
@@ -591,81 +473,6 @@ def event_time_value(value: Any) -> float:
     return time.time()
 
 
-def event_links(
-    event: dict[str, Any],
-    previous_event_id: ObjectId | None,
-) -> tuple[ObjectId, ...]:
-    """Link a run event to its predecessor and its prompt-trace objects.
-
-    Components stay reachable through the prompt object's own links;
-    linking them here again grew every event by the whole component set.
-    """
-    links: list[ObjectId] = []
-    if previous_event_id:
-        links.append(previous_event_id)
-    add_event_link(links, event_domain_object_id(event))
-    prompt_trace = event.get("prompt_trace")
-    if isinstance(prompt_trace, dict):
-        add_event_link(links, trace_object_id(prompt_trace, "prompt_object_id"))
-        add_event_link(
-            links,
-            trace_object_id(prompt_trace, "assistant_message_object_id"),
-        )
-    return tuple(links)
-
-
-def stored_event_payload(payload: dict[str, Any]) -> dict[str, Any]:
-    """Return the event as persisted: linked graph content is not inlined.
-
-    The component ids and the assistant message body already live in the
-    prompt and assistant_message objects; storing them again in every run
-    event duplicated the heaviest content once per turn. Projection
-    rehydrates the assistant body from the link.
-    """
-    prompt_trace = payload.get("prompt_trace")
-    if not isinstance(prompt_trace, dict):
-        return payload
-    stored = dict(payload)
-    stored["prompt_trace"] = {
-        key: value
-        for key, value in prompt_trace.items()
-        if key != "component_object_ids"
-    }
-    if str(stored.get("type") or "") == "model" and trace_object_id(
-        stored["prompt_trace"], "assistant_message_object_id"
-    ):
-        stored.pop("content", None)
-        stored.pop("tool_calls", None)
-        stored.pop("reasoning", None)
-    return stored
-
-
-def event_domain_object_id(event: dict[str, Any]) -> ObjectId | None:
-    event_type = str(event.get("type") or "")
-    if event_type == "tool_result":
-        return trace_object_id(event, "tool_result_object_id")
-    if event_type == "tool_call":
-        return trace_object_id(event, "tool_call_object_id")
-    prompt_trace = event.get("prompt_trace")
-    if event_type == "model" and isinstance(prompt_trace, dict):
-        return trace_object_id(prompt_trace, "assistant_message_object_id")
-    return None
-
-
-def should_update_run_head(event: dict[str, Any]) -> bool:
-    event_type = str(event.get("type") or "")
-    if event_type in NON_HEAD_EVENT_TYPES:
-        return False
-    if event_type in RUN_HEAD_EVENT_TYPES:
-        return True
-    return event_domain_object_id(event) is None
-
-
-def add_event_link(links: list[ObjectId], object_id: ObjectId | None) -> None:
-    if object_id and object_id not in links:
-        links.append(object_id)
-
-
 def trace_object_id(event: dict[str, Any], field: str) -> ObjectId | None:
     value = event.get(field)
     if isinstance(value, str) and value.startswith("sha256:"):
@@ -673,217 +480,9 @@ def trace_object_id(event: dict[str, Any], field: str) -> ObjectId | None:
     return None
 
 
-def timeline_events_from_head(
-    store: Store,
-    object_id: ObjectId,
-    *,
-    seen: set[ObjectId],
-) -> list[dict[str, Any]]:
-    """Walk predecessor links iteratively; chains exceed the recursion limit."""
-    chunks: list[list[dict[str, Any]]] = []
-    current: ObjectId | None = object_id
-    while current and current not in seen:
-        seen.add(current)
-        obj = store.get_object(current)
-        if obj is None:
-            break
-        predecessor, events = timeline_node(store, current, obj)
-        chunks.append(events)
-        current = predecessor
-    events = []
-    for chunk in reversed(chunks):
-        events.extend(chunk)
-    return events
-
-
-def timeline_node(
-    store: Store,
-    object_id: ObjectId,
-    obj: Object,
-) -> tuple[ObjectId | None, list[dict[str, Any]]]:
-    """Return an object's predecessor link and its own timeline events."""
-    if obj.kind == RUN_EVENT_KIND:
-        previous_id = str(obj.data.get("previous_event_object_id") or "")
-        event = object_event(obj)
-        if event:
-            event = rehydrated_model_event(store, event)
-        return previous_id or None, [event] if event else []
-    if obj.kind == "assistant_message":
-        prompt_id = obj.links[0] if obj.links else ""
-        events = prompt_component_events(store, prompt_id) if prompt_id else []
-        event = model_event_from_object(object_id, obj, prompt_id)
-        if event:
-            events.append(event)
-        return None, events
-    if obj.kind == "tool_call":
-        assistant_id = obj.links[0] if obj.links else ""
-        return assistant_id or None, [tool_call_event_from_object(object_id, obj)]
-    if obj.kind == "tool_result":
-        previous_id = obj.links[0] if obj.links else ""
-        event = object_event(obj) or tool_result_event_from_object(object_id, obj)
-        return previous_id or None, [event]
-    event = object_event(obj)
-    return None, [event] if event else []
-
-
-def object_event(obj: Object) -> dict[str, Any]:
-    event = obj.data.get("event")
-    return dict(event) if isinstance(event, dict) else {}
-
-
-def rehydrated_model_event(
-    store: Store,
-    event: dict[str, Any],
-) -> dict[str, Any]:
-    """Merge a linked assistant message body back into a projected event."""
-    if str(event.get("type") or "") != "model" or "content" in event:
-        return event
-    prompt_trace = event.get("prompt_trace")
-    if not isinstance(prompt_trace, dict):
-        return event
-    assistant_id = trace_object_id(prompt_trace, "assistant_message_object_id")
-    if assistant_id is None:
-        return event
-    assistant = store.get_object(assistant_id)
-    if assistant is None:
-        return event
-    message = assistant.data.get("message")
-    if not isinstance(message, dict):
-        return event
-    rehydrated = dict(event)
-    content = message.get("content")
-    if isinstance(content, str) and content:
-        rehydrated["content"] = content
-    tool_calls = message.get("tool_calls")
-    if isinstance(tool_calls, list):
-        rehydrated["tool_calls"] = tool_calls
-    reasoning = message.get("reasoning_content")
-    if isinstance(reasoning, str) and reasoning:
-        rehydrated["reasoning"] = reasoning
-    return rehydrated
-
-
-def prompt_component_events(store: Store, prompt_id: ObjectId) -> list[dict[str, Any]]:
-    prompt = store.get_object(prompt_id)
-    if prompt is None or prompt.kind != "prompt":
-        return []
-    events = []
-    for component_id in prompt.links:
-        component = store.get_object(component_id)
-        if component is None:
-            continue
-        event = prompt_component_event(component_id, component)
-        if event:
-            events.append(event)
-    return events
-
-
-def prompt_component_event(
-    component_id: ObjectId,
-    component: Object,
-) -> dict[str, Any]:
-    if component.kind in {
-        "system_prompt",
-        "tool_descriptor_set",
-        "skill_context",
-        "project_context",
-    }:
-        return {}
-    source_event = component.data.get("source_event")
-    if isinstance(source_event, dict):
-        event = dict(source_event)
-        normalize_source_event(event)
-        return event
-    message = component.data.get("message")
-    if not isinstance(message, dict):
-        return {}
-    event = chat_message_event(message)
-    if component.kind == "user_message":
-        event["type"] = "user_message"
-    source_object_id = component.data.get("source_object_id")
-    if isinstance(source_object_id, str) and source_object_id.startswith("sha256:"):
-        event["source_object_id"] = source_object_id
-    if component_id.startswith("sha256:"):
-        event["prompt_component_object_id"] = component_id
-    return event
-
-
-def normalize_source_event(event: dict[str, Any]) -> None:
-    tool_name = event.pop("tool_name", None)
-    if tool_name and not event.get("name"):
-        event["name"] = tool_name
-
-
-def chat_message_event(message: dict[str, Any]) -> dict[str, Any]:
-    role = str(message.get("role") or "")
-    if role == "assistant":
-        event: dict[str, Any] = {"type": "model"}
-        content = message.get("content")
-        if isinstance(content, str) and content:
-            event["content"] = content
-        tool_calls = message.get("tool_calls")
-        if isinstance(tool_calls, list):
-            event["tool_calls"] = tool_calls
-        reasoning = message.get("reasoning_content")
-        if isinstance(reasoning, str) and reasoning:
-            event["reasoning"] = reasoning
-        return event
-    if role == "tool":
-        return tool_result_event_from_message(message)
-    return {"role": role, "content": str(message.get("content") or "")}
-
-
-def model_event_from_object(
-    object_id: ObjectId,
-    obj: Object,
-    prompt_id: ObjectId,
-) -> dict[str, Any]:
-    message = obj.data.get("message")
-    if not isinstance(message, dict):
-        return {}
-    event = chat_message_event({"role": "assistant", **message})
-    event["type"] = "model"
-    if prompt_id:
-        event["prompt_trace"] = {
-            "prompt_object_id": prompt_id,
-            "assistant_message_object_id": object_id,
-        }
-    return event
-
-
-def tool_call_event_from_object(object_id: ObjectId, obj: Object) -> dict[str, Any]:
-    data = obj.data
-    event = {
-        "type": "tool_call",
-        "id": str(data.get("tool_call_id") or ""),
-        "tool_call_id": str(data.get("tool_call_id") or ""),
-        "name": str(data.get("name") or ""),
-        "input": data.get("input") if isinstance(data.get("input"), dict) else {},
-        "tool_call_object_id": object_id,
-    }
-    arguments = data.get("arguments")
-    if isinstance(arguments, str):
-        event["arguments"] = arguments
-    return event
-
-
-def tool_result_event_from_object(object_id: ObjectId, obj: Object) -> dict[str, Any]:
-    data = obj.data
-    event: dict[str, Any] = {
-        "type": "tool_result",
-        "tool_call_id": str(data.get("tool_call_id") or ""),
-        "name": str(data.get("name") or ""),
-        "tool_result_object_id": object_id,
-    }
-    if obj.links:
-        event["tool_call_object_id"] = obj.links[0]
-    result = data.get("result")
-    if isinstance(result, dict):
-        event["result"] = result
-    model_telemetry = data.get("model_telemetry")
-    if isinstance(model_telemetry, dict):
-        event["model_telemetry"] = model_telemetry
-    return event
+def add_event_link(links: list[ObjectId], object_id: ObjectId | None) -> None:
+    if object_id and object_id not in links:
+        links.append(object_id)
 
 
 def tool_result_event_from_message(message: dict[str, Any]) -> dict[str, Any]:

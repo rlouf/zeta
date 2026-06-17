@@ -30,7 +30,6 @@ from zeta import context as zeta_context
 from zeta import events as zeta_events
 from zeta import prompt as zeta_prompt
 from zeta import rpc as zeta_rpc
-from zeta import timeline as zeta_timeline
 from zeta import trace as zeta_trace
 from zeta.models import chat_completions as zeta_model
 from zeta.tools.base import ToolImpl, ToolSpec
@@ -246,7 +245,9 @@ def test_zeta_rpc_session_uses_explicit_context(monkeypatch, tmp_path: Path) -> 
     assert [
         event.event_type for event in event_store.list_events(zeta_events.Filter())
     ] == ["zeta.user_message", "zeta.model.called"]
-    assert trace_store.get_ref(zeta_timeline.event_head_ref("ctx-session")) is not None
+    assert trace_store.objects(kind="run_event") == []
+    assert "run/ctx-session/head" not in trace_store.refs()
+    assert "run/ctx-session/event_head" not in trace_store.refs()
 
 
 def test_zeta_rpc_session_returns_aborted_on_wall_clock_budget(

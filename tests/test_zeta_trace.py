@@ -56,6 +56,17 @@ def current_zeta_timeline() -> list[dict[str, object]]:
     return zeta_timeline.current_timeline(runtime_context=zeta_runtime_context())
 
 
+def assert_no_trace_timeline_chain(
+    store: zeta_trace.Store,
+    *,
+    session_id: str = "zeta-test",
+) -> None:
+    refs = store.refs()
+    assert store.objects(kind="run_event") == []
+    assert f"run/{session_id}/head" not in refs
+    assert f"run/{session_id}/event_head" not in refs
+
+
 @pytest.mark.parametrize(
     "store",
     [
@@ -509,9 +520,7 @@ def test_zeta_timeline_record_and_project(tmp_path: Path, monkeypatch) -> None:
     events = zeta_timeline.current_timeline(runtime_context=runtime_context)
     assert events[0]["type"] == "tool_call"
     assert events[0]["name"] == "read"
-    refs = runtime_context.trace_store.refs()
-    assert refs[zeta_timeline.run_head_ref("zeta-test")]
-    assert refs[zeta_timeline.event_head_ref("zeta-test")]
+    assert_no_trace_timeline_chain(runtime_context.trace_store)
     tool_events = zeta_event_store().list_events(Filter(event_type="zeta.tool.called"))
     assert len(tool_events) == 1
     assert tool_events[0].payload["name"] == "read"
@@ -698,7 +707,7 @@ def test_zeta_user_message_usage_and_abort_are_durable(
     ]
 
 
-def test_zeta_current_timeline_uses_durable_log_before_trace_head(
+def test_zeta_current_timeline_uses_durable_log_without_trace_head(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -710,26 +719,13 @@ def test_zeta_current_timeline_uses_durable_log_before_trace_head(
         {"type": "user_message", "content": "durable"},
         runtime_context=runtime_context,
     )
-    stale_id = runtime_context.trace_store.put_object(
-        zeta_trace.Object(
-            kind="run_event",
-            schema="zeta.run_event.v1",
-            data={
-                "event": {"type": "user_message", "content": "stale-trace"},
-                "previous_event_object_id": "",
-            },
-        )
-    )
-    runtime_context.trace_store.set_ref(
-        zeta_timeline.run_head_ref("zeta-test"),
-        stale_id,
-    )
 
     events = zeta_timeline.current_timeline(runtime_context=runtime_context)
     assert [event["content"] for event in events] == ["durable"]
+    assert_no_trace_timeline_chain(runtime_context.trace_store)
 
 
-def test_zeta_timeline_projects_from_ref_and_object(
+def test_zeta_timeline_projects_fresh_session_from_durable_log(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -738,35 +734,65 @@ def test_zeta_timeline_projects_from_ref_and_object(
     runtime_context = zeta_runtime_context()
 
     record_zeta_event(
-        {"type": "user_message", "content": "first"},
+        {"type": "user_message", "content": "first", "id": "user-1"},
         runtime_context=runtime_context,
     )
-    store = runtime_context.trace_store
-    first_head = store.get_ref(zeta_timeline.run_head_ref("zeta-test"))
-    assert first_head is not None
-    store.set_ref("run/custom/head", first_head)
-
     record_zeta_event(
-        {"type": "model", "content": "second"},
+        {"type": "model", "content": "second", "id": "model-1"},
+        runtime_context=runtime_context,
+    )
+    record_zeta_event(
+        {
+            "type": "tool_call",
+            "id": "call-1",
+            "tool_call_id": "call-1",
+            "name": "read",
+            "input": {"path": "README.md"},
+            "caused_by": "model-1",
+        },
+        runtime_context=runtime_context,
+    )
+    record_zeta_event(
+        {
+            "type": "tool_result",
+            "id": "result-1",
+            "tool_call_id": "call-1",
+            "name": "read",
+            "result": {"ok": True},
+            "caused_by": "call-1",
+        },
+        runtime_context=runtime_context,
+    )
+    record_zeta_event(
+        {"type": "model_usage", "usage": {"tokens": 4}},
+        runtime_context=runtime_context,
+    )
+    record_zeta_event(
+        {"type": "turn_aborted", "content": "stopped"},
         runtime_context=runtime_context,
     )
 
-    assert [
-        event["content"]
-        for event in zeta_timeline.timeline_from_ref("run/custom/head", store=store)
-    ] == ["first"]
-    assert [
-        event["content"]
-        for event in zeta_timeline.timeline_from_ref(
-            zeta_timeline.run_head_ref("zeta-test"),
-            store=store,
-        )
-    ] == ["first", "second"]
-    assert [
-        event["content"]
-        for event in zeta_timeline.timeline_from_object(first_head, store=store)
-    ] == ["first"]
-    assert zeta_timeline.timeline_from_ref("run/missing/head", store=store) == []
+    events = zeta_timeline.current_timeline(runtime_context=runtime_context)
+
+    assert [event["type"] for event in events] == [
+        "user_message",
+        "model",
+        "tool_call",
+        "tool_result",
+        "model_usage",
+        "turn_aborted",
+    ]
+    assert [event["id"] for event in events[:4]] == [
+        "user-1",
+        "model-1",
+        "call-1",
+        "result-1",
+    ]
+    assert events[2]["input"] == {"path": "README.md"}
+    assert events[3]["result"] == {"ok": True}
+    assert events[4]["usage"] == {"tokens": 4}
+    assert events[5]["content"] == "stopped"
+    assert_no_trace_timeline_chain(runtime_context.trace_store)
 
 
 def test_zeta_record_event_stores_prompt_link_not_components(
@@ -814,16 +840,13 @@ def test_zeta_record_event_stores_prompt_link_not_components(
         runtime_context=runtime_context,
     )
 
-    event_id = store.get_ref(zeta_timeline.event_head_ref("zeta-test"))
-    assert event_id is not None
-    run_event = store.get_object(event_id)
-    assert run_event is not None
-    assert prompt_id in run_event.links
-    assert assistant_id in run_event.links
-    assert component_id not in run_event.links
-    stored = run_event.data["event"]
-    assert "component_object_ids" not in stored["prompt_trace"]
-    assert "content" not in stored
+    assert_no_trace_timeline_chain(store)
+    (event,) = zeta_event_store().list_events(Filter(event_type="zeta.model.called"))
+    assert event.payload["used_objects"] == [{"kind": "prompt", "id": prompt_id}]
+    assert event.payload["returned_objects"] == [
+        {"kind": "assistant_message", "id": assistant_id}
+    ]
+    assert "prompt_trace" not in event.payload
 
 
 def test_zeta_timeline_rehydrates_assistant_content_from_the_graph(
@@ -880,6 +903,7 @@ def test_zeta_timeline_rehydrates_assistant_content_from_the_graph(
     assert events[-1]["type"] == "model"
     assert events[-1]["content"] == "the answer"
     assert events[-1]["tool_calls"] == tool_calls
+    assert_no_trace_timeline_chain(store)
 
 
 def test_zeta_timeline_rehydrates_assistant_reasoning_from_the_graph(
@@ -929,17 +953,7 @@ def test_zeta_timeline_rehydrates_assistant_reasoning_from_the_graph(
     assert events[-1]["content"] == "the answer"
     assert events[-1]["reasoning"] == "weighing the options"
 
-    event_id = store.get_ref(zeta_timeline.event_head_ref("zeta-test"))
-    assert event_id is not None
-    run_event = store.get_object(event_id)
-    assert run_event is not None
-    assert "reasoning" not in run_event.data["event"]
-
-    fallback = zeta_timeline.timeline_from_ref(
-        zeta_timeline.event_head_ref("zeta-test"),
-        store=store,
-    )
-    assert fallback[-1]["reasoning"] == "weighing the options"
+    assert_no_trace_timeline_chain(store)
 
     messages = zeta_timeline.chat_messages(events)
     assert "reasoning" not in messages[-1]
@@ -960,11 +974,7 @@ def test_zeta_timeline_keeps_untraced_assistant_content_inline(
     )
 
     store = runtime_context.trace_store
-    event_id = store.get_ref(zeta_timeline.event_head_ref("zeta-test"))
-    assert event_id is not None
-    run_event = store.get_object(event_id)
-    assert run_event is not None
-    assert run_event.data["event"]["content"] == "fallback"
+    assert_no_trace_timeline_chain(store)
     assert (
         zeta_timeline.current_timeline(runtime_context=runtime_context)[-1]["content"]
         == "fallback"
@@ -1010,29 +1020,6 @@ def test_zeta_timeline_last_event_time_tracks_the_newest_event(
         )
         == second["time"]
     )
-
-
-def test_zeta_timeline_projects_deep_event_chains() -> None:
-    store = zeta_trace.InMemoryStore()
-    previous = ""
-    for index in range(1500):
-        previous = store.put_object(
-            zeta_trace.Object(
-                kind="run_event",
-                schema="zeta.run_event.v1",
-                data={
-                    "event": {"type": "user_message", "content": f"event-{index}"},
-                    "previous_event_object_id": previous,
-                },
-                links=(previous,) if previous else (),
-            )
-        )
-
-    events = zeta_timeline.timeline_from_object(previous, store=store)
-
-    assert len(events) == 1500
-    assert events[0]["content"] == "event-0"
-    assert events[-1]["content"] == "event-1499"
 
 
 def test_zeta_inmemory_store_dedupes_repeated_derivations() -> None:
@@ -1134,7 +1121,7 @@ def test_zeta_sqlite_store_batch_defers_commit(tmp_path: Path) -> None:
     reader.close()
 
 
-def test_zeta_record_event_writes_in_a_single_batch() -> None:
+def test_zeta_record_event_does_not_write_trace_timeline_batch() -> None:
     store = BatchSpyStore()
 
     record_zeta_event(
@@ -1142,7 +1129,8 @@ def test_zeta_record_event_writes_in_a_single_batch() -> None:
         runtime_context=zeta_runtime_context(trace_store=store),
     )
 
-    assert store.batches == 1
+    assert store.batches == 0
+    assert_no_trace_timeline_chain(store, session_id="zeta")
 
 
 def test_zeta_trace_sqlite_answers_forward_derivation_queries(

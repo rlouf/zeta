@@ -16,7 +16,7 @@ from urllib.parse import urlparse, urlunparse
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import ValidationError
 
-from . import ModelInput
+from . import ModelInput, ModelOutput
 from .profiles import model_name, model_url
 
 MUTED = "\033[38;2;110;106;134m"
@@ -663,17 +663,13 @@ def chat_completion_messages(
         context_tokens=context_tokens,
         telemetry_sink=telemetry_sink,
     )
-    message = payload["choices"][0]["message"]
-    if not isinstance(message, dict):
-        raise RuntimeError("model request failed: assistant message was invalid")
-    if payload["choices"][0].get("finish_reason") == "length" and message.get(
-        "tool_calls"
-    ):
+    output = model_output_from_chat_completion(payload)
+    if output.finish_reason == "length" and output.message.get("tool_calls"):
         raise RuntimeError(
             "model request failed: the response hit max_tokens in the middle "
             "of a tool call, leaving its arguments incomplete"
         )
-    return message
+    return output.message
 
 
 def chat_completion_request_body(
@@ -720,6 +716,18 @@ def chat_completion_request_from_input(model_input: ModelInput) -> dict[str, Any
         selected_model=model_input.selected_model,
         thinking=model_input.thinking,
     )
+
+
+def model_output_from_chat_completion(payload: dict[str, Any]) -> ModelOutput:
+    choices = payload.get("choices")
+    if not isinstance(choices, list) or not choices:
+        raise RuntimeError("model request failed: response choices were invalid")
+    first_choice = choices[0]
+    if not isinstance(first_choice, dict):
+        raise RuntimeError("model request failed: response choice was invalid")
+    if not isinstance(first_choice.get("message"), dict):
+        raise RuntimeError("model request failed: assistant message was invalid")
+    return ModelOutput.from_chat_completion(payload)
 
 
 def json_schema_response_format(

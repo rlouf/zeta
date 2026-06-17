@@ -48,6 +48,7 @@ if TYPE_CHECKING:
         ensure_server,
         model_endpoint_open,
         model_endpoint_valid,
+        model_output_from_chat_completion,
         request_model_metadata,
     )
 
@@ -60,6 +61,7 @@ _TRANSPORT_EXPORTS = frozenset(
         "ensure_server",
         "model_endpoint_open",
         "model_endpoint_valid",
+        "model_output_from_chat_completion",
         "request_model_metadata",
     }
 )
@@ -191,6 +193,7 @@ __all__ = [
     "load_model_profiles",
     "model_endpoint_open",
     "model_endpoint_valid",
+    "model_output_from_chat_completion",
     "model_name",
     "model_selection_event",
     "model_url",

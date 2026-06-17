@@ -148,6 +148,49 @@ def test_zeta_model_output_from_chat_completion_preserves_message_usage_metadata
     assert output.provider_replay_items == ()
 
 
+def test_zeta_chat_completion_model_output_from_stream_payload() -> None:
+    payload = zeta_model.read_streamed_chat_completion(
+        sse_lines(
+            {
+                "id": "chatcmpl-test",
+                "choices": [
+                    {
+                        "index": 0,
+                        "delta": {"role": "assistant", "content": "hel"},
+                        "finish_reason": None,
+                    }
+                ],
+            },
+            {
+                "usage": {
+                    "prompt_tokens": 3,
+                    "completion_tokens": 2,
+                    "total_tokens": 5,
+                },
+                "choices": [
+                    {
+                        "index": 0,
+                        "delta": {"content": "lo"},
+                        "finish_reason": "stop",
+                    }
+                ],
+            },
+            "[DONE]",
+        )
+    )
+
+    output = zeta_model.model_output_from_chat_completion(payload)
+
+    assert output.message == {"role": "assistant", "content": "hello"}
+    assert output.finish_reason == "stop"
+    assert output.usage == zeta_models_api.ModelUsage(
+        prompt_tokens=3,
+        completion_tokens=2,
+        total_tokens=5,
+    )
+    assert output.provider_metadata == {"id": "chatcmpl-test"}
+
+
 def test_zeta_request_chat_completion_streams_final_message(monkeypatch) -> None:
     captured: dict[str, Any] = {}
     response = FakeStreamingResponse(
@@ -1157,6 +1200,44 @@ def test_zeta_chat_completion_messages_accepts_request_model(monkeypatch) -> Non
     assert body["model"] == "fast-model"
     assert body["stream_options"] == {"include_usage": True}
     assert captured["selected_url"] == "http://127.0.0.1:8081/v1/chat/completions"
+
+
+def test_zeta_chat_completion_messages_returns_adapter_message(monkeypatch) -> None:
+    payload = {
+        "choices": [
+            {
+                "message": {"role": "assistant", "content": "raw"},
+                "finish_reason": "stop",
+            }
+        ]
+    }
+    converted: list[dict[str, Any]] = []
+
+    def fake_request(body: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
+        del body
+        del kwargs
+        return payload
+
+    def fake_model_output(
+        raw_payload: dict[str, Any],
+    ) -> zeta_models_api.ModelOutput:
+        converted.append(raw_payload)
+        return zeta_models_api.ModelOutput(
+            message={"role": "assistant", "content": "converted"},
+            finish_reason="stop",
+        )
+
+    monkeypatch.setattr(zeta_model, "request_chat_completion", fake_request)
+    monkeypatch.setattr(
+        zeta_model,
+        "model_output_from_chat_completion",
+        fake_model_output,
+    )
+
+    message = zeta_model.chat_completion_messages([{"role": "user", "content": "hi"}])
+
+    assert message == {"role": "assistant", "content": "converted"}
+    assert converted == [payload]
 
 
 def test_zeta_chat_completion_messages_sends_native_tools(monkeypatch) -> None:

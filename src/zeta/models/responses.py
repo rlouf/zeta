@@ -19,6 +19,7 @@ from typing import Any
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import ValidationError
 
+from . import ModelInput
 from .chat_completions import (
     DEFAULT_MAX_COMPLETION_TOKENS,
     ChatCompletionStreamSink,
@@ -100,6 +101,18 @@ def responses_request_body(
         body["tool_choice"] = tool_choice if isinstance(tool_choice, str) else "auto"
         body["parallel_tool_calls"] = True
     return body
+
+
+def responses_request_from_input(model_input: ModelInput) -> dict[str, Any]:
+    return responses_request_body(
+        model_input.messages,
+        model=codex_model_name(model_input.selected_model),
+        tools=model_input.tools,
+        tool_choice=model_input.tool_choice,
+        max_tokens=model_input.max_tokens or DEFAULT_MAX_COMPLETION_TOKENS,
+        thinking=model_input.thinking,
+        session_id=model_input.session_id,
+    )
 
 
 def responses_instructions(messages: list[dict[str, Any]]) -> str:

@@ -1172,7 +1172,7 @@ Provider adapters translate:
 - `uv run pytest tests/test_zeta_agent.py tests/test_zeta_prompt.py -q`
 - `uv run pytest -q`
 
-### Slice 1: provider-neutral model records
+### Slice 1: provider-neutral model records - complete
 
 Introduce records next to the model adapter layer without changing callers yet.
 
@@ -1218,7 +1218,11 @@ Tests first:
 
 Verification:
 
-- `uv run pytest tests/test_zeta_model.py tests/test_zeta_responses.py -q`
+- `uv run pytest tests/test_zeta_model.py tests/test_zeta_responses.py -q` passed
+  with 78 tests.
+- `uv run pytest -q` passed with 813 tests and 4 skipped.
+- `uv run coverage run -m pytest` and `uv run coverage report` passed with
+  93% total coverage.
 
 ### Slice 2: Chat Completions adapter
 

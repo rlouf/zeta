@@ -22,6 +22,7 @@ from click.testing import CliRunner
 
 from sigil.cli import cli as sigil_cli
 from sigil.sessions import session_dir
+from zeta import models as zeta_models_api
 from zeta import prompt as zeta_prompt
 from zeta.models import chat_completions as zeta_model
 from zeta.models import profiles as zeta_models
@@ -60,6 +61,91 @@ def test_zeta_model_first_output_timeout_uses_zeta_env(monkeypatch) -> None:
 
     monkeypatch.setenv("ZETA_MODEL_FIRST_OUTPUT_TIMEOUT_SECONDS", "0")
     assert zeta_model.model_first_output_timeout() is None
+
+
+def test_zeta_model_input_renders_existing_chat_completion_request() -> None:
+    model_input = zeta_models_api.ModelInput(
+        messages=[{"role": "user", "content": "hi"}],
+        tools=[
+            {
+                "type": "function",
+                "function": {
+                    "name": "read",
+                    "description": "Read a file.",
+                    "parameters": {"type": "object"},
+                },
+            }
+        ],
+        tool_choice="auto",
+        max_tokens=128,
+        selected_model="unit-model",
+        thinking="low",
+    )
+
+    assert zeta_model.chat_completion_request_from_input(model_input) == {
+        "model": "unit-model",
+        "messages": [{"role": "user", "content": "hi"}],
+        "temperature": 0.2,
+        "max_tokens": 128,
+        "stream_options": {"include_usage": True},
+        "reasoning_effort": "low",
+        "tools": [
+            {
+                "type": "function",
+                "function": {
+                    "name": "read",
+                    "description": "Read a file.",
+                    "parameters": {"type": "object"},
+                },
+            }
+        ],
+        "tool_choice": "auto",
+    }
+
+
+def test_zeta_model_output_from_chat_completion_preserves_message_usage_metadata() -> (
+    None
+):
+    output = zeta_models_api.ModelOutput.from_chat_completion(
+        {
+            "id": "chatcmpl-1",
+            "model": "unit-model",
+            "system_fingerprint": "fp-1",
+            "usage": {
+                "prompt_tokens": 10,
+                "completion_tokens": 2,
+                "total_tokens": 12,
+            },
+            "choices": [
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": "done",
+                        "reasoning_content": "thinking",
+                    },
+                    "finish_reason": "stop",
+                }
+            ],
+        }
+    )
+
+    assert output.message == {
+        "role": "assistant",
+        "content": "done",
+        "reasoning_content": "thinking",
+    }
+    assert output.finish_reason == "stop"
+    assert output.usage == zeta_models_api.ModelUsage(
+        prompt_tokens=10,
+        completion_tokens=2,
+        total_tokens=12,
+    )
+    assert output.provider_metadata == {
+        "id": "chatcmpl-1",
+        "model": "unit-model",
+        "system_fingerprint": "fp-1",
+    }
+    assert output.provider_replay_items == ()
 
 
 def test_zeta_request_chat_completion_streams_final_message(monkeypatch) -> None:

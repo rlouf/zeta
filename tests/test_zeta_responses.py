@@ -8,6 +8,7 @@ from typing import Any
 import pytest
 from _zeta_helpers import FakeStreamingResponse
 
+from zeta import models as zeta_models_api
 from zeta.models import codex_auth
 from zeta.models import responses as zeta_responses
 
@@ -71,6 +72,58 @@ def test_zeta_responses_body_moves_system_prompt_to_instructions() -> None:
     assert body["stream"] is True
     assert body["store"] is False
     assert body["include"] == ["reasoning.encrypted_content"]
+
+
+def test_zeta_model_input_renders_existing_responses_request() -> None:
+    model_input = zeta_models_api.ModelInput(
+        messages=[
+            {"role": "system", "content": "Be terse."},
+            {"role": "user", "content": "hi"},
+        ],
+        tools=[
+            {
+                "type": "function",
+                "function": {
+                    "name": "read",
+                    "description": "Read a file.",
+                    "parameters": {"type": "object"},
+                },
+            }
+        ],
+        tool_choice="auto",
+        max_tokens=512,
+        selected_model="gpt-5.5",
+        session_id="session-1",
+        thinking="minimal",
+    )
+
+    body = zeta_responses.responses_request_from_input(model_input)
+
+    assert body["model"] == "gpt-5.5"
+    assert body["stream"] is True
+    assert body["store"] is False
+    assert body["instructions"] == "Be terse."
+    assert body["input"] == [
+        {
+            "type": "message",
+            "role": "user",
+            "content": [{"type": "input_text", "text": "hi"}],
+        }
+    ]
+    assert body["tools"] == [
+        {
+            "type": "function",
+            "name": "read",
+            "description": "Read a file.",
+            "parameters": {"type": "object"},
+            "strict": None,
+        }
+    ]
+    assert body["tool_choice"] == "auto"
+    assert body["parallel_tool_calls"] is True
+    assert body["prompt_cache_key"] == "session-1"
+    assert body["reasoning"]["effort"] == "low"
+    assert "max_output_tokens" not in body
 
 
 def test_zeta_responses_body_converts_assistant_and_tool_messages() -> None:
@@ -244,6 +297,54 @@ def test_zeta_responses_stream_accumulates_text_and_reasoning() -> None:
         "completion_tokens": 20,
         "total_tokens": 120,
     }
+
+
+def test_zeta_model_output_from_responses_payload_preserves_replay_items() -> None:
+    payload = zeta_responses.read_streamed_responses(
+        iter(
+            sse_frames(
+                [
+                    {
+                        "type": "response.output_item.done",
+                        "item": {
+                            "type": "reasoning",
+                            "id": "rs_1",
+                            "encrypted_content": "opaque",
+                        },
+                    },
+                    {
+                        "type": "response.output_item.done",
+                        "item": {
+                            "type": "message",
+                            "id": "msg_1",
+                            "role": "assistant",
+                            "content": [{"type": "output_text", "text": "done"}],
+                        },
+                    },
+                    COMPLETED,
+                ]
+            )
+        )
+    )
+
+    output = zeta_models_api.ModelOutput.from_chat_completion(payload)
+
+    assert output.message["content"] == "done"
+    assert output.finish_reason == "stop"
+    assert output.usage == zeta_models_api.ModelUsage(
+        prompt_tokens=100,
+        completion_tokens=20,
+        total_tokens=120,
+    )
+    assert output.provider_replay_items == (
+        {"type": "reasoning", "id": "rs_1", "encrypted_content": "opaque"},
+        {
+            "type": "message",
+            "id": "msg_1",
+            "role": "assistant",
+            "content": [{"type": "output_text", "text": "done"}],
+        },
+    )
 
 
 def test_zeta_responses_stream_collects_tool_calls() -> None:

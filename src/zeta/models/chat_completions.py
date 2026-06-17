@@ -16,6 +16,7 @@ from urllib.parse import urlparse, urlunparse
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import ValidationError
 
+from . import ModelInput
 from .profiles import model_name, model_url
 
 MUTED = "\033[38;2;110;106;134m"
@@ -708,6 +709,17 @@ def chat_completion_request_body(
     if response_format is not None:
         body["response_format"] = response_format
     return body
+
+
+def chat_completion_request_from_input(model_input: ModelInput) -> dict[str, Any]:
+    return chat_completion_request_body(
+        model_input.messages,
+        tools=model_input.tools,
+        tool_choice=model_input.tool_choice,
+        max_tokens=model_input.max_tokens or DEFAULT_MAX_COMPLETION_TOKENS,
+        selected_model=model_input.selected_model,
+        thinking=model_input.thinking,
+    )
 
 
 def json_schema_response_format(

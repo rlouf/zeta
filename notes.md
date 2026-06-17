@@ -1457,6 +1457,35 @@ Verification:
   passed.
 - `uv run pre-commit run --all` passed.
 
+### Slice 7: terminal capability result reconciliation - complete
+
+Added the first resume-facing reconciliation check: before invoking a capability
+call, `run_capability_step()` now looks for an existing terminal `tool_result`
+with the same `tool_call_id` in `RunState.events`. If one exists, the step
+records `record_capability_result` and does not invoke the capability again.
+
+Behavior preserved:
+
+- Fresh capability calls still emit the same `tool_call` and `tool_result`
+  events.
+- Existing terminal results are not duplicated into `RunState.events`.
+- The reconciliation path is in-memory only; rebuilding `RunState` from durable
+  events remains a later slice.
+
+Verification:
+
+- `uv run ripple src/zeta/agent.py run_capability_step` could not run because
+  `ripple` is not installed in this checkout.
+- `uv run pytest tests/test_zeta_agent.py tests/test_zeta_tools.py tests/test_zeta_trace.py -q`
+  passed with 252 tests and 2 skipped.
+- `uv run pytest -q` passed with 828 tests and 4 skipped.
+- `uv run coverage run -m pytest` and `uv run coverage report` passed with
+  93% total coverage.
+- `uv run ty check src tests` passed.
+- `uvx --with radon radon cc src/zeta/agent.py tests/test_zeta_agent.py -s`
+  passed.
+- `uv run pre-commit run --all` passed.
+
 ## 7. Replay, diff, and fork acceptance tests
 
 ### Current read

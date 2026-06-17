@@ -702,6 +702,57 @@ def test_zeta_run_capability_step_records_call_execution_and_result(
     ]
 
 
+def test_zeta_run_capability_step_reconciles_existing_terminal_result(
+    monkeypatch,
+) -> None:
+    state = zeta_agent.RunState(
+        events=[
+            {
+                "type": "tool_result",
+                "tool_call_id": "call-1",
+                "status": "completed",
+                "result": {"ok": True},
+            }
+        ]
+    )
+    registry = CapabilityRegistry()
+    projection = registry.project(())
+    invoked = False
+
+    def fail_handle_tool_call(
+        *args: object, **kwargs: object
+    ) -> zeta_agent.CapabilityCallResult:
+        nonlocal invoked
+        invoked = True
+        return zeta_agent.CapabilityCallResult(events=[])
+
+    monkeypatch.setattr(zeta_agent, "handle_tool_call", fail_handle_tool_call)
+
+    result = zeta_agent.run_capability_step(
+        {"id": "call-1", "function": {"name": "read", "arguments": "{}"}},
+        index=0,
+        config=zeta_agent.AgentConfig(),
+        allowed_capabilities=(),
+        projection=projection,
+        model_telemetry={},
+        prompt_trace=None,
+        builder=zeta_prompt.PromptBuilder(),
+        event_sink=None,
+        tool_registry=registry,
+        assistant_event_id="assistant-1",
+        state=state,
+        cancellation_event=None,
+        deadline=None,
+    )
+
+    assert invoked is False
+    assert result.events == []
+    assert [step.step for step in state.steps] == [
+        "check_budget",
+        "record_capability_result",
+    ]
+
+
 def rpc_messages(output: StringIO) -> list[dict[str, Any]]:
     return [json.loads(line) for line in output.getvalue().splitlines()]
 

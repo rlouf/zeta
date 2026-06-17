@@ -524,6 +524,15 @@ def run_capability_step(
         cancellation_event=cancellation_event,
         deadline=deadline,
     )
+    if (
+        terminal_capability_result_event(
+            state.events,
+            tool_call_id(tool_call, index=index),
+        )
+        is not None
+    ):
+        state.note_step("record_capability_result")
+        return CapabilityCallResult(events=[])
     state.note_step("record_capability_call")
     state.note_step("execute_capability")
     result = handle_tool_call(
@@ -541,6 +550,27 @@ def run_capability_step(
     )
     state.note_step("record_capability_result")
     return result
+
+
+TERMINAL_TOOL_STATUSES = {"completed", "failed", "refused", "cancelled", "timed_out"}
+
+
+def tool_call_id(tool_call: dict[str, Any], *, index: int) -> str:
+    return str(tool_call.get("id") or f"call-{index}")
+
+
+def terminal_capability_result_event(
+    events: list[dict[str, Any]],
+    call_id: str,
+) -> dict[str, Any] | None:
+    for event in reversed(events):
+        if event.get("type") != "tool_result":
+            continue
+        if event.get("tool_call_id") != call_id:
+            continue
+        if event.get("status") in TERMINAL_TOOL_STATUSES:
+            return event
+    return None
 
 
 def check_turn_budget(

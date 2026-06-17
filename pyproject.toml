@@ -38,6 +38,7 @@ dependencies = [
   "click>=8.1",
   "jinja2>=3.1",
   "jsonschema>=4.0",
+  "PyYAML",
   "rich>=13.7",
 ]
 
@@ -94,3 +95,7 @@ extend-select = ["B", "I", "UP"]
 [tool.vulture]
 paths = ["src", "tests"]
 min_confidence = 80
+
+[tool.deptry]
+known_first_party = ["sigil", "zeta"]
+package_module_name_map = { PyYAML = "yaml" }

@@ -746,6 +746,7 @@ dependencies = [
     { name = "click" },
     { name = "jinja2" },
     { name = "jsonschema" },
+    { name = "pyyaml" },
     { name = "rich" },
 ]
 
@@ -765,6 +766,7 @@ requires-dist = [
     { name = "click", specifier = ">=8.1" },
     { name = "jinja2", specifier = ">=3.1" },
     { name = "jsonschema", specifier = ">=4.0" },
+    { name = "pyyaml" },
     { name = "rich", specifier = ">=13.7" },
 ]
 

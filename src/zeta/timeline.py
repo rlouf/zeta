@@ -17,12 +17,10 @@ from .events import (
     EventSink,
     Filter,
     SqliteEventStore,
-    durable_event_draft,
-    model_called_event,
+    durable_event_for_type,
     publish_event,
     time_from_timestamp_micros,
     timestamp_micros_from_time,
-    tool_called_event,
 )
 from .tools.base import effect_resolution, proposed_effect
 from .trace import (
@@ -96,49 +94,29 @@ def durable_event_from_timeline(
     event_id: str | None,
     timestamp_micros: int | None,
 ) -> DraftEvent | None:
-    if event_type == "model":
-        return model_called_event(
-            payload=payload,
-            turn_id=turn_id,
-            session_id=session_id,
-            caused_by=caused_by,
-            event_id=event_id,
-            timestamp_micros=timestamp_micros,
-        )
-    if event_type == "tool_result":
-        return tool_called_event(
-            payload=payload,
-            turn_id=turn_id,
-            session_id=session_id,
-            caused_by=caused_by,
-            event_id=event_id,
-            timestamp_micros=timestamp_micros,
-        )
-    if event_type == "tool_call":
-        return tool_called_event(
-            payload=payload,
-            turn_id=turn_id,
-            session_id=session_id,
-            caused_by=caused_by,
-            event_id=event_id,
-            timestamp_micros=timestamp_micros,
-        )
-    if event_type in {"user_message", "turn_aborted", "model_usage"}:
-        durable_type = f"zeta.{event_type}"
-        return durable_event_draft(
+    durable_type = durable_type_from_timeline_type(event_type)
+    if durable_type:
+        return durable_event_for_type(
             durable_type,
-            "zeta",
             payload=payload,
             turn_id=turn_id,
             session_id=session_id,
             caused_by=caused_by,
             event_id=event_id,
-            idempotency_key=(
-                f"{durable_type}:{event_id}" if event_id is not None else None
-            ),
             timestamp_micros=timestamp_micros,
         )
     return None
+
+
+def durable_type_from_timeline_type(event_type: str) -> str:
+    return {
+        "model": "zeta.model.called",
+        "tool_call": "zeta.tool.called",
+        "tool_result": "zeta.tool.called",
+        "user_message": "zeta.user_message",
+        "turn_aborted": "zeta.turn_aborted",
+        "model_usage": "zeta.model_usage",
+    }.get(event_type, "")
 
 
 def timeline_session_id() -> str:
@@ -514,33 +492,39 @@ def _chat_message_entries(
     tool_call_ids: set[str] = set()
     resolved_effects = resolved_effect_call_ids(timeline)
     for index, event in enumerate(timeline):
-        message = role_chat_message(event)
-        if message is not None:
-            entries.append(ChatMessageEntry(index, event, message))
-            continue
-        event_type = str(event.get("type") or "")
-        message = event_chat_message(event_type, event)
+        message = timeline_chat_message(
+            event,
+            index=index,
+            tool_call_ids=tool_call_ids,
+            resolved_effects=resolved_effects,
+        )
         if message is not None:
             entries.append(ChatMessageEntry(index, event, message))
             record_tool_call_ids(message, tool_call_ids)
-            continue
-        if event_type == "tool_call":
-            tool_call_id = str(event.get("id") or event.get("tool_call_id") or "")
-            if tool_call_id and tool_call_id in tool_call_ids:
-                continue
-            message = tool_call_message(event, fallback_id=f"call-{index}")
-            entries.append(ChatMessageEntry(index, event, message))
-            record_tool_call_ids(message, tool_call_ids)
-            continue
-        if event_type == "tool_result":
-            if is_resolved_proposed_effect(event, resolved_effects):
-                continue
-            entries.append(
-                ChatMessageEntry(
-                    index, event, tool_result_message(event, tool_call_ids)
-                )
-            )
     return entries
+
+
+def timeline_chat_message(
+    event: dict[str, Any],
+    *,
+    index: int,
+    tool_call_ids: set[str],
+    resolved_effects: set[str],
+) -> dict[str, Any] | None:
+    message = role_or_event_chat_message(event)
+    if message is not None:
+        return message
+    event_type = str(event.get("type") or "")
+    if event_type == "tool_call":
+        tool_call_id = str(event.get("id") or event.get("tool_call_id") or "")
+        if tool_call_id and tool_call_id in tool_call_ids:
+            return None
+        return tool_call_message(event, fallback_id=f"call-{index}")
+    if event_type == "tool_result":
+        if is_resolved_proposed_effect(event, resolved_effects):
+            return None
+        return tool_result_message(event, tool_call_ids)
+    return None
 
 
 def resolved_effect_call_ids(timeline: list[dict[str, Any]]) -> set[str]:
@@ -573,27 +557,15 @@ def is_resolved_proposed_effect(
     return effect is not None
 
 
-def role_chat_message(event: dict[str, Any]) -> dict[str, Any] | None:
+def role_or_event_chat_message(event: dict[str, Any]) -> dict[str, Any] | None:
     role = str(event.get("role") or "")
     if role not in {"user", "assistant"}:
-        return None
-    content = str(event.get("content") or "")
-    if not content:
-        return None
-    return {"role": role, "content": content}
-
-
-def event_chat_message(
-    event_type: str,
-    event: dict[str, Any],
-) -> dict[str, Any] | None:
-    role_by_type = {
-        "user_message": "user",
-        "model": "assistant",
-        "turn_aborted": "assistant",
-    }
-    role = role_by_type.get(event_type)
-    if role is None:
+        role = {
+            "user_message": "user",
+            "model": "assistant",
+            "turn_aborted": "assistant",
+        }.get(str(event.get("type") or ""), "")
+    if not role:
         return None
     content = str(event.get("content") or "")
     tool_calls = event.get("tool_calls")

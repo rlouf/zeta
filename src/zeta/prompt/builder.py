@@ -322,8 +322,13 @@ def render_model_input(prompt: PromptPlan | StoredPrompt) -> ModelInput:
     )
 
 
-def prepared_prompt_from(prompt: PromptPlan | StoredPrompt) -> PreparedPrompt:
-    model_input = render_model_input(prompt)
+def prepared_prompt_from(
+    prompt: PromptPlan | StoredPrompt,
+    *,
+    model_input: ModelInput | None = None,
+) -> PreparedPrompt:
+    if model_input is None:
+        model_input = render_model_input(prompt)
     prompt_id = prompt.prompt_object_id if isinstance(prompt, StoredPrompt) else None
     component_ids = (
         prompt.component_object_ids if isinstance(prompt, StoredPrompt) else ()

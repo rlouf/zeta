@@ -556,7 +556,7 @@ def test_zeta_build_prompt_step_returns_committed_model_input() -> None:
     store = zeta_trace.InMemoryStore()
     state = zeta_agent.RunState()
 
-    built = zeta_agent.build_prompt_step(
+    prepared_prompt, model_input = zeta_agent.build_prompt_step(
         "answer",
         [{"role": "user", "content": "prior"}],
         config=zeta_agent.AgentConfig(model_name="unit-model"),
@@ -569,9 +569,9 @@ def test_zeta_build_prompt_step_returns_committed_model_input() -> None:
     )
 
     assert [step.step for step in state.steps] == ["build_prompt"]
-    assert built.prepared_prompt.prompt_object_id is not None
-    assert built.model_input == zeta_models_api.ModelInput(
-        messages=built.prepared_prompt.messages,
+    assert prepared_prompt.prompt_object_id is not None
+    assert model_input == zeta_models_api.ModelInput(
+        messages=prepared_prompt.messages,
         tools=[],
         tool_choice="auto",
         max_tokens=zeta_model.DEFAULT_MAX_COMPLETION_TOKENS,
@@ -599,7 +599,7 @@ def test_zeta_call_model_step_returns_output_and_telemetry(monkeypatch) -> None:
     )
     state = zeta_agent.RunState()
 
-    called = zeta_agent.call_model_step(
+    model_output, streamed_content, model_telemetry = zeta_agent.call_model_step(
         zeta_models_api.ModelInput(
             messages=[{"role": "user", "content": "answer"}],
             tools=[],
@@ -612,18 +612,16 @@ def test_zeta_call_model_step_returns_output_and_telemetry(monkeypatch) -> None:
     )
 
     assert [step.step for step in state.steps] == ["call_model"]
-    assert called.model_output == zeta_models_api.ModelOutput(
-        message={"content": "done"}
-    )
-    assert called.streamed_content is True
-    assert called.model_telemetry == {"usage": {"prompt_tokens": 1}}
+    assert model_output == zeta_models_api.ModelOutput(message={"content": "done"})
+    assert streamed_content is True
+    assert model_telemetry == {"usage": {"prompt_tokens": 1}}
 
 
 def test_zeta_record_assistant_step_links_output_to_prompt() -> None:
     store = zeta_trace.InMemoryStore()
     state = zeta_agent.RunState()
     builder = zeta_prompt.PromptBuilder(store=store)
-    built = zeta_agent.build_prompt_step(
+    prepared_prompt, _ = zeta_agent.build_prompt_step(
         "answer",
         [],
         config=zeta_agent.AgentConfig(),
@@ -635,8 +633,8 @@ def test_zeta_record_assistant_step_links_output_to_prompt() -> None:
         builder=builder,
     )
 
-    recorded = zeta_agent.record_assistant_step(
-        built.prepared_prompt,
+    assistant, prompt_trace = zeta_agent.record_assistant_step(
+        prepared_prompt,
         zeta_models_api.ModelOutput(message={"content": "done"}),
         {"usage": {"prompt_tokens": 1}},
         state=state,
@@ -647,9 +645,9 @@ def test_zeta_record_assistant_step_links_output_to_prompt() -> None:
         "build_prompt",
         "record_assistant",
     ]
-    assert recorded.assistant.content == "done"
-    assert recorded.prompt_trace is not None
-    assert state.prompt_traces == [recorded.prompt_trace]
+    assert assistant.content == "done"
+    assert prompt_trace is not None
+    assert state.prompt_traces == [prompt_trace]
     assert state.latest_model_telemetry == {"usage": {"prompt_tokens": 1}}
 
 

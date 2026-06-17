@@ -359,7 +359,28 @@ def turn_idempotency_key(event_type: str, turn_id: str | None) -> str | None:
     return f"{event_type}:{turn_id}"
 
 
-def model_called_event(
+EVENT_IDEMPOTENT_TYPES = frozenset(
+    {
+        "zeta.model.called",
+        "zeta.tool.called",
+        "zeta.user_message",
+        "zeta.turn_aborted",
+        "zeta.model_usage",
+    }
+)
+TURN_IDEMPOTENT_TYPES = frozenset(
+    {
+        "zeta.prompt.submitted",
+        "zeta.turn.completed",
+        "zeta.turn.failed",
+        "zeta.turn.aborted",
+    }
+)
+SUPPORTED_DURABLE_EVENT_TYPES = EVENT_IDEMPOTENT_TYPES | TURN_IDEMPOTENT_TYPES
+
+
+def durable_event_for_type(
+    event_type: str,
     *,
     payload: dict[str, Any],
     turn_id: str | None,
@@ -369,14 +390,51 @@ def model_called_event(
     timestamp_micros: int | None = None,
 ) -> DraftEvent:
     return durable_event_draft(
-        "zeta.model.called",
+        event_type,
         "zeta",
         payload=payload,
         turn_id=turn_id,
         session_id=session_id,
         caused_by=caused_by,
         event_id=event_id,
-        idempotency_key=event_idempotency_key("zeta.model.called", event_id),
+        idempotency_key=durable_event_idempotency_key(
+            event_type,
+            event_id=event_id,
+            turn_id=turn_id,
+        ),
+        timestamp_micros=timestamp_micros,
+    )
+
+
+def durable_event_idempotency_key(
+    event_type: str,
+    *,
+    event_id: str | None,
+    turn_id: str | None,
+) -> str | None:
+    if event_type in EVENT_IDEMPOTENT_TYPES:
+        return event_idempotency_key(event_type, event_id)
+    if event_type in TURN_IDEMPOTENT_TYPES:
+        return turn_idempotency_key(event_type, turn_id)
+    return None
+
+
+def model_called_event(
+    *,
+    payload: dict[str, Any],
+    turn_id: str | None,
+    session_id: str,
+    caused_by: str | None = None,
+    event_id: str | None = None,
+    timestamp_micros: int | None = None,
+) -> DraftEvent:
+    return durable_event_for_type(
+        "zeta.model.called",
+        payload=payload,
+        turn_id=turn_id,
+        session_id=session_id,
+        caused_by=caused_by,
+        event_id=event_id,
         timestamp_micros=timestamp_micros,
     )
 
@@ -390,15 +448,13 @@ def tool_called_event(
     event_id: str | None = None,
     timestamp_micros: int | None = None,
 ) -> DraftEvent:
-    return durable_event_draft(
+    return durable_event_for_type(
         "zeta.tool.called",
-        "zeta",
         payload=payload,
         turn_id=turn_id,
         session_id=session_id,
         caused_by=caused_by,
         event_id=event_id,
-        idempotency_key=event_idempotency_key("zeta.tool.called", event_id),
         timestamp_micros=timestamp_micros,
     )
 
@@ -416,15 +472,13 @@ class DurableEventConstructors:
         event_id: str | None = None,
         timestamp_micros: int | None = None,
     ) -> DraftEvent:
-        return durable_event_draft(
+        return durable_event_for_type(
             "zeta.prompt.submitted",
-            "zeta",
             payload=payload,
             turn_id=turn_id,
             session_id=session_id,
             caused_by=caused_by,
             event_id=event_id,
-            idempotency_key=turn_idempotency_key("zeta.prompt.submitted", turn_id),
             timestamp_micros=timestamp_micros,
         )
 
@@ -499,15 +553,13 @@ class DurableEventConstructors:
         event_id: str | None,
         timestamp_micros: int | None,
     ) -> DraftEvent:
-        return durable_event_draft(
+        return durable_event_for_type(
             event_type,
-            "zeta",
             payload=payload,
             turn_id=turn_id,
             session_id=session_id,
             caused_by=caused_by,
             event_id=event_id,
-            idempotency_key=turn_idempotency_key(event_type, turn_id),
             timestamp_micros=timestamp_micros,
         )
 
@@ -525,53 +577,9 @@ def durable_draft_from_payload(
     event_id: str | None,
     timestamp_micros: int | None,
 ) -> DraftEvent | None:
-    if event_type == "zeta.prompt.submitted":
-        return durable_event.prompt_submitted(
-            payload=payload,
-            turn_id=turn_id,
-            session_id=session_id,
-            caused_by=caused_by,
-            event_id=event_id,
-            timestamp_micros=timestamp_micros,
-        )
-    if event_type == "zeta.turn.completed":
-        return durable_event.turn_completed(
-            payload=payload,
-            turn_id=turn_id,
-            session_id=session_id,
-            caused_by=caused_by,
-            event_id=event_id,
-            timestamp_micros=timestamp_micros,
-        )
-    if event_type == "zeta.turn.failed":
-        return durable_event.turn_failed(
-            payload=payload,
-            turn_id=turn_id,
-            session_id=session_id,
-            caused_by=caused_by,
-            event_id=event_id,
-            timestamp_micros=timestamp_micros,
-        )
-    if event_type == "zeta.turn.aborted":
-        return durable_event.turn_aborted(
-            payload=payload,
-            turn_id=turn_id,
-            session_id=session_id,
-            caused_by=caused_by,
-            event_id=event_id,
-            timestamp_micros=timestamp_micros,
-        )
-    if event_type == "zeta.model.called":
-        return model_called_event(
-            payload=payload,
-            turn_id=turn_id,
-            session_id=session_id,
-            caused_by=caused_by,
-            event_id=event_id,
-            timestamp_micros=timestamp_micros,
-        )
-    if event_type == "zeta.tool.called":
-        return tool_called_event(
+    if event_type in SUPPORTED_DURABLE_EVENT_TYPES:
+        return durable_event_for_type(
+            event_type,
             payload=payload,
             turn_id=turn_id,
             session_id=session_id,

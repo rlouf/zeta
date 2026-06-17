@@ -296,25 +296,6 @@ class ModelTurn:
 
 
 @dataclass(frozen=True)
-class BuiltPrompt:
-    prepared_prompt: PreparedPrompt
-    model_input: ModelInput
-
-
-@dataclass(frozen=True)
-class ModelCall:
-    model_output: ModelOutput
-    streamed_content: bool
-    model_telemetry: dict[str, Any]
-
-
-@dataclass(frozen=True)
-class RecordedAssistant:
-    assistant: AssistantMessage
-    prompt_trace: PromptTrace | None
-
-
-@dataclass(frozen=True)
 class AssistantMessage:
     content: str
     reasoning_content: str
@@ -349,7 +330,7 @@ def request_model_turn(
     model_status: ModelStatusFactory | None,
     stream_sink: ChatCompletionStreamSink | None,
 ) -> ModelTurn:
-    built_prompt = build_prompt_step(
+    prepared_prompt, model_input = build_prompt_step(
         objective,
         timeline,
         config=config,
@@ -360,25 +341,25 @@ def request_model_turn(
         state=state,
         builder=builder,
     )
-    model_call = call_model_step(
-        built_prompt.model_input,
+    model_output, streamed_content, model_telemetry = call_model_step(
+        model_input,
         config=config,
         state=state,
         model_status=model_status,
         stream_sink=stream_sink,
     )
-    recorded = record_assistant_step(
-        built_prompt.prepared_prompt,
-        model_call.model_output,
-        model_call.model_telemetry,
+    assistant, prompt_trace = record_assistant_step(
+        prepared_prompt,
+        model_output,
+        model_telemetry,
         state=state,
         builder=builder,
     )
     return ModelTurn(
-        assistant=recorded.assistant,
-        streamed_content=model_call.streamed_content,
-        model_telemetry=model_call.model_telemetry,
-        prompt_trace=recorded.prompt_trace,
+        assistant=assistant,
+        streamed_content=streamed_content,
+        model_telemetry=model_telemetry,
+        prompt_trace=prompt_trace,
     )
 
 
@@ -393,7 +374,7 @@ def build_prompt_step(
     tools: list[dict[str, Any]],
     state: RunState,
     builder: PromptBuilder,
-) -> BuiltPrompt:
+) -> tuple[PreparedPrompt, ModelInput]:
     state.note_step("build_prompt")
     prompt_plan = builder.plan_prompt(
         objective,
@@ -409,8 +390,8 @@ def build_prompt_step(
     )
     stored_prompt = builder.commit_prompt_plan(prompt_plan)
     model_input = render_model_input(stored_prompt)
-    prepared_prompt = prepared_prompt_from(stored_prompt)
-    return BuiltPrompt(prepared_prompt=prepared_prompt, model_input=model_input)
+    prepared_prompt = prepared_prompt_from(stored_prompt, model_input=model_input)
+    return prepared_prompt, model_input
 
 
 def call_model_step(
@@ -420,7 +401,7 @@ def call_model_step(
     state: RunState,
     model_status: ModelStatusFactory | None,
     stream_sink: ChatCompletionStreamSink | None,
-) -> ModelCall:
+) -> tuple[ModelOutput, bool, dict[str, Any]]:
     state.note_step("call_model")
     model_output, streamed_content, model_telemetry = request_assistant_message(
         model_input.messages,
@@ -430,11 +411,7 @@ def call_model_step(
         model_status=model_status,
         stream_sink=stream_sink,
     )
-    return ModelCall(
-        model_output=model_output,
-        streamed_content=streamed_content,
-        model_telemetry=model_telemetry,
-    )
+    return model_output, streamed_content, model_telemetry
 
 
 def record_assistant_step(
@@ -444,7 +421,7 @@ def record_assistant_step(
     *,
     state: RunState,
     builder: PromptBuilder,
-) -> RecordedAssistant:
+) -> tuple[AssistantMessage, PromptTrace | None]:
     assistant = AssistantMessage.from_provider(model_output.message)
     state.note_step("record_assistant")
     prompt_trace = builder.record_assistant_message(
@@ -453,7 +430,7 @@ def record_assistant_step(
     )
     state.note_prompt_trace(prompt_trace)
     state.note_model_telemetry(model_telemetry)
-    return RecordedAssistant(assistant=assistant, prompt_trace=prompt_trace)
+    return assistant, prompt_trace
 
 
 def run_capability_calls(
@@ -1082,10 +1059,9 @@ class ModelToolCall:
         return ToolCallRuntimeEvent(tool_call=self, caused_by=caused_by).to_event()
 
 
-@dataclass
+@dataclass(frozen=True)
 class CapabilityCallInvocation:
     tool_call: ModelToolCall
-    capability_id: str
     call_event: dict[str, Any]
 
     @property
@@ -1103,6 +1079,12 @@ class CapabilityCallInvocation:
     @property
     def parse_error(self) -> str:
         return self.tool_call.parse_error
+
+
+@dataclass(frozen=True)
+class ToolCallValidation:
+    capability_id: str = ""
+    error: tuple[str, str] | None = None
 
 
 def handle_tool_call(
@@ -1135,14 +1117,14 @@ def handle_tool_call(
             event_sink=event_sink,
             caused_by=caused_by,
         )
-    validation_error = tool_call_validation_error(
+    validation = validate_tool_call(
         invocation,
         allowed_capabilities=allowed_capabilities,
         projection=projection,
         tool_registry=active_tool_registry,
     )
-    if validation_error is not None:
-        code, message = validation_error
+    if validation.error is not None:
+        code, message = validation.error
         return reject_tool_call(
             invocation,
             code,
@@ -1154,6 +1136,7 @@ def handle_tool_call(
         )
     return run_valid_tool_call(
         invocation,
+        capability_id=validation.capability_id,
         execution_mode=execution_mode,
         model_telemetry=model_telemetry,
         prompt_trace=prompt_trace,
@@ -1174,41 +1157,45 @@ def tool_call_invocation(
         return None
     return CapabilityCallInvocation(
         tool_call=record,
-        capability_id="",
         call_event=record.event(caused_by=caused_by),
     )
 
 
-def tool_call_validation_error(
+def validate_tool_call(
     invocation: CapabilityCallInvocation,
     *,
     allowed_capabilities: tuple[str, ...],
     projection: CapabilityProjection,
     tool_registry: CapabilityRegistry,
-) -> tuple[str, str] | None:
+) -> ToolCallValidation:
     if invocation.parse_error:
-        return "invalid-json-args", invocation.parse_error
+        return ToolCallValidation(error=("invalid-json-args", invocation.parse_error))
     capability_id = projection.alias_to_id.get(invocation.name)
     if capability_id is None:
         if tool_registry.resolve(invocation.name) is not None:
-            return (
+            return ToolCallValidation(
+                error=(
+                    "disallowed-tool",
+                    f"tool is not allowed in this workflow: {invocation.name}",
+                )
+            )
+        return ToolCallValidation(
+            error=("unknown-tool", f"unknown tool: {invocation.name}")
+        )
+    if capability_id not in allowed_capabilities:
+        return ToolCallValidation(
+            error=(
                 "disallowed-tool",
                 f"tool is not allowed in this workflow: {invocation.name}",
             )
-        return "unknown-tool", f"unknown tool: {invocation.name}"
-    invocation.capability_id = capability_id
-    if capability_id not in allowed_capabilities:
-        return (
-            "disallowed-tool",
-            f"tool is not allowed in this workflow: {invocation.name}",
         )
     schema_errors = tool_registry.validate_capability_args(
         capability_id,
         invocation.params,
     )
     if schema_errors:
-        return "schema-mismatch", "; ".join(schema_errors)
-    return None
+        return ToolCallValidation(error=("schema-mismatch", "; ".join(schema_errors)))
+    return ToolCallValidation(capability_id=capability_id)
 
 
 def reject_tool_call(
@@ -1238,6 +1225,7 @@ def reject_tool_call(
 def run_valid_tool_call(
     invocation: CapabilityCallInvocation,
     *,
+    capability_id: str,
     execution_mode: ExecutionMode,
     model_telemetry: dict[str, Any] | None,
     prompt_trace: PromptTrace | None,
@@ -1246,7 +1234,7 @@ def run_valid_tool_call(
     tool_registry: CapabilityRegistry,
 ) -> CapabilityCallResult:
     events: list[dict[str, Any]] = []
-    invocation.call_event["capability_id"] = invocation.capability_id
+    invocation.call_event["capability_id"] = capability_id
     attach_tool_call_trace(
         invocation.call_event,
         prompt_trace=prompt_trace,
@@ -1255,7 +1243,7 @@ def run_valid_tool_call(
     emit_event(events, invocation.call_event, event_sink)
     try:
         result = invoke_capability(
-            invocation.capability_id,
+            capability_id,
             invocation.params,
             execution_mode=execution_mode,
             tool_registry=tool_registry,
@@ -1265,7 +1253,7 @@ def run_valid_tool_call(
     staged_effect = (
         result_staged_effect(result)
         if tool_call_stages_effect(
-            invocation.capability_id,
+            capability_id,
             execution_mode,
             tool_registry=tool_registry,
         )
@@ -1282,7 +1270,7 @@ def run_valid_tool_call(
             invocation.call_id,
             invocation.name,
             result,
-            capability_id=invocation.capability_id,
+            capability_id=capability_id,
             call_event=invocation.call_event,
             model_telemetry=model_telemetry,
             prompt_trace=prompt_trace,

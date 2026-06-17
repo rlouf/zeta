@@ -19,9 +19,8 @@ from .models import (
     model_endpoint_open,
 )
 from .prompt import PromptBuilder, prompt_transform_from_env
-from .prompt.system import model_capability_descriptors
 from .tools.base import proposed_effect
-from .tools.registry import CapabilityRegistry, ExecutionMode
+from .tools.registry import CapabilityProjection, CapabilityRegistry, ExecutionMode
 from .tools.registry import registry as _runtime_tool_registry
 from .trace import PromptTrace, Store, prompt_trace_payload
 
@@ -145,10 +144,8 @@ def run_agent_turn(
         store=trace_store,
         transform=prompt_transform_from_env(),
     )
-    tools = model_capability_descriptors(
-        allowed_capabilities,
-        tool_registry=active_tool_registry,
-    )
+    projection = active_tool_registry.project(allowed_capabilities)
+    tools = projection.descriptors
     for _ in turn_indices(config.max_turns):
         check_turn_budget(
             state,
@@ -192,6 +189,7 @@ def run_agent_turn(
             tool_calls,
             config=config,
             allowed_capabilities=allowed_capabilities,
+            projection=projection,
             model_telemetry=turn.model_telemetry,
             prompt_trace=turn.prompt_trace,
             builder=builder,
@@ -264,6 +262,7 @@ def run_capability_calls(
     *,
     config: AgentConfig,
     allowed_capabilities: tuple[str, ...],
+    projection: CapabilityProjection,
     model_telemetry: dict[str, Any],
     prompt_trace: PromptTrace | None,
     builder: PromptBuilder,
@@ -284,6 +283,7 @@ def run_capability_calls(
         result_event = handle_tool_call(
             tool_call,
             allowed_capabilities=allowed_capabilities,
+            projection=projection,
             index=index,
             execution_mode=config.execution_mode,
             model_telemetry=(model_telemetry if index == 0 else None),
@@ -715,6 +715,7 @@ def handle_tool_call(
     tool_call: dict[str, Any],
     *,
     allowed_capabilities: tuple[str, ...],
+    projection: CapabilityProjection,
     index: int,
     execution_mode: ExecutionMode = "stage",
     model_telemetry: dict[str, Any] | None = None,
@@ -743,6 +744,7 @@ def handle_tool_call(
     validation_error = tool_call_validation_error(
         invocation,
         allowed_capabilities=allowed_capabilities,
+        projection=projection,
         tool_registry=active_tool_registry,
     )
     if validation_error is not None:
@@ -804,12 +806,18 @@ def tool_call_validation_error(
     invocation: CapabilityCallInvocation,
     *,
     allowed_capabilities: tuple[str, ...],
+    projection: CapabilityProjection,
     tool_registry: CapabilityRegistry,
 ) -> tuple[str, str] | None:
     if invocation.parse_error:
         return "invalid-json-args", invocation.parse_error
-    capability_id = tool_registry.resolve(invocation.name)
+    capability_id = projection.alias_to_id.get(invocation.name)
     if capability_id is None:
+        if tool_registry.resolve(invocation.name) is not None:
+            return (
+                "disallowed-tool",
+                f"tool is not allowed in this workflow: {invocation.name}",
+            )
         return "unknown-tool", f"unknown tool: {invocation.name}"
     invocation.capability_id = capability_id
     if capability_id not in allowed_capabilities:
@@ -861,6 +869,7 @@ def run_valid_tool_call(
     tool_registry: CapabilityRegistry,
 ) -> CapabilityCallResult:
     events: list[dict[str, Any]] = []
+    invocation.call_event["capability_id"] = invocation.capability_id
     attach_tool_call_trace(
         invocation.call_event,
         prompt_trace=prompt_trace,
@@ -879,7 +888,7 @@ def run_valid_tool_call(
     staged_effect = (
         result_staged_effect(result)
         if tool_call_stages_effect(
-            invocation.name,
+            invocation.capability_id,
             execution_mode,
             tool_registry=tool_registry,
         )
@@ -896,6 +905,7 @@ def run_valid_tool_call(
             invocation.call_id,
             invocation.name,
             result,
+            capability_id=invocation.capability_id,
             call_event=invocation.call_event,
             model_telemetry=model_telemetry,
             prompt_trace=prompt_trace,
@@ -982,6 +992,7 @@ def traced_tool_result_event(
     name: str,
     result: dict[str, Any],
     *,
+    capability_id: str = "",
     call_event: dict[str, Any],
     model_telemetry: dict[str, Any] | None = None,
     prompt_trace: PromptTrace | None = None,
@@ -991,6 +1002,7 @@ def traced_tool_result_event(
         call_id,
         name,
         result,
+        capability_id=capability_id,
         model_telemetry=model_telemetry,
         prompt_trace=prompt_trace,
     )
@@ -1010,6 +1022,7 @@ def tool_result_event(
     name: str,
     result: dict[str, Any],
     *,
+    capability_id: str = "",
     model_telemetry: dict[str, Any] | None = None,
     prompt_trace: PromptTrace | None = None,
 ) -> dict[str, Any]:
@@ -1019,6 +1032,8 @@ def tool_result_event(
         "name": name,
         "result": normalized_tool_result(name, result),
     }
+    if capability_id:
+        event["capability_id"] = capability_id
     ensure_event_id(event)
     if model_telemetry:
         event["model_telemetry"] = dict(model_telemetry)

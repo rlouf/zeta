@@ -49,19 +49,21 @@ ensure_builtin_tools_registered()
 def _test_capability(
     name: str,
     *,
+    provider: str = "test",
     schema: dict[str, Any] | None = None,
     effects: tuple[EffectKind, ...] = ("read",),
+    aliases: tuple[str, ...] | None = None,
     run_result: dict[str, Any] | None = None,
     supports_staging: bool = False,
     supports_direct: bool = True,
 ) -> Capability:
     return Capability(
         CapabilitySpec(
-            CapabilityId("test", name),
+            CapabilityId(provider, name),
             f"{name} test capability.",
             schema or {"type": "object"},
             effects=effects,
-            aliases=(name,),
+            aliases=aliases or (name,),
         ),
         CapabilityPolicy(
             supports_staging=supports_staging,
@@ -1423,6 +1425,64 @@ def test_zeta_agent_turn_uses_explicit_tool_registry(monkeypatch) -> None:
         "ctx_echo",
         "ctx_echo",
     ]
+
+
+def test_zeta_agent_turn_resolves_model_alias_through_projection(monkeypatch) -> None:
+    registry = CapabilityRegistry()
+    registry.register(_test_capability("read", provider="host", aliases=("read",)))
+    registry.register(_test_capability("read", provider="rpc", aliases=("read",)))
+    responses = iter(
+        [
+            {
+                "tool_calls": [
+                    {
+                        "id": "call-1",
+                        "type": "function",
+                        "function": {
+                            "name": "read",
+                            "arguments": '{"path":"README.md"}',
+                        },
+                    }
+                ]
+            },
+            {"content": "done"},
+        ]
+    )
+    invoked: list[tuple[str, dict[str, Any]]] = []
+
+    def fake_invoke(
+        capability_id: str,
+        params: dict[str, Any],
+        **kwargs: object,
+    ) -> dict[str, Any]:
+        invoked.append((capability_id, params))
+        return {"ok": True, "content": [{"type": "text", "text": "ok"}]}
+
+    monkeypatch.setattr(zeta_agent, "model_endpoint_open", lambda: True)
+    monkeypatch.setattr(
+        zeta_agent,
+        "chat_completion_messages",
+        lambda *args, **kwargs: next(responses),
+    )
+    monkeypatch.setattr(zeta_agent, "invoke_capability", fake_invoke)
+
+    result = zeta_agent.run_agent_turn(
+        "read",
+        [],
+        zeta_agent.AgentConfig(allowed_capabilities=("host.read",), max_turns=2),
+        tool_registry=registry,
+    )
+
+    assert result.final_text == "done"
+    assert invoked == [("host.read", {"path": "README.md"})]
+    tool_call = next(event for event in result.events if event["type"] == "tool_call")
+    tool_result = next(
+        event for event in result.events if event["type"] == "tool_result"
+    )
+    assert tool_call["name"] == "read"
+    assert tool_call["capability_id"] == "host.read"
+    assert tool_result["name"] == "read"
+    assert tool_result["capability_id"] == "host.read"
 
 
 def test_zeta_agent_turn_passes_thinking_to_the_model(monkeypatch) -> None:

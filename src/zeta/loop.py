@@ -243,9 +243,7 @@ def run_agent_steps(
         state.note_step("check_budget")
         check_turn_budget(
             state,
-            event_sink=ctx.event_sink,
-            cancellation_event=ctx.cancellation_event,
-            deadline=ctx.deadline,
+            ctx=ctx,
         )
         turn = request_model_turn(
             objective,
@@ -260,9 +258,8 @@ def run_agent_steps(
         if ctx.cancellation_event is not None and ctx.cancellation_event.is_set():
             check_turn_budget(
                 state,
-                event_sink=ctx.event_sink,
-                cancellation_event=ctx.cancellation_event,
-                deadline=None,
+                ctx=ctx,
+                check_deadline=False,
             )
         assistant = turn.assistant.to_provider()
         assistant_event_id, tool_calls = record_model_event(
@@ -491,9 +488,7 @@ def run_capability_step(
     state.note_step("check_budget")
     check_turn_budget(
         state,
-        event_sink=ctx.event_sink,
-        cancellation_event=ctx.cancellation_event,
-        deadline=ctx.deadline,
+        ctx=ctx,
     )
     if (
         terminal_capability_result_event(
@@ -541,20 +536,13 @@ def terminal_capability_result_event(
 def check_turn_budget(
     state: AgentTurnState,
     *,
-    event_sink: AgentEventSink | None,
-    cancellation_event: threading.Event | None,
-    deadline: float | None,
+    ctx: TurnContext,
+    check_deadline: bool = True,
 ) -> None:
     raise_if_agent_turn_aborted(
-        state.events,
-        event_sink=event_sink,
-        cancellation_event=cancellation_event,
-        deadline=deadline,
-        caused_by=state.next_model_caused_by,
-        model_telemetry=state.latest_model_telemetry,
-        model_telemetry_calls=state.model_telemetry_calls,
-        prompt_traces=state.prompt_traces,
-        steps=state.steps,
+        state,
+        ctx=ctx,
+        deadline=ctx.deadline if check_deadline else None,
     )
 
 
@@ -568,32 +556,20 @@ def agent_deadline(config: AgentConfig, deadline: float | None) -> float | None:
 
 
 def raise_if_agent_turn_aborted(
-    events: list[dict[str, Any]],
+    state: AgentTurnState,
     *,
-    event_sink: AgentEventSink | None,
-    cancellation_event: threading.Event | None,
+    ctx: TurnContext,
     deadline: float | None,
-    caused_by: str | None,
-    model_telemetry: dict[str, Any],
-    model_telemetry_calls: list[dict[str, Any]],
-    prompt_traces: list[PromptTrace],
-    steps: list[StepResult],
 ) -> None:
-    reason = agent_abort_reason(cancellation_event, deadline)
+    reason = agent_abort_reason(ctx.cancellation_event, deadline)
     if reason is None:
         return
-    steps.append(StepResult("abort_run"))
-    event = turn_aborted_event(reason, caused_by=caused_by)
-    emit_event(events, event, event_sink)
+    state.note_step("abort_run")
+    event = turn_aborted_event(reason, caused_by=state.next_model_caused_by)
+    emit_event(state.events, event, ctx.event_sink)
     raise AgentTurnAborted(
         reason,
-        result=AgentTurnResult(
-            events=events,
-            model_telemetry=model_telemetry,
-            model_telemetry_calls=model_telemetry_calls,
-            prompt_traces=prompt_traces,
-            steps=steps,
-        ),
+        result=state.result(),
         event_recorded=True,
     )
 

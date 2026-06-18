@@ -289,16 +289,9 @@ def run_agent_steps(
             projection=projection,
             model_telemetry=turn.model_telemetry,
             prompt_trace=turn.prompt_trace,
-            builder=ctx.builder,
-            event_sink=ctx.event_sink,
-            durable_event_sink=ctx.durable_event_sink,
-            session_id=ctx.session_id,
-            turn_id=ctx.turn_id,
-            tool_registry=ctx.tool_registry,
             assistant_event_id=assistant_event_id,
             state=state,
-            cancellation_event=ctx.cancellation_event,
-            deadline=ctx.deadline,
+            ctx=ctx,
         )
         if outcome is not None:
             return outcome
@@ -458,16 +451,9 @@ def run_capability_calls(
     projection: CapabilityProjection,
     model_telemetry: dict[str, Any],
     prompt_trace: PromptTrace | None,
-    builder: PromptBuilder,
-    event_sink: AgentEventSink | None,
-    durable_event_sink: EventSink | None = None,
-    session_id: str | None = None,
-    turn_id: str | None = None,
-    tool_registry: CapabilityRegistry,
     assistant_event_id: str | None,
     state: AgentTurnState,
-    cancellation_event: threading.Event | None,
-    deadline: float | None,
+    ctx: TurnContext,
 ) -> AgentTurnResult | None:
     for index, tool_call in enumerate(tool_calls):
         result_event = run_capability_step(
@@ -478,16 +464,16 @@ def run_capability_calls(
             projection=projection,
             model_telemetry=(model_telemetry if index == 0 else None),
             prompt_trace=prompt_trace,
-            builder=builder,
-            event_sink=event_sink,
-            durable_event_sink=durable_event_sink,
-            session_id=session_id,
-            turn_id=turn_id,
-            tool_registry=tool_registry,
+            builder=ctx.builder,
+            event_sink=ctx.event_sink,
+            durable_event_sink=ctx.durable_event_sink,
+            session_id=ctx.session_id,
+            turn_id=ctx.turn_id,
+            tool_registry=ctx.tool_registry,
             assistant_event_id=assistant_event_id,
             state=state,
-            cancellation_event=cancellation_event,
-            deadline=deadline,
+            cancellation_event=ctx.cancellation_event,
+            deadline=ctx.deadline,
         )
         state.events.extend(result_event.events)
         state.next_model_caused_by = next_model_parent(result_event.events)

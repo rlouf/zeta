@@ -258,48 +258,37 @@ def rename_current_session(name: str) -> dict[str, Any]:
     return {"session_id": session_id(), "name": clean_name, "path": str(root)}
 
 
-def clear_current_session() -> list[str]:
-    """Remove the whole session directory and report the files it held.
-
-    Continuity lives in more than the inspectable files: the Zeta trace store
-    and the active-model selection must go too, or the next agent step resumes
-    the conversation the user just cleared.
-    """
+def clear_current_session() -> dict[str, list[str]]:
+    """Clear state scoped to the current session."""
     from . import zeta_session_for_sigil
 
-    roots = [session_dir()]
-    existing_roots = [root for root in roots if root.exists()]
-    if not existing_roots:
-        removed: list[str] = []
-    else:
-        removed = [
-            str(path)
-            for root in existing_roots
-            for path in sorted(root.rglob("*"))
-            if path.is_file()
-        ]
-        for root in existing_roots:
-            shutil.rmtree(root)
+    removed: list[str] = []
+    root = session_dir()
+    if root.exists():
+        removed = [str(path) for path in sorted(root.rglob("*")) if path.is_file()]
+        shutil.rmtree(root)
+
+    cleared: list[str] = []
     context = zeta_session_for_sigil()
     trace_store = context.trace_store
     if hasattr(trace_store, "clear_session"):
         trace_store.clear_session(session_id())  # type: ignore[attr-defined]
-        removed.append(str(trace_store.path))  # type: ignore[attr-defined]
-    removed.extend(clear_zeta_event_continuity(context.event_sink))
-    return removed
+        path = getattr(trace_store, "path", None)
+        if path is not None:
+            cleared.append(str(path))
+    cleared.extend(clear_zeta_event_continuity(context.event_sink))
+    return {"removed": removed, "cleared": sorted(set(cleared))}
 
 
 def clear_zeta_event_continuity(event_sink: Any) -> list[str]:
-    removed: list[str] = []
-    if hasattr(event_sink, "clear_session_events"):
-        event_sink.clear_session_events(  # type: ignore[attr-defined]
-            session_id(),
-            event_type_prefix="zeta.",
-        )
-        path = getattr(event_sink, "path", None)
-        if path is not None:
-            removed.append(str(path))
-    return removed
+    if not hasattr(event_sink, "clear_session_events"):
+        return []
+    event_sink.clear_session_events(  # type: ignore[attr-defined]
+        session_id(),
+        event_type_prefix="zeta.",
+    )
+    path = getattr(event_sink, "path", None)
+    return [str(path)] if path is not None else []
 
 
 RECENT_TURNS_PROMPT_LIMIT = 10

@@ -115,10 +115,10 @@ def session_rename(name: tuple[str, ...], json_output: bool) -> int:
 )
 @click.option("--json", "json_output", is_flag=True, help=JSON_HELP)
 def session_clear(json_output: bool) -> int:
-    """Remove the current session's state directory.
+    """Clear state scoped to the current session.
 
-    Deletes the session's continuity files, trace store, and bridged turn
-    objects. The global event journal survives.
+    Removes any legacy per-session files, then clears this session's trace
+    records from the shared SQLite store. The databases themselves survive.
     """
     return print_session_clear(json_output)
 
@@ -175,15 +175,18 @@ def print_session_list(json_output: bool) -> int:
 
 
 def print_session_clear(json_output: bool) -> int:
-    """Clear the current session state and report removed paths."""
-    removed = clear_current_session()
+    """Clear the current session state and report what changed."""
+    result = clear_current_session()
     if json_output:
-        pretty_print_json({"removed": removed})
+        pretty_print_json(result)
         return 0
-    if removed:
-        for path in removed:
-            print(f"removed {path}")
-    else:
+    removed = result["removed"]
+    cleared = result["cleared"]
+    for path in removed:
+        print(f"removed {path}")
+    for path in cleared:
+        print(f"cleared session records from {path}")
+    if not removed and not cleared:
         print("session already clear")
     return 0
 

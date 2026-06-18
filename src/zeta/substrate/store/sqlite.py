@@ -12,16 +12,16 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
-from .derivation import Derivation
-from .object import (
+from ..derivation import Derivation
+from ..object import (
     Object,
     ObjectId,
 )
-from .ref import (
+from ..ref import (
     Ref,
     RefUpdate,
 )
-from .store import (
+from .base import (
     StoreBase,
     TraceStats,
     UnknownSessionError,

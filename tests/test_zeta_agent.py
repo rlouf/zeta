@@ -45,7 +45,7 @@ from zeta.capabilities.base import (
 )
 from zeta.capabilities.registry import CapabilityRegistry
 from zeta.context import builder as zeta_context
-from zeta.events import DraftEvent, Event
+from zeta.events import AppendOutcome, DraftEvent, Event
 from zeta.models import chat_completions as zeta_model
 from zeta.store.events import Filter, SqliteEventStore
 from zeta.store.substrate import InMemoryStore
@@ -429,6 +429,42 @@ def test_zeta_record_model_event_sends_same_dict_to_sink() -> None:
     assert sink_events[0] is events[0]
     assert events[0]["content"] == "done"
     assert events[0]["caused_by"] == "parent-1"
+
+
+def test_zeta_record_model_event_can_emit_direct_durable_draft() -> None:
+    events: list[dict[str, Any]] = []
+    drafts: list[DraftEvent] = []
+
+    class Sink:
+        def accept(self, draft: DraftEvent) -> AppendOutcome:
+            drafts.append(draft)
+            return AppendOutcome(Event.from_draft(draft), inserted=True)
+
+    event_id, tool_calls = zeta_agent.record_model_event(
+        {"content": "done"},
+        events,
+        prompt_trace=None,
+        prompt_builder=cast(Any, None),
+        event_sink=None,
+        durable_event_sink=Sink(),
+        session_id="session-1",
+        turn_id="turn-1",
+        caused_by="parent-1",
+    )
+
+    assert isinstance(event_id, str)
+    assert tool_calls == []
+    assert len(events) == 1
+    assert len(drafts) == 1
+    assert drafts[0].event_type == "zeta.model.called"
+    assert drafts[0].payload == {
+        "_timeline_type": "model",
+        "content": "done",
+    }
+    assert drafts[0].session_id == "session-1"
+    assert drafts[0].turn_id == "turn-1"
+    assert drafts[0].caused_by == "parent-1"
+    assert drafts[0].idempotency_key == f"zeta.model.called:{event_id}"
 
 
 def test_zeta_assistant_message_round_trips_content_to_model_event() -> None:

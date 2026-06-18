@@ -24,7 +24,7 @@ from zeta.context.builder import (
     render_model_input,
 )
 from zeta.context.components import PromptTrace, prompt_trace_payload
-from zeta.events import DraftEvent
+from zeta.events import DraftEvent, EventSink
 from zeta.models import (
     CODEX_RESPONSES_API,
     ModelInput,
@@ -1050,6 +1050,9 @@ def record_model_event(
     prompt_trace: PromptTrace | None,
     prompt_builder: PromptBuilder,
     event_sink: AgentEventSink | None,
+    durable_event_sink: EventSink | None = None,
+    session_id: str | None = None,
+    turn_id: str | None = None,
     caused_by: str | None = None,
 ) -> tuple[str | None, list[dict[str, Any]]]:
     event = model_event(assistant)
@@ -1068,8 +1071,64 @@ def record_model_event(
     if tool_call_object_ids:
         event["tool_call_object_ids"] = tool_call_object_ids
     if event:
+        publish_model_draft(
+            event,
+            event_sink=durable_event_sink,
+            session_id=session_id,
+            turn_id=turn_id,
+        )
         emit_event(events, event, event_sink)
     return event_id, tool_calls
+
+
+def publish_model_draft(
+    event: dict[str, Any],
+    *,
+    event_sink: EventSink | None,
+    session_id: str | None,
+    turn_id: str | None,
+) -> None:
+    if event_sink is None or session_id is None:
+        return
+    payload = model_durable_payload(event)
+    event_sink.accept(
+        model_called_draft(
+            payload=payload,
+            turn_id=turn_id,
+            session_id=session_id,
+            caused_by=event.get("caused_by")
+            if isinstance(event.get("caused_by"), str)
+            else None,
+            event_id=event.get("id") if isinstance(event.get("id"), str) else None,
+        )
+    )
+
+
+def model_durable_payload(event: dict[str, Any]) -> dict[str, Any]:
+    payload = {
+        key: value
+        for key, value in event.items()
+        if key
+        not in {
+            "id",
+            "type",
+            "time",
+            "session",
+            "source",
+            "caused_by",
+            "prompt_trace",
+            "tool_call_object_id",
+            "tool_call_object_ids",
+            "tool_result_object_id",
+        }
+    }
+    payload["_timeline_type"] = "model"
+    used_objects, returned_objects = model_durable_object_links(event)
+    if used_objects:
+        payload["used_objects"] = used_objects
+    if returned_objects:
+        payload["returned_objects"] = returned_objects
+    return payload
 
 
 def next_model_parent(events: list[dict[str, Any]]) -> str | None:

@@ -63,7 +63,6 @@ StepName = Literal[
     "finish_run",
     "abort_run",
 ]
-Step = StepName
 
 
 @dataclass(frozen=True)
@@ -74,7 +73,7 @@ class StepEffect:
 
 @dataclass(frozen=True)
 class StepResult:
-    step: Step
+    step: StepName
     effects: tuple[StepEffect, ...] = ()
 
 

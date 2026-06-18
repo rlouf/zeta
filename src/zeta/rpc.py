@@ -15,41 +15,41 @@ from jsonschema import Draft202012Validator
 from jsonschema.exceptions import SchemaError
 
 from .agents import AgentConfig
-from .events import (
-    AgentDefinition,
-    AgentRun,
-    DraftEvent,
-    Event,
-    EventCursor,
-    EventDispatcher,
-    EventReader,
-    EventSink,
-    Filter,
-    TriggerRule,
-    event_payload_draft,
-    time_from_timestamp_micros,
-)
-from .session import Session, default_session
-from .timeline import current_timeline, record_event, timeline_event_from_durable_event
-from .tools.base import (
+from .capabilities import (
     EFFECT_KINDS,
     READ_ONLY_EFFECT_KINDS,
     Capability,
     CapabilityId,
     CapabilityPolicy,
+    CapabilityRegistry,
     CapabilityResult,
     CapabilitySpec,
     EffectKind,
+    ExecutionMode,
     error_result,
 )
-from .tools.registry import CapabilityRegistry, ExecutionMode
-from .tools.registry import registry as _runtime_tool_registry
-from .turn import (
+from .capabilities import registry as _runtime_tool_registry
+from .dispatch import AgentDefinition, AgentRun, EventDispatcher, TriggerRule
+from .events import (
+    DraftEvent,
+    Event,
+    EventCursor,
+    EventReader,
+    EventSink,
+    Filter,
+    current_timeline,
+    event_payload_draft,
+    record_event,
+    time_from_timestamp_micros,
+    timeline_event_from_durable_event,
+)
+from .loop import (
     AgentTurnAborted,
     AgentTurnResult,
     registered_capabilities,
     run_agent_turn,
 )
+from .session import Session, default_session
 
 RpcSessionRunner = Callable[[dict[str, Any]], dict[str, Any]]
 ToolCallStatus = Literal["requested", "responded", "failed", "cancelled", "timed_out"]

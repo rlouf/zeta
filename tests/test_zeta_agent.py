@@ -983,6 +983,79 @@ def test_zeta_event_dispatcher_creates_work_for_matching_agent(
     ]
 
 
+def test_zeta_event_dispatcher_matches_exact_event_type(tmp_path: Path) -> None:
+    event_store = zeta_events.SqliteEventStore(tmp_path / "events.sqlite3")
+    calls: list[str] = []
+
+    dispatcher = zeta_events.EventDispatcher(
+        event_store,
+        agents=[
+            zeta_events.AgentDefinition(
+                "exact-agent",
+                zeta_events.TriggerRule(event_type="github.issue.opened"),
+                run=lambda run: {"outcome": calls.append(run.triggering_event.id)},
+            ),
+            zeta_events.AgentDefinition(
+                "other-agent",
+                zeta_events.TriggerRule(event_type="github.issue.closed"),
+                run=lambda run: {"outcome": calls.append(run.triggering_event.id)},
+            ),
+        ],
+    )
+
+    outcome = dispatcher.dispatch(
+        zeta_events.DraftEvent(
+            "github.issue.opened",
+            "github",
+            {"title": "Bug"},
+            session_id="repo",
+        )
+    )
+
+    assert len(calls) == 1
+    assert calls == [outcome.event.id]
+    assert [event.payload["agent_id"] for event in outcome.work_events] == [
+        "exact-agent",
+        "exact-agent",
+        "exact-agent",
+    ]
+
+
+def test_zeta_event_dispatcher_records_pending_work_without_runner(
+    tmp_path: Path,
+) -> None:
+    event_store = zeta_events.SqliteEventStore(tmp_path / "events.sqlite3")
+    published: list[zeta_events.Event] = []
+    dispatcher = zeta_events.EventDispatcher(
+        event_store,
+        agents=[
+            zeta_events.AgentDefinition(
+                "issue-triage",
+                zeta_events.TriggerRule(event_type="github.issue.opened"),
+            )
+        ],
+        publish_event=published.append,
+    )
+
+    outcome = dispatcher.dispatch(
+        zeta_events.DraftEvent(
+            "github.issue.opened",
+            "github",
+            {"title": "Bug"},
+            session_id="repo",
+        )
+    )
+
+    assert [event.event_type for event in outcome.work_events] == [
+        "runtime.work.pending"
+    ]
+    assert outcome.agent_results == []
+    assert [event.event_type for event in published] == [
+        "github.issue.opened",
+        "runtime.work.pending",
+    ]
+
+
 def test_zeta_event_dispatcher_does_not_route_duplicate_events(
     tmp_path: Path,
 ) -> None:

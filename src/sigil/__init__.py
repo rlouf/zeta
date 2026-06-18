@@ -4,8 +4,8 @@ from __future__ import annotations
 
 
 def zeta_session_for_sigil():
+    from zeta.capabilities import registry
     from zeta.session import session_for_id, zeta_state_dir
-    from zeta.tools.registry import registry
 
     from .sessions import session_dir, session_id
 

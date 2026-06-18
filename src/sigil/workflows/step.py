@@ -12,23 +12,22 @@ from pathlib import Path
 from typing import Any, Literal, TextIO
 
 from zeta.agents import AgentConfig
+from zeta.capabilities import CapabilityRegistry, ExecutionMode, proposed_effect
+from zeta.capabilities import registry as _default_tool_registry
 from zeta.context import load_project_instructions, system_prompt
+from zeta.events import current_timeline, record_event
+from zeta.loop import (
+    AgentTurnAborted,
+    registered_capabilities,
+    run_agent_turn,
+)
 from zeta.models import (
     active_model_selection,
     model_selection_event,
 )
 from zeta.session import Session
 from zeta.skills import expand_skill_directive
-from zeta.timeline import current_timeline, record_event
-from zeta.tools.base import proposed_effect
-from zeta.tools.registry import CapabilityRegistry, ExecutionMode
-from zeta.tools.registry import registry as _default_tool_registry
-from zeta.trace import latest_prompt_trace_fields
-from zeta.turn import (
-    AgentTurnAborted,
-    registered_capabilities,
-    run_agent_turn,
-)
+from zeta.substrate import latest_prompt_trace_fields
 
 from ..agent_io import (
     TurnEventRecorder,

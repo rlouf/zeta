@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from zeta.tools.base import CapabilityId, CapabilitySpec, error_result
+from zeta.capabilities import CapabilityId, CapabilitySpec, error_result
 
 if TYPE_CHECKING:
     from zeta.history import HistoryView

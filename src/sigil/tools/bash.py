@@ -8,7 +8,7 @@ import subprocess
 import time
 from typing import Any
 
-from zeta.tools.base import (
+from zeta.capabilities import (
     CapabilityId,
     CapabilitySpec,
     error_result,

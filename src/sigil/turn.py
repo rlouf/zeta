@@ -7,6 +7,7 @@ import uuid
 from collections.abc import Iterable
 from typing import Any
 
+from zeta.capabilities import proposed_effect
 from zeta.history import (
     TURN_RECORD_SCHEMA,
     effect_record,
@@ -16,9 +17,13 @@ from zeta.history import (
     turn_record,
 )
 from zeta.session import Session
-from zeta.timeline import add_event_link
-from zeta.tools.base import proposed_effect
-from zeta.trace import Derivation, Object, PromptTrace, warn_trace_failure_once
+from zeta.substrate import (
+    Derivation,
+    Object,
+    PromptTrace,
+    add_event_link,
+    warn_trace_failure_once,
+)
 
 from .protocols import (
     EFFECT_KIND_COMMAND,

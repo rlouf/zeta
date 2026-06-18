@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from sigil.tools.read import snapshot_tag
-from zeta.tools.base import CapabilityId, CapabilitySpec, content_hash, error_result
+from zeta.capabilities import CapabilityId, CapabilitySpec, content_hash, error_result
 
 MAX_TOOL_RESULT_CHARS = 12_000
 

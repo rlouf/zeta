@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any, cast
 
-from zeta.trace import Object, ObjectId, SqliteStore, Store
+from zeta.substrate import Object, ObjectId, SqliteStore, Store
 
 from ..display.summarize import truncate
 

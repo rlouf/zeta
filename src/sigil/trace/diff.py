@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import difflib
 
-from zeta.trace import Object, ObjectId, Store
+from zeta.substrate import Object, ObjectId, Store
 
 from ..display.summarize import short_trace_id, trace_object_summary
 

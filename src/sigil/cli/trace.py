@@ -18,7 +18,7 @@ from zeta.events import (
     row_to_event,
 )
 from zeta.models import chat_completion_messages
-from zeta.trace import (
+from zeta.substrate import (
     DEFAULT_SQLITE_NAME,
     Derivation,
     Object,

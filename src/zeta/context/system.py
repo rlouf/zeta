@@ -8,9 +8,9 @@ from typing import Any
 
 from jinja2 import Environment, StrictUndefined
 
+from ..capabilities import CapabilityRegistry
+from ..capabilities import registry as _runtime_tool_registry
 from ..skills import Skill, available_skills
-from ..tools.registry import CapabilityRegistry
-from ..tools.registry import registry as _runtime_tool_registry
 
 PROMPT_TEMPLATE_ENV = Environment(
     autoescape=False,

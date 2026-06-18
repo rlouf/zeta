@@ -53,6 +53,7 @@ from zeta.events import (
     DraftEvent,
     EventCursor,
     Filter,
+    MemoryEventStore,
     SqliteEventStore,
     durable_event,
     event_store_path,
@@ -464,6 +465,72 @@ def test_sqlite_event_store_filters_and_cursors(tmp_path: Path) -> None:
     assert [event.id for event in after_first] == [
         event.id for event in store.list_events(Filter()) if event.id != first.id
     ]
+
+
+@pytest.mark.parametrize(
+    "store_name",
+    [
+        pytest.param("memory", id="memory"),
+        pytest.param("sqlite", id="sqlite"),
+    ],
+)
+def test_event_stores_share_ordering_idempotency_and_filter_semantics(
+    store_name: str,
+    tmp_path: Path,
+) -> None:
+    event_store: MemoryEventStore | SqliteEventStore
+    if store_name == "sqlite":
+        event_store = SqliteEventStore(tmp_path / "events.sqlite3")
+    else:
+        event_store = MemoryEventStore()
+    first = event_store.accept(
+        DraftEvent(
+            event_type="zeta.model.called",
+            source="zeta",
+            payload={"content": "first"},
+            session_id="s1",
+            idempotency_key="model:first",
+            timestamp_micros=2,
+            event_id="z-event",
+        )
+    ).event
+    duplicate = event_store.accept(
+        DraftEvent(
+            event_type="zeta.model.called",
+            source="zeta",
+            payload={"content": "replayed"},
+            session_id="s1",
+            idempotency_key="model:first",
+            timestamp_micros=3,
+            event_id="other-event",
+        )
+    )
+    second = event_store.accept(
+        DraftEvent(
+            event_type="zeta.tool.called",
+            source="zeta",
+            payload={"name": "read"},
+            caused_by=first.id,
+            session_id="s1",
+            timestamp_micros=1,
+            event_id="a-event",
+        )
+    ).event
+
+    assert duplicate.inserted is False
+    assert duplicate.event == first
+    assert [event.id for event in event_store.list_events(Filter())] == [
+        first.id,
+        second.id,
+    ]
+    assert event_store.list_events(Filter(session_id="s1", caused_by=first.id)) == [
+        second
+    ]
+    assert event_store.list_events(Filter(after=EventCursor.from_event(first))) == [
+        second
+    ]
+    assert event_store.children(first.id) == [second]
+    assert event_store.causal_chain(second.id) == [first, second]
 
 
 def test_sqlite_event_store_orders_by_append_sequence(tmp_path: Path) -> None:

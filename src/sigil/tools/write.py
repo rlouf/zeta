@@ -6,7 +6,7 @@ import shlex
 from pathlib import Path
 from typing import Any
 
-from zeta.tools.base import (
+from zeta.capabilities import (
     CapabilityId,
     CapabilitySpec,
     change_hashes,

@@ -8,8 +8,8 @@ from typing import Any, Protocol
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import ValidationError
 
+from ...capabilities import content_hash
 from ...models import chat_structured_output
-from ...tools.base import content_hash
 from ..components import PromptComponent
 
 TASK_STATE_RESPONSE_NAME = "zeta_task_state"

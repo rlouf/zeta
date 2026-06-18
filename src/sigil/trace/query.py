@@ -6,7 +6,7 @@ from typing import Any
 
 import click
 
-from zeta.trace import (
+from zeta.substrate import (
     AmbiguousIdError,
     Object,
     ObjectId,

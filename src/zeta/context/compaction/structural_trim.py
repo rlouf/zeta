@@ -6,7 +6,7 @@ import json
 from dataclasses import replace
 from typing import Any
 
-from ...tools.base import content_hash
+from ...capabilities import content_hash
 from ..budget import render_stub
 from ..components import PromptComponent
 

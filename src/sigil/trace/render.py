@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from zeta.trace import Object, ObjectId, Store
+from zeta.substrate import Object, ObjectId, Store
 
 from ..display.summarize import short_trace_id, text_content, trace_object_summary
 

@@ -8,9 +8,9 @@ import time
 from collections.abc import Callable
 from typing import Any, cast
 
+from zeta.capabilities import proposed_effect
 from zeta.context.budget import estimated_tokens_for_text
-from zeta.tools.base import proposed_effect
-from zeta.trace import Object
+from zeta.substrate import Object
 
 from ..protocols import (
     SHELL_HANDOFF_OUTCOME_CANCELLED,

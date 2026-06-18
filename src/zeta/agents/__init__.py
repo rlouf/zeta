@@ -1,0 +1,95 @@
+"""Declarative authored-agent specs for Zeta runtimes."""
+
+from __future__ import annotations
+
+from .capabilities import AgentConfig
+from .events import EventEnvelope, EventRegistry, EventRegistryError
+from .loader import load_specs_recursive
+from .manifest import (
+    Manifest,
+    ManifestError,
+    validate_events,
+    validate_extensions,
+    validate_tools,
+)
+from .prompts import TemplateError, render_prompt, validate_prompt
+from .resources import resource_extensions
+from .returns import derive_returns_schema
+from .runtime import (
+    AgentTurnRunner,
+    ContextFactory,
+    TimelineFactory,
+    agent_runner,
+    agent_turn_result_mapping,
+    compile_agent_definition,
+    compile_agent_definitions,
+    config_for_spec,
+    default_agent_turn_runner,
+)
+from .spec import (
+    BUILT_IN_FRONTMATTER_KEYS,
+    SLUG_PATTERN,
+    AgentSpec,
+    ScheduleEntry,
+    SpecError,
+    bool_field,
+    derive_slug,
+    load_spec,
+    matches,
+    relative_to_cwd,
+    required_schedule_string,
+    required_string,
+    schedule_entry,
+    schedule_payload,
+    schedule_timezone,
+    schedule_tuple,
+    split_frontmatter,
+    string_tuple,
+    validate_schedules_subset_of_accepts,
+)
+
+__all__ = [
+    "AgentConfig",
+    "AgentSpec",
+    "AgentTurnRunner",
+    "BUILT_IN_FRONTMATTER_KEYS",
+    "ContextFactory",
+    "EventEnvelope",
+    "EventRegistry",
+    "EventRegistryError",
+    "Manifest",
+    "ManifestError",
+    "SLUG_PATTERN",
+    "ScheduleEntry",
+    "SpecError",
+    "TemplateError",
+    "TimelineFactory",
+    "agent_runner",
+    "agent_turn_result_mapping",
+    "bool_field",
+    "compile_agent_definition",
+    "compile_agent_definitions",
+    "config_for_spec",
+    "default_agent_turn_runner",
+    "derive_returns_schema",
+    "derive_slug",
+    "load_spec",
+    "load_specs_recursive",
+    "matches",
+    "relative_to_cwd",
+    "render_prompt",
+    "required_schedule_string",
+    "required_string",
+    "resource_extensions",
+    "schedule_entry",
+    "schedule_payload",
+    "schedule_timezone",
+    "schedule_tuple",
+    "split_frontmatter",
+    "string_tuple",
+    "validate_events",
+    "validate_extensions",
+    "validate_prompt",
+    "validate_schedules_subset_of_accepts",
+    "validate_tools",
+]

@@ -78,7 +78,7 @@ def _test_capability(
     )
 
 
-def test_zeta_tool_registry_registers_and_lists_tools() -> None:
+def test_zeta_capability_registry_registers_and_lists_capabilities() -> None:
     capability = _test_capability("unit", effects=("read",))
     registry = CapabilityRegistry()
 
@@ -89,7 +89,7 @@ def test_zeta_tool_registry_registers_and_lists_tools() -> None:
     assert capability.spec.metadata()["id"] == "test.unit"
 
 
-def test_zeta_tool_registry_rejects_invalid_tool_schema() -> None:
+def test_zeta_capability_registry_rejects_invalid_capability_schema() -> None:
     registry = CapabilityRegistry()
     capability = _test_capability(
         "bad",
@@ -100,7 +100,7 @@ def test_zeta_tool_registry_rejects_invalid_tool_schema() -> None:
         registry.register(capability)
 
 
-def test_zeta_tool_registry_refuses_undeclared_effects_in_stage_mode() -> None:
+def test_zeta_capability_registry_refuses_undeclared_effects_in_stage_mode() -> None:
     registry = CapabilityRegistry()
     registry.register(_test_capability("unit"))
 
@@ -111,7 +111,7 @@ def test_zeta_tool_registry_refuses_undeclared_effects_in_stage_mode() -> None:
     assert "undeclared" in result["error"]["message"]
 
 
-def test_zeta_tool_registry_requires_direct_execution_permission() -> None:
+def test_zeta_capability_registry_requires_direct_execution_permission() -> None:
     registry = CapabilityRegistry()
     registry.register(
         _test_capability(
@@ -133,7 +133,7 @@ def test_zeta_tool_registry_requires_direct_execution_permission() -> None:
     }
 
 
-def test_zeta_tool_registry_normalizes_malformed_executor_result() -> None:
+def test_zeta_capability_registry_normalizes_malformed_executor_result() -> None:
     registry = CapabilityRegistry()
     registry.register(
         _test_capability(
@@ -241,7 +241,7 @@ def test_zeta_capability_result_payload_normalizes_malformed_result_to_error() -
     }
 
 
-def test_zeta_tool_registry_converts_executor_exception_to_error_result() -> None:
+def test_zeta_capability_registry_converts_executor_exception_to_error_result() -> None:
     registry = CapabilityRegistry()
 
     def crash(params: dict[str, Any]) -> dict[str, Any]:
@@ -277,7 +277,7 @@ def test_zeta_tool_registry_converts_executor_exception_to_error_result() -> Non
     }
 
 
-def test_zeta_tool_registry_rejects_low_trust_mutating_direct_execution() -> None:
+def test_zeta_capability_registry_rejects_low_trust_mutating_direct_execution() -> None:
     registry = CapabilityRegistry()
     registry.register(
         _test_capability(
@@ -301,7 +301,7 @@ def test_zeta_tool_registry_rejects_low_trust_mutating_direct_execution() -> Non
     }
 
 
-def test_zeta_tool_registry_allows_low_trust_mutating_stage_execution() -> None:
+def test_zeta_capability_registry_allows_low_trust_mutating_stage_execution() -> None:
     registry = CapabilityRegistry()
     registry.register(
         _test_capability(
@@ -387,7 +387,7 @@ def test_zeta_capability_projection_can_use_qualified_aliases() -> None:
     ] == ["host.read", "rpc.read"]
 
 
-def test_zeta_tool_registry_starts_empty() -> None:
+def test_zeta_capability_registry_starts_empty() -> None:
     registry = CapabilityRegistry()
 
     assert registry.list_capability_ids() == []
@@ -429,8 +429,8 @@ def test_sigil_ensures_shared_zeta_registry_has_builtins() -> None:
     assert "sigil.web_fetch" not in names
 
 
-def test_zeta_tool_registry_does_not_import_sigil_tools() -> None:
-    source = Path("src/zeta/tools/registry.py").read_text(encoding="utf-8")
+def test_zeta_capability_registry_does_not_import_sigil_tools() -> None:
+    source = Path("src/zeta/capabilities/registry.py").read_text(encoding="utf-8")
     tree = ast.parse(source)
     imports = []
     for node in ast.walk(tree):

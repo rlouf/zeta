@@ -8,9 +8,9 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from .capabilities import CapabilityRegistry
     from .events import EventSink
-    from .tools.registry import CapabilityRegistry
-    from .trace import Store
+    from .substrate import Store
 
 
 @dataclass(frozen=True)
@@ -45,10 +45,10 @@ def session_for_id(
 ) -> Session:
     """Build the default Zeta runtime dependencies for one session."""
     from .events import SqliteEventStore, event_store_path
-    from .trace import SqliteStore, zeta_sqlite_path
+    from .substrate import SqliteStore, zeta_sqlite_path
 
     if tool_registry is None:
-        from .tools.registry import registry as tool_registry
+        from .capabilities import registry as tool_registry
 
     return Session(
         session_id=session_id,

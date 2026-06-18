@@ -2,21 +2,20 @@
 
 from __future__ import annotations
 
+import json
 import os
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
+from ..capabilities import content_hash, effect_resolution, proposed_effect
 from ..skills import Skill, available_skills, expand_skill_directive
-from ..timeline import (
-    ChatMessageEntry,
-    _chat_message_entries,
+from ..substrate import (
+    Object,
+    ObjectId,
     add_event_link,
-    from_message_boundary,
     trace_object_id,
 )
-from ..tools.base import content_hash
-from ..trace import Object, ObjectId
 from .system import (
     can_read_skill_files,
     enabled_capability_ids,
@@ -58,6 +57,15 @@ class PromptComponent:
         return self.links
 
 
+@dataclass(frozen=True)
+class ChatMessageEntry:
+    """A rendered chat message plus the timeline event that produced it."""
+
+    event_index: int
+    event: dict[str, Any]
+    message: dict[str, Any]
+
+
 def zeta_context_message(
     objective: str,
     *,
@@ -71,6 +79,244 @@ def zeta_context_message(
     if context.strip():
         sections.append(context.strip())
     return "\n\n".join(sections)
+
+
+def from_message_boundary(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Drop leading tool results whose calls fell outside a timeline window.
+
+    The event-count tail can open mid tool exchange; an orphaned result
+    renders as a raw JSON dump in the prompt. Reconciliation reads the raw
+    timeline, so this trim belongs to the model-facing conversion only.
+    """
+    start = 0
+    while start < len(events):
+        if str(events[start].get("type") or "") != "tool_result":
+            break
+        start += 1
+    return events[start:]
+
+
+def tool_result_event_from_message(message: dict[str, Any]) -> dict[str, Any]:
+    event: dict[str, Any] = {
+        "type": "tool_result",
+        "tool_call_id": str(message.get("tool_call_id") or ""),
+    }
+    content = message.get("content")
+    if isinstance(content, str):
+        try:
+            result = json.loads(content)
+        except json.JSONDecodeError:
+            result = {"content": content}
+        if isinstance(result, dict):
+            event["result"] = result
+    return event
+
+
+def chat_messages(
+    timeline: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    return [entry.message for entry in _chat_message_entries(timeline)]
+
+
+def _chat_message_entries(
+    timeline: list[dict[str, Any]],
+) -> list[ChatMessageEntry]:
+    entries: list[ChatMessageEntry] = []
+    tool_call_ids: set[str] = set()
+    resolved_effects = resolved_effect_call_ids(timeline)
+    for index, event in enumerate(timeline):
+        message = timeline_chat_message(
+            event,
+            index=index,
+            tool_call_ids=tool_call_ids,
+            resolved_effects=resolved_effects,
+        )
+        if message is not None:
+            entries.append(ChatMessageEntry(index, event, message))
+            record_tool_call_ids(message, tool_call_ids)
+    return entries
+
+
+def timeline_chat_message(
+    event: dict[str, Any],
+    *,
+    index: int,
+    tool_call_ids: set[str],
+    resolved_effects: set[str],
+) -> dict[str, Any] | None:
+    message = role_or_event_chat_message(event)
+    if message is not None:
+        return message
+    event_type = str(event.get("type") or "")
+    if event_type == "tool_call":
+        tool_call_id = str(event.get("id") or event.get("tool_call_id") or "")
+        if tool_call_id and tool_call_id in tool_call_ids:
+            return None
+        return tool_call_message(event, fallback_id=f"call-{index}")
+    if event_type == "tool_result":
+        if is_resolved_proposed_effect(event, resolved_effects):
+            return None
+        return tool_result_message(event, tool_call_ids)
+    return None
+
+
+def resolved_effect_call_ids(timeline: list[dict[str, Any]]) -> set[str]:
+    """Return tool call ids that have a proposed-effect resolution."""
+    resolved: set[str] = set()
+    for event in timeline:
+        if str(event.get("type") or "") != "tool_result":
+            continue
+        result = event.get("result")
+        if not isinstance(result, dict) or effect_resolution(result) is None:
+            continue
+        tool_call_id = str(event.get("tool_call_id") or "")
+        if tool_call_id:
+            resolved.add(tool_call_id)
+    return resolved
+
+
+def is_resolved_proposed_effect(
+    event: dict[str, Any],
+    resolved_effects: set[str],
+) -> bool:
+    """Return whether this proposal was superseded by a resolution result."""
+    tool_call_id = str(event.get("tool_call_id") or "")
+    if not tool_call_id or tool_call_id not in resolved_effects:
+        return False
+    result = event.get("result")
+    if not isinstance(result, dict):
+        return False
+    effect = proposed_effect(result)
+    return effect is not None
+
+
+def role_or_event_chat_message(event: dict[str, Any]) -> dict[str, Any] | None:
+    role = str(event.get("role") or "")
+    if role not in {"user", "assistant"}:
+        role = {
+            "user_message": "user",
+            "model": "assistant",
+            "turn_aborted": "assistant",
+        }.get(str(event.get("type") or ""), "")
+    if not role:
+        return None
+    content = str(event.get("content") or "")
+    tool_calls = event.get("tool_calls")
+    if isinstance(tool_calls, list) and role == "assistant":
+        return {
+            "role": "assistant",
+            "content": content or None,
+            "tool_calls": [renderable_tool_call(call) for call in tool_calls],
+        }
+    if not content:
+        return None
+    return {"role": role, "content": content}
+
+
+def renderable_tool_call(call: Any) -> Any:
+    """Repair tool call arguments that are not valid JSON.
+
+    A recorded tool call can carry truncated arguments; chat templates refuse to
+    render them, which would fail every later prompt in the session.
+    """
+    if not isinstance(call, dict):
+        return call
+    function = call.get("function")
+    if not isinstance(function, dict):
+        return call
+    arguments = function.get("arguments")
+    if not isinstance(arguments, str):
+        return call
+    try:
+        json.loads(arguments)
+    except json.JSONDecodeError:
+        repaired = json.dumps(
+            {"truncated_arguments": arguments[:200]},
+            ensure_ascii=False,
+        )
+        return {**call, "function": {**function, "arguments": repaired}}
+    return call
+
+
+def record_tool_call_ids(
+    message: dict[str, Any],
+    tool_call_ids: set[str],
+) -> None:
+    tool_calls = message.get("tool_calls")
+    if not isinstance(tool_calls, list):
+        return
+    for call in tool_calls:
+        if isinstance(call, dict):
+            tool_call_ids.add(str(call.get("id") or ""))
+
+
+def tool_call_message(
+    event: dict[str, Any],
+    *,
+    fallback_id: str,
+) -> dict[str, Any]:
+    tool_call_id = str(event.get("id") or event.get("tool_call_id") or fallback_id)
+    tool_name = str(event.get("name") or "")
+    tool_input = event.get("input")
+    if not isinstance(tool_input, dict):
+        tool_input = {}
+    return {
+        "role": "assistant",
+        "content": None,
+        "tool_calls": [
+            {
+                "id": tool_call_id,
+                "type": "function",
+                "function": {
+                    "name": tool_name,
+                    "arguments": json.dumps(
+                        tool_input,
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    ),
+                },
+            }
+        ],
+    }
+
+
+RENDERED_EVENT_PRIVATE_FIELDS = frozenset(
+    {
+        "prompt_trace",
+        "tool_call_object_id",
+        "tool_result_object_id",
+        "prompt_component_object_id",
+        "source_object_id",
+        "model_telemetry",
+    }
+)
+
+
+def tool_result_message(
+    event: dict[str, Any],
+    tool_call_ids: set[str],
+) -> dict[str, Any]:
+    tool_call_id = str(event.get("tool_call_id") or "")
+    if tool_call_id and tool_call_id in tool_call_ids:
+        return {
+            "role": "tool",
+            "tool_call_id": tool_call_id,
+            "content": json.dumps(
+                event.get("result") or {},
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ),
+        }
+    rendered = {
+        key: value
+        for key, value in event.items()
+        if key not in RENDERED_EVENT_PRIVATE_FIELDS
+    }
+    return {
+        "role": "user",
+        "content": "Tool result JSON:\n"
+        + json.dumps(rendered, ensure_ascii=False, separators=(",", ":")),
+    }
 
 
 def prompt_components(

@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from zeta.history import import_history_records
-from zeta.trace import export_trace_refs, import_trace_graph
+from zeta.substrate import export_trace_refs, import_trace_graph
 
 from .state import event_store_path, history_view
 

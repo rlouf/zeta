@@ -13,7 +13,7 @@ from zeta.models import (
     resolve_active_model,
     resolve_model_profile,
 )
-from zeta.trace import Derivation, Object, ObjectId, Store, warn_trace_failure_once
+from zeta.substrate import Derivation, Object, ObjectId, Store, warn_trace_failure_once
 
 from ..display.summarize import (
     assistant_trace_message,

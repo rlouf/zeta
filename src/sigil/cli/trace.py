@@ -13,6 +13,7 @@ from zeta.substrate import (
     UnknownSessionError,
     available_session_ids,
     open_existing_trace_store,
+    zeta_sqlite_path,
 )
 
 from ..trace.diff import render_prompt_diff
@@ -109,6 +110,35 @@ def open_session_store(session_id: str) -> SqliteStore:
         raise click.ClickException(
             f"no trace store for session '{error.session_id}' (recorded: {available})"
         ) from error
+
+
+@trace_group.command(
+    "reinit-store",
+    epilog=examples(
+        "sigil trace reinit-store",
+        "sigil trace reinit-store --yes",
+    ),
+)
+@click.option(
+    "--yes",
+    is_flag=True,
+    help="Recreate the unified Zeta SQLite database without prompting.",
+)
+def trace_reinit_store(yes: bool) -> int:
+    """Recreate the local Zeta SQLite database."""
+    path = zeta_sqlite_path()
+    if not yes:
+        click.confirm(
+            f"Delete and recreate {path}?",
+            abort=True,
+            err=True,
+        )
+    if path.exists():
+        path.unlink()
+    store = SqliteStore(path)
+    store.close()
+    click.echo(f"reinitialized {path}")
+    return 0
 
 
 @trace_group.command(

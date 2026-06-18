@@ -269,6 +269,11 @@ class SqliteStore(StoreBase):
 
     def _init_schema(self) -> None:
         with self._write_lock:
+            if self._schema_is_incompatible():
+                raise sqlite3.OperationalError(
+                    "incompatible Zeta SQLite schema; run "
+                    "`sigil trace reinit-store --yes` to recreate the local store"
+                )
             self.connection.executescript(
                 """
                 CREATE TABLE IF NOT EXISTS objects (
@@ -320,6 +325,38 @@ class SqliteStore(StoreBase):
                 """
             )
             self.connection.commit()
+
+    def _schema_is_incompatible(self) -> bool:
+        required_columns = {
+            "objects": {"id", "kind", "schema", "data_json", "links_json"},
+            "refs": {"scope", "name", "object_id"},
+            "derivations": {
+                "id",
+                "session_id",
+                "producer",
+                "output_id",
+                "input_ids_json",
+                "params_json",
+                "created_at",
+            },
+            "derivation_inputs": {
+                "session_id",
+                "derivation_id",
+                "input_id",
+                "position",
+            },
+        }
+        for table, columns in required_columns.items():
+            existing = self._table_columns(table)
+            if existing and not columns.issubset(existing):
+                return True
+        return False
+
+    def _table_columns(self, table: str) -> set[str]:
+        return {
+            str(row["name"])
+            for row in self.connection.execute(f"PRAGMA table_info({table})")
+        }
 
     def _index_derivation_inputs(
         self,

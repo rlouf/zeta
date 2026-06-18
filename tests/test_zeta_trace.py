@@ -235,6 +235,81 @@ def test_zeta_trace_sqlite_persists_objects_refs_derivations_and_closure(
     reopened.close()
 
 
+def test_zeta_trace_sqlite_reports_incompatible_substrate_schema(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "zeta.sqlite3"
+    connection = sqlite3.connect(path)
+    connection.executescript(
+        """
+        CREATE TABLE derivations (
+          id TEXT NOT NULL,
+          producer TEXT NOT NULL,
+          output_id TEXT NOT NULL,
+          input_ids_json TEXT NOT NULL,
+          params_json TEXT NOT NULL,
+          created_at REAL NOT NULL
+        );
+        CREATE TABLE events (
+          seq INTEGER PRIMARY KEY AUTOINCREMENT,
+          id TEXT UNIQUE NOT NULL,
+          type TEXT NOT NULL,
+          source TEXT NOT NULL,
+          payload TEXT NOT NULL,
+          idempotency_key TEXT,
+          caused_by TEXT,
+          session_id TEXT,
+          turn_id TEXT,
+          timestamp INTEGER NOT NULL
+        ) STRICT;
+        INSERT INTO events (id, type, source, payload, timestamp)
+        VALUES ('evt_existing', 'zeta.test', 'test', '{}', 1);
+        """
+    )
+    connection.close()
+
+    with pytest.raises(sqlite3.OperationalError, match="reinit-store --yes"):
+        zeta_trace.SqliteStore(path, session_id="current")
+
+
+def test_sigil_trace_reinit_store_recreates_unified_database(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ZETA_STATE_DIR", str(tmp_path))
+    path = tmp_path / "zeta.sqlite3"
+    connection = sqlite3.connect(path)
+    connection.executescript(
+        """
+        CREATE TABLE derivations (
+          id TEXT NOT NULL,
+          producer TEXT NOT NULL,
+          output_id TEXT NOT NULL,
+          input_ids_json TEXT NOT NULL,
+          params_json TEXT NOT NULL,
+          created_at REAL NOT NULL
+        );
+        """
+    )
+    connection.close()
+
+    result = CliRunner().invoke(sigil_cli, ["trace", "reinit-store", "--yes"])
+
+    assert result.exit_code == 0
+    assert f"reinitialized {path}" in result.output
+    connection = sqlite3.connect(path)
+    connection.row_factory = sqlite3.Row
+    try:
+        columns = {
+            str(row["name"])
+            for row in connection.execute("PRAGMA table_info(derivations)")
+        }
+    finally:
+        connection.close()
+
+    assert "session_id" in columns
+
+
 def seed_session_store(session_id: str, text: str) -> str:
     """Write one prompt object into a named session's trace store."""
     return seed_trace_store(zeta_trace.zeta_sqlite_path(), text, session_id=session_id)

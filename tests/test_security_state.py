@@ -219,7 +219,7 @@ def test_status_dispatch_does_not_load_workflow_modules() -> None:
             "assert code in (0, 1), code; "
             "heavy = [name for name in sys.modules "
             "if name.startswith('sigil.workflows') or name.startswith('rich') "
-            "or name in ('zeta.models.chat_completions', 'zeta.turn', 'jsonschema')]; "
+            "or name in ('zeta.models.chat_completions', 'zeta.loop', 'jsonschema')]; "
             "assert not heavy, heavy"
         )
         subprocess.run(
@@ -244,7 +244,7 @@ def test_spool_ingestion_does_not_load_display_or_model() -> None:
             "assert count == 1, count; "
             "heavy = [name for name in sys.modules "
             "if name.startswith('sigil.display') "
-            "or name.startswith('zeta.turn') "
+            "or name.startswith('zeta.loop') "
             "or name.startswith('zeta.model') "
             "or name.startswith('rich')]; "
             "assert not heavy, heavy"
@@ -1981,7 +1981,7 @@ def test_ask_omits_failure_context_after_successful_turn() -> None:
 
 def test_fresh_ask_only_includes_shell_activity_since_last_response() -> None:
     from sigil import zeta_session_for_sigil
-    from zeta import timeline as zeta_timeline
+    from zeta import events as zeta_timeline
 
     with tempfile.TemporaryDirectory() as tmp:
         with patch_dict(
@@ -2011,7 +2011,7 @@ def test_fresh_ask_only_includes_shell_activity_since_last_response() -> None:
 
 def test_fresh_ask_omits_failure_context_already_seen_by_the_model() -> None:
     from sigil import zeta_session_for_sigil
-    from zeta import timeline as zeta_timeline
+    from zeta import events as zeta_timeline
 
     with tempfile.TemporaryDirectory() as tmp:
         with patch_dict(
@@ -2132,7 +2132,7 @@ def test_events_raw_requires_json() -> None:
 
 def test_session_transcript_renders_conversation() -> None:
     from sigil import zeta_session_for_sigil
-    from zeta import timeline as zeta_timeline
+    from zeta import events as zeta_timeline
 
     with tempfile.TemporaryDirectory() as tmp:
         with patch_dict(
@@ -2158,7 +2158,7 @@ def test_session_transcript_renders_conversation() -> None:
 
 def test_session_transcript_limits_and_dumps_json() -> None:
     from sigil import zeta_session_for_sigil
-    from zeta import timeline as zeta_timeline
+    from zeta import events as zeta_timeline
 
     with tempfile.TemporaryDirectory() as tmp:
         with patch_dict(

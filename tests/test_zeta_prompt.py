@@ -24,7 +24,15 @@ from sigil.tools import ensure_builtin_tools_registered
 from zeta import context as zeta_context
 from zeta import models as zeta_models_api
 from zeta import skills as zeta_skills
-from zeta import trace as zeta_trace
+from zeta import substrate as zeta_trace
+from zeta.capabilities import (
+    Capability,
+    CapabilityId,
+    CapabilityPolicy,
+    CapabilityRegistry,
+    CapabilitySpec,
+    InProcessCapabilityExecutor,
+)
 from zeta.context.instructions import (
     MAX_INSTRUCTION_FILE_CHARS,
     MAX_INSTRUCTION_TOTAL_CHARS,
@@ -32,14 +40,6 @@ from zeta.context.instructions import (
 )
 from zeta.context.system import model_capability_descriptors
 from zeta.models import chat_completions as zeta_model
-from zeta.tools.base import (
-    Capability,
-    CapabilityId,
-    CapabilityPolicy,
-    CapabilitySpec,
-    InProcessCapabilityExecutor,
-)
-from zeta.tools.registry import CapabilityRegistry
 
 ensure_builtin_tools_registered()
 

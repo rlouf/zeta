@@ -24,7 +24,7 @@ from .refs import (
     UnknownIdError,
 )
 
-LOGGER = logging.getLogger("zeta.trace")
+LOGGER = logging.getLogger("zeta.substrate")
 _WARNED_FAILURES: set[str] = set()
 
 

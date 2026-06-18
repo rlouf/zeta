@@ -19,9 +19,10 @@ from sigil.cli import cli as sigil_cli
 from sigil.display.summarize import assistant_trace_summary
 from sigil.trace.replay import latest_model_answer
 from zeta import context as zeta_context
-from zeta import timeline as zeta_timeline
-from zeta import trace as zeta_trace
-from zeta import turn as zeta_agent
+from zeta import events as zeta_timeline
+from zeta import loop as zeta_agent
+from zeta import substrate as zeta_trace
+from zeta.context.components import chat_messages
 from zeta.events import Filter, SqliteEventStore, event_store_path
 from zeta.models import profiles as zeta_models
 from zeta.session import Session, default_session
@@ -1034,7 +1035,7 @@ def test_zeta_timeline_rehydrates_assistant_reasoning_from_the_graph(
 
     assert_no_trace_timeline_chain(store)
 
-    messages = zeta_timeline.chat_messages(events)
+    messages = chat_messages(events)
     assert "reasoning" not in messages[-1]
     assert "reasoning_content" not in messages[-1]
 
@@ -1128,7 +1129,7 @@ def test_zeta_orphan_tool_result_rendering_strips_trace_fields() -> None:
         "prompt_trace": {"prompt_object_id": "sha256:prompt"},
     }
 
-    messages = zeta_timeline.chat_messages([event])
+    messages = chat_messages([event])
 
     assert len(messages) == 1
     assert messages[0]["role"] == "user"
@@ -1155,7 +1156,7 @@ def test_zeta_chat_messages_repairs_truncated_tool_call_arguments() -> None:
         ],
     }
 
-    messages = zeta_timeline.chat_messages([event])
+    messages = chat_messages([event])
 
     assert len(messages) == 1
     call = messages[0]["tool_calls"][0]
@@ -1178,7 +1179,7 @@ def test_zeta_chat_messages_keeps_valid_tool_call_arguments() -> None:
         ],
     }
 
-    messages = zeta_timeline.chat_messages([event])
+    messages = chat_messages([event])
 
     assert messages[0]["tool_calls"][0]["function"]["arguments"] == (
         '{"path": "doc.md"}'

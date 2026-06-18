@@ -13,8 +13,8 @@ from pathlib import Path
 from typing import Any, cast
 
 from zeta import context as zeta_context
-from zeta import trace as zeta_trace
-from zeta import turn as zeta_agent
+from zeta import loop as zeta_agent
+from zeta import substrate as zeta_trace
 from zeta.models import chat_completions as zeta_model
 
 

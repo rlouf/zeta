@@ -8,17 +8,18 @@ from typing import Any
 import pytest
 
 from zeta import agents as zeta_agents
+from zeta import dispatch as zeta_dispatch
 from zeta import events as zeta_events
 from zeta.agents import AgentConfig
-from zeta.tools.base import (
+from zeta.capabilities import (
     Capability,
     CapabilityId,
     CapabilityPolicy,
+    CapabilityRegistry,
     CapabilitySpec,
     InProcessCapabilityExecutor,
 )
-from zeta.tools.registry import CapabilityRegistry
-from zeta.turn import AgentTurnResult
+from zeta.loop import AgentTurnResult
 
 
 def _write_spec(path: Path, content: str) -> Path:
@@ -242,7 +243,7 @@ User asked: {{ event.payload.text }}
 
     compiled = zeta_agents.compile_agent_definition(spec, run_turn=run_turn)
     store = zeta_events.SqliteEventStore(tmp_path / "events.sqlite3")
-    dispatcher = zeta_events.EventDispatcher(store, agents=[compiled])
+    dispatcher = zeta_dispatch.EventDispatcher(store, agents=[compiled])
 
     outcome = dispatcher.dispatch(
         zeta_events.DraftEvent(

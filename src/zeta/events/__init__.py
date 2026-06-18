@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from typing import Any
-
 from .event import (
     AppendOutcome,
     DraftEvent,
@@ -81,17 +79,6 @@ from .timeline import (
     timeline_session_id,
 )
 
-_DISPATCH_EXPORTS = {
-    "AgentDefinition",
-    "AgentRun",
-    "DispatchMode",
-    "DispatchOutcome",
-    "EventDispatcher",
-    "TriggerRule",
-    "terminal_work_event_type",
-    "work_id_for_event",
-}
-
 __all__ = [
     "AppendOutcome",
     "DraftEvent",
@@ -165,13 +152,3 @@ __all__ = [
     "tool_called_event",
     "turn_idempotency_key",
 ]
-
-
-def __getattr__(name: str) -> Any:
-    if name in _DISPATCH_EXPORTS:
-        from .. import dispatch
-
-        value = getattr(dispatch, name)
-        globals()[name] = value
-        return value
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

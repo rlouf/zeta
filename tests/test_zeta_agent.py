@@ -30,23 +30,24 @@ from sigil.cli import cli
 from sigil.tools import ensure_builtin_tools_registered
 from zeta import cli as zeta_cli
 from zeta import context as zeta_context
+from zeta import dispatch as zeta_dispatch
 from zeta import events as zeta_events
+from zeta import loop as zeta_agent
 from zeta import models as zeta_models_api
 from zeta import rpc as zeta_rpc
 from zeta import session as zeta_session
-from zeta import trace as zeta_trace
-from zeta import turn as zeta_agent
-from zeta.models import chat_completions as zeta_model
-from zeta.tools.base import (
+from zeta import substrate as zeta_trace
+from zeta.capabilities import (
     Capability,
     CapabilityId,
     CapabilityPolicy,
+    CapabilityRegistry,
     CapabilitySpec,
     EffectKind,
     InProcessCapabilityExecutor,
     TrustLevel,
 )
-from zeta.tools.registry import CapabilityRegistry
+from zeta.models import chat_completions as zeta_model
 
 ensure_builtin_tools_registered()
 
@@ -880,8 +881,8 @@ def test_zeta_rpc_session_run_rejects_invalid_workflow() -> None:
 
 
 def test_zeta_event_trigger_rule_matches_exact_and_prefix() -> None:
-    exact = zeta_events.TriggerRule(event_type="session.turn.requested")
-    prefix = zeta_events.TriggerRule(event_type_prefix="github.issue.")
+    exact = zeta_dispatch.TriggerRule(event_type="session.turn.requested")
+    prefix = zeta_dispatch.TriggerRule(event_type_prefix="github.issue.")
     event = zeta_events.DraftEvent(
         "session.turn.requested",
         "test",
@@ -904,7 +905,7 @@ def test_zeta_event_trigger_rule_matches_exact_and_prefix() -> None:
 def test_zeta_event_dispatcher_persists_unmatched_event(tmp_path: Path) -> None:
     event_store = zeta_events.SqliteEventStore(tmp_path / "events.sqlite3")
     published: list[zeta_events.Event] = []
-    dispatcher = zeta_events.EventDispatcher(
+    dispatcher = zeta_dispatch.EventDispatcher(
         event_store,
         publish_event=published.append,
     )
@@ -931,18 +932,18 @@ def test_zeta_event_dispatcher_creates_work_for_matching_agent(
 ) -> None:
     event_store = zeta_events.SqliteEventStore(tmp_path / "events.sqlite3")
     published: list[zeta_events.Event] = []
-    seen: list[zeta_events.AgentRun] = []
+    seen: list[zeta_dispatch.AgentRun] = []
 
-    def run_agent(run: zeta_events.AgentRun) -> dict[str, object]:
+    def run_agent(run: zeta_dispatch.AgentRun) -> dict[str, object]:
         seen.append(run)
         return {"outcome": "handled"}
 
-    dispatcher = zeta_events.EventDispatcher(
+    dispatcher = zeta_dispatch.EventDispatcher(
         event_store,
         agents=[
-            zeta_events.AgentDefinition(
+            zeta_dispatch.AgentDefinition(
                 "issue-triage",
-                zeta_events.TriggerRule(event_type_prefix="github.issue."),
+                zeta_dispatch.TriggerRule(event_type_prefix="github.issue."),
                 run=run_agent,
             )
         ],
@@ -987,17 +988,17 @@ def test_zeta_event_dispatcher_matches_exact_event_type(tmp_path: Path) -> None:
     event_store = zeta_events.SqliteEventStore(tmp_path / "events.sqlite3")
     calls: list[str] = []
 
-    dispatcher = zeta_events.EventDispatcher(
+    dispatcher = zeta_dispatch.EventDispatcher(
         event_store,
         agents=[
-            zeta_events.AgentDefinition(
+            zeta_dispatch.AgentDefinition(
                 "exact-agent",
-                zeta_events.TriggerRule(event_type="github.issue.opened"),
+                zeta_dispatch.TriggerRule(event_type="github.issue.opened"),
                 run=lambda run: {"outcome": calls.append(run.triggering_event.id)},
             ),
-            zeta_events.AgentDefinition(
+            zeta_dispatch.AgentDefinition(
                 "other-agent",
-                zeta_events.TriggerRule(event_type="github.issue.closed"),
+                zeta_dispatch.TriggerRule(event_type="github.issue.closed"),
                 run=lambda run: {"outcome": calls.append(run.triggering_event.id)},
             ),
         ],
@@ -1026,12 +1027,12 @@ def test_zeta_event_dispatcher_records_pending_work_without_runner(
 ) -> None:
     event_store = zeta_events.SqliteEventStore(tmp_path / "events.sqlite3")
     published: list[zeta_events.Event] = []
-    dispatcher = zeta_events.EventDispatcher(
+    dispatcher = zeta_dispatch.EventDispatcher(
         event_store,
         agents=[
-            zeta_events.AgentDefinition(
+            zeta_dispatch.AgentDefinition(
                 "issue-triage",
-                zeta_events.TriggerRule(event_type="github.issue.opened"),
+                zeta_dispatch.TriggerRule(event_type="github.issue.opened"),
             )
         ],
         publish_event=published.append,
@@ -1062,17 +1063,17 @@ def test_zeta_event_dispatcher_does_not_route_duplicate_events(
     event_store = zeta_events.SqliteEventStore(tmp_path / "events.sqlite3")
     calls = 0
 
-    def run_agent(run: zeta_events.AgentRun) -> dict[str, object]:
+    def run_agent(run: zeta_dispatch.AgentRun) -> dict[str, object]:
         nonlocal calls
         calls += 1
         return {"outcome": "handled"}
 
-    dispatcher = zeta_events.EventDispatcher(
+    dispatcher = zeta_dispatch.EventDispatcher(
         event_store,
         agents=[
-            zeta_events.AgentDefinition(
+            zeta_dispatch.AgentDefinition(
                 "issue-triage",
-                zeta_events.TriggerRule(event_type="github.issue.opened"),
+                zeta_dispatch.TriggerRule(event_type="github.issue.opened"),
                 run=run_agent,
             )
         ],
@@ -1105,16 +1106,16 @@ def test_zeta_event_dispatcher_does_not_route_duplicate_events(
 def test_zeta_event_dispatcher_records_failed_work(tmp_path: Path) -> None:
     event_store = zeta_events.SqliteEventStore(tmp_path / "events.sqlite3")
 
-    def fail_agent(run: zeta_events.AgentRun) -> dict[str, object]:
+    def fail_agent(run: zeta_dispatch.AgentRun) -> dict[str, object]:
         del run
         raise RuntimeError("boom")
 
-    dispatcher = zeta_events.EventDispatcher(
+    dispatcher = zeta_dispatch.EventDispatcher(
         event_store,
         agents=[
-            zeta_events.AgentDefinition(
+            zeta_dispatch.AgentDefinition(
                 "issue-triage",
-                zeta_events.TriggerRule(event_type="github.issue.opened"),
+                zeta_dispatch.TriggerRule(event_type="github.issue.opened"),
                 run=fail_agent,
             )
         ],

@@ -560,7 +560,7 @@ def test_sigil_blame_reports_untouched_files(monkeypatch) -> None:
 
 def seed_bundle_state(monkeypatch) -> dict[str, str]:
     """Record one turn with an effect, bridged into its session trace store."""
-    from zeta import trace as zeta_trace
+    from zeta import substrate as zeta_trace
 
     monkeypatch.setenv("SIGIL_SESSION_ID", "bundle-src")
     append_event(

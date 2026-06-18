@@ -41,9 +41,10 @@ from sigil.sessions import record_turn, session_dir
 from sigil.state import history_view, read_events
 from sigil.workflows import ask as ask_runner
 from sigil.workflows import step as zeta_runner
-from zeta import timeline as zeta_timeline
-from zeta import trace as zeta_trace
-from zeta import turn as zeta_agent
+from zeta import events as zeta_timeline
+from zeta import loop as zeta_agent
+from zeta import substrate as zeta_trace
+from zeta.context.components import chat_messages
 from zeta.events import Filter, SqliteEventStore, event_store_path
 from zeta.history import (
     effect_record,
@@ -53,7 +54,7 @@ from zeta.history import (
     turn_record,
 )
 from zeta.models import profiles as zeta_models
-from zeta.trace import PromptTrace
+from zeta.substrate import PromptTrace
 
 
 def record_sigil_event(event: dict[str, Any]) -> dict[str, Any]:
@@ -1126,7 +1127,7 @@ def test_resolved_shell_handoff_context_keeps_tool_call_with_shell_result(
     record_turn("uv run pytest", 1, "/repo", stderr_snippet="test failed")
 
     sigil_handoff.append_shell_result()
-    messages = zeta_timeline.chat_messages(current_sigil_timeline())
+    messages = chat_messages(current_sigil_timeline())
 
     assert messages[0]["role"] == "assistant"
     assert messages[0]["tool_calls"][0]["id"] == "call-1"
@@ -1779,7 +1780,7 @@ def test_zeta_answer_model_failure_records_turn_abort(
     assert timeline[-1]["type"] == "turn_aborted"
     assert "model stream failed" in timeline[-1]["error"]
     assert timeline[-2]["type"] == "user_message"
-    messages = zeta_timeline.chat_messages(timeline)
+    messages = chat_messages(timeline)
     assert messages[-1]["role"] == "assistant"
     assert "turn aborted" in messages[-1]["content"]
 

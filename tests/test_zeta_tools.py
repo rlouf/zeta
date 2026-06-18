@@ -15,21 +15,19 @@ from sigil.tools import ensure_builtin_tools_registered, register_builtin_tools
 from sigil.tools import grep as grep_tool
 from sigil.tools import read as read_tool
 from sigil.tools import web as web_tool
-from zeta.tools.base import (
+from zeta.capabilities import (
     Capability,
+    CapabilityError,
     CapabilityId,
     CapabilityPolicy,
+    CapabilityRegistry,
+    CapabilityResultPayload,
     CapabilitySpec,
     EffectKind,
     InProcessCapabilityExecutor,
     TrustLevel,
 )
-from zeta.tools.registry import (
-    CapabilityError,
-    CapabilityRegistry,
-    CapabilityResultPayload,
-)
-from zeta.tools.registry import registry as tool_registry
+from zeta.capabilities import registry as tool_registry
 
 ensure_builtin_tools_registered()
 

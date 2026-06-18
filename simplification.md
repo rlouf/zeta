@@ -16,10 +16,10 @@ Use `substrate/`, not `artifacts/`. This matches `../zeta/zeta-substrate` and
 keeps the layer conceptually broader than user-facing artifacts: it owns
 immutable objects, refs, derivations, freshness, and object graph queries.
 
-Use `capabilities/`, not `tools/`, for the Python runtime boundary. The existing
-`tools/` package remains as a thin compatibility and model-API vocabulary layer.
-The capability layer owns descriptors, projection, invocation, execution policy,
-and staged/direct effects.
+Use `capabilities/`, not `tools/`, for the Python runtime boundary. The
+capability layer owns descriptors, projection, invocation, execution policy,
+and staged/direct effects. Keep model-provider "tool call" wording only where
+it describes the API protocol.
 
 ## Comparison with `../zeta`
 
@@ -126,7 +126,6 @@ public import paths when those names remain useful to callers:
 ```text
 src/zeta/trace.py          # deprecated wrapper around substrate/*
 src/zeta/timeline.py       # deprecated wrapper around events/context/substrate
-src/zeta/tools/            # public model-tool vocabulary over capabilities/*
 src/zeta/turn.py           # compatibility alias for loop.py
 ```
 
@@ -304,8 +303,8 @@ preserving public behavior and tests.
    remains a read model over durable events.
 10. Move agent specs, prompt templates, resources, and skill loading into
     `agents/`, matching the `../zeta/zeta-agents` boundary.
-11. Move `tools/` implementation into `capabilities/`, leaving `tools/` as a
-    temporary wrapper.
+11. Move `tools/` implementation into `capabilities/`, then delete the
+    duplicate `zeta.tools` wrapper.
 12. Rename `turn.py` to `loop.py` once the surrounding imports are ready.
 13. Convert `loop.py` internals from loose dict events to typed runtime facts,
     while serializing to existing durable/event-shaped dictionaries at the
@@ -511,10 +510,11 @@ then run the targeted tests before moving to the next commit.
   `capabilities/policies.py` if this removes real ownership confusion.
 - [x] Add `capabilities/adapters.py` only for actual host/client adapter code,
   not as a placeholder.
-- [x] Keep `tools/` as wrappers re-exporting the new capability implementation.
+- [x] Delete the `tools/` wrappers after moving implementation to capabilities.
 - [x] Update internal imports in `turn.py`, `context/`, and `agents/` to use
   `zeta.capabilities`.
-- [x] Leave tests on old imports where they prove compatibility.
+- [x] Move tests to `zeta.capabilities`; do not keep duplicate `zeta.tools`
+  imports.
 - [x] Run `ripple` on `CapabilityRegistry.project`.
 - [x] Run `uv run pytest tests/test_zeta_tools.py tests/test_zeta_agent.py tests/test_zeta_prompt.py -q`.
 
@@ -583,8 +583,9 @@ then run the targeted tests before moving to the next commit.
 - [x] Confirm all internal generic capability imports use `zeta.capabilities`.
 - [x] Decide whether `zeta.tools` remains public because model APIs call these
   "tools".
-- [x] If not needed, delete `tools/`.
-- [x] If kept, make it a thin compatibility/public-vocabulary package only.
+- [x] Delete `tools/`; keep model-provider "tool call" vocabulary in loop and
+  prompt code only.
+- [x] Remove tests importing `zeta.tools`.
 - [x] Run `uv run pytest tests/test_zeta_tools.py tests/test_zeta_agent.py -q`
   or the renamed equivalent.
 
@@ -630,7 +631,7 @@ The proposal is an end state. The safest first steps are narrower:
 
 - Move `Object`, `ObjectId`, `Derivation`, `PromptTrace`, refs, and store
   protocols from `trace.py` into `substrate/`.
-- Keep `trace.py` as a deprecated wrapper around `substrate/`.
+- Delete `trace.py` after internal callers import `substrate/` directly.
 - Keep trace-specific CLI naming only at user-facing boundaries.
 
 ### Stage 4: Timeline demolition
@@ -638,20 +639,21 @@ The proposal is an end state. The safest first steps are narrower:
 - Move durable event append/read helpers into `events/`.
 - Move object-link derivation into `substrate/`.
 - Move model-message reconstruction into `context/`.
-- Keep only deprecated compatibility wrappers in `timeline.py`.
+- Delete `timeline.py` after internal callers import `events/` and `context/`
+  directly.
 
 ### Stage 5: Capability rename
 
 - Move `tools/base.py` and `tools/registry.py` implementation into
   `capabilities/`.
-- Keep `tools/` as a public model-tool vocabulary wrapper.
+- Delete the duplicate `zeta.tools` wrapper.
 - Rename generic test names to capability language while keeping builtin tool
   tests under `test_zeta_tools.py`.
 
 ### Stage 6: Loop rename and typed facts
 
 - Rename `turn.py` to `loop.py`.
-- Keep public wrappers if needed.
+- Delete `turn.py` after internal callers import `loop.py` directly.
 - Replace loose runtime event dictionaries inside the loop with typed facts.
 - Serialize to durable event dictionaries at the event-store boundary.
 
@@ -661,10 +663,9 @@ The proposal is an end state. The safest first steps are narrower:
 - Keep event schemas and log protocols together under `events/`.
 - Use `substrate/`, not `artifacts/`.
 - Use `capabilities/`, not `tools/`, for the long-term Python runtime boundary.
-- Keep public wrappers at old public import paths when they preserve useful
-  external vocabulary.
+- Delete duplicate public wrappers for `tools`, `trace`, `timeline`, and `turn`;
+  use domain modules directly.
 - Do not add `zeta/compat/`.
-- Keep `timeline.py` deprecated unless a later public API cleanup removes it.
 - Do not add `context/messages.py` by default.
 - Keep `history.py` for human/CLI turn records unless a later split has a clear
   benefit.

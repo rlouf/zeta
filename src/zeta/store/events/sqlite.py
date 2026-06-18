@@ -12,8 +12,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from zeta.events.event import DraftEvent, Event
-from zeta.events.store.base import AppendOutcome, Filter
+from zeta.events import AppendOutcome, DraftEvent, Event, Filter
 
 EVENT_STORE_NAME = "events.sqlite3"
 ZETA_STORE_NAME = "zeta.sqlite3"

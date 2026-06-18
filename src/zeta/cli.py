@@ -4,9 +4,9 @@ import sys
 
 import click
 
-from zeta.events.store import EventReader
 from zeta.rpc import JsonRpcServer, run_rpc_session, session_event_dispatcher
 from zeta.session import default_session
+from zeta.store.events import EventReader
 
 
 @click.group(context_settings={"help_option_names": ["-h", "--help"]})

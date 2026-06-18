@@ -23,7 +23,7 @@ from sigil.protocols import (
     turn_contract,
 )
 from sigil.state import event_store_path, read_events, state_dir
-from zeta.events.event import Event
+from zeta.events import Event
 from zeta.history import (
     effect_record,
     publish_effect_record,

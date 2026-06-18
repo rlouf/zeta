@@ -23,9 +23,9 @@ from zeta.capabilities.base import (
     InProcessCapabilityExecutor,
 )
 from zeta.capabilities.registry import CapabilityRegistry
-from zeta.events.event import DraftEvent
-from zeta.events.store import SqliteEventStore
+from zeta.events import DraftEvent
 from zeta.loop import AgentTurnResult
+from zeta.store.events import SqliteEventStore
 
 zeta_agents = SimpleNamespace(
     EventEnvelope=EventEnvelope,

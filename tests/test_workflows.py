@@ -43,7 +43,6 @@ from sigil.workflows import step as zeta_runner
 from zeta import loop as zeta_agent
 from zeta import timeline as zeta_timeline
 from zeta.context.components import PromptTrace, chat_messages
-from zeta.events.store import Filter, SqliteEventStore, event_store_path
 from zeta.history import (
     effect_record,
     history_event_record,
@@ -52,6 +51,7 @@ from zeta.history import (
     turn_record,
 )
 from zeta.models import profiles as zeta_models
+from zeta.store.events import Filter, SqliteEventStore, event_store_path
 from zeta.substrate.ref import Ref
 from zeta.substrate.store import resolve_object_id
 

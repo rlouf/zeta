@@ -10,11 +10,11 @@ from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import Any, cast
 
-from zeta.events.event import (
+from zeta.events import (
     DraftEvent,
     Event,
 )
-from zeta.events.store import (
+from zeta.store.events import (
     Filter,
     append_event_to_log,
     publish_event_to_log,

@@ -9,7 +9,7 @@ from typing import Any
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import SchemaError
 
-from zeta.events.event import Event
+from zeta.events import Event
 
 
 @dataclass(frozen=True)

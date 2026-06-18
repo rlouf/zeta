@@ -1,8 +1,8 @@
 """Event store implementations."""
 
-from zeta.events.store.base import AppendOutcome, EventReader, Filter
-from zeta.events.store.memory import MemoryEventStore
-from zeta.events.store.sqlite import (
+from zeta.events import AppendOutcome, EventReader, Filter
+from zeta.store.events.memory import MemoryEventStore
+from zeta.store.events.sqlite import (
     EVENT_STORE_NAME,
     ZETA_STORE_NAME,
     SqliteEventStore,

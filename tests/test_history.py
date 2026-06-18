@@ -23,8 +23,8 @@ from sigil.state import (
     state_dir,
 )
 from zeta import history as zeta_history
-from zeta.events.event import DraftEvent
-from zeta.events.store import publish_event_to_log
+from zeta.events import DraftEvent
+from zeta.store.events import publish_event_to_log
 
 
 def sample_turn_record(turn_id: str = "turn-1", **overrides: Any) -> dict[str, Any]:

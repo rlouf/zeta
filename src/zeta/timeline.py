@@ -8,9 +8,8 @@ import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
-from zeta.events.event import DraftEvent, Event
-from zeta.events.sink import EventSink, publish_event
-from zeta.events.store import EventReader, Filter, SqliteEventStore
+from zeta.events import DraftEvent, Event, EventSink, publish_event
+from zeta.store.events import EventReader, Filter, SqliteEventStore
 from zeta.substrate.store import Store, warn_trace_failure_once
 
 if TYPE_CHECKING:
@@ -670,7 +669,7 @@ def publish_event_payload_to_log(
     session_id: str,
     cwd: str | None = None,
 ) -> Event:
-    from zeta.events.store import append_event_to_log
+    from zeta.store.events import append_event_to_log
 
     payload = {"cwd": cwd or os.getcwd(), **event}
     draft = event_payload_draft(payload, session_id=session_id, cwd=cwd)

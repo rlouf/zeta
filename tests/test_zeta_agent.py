@@ -45,9 +45,9 @@ from zeta.capabilities.base import (
 )
 from zeta.capabilities.registry import CapabilityRegistry
 from zeta.context import builder as zeta_context
-from zeta.events.event import DraftEvent, Event
-from zeta.events.store import Filter, SqliteEventStore
+from zeta.events import DraftEvent, Event
 from zeta.models import chat_completions as zeta_model
+from zeta.store.events import Filter, SqliteEventStore
 from zeta.substrate.store import InMemoryStore
 from zeta.timeline import durable_event_draft
 

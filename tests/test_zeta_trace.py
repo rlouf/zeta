@@ -22,9 +22,9 @@ from zeta import loop as zeta_agent
 from zeta import timeline as zeta_timeline
 from zeta.context.builder import PromptBuilder
 from zeta.context.components import chat_messages
-from zeta.events.store import Filter, SqliteEventStore, event_store_path
 from zeta.models import profiles as zeta_models
 from zeta.session import Session, default_session
+from zeta.store.events import Filter, SqliteEventStore, event_store_path
 from zeta.substrate.derivation import Derivation
 from zeta.substrate.object import Object, ObjectId
 from zeta.substrate.ref import Ref, RefUpdate

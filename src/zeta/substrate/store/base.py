@@ -1,4 +1,10 @@
-"""Substrate store protocol and shared helpers."""
+"""Store protocol and shared substrate helpers.
+
+Stores persist immutable objects, mutable refs, and derivations. Object ids
+identify stable values. Refs identify moving logical sources. Derivations link
+outputs back to immutable inputs for replay, graph traversal, and cache
+reasoning.
+"""
 
 from __future__ import annotations
 
@@ -88,7 +94,13 @@ def normalize_json(value: Any) -> Any:
 
 
 class Store(Protocol):
-    """Storage API shared by in-memory and SQLite stores."""
+    """Storage API shared by in-memory and SQLite stores.
+
+    Implementations store objects by content address, move refs conditionally,
+    and record derivations that explain how outputs were built. The protocol is
+    intentionally small so callers can use either ephemeral memory storage or
+    durable local SQLite without changing trace-building code.
+    """
 
     def put_object(self, obj: Object) -> ObjectId: ...
     def get_object(self, object_id: ObjectId) -> Object | None: ...
@@ -153,7 +165,11 @@ def warn_trace_failure_once(operation: str, exc: BaseException) -> None:
 
 
 class StoreBase:
-    """Shared graph helpers for concrete stores."""
+    """Shared graph helpers for concrete stores.
+
+    Graph traversal follows structural object links. It does not infer
+    execution order or freshness; those concepts live in derivations and refs.
+    """
 
     def prompt_object_ids(self) -> list[ObjectId]:
         store = cast(Store, self)

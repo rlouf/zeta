@@ -1,4 +1,4 @@
-"""Substrate derivation records."""
+"""Derivation records explain how substrate objects were built."""
 
 from __future__ import annotations
 
@@ -12,7 +12,16 @@ from .object import ObjectId
 
 @dataclass(frozen=True)
 class Derivation:
-    """Record how an object was produced."""
+    """Semantic build record for an object.
+
+    This is not an execution event. It intentionally does not record latency,
+    retries, request ids, worker identity, or logs. It records the durable
+    build relationship needed for replay and cache reasoning.
+
+    `input_ids` are immutable object inputs. `producer` should name the
+    producer and version. `params` are the producer parameters that affect the
+    produced object.
+    """
 
     producer: str
     output_id: ObjectId
@@ -20,7 +29,7 @@ class Derivation:
     params: dict[str, Any] = field(default_factory=dict)
 
     def content_address(self) -> str:
-        """Return the deterministic content address for this derivation."""
+        """Return the hash of the identity-bearing derivation fields."""
         payload: dict[str, Any] = {
             "producer": self.producer,
             "output_id": self.output_id,

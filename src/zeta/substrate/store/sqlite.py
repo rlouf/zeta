@@ -1,4 +1,10 @@
-"""SQLite substrate store and session helpers."""
+"""SQLite substrate store and session helpers.
+
+`SqliteStore` provides durable local storage for the substrate. It keeps
+objects content-addressed, scopes refs and derivations by session when a
+session id is supplied, and indexes derivation inputs so callers can traverse
+both producer and consumer relationships.
+"""
 
 from __future__ import annotations
 
@@ -203,7 +209,7 @@ def _derivation_from_row(row: sqlite3.Row) -> Derivation:
 
 
 class SqliteStore(StoreBase):
-    """Synchronous SQLite trace store using the standard library."""
+    """Synchronous SQLite implementation of the substrate store protocol."""
 
     def __init__(
         self,

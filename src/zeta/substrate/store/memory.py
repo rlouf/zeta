@@ -1,4 +1,4 @@
-"""In-memory substrate store."""
+"""In-memory substrate store for tests and ephemeral traces."""
 
 from __future__ import annotations
 
@@ -12,7 +12,12 @@ from .base import StoreBase, TraceStats, canonical_json
 
 
 class InMemoryStore(StoreBase):
-    """Process-local trace store for tests and short-lived traces."""
+    """Process-local store with the same substrate semantics as SQLite.
+
+    Objects and derivations are kept in dictionaries, and refs are mutable
+    process-local pointers. This store is useful for tests and short-lived
+    traces where durability is not required.
+    """
 
     def __init__(self) -> None:
         self._objects: dict[ObjectId, Object] = {}

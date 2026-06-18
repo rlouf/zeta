@@ -1,4 +1,16 @@
-"""Content-addressed substrate objects."""
+"""Objects are the value plane of the substrate.
+
+An object says "this value exists" and nothing more. Its id is computed from
+the canonical JSON representation of its identity-bearing fields: `kind`,
+`schema`, `data`, and `links`.
+
+`links` are structural value dependencies. They mean that the linked objects
+are part of this object's value. They do not mean "this run happened before
+that run", "this ref was updated", or "this worker produced this value".
+Provenance is represented by derivations in the store layer.
+
+JSON object key order does not affect object identity.
+"""
 
 from __future__ import annotations
 
@@ -12,7 +24,12 @@ ObjectId = str
 
 @dataclass(frozen=True)
 class Object:
-    """Content-addressed object with ordered links to other objects."""
+    """Immutable content-addressed value.
+
+    `kind` is the broad object kind, such as `message` or `context`. `schema`
+    identifies the payload shape. `data` is the JSON payload. `links` are
+    ordered structural dependencies included in the content address.
+    """
 
     kind: str
     schema: str
@@ -20,7 +37,7 @@ class Object:
     links: tuple[ObjectId, ...] = ()
 
     def content_address(self) -> ObjectId:
-        """Return the deterministic content address for this object."""
+        """Return the hash of `kind`, `schema`, `data`, and structural links."""
         payload: dict[str, Any] = {
             "kind": self.kind,
             "schema": self.schema,

@@ -22,13 +22,13 @@ from ..substrate import (
     Derivation,
     Object,
     ObjectId,
-    PromptTrace,
     Store,
     canonical_json,
     warn_trace_failure_once,
 )
 from .components import (
     PromptComponent,
+    PromptTrace,
     component_messages,
     prompt_component_object,
     prompt_components,

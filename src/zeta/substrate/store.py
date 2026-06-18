@@ -2,20 +2,17 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from collections.abc import Iterator
 from contextlib import AbstractContextManager, contextmanager
-from typing import Protocol, cast
+from dataclasses import dataclass
+from typing import Any, Protocol, cast
 
 from .derivation import Derivation
 from .object import (
     Object,
     ObjectId,
-    TraceStats,
-    canonical_json,
-    normalize_object,
-    object_id,
-    object_payload,
 )
 from .refs import (
     REF_EXPECTED_UNSET,
@@ -26,6 +23,45 @@ from .refs import (
 
 LOGGER = logging.getLogger("zeta.substrate")
 _WARNED_FAILURES: set[str] = set()
+
+
+@dataclass(frozen=True)
+class TraceStats:
+    """Basic trace store size statistics."""
+
+    object_count: int
+    total_bytes: int
+
+
+def escape_like(text: str) -> str:
+    """Escape SQLite LIKE wildcards so they match literally."""
+    return text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+def canonical_json(value: Any) -> str:
+    """Serialize JSON data deterministically for content hashing."""
+    return json.dumps(
+        normalize_json(value),
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+
+def normalize_json(value: Any) -> Any:
+    """Normalize Python-native JSON values before deterministic serialization."""
+    if value is None or isinstance(value, str | int | float | bool):
+        return value
+    if isinstance(value, tuple | list):
+        return [normalize_json(item) for item in value]
+    if isinstance(value, dict):
+        normalized: dict[str, Any] = {}
+        for key, item in value.items():
+            if not isinstance(key, str):
+                raise TypeError("canonical JSON object keys must be strings")
+            normalized[key] = normalize_json(item)
+        return normalized
+    raise TypeError(f"value is not JSON serializable: {type(value).__name__}")
 
 
 class Store(Protocol):
@@ -126,9 +162,8 @@ class InMemoryStore(StoreBase):
         self.derivations: dict[str, Derivation] = {}
 
     def put_object(self, obj: Object) -> ObjectId:
-        stored = normalize_object(obj)
-        object_id_value = object_id(stored)
-        self._objects.setdefault(object_id_value, stored)
+        object_id_value = obj.content_address()
+        self._objects.setdefault(object_id_value, obj)
         return object_id_value
 
     def get_object(self, object_id: ObjectId) -> Object | None:
@@ -217,7 +252,16 @@ class InMemoryStore(StoreBase):
         return TraceStats(
             object_count=len(self._objects),
             total_bytes=sum(
-                len(canonical_json(object_payload(obj)).encode("utf-8"))
+                len(
+                    canonical_json(
+                        {
+                            "kind": obj.kind,
+                            "schema": obj.schema,
+                            "data": obj.data,
+                            "links": list(obj.links),
+                        }
+                    ).encode("utf-8")
+                )
                 for obj in self._objects.values()
             ),
         )

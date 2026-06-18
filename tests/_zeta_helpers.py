@@ -270,7 +270,7 @@ def assert_tool_result_derivation_graph(
 
 def assert_prompt_trace_replay_graph(
     store: zeta_trace.InMemoryStore,
-    trace: zeta_trace.PromptTrace,
+    trace: zeta_context.PromptTrace,
 ) -> zeta_context.ReconstructedPrompt:
     reconstructed = zeta_context.reconstructed_prompt_request(
         store,

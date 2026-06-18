@@ -14,7 +14,11 @@ from typing import Any, Literal, TextIO
 from zeta.agents import AgentConfig
 from zeta.capabilities import CapabilityRegistry, ExecutionMode, proposed_effect
 from zeta.capabilities import registry as _default_tool_registry
-from zeta.context import load_project_instructions, system_prompt
+from zeta.context import (
+    latest_prompt_trace_fields,
+    load_project_instructions,
+    system_prompt,
+)
 from zeta.events import current_timeline, record_event
 from zeta.loop import (
     AgentTurnAborted,
@@ -27,7 +31,6 @@ from zeta.models import (
 )
 from zeta.session import Session
 from zeta.skills import expand_skill_directive
-from zeta.substrate import latest_prompt_trace_fields
 
 from ..agent_io import (
     TurnEventRecorder,

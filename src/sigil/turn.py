@@ -8,6 +8,7 @@ from collections.abc import Iterable
 from typing import Any
 
 from zeta.capabilities import proposed_effect
+from zeta.context import PromptTrace
 from zeta.history import (
     TURN_RECORD_SCHEMA,
     effect_record,
@@ -20,7 +21,6 @@ from zeta.session import Session
 from zeta.substrate import (
     Derivation,
     Object,
-    PromptTrace,
     add_event_link,
     warn_trace_failure_once,
 )

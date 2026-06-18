@@ -129,34 +129,39 @@ def test_zeta_trace_object_ids_ignore_dict_key_order() -> None:
         data={"a": {"y": [{"a": 4, "b": 3}], "z": 2}, "b": 1},
     )
 
-    assert zeta_trace.object_id(first) == zeta_trace.object_id(second)
+    assert first.content_address() == second.content_address()
 
 
 def test_zeta_trace_object_ids_change_for_schema_data_and_links() -> None:
-    base = zeta_trace.object_id(
-        zeta_trace.Object(kind="example", schema="v1", data={"value": 1})
-    )
+    base = zeta_trace.Object(
+        kind="example", schema="v1", data={"value": 1}
+    ).content_address()
 
-    assert base != zeta_trace.object_id(
-        zeta_trace.Object(kind="example", schema="v2", data={"value": 1})
+    assert (
+        base
+        != zeta_trace.Object(
+            kind="example", schema="v2", data={"value": 1}
+        ).content_address()
     )
-    assert base != zeta_trace.object_id(
-        zeta_trace.Object(kind="example", schema="v1", data={"value": 2})
+    assert (
+        base
+        != zeta_trace.Object(
+            kind="example", schema="v1", data={"value": 2}
+        ).content_address()
     )
-    assert zeta_trace.object_id(
+    assert (
         zeta_trace.Object(
             kind="example",
             schema="v1",
             data={"value": 1},
             links=("left", "right"),
-        )
-    ) != zeta_trace.object_id(
-        zeta_trace.Object(
+        ).content_address()
+        != zeta_trace.Object(
             kind="example",
             schema="v1",
             data={"value": 1},
             links=("right", "left"),
-        )
+        ).content_address()
     )
 
 

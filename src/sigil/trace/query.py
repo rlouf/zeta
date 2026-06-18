@@ -12,7 +12,6 @@ from zeta.substrate import (
     ObjectId,
     Store,
     UnknownIdError,
-    object_payload,
     resolve_object_id,
 )
 
@@ -52,7 +51,12 @@ def get_trace_object(
         return None
     return {
         "id": object_id,
-        "object": object_payload(obj),
+        "object": {
+            "kind": obj.kind,
+            "schema": obj.schema,
+            "data": obj.data,
+            "links": list(obj.links),
+        },
         "derivations": [
             {
                 "producer": derivation.producer,

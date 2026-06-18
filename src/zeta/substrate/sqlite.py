@@ -16,14 +16,9 @@ from .derivation import Derivation
 from .object import (
     Object,
     ObjectId,
-    TraceStats,
-    canonical_json,
-    escape_like,
-    normalize_object,
-    object_id,
 )
 from .refs import REF_EXPECTED_UNSET, RefConflictError, UnknownSessionError
-from .store import StoreBase
+from .store import StoreBase, TraceStats, canonical_json, escape_like
 
 DEFAULT_SQLITE_NAME = "zeta-trace.sqlite3"
 ZETA_SQLITE_NAME = "zeta.sqlite3"
@@ -449,8 +444,7 @@ class SqliteStore(StoreBase):
 
     def put_object(self, obj: Object) -> ObjectId:
         self._ensure_writable()
-        stored = normalize_object(obj)
-        object_id_value = object_id(stored)
+        object_id_value = obj.content_address()
         with self._write_lock:
             self.connection.execute(
                 """
@@ -460,10 +454,10 @@ class SqliteStore(StoreBase):
                 """,
                 (
                     object_id_value,
-                    stored.kind,
-                    stored.schema,
-                    canonical_json(stored.data),
-                    canonical_json(list(stored.links)),
+                    obj.kind,
+                    obj.schema,
+                    canonical_json(obj.data),
+                    canonical_json(list(obj.links)),
                 ),
             )
             self._commit()
@@ -621,7 +615,6 @@ class SqliteStore(StoreBase):
         versions.
         """
         self._ensure_writable()
-        stored = normalize_object(obj)
         with self._write_lock:
             self.connection.execute(
                 """
@@ -631,10 +624,10 @@ class SqliteStore(StoreBase):
                 """,
                 (
                     object_id_value,
-                    stored.kind,
-                    stored.schema,
-                    canonical_json(stored.data),
-                    canonical_json(list(stored.links)),
+                    obj.kind,
+                    obj.schema,
+                    canonical_json(obj.data),
+                    canonical_json(list(obj.links)),
                 ),
             )
             self._commit()

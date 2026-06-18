@@ -44,6 +44,7 @@ from sigil.workflows import step as zeta_runner
 from zeta import events as zeta_timeline
 from zeta import loop as zeta_agent
 from zeta import substrate as zeta_trace
+from zeta.context import PromptTrace
 from zeta.context.components import chat_messages
 from zeta.events import Filter, SqliteEventStore, event_store_path
 from zeta.history import (
@@ -54,7 +55,6 @@ from zeta.history import (
     turn_record,
 )
 from zeta.models import profiles as zeta_models
-from zeta.substrate import PromptTrace
 
 
 def record_sigil_event(event: dict[str, Any]) -> dict[str, Any]:

@@ -23,6 +23,8 @@ from .capabilities import registry as _runtime_tool_registry
 from .context import (
     PreparedPrompt,
     PromptBuilder,
+    PromptTrace,
+    prompt_trace_payload,
     prompt_transform_from_env,
     render_model_input,
 )
@@ -37,7 +39,7 @@ from .models.chat_completions import (
     ChatCompletionStreamSink,
     model_endpoint_open,
 )
-from .substrate import PromptTrace, Store, prompt_trace_payload
+from .substrate import Store
 
 AgentEventSink = Callable[[dict[str, Any]], None]
 ModelStatusFactory = Callable[[], AbstractContextManager[object]]

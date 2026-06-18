@@ -30,6 +30,37 @@ TIMELINE_TAIL_LIMIT = 50
 
 
 @dataclass(frozen=True)
+class PromptTrace:
+    """Trace ids for one prompt request and its assistant response.
+
+    Component ids ride on the prompt object's links, not here: carrying
+    them in every event payload grew the store quadratically with turns.
+    """
+
+    prompt_object_id: ObjectId
+    assistant_message_object_id: ObjectId | None = None
+
+
+def prompt_trace_payload(trace: PromptTrace) -> dict[str, Any]:
+    """Return JSON metadata for a prompt trace."""
+    payload: dict[str, Any] = {"prompt_object_id": trace.prompt_object_id}
+    if trace.assistant_message_object_id is not None:
+        payload["assistant_message_object_id"] = trace.assistant_message_object_id
+    return payload
+
+
+def latest_prompt_trace_fields(prompt_traces: Iterable[Any]) -> dict[str, Any]:
+    """Return event fields for the most recent valid prompt trace."""
+    traces = list(prompt_traces)
+    if not traces:
+        return {}
+    trace = traces[-1]
+    if not isinstance(trace, PromptTrace):
+        return {}
+    return {"prompt_trace": prompt_trace_payload(trace)}
+
+
+@dataclass(frozen=True)
 class PromptComponent:
     """A first-class prompt component that can become a trace object."""
 

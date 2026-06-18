@@ -1399,12 +1399,8 @@ def handle_tool_call(
             "tool call did not include a function payload",
             model_telemetry=model_telemetry,
             prompt_trace=prompt_trace,
-            prompt_builder=ctx.builder,
-            event_sink=ctx.event_sink,
-            durable_event_sink=ctx.durable_event_sink,
-            session_id=ctx.session_id,
-            turn_id=ctx.turn_id,
             caused_by=caused_by,
+            ctx=ctx,
         )
     validation = validate_tool_call(
         invocation,
@@ -1420,11 +1416,7 @@ def handle_tool_call(
             message,
             model_telemetry=model_telemetry,
             prompt_trace=prompt_trace,
-            prompt_builder=ctx.builder,
-            event_sink=ctx.event_sink,
-            durable_event_sink=ctx.durable_event_sink,
-            session_id=ctx.session_id,
-            turn_id=ctx.turn_id,
+            ctx=ctx,
         )
     return run_valid_tool_call(
         invocation,
@@ -1500,11 +1492,7 @@ def reject_tool_call(
     *,
     model_telemetry: dict[str, Any] | None,
     prompt_trace: PromptTrace | None,
-    prompt_builder: PromptBuilder | None,
-    event_sink: AgentEventSink | None,
-    durable_event_sink: EventSink | None,
-    session_id: str | None,
-    turn_id: str | None,
+    ctx: TurnContext,
 ) -> CapabilityCallResult:
     return invalid_tool_result(
         invocation.call_id,
@@ -1515,11 +1503,7 @@ def reject_tool_call(
         call_event=invocation.call_event,
         model_telemetry=model_telemetry,
         prompt_trace=prompt_trace,
-        prompt_builder=prompt_builder,
-        event_sink=event_sink,
-        durable_event_sink=durable_event_sink,
-        session_id=session_id,
-        turn_id=turn_id,
+        ctx=ctx,
     )
 
 
@@ -1624,12 +1608,8 @@ def invalid_tool_result(
     call_event: dict[str, Any] | None = None,
     model_telemetry: dict[str, Any] | None = None,
     prompt_trace: PromptTrace | None = None,
-    prompt_builder: PromptBuilder | None = None,
-    event_sink: AgentEventSink | None = None,
-    durable_event_sink: EventSink | None = None,
-    session_id: str | None = None,
-    turn_id: str | None = None,
     caused_by: str | None = None,
+    ctx: TurnContext,
 ) -> CapabilityCallResult:
     event = call_event or {
         "type": "tool_call",
@@ -1644,7 +1624,7 @@ def invalid_tool_result(
     attach_tool_call_trace(
         event,
         prompt_trace=prompt_trace,
-        prompt_builder=prompt_builder,
+        prompt_builder=ctx.builder,
     )
     result_event = tool_result_event(
         call_id,
@@ -1659,23 +1639,23 @@ def invalid_tool_result(
         result_event,
         event,
         prompt_trace=prompt_trace,
-        prompt_builder=prompt_builder,
+        prompt_builder=ctx.builder,
     )
     emit_tool_event(
         events,
         event,
-        event_sink=event_sink,
-        durable_event_sink=durable_event_sink,
-        session_id=session_id,
-        turn_id=turn_id,
+        event_sink=ctx.event_sink,
+        durable_event_sink=ctx.durable_event_sink,
+        session_id=ctx.session_id,
+        turn_id=ctx.turn_id,
     )
     emit_tool_event(
         events,
         result_event,
-        event_sink=event_sink,
-        durable_event_sink=durable_event_sink,
-        session_id=session_id,
-        turn_id=turn_id,
+        event_sink=ctx.event_sink,
+        durable_event_sink=ctx.durable_event_sink,
+        session_id=ctx.session_id,
+        turn_id=ctx.turn_id,
     )
     return CapabilityCallResult(events=events)
 

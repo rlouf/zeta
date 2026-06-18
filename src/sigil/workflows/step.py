@@ -17,7 +17,6 @@ from zeta.context import (
     load_project_instructions,
     system_prompt,
 )
-from zeta.events import current_timeline, record_event
 from zeta.loop import (
     AgentTurnAborted,
     registered_capabilities,
@@ -29,6 +28,7 @@ from zeta.models import (
 )
 from zeta.session import Session
 from zeta.skills import expand_skill_directive
+from zeta.timeline import current_timeline, record_event
 
 from ..agent_io import (
     TurnEventRecorder,

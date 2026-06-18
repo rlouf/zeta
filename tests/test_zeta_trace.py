@@ -17,9 +17,9 @@ from sigil.cli import cli as sigil_cli
 from sigil.display.summarize import assistant_trace_summary
 from sigil.trace.replay import latest_model_answer
 from zeta import context as zeta_context
-from zeta import events as zeta_timeline
 from zeta import loop as zeta_agent
 from zeta import substrate as zeta_trace
+from zeta import timeline as zeta_timeline
 from zeta.context.components import chat_messages
 from zeta.events import Filter, SqliteEventStore, event_store_path
 from zeta.models import profiles as zeta_models

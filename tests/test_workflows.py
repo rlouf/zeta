@@ -39,9 +39,9 @@ from sigil.sessions import record_turn, session_dir
 from sigil.state import history_view, read_events
 from sigil.workflows import ask as ask_runner
 from sigil.workflows import step as zeta_runner
-from zeta import events as zeta_timeline
 from zeta import loop as zeta_agent
 from zeta import substrate as zeta_trace
+from zeta import timeline as zeta_timeline
 from zeta.context import PromptTrace
 from zeta.context.components import chat_messages
 from zeta.events import Filter, SqliteEventStore, event_store_path

@@ -45,6 +45,7 @@ from sigil.workflows.ask import (
     ASK_SYSTEM_PROMPT,
     ask,
 )
+from zeta import events as zeta_events
 from zeta.events import (
     AppendOutcome,
     DraftEvent,
@@ -52,12 +53,10 @@ from zeta.events import (
     Filter,
     MemoryEventStore,
     SqliteEventStore,
-    durable_event,
     event_store_path,
-    model_called_event,
     publish_event,
-    tool_called_event,
 )
+from zeta.timeline import durable_event, model_called_event, tool_called_event
 
 
 class TtyStringIO(StringIO):
@@ -82,6 +81,21 @@ def test_zeta_package_does_not_import_parent_sigil_modules() -> None:
                     module = "." * node.level + (node.module or "")
                     violations.append(f"{path}:{node.lineno}: from {module}")
     assert violations == []
+
+
+def test_zeta_events_exports_only_generic_event_infrastructure() -> None:
+    runtime_names = {
+        "current_timeline",
+        "record_event",
+        "last_event_time",
+        "durable_event",
+        "model_called_event",
+        "tool_called_event",
+        "event_payload_draft",
+        "timeline_event_from_durable_event",
+    }
+
+    assert runtime_names.isdisjoint(set(zeta_events.__all__))
 
 
 def resolved_import_module(
@@ -1968,7 +1982,7 @@ def test_ask_omits_failure_context_after_successful_turn() -> None:
 
 def test_fresh_ask_only_includes_shell_activity_since_last_response() -> None:
     from sigil import zeta_session_for_sigil
-    from zeta import events as zeta_timeline
+    from zeta import timeline as zeta_timeline
 
     with tempfile.TemporaryDirectory() as tmp:
         with patch_dict(
@@ -1998,7 +2012,7 @@ def test_fresh_ask_only_includes_shell_activity_since_last_response() -> None:
 
 def test_fresh_ask_omits_failure_context_already_seen_by_the_model() -> None:
     from sigil import zeta_session_for_sigil
-    from zeta import events as zeta_timeline
+    from zeta import timeline as zeta_timeline
 
     with tempfile.TemporaryDirectory() as tmp:
         with patch_dict(
@@ -2119,7 +2133,7 @@ def test_events_raw_requires_json() -> None:
 
 def test_session_transcript_renders_conversation() -> None:
     from sigil import zeta_session_for_sigil
-    from zeta import events as zeta_timeline
+    from zeta import timeline as zeta_timeline
 
     with tempfile.TemporaryDirectory() as tmp:
         with patch_dict(
@@ -2145,7 +2159,7 @@ def test_session_transcript_renders_conversation() -> None:
 
 def test_session_transcript_limits_and_dumps_json() -> None:
     from sigil import zeta_session_for_sigil
-    from zeta import events as zeta_timeline
+    from zeta import timeline as zeta_timeline
 
     with tempfile.TemporaryDirectory() as tmp:
         with patch_dict(

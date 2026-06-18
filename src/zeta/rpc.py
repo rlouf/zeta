@@ -34,10 +34,6 @@ from .events import (
     EventReader,
     EventSink,
     Filter,
-    current_timeline,
-    event_payload_draft,
-    record_event,
-    timeline_event_from_durable_event,
 )
 from .loop import (
     AgentTurnAborted,
@@ -46,6 +42,12 @@ from .loop import (
     run_agent_turn,
 )
 from .session import Session, default_session
+from .timeline import (
+    current_timeline,
+    event_payload_draft,
+    record_event,
+    timeline_event_from_durable_event,
+)
 
 RpcSessionRunner = Callable[[dict[str, Any]], dict[str, Any]]
 ToolCallStatus = Literal["requested", "responded", "failed", "cancelled", "timed_out"]

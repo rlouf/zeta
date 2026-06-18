@@ -14,7 +14,6 @@ from typing import Any, TextIO
 from zeta.agents import AgentConfig
 from zeta.capabilities import ExecutionMode
 from zeta.context import load_project_instructions
-from zeta.events import current_timeline, record_event
 from zeta.loop import (
     AgentTurnAborted,
     AgentTurnResult,
@@ -29,6 +28,7 @@ from zeta.models import (
 )
 from zeta.models.chat_completions import ensure_server
 from zeta.session import Session
+from zeta.timeline import current_timeline, record_event
 
 from .display.render import render_tool_start
 from .display.state import (

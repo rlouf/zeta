@@ -35,6 +35,7 @@ from zeta import models as zeta_models_api
 from zeta import rpc as zeta_rpc
 from zeta import session as zeta_session
 from zeta import substrate as zeta_trace
+from zeta import timeline as zeta_timeline
 from zeta.capabilities import (
     Capability,
     CapabilityId,
@@ -2367,7 +2368,7 @@ def test_zeta_rpc_events_list_pages_in_append_order(tmp_path: Path) -> None:
     event_store = zeta_events.SqliteEventStore(tmp_path / "events.sqlite3")
     for content in ("one", "two", "three"):
         event_store.accept(
-            zeta_events.durable_event_draft(
+            zeta_timeline.durable_event_draft(
                 "zeta.user_message",
                 "zeta",
                 payload={
@@ -2426,7 +2427,7 @@ def test_zeta_rpc_events_list_filters_by_session_and_run(tmp_path: Path) -> None
         ("session-1", "run_1", "three"),
     ):
         event_store.accept(
-            zeta_events.durable_event_draft(
+            zeta_timeline.durable_event_draft(
                 "zeta.user_message",
                 "zeta",
                 payload={

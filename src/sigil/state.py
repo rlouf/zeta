@@ -16,9 +16,9 @@ from zeta.events import (
     event_log_causal_chain,
     event_log_children,
     event_log_turn_events,
-    publish_event_payload_to_log,
     read_event_log,
 )
+from zeta.timeline import publish_event_payload_to_log
 
 if TYPE_CHECKING:
     from zeta.events import Event

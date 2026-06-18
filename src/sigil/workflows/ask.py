@@ -6,8 +6,8 @@ the other glyphs remember. A new shell session starts a fresh thread.
 
 """
 
-from zeta.events import last_event_time
 from zeta.skills import expand_skill_directive
+from zeta.timeline import last_event_time
 
 from ..sessions import active_failure_context, recent_turns_context
 from .step import step

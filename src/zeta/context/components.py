@@ -14,7 +14,7 @@ from zeta.context.system import (
     system_prompt,
 )
 from zeta.skills import Skill, available_skills, expand_skill_directive
-from zeta.substrate import Object, ObjectId
+from zeta.substrate import Object, ObjectId, trace_object_id
 
 Representation = Literal["full", "summary", "stub"]
 
@@ -517,13 +517,6 @@ def timeline_message_component_links(event: dict[str, Any]) -> tuple[ObjectId, .
 def add_event_link(links: list[ObjectId], object_id: ObjectId | None) -> None:
     if object_id and object_id not in links:
         links.append(object_id)
-
-
-def trace_object_id(event: dict[str, Any], field: str) -> ObjectId | None:
-    value = event.get(field)
-    if isinstance(value, str) and value.startswith("sha256:"):
-        return value
-    return None
 
 
 def assistant_message_object_id(event: dict[str, Any]) -> ObjectId | None:

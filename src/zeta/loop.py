@@ -33,6 +33,7 @@ from zeta.models import (
 )
 from zeta.models.chat_completions import ChatCompletionStreamSink, model_endpoint_open
 from zeta.store.substrate import Store
+from zeta.substrate import trace_object_id
 
 AgentEventSink = Callable[[dict[str, Any]], None]
 ModelStatusFactory = Callable[[], AbstractContextManager[object]]
@@ -1149,13 +1150,6 @@ def add_durable_object_link(
     link = {"kind": kind, "id": object_id}
     if link not in links:
         links.append(link)
-
-
-def trace_object_id(event: dict[str, Any], field: str) -> str | None:
-    value = event.get(field)
-    if isinstance(value, str) and value.startswith("sha256:"):
-        return value
-    return None
 
 
 def ensure_event_id(event: dict[str, Any]) -> str:

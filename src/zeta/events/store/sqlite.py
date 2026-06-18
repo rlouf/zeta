@@ -44,7 +44,6 @@ class SqliteEventStore:
             pass
 
     def _init_schema(self) -> None:
-        self._ensure_events_table_has_sequence()
         self.connection.executescript(
             """
             CREATE TABLE IF NOT EXISTS events (
@@ -79,49 +78,6 @@ class SqliteEventStore:
             CREATE INDEX IF NOT EXISTS idx_events_turn_seq
               ON events(turn_id, seq)
               WHERE turn_id IS NOT NULL;
-            """
-        )
-        self.connection.commit()
-
-    def _ensure_events_table_has_sequence(self) -> None:
-        row = self.connection.execute(
-            """
-            SELECT name
-            FROM sqlite_master
-            WHERE type = 'table' AND name = 'events'
-            """
-        ).fetchone()
-        if row is None:
-            return
-        columns = {
-            str(column["name"])
-            for column in self.connection.execute("PRAGMA table_info(events)")
-        }
-        if "seq" in columns:
-            return
-        self.connection.executescript(
-            """
-            ALTER TABLE events RENAME TO events_legacy;
-            CREATE TABLE events (
-              seq INTEGER PRIMARY KEY AUTOINCREMENT,
-              id TEXT UNIQUE NOT NULL,
-              type TEXT NOT NULL,
-              source TEXT NOT NULL,
-              payload TEXT NOT NULL,
-              idempotency_key TEXT,
-              caused_by TEXT,
-              session_id TEXT,
-              turn_id TEXT,
-              timestamp INTEGER NOT NULL
-            ) STRICT;
-            INSERT INTO events
-              (id, type, source, payload, idempotency_key, caused_by, session_id,
-               turn_id, timestamp)
-            SELECT id, type, source, payload, idempotency_key, caused_by, session_id,
-                   turn_id, timestamp
-            FROM events_legacy
-            ORDER BY timestamp ASC, id ASC;
-            DROP TABLE events_legacy;
             """
         )
         self.connection.commit()
@@ -347,7 +303,6 @@ def row_to_event(row: sqlite3.Row) -> Event:
     payload = json.loads(str(row["payload"]))
     if not isinstance(payload, dict):
         payload = {"value": payload}
-    seq = int(row["seq"]) if "seq" in row.keys() else 0
     return Event(
         id=str(row["id"]),
         event_type=str(row["type"]),
@@ -358,7 +313,7 @@ def row_to_event(row: sqlite3.Row) -> Event:
         session_id=optional_str(row["session_id"]),
         turn_id=optional_str(row["turn_id"]),
         timestamp_micros=int(row["timestamp"]),
-        seq=seq,
+        seq=int(row["seq"]),
     )
 
 

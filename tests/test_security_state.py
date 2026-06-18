@@ -1,7 +1,6 @@
 import ast
 import json
 import os
-import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -560,52 +559,6 @@ def test_sqlite_event_store_orders_by_append_sequence(tmp_path: Path) -> None:
     assert [event.id for event in store.list_events(Filter(after=first.cursor()))] == [
         "a-event",
     ]
-
-
-def test_sqlite_event_store_migrates_legacy_rows_to_sequence_order(
-    tmp_path: Path,
-) -> None:
-    path = tmp_path / "events.sqlite3"
-    connection = sqlite3.connect(path)
-    connection.executescript(
-        """
-        CREATE TABLE events (
-          id TEXT PRIMARY KEY,
-          type TEXT NOT NULL,
-          source TEXT NOT NULL,
-          payload TEXT NOT NULL,
-          idempotency_key TEXT,
-          caused_by TEXT,
-          session_id TEXT,
-          turn_id TEXT,
-          timestamp INTEGER NOT NULL
-        ) STRICT;
-        """
-    )
-    connection.execute(
-        """
-        INSERT INTO events
-          (id, type, source, payload, timestamp)
-        VALUES (?, ?, ?, ?, ?)
-        """,
-        ("b-event", "zeta.model.called", "zeta", "{}", 1),
-    )
-    connection.execute(
-        """
-        INSERT INTO events
-          (id, type, source, payload, timestamp)
-        VALUES (?, ?, ?, ?, ?)
-        """,
-        ("a-event", "zeta.model.called", "zeta", "{}", 1),
-    )
-    connection.commit()
-    connection.close()
-
-    store = SqliteEventStore(path)
-
-    events = store.list_events(Filter())
-    assert [event.id for event in events] == ["a-event", "b-event"]
-    assert [event.seq for event in events] == [1, 2]
 
 
 def test_sqlite_event_store_traverses_causality(tmp_path: Path) -> None:

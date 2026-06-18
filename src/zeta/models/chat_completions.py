@@ -30,6 +30,10 @@ ModelTelemetrySink = Callable[[dict[str, Any]], None]
 _MODEL_CONTEXT_TOKENS_CACHE: dict[tuple[str, str], int] = {}
 
 
+def tool_call_id(tool_call: dict[str, Any], *, index: int) -> str:
+    return str(tool_call.get("id") or f"call-{index}")
+
+
 def should_color(stream: object) -> bool:
     return (
         bool(getattr(stream, "isatty", lambda: False)())
@@ -583,7 +587,7 @@ class ChatStreamAccumulator:
         if not isinstance(function, dict):
             function = {"name": "", "arguments": ""}
         return {
-            "id": str(call.get("id") or f"call-{index}"),
+            "id": tool_call_id(call, index=index),
             "type": str(call.get("type") or "function"),
             "function": {
                 "name": str(function.get("name") or ""),

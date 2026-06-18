@@ -31,7 +31,11 @@ from zeta.models import (
     ModelOutput,
     chat_completion_messages,
 )
-from zeta.models.chat_completions import ChatCompletionStreamSink, model_endpoint_open
+from zeta.models.chat_completions import (
+    ChatCompletionStreamSink,
+    model_endpoint_open,
+    tool_call_id,
+)
 from zeta.store.substrate import Store
 from zeta.substrate import trace_object_id
 
@@ -550,10 +554,6 @@ def run_capability_step(
 
 
 TERMINAL_TOOL_STATUSES = {"completed", "failed", "refused", "cancelled", "timed_out"}
-
-
-def tool_call_id(tool_call: dict[str, Any], *, index: int) -> str:
-    return str(tool_call.get("id") or f"call-{index}")
 
 
 def terminal_capability_result_event(
@@ -1352,7 +1352,7 @@ class ModelToolCall:
         *,
         index: int,
     ) -> ModelToolCall | None:
-        call_id = str(tool_call.get("id") or f"call-{index}")
+        call_id = tool_call_id(tool_call, index=index)
         function = tool_call.get("function")
         if not isinstance(function, dict):
             return None
@@ -1422,7 +1422,7 @@ def handle_tool_call(
     caused_by: str | None = None,
 ) -> CapabilityCallResult:
     active_tool_registry = tool_registry or _runtime_tool_registry
-    call_id = str(tool_call.get("id") or f"call-{index}")
+    call_id = tool_call_id(tool_call, index=index)
     invocation = tool_call_invocation(tool_call, index=index, caused_by=caused_by)
     if invocation is None:
         return invalid_tool_result(

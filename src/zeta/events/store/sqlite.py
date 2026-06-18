@@ -12,8 +12,8 @@ import time
 from pathlib import Path
 from typing import Any
 
-from ..event import AppendOutcome, DraftEvent, Event
-from .base import Filter
+from ..event import DraftEvent, Event
+from .base import AppendOutcome, Filter
 
 EVENT_STORE_NAME = "events.sqlite3"
 ZETA_STORE_NAME = "zeta.sqlite3"
@@ -150,19 +150,9 @@ class SqliteEventStore:
         if filter.caused_by is not None:
             clauses.append("caused_by = ?")
             params.append(filter.caused_by)
-        if filter.after is not None:
-            if filter.after.seq is not None:
-                clauses.append("seq > ?")
-                params.append(filter.after.seq)
-            else:
-                clauses.append("(timestamp > ? OR (timestamp = ? AND id > ?))")
-                params.extend(
-                    [
-                        filter.after.timestamp_micros,
-                        filter.after.timestamp_micros,
-                        filter.after.id,
-                    ]
-                )
+        if filter.after_seq is not None:
+            clauses.append("seq > ?")
+            params.append(filter.after_seq)
         where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
         limit = ""
         if filter.limit is not None:

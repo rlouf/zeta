@@ -1,6 +1,6 @@
 """Event store implementations."""
 
-from .base import EventReader, Filter
+from .base import AppendOutcome, EventReader, Filter
 from .memory import MemoryEventStore
 from .sqlite import (
     EVENT_STORE_NAME,
@@ -17,6 +17,7 @@ from .sqlite import (
 )
 
 __all__ = [
+    "AppendOutcome",
     "EVENT_STORE_NAME",
     "EventReader",
     "Filter",

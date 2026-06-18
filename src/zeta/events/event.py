@@ -14,43 +14,6 @@ from uuid import uuid4
 
 
 @dataclass(frozen=True)
-class EventCursor:
-    """Replay position over the durable event ordering key.
-
-    Cursors let readers resume from a store-owned order without assuming that
-    wall-clock timestamps are unique or monotonic across producers.
-    """
-
-    seq: int | None = None
-    timestamp_micros: int | None = None
-    id: str | None = None
-
-    @classmethod
-    def from_event(cls, event: Event) -> EventCursor:
-        return cls(seq=event.seq)
-
-    def encode(self) -> str:
-        if self.seq is not None:
-            return str(self.seq)
-        return f"{self.timestamp_micros}:{self.id}"
-
-    @classmethod
-    def decode(cls, value: str) -> EventCursor | None:
-        try:
-            return cls(seq=int(value))
-        except ValueError:
-            pass
-        timestamp, separator, event_id = value.partition(":")
-        if not separator:
-            return None
-        try:
-            timestamp_micros = int(timestamp)
-        except ValueError:
-            return None
-        return cls(timestamp_micros=timestamp_micros, id=event_id)
-
-
-@dataclass(frozen=True)
 class DraftEvent:
     """Producer-supplied event before store enrichment.
 
@@ -107,22 +70,6 @@ class Event:
     turn_id: str | None
     timestamp_micros: int
     seq: int = 0
-
-    def cursor(self) -> EventCursor:
-        return EventCursor.from_event(self)
-
-
-@dataclass(frozen=True)
-class AppendOutcome:
-    """Append result that preserves idempotent producer semantics.
-
-    Stores return the existing event on duplicate input so callers can treat
-    retries as successful acknowledgements without guessing whether persistence
-    happened.
-    """
-
-    event: Event
-    inserted: bool
 
 
 def current_timestamp_micros() -> int:

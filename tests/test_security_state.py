@@ -48,7 +48,6 @@ from sigil.workflows.ask import (
 from zeta.events import (
     AppendOutcome,
     DraftEvent,
-    EventCursor,
     Filter,
     MemoryEventStore,
     SqliteEventStore,
@@ -455,7 +454,7 @@ def test_sqlite_event_store_filters_and_cursors(tmp_path: Path) -> None:
     ).event
 
     zeta_events = store.list_events(Filter(event_type_prefix="zeta."))
-    after_first = store.list_events(Filter(after=EventCursor.from_event(first)))
+    after_first = store.list_events(Filter(after_seq=first.seq))
 
     assert [event.id for event in zeta_events] == [first.id, second.id, third.id]
     assert store.list_events(Filter(session_id="s1", caused_by=first.id)) == [second]
@@ -523,9 +522,7 @@ def test_event_stores_share_ordering_idempotency_and_filter_semantics(
     assert event_store.list_events(Filter(session_id="s1", caused_by=first.id)) == [
         second
     ]
-    assert event_store.list_events(Filter(after=EventCursor.from_event(first))) == [
-        second
-    ]
+    assert event_store.list_events(Filter(after_seq=first.seq)) == [second]
     assert event_store.children(first.id) == [second]
     assert event_store.causal_chain(second.id) == [first, second]
 
@@ -556,8 +553,8 @@ def test_sqlite_event_store_orders_by_append_sequence(tmp_path: Path) -> None:
         "a-event",
     ]
     assert first.seq < second.seq
-    assert [event.id for event in store.list_events(Filter(after=first.cursor()))] == [
-        "a-event",
+    assert [event.id for event in store.list_events(Filter(after_seq=first.seq))] == [
+        "a-event"
     ]
 
 

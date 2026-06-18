@@ -8,7 +8,8 @@ from __future__ import annotations
 
 from typing import Protocol
 
-from .event import AppendOutcome, DraftEvent
+from .event import DraftEvent
+from .store.base import AppendOutcome
 
 
 class EventSink(Protocol):

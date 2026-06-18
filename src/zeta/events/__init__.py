@@ -7,10 +7,8 @@ layout.
 """
 
 from .event import (
-    AppendOutcome,
     DraftEvent,
     Event,
-    EventCursor,
     current_timestamp_micros,
     id_for_idempotency_key,
     normalize_idempotency_key,
@@ -41,6 +39,7 @@ from .sink import EventSink, publish_event
 from .store import (
     EVENT_STORE_NAME,
     ZETA_STORE_NAME,
+    AppendOutcome,
     EventReader,
     Filter,
     MemoryEventStore,
@@ -88,7 +87,6 @@ __all__ = [
     "EVENT_IDEMPOTENT_TYPES",
     "EVENT_STORE_NAME",
     "Event",
-    "EventCursor",
     "EventReader",
     "EventSink",
     "Filter",

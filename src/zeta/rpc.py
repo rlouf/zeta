@@ -31,7 +31,6 @@ from .dispatch import AgentDefinition, AgentRun, EventDispatcher, TriggerRule
 from .events import (
     DraftEvent,
     Event,
-    EventCursor,
     EventReader,
     EventSink,
     Filter,
@@ -77,7 +76,7 @@ class RpcRunState:
 @dataclass(frozen=True)
 class EventSubscription:
     id: str
-    after: EventCursor | None = None
+    after_seq: int | None = None
     session_id: str | None = None
     run_id: str | None = None
 
@@ -406,7 +405,7 @@ def final_event_cursor(runtime_context: Session, run_id: str) -> str | None:
     )
     if not events:
         return None
-    return events[-1].cursor().encode()
+    return str(events[-1].seq)
 
 
 def rpc_event_with_cursor(
@@ -443,7 +442,7 @@ def rpc_event_from_durable_event(event: Event) -> dict[str, Any]:
     projected = timeline_event_from_durable_event(event)
     if not projected:
         projected = generic_rpc_event_from_durable_event(event)
-    projected["cursor"] = event.cursor().encode()
+    projected["cursor"] = str(event.seq)
     return projected
 
 
@@ -740,7 +739,7 @@ def normalized_client_tool_response(
     return cast(dict[str, Any], raw_result), "responded"
 
 
-def event_cursor_param(value: Any) -> EventCursor | None:
+def event_cursor_param(value: Any) -> int | None:
     if value is None:
         return None
     if not isinstance(value, str):
@@ -750,15 +749,15 @@ def event_cursor_param(value: Any) -> EventCursor | None:
             "Invalid params",
             {"message": "after must be an event cursor string"},
         )
-    cursor = EventCursor.decode(value)
-    if cursor is None:
+    try:
+        return int(value)
+    except ValueError:
         raise RpcError(
             -32602,
             "invalid_cursor",
             "Invalid params",
             {"message": "after must be an event cursor string"},
-        )
-    return cursor
+        ) from None
 
 
 def positive_limit_param(value: Any) -> int | None:
@@ -797,15 +796,13 @@ def event_matches_subscription(
         return False
     if subscription.run_id is not None and event.get("run_id") != subscription.run_id:
         return False
-    if subscription.after is None:
+    if subscription.after_seq is None:
         return True
-    cursor = EventCursor.decode(str(event.get("cursor") or ""))
-    return (
-        cursor is not None
-        and cursor.seq is not None
-        and subscription.after.seq is not None
-        and cursor.seq > subscription.after.seq
-    )
+    try:
+        cursor_seq = int(str(event.get("cursor") or ""))
+    except ValueError:
+        return False
+    return cursor_seq > subscription.after_seq
 
 
 class JsonRpcServer:
@@ -962,17 +959,22 @@ class JsonRpcServer:
                 "Server error",
                 {"message": "events.list is not configured"},
             )
-        after = event_cursor_param(params.get("after"))
+        after_seq = event_cursor_param(params.get("after"))
         limit = positive_limit_param(params.get("limit"))
         session_id = optional_string(params.get("session_id"))
         run_id = optional_string(params.get("run_id"))
         events = self.event_reader.list_events(
-            Filter(session_id=session_id, turn_id=run_id, after=after, limit=limit)
+            Filter(
+                session_id=session_id,
+                turn_id=run_id,
+                after_seq=after_seq,
+                limit=limit,
+            )
         )
         next_cursor = (
-            events[-1].cursor().encode()
+            str(events[-1].seq)
             if events
-            else (after.encode() if after is not None else None)
+            else (str(after_seq) if after_seq is not None else None)
         )
         return {
             "events": [rpc_event_from_durable_event(event) for event in events],
@@ -980,10 +982,10 @@ class JsonRpcServer:
         }
 
     def subscribe_events(self, params: dict[str, Any]) -> dict[str, Any]:
-        after = event_cursor_param(params.get("after"))
+        after_seq = event_cursor_param(params.get("after"))
         subscription = EventSubscription(
             id=f"sub_{uuid.uuid4().hex}",
-            after=after,
+            after_seq=after_seq,
             session_id=optional_string(params.get("session_id")),
             run_id=optional_string(params.get("run_id")),
         )
@@ -991,7 +993,7 @@ class JsonRpcServer:
         return {
             "subscribed": True,
             "subscription_id": subscription.id,
-            "next_cursor": after.encode() if after is not None else None,
+            "next_cursor": str(after_seq) if after_seq is not None else None,
         }
 
     def publish_runtime_event(self, params: dict[str, Any]) -> dict[str, Any]:

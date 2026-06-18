@@ -132,7 +132,7 @@ class EventDispatcher:
             return {
                 "outcome": "failed",
                 "error": str(exc),
-                "final_event_cursor": failed.cursor().encode(),
+                "final_event_cursor": str(failed.seq),
             }, events
         terminal_type = terminal_work_event_type(result)
         completed = self._append_work_event(
@@ -143,7 +143,10 @@ class EventDispatcher:
             {"status": terminal_type.rsplit(".", 1)[-1], "result": result},
         )
         events.append(completed)
-        result = {**result, "final_event_cursor": completed.cursor().encode()}
+        result = {
+            **result,
+            "final_event_cursor": str(completed.seq),
+        }
         return result, events
 
     def _append_work_event(

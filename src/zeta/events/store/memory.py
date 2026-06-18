@@ -1,11 +1,11 @@
 """In-memory event store.
 
 The memory store mirrors SQLite append semantics for tests and ephemeral
-runtimes, including idempotency and cursor ordering, without creating files.
+runtimes, including idempotency and sequence ordering, without creating files.
 """
 
-from ..event import AppendOutcome, DraftEvent, Event
-from .base import Filter
+from ..event import DraftEvent, Event
+from .base import AppendOutcome, Filter
 
 
 class MemoryEventStore:
@@ -117,11 +117,6 @@ def matches_filter(event: Event, filter: Filter) -> bool:
         return False
     if filter.caused_by is not None and event.caused_by != filter.caused_by:
         return False
-    if filter.after is None:
+    if filter.after_seq is None:
         return True
-    if filter.after.seq is not None:
-        return event.seq > filter.after.seq
-    return (event.timestamp_micros, event.id) > (
-        filter.after.timestamp_micros or 0,
-        filter.after.id or "",
-    )
+    return event.seq > filter.after_seq

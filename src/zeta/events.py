@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, Protocol
 from uuid import uuid4
 
 
@@ -103,14 +103,6 @@ class EventSink(Protocol):
         """Accept one draft event and return the durable append outcome."""
 
 
-@runtime_checkable
-class EventReader(Protocol):
-    """Readable event log capability for projections and inspection."""
-
-    def list_events(self, filter: Filter) -> list[Event]:
-        """List durable events matching the filter."""
-
-
 def publish_event(draft: DraftEvent, *, sink: EventSink) -> AppendOutcome:
     return sink.accept(draft)
 
@@ -119,7 +111,6 @@ __all__ = [
     "AppendOutcome",
     "DraftEvent",
     "Event",
-    "EventReader",
     "EventSink",
     "Filter",
     "publish_event",

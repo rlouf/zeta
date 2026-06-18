@@ -1,6 +1,8 @@
 """Event store implementations."""
 
-from zeta.events import AppendOutcome, EventReader, Filter
+from typing import Protocol, runtime_checkable
+
+from zeta.events import AppendOutcome, Event, Filter
 from zeta.store.events.memory import MemoryEventStore
 from zeta.store.events.sqlite import (
     EVENT_STORE_NAME,
@@ -15,6 +17,15 @@ from zeta.store.events.sqlite import (
     publish_event_to_log,
     read_event_log,
 )
+
+
+@runtime_checkable
+class EventReader(Protocol):
+    """Readable event store capability for projections and inspection."""
+
+    def list_events(self, filter: Filter) -> list[Event]:
+        """List durable events matching the filter."""
+
 
 __all__ = [
     "AppendOutcome",

@@ -1424,12 +1424,7 @@ def handle_tool_call(
         execution_mode=execution_mode,
         model_telemetry=model_telemetry,
         prompt_trace=prompt_trace,
-        prompt_builder=ctx.builder,
-        event_sink=ctx.event_sink,
-        durable_event_sink=ctx.durable_event_sink,
-        session_id=ctx.session_id,
-        turn_id=ctx.turn_id,
-        tool_registry=ctx.tool_registry,
+        ctx=ctx,
     )
 
 
@@ -1514,12 +1509,7 @@ def run_valid_tool_call(
     execution_mode: ExecutionMode,
     model_telemetry: dict[str, Any] | None,
     prompt_trace: PromptTrace | None,
-    prompt_builder: PromptBuilder | None,
-    event_sink: AgentEventSink | None,
-    durable_event_sink: EventSink | None,
-    session_id: str | None,
-    turn_id: str | None,
-    tool_registry: CapabilityRegistry,
+    ctx: TurnContext,
 ) -> CapabilityCallResult:
     events: list[dict[str, Any]] = []
     call_event = invocation.call_event
@@ -1527,22 +1517,22 @@ def run_valid_tool_call(
     attach_tool_call_trace(
         call_event,
         prompt_trace=prompt_trace,
-        prompt_builder=prompt_builder,
+        prompt_builder=ctx.builder,
     )
     emit_tool_event(
         events,
         call_event,
-        event_sink=event_sink,
-        durable_event_sink=durable_event_sink,
-        session_id=session_id,
-        turn_id=turn_id,
+        event_sink=ctx.event_sink,
+        durable_event_sink=ctx.durable_event_sink,
+        session_id=ctx.session_id,
+        turn_id=ctx.turn_id,
     )
     try:
         result = invoke_capability(
             capability_id,
             invocation.params,
             execution_mode=execution_mode,
-            tool_registry=tool_registry,
+            tool_registry=ctx.tool_registry,
         )
     except Exception as exc:
         result = tool_error("tool-crashed", f"{type(exc).__name__}: {exc}")
@@ -1551,7 +1541,7 @@ def run_valid_tool_call(
         if tool_call_stages_effect(
             capability_id,
             execution_mode,
-            tool_registry=tool_registry,
+            tool_registry=ctx.tool_registry,
         )
         else None
     )
@@ -1570,12 +1560,12 @@ def run_valid_tool_call(
             call_event=call_event,
             model_telemetry=model_telemetry,
             prompt_trace=prompt_trace,
-            prompt_builder=prompt_builder,
+            prompt_builder=ctx.builder,
         ),
-        event_sink=event_sink,
-        durable_event_sink=durable_event_sink,
-        session_id=session_id,
-        turn_id=turn_id,
+        event_sink=ctx.event_sink,
+        durable_event_sink=ctx.durable_event_sink,
+        session_id=ctx.session_id,
+        turn_id=ctx.turn_id,
     )
     return CapabilityCallResult(
         events=events,

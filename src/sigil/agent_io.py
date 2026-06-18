@@ -35,6 +35,7 @@ from sigil.turn import TurnRecorder
 from zeta.agents.capabilities import AgentConfig
 from zeta.capabilities.base import ExecutionMode
 from zeta.context.instructions import load_project_instructions
+from zeta.events import AppendOutcome, DraftEvent, Event
 from zeta.loop import (
     AgentTurnAborted,
     AgentTurnResult,
@@ -49,7 +50,72 @@ from zeta.models import (
 )
 from zeta.models.chat_completions import ensure_server
 from zeta.session import Session
-from zeta.timeline import current_timeline, record_event
+from zeta.timeline import (
+    current_timeline,
+    record_event,
+    timeline_event_from_durable_event,
+)
+
+
+def draft_event_id(draft: DraftEvent) -> str | None:
+    key = draft.idempotency_key
+    prefix = f"{draft.event_type}:"
+    if key is None or not key.startswith(prefix):
+        return None
+    event_id = key[len(prefix) :].strip()
+    return event_id or None
+
+
+class DirectRuntimeEventSink:
+    def __init__(self, recorder: "TurnEventRecorder") -> None:
+        self.recorder = recorder
+        self.projected_events: dict[str, dict[str, Any]] = {}
+
+    def accept(self, draft: DraftEvent) -> AppendOutcome:
+        tagged = DraftEvent(
+            event_type=draft.event_type,
+            source=draft.source,
+            payload={**draft.payload, **self.recorder.tag_fields},
+            idempotency_key=draft.idempotency_key,
+            caused_by=draft.caused_by,
+            session_id=draft.session_id,
+            turn_id=draft.turn_id,
+        )
+        event_id = draft_event_id(tagged)
+        append = getattr(self.recorder.runtime_context.event_sink, "append", None)
+        if callable(append) and event_id is not None:
+            event = Event(
+                id=event_id,
+                event_type=tagged.event_type,
+                source=tagged.source,
+                payload=tagged.payload,
+                idempotency_key=tagged.idempotency_key,
+                caused_by=tagged.caused_by,
+                session_id=tagged.session_id,
+                turn_id=tagged.turn_id,
+                timestamp_micros=time_micros(),
+            )
+            outcome = append(event)
+        else:
+            outcome = self.recorder.runtime_context.event_sink.accept(tagged)
+        projected = timeline_event_from_durable_event(outcome.event)
+        runtime_id = event_id or projected.get("id")
+        if isinstance(runtime_id, str) and projected:
+            self.projected_events[runtime_id] = projected
+        return outcome
+
+    def projected_event(self, event: dict[str, Any]) -> dict[str, Any] | None:
+        event_id = event.get("id")
+        if not isinstance(event_id, str):
+            return None
+        projected = self.projected_events.get(event_id)
+        return dict(projected) if projected is not None else None
+
+
+def time_micros() -> int:
+    import time
+
+    return time.time_ns() // 1_000
 
 
 def model_server_ready(selected_model: ModelSelection | None) -> bool:
@@ -124,6 +190,7 @@ class TurnEventRecorder:
         self.turn_recorder = turn_recorder
         self.runtime_context = runtime_context
         self.recorded_event_ids: set[int] = set()
+        self.direct_event_sink = DirectRuntimeEventSink(self)
         self.status: int | None = None
 
     def record(self, event: dict[str, Any]) -> None:
@@ -158,6 +225,11 @@ class TurnEventRecorder:
             self.status = status
 
     def persist(self, event_type: str, event: dict[str, Any]) -> dict[str, Any]:
+        direct_event = self.direct_event_sink.projected_event(event)
+        if direct_event is not None:
+            if "effects" in event:
+                direct_event["effects"] = event["effects"]
+            return direct_event
         fields = {
             key: value
             for key, value in event.items()

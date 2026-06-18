@@ -188,6 +188,9 @@ def step(
             ),
             context=context,
             event_sink=recorder.record,
+            durable_event_sink=recorder.direct_event_sink,
+            session_id=runtime_context.session_id,
+            turn_id=turn_recorder.turn_id,
             model_status=thinking_status_factory(
                 output,
                 before_start=(

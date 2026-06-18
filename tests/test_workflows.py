@@ -1987,7 +1987,54 @@ def test_zeta_step_threads_durable_event_causality(monkeypatch) -> None:
     ) -> zeta_agent.AgentTurnResult:
         del objective, transcript, config
         prompt_event_id = cast(str, kwargs["caused_by"])
+        durable_event_sink = cast(Any, kwargs["durable_event_sink"])
         captured["prompt_event_id"] = prompt_event_id
+        durable_event_sink.accept(
+            zeta_agent.model_called_draft(
+                payload={
+                    "_timeline_type": "model",
+                    "content": "",
+                    "workflow": "do",
+                },
+                turn_id=cast(str, kwargs["turn_id"]),
+                session_id=cast(str, kwargs["session_id"]),
+                caused_by=prompt_event_id,
+                event_id="model-event",
+            )
+        )
+        durable_event_sink.accept(
+            zeta_agent.tool_called_draft(
+                payload={
+                    "_timeline_type": "tool_call",
+                    "tool_call_id": "call-1",
+                    "name": "write",
+                    "input": {"path": "a.txt", "content": "hello\n"},
+                    "workflow": "do",
+                },
+                turn_id=cast(str, kwargs["turn_id"]),
+                session_id=cast(str, kwargs["session_id"]),
+                caused_by="model-event",
+                event_id="call-1",
+            )
+        )
+        durable_event_sink.accept(
+            zeta_agent.tool_called_draft(
+                payload={
+                    "_timeline_type": "tool_result",
+                    "tool_call_id": "call-1",
+                    "name": "write",
+                    "result": {
+                        "ok": True,
+                        "metadata": {"mode": "direct", "path": "a.txt"},
+                    },
+                    "workflow": "do",
+                },
+                turn_id=cast(str, kwargs["turn_id"]),
+                session_id=cast(str, kwargs["session_id"]),
+                caused_by="model-event",
+                event_id="tool-event",
+            )
+        )
         return zeta_agent.AgentTurnResult(
             final_text="done",
             events=[

@@ -13,7 +13,7 @@ from sigil.protocols import (
 )
 from zeta.capabilities.base import proposed_effect
 from zeta.context.budget import estimated_tokens_for_text
-from zeta.substrate.object import Object
+from zeta.substrate import Object
 
 SUMMARY_FIELDS_BY_TOOL = {
     "read": ("path", "file_path"),

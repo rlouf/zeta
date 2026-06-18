@@ -5,13 +5,13 @@ from typing import Any
 import click
 
 from sigil.display.summarize import estimated_prompt_tokens
-from zeta.substrate.object import Object, ObjectId
-from zeta.substrate.store import (
+from zeta.store.substrate import (
     AmbiguousIdError,
     Store,
     UnknownIdError,
     resolve_object_id,
 )
+from zeta.substrate import Object, ObjectId
 
 
 def resolve_cli_object_id(token: str, *, store: Store) -> ObjectId:

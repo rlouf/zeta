@@ -48,7 +48,7 @@ from zeta.context import builder as zeta_context
 from zeta.events import DraftEvent, Event
 from zeta.models import chat_completions as zeta_model
 from zeta.store.events import Filter, SqliteEventStore
-from zeta.substrate.store import InMemoryStore
+from zeta.store.substrate import InMemoryStore
 from zeta.timeline import durable_event_draft
 
 zeta_trace = SimpleNamespace(InMemoryStore=InMemoryStore)

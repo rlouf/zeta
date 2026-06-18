@@ -25,10 +25,7 @@ from zeta.context.components import chat_messages
 from zeta.models import profiles as zeta_models
 from zeta.session import Session, default_session
 from zeta.store.events import Filter, SqliteEventStore, event_store_path
-from zeta.substrate.derivation import Derivation
-from zeta.substrate.object import Object, ObjectId
-from zeta.substrate.ref import Ref, RefUpdate
-from zeta.substrate.store import (
+from zeta.store.substrate import (
     AmbiguousIdError,
     InMemoryStore,
     SqliteStore,
@@ -38,6 +35,7 @@ from zeta.substrate.store import (
     resolve_object_id,
     zeta_sqlite_path,
 )
+from zeta.substrate import Derivation, Object, ObjectId, Ref, RefUpdate
 
 zeta_trace = SimpleNamespace(
     AmbiguousIdError=AmbiguousIdError,

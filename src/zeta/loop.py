@@ -31,7 +31,7 @@ from zeta.models import (
     chat_completion_messages,
 )
 from zeta.models.chat_completions import ChatCompletionStreamSink, model_endpoint_open
-from zeta.substrate.store import Store
+from zeta.store.substrate import Store
 
 AgentEventSink = Callable[[dict[str, Any]], None]
 ModelStatusFactory = Callable[[], AbstractContextManager[object]]

@@ -14,7 +14,7 @@ from zeta.context.system import (
     system_prompt,
 )
 from zeta.skills import Skill, available_skills, expand_skill_directive
-from zeta.substrate.object import Object, ObjectId
+from zeta.substrate import Object, ObjectId
 
 Representation = Literal["full", "summary", "stub"]
 

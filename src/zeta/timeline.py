@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 from zeta.events import DraftEvent, Event, EventSink, publish_event
 from zeta.store.events import EventReader, Filter, SqliteEventStore
-from zeta.substrate.store import Store, warn_trace_failure_once
+from zeta.store.substrate import Store, warn_trace_failure_once
 
 if TYPE_CHECKING:
     from zeta.session import Session

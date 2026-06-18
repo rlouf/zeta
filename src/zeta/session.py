@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from zeta.capabilities.registry import CapabilityRegistry
     from zeta.events import EventSink
-    from zeta.substrate.store import Store
+    from zeta.store.substrate import Store
 
 
 @dataclass(frozen=True)
@@ -45,7 +45,7 @@ def session_for_id(
 ) -> Session:
     """Build the default Zeta runtime dependencies for one session."""
     from zeta.store.events import SqliteEventStore, event_store_path
-    from zeta.substrate.store import SqliteStore, zeta_sqlite_path
+    from zeta.store.substrate import SqliteStore, zeta_sqlite_path
 
     if tool_registry is None:
         from zeta.capabilities.registry import registry as tool_registry

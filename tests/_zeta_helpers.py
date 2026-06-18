@@ -21,8 +21,8 @@ from zeta.context.builder import (
 )
 from zeta.context.components import PromptComponent, prompt_components
 from zeta.models import chat_completions as zeta_model
-from zeta.substrate.object import Object, ObjectId
-from zeta.substrate.store import InMemoryStore, Store
+from zeta.store.substrate import InMemoryStore, Store
+from zeta.substrate import Object, ObjectId
 
 zeta_context = SimpleNamespace(
     PreparedPrompt=PreparedPrompt,

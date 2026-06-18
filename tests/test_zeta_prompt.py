@@ -60,9 +60,8 @@ from zeta.context.instructions import (
 )
 from zeta.context.system import model_capability_descriptors, system_prompt
 from zeta.models import chat_completions as zeta_model
-from zeta.substrate.derivation import Derivation
-from zeta.substrate.object import Object
-from zeta.substrate.store import InMemoryStore
+from zeta.store.substrate import InMemoryStore
+from zeta.substrate import Derivation, Object
 
 ensure_builtin_tools_registered()
 

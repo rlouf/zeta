@@ -21,8 +21,8 @@ from sigil.protocols import (
     SHELL_HANDOFF_OUTCOME_CANCELLED,
     SHELL_HANDOFF_OUTCOME_EXECUTED,
 )
-from zeta.substrate.object import Object
-from zeta.substrate.store import InMemoryStore
+from zeta.store.substrate import InMemoryStore
+from zeta.substrate import Object
 
 zeta_trace = SimpleNamespace(InMemoryStore=InMemoryStore, Object=Object)
 

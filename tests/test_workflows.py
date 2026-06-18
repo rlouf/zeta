@@ -52,8 +52,8 @@ from zeta.history import (
 )
 from zeta.models import profiles as zeta_models
 from zeta.store.events import Filter, SqliteEventStore, event_store_path
-from zeta.substrate.ref import Ref
-from zeta.substrate.store import resolve_object_id
+from zeta.store.substrate import resolve_object_id
+from zeta.substrate import Ref
 
 zeta_trace = SimpleNamespace(Ref=Ref, resolve_object_id=resolve_object_id)
 

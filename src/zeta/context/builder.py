@@ -25,13 +25,12 @@ from zeta.models.chat_completions import (
     chat_completion_request_body,
 )
 from zeta.skills import Skill, available_skills
-from zeta.substrate.derivation import Derivation
-from zeta.substrate.object import Object, ObjectId
-from zeta.substrate.store import (
+from zeta.store.substrate import (
     Store,
     canonical_json,
     warn_trace_failure_once,
 )
+from zeta.substrate import Derivation, Object, ObjectId
 
 
 @dataclass(frozen=True)

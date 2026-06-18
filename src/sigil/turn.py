@@ -24,9 +24,8 @@ from zeta.history import (
     turn_record,
 )
 from zeta.session import Session
-from zeta.substrate.derivation import Derivation
-from zeta.substrate.object import Object, ObjectId
-from zeta.substrate.store import warn_trace_failure_once
+from zeta.store.substrate import warn_trace_failure_once
+from zeta.substrate import Derivation, Object, ObjectId
 
 
 class TurnRecorder:

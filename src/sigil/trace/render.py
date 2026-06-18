@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 from sigil.display.summarize import short_trace_id, text_content, trace_object_summary
-from zeta.substrate.object import Object, ObjectId
-from zeta.substrate.store import Store
+from zeta.store.substrate import Store
+from zeta.substrate import Object, ObjectId
 
 BODY_LINE_LIMIT = 8
 

@@ -44,6 +44,7 @@ from zeta.runtime_events import (
     TurnAbortedRuntimeEvent,
 )
 from zeta.store.substrate import Store
+from zeta.timeline import timeline_event_from_durable_event
 
 AgentEventSink = Callable[[DraftEvent], None]
 ModelStatusFactory = Callable[[], AbstractContextManager[object]]
@@ -806,7 +807,7 @@ def draft_timeline_event(draft: DraftEvent) -> dict[str, Any]:
         turn_id=draft.turn_id,
         timestamp_micros=time.time_ns() // 1_000,
     )
-    projected = runtime_events.timeline_event_from_durable_event(event)
+    projected = timeline_event_from_durable_event(event)
     if projected.get("type") == "model":
         tool_call_object_ids = [
             link["id"]

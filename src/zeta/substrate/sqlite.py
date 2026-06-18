@@ -545,8 +545,7 @@ class SqliteStore(StoreBase):
 
     def record_derivation(self, derivation: Derivation) -> str:
         self._ensure_writable()
-        stored = derivation.normalized()
-        id_value = stored.content_id()
+        id_value = derivation.content_address()
         with self._write_lock:
             self.connection.execute(
                 """
@@ -558,14 +557,16 @@ class SqliteStore(StoreBase):
                 (
                     id_value,
                     self.session_id,
-                    stored.producer,
-                    stored.output_id,
-                    canonical_json(list(stored.input_ids)),
-                    canonical_json(stored.params),
+                    derivation.producer,
+                    derivation.output_id,
+                    canonical_json(list(derivation.input_ids)),
+                    canonical_json(derivation.params),
                     time.time(),
                 ),
             )
-            self._index_derivation_inputs(self.session_id, id_value, stored.input_ids)
+            self._index_derivation_inputs(
+                self.session_id, id_value, derivation.input_ids
+            )
             self._commit()
         return id_value
 
@@ -646,8 +647,7 @@ class SqliteStore(StoreBase):
     ) -> None:
         """Insert an exported derivation, preserving its original timestamp."""
         self._ensure_writable()
-        stored = derivation.normalized()
-        stored_id = stored.content_id()
+        stored_id = derivation.content_address()
         if self.session_id is None:
             stored_id = derivation_id_value
         with self._write_lock:
@@ -661,17 +661,17 @@ class SqliteStore(StoreBase):
                 (
                     stored_id,
                     self.session_id,
-                    stored.producer,
-                    stored.output_id,
-                    canonical_json(list(stored.input_ids)),
-                    canonical_json(stored.params),
+                    derivation.producer,
+                    derivation.output_id,
+                    canonical_json(list(derivation.input_ids)),
+                    canonical_json(derivation.params),
                     created_at,
                 ),
             )
             self._index_derivation_inputs(
                 self.session_id,
                 stored_id,
-                stored.input_ids,
+                derivation.input_ids,
             )
             self._commit()
 

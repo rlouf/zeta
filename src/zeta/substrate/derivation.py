@@ -3,31 +3,23 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from dataclasses import dataclass, field
 from typing import Any
 
-from .object import ObjectId, canonical_json, normalize_json
+from .object import ObjectId
 
 
 @dataclass(frozen=True)
 class Derivation:
-    """Record how a trace object was produced."""
+    """Record how an object was produced."""
 
     producer: str
     output_id: ObjectId
     input_ids: tuple[ObjectId, ...] = ()
     params: dict[str, Any] = field(default_factory=dict)
 
-    def normalized(self) -> Derivation:
-        """Return a derivation whose identity is stable across store backends."""
-        return Derivation(
-            producer=self.producer,
-            output_id=self.output_id,
-            input_ids=tuple(str(input_id) for input_id in self.input_ids),
-            params=normalize_json(self.params),
-        )
-
-    def content_id(self) -> str:
+    def content_address(self) -> str:
         """Return the deterministic content address for this derivation."""
         payload: dict[str, Any] = {
             "producer": self.producer,
@@ -35,5 +27,11 @@ class Derivation:
             "input_ids": self.input_ids,
             "params": self.params,
         }
-        digest = hashlib.sha256(canonical_json(payload).encode()).hexdigest()
+        content = json.dumps(
+            payload,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        digest = hashlib.sha256(content.encode()).hexdigest()
         return f"derivation:{digest}"

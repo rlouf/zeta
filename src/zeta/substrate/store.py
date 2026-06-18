@@ -192,9 +192,8 @@ class InMemoryStore(StoreBase):
         yield
 
     def record_derivation(self, derivation: Derivation) -> str:
-        stored = derivation.normalized()
-        id_value = stored.content_id()
-        self.derivations.setdefault(id_value, stored)
+        id_value = derivation.content_address()
+        self.derivations.setdefault(id_value, derivation)
         return id_value
 
     def derivations_for_output(self, output_id: ObjectId) -> list[Derivation]:

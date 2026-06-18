@@ -1290,7 +1290,7 @@ def test_zeta_trace_derivation_ids_are_content_scoped_across_sessions(
     first_id = first.record_derivation(derivation)
     second_id = second.record_derivation(derivation)
 
-    assert first_id == second_id == derivation.content_id()
+    assert first_id == second_id == derivation.content_address()
     assert first.derivations_for_input("sha256:in") == [derivation]
     assert second.derivations_for_input("sha256:in") == [derivation]
 
@@ -1317,7 +1317,7 @@ def test_zeta_trace_backfills_derivation_inputs_on_open(tmp_path: Path) -> None:
         VALUES (?, ?, ?, ?, ?, ?)
         """,
         (
-            derivation.content_id(),
+            derivation.content_address(),
             derivation.producer,
             derivation.output_id,
             json.dumps(list(derivation.input_ids)),
@@ -1413,7 +1413,7 @@ def test_zeta_trace_lists_objects_by_derivation_recency(tmp_path: Path) -> None:
               (id, producer, output_id, input_ids_json, params_json, created_at)
             VALUES (?, ?, ?, '[]', '{}', ?)
             """,
-            (derivation.content_id(), "test:v1", output_id, created_at),
+            (derivation.content_address(), "test:v1", output_id, created_at),
         )
     store.connection.commit()
 

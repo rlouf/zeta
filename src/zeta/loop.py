@@ -255,9 +255,7 @@ def run_agent_steps(
             context=context,
             tools=tools,
             state=state,
-            builder=ctx.builder,
-            model_status=ctx.model_status,
-            stream_sink=ctx.stream_sink,
+            ctx=ctx,
         )
         if ctx.cancellation_event is not None and ctx.cancellation_event.is_set():
             check_turn_budget(
@@ -347,9 +345,7 @@ def request_model_turn(
     context: str,
     tools: list[dict[str, Any]],
     state: AgentTurnState,
-    builder: PromptBuilder,
-    model_status: ModelStatusFactory | None,
-    stream_sink: ChatCompletionStreamSink | None,
+    ctx: TurnContext,
 ) -> ModelTurn:
     prepared_prompt, model_input = build_prompt_step(
         objective,
@@ -360,21 +356,21 @@ def request_model_turn(
         current_events=state.events,
         tools=tools,
         state=state,
-        builder=builder,
+        builder=ctx.builder,
     )
     model_output, streamed_content, model_telemetry = call_model_step(
         model_input,
         config=config,
         state=state,
-        model_status=model_status,
-        stream_sink=stream_sink,
+        model_status=ctx.model_status,
+        stream_sink=ctx.stream_sink,
     )
     assistant, prompt_trace = record_assistant_step(
         prepared_prompt,
         model_output,
         model_telemetry,
         state=state,
-        builder=builder,
+        builder=ctx.builder,
     )
     return ModelTurn(
         assistant=assistant,

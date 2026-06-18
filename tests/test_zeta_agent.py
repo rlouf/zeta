@@ -732,6 +732,19 @@ def test_zeta_request_model_turn_builds_assistant_from_model_output(
     )
     state = zeta_agent.AgentTurnState()
     builder = PlanOnlyPromptBuilder()
+    ctx = zeta_agent.TurnContext(
+        session_id=None,
+        turn_id=None,
+        event_sink=None,
+        durable_event_sink=None,
+        trace_store=None,
+        tool_registry=CapabilityRegistry(),
+        builder=builder,
+        model_status=None,
+        stream_sink=None,
+        cancellation_event=None,
+        deadline=None,
+    )
 
     turn = zeta_agent.request_model_turn(
         "answer",
@@ -741,9 +754,7 @@ def test_zeta_request_model_turn_builds_assistant_from_model_output(
         context="",
         tools=[],
         state=state,
-        builder=builder,
-        model_status=None,
-        stream_sink=None,
+        ctx=ctx,
     )
 
     assert builder.planned

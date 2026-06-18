@@ -57,29 +57,18 @@ def available_session_ids(root: Path | None = None) -> list[str]:
     connection.row_factory = sqlite3.Row
     try:
         sessions: set[str] = set()
-        if _table_exists(connection, "derivations") and _column_exists(
-            connection, "derivations", "session_id"
-        ):
-            rows = connection.execute(
-                "SELECT DISTINCT session_id FROM derivations WHERE session_id IS NOT NULL"
-            ).fetchall()
-            sessions.update(str(row["session_id"]) for row in rows)
-        if _table_exists(connection, "refs") and _column_exists(
-            connection, "refs", "scope"
-        ):
-            rows = connection.execute(
-                """
-                SELECT DISTINCT substr(scope, 9) AS session_id
-                FROM refs
-                WHERE scope LIKE 'session/%'
-                """
-            ).fetchall()
-            sessions.update(str(row["session_id"]) for row in rows)
-        if _table_exists(connection, "events"):
-            rows = connection.execute(
-                "SELECT DISTINCT session_id FROM events WHERE session_id IS NOT NULL"
-            ).fetchall()
-            sessions.update(str(row["session_id"]) for row in rows)
+        rows = connection.execute(
+            "SELECT DISTINCT session_id FROM derivations WHERE session_id IS NOT NULL"
+        ).fetchall()
+        sessions.update(str(row["session_id"]) for row in rows)
+        rows = connection.execute(
+            """
+            SELECT DISTINCT substr(scope, 9) AS session_id
+            FROM refs
+            WHERE scope LIKE 'session/%'
+            """
+        ).fetchall()
+        sessions.update(str(row["session_id"]) for row in rows)
         return sorted(session for session in sessions if session)
     finally:
         connection.close()
@@ -195,28 +184,6 @@ def import_trace_graph(
     return count
 
 
-def _table_exists(connection: sqlite3.Connection, name: str) -> bool:
-    row = connection.execute(
-        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
-        (name,),
-    ).fetchone()
-    return row is not None
-
-
-def _column_exists(connection: sqlite3.Connection, table: str, column: str) -> bool:
-    rows = connection.execute(f"PRAGMA table_info({table})").fetchall()
-    return any(str(row["name"]) == column for row in rows)
-
-
-def _table_columns(connection: sqlite3.Connection, table: str) -> set[str]:
-    rows = connection.execute(f"PRAGMA table_info({table})").fetchall()
-    return {str(row["name"]) for row in rows}
-
-
-def optional_session_id(value: object) -> str | None:
-    return value if isinstance(value, str) else None
-
-
 def _object_from_row(row: sqlite3.Row) -> Object:
     return Object(
         kind=str(row["kind"]),
@@ -322,7 +289,6 @@ class SqliteStore(StoreBase):
                 );
                 """
             )
-            self._migrate_legacy_schema()
             self.connection.executescript(
                 """
                 CREATE UNIQUE INDEX IF NOT EXISTS derivations_scope_id_idx
@@ -339,7 +305,6 @@ class SqliteStore(StoreBase):
                 );
                 """
             )
-            self._migrate_derivation_inputs_schema()
             self.connection.executescript(
                 """
                 CREATE UNIQUE INDEX IF NOT EXISTS derivation_inputs_scope_position_idx
@@ -348,91 +313,6 @@ class SqliteStore(StoreBase):
                   ON derivation_inputs(input_id);
                 """
             )
-            self.connection.commit()
-            self._backfill_derivation_inputs()
-
-    def _migrate_legacy_schema(self) -> None:
-        """Upgrade old single-session trace schemas opened directly by tests."""
-        refs_columns = _table_columns(self.connection, "refs")
-        if refs_columns and "scope" not in refs_columns:
-            self.connection.executescript(
-                """
-                ALTER TABLE refs RENAME TO refs_old;
-                CREATE TABLE refs (
-                  scope TEXT NOT NULL DEFAULT 'global',
-                  name TEXT NOT NULL,
-                  object_id TEXT NOT NULL,
-                  PRIMARY KEY (scope, name)
-                );
-                INSERT OR IGNORE INTO refs(scope, name, object_id)
-                  SELECT 'global', name, object_id FROM refs_old;
-                DROP TABLE refs_old;
-                """
-            )
-        derivation_columns = _table_columns(self.connection, "derivations")
-        if derivation_columns and "session_id" not in derivation_columns:
-            self.connection.execute(
-                "ALTER TABLE derivations ADD COLUMN session_id TEXT"
-            )
-        if self._derivations_id_is_primary_key():
-            self.connection.executescript(
-                """
-                ALTER TABLE derivations RENAME TO derivations_old;
-                CREATE TABLE derivations (
-                  id TEXT NOT NULL,
-                  session_id TEXT,
-                  producer TEXT NOT NULL,
-                  output_id TEXT NOT NULL,
-                  input_ids_json TEXT NOT NULL,
-                  params_json TEXT NOT NULL,
-                  created_at REAL NOT NULL
-                );
-                INSERT OR IGNORE INTO derivations
-                  (id, session_id, producer, output_id, input_ids_json,
-                   params_json, created_at)
-                  SELECT id, session_id, producer, output_id, input_ids_json,
-                         params_json, created_at
-                  FROM derivations_old;
-                DROP TABLE derivations_old;
-                """
-            )
-
-    def _derivations_id_is_primary_key(self) -> bool:
-        rows = self.connection.execute("PRAGMA table_info(derivations)").fetchall()
-        return any(str(row["name"]) == "id" and int(row["pk"]) for row in rows)
-
-    def _migrate_derivation_inputs_schema(self) -> None:
-        columns = _table_columns(self.connection, "derivation_inputs")
-        if columns and "session_id" not in columns:
-            self.connection.executescript(
-                """
-                DROP TABLE derivation_inputs;
-                CREATE TABLE derivation_inputs (
-                  session_id TEXT,
-                  derivation_id TEXT NOT NULL,
-                  input_id TEXT NOT NULL,
-                  position INTEGER NOT NULL
-                );
-                """
-            )
-
-    def _backfill_derivation_inputs(self) -> None:
-        """Index pre-existing derivations whose inputs predate the table."""
-        with self._write_lock:
-            indexed = self.connection.execute(
-                "SELECT COUNT(*) AS n FROM derivation_inputs"
-            ).fetchone()
-            if int(indexed["n"]):
-                return
-            rows = self.connection.execute(
-                "SELECT session_id, id, input_ids_json FROM derivations"
-            ).fetchall()
-            for row in rows:
-                self._index_derivation_inputs(
-                    optional_session_id(row["session_id"]),
-                    str(row["id"]),
-                    tuple(json.loads(str(row["input_ids_json"]))),
-                )
             self.connection.commit()
 
     def _index_derivation_inputs(

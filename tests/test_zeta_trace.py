@@ -1341,41 +1341,6 @@ def test_zeta_trace_derivation_ids_are_content_scoped_across_sessions(
     second.close()
 
 
-def test_zeta_trace_backfills_derivation_inputs_on_open(tmp_path: Path) -> None:
-    path = tmp_path / "trace.sqlite3"
-    store = zeta_trace.SqliteStore(path)
-    derivation = zeta_trace.Derivation(
-        producer="legacy:v1",
-        output_id="sha256:out",
-        input_ids=("sha256:in",),
-    )
-    store.connection.execute(
-        """
-        INSERT INTO derivations
-          (id, producer, output_id, input_ids_json, params_json, created_at)
-        VALUES (?, ?, ?, ?, ?, ?)
-        """,
-        (
-            derivation.content_address(),
-            derivation.producer,
-            derivation.output_id,
-            json.dumps(list(derivation.input_ids)),
-            "{}",
-            1.0,
-        ),
-    )
-    store.connection.commit()
-    assert store.derivations_for_input("sha256:in") == []
-    store.close()
-
-    reopened = zeta_trace.SqliteStore(path)
-
-    (recovered,) = reopened.derivations_for_input("sha256:in")
-    assert recovered.producer == "legacy:v1"
-    assert recovered.output_id == "sha256:out"
-    reopened.close()
-
-
 def test_zeta_trace_resolves_refs_full_ids_and_prefixes(tmp_path: Path) -> None:
     store = zeta_trace.SqliteStore(tmp_path / "trace.sqlite3")
     object_id = store.put_object(

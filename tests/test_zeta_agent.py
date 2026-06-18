@@ -876,6 +876,19 @@ def test_zeta_run_capability_step_records_call_execution_and_result(
     registry = CapabilityRegistry()
     projection = registry.project(())
     tool_call = {"id": "call-1", "function": {"name": "read", "arguments": "{}"}}
+    ctx = zeta_agent.TurnContext(
+        session_id=None,
+        turn_id=None,
+        event_sink=None,
+        durable_event_sink=None,
+        trace_store=None,
+        tool_registry=registry,
+        builder=zeta_context.PromptBuilder(),
+        model_status=None,
+        stream_sink=None,
+        cancellation_event=None,
+        deadline=None,
+    )
 
     def fake_handle_tool_call(
         received: dict[str, Any],
@@ -900,13 +913,9 @@ def test_zeta_run_capability_step_records_call_execution_and_result(
         projection=projection,
         model_telemetry={},
         prompt_trace=None,
-        builder=zeta_context.PromptBuilder(),
-        event_sink=None,
-        tool_registry=registry,
         assistant_event_id="assistant-1",
         state=state,
-        cancellation_event=None,
-        deadline=None,
+        ctx=ctx,
     )
 
     assert [step.step for step in state.steps] == [
@@ -937,6 +946,19 @@ def test_zeta_run_capability_step_reconciles_existing_terminal_result(
     registry = CapabilityRegistry()
     projection = registry.project(())
     invoked = False
+    ctx = zeta_agent.TurnContext(
+        session_id=None,
+        turn_id=None,
+        event_sink=None,
+        durable_event_sink=None,
+        trace_store=None,
+        tool_registry=registry,
+        builder=zeta_context.PromptBuilder(),
+        model_status=None,
+        stream_sink=None,
+        cancellation_event=None,
+        deadline=None,
+    )
 
     def fail_handle_tool_call(
         *args: object, **kwargs: object
@@ -955,13 +977,9 @@ def test_zeta_run_capability_step_reconciles_existing_terminal_result(
         projection=projection,
         model_telemetry={},
         prompt_trace=None,
-        builder=zeta_context.PromptBuilder(),
-        event_sink=None,
-        tool_registry=registry,
         assistant_event_id="assistant-1",
         state=state,
-        cancellation_event=None,
-        deadline=None,
+        ctx=ctx,
     )
 
     assert invoked is False

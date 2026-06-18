@@ -464,16 +464,9 @@ def run_capability_calls(
             projection=projection,
             model_telemetry=(model_telemetry if index == 0 else None),
             prompt_trace=prompt_trace,
-            builder=ctx.builder,
-            event_sink=ctx.event_sink,
-            durable_event_sink=ctx.durable_event_sink,
-            session_id=ctx.session_id,
-            turn_id=ctx.turn_id,
-            tool_registry=ctx.tool_registry,
             assistant_event_id=assistant_event_id,
             state=state,
-            cancellation_event=ctx.cancellation_event,
-            deadline=ctx.deadline,
+            ctx=ctx,
         )
         state.events.extend(result_event.events)
         state.next_model_caused_by = next_model_parent(result_event.events)
@@ -495,23 +488,16 @@ def run_capability_step(
     projection: CapabilityProjection,
     model_telemetry: dict[str, Any] | None,
     prompt_trace: PromptTrace | None,
-    builder: PromptBuilder,
-    event_sink: AgentEventSink | None,
-    durable_event_sink: EventSink | None = None,
-    session_id: str | None = None,
-    turn_id: str | None = None,
-    tool_registry: CapabilityRegistry,
     assistant_event_id: str | None,
     state: RunState,
-    cancellation_event: threading.Event | None,
-    deadline: float | None,
+    ctx: TurnContext,
 ) -> CapabilityCallResult:
     state.note_step("check_budget")
     check_turn_budget(
         state,
-        event_sink=event_sink,
-        cancellation_event=cancellation_event,
-        deadline=deadline,
+        event_sink=ctx.event_sink,
+        cancellation_event=ctx.cancellation_event,
+        deadline=ctx.deadline,
     )
     if (
         terminal_capability_result_event(
@@ -532,12 +518,12 @@ def run_capability_step(
         execution_mode=config.execution_mode,
         model_telemetry=model_telemetry,
         prompt_trace=prompt_trace,
-        prompt_builder=builder,
-        event_sink=event_sink,
-        durable_event_sink=durable_event_sink,
-        session_id=session_id,
-        turn_id=turn_id,
-        tool_registry=tool_registry,
+        prompt_builder=ctx.builder,
+        event_sink=ctx.event_sink,
+        durable_event_sink=ctx.durable_event_sink,
+        session_id=ctx.session_id,
+        turn_id=ctx.turn_id,
+        tool_registry=ctx.tool_registry,
         caused_by=assistant_event_id,
     )
     state.note_step("record_capability_result")

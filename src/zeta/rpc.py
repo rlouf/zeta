@@ -164,10 +164,7 @@ def record_runtime_event(
 ) -> dict[str, Any]:
     draft = runtime_event_draft(event, session_id=runtime_context.session_id)
     outcome = direct_event_sink.accept(draft)
-    projected = timeline_event_from_durable_event(outcome.event)
-    if "effects" in event:
-        projected["effects"] = event["effects"]
-    return projected
+    return timeline_event_from_durable_event(outcome.event)
 
 
 def runtime_event_draft(
@@ -307,8 +304,6 @@ def run_session_turn(
     def sink(event: dict[str, Any]) -> None:
         scoped = rpc_event_with_run_id(event, run_id)
         persisted = direct_event_sink.projected_event(scoped)
-        if persisted is not None and "effects" in scoped:
-            persisted["effects"] = scoped["effects"]
         if persisted is None:
             persisted = record_runtime_event(
                 scoped,

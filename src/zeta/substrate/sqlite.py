@@ -17,12 +17,17 @@ from .object import (
     Object,
     ObjectId,
 )
-from .refs import (
+from .ref import (
     Ref,
     RefUpdate,
-    UnknownSessionError,
 )
-from .store import StoreBase, TraceStats, canonical_json, escape_like
+from .store import (
+    StoreBase,
+    TraceStats,
+    UnknownSessionError,
+    canonical_json,
+    escape_like,
+)
 
 DEFAULT_SQLITE_NAME = "zeta-trace.sqlite3"
 ZETA_SQLITE_NAME = "zeta.sqlite3"

@@ -7,13 +7,10 @@ from .object import (
     Object,
     ObjectId,
 )
-from .refs import (
-    AmbiguousIdError,
+from .ref import (
     Ref,
     RefName,
     RefUpdate,
-    UnknownIdError,
-    UnknownSessionError,
 )
 from .sqlite import (
     DEFAULT_SQLITE_NAME,
@@ -29,10 +26,13 @@ from .sqlite import (
     zeta_sqlite_path,
 )
 from .store import (
+    AmbiguousIdError,
     InMemoryStore,
     Store,
     StoreBase,
     TraceStats,
+    UnknownIdError,
+    UnknownSessionError,
     canonical_json,
     escape_like,
     normalize_json,

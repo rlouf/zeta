@@ -14,15 +14,39 @@ from .object import (
     Object,
     ObjectId,
 )
-from .refs import (
-    AmbiguousIdError,
+from .ref import (
     Ref,
     RefUpdate,
-    UnknownIdError,
 )
 
 LOGGER = logging.getLogger("zeta.substrate")
 _WARNED_FAILURES: set[str] = set()
+
+
+class UnknownIdError(LookupError):
+    """A trace id token matched no ref, object id, or prefix."""
+
+    def __init__(self, token: str) -> None:
+        super().__init__(token)
+        self.token = token
+
+
+class AmbiguousIdError(LookupError):
+    """A trace id prefix matched more than one object."""
+
+    def __init__(self, token: str, candidates: list[ObjectId]) -> None:
+        super().__init__(token)
+        self.token = token
+        self.candidates = candidates
+
+
+class UnknownSessionError(LookupError):
+    """A session id named no recorded trace store."""
+
+    def __init__(self, session_id: str, available: list[str]) -> None:
+        super().__init__(session_id)
+        self.session_id = session_id
+        self.available = available
 
 
 @dataclass(frozen=True)

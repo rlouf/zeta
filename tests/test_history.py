@@ -100,7 +100,8 @@ def test_history_publish_turn_record_uses_outcome_event_names() -> None:
     )
 
     assert failed.event_type == "zeta.turn.failed"
-    assert aborted.event_type == "zeta.turn.aborted"
+    assert aborted.event_type == "zeta.turn.failed"
+    assert aborted.payload["reason"] == "aborted"
 
 
 def test_history_publish_effect_record_writes_durable_tool_event() -> None:

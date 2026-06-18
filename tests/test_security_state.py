@@ -793,7 +793,7 @@ def test_durable_event_constructors_set_turn_id_and_idempotency_keys() -> None:
         session_id="s1",
     )
     aborted = zeta_turn_draft(
-        "zeta.turn.aborted",
+        "zeta.turn.failed",
         payload={"outcome": "aborted"},
         turn_id="turn-1",
         session_id="s1",
@@ -814,8 +814,8 @@ def test_durable_event_constructors_set_turn_id_and_idempotency_keys() -> None:
     assert completed.idempotency_key == "zeta.turn.completed:turn-1"
     assert failed.event_type == "zeta.turn.failed"
     assert failed.idempotency_key == "zeta.turn.failed:turn-1"
-    assert aborted.event_type == "zeta.turn.aborted"
-    assert aborted.idempotency_key == "zeta.turn.aborted:turn-1"
+    assert aborted.event_type == "zeta.turn.failed"
+    assert aborted.idempotency_key == "zeta.turn.failed:turn-1"
 
 
 def test_durable_event_constructor_idempotency_deduplicates_replays(

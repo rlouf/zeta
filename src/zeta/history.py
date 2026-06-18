@@ -25,7 +25,6 @@ SINCE_PATTERN = re.compile(r"(\d+)([dhm])")
 SINCE_SCALES = {"d": 86400, "h": 3600, "m": 60}
 TURN_EVENT_COMPLETED = "zeta.turn.completed"
 TURN_EVENT_FAILED = "zeta.turn.failed"
-TURN_EVENT_ABORTED = "zeta.turn.aborted"
 TURN_RECORD_SCHEMA = "zeta.turn"
 EFFECT_RECORD_TYPE = "zeta.effect"
 EFFECT_RECORD_SCHEMA = "zeta.effect"
@@ -256,6 +255,8 @@ def turn_record(
         record["agent"] = dict(agent)
     if cost is not None:
         record["cost"] = dict(cost)
+    if outcome == "aborted":
+        record["reason"] = "aborted"
     return record
 
 
@@ -299,10 +300,8 @@ def effect_record(
 
 def turn_event_type(outcome: str) -> str:
     """Return the durable event type for a turn outcome."""
-    if outcome == "failed":
+    if outcome in {"failed", "aborted"}:
         return TURN_EVENT_FAILED
-    if outcome == "aborted":
-        return TURN_EVENT_ABORTED
     return TURN_EVENT_COMPLETED
 
 
@@ -330,12 +329,15 @@ def publish_turn_record(
 ) -> Event:
     """Append one durable turn record to a Zeta event store."""
     event_type = turn_event_type(str(record.get("outcome") or ""))
+    payload = dict(record)
+    if payload.get("outcome") == "aborted":
+        payload.setdefault("reason", "aborted")
     return append_event(
         path,
         event_from_record(
             {
                 "cwd": cwd or os.getcwd(),
-                **record,
+                **payload,
                 "type": event_type,
                 "session": session_id,
             }

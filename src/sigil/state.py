@@ -30,7 +30,6 @@ EVENT_IDEMPOTENT_TYPES = frozenset(
         "zeta.tool_call.completed",
         "zeta.tool_call.failed",
         "zeta.user_message",
-        "zeta.turn_aborted",
         "zeta.model_usage",
     }
 )
@@ -39,7 +38,6 @@ TURN_IDEMPOTENT_TYPES = frozenset(
         "zeta.prompt.submitted",
         "zeta.turn.completed",
         "zeta.turn.failed",
-        "zeta.turn.aborted",
     }
 )
 TIMELINE_DURABLE_TYPES = {

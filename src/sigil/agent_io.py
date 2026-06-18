@@ -197,8 +197,9 @@ def record_runtime_event(
             if key not in {"id", "type", "time", "session", "source", "caused_by"}
         }
         payload["_timeline_type"] = "turn_aborted"
+        payload.setdefault("reason", "aborted")
         draft = DraftEvent(
-            event_type="zeta.turn_aborted",
+            event_type="zeta.turn.failed",
             source="zeta",
             payload=payload,
             idempotency_key=None,
@@ -400,9 +401,10 @@ def record_turn_abort(
         **fields,
         "_timeline_type": "turn_aborted",
     }
+    payload.setdefault("reason", "aborted")
     outcome = runtime_context.event_sink.accept(
         DraftEvent(
-            event_type="zeta.turn_aborted",
+            event_type="zeta.turn.failed",
             source="zeta",
             payload=payload,
             idempotency_key=None,

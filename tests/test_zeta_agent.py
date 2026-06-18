@@ -1843,7 +1843,7 @@ def test_zeta_rpc_session_returns_aborted_on_wall_clock_budget(
         "runtime.work.pending",
         "runtime.work.claimed",
         "zeta.user_message",
-        "zeta.turn_aborted",
+        "zeta.turn.failed",
         "runtime.work.cancelled",
     ]
 
@@ -1951,7 +1951,7 @@ def test_zeta_rpc_session_cancel_aborts_active_run(
         "runtime.work.pending",
         "runtime.work.claimed",
         "zeta.user_message",
-        "zeta.turn_aborted",
+        "zeta.turn.failed",
         "runtime.work.cancelled",
     ]
 

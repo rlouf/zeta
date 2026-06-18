@@ -202,7 +202,7 @@ def runtime_event_draft(
         )
     elif event_type == "turn_aborted":
         return DraftEvent(
-            event_type="zeta.turn_aborted",
+            event_type="zeta.turn.failed",
             source="zeta",
             payload=turn_aborted_payload(event),
             idempotency_key=None,
@@ -222,6 +222,7 @@ def turn_aborted_payload(event: dict[str, Any]) -> dict[str, Any]:
         if key not in {"id", "type", "time", "session", "source", "caused_by"}
     }
     payload["_timeline_type"] = "turn_aborted"
+    payload.setdefault("reason", "aborted")
     return payload
 
 
@@ -921,7 +922,6 @@ def rpc_event_idempotency_key(
         "zeta.tool_call.completed",
         "zeta.tool_call.failed",
         "zeta.user_message",
-        "zeta.turn_aborted",
         "zeta.model_usage",
     }:
         return f"{event_type}:{event_id}" if event_id is not None else None
@@ -929,7 +929,6 @@ def rpc_event_idempotency_key(
         "zeta.prompt.submitted",
         "zeta.turn.completed",
         "zeta.turn.failed",
-        "zeta.turn.aborted",
     }:
         return f"{event_type}:{turn_id}" if turn_id is not None else None
     return None

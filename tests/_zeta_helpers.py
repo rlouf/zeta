@@ -6,6 +6,7 @@ import base64
 import json
 import re
 import time
+import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
 from io import StringIO
@@ -20,9 +21,13 @@ from zeta.context.builder import (
     reconstructed_prompt_request,
 )
 from zeta.context.components import PromptComponent, prompt_components
+from zeta.events import Event
 from zeta.models import chat_completions as zeta_model
+from zeta.rpc import rpc_event_dict_draft
+from zeta.session import Session
 from zeta.store.substrate import InMemoryStore, Store
 from zeta.substrate import Object, ObjectId
+from zeta.timeline import timeline_event_from_durable_event
 
 zeta_context = SimpleNamespace(
     PreparedPrompt=PreparedPrompt,
@@ -176,6 +181,45 @@ def event_by_type(
     event_type: str,
 ) -> dict[str, Any]:
     return next(event for event in events if event.get("type") == event_type)
+
+
+def record_durable_timeline_event(
+    event: dict[str, Any],
+    *,
+    runtime_context: Session,
+) -> dict[str, Any]:
+    draft = rpc_event_dict_draft(event, session_id=runtime_context.session_id)
+    append = getattr(runtime_context.event_sink, "append", None)
+    if callable(append):
+        appended = append(
+            Event(
+                id=event_id(event),
+                event_type=draft.event_type,
+                source=draft.source,
+                payload=draft.payload,
+                idempotency_key=draft.idempotency_key,
+                caused_by=draft.caused_by,
+                session_id=draft.session_id,
+                turn_id=draft.turn_id,
+                timestamp_micros=event_timestamp_micros(event),
+            )
+        )
+        durable_event = appended.event
+    else:
+        durable_event = runtime_context.event_sink.accept(draft).event
+    return timeline_event_from_durable_event(durable_event)
+
+
+def event_id(event: dict[str, Any]) -> str:
+    value = event.get("id")
+    return value if isinstance(value, str) and value else f"evt_{uuid.uuid4().hex}"
+
+
+def event_timestamp_micros(event: dict[str, Any]) -> int:
+    value = event.get("time")
+    if isinstance(value, int | float) and not isinstance(value, bool):
+        return int(float(value) * 1_000_000)
+    return time.time_ns() // 1_000
 
 
 def read_tool_call_response(target: Path) -> dict[str, Any]:

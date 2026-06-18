@@ -10,6 +10,7 @@ from typing import Any, cast
 import pytest
 from _zeta_helpers import (
     TtyBuffer,
+    record_durable_timeline_event,
     required_stream_sink,
     visible_terminal_text,
     write_models_config,
@@ -59,7 +60,7 @@ zeta_trace = SimpleNamespace(Ref=Ref, resolve_object_id=resolve_object_id)
 
 
 def record_sigil_event(event: dict[str, Any]) -> dict[str, Any]:
-    return zeta_timeline.record_event(
+    return record_durable_timeline_event(
         event,
         runtime_context=sigil.zeta_session_for_sigil(),
     )

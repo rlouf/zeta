@@ -11,6 +11,7 @@ from _zeta_helpers import (
     event_by_type,
     read_tool_call_response,
     read_tool_payload,
+    record_durable_timeline_event,
 )
 from click.testing import CliRunner
 
@@ -79,7 +80,7 @@ def record_zeta_event(
     *,
     runtime_context: Session | None = None,
 ) -> dict[str, object]:
-    return zeta_timeline.record_event(
+    return record_durable_timeline_event(
         event,
         runtime_context=runtime_context or zeta_runtime_context(),
     )

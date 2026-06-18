@@ -13,6 +13,7 @@ from typing import Any, cast
 import click
 import pytest
 from _patch import patch, patch_dict
+from _zeta_helpers import record_durable_timeline_event
 from click.testing import CliRunner
 
 from sigil.cli import cli, main
@@ -1980,7 +1981,6 @@ def test_ask_omits_failure_context_after_successful_turn() -> None:
 
 def test_fresh_ask_only_includes_shell_activity_since_last_response() -> None:
     from sigil import zeta_session_for_sigil
-    from zeta import timeline as zeta_timeline
 
     with tempfile.TemporaryDirectory() as tmp:
         with patch_dict(
@@ -1988,7 +1988,7 @@ def test_fresh_ask_only_includes_shell_activity_since_last_response() -> None:
             {"SIGIL_STATE_DIR": tmp, "SIGIL_SESSION_ID": "test"},
         ):
             record_turn("ls -la", 0, "/repo")
-            zeta_timeline.record_event(
+            record_durable_timeline_event(
                 {"type": "model", "content": "95 files."},
                 runtime_context=zeta_session_for_sigil(),
             )
@@ -2010,7 +2010,6 @@ def test_fresh_ask_only_includes_shell_activity_since_last_response() -> None:
 
 def test_fresh_ask_omits_failure_context_already_seen_by_the_model() -> None:
     from sigil import zeta_session_for_sigil
-    from zeta import timeline as zeta_timeline
 
     with tempfile.TemporaryDirectory() as tmp:
         with patch_dict(
@@ -2023,7 +2022,7 @@ def test_fresh_ask_omits_failure_context_already_seen_by_the_model() -> None:
                 "/repo",
                 stderr_snippet="AssertionError: no",
             )
-            zeta_timeline.record_event(
+            record_durable_timeline_event(
                 {"type": "model", "content": "The fixture is wrong."},
                 runtime_context=zeta_session_for_sigil(),
             )
@@ -2131,7 +2130,6 @@ def test_events_raw_requires_json() -> None:
 
 def test_session_transcript_renders_conversation() -> None:
     from sigil import zeta_session_for_sigil
-    from zeta import timeline as zeta_timeline
 
     with tempfile.TemporaryDirectory() as tmp:
         with patch_dict(
@@ -2139,11 +2137,11 @@ def test_session_transcript_renders_conversation() -> None:
             {"SIGIL_STATE_DIR": tmp, "SIGIL_SESSION_ID": "test"},
         ):
             runtime_context = zeta_session_for_sigil()
-            zeta_timeline.record_event(
+            record_durable_timeline_event(
                 {"type": "user_message", "content": "what is sigil?"},
                 runtime_context=runtime_context,
             )
-            zeta_timeline.record_event(
+            record_durable_timeline_event(
                 {"type": "model", "content": "A shell assistant."},
                 runtime_context=runtime_context,
             )
@@ -2157,7 +2155,6 @@ def test_session_transcript_renders_conversation() -> None:
 
 def test_session_transcript_limits_and_dumps_json() -> None:
     from sigil import zeta_session_for_sigil
-    from zeta import timeline as zeta_timeline
 
     with tempfile.TemporaryDirectory() as tmp:
         with patch_dict(
@@ -2165,11 +2162,11 @@ def test_session_transcript_limits_and_dumps_json() -> None:
             {"SIGIL_STATE_DIR": tmp, "SIGIL_SESSION_ID": "test"},
         ):
             runtime_context = zeta_session_for_sigil()
-            zeta_timeline.record_event(
+            record_durable_timeline_event(
                 {"type": "user_message", "content": "first"},
                 runtime_context=runtime_context,
             )
-            zeta_timeline.record_event(
+            record_durable_timeline_event(
                 {"type": "model", "content": "second"},
                 runtime_context=runtime_context,
             )

@@ -22,7 +22,7 @@ from zeta.history import effect_record, publish_effect_record
 from zeta.loop import tool_called_draft, tool_durable_payload
 from zeta.timeline import (
     current_timeline,
-    record_event,
+    event_payload,
     timeline_event_from_durable_event,
 )
 
@@ -35,7 +35,7 @@ def append_shell_result() -> dict[str, Any]:
     event = shell_result_event(current_timeline(runtime_context=runtime_context))
     if event.get("type") == "tool_result":
         return record_shell_tool_result(event)
-    return record_event(event, runtime_context=runtime_context)
+    return event_payload({**event, "session": runtime_context.session_id})
 
 
 def record_shell_tool_result(event: dict[str, Any]) -> dict[str, Any]:

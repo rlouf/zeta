@@ -28,7 +28,7 @@ from zeta.capabilities.base import (
 from zeta.capabilities.registry import CapabilityRegistry
 from zeta.capabilities.registry import registry as _runtime_tool_registry
 from zeta.dispatch import AgentDefinition, AgentRun, EventDispatcher, TriggerRule
-from zeta.events import DraftEvent, Event, EventSink
+from zeta.events import AppendOutcome, DraftEvent, Event, EventSink
 from zeta.loop import (
     AgentTurnAborted,
     AgentTurnResult,
@@ -75,6 +75,62 @@ class EventSubscription:
     after_seq: int | None = None
     session_id: str | None = None
     run_id: str | None = None
+
+
+def draft_event_id(draft: DraftEvent) -> str | None:
+    key = draft.idempotency_key
+    prefix = f"{draft.event_type}:"
+    if key is None or not key.startswith(prefix):
+        return None
+    event_id = key[len(prefix) :].strip()
+    return event_id or None
+
+
+class DirectRuntimeEventSink:
+    def __init__(self, runtime_context: Session, run_id: str) -> None:
+        self.runtime_context = runtime_context
+        self.run_id = run_id
+        self.projected_events: dict[str, dict[str, Any]] = {}
+
+    def accept(self, draft: DraftEvent) -> AppendOutcome:
+        tagged = DraftEvent(
+            event_type=draft.event_type,
+            source=draft.source,
+            payload={**draft.payload, "run_id": self.run_id},
+            idempotency_key=draft.idempotency_key,
+            caused_by=draft.caused_by,
+            session_id=draft.session_id,
+            turn_id=draft.turn_id,
+        )
+        event_id = draft_event_id(tagged)
+        append = getattr(self.runtime_context.event_sink, "append", None)
+        if callable(append) and event_id is not None:
+            event = Event(
+                id=event_id,
+                event_type=tagged.event_type,
+                source=tagged.source,
+                payload=tagged.payload,
+                idempotency_key=tagged.idempotency_key,
+                caused_by=tagged.caused_by,
+                session_id=tagged.session_id,
+                turn_id=tagged.turn_id,
+                timestamp_micros=time.time_ns() // 1_000,
+            )
+            outcome = append(event)
+        else:
+            outcome = self.runtime_context.event_sink.accept(tagged)
+        projected = timeline_event_from_durable_event(outcome.event)
+        runtime_id = event_id or projected.get("id")
+        if isinstance(runtime_id, str) and projected:
+            self.projected_events[runtime_id] = projected
+        return outcome
+
+    def projected_event(self, event: dict[str, Any]) -> dict[str, Any] | None:
+        event_id = event.get("id")
+        if not isinstance(event_id, str):
+            return None
+        projected = self.projected_events.get(event_id)
+        return dict(projected) if projected is not None else None
 
 
 @dataclass(frozen=True)
@@ -196,12 +252,15 @@ def run_session_turn(
         runtime_context=runtime_context,
     )
     publish_event(rpc_event_with_cursor(runtime_context, user_event, run_id))
+    direct_event_sink = DirectRuntimeEventSink(runtime_context, run_id)
 
     def sink(event: dict[str, Any]) -> None:
-        persisted = record_event(
-            rpc_event_with_run_id(event, run_id),
-            runtime_context=runtime_context,
-        )
+        scoped = rpc_event_with_run_id(event, run_id)
+        persisted = direct_event_sink.projected_event(scoped)
+        if persisted is not None and "effects" in scoped:
+            persisted["effects"] = scoped["effects"]
+        if persisted is None:
+            persisted = record_event(scoped, runtime_context=runtime_context)
         publish_event(rpc_event_with_cursor(runtime_context, persisted, run_id))
 
     try:
@@ -216,6 +275,9 @@ def run_session_turn(
             ),
             context=rpc_context(params),
             event_sink=sink,
+            durable_event_sink=direct_event_sink,
+            session_id=runtime_context.session_id,
+            turn_id=run_id,
             trace_store=runtime_context.trace_store,
             tool_registry=runtime_context.tool_registry,
             caused_by=caused_by,

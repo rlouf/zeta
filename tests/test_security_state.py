@@ -47,7 +47,7 @@ from sigil.workflows.ask import (
     ask,
 )
 from zeta import events as zeta_events
-from zeta import loop as zeta_agent
+from zeta import runtime_events as zeta_runtime_events
 from zeta import timeline as zeta_timeline
 from zeta.events import DraftEvent, Event, publish_event
 from zeta.store.events import (
@@ -802,14 +802,14 @@ def test_durable_event_constructors_set_turn_id_and_idempotency_keys() -> None:
         turn_id="turn-1",
         session_id="s1",
     )
-    model = zeta_agent.model_called_draft(
+    model = zeta_runtime_events.model_called_draft(
         payload={"content": "answer"},
         turn_id="turn-1",
         session_id="s1",
         caused_by="prompt-event",
         event_id="model-event",
     )
-    tool = zeta_agent.tool_called_draft(
+    tool = zeta_runtime_events.tool_called_draft(
         payload={"name": "read"},
         turn_id="turn-1",
         session_id="s1",

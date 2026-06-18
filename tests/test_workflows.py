@@ -42,6 +42,7 @@ from sigil.state import history_view, read_events
 from sigil.workflows import ask as ask_runner
 from sigil.workflows import step as zeta_runner
 from zeta import loop as zeta_agent
+from zeta import runtime_events as zeta_runtime_events
 from zeta import timeline as zeta_timeline
 from zeta.context.components import PromptTrace, chat_messages
 from zeta.history import (
@@ -1991,7 +1992,7 @@ def test_zeta_step_threads_durable_event_causality(monkeypatch) -> None:
         durable_event_sink = cast(Any, kwargs["durable_event_sink"])
         captured["prompt_event_id"] = prompt_event_id
         durable_event_sink.accept(
-            zeta_agent.model_called_draft(
+            zeta_runtime_events.model_called_draft(
                 payload={
                     "_timeline_type": "model",
                     "content": "",
@@ -2004,7 +2005,7 @@ def test_zeta_step_threads_durable_event_causality(monkeypatch) -> None:
             )
         )
         durable_event_sink.accept(
-            zeta_agent.tool_called_draft(
+            zeta_runtime_events.tool_called_draft(
                 payload={
                     "_timeline_type": "tool_call",
                     "tool_call_id": "call-1",
@@ -2019,7 +2020,7 @@ def test_zeta_step_threads_durable_event_causality(monkeypatch) -> None:
             )
         )
         durable_event_sink.accept(
-            zeta_agent.tool_called_draft(
+            zeta_runtime_events.tool_called_draft(
                 payload={
                     "_timeline_type": "tool_result",
                     "tool_call_id": "call-1",

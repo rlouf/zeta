@@ -32,6 +32,7 @@ from zeta import dispatch as zeta_dispatch
 from zeta import loop as zeta_agent
 from zeta import models as zeta_models_api
 from zeta import rpc as zeta_rpc
+from zeta import runtime_events as zeta_runtime_events
 from zeta import session as zeta_session
 from zeta.capabilities.base import (
     Capability,
@@ -311,7 +312,7 @@ def test_zeta_model_runtime_event_round_trips_to_current_dict_shape() -> None:
 
 
 def test_zeta_model_called_draft_sets_durable_metadata() -> None:
-    draft = zeta_agent.model_called_draft(
+    draft = zeta_runtime_events.model_called_draft(
         payload={"content": "done"},
         turn_id="turn-1",
         session_id="session-1",
@@ -329,7 +330,7 @@ def test_zeta_model_called_draft_sets_durable_metadata() -> None:
 
 
 def test_zeta_model_durable_object_links_extract_trace_refs() -> None:
-    used_objects, returned_objects = zeta_agent.model_durable_object_links(
+    used_objects, returned_objects = zeta_runtime_events.model_durable_object_links(
         {
             "prompt_trace": {
                 "prompt_object_id": "sha256:prompt",
@@ -374,7 +375,7 @@ def test_zeta_tool_call_runtime_event_round_trips_to_current_dict_shape() -> Non
 
 
 def test_zeta_tool_called_draft_sets_durable_metadata() -> None:
-    draft = zeta_agent.tool_called_draft(
+    draft = zeta_runtime_events.tool_called_draft(
         payload={"_timeline_type": "tool_call", "name": "read"},
         turn_id="turn-1",
         session_id="session-1",
@@ -392,11 +393,13 @@ def test_zeta_tool_called_draft_sets_durable_metadata() -> None:
 
 
 def test_zeta_tool_result_durable_object_links_extract_trace_refs() -> None:
-    used_objects, returned_objects = zeta_agent.tool_result_durable_object_links(
-        {
-            "tool_call_object_id": "sha256:call",
-            "tool_result_object_id": "sha256:result",
-        }
+    used_objects, returned_objects = (
+        zeta_runtime_events.tool_result_durable_object_links(
+            {
+                "tool_call_object_id": "sha256:call",
+                "tool_result_object_id": "sha256:result",
+            }
+        )
     )
 
     assert used_objects == [{"kind": "tool_call", "id": "sha256:call"}]

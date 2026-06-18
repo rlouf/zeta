@@ -25,7 +25,7 @@ from zeta.context.builder import (
     render_model_input,
 )
 from zeta.context.components import PromptTrace, prompt_trace_payload
-from zeta.events import DraftEvent, EventSink
+from zeta.events import EventSink
 from zeta.models import (
     CODEX_RESPONSES_API,
     ModelInput,
@@ -789,22 +789,6 @@ def record_runtime_event(
     return recorded
 
 
-def tool_durable_payload(event: dict[str, Any]) -> dict[str, Any]:
-    return runtime_events.tool_durable_payload(event)
-
-
-def tool_durable_object_links(
-    event: dict[str, Any],
-) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
-    return runtime_events.tool_durable_object_links(event)
-
-
-def tool_result_durable_object_links(
-    event: dict[str, Any],
-) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
-    return runtime_events.tool_result_durable_object_links(event)
-
-
 @dataclass(frozen=True)
 class CapabilityCallResult:
     events: list[dict[str, Any]]
@@ -814,46 +798,6 @@ class CapabilityCallResult:
 
 def model_event(assistant: dict[str, Any]) -> dict[str, Any]:
     return ModelRuntimeEvent.from_assistant(assistant).to_event()
-
-
-def model_called_draft(
-    *,
-    payload: dict[str, Any],
-    turn_id: str | None,
-    session_id: str,
-    caused_by: str | None = None,
-    event_id: str | None = None,
-) -> DraftEvent:
-    return runtime_events.model_called_draft(
-        payload=payload,
-        turn_id=turn_id,
-        session_id=session_id,
-        caused_by=caused_by,
-        event_id=event_id,
-    )
-
-
-def tool_called_draft(
-    *,
-    payload: dict[str, Any],
-    turn_id: str | None,
-    session_id: str,
-    caused_by: str | None = None,
-    event_id: str | None = None,
-) -> DraftEvent:
-    return runtime_events.tool_called_draft(
-        payload=payload,
-        turn_id=turn_id,
-        session_id=session_id,
-        caused_by=caused_by,
-        event_id=event_id,
-    )
-
-
-def model_durable_object_links(
-    event: dict[str, Any],
-) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
-    return runtime_events.model_durable_object_links(event)
 
 
 def ensure_event_id(event: dict[str, Any]) -> str:
@@ -902,10 +846,6 @@ def record_model_event(
             ctx=ctx,
         )
     return event_id, tool_calls
-
-
-def model_durable_payload(event: dict[str, Any]) -> dict[str, Any]:
-    return runtime_events.model_durable_payload(event)
 
 
 def next_model_parent(events: list[dict[str, Any]]) -> str | None:

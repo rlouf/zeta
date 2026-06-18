@@ -39,12 +39,8 @@ from zeta.events import AppendOutcome, DraftEvent, Event
 from zeta.loop import (
     AgentTurnAborted,
     AgentTurnResult,
-    model_called_draft,
-    model_durable_payload,
     registered_capabilities,
     run_agent_turn,
-    tool_called_draft,
-    tool_durable_payload,
 )
 from zeta.models import (
     CODEX_RESPONSES_API,
@@ -53,6 +49,12 @@ from zeta.models import (
     model_selection_event,
 )
 from zeta.models.chat_completions import ensure_server
+from zeta.runtime_events import (
+    model_called_draft,
+    model_durable_payload,
+    tool_called_draft,
+    tool_durable_payload,
+)
 from zeta.session import Session
 from zeta.timeline import (
     current_timeline,

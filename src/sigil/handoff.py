@@ -21,7 +21,7 @@ from sigil.sessions import event_time, recent_turns, session_id
 from sigil.state import event_store_path
 from zeta.capabilities.base import proposed_effect
 from zeta.history import effect_record, publish_effect_record
-from zeta.loop import tool_called_draft, tool_durable_payload
+from zeta.runtime_events import tool_called_draft, tool_durable_payload
 from zeta.timeline import (
     current_timeline,
     timeline_event_from_durable_event,

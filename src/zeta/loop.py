@@ -151,6 +151,21 @@ class AgentTurnAborted(RuntimeError):
         self.event_recorded = event_recorded
 
 
+@dataclass(frozen=True)
+class TurnContext:
+    session_id: str | None
+    turn_id: str | None
+    event_sink: AgentEventSink | None
+    durable_event_sink: EventSink | None
+    trace_store: Store | None
+    tool_registry: CapabilityRegistry
+    builder: PromptBuilder
+    model_status: ModelStatusFactory | None
+    stream_sink: ChatCompletionStreamSink | None
+    cancellation_event: threading.Event | None
+    deadline: float | None
+
+
 def run_agent_turn(
     objective: str,
     timeline: list[dict[str, Any]],
@@ -184,6 +199,19 @@ def run_agent_turn(
         store=trace_store,
         transform=prompt_transform_from_env(),
     )
+    ctx = TurnContext(
+        session_id=session_id,
+        turn_id=turn_id,
+        event_sink=event_sink,
+        durable_event_sink=durable_event_sink,
+        trace_store=trace_store,
+        tool_registry=active_tool_registry,
+        builder=builder,
+        model_status=model_status,
+        stream_sink=stream_sink,
+        cancellation_event=cancellation_event,
+        deadline=deadline,
+    )
     projection = active_tool_registry.project(allowed_capabilities)
     tools = projection.descriptors
     return run_agent_steps(
@@ -195,16 +223,7 @@ def run_agent_turn(
         projection=projection,
         tools=tools,
         state=state,
-        builder=builder,
-        event_sink=event_sink,
-        durable_event_sink=durable_event_sink,
-        session_id=session_id,
-        turn_id=turn_id,
-        model_status=model_status,
-        stream_sink=stream_sink,
-        tool_registry=active_tool_registry,
-        cancellation_event=cancellation_event,
-        deadline=deadline,
+        ctx=ctx,
     )
 
 
@@ -218,24 +237,15 @@ def run_agent_steps(
     projection: CapabilityProjection,
     tools: list[dict[str, Any]],
     state: RunState,
-    builder: PromptBuilder,
-    event_sink: AgentEventSink | None,
-    durable_event_sink: EventSink | None,
-    session_id: str | None,
-    turn_id: str | None,
-    model_status: ModelStatusFactory | None,
-    stream_sink: ChatCompletionStreamSink | None,
-    tool_registry: CapabilityRegistry,
-    cancellation_event: threading.Event | None,
-    deadline: float | None,
+    ctx: TurnContext,
 ) -> AgentTurnResult:
     for _ in turn_indices(config.max_turns):
         state.note_step("check_budget")
         check_turn_budget(
             state,
-            event_sink=event_sink,
-            cancellation_event=cancellation_event,
-            deadline=deadline,
+            event_sink=ctx.event_sink,
+            cancellation_event=ctx.cancellation_event,
+            deadline=ctx.deadline,
         )
         turn = request_model_turn(
             objective,
@@ -245,15 +255,15 @@ def run_agent_steps(
             context=context,
             tools=tools,
             state=state,
-            builder=builder,
-            model_status=model_status,
-            stream_sink=stream_sink,
+            builder=ctx.builder,
+            model_status=ctx.model_status,
+            stream_sink=ctx.stream_sink,
         )
-        if cancellation_event is not None and cancellation_event.is_set():
+        if ctx.cancellation_event is not None and ctx.cancellation_event.is_set():
             check_turn_budget(
                 state,
-                event_sink=event_sink,
-                cancellation_event=cancellation_event,
+                event_sink=ctx.event_sink,
+                cancellation_event=ctx.cancellation_event,
                 deadline=None,
             )
         assistant = turn.assistant.to_provider()
@@ -261,11 +271,11 @@ def run_agent_steps(
             assistant,
             state.events,
             prompt_trace=turn.prompt_trace,
-            prompt_builder=builder,
-            event_sink=event_sink,
-            durable_event_sink=durable_event_sink,
-            session_id=session_id,
-            turn_id=turn_id,
+            prompt_builder=ctx.builder,
+            event_sink=ctx.event_sink,
+            durable_event_sink=ctx.durable_event_sink,
+            session_id=ctx.session_id,
+            turn_id=ctx.turn_id,
             caused_by=state.next_model_caused_by,
         )
         if not tool_calls:
@@ -281,16 +291,16 @@ def run_agent_steps(
             projection=projection,
             model_telemetry=turn.model_telemetry,
             prompt_trace=turn.prompt_trace,
-            builder=builder,
-            event_sink=event_sink,
-            durable_event_sink=durable_event_sink,
-            session_id=session_id,
-            turn_id=turn_id,
-            tool_registry=tool_registry,
+            builder=ctx.builder,
+            event_sink=ctx.event_sink,
+            durable_event_sink=ctx.durable_event_sink,
+            session_id=ctx.session_id,
+            turn_id=ctx.turn_id,
+            tool_registry=ctx.tool_registry,
             assistant_event_id=assistant_event_id,
             state=state,
-            cancellation_event=cancellation_event,
-            deadline=deadline,
+            cancellation_event=ctx.cancellation_event,
+            deadline=ctx.deadline,
         )
         if outcome is not None:
             return outcome

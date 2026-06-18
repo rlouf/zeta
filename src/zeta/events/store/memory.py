@@ -1,11 +1,15 @@
-"""In-memory event store."""
+"""In-memory event store.
+
+The memory store mirrors SQLite append semantics for tests and ephemeral
+runtimes, including idempotency and cursor ordering, without creating files.
+"""
 
 from ..event import AppendOutcome, DraftEvent, Event
 from .base import Filter
 
 
 class MemoryEventStore:
-    """In-memory event store for tests and ephemeral runtimes."""
+    """Append-only event store backed by process memory."""
 
     def __init__(self) -> None:
         self._events: list[Event] = []

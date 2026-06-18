@@ -1,4 +1,9 @@
-"""Durable event envelope types."""
+"""Durable event envelope types.
+
+The event layer keeps runtime facts separate from the substrate object graph.
+Drafts are convenient producer inputs; events are the immutable records that
+stores can deduplicate, order, and replay.
+"""
 
 from __future__ import annotations
 
@@ -10,7 +15,11 @@ from uuid import uuid4
 
 @dataclass(frozen=True)
 class EventCursor:
-    """Opaque replay position over the event ordering key."""
+    """Replay position over the durable event ordering key.
+
+    Cursors let readers resume from a store-owned order without assuming that
+    wall-clock timestamps are unique or monotonic across producers.
+    """
 
     seq: int | None = None
     timestamp_micros: int | None = None
@@ -43,7 +52,11 @@ class EventCursor:
 
 @dataclass(frozen=True)
 class DraftEvent:
-    """Pre-enrichment event accepted by the event store."""
+    """Producer-supplied event before store enrichment.
+
+    Drafts keep event creation ergonomic at call sites while centralizing ID,
+    idempotency, and timestamp normalization at the sink/store boundary.
+    """
 
     event_type: str
     source: str
@@ -77,7 +90,12 @@ class DraftEvent:
 
 @dataclass(frozen=True)
 class Event:
-    """Durable event fact."""
+    """Immutable fact recorded in the event log.
+
+    Events carry both domain payload and bookkeeping fields so replay,
+    causality traversal, and session filtering do not need to inspect payload
+    schemas.
+    """
 
     id: str
     event_type: str
@@ -96,7 +114,12 @@ class Event:
 
 @dataclass(frozen=True)
 class AppendOutcome:
-    """Result of appending an event."""
+    """Append result that preserves idempotent producer semantics.
+
+    Stores return the existing event on duplicate input so callers can treat
+    retries as successful acknowledgements without guessing whether persistence
+    happened.
+    """
 
     event: Event
     inserted: bool

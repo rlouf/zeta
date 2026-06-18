@@ -1,4 +1,8 @@
-"""Event sink protocol."""
+"""Producer-facing event sink protocol.
+
+Sinks are the narrow boundary for code that emits runtime facts. Producers only
+need to submit drafts; storage, idempotency, and ordering remain store concerns.
+"""
 
 from __future__ import annotations
 
@@ -8,10 +12,10 @@ from .event import AppendOutcome, DraftEvent
 
 
 class EventSink(Protocol):
-    """Consumer of draft events."""
+    """Accepts draft events from runtime producers."""
 
     def accept(self, draft: DraftEvent) -> AppendOutcome:
-        """Accept one draft event."""
+        """Accept one draft event and return the durable append outcome."""
 
 
 def publish_event(draft: DraftEvent, *, sink: EventSink) -> AppendOutcome:

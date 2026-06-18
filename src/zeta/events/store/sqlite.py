@@ -1,4 +1,9 @@
-"""SQLite event store."""
+"""SQLite event store.
+
+SQLite is the durable event log used by local runtimes. The schema keeps event
+IDs, idempotency keys, causality, session scope, and append sequence in one
+table so readers can replay stable slices without decoding payloads.
+"""
 
 import json
 import os
@@ -15,7 +20,7 @@ ZETA_STORE_NAME = "zeta.sqlite3"
 
 
 class SqliteEventStore:
-    """SQLite-backed event store."""
+    """Durable event store backed by a single SQLite database."""
 
     def __init__(self, path: Path | str) -> None:
         self.path = Path(path)

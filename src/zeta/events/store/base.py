@@ -1,4 +1,9 @@
-"""Event store protocols and filters."""
+"""Event store protocols and filters.
+
+Stores own durable event ordering and filtered replay. Keeping the reader
+protocol separate from sinks lets timeline projection depend only on read
+capability while producers depend only on append capability.
+"""
 
 from __future__ import annotations
 
@@ -10,7 +15,7 @@ from ..event import Event, EventCursor
 
 @runtime_checkable
 class EventReader(Protocol):
-    """Readable event log capability."""
+    """Readable event log capability for projections and inspection."""
 
     def list_events(self, filter: Filter) -> list[Event]:
         """List durable events matching the filter."""
@@ -18,7 +23,7 @@ class EventReader(Protocol):
 
 @dataclass(frozen=True)
 class Filter:
-    """Event listing filter."""
+    """Selection criteria for replaying a slice of the event log."""
 
     event_type: str | None = None
     event_type_prefix: str | None = None

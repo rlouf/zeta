@@ -1,4 +1,10 @@
-"""Durable event ontology and stores for Zeta runtimes."""
+"""Durable events shared by Zeta runtimes.
+
+Events are the append-only record of runtime activity. Producers submit
+drafts through an event sink, stores assign durable ordering, and readers
+replay filtered slices to rebuild timelines without depending on trace object
+layout.
+"""
 
 from .event import (
     AppendOutcome,

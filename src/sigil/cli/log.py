@@ -1,7 +1,5 @@
 """The `log` group: queries over turn/effect history."""
 
-from __future__ import annotations
-
 from typing import Any
 
 import click

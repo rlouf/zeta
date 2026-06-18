@@ -1,7 +1,5 @@
 """Model profile discovery and session selection for Zeta."""
 
-from __future__ import annotations
-
 import json
 import os
 import re

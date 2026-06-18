@@ -1,7 +1,5 @@
 """Codex-backed public web search tool."""
 
-from __future__ import annotations
-
 import json
 import os
 import re

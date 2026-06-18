@@ -1,7 +1,5 @@
 """Prompt trace diff rendering helpers."""
 
-from __future__ import annotations
-
 import difflib
 
 from zeta.substrate import Object, ObjectId, Store

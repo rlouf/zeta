@@ -1,7 +1,5 @@
 """Command-line entrypoint for the Zeta runtime."""
 
-from __future__ import annotations
-
 import sys
 
 import click

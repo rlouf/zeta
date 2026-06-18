@@ -1,7 +1,5 @@
 """Authored-agent prompt rendering and validation."""
 
-from __future__ import annotations
-
 from jinja2 import Environment, meta
 
 from .events import EventEnvelope

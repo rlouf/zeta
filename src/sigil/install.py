@@ -1,7 +1,5 @@
 """Install and diagnose Sigil shell integrations."""
 
-from __future__ import annotations
-
 import importlib.resources
 import json
 import os

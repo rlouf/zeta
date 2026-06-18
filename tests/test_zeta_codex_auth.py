@@ -1,7 +1,5 @@
 """Tests for ChatGPT OAuth credential handling for the Codex backend."""
 
-from __future__ import annotations
-
 import json
 import time
 from pathlib import Path

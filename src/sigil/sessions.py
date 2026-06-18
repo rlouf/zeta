@@ -5,8 +5,6 @@ current shell's continuity files visible, and own the recent-turns buffer the
 shell bindings write through `record_turn`.
 """
 
-from __future__ import annotations
-
 import hashlib
 import json
 import os

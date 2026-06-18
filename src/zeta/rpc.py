@@ -1,7 +1,5 @@
 """Newline-delimited JSON-RPC transport for the Zeta runtime."""
 
-from __future__ import annotations
-
 import json
 import select
 import threading

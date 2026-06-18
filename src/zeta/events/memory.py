@@ -1,7 +1,5 @@
 """In-memory event store."""
 
-from __future__ import annotations
-
 from .event import AppendOutcome, DraftEvent, Event
 from .store import Filter
 

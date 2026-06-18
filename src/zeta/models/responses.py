@@ -6,8 +6,6 @@ Responses output items under ``_responses_items`` so reasoning items (with
 their encrypted content) and item ids replay verbatim on the next request.
 """
 
-from __future__ import annotations
-
 import json
 import os
 import time

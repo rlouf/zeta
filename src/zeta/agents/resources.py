@@ -1,7 +1,5 @@
 """Authored-agent resource loading hooks."""
 
-from __future__ import annotations
-
 from .spec import AgentSpec
 
 

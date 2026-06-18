@@ -4,8 +4,6 @@ Prompt component order is a public contract for prefix-cache friendliness:
 system_prompt, tool descriptors, project context, then volatile components.
 """
 
-from __future__ import annotations
-
 from collections.abc import Iterable
 from contextlib import nullcontext
 from dataclasses import dataclass, replace

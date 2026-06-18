@@ -1,7 +1,5 @@
 """Portable turn-history bundles."""
 
-from __future__ import annotations
-
 from typing import Any
 
 from zeta.history import import_history_records

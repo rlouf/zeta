@@ -1,7 +1,5 @@
 """OpenAI-compatible chat completions transport for Zeta."""
 
-from __future__ import annotations
-
 import http.client
 import json
 import os

@@ -1,7 +1,5 @@
 """Model request, streaming, and model-selection tests."""
 
-from __future__ import annotations
-
 import email.message
 import io
 import json

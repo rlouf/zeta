@@ -1,7 +1,5 @@
 """Durable event ontology and stores for Zeta runtimes."""
 
-from __future__ import annotations
-
 from .event import (
     AppendOutcome,
     DraftEvent,

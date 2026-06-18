@@ -19,8 +19,6 @@ such as timestamps, retries, latency, or worker identity do not belong in an
 object. If those facts matter, record them outside the value plane.
 """
 
-from __future__ import annotations
-
 from .derivation import Derivation
 from .object import (
     Object,

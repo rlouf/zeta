@@ -1,7 +1,5 @@
 """Declarative authored-agent specs for Zeta runtimes."""
 
-from __future__ import annotations
-
 from .capabilities import AgentConfig
 from .events import EventEnvelope, EventRegistry, EventRegistryError
 from .loader import load_specs_recursive

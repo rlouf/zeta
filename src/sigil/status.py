@@ -1,7 +1,5 @@
 """Compact current-session status for shell-native Sigil workflows."""
 
-from __future__ import annotations
-
 import logging
 import os
 import time

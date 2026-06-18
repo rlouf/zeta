@@ -1,7 +1,5 @@
 """Substrate store implementations."""
 
-from __future__ import annotations
-
 from .base import (
     AmbiguousIdError,
     Store,

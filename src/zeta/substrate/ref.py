@@ -13,8 +13,6 @@ it observed before moving the ref. That prevents silent overwrites when
 multiple agents or tasks update the same logical state concurrently.
 """
 
-from __future__ import annotations
-
 from dataclasses import dataclass
 
 from .object import ObjectId

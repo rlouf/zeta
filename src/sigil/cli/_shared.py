@@ -1,7 +1,5 @@
 """Shared CLI helpers: stdin handling, $EDITOR composition, and JSON output."""
 
-from __future__ import annotations
-
 import json
 import os
 import shlex

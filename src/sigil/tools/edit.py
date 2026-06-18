@@ -1,7 +1,5 @@
 """Exact-replacement edit tool implementation."""
 
-from __future__ import annotations
-
 import difflib
 import re
 import shlex

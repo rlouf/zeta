@@ -5,8 +5,6 @@ The group imports each module on first use: glyphs like `?` and the per-prompt
 shell-turn recording must not pay for the heaviest workflow's import graph.
 """
 
-from __future__ import annotations
-
 import importlib
 from contextlib import suppress
 

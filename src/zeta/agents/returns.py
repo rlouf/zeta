@@ -1,7 +1,5 @@
 """Return schema derivation for authored agents."""
 
-from __future__ import annotations
-
 from typing import Any
 
 from .events import EventRegistry

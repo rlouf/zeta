@@ -4,8 +4,6 @@ The sourced shell bindings own the primary interactive loop. This module keeps
 CLI workflow steps on the same Zeta service layer without an external agent.
 """
 
-from __future__ import annotations
-
 import sys
 from collections.abc import Callable, Iterable, Sequence
 from pathlib import Path

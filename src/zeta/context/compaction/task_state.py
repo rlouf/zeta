@@ -1,7 +1,5 @@
 """Structured task-state extraction for prompt compaction."""
 
-from __future__ import annotations
-
 import json
 from typing import Any, Protocol
 

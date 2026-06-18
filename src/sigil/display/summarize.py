@@ -1,7 +1,5 @@
 """Compact user-facing summaries for tool, handoff, and shell results."""
 
-from __future__ import annotations
-
 import json
 import os
 import time

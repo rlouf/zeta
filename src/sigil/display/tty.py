@@ -1,7 +1,5 @@
 """Terminal color constants and predicates shared by CLI rendering."""
 
-from __future__ import annotations
-
 import os
 from typing import TextIO
 

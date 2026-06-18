@@ -6,8 +6,6 @@ recorder missed. This module owns that skeleton; workflow modules own
 workflow-specific tagging, logging, and handoff handling.
 """
 
-from __future__ import annotations
-
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass

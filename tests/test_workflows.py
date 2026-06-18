@@ -1,7 +1,5 @@
 """Ask and step workflow tests, including shell handoff resolution."""
 
-from __future__ import annotations
-
 import json
 import sys
 from collections.abc import Callable

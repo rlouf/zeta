@@ -1,7 +1,5 @@
 """Authored agent spec data structures and frontmatter parsing."""
 
-from __future__ import annotations
-
 import hashlib
 import re
 from collections.abc import Iterable, Mapping

@@ -1,7 +1,5 @@
 """In-memory substrate store for tests and ephemeral traces."""
 
-from __future__ import annotations
-
 from collections.abc import Iterator
 from contextlib import contextmanager
 

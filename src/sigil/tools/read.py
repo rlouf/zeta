@@ -1,7 +1,5 @@
 """Read tool implementation."""
 
-from __future__ import annotations
-
 import re
 import urllib.error
 import urllib.request

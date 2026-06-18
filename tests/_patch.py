@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 from collections.abc import MutableMapping
 from contextlib import contextmanager
 from importlib import import_module

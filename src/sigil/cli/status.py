@@ -1,7 +1,5 @@
 """Status command for shell-native diagnostics."""
 
-from __future__ import annotations
-
 import click
 
 from ..status import current_status, format_status

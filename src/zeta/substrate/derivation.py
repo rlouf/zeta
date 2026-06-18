@@ -1,7 +1,5 @@
 """Derivation records explain how substrate objects were built."""
 
-from __future__ import annotations
-
 import hashlib
 import json
 from dataclasses import dataclass, field

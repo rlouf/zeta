@@ -1,7 +1,5 @@
 """Tool-call trace reporting helpers."""
 
-from __future__ import annotations
-
 from collections.abc import Mapping
 from typing import Any, cast
 

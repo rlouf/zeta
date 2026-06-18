@@ -1,7 +1,5 @@
 """Core runtime for Sigil."""
 
-from __future__ import annotations
-
 
 def zeta_session_for_sigil():
     from zeta.capabilities import registry

@@ -1,7 +1,5 @@
 """Sigil-owned shell handoff capture and reconciliation."""
 
-from __future__ import annotations
-
 import uuid
 from typing import Any, cast
 

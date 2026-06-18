@@ -1,7 +1,5 @@
 """Structural tool-result trimming for prompt compaction."""
 
-from __future__ import annotations
-
 import json
 from dataclasses import replace
 from typing import Any

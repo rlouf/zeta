@@ -1,7 +1,5 @@
 """The `session` command: inspect or clear the current shell session state."""
 
-from __future__ import annotations
-
 import click
 
 from ..sessions import (

@@ -12,8 +12,6 @@ Provenance is represented by derivations in the store layer.
 JSON object key order does not affect object identity.
 """
 
-from __future__ import annotations
-
 import hashlib
 import json
 from dataclasses import dataclass, field

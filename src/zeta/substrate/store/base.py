@@ -6,8 +6,6 @@ outputs back to immutable inputs for replay, graph traversal, and cache
 reasoning.
 """
 
-from __future__ import annotations
-
 import json
 import logging
 from contextlib import AbstractContextManager

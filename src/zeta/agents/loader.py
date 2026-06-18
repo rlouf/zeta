@@ -1,7 +1,5 @@
 """Recursive authored-agent loading."""
 
-from __future__ import annotations
-
 from pathlib import Path
 
 from .spec import AgentSpec, load_spec

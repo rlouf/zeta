@@ -1,7 +1,5 @@
 """Trace object query and resolution helpers."""
 
-from __future__ import annotations
-
 from typing import Any
 
 import click

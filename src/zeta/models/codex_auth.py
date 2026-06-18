@@ -6,8 +6,6 @@ an exclusive lock on a sidecar file, re-reads the store to pick up a
 concurrent refresh, and writes the new tokens back atomically.
 """
 
-from __future__ import annotations
-
 import base64
 import binascii
 import contextlib

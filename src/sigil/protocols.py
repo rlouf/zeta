@@ -1,7 +1,5 @@
 """Shared protocol constants for Sigil and the bundled Zeta runtime."""
 
-from __future__ import annotations
-
 from collections.abc import Iterable, Mapping
 from typing import Any, cast
 

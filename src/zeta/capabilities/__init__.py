@@ -1,7 +1,5 @@
 """Runtime capability contracts, registry, and projection."""
 
-from __future__ import annotations
-
 from .base import (
     EFFECT_KINDS,
     READ_ONLY_EFFECT_KINDS,

@@ -1290,7 +1290,7 @@ def test_zeta_trace_backfills_derivation_inputs_on_open(tmp_path: Path) -> None:
         VALUES (?, ?, ?, ?, ?, ?)
         """,
         (
-            zeta_trace.derivation_id(derivation),
+            derivation.content_id(),
             derivation.producer,
             derivation.output_id,
             json.dumps(list(derivation.input_ids)),
@@ -1386,7 +1386,7 @@ def test_zeta_trace_lists_objects_by_derivation_recency(tmp_path: Path) -> None:
               (id, producer, output_id, input_ids_json, params_json, created_at)
             VALUES (?, ?, ?, '[]', '{}', ?)
             """,
-            (zeta_trace.derivation_id(derivation), "test:v1", output_id, created_at),
+            (derivation.content_id(), "test:v1", output_id, created_at),
         )
     store.connection.commit()
 

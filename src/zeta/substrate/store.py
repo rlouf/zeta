@@ -7,7 +7,7 @@ from collections.abc import Iterator
 from contextlib import AbstractContextManager, contextmanager
 from typing import Protocol, cast
 
-from .derivation import Derivation, derivation_id, normalize_derivation
+from .derivation import Derivation
 from .object import (
     Object,
     ObjectId,
@@ -192,8 +192,8 @@ class InMemoryStore(StoreBase):
         yield
 
     def record_derivation(self, derivation: Derivation) -> str:
-        stored = normalize_derivation(derivation)
-        id_value = derivation_id(stored)
+        stored = derivation.normalized()
+        id_value = stored.content_id()
         self.derivations.setdefault(id_value, stored)
         return id_value
 

@@ -12,7 +12,6 @@ from zeta.substrate import (
     ObjectId,
     Store,
     UnknownIdError,
-    derivation_payload,
     object_payload,
     resolve_object_id,
 )
@@ -55,7 +54,12 @@ def get_trace_object(
         "id": object_id,
         "object": object_payload(obj),
         "derivations": [
-            derivation_payload(derivation)
+            {
+                "producer": derivation.producer,
+                "output_id": derivation.output_id,
+                "input_ids": list(derivation.input_ids),
+                "params": derivation.params,
+            }
             for derivation in store.derivations_for_output(object_id)
         ],
     }

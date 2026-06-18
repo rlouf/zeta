@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import sqlite3
@@ -13,12 +12,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, cast
 
-from .derivation import (
-    Derivation,
-    derivation_id,
-    derivation_payload,
-    normalize_derivation,
-)
+from .derivation import Derivation
 from .object import (
     Object,
     ObjectId,
@@ -495,8 +489,8 @@ class SqliteStore(StoreBase):
 
     def record_derivation(self, derivation: Derivation) -> str:
         self._ensure_writable()
-        stored = normalize_derivation(derivation)
-        id_value = self._derivation_id(stored)
+        stored = derivation.normalized()
+        id_value = stored.content_id(session_id=self.session_id)
         with self._write_lock:
             self.connection.execute(
                 """
@@ -596,9 +590,9 @@ class SqliteStore(StoreBase):
     ) -> None:
         """Insert an exported derivation, preserving its original timestamp."""
         self._ensure_writable()
-        stored = normalize_derivation(derivation)
+        stored = derivation.normalized()
         stored_id = (
-            self._derivation_id(stored)
+            stored.content_id(session_id=self.session_id)
             if self.session_id is not None
             else derivation_id_value
         )
@@ -622,13 +616,6 @@ class SqliteStore(StoreBase):
             )
             self._index_derivation_inputs(stored_id, stored.input_ids)
             self._commit()
-
-    def _derivation_id(self, derivation: Derivation) -> str:
-        if self.session_id is None:
-            return derivation_id(derivation)
-        payload = {"session_id": self.session_id, **derivation_payload(derivation)}
-        digest = hashlib.sha256(canonical_json(payload).encode()).hexdigest()
-        return f"derivation:{digest}"
 
     def derivations_for_input(self, input_id: ObjectId) -> list[Derivation]:
         session_filter, params = self._session_filter(

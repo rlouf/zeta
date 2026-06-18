@@ -2,12 +2,7 @@
 
 from __future__ import annotations
 
-from .derivation import (
-    Derivation,
-    derivation_id,
-    derivation_payload,
-    normalize_derivation,
-)
+from .derivation import Derivation
 from .links import (
     add_event_link,
     add_object_link,
@@ -83,14 +78,11 @@ __all__ = [
     "available_session_ids",
     "canonical_json",
     "default_sqlite_path",
-    "derivation_id",
-    "derivation_payload",
     "durable_event_object_links",
     "escape_like",
     "export_trace_refs",
     "import_trace_graph",
     "latest_prompt_trace_fields",
-    "normalize_derivation",
     "normalize_json",
     "normalize_object",
     "object_id",

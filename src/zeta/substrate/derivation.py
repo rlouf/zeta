@@ -18,30 +18,24 @@ class Derivation:
     input_ids: tuple[ObjectId, ...] = ()
     params: dict[str, Any] = field(default_factory=dict)
 
+    def normalized(self) -> Derivation:
+        """Return a derivation whose identity is stable across store backends."""
+        return Derivation(
+            producer=self.producer,
+            output_id=self.output_id,
+            input_ids=tuple(str(input_id) for input_id in self.input_ids),
+            params=normalize_json(self.params),
+        )
 
-def derivation_payload(derivation: Derivation) -> dict[str, Any]:
-    """Return the canonical derivation payload."""
-    return {
-        "producer": derivation.producer,
-        "output_id": derivation.output_id,
-        "input_ids": list(derivation.input_ids),
-        "params": derivation.params,
-    }
-
-
-def derivation_id(derivation: Derivation) -> str:
-    """Return the deterministic content address for a derivation record."""
-    digest = hashlib.sha256(
-        canonical_json(derivation_payload(derivation)).encode()
-    ).hexdigest()
-    return f"derivation:{digest}"
-
-
-def normalize_derivation(derivation: Derivation) -> Derivation:
-    """Return a derivation with normalized containers."""
-    return Derivation(
-        producer=derivation.producer,
-        output_id=derivation.output_id,
-        input_ids=tuple(str(input_id) for input_id in derivation.input_ids),
-        params=normalize_json(derivation.params),
-    )
+    def content_id(self, *, session_id: str | None = None) -> str:
+        """Return the deterministic content address for this derivation."""
+        payload: dict[str, Any] = {
+            "producer": self.producer,
+            "output_id": self.output_id,
+            "input_ids": self.input_ids,
+            "params": self.params,
+        }
+        if session_id is not None:
+            payload = {"session_id": session_id, **payload}
+        digest = hashlib.sha256(canonical_json(payload).encode()).hexdigest()
+        return f"derivation:{digest}"

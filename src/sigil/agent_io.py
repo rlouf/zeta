@@ -27,9 +27,9 @@ from zeta.models import (
     CODEX_RESPONSES_API,
     ModelSelection,
     active_model_selection,
-    ensure_server,
     model_selection_event,
 )
+from zeta.models.chat_completions import ensure_server
 from zeta.session import Session
 
 from .display.render import render_tool_start

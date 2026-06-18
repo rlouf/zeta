@@ -1,14 +1,13 @@
 """Model profiles and protocol clients behind one package surface.
 
-Profile discovery and selection load eagerly; the transport surface loads
-on first attribute access so that status paths importing this package
-stay free of the HTTP client and its jsonschema dependency.
+Profile discovery and selection load eagerly. Transport-specific helpers live
+in their transport modules.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from .profiles import (
     CHAT_COMPLETIONS_API,
@@ -37,33 +36,6 @@ from .profiles import (
     resolve_model_profile,
     set_active_model_profile,
     user_models_config_path,
-)
-
-if TYPE_CHECKING:
-    from .chat_completions import (
-        DEFAULT_MAX_COMPLETION_TOKENS,
-        ChatCompletionStreamSink,
-        chat_completion_request_body,
-        endpoint_reachable,
-        ensure_server,
-        model_endpoint_open,
-        model_endpoint_valid,
-        model_output_from_chat_completion,
-        request_model_metadata,
-    )
-
-_TRANSPORT_EXPORTS = frozenset(
-    {
-        "ChatCompletionStreamSink",
-        "DEFAULT_MAX_COMPLETION_TOKENS",
-        "chat_completion_request_body",
-        "endpoint_reachable",
-        "ensure_server",
-        "model_endpoint_open",
-        "model_endpoint_valid",
-        "model_output_from_chat_completion",
-        "request_model_metadata",
-    }
 )
 
 
@@ -181,9 +153,7 @@ def token_count(value: Any) -> int | None:
 __all__ = [
     "CHAT_COMPLETIONS_API",
     "CODEX_RESPONSES_API",
-    "ChatCompletionStreamSink",
     "DEFAULT_CODEX_BASE_URL",
-    "DEFAULT_MAX_COMPLETION_TOKENS",
     "DEFAULT_MODEL_NAME",
     "DEFAULT_MODEL_URL",
     "MODEL_APIS",
@@ -200,21 +170,14 @@ __all__ = [
     "active_model_profile",
     "active_model_selection",
     "chat_completion_messages",
-    "chat_completion_request_body",
     "chat_structured_output",
     "clear_active_model_profile",
     "configured_default_selection",
     "default_model_selection",
-    "endpoint_reachable",
-    "ensure_server",
     "load_model_profiles",
-    "model_endpoint_open",
-    "model_endpoint_valid",
-    "model_output_from_chat_completion",
     "model_name",
     "model_selection_event",
     "model_url",
-    "request_model_metadata",
     "resolve_active_model",
     "resolve_model_profile",
     "set_active_model_profile",
@@ -256,11 +219,3 @@ def chat_structured_output(
 
         return responses.codex_structured_output(messages, **options)
     raise ValueError(f"unknown model api: {api!r}")
-
-
-def __getattr__(name: str) -> Any:
-    if name in _TRANSPORT_EXPORTS:
-        from . import chat_completions
-
-        return getattr(chat_completions, name)
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

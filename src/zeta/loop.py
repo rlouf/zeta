@@ -29,10 +29,12 @@ from .context import (
 from .context.builder import prepared_prompt_from
 from .models import (
     CODEX_RESPONSES_API,
-    ChatCompletionStreamSink,
     ModelInput,
     ModelOutput,
     chat_completion_messages,
+)
+from .models.chat_completions import (
+    ChatCompletionStreamSink,
     model_endpoint_open,
 )
 from .substrate import PromptTrace, Store, prompt_trace_payload

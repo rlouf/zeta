@@ -12,10 +12,9 @@ from dataclasses import dataclass, replace
 from typing import Any
 
 from ..capabilities import content_hash
-from ..models import (
+from ..models import ModelInput, ModelOutput
+from ..models.chat_completions import (
     DEFAULT_MAX_COMPLETION_TOKENS,
-    ModelInput,
-    ModelOutput,
     chat_completion_request_body,
 )
 from ..skills import Skill, available_skills

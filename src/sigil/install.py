@@ -14,11 +14,13 @@ from typing import Any
 
 from zeta.models import (
     CODEX_RESPONSES_API,
-    endpoint_reachable,
     load_model_profiles,
+    resolve_active_model,
+)
+from zeta.models.chat_completions import (
+    endpoint_reachable,
     model_endpoint_valid,
     request_model_metadata,
-    resolve_active_model,
 )
 from zeta.models.codex_auth import (
     access_token_expired,

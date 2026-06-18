@@ -133,6 +133,29 @@ class DirectRuntimeEventSink:
         return dict(projected) if projected is not None else None
 
 
+def record_user_message(
+    event: dict[str, Any],
+    *,
+    runtime_context: Session,
+) -> dict[str, Any]:
+    payload = {key: value for key, value in event.items() if key != "type"}
+    payload["_timeline_type"] = "user_message"
+    outcome = runtime_context.event_sink.accept(
+        DraftEvent(
+            event_type="zeta.user_message",
+            source="zeta",
+            payload=payload,
+            idempotency_key=None,
+            caused_by=None,
+            session_id=runtime_context.session_id,
+            turn_id=event.get("turn_id")
+            if isinstance(event.get("turn_id"), str)
+            else None,
+        )
+    )
+    return timeline_event_from_durable_event(outcome.event)
+
+
 @dataclass(frozen=True)
 class RpcClientCapabilityExecutor:
     call_client_tool: Callable[..., dict[str, Any]]
@@ -239,7 +262,7 @@ def run_session_turn(
     )
     execution_mode: ExecutionMode = "direct" if workflow == "do" else "stage"
     prior_timeline = current_timeline(runtime_context=runtime_context)
-    user_event = record_event(
+    user_event = record_user_message(
         {
             "type": "user_message",
             "content": objective,

@@ -388,6 +388,21 @@ def test_sqlite_event_store_deduplicates_idempotency_keys(tmp_path: Path) -> Non
     assert first.event.seq == second.event.seq
 
 
+def test_event_from_draft_uses_uuid_id_and_normalizes_idempotency_key() -> None:
+    event = Event.from_draft(
+        DraftEvent(
+            event_type="zeta.turn.completed",
+            source="test",
+            payload={"turn_id": "turn-1"},
+            idempotency_key=" turn:turn-1 ",
+        )
+    )
+
+    assert event.id.startswith("evt_")
+    assert len(event.id) == 36
+    assert event.idempotency_key == "turn:turn-1"
+
+
 class RecordingEventSink:
     def __init__(self, path: Path) -> None:
         self.store = SqliteEventStore(path)
@@ -487,8 +502,6 @@ def test_event_stores_share_ordering_idempotency_and_filter_semantics(
             payload={"content": "first"},
             session_id="s1",
             idempotency_key="model:first",
-            timestamp_micros=2,
-            event_id="z-event",
         )
     ).event
     duplicate = event_store.accept(
@@ -498,8 +511,6 @@ def test_event_stores_share_ordering_idempotency_and_filter_semantics(
             payload={"content": "replayed"},
             session_id="s1",
             idempotency_key="model:first",
-            timestamp_micros=3,
-            event_id="other-event",
         )
     )
     second = event_store.accept(
@@ -509,8 +520,6 @@ def test_event_stores_share_ordering_idempotency_and_filter_semantics(
             payload={"name": "read"},
             caused_by=first.id,
             session_id="s1",
-            timestamp_micros=1,
-            event_id="a-event",
         )
     ).event
 
@@ -530,22 +539,30 @@ def test_event_stores_share_ordering_idempotency_and_filter_semantics(
 
 def test_sqlite_event_store_orders_by_append_sequence(tmp_path: Path) -> None:
     store = SqliteEventStore(tmp_path / "events.sqlite3")
-    first = store.accept(
-        DraftEvent(
+    first = store.append(
+        Event(
+            id="z-event",
             event_type="zeta.model.called",
             source="zeta",
             payload={"content": "first"},
-            event_id="z-event",
             timestamp_micros=2,
+            idempotency_key=None,
+            caused_by=None,
+            session_id=None,
+            turn_id=None,
         )
     ).event
-    second = store.accept(
-        DraftEvent(
+    second = store.append(
+        Event(
+            id="a-event",
             event_type="zeta.model.called",
             source="zeta",
             payload={"content": "second"},
-            event_id="a-event",
             timestamp_micros=1,
+            idempotency_key=None,
+            caused_by=None,
+            session_id=None,
+            turn_id=None,
         )
     ).event
 
@@ -561,43 +578,56 @@ def test_sqlite_event_store_orders_by_append_sequence(tmp_path: Path) -> None:
 
 def test_sqlite_event_store_traverses_causality(tmp_path: Path) -> None:
     store = SqliteEventStore(tmp_path / "events.sqlite3")
-    prompt = store.accept(
-        DraftEvent(
+    prompt = store.append(
+        Event(
+            id="prompt-event",
             event_type="zeta.prompt.submitted",
             source="sigil",
             payload={"turn_id": "turn-1"},
             turn_id="turn-1",
-            event_id="prompt-event",
+            idempotency_key=None,
+            caused_by=None,
+            session_id=None,
+            timestamp_micros=1,
         )
     ).event
-    model = store.accept(
-        DraftEvent(
+    model = store.append(
+        Event(
+            id="model-event",
             event_type="zeta.model.called",
             source="zeta",
             payload={"turn_id": "turn-1"},
             turn_id="turn-1",
             caused_by=prompt.id,
-            event_id="model-event",
+            idempotency_key=None,
+            session_id=None,
+            timestamp_micros=2,
         )
     ).event
-    tool = store.accept(
-        DraftEvent(
+    tool = store.append(
+        Event(
+            id="tool-event",
             event_type="zeta.tool.called",
             source="zeta",
             payload={"turn_id": "turn-1"},
             turn_id="turn-1",
             caused_by=model.id,
-            event_id="tool-event",
+            idempotency_key=None,
+            session_id=None,
+            timestamp_micros=3,
         )
     ).event
-    store.accept(
-        DraftEvent(
+    store.append(
+        Event(
+            id="turn-event",
             event_type="zeta.turn.completed",
             source="sigil",
             payload={"turn_id": "turn-1"},
             turn_id="turn-1",
             caused_by=tool.id,
-            event_id="turn-event",
+            idempotency_key=None,
+            session_id=None,
+            timestamp_micros=4,
         )
     )
 
@@ -618,22 +648,30 @@ def test_sqlite_event_store_traverses_causality(tmp_path: Path) -> None:
 
 def test_sqlite_event_store_causal_chain_stops_on_cycles(tmp_path: Path) -> None:
     store = SqliteEventStore(tmp_path / "events.sqlite3")
-    store.accept(
-        DraftEvent(
+    store.append(
+        Event(
+            id="event-a",
             event_type="cycle.a",
             source="test",
             payload={},
             caused_by="event-b",
-            event_id="event-a",
+            idempotency_key=None,
+            session_id=None,
+            turn_id=None,
+            timestamp_micros=1,
         )
     )
-    store.accept(
-        DraftEvent(
+    store.append(
+        Event(
+            id="event-b",
             event_type="cycle.b",
             source="test",
             payload={},
             caused_by="event-a",
-            event_id="event-b",
+            idempotency_key=None,
+            session_id=None,
+            turn_id=None,
+            timestamp_micros=2,
         )
     )
 
@@ -673,7 +711,6 @@ def test_sqlite_event_store_events_for_turn_uses_turn_id_column(tmp_path: Path) 
             source="test",
             payload={"turn_id": "payload-turn"},
             turn_id="column-turn",
-            event_id="column-event",
         )
     ).event
     store.accept(
@@ -682,7 +719,6 @@ def test_sqlite_event_store_events_for_turn_uses_turn_id_column(tmp_path: Path) 
             source="test",
             payload={"turn_id": "payload-turn"},
             turn_id="other-turn",
-            event_id="other-event",
         )
     )
 
@@ -713,21 +749,21 @@ def test_durable_event_constructors_set_turn_id_and_idempotency_keys() -> None:
         payload={"content": "answer"},
         turn_id="turn-1",
         session_id="s1",
-        caused_by=prompt.event_id,
+        caused_by="prompt-event",
         event_id="model-event",
     )
     tool = tool_called_event(
         payload={"name": "read"},
         turn_id="turn-1",
         session_id="s1",
-        caused_by=model.event_id,
+        caused_by="model-event",
         event_id="tool-event",
     )
     completed = durable_event.turn_completed(
         payload={"outcome": "answered"},
         turn_id="turn-1",
         session_id="s1",
-        caused_by=tool.event_id,
+        caused_by="tool-event",
         event_id="turn-event",
     )
     failed = durable_event.turn_failed(

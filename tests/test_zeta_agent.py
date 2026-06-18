@@ -2378,9 +2378,7 @@ def test_zeta_rpc_events_list_pages_in_append_order(tmp_path: Path) -> None:
                 session_id="session-1",
                 turn_id="run_1",
                 caused_by=None,
-                event_id=None,
                 idempotency_key=None,
-                timestamp_micros=None,
             )
         )
     input_stream = StringIO(
@@ -2439,9 +2437,7 @@ def test_zeta_rpc_events_list_filters_by_session_and_run(tmp_path: Path) -> None
                 session_id=session_id,
                 turn_id=run_id,
                 caused_by=None,
-                event_id=None,
                 idempotency_key=None,
-                timestamp_micros=None,
             )
         )
     input_stream = StringIO(

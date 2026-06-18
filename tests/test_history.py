@@ -176,7 +176,6 @@ def test_history_history_reads_durable_events() -> None:
                 "effects": [sample_effect_record("effect-old", turn_id="turn-old")]
             },
             session_id="default",
-            timestamp_micros=101_000_000,
         )
     )
     append_event(sample_turn_record("turn-new", time=200.0))
@@ -203,13 +202,12 @@ def test_history_history_uses_event_metadata() -> None:
                 "outcome": TURN_OUTCOME_EXECUTED,
             },
             session_id="event-session",
-            timestamp_micros=2_000_000,
         )
     )
 
     turn = sigil_state.history_view().turn("turn-meta")
     assert turn is not None
-    assert turn["time"] == 2.0
+    assert turn["time"] >= 1.0
     assert turn["session"] == "event-session"
 
 

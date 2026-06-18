@@ -8,7 +8,6 @@ from zeta.events import (
     Event,
     Filter,
     read_event_log,
-    time_from_timestamp_micros,
 )
 
 from ..state import causal_chain, event_store_path, events_for_turn, read_events
@@ -261,7 +260,7 @@ def normalized_event(event: Event) -> dict[str, object]:
         "session_id": event.session_id,
         "turn_id": event.turn_id,
         "timestamp_micros": event.timestamp_micros,
-        "time": time_from_timestamp_micros(event.timestamp_micros),
+        "time": event.timestamp_micros / 1_000_000,
     }
 
 
@@ -302,7 +301,7 @@ def event_summary(event: Event) -> dict[str, object]:
     event_id = event.id
     session = event.session_id or ""
     event_type = event.event_type
-    event_time = time_from_timestamp_micros(event.timestamp_micros)
+    event_time = event.timestamp_micros / 1_000_000
     workflow = event_workflow(payload)
     return {
         "id": event_id or "-",

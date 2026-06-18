@@ -1,10 +1,12 @@
 """Durable event payload constructors."""
 
 import os
+import time
+import uuid
 from pathlib import Path
 from typing import Any
 
-from .event import DraftEvent, Event, timestamp_micros_from_time
+from .event import DraftEvent, Event
 
 EVENT_IDEMPOTENT_TYPES = frozenset(
     {
@@ -34,9 +36,7 @@ def durable_event_draft(
     turn_id: str | None,
     session_id: str,
     caused_by: str | None,
-    event_id: str | None,
     idempotency_key: str | None,
-    timestamp_micros: int | None,
 ) -> DraftEvent:
     return DraftEvent(
         event_type=event_type,
@@ -46,8 +46,6 @@ def durable_event_draft(
         caused_by=caused_by,
         session_id=session_id,
         turn_id=turn_id,
-        timestamp_micros=timestamp_micros,
-        event_id=event_id,
     )
 
 
@@ -59,7 +57,6 @@ def durable_event_from_timeline(
     session_id: str,
     caused_by: str | None,
     event_id: str | None,
-    timestamp_micros: int | None,
 ) -> DraftEvent | None:
     durable_type = durable_type_from_timeline_type(event_type)
     if durable_type:
@@ -70,7 +67,6 @@ def durable_event_from_timeline(
             session_id=session_id,
             caused_by=caused_by,
             event_id=event_id,
-            timestamp_micros=timestamp_micros,
         )
     return None
 
@@ -221,7 +217,6 @@ def durable_event_for_type(
     session_id: str,
     caused_by: str | None = None,
     event_id: str | None = None,
-    timestamp_micros: int | None = None,
 ) -> DraftEvent:
     return durable_event_draft(
         event_type,
@@ -230,13 +225,11 @@ def durable_event_for_type(
         turn_id=turn_id,
         session_id=session_id,
         caused_by=caused_by,
-        event_id=event_id,
         idempotency_key=durable_event_idempotency_key(
             event_type,
             event_id=event_id,
             turn_id=turn_id,
         ),
-        timestamp_micros=timestamp_micros,
     )
 
 
@@ -260,7 +253,6 @@ def model_called_event(
     session_id: str,
     caused_by: str | None = None,
     event_id: str | None = None,
-    timestamp_micros: int | None = None,
 ) -> DraftEvent:
     return durable_event_for_type(
         "zeta.model.called",
@@ -269,7 +261,6 @@ def model_called_event(
         session_id=session_id,
         caused_by=caused_by,
         event_id=event_id,
-        timestamp_micros=timestamp_micros,
     )
 
 
@@ -280,7 +271,6 @@ def tool_called_event(
     session_id: str,
     caused_by: str | None = None,
     event_id: str | None = None,
-    timestamp_micros: int | None = None,
 ) -> DraftEvent:
     return durable_event_for_type(
         "zeta.tool.called",
@@ -289,7 +279,6 @@ def tool_called_event(
         session_id=session_id,
         caused_by=caused_by,
         event_id=event_id,
-        timestamp_micros=timestamp_micros,
     )
 
 
@@ -304,7 +293,6 @@ class DurableEventConstructors:
         session_id: str,
         caused_by: str | None = None,
         event_id: str | None = None,
-        timestamp_micros: int | None = None,
     ) -> DraftEvent:
         return durable_event_for_type(
             "zeta.prompt.submitted",
@@ -313,7 +301,6 @@ class DurableEventConstructors:
             session_id=session_id,
             caused_by=caused_by,
             event_id=event_id,
-            timestamp_micros=timestamp_micros,
         )
 
     def turn_completed(
@@ -324,7 +311,6 @@ class DurableEventConstructors:
         session_id: str,
         caused_by: str | None = None,
         event_id: str | None = None,
-        timestamp_micros: int | None = None,
     ) -> DraftEvent:
         return self._turn_event(
             "zeta.turn.completed",
@@ -333,7 +319,6 @@ class DurableEventConstructors:
             session_id=session_id,
             caused_by=caused_by,
             event_id=event_id,
-            timestamp_micros=timestamp_micros,
         )
 
     def turn_failed(
@@ -344,7 +329,6 @@ class DurableEventConstructors:
         session_id: str,
         caused_by: str | None = None,
         event_id: str | None = None,
-        timestamp_micros: int | None = None,
     ) -> DraftEvent:
         return self._turn_event(
             "zeta.turn.failed",
@@ -353,7 +337,6 @@ class DurableEventConstructors:
             session_id=session_id,
             caused_by=caused_by,
             event_id=event_id,
-            timestamp_micros=timestamp_micros,
         )
 
     def turn_aborted(
@@ -364,7 +347,6 @@ class DurableEventConstructors:
         session_id: str,
         caused_by: str | None = None,
         event_id: str | None = None,
-        timestamp_micros: int | None = None,
     ) -> DraftEvent:
         return self._turn_event(
             "zeta.turn.aborted",
@@ -373,7 +355,6 @@ class DurableEventConstructors:
             session_id=session_id,
             caused_by=caused_by,
             event_id=event_id,
-            timestamp_micros=timestamp_micros,
         )
 
     def _turn_event(
@@ -385,7 +366,6 @@ class DurableEventConstructors:
         session_id: str,
         caused_by: str | None,
         event_id: str | None,
-        timestamp_micros: int | None,
     ) -> DraftEvent:
         return durable_event_for_type(
             event_type,
@@ -394,7 +374,6 @@ class DurableEventConstructors:
             session_id=session_id,
             caused_by=caused_by,
             event_id=event_id,
-            timestamp_micros=timestamp_micros,
         )
 
 
@@ -409,7 +388,6 @@ def durable_draft_from_payload(
     session_id: str,
     caused_by: str | None,
     event_id: str | None,
-    timestamp_micros: int | None,
 ) -> DraftEvent | None:
     if event_type in SUPPORTED_DURABLE_EVENT_TYPES:
         return durable_event_for_type(
@@ -419,7 +397,6 @@ def durable_draft_from_payload(
             session_id=session_id,
             caused_by=caused_by,
             event_id=event_id,
-            timestamp_micros=timestamp_micros,
         )
     return None
 
@@ -437,7 +414,6 @@ def event_payload_draft(
         payload.get("turn_id") if isinstance(payload.get("turn_id"), str) else None
     )
     event_session_id = str(payload.get("session") or session_id)
-    event_timestamp = timestamp_micros_from_time(payload.get("time"))
     caused_by = (
         str(payload["caused_by"]) if isinstance(payload.get("caused_by"), str) else None
     )
@@ -453,7 +429,6 @@ def event_payload_draft(
         session_id=event_session_id,
         caused_by=caused_by,
         event_id=event_id,
-        timestamp_micros=event_timestamp,
     )
     if draft is not None:
         return draft
@@ -464,8 +439,6 @@ def event_payload_draft(
         caused_by=caused_by,
         session_id=event_session_id,
         turn_id=turn_id,
-        timestamp_micros=event_timestamp,
-        event_id=event_id,
     )
 
 
@@ -476,9 +449,31 @@ def publish_event_payload_to_log(
     session_id: str,
     cwd: str | None = None,
 ) -> Event:
-    from .store import publish_event_to_log
+    from .store import append_event_to_log
 
-    return publish_event_to_log(
+    payload = {"cwd": cwd or os.getcwd(), **event}
+    draft = event_payload_draft(payload, session_id=session_id, cwd=cwd)
+    event_id = payload.get("id") if isinstance(payload.get("id"), str) else None
+    event_time = payload.get("time")
+    timestamp_micros = (
+        int(float(event_time) * 1_000_000)
+        if isinstance(event_time, int | float) and not isinstance(event_time, bool)
+        else time.time_ns() // 1_000
+    )
+    idempotency_key = (
+        draft.idempotency_key.strip() if draft.idempotency_key is not None else None
+    )
+    return append_event_to_log(
         path,
-        event_payload_draft(event, session_id=session_id, cwd=cwd),
+        Event(
+            id=event_id or f"evt_{uuid.uuid4().hex}",
+            event_type=draft.event_type,
+            source=draft.source,
+            payload=draft.payload,
+            idempotency_key=idempotency_key or None,
+            caused_by=draft.caused_by,
+            session_id=draft.session_id,
+            turn_id=draft.turn_id,
+            timestamp_micros=timestamp_micros,
+        ),
     )

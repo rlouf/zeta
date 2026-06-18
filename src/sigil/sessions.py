@@ -16,7 +16,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from zeta.events import Event, time_from_timestamp_micros
+from zeta.events import Event
 from zeta.history import (
     effect_record,
     publish_effect_record,
@@ -204,7 +204,7 @@ def latest_events_by_session(events: list[Event]) -> dict[str, Event]:
 def event_time(event: Event | dict[str, Any]) -> float:
     """Return event time as a sortable float, treating malformed times as zero."""
     if isinstance(event, Event):
-        return time_from_timestamp_micros(event.timestamp_micros)
+        return event.timestamp_micros / 1_000_000
     value = event.get("time")
     return value if isinstance(value, int | float) else 0.0
 

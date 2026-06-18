@@ -37,7 +37,6 @@ from .events import (
     current_timeline,
     event_payload_draft,
     record_event,
-    time_from_timestamp_micros,
     timeline_event_from_durable_event,
 )
 from .loop import (
@@ -451,7 +450,7 @@ def generic_rpc_event_from_durable_event(event: Event) -> dict[str, Any]:
         "type": event.event_type,
         "id": event.id,
         "source": event.source,
-        "time": time_from_timestamp_micros(event.timestamp_micros),
+        "time": event.timestamp_micros / 1_000_000,
         **event.payload,
     }
     if event.session_id is not None:
@@ -713,7 +712,6 @@ def rpc_publish_event_draft(params: dict[str, Any]) -> DraftEvent:
         caused_by=optional_string(params.get("caused_by")),
         session_id=optional_string(params.get("session_id")),
         turn_id=optional_string(params.get("turn_id")),
-        event_id=optional_string(params.get("id")),
     )
 
 

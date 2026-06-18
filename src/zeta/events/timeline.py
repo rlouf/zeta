@@ -5,10 +5,10 @@ from __future__ import annotations
 import os
 import time
 import uuid
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 from ..substrate import Store, warn_trace_failure_once
-from .event import Event, time_from_timestamp_micros
+from .event import DraftEvent, Event
 from .payloads import (
     durable_event_from_timeline,
     durable_event_id,
@@ -20,6 +20,11 @@ from .store import EventReader, Filter, SqliteEventStore
 
 if TYPE_CHECKING:
     from ..session import Session
+
+
+@runtime_checkable
+class EventAppender(Protocol):
+    def append(self, event: Event) -> object: ...
 
 
 def record_event(
@@ -81,22 +86,42 @@ def record_durable_event(
         session_id=str(event.get("session") or session_id or timeline_session_id()),
         caused_by=optional_event_str(event.get("caused_by")),
         event_id=durable_event_id(event_type, event),
-        timestamp_micros=timestamp_micros_from_event_time(event.get("time")),
     )
     if draft is None:
         return
     if event_sink is None:
         return
     try:
-        publish_event(draft, sink=event_sink)
+        appender = event_sink if isinstance(event_sink, EventAppender) else None
+        if appender is not None:
+            appender.append(timeline_durable_event(event, draft))
+        else:
+            publish_event(draft, sink=event_sink)
     except Exception as exc:
         warn_trace_failure_once("record_durable_event", exc)
 
 
-def timestamp_micros_from_event_time(value: object) -> int | None:
-    from .event import timestamp_micros_from_time
-
-    return timestamp_micros_from_time(value)
+def timeline_durable_event(event: dict[str, Any], draft: DraftEvent) -> Event:
+    event_time = event.get("time")
+    timestamp_micros = (
+        int(float(event_time) * 1_000_000)
+        if isinstance(event_time, int | float) and not isinstance(event_time, bool)
+        else time.time_ns() // 1_000
+    )
+    idempotency_key = (
+        draft.idempotency_key.strip() if draft.idempotency_key is not None else None
+    )
+    return Event(
+        id=str(event.get("id") or uuid.uuid4()),
+        event_type=draft.event_type,
+        source=draft.source,
+        payload=draft.payload,
+        idempotency_key=idempotency_key or None,
+        caused_by=draft.caused_by,
+        session_id=draft.session_id,
+        turn_id=draft.turn_id,
+        timestamp_micros=timestamp_micros,
+    )
 
 
 def timeline_session_id() -> str:
@@ -133,7 +158,7 @@ def exact_event_time(event: Event) -> float:
     exact_time = event.payload.get("_time")
     if isinstance(exact_time, int | float) and not isinstance(exact_time, bool):
         return float(exact_time)
-    return time_from_timestamp_micros(event.timestamp_micros)
+    return event.timestamp_micros / 1_000_000
 
 
 def event_reader(sink: EventSink) -> EventReader | None:

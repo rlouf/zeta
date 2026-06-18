@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import re
 import time
+import uuid
 from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import Any, cast
@@ -16,8 +17,6 @@ from .events import (
     append_event_to_log,
     publish_event_to_log,
     read_event_log,
-    time_from_timestamp_micros,
-    timestamp_micros_from_time,
 )
 
 SINCE_PATTERN = re.compile(r"(\d+)([dhm])")
@@ -329,26 +328,15 @@ def publish_turn_record(
 ) -> Event:
     """Append one durable turn record to a Zeta event store."""
     event_type = turn_event_type(str(record.get("outcome") or ""))
-    payload = domain_payload({"cwd": cwd or os.getcwd(), **record, "type": event_type})
-    return append_draft(
+    return append_event(
         path,
-        DraftEvent(
-            event_type=event_type,
-            source=str(record.get("source") or "zeta"),
-            payload=payload,
-            caused_by=(
-                str(record["caused_by"])
-                if isinstance(record.get("caused_by"), str)
-                else None
-            ),
-            session_id=session_id,
-            turn_id=(
-                str(record["turn_id"])
-                if isinstance(record.get("turn_id"), str)
-                else None
-            ),
-            timestamp_micros=timestamp_micros_from_time(record.get("time")),
-            event_id=(str(record["id"]) if isinstance(record.get("id"), str) else None),
+        event_from_record(
+            {
+                "cwd": cwd or os.getcwd(),
+                **record,
+                "type": event_type,
+                "session": session_id,
+            }
         ),
     )
 
@@ -361,24 +349,14 @@ def publish_effect_record(
     cwd: str | None = None,
 ) -> dict[str, Any]:
     """Append one durable tool-effect event and return its history record."""
-    appended = append_draft(
+    appended = append_event(
         path,
-        DraftEvent(
-            event_type="zeta.tool.called",
-            source="zeta",
-            payload={
+        event_from_effect_record(
+            {
                 "cwd": cwd or os.getcwd(),
-                "turn_id": record.get("turn_id"),
-                "effects": [record],
-            },
-            session_id=session_id,
-            turn_id=(
-                str(record["turn_id"])
-                if isinstance(record.get("turn_id"), str)
-                else None
-            ),
-            timestamp_micros=timestamp_micros_from_time(record.get("time")),
-            event_id=(str(record["id"]) if isinstance(record.get("id"), str) else None),
+                "session": session_id,
+                **record,
+            }
         ),
     )
     return effect_event_record(
@@ -514,7 +492,7 @@ def history_event_record(event: Event) -> dict[str, Any]:
         {
             "id": event.id,
             "type": event.event_type,
-            "time": time_from_timestamp_micros(event.timestamp_micros),
+            "time": event.timestamp_micros / 1_000_000,
         }
     )
     if event.session_id is not None:
@@ -539,7 +517,7 @@ def effect_event_record(
 
 
 def event_time(event: Event) -> float:
-    return time_from_timestamp_micros(event.timestamp_micros)
+    return event.timestamp_micros / 1_000_000
 
 
 def event_from_effect_record(record: dict[str, Any]) -> Event:
@@ -564,13 +542,18 @@ def event_from_effect_record(record: dict[str, Any]) -> Event:
         turn_id=(
             str(record["turn_id"]) if isinstance(record.get("turn_id"), str) else None
         ),
-        timestamp_micros=timestamp_micros_from_time(record.get("time")) or 0,
+        timestamp_micros=(
+            int(float(record["time"]) * 1_000_000)
+            if isinstance(record.get("time"), int | float)
+            and not isinstance(record.get("time"), bool)
+            else 0
+        ),
     )
 
 
 def event_from_record(record: dict[str, Any]) -> Event:
     return Event(
-        id=str(record["id"]),
+        id=str(record.get("id") or f"evt_{uuid.uuid4().hex}"),
         event_type=str(record["type"]),
         source=str(record.get("source") or "zeta"),
         payload=domain_payload(record),
@@ -586,7 +569,12 @@ def event_from_record(record: dict[str, Any]) -> Event:
         turn_id=(
             str(record["turn_id"]) if isinstance(record.get("turn_id"), str) else None
         ),
-        timestamp_micros=timestamp_micros_from_time(record.get("time")) or 0,
+        timestamp_micros=(
+            int(float(record["time"]) * 1_000_000)
+            if isinstance(record.get("time"), int | float)
+            and not isinstance(record.get("time"), bool)
+            else 0
+        ),
     )
 
 

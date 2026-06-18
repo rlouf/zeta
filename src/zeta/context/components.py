@@ -142,7 +142,9 @@ def tool_result_event_from_message(message: dict[str, Any]) -> dict[str, Any]:
 def chat_messages(
     timeline: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    return [entry.message for entry in _chat_message_entries(timeline)]
+    return complete_tool_exchange_messages(
+        [entry.message for entry in _chat_message_entries(timeline)]
+    )
 
 
 def _chat_message_entries(
@@ -263,6 +265,38 @@ def renderable_tool_call(call: Any) -> Any:
         )
         return {**call, "function": {**function, "arguments": repaired}}
     return call
+
+
+def complete_tool_exchange_messages(
+    messages: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    answered_call_ids = {
+        str(message.get("tool_call_id") or "")
+        for message in messages
+        if message.get("role") == "tool"
+    }
+    return [
+        message
+        for message in messages
+        if not has_unanswered_tool_call(message, answered_call_ids)
+    ]
+
+
+def has_unanswered_tool_call(
+    message: dict[str, Any],
+    answered_call_ids: set[str],
+) -> bool:
+    if message.get("role") != "assistant":
+        return False
+    tool_calls = message.get("tool_calls")
+    if not isinstance(tool_calls, list):
+        return False
+    call_ids = [
+        str(call.get("id") or "")
+        for call in tool_calls
+        if isinstance(call, dict) and call.get("id")
+    ]
+    return any(call_id not in answered_call_ids for call_id in call_ids)
 
 
 def record_tool_call_ids(

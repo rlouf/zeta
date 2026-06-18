@@ -60,7 +60,7 @@ class Event:
             id=f"evt_{uuid4().hex}",
             event_type=draft.event_type,
             source=draft.source,
-            payload=draft.payload,
+            payload=dict(draft.payload),
             idempotency_key=idempotency_key,
             caused_by=draft.caused_by,
             session_id=draft.session_id,

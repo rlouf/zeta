@@ -1253,24 +1253,27 @@ def test_zeta_orphan_tool_result_rendering_strips_trace_fields() -> None:
 
 
 def test_zeta_chat_messages_repairs_truncated_tool_call_arguments() -> None:
-    event = {
-        "type": "model",
-        "content": "",
-        "tool_calls": [
-            {
-                "id": "call-0",
-                "type": "function",
-                "function": {
-                    "name": "write",
-                    "arguments": '{"path": "doc.md", "content": "cut mid stri',
-                },
-            }
-        ],
-    }
+    events = [
+        {
+            "type": "model",
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": "call-0",
+                    "type": "function",
+                    "function": {
+                        "name": "write",
+                        "arguments": '{"path": "doc.md", "content": "cut mid stri',
+                    },
+                }
+            ],
+        },
+        {"type": "tool_result", "tool_call_id": "call-0", "result": {"ok": True}},
+    ]
 
-    messages = chat_messages([event])
+    messages = chat_messages(events)
 
-    assert len(messages) == 1
+    assert len(messages) == 2
     call = messages[0]["tool_calls"][0]
     arguments = json.loads(call["function"]["arguments"])
     assert arguments["truncated_arguments"].startswith('{"path": "doc.md"')
@@ -1279,23 +1282,51 @@ def test_zeta_chat_messages_repairs_truncated_tool_call_arguments() -> None:
 
 
 def test_zeta_chat_messages_keeps_valid_tool_call_arguments() -> None:
-    event = {
-        "type": "model",
-        "content": "",
-        "tool_calls": [
-            {
-                "id": "call-0",
-                "type": "function",
-                "function": {"name": "read", "arguments": '{"path": "doc.md"}'},
-            }
-        ],
-    }
+    events = [
+        {
+            "type": "model",
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": "call-0",
+                    "type": "function",
+                    "function": {"name": "read", "arguments": '{"path": "doc.md"}'},
+                }
+            ],
+        },
+        {"type": "tool_result", "tool_call_id": "call-0", "result": {"ok": True}},
+    ]
 
-    messages = chat_messages([event])
+    messages = chat_messages(events)
 
     assert messages[0]["tool_calls"][0]["function"]["arguments"] == (
         '{"path": "doc.md"}'
     )
+
+
+def test_zeta_chat_messages_trims_unanswered_tool_calls() -> None:
+    events = [
+        {"type": "user_message", "content": "hello"},
+        {
+            "type": "model",
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": "call-0",
+                    "type": "function",
+                    "function": {"name": "read", "arguments": "{}"},
+                }
+            ],
+        },
+        {"type": "turn_aborted", "content": "(turn aborted)"},
+    ]
+
+    messages = chat_messages(events)
+
+    assert messages == [
+        {"role": "user", "content": "hello"},
+        {"role": "assistant", "content": "(turn aborted)"},
+    ]
 
 
 def test_zeta_sqlite_store_batch_defers_commit(tmp_path: Path) -> None:

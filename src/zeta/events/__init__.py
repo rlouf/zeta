@@ -11,7 +11,6 @@ from .event import (
     time_from_timestamp_micros,
     timestamp_micros_from_time,
 )
-from .memory import MemoryEventStore
 from .payloads import (
     EVENT_IDEMPOTENT_TYPES,
     SUPPORTED_DURABLE_EVENT_TYPES,
@@ -32,9 +31,13 @@ from .payloads import (
     tool_called_event,
     turn_idempotency_key,
 )
-from .sqlite import (
+from .sink import EventSink, publish_event
+from .store import (
     EVENT_STORE_NAME,
     ZETA_STORE_NAME,
+    EventReader,
+    Filter,
+    MemoryEventStore,
     SqliteEventStore,
     append_event_to_log,
     append_event_to_log_outcome,
@@ -49,7 +52,6 @@ from .sqlite import (
     read_event_log,
     row_to_event,
 )
-from .store import EventReader, EventSink, Filter, publish_event
 from .timeline import (
     add_durable_object_ref,
     add_durable_object_refs,

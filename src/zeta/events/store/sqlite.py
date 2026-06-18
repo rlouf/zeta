@@ -7,8 +7,8 @@ import time
 from pathlib import Path
 from typing import Any
 
-from .event import AppendOutcome, DraftEvent, Event
-from .store import Filter
+from ..event import AppendOutcome, DraftEvent, Event
+from .base import Filter
 
 EVENT_STORE_NAME = "events.sqlite3"
 ZETA_STORE_NAME = "zeta.sqlite3"

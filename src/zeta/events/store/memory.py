@@ -1,7 +1,7 @@
 """In-memory event store."""
 
-from .event import AppendOutcome, DraftEvent, Event
-from .store import Filter
+from ..event import AppendOutcome, DraftEvent, Event
+from .base import Filter
 
 
 class MemoryEventStore:

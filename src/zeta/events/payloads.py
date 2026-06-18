@@ -476,7 +476,7 @@ def publish_event_payload_to_log(
     session_id: str,
     cwd: str | None = None,
 ) -> Event:
-    from .sqlite import publish_event_to_log
+    from .store import publish_event_to_log
 
     return publish_event_to_log(
         path,

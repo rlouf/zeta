@@ -15,8 +15,8 @@ from .payloads import (
     durable_event_payload,
     optional_event_str,
 )
-from .sqlite import SqliteEventStore
-from .store import EventReader, EventSink, Filter, publish_event
+from .sink import EventSink, publish_event
+from .store import EventReader, Filter, SqliteEventStore
 
 if TYPE_CHECKING:
     from ..session import Session

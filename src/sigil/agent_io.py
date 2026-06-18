@@ -347,13 +347,28 @@ def record_turn_abort(
     message = str(error) or type(error).__name__
     if reason is not None:
         fields["reason"] = reason
-    return record_zeta_event(
-        "turn_aborted",
-        runtime_context=runtime_context,
-        error=message,
-        content=f"(turn aborted: {message})",
+    payload = {
+        "error": message,
+        "content": f"(turn aborted: {message})",
         **fields,
+        "_timeline_type": "turn_aborted",
+    }
+    outcome = runtime_context.event_sink.accept(
+        DraftEvent(
+            event_type="zeta.turn_aborted",
+            source="zeta",
+            payload=payload,
+            idempotency_key=None,
+            caused_by=fields.get("caused_by")
+            if isinstance(fields.get("caused_by"), str)
+            else None,
+            session_id=runtime_context.session_id,
+            turn_id=fields.get("turn_id")
+            if isinstance(fields.get("turn_id"), str)
+            else None,
+        )
     )
+    return timeline_event_from_durable_event(outcome.event)
 
 
 def run_zeta_rpc_session(

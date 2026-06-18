@@ -499,6 +499,43 @@ def test_sqlite_event_store_filters_and_cursors(tmp_path: Path) -> None:
     ]
 
 
+def test_durable_timeline_projection_prefers_payload_type() -> None:
+    event = Event(
+        id="evt_model_usage",
+        event_type="zeta.model_call.completed",
+        source="zeta",
+        payload={"_timeline_type": "model_usage", "usage": {"tokens": 1}},
+        idempotency_key=None,
+        caused_by=None,
+        session_id="s1",
+        turn_id=None,
+        timestamp_micros=1_000_000,
+    )
+
+    projected = zeta_timeline.timeline_event_from_durable_event(event)
+
+    assert projected["type"] == "model_usage"
+    assert "_timeline_type" not in projected
+
+
+def test_durable_timeline_projection_uses_durable_type_without_payload_type() -> None:
+    event = Event(
+        id="evt_domain",
+        event_type="zeta.turn.completed",
+        source="zeta",
+        payload={"turn_id": "turn-1"},
+        idempotency_key=None,
+        caused_by=None,
+        session_id="s1",
+        turn_id=None,
+        timestamp_micros=1_000_000,
+    )
+
+    projected = zeta_timeline.timeline_event_from_durable_event(event)
+
+    assert projected["type"] == "turn.completed"
+
+
 @pytest.mark.parametrize(
     "store_name",
     [

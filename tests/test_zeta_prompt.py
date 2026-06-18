@@ -524,7 +524,7 @@ def test_zeta_prompt_request_reconstructs_a_no_thinking_prompt() -> None:
     assert reconstructed.payload_verified
 
 
-def test_zeta_prompt_reconstruction_treats_legacy_prompts_as_no_thinking() -> None:
+def test_zeta_prompt_reconstruction_does_not_infer_missing_thinking() -> None:
     store = zeta_trace.InMemoryStore()
     message = {"role": "user", "content": "objective"}
     component_id = store.put_object(
@@ -534,7 +534,7 @@ def test_zeta_prompt_reconstruction_treats_legacy_prompts_as_no_thinking() -> No
             data={"message": message},
         )
     )
-    legacy_payload = zeta_model.chat_completion_request_body(
+    no_thinking_payload = zeta_model.chat_completion_request_body(
         [message],
         max_tokens=zeta_model.DEFAULT_MAX_COMPLETION_TOKENS,
         thinking="none",
@@ -543,7 +543,7 @@ def test_zeta_prompt_reconstruction_treats_legacy_prompts_as_no_thinking() -> No
         zeta_trace.Object(
             kind="prompt",
             schema="zeta.prompt.v1",
-            data={"payload_sha256": zeta_context.payload_sha256(legacy_payload)},
+            data={"payload_sha256": zeta_context.payload_sha256(no_thinking_payload)},
             links=(component_id,),
         )
     )
@@ -562,8 +562,8 @@ def test_zeta_prompt_reconstruction_treats_legacy_prompts_as_no_thinking() -> No
     reconstructed = zeta_context.reconstructed_prompt_request(store, prompt_id)
 
     assert reconstructed is not None
-    assert reconstructed.thinking == "none"
-    assert reconstructed.payload_verified
+    assert reconstructed.thinking is None
+    assert not reconstructed.payload_verified
 
 
 def test_zeta_prompt_request_reconstruction_flags_a_changed_component() -> None:

@@ -539,19 +539,13 @@ def prompt_builder_params(
     store: Store,
     prompt_id: ObjectId,
 ) -> tuple[int, str | None, str | None]:
-    """Return the max_tokens, model, and thinking the builder recorded.
-
-    A derivation without a `thinking` param predates the setting; those
-    prompts were built with thinking disabled, so absence means `"none"`.
-    """
+    """Return the max_tokens, model, and thinking the builder recorded."""
     for derivation in store.derivations_for_output(prompt_id):
         if derivation.producer != "PromptBuilder":
             continue
         max_tokens = derivation.params.get("max_tokens")
         selected_model = derivation.params.get("selected_model")
-        thinking = (
-            derivation.params["thinking"] if "thinking" in derivation.params else "none"
-        )
+        thinking = derivation.params.get("thinking")
         return (
             max_tokens
             if isinstance(max_tokens, int) and not isinstance(max_tokens, bool)

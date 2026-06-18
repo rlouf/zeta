@@ -385,7 +385,6 @@ def test_sigil_log_filters_workflow_failed_and_sessions(monkeypatch) -> None:
     by_workflow = runner.invoke(sigil_cli, ["log", "--workflow", "do"])
     by_failed = runner.invoke(sigil_cli, ["log", "--failed"])
     elsewhere = runner.invoke(sigil_cli, ["log", "--session", "elsewhere"])
-    legacy_flag = runner.invoke(sigil_cli, ["log", "--all-sessions"])
 
     assert by_workflow.exit_code == 0
     assert len(by_workflow.output.splitlines()) == 1
@@ -396,7 +395,6 @@ def test_sigil_log_filters_workflow_failed_and_sessions(monkeypatch) -> None:
     assert len(elsewhere.output.splitlines()) == 1
     assert "ls" in elsewhere.output
     assert "elsewhere" not in by_workflow.output
-    assert legacy_flag.exit_code != 0
 
 
 def test_sigil_log_session_filter_omits_the_session_column(monkeypatch) -> None:

@@ -117,8 +117,8 @@ def session_rename(name: tuple[str, ...], json_output: bool) -> int:
 def session_clear(json_output: bool) -> int:
     """Clear state scoped to the current session.
 
-    Removes any legacy per-session files, then clears this session's trace
-    records from the shared SQLite store. The databases themselves survive.
+    Removes this session's continuity files and clears this session's trace
+    records. The databases themselves survive.
     """
     return print_session_clear(json_output)
 

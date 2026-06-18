@@ -32,15 +32,18 @@ from zeta.events import AppendOutcome, DraftEvent, Event, EventSink
 from zeta.loop import (
     AgentTurnAborted,
     AgentTurnResult,
+    model_called_draft,
+    model_durable_payload,
     registered_capabilities,
     run_agent_turn,
+    tool_called_draft,
+    tool_durable_payload,
 )
 from zeta.session import Session, default_session
 from zeta.store.events import EventReader, Filter
 from zeta.timeline import (
     current_timeline,
     event_payload_draft,
-    record_event,
     timeline_event_from_durable_event,
 )
 
@@ -154,6 +157,72 @@ def record_user_message(
         )
     )
     return timeline_event_from_durable_event(outcome.event)
+
+
+def record_runtime_event(
+    event: dict[str, Any],
+    *,
+    runtime_context: Session,
+    direct_event_sink: DirectRuntimeEventSink,
+) -> dict[str, Any]:
+    draft = runtime_event_draft(event, runtime_context=runtime_context)
+    outcome = direct_event_sink.accept(draft)
+    projected = timeline_event_from_durable_event(outcome.event)
+    if "effects" in event:
+        projected["effects"] = event["effects"]
+    return projected
+
+
+def runtime_event_draft(
+    event: dict[str, Any],
+    *,
+    runtime_context: Session,
+) -> DraftEvent:
+    event_type = str(event.get("type") or "")
+    caused_by = (
+        event.get("caused_by") if isinstance(event.get("caused_by"), str) else None
+    )
+    event_id = event.get("id") if isinstance(event.get("id"), str) else None
+    turn_id = event.get("turn_id") if isinstance(event.get("turn_id"), str) else None
+    if event_type == "model":
+        draft = model_called_draft(
+            payload=model_durable_payload(event),
+            turn_id=turn_id,
+            session_id=runtime_context.session_id,
+            caused_by=caused_by,
+            event_id=event_id,
+        )
+    elif event_type in {"tool_call", "tool_result"}:
+        draft = tool_called_draft(
+            payload=tool_durable_payload(event),
+            turn_id=turn_id,
+            session_id=runtime_context.session_id,
+            caused_by=caused_by,
+            event_id=event_id,
+        )
+    elif event_type == "turn_aborted":
+        return DraftEvent(
+            event_type="zeta.turn_aborted",
+            source="zeta",
+            payload=turn_aborted_payload(event),
+            idempotency_key=None,
+            caused_by=caused_by,
+            session_id=runtime_context.session_id,
+            turn_id=turn_id,
+        )
+    else:
+        raise ValueError(f"unsupported runtime event type: {event_type}")
+    return draft
+
+
+def turn_aborted_payload(event: dict[str, Any]) -> dict[str, Any]:
+    payload = {
+        key: value
+        for key, value in event.items()
+        if key not in {"id", "type", "time", "session", "source", "caused_by"}
+    }
+    payload["_timeline_type"] = "turn_aborted"
+    return payload
 
 
 @dataclass(frozen=True)
@@ -283,7 +352,11 @@ def run_session_turn(
         if persisted is not None and "effects" in scoped:
             persisted["effects"] = scoped["effects"]
         if persisted is None:
-            persisted = record_event(scoped, runtime_context=runtime_context)
+            persisted = record_runtime_event(
+                scoped,
+                runtime_context=runtime_context,
+                direct_event_sink=direct_event_sink,
+            )
         publish_event(rpc_event_with_cursor(runtime_context, persisted, run_id))
 
     try:

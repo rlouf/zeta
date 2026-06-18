@@ -1,6 +1,7 @@
 """Newline-delimited JSON-RPC transport for the Zeta runtime."""
 
 import json
+import os
 import select
 import threading
 import time
@@ -43,7 +44,6 @@ from zeta.session import Session, default_session
 from zeta.store.events import EventReader, Filter
 from zeta.timeline import (
     current_timeline,
-    event_payload_draft,
     timeline_event_from_durable_event,
 )
 
@@ -165,7 +165,7 @@ def record_runtime_event(
     runtime_context: Session,
     direct_event_sink: DirectRuntimeEventSink,
 ) -> dict[str, Any]:
-    draft = runtime_event_draft(event, runtime_context=runtime_context)
+    draft = runtime_event_draft(event, session_id=runtime_context.session_id)
     outcome = direct_event_sink.accept(draft)
     projected = timeline_event_from_durable_event(outcome.event)
     if "effects" in event:
@@ -176,7 +176,7 @@ def record_runtime_event(
 def runtime_event_draft(
     event: dict[str, Any],
     *,
-    runtime_context: Session,
+    session_id: str,
 ) -> DraftEvent:
     event_type = str(event.get("type") or "")
     caused_by = (
@@ -188,7 +188,7 @@ def runtime_event_draft(
         draft = model_called_draft(
             payload=model_durable_payload(event),
             turn_id=turn_id,
-            session_id=runtime_context.session_id,
+            session_id=session_id,
             caused_by=caused_by,
             event_id=event_id,
         )
@@ -196,7 +196,7 @@ def runtime_event_draft(
         draft = tool_called_draft(
             payload=tool_durable_payload(event),
             turn_id=turn_id,
-            session_id=runtime_context.session_id,
+            session_id=session_id,
             caused_by=caused_by,
             event_id=event_id,
         )
@@ -207,7 +207,7 @@ def runtime_event_draft(
             payload=turn_aborted_payload(event),
             idempotency_key=None,
             caused_by=caused_by,
-            session_id=runtime_context.session_id,
+            session_id=session_id,
             turn_id=turn_id,
         )
     else:
@@ -840,7 +840,7 @@ def rpc_publish_event_draft(params: dict[str, Any]) -> DraftEvent:
         session_id = optional_string(params.get("session_id")) or optional_string(
             event.get("session")
         )
-        return event_payload_draft(event, session_id=session_id or "")
+        return rpc_event_dict_draft(event, session_id=session_id or "")
     event_type = optional_string(params.get("type"))
     if event_type is None:
         raise RpcError(
@@ -868,6 +868,69 @@ def rpc_publish_event_draft(params: dict[str, Any]) -> DraftEvent:
         session_id=optional_string(params.get("session_id")),
         turn_id=optional_string(params.get("turn_id")),
     )
+
+
+def rpc_event_dict_draft(event: dict[str, Any], *, session_id: str) -> DraftEvent:
+    payload = {"cwd": os.getcwd(), **event}
+    event_type = str(payload.get("type") or "event")
+    event_session_id = str(payload.get("session") or session_id)
+    if event_type in {"model", "tool_call", "tool_result", "turn_aborted"}:
+        return runtime_event_draft(payload, session_id=event_session_id)
+    event_id = optional_string(payload.get("id"))
+    turn_id = optional_string(payload.get("turn_id"))
+    caused_by = optional_string(payload.get("caused_by"))
+    domain_payload = {
+        key: value
+        for key, value in payload.items()
+        if key not in {"id", "type", "time", "session", "source", "caused_by"}
+    }
+    durable_type = rpc_durable_event_type(event_type)
+    return DraftEvent(
+        durable_type,
+        "zeta"
+        if durable_type.startswith("zeta.")
+        else str(payload.get("source") or "zeta"),
+        domain_payload,
+        idempotency_key=rpc_event_idempotency_key(
+            durable_type,
+            event_id=event_id,
+            turn_id=turn_id,
+        ),
+        caused_by=caused_by,
+        session_id=event_session_id,
+        turn_id=turn_id,
+    )
+
+
+def rpc_durable_event_type(event_type: str) -> str:
+    return {
+        "user_message": "zeta.user_message",
+        "model_usage": "zeta.model_usage",
+    }.get(event_type, event_type)
+
+
+def rpc_event_idempotency_key(
+    event_type: str,
+    *,
+    event_id: str | None,
+    turn_id: str | None,
+) -> str | None:
+    if event_type in {
+        "zeta.model.called",
+        "zeta.tool.called",
+        "zeta.user_message",
+        "zeta.turn_aborted",
+        "zeta.model_usage",
+    }:
+        return f"{event_type}:{event_id}" if event_id is not None else None
+    if event_type in {
+        "zeta.prompt.submitted",
+        "zeta.turn.completed",
+        "zeta.turn.failed",
+        "zeta.turn.aborted",
+    }:
+        return f"{event_type}:{turn_id}" if turn_id is not None else None
+    return None
 
 
 def normalized_client_tool_response(

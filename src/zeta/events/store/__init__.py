@@ -12,12 +12,8 @@ from .sqlite import (
     event_log_children,
     event_log_turn_events,
     event_store_path,
-    execute_with_retry,
-    like_prefix,
-    optional_str,
     publish_event_to_log,
     read_event_log,
-    row_to_event,
 )
 
 __all__ = [
@@ -33,10 +29,6 @@ __all__ = [
     "event_log_children",
     "event_log_turn_events",
     "event_store_path",
-    "execute_with_retry",
-    "like_prefix",
-    "optional_str",
     "publish_event_to_log",
     "read_event_log",
-    "row_to_event",
 ]

@@ -1,33 +1,18 @@
 """User-facing trace inspection commands."""
 
-import json
-import sqlite3
 from collections.abc import Callable
-from pathlib import Path
 from typing import Any
 
 import click
 
 from zeta.context import reconstructed_prompt_request
-from zeta.events import (
-    EVENT_STORE_NAME,
-    Event,
-    append_event_to_log_outcome,
-    row_to_event,
-)
 from zeta.models import chat_completion_messages
 from zeta.substrate import (
-    DEFAULT_SQLITE_NAME,
-    Derivation,
-    Object,
     SqliteStore,
     Store,
     UnknownSessionError,
     available_session_ids,
     open_existing_trace_store,
-    open_trace_store,
-    trace_state_dir,
-    zeta_sqlite_path,
 )
 
 from ..trace.diff import render_prompt_diff
@@ -124,203 +109,6 @@ def open_session_store(session_id: str) -> SqliteStore:
         raise click.ClickException(
             f"no trace store for session '{error.session_id}' (recorded: {available})"
         ) from error
-
-
-@trace_group.command(
-    "migrate-store",
-    epilog=examples(
-        "sigil trace migrate-store",
-        "sigil trace migrate-store --move",
-    ),
-)
-@click.option(
-    "--move",
-    "move_legacy",
-    is_flag=True,
-    help="Remove legacy per-session trace DBs after importing them.",
-)
-def trace_migrate_store(move_legacy: bool) -> int:
-    """Import legacy per-session trace DBs into the unified Zeta store."""
-    paths = legacy_trace_paths()
-    event_path = legacy_event_path()
-    if not paths and event_path is None:
-        click.echo("no legacy Zeta stores found")
-        return 0
-    imported_objects = 0
-    imported_derivations = 0
-    imported_refs = 0
-    imported_events = 0
-    if event_path is not None:
-        imported_events = import_legacy_event_store(event_path)
-        if move_legacy:
-            event_path.unlink()
-    for path in paths:
-        counts = import_legacy_trace_store(path)
-        imported_objects += counts["objects"]
-        imported_derivations += counts["derivations"]
-        imported_refs += counts["refs"]
-        if move_legacy:
-            path.unlink()
-            remove_empty_parents(path.parent, trace_state_dir() / "sessions")
-    suffix = " and moved legacy files" if move_legacy else ""
-    click.echo(
-        "imported "
-        f"{imported_objects} objects, {imported_derivations} derivations, "
-        f"{imported_refs} refs, {imported_events} events from "
-        f"{len(paths)} legacy trace stores{suffix}"
-    )
-    return 0
-
-
-def legacy_trace_paths() -> list[Path]:
-    root = trace_state_dir() / "sessions"
-    if not root.exists():
-        return []
-    return sorted(root.glob(f"*/{DEFAULT_SQLITE_NAME}"))
-
-
-def legacy_event_path() -> Path | None:
-    path = trace_state_dir() / EVENT_STORE_NAME
-    return path if path.exists() else None
-
-
-def import_legacy_event_store(path: Path) -> int:
-    source = sqlite3.connect(f"{path.as_uri()}?mode=ro&immutable=1", uri=True)
-    source.row_factory = sqlite3.Row
-    imported = 0
-    try:
-        if not legacy_table_exists(source, "events"):
-            return 0
-        rows = source.execute(
-            """
-            SELECT id, type, source, payload, idempotency_key, caused_by,
-                   session_id, turn_id, timestamp
-            FROM events
-            ORDER BY timestamp ASC, id ASC
-            """
-        )
-        for row in rows:
-            event = row_to_event(row)
-            if not isinstance(event, Event):
-                continue
-            outcome = append_event_to_log_outcome(zeta_sqlite_path(), event)
-            if outcome.inserted:
-                imported += 1
-    finally:
-        source.close()
-    return imported
-
-
-def import_legacy_trace_store(path: Path) -> dict[str, int]:
-    session_id_value = path.parent.name
-    source = sqlite3.connect(f"{path.as_uri()}?mode=ro&immutable=1", uri=True)
-    source.row_factory = sqlite3.Row
-    target = open_trace_store(session_id_value)
-    objects = 0
-    derivations = 0
-    refs = 0
-    try:
-        with target.batch():
-            objects = import_legacy_objects(source, target)
-            derivations = import_legacy_derivations(source, target)
-            refs = import_legacy_refs(source, target, session_id_value)
-    finally:
-        source.close()
-        target.close()
-    return {"objects": objects, "derivations": derivations, "refs": refs}
-
-
-def import_legacy_objects(source: sqlite3.Connection, target: Any) -> int:
-    if not legacy_table_exists(source, "objects"):
-        return 0
-    imported = 0
-    for row in source.execute(
-        "SELECT id, kind, schema, data_json, links_json FROM objects"
-    ):
-        target.import_object(
-            str(row["id"]),
-            Object(
-                kind=str(row["kind"]),
-                schema=str(row["schema"]),
-                data=json.loads(str(row["data_json"])),
-                links=tuple(json.loads(str(row["links_json"]))),
-            ),
-        )
-        imported += 1
-    return imported
-
-
-def import_legacy_derivations(source: sqlite3.Connection, target: Any) -> int:
-    if not legacy_table_exists(source, "derivations"):
-        return 0
-    imported = 0
-    rows = source.execute(
-        """
-        SELECT id, producer, output_id, input_ids_json, params_json, created_at
-        FROM derivations
-        """
-    )
-    for row in rows:
-        target.import_derivation(
-            str(row["id"]),
-            Derivation(
-                producer=str(row["producer"]),
-                output_id=str(row["output_id"]),
-                input_ids=tuple(json.loads(str(row["input_ids_json"]))),
-                params=json.loads(str(row["params_json"])),
-            ),
-            float(row["created_at"]),
-        )
-        imported += 1
-    return imported
-
-
-def import_legacy_refs(
-    source: sqlite3.Connection,
-    target: Any,
-    session_id_value: str,
-) -> int:
-    if not legacy_table_exists(source, "refs"):
-        return 0
-    query = "SELECT name, object_id FROM refs"
-    params: tuple[str, ...] = ()
-    if "scope" in legacy_columns(source, "refs"):
-        query = "SELECT name, object_id FROM refs WHERE scope IN ('global', ?)"
-        params = (f"session/{session_id_value}",)
-    imported = 0
-    for row in source.execute(query, params):
-        name = str(row["name"])
-        current = target.get_ref(name)
-        expected = current.object_id if current is not None else None
-        target.move_ref(name, expected, str(row["object_id"]))
-        imported += 1
-    return imported
-
-
-def legacy_table_exists(connection: sqlite3.Connection, name: str) -> bool:
-    row = connection.execute(
-        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
-        (name,),
-    ).fetchone()
-    return row is not None
-
-
-def legacy_columns(connection: sqlite3.Connection, table: str) -> set[str]:
-    return {
-        str(row["name"]) for row in connection.execute(f"PRAGMA table_info({table})")
-    }
-
-
-def remove_empty_parents(path: Path, stop: Path) -> None:
-    current = path
-    while current != stop.parent:
-        try:
-            current.rmdir()
-        except OSError:
-            return
-        if current == stop:
-            return
-        current = current.parent
 
 
 @trace_group.command(

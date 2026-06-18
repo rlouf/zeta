@@ -27,11 +27,11 @@ class SqliteEventStore:
             check_same_thread=False,
         )
         self.connection.row_factory = sqlite3.Row
-        execute_with_retry(self.connection, "PRAGMA busy_timeout=5000")
-        execute_with_retry(self.connection, "PRAGMA case_sensitive_like=ON")
+        _execute_with_retry(self.connection, "PRAGMA busy_timeout=5000")
+        _execute_with_retry(self.connection, "PRAGMA case_sensitive_like=ON")
         if self.path != Path(":memory:"):
-            execute_with_retry(self.connection, "PRAGMA journal_mode=WAL")
-            execute_with_retry(self.connection, "PRAGMA synchronous=NORMAL")
+            _execute_with_retry(self.connection, "PRAGMA journal_mode=WAL")
+            _execute_with_retry(self.connection, "PRAGMA synchronous=NORMAL")
         self._init_schema()
 
     def close(self) -> None:
@@ -125,7 +125,7 @@ class SqliteEventStore:
             """,
             (event_id,),
         ).fetchone()
-        return row_to_event(row) if row is not None else None
+        return _row_to_event(row) if row is not None else None
 
     def list_events(self, filter: Filter) -> list[Event]:
         clauses: list[str] = []
@@ -135,7 +135,7 @@ class SqliteEventStore:
             params.append(filter.event_type)
         if filter.event_type_prefix is not None:
             clauses.append("type LIKE ? ESCAPE '\\'")
-            params.append(like_prefix(filter.event_type_prefix))
+            params.append(_like_prefix(filter.event_type_prefix))
         if filter.session_id is not None:
             clauses.append("session_id = ?")
             params.append(filter.session_id)
@@ -174,7 +174,7 @@ class SqliteEventStore:
             """,
             params,
         ).fetchall()
-        return [row_to_event(row) for row in rows]
+        return [_row_to_event(row) for row in rows]
 
     def children(self, event_id: str, *, limit: int | None = None) -> list[Event]:
         return self.list_events(Filter(caused_by=event_id, limit=limit))
@@ -201,7 +201,7 @@ class SqliteEventStore:
             DELETE FROM events
             WHERE session_id = ? AND type LIKE ? ESCAPE '\\'
             """,
-            (session_id, like_prefix(event_type_prefix)),
+            (session_id, _like_prefix(event_type_prefix)),
         )
         self.connection.commit()
         return int(cursor.rowcount)
@@ -231,7 +231,7 @@ class SqliteEventStore:
             ).fetchone()
         if row is None:
             raise sqlite3.IntegrityError(f"append conflict for event {event.id}")
-        return row_to_event(row)
+        return _row_to_event(row)
 
 
 def event_store_path(root: Path | None = None) -> Path:
@@ -299,7 +299,7 @@ def event_log_turn_events(path: Path | str, turn_id: str) -> list[Event]:
         store.close()
 
 
-def row_to_event(row: sqlite3.Row) -> Event:
+def _row_to_event(row: sqlite3.Row) -> Event:
     payload = json.loads(str(row["payload"]))
     if not isinstance(payload, dict):
         payload = {"value": payload}
@@ -308,25 +308,25 @@ def row_to_event(row: sqlite3.Row) -> Event:
         event_type=str(row["type"]),
         source=str(row["source"]),
         payload=payload,
-        idempotency_key=optional_str(row["idempotency_key"]),
-        caused_by=optional_str(row["caused_by"]),
-        session_id=optional_str(row["session_id"]),
-        turn_id=optional_str(row["turn_id"]),
+        idempotency_key=_optional_str(row["idempotency_key"]),
+        caused_by=_optional_str(row["caused_by"]),
+        session_id=_optional_str(row["session_id"]),
+        turn_id=_optional_str(row["turn_id"]),
         timestamp_micros=int(row["timestamp"]),
         seq=int(row["seq"]),
     )
 
 
-def optional_str(value: object) -> str | None:
+def _optional_str(value: object) -> str | None:
     return value if isinstance(value, str) else None
 
 
-def like_prefix(prefix: str) -> str:
+def _like_prefix(prefix: str) -> str:
     escaped = prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
     return f"{escaped}%"
 
 
-def execute_with_retry(connection: sqlite3.Connection, sql: str) -> None:
+def _execute_with_retry(connection: sqlite3.Connection, sql: str) -> None:
     deadline = time.monotonic() + 5
     while True:
         try:

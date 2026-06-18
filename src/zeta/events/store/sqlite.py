@@ -88,7 +88,7 @@ class SqliteEventStore:
         self.connection.commit()
 
     def accept(self, draft: DraftEvent) -> AppendOutcome:
-        return self.append(draft.enrich())
+        return self.append(Event.from_draft(draft))
 
     def append(self, event: Event) -> AppendOutcome:
         payload = json.dumps(event.payload, ensure_ascii=False, separators=(",", ":"))

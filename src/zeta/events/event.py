@@ -31,25 +31,6 @@ class DraftEvent:
     timestamp_micros: int | None = None
     event_id: str | None = None
 
-    def enrich(self) -> Event:
-        idempotency_key = normalize_idempotency_key(self.idempotency_key)
-        event_id = self.event_id
-        if event_id is None and idempotency_key is not None:
-            event_id = id_for_idempotency_key(idempotency_key)
-        if event_id is None:
-            event_id = f"evt_{uuid4().hex}"
-        return Event(
-            id=event_id,
-            event_type=self.event_type,
-            source=self.source,
-            payload=dict(self.payload),
-            idempotency_key=idempotency_key,
-            caused_by=self.caused_by,
-            session_id=self.session_id,
-            turn_id=self.turn_id,
-            timestamp_micros=self.timestamp_micros or current_timestamp_micros(),
-        )
-
 
 @dataclass(frozen=True)
 class Event:
@@ -70,6 +51,26 @@ class Event:
     turn_id: str | None
     timestamp_micros: int
     seq: int = 0
+
+    @classmethod
+    def from_draft(cls, draft: DraftEvent) -> Event:
+        idempotency_key = normalize_idempotency_key(draft.idempotency_key)
+        event_id = draft.event_id
+        if event_id is None and idempotency_key is not None:
+            event_id = id_for_idempotency_key(idempotency_key)
+        if event_id is None:
+            event_id = f"evt_{uuid4().hex}"
+        return cls(
+            id=event_id,
+            event_type=draft.event_type,
+            source=draft.source,
+            payload=dict(draft.payload),
+            idempotency_key=idempotency_key,
+            caused_by=draft.caused_by,
+            session_id=draft.session_id,
+            turn_id=draft.turn_id,
+            timestamp_micros=draft.timestamp_micros or current_timestamp_micros(),
+        )
 
 
 def current_timestamp_micros() -> int:

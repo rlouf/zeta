@@ -881,22 +881,26 @@ def test_zeta_rpc_session_run_rejects_invalid_workflow() -> None:
 def test_zeta_event_trigger_rule_matches_exact_and_prefix() -> None:
     exact = zeta_dispatch.TriggerRule(event_type="session.turn.requested")
     prefix = zeta_dispatch.TriggerRule(event_type_prefix="github.issue.")
-    event = zeta_events.DraftEvent(
-        "session.turn.requested",
-        "test",
-        {},
-        session_id="session-1",
-    ).enrich()
+    event = zeta_events.Event.from_draft(
+        zeta_events.DraftEvent(
+            "session.turn.requested",
+            "test",
+            {},
+            session_id="session-1",
+        )
+    )
 
     assert exact.matches(event)
     assert not prefix.matches(event)
     assert prefix.matches(
-        zeta_events.DraftEvent(
-            "github.issue.opened",
-            "test",
-            {},
-            session_id="session-1",
-        ).enrich()
+        zeta_events.Event.from_draft(
+            zeta_events.DraftEvent(
+                "github.issue.opened",
+                "test",
+                {},
+                session_id="session-1",
+            )
+        )
     )
 
 

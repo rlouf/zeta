@@ -18,7 +18,7 @@ class MemoryEventStore:
         self._next_seq = 1
 
     def accept(self, draft: DraftEvent) -> AppendOutcome:
-        return self.append(draft.enrich())
+        return self.append(Event.from_draft(draft))
 
     def append(self, event: Event) -> AppendOutcome:
         duplicate = self._duplicate_for(event)

@@ -48,6 +48,7 @@ from sigil.workflows.ask import (
 from zeta.events import (
     AppendOutcome,
     DraftEvent,
+    Event,
     Filter,
     MemoryEventStore,
     SqliteEventStore,
@@ -784,11 +785,13 @@ def test_sqlite_event_store_accepts_events_without_idempotency_keys(
     tmp_path: Path,
 ) -> None:
     store = SqliteEventStore(tmp_path / "events.sqlite3")
-    event = DraftEvent(
-        event_type="sigil.command.accepted",
-        source="test",
-        payload={"command": "ls"},
-    ).enrich()
+    event = Event.from_draft(
+        DraftEvent(
+            event_type="sigil.command.accepted",
+            source="test",
+            payload={"command": "ls"},
+        )
+    )
 
     inserted = store.append(event)
 

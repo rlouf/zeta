@@ -885,6 +885,8 @@ def rpc_event_dict_draft(event: dict[str, Any], *, session_id: str) -> DraftEven
         for key, value in payload.items()
         if key not in {"id", "type", "time", "session", "source", "caused_by"}
     }
+    if event_type == "model_usage":
+        domain_payload["_timeline_type"] = "model_usage"
     durable_type = rpc_durable_event_type(event_type)
     return DraftEvent(
         durable_type,
@@ -906,7 +908,7 @@ def rpc_event_dict_draft(event: dict[str, Any], *, session_id: str) -> DraftEven
 def rpc_durable_event_type(event_type: str) -> str:
     return {
         "user_message": "zeta.user_message",
-        "model_usage": "zeta.model_usage",
+        "model_usage": "zeta.model_call.completed",
     }.get(event_type, event_type)
 
 
@@ -922,7 +924,6 @@ def rpc_event_idempotency_key(
         "zeta.tool_call.completed",
         "zeta.tool_call.failed",
         "zeta.user_message",
-        "zeta.model_usage",
     }:
         return f"{event_type}:{event_id}" if event_id is not None else None
     if event_type in {

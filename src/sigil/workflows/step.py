@@ -451,15 +451,16 @@ def record_agent_model_telemetry(
     prompt_traces: Sequence[Any] = (),
     runtime_context: Session,
 ) -> None:
+    del workflow
     fields = model_telemetry_fields(model_telemetry)
     if not fields:
         return
     fields.update(latest_prompt_trace_fields(prompt_traces))
     runtime_context.event_sink.accept(
         DraftEvent(
-            event_type="zeta.model_usage",
+            event_type="zeta.model_call.completed",
             source="zeta",
-            payload={**fields, "workflow": workflow, "_timeline_type": "model_usage"},
+            payload={**fields, "_timeline_type": "model_usage"},
             idempotency_key=None,
             caused_by=None,
             session_id=runtime_context.session_id,

@@ -30,7 +30,6 @@ EVENT_IDEMPOTENT_TYPES = frozenset(
         "zeta.tool_call.completed",
         "zeta.tool_call.failed",
         "zeta.user_message",
-        "zeta.model_usage",
     }
 )
 TURN_IDEMPOTENT_TYPES = frozenset(
@@ -42,7 +41,7 @@ TURN_IDEMPOTENT_TYPES = frozenset(
 )
 TIMELINE_DURABLE_TYPES = {
     "user_message": "zeta.user_message",
-    "model_usage": "zeta.model_usage",
+    "model_usage": "zeta.model_call.completed",
 }
 
 
@@ -115,6 +114,8 @@ def durable_log_event(event: dict[str, Any], *, session_id: str) -> Event:
         for key, value in payload.items()
         if key not in {"id", "type", "time", "session", "source", "caused_by"}
     }
+    if event_type == "model_usage":
+        domain_payload["_timeline_type"] = "model_usage"
     return Event(
         id=event_id,
         event_type=durable_type,

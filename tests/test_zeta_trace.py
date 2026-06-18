@@ -932,7 +932,7 @@ def test_zeta_user_message_usage_and_abort_are_durable(
     events = zeta_event_store().list_events(Filter())
     assert [event.event_type for event in events] == [
         "zeta.user_message",
-        "zeta.model_usage",
+        "zeta.model_call.completed",
         "zeta.turn.failed",
     ]
     assert [event.payload.get("content") for event in events] == [

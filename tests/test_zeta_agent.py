@@ -444,14 +444,26 @@ def test_zeta_turn_aborted_runtime_event_round_trips_to_current_dict_shape() -> 
 def test_zeta_record_model_event_sends_same_dict_to_sink() -> None:
     events: list[dict[str, Any]] = []
     sink_events: list[dict[str, Any]] = []
+    ctx = zeta_agent.TurnContext(
+        session_id=None,
+        turn_id=None,
+        event_sink=sink_events.append,
+        durable_event_sink=None,
+        trace_store=None,
+        tool_registry=CapabilityRegistry(),
+        builder=cast(Any, None),
+        model_status=None,
+        stream_sink=None,
+        cancellation_event=None,
+        deadline=None,
+    )
 
     event_id, tool_calls = zeta_agent.record_model_event(
         {"content": "done"},
         events,
         prompt_trace=None,
-        prompt_builder=cast(Any, None),
-        event_sink=sink_events.append,
         caused_by="parent-1",
+        ctx=ctx,
     )
 
     assert isinstance(event_id, str)
@@ -471,16 +483,26 @@ def test_zeta_record_model_event_can_emit_direct_durable_draft() -> None:
             drafts.append(draft)
             return AppendOutcome(Event.from_draft(draft), inserted=True)
 
+    ctx = zeta_agent.TurnContext(
+        session_id="session-1",
+        turn_id="turn-1",
+        event_sink=None,
+        durable_event_sink=Sink(),
+        trace_store=None,
+        tool_registry=CapabilityRegistry(),
+        builder=cast(Any, None),
+        model_status=None,
+        stream_sink=None,
+        cancellation_event=None,
+        deadline=None,
+    )
+
     event_id, tool_calls = zeta_agent.record_model_event(
         {"content": "done"},
         events,
         prompt_trace=None,
-        prompt_builder=cast(Any, None),
-        event_sink=None,
-        durable_event_sink=Sink(),
-        session_id="session-1",
-        turn_id="turn-1",
         caused_by="parent-1",
+        ctx=ctx,
     )
 
     assert isinstance(event_id, str)

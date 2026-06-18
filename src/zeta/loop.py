@@ -269,12 +269,8 @@ def run_agent_steps(
             assistant,
             state.events,
             prompt_trace=turn.prompt_trace,
-            prompt_builder=ctx.builder,
-            event_sink=ctx.event_sink,
-            durable_event_sink=ctx.durable_event_sink,
-            session_id=ctx.session_id,
-            turn_id=ctx.turn_id,
             caused_by=state.next_model_caused_by,
+            ctx=ctx,
         )
         if not tool_calls:
             state.note_step("finish_run")
@@ -1138,12 +1134,8 @@ def record_model_event(
     events: list[dict[str, Any]],
     *,
     prompt_trace: PromptTrace | None,
-    prompt_builder: PromptBuilder,
-    event_sink: AgentEventSink | None,
-    durable_event_sink: EventSink | None = None,
-    session_id: str | None = None,
-    turn_id: str | None = None,
     caused_by: str | None = None,
+    ctx: TurnContext,
 ) -> tuple[str | None, list[dict[str, Any]]]:
     event = model_event(assistant)
     if caused_by is not None:
@@ -1156,36 +1148,32 @@ def record_model_event(
         tool_calls,
         caused_by=event_id,
         prompt_trace=prompt_trace,
-        prompt_builder=prompt_builder,
+        prompt_builder=ctx.builder,
     )
     if tool_call_object_ids:
         event["tool_call_object_ids"] = tool_call_object_ids
     if event:
         publish_model_draft(
             event,
-            event_sink=durable_event_sink,
-            session_id=session_id,
-            turn_id=turn_id,
+            ctx=ctx,
         )
-        emit_event(events, event, event_sink)
+        emit_event(events, event, ctx.event_sink)
     return event_id, tool_calls
 
 
 def publish_model_draft(
     event: dict[str, Any],
     *,
-    event_sink: EventSink | None,
-    session_id: str | None,
-    turn_id: str | None,
+    ctx: TurnContext,
 ) -> None:
-    if event_sink is None or session_id is None:
+    if ctx.durable_event_sink is None or ctx.session_id is None:
         return
     payload = model_durable_payload(event)
-    event_sink.accept(
+    ctx.durable_event_sink.accept(
         model_called_draft(
             payload=payload,
-            turn_id=turn_id,
-            session_id=session_id,
+            turn_id=ctx.turn_id,
+            session_id=ctx.session_id,
             caused_by=event.get("caused_by")
             if isinstance(event.get("caused_by"), str)
             else None,

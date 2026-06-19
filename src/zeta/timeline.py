@@ -145,7 +145,10 @@ def add_durable_object_ref(
         return
     kind, object_id = ref
     if kind == "tool_call":
-        event.setdefault("tool_call_object_id", object_id)
+        if returned and event.get("type") == "model":
+            event.setdefault("tool_call_object_ids", []).append(object_id)
+        else:
+            event.setdefault("tool_call_object_id", object_id)
         return
     durable_ref_handlers(returned).get(kind, ignore_durable_ref)(event, object_id)
 

@@ -797,7 +797,7 @@ def normalize_draft_event(event: DraftEvent | dict[str, Any]) -> DraftEvent:
 
 def draft_timeline_event(draft: DraftEvent) -> dict[str, Any]:
     event = Event(
-        id=draft_event_id(draft) or f"evt_{uuid.uuid4().hex}",
+        id=f"evt_{uuid.uuid4().hex}",
         event_type=draft.event_type,
         source=draft.source,
         payload=dict(draft.payload),
@@ -807,18 +807,7 @@ def draft_timeline_event(draft: DraftEvent) -> dict[str, Any]:
         turn_id=draft.turn_id,
         timestamp_micros=time.time_ns() // 1_000,
     )
-    projected = timeline_event_from_durable_event(event)
-    if projected.get("type") == "model":
-        tool_call_object_ids = [
-            link["id"]
-            for link in draft.payload.get("returned_objects", [])
-            if isinstance(link, dict)
-            and link.get("kind") == "tool_call"
-            and isinstance(link.get("id"), str)
-        ]
-        if tool_call_object_ids:
-            projected["tool_call_object_ids"] = tool_call_object_ids
-    return projected
+    return timeline_event_from_durable_event(event)
 
 
 def emit_event(

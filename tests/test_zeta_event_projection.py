@@ -405,7 +405,7 @@ def test_zeta_timeline_and_rpc_projection_contract() -> None:
                 "prompt_object_id": "sha256:prompt",
                 "assistant_message_object_id": "sha256:assistant",
             },
-            "tool_call_object_id": "sha256:tool-call",
+            "tool_call_object_ids": ["sha256:tool-call"],
         },
         {
             "type": "tool_call",

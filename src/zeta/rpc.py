@@ -112,34 +112,8 @@ def record_runtime_draft(
         session_id=runtime_context.session_id,
         turn_id=run_id,
     )
-    append = getattr(runtime_context.event_sink, "append", None)
-    event_id = draft_event_id(tagged)
-    if callable(append) and event_id is not None:
-        outcome = append(
-            Event(
-                id=event_id,
-                event_type=tagged.event_type,
-                source=tagged.source,
-                payload=tagged.payload,
-                idempotency_key=tagged.idempotency_key,
-                caused_by=tagged.caused_by,
-                session_id=tagged.session_id,
-                turn_id=tagged.turn_id,
-                timestamp_micros=time.time_ns() // 1_000,
-            )
-        )
-    else:
-        outcome = runtime_context.event_sink.accept(tagged)
+    outcome = runtime_context.event_sink.accept(tagged)
     return timeline_event_from_durable_event(outcome.event)
-
-
-def draft_event_id(draft: DraftEvent) -> str | None:
-    key = draft.idempotency_key
-    prefix = f"{draft.event_type}:"
-    if key is None or not key.startswith(prefix):
-        return None
-    event_id = key[len(prefix) :].strip()
-    return event_id or None
 
 
 @dataclass(frozen=True)
@@ -462,7 +436,7 @@ def add_unique_list(values: list[str], raw_values: Any) -> None:
 
 def draft_timeline_event(draft: DraftEvent) -> dict[str, Any]:
     event = Event(
-        id=draft_event_id(draft) or f"evt_{uuid.uuid4().hex}",
+        id=f"evt_{uuid.uuid4().hex}",
         event_type=draft.event_type,
         source=draft.source,
         payload=dict(draft.payload),

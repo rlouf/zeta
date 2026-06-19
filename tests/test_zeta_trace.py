@@ -37,6 +37,7 @@ from zeta.store.substrate import (
     resolve_object_id,
     zeta_sqlite_path,
 )
+from zeta.store.substrate.base import IncompatibleSchemaError
 from zeta.substrate import Derivation, Object, ObjectId, Ref, RefUpdate
 
 zeta_trace = SimpleNamespace(
@@ -298,7 +299,9 @@ def test_zeta_trace_sqlite_reports_incompatible_substrate_schema(
     )
     connection.close()
 
-    with pytest.raises(sqlite3.OperationalError, match="reinit-store --yes"):
+    with pytest.raises(
+        IncompatibleSchemaError, match="incompatible Zeta SQLite schema"
+    ):
         zeta_trace.SqliteStore(path, session_id="current")
 
 

@@ -27,7 +27,7 @@ from zeta.capabilities.base import (
 )
 from zeta.capabilities.registry import CapabilityRegistry
 from zeta.capabilities.registry import registry as _runtime_tool_registry
-from zeta.dispatch import AsyncEventDispatcher, EventDispatcher
+from zeta.dispatch import AsyncEventDispatcher
 from zeta.events import DraftEvent, Event, EventSink
 from zeta.runtime_events import runtime_event_draft
 from zeta.session import (
@@ -571,7 +571,7 @@ class JsonRpcProtocol:
         self.event_sink = event_sink
         if self.event_sink is None and hasattr(event_reader, "accept"):
             self.event_sink = cast(EventSink, event_reader)
-        self.event_dispatcher: EventDispatcher | AsyncEventDispatcher | None = None
+        self.event_dispatcher: AsyncEventDispatcher | None = None
         self.tool_responses: dict[str, dict[str, Any]] = {}
         self.tool_calls: dict[str, ClientToolCall] = {}
         self.client_tools: set[str] = set()
@@ -633,7 +633,12 @@ class JsonRpcProtocol:
         if method == "events.subscribe":
             return self.subscribe_events(params)
         if method == "events.publish":
-            return self.publish_runtime_event(params)
+            raise RpcError(
+                -32000,
+                "events_unavailable",
+                "Server error",
+                {"message": "events.publish requires an active async server"},
+            )
         if method == "session.run":
             raise RpcError(
                 -32000,
@@ -691,39 +696,6 @@ class JsonRpcProtocol:
             "subscribed": True,
             "subscription_id": subscription.id,
             "next_cursor": str(after_seq) if after_seq is not None else None,
-        }
-
-    def publish_runtime_event(self, params: dict[str, Any]) -> dict[str, Any]:
-        dispatcher = self.event_dispatcher
-        if isinstance(dispatcher, AsyncEventDispatcher):
-            raise RpcError(
-                -32000,
-                "events_unavailable",
-                "Server error",
-                {"message": "events.publish requires an active async server"},
-            )
-        if dispatcher is None:
-            if self.event_sink is None:
-                raise RpcError(
-                    -32000,
-                    "events_unavailable",
-                    "Server error",
-                    {"message": "events.publish is not configured"},
-                )
-            dispatcher = EventDispatcher(
-                self.event_sink,
-                publish_event=lambda event: self.publish_event(
-                    rpc_event_from_durable_event(event)
-                ),
-            )
-        outcome = dispatcher.dispatch(rpc_publish_event_draft(params))
-        return {
-            "inserted": outcome.inserted,
-            "event": rpc_event_from_durable_event(outcome.event),
-            "work_events": [
-                rpc_event_from_durable_event(event) for event in outcome.work_events
-            ],
-            "agent_results": outcome.agent_results,
         }
 
     def register_client_tools(self, tools: Any) -> list[dict[str, Any]]:
@@ -1008,10 +980,7 @@ class JsonRpcServer(JsonRpcProtocol):
                     rpc_event_from_durable_event(event)
                 ),
             )
-        if isinstance(dispatcher, EventDispatcher):
-            outcome = dispatcher.dispatch(rpc_publish_event_draft(params))
-        else:
-            outcome = await dispatcher.dispatch(rpc_publish_event_draft(params))
+        outcome = await dispatcher.dispatch(rpc_publish_event_draft(params))
         return {
             "inserted": outcome.inserted,
             "event": rpc_event_from_durable_event(outcome.event),

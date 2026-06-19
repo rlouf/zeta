@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import hashlib
+import inspect
 import os
 import tempfile
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal, Protocol, get_args
+from typing import Any, Literal, Protocol, cast, get_args
 
 EffectKind = Literal["read", "write", "delete", "execute", "search"]
 
@@ -85,11 +86,13 @@ class CapabilityExecutor(Protocol):
         params: dict[str, Any],
         *,
         mode: ExecutionMode,
-    ) -> CapabilityResult: ...
+    ) -> CapabilityResult | Awaitable[CapabilityResult]: ...
 
 
 ExecutionMode = Literal["stage", "direct"]
-CapabilityFunction = Callable[[dict[str, Any]], dict[str, Any]]
+CapabilityFunction = Callable[
+    [dict[str, Any]], dict[str, Any] | Awaitable[dict[str, Any]]
+]
 
 
 @dataclass(frozen=True)
@@ -97,7 +100,7 @@ class InProcessCapabilityExecutor:
     run: CapabilityFunction
     stage: CapabilityFunction | None = None
 
-    def invoke(
+    async def invoke(
         self,
         capability: CapabilitySpec,
         params: dict[str, Any],
@@ -105,8 +108,12 @@ class InProcessCapabilityExecutor:
         mode: ExecutionMode,
     ) -> CapabilityResult:
         if mode == "stage" and self.stage is not None and capability.mutates():
-            return CapabilityResult.from_mapping(self.stage(params))
-        return CapabilityResult.from_mapping(self.run(params))
+            result = self.stage(params)
+        else:
+            result = self.run(params)
+        if inspect.isawaitable(result):
+            result = await result
+        return CapabilityResult.from_mapping(cast(dict[str, Any], result))
 
 
 @dataclass(frozen=True)

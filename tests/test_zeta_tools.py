@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import ast
+import asyncio
 import hashlib
 import shutil
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -321,10 +322,15 @@ def test_zeta_capability_registry_allows_low_trust_mutating_stage_execution() ->
 def test_zeta_in_process_capability_executor_runs_read_capability() -> None:
     capability = _test_capability("read", effects=("read",))
 
-    result = capability.executor.invoke(
-        capability.spec,
-        {"path": "README.md"},
-        mode="stage",
+    result = asyncio.run(
+        cast(
+            Any,
+            capability.executor.invoke(
+                capability.spec,
+                {"path": "README.md"},
+                mode="stage",
+            ),
+        )
     )
 
     assert result.payload == {"ok": True, "metadata": {"path": "README.md"}}
@@ -337,10 +343,15 @@ def test_zeta_in_process_capability_executor_stages_mutating_capability() -> Non
         supports_staging=True,
     )
 
-    result = capability.executor.invoke(
-        capability.spec,
-        {"path": "README.md"},
-        mode="stage",
+    result = asyncio.run(
+        cast(
+            Any,
+            capability.executor.invoke(
+                capability.spec,
+                {"path": "README.md"},
+                mode="stage",
+            ),
+        )
     )
 
     assert result.payload == {"ok": True, "effect": {"status": "proposed"}}

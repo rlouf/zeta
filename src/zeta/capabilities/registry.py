@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
+import inspect
+from collections.abc import Coroutine
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, cast
 
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import SchemaError, ValidationError
@@ -316,6 +319,64 @@ class CapabilityRegistry:
             execution_mode,
         ).payload
 
+    async def invoke_async(
+        self,
+        capability_id: str,
+        params: dict[str, Any],
+        *,
+        execution_mode: ExecutionMode = "stage",
+    ) -> dict[str, Any]:
+        capability_id = self.resolve(capability_id) or capability_id
+        capability = self.get(capability_id)
+        if capability is None:
+            return error_result(
+                "unknown-capability", f"unknown capability: {capability_id}"
+            )
+        if not capability.spec.mutates():
+            return (
+                await invoke_executor_async(
+                    capability_id,
+                    capability,
+                    params,
+                    execution_mode,
+                )
+            ).payload
+        if execution_mode == "direct":
+            if not capability.policy.supports_direct:
+                return error_result(
+                    "direct-execution-disallowed",
+                    f"capability {capability_id} does not allow direct execution",
+                )
+            if low_trust_mutating_capability(capability):
+                return error_result(
+                    "trust-direct-disallowed",
+                    f"capability {capability_id} with {capability.policy.trust} trust "
+                    "cannot run mutating effects directly",
+                )
+            return (
+                await invoke_executor_async(
+                    capability_id,
+                    capability,
+                    params,
+                    execution_mode,
+                )
+            ).payload
+        if not capability.policy.supports_staging:
+            declared = ", ".join(capability.spec.effects) or "undeclared"
+            return error_result(
+                "staging-unsupported",
+                f"capability {capability_id} has effects ({declared}) that cannot be staged "
+                "for review; rerun in the do workflow (,,,)",
+            )
+        return (
+            await invoke_executor_async(
+                capability_id,
+                capability,
+                params,
+                execution_mode,
+            )
+        ).payload
+
 
 registry = CapabilityRegistry()
 
@@ -336,6 +397,8 @@ def invoke_executor(
 ) -> CapabilityResult:
     try:
         result = capability.executor.invoke(capability.spec, params, mode=mode)
+        if inspect.isawaitable(result):
+            result = asyncio.run(cast(Coroutine[Any, Any, CapabilityResult], result))
     except Exception as exc:
         return CapabilityResult.from_mapping(
             error_result(
@@ -344,6 +407,42 @@ def invoke_executor(
                 data={"capability_id": capability_id},
             )
         )
+    return CapabilityResult.from_mapping(
+        normalize_capability_result_payload(capability_id, result.payload)
+    )
+
+
+async def invoke_executor_async(
+    capability_id: str,
+    capability: Capability,
+    params: dict[str, Any],
+    mode: ExecutionMode,
+) -> CapabilityResult:
+    try:
+        if inspect.iscoroutinefunction(capability.executor.invoke):
+            result = await capability.executor.invoke(
+                capability.spec,
+                params,
+                mode=mode,
+            )
+        else:
+            result = await asyncio.to_thread(
+                capability.executor.invoke,
+                capability.spec,
+                params,
+                mode=mode,
+            )
+    except Exception as exc:
+        return CapabilityResult.from_mapping(
+            error_result(
+                "executor-exception",
+                f"{type(exc).__name__}: {exc}",
+                data={"capability_id": capability_id},
+            )
+        )
+    if inspect.isawaitable(result):
+        result = await result
+    result = cast(CapabilityResult, result)
     return CapabilityResult.from_mapping(
         normalize_capability_result_payload(capability_id, result.payload)
     )

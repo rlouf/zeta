@@ -80,6 +80,13 @@ def run_rpc_session(*args: Any, **kwargs: Any) -> dict[str, Any]:
     return asyncio.run(zeta_rpc.run_rpc_session(*args, **kwargs))
 
 
+def dispatch_event(
+    dispatcher: zeta_dispatch.AsyncEventDispatcher,
+    draft: DraftEvent,
+) -> zeta_dispatch.DispatchOutcome:
+    return asyncio.run(dispatcher.dispatch(draft))
+
+
 def _test_capability(
     name: str,
     *,
@@ -541,18 +548,20 @@ def test_zeta_handle_tool_call_emits_drafts() -> None:
         deadline=None,
     )
 
-    result = zeta_agent.handle_tool_call(
-        {
-            "id": "call-1",
-            "type": "function",
-            "function": {"name": "read", "arguments": '{"path": "README.md"}'},
-        },
-        allowed_capabilities=allowed_capabilities,
-        projection=registry.project(allowed_capabilities),
-        index=0,
-        execution_mode="direct",
-        caused_by="model-1",
-        ctx=ctx,
+    result = asyncio.run(
+        zeta_agent.handle_tool_call(
+            {
+                "id": "call-1",
+                "type": "function",
+                "function": {"name": "read", "arguments": '{"path": "README.md"}'},
+            },
+            allowed_capabilities=allowed_capabilities,
+            projection=registry.project(allowed_capabilities),
+            index=0,
+            execution_mode="direct",
+            caused_by="model-1",
+            ctx=ctx,
+        )
     )
 
     assert [event["type"] for event in timeline_events(result.events)] == [
@@ -669,13 +678,15 @@ def test_zeta_request_assistant_message_returns_model_output(monkeypatch) -> Non
         zeta_models_api, "chat_completion_messages", fake_chat_completion_messages
     )
 
-    output, streamed_content, telemetry = zeta_agent.request_assistant_message(
-        zeta_models_api.ModelInput(
-            messages=[{"role": "user", "content": "hi"}],
-            tools=[],
-            tool_choice="auto",
-        ),
-        config=zeta_agent.AgentConfig(),
+    output, streamed_content, telemetry = asyncio.run(
+        zeta_agent.request_assistant_message(
+            zeta_models_api.ModelInput(
+                messages=[{"role": "user", "content": "hi"}],
+                tools=[],
+                tool_choice="auto",
+            ),
+            config=zeta_agent.AgentConfig(),
+        )
     )
 
     assert output == zeta_models_api.ModelOutput(
@@ -766,15 +777,17 @@ def test_zeta_request_model_turn_builds_assistant_from_model_output(
         deadline=None,
     )
 
-    turn = zeta_agent.request_model_turn(
-        "answer",
-        [],
-        config=zeta_agent.AgentConfig(),
-        allowed_capabilities=(),
-        context="",
-        tools=[],
-        state=state,
-        ctx=ctx,
+    turn = asyncio.run(
+        zeta_agent.request_model_turn(
+            "answer",
+            [],
+            config=zeta_agent.AgentConfig(),
+            allowed_capabilities=(),
+            context="",
+            tools=[],
+            state=state,
+            ctx=ctx,
+        )
     )
 
     assert builder.planned
@@ -822,7 +835,7 @@ def test_zeta_call_model_step_returns_output_and_telemetry() -> None:
         def available(self, config: zeta_agent.AgentConfig) -> bool:
             return True
 
-        def generate(
+        async def generate(
             self,
             model_input: zeta_models_api.ModelInput,
             config: zeta_agent.AgentConfig,
@@ -839,16 +852,18 @@ def test_zeta_call_model_step_returns_output_and_telemetry() -> None:
 
     state = zeta_agent.RunState()
 
-    model_output, streamed_content, model_telemetry = zeta_agent.call_model_step(
-        zeta_models_api.ModelInput(
-            messages=[{"role": "user", "content": "answer"}],
-            tools=[],
-            tool_choice="auto",
-        ),
-        config=zeta_agent.AgentConfig(),
-        state=state,
-        model_gateway=FakeGateway(),
-        event_sink=None,
+    model_output, streamed_content, model_telemetry = asyncio.run(
+        zeta_agent.call_model_step(
+            zeta_models_api.ModelInput(
+                messages=[{"role": "user", "content": "answer"}],
+                tools=[],
+                tool_choice="auto",
+            ),
+            config=zeta_agent.AgentConfig(),
+            state=state,
+            model_gateway=FakeGateway(),
+            event_sink=None,
+        )
     )
 
     assert [step.step for step in state.steps] == ["call_model"]
@@ -908,14 +923,14 @@ def test_zeta_agent_compaction_policy_bounds_model_input() -> None:
 
 
 def test_zeta_async_agent_turn_runs_turns_concurrently() -> None:
-    barrier = threading.Barrier(2)
+    barrier = asyncio.Event()
     seen: list[str] = []
 
     class BlockingGateway:
         def available(self, config: zeta_agent.AgentConfig) -> bool:
             return True
 
-        def generate(
+        async def generate(
             self,
             model_input: zeta_models_api.ModelInput,
             config: zeta_agent.AgentConfig,
@@ -926,7 +941,9 @@ def test_zeta_async_agent_turn_runs_turns_concurrently() -> None:
             del config, stream, telemetry_sink
             objective = str(model_input.messages[-1]["content"]).splitlines()[0]
             seen.append(objective)
-            barrier.wait(timeout=2)
+            if len(seen) == 2:
+                barrier.set()
+            await barrier.wait()
             return zeta_models_api.ModelOutput(message={"content": objective})
 
     async def run() -> None:
@@ -1033,17 +1050,19 @@ def test_zeta_run_capability_step_records_call_execution_and_result(
 
     monkeypatch.setattr(zeta_agent, "handle_tool_call", fake_handle_tool_call)
 
-    result = zeta_agent.run_capability_step(
-        tool_call,
-        index=0,
-        config=zeta_agent.AgentConfig(),
-        allowed_capabilities=(),
-        projection=projection,
-        model_telemetry={},
-        prompt_trace=None,
-        assistant_event_id="assistant-1",
-        state=state,
-        ctx=ctx,
+    result = asyncio.run(
+        zeta_agent.run_capability_step(
+            tool_call,
+            index=0,
+            config=zeta_agent.AgentConfig(),
+            allowed_capabilities=(),
+            projection=projection,
+            model_telemetry={},
+            prompt_trace=None,
+            assistant_event_id="assistant-1",
+            state=state,
+            ctx=ctx,
+        )
     )
 
     assert [step.step for step in state.steps] == [
@@ -1109,17 +1128,19 @@ def test_zeta_run_capability_step_reconciles_existing_terminal_result(
 
     monkeypatch.setattr(zeta_agent, "handle_tool_call", fail_handle_tool_call)
 
-    result = zeta_agent.run_capability_step(
-        {"id": "call-1", "function": {"name": "read", "arguments": "{}"}},
-        index=0,
-        config=zeta_agent.AgentConfig(),
-        allowed_capabilities=(),
-        projection=projection,
-        model_telemetry={},
-        prompt_trace=None,
-        assistant_event_id="assistant-1",
-        state=state,
-        ctx=ctx,
+    result = asyncio.run(
+        zeta_agent.run_capability_step(
+            {"id": "call-1", "function": {"name": "read", "arguments": "{}"}},
+            index=0,
+            config=zeta_agent.AgentConfig(),
+            allowed_capabilities=(),
+            projection=projection,
+            model_telemetry={},
+            prompt_trace=None,
+            assistant_event_id="assistant-1",
+            state=state,
+            ctx=ctx,
+        )
     )
 
     assert invoked is False
@@ -1417,18 +1438,19 @@ def test_zeta_event_trigger_rule_matches_exact_and_prefix() -> None:
 def test_zeta_event_dispatcher_persists_unmatched_event(tmp_path: Path) -> None:
     event_store = zeta_events.SqliteEventStore(tmp_path / "events.sqlite3")
     published: list[zeta_events.Event] = []
-    dispatcher = zeta_dispatch.EventDispatcher(
+    dispatcher = zeta_dispatch.AsyncEventDispatcher(
         event_store,
         publish_event=published.append,
     )
 
-    outcome = dispatcher.dispatch(
+    outcome = dispatch_event(
+        dispatcher,
         zeta_events.DraftEvent(
             "github.issue.opened",
             "github",
             {"title": "Bug"},
             session_id="repo",
-        )
+        ),
     )
 
     assert outcome.inserted is True
@@ -1450,7 +1472,7 @@ def test_zeta_event_dispatcher_creates_work_for_matching_agent(
         seen.append(run)
         return {"outcome": "handled"}
 
-    dispatcher = zeta_dispatch.EventDispatcher(
+    dispatcher = zeta_dispatch.AsyncEventDispatcher(
         event_store,
         agents=[
             zeta_dispatch.AgentDefinition(
@@ -1462,14 +1484,15 @@ def test_zeta_event_dispatcher_creates_work_for_matching_agent(
         publish_event=published.append,
     )
 
-    outcome = dispatcher.dispatch(
+    outcome = dispatch_event(
+        dispatcher,
         zeta_events.DraftEvent(
             "github.issue.opened",
             "github",
             {"title": "Bug"},
             session_id="repo",
             idempotency_key="github:event:1",
-        )
+        ),
     )
 
     assert outcome.inserted is True
@@ -1550,7 +1573,7 @@ def test_zeta_event_dispatcher_matches_exact_event_type(tmp_path: Path) -> None:
     event_store = zeta_events.SqliteEventStore(tmp_path / "events.sqlite3")
     calls: list[str] = []
 
-    dispatcher = zeta_dispatch.EventDispatcher(
+    dispatcher = zeta_dispatch.AsyncEventDispatcher(
         event_store,
         agents=[
             zeta_dispatch.AgentDefinition(
@@ -1566,13 +1589,14 @@ def test_zeta_event_dispatcher_matches_exact_event_type(tmp_path: Path) -> None:
         ],
     )
 
-    outcome = dispatcher.dispatch(
+    outcome = dispatch_event(
+        dispatcher,
         zeta_events.DraftEvent(
             "github.issue.opened",
             "github",
             {"title": "Bug"},
             session_id="repo",
-        )
+        ),
     )
 
     assert len(calls) == 1
@@ -1589,7 +1613,7 @@ def test_zeta_event_dispatcher_records_pending_work_without_runner(
 ) -> None:
     event_store = zeta_events.SqliteEventStore(tmp_path / "events.sqlite3")
     published: list[zeta_events.Event] = []
-    dispatcher = zeta_dispatch.EventDispatcher(
+    dispatcher = zeta_dispatch.AsyncEventDispatcher(
         event_store,
         agents=[
             zeta_dispatch.AgentDefinition(
@@ -1600,13 +1624,14 @@ def test_zeta_event_dispatcher_records_pending_work_without_runner(
         publish_event=published.append,
     )
 
-    outcome = dispatcher.dispatch(
+    outcome = dispatch_event(
+        dispatcher,
         zeta_events.DraftEvent(
             "github.issue.opened",
             "github",
             {"title": "Bug"},
             session_id="repo",
-        )
+        ),
     )
 
     assert [event.event_type for event in outcome.work_events] == [
@@ -1630,7 +1655,7 @@ def test_zeta_event_dispatcher_does_not_route_duplicate_events(
         calls += 1
         return {"outcome": "handled"}
 
-    dispatcher = zeta_dispatch.EventDispatcher(
+    dispatcher = zeta_dispatch.AsyncEventDispatcher(
         event_store,
         agents=[
             zeta_dispatch.AgentDefinition(
@@ -1648,8 +1673,8 @@ def test_zeta_event_dispatcher_does_not_route_duplicate_events(
         idempotency_key="github:event:1",
     )
 
-    first = dispatcher.dispatch(draft)
-    second = dispatcher.dispatch(draft)
+    first = dispatch_event(dispatcher, draft)
+    second = dispatch_event(dispatcher, draft)
 
     assert first.inserted is True
     assert second.inserted is False
@@ -1672,7 +1697,7 @@ def test_zeta_event_dispatcher_records_failed_work(tmp_path: Path) -> None:
         del run
         raise RuntimeError("boom")
 
-    dispatcher = zeta_dispatch.EventDispatcher(
+    dispatcher = zeta_dispatch.AsyncEventDispatcher(
         event_store,
         agents=[
             zeta_dispatch.AgentDefinition(
@@ -1683,13 +1708,14 @@ def test_zeta_event_dispatcher_records_failed_work(tmp_path: Path) -> None:
         ],
     )
 
-    outcome = dispatcher.dispatch(
+    outcome = dispatch_event(
+        dispatcher,
         zeta_events.DraftEvent(
             "github.issue.opened",
             "github",
             {"title": "Bug"},
             session_id="repo",
-        )
+        ),
     )
 
     assert [event.event_type for event in outcome.work_events] == [

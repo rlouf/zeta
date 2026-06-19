@@ -6,6 +6,7 @@ in their transport modules.
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
@@ -137,7 +138,7 @@ class DefaultModelGateway:
             return model_endpoint_open()
         return model_endpoint_open(model_url)
 
-    def generate(
+    async def generate(
         self,
         model_input: ModelInput,
         config: Any,
@@ -145,7 +146,8 @@ class DefaultModelGateway:
         stream: Any | None = None,
         telemetry_sink: Callable[[dict[str, Any]], None] | None = None,
     ) -> ModelOutput:
-        assistant = chat_completion_messages(
+        assistant = await asyncio.to_thread(
+            chat_completion_messages,
             model_input.messages,
             api=getattr(config, "model_api", None),
             tools=model_input.tools or [],

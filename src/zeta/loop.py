@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import asyncio
+import inspect
 import json
 import time
 import uuid
@@ -186,7 +186,7 @@ class ModelStream(Protocol):
 class ModelGateway(Protocol):
     def available(self, config: AgentConfig) -> bool: ...
 
-    def generate(
+    async def generate(
         self,
         model_input: ModelInput,
         config: AgentConfig,
@@ -207,7 +207,7 @@ class TurnContext:
     model_gateway: ModelGateway = field(default_factory=DefaultModelGateway)
 
 
-def _run_agent_turn_blocking(
+async def async_run_agent_turn(
     objective: str,
     timeline: list[dict[str, Any]],
     config: AgentConfig,
@@ -248,7 +248,7 @@ def _run_agent_turn_blocking(
     )
     projection = active_tool_registry.project(allowed_capabilities)
     tools = projection.descriptors
-    return run_agent_steps(
+    return await run_agent_steps(
         objective,
         timeline,
         config=config,
@@ -261,39 +261,7 @@ def _run_agent_turn_blocking(
     )
 
 
-async def async_run_agent_turn(
-    objective: str,
-    timeline: list[dict[str, Any]],
-    config: AgentConfig,
-    *,
-    context: str = "",
-    event_sink: AgentEventSink | None = None,
-    prompt_builder: PromptBuilder | None = None,
-    trace_store: Store | None = None,
-    tool_registry: CapabilityRegistry | None = None,
-    model_gateway: ModelGateway | None = None,
-    caused_by: str | None = None,
-    cancellation_event: CancellationToken | None = None,
-    deadline: float | None = None,
-) -> AgentTurnResult:
-    return await asyncio.to_thread(
-        _run_agent_turn_blocking,
-        objective,
-        timeline,
-        config,
-        context=context,
-        event_sink=event_sink,
-        prompt_builder=prompt_builder,
-        trace_store=trace_store,
-        tool_registry=tool_registry,
-        model_gateway=model_gateway,
-        caused_by=caused_by,
-        cancellation_event=cancellation_event,
-        deadline=deadline,
-    )
-
-
-def run_agent_steps(
+async def run_agent_steps(
     objective: str,
     timeline: list[dict[str, Any]],
     *,
@@ -311,7 +279,7 @@ def run_agent_steps(
             state,
             ctx=ctx,
         )
-        turn = request_model_turn(
+        turn = await request_model_turn(
             objective,
             timeline,
             config=config,
@@ -341,7 +309,7 @@ def run_agent_steps(
                 final_text=turn.assistant.content,
                 final_text_streamed=turn.streamed_content,
             )
-        outcome = run_capability_calls(
+        outcome = await run_capability_calls(
             tool_calls,
             config=config,
             allowed_capabilities=allowed_capabilities,
@@ -388,7 +356,7 @@ class AssistantMessage:
         return dict(self.provider_payload)
 
 
-def request_model_turn(
+async def request_model_turn(
     objective: str,
     timeline: list[dict[str, Any]],
     *,
@@ -410,7 +378,7 @@ def request_model_turn(
         state=state,
         builder=ctx.builder,
     )
-    model_output, streamed_content, model_telemetry = call_model_step(
+    model_output, streamed_content, model_telemetry = await call_model_step(
         model_input,
         config=config,
         state=state,
@@ -463,7 +431,7 @@ def build_prompt_step(
     return prepared_prompt, model_input
 
 
-def call_model_step(
+async def call_model_step(
     model_input: ModelInput,
     *,
     config: AgentConfig,
@@ -472,12 +440,15 @@ def call_model_step(
     event_sink: AgentEventSink | None,
 ) -> tuple[ModelOutput, bool, dict[str, Any]]:
     state.note_step("call_model")
-    model_output, streamed_content, model_telemetry = request_assistant_message(
+    requested = request_assistant_message(
         model_input,
         config=config,
         model_gateway=model_gateway or DefaultModelGateway(),
         events=state.events,
         event_sink=event_sink,
+    )
+    model_output, streamed_content, model_telemetry = (
+        await requested if inspect.isawaitable(requested) else requested
     )
     return model_output, streamed_content, model_telemetry
 
@@ -501,7 +472,7 @@ def record_assistant_step(
     return assistant, prompt_trace
 
 
-def run_capability_calls(
+async def run_capability_calls(
     tool_calls: list[dict[str, Any]],
     *,
     config: AgentConfig,
@@ -514,7 +485,7 @@ def run_capability_calls(
     ctx: TurnContext,
 ) -> AgentTurnResult | None:
     for index, tool_call in enumerate(tool_calls):
-        result_event = run_capability_step(
+        result_event = await run_capability_step(
             tool_call,
             index=index,
             config=config,
@@ -537,7 +508,7 @@ def run_capability_calls(
     return None
 
 
-def run_capability_step(
+async def run_capability_step(
     tool_call: dict[str, Any],
     *,
     index: int,
@@ -566,7 +537,7 @@ def run_capability_step(
         return CapabilityCallResult(events=[])
     state.note_step("record_capability_call")
     state.note_step("execute_capability")
-    result = handle_tool_call(
+    handled = handle_tool_call(
         tool_call,
         allowed_capabilities=allowed_capabilities,
         projection=projection,
@@ -577,6 +548,7 @@ def run_capability_step(
         caused_by=assistant_event_id,
         ctx=ctx,
     )
+    result = await handled if inspect.isawaitable(handled) else handled
     state.note_step("record_capability_result")
     return result
 
@@ -695,7 +667,7 @@ def registered_capabilities(
     return tuple(enabled)
 
 
-def invoke_capability(
+async def invoke_capability(
     capability_id: str,
     params: dict[str, Any],
     *,
@@ -703,7 +675,7 @@ def invoke_capability(
     tool_registry: CapabilityRegistry | None = None,
 ) -> dict[str, Any]:
     active_tool_registry = tool_registry or _runtime_tool_registry
-    return active_tool_registry.invoke(
+    return await active_tool_registry.invoke_async(
         capability_id,
         params,
         execution_mode=execution_mode,
@@ -716,7 +688,7 @@ def turn_indices(max_turns: int | None) -> Iterable[int]:
     return range(max(max_turns, 0))
 
 
-def request_assistant_message(
+async def request_assistant_message(
     model_input: ModelInput,
     *,
     config: AgentConfig,
@@ -728,12 +700,13 @@ def request_assistant_message(
     recorded_events = events if events is not None else []
     turn_stream_sink = ModelTurnStreamSink(recorded_events, event_sink)
     gateway = model_gateway or DefaultModelGateway()
-    model_output = gateway.generate(
+    generated = gateway.generate(
         model_input,
         config,
         stream=turn_stream_sink,
         telemetry_sink=model_telemetry.update,
     )
+    model_output = await generated if inspect.isawaitable(generated) else generated
     return (
         model_output,
         turn_stream_sink.streamed_content,
@@ -1083,7 +1056,7 @@ class ToolCallValidation:
     error: tuple[str, str] | None = None
 
 
-def handle_tool_call(
+async def handle_tool_call(
     tool_call: dict[str, Any],
     *,
     allowed_capabilities: tuple[str, ...],
@@ -1125,7 +1098,7 @@ def handle_tool_call(
             prompt_trace=prompt_trace,
             ctx=ctx,
         )
-    return run_valid_tool_call(
+    return await run_valid_tool_call(
         invocation,
         capability_id=validation.capability_id,
         execution_mode=execution_mode,
@@ -1209,7 +1182,7 @@ def reject_tool_call(
     )
 
 
-def run_valid_tool_call(
+async def run_valid_tool_call(
     invocation: CapabilityCallInvocation,
     *,
     capability_id: str,
@@ -1232,12 +1205,13 @@ def run_valid_tool_call(
         ctx=ctx,
     )
     try:
-        result = invoke_capability(
+        invoked = invoke_capability(
             capability_id,
             invocation.params,
             execution_mode=execution_mode,
             tool_registry=ctx.tool_registry,
         )
+        result = await invoked if inspect.isawaitable(invoked) else invoked
     except Exception as exc:
         result = tool_error("tool-crashed", f"{type(exc).__name__}: {exc}")
     staged_effect = (

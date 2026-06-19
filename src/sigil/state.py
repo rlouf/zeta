@@ -92,10 +92,26 @@ def append_event(event: dict[str, Any]) -> Event:
     )
 
 
-def append_prompt_submitted_event(event: dict[str, Any]) -> Event:
-    prompt_event = dict(event)
-    prompt_event["type"] = "zeta.prompt.submitted"
-    return append_event(prompt_event)
+def append_prompt_submitted_event(event: Event) -> Event:
+    return (
+        SqliteEventStore(event_store_path())
+        .append(
+            Event(
+                id=f"evt_{uuid.uuid4().hex}",
+                event_type="zeta.prompt.submitted",
+                source=event.source,
+                payload=event.payload,
+                idempotency_key=f"zeta.prompt.submitted:{event.turn_id}"
+                if event.turn_id is not None
+                else None,
+                caused_by=event.id,
+                session_id=event.session_id,
+                turn_id=event.turn_id,
+                timestamp_micros=int(time.time_ns() // 1_000),
+            )
+        )
+        .event
+    )
 
 
 def durable_log_event(event: dict[str, Any], *, session_id: str) -> Event:

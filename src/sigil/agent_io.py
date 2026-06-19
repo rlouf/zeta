@@ -62,20 +62,19 @@ from zeta.session import Session
 from zeta.store.events import EventReader, Filter, SqliteEventStore
 from zeta.store.substrate import Store, warn_trace_failure_once
 
+RuntimePublishedEvent = Event | DraftEvent
 
-def current_timeline(*, runtime_context: Session) -> list[dict[str, Any]]:
+
+def current_timeline(*, runtime_context: Session) -> list[Event]:
     try:
         if not isinstance(runtime_context.event_sink, EventReader):
             return []
-        return [
-            event_view(event)
-            for event in runtime_context.event_sink.list_events(
-                Filter(
-                    session_id=runtime_context.session_id,
-                    event_type_prefix="zeta.",
-                )
+        return runtime_context.event_sink.list_events(
+            Filter(
+                session_id=runtime_context.session_id,
+                event_type_prefix="zeta.",
             )
-        ]
+        )
     except Exception as exc:
         warn_trace_failure_once("current_timeline", exc)
         return []
@@ -102,7 +101,7 @@ def record_user_message(
     event: dict[str, Any],
     *,
     runtime_context: Session,
-) -> dict[str, Any]:
+) -> Event:
     payload = {key: value for key, value in event.items() if key != "type"}
     outcome = runtime_context.event_sink.accept(
         user_message_draft(
@@ -113,7 +112,7 @@ def record_user_message(
             else None,
         )
     )
-    return event_view(outcome.event)
+    return outcome.event
 
 
 def record_runtime_draft(
@@ -123,7 +122,7 @@ def record_runtime_draft(
     tag_fields: dict[str, Any] | None = None,
     strip_fields: frozenset[str] = frozenset(),
     turn_id: str | None = None,
-) -> dict[str, Any]:
+) -> Event:
     tagged = {
         key: value for key, value in draft.payload.items() if key not in strip_fields
     }
@@ -153,11 +152,11 @@ def record_runtime_draft(
         )
     else:
         outcome = runtime_context.event_sink.accept(tagged_draft)
-    return event_view(outcome.event)
+    return outcome.event
 
 
-def project_runtime_draft(draft: DraftEvent) -> dict[str, Any]:
-    return draft_event_view(draft)
+def project_runtime_draft(draft: DraftEvent) -> DraftEvent:
+    return draft
 
 
 def time_micros() -> int:
@@ -242,9 +241,9 @@ class TurnEventRecorder:
 
     def record(self, draft: DraftEvent) -> None:
         self.recorded_event_ids.add(id(draft))
-        projected_for_effects = project_runtime_draft(draft)
+        projected_for_effects = dict(draft.payload)
         if (
-            projected_for_effects.get("type") == "tool_result"
+            projected_for_effects.get("_timeline_type") == "tool_result"
             and self.turn_recorder is not None
         ):
             self.turn_recorder.attach_tool_result_effect(projected_for_effects)
@@ -255,16 +254,21 @@ class TurnEventRecorder:
             persisted = self.transient(draft)
         else:
             persisted = self.persist(draft)
-        event_type = str(persisted.get("type") or "")
+        rendered = (
+            event_view(persisted)
+            if isinstance(persisted, Event)
+            else draft_event_view(persisted)
+        )
+        event_type = str(rendered.get("type") or "")
         if self.turn_recorder is not None:
             self.turn_recorder.note_runtime_event(persisted)
         if event_type == "runtime.stream.chunk":
-            text = persisted.get("text")
+            text = rendered.get("text")
             if isinstance(text, str) and self.renderer.stream_renderer is not None:
                 self.renderer.stream_renderer.content_delta(text)
             return
         if event_type == "runtime.status.update":
-            text = persisted.get("text")
+            text = rendered.get("text")
             if (
                 isinstance(text, str)
                 and self.renderer.progress_renderer is not None
@@ -273,15 +277,15 @@ class TurnEventRecorder:
                 self.renderer.progress_renderer.observe_reasoning_delta(text)
             return
         if event_type == "tool_call":
-            params = persisted.get("input")
+            params = rendered.get("input")
             self.handle_tool_call(
-                str(persisted.get("name") or ""),
+                str(rendered.get("name") or ""),
                 params if isinstance(params, dict) else {},
             )
             return
         if event_type != "tool_result":
             return
-        status = self.handle_tool_result(persisted)
+        status = self.handle_tool_result(rendered)
         if status is not None:
             self.status = status
 
@@ -292,7 +296,7 @@ class TurnEventRecorder:
                 continue
             self.record(draft)
 
-    def persist(self, draft: DraftEvent) -> dict[str, Any]:
+    def persist(self, draft: DraftEvent) -> Event:
         return record_runtime_draft(
             draft,
             runtime_context=self.runtime_context,
@@ -303,7 +307,7 @@ class TurnEventRecorder:
             ),
         )
 
-    def transient(self, draft: DraftEvent) -> dict[str, Any]:
+    def transient(self, draft: DraftEvent) -> DraftEvent:
         payload = {
             key: value
             for key, value in draft.payload.items()
@@ -366,7 +370,7 @@ def record_turn_abort(
     runtime_context: Session,
     reason: str | None = None,
     **fields: Any,
-) -> dict[str, Any]:
+) -> Event:
     """Resolve an aborted turn in the timeline instead of dangling its question."""
     message = str(error) or type(error).__name__
     if reason is not None:
@@ -393,13 +397,13 @@ def record_turn_abort(
             else None,
         )
     )
-    return event_view(outcome.event)
+    return outcome.event
 
 
 async def run_zeta_rpc_session(
     params: dict[str, Any],
     *,
-    publish_event: Callable[[dict[str, Any]], None],
+    publish_event: Callable[[RuntimePublishedEvent], None],
 ) -> dict[str, Any]:
     from sigil import zeta_session_for_sigil
 
@@ -453,7 +457,8 @@ async def run_zeta_rpc_session(
         runtime_context=runtime_context,
     )
     turn_recorder.note_root_event(user_event)
-    append_prompt_submitted_event(user_event)
+    prompt_submitted = append_prompt_submitted_event(user_event)
+    turn_recorder.note_root_event(prompt_submitted)
     publish_event(user_event)
 
     def sink(draft: DraftEvent) -> None:
@@ -472,8 +477,8 @@ async def run_zeta_rpc_session(
             runtime_context=runtime_context,
             turn_id=turn_recorder.turn_id,
         )
-        if persisted.get("type") == "tool_result":
-            turn_recorder.attach_tool_result_effect(persisted)
+        if persisted.payload.get("_timeline_type") == "tool_result":
+            turn_recorder.attach_tool_result_effect(dict(persisted.payload))
         turn_recorder.note_runtime_event(persisted)
         publish_event(persisted)
 

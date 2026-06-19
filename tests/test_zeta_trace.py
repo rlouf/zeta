@@ -26,7 +26,7 @@ from zeta import loop as zeta_agent
 from zeta import models as zeta_models_api
 from zeta.context.builder import PromptBuilder
 from zeta.context.components import chat_messages
-from zeta.events import DraftEvent
+from zeta.events import DraftEvent, event_view
 from zeta.models import chat_completions as zeta_model
 from zeta.models import profiles as zeta_models
 from zeta.session import Session, current_timeline, default_session
@@ -97,7 +97,16 @@ def record_zeta_event(
 
 
 def current_zeta_timeline() -> list[dict[str, object]]:
-    return current_timeline(runtime_context=zeta_runtime_context())
+    return [
+        event_view(event)
+        for event in current_timeline(runtime_context=zeta_runtime_context())
+    ]
+
+
+def timeline_views(runtime_context: Session) -> list[dict[str, Any]]:
+    return [
+        event_view(event) for event in current_timeline(runtime_context=runtime_context)
+    ]
 
 
 def assert_no_trace_timeline_chain(
@@ -677,7 +686,7 @@ def test_zeta_timeline_record_and_project(tmp_path: Path, monkeypatch) -> None:
         {"type": "tool_call", "name": "read"}, runtime_context=runtime_context
     )
 
-    events = current_timeline(runtime_context=runtime_context)
+    events = timeline_views(runtime_context)
     assert events[0]["type"] == "tool_call"
     assert events[0]["name"] == "read"
     assert_no_trace_timeline_chain(runtime_context.trace_store)
@@ -706,7 +715,7 @@ def test_zeta_timeline_tool_result_is_durable(
         runtime_context=runtime_context,
     )
 
-    timeline = current_timeline(runtime_context=runtime_context)
+    timeline = timeline_views(runtime_context)
     assert timeline[0]["type"] == "tool_result"
     assert timeline[0]["result"] == {"ok": True}
     tool_events = [
@@ -967,7 +976,7 @@ def test_zeta_current_timeline_uses_durable_log_without_trace_head(
         runtime_context=runtime_context,
     )
 
-    events = current_timeline(runtime_context=runtime_context)
+    events = timeline_views(runtime_context)
     assert [event["content"] for event in events] == ["durable"]
     assert_no_trace_timeline_chain(runtime_context.trace_store)
 
@@ -1019,7 +1028,7 @@ def test_zeta_timeline_projects_fresh_session_from_durable_log(
         runtime_context=runtime_context,
     )
 
-    events = current_timeline(runtime_context=runtime_context)
+    events = timeline_views(runtime_context)
 
     assert [event["type"] for event in events] == [
         "user_message",
@@ -1148,7 +1157,7 @@ def test_zeta_timeline_rehydrates_assistant_content_from_the_graph(
         runtime_context=runtime_context,
     )
 
-    events = current_timeline(runtime_context=runtime_context)
+    events = timeline_views(runtime_context)
     assert events[-1]["type"] == "model"
     assert events[-1]["content"] == "the answer"
     assert events[-1]["tool_calls"] == tool_calls
@@ -1198,7 +1207,7 @@ def test_zeta_timeline_rehydrates_assistant_reasoning_from_the_graph(
         runtime_context=runtime_context,
     )
 
-    events = current_timeline(runtime_context=runtime_context)
+    events = timeline_views(runtime_context)
     assert events[-1]["content"] == "the answer"
     assert events[-1]["reasoning"] == "weighing the options"
 
@@ -1224,9 +1233,7 @@ def test_zeta_timeline_keeps_untraced_assistant_content_inline(
 
     store = runtime_context.trace_store
     assert_no_trace_timeline_chain(store)
-    assert (
-        current_timeline(runtime_context=runtime_context)[-1]["content"] == "fallback"
-    )
+    assert timeline_views(runtime_context)[-1]["content"] == "fallback"
 
 
 def test_zeta_timeline_last_event_time_tracks_the_newest_event(

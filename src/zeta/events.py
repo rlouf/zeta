@@ -195,10 +195,6 @@ def draft_event_view(draft: DraftEvent) -> dict[str, Any]:
     return event_view(event)
 
 
-def event_views(events: list[Event]) -> list[dict[str, Any]]:
-    return [view for event in events if (view := event_view(event))]
-
-
 def exact_event_time(event: Event) -> float:
     exact_time = event.payload.get("_time")
     if isinstance(exact_time, int | float) and not isinstance(exact_time, bool):
@@ -698,7 +694,6 @@ __all__ = [
     "draft_event_id",
     "draft_event_view",
     "event_view",
-    "event_views",
     "boundary_event_draft",
     "durable_model_event_payload",
     "durable_tool_event_payload",

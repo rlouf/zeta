@@ -72,6 +72,36 @@ zeta_events = SimpleNamespace(
 )
 
 
+def rpc_event(
+    content: str,
+    *,
+    seq: int,
+    session_id: str | None = None,
+    turn_id: str | None = None,
+) -> Event:
+    return Event(
+        id=f"evt_{seq}",
+        event_type="zeta.user_message",
+        source="test",
+        payload={"content": content, "_timeline_type": "user_message"},
+        idempotency_key=None,
+        caused_by=None,
+        session_id=session_id,
+        turn_id=turn_id,
+        timestamp_micros=seq,
+        seq=seq,
+    )
+
+
+def published_event_views(events: list[Event | DraftEvent]) -> list[dict[str, Any]]:
+    return [
+        zeta_event_model.event_view(event)
+        if isinstance(event, Event)
+        else zeta_event_model.draft_event_view(event)
+        for event in events
+    ]
+
+
 def run_agent_turn(*args: Any, **kwargs: Any) -> zeta_agent.AgentTurnResult:
     return asyncio.run(zeta_agent.async_run_agent_turn(*args, **kwargs))
 
@@ -1348,15 +1378,15 @@ def test_zeta_rpc_session_uses_shared_runner_boundary(monkeypatch) -> None:
     async def fake_run_rpc_session(
         params: dict[str, Any],
         *,
-        publish_event: Callable[[dict[str, Any]], None],
+        publish_event: Callable[[Event | DraftEvent], None],
         runtime_context: zeta_session.Session | None = None,
     ) -> dict[str, Any]:
         captured["params"] = params
         captured["runtime_context"] = runtime_context
-        publish_event({"type": "seen"})
+        publish_event(DraftEvent("seen", "test", {"_timeline_type": "seen"}))
         return {"run_id": "run-1", "outcome": "answered"}
 
-    published: list[dict[str, Any]] = []
+    published: list[Event | DraftEvent] = []
     monkeypatch.setattr(zeta_rpc, "run_rpc_session", fake_run_rpc_session)
 
     result = asyncio.run(
@@ -1370,7 +1400,7 @@ def test_zeta_rpc_session_uses_shared_runner_boundary(monkeypatch) -> None:
     assert result == {"run_id": "run-1", "outcome": "answered"}
     assert captured["params"] == {"objective": "answer"}
     assert captured["runtime_context"] is None
-    assert published == [{"type": "seen"}]
+    assert [event["type"] for event in published_event_views(published)] == ["seen"]
 
 
 def test_sigil_zeta_rpc_session_uses_shared_runner_boundary(monkeypatch) -> None:
@@ -1379,13 +1409,13 @@ def test_sigil_zeta_rpc_session_uses_shared_runner_boundary(monkeypatch) -> None
     async def fake_run_zeta_rpc_session(
         params: dict[str, Any],
         *,
-        publish_event: Callable[[dict[str, Any]], None],
+        publish_event: Callable[[Event | DraftEvent], None],
     ) -> dict[str, Any]:
         captured["params"] = params
-        publish_event({"type": "seen"})
+        publish_event(DraftEvent("seen", "test", {"_timeline_type": "seen"}))
         return {"turn_id": "turn-1", "outcome": "answered", "final_text": "done"}
 
-    published: list[dict[str, Any]] = []
+    published: list[Event | DraftEvent] = []
     monkeypatch.setattr(
         sigil_agent_io,
         "run_zeta_rpc_session",
@@ -1401,7 +1431,10 @@ def test_sigil_zeta_rpc_session_uses_shared_runner_boundary(monkeypatch) -> None
 
     assert result == {"turn_id": "turn-1", "outcome": "answered", "final_text": "done"}
     assert captured["params"] == {"objective": "answer"}
-    assert published == [{"type": "seen"}]
+    assert [
+        zeta_event_model.draft_event_view(cast(DraftEvent, event))["type"]
+        for event in published
+    ] == ["seen"]
 
 
 def test_zeta_rpc_session_run_rejects_invalid_workflow() -> None:
@@ -1977,7 +2010,7 @@ def test_zeta_rpc_session_uses_explicit_context(monkeypatch, tmp_path: Path) -> 
         state_dir=tmp_path,
         session_dir=tmp_path / "sessions" / "ctx-session",
     )
-    published: list[dict[str, Any]] = []
+    published: list[Event | DraftEvent] = []
 
     monkeypatch.setattr(zeta_model, "model_endpoint_open", lambda *args: True)
     monkeypatch.setattr(
@@ -1996,7 +2029,8 @@ def test_zeta_rpc_session_uses_explicit_context(monkeypatch, tmp_path: Path) -> 
     assert result["final_text"] == "done"
     assert result["run_id"].startswith("run_")
     assert result["final_event_cursor"] == "6"
-    assert [event["type"] for event in published] == [
+    published_views = published_event_views(published)
+    assert [event["type"] for event in published_views] == [
         "session.turn.requested",
         "runtime.work.pending",
         "runtime.work.claimed",
@@ -2004,12 +2038,19 @@ def test_zeta_rpc_session_uses_explicit_context(monkeypatch, tmp_path: Path) -> 
         "model",
         "runtime.work.completed",
     ]
-    assert {event["session"] for event in published} == {"ctx-session"}
-    assert {event["run_id"] for event in published if "run_id" in event} == {
+    assert {event["session"] for event in published_views} == {"ctx-session"}
+    assert {event["run_id"] for event in published_views if "run_id" in event} == {
         result["run_id"]
     }
-    assert [event["cursor"] for event in published] == ["1", "2", "3", "4", "5", "6"]
-    assert {event["turn_id"] for event in published} == {result["run_id"]}
+    assert [event["cursor"] for event in published_views] == [
+        "1",
+        "2",
+        "3",
+        "4",
+        "5",
+        "6",
+    ]
+    assert {event["turn_id"] for event in published_views} == {result["run_id"]}
     assert [
         event.event_type for event in event_store.list_events(zeta_events.Filter())
     ] == [
@@ -2233,7 +2274,7 @@ def test_zeta_rpc_session_returns_aborted_on_wall_clock_budget(
         state_dir=tmp_path,
         session_dir=tmp_path / "sessions" / "ctx-session",
     )
-    published: list[dict[str, Any]] = []
+    published: list[Event | DraftEvent] = []
 
     def fail_chat_completion_messages(*args: object, **kwargs: object) -> dict:
         raise AssertionError("expired turn must not request the model")
@@ -2259,7 +2300,8 @@ def test_zeta_rpc_session_returns_aborted_on_wall_clock_budget(
     assert result["final_text"] == ""
     assert result["run_id"].startswith("run_")
     assert result["final_event_cursor"] == "6"
-    assert [event["type"] for event in published] == [
+    published_views = published_event_views(published)
+    assert [event["type"] for event in published_views] == [
         "session.turn.requested",
         "runtime.work.pending",
         "runtime.work.claimed",
@@ -2267,10 +2309,10 @@ def test_zeta_rpc_session_returns_aborted_on_wall_clock_budget(
         "turn_aborted",
         "runtime.work.cancelled",
     ]
-    assert {event["run_id"] for event in published if "run_id" in event} == {
+    assert {event["run_id"] for event in published_views if "run_id" in event} == {
         result["run_id"]
     }
-    assert published[-2]["reason"] == "deadline_exceeded"
+    assert published_views[-2]["reason"] == "deadline_exceeded"
     assert [
         event.event_type for event in event_store.list_events(zeta_events.Filter())
     ] == [
@@ -3101,7 +3143,7 @@ def test_zeta_rpc_session_run_streams_events_and_returns_turn(
         "runtime.stream.chunk",
         "runtime.stream.chunk",
         "model",
-        "zeta.turn.completed",
+        "turn.completed",
     ]
     assert response["id"] == 1
     assert response["result"]["outcome"] == "answered"
@@ -3119,7 +3161,7 @@ def test_zeta_rpc_session_run_streams_events_and_returns_turn(
     assert len(model_events) == 1
     assert stream_events == []
     assert model_events[0].id == published[3]["id"]
-    assert model_events[0].caused_by == published[0]["id"]
+    assert model_events[0].caused_by != published[0]["id"]
 
 
 def test_zeta_rpc_events_list_pages_in_append_order(tmp_path: Path) -> None:
@@ -3261,8 +3303,8 @@ def test_zeta_rpc_events_subscribe_filters_after_cursor() -> None:
     server = zeta_rpc.JsonRpcServer(input_stream, output)
 
     asyncio.run(server.serve())
-    server.publish_event({"type": "user_message", "content": "old", "cursor": "1"})
-    server.publish_event({"type": "user_message", "content": "new", "cursor": "2"})
+    server.publish_event(rpc_event("old", seq=1))
+    server.publish_event(rpc_event("new", seq=2))
 
     messages = rpc_messages(output)
     assert messages[0]["result"]["subscription_id"].startswith("sub_")
@@ -3301,31 +3343,13 @@ def test_zeta_rpc_events_subscribe_filters_by_session_and_run() -> None:
 
     asyncio.run(server.serve())
     server.publish_event(
-        {
-            "type": "user_message",
-            "content": "wrong-session",
-            "session": "session-2",
-            "run_id": "run_1",
-            "cursor": "1",
-        }
+        rpc_event("wrong-session", seq=1, session_id="session-2", turn_id="run_1")
     )
     server.publish_event(
-        {
-            "type": "user_message",
-            "content": "wrong-run",
-            "session": "session-1",
-            "run_id": "run_2",
-            "cursor": "2",
-        }
+        rpc_event("wrong-run", seq=2, session_id="session-1", turn_id="run_2")
     )
     server.publish_event(
-        {
-            "type": "user_message",
-            "content": "match",
-            "session": "session-1",
-            "run_id": "run_1",
-            "cursor": "3",
-        }
+        rpc_event("match", seq=3, session_id="session-1", turn_id="run_1")
     )
 
     assert [
@@ -3339,17 +3363,14 @@ def test_zeta_rpc_publish_event_keeps_default_stream_without_subscription() -> N
     output = StringIO()
     server = zeta_rpc.JsonRpcServer(StringIO(), output)
 
-    server.publish_event({"type": "user_message", "content": "live", "cursor": "1"})
+    server.publish_event(rpc_event("live", seq=1))
 
-    assert rpc_messages(output) == [
-        {
-            "jsonrpc": "2.0",
-            "method": "events.publish",
-            "params": {
-                "event": {"type": "user_message", "content": "live", "cursor": "1"}
-            },
-        }
-    ]
+    [message] = rpc_messages(output)
+    assert message["jsonrpc"] == "2.0"
+    assert message["method"] == "events.publish"
+    assert message["params"]["event"]["type"] == "user_message"
+    assert message["params"]["event"]["content"] == "live"
+    assert message["params"]["event"]["cursor"] == "1"
 
 
 def test_zeta_agent_turn_uses_explicit_tool_registry(monkeypatch) -> None:

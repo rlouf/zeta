@@ -43,7 +43,8 @@ from zeta.capabilities.registry import registry as _default_tool_registry
 from zeta.context.components import latest_prompt_trace_fields
 from zeta.context.instructions import load_project_instructions
 from zeta.context.system import system_prompt
-from zeta.events import DraftEvent, event_view
+from zeta.events import DraftEvent, Event
+from zeta.history import history_event_record
 from zeta.loop import (
     AgentTurnAborted,
     async_run_agent_turn,
@@ -156,8 +157,8 @@ def step(
     if selected_model is not None:
         user_event["model"] = model_selection_event(selected_model)
     prompt_event = record_user_message(user_event, runtime_context=runtime_context)
-    append_prompt_submitted_event(prompt_event)
-    turn_recorder.note_root_event(prompt_event)
+    prompt_submitted = append_prompt_submitted_event(prompt_event)
+    turn_recorder.note_root_event(prompt_submitted)
     context = load_project_instructions()
     renderer = build_turn_renderer(output, objective=objective)
     recorder = AgentStepEventRecorder(
@@ -364,7 +365,7 @@ def record_user_message(
     event: dict[str, Any],
     *,
     runtime_context: Session,
-) -> dict[str, Any]:
+) -> Event:
     payload = {key: value for key, value in event.items() if key != "type"}
     payload["_timeline_type"] = "user_message"
     outcome = runtime_context.event_sink.accept(
@@ -380,15 +381,15 @@ def record_user_message(
             else None,
         )
     )
-    return event_view(outcome.event)
+    return outcome.event
 
 
-def finalize_progress(renderer: TurnRenderer, turn: dict[str, Any]) -> None:
+def finalize_progress(renderer: TurnRenderer, turn: Event) -> None:
     if (
         renderer.progress_renderer is not None
         and renderer.progress_renderer.mode != PROGRESS_MODE_TRACE
     ):
-        renderer.progress_renderer.finalize(turn)
+        renderer.progress_renderer.finalize(history_event_record(turn))
 
 
 def write_handoff(path: str | Path | None, handoff: dict[str, Any]) -> None:

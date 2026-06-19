@@ -30,8 +30,10 @@ from zeta.capabilities.registry import registry as _runtime_tool_registry
 from zeta.dispatch import AsyncEventDispatcher
 from zeta.events import (
     DraftEvent,
+    Event,
     EventSink,
     boundary_event_draft,
+    draft_event_view,
     event_view,
 )
 from zeta.session import (
@@ -45,6 +47,7 @@ from zeta.session import (
 )
 from zeta.store.events import EventReader, Filter
 
+RuntimePublishedEvent = Event | DraftEvent
 RpcSessionRunner = Callable[[dict[str, Any]], Awaitable[dict[str, Any]]]
 ToolCallStatus = Literal["requested", "responded", "failed", "cancelled", "timed_out"]
 RpcRunStatus = Literal["running", "cancelling", "completed", "cancelled", "failed"]
@@ -193,7 +196,7 @@ class RpcError(RuntimeError):
 async def run_rpc_session(
     params: dict[str, Any],
     *,
-    publish_event: Callable[[dict[str, Any]], None],
+    publish_event: Callable[[RuntimePublishedEvent], None],
     runtime_context: Session | None = None,
 ) -> dict[str, Any]:
     runtime_context = runtime_context or default_session()
@@ -498,23 +501,21 @@ def rpc_outcome(staged_effect: dict[str, Any] | None, final_text: str) -> str:
 
 
 def event_matches_subscription(
-    event: dict[str, Any],
+    event: RuntimePublishedEvent,
     subscription: EventSubscription,
 ) -> bool:
     if (
         subscription.session_id is not None
-        and event.get("session") != subscription.session_id
+        and event.session_id != subscription.session_id
     ):
         return False
-    if subscription.run_id is not None and event.get("run_id") != subscription.run_id:
+    if subscription.run_id is not None and event.turn_id != subscription.run_id:
         return False
     if subscription.after_seq is None:
         return True
-    try:
-        cursor_seq = int(str(event.get("cursor") or ""))
-    except ValueError:
+    if not isinstance(event, Event):
         return False
-    return cursor_seq > subscription.after_seq
+    return event.seq > subscription.after_seq
 
 
 class JsonRpcProtocol:
@@ -821,16 +822,19 @@ class JsonRpcProtocol:
         if request_id is not None:
             self.write_response(request_id, result)
 
-    def publish_event(self, event: dict[str, Any]) -> None:
+    def publish_event(self, event: RuntimePublishedEvent) -> None:
+        view = (
+            event_view(event) if isinstance(event, Event) else draft_event_view(event)
+        )
         if self.event_subscriptions:
             for subscription in self.event_subscriptions.values():
                 if event_matches_subscription(event, subscription):
                     self.write_notification(
                         "events.publish",
-                        {"subscription_id": subscription.id, "event": event},
+                        {"subscription_id": subscription.id, "event": view},
                     )
             return
-        self.write_notification("events.publish", {"event": event})
+        self.write_notification("events.publish", {"event": view})
 
     def write_response(self, request_id: Any, result: Any) -> None:
         self.write_message({"jsonrpc": "2.0", "id": request_id, "result": result})
@@ -965,7 +969,7 @@ class JsonRpcServer(JsonRpcProtocol):
                 )
             dispatcher = AsyncEventDispatcher(
                 self.event_sink,
-                publish_event=lambda event: self.publish_event(event_view(event)),
+                publish_event=self.publish_event,
             )
         outcome = await dispatcher.dispatch(rpc_publish_event_draft(params))
         return {

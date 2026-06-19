@@ -14,8 +14,8 @@ from zeta.capabilities.base import ExecutionMode
 from zeta.dispatch import AgentDefinition, AgentRun, AsyncEventDispatcher, TriggerRule
 from zeta.events import (
     DraftEvent,
-    draft_event_view,
-    event_view,
+    Event,
+    draft_event_id,
     user_message_draft,
 )
 from zeta.loop import (
@@ -183,19 +183,19 @@ def zeta_state_dir() -> Path:
     return Path(root).expanduser() if root else Path.home() / ".zeta"
 
 
-def current_timeline(*, runtime_context: Session) -> list[dict[str, Any]]:
+RuntimePublishedEvent = Event | DraftEvent
+
+
+def current_timeline(*, runtime_context: Session) -> list[Event]:
     try:
         if not isinstance(runtime_context.event_sink, EventReader):
             return []
-        return [
-            event_view(event)
-            for event in runtime_context.event_sink.list_events(
-                Filter(
-                    session_id=runtime_context.session_id,
-                    event_type_prefix="zeta.",
-                )
+        return runtime_context.event_sink.list_events(
+            Filter(
+                session_id=runtime_context.session_id,
+                event_type_prefix="zeta.",
             )
-        ]
+        )
     except Exception as exc:
         warn_trace_failure_once("current_timeline", exc)
         return []
@@ -205,7 +205,7 @@ async def run_session_turn_from_event(
     run: AgentRun,
     *,
     runtime_context: Session,
-    publish_event: Callable[[dict[str, Any]], None],
+    publish_event: Callable[[RuntimePublishedEvent], None],
     cancellation_event: CancellationToken | None = None,
 ) -> dict[str, Any]:
     params = dict(run.triggering_event.payload)
@@ -227,7 +227,7 @@ async def run_session_turn(
     *,
     run_id: str,
     caused_by: str,
-    publish_event: Callable[[dict[str, Any]], None],
+    publish_event: Callable[[RuntimePublishedEvent], None],
     runtime_context: Session,
     cancellation_event: CancellationToken | None,
 ) -> dict[str, Any]:
@@ -306,7 +306,7 @@ async def run_session_turn(
 def session_event_dispatcher(
     runtime_context: Session,
     *,
-    publish_event: Callable[[dict[str, Any]], None],
+    publish_event: Callable[[RuntimePublishedEvent], None],
     cancellation_event: CancellationToken | None = None,
 ) -> AsyncEventDispatcher:
     return AsyncEventDispatcher(
@@ -323,7 +323,7 @@ def session_event_dispatcher(
                 ),
             )
         ],
-        publish_event=lambda event: publish_event(event_view(event)),
+        publish_event=publish_event,
     )
 
 
@@ -348,7 +348,7 @@ def record_user_message(
     event: dict[str, Any],
     *,
     runtime_context: Session,
-) -> dict[str, Any]:
+) -> Event:
     payload = {key: value for key, value in event.items() if key != "type"}
     outcome = runtime_context.event_sink.accept(
         user_message_draft(
@@ -359,7 +359,7 @@ def record_user_message(
             else None,
         )
     )
-    return event_view(outcome.event)
+    return outcome.event
 
 
 def record_runtime_draft(
@@ -367,7 +367,7 @@ def record_runtime_draft(
     *,
     runtime_context: Session,
     run_id: str,
-) -> dict[str, Any]:
+) -> Event:
     tagged = replace(
         draft,
         payload={**draft.payload, "run_id": run_id},
@@ -375,7 +375,7 @@ def record_runtime_draft(
         turn_id=run_id,
     )
     outcome = runtime_context.event_sink.accept(tagged)
-    return event_view(outcome.event)
+    return outcome.event
 
 
 def live_runtime_event(
@@ -383,19 +383,13 @@ def live_runtime_event(
     *,
     runtime_context: Session,
     run_id: str,
-) -> dict[str, Any]:
-    event = draft_event_view(
-        replace(
-            draft,
-            payload={**draft.payload, "run_id": run_id},
-            session_id=runtime_context.session_id,
-            turn_id=run_id,
-        )
+) -> DraftEvent:
+    return replace(
+        draft,
+        payload={**draft.payload, "run_id": run_id},
+        session_id=runtime_context.session_id,
+        turn_id=run_id,
     )
-    event["session"] = runtime_context.session_id
-    event["run_id"] = run_id
-    event["turn_id"] = run_id
-    return event
 
 
 def session_result(
@@ -429,21 +423,55 @@ def session_trace_result(agent_result: AgentTurnResult | None) -> dict[str, list
             prompt_trace.assistant_message_object_id,
         )
     for draft in agent_result.events:
-        event = draft_event_view(draft)
-        event_type = str(event.get("type") or "")
+        event_type = draft_timeline_type(draft)
         if event_type == "model":
-            add_unique(trace["model_event_ids"], event.get("id"))
-            add_unique_list(trace["tool_call_ids"], event.get("tool_call_object_ids"))
+            add_unique(trace["model_event_ids"], draft_event_id(draft))
+            add_unique_list(
+                trace["tool_call_ids"], draft_object_ids(draft, "tool_call")
+            )
             continue
         if event_type == "tool_call":
-            add_unique(trace["tool_event_ids"], event.get("id"))
-            add_unique(trace["tool_call_ids"], event.get("tool_call_object_id"))
+            add_unique(trace["tool_event_ids"], draft_event_id(draft))
+            add_unique_list(
+                trace["tool_call_ids"], draft_object_ids(draft, "tool_call")
+            )
             continue
         if event_type == "tool_result":
-            add_unique(trace["tool_event_ids"], event.get("id"))
-            add_unique(trace["tool_call_ids"], event.get("tool_call_object_id"))
-            add_unique(trace["tool_result_ids"], event.get("tool_result_object_id"))
+            add_unique(trace["tool_event_ids"], draft_event_id(draft))
+            add_unique_list(
+                trace["tool_call_ids"], draft_object_ids(draft, "tool_call")
+            )
+            add_unique_list(
+                trace["tool_result_ids"], draft_object_ids(draft, "tool_result")
+            )
     return trace
+
+
+def draft_timeline_type(draft: DraftEvent) -> str:
+    view_type = draft.payload.get("_timeline_type")
+    if isinstance(view_type, str) and view_type:
+        return view_type
+    prefix = "zeta."
+    if draft.event_type.startswith(prefix):
+        return draft.event_type[len(prefix) :]
+    return draft.event_type
+
+
+def draft_object_ids(draft: DraftEvent, kind: str) -> list[str]:
+    object_ids: list[str] = []
+    for collection in ("used_objects", "returned_objects"):
+        links = draft.payload.get(collection)
+        if not isinstance(links, list):
+            continue
+        for link in links:
+            if not isinstance(link, dict):
+                continue
+            if link.get("kind") != kind:
+                continue
+            object_id = link.get("id")
+            if isinstance(object_id, str):
+                object_ids.append(object_id)
+    return object_ids
 
 
 def empty_session_trace_result() -> dict[str, list[str]]:

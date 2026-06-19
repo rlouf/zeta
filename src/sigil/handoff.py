@@ -3,6 +3,7 @@
 import os
 import time
 import uuid
+from collections.abc import Sequence
 from typing import Any, cast
 
 from sigil.agent_io import current_timeline
@@ -21,8 +22,16 @@ from sigil.protocols import (
 from sigil.sessions import event_time, recent_turns, session_id
 from sigil.state import event_store_path
 from zeta.capabilities.base import proposed_effect
-from zeta.events import durable_tool_event_payload, event_view, tool_call_draft
+from zeta.events import (
+    Event,
+    durable_tool_event_payload,
+    event_view,
+    exact_event_time,
+    tool_call_draft,
+)
 from zeta.history import effect_record, publish_effect_record
+
+HandoffTimelineEvent = Event | dict[str, Any]
 
 
 def append_shell_result() -> dict[str, Any]:
@@ -32,7 +41,7 @@ def append_shell_result() -> dict[str, Any]:
     runtime_context = zeta_session_for_sigil()
     event = shell_result_event(current_timeline(runtime_context=runtime_context))
     if event.get("type") == "tool_result":
-        return record_shell_tool_result(event)
+        return event_view(record_shell_tool_result(event))
     return shell_resume_payload(event, session_id=runtime_context.session_id)
 
 
@@ -51,7 +60,7 @@ def shell_resume_time(value: Any) -> float:
     return time.time()
 
 
-def record_shell_tool_result(event: dict[str, Any]) -> dict[str, Any]:
+def record_shell_tool_result(event: dict[str, Any]) -> Event:
     """Persist shell handoff results as tool events owned by handoff code."""
     from sigil import zeta_session_for_sigil
 
@@ -69,10 +78,10 @@ def record_shell_tool_result(event: dict[str, Any]) -> dict[str, Any]:
             event_id=event.get("id") if isinstance(event.get("id"), str) else None,
         )
     )
-    return event_view(outcome.event)
+    return outcome.event
 
 
-def shell_result_event(timeline: list[dict[str, Any]]) -> dict[str, Any]:
+def shell_result_event(timeline: Sequence[HandoffTimelineEvent]) -> dict[str, Any]:
     """Build the timeline event that resumes a user-run shell handoff."""
     handoff = latest_unresolved_shell_handoff(timeline)
     if not handoff:
@@ -276,7 +285,7 @@ def command_matches_staged(expected: str, command: str) -> bool:
 
 def matching_pending_handoff(
     command: str,
-    timeline: list[dict[str, Any]],
+    timeline: Sequence[HandoffTimelineEvent],
 ) -> dict[str, Any]:
     """Return the pending shell handoff that a just-run command resolves."""
     handoff = latest_unresolved_shell_handoff(timeline)
@@ -288,15 +297,16 @@ def matching_pending_handoff(
 
 
 def latest_unresolved_shell_handoff(
-    timeline: list[dict[str, Any]],
+    timeline: Sequence[HandoffTimelineEvent],
 ) -> dict[str, Any]:
     """Return metadata for the latest bash handoff in a timeline."""
     resolved_call_ids: set[str] = set()
     for event in reversed(timeline):
-        result = event.get("result")
+        payload = handoff_event_payload(event)
+        result = payload.get("result")
         if not isinstance(result, dict):
             continue
-        tool_call_id = str(event.get("tool_call_id") or "")
+        tool_call_id = str(payload.get("tool_call_id") or "")
         if is_shell_handoff_result(result):
             if tool_call_id:
                 resolved_call_ids.add(tool_call_id)
@@ -308,14 +318,28 @@ def latest_unresolved_shell_handoff(
             continue
         return {
             "tool_call_id": tool_call_id,
-            "name": str(event.get("name") or "bash"),
+            "name": str(payload.get("name") or "bash"),
             "command": str(handoff.get("command") or ""),
             "reason": str(handoff.get("reason") or ""),
             "artifact": str(handoff.get("artifact") or ""),
-            "time": event.get("time"),
-            "turn_id": str(event.get("turn_id") or ""),
+            "time": handoff_event_time(event),
+            "turn_id": handoff_event_turn_id(event),
         }
     return {}
+
+
+def handoff_event_payload(event: HandoffTimelineEvent) -> dict[str, Any]:
+    return dict(event.payload) if isinstance(event, Event) else event
+
+
+def handoff_event_time(event: HandoffTimelineEvent) -> Any:
+    return exact_event_time(event) if isinstance(event, Event) else event.get("time")
+
+
+def handoff_event_turn_id(event: HandoffTimelineEvent) -> str:
+    if isinstance(event, Event):
+        return event.turn_id or ""
+    return str(event.get("turn_id") or "")
 
 
 def shell_handoff_metadata(result: dict[str, Any]) -> dict[str, Any]:

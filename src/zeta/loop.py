@@ -6,7 +6,7 @@ import inspect
 import json
 import time
 import uuid
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Literal, Protocol, cast
 
@@ -24,7 +24,9 @@ from zeta.context.builder import (
 from zeta.context.components import PromptTrace, prompt_trace_payload
 from zeta.events import (
     DraftEvent,
+    Event,
     draft_event_view,
+    event_view,
     normalized_tool_result,
     runtime_event_draft,
     status_update_draft,
@@ -41,6 +43,7 @@ from zeta.models.chat_completions import tool_call_id
 from zeta.store.substrate import Store
 
 AgentEventSink = Callable[[DraftEvent], None]
+TimelineEvent = Event | dict[str, Any]
 DEFAULT_MAX_TURNS = 25
 tool_registry = _runtime_tool_registry
 time_monotonic = time.monotonic
@@ -179,7 +182,7 @@ class TurnContext:
 
 async def async_run_agent_turn(
     objective: str,
-    timeline: list[dict[str, Any]],
+    timeline: Sequence[TimelineEvent],
     config: AgentConfig,
     *,
     context: str = "",
@@ -233,7 +236,7 @@ async def async_run_agent_turn(
 
 async def run_agent_steps(
     objective: str,
-    timeline: list[dict[str, Any]],
+    timeline: Sequence[TimelineEvent],
     *,
     config: AgentConfig,
     context: str,
@@ -328,7 +331,7 @@ class AssistantMessage:
 
 async def request_model_turn(
     objective: str,
-    timeline: list[dict[str, Any]],
+    timeline: Sequence[TimelineEvent],
     *,
     config: AgentConfig,
     allowed_capabilities: tuple[str, ...],
@@ -376,7 +379,7 @@ async def request_model_turn(
 
 def build_prompt_step(
     objective: str,
-    timeline: list[dict[str, Any]],
+    timeline: Sequence[TimelineEvent],
     *,
     config: AgentConfig,
     allowed_capabilities: tuple[str, ...],
@@ -389,7 +392,10 @@ def build_prompt_step(
     state.note_step("build_prompt")
     prompt_plan = builder.plan_prompt(
         objective,
-        timeline,
+        [
+            event_view(event) if isinstance(event, Event) else dict(event)
+            for event in timeline
+        ],
         system=config.system_prompt,
         allowed_capabilities=allowed_capabilities,
         context=context,
@@ -533,15 +539,14 @@ TERMINAL_TOOL_STATUSES = {"completed", "failed", "refused", "cancelled", "timed_
 def terminal_capability_result_event(
     events: list[DraftEvent],
     call_id: str,
-) -> dict[str, Any] | None:
+) -> DraftEvent | None:
     for draft in reversed(events):
-        event = draft_event_view(draft)
-        if event.get("type") != "tool_result":
+        if draft_timeline_type(draft) != "tool_result":
             continue
-        if event.get("tool_call_id") != call_id:
+        if draft.payload.get("tool_call_id") != call_id:
             continue
-        if event.get("status") in TERMINAL_TOOL_STATUSES:
-            return event
+        if draft.payload.get("status") in TERMINAL_TOOL_STATUSES:
+            return draft
     return None
 
 
@@ -755,9 +760,9 @@ def record_runtime_event(
     draft: DraftEvent,
     *,
     ctx: TurnContext,
-) -> dict[str, Any]:
+) -> DraftEvent:
     emit_event(events, draft, ctx.event_sink)
-    return draft_event_view(draft)
+    return draft
 
 
 @dataclass(frozen=True)
@@ -831,13 +836,22 @@ def record_model_event(
 
 def next_model_parent(events: list[DraftEvent]) -> str | None:
     for draft in reversed(events):
-        event = draft_event_view(draft)
-        if str(event.get("type") or "") != "tool_result":
+        if draft_timeline_type(draft) != "tool_result":
             continue
-        event_id = event.get("id")
+        event_id = draft_event_id(draft)
         if isinstance(event_id, str) and event_id:
             return event_id
     return None
+
+
+def draft_timeline_type(draft: DraftEvent) -> str:
+    view_type = draft.payload.get("_timeline_type")
+    if isinstance(view_type, str) and view_type:
+        return view_type
+    prefix = "zeta."
+    if draft.event_type.startswith(prefix):
+        return draft.event_type[len(prefix) :]
+    return draft.event_type
 
 
 def attach_prompt_trace(event: dict[str, Any], trace: PromptTrace) -> None:

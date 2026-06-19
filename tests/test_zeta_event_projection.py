@@ -8,7 +8,6 @@ from zeta.events import (
     durable_model_event_payload,
     durable_tool_event_payload,
     event_view,
-    event_views,
     model_call_draft,
     runtime_event_draft,
     tool_call_draft,
@@ -401,7 +400,7 @@ def test_zeta_runtime_event_projection_contract() -> None:
 
 def test_zeta_event_view_and_rpc_projection_contract() -> None:
     events = runtime_events()
-    projected = event_views(events)
+    projected = [event_view(event) for event in events]
 
     assert [event["cursor"] for event in projected] == ["1", "2", "3", "4", "5", "6"]
     assert [

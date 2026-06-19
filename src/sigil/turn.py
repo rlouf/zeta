@@ -15,6 +15,7 @@ from sigil.sessions import session_id
 from sigil.state import event_store_path
 from zeta.capabilities.base import proposed_effect
 from zeta.context.components import PromptTrace
+from zeta.events import DraftEvent, Event
 from zeta.history import (
     TURN_RECORD_SCHEMA,
     effect_record,
@@ -60,16 +61,13 @@ class TurnRecorder:
         self.root_event_id: str | None = None
         self.last_runtime_event_id: str | None = None
 
-    def note_root_event(self, event: dict[str, Any]) -> None:
-        event_id = event_id_value(event)
-        if event_id is not None:
-            self.root_event_id = event_id
+    def note_root_event(self, event: Event) -> None:
+        self.root_event_id = event.id
 
-    def note_runtime_event(self, event: dict[str, Any]) -> None:
-        event_id = event_id_value(event)
-        if event_id is None or not is_durable_runtime_event(event):
+    def note_runtime_event(self, event: Event | DraftEvent) -> None:
+        if not isinstance(event, Event) or not is_durable_runtime_event(event):
             return
-        self.last_runtime_event_id = event_id
+        self.last_runtime_event_id = event.id
 
     def causal_parent_event_id(self) -> str | None:
         return self.last_runtime_event_id or self.root_event_id
@@ -99,6 +97,8 @@ class TurnRecorder:
         self.effect_ids.append(effect_id)
         self.effects.append(payload)
         object_id = str(event.get("tool_result_object_id") or "")
+        if not object_id:
+            object_id = first_object_link_id(event, "returned_objects", "tool_result")
         if object_id:
             self.effect_object_ids.append(object_id)
 
@@ -109,7 +109,7 @@ class TurnRecorder:
         self,
         outcome: str,
         prompt_traces: Iterable[PromptTrace] = (),
-    ) -> dict[str, Any]:
+    ) -> Event:
         """Append the turn record closing this turn and bridge it into the graph."""
         record = turn_record(
             self.turn_id,
@@ -137,7 +137,7 @@ class TurnRecorder:
             self.effect_object_ids,
             runtime_context=self.runtime_context,
         )
-        return payload
+        return event
 
     def cost(self) -> dict[str, int]:
         wall_ms = int((time.monotonic() - self.started) * 1000)
@@ -243,17 +243,37 @@ def event_id_value(event: dict[str, Any]) -> str | None:
     return event_id if isinstance(event_id, str) and event_id else None
 
 
-def is_durable_runtime_event(event: dict[str, Any]) -> bool:
-    event_type = str(event.get("type") or "")
-    if event_type in {"model", "turn_aborted"}:
+def is_durable_runtime_event(event: Event) -> bool:
+    view_type = event.payload.get("_timeline_type")
+    event_type = view_type if isinstance(view_type, str) else event.event_type
+    if event_type in {"model", "turn_aborted", "zeta.model_call.completed"}:
         return True
-    if event_type != "tool_result":
+    if event_type not in {"tool_result", "zeta.tool_call.completed"}:
         return False
     return (
-        "effects" in event
-        or "returned_objects" in event
-        or bool(event.get("tool_result_object_id"))
+        "effects" in event.payload
+        or "returned_objects" in event.payload
+        or bool(event.payload.get("tool_result_object_id"))
     )
+
+
+def first_object_link_id(
+    event: dict[str, Any],
+    collection: str,
+    kind: str,
+) -> str:
+    links = event.get(collection)
+    if not isinstance(links, list):
+        return ""
+    for link in links:
+        if not isinstance(link, dict):
+            continue
+        if link.get("kind") != kind:
+            continue
+        object_id = link.get("id")
+        if isinstance(object_id, str):
+            return object_id
+    return ""
 
 
 def file_effect_fields(

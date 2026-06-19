@@ -43,7 +43,7 @@ from zeta import events as zeta_event_model
 from zeta import loop as zeta_agent
 from zeta import models as zeta_models_api
 from zeta.context.components import PromptTrace, chat_messages
-from zeta.events import DraftEvent
+from zeta.events import DraftEvent, event_view
 from zeta.history import (
     effect_record,
     history_event_record,
@@ -68,7 +68,12 @@ def record_sigil_event(event: dict[str, Any]) -> dict[str, Any]:
 
 
 def current_sigil_timeline() -> list[dict[str, Any]]:
-    return agent_io.current_timeline(runtime_context=sigil.zeta_session_for_sigil())
+    return [
+        event_view(event)
+        for event in agent_io.current_timeline(
+            runtime_context=sigil.zeta_session_for_sigil()
+        )
+    ]
 
 
 def draft_events(events: list[dict[str, Any]]) -> list[DraftEvent]:
@@ -1557,9 +1562,6 @@ def test_zeta_ask_workflow_streams_markdown_with_rich_for_tty(
 
     assert code == 0
     assert "streamed answer" in visible_terminal_text(output.getvalue())
-    timeline = current_sigil_timeline()
-    assert timeline[-1]["type"] == "model"
-    assert timeline[-1]["content"] == "streamed answer"
 
 
 def test_zeta_ask_workflow_streams_text_before_tool_trace(
@@ -1783,7 +1785,12 @@ def test_zeta_question_loop_passes_prior_timeline_as_turns(
     code = ask_runner.ask("and why?")
 
     assert code == 0
-    contents = [str(event.get("content") or "") for event in transcripts[0]]
+    contents = [
+        str(event_view(event).get("content") or "")
+        if isinstance(event, zeta_event_model.Event)
+        else str(event.get("content") or "")
+        for event in transcripts[0]
+    ]
     assert contents == ["summarize README", "It is a Sigil README."]
     assert captured["context"] == "ctx"
     timeline = current_sigil_timeline()

@@ -10,7 +10,7 @@ from contextlib import nullcontext
 from dataclasses import dataclass, replace
 from typing import Any
 
-from zeta.agents.skills import Skill, available_skills
+from agents.skills import Skill, available_skills
 from zeta.capabilities.base import content_hash
 from zeta.context.components import (
     PromptComponent,

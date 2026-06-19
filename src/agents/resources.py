@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from zeta.agents.spec import AgentSpec
+from agents.spec import AgentSpec
 
 
 def resource_extensions(spec: AgentSpec) -> dict[str, object]:

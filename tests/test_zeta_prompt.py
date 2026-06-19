@@ -19,10 +19,10 @@ from _zeta_helpers import (
     write_skill,
 )
 
+from agents import skills as zeta_skills
 from sigil.tools import ensure_builtin_tools_registered
 from zeta import events as zeta_event_model
 from zeta import models as zeta_models_api
-from zeta.agents import skills as zeta_skills
 from zeta.capabilities.base import (
     Capability,
     CapabilityId,

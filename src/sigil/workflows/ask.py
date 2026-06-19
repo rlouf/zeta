@@ -8,10 +8,10 @@ the other glyphs remember. A new shell session starts a fresh thread.
 
 from __future__ import annotations
 
+from agents.skills import expand_skill_directive
 from sigil.agent_io import last_event_time
 from sigil.sessions import active_failure_context, recent_turns_context
 from sigil.workflows.step import step
-from zeta.agents.skills import expand_skill_directive
 
 ASK_SYSTEM_PROMPT = (
     "Answer concisely. You are responding to a quick question typed at a shell "

@@ -4,9 +4,9 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
-from zeta.agents.events import EventRegistry
-from zeta.agents.prompts import validate_prompt
-from zeta.agents.spec import AgentSpec
+from agents.events import EventRegistry
+from agents.prompts import validate_prompt
+from agents.spec import AgentSpec
 from zeta.capabilities.registry import CapabilityRegistry
 
 RESERVED_TOOL_NAMES = frozenset({"__return"})

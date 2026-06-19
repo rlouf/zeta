@@ -6,10 +6,10 @@ from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any, cast
 
+from agents.events import EventEnvelope
+from agents.prompts import render_prompt
+from agents.spec import AgentSpec
 from zeta.agents.capabilities import AgentConfig
-from zeta.agents.events import EventEnvelope
-from zeta.agents.prompts import render_prompt
-from zeta.agents.spec import AgentSpec
 from zeta.dispatch import AgentDefinition, AgentRun, TriggerRule
 
 if TYPE_CHECKING:

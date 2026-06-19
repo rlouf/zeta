@@ -172,7 +172,7 @@ def write_handoff_resume(path: Path | None, command: str, status: int) -> None:
     if path is None or status == EXIT_INTERRUPTED:
         return
     from sigil import zeta_session_for_sigil
-    from zeta.timeline import current_timeline
+    from sigil.agent_io import current_timeline
 
     if not matching_pending_handoff(
         command,

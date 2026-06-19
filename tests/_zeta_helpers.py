@@ -21,13 +21,12 @@ from zeta.context.builder import (
     reconstructed_prompt_request,
 )
 from zeta.context.components import PromptComponent, prompt_components
-from zeta.events import DraftEvent, Event
+from zeta.events import DraftEvent, Event, draft_event_view, event_view
 from zeta.models import chat_completions as zeta_model
 from zeta.rpc import rpc_event_dict_draft
 from zeta.session import Session
 from zeta.store.substrate import InMemoryStore, Store
 from zeta.substrate import Object, ObjectId
-from zeta.timeline import timeline_event_from_durable_event
 
 zeta_context = SimpleNamespace(
     PreparedPrompt=PreparedPrompt,
@@ -188,9 +187,7 @@ def timeline_events(
     events: list[dict[str, Any]] | list[DraftEvent],
 ) -> list[dict[str, Any]]:
     return [
-        zeta_agent.draft_timeline_event(event)
-        if isinstance(event, DraftEvent)
-        else event
+        draft_event_view(event) if isinstance(event, DraftEvent) else event
         for event in events
     ]
 
@@ -233,7 +230,7 @@ def record_durable_timeline_event(
         durable_event = appended.event
     else:
         durable_event = runtime_context.event_sink.accept(draft).event
-    return timeline_event_from_durable_event(durable_event)
+    return event_view(durable_event)
 
 
 def event_id(event: dict[str, Any]) -> str:

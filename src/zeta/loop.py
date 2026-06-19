@@ -10,7 +10,6 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from typing import Any, Literal, Protocol, cast
 
-from zeta import runtime_events
 from zeta.agents.capabilities import AgentConfig
 from zeta.capabilities.base import ExecutionMode, proposed_effect
 from zeta.capabilities.registry import CapabilityProjection, CapabilityRegistry
@@ -23,21 +22,23 @@ from zeta.context.builder import (
     render_model_input,
 )
 from zeta.context.components import PromptTrace, prompt_trace_payload
-from zeta.events import DraftEvent, Event
+from zeta.events import (
+    DraftEvent,
+    draft_event_view,
+    normalized_tool_result,
+    runtime_event_draft,
+    status_update_draft,
+    stream_chunk_draft,
+    tool_result_status,
+    turn_aborted_draft,
+)
 from zeta.models import (
     DefaultModelGateway,
     ModelInput,
     ModelOutput,
 )
 from zeta.models.chat_completions import tool_call_id
-from zeta.runtime_events import (
-    ModelRuntimeEvent,
-    ToolCallRuntimeEvent,
-    ToolResultRuntimeEvent,
-    TurnAbortedRuntimeEvent,
-)
 from zeta.store.substrate import Store
-from zeta.timeline import timeline_event_from_durable_event
 
 AgentEventSink = Callable[[DraftEvent], None]
 DEFAULT_MAX_TURNS = 25
@@ -603,10 +604,14 @@ def raise_if_agent_turn_aborted(
     if reason is None:
         return
     state.note_step("abort_run")
-    event = turn_aborted_event(reason, caused_by=state.next_model_caused_by)
     record_runtime_event(
         state.events,
-        runtime_events.TurnAbortedRuntimeEvent.from_event(event),
+        turn_aborted_draft(
+            reason=reason,
+            session_id=None,
+            turn_id=None,
+            caused_by=state.next_model_caused_by,
+        ),
         ctx=ctx,
     )
     raise AgentTurnAborted(
@@ -625,14 +630,6 @@ def agent_abort_reason(
     if deadline is not None and time_monotonic() >= deadline:
         return "deadline_exceeded"
     return None
-
-
-def turn_aborted_event(reason: str, *, caused_by: str | None) -> dict[str, Any]:
-    return TurnAbortedRuntimeEvent(
-        event_id=str(uuid.uuid4()),
-        reason=reason,
-        caused_by=caused_by,
-    ).to_event()
 
 
 def agent_model_endpoint_open(config: AgentConfig) -> bool:
@@ -732,11 +729,7 @@ class ModelTurnStreamSink:
         self.streamed_content = True
         emit_event(
             self.events,
-            DraftEvent(
-                "runtime.stream.chunk",
-                "zeta",
-                {"text": text, "_timeline_type": "runtime.stream.chunk"},
-            ),
+            stream_chunk_draft(text),
             self.event_sink,
         )
 
@@ -745,15 +738,7 @@ class ModelTurnStreamSink:
             return
         emit_event(
             self.events,
-            DraftEvent(
-                "runtime.status.update",
-                "zeta",
-                {
-                    "status": "reasoning_delta",
-                    "text": text,
-                    "_timeline_type": "runtime.status.update",
-                },
-            ),
+            status_update_draft("reasoning_delta", text),
             self.event_sink,
         )
 
@@ -780,29 +765,22 @@ def normalize_draft_events(
 def normalize_draft_event(event: DraftEvent | dict[str, Any]) -> DraftEvent:
     if isinstance(event, DraftEvent):
         return event
-    runtime_event = runtime_events.runtime_event_from_event(event)
-    if runtime_event is None:
-        return DraftEvent(
-            event_type=str(event.get("type") or "event"),
-            source=str(event.get("source") or "zeta"),
-            payload={key: value for key, value in event.items() if key != "type"},
-        )
-    return runtime_event.to_durable(session_id=None, turn_id=None)
+    if str(event.get("type") or "") in {
+        "model",
+        "tool_call",
+        "tool_result",
+        "turn_aborted",
+    }:
+        return runtime_event_draft(event, session_id=None, turn_id=None)
+    return DraftEvent(
+        event_type=str(event.get("type") or "event"),
+        source=str(event.get("source") or "zeta"),
+        payload={key: value for key, value in event.items() if key != "type"},
+    )
 
 
 def draft_timeline_event(draft: DraftEvent) -> dict[str, Any]:
-    event = Event(
-        id=draft_event_id(draft) or f"evt_{uuid.uuid4().hex}",
-        event_type=draft.event_type,
-        source=draft.source,
-        payload=dict(draft.payload),
-        idempotency_key=draft.idempotency_key,
-        caused_by=draft.caused_by,
-        session_id=draft.session_id,
-        turn_id=draft.turn_id,
-        timestamp_micros=time.time_ns() // 1_000,
-    )
-    return timeline_event_from_durable_event(event)
+    return draft_event_view(draft)
 
 
 def emit_event(
@@ -822,30 +800,18 @@ def emit_tool_event(
     ctx: TurnContext,
 ) -> None:
     record_runtime_event(
-        events,
-        runtime_events.runtime_event_from_event(event),
-        event=event,
-        ctx=ctx,
+        events, runtime_event_draft(event, session_id=None, turn_id=None), ctx=ctx
     )
 
 
 def record_runtime_event(
     events: list[DraftEvent],
-    runtime_event: runtime_events.RuntimeEvent | None,
+    draft: DraftEvent,
     *,
-    event: dict[str, Any] | None = None,
     ctx: TurnContext,
 ) -> dict[str, Any]:
-    recorded = (
-        runtime_event.to_event() if runtime_event is not None else dict(event or {})
-    )
-    if runtime_event is not None:
-        emit_event(
-            events,
-            runtime_event.to_durable(session_id=None, turn_id=None),
-            ctx.event_sink,
-        )
-    return recorded
+    emit_event(events, draft, ctx.event_sink)
+    return draft_event_view(draft)
 
 
 @dataclass(frozen=True)
@@ -856,7 +822,17 @@ class CapabilityCallResult:
 
 
 def model_event(assistant: dict[str, Any]) -> dict[str, Any]:
-    return ModelRuntimeEvent.from_assistant(assistant).to_event()
+    content = assistant.get("content")
+    reasoning = assistant.get("reasoning_content")
+    event: dict[str, Any] = {"type": "model"}
+    if isinstance(reasoning, str) and reasoning:
+        event["reasoning"] = reasoning
+    if isinstance(content, str) and content:
+        event["content"] = content
+    tool_calls = assistant_tool_calls(assistant)
+    if tool_calls:
+        event["tool_calls"] = tool_calls
+    return event
 
 
 def ensure_event_id(event: dict[str, Any]) -> str:
@@ -901,7 +877,7 @@ def record_model_event(
     if event:
         record_runtime_event(
             events,
-            runtime_events.ModelRuntimeEvent.from_event(event),
+            runtime_event_draft(event, session_id=None, turn_id=None),
             ctx=ctx,
         )
     return event_id, tool_calls
@@ -1021,17 +997,24 @@ class ModelToolCall:
         )
 
     def event(self, *, caused_by: str | None) -> dict[str, Any]:
-        return ToolCallRuntimeEvent(tool_call=self, caused_by=caused_by).to_event()
+        event: dict[str, Any] = {
+            "type": "tool_call",
+            "id": self.call_id,
+            "tool_call_id": self.call_id,
+            "status": "pending",
+            "name": self.name,
+            "input": self.params,
+            "arguments": self.raw_arguments,
+        }
+        if caused_by is not None:
+            event["caused_by"] = caused_by
+        return event
 
 
 @dataclass(frozen=True)
 class CapabilityCallInvocation:
     tool_call: ModelToolCall
-    runtime_event: ToolCallRuntimeEvent
-
-    @property
-    def call_event(self) -> dict[str, Any]:
-        return self.runtime_event.to_event()
+    call_event: dict[str, Any]
 
     @property
     def call_id(self) -> str:
@@ -1119,7 +1102,7 @@ def tool_call_invocation(
         return None
     return CapabilityCallInvocation(
         tool_call=record,
-        runtime_event=ToolCallRuntimeEvent(tool_call=record, caused_by=caused_by),
+        call_event=record.event(caused_by=caused_by),
     )
 
 
@@ -1363,76 +1346,21 @@ def tool_result_event(
     trace_payload = (
         prompt_trace_payload(prompt_trace) if prompt_trace is not None else None
     )
-    return ToolResultRuntimeEvent(
-        call_id=call_id,
-        name=name,
-        result=result,
-        capability_id=capability_id,
-        model_telemetry=model_telemetry,
-        prompt_trace=trace_payload,
-    ).to_event()
-
-
-REFUSED_TOOL_ERROR_CODES = {
-    "direct-execution-disallowed",
-    "disallowed-tool",
-    "invalid-json-args",
-    "invalid-tool-call",
-    "schema-mismatch",
-    "staging-unsupported",
-    "unknown-tool",
-}
-
-
-def tool_result_status(result: dict[str, Any]) -> str:
-    if result.get("ok") is True:
-        return "completed"
-    error = result.get("error")
-    if isinstance(error, dict) and error.get("code") in REFUSED_TOOL_ERROR_CODES:
-        return "refused"
-    return "failed"
-
-
-def normalized_tool_result(name: str, result: dict[str, Any]) -> dict[str, Any]:
-    stored = dict(result)
-    if stored.get("ok") is not False or isinstance(stored.get("error"), dict):
-        return stored
-    message = tool_failure_message(stored)
-    if message:
-        stored["error"] = {
-            "code": f"{name or 'tool'}-failed",
-            "message": message,
-        }
-    return stored
-
-
-def tool_failure_message(result: dict[str, Any]) -> str:
-    content = result.get("content")
-    text = first_tool_text(content)
-    if text:
-        return flatten_tool_text(text)
-    metadata = result.get("metadata")
-    if isinstance(metadata, dict):
-        status = metadata.get("status")
-        if isinstance(status, int):
-            return f"status {status}"
-    return ""
-
-
-def first_tool_text(content: object) -> str:
-    if not isinstance(content, list):
-        return ""
-    for item in content:
-        if not isinstance(item, dict):
-            continue
-        text = cast("dict[str, Any]", item).get("text")
-        if isinstance(text, str) and text.strip():
-            return text
-    return ""
-
-
-def flatten_tool_text(text: str) -> str:
-    return " ".join(text.strip().split())
+    event: dict[str, Any] = {
+        "type": "tool_result",
+        "tool_call_id": call_id,
+        "status": tool_result_status(result),
+        "name": name,
+        "result": normalized_tool_result(name, result),
+    }
+    ensure_event_id(event)
+    if capability_id:
+        event["capability_id"] = capability_id
+    if model_telemetry:
+        event["model_telemetry"] = dict(model_telemetry)
+    if trace_payload is not None:
+        event["prompt_trace"] = trace_payload
+    return event
 
 
 def tool_error(code: str, message: str) -> dict[str, Any]:

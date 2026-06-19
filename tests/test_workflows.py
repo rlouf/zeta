@@ -39,10 +39,9 @@ from sigil.sessions import record_turn, session_dir
 from sigil.state import history_view, read_events
 from sigil.workflows import ask as ask_runner
 from sigil.workflows import step as zeta_runner
+from zeta import events as zeta_event_model
 from zeta import loop as zeta_agent
 from zeta import models as zeta_models_api
-from zeta import runtime_events as zeta_runtime_events
-from zeta import timeline as zeta_timeline
 from zeta.context.components import PromptTrace, chat_messages
 from zeta.events import DraftEvent
 from zeta.history import (
@@ -69,9 +68,7 @@ def record_sigil_event(event: dict[str, Any]) -> dict[str, Any]:
 
 
 def current_sigil_timeline() -> list[dict[str, Any]]:
-    return zeta_timeline.current_timeline(
-        runtime_context=sigil.zeta_session_for_sigil()
-    )
+    return agent_io.current_timeline(runtime_context=sigil.zeta_session_for_sigil())
 
 
 def test_sigil_step_writes_handoff_file(
@@ -2046,7 +2043,7 @@ def test_zeta_step_threads_durable_event_causality(monkeypatch) -> None:
         event_sink = cast("Callable[[Any], None]", kwargs["event_sink"])
         captured["prompt_event_id"] = prompt_event_id
         drafts = [
-            zeta_runtime_events.model_called_draft(
+            zeta_event_model.model_call_draft(
                 payload={
                     "_timeline_type": "model",
                     "content": "",
@@ -2057,7 +2054,7 @@ def test_zeta_step_threads_durable_event_causality(monkeypatch) -> None:
                 caused_by=prompt_event_id,
                 event_id="model-event",
             ),
-            zeta_runtime_events.tool_called_draft(
+            zeta_event_model.tool_call_draft(
                 payload={
                     "_timeline_type": "tool_call",
                     "tool_call_id": "call-1",
@@ -2070,7 +2067,7 @@ def test_zeta_step_threads_durable_event_causality(monkeypatch) -> None:
                 caused_by="model-event",
                 event_id="call-1",
             ),
-            zeta_runtime_events.tool_called_draft(
+            zeta_event_model.tool_call_draft(
                 payload={
                     "_timeline_type": "tool_result",
                     "tool_call_id": "call-1",

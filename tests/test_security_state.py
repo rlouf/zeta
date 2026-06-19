@@ -47,9 +47,7 @@ from sigil.workflows.ask import (
     ask,
 )
 from zeta import events as zeta_events
-from zeta import runtime_events as zeta_runtime_events
-from zeta import timeline as zeta_timeline
-from zeta.events import DraftEvent, Event, publish_event
+from zeta.events import DraftEvent, Event, event_view, publish_event
 from zeta.store.events import (
     AppendOutcome,
     EventStoreProtocol,
@@ -84,8 +82,8 @@ def test_zeta_package_does_not_import_parent_sigil_modules() -> None:
     assert violations == []
 
 
-def test_zeta_events_exports_only_generic_event_infrastructure() -> None:
-    runtime_names = {
+def test_zeta_events_exports_the_canonical_event_boundary() -> None:
+    deleted_compatibility_names = {
         "current_timeline",
         "record_event",
         "last_event_time",
@@ -96,13 +94,10 @@ def test_zeta_events_exports_only_generic_event_infrastructure() -> None:
         "timeline_event_from_durable_event",
     }
 
-    assert runtime_names.isdisjoint(set(zeta_events.__all__))
-    assert not hasattr(zeta_timeline, "record_event")
-    assert not hasattr(zeta_timeline, "event_payload_draft")
-    assert not hasattr(zeta_timeline, "publish_event_payload_to_log")
-    assert not hasattr(zeta_timeline, "durable_event")
-    assert not hasattr(zeta_timeline, "model_called_event")
-    assert not hasattr(zeta_timeline, "tool_called_event")
+    assert deleted_compatibility_names.isdisjoint(set(zeta_events.__all__))
+    assert {"DraftEvent", "Event", "event_view", "draft_event_view"}.issubset(
+        set(zeta_events.__all__)
+    )
 
 
 def resolved_import_module(
@@ -542,7 +537,7 @@ def test_durable_timeline_projection_prefers_payload_type() -> None:
         timestamp_micros=1_000_000,
     )
 
-    projected = zeta_timeline.timeline_event_from_durable_event(event)
+    projected = event_view(event)
 
     assert projected["type"] == "model_usage"
     assert "_timeline_type" not in projected
@@ -561,7 +556,7 @@ def test_durable_timeline_projection_uses_durable_type_without_payload_type() ->
         timestamp_micros=1_000_000,
     )
 
-    projected = zeta_timeline.timeline_event_from_durable_event(event)
+    projected = event_view(event)
 
     assert projected["type"] == "turn.completed"
 
@@ -832,14 +827,14 @@ def test_durable_event_constructors_set_turn_id_and_idempotency_keys() -> None:
         turn_id="turn-1",
         session_id="s1",
     )
-    model = zeta_runtime_events.model_called_draft(
+    model = zeta_events.model_call_draft(
         payload={"content": "answer"},
         turn_id="turn-1",
         session_id="s1",
         caused_by="prompt-event",
         event_id="model-event",
     )
-    tool = zeta_runtime_events.tool_called_draft(
+    tool = zeta_events.tool_call_draft(
         payload={"name": "read"},
         turn_id="turn-1",
         session_id="s1",

@@ -14,6 +14,7 @@ from sigil.agent_io import (
     TurnEventRecorder,
     TurnRenderer,
     build_turn_renderer,
+    current_timeline,
     event_model_telemetry,
     model_server_ready,
     model_telemetry_fields,
@@ -42,7 +43,7 @@ from zeta.capabilities.registry import registry as _default_tool_registry
 from zeta.context.components import latest_prompt_trace_fields
 from zeta.context.instructions import load_project_instructions
 from zeta.context.system import system_prompt
-from zeta.events import DraftEvent
+from zeta.events import DraftEvent, event_view
 from zeta.loop import (
     AgentTurnAborted,
     async_run_agent_turn,
@@ -54,10 +55,6 @@ from zeta.models import (
 )
 from zeta.session import Session
 from zeta.skills import expand_skill_directive
-from zeta.timeline import (
-    current_timeline,
-    timeline_event_from_durable_event,
-)
 
 HandoffOutput = Literal["detail", "summary", "none"]
 Workflow = Literal["ask", "propose", "do"]
@@ -383,7 +380,7 @@ def record_user_message(
             else None,
         )
     )
-    return timeline_event_from_durable_event(outcome.event)
+    return event_view(outcome.event)
 
 
 def finalize_progress(renderer: TurnRenderer, turn: dict[str, Any]) -> None:

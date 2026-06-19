@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import os
-import time
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
@@ -13,7 +12,13 @@ from typing import TYPE_CHECKING, Any
 from zeta.agents.capabilities import AgentConfig
 from zeta.capabilities.base import ExecutionMode
 from zeta.dispatch import AgentDefinition, AgentRun, AsyncEventDispatcher, TriggerRule
-from zeta.events import DraftEvent, Event
+from zeta.events import (
+    DraftEvent,
+    Event,
+    draft_event_view,
+    event_view,
+    user_message_draft,
+)
 from zeta.loop import (
     AgentTurnAborted,
     AgentTurnResult,
@@ -23,7 +28,7 @@ from zeta.loop import (
     registered_capabilities,
 )
 from zeta.store.events import EventReader, Filter
-from zeta.timeline import current_timeline, timeline_event_from_durable_event
+from zeta.store.substrate import warn_trace_failure_once
 
 if TYPE_CHECKING:
     from zeta.capabilities.registry import CapabilityRegistry
@@ -93,6 +98,24 @@ def session_for_id(
 def zeta_state_dir() -> Path:
     root = os.environ.get("ZETA_STATE_DIR")
     return Path(root).expanduser() if root else Path.home() / ".zeta"
+
+
+def current_timeline(*, runtime_context: Session) -> list[dict[str, Any]]:
+    try:
+        if not isinstance(runtime_context.event_sink, EventReader):
+            return []
+        return [
+            event_view(event)
+            for event in runtime_context.event_sink.list_events(
+                Filter(
+                    session_id=runtime_context.session_id,
+                    event_type_prefix="zeta.",
+                )
+            )
+        ]
+    except Exception as exc:
+        warn_trace_failure_once("current_timeline", exc)
+        return []
 
 
 async def run_session_turn_from_event(
@@ -220,9 +243,7 @@ def session_event_dispatcher(
                 ),
             )
         ],
-        publish_event=lambda event: publish_event(
-            session_event_from_durable_event(event)
-        ),
+        publish_event=lambda event: publish_event(event_view(event)),
     )
 
 
@@ -270,21 +291,16 @@ def record_user_message(
     runtime_context: Session,
 ) -> dict[str, Any]:
     payload = {key: value for key, value in event.items() if key != "type"}
-    payload["_timeline_type"] = "user_message"
     outcome = runtime_context.event_sink.accept(
-        DraftEvent(
-            event_type="zeta.user_message",
-            source="zeta",
-            payload=payload,
-            idempotency_key=None,
-            caused_by=None,
+        user_message_draft(
+            payload,
             session_id=runtime_context.session_id,
             turn_id=event.get("turn_id")
             if isinstance(event.get("turn_id"), str)
             else None,
         )
     )
-    return timeline_event_from_durable_event(outcome.event)
+    return event_view(outcome.event)
 
 
 def record_runtime_draft(
@@ -300,7 +316,7 @@ def record_runtime_draft(
         turn_id=run_id,
     )
     outcome = runtime_context.event_sink.accept(tagged)
-    return timeline_event_from_durable_event(outcome.event)
+    return event_view(outcome.event)
 
 
 def live_runtime_event(
@@ -309,7 +325,7 @@ def live_runtime_event(
     runtime_context: Session,
     run_id: str,
 ) -> dict[str, Any]:
-    event = draft_timeline_event(
+    event = draft_event_view(
         replace(
             draft,
             payload={**draft.payload, "run_id": run_id},
@@ -354,7 +370,7 @@ def session_trace_result(agent_result: AgentTurnResult | None) -> dict[str, list
             prompt_trace.assistant_message_object_id,
         )
     for draft in agent_result.events:
-        event = draft_timeline_event(draft)
+        event = draft_event_view(draft)
         event_type = str(event.get("type") or "")
         if event_type == "model":
             add_unique(trace["model_event_ids"], event.get("id"))
@@ -394,30 +410,6 @@ def add_unique_list(values: list[str], raw_values: Any) -> None:
         add_unique(values, value)
 
 
-def draft_timeline_event(draft: DraftEvent) -> dict[str, Any]:
-    event = Event(
-        id=draft_event_id(draft) or f"evt_{uuid.uuid4().hex}",
-        event_type=draft.event_type,
-        source=draft.source,
-        payload=dict(draft.payload),
-        idempotency_key=draft.idempotency_key,
-        caused_by=draft.caused_by,
-        session_id=draft.session_id,
-        turn_id=draft.turn_id,
-        timestamp_micros=time.time_ns() // 1_000,
-    )
-    return timeline_event_from_durable_event(event)
-
-
-def draft_event_id(draft: DraftEvent) -> str | None:
-    key = draft.idempotency_key
-    prefix = f"{draft.event_type}:"
-    if key is None or not key.startswith(prefix):
-        return None
-    event_id = key[len(prefix) :].strip()
-    return event_id or None
-
-
 def final_event_cursor(runtime_context: Session, run_id: str) -> str | None:
     if not isinstance(runtime_context.event_sink, EventReader):
         return None
@@ -437,7 +429,7 @@ def session_event_with_cursor(
     durable_event = durable_event_for_session_event(runtime_context, event, run_id)
     if durable_event is None:
         return event
-    return session_event_from_durable_event(durable_event)
+    return event_view(durable_event)
 
 
 def durable_event_for_session_event(
@@ -457,31 +449,6 @@ def durable_event_for_session_event(
         if durable_event.id == event_id:
             return durable_event
     return None
-
-
-def session_event_from_durable_event(event: Event) -> dict[str, Any]:
-    projected = timeline_event_from_durable_event(event)
-    if not projected:
-        projected = generic_session_event_from_durable_event(event)
-    projected["cursor"] = str(event.seq)
-    return projected
-
-
-def generic_session_event_from_durable_event(event: Event) -> dict[str, Any]:
-    projected = {
-        "type": event.event_type,
-        "id": event.id,
-        "source": event.source,
-        "time": event.timestamp_micros / 1_000_000,
-        **event.payload,
-    }
-    if event.session_id is not None:
-        projected["session"] = event.session_id
-    if event.turn_id is not None:
-        projected["turn_id"] = event.turn_id
-    if event.caused_by is not None:
-        projected["caused_by"] = event.caused_by
-    return projected
 
 
 def session_objective(params: dict[str, Any]) -> str:

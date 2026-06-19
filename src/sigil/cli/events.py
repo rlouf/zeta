@@ -9,7 +9,7 @@ from sigil.cli._base import cli, examples
 from sigil.cli._shared import pretty_print_json
 from sigil.state import causal_chain, event_store_path, events_for_turn, read_events
 from zeta.events import Event
-from zeta.store.events import Filter, read_event_log
+from zeta.store.events import Filter, SqliteEventStore
 
 EVENT_LIST_COLUMNS = ("time", "workflow", "event", "session", "detail")
 WORKFLOW_GLYPHS = frozenset({",", ",,", ",,,", "?", "ask"})
@@ -169,7 +169,9 @@ def print_events_list(
 ) -> int:
     """Print a bounded recent view of the global event journal."""
     if raw:
-        events = read_event_log(event_store_path(), Filter(session_id=session_id))
+        events = SqliteEventStore(event_store_path()).list_events(
+            Filter(session_id=session_id)
+        )
         pretty_print_json([normalized_event(event) for event in events[-limit:]])
         return 0
     events = read_events()

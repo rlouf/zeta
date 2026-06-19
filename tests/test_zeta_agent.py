@@ -32,10 +32,10 @@ from sigil.cli import cli
 from sigil.tools import ensure_builtin_tools_registered
 from zeta import cli as zeta_cli
 from zeta import dispatch as zeta_dispatch
+from zeta import events as zeta_event_model
 from zeta import loop as zeta_agent
 from zeta import models as zeta_models_api
 from zeta import rpc as zeta_rpc
-from zeta import runtime_events as zeta_runtime_events
 from zeta import session as zeta_session
 from zeta.agents.capabilities import CompactionPolicy
 from zeta.capabilities.base import (
@@ -300,8 +300,8 @@ def test_zeta_model_tool_call_preserves_invalid_json_error() -> None:
     assert invocation.call_event == record.event(caused_by="assistant-1")
 
 
-def test_zeta_model_runtime_event_round_trips_to_current_dict_shape() -> None:
-    record = zeta_agent.ModelRuntimeEvent.from_assistant(
+def test_zeta_model_event_has_boundary_dict_shape() -> None:
+    assert zeta_agent.model_event(
         {
             "content": "done",
             "reasoning_content": "thinking",
@@ -313,9 +313,7 @@ def test_zeta_model_runtime_event_round_trips_to_current_dict_shape() -> None:
                 }
             ],
         }
-    )
-
-    assert record.to_event() == {
+    ) == {
         "type": "model",
         "reasoning": "thinking",
         "content": "done",
@@ -330,7 +328,7 @@ def test_zeta_model_runtime_event_round_trips_to_current_dict_shape() -> None:
 
 
 def test_zeta_model_called_draft_sets_durable_metadata() -> None:
-    draft = zeta_runtime_events.model_called_draft(
+    draft = zeta_event_model.model_call_draft(
         payload={"content": "done"},
         turn_id="turn-1",
         session_id="session-1",
@@ -348,7 +346,7 @@ def test_zeta_model_called_draft_sets_durable_metadata() -> None:
 
 
 def test_zeta_model_durable_object_links_extract_trace_refs() -> None:
-    used_objects, returned_objects = zeta_runtime_events.model_durable_object_links(
+    used_objects, returned_objects = zeta_event_model.model_durable_object_links(
         {
             "prompt_trace": {
                 "prompt_object_id": "sha256:prompt",
@@ -367,7 +365,7 @@ def test_zeta_model_durable_object_links_extract_trace_refs() -> None:
     ]
 
 
-def test_zeta_tool_call_runtime_event_round_trips_to_current_dict_shape() -> None:
+def test_zeta_tool_call_event_has_boundary_dict_shape() -> None:
     model_tool_call = zeta_agent.ModelToolCall(
         call_id="call-1",
         name="read",
@@ -375,12 +373,7 @@ def test_zeta_tool_call_runtime_event_round_trips_to_current_dict_shape() -> Non
         params={},
     )
 
-    event = zeta_agent.ToolCallRuntimeEvent(
-        tool_call=model_tool_call,
-        caused_by="assistant-1",
-    )
-
-    assert event.to_event() == {
+    assert model_tool_call.event(caused_by="assistant-1") == {
         "type": "tool_call",
         "id": "call-1",
         "tool_call_id": "call-1",
@@ -393,7 +386,7 @@ def test_zeta_tool_call_runtime_event_round_trips_to_current_dict_shape() -> Non
 
 
 def test_zeta_tool_called_draft_sets_durable_metadata() -> None:
-    draft = zeta_runtime_events.tool_called_draft(
+    draft = zeta_event_model.tool_call_draft(
         payload={"_timeline_type": "tool_call", "name": "read"},
         turn_id="turn-1",
         session_id="session-1",
@@ -411,31 +404,29 @@ def test_zeta_tool_called_draft_sets_durable_metadata() -> None:
 
 
 def test_zeta_tool_result_durable_object_links_extract_trace_refs() -> None:
-    used_objects, returned_objects = (
-        zeta_runtime_events.tool_result_durable_object_links(
-            {
-                "tool_call_object_id": "sha256:call",
-                "tool_result_object_id": "sha256:result",
-            }
-        )
+    used_objects, returned_objects = zeta_event_model.tool_result_durable_object_links(
+        {
+            "tool_call_object_id": "sha256:call",
+            "tool_result_object_id": "sha256:result",
+        }
     )
 
     assert used_objects == [{"kind": "tool_call", "id": "sha256:call"}]
     assert returned_objects == [{"kind": "tool_result", "id": "sha256:result"}]
 
 
-def test_zeta_tool_result_runtime_event_round_trips_to_current_dict_shape() -> None:
-    event = zeta_agent.ToolResultRuntimeEvent(
-        event_id="result-1",
-        call_id="call-1",
-        name="read",
-        result={"ok": True, "content": [{"type": "text", "text": "done"}]},
+def test_zeta_tool_result_event_has_boundary_dict_shape() -> None:
+    event = zeta_agent.tool_result_event(
+        "call-1",
+        "read",
+        {"ok": True, "content": [{"type": "text", "text": "done"}]},
         capability_id="builtin.read",
         model_telemetry={"input_tokens": 1},
-        prompt_trace={"session_id": "session-1"},
     )
+    event["id"] = "result-1"
+    event["prompt_trace"] = {"session_id": "session-1"}
 
-    assert event.to_event() == {
+    assert event == {
         "type": "tool_result",
         "tool_call_id": "call-1",
         "status": "completed",
@@ -445,22 +436,6 @@ def test_zeta_tool_result_runtime_event_round_trips_to_current_dict_shape() -> N
         "capability_id": "builtin.read",
         "model_telemetry": {"input_tokens": 1},
         "prompt_trace": {"session_id": "session-1"},
-    }
-
-
-def test_zeta_turn_aborted_runtime_event_round_trips_to_current_dict_shape() -> None:
-    event = zeta_agent.TurnAbortedRuntimeEvent(
-        event_id="abort-1",
-        reason="deadline_exceeded",
-        caused_by="tool-result-1",
-    )
-
-    assert event.to_event() == {
-        "type": "turn_aborted",
-        "id": "abort-1",
-        "reason": "deadline_exceeded",
-        "content": "(turn aborted: deadline exceeded)",
-        "caused_by": "tool-result-1",
     }
 
 
@@ -1030,12 +1005,12 @@ def test_zeta_run_capability_step_records_call_execution_and_result(
         assert kwargs["index"] == 0
         return zeta_agent.CapabilityCallResult(
             events=[
-                zeta_runtime_events.runtime_event_draft(
+                zeta_event_model.runtime_event_draft(
                     {"type": "tool_call", "id": "call-1", "tool_call_id": "call-1"},
                     session_id=None,
                     turn_id=None,
                 ),
-                zeta_runtime_events.runtime_event_draft(
+                zeta_event_model.runtime_event_draft(
                     {
                         "type": "tool_result",
                         "id": "result-1",
@@ -1094,7 +1069,7 @@ def test_zeta_run_capability_step_reconciles_existing_terminal_result(
 ) -> None:
     state = zeta_agent.RunState(
         events=[
-            zeta_runtime_events.runtime_event_draft(
+            zeta_event_model.runtime_event_draft(
                 {
                     "type": "tool_result",
                     "id": "result-1",

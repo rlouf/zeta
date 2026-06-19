@@ -24,7 +24,7 @@ from sigil.state import (
 )
 from zeta import history as zeta_history
 from zeta.events import DraftEvent
-from zeta.store.events import publish_event_to_log
+from zeta.store.events import SqliteEventStore
 
 
 def sample_turn_record(turn_id: str = "turn-1", **overrides: Any) -> dict[str, Any]:
@@ -68,7 +68,7 @@ def append_history_record(record: dict[str, Any]) -> dict[str, Any]:
 
 
 def publish_sigil_draft(draft: DraftEvent) -> None:
-    publish_event_to_log(event_store_path(), draft)
+    SqliteEventStore(event_store_path()).accept(draft)
 
 
 def test_history_publish_turn_record_writes_log_and_history() -> None:

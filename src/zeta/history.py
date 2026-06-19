@@ -16,9 +16,7 @@ from zeta.events import (
 )
 from zeta.store.events import (
     Filter,
-    append_event_to_log,
-    publish_event_to_log,
-    read_event_log,
+    SqliteEventStore,
 )
 
 SINCE_PATTERN = re.compile(r"(\d+)([dhm])")
@@ -85,7 +83,7 @@ class HistoryView:
 
     @classmethod
     def from_store(cls, path: str | Path) -> HistoryView:
-        return cls(read_event_log(path, Filter()))
+        return cls(SqliteEventStore(path).list_events(Filter()))
 
     def query_turns(
         self,
@@ -372,11 +370,11 @@ def publish_effect_record(
 
 
 def append_draft(path: str | Path, draft: DraftEvent) -> Event:
-    return publish_event_to_log(path, draft)
+    return SqliteEventStore(path).accept(draft).event
 
 
 def append_event(path: str | Path, event: Event) -> Event:
-    return append_event_to_log(path, event)
+    return SqliteEventStore(path).append(event).event
 
 
 def import_history_records(

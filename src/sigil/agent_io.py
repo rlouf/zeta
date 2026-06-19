@@ -35,7 +35,16 @@ from sigil.turn import TurnRecorder
 from zeta.agents.capabilities import AgentConfig
 from zeta.capabilities.base import ExecutionMode
 from zeta.context.instructions import load_project_instructions
-from zeta.events import DraftEvent, Event
+from zeta.events import (
+    DraftEvent,
+    Event,
+    draft_event_id,
+    draft_event_view,
+    event_view,
+    exact_event_time,
+    runtime_event_draft,
+    user_message_draft,
+)
 from zeta.loop import (
     AgentTurnAborted,
     AgentTurnResult,
@@ -50,12 +59,44 @@ from zeta.models import (
     model_selection_event,
 )
 from zeta.models.chat_completions import ensure_server
-from zeta.runtime_events import runtime_event_draft
 from zeta.session import Session
-from zeta.timeline import (
-    current_timeline,
-    timeline_event_from_durable_event,
-)
+from zeta.store.events import EventReader, Filter, SqliteEventStore
+from zeta.store.substrate import Store, warn_trace_failure_once
+
+
+def current_timeline(*, runtime_context: Session) -> list[dict[str, Any]]:
+    try:
+        if not isinstance(runtime_context.event_sink, EventReader):
+            return []
+        return [
+            event_view(event)
+            for event in runtime_context.event_sink.list_events(
+                Filter(
+                    session_id=runtime_context.session_id,
+                    event_type_prefix="zeta.",
+                )
+            )
+        ]
+    except Exception as exc:
+        warn_trace_failure_once("current_timeline", exc)
+        return []
+
+
+def last_event_time(*, store: Store, run_id: str | None = None) -> float | None:
+    try:
+        path = getattr(store, "path", None)
+        if path is None:
+            return None
+        events = SqliteEventStore(path).list_events(Filter(session_id=run_id))
+        zeta_events = [
+            event for event in events if event.event_type.startswith("zeta.")
+        ]
+        if not zeta_events:
+            return None
+        return exact_event_time(zeta_events[-1])
+    except Exception as exc:
+        warn_trace_failure_once("last_event_time", exc)
+        return None
 
 
 def record_user_message(
@@ -64,21 +105,16 @@ def record_user_message(
     runtime_context: Session,
 ) -> dict[str, Any]:
     payload = {key: value for key, value in event.items() if key != "type"}
-    payload["_timeline_type"] = "user_message"
     outcome = runtime_context.event_sink.accept(
-        DraftEvent(
-            event_type="zeta.user_message",
-            source="zeta",
-            payload=payload,
-            idempotency_key=None,
-            caused_by=None,
+        user_message_draft(
+            payload,
             session_id=runtime_context.session_id,
             turn_id=event.get("turn_id")
             if isinstance(event.get("turn_id"), str)
             else None,
         )
     )
-    return timeline_event_from_durable_event(outcome.event)
+    return event_view(outcome.event)
 
 
 def record_runtime_draft(
@@ -119,8 +155,7 @@ def record_runtime_draft(
         )
     else:
         outcome = runtime_context.event_sink.accept(tagged_draft)
-    projected = timeline_event_from_durable_event(outcome.event)
-    return projected
+    return event_view(outcome.event)
 
 
 def ensure_runtime_draft(draft: DraftEvent | dict[str, Any]) -> DraftEvent:
@@ -131,27 +166,7 @@ def ensure_runtime_draft(draft: DraftEvent | dict[str, Any]) -> DraftEvent:
 
 
 def project_runtime_draft(draft: DraftEvent) -> dict[str, Any]:
-    event = Event(
-        id=draft_event_id(draft) or "draft",
-        event_type=draft.event_type,
-        source=draft.source,
-        payload=dict(draft.payload),
-        idempotency_key=draft.idempotency_key,
-        caused_by=draft.caused_by,
-        session_id=draft.session_id,
-        turn_id=draft.turn_id,
-        timestamp_micros=time_micros(),
-    )
-    return timeline_event_from_durable_event(event)
-
-
-def draft_event_id(draft: DraftEvent) -> str | None:
-    key = draft.idempotency_key
-    prefix = f"{draft.event_type}:"
-    if key is None or not key.startswith(prefix):
-        return None
-    event_id = key[len(prefix) :].strip()
-    return event_id or None
+    return draft_event_view(draft)
 
 
 def time_micros() -> int:
@@ -391,7 +406,7 @@ def record_turn_abort(
             else None,
         )
     )
-    return timeline_event_from_durable_event(outcome.event)
+    return event_view(outcome.event)
 
 
 async def run_zeta_rpc_session(

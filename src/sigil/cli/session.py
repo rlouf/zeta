@@ -195,7 +195,7 @@ def print_session_transcript(limit: int | None, json_output: bool) -> int:
     """Render the current session timeline as a conversation."""
     # Imported lazily: `sigil.cli` must not load zeta or rich at import time.
     from sigil import zeta_session_for_sigil
-    from zeta.timeline import current_timeline
+    from sigil.agent_io import current_timeline
 
     events = current_timeline(runtime_context=zeta_session_for_sigil())
     if limit is not None and limit > 0:

@@ -2,20 +2,18 @@ import json
 from dataclasses import asdict, replace
 from typing import Any
 
-from zeta.events import DraftEvent, Event
-from zeta.history import effect_record, event_from_record, turn_record
-from zeta.rpc import (
-    generic_rpc_event_from_durable_event,
-    rpc_event_from_durable_event,
-)
-from zeta.runtime_events import (
-    model_called_draft,
+from zeta.events import (
+    DraftEvent,
+    Event,
+    event_view,
+    event_views,
+    model_call_draft,
     model_durable_payload,
-    runtime_event_from_event,
-    tool_called_draft,
+    runtime_event_draft,
+    tool_call_draft,
     tool_durable_payload,
 )
-from zeta.timeline import timeline_from_events
+from zeta.history import effect_record, event_from_record, turn_record
 
 SESSION_ID = "session-1"
 TURN_ID = "turn-1"
@@ -131,32 +129,32 @@ def runtime_drafts() -> list[DraftEvent]:
     )
     aborted = turn_aborted_event()
     return [
-        model_called_draft(
+        model_call_draft(
             payload=model_durable_payload(model),
             turn_id=TURN_ID,
             session_id=SESSION_ID,
             event_id="model-1",
         ),
-        tool_called_draft(
+        tool_call_draft(
             payload=tool_durable_payload(call),
             turn_id=TURN_ID,
             session_id=SESSION_ID,
             caused_by="model-1",
             event_id="call-1",
         ),
-        tool_called_draft(
+        tool_call_draft(
             payload=tool_durable_payload(result_ok),
             turn_id=TURN_ID,
             session_id=SESSION_ID,
             event_id="result-ok",
         ),
-        tool_called_draft(
+        tool_call_draft(
             payload=tool_durable_payload(result_failed),
             turn_id=TURN_ID,
             session_id=SESSION_ID,
             event_id="result-failed",
         ),
-        tool_called_draft(
+        tool_call_draft(
             payload=tool_durable_payload(result_refused),
             turn_id=TURN_ID,
             session_id=SESSION_ID,
@@ -227,9 +225,9 @@ def test_zeta_runtime_events_project_to_durable_drafts() -> None:
 
     drafts = []
     for event in events:
-        runtime_event = runtime_event_from_event(event)
-        assert runtime_event is not None
-        drafts.append(runtime_event.to_durable(session_id=SESSION_ID, turn_id=TURN_ID))
+        drafts.append(
+            runtime_event_draft(event, session_id=SESSION_ID, turn_id=TURN_ID)
+        )
 
     assert [asdict(draft) for draft in drafts] == [
         asdict(draft) for draft in runtime_drafts()
@@ -374,10 +372,15 @@ def test_zeta_runtime_event_projection_contract() -> None:
     ]
 
 
-def test_zeta_timeline_and_rpc_projection_contract() -> None:
+def test_zeta_event_view_and_rpc_projection_contract() -> None:
     events = runtime_events()
+    projected = event_views(events)
 
-    assert timeline_from_events(events) == [
+    assert [event["cursor"] for event in projected] == ["1", "2", "3", "4", "5", "6"]
+    assert [
+        {key: value for key, value in event.items() if key != "cursor"}
+        for event in projected
+    ] == [
         {
             "type": "model",
             "id": "model-1",
@@ -495,10 +498,7 @@ def test_zeta_timeline_and_rpc_projection_contract() -> None:
             "content": "(turn aborted: max turns)",
         },
     ]
-    assert rpc_event_from_durable_event(events[1]) == {
-        **timeline_from_events([events[1]])[0],
-        "cursor": "2",
-    }
+    assert event_view(events[1])["cursor"] == "2"
     generic = Event(
         id="external-1",
         event_type="runtime.work.completed",
@@ -511,18 +511,7 @@ def test_zeta_timeline_and_rpc_projection_contract() -> None:
         timestamp_micros=TIMESTAMP_MICROS,
         seq=7,
     )
-    assert generic_rpc_event_from_durable_event(generic) == {
-        "type": "runtime.work.completed",
-        "id": "external-1",
-        "source": "dispatcher",
-        "time": EVENT_TIME,
-        "work_id": "work-1",
-        "result": {"ok": True},
-        "session": SESSION_ID,
-        "turn_id": TURN_ID,
-        "caused_by": "call-1",
-    }
-    assert rpc_event_from_durable_event(generic) == {
+    assert event_view(generic) == {
         "type": "runtime.work.completed",
         "id": "external-1",
         "source": "dispatcher",

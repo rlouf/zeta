@@ -16,11 +16,7 @@ from zeta.events import Event
 from zeta.store.events import (
     EVENT_STORE_NAME,
     Filter,
-    append_event_to_log,
-    event_log_causal_chain,
-    event_log_children,
-    event_log_turn_events,
-    read_event_log,
+    SqliteEventStore,
 )
 
 EVENT_IDEMPOTENT_TYPES = frozenset(
@@ -60,7 +56,7 @@ def event_store_path() -> Path:
 
 def read_events() -> list[Event]:
     """Read Sigil's frontend event journal."""
-    return read_event_log(event_store_path(), Filter())
+    return SqliteEventStore(event_store_path()).list_events(Filter())
 
 
 def history_view(events: list[Event] | None = None) -> Any:
@@ -73,15 +69,15 @@ def history_view(events: list[Event] | None = None) -> Any:
 
 
 def event_children(event_id: str, *, limit: int | None = None) -> list[Event]:
-    return event_log_children(event_store_path(), event_id, limit=limit)
+    return SqliteEventStore(event_store_path()).children(event_id, limit=limit)
 
 
 def causal_chain(event_id: str) -> list[Event]:
-    return event_log_causal_chain(event_store_path(), event_id)
+    return SqliteEventStore(event_store_path()).causal_chain(event_id)
 
 
 def events_for_turn(turn_id: str) -> list[Event]:
-    return event_log_turn_events(event_store_path(), turn_id)
+    return SqliteEventStore(event_store_path()).events_for_turn(turn_id)
 
 
 def append_event(event: dict[str, Any]) -> Event:
@@ -89,8 +85,10 @@ def append_event(event: dict[str, Any]) -> Event:
     from sigil.sessions import session_id
 
     payload = {"source": "sigil", **event}
-    return append_event_to_log(
-        event_store_path(), durable_log_event(payload, session_id=session_id())
+    return (
+        SqliteEventStore(event_store_path())
+        .append(durable_log_event(payload, session_id=session_id()))
+        .event
     )
 
 

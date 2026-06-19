@@ -28,18 +28,13 @@ from zeta.capabilities.base import (
 from zeta.capabilities.registry import CapabilityRegistry
 from zeta.capabilities.registry import registry as _runtime_tool_registry
 from zeta.dispatch import AsyncEventDispatcher
-from zeta.events import DraftEvent, Event, EventSink
-from zeta.runtime_events import runtime_event_draft
+from zeta.events import DraftEvent, EventSink, event_view, runtime_event_draft
 from zeta.session import (
     Session,
     SessionRequestError,
     default_session,
-    durable_event_for_session_event,
     empty_session_trace_result,
-    generic_session_event_from_durable_event,
     session_event_dispatcher,
-    session_event_from_durable_event,
-    session_event_with_cursor,
     session_run_id,
     session_turn_requested_draft,
 )
@@ -162,7 +157,7 @@ async def run_rpc_session(
         "run_id": run_id,
         "outcome": "duplicate" if not outcome.inserted else "unhandled",
         "final_text": "",
-        "trace": empty_rpc_trace_result(),
+        "trace": empty_session_trace_result(),
     }
 
 
@@ -191,34 +186,6 @@ def rpc_event_with_run_id(event: dict[str, Any], run_id: str) -> dict[str, Any]:
     scoped["run_id"] = run_id
     scoped["turn_id"] = run_id
     return scoped
-
-
-def empty_rpc_trace_result() -> dict[str, list[str]]:
-    return empty_session_trace_result()
-
-
-def rpc_event_with_cursor(
-    runtime_context: Session,
-    event: dict[str, Any],
-    run_id: str,
-) -> dict[str, Any]:
-    return session_event_with_cursor(runtime_context, event, run_id)
-
-
-def durable_event_for_rpc_event(
-    runtime_context: Session,
-    event: dict[str, Any],
-    run_id: str,
-) -> Event | None:
-    return durable_event_for_session_event(runtime_context, event, run_id)
-
-
-def rpc_event_from_durable_event(event: Event) -> dict[str, Any]:
-    return session_event_from_durable_event(event)
-
-
-def generic_rpc_event_from_durable_event(event: Event) -> dict[str, Any]:
-    return generic_session_event_from_durable_event(event)
 
 
 def client_tool_timeout_sec(item: dict[str, Any]) -> float | None:
@@ -679,7 +646,7 @@ class JsonRpcProtocol:
             else (str(after_seq) if after_seq is not None else None)
         )
         return {
-            "events": [rpc_event_from_durable_event(event) for event in events],
+            "events": [event_view(event) for event in events],
             "next_cursor": next_cursor,
         }
 
@@ -976,17 +943,13 @@ class JsonRpcServer(JsonRpcProtocol):
                 )
             dispatcher = AsyncEventDispatcher(
                 self.event_sink,
-                publish_event=lambda event: self.publish_event(
-                    rpc_event_from_durable_event(event)
-                ),
+                publish_event=lambda event: self.publish_event(event_view(event)),
             )
         outcome = await dispatcher.dispatch(rpc_publish_event_draft(params))
         return {
             "inserted": outcome.inserted,
-            "event": rpc_event_from_durable_event(outcome.event),
-            "work_events": [
-                rpc_event_from_durable_event(event) for event in outcome.work_events
-            ],
+            "event": event_view(outcome.event),
+            "work_events": [event_view(event) for event in outcome.work_events],
             "agent_results": outcome.agent_results,
         }
 

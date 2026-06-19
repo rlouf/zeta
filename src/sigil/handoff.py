@@ -5,6 +5,7 @@ import time
 import uuid
 from typing import Any, cast
 
+from sigil.agent_io import current_timeline
 from sigil.protocols import (
     EFFECT_KIND_HANDOFF,
     SHELL_HANDOFF_CANCEL_EXPECTED_NOT_EXECUTED,
@@ -20,12 +21,8 @@ from sigil.protocols import (
 from sigil.sessions import event_time, recent_turns, session_id
 from sigil.state import event_store_path
 from zeta.capabilities.base import proposed_effect
+from zeta.events import event_view, tool_call_draft, tool_durable_payload
 from zeta.history import effect_record, publish_effect_record
-from zeta.runtime_events import tool_called_draft, tool_durable_payload
-from zeta.timeline import (
-    current_timeline,
-    timeline_event_from_durable_event,
-)
 
 
 def append_shell_result() -> dict[str, Any]:
@@ -60,7 +57,7 @@ def record_shell_tool_result(event: dict[str, Any]) -> dict[str, Any]:
 
     runtime_context = zeta_session_for_sigil()
     outcome = runtime_context.event_sink.accept(
-        tool_called_draft(
+        tool_call_draft(
             payload=tool_durable_payload(event),
             turn_id=event.get("turn_id")
             if isinstance(event.get("turn_id"), str)
@@ -72,7 +69,7 @@ def record_shell_tool_result(event: dict[str, Any]) -> dict[str, Any]:
             event_id=event.get("id") if isinstance(event.get("id"), str) else None,
         )
     )
-    return timeline_event_from_durable_event(outcome.event)
+    return event_view(outcome.event)
 
 
 def shell_result_event(timeline: list[dict[str, Any]]) -> dict[str, Any]:

@@ -23,7 +23,6 @@ from zeta.store.substrate.base import (
     StoreBase,
     TraceStats,
     UnknownSessionError,
-    canonical_json,
     escape_like,
 )
 from zeta.substrate import (
@@ -392,8 +391,20 @@ class SqliteStore(StoreBase):
                     object_id_value,
                     obj.kind,
                     obj.schema,
-                    canonical_json(obj.data),
-                    canonical_json(list(obj.links)),
+                    json.dumps(
+                        obj.data,
+                        ensure_ascii=False,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                        allow_nan=False,
+                    ),
+                    json.dumps(
+                        list(obj.links),
+                        ensure_ascii=False,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                        allow_nan=False,
+                    ),
                 ),
             )
             self._commit()
@@ -487,8 +498,20 @@ class SqliteStore(StoreBase):
                     self.session_id,
                     derivation.producer,
                     derivation.output_id,
-                    canonical_json(list(derivation.input_ids)),
-                    canonical_json(derivation.params),
+                    json.dumps(
+                        list(derivation.input_ids),
+                        ensure_ascii=False,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                        allow_nan=False,
+                    ),
+                    json.dumps(
+                        derivation.params,
+                        ensure_ascii=False,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                        allow_nan=False,
+                    ),
                     time.time(),
                 ),
             )
@@ -560,8 +583,20 @@ class SqliteStore(StoreBase):
                     object_id_value,
                     obj.kind,
                     obj.schema,
-                    canonical_json(obj.data),
-                    canonical_json(list(obj.links)),
+                    json.dumps(
+                        obj.data,
+                        ensure_ascii=False,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                        allow_nan=False,
+                    ),
+                    json.dumps(
+                        list(obj.links),
+                        ensure_ascii=False,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                        allow_nan=False,
+                    ),
                 ),
             )
             self._commit()
@@ -590,8 +625,20 @@ class SqliteStore(StoreBase):
                     self.session_id,
                     derivation.producer,
                     derivation.output_id,
-                    canonical_json(list(derivation.input_ids)),
-                    canonical_json(derivation.params),
+                    json.dumps(
+                        list(derivation.input_ids),
+                        ensure_ascii=False,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                        allow_nan=False,
+                    ),
+                    json.dumps(
+                        derivation.params,
+                        ensure_ascii=False,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                        allow_nan=False,
+                    ),
                     created_at,
                 ),
             )

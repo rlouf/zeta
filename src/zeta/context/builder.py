@@ -4,6 +4,7 @@ Prompt component order is a public contract for prefix-cache friendliness:
 system_prompt, tool descriptors, project context, then volatile components.
 """
 
+import json
 from collections.abc import Iterable
 from contextlib import nullcontext
 from dataclasses import dataclass, replace
@@ -27,7 +28,6 @@ from zeta.models.chat_completions import (
 from zeta.skills import Skill, available_skills
 from zeta.store.substrate import (
     Store,
-    canonical_json,
     warn_trace_failure_once,
 )
 from zeta.substrate import Derivation, Object, ObjectId
@@ -443,7 +443,15 @@ def stored_component_ids(components: Iterable[PromptComponent]) -> tuple[ObjectI
 
 def payload_sha256(payload: dict[str, Any]) -> str:
     """Return the content address of a model request payload."""
-    return content_hash(canonical_json(payload))
+    return content_hash(
+        json.dumps(
+            payload,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+    )
 
 
 @dataclass(frozen=True)

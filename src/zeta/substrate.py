@@ -48,6 +48,7 @@ class Object:
             ensure_ascii=False,
             sort_keys=True,
             separators=(",", ":"),
+            allow_nan=False,
         )
         digest = hashlib.sha256(content.encode()).hexdigest()
         return f"sha256:{digest}"
@@ -80,6 +81,7 @@ class Derivation:
             ensure_ascii=False,
             sort_keys=True,
             separators=(",", ":"),
+            allow_nan=False,
         )
         digest = hashlib.sha256(content.encode()).hexdigest()
         return f"derivation:{digest}"

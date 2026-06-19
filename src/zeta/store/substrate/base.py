@@ -6,11 +6,10 @@ outputs back to immutable inputs for replay, graph traversal, and cache
 reasoning.
 """
 
-import json
 import logging
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
-from typing import Any, Protocol, cast
+from typing import Protocol, cast
 
 from zeta.substrate import Derivation, Object, ObjectId, Ref, RefUpdate
 
@@ -61,32 +60,6 @@ class TraceStats:
 def escape_like(text: str) -> str:
     """Escape SQLite LIKE wildcards so they match literally."""
     return text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-
-
-def canonical_json(value: Any) -> str:
-    """Serialize JSON data deterministically for content hashing."""
-    return json.dumps(
-        normalize_json(value),
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-    )
-
-
-def normalize_json(value: Any) -> Any:
-    """Normalize Python-native JSON values before deterministic serialization."""
-    if value is None or isinstance(value, str | int | float | bool):
-        return value
-    if isinstance(value, tuple | list):
-        return [normalize_json(item) for item in value]
-    if isinstance(value, dict):
-        normalized: dict[str, Any] = {}
-        for key, item in value.items():
-            if not isinstance(key, str):
-                raise TypeError("canonical JSON object keys must be strings")
-            normalized[key] = normalize_json(item)
-        return normalized
-    raise TypeError(f"value is not JSON serializable: {type(value).__name__}")
 
 
 class Store(Protocol):

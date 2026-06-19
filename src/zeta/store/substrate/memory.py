@@ -1,9 +1,10 @@
 """In-memory substrate store for tests and ephemeral traces."""
 
+import json
 from collections.abc import Iterator
 from contextlib import contextmanager
 
-from zeta.store.substrate.base import StoreBase, TraceStats, canonical_json
+from zeta.store.substrate.base import StoreBase, TraceStats
 from zeta.substrate import Derivation, Object, ObjectId, Ref, RefUpdate
 
 
@@ -57,7 +58,14 @@ class InMemoryStore(StoreBase):
         listed = [
             (object_id_value, obj)
             for object_id_value, obj in self.objects(kind=kind)
-            if needle in canonical_json(obj.data).lower()
+            if needle
+            in json.dumps(
+                obj.data,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+                allow_nan=False,
+            ).lower()
         ]
         return listed if limit is None else listed[:limit]
 
@@ -118,13 +126,17 @@ class InMemoryStore(StoreBase):
             object_count=len(self._objects),
             total_bytes=sum(
                 len(
-                    canonical_json(
+                    json.dumps(
                         {
                             "kind": obj.kind,
                             "schema": obj.schema,
                             "data": obj.data,
                             "links": list(obj.links),
-                        }
+                        },
+                        ensure_ascii=False,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                        allow_nan=False,
                     ).encode("utf-8")
                 )
                 for obj in self._objects.values()

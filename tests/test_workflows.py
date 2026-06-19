@@ -71,6 +71,13 @@ def current_sigil_timeline() -> list[dict[str, Any]]:
     return agent_io.current_timeline(runtime_context=sigil.zeta_session_for_sigil())
 
 
+def draft_events(events: list[dict[str, Any]]) -> list[DraftEvent]:
+    return [
+        zeta_event_model.runtime_event_draft(event, session_id=None, turn_id=None)
+        for event in events
+    ]
+
+
 def test_sigil_step_writes_handoff_file(
     tmp_path: Path,
     monkeypatch,
@@ -82,29 +89,31 @@ def test_sigil_step_writes_handoff_file(
         zeta_runner,
         "run_agent_turn",
         lambda *args, **kwargs: zeta_agent.AgentTurnResult(
-            events=[
-                {
-                    "type": "tool_call",
-                    "id": "call-1",
-                    "tool_call_id": "call-1",
-                    "name": "bash",
-                    "input": {"command": "uv run pytest", "reason": "Run tests."},
-                },
-                {
-                    "type": "tool_result",
-                    "tool_call_id": "call-1",
-                    "name": "bash",
-                    "result": {
-                        "ok": True,
-                        "effect": {
-                            "kind": "command",
-                            "status": "proposed",
-                            "command": "uv run pytest",
-                            "reason": "Run tests.",
+            events=draft_events(
+                [
+                    {
+                        "type": "tool_call",
+                        "id": "call-1",
+                        "tool_call_id": "call-1",
+                        "name": "bash",
+                        "input": {"command": "uv run pytest", "reason": "Run tests."},
+                    },
+                    {
+                        "type": "tool_result",
+                        "tool_call_id": "call-1",
+                        "name": "bash",
+                        "result": {
+                            "ok": True,
+                            "effect": {
+                                "kind": "command",
+                                "status": "proposed",
+                                "command": "uv run pytest",
+                                "reason": "Run tests.",
+                            },
                         },
                     },
-                },
-            ],
+                ]
+            ),
             staged_effect={
                 "kind": "command",
                 "status": "proposed",
@@ -138,24 +147,26 @@ def test_sigil_step_keeps_trace_off_stdout(monkeypatch) -> None:
         "run_agent_turn",
         lambda *args, **kwargs: zeta_agent.AgentTurnResult(
             final_text="summary",
-            events=[
-                {
-                    "type": "tool_call",
-                    "tool_call_id": "call-1",
-                    "name": "read",
-                    "input": {"path": "README.md"},
-                },
-                {
-                    "type": "tool_result",
-                    "tool_call_id": "call-1",
-                    "name": "read",
-                    "result": {
-                        "ok": True,
-                        "content": [{"type": "text", "text": "a\n"}],
+            events=draft_events(
+                [
+                    {
+                        "type": "tool_call",
+                        "tool_call_id": "call-1",
+                        "name": "read",
+                        "input": {"path": "README.md"},
                     },
-                },
-                {"type": "model", "content": "summary"},
-            ],
+                    {
+                        "type": "tool_result",
+                        "tool_call_id": "call-1",
+                        "name": "read",
+                        "result": {
+                            "ok": True,
+                            "content": [{"type": "text", "text": "a\n"}],
+                        },
+                    },
+                    {"type": "model", "content": "summary"},
+                ]
+            ),
         ),
     )
 
@@ -185,24 +196,26 @@ def test_zeta_agent_step_separates_trace_from_final_answer(
         captured["context"] = kwargs.get("context")
         return zeta_agent.AgentTurnResult(
             final_text="The answer.",
-            events=[
-                {
-                    "type": "tool_call",
-                    "tool_call_id": "call-1",
-                    "name": "read",
-                    "input": {"path": "README.md"},
-                },
-                {
-                    "type": "tool_result",
-                    "tool_call_id": "call-1",
-                    "name": "read",
-                    "result": {
-                        "ok": True,
-                        "content": [{"type": "text", "text": "a\n"}],
+            events=draft_events(
+                [
+                    {
+                        "type": "tool_call",
+                        "tool_call_id": "call-1",
+                        "name": "read",
+                        "input": {"path": "README.md"},
                     },
-                },
-                {"type": "model", "content": "The answer."},
-            ],
+                    {
+                        "type": "tool_result",
+                        "tool_call_id": "call-1",
+                        "name": "read",
+                        "result": {
+                            "ok": True,
+                            "content": [{"type": "text", "text": "a\n"}],
+                        },
+                    },
+                    {"type": "model", "content": "The answer."},
+                ]
+            ),
         )
 
     monkeypatch.setattr(agent_io, "ensure_server", lambda: True)
@@ -345,7 +358,7 @@ def test_zeta_agent_step_renders_context_usage_at_bottom_after_tools(
             event_sink(event)
         return zeta_agent.AgentTurnResult(
             final_text="done",
-            events=events,
+            events=draft_events(events),
             model_telemetry={
                 "usage": {"prompt_tokens": 456, "completion_tokens": 4},
                 "model_context_tokens": 262_144,
@@ -561,7 +574,7 @@ def test_zeta_agent_step_prints_tool_start_while_agent_runs(
         event_sink(tool_result)
         return zeta_agent.AgentTurnResult(
             final_text="It is a README.",
-            events=[tool_call, tool_result],
+            events=draft_events([tool_call, tool_result]),
         )
 
     monkeypatch.setattr(agent_io, "ensure_server", lambda: True)
@@ -606,7 +619,7 @@ def test_zeta_agent_step_streams_text_before_tool_trace(
         event_sink(tool_call)
         return zeta_agent.AgentTurnResult(
             final_text="It is a README.",
-            events=[tool_call],
+            events=draft_events([tool_call]),
         )
 
     monkeypatch.setattr(agent_io, "ensure_server", lambda: True)
@@ -672,7 +685,7 @@ def test_zeta_agent_step_separates_tool_result_from_later_streamed_text(
         )
         return zeta_agent.AgentTurnResult(
             final_text="It is a README.",
-            events=[tool_call, tool_result],
+            events=draft_events([tool_call, tool_result]),
             final_text_streamed=True,
         )
 
@@ -739,7 +752,9 @@ def test_zeta_agent_step_does_not_insert_blank_lines_between_tool_calls(
         ]
         for event in events:
             event_sink(event)
-        return zeta_agent.AgentTurnResult(final_text="Done.", events=events)
+        return zeta_agent.AgentTurnResult(
+            final_text="Done.", events=draft_events(events)
+        )
 
     monkeypatch.setattr(agent_io, "ensure_server", lambda: True)
     monkeypatch.setattr(zeta_runner, "run_agent_turn", fake_run_agent_turn)
@@ -828,25 +843,27 @@ def test_zeta_agent_step_prints_final_answer_after_direct_edit(
         "run_agent_turn",
         lambda *args, **kwargs: zeta_agent.AgentTurnResult(
             final_text="edited and verified",
-            events=[
-                {
-                    "type": "tool_call",
-                    "id": "call-1",
-                    "tool_call_id": "call-1",
-                    "name": "edit",
-                    "input": {"location": "a.txt", "old": "old", "new": "new"},
-                },
-                {
-                    "type": "tool_result",
-                    "tool_call_id": "call-1",
-                    "name": "edit",
-                    "result": {
-                        "ok": True,
-                        "metadata": {"mode": "direct_replace", "location": "a.txt"},
+            events=draft_events(
+                [
+                    {
+                        "type": "tool_call",
+                        "id": "call-1",
+                        "tool_call_id": "call-1",
+                        "name": "edit",
+                        "input": {"location": "a.txt", "old": "old", "new": "new"},
                     },
-                },
-                {"type": "model", "content": "edited and verified"},
-            ],
+                    {
+                        "type": "tool_result",
+                        "tool_call_id": "call-1",
+                        "name": "edit",
+                        "result": {
+                            "ok": True,
+                            "metadata": {"mode": "direct_replace", "location": "a.txt"},
+                        },
+                    },
+                    {"type": "model", "content": "edited and verified"},
+                ]
+            ),
         ),
     )
 
@@ -1367,43 +1384,45 @@ def test_zeta_question_loop_feeds_current_tool_result_to_next_step(
         transcripts.append(transcript)
         return zeta_agent.AgentTurnResult(
             final_text="It contains project metadata.",
-            events=[
-                {
-                    "type": "model",
-                    "tool_calls": [
-                        {
-                            "id": "call-1",
-                            "type": "function",
-                            "function": {
-                                "name": "read",
-                                "arguments": '{"path":"pyproject.toml"}',
-                            },
-                        }
-                    ],
-                },
-                {
-                    "type": "tool_call",
-                    "id": "call-1",
-                    "tool_call_id": "call-1",
-                    "name": "read",
-                    "input": {"path": "pyproject.toml"},
-                },
-                {
-                    "type": "tool_result",
-                    "tool_call_id": "call-1",
-                    "name": "read",
-                    "result": {
-                        "ok": True,
-                        "content": [
-                            {"type": "text", "text": "[project]\nname = 'sigil'\n"}
+            events=draft_events(
+                [
+                    {
+                        "type": "model",
+                        "tool_calls": [
+                            {
+                                "id": "call-1",
+                                "type": "function",
+                                "function": {
+                                    "name": "read",
+                                    "arguments": '{"path":"pyproject.toml"}',
+                                },
+                            }
                         ],
                     },
-                },
-                {
-                    "type": "model",
-                    "content": "It contains project metadata.",
-                },
-            ],
+                    {
+                        "type": "tool_call",
+                        "id": "call-1",
+                        "tool_call_id": "call-1",
+                        "name": "read",
+                        "input": {"path": "pyproject.toml"},
+                    },
+                    {
+                        "type": "tool_result",
+                        "tool_call_id": "call-1",
+                        "name": "read",
+                        "result": {
+                            "ok": True,
+                            "content": [
+                                {"type": "text", "text": "[project]\nname = 'sigil'\n"}
+                            ],
+                        },
+                    },
+                    {
+                        "type": "model",
+                        "content": "It contains project metadata.",
+                    },
+                ]
+            ),
         )
 
     monkeypatch.setattr(agent_io, "ensure_server", lambda: True)
@@ -1484,7 +1503,7 @@ def test_zeta_ask_workflow_streams_final_text_without_duplicate(
         )
         return zeta_agent.AgentTurnResult(
             final_text="streamed answer",
-            events=[{"type": "model", "content": "streamed answer"}],
+            events=draft_events([{"type": "model", "content": "streamed answer"}]),
             final_text_streamed=True,
         )
 
@@ -1522,7 +1541,7 @@ def test_zeta_ask_workflow_streams_markdown_with_rich_for_tty(
         )
         return zeta_agent.AgentTurnResult(
             final_text="streamed answer",
-            events=[{"type": "model", "content": "streamed answer"}],
+            events=draft_events([{"type": "model", "content": "streamed answer"}]),
             final_text_streamed=True,
         )
 
@@ -1588,7 +1607,7 @@ def test_zeta_ask_workflow_streams_text_before_tool_trace(
         )
         return zeta_agent.AgentTurnResult(
             final_text="It is a README.",
-            events=[tool_call, tool_result],
+            events=draft_events([tool_call, tool_result]),
             final_text_streamed=True,
         )
 
@@ -1666,7 +1685,7 @@ def test_zeta_ask_workflow_renders_context_usage_at_bottom_after_tools(
             event_sink(event)
         return zeta_agent.AgentTurnResult(
             final_text="It is a README.",
-            events=events,
+            events=draft_events(events),
             model_telemetry=telemetry,
         )
 
@@ -1718,7 +1737,7 @@ def test_zeta_question_loop_prints_tool_start_while_agent_runs(
         event_sink(tool_result)
         return zeta_agent.AgentTurnResult(
             final_text="It is a README.",
-            events=[tool_call, tool_result],
+            events=draft_events([tool_call, tool_result]),
         )
 
     monkeypatch.setattr(agent_io, "ensure_server", lambda: True)
@@ -1747,7 +1766,7 @@ def test_zeta_question_loop_passes_prior_timeline_as_turns(
         captured["context"] = kwargs.get("context")
         return zeta_agent.AgentTurnResult(
             final_text="follow-up answer",
-            events=[{"type": "model", "content": "follow-up answer"}],
+            events=draft_events([{"type": "model", "content": "follow-up answer"}]),
         )
 
     monkeypatch.setattr(agent_io, "ensure_server", lambda: True)
@@ -1782,24 +1801,26 @@ def test_zeta_ask_workflow_reports_stall_without_final_answer(
     ) -> zeta_agent.AgentTurnResult:
         del objective, transcript, config, kwargs
         return zeta_agent.AgentTurnResult(
-            events=[
-                {
-                    "type": "tool_call",
-                    "id": "call-1",
-                    "tool_call_id": "call-1",
-                    "name": "read",
-                    "input": {"path": "README.md"},
-                },
-                {
-                    "type": "tool_result",
-                    "tool_call_id": "call-1",
-                    "name": "read",
-                    "result": {
-                        "ok": True,
-                        "content": [{"type": "text", "text": "Sigil docs"}],
+            events=draft_events(
+                [
+                    {
+                        "type": "tool_call",
+                        "id": "call-1",
+                        "tool_call_id": "call-1",
+                        "name": "read",
+                        "input": {"path": "README.md"},
                     },
-                },
-            ]
+                    {
+                        "type": "tool_result",
+                        "tool_call_id": "call-1",
+                        "name": "read",
+                        "result": {
+                            "ok": True,
+                            "content": [{"type": "text", "text": "Sigil docs"}],
+                        },
+                    },
+                ]
+            )
         )
 
     monkeypatch.setattr(agent_io, "ensure_server", lambda: True)
@@ -1914,7 +1935,7 @@ def test_zeta_ask_workflow_keeps_stdout_clean_for_pipes(
             event_sink(event)
         return zeta_agent.AgentTurnResult(
             final_text="grep-safe answer",
-            events=events,
+            events=draft_events(events),
             model_telemetry={
                 "usage": {"prompt_tokens": 10, "completion_tokens": 2},
                 "model_context_tokens": 1000,
@@ -2125,29 +2146,31 @@ def test_zeta_step_records_staged_turn_record(monkeypatch) -> None:
         zeta_runner,
         "run_agent_turn",
         lambda *args, **kwargs: zeta_agent.AgentTurnResult(
-            events=[
-                {
-                    "type": "tool_call",
-                    "id": "call-1",
-                    "tool_call_id": "call-1",
-                    "name": "bash",
-                    "input": {"command": "uv run pytest", "reason": "Run tests."},
-                },
-                {
-                    "type": "tool_result",
-                    "tool_call_id": "call-1",
-                    "name": "bash",
-                    "result": {
-                        "ok": True,
-                        "effect": {
-                            "kind": "command",
-                            "status": "proposed",
-                            "command": "uv run pytest",
-                            "reason": "Run tests.",
+            events=draft_events(
+                [
+                    {
+                        "type": "tool_call",
+                        "id": "call-1",
+                        "tool_call_id": "call-1",
+                        "name": "bash",
+                        "input": {"command": "uv run pytest", "reason": "Run tests."},
+                    },
+                    {
+                        "type": "tool_result",
+                        "tool_call_id": "call-1",
+                        "name": "bash",
+                        "result": {
+                            "ok": True,
+                            "effect": {
+                                "kind": "command",
+                                "status": "proposed",
+                                "command": "uv run pytest",
+                                "reason": "Run tests.",
+                            },
                         },
                     },
-                },
-            ],
+                ]
+            ),
             staged_effect={
                 "kind": "command",
                 "status": "proposed",
@@ -2205,30 +2228,32 @@ def test_do_step_records_executed_turn_with_file_effect(monkeypatch) -> None:
         "run_agent_turn",
         lambda *args, **kwargs: zeta_agent.AgentTurnResult(
             final_text="done",
-            events=[
-                {
-                    "type": "tool_call",
-                    "id": "call-1",
-                    "tool_call_id": "call-1",
-                    "name": "write",
-                    "input": {"path": "a.txt", "content": "hello\n"},
-                },
-                {
-                    "type": "tool_result",
-                    "tool_call_id": "call-1",
-                    "name": "write",
-                    "result": {
-                        "ok": True,
-                        "content": [{"type": "text", "text": "wrote a.txt"}],
-                        "metadata": {
-                            "mode": "direct",
-                            "path": "a.txt",
-                            "before_hash": "sha256:before",
-                            "after_hash": "sha256:after",
+            events=draft_events(
+                [
+                    {
+                        "type": "tool_call",
+                        "id": "call-1",
+                        "tool_call_id": "call-1",
+                        "name": "write",
+                        "input": {"path": "a.txt", "content": "hello\n"},
+                    },
+                    {
+                        "type": "tool_result",
+                        "tool_call_id": "call-1",
+                        "name": "write",
+                        "result": {
+                            "ok": True,
+                            "content": [{"type": "text", "text": "wrote a.txt"}],
+                            "metadata": {
+                                "mode": "direct",
+                                "path": "a.txt",
+                                "before_hash": "sha256:before",
+                                "after_hash": "sha256:after",
+                            },
                         },
                     },
-                },
-            ],
+                ]
+            ),
             model_telemetry_calls=[
                 {"usage": {"prompt_tokens": 9, "completion_tokens": 4}}
             ],
@@ -2260,25 +2285,27 @@ def test_zeta_step_bridges_turn_record_into_trace_graph(monkeypatch) -> None:
         "run_agent_turn",
         lambda *args, **kwargs: zeta_agent.AgentTurnResult(
             final_text="done",
-            events=[
-                {
-                    "type": "tool_call",
-                    "id": "call-1",
-                    "tool_call_id": "call-1",
-                    "name": "write",
-                    "input": {"path": "a.txt", "content": "hello\n"},
-                },
-                {
-                    "type": "tool_result",
-                    "tool_call_id": "call-1",
-                    "name": "write",
-                    "tool_result_object_id": tool_result_object_id,
-                    "result": {
-                        "ok": True,
-                        "metadata": {"mode": "direct", "path": "a.txt"},
+            events=draft_events(
+                [
+                    {
+                        "type": "tool_call",
+                        "id": "call-1",
+                        "tool_call_id": "call-1",
+                        "name": "write",
+                        "input": {"path": "a.txt", "content": "hello\n"},
                     },
-                },
-            ],
+                    {
+                        "type": "tool_result",
+                        "tool_call_id": "call-1",
+                        "name": "write",
+                        "tool_result_object_id": tool_result_object_id,
+                        "result": {
+                            "ok": True,
+                            "metadata": {"mode": "direct", "path": "a.txt"},
+                        },
+                    },
+                ]
+            ),
             prompt_traces=[PromptTrace(prompt_object_id=prompt_object_id)],
         ),
     )
@@ -2332,7 +2359,7 @@ def test_turn_bridge_failure_does_not_break_the_step(monkeypatch) -> None:
         "run_agent_turn",
         lambda *args, **kwargs: zeta_agent.AgentTurnResult(
             final_text="done",
-            events=[{"type": "model", "content": "done"}],
+            events=draft_events([{"type": "model", "content": "done"}]),
         ),
     )
 
@@ -2350,7 +2377,7 @@ def test_zeta_step_tags_timeline_events_with_turn_id(monkeypatch) -> None:
         "run_agent_turn",
         lambda *args, **kwargs: zeta_agent.AgentTurnResult(
             final_text="done",
-            events=[{"type": "model", "content": "done"}],
+            events=draft_events([{"type": "model", "content": "done"}]),
         ),
     )
 
@@ -2422,7 +2449,7 @@ def test_ask_records_answered_turn_record(monkeypatch, capsys) -> None:
         "run_agent_turn",
         lambda *args, **kwargs: zeta_agent.AgentTurnResult(
             final_text="the answer",
-            events=[{"type": "model", "content": "the answer"}],
+            events=draft_events([{"type": "model", "content": "the answer"}]),
             model_telemetry_calls=[
                 {"usage": {"prompt_tokens": 21, "completion_tokens": 6}}
             ],

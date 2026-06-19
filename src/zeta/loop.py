@@ -69,7 +69,7 @@ class StepResult:
     effects: tuple[StepEffect, ...] = ()
 
 
-@dataclass(frozen=True, init=False)
+@dataclass(frozen=True)
 class AgentTurnResult:
     """Result from one native tool-call loop."""
 
@@ -81,30 +81,6 @@ class AgentTurnResult:
     model_telemetry_calls: list[dict[str, Any]] = field(default_factory=list)
     prompt_traces: list[PromptTrace] = field(default_factory=list)
     steps: list[StepResult] = field(default_factory=list)
-
-    def __init__(
-        self,
-        final_text: str = "",
-        events: Iterable[DraftEvent | dict[str, Any]] = (),
-        staged_effect: dict[str, Any] | None = None,
-        final_text_streamed: bool = False,
-        model_telemetry: dict[str, Any] | None = None,
-        model_telemetry_calls: list[dict[str, Any]] | None = None,
-        prompt_traces: list[PromptTrace] | None = None,
-        steps: list[StepResult] | None = None,
-    ) -> None:
-        object.__setattr__(self, "final_text", final_text)
-        object.__setattr__(self, "events", normalize_draft_events(events))
-        object.__setattr__(self, "staged_effect", staged_effect)
-        object.__setattr__(self, "final_text_streamed", final_text_streamed)
-        object.__setattr__(self, "model_telemetry", model_telemetry or {})
-        object.__setattr__(
-            self,
-            "model_telemetry_calls",
-            model_telemetry_calls or [],
-        )
-        object.__setattr__(self, "prompt_traces", prompt_traces or [])
-        object.__setattr__(self, "steps", steps or [])
 
 
 @dataclass
@@ -751,29 +727,6 @@ def draft_event_id(draft: DraftEvent) -> str | None:
         return None
     event_id = key[len(prefix) :].strip()
     return event_id or None
-
-
-def normalize_draft_events(
-    events: Iterable[DraftEvent | dict[str, Any]],
-) -> list[DraftEvent]:
-    return [normalize_draft_event(event) for event in events]
-
-
-def normalize_draft_event(event: DraftEvent | dict[str, Any]) -> DraftEvent:
-    if isinstance(event, DraftEvent):
-        return event
-    if str(event.get("type") or "") in {
-        "model",
-        "tool_call",
-        "tool_result",
-        "turn_aborted",
-    }:
-        return runtime_event_draft(event, session_id=None, turn_id=None)
-    return DraftEvent(
-        event_type=str(event.get("type") or "event"),
-        source=str(event.get("source") or "zeta"),
-        payload={key: value for key, value in event.items() if key != "type"},
-    )
 
 
 def emit_event(

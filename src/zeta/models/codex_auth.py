@@ -1,6 +1,6 @@
 """ChatGPT OAuth credentials for the Codex Responses backend.
 
-Sigil reuses the Codex CLI's credential store at ``~/.codex/auth.json``
+Zeta reuses the Codex CLI's credential store at ``~/.codex/auth.json``
 rather than running its own login flow. Reads are cheap; a refresh takes
 an exclusive lock on a sidecar file, re-reads the store to pick up a
 concurrent refresh, and writes the new tokens back atomically.

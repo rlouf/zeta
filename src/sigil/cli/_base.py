@@ -121,23 +121,32 @@ def main(argv: list[str] | None = None) -> int:
         return EXIT_ERROR
     except click.exceptions.Exit as error:
         return int(error.exit_code)
-    except RuntimeError as error:
-        click.echo(f"sigil: {error}", err=True)
-        click.echo(
-            "Check the model endpoint with `sigil doctor`, then retry.", err=True
-        )
-        return EXIT_MODEL_UNAVAILABLE
-    except FileNotFoundError as error:
-        program = error.filename or "required executable"
-        click.echo(f"sigil: missing executable: {program}", err=True)
-        click.echo("Install it or make sure it is on PATH, then retry.", err=True)
-        return EXIT_COMMAND_NOT_FOUND
-    except PermissionError as error:
-        target = error.filename or "requested path"
-        click.echo(f"sigil: permission denied: {target}", err=True)
-        click.echo(
-            "Check the path permissions or set SIGIL_STATE_DIR to a writable directory.",
-            err=True,
-        )
-        return EXIT_ERROR
+    except Exception as error:
+        if type(error).__name__ == "IncompatibleSchemaError":
+            click.echo(f"sigil: {error}", err=True)
+            click.echo(
+                "Run `sigil trace reinit-store --yes` to recreate the local store.",
+                err=True,
+            )
+            return EXIT_ERROR
+        if isinstance(error, RuntimeError):
+            click.echo(f"sigil: {error}", err=True)
+            click.echo(
+                "Check the model endpoint with `sigil doctor`, then retry.", err=True
+            )
+            return EXIT_MODEL_UNAVAILABLE
+        if isinstance(error, FileNotFoundError):
+            program = error.filename or "required executable"
+            click.echo(f"sigil: missing executable: {program}", err=True)
+            click.echo("Install it or make sure it is on PATH, then retry.", err=True)
+            return EXIT_COMMAND_NOT_FOUND
+        if isinstance(error, PermissionError):
+            target = error.filename or "requested path"
+            click.echo(f"sigil: permission denied: {target}", err=True)
+            click.echo(
+                "Check the path permissions or set SIGIL_STATE_DIR to a writable directory.",
+                err=True,
+            )
+            return EXIT_ERROR
+        raise
     return int(result or EXIT_OK)

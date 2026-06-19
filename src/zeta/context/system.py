@@ -128,8 +128,19 @@ def current_date_line() -> str:
     return time.strftime("Today is %Y-%m-%d (%A).", time.localtime())
 
 
-def can_read_skill_files(enabled_capabilities: Iterable[str]) -> bool:
-    return "sigil.read" in set(enabled_capabilities)
+def can_read_skill_files(
+    enabled_capabilities: Iterable[str],
+    *,
+    tool_registry: CapabilityRegistry | None = None,
+) -> bool:
+    active_registry = tool_registry or _runtime_tool_registry
+    for capability_id in enabled_capabilities:
+        capability = active_registry.get(capability_id)
+        if not capability:
+            continue
+        if "read" in capability.spec.effects or "read" in capability.spec.aliases:
+            return True
+    return False
 
 
 def capability_available(

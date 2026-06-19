@@ -44,6 +44,12 @@ class UnknownSessionError(LookupError):
         self.available = available
 
 
+class IncompatibleSchemaError(Exception):
+    """The local trace store schema is incompatible with the runtime."""
+
+    pass
+
+
 @dataclass(frozen=True)
 class TraceStats:
     """Basic trace store size statistics."""

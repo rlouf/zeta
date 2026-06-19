@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any
 
 from zeta.store.substrate.base import (
+    IncompatibleSchemaError,
     StoreBase,
     TraceStats,
     UnknownSessionError,
@@ -274,10 +275,7 @@ class SqliteStore(StoreBase):
     def _init_schema(self) -> None:
         with self._write_lock:
             if self._schema_is_incompatible():
-                raise sqlite3.OperationalError(
-                    "incompatible Zeta SQLite schema; run "
-                    "`sigil trace reinit-store --yes` to recreate the local store"
-                )
+                raise IncompatibleSchemaError("incompatible Zeta SQLite schema")
             self.connection.executescript(
                 """
                 CREATE TABLE IF NOT EXISTS objects (

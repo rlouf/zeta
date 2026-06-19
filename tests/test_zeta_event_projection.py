@@ -2,6 +2,7 @@ import json
 from dataclasses import asdict, replace
 from typing import Any
 
+from zeta.context.builder import project_trace_events
 from zeta.events import (
     DraftEvent,
     Event,
@@ -13,6 +14,8 @@ from zeta.events import (
     tool_call_draft,
 )
 from zeta.history import effect_record, event_from_record, turn_record
+from zeta.store.substrate import InMemoryStore
+from zeta.substrate import Derivation, Object
 
 SESSION_ID = "session-1"
 TURN_ID = "turn-1"
@@ -47,11 +50,6 @@ def model_event() -> dict[str, Any]:
                 "function": {"name": "read", "arguments": '{"path":"README.md"}'},
             }
         ],
-        "prompt_trace": {
-            "prompt_object_id": "sha256:prompt",
-            "assistant_message_object_id": "sha256:assistant",
-        },
-        "tool_call_object_ids": ["sha256:tool-call"],
     }
 
 
@@ -65,7 +63,6 @@ def tool_call_event() -> dict[str, Any]:
         "input": {"path": "README.md"},
         "arguments": '{"path":"README.md"}',
         "caused_by": "model-1",
-        "tool_call_object_id": "sha256:tool-call",
     }
 
 
@@ -84,8 +81,6 @@ def tool_result_event(
         "result": result,
         "capability_id": "sigil.read",
         "model_telemetry": {"input_tokens": 10, "output_tokens": 2},
-        "tool_call_object_id": "sha256:tool-call",
-        "tool_result_object_id": f"sha256:{event_id}",
     }
 
 
@@ -281,11 +276,6 @@ def test_zeta_runtime_event_projection_contract() -> None:
                     }
                 ],
                 "_timeline_type": "model",
-                "used_objects": [{"kind": "prompt", "id": "sha256:prompt"}],
-                "returned_objects": [
-                    {"kind": "assistant_message", "id": "sha256:assistant"},
-                    {"kind": "tool_call", "id": "sha256:tool-call"},
-                ],
             },
             "idempotency_key": "zeta.model_call.completed:model-1",
             "caused_by": None,
@@ -302,7 +292,6 @@ def test_zeta_runtime_event_projection_contract() -> None:
                 "input": {"path": "README.md"},
                 "arguments": '{"path":"README.md"}',
                 "_timeline_type": "tool_call",
-                "returned_objects": [{"kind": "tool_call", "id": "sha256:tool-call"}],
             },
             "idempotency_key": "zeta.tool_call.started:call-1",
             "caused_by": "model-1",
@@ -323,8 +312,6 @@ def test_zeta_runtime_event_projection_contract() -> None:
                 "capability_id": "sigil.read",
                 "model_telemetry": {"input_tokens": 10, "output_tokens": 2},
                 "_timeline_type": "tool_result",
-                "used_objects": [{"kind": "tool_call", "id": "sha256:tool-call"}],
-                "returned_objects": [{"kind": "tool_result", "id": "sha256:result-ok"}],
             },
             "idempotency_key": "zeta.tool_call.completed:result-ok",
             "caused_by": None,
@@ -345,10 +332,6 @@ def test_zeta_runtime_event_projection_contract() -> None:
                 "capability_id": "sigil.read",
                 "model_telemetry": {"input_tokens": 10, "output_tokens": 2},
                 "_timeline_type": "tool_result",
-                "used_objects": [{"kind": "tool_call", "id": "sha256:tool-call"}],
-                "returned_objects": [
-                    {"kind": "tool_result", "id": "sha256:result-failed"}
-                ],
             },
             "idempotency_key": "zeta.tool_call.failed:result-failed",
             "caused_by": None,
@@ -372,10 +355,6 @@ def test_zeta_runtime_event_projection_contract() -> None:
                 "capability_id": "sigil.read",
                 "model_telemetry": {"input_tokens": 10, "output_tokens": 2},
                 "_timeline_type": "tool_result",
-                "used_objects": [{"kind": "tool_call", "id": "sha256:tool-call"}],
-                "returned_objects": [
-                    {"kind": "tool_result", "id": "sha256:result-refused"}
-                ],
             },
             "idempotency_key": "zeta.tool_call.failed:result-refused",
             "caused_by": None,
@@ -425,16 +404,6 @@ def test_zeta_event_view_and_rpc_projection_contract() -> None:
                     },
                 }
             ],
-            "used_objects": [{"kind": "prompt", "id": "sha256:prompt"}],
-            "returned_objects": [
-                {"kind": "assistant_message", "id": "sha256:assistant"},
-                {"kind": "tool_call", "id": "sha256:tool-call"},
-            ],
-            "prompt_trace": {
-                "prompt_object_id": "sha256:prompt",
-                "assistant_message_object_id": "sha256:assistant",
-            },
-            "tool_call_object_ids": ["sha256:tool-call"],
         },
         {
             "type": "tool_call",
@@ -448,8 +417,6 @@ def test_zeta_event_view_and_rpc_projection_contract() -> None:
             "name": "read",
             "input": {"path": "README.md"},
             "arguments": '{"path":"README.md"}',
-            "returned_objects": [{"kind": "tool_call", "id": "sha256:tool-call"}],
-            "tool_call_object_id": "sha256:tool-call",
         },
         {
             "type": "tool_result",
@@ -463,10 +430,6 @@ def test_zeta_event_view_and_rpc_projection_contract() -> None:
             "result": {"ok": True, "content": [{"type": "text", "text": "contents"}]},
             "capability_id": "sigil.read",
             "model_telemetry": {"input_tokens": 10, "output_tokens": 2},
-            "used_objects": [{"kind": "tool_call", "id": "sha256:tool-call"}],
-            "returned_objects": [{"kind": "tool_result", "id": "sha256:result-ok"}],
-            "tool_call_object_id": "sha256:tool-call",
-            "tool_result_object_id": "sha256:result-ok",
         },
         {
             "type": "tool_result",
@@ -483,10 +446,6 @@ def test_zeta_event_view_and_rpc_projection_contract() -> None:
             },
             "capability_id": "sigil.read",
             "model_telemetry": {"input_tokens": 10, "output_tokens": 2},
-            "used_objects": [{"kind": "tool_call", "id": "sha256:tool-call"}],
-            "returned_objects": [{"kind": "tool_result", "id": "sha256:result-failed"}],
-            "tool_call_object_id": "sha256:tool-call",
-            "tool_result_object_id": "sha256:result-failed",
         },
         {
             "type": "tool_result",
@@ -506,12 +465,6 @@ def test_zeta_event_view_and_rpc_projection_contract() -> None:
             },
             "capability_id": "sigil.read",
             "model_telemetry": {"input_tokens": 10, "output_tokens": 2},
-            "used_objects": [{"kind": "tool_call", "id": "sha256:tool-call"}],
-            "returned_objects": [
-                {"kind": "tool_result", "id": "sha256:result-refused"}
-            ],
-            "tool_call_object_id": "sha256:tool-call",
-            "tool_result_object_id": "sha256:result-refused",
         },
         {
             "type": "turn_aborted",
@@ -549,6 +502,172 @@ def test_zeta_event_view_and_rpc_projection_contract() -> None:
         "caused_by": "call-1",
         "cursor": "7",
     }
+
+
+def test_zeta_pure_runtime_events_project_to_trace_graph() -> None:
+    store = InMemoryStore()
+    prompt_id = store.put_object(
+        Object(
+            kind="prompt",
+            schema="zeta.prompt.v1",
+            data={"payload_sha256": "test"},
+        )
+    )
+    model = event_from_draft(
+        model_call_draft(
+            payload={
+                "_timeline_type": "model",
+                "content": "I will inspect the file.",
+                "tool_calls": [
+                    {
+                        "id": "call-1",
+                        "type": "function",
+                        "function": {
+                            "name": "read",
+                            "arguments": '{"path":"README.md"}',
+                        },
+                    }
+                ],
+                "prompt_object_id": prompt_id,
+            },
+            turn_id=TURN_ID,
+            session_id=SESSION_ID,
+            event_id="model-1",
+        ),
+        event_id="model-1",
+        seq=1,
+    )
+    tool_call = event_from_draft(
+        tool_call_draft(
+            payload={
+                "_timeline_type": "tool_call",
+                "tool_call_id": "call-1",
+                "status": "pending",
+                "name": "read",
+                "input": {"path": "README.md"},
+                "arguments": '{"path":"README.md"}',
+            },
+            turn_id=TURN_ID,
+            session_id=SESSION_ID,
+            caused_by="model-1",
+            event_id="call-1",
+        ),
+        event_id="call-1",
+        seq=2,
+    )
+    tool_result = event_from_draft(
+        tool_call_draft(
+            payload={
+                "_timeline_type": "tool_result",
+                "tool_call_id": "call-1",
+                "status": "completed",
+                "name": "read",
+                "result": {
+                    "ok": True,
+                    "content": [{"type": "text", "text": "contents"}],
+                },
+                "capability_id": "sigil.read",
+                "model_telemetry": {"input_tokens": 10, "output_tokens": 2},
+            },
+            turn_id=TURN_ID,
+            session_id=SESSION_ID,
+            event_id="result-ok",
+        ),
+        event_id="result-ok",
+        seq=3,
+    )
+
+    projection = project_trace_events([model, tool_call, tool_result], store)
+    replayed = project_trace_events([model, tool_call, tool_result], store)
+
+    assistant_id = projection.assistant_message_ids["model-1"]
+    tool_call_id = projection.tool_call_object_ids["call-1"]
+    tool_result_id = projection.tool_result_object_ids["result-ok"]
+    assert replayed == projection
+    assert store.get_object(assistant_id) == Object(
+        kind="assistant_message",
+        schema="zeta.model_output.v1",
+        data={
+            "message": {
+                "content": "I will inspect the file.",
+                "tool_calls": [
+                    {
+                        "id": "call-1",
+                        "type": "function",
+                        "function": {
+                            "name": "read",
+                            "arguments": '{"path":"README.md"}',
+                        },
+                    }
+                ],
+            },
+            "model_output": {
+                "message": {
+                    "content": "I will inspect the file.",
+                    "tool_calls": [
+                        {
+                            "id": "call-1",
+                            "type": "function",
+                            "function": {
+                                "name": "read",
+                                "arguments": '{"path":"README.md"}',
+                            },
+                        }
+                    ],
+                }
+            },
+        },
+        links=(prompt_id,),
+    )
+    assert store.get_object(tool_call_id) == Object(
+        kind="tool_call",
+        schema="zeta.tool_call.v1",
+        data={
+            "tool_call_id": "call-1",
+            "name": "read",
+            "input": {"path": "README.md"},
+            "arguments": '{"path":"README.md"}',
+        },
+        links=(assistant_id,),
+    )
+    assert store.get_object(tool_result_id) == Object(
+        kind="tool_result",
+        schema="zeta.tool_result.v1",
+        data={
+            "tool_call_id": "call-1",
+            "name": "read",
+            "result": {
+                "ok": True,
+                "content": [{"type": "text", "text": "contents"}],
+            },
+            "model_telemetry": {"input_tokens": 10, "output_tokens": 2},
+        },
+        links=(tool_call_id,),
+    )
+    assert store.derivations_for_output(assistant_id) == [
+        Derivation(
+            producer="ModelResponse",
+            output_id=assistant_id,
+            input_ids=(prompt_id,),
+            params={},
+        )
+    ]
+    assert store.derivations_for_output(tool_call_id) == [
+        Derivation(
+            producer="ToolCallProjection",
+            output_id=tool_call_id,
+            input_ids=(assistant_id,),
+            params={"tool_call_id": "call-1", "name": "read"},
+        )
+    ]
+    assert store.derivations_for_output(tool_result_id) == [
+        Derivation(
+            producer="ToolExecution",
+            output_id=tool_result_id,
+            input_ids=(tool_call_id,),
+            params={"tool_call_id": "call-1", "name": "read"},
+        )
+    ]
 
 
 def test_zeta_history_record_projection_contract() -> None:

@@ -18,10 +18,12 @@ from zeta.context import prompt_transform_from_policy
 from zeta.context.builder import (
     PreparedPrompt,
     PromptBuilder,
+    TraceProjection,
     prepared_prompt_from,
+    project_trace_drafts,
     render_model_input,
 )
-from zeta.context.components import PromptTrace, prompt_trace_payload
+from zeta.context.components import PromptTrace
 from zeta.events import (
     DraftEvent,
     Event,
@@ -276,6 +278,11 @@ async def run_agent_steps(
             caused_by=state.next_model_caused_by,
             ctx=ctx,
         )
+        update_prompt_trace_from_projection(
+            assistant_event_id,
+            state=state,
+            ctx=ctx,
+        )
         if not tool_calls:
             state.note_step("finish_run")
             return state.result(
@@ -288,7 +295,6 @@ async def run_agent_steps(
             allowed_capabilities=allowed_capabilities,
             projection=projection,
             model_telemetry=turn.model_telemetry,
-            prompt_trace=turn.prompt_trace,
             assistant_event_id=assistant_event_id,
             state=state,
             ctx=ctx,
@@ -346,11 +352,7 @@ async def request_model_turn(
         config=config,
         allowed_capabilities=allowed_capabilities,
         context=context,
-        current_events=[
-            draft_event_view(draft)
-            for draft in state.events
-            if not is_runtime_ui_event(draft)
-        ],
+        current_events=draft_views_for_prompt(state.events, ctx.builder),
         tools=tools,
         state=state,
         builder=ctx.builder,
@@ -443,9 +445,10 @@ def record_assistant_step(
 ) -> tuple[AssistantMessage, PromptTrace | None]:
     assistant = AssistantMessage.from_provider(model_output.message)
     state.note_step("record_assistant")
-    prompt_trace = builder.record_assistant_message(
-        prepared_prompt,
-        model_output,
+    prompt_trace = (
+        PromptTrace(prompt_object_id=prepared_prompt.prompt_object_id)
+        if prepared_prompt.prompt_object_id is not None
+        else None
     )
     state.note_prompt_trace(prompt_trace)
     state.note_model_telemetry(model_telemetry)
@@ -459,7 +462,6 @@ async def run_capability_calls(
     allowed_capabilities: tuple[str, ...],
     projection: CapabilityProjection,
     model_telemetry: dict[str, Any],
-    prompt_trace: PromptTrace | None,
     assistant_event_id: str | None,
     state: AgentTurnState,
     ctx: TurnContext,
@@ -472,12 +474,13 @@ async def run_capability_calls(
             allowed_capabilities=allowed_capabilities,
             projection=projection,
             model_telemetry=(model_telemetry if index == 0 else None),
-            prompt_trace=prompt_trace,
             assistant_event_id=assistant_event_id,
             state=state,
             ctx=ctx,
         )
         state.events.extend(result_event.events)
+        if result_event.events:
+            project_trace_drafts(state.events, ctx.builder.store())
         state.next_model_caused_by = next_model_parent(result_event.events)
         if result_event.staged_effect is not None and config.stop_on_staged_effect:
             state.note_step("finish_run")
@@ -496,7 +499,6 @@ async def run_capability_step(
     allowed_capabilities: tuple[str, ...],
     projection: CapabilityProjection,
     model_telemetry: dict[str, Any] | None,
-    prompt_trace: PromptTrace | None,
     assistant_event_id: str | None,
     state: RunState,
     ctx: TurnContext,
@@ -524,7 +526,6 @@ async def run_capability_step(
         index=index,
         execution_mode=config.execution_mode,
         model_telemetry=model_telemetry,
-        prompt_trace=prompt_trace,
         caused_by=assistant_event_id,
         ctx=ctx,
     )
@@ -725,6 +726,67 @@ def is_runtime_ui_event(draft: DraftEvent) -> bool:
     return draft.event_type in {"runtime.stream.chunk", "runtime.status.update"}
 
 
+def draft_views_for_prompt(
+    drafts: list[DraftEvent],
+    builder: PromptBuilder,
+) -> list[dict[str, Any]]:
+    projection = project_trace_drafts(drafts, builder.store())
+    views = []
+    for draft in drafts:
+        if is_runtime_ui_event(draft):
+            continue
+        view = draft_event_view(draft)
+        event_id = draft_event_id(draft)
+        if event_id is not None:
+            add_projection_fields_for_prompt(view, event_id, projection)
+        views.append(view)
+    return views
+
+
+def add_projection_fields_for_prompt(
+    view: dict[str, Any],
+    event_id: str,
+    projection: TraceProjection,
+) -> None:
+    event_type = view.get("type")
+    if event_type == "model":
+        prompt_id = projection.prompt_object_ids.get(event_id)
+        assistant_id = projection.assistant_message_ids.get(event_id)
+        if prompt_id is not None:
+            view["prompt_trace"] = {"prompt_object_id": prompt_id}
+            if assistant_id is not None:
+                view["prompt_trace"]["assistant_message_object_id"] = assistant_id
+        tool_calls = view.get("tool_calls")
+        if isinstance(tool_calls, list):
+            tool_call_ids = [
+                projection.tool_call_object_ids[tool_call["id"]]
+                for tool_call in tool_calls
+                if isinstance(tool_call, dict)
+                and isinstance(tool_call.get("id"), str)
+                and tool_call["id"] in projection.tool_call_object_ids
+            ]
+            if tool_call_ids:
+                view["tool_call_object_ids"] = tool_call_ids
+        return
+    if event_type == "tool_call":
+        call_id = projection.tool_call_object_ids.get(event_id)
+        if call_id is not None:
+            view["tool_call_object_id"] = call_id
+        return
+    if event_type == "tool_result":
+        tool_call_id = view.get("tool_call_id")
+        call_id = (
+            projection.tool_call_object_ids.get(tool_call_id)
+            if isinstance(tool_call_id, str)
+            else None
+        )
+        result_id = projection.tool_result_object_ids.get(event_id)
+        if call_id is not None:
+            view["tool_call_object_id"] = call_id
+        if result_id is not None:
+            view["tool_result_object_id"] = result_id
+
+
 def draft_event_id(draft: DraftEvent) -> str | None:
     key = draft.idempotency_key
     prefix = f"{draft.event_type}:"
@@ -762,6 +824,8 @@ def record_runtime_event(
     ctx: TurnContext,
 ) -> DraftEvent:
     emit_event(events, draft, ctx.event_sink)
+    if ctx.event_sink is None:
+        project_trace_drafts(events, ctx.builder.store())
     return draft
 
 
@@ -814,17 +878,9 @@ def record_model_event(
     if caused_by is not None:
         event["caused_by"] = caused_by
     if prompt_trace is not None:
-        attach_prompt_trace(event, prompt_trace)
+        event["prompt_object_id"] = prompt_trace.prompt_object_id
     event_id = ensure_event_id(event) if event else None
     tool_calls = assistant_tool_calls(assistant)
-    tool_call_object_ids = model_tool_call_object_ids(
-        tool_calls,
-        caused_by=event_id,
-        prompt_trace=prompt_trace,
-        prompt_builder=ctx.builder,
-    )
-    if tool_call_object_ids:
-        event["tool_call_object_ids"] = tool_call_object_ids
     if event:
         record_runtime_event(
             events,
@@ -832,6 +888,25 @@ def record_model_event(
             ctx=ctx,
         )
     return event_id, tool_calls
+
+
+def update_prompt_trace_from_projection(
+    assistant_event_id: str | None,
+    *,
+    state: RunState,
+    ctx: TurnContext,
+) -> None:
+    if assistant_event_id is None or not state.prompt_traces:
+        return
+    projection = project_trace_drafts(state.events, ctx.builder.store())
+    assistant_id = projection.assistant_message_ids.get(assistant_event_id)
+    if assistant_id is None:
+        return
+    trace = state.prompt_traces[-1]
+    state.prompt_traces[-1] = PromptTrace(
+        prompt_object_id=trace.prompt_object_id,
+        assistant_message_object_id=assistant_id,
+    )
 
 
 def next_model_parent(events: list[DraftEvent]) -> str | None:
@@ -852,65 +927,6 @@ def draft_timeline_type(draft: DraftEvent) -> str:
     if draft.event_type.startswith(prefix):
         return draft.event_type[len(prefix) :]
     return draft.event_type
-
-
-def attach_prompt_trace(event: dict[str, Any], trace: PromptTrace) -> None:
-    event["prompt_trace"] = prompt_trace_payload(trace)
-
-
-def attach_tool_call_trace(
-    event: dict[str, Any],
-    *,
-    prompt_trace: PromptTrace | None,
-    prompt_builder: PromptBuilder | None,
-) -> None:
-    if prompt_trace is None or prompt_builder is None:
-        return
-    object_id = prompt_builder.record_tool_call(prompt_trace, event)
-    if object_id:
-        event["tool_call_object_id"] = object_id
-
-
-def attach_tool_result_trace(
-    event: dict[str, Any],
-    call_event: dict[str, Any],
-    *,
-    prompt_trace: PromptTrace | None,
-    prompt_builder: PromptBuilder | None,
-) -> None:
-    if prompt_trace is None or prompt_builder is None:
-        return
-    object_id = prompt_builder.record_tool_result(prompt_trace, call_event, event)
-    if object_id:
-        event["tool_result_object_id"] = object_id
-        call_object_id = str(call_event.get("tool_call_object_id") or "")
-        if call_object_id:
-            event["tool_call_object_id"] = call_object_id
-
-
-def model_tool_call_object_ids(
-    tool_calls: list[dict[str, Any]],
-    *,
-    caused_by: str | None,
-    prompt_trace: PromptTrace | None,
-    prompt_builder: PromptBuilder | None,
-) -> list[str]:
-    object_ids: list[str] = []
-    if prompt_trace is None or prompt_builder is None:
-        return object_ids
-    for index, tool_call in enumerate(tool_calls):
-        call_event = model_tool_call_event(tool_call, index=index, caused_by=caused_by)
-        if not call_event:
-            continue
-        attach_tool_call_trace(
-            call_event,
-            prompt_trace=prompt_trace,
-            prompt_builder=prompt_builder,
-        )
-        object_id = call_event.get("tool_call_object_id")
-        if isinstance(object_id, str):
-            object_ids.append(object_id)
-    return object_ids
 
 
 def model_tool_call_event(
@@ -1007,7 +1023,6 @@ async def handle_tool_call(
     index: int,
     execution_mode: ExecutionMode = "stage",
     model_telemetry: dict[str, Any] | None = None,
-    prompt_trace: PromptTrace | None = None,
     caused_by: str | None = None,
     ctx: TurnContext,
 ) -> CapabilityCallResult:
@@ -1021,7 +1036,6 @@ async def handle_tool_call(
             "invalid-tool-call",
             "tool call did not include a function payload",
             model_telemetry=model_telemetry,
-            prompt_trace=prompt_trace,
             caused_by=caused_by,
             ctx=ctx,
         )
@@ -1038,7 +1052,6 @@ async def handle_tool_call(
             code,
             message,
             model_telemetry=model_telemetry,
-            prompt_trace=prompt_trace,
             ctx=ctx,
         )
     return await run_valid_tool_call(
@@ -1046,7 +1059,6 @@ async def handle_tool_call(
         capability_id=validation.capability_id,
         execution_mode=execution_mode,
         model_telemetry=model_telemetry,
-        prompt_trace=prompt_trace,
         ctx=ctx,
     )
 
@@ -1109,7 +1121,6 @@ def reject_tool_call(
     message: str,
     *,
     model_telemetry: dict[str, Any] | None,
-    prompt_trace: PromptTrace | None,
     ctx: TurnContext,
 ) -> CapabilityCallResult:
     return invalid_tool_result(
@@ -1120,7 +1131,6 @@ def reject_tool_call(
         message,
         call_event=invocation.call_event,
         model_telemetry=model_telemetry,
-        prompt_trace=prompt_trace,
         ctx=ctx,
     )
 
@@ -1131,17 +1141,11 @@ async def run_valid_tool_call(
     capability_id: str,
     execution_mode: ExecutionMode,
     model_telemetry: dict[str, Any] | None,
-    prompt_trace: PromptTrace | None,
     ctx: TurnContext,
 ) -> CapabilityCallResult:
     events: list[DraftEvent] = []
     call_event = invocation.call_event
     call_event["capability_id"] = capability_id
-    attach_tool_call_trace(
-        call_event,
-        prompt_trace=prompt_trace,
-        prompt_builder=ctx.builder,
-    )
     emit_tool_event(
         events,
         call_event,
@@ -1173,20 +1177,16 @@ async def run_valid_tool_call(
         )
         and result.get("ok") is True
     )
-    emit_tool_event(
-        events,
-        traced_tool_result_event(
-            invocation.call_id,
-            invocation.name,
-            result,
-            capability_id=capability_id,
-            call_event=call_event,
-            model_telemetry=model_telemetry,
-            prompt_trace=prompt_trace,
-            prompt_builder=ctx.builder,
-        ),
-        ctx=ctx,
+    result_event = tool_result_event(
+        invocation.call_id,
+        invocation.name,
+        result,
+        capability_id=capability_id,
+        model_telemetry=model_telemetry,
     )
+    if isinstance(call_event.get("caused_by"), str):
+        result_event["caused_by"] = call_event["caused_by"]
+    emit_tool_event(events, result_event, ctx=ctx)
     return CapabilityCallResult(
         events=events,
         staged_effect=staged_effect,
@@ -1217,7 +1217,6 @@ def invalid_tool_result(
     *,
     call_event: dict[str, Any] | None = None,
     model_telemetry: dict[str, Any] | None = None,
-    prompt_trace: PromptTrace | None = None,
     caused_by: str | None = None,
     ctx: TurnContext,
 ) -> CapabilityCallResult:
@@ -1231,26 +1230,14 @@ def invalid_tool_result(
     if caused_by is not None:
         event["caused_by"] = caused_by
     events: list[DraftEvent] = []
-    attach_tool_call_trace(
-        event,
-        prompt_trace=prompt_trace,
-        prompt_builder=ctx.builder,
-    )
     result_event = tool_result_event(
         call_id,
         name,
         tool_error(code, message),
         model_telemetry=model_telemetry,
-        prompt_trace=prompt_trace,
     )
     if isinstance(event.get("caused_by"), str):
         result_event["caused_by"] = event["caused_by"]
-    attach_tool_result_trace(
-        result_event,
-        event,
-        prompt_trace=prompt_trace,
-        prompt_builder=ctx.builder,
-    )
     emit_tool_event(
         events,
         event,
@@ -1264,36 +1251,6 @@ def invalid_tool_result(
     return CapabilityCallResult(events=events)
 
 
-def traced_tool_result_event(
-    call_id: str,
-    name: str,
-    result: dict[str, Any],
-    *,
-    capability_id: str = "",
-    call_event: dict[str, Any],
-    model_telemetry: dict[str, Any] | None = None,
-    prompt_trace: PromptTrace | None = None,
-    prompt_builder: PromptBuilder | None = None,
-) -> dict[str, Any]:
-    event = tool_result_event(
-        call_id,
-        name,
-        result,
-        capability_id=capability_id,
-        model_telemetry=model_telemetry,
-        prompt_trace=prompt_trace,
-    )
-    if isinstance(call_event.get("caused_by"), str):
-        event["caused_by"] = call_event["caused_by"]
-    attach_tool_result_trace(
-        event,
-        call_event,
-        prompt_trace=prompt_trace,
-        prompt_builder=prompt_builder,
-    )
-    return event
-
-
 def tool_result_event(
     call_id: str,
     name: str,
@@ -1301,11 +1258,7 @@ def tool_result_event(
     *,
     capability_id: str = "",
     model_telemetry: dict[str, Any] | None = None,
-    prompt_trace: PromptTrace | None = None,
 ) -> dict[str, Any]:
-    trace_payload = (
-        prompt_trace_payload(prompt_trace) if prompt_trace is not None else None
-    )
     event: dict[str, Any] = {
         "type": "tool_result",
         "tool_call_id": call_id,
@@ -1318,8 +1271,6 @@ def tool_result_event(
         event["capability_id"] = capability_id
     if model_telemetry:
         event["model_telemetry"] = dict(model_telemetry)
-    if trace_payload is not None:
-        event["prompt_trace"] = trace_payload
     return event
 
 

@@ -18,6 +18,8 @@ from _zeta_helpers import (
     assert_tool_result_derivation,
     assert_tool_result_derivation_graph,
     event_by_type,
+    projected_tool_call_object_id,
+    projected_tool_result_object_id,
     read_tool_call_response,
     read_tool_payload,
     required_stream_sink,
@@ -375,7 +377,7 @@ def test_zeta_model_called_draft_sets_durable_metadata() -> None:
     assert draft.idempotency_key == "zeta.model_call.completed:model-1"
 
 
-def test_zeta_durable_model_event_payload_extracts_trace_refs() -> None:
+def test_zeta_durable_model_event_payload_keeps_domain_fields() -> None:
     payload = zeta_event_model.durable_model_event_payload(
         {
             "type": "model",
@@ -393,12 +395,12 @@ def test_zeta_durable_model_event_payload_extracts_trace_refs() -> None:
     assert payload == {
         "_timeline_type": "model",
         "content": "done",
-        "used_objects": [{"kind": "prompt", "id": "sha256:prompt"}],
-        "returned_objects": [
-            {"kind": "assistant_message", "id": "sha256:assistant"},
-            {"kind": "tool_call", "id": "sha256:call-1"},
-            {"kind": "tool_call", "id": "sha256:call-2"},
-        ],
+        "prompt_trace": {
+            "prompt_object_id": "sha256:prompt",
+            "assistant_message_object_id": "sha256:assistant",
+        },
+        "tool_call_object_ids": ["sha256:call-1"],
+        "tool_call_object_id": "sha256:call-2",
     }
 
 
@@ -440,7 +442,7 @@ def test_zeta_tool_called_draft_sets_durable_metadata() -> None:
     assert draft.idempotency_key == "zeta.tool_call.started:tool-1"
 
 
-def test_zeta_durable_tool_result_event_payload_extracts_trace_refs() -> None:
+def test_zeta_durable_tool_result_event_payload_keeps_domain_fields() -> None:
     payload = zeta_event_model.durable_tool_event_payload(
         {
             "type": "tool_result",
@@ -454,12 +456,12 @@ def test_zeta_durable_tool_result_event_payload_extracts_trace_refs() -> None:
     assert payload == {
         "_timeline_type": "tool_result",
         "result": {"ok": True},
-        "used_objects": [{"kind": "tool_call", "id": "sha256:call"}],
-        "returned_objects": [{"kind": "tool_result", "id": "sha256:result"}],
+        "tool_call_object_id": "sha256:call",
+        "tool_result_object_id": "sha256:result",
     }
 
 
-def test_zeta_durable_tool_call_event_payload_extracts_trace_refs() -> None:
+def test_zeta_durable_tool_call_event_payload_keeps_domain_fields() -> None:
     payload = zeta_event_model.durable_tool_event_payload(
         {
             "type": "tool_call",
@@ -472,7 +474,7 @@ def test_zeta_durable_tool_call_event_payload_extracts_trace_refs() -> None:
     assert payload == {
         "_timeline_type": "tool_call",
         "name": "read",
-        "returned_objects": [{"kind": "tool_call", "id": "sha256:call"}],
+        "tool_call_object_id": "sha256:call",
     }
 
 
@@ -1094,7 +1096,6 @@ def test_zeta_run_capability_step_records_call_execution_and_result(
             allowed_capabilities=(),
             projection=projection,
             model_telemetry={},
-            prompt_trace=None,
             assistant_event_id="assistant-1",
             state=state,
             ctx=ctx,
@@ -1172,7 +1173,6 @@ def test_zeta_run_capability_step_reconciles_existing_terminal_result(
             allowed_capabilities=(),
             projection=projection,
             model_telemetry={},
-            prompt_trace=None,
             assistant_event_id="assistant-1",
             state=state,
             ctx=ctx,
@@ -2201,12 +2201,6 @@ def test_zeta_rpc_session_trace_refs_degrade_when_trace_data_is_missing(
         "chat_completion_messages",
         lambda *args, **kwargs: {"content": "done"},
     )
-    monkeypatch.setattr(
-        zeta_context.PromptBuilder,
-        "record_assistant_message",
-        lambda self, prepared, assistant: None,
-    )
-
     result = run_rpc_session(
         {"objective": "answer", "tools": [], "context": ""},
         publish_event=lambda event: None,
@@ -2214,8 +2208,8 @@ def test_zeta_rpc_session_trace_refs_degrade_when_trace_data_is_missing(
     )
 
     trace = result["trace"]
-    assert trace["prompt_ids"] == []
-    assert trace["assistant_message_ids"] == []
+    assert len(trace["prompt_ids"]) == 1
+    assert len(trace["assistant_message_ids"]) == 1
     assert len(trace["model_event_ids"]) == 1
     assert trace["tool_event_ids"] == []
     assert trace["tool_call_ids"] == []
@@ -3575,7 +3569,7 @@ def test_zeta_agent_tool_call_is_caused_by_assistant_event(
     assert assistant["caused_by"] == "prompt-event"
     assert tool_call["caused_by"] == assistant["id"]
     assert tool_result["caused_by"] == assistant["id"]
-    assert assistant["tool_call_object_ids"] == [tool_call["tool_call_object_id"]]
+    assert projected_tool_call_object_id(store, tool_call)
 
 
 def test_zeta_agent_turn_finalizes_text(monkeypatch) -> None:
@@ -3605,7 +3599,7 @@ def test_zeta_agent_turn_finalizes_text(monkeypatch) -> None:
     assert result.final_text == "done"
     assert timeline_events(result.events)[0]["type"] == "model"
     assert timeline_events(result.events)[0]["content"] == "done"
-    assert timeline_events(result.events)[0]["prompt_trace"]["prompt_object_id"]
+    assert timeline_events(result.events)[0]["prompt_object_id"]
     assert [step.step for step in result.steps] == [
         "check_budget",
         "build_prompt",
@@ -3667,9 +3661,9 @@ def test_zeta_agent_turn_stores_prompt_and_assistant_trace(monkeypatch) -> None:
     assert assistant.kind == "assistant_message"
     assert assistant.links == (trace.prompt_object_id,)
     assert assistant.data["message"] == {"content": "done"}
-    assert timeline_events(result.events)[0]["prompt_trace"][
-        "assistant_message_object_id"
-    ] == (trace.assistant_message_object_id)
+    assert timeline_events(result.events)[0]["prompt_object_id"] == (
+        trace.prompt_object_id
+    )
 
 
 def test_zeta_agent_turn_captures_model_telemetry(monkeypatch) -> None:
@@ -4399,11 +4393,13 @@ def test_zeta_agent_turn_stops_after_staged_tool(monkeypatch) -> None:
     assert_prompt_trace_replay_graph(store, result.prompt_traces[0])
     tool_call = event_by_type(result.events, "tool_call")
     tool_result = event_by_type(result.events, "tool_result")
-    assert_tool_call_derivation(store, result, tool_call["tool_call_object_id"])
+    call_object_id = projected_tool_call_object_id(store, tool_call)
+    result_object_id = projected_tool_result_object_id(store, tool_result)
+    assert_tool_call_derivation(store, result, call_object_id)
     assert_tool_result_derivation(
         store,
-        tool_call["tool_call_object_id"],
-        tool_result["tool_result_object_id"],
+        call_object_id,
+        result_object_id,
     )
 
 
@@ -4640,15 +4636,17 @@ def test_zeta_agent_turn_aborts_on_deadline_between_model_turns(
     assert trace.assistant_message_object_id is not None
     tool_call = event_by_type(result.events, "tool_call")
     tool_result = event_by_type(result.events, "tool_result")
+    call_object_id = projected_tool_call_object_id(store, tool_call)
+    result_object_id = projected_tool_result_object_id(store, tool_result)
     assert_tool_call_derivation(
         store,
         result,
-        tool_call["tool_call_object_id"],
+        call_object_id,
     )
     assert_tool_result_derivation(
         store,
-        tool_call["tool_call_object_id"],
-        tool_result["tool_result_object_id"],
+        call_object_id,
+        result_object_id,
     )
     assert raised.value.result.steps[-1].step == "abort_run"
     projected = timeline_events(events)

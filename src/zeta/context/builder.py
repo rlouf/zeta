@@ -13,14 +13,14 @@ from typing import Any
 from zeta.capabilities.base import content_hash
 from zeta.context.components import (
     PromptComponent,
-    PromptTrace,
     component_messages,
     prompt_component_object,
     prompt_components,
 )
 from zeta.context.system import can_read_skill_files, enabled_capability_ids
 from zeta.context.transforms import NoOpPromptTransform, PromptTransform
-from zeta.models import ModelInput, ModelOutput
+from zeta.events import DraftEvent, Event, draft_event_id
+from zeta.models import ModelInput
 from zeta.models.chat_completions import (
     DEFAULT_MAX_COMPLETION_TOKENS,
     chat_completion_request_body,
@@ -65,6 +65,16 @@ class StoredPrompt:
     components: tuple[PromptComponent, ...]
     prompt_object_id: ObjectId | None = None
     component_object_ids: tuple[ObjectId, ...] = ()
+
+
+@dataclass(frozen=True)
+class TraceProjection:
+    """Trace ids derived from replaying domain events."""
+
+    prompt_object_ids: dict[str, ObjectId]
+    assistant_message_ids: dict[str, ObjectId]
+    tool_call_object_ids: dict[str, ObjectId]
+    tool_result_object_ids: dict[str, ObjectId]
 
 
 class PromptBuilder:
@@ -119,108 +129,6 @@ class PromptBuilder:
             transform=self.transform,
         )
 
-    def record_assistant_message(
-        self,
-        prepared: PreparedPrompt,
-        model_output: ModelOutput,
-    ) -> PromptTrace | None:
-        store = self.store()
-        if store is None or prepared.prompt_object_id is None:
-            return None
-        try:
-            assistant_id = store.put_object(
-                Object(
-                    kind="assistant_message",
-                    schema="zeta.model_output.v1",
-                    data=model_output.to_trace_data(),
-                    links=(prepared.prompt_object_id,),
-                )
-            )
-            store.record_derivation(
-                Derivation(
-                    producer="ModelResponse",
-                    output_id=assistant_id,
-                    input_ids=(prepared.prompt_object_id,),
-                    params={},
-                )
-            )
-            return PromptTrace(
-                prompt_object_id=prepared.prompt_object_id,
-                assistant_message_object_id=assistant_id,
-            )
-        except Exception as exc:
-            warn_trace_failure_once("record_assistant_message", exc)
-            return None
-
-    def record_tool_call(
-        self,
-        trace: PromptTrace,
-        event: dict[str, Any],
-    ) -> ObjectId | None:
-        """Record a first-class tool call projected from the model response."""
-        store = self.store()
-        source_id = trace.assistant_message_object_id or trace.prompt_object_id
-        if store is None or not source_id:
-            return None
-        try:
-            call_id = store.put_object(
-                Object(
-                    kind="tool_call",
-                    schema="zeta.tool_call.v1",
-                    data=tool_call_object_data(event),
-                    links=(source_id,),
-                )
-            )
-            store.record_derivation(
-                Derivation(
-                    producer="ToolCallProjection",
-                    output_id=call_id,
-                    input_ids=(source_id,),
-                    params=tool_event_derivation_params(event),
-                )
-            )
-            return call_id
-        except Exception as exc:
-            warn_trace_failure_once("record_tool_call", exc)
-            return None
-
-    def record_tool_result(
-        self,
-        trace: PromptTrace,
-        call_event: dict[str, Any],
-        result_event: dict[str, Any],
-    ) -> ObjectId | None:
-        """Record a first-class tool result derived from a tool call."""
-        store = self.store()
-        if store is None:
-            return None
-        call_object_id = str(call_event.get("tool_call_object_id") or "")
-        if not call_object_id:
-            call_object_id = self.record_tool_call(trace, call_event) or ""
-        if not call_object_id:
-            return None
-        try:
-            result_id = store.put_object(
-                Object(
-                    kind="tool_result",
-                    schema="zeta.tool_result.v1",
-                    data=tool_result_object_data(result_event),
-                    links=(call_object_id,),
-                )
-            )
-            store.record_derivation(
-                Derivation(
-                    producer="ToolExecution",
-                    output_id=result_id,
-                    input_ids=(call_object_id,),
-                    params=tool_event_derivation_params(result_event),
-                )
-            )
-            return result_id
-        except Exception as exc:
-            warn_trace_failure_once("record_tool_result", exc)
-            return None
-
     def _skills_for(self, allowed_capabilities: Iterable[str] | None) -> list[Skill]:
         enabled = enabled_capability_ids(allowed_capabilities)
         cached = self._skills.get(enabled)
@@ -231,6 +139,182 @@ class PromptBuilder:
 
     def store(self) -> Store | None:
         return self._store
+
+
+def project_trace_events(
+    events: Iterable[Event], store: Store | None
+) -> TraceProjection:
+    projection = TraceProjection({}, {}, {}, {})
+    if store is None:
+        return projection
+    latest_assistant_id: ObjectId | None = None
+    for event in events:
+        timeline_type = event_timeline_type(event)
+        if timeline_type == "model":
+            latest_assistant_id = project_model_event(event, store, projection)
+            continue
+        if timeline_type == "tool_call":
+            project_tool_call_event(
+                event,
+                store,
+                projection,
+                latest_assistant_id=latest_assistant_id,
+            )
+            continue
+        if timeline_type == "tool_result":
+            project_tool_result_event(event, store, projection)
+    return projection
+
+
+def project_trace_drafts(
+    drafts: Iterable[DraftEvent],
+    store: Store | None,
+) -> TraceProjection:
+    return project_trace_events(
+        (
+            Event(
+                id=draft_event_id(draft) or "",
+                event_type=draft.event_type,
+                source=draft.source,
+                payload=draft.payload,
+                idempotency_key=draft.idempotency_key,
+                caused_by=draft.caused_by,
+                session_id=draft.session_id,
+                turn_id=draft.turn_id,
+                timestamp_micros=0,
+            )
+            for draft in drafts
+        ),
+        store,
+    )
+
+
+def event_timeline_type(event: Event) -> str:
+    view_type = event.payload.get("_timeline_type")
+    if isinstance(view_type, str) and view_type:
+        return view_type
+    prefix = "zeta."
+    if event.event_type.startswith(prefix):
+        return event.event_type[len(prefix) :]
+    return event.event_type
+
+
+def project_model_event(
+    event: Event,
+    store: Store,
+    projection: TraceProjection,
+) -> ObjectId | None:
+    prompt_id = optional_object_id(event.payload.get("prompt_object_id"))
+    if prompt_id is None:
+        return None
+    assistant_id = store.put_object(
+        Object(
+            kind="assistant_message",
+            schema="zeta.model_output.v1",
+            data=model_trace_data(event),
+            links=(prompt_id,),
+        )
+    )
+    store.record_derivation(
+        Derivation(
+            producer="ModelResponse",
+            output_id=assistant_id,
+            input_ids=(prompt_id,),
+            params={},
+        )
+    )
+    projection.prompt_object_ids[event.id] = prompt_id
+    projection.assistant_message_ids[event.id] = assistant_id
+    return assistant_id
+
+
+def project_tool_call_event(
+    event: Event,
+    store: Store,
+    projection: TraceProjection,
+    *,
+    latest_assistant_id: ObjectId | None,
+) -> ObjectId | None:
+    source_id = (
+        projection.assistant_message_ids.get(event.caused_by or "")
+        or latest_assistant_id
+    )
+    if source_id is None:
+        return None
+    payload = dict(event.payload)
+    call_id = store.put_object(
+        Object(
+            kind="tool_call",
+            schema="zeta.tool_call.v1",
+            data=tool_call_object_data(payload),
+            links=(source_id,),
+        )
+    )
+    store.record_derivation(
+        Derivation(
+            producer="ToolCallProjection",
+            output_id=call_id,
+            input_ids=(source_id,),
+            params=tool_event_derivation_params(payload),
+        )
+    )
+    projection.tool_call_object_ids[event.id] = call_id
+    tool_call_id = payload.get("tool_call_id")
+    if isinstance(tool_call_id, str) and tool_call_id:
+        projection.tool_call_object_ids[tool_call_id] = call_id
+    return call_id
+
+
+def project_tool_result_event(
+    event: Event,
+    store: Store,
+    projection: TraceProjection,
+) -> ObjectId | None:
+    payload = dict(event.payload)
+    tool_call_id = payload.get("tool_call_id")
+    call_object_id = (
+        projection.tool_call_object_ids.get(tool_call_id)
+        if isinstance(tool_call_id, str)
+        else None
+    )
+    if call_object_id is None:
+        return None
+    result_id = store.put_object(
+        Object(
+            kind="tool_result",
+            schema="zeta.tool_result.v1",
+            data=tool_result_object_data(payload),
+            links=(call_object_id,),
+        )
+    )
+    store.record_derivation(
+        Derivation(
+            producer="ToolExecution",
+            output_id=result_id,
+            input_ids=(call_object_id,),
+            params=tool_event_derivation_params(payload),
+        )
+    )
+    projection.tool_result_object_ids[event.id] = result_id
+    return result_id
+
+
+def optional_object_id(value: Any) -> ObjectId | None:
+    return value if isinstance(value, str) and value.startswith("sha256:") else None
+
+
+def model_trace_data(event: Event) -> dict[str, Any]:
+    message: dict[str, Any] = {}
+    content = event.payload.get("content")
+    if isinstance(content, str):
+        message["content"] = content
+    reasoning = event.payload.get("reasoning")
+    if isinstance(reasoning, str):
+        message["reasoning_content"] = reasoning
+    tool_calls = event.payload.get("tool_calls")
+    if isinstance(tool_calls, list):
+        message["tool_calls"] = [call for call in tool_calls if isinstance(call, dict)]
+    return {"message": dict(message), "model_output": {"message": dict(message)}}
 
 
 def plan_prompt(

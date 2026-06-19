@@ -19,6 +19,7 @@ from zeta import loop as zeta_agent
 from zeta.context.builder import (
     PreparedPrompt,
     ReconstructedPrompt,
+    project_trace_events,
     reconstructed_prompt_request,
 )
 from zeta.context.components import PromptComponent, prompt_components
@@ -31,6 +32,7 @@ from zeta.events import (
 )
 from zeta.models import chat_completions as zeta_model
 from zeta.session import Session
+from zeta.store.events import Filter
 from zeta.store.substrate import InMemoryStore, Store
 from zeta.substrate import Object, ObjectId
 
@@ -237,6 +239,24 @@ def record_durable_timeline_event(
         durable_event = appended.event
     else:
         durable_event = runtime_context.event_sink.accept(draft).event
+    event_reader = getattr(runtime_context.event_sink, "list_events", None)
+    if callable(event_reader):
+        event_filter = (
+            Filter(
+                session_id=runtime_context.session_id,
+                turn_id=durable_event.turn_id,
+                event_type_prefix="zeta.",
+            )
+            if durable_event.turn_id is not None
+            else Filter(
+                session_id=runtime_context.session_id,
+                event_type_prefix="zeta.",
+            )
+        )
+        project_trace_events(
+            event_reader(event_filter),
+            runtime_context.trace_store,
+        )
     return event_view(durable_event)
 
 
@@ -359,8 +379,8 @@ def assert_tool_result_derivation_graph(
     call_event: dict[str, Any],
     result_event: dict[str, Any],
 ) -> None:
-    call_object_id = call_event["tool_call_object_id"]
-    result_object_id = result_event["tool_result_object_id"]
+    call_object_id = projected_tool_call_object_id(store, call_event)
+    result_object_id = projected_tool_result_object_id(store, result_event)
     assert_tool_call_derivation(store, result, call_object_id)
     assert_tool_result_derivation(store, call_object_id, result_object_id)
     assert_prompt_closure_contains_tool_result(
@@ -369,6 +389,28 @@ def assert_tool_result_derivation_graph(
         call_object_id,
         result_object_id,
     )
+
+
+def projected_tool_call_object_id(
+    store: InMemoryStore,
+    call_event: dict[str, Any],
+) -> ObjectId:
+    tool_call_id = str(call_event.get("tool_call_id") or call_event.get("id") or "")
+    for object_id, obj in store.objects(kind="tool_call"):
+        if obj.data.get("tool_call_id") == tool_call_id:
+            return object_id
+    raise AssertionError(f"missing projected tool_call object for {tool_call_id}")
+
+
+def projected_tool_result_object_id(
+    store: InMemoryStore,
+    result_event: dict[str, Any],
+) -> ObjectId:
+    tool_call_id = str(result_event.get("tool_call_id") or "")
+    for object_id, obj in store.objects(kind="tool_result"):
+        if obj.data.get("tool_call_id") == tool_call_id:
+            return object_id
+    raise AssertionError(f"missing projected tool_result object for {tool_call_id}")
 
 
 def assert_prompt_trace_replay_graph(

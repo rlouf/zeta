@@ -20,6 +20,7 @@ from _zeta_helpers import (
 )
 
 from sigil.tools import ensure_builtin_tools_registered
+from zeta import events as zeta_event_model
 from zeta import models as zeta_models_api
 from zeta import skills as zeta_skills
 from zeta.capabilities.base import (
@@ -85,6 +86,7 @@ zeta_context = SimpleNamespace(
     estimated_tokens=estimated_tokens,
     measure=measure,
     payload_sha256=payload_sha256,
+    project_trace_events=context_builder.project_trace_events,
     prompt_components=prompt_components,
     prompt_transform_from_env=prompt_transform_from_env,
     reconstructed_prompt_request=reconstructed_prompt_request,
@@ -447,7 +449,7 @@ def test_zeta_prompt_render_model_input_matches_prepared_prompt() -> None:
     )
 
 
-def test_zeta_prompt_records_provider_neutral_model_output() -> None:
+def test_zeta_prompt_projects_model_output_from_event() -> None:
     store = zeta_trace.InMemoryStore()
     prepared = prepare_prompt(
         zeta_context.PromptBuilder(store=store),
@@ -456,48 +458,30 @@ def test_zeta_prompt_records_provider_neutral_model_output() -> None:
         allowed_capabilities=(),
     )
     assert prepared.prompt_object_id is not None
-    output = zeta_models_api.ModelOutput(
-        message={
-            "role": "assistant",
+    event = zeta_event_model.Event(
+        id="model-1",
+        event_type="zeta.model_call.completed",
+        source="zeta",
+        payload={
+            "_timeline_type": "model",
             "content": "done",
-            "_responses_items": [{"type": "reasoning", "id": "rs_1"}],
+            "prompt_object_id": prepared.prompt_object_id,
         },
-        finish_reason="stop",
-        usage=zeta_models_api.ModelUsage(
-            prompt_tokens=3,
-            completion_tokens=2,
-            total_tokens=5,
-        ),
-        provider_metadata={"id": "resp_1", "model": "gpt-5.5"},
-        provider_replay_items=({"type": "reasoning", "id": "rs_1"},),
+        idempotency_key=None,
+        caused_by=None,
+        session_id="session-1",
+        turn_id="turn-1",
+        timestamp_micros=1,
     )
 
-    trace = zeta_context.PromptBuilder(store=store).record_assistant_message(
-        prepared,
-        output,
-    )
+    projection = zeta_context.project_trace_events([event], store)
 
-    assert trace is not None
-    assistant = store.get_object(str(trace.assistant_message_object_id))
+    assistant = store.get_object(projection.assistant_message_ids["model-1"])
     assert assistant is not None
     assert assistant.kind == "assistant_message"
     assert assistant.schema == "zeta.model_output.v1"
     assert assistant.data["message"]["content"] == "done"
-    assert assistant.data["model_output"] == {
-        "message": {
-            "role": "assistant",
-            "content": "done",
-            "_responses_items": [{"type": "reasoning", "id": "rs_1"}],
-        },
-        "finish_reason": "stop",
-        "usage": {
-            "prompt_tokens": 3,
-            "completion_tokens": 2,
-            "total_tokens": 5,
-        },
-        "provider_metadata": {"id": "resp_1", "model": "gpt-5.5"},
-        "provider_replay_items": [{"type": "reasoning", "id": "rs_1"}],
-    }
+    assert assistant.data["model_output"] == {"message": {"content": "done"}}
 
 
 def test_zeta_prompt_request_reconstructs_a_no_thinking_prompt() -> None:

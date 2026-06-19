@@ -10,7 +10,6 @@ from typing import Any
 import pytest
 from _zeta_helpers import (
     BatchSpyStore,
-    event_by_type,
     read_tool_call_response,
     read_tool_payload,
     record_durable_timeline_event,
@@ -772,7 +771,7 @@ def test_zeta_timeline_tool_call_is_caused_by_assistant_event(
     assert tool_calls[0].payload["name"] == "read"
 
 
-def test_zeta_model_called_links_used_and_returned_objects(
+def test_zeta_model_called_keeps_trace_links_out_of_payload(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -787,33 +786,12 @@ def test_zeta_model_called_links_used_and_returned_objects(
             data={"payload_sha256": "sha256:payload"},
         )
     )
-    assistant_id = store.put_object(
-        zeta_trace.Object(
-            kind="assistant_message",
-            schema="zeta.assistant_output.v1",
-            data={"message": {"role": "assistant", "content": "the answer"}},
-            links=(prompt_id,),
-        )
-    )
-    call_id = store.put_object(
-        zeta_trace.Object(
-            kind="tool_call",
-            schema="zeta.tool_call.v1",
-            data={"tool_call_id": "call-1", "name": "read", "input": {}},
-            links=(assistant_id,),
-        )
-    )
-
     record_zeta_event(
         {
             "type": "model",
             "id": "model-event-1",
             "content": "the answer",
-            "prompt_trace": {
-                "prompt_object_id": prompt_id,
-                "assistant_message_object_id": assistant_id,
-            },
-            "tool_call_object_ids": [call_id],
+            "prompt_object_id": prompt_id,
         },
         runtime_context=runtime_context,
     )
@@ -821,16 +799,12 @@ def test_zeta_model_called_links_used_and_returned_objects(
     event = zeta_event_store().get("model-event-1")
     assert event is not None
     assert event.event_type == "zeta.model_call.completed"
-    assert event.payload["used_objects"] == [
-        {"kind": "prompt", "id": prompt_id},
-    ]
-    assert event.payload["returned_objects"] == [
-        {"kind": "assistant_message", "id": assistant_id},
-        {"kind": "tool_call", "id": call_id},
-    ]
+    assert "used_objects" not in event.payload
+    assert "returned_objects" not in event.payload
+    assert store.objects(kind="assistant_message")
 
 
-def test_zeta_tool_called_links_used_and_returned_objects(
+def test_zeta_tool_called_keeps_trace_links_out_of_payload(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -854,15 +828,11 @@ def test_zeta_tool_called_links_used_and_returned_objects(
     )
     assert len(events) == 1
     assert events[0].caused_by == "model-event-1"
-    assert events[0].payload["used_objects"] == [
-        {"kind": "tool_call", "id": "sha256:call"},
-    ]
-    assert events[0].payload["returned_objects"] == [
-        {"kind": "tool_result", "id": "sha256:result"},
-    ]
+    assert "used_objects" not in events[0].payload
+    assert "returned_objects" not in events[0].payload
 
 
-def test_zeta_agent_durable_events_link_trace_objects(
+def test_zeta_agent_durable_events_project_trace_objects(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -888,7 +858,7 @@ def test_zeta_agent_durable_events_link_trace_objects(
     def record_runtime_event(event: DraftEvent) -> None:
         record_zeta_event(event, runtime_context=runtime_context)
 
-    result = run_agent_turn(
+    run_agent_turn(
         "inspect",
         [],
         zeta_agent.AgentConfig(allowed_capabilities=("read",), max_turns=2),
@@ -896,8 +866,6 @@ def test_zeta_agent_durable_events_link_trace_objects(
         prompt_builder=PromptBuilder(store=runtime_context.trace_store),
     )
 
-    tool_call = event_by_type(result.events, "tool_call")
-    tool_result = event_by_type(result.events, "tool_result")
     model_events = zeta_event_store().list_events(
         Filter(event_type="zeta.model_call.completed")
     )
@@ -908,35 +876,17 @@ def test_zeta_agent_durable_events_link_trace_objects(
     ]
 
     assert len(model_events) == 2
-    assert model_events[0].payload["used_objects"] == [
-        {"kind": "prompt", "id": result.prompt_traces[0].prompt_object_id},
-    ]
-    assert model_events[0].payload["returned_objects"] == [
-        {
-            "kind": "assistant_message",
-            "id": result.prompt_traces[0].assistant_message_object_id,
-        },
-        {"kind": "tool_call", "id": tool_call["tool_call_object_id"]},
-    ]
-    assert model_events[1].payload["used_objects"] == [
-        {"kind": "prompt", "id": result.prompt_traces[1].prompt_object_id},
-    ]
-    assert model_events[1].payload["returned_objects"] == [
-        {
-            "kind": "assistant_message",
-            "id": result.prompt_traces[1].assistant_message_object_id,
-        },
-    ]
+    assert all("used_objects" not in event.payload for event in model_events)
+    assert all("returned_objects" not in event.payload for event in model_events)
     assert [event.payload["_timeline_type"] for event in tool_events] == [
         "tool_call",
         "tool_result",
     ]
-    assert tool_events[1].payload["used_objects"] == [
-        {"kind": "tool_call", "id": tool_call["tool_call_object_id"]},
-    ]
-    assert tool_events[1].payload["returned_objects"] == [
-        {"kind": "tool_result", "id": tool_result["tool_result_object_id"]},
-    ]
+    assert all("used_objects" not in event.payload for event in tool_events)
+    assert all("returned_objects" not in event.payload for event in tool_events)
+    assert runtime_context.trace_store.objects(kind="assistant_message")
+    assert runtime_context.trace_store.objects(kind="tool_call")
+    assert runtime_context.trace_store.objects(kind="tool_result")
 
 
 def test_zeta_user_message_usage_and_abort_are_durable(
@@ -1074,24 +1024,11 @@ def test_zeta_record_event_stores_prompt_link_not_components(
             links=(component_id,),
         )
     )
-    assistant_id = store.put_object(
-        zeta_trace.Object(
-            kind="assistant_message",
-            schema="zeta.assistant_output.v1",
-            data={"message": {"role": "assistant", "content": "the answer"}},
-            links=(prompt_id,),
-        )
-    )
-
     record_zeta_event(
         {
             "type": "model",
             "content": "the answer",
-            "prompt_trace": {
-                "prompt_object_id": prompt_id,
-                "assistant_message_object_id": assistant_id,
-                "component_object_ids": [component_id],
-            },
+            "prompt_object_id": prompt_id,
         },
         runtime_context=runtime_context,
     )
@@ -1100,10 +1037,9 @@ def test_zeta_record_event_stores_prompt_link_not_components(
     (event,) = zeta_event_store().list_events(
         Filter(event_type="zeta.model_call.completed")
     )
-    assert event.payload["used_objects"] == [{"kind": "prompt", "id": prompt_id}]
-    assert event.payload["returned_objects"] == [
-        {"kind": "assistant_message", "id": assistant_id}
-    ]
+    assert event.payload["prompt_object_id"] == prompt_id
+    assert "used_objects" not in event.payload
+    assert "returned_objects" not in event.payload
     assert "prompt_trace" not in event.payload
 
 

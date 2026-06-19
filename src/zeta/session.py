@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any, Literal, cast
 
 from zeta.agents.capabilities import AgentConfig
 from zeta.capabilities.base import ExecutionMode
+from zeta.context.builder import event_timeline_type, project_trace_events
 from zeta.dispatch import AgentDefinition, AgentRun, AsyncEventDispatcher, TriggerRule
 from zeta.events import (
     DraftEvent,
@@ -375,7 +376,26 @@ def record_runtime_draft(
         turn_id=run_id,
     )
     outcome = runtime_context.event_sink.accept(tagged)
+    project_trace_for_turn(runtime_context, outcome.event.turn_id)
     return outcome.event
+
+
+def project_trace_for_turn(runtime_context: Session, turn_id: str | None) -> None:
+    if turn_id is None or not isinstance(runtime_context.event_sink, EventReader):
+        return
+    try:
+        project_trace_events(
+            runtime_context.event_sink.list_events(
+                Filter(
+                    session_id=runtime_context.session_id,
+                    turn_id=turn_id,
+                    event_type_prefix="zeta.",
+                )
+            ),
+            runtime_context.trace_store,
+        )
+    except Exception as exc:
+        warn_trace_failure_once("project_trace_for_turn", exc)
 
 
 def live_runtime_event(
@@ -404,7 +424,11 @@ def session_result(
         "run_id": run_id,
         "outcome": outcome,
         "final_text": final_text,
-        "trace": session_trace_result(agent_result),
+        "trace": session_trace_result(
+            agent_result,
+            runtime_context=runtime_context,
+            run_id=run_id,
+        ),
     }
     cursor = final_event_cursor(runtime_context, run_id)
     if cursor is not None:
@@ -412,8 +436,19 @@ def session_result(
     return result
 
 
-def session_trace_result(agent_result: AgentTurnResult | None) -> dict[str, list[str]]:
+def session_trace_result(
+    agent_result: AgentTurnResult | None,
+    *,
+    runtime_context: Session | None = None,
+    run_id: str | None = None,
+) -> dict[str, list[str]]:
     trace = empty_session_trace_result()
+    if (
+        runtime_context is not None
+        and run_id is not None
+        and isinstance(runtime_context.event_sink, EventReader)
+    ):
+        return projected_session_trace_result(runtime_context, run_id)
     if agent_result is None:
         return trace
     for prompt_trace in agent_result.prompt_traces:
@@ -445,6 +480,52 @@ def session_trace_result(agent_result: AgentTurnResult | None) -> dict[str, list
                 trace["tool_result_ids"], draft_object_ids(draft, "tool_result")
             )
     return trace
+
+
+def projected_session_trace_result(
+    runtime_context: Session,
+    run_id: str,
+) -> dict[str, list[str]]:
+    trace = empty_session_trace_result()
+    events = runtime_context.event_sink.list_events(
+        Filter(
+            session_id=runtime_context.session_id,
+            turn_id=run_id,
+            event_type_prefix="zeta.",
+        )
+    )
+    projection = project_trace_events(events, runtime_context.trace_store)
+    for event in events:
+        add_projected_event_trace(trace, event, projection)
+    return trace
+
+
+def add_projected_event_trace(
+    trace: dict[str, list[str]],
+    event: Event,
+    projection: Any,
+) -> None:
+    event_type = event_timeline_type(event)
+    if event_type == "model":
+        add_unique(trace["model_event_ids"], event.id)
+        add_unique(trace["prompt_ids"], projection.prompt_object_ids.get(event.id))
+        add_unique(
+            trace["assistant_message_ids"],
+            projection.assistant_message_ids.get(event.id),
+        )
+        return
+    if event_type == "tool_call":
+        add_unique(trace["tool_event_ids"], event.id)
+        add_unique(
+            trace["tool_call_ids"], projection.tool_call_object_ids.get(event.id)
+        )
+        return
+    if event_type == "tool_result":
+        add_unique(trace["tool_event_ids"], event.id)
+        add_unique(
+            trace["tool_result_ids"],
+            projection.tool_result_object_ids.get(event.id),
+        )
 
 
 def draft_timeline_type(draft: DraftEvent) -> str:

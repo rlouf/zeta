@@ -15,8 +15,6 @@ from types import MappingProxyType
 from typing import Any, Protocol, cast
 from uuid import uuid4
 
-from zeta.substrate import trace_object_id
-
 EVENT_IDEMPOTENT_TYPES = frozenset(
     {
         "zeta.model_call.completed",
@@ -40,10 +38,6 @@ RUNTIME_DURABLE_EXCLUDED_KEYS = {
     "session",
     "source",
     "caused_by",
-    "prompt_trace",
-    "tool_call_object_id",
-    "tool_call_object_ids",
-    "tool_result_object_id",
 }
 REFUSED_TOOL_ERROR_CODES = {
     "direct-execution-disallowed",
@@ -174,7 +168,6 @@ def event_view(event: Event) -> dict[str, Any]:
     if event.caused_by is not None:
         projected["caused_by"] = event.caused_by
     projected.update(payload)
-    add_durable_object_refs(projected)
     if event.seq:
         projected["cursor"] = str(event.seq)
     return projected
@@ -219,79 +212,6 @@ def draft_event_id(draft: DraftEvent) -> str | None:
         return None
     event_id = key[len(prefix) :].strip()
     return event_id or None
-
-
-def add_durable_object_refs(event: dict[str, Any]) -> None:
-    for link in event.get("used_objects") or []:
-        add_durable_object_ref(event, link, returned=False)
-    for link in event.get("returned_objects") or []:
-        add_durable_object_ref(event, link, returned=True)
-
-
-def add_durable_object_ref(
-    event: dict[str, Any],
-    link: Any,
-    *,
-    returned: bool,
-) -> None:
-    ref = durable_object_ref(link)
-    if ref is None:
-        return
-    kind, object_id = ref
-    if kind == "tool_call":
-        if returned and event.get("type") == "model":
-            event.setdefault("tool_call_object_ids", []).append(object_id)
-        else:
-            event.setdefault("tool_call_object_id", object_id)
-        return
-    durable_ref_handlers(returned).get(kind, ignore_durable_ref)(event, object_id)
-
-
-def durable_object_ref(link: Any) -> tuple[str, str] | None:
-    if not isinstance(link, dict):
-        return None
-    kind = link.get("kind")
-    object_id = link.get("id")
-    if isinstance(kind, str) and isinstance(object_id, str):
-        return kind, object_id
-    return None
-
-
-def durable_ref_handlers(returned: bool) -> dict[str, Any]:
-    if returned:
-        return {
-            "tool_result": set_tool_result_ref,
-            "assistant_message": set_assistant_message_ref,
-        }
-    return {"prompt": set_prompt_ref}
-
-
-def ignore_durable_ref(event: dict[str, Any], object_id: str) -> None:
-    del event, object_id
-
-
-def set_tool_result_ref(event: dict[str, Any], object_id: str) -> None:
-    event.setdefault("tool_result_object_id", object_id)
-
-
-def set_prompt_ref(event: dict[str, Any], object_id: str) -> None:
-    durable_prompt_trace(event).setdefault("prompt_object_id", object_id)
-
-
-def set_assistant_message_ref(event: dict[str, Any], object_id: str) -> None:
-    durable_prompt_trace(event).setdefault(
-        "assistant_message_object_id",
-        object_id,
-    )
-
-
-def durable_prompt_trace(event: dict[str, Any]) -> dict[str, Any]:
-    prompt_trace = event.setdefault("prompt_trace", {})
-    if isinstance(prompt_trace, dict):
-        return prompt_trace
-    prompt_trace = {}
-    event["prompt_trace"] = prompt_trace
-    return prompt_trace
 
 
 def runtime_event_draft(
@@ -547,37 +467,6 @@ def durable_model_event_payload(event: Mapping[str, Any]) -> dict[str, Any]:
     event_dict = dict(event)
     payload = durable_payload(event_dict)
     payload["_timeline_type"] = "model"
-    used_objects: list[dict[str, str]] = []
-    returned_objects: list[dict[str, str]] = []
-    prompt_trace = event_dict.get("prompt_trace")
-    if isinstance(prompt_trace, dict):
-        add_durable_object_link(
-            used_objects,
-            "prompt",
-            trace_object_id(prompt_trace, "prompt_object_id"),
-        )
-        add_durable_object_link(
-            returned_objects,
-            "assistant_message",
-            trace_object_id(prompt_trace, "assistant_message_object_id"),
-        )
-    object_ids = event_dict.get("tool_call_object_ids")
-    if isinstance(object_ids, (list, tuple)):
-        for object_id in object_ids:
-            add_durable_object_link(
-                returned_objects,
-                "tool_call",
-                object_id if isinstance(object_id, str) else None,
-            )
-    add_durable_object_link(
-        returned_objects,
-        "tool_call",
-        trace_object_id(event_dict, "tool_call_object_id"),
-    )
-    if used_objects:
-        payload["used_objects"] = used_objects
-    if returned_objects:
-        payload["returned_objects"] = returned_objects
     return payload
 
 
@@ -586,29 +475,6 @@ def durable_tool_event_payload(event: Mapping[str, Any]) -> dict[str, Any]:
     payload = durable_payload(event_dict)
     event_type = str(event.get("type") or "")
     payload["_timeline_type"] = event_type
-    used_objects: list[dict[str, str]] = []
-    returned_objects: list[dict[str, str]] = []
-    if event_type == "tool_call":
-        add_durable_object_link(
-            returned_objects,
-            "tool_call",
-            trace_object_id(event_dict, "tool_call_object_id"),
-        )
-    if event_type == "tool_result":
-        add_durable_object_link(
-            used_objects,
-            "tool_call",
-            trace_object_id(event_dict, "tool_call_object_id"),
-        )
-        add_durable_object_link(
-            returned_objects,
-            "tool_result",
-            trace_object_id(event_dict, "tool_result_object_id"),
-        )
-    if used_objects:
-        payload["used_objects"] = used_objects
-    if returned_objects:
-        payload["returned_objects"] = returned_objects
     return payload
 
 
@@ -618,18 +484,6 @@ def durable_payload(event: Mapping[str, Any]) -> dict[str, Any]:
         for key, value in event.items()
         if key not in RUNTIME_DURABLE_EXCLUDED_KEYS
     }
-
-
-def add_durable_object_link(
-    links: list[dict[str, str]],
-    kind: str,
-    object_id: str | None,
-) -> None:
-    if not object_id:
-        return
-    link = {"kind": kind, "id": object_id}
-    if link not in links:
-        links.append(link)
 
 
 def tool_result_status(result: Mapping[str, Any]) -> str:

@@ -34,6 +34,7 @@ from sigil.tools import ensure_builtin_tools_registered
 from sigil.turn import TurnRecorder
 from zeta.agents.capabilities import AgentConfig
 from zeta.capabilities.base import ExecutionMode
+from zeta.context.builder import project_trace_events
 from zeta.context.instructions import load_project_instructions
 from zeta.events import (
     DraftEvent,
@@ -152,11 +153,30 @@ def record_runtime_draft(
         )
     else:
         outcome = runtime_context.event_sink.accept(tagged_draft)
+    project_trace_for_turn(runtime_context, outcome.event.turn_id)
     return outcome.event
 
 
 def project_runtime_draft(draft: DraftEvent) -> DraftEvent:
     return draft
+
+
+def project_trace_for_turn(runtime_context: Session, turn_id: str | None) -> None:
+    if turn_id is None or not isinstance(runtime_context.event_sink, EventReader):
+        return
+    try:
+        project_trace_events(
+            runtime_context.event_sink.list_events(
+                Filter(
+                    session_id=runtime_context.session_id,
+                    turn_id=turn_id,
+                    event_type_prefix="zeta.",
+                )
+            ),
+            runtime_context.trace_store,
+        )
+    except Exception as exc:
+        warn_trace_failure_once("project_trace_for_turn", exc)
 
 
 def time_micros() -> int:

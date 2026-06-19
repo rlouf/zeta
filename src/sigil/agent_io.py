@@ -42,7 +42,6 @@ from zeta.events import (
     draft_event_view,
     event_view,
     exact_event_time,
-    runtime_event_draft,
     user_message_draft,
 )
 from zeta.loop import (
@@ -118,14 +117,13 @@ def record_user_message(
 
 
 def record_runtime_draft(
-    draft: DraftEvent | dict[str, Any],
+    draft: DraftEvent,
     *,
     runtime_context: Session,
     tag_fields: dict[str, Any] | None = None,
     strip_fields: frozenset[str] = frozenset(),
     turn_id: str | None = None,
 ) -> dict[str, Any]:
-    draft = ensure_runtime_draft(draft)
     tagged = {
         key: value for key, value in draft.payload.items() if key not in strip_fields
     }
@@ -156,13 +154,6 @@ def record_runtime_draft(
     else:
         outcome = runtime_context.event_sink.accept(tagged_draft)
     return event_view(outcome.event)
-
-
-def ensure_runtime_draft(draft: DraftEvent | dict[str, Any]) -> DraftEvent:
-    if isinstance(draft, DraftEvent):
-        return draft
-    turn_id = draft.get("turn_id") if isinstance(draft.get("turn_id"), str) else None
-    return runtime_event_draft(draft, session_id=None, turn_id=turn_id)
 
 
 def project_runtime_draft(draft: DraftEvent) -> dict[str, Any]:
@@ -249,19 +240,8 @@ class TurnEventRecorder:
         self.recorded_event_ids: set[int] = set()
         self.status: int | None = None
 
-    def record(self, draft: DraftEvent | dict[str, Any]) -> None:
+    def record(self, draft: DraftEvent) -> None:
         self.recorded_event_ids.add(id(draft))
-        self.record_event(draft)
-
-    def replay(self, result: AgentTurnResult) -> None:
-        """Record any turn events the live sink did not see."""
-        for draft in result.events:
-            if id(draft) in self.recorded_event_ids:
-                continue
-            self.record_event(draft)
-
-    def record_event(self, draft: DraftEvent | dict[str, Any]) -> None:
-        draft = ensure_runtime_draft(draft)
         projected_for_effects = project_runtime_draft(draft)
         if (
             projected_for_effects.get("type") == "tool_result"
@@ -304,6 +284,13 @@ class TurnEventRecorder:
         status = self.handle_tool_result(persisted)
         if status is not None:
             self.status = status
+
+    def replay(self, result: AgentTurnResult) -> None:
+        """Record any turn events the live sink did not see."""
+        for draft in result.events:
+            if id(draft) in self.recorded_event_ids:
+                continue
+            self.record(draft)
 
     def persist(self, draft: DraftEvent) -> dict[str, Any]:
         return record_runtime_draft(

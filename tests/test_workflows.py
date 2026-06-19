@@ -78,6 +78,10 @@ def draft_events(events: list[dict[str, Any]]) -> list[DraftEvent]:
     ]
 
 
+def draft_event(event: dict[str, Any]) -> DraftEvent:
+    return zeta_event_model.runtime_event_draft(event, session_id=None, turn_id=None)
+
+
 def test_sigil_step_writes_handoff_file(
     tmp_path: Path,
     monkeypatch,
@@ -319,7 +323,7 @@ def test_zeta_agent_step_renders_context_usage_at_bottom_after_tools(
         **kwargs: object,
     ) -> zeta_agent.AgentTurnResult:
         del objective, transcript, config
-        event_sink = cast("Callable[[Any], None]", kwargs.get("event_sink"))
+        event_sink = cast("Callable[[DraftEvent], None]", kwargs.get("event_sink"))
         first_call = {
             "type": "tool_call",
             "id": "call-1",
@@ -354,8 +358,8 @@ def test_zeta_agent_step_renders_context_usage_at_bottom_after_tools(
             "model_telemetry": tool_telemetry,
         }
         events = [first_call, first_result, second_call, second_result]
-        for event in events:
-            event_sink(event)
+        for draft in draft_events(events):
+            event_sink(draft)
         return zeta_agent.AgentTurnResult(
             final_text="done",
             events=draft_events(events),
@@ -551,7 +555,7 @@ def test_zeta_agent_step_prints_tool_start_while_agent_runs(
         **kwargs: object,
     ) -> zeta_agent.AgentTurnResult:
         del objective, transcript, config
-        event_sink = cast("Callable[[Any], None]", kwargs.get("event_sink"))
+        event_sink = cast("Callable[[DraftEvent], None]", kwargs.get("event_sink"))
         assert callable(event_sink)
         tool_call = {
             "type": "tool_call",
@@ -560,7 +564,7 @@ def test_zeta_agent_step_prints_tool_start_while_agent_runs(
             "name": "read",
             "input": {"path": "README.md"},
         }
-        event_sink(tool_call)
+        event_sink(draft_event(tool_call))
         assert capsys.readouterr().err == ""
         tool_result = {
             "type": "tool_result",
@@ -571,7 +575,7 @@ def test_zeta_agent_step_prints_tool_start_while_agent_runs(
                 "content": [{"type": "text", "text": "README"}],
             },
         }
-        event_sink(tool_result)
+        event_sink(draft_event(tool_result))
         return zeta_agent.AgentTurnResult(
             final_text="It is a README.",
             events=draft_events([tool_call, tool_result]),
@@ -598,7 +602,7 @@ def test_zeta_agent_step_streams_text_before_tool_trace(
         **kwargs: object,
     ) -> zeta_agent.AgentTurnResult:
         del objective, transcript, config
-        event_sink = cast("Callable[[Any], None]", kwargs.get("event_sink"))
+        event_sink = cast("Callable[[DraftEvent], None]", kwargs.get("event_sink"))
         event_sink(
             DraftEvent(
                 "runtime.stream.chunk",
@@ -616,7 +620,7 @@ def test_zeta_agent_step_streams_text_before_tool_trace(
             "name": "read",
             "input": {"path": "README.md"},
         }
-        event_sink(tool_call)
+        event_sink(draft_event(tool_call))
         return zeta_agent.AgentTurnResult(
             final_text="It is a README.",
             events=draft_events([tool_call]),
@@ -647,7 +651,7 @@ def test_zeta_agent_step_separates_tool_result_from_later_streamed_text(
         **kwargs: object,
     ) -> zeta_agent.AgentTurnResult:
         del objective, transcript, config
-        event_sink = cast("Callable[[Any], None]", kwargs.get("event_sink"))
+        event_sink = cast("Callable[[DraftEvent], None]", kwargs.get("event_sink"))
         event_sink(
             DraftEvent(
                 "runtime.stream.chunk",
@@ -674,8 +678,8 @@ def test_zeta_agent_step_separates_tool_result_from_later_streamed_text(
                 "content": [{"type": "text", "text": "README\n"}],
             },
         }
-        event_sink(tool_call)
-        event_sink(tool_result)
+        event_sink(draft_event(tool_call))
+        event_sink(draft_event(tool_result))
         event_sink(
             DraftEvent(
                 "runtime.stream.chunk",
@@ -715,7 +719,7 @@ def test_zeta_agent_step_does_not_insert_blank_lines_between_tool_calls(
         **kwargs: object,
     ) -> zeta_agent.AgentTurnResult:
         del objective, transcript, config
-        event_sink = cast("Callable[[Any], None]", kwargs.get("event_sink"))
+        event_sink = cast("Callable[[DraftEvent], None]", kwargs.get("event_sink"))
         events = [
             {
                 "type": "tool_call",
@@ -750,8 +754,8 @@ def test_zeta_agent_step_does_not_insert_blank_lines_between_tool_calls(
                 },
             },
         ]
-        for event in events:
-            event_sink(event)
+        for draft in draft_events(events):
+            event_sink(draft)
         return zeta_agent.AgentTurnResult(
             final_text="Done.", events=draft_events(events)
         )
@@ -784,7 +788,7 @@ def test_zeta_agent_step_aligns_thinking_status_after_tool_trace(
         **kwargs: object,
     ) -> zeta_agent.AgentTurnResult:
         del objective, transcript, config
-        event_sink = cast("Callable[[Any], None]", kwargs.get("event_sink"))
+        event_sink = cast("Callable[[DraftEvent], None]", kwargs.get("event_sink"))
         tool_call = {
             "type": "tool_call",
             "id": "call-1",
@@ -801,8 +805,8 @@ def test_zeta_agent_step_aligns_thinking_status_after_tool_trace(
                 "content": [{"type": "text", "text": "README\n"}],
             },
         }
-        event_sink(tool_call)
-        event_sink(tool_result)
+        event_sink(draft_event(tool_call))
+        event_sink(draft_event(tool_result))
         event_sink(
             DraftEvent(
                 "runtime.status.update",
@@ -1493,7 +1497,7 @@ def test_zeta_ask_workflow_streams_final_text_without_duplicate(
         **kwargs: object,
     ) -> zeta_agent.AgentTurnResult:
         del objective, transcript, config
-        event_sink = cast("Callable[[Any], None]", kwargs.get("event_sink"))
+        event_sink = cast("Callable[[DraftEvent], None]", kwargs.get("event_sink"))
         event_sink(
             DraftEvent(
                 "runtime.stream.chunk",
@@ -1528,7 +1532,7 @@ def test_zeta_ask_workflow_streams_markdown_with_rich_for_tty(
         **kwargs: object,
     ) -> zeta_agent.AgentTurnResult:
         del objective, transcript, config
-        event_sink = cast("Callable[[Any], None]", kwargs.get("event_sink"))
+        event_sink = cast("Callable[[DraftEvent], None]", kwargs.get("event_sink"))
         event_sink(
             DraftEvent(
                 "runtime.stream.chunk",
@@ -1569,7 +1573,7 @@ def test_zeta_ask_workflow_streams_text_before_tool_trace(
         **kwargs: object,
     ) -> zeta_agent.AgentTurnResult:
         del objective, transcript, config
-        event_sink = cast("Callable[[Any], None]", kwargs.get("event_sink"))
+        event_sink = cast("Callable[[DraftEvent], None]", kwargs.get("event_sink"))
         event_sink(
             DraftEvent(
                 "runtime.stream.chunk",
@@ -1596,8 +1600,8 @@ def test_zeta_ask_workflow_streams_text_before_tool_trace(
                 "content": [{"type": "text", "text": "README"}],
             },
         }
-        event_sink(tool_call)
-        event_sink(tool_result)
+        event_sink(draft_event(tool_call))
+        event_sink(draft_event(tool_result))
         event_sink(
             DraftEvent(
                 "runtime.stream.chunk",
@@ -1646,7 +1650,7 @@ def test_zeta_ask_workflow_renders_context_usage_at_bottom_after_tools(
         **kwargs: object,
     ) -> zeta_agent.AgentTurnResult:
         del objective, transcript, config
-        event_sink = cast("Callable[[Any], None]", kwargs.get("event_sink"))
+        event_sink = cast("Callable[[DraftEvent], None]", kwargs.get("event_sink"))
         first_call = {
             "type": "tool_call",
             "id": "call-1",
@@ -1681,8 +1685,8 @@ def test_zeta_ask_workflow_renders_context_usage_at_bottom_after_tools(
             "model_telemetry": telemetry,
         }
         events = [first_call, first_result, second_call, second_result]
-        for event in events:
-            event_sink(event)
+        for draft in draft_events(events):
+            event_sink(draft)
         return zeta_agent.AgentTurnResult(
             final_text="It is a README.",
             events=draft_events(events),
@@ -1714,7 +1718,7 @@ def test_zeta_question_loop_prints_tool_start_while_agent_runs(
         **kwargs: object,
     ) -> zeta_agent.AgentTurnResult:
         del objective, transcript, config
-        event_sink = cast("Callable[[Any], None]", kwargs.get("event_sink"))
+        event_sink = cast("Callable[[DraftEvent], None]", kwargs.get("event_sink"))
         assert callable(event_sink)
         tool_call = {
             "type": "tool_call",
@@ -1723,7 +1727,7 @@ def test_zeta_question_loop_prints_tool_start_while_agent_runs(
             "name": "read",
             "input": {"path": "README.md"},
         }
-        event_sink(tool_call)
+        event_sink(draft_event(tool_call))
         assert capsys.readouterr().err == ""
         tool_result = {
             "type": "tool_result",
@@ -1734,7 +1738,7 @@ def test_zeta_question_loop_prints_tool_start_while_agent_runs(
                 "content": [{"type": "text", "text": "README"}],
             },
         }
-        event_sink(tool_result)
+        event_sink(draft_event(tool_result))
         return zeta_agent.AgentTurnResult(
             final_text="It is a README.",
             events=draft_events([tool_call, tool_result]),
@@ -1914,7 +1918,7 @@ def test_zeta_ask_workflow_keeps_stdout_clean_for_pipes(
         **kwargs: object,
     ) -> zeta_agent.AgentTurnResult:
         del objective, transcript, config
-        event_sink = cast("Callable[[Any], None]", kwargs.get("event_sink"))
+        event_sink = cast("Callable[[DraftEvent], None]", kwargs.get("event_sink"))
         assert callable(event_sink)
         events = [
             {
@@ -1931,8 +1935,8 @@ def test_zeta_ask_workflow_keeps_stdout_clean_for_pipes(
                 "result": {"ok": True, "content": [{"type": "text", "text": "A\n"}]},
             },
         ]
-        for event in events:
-            event_sink(event)
+        for draft in draft_events(events):
+            event_sink(draft)
         return zeta_agent.AgentTurnResult(
             final_text="grep-safe answer",
             events=draft_events(events),
@@ -2061,7 +2065,7 @@ def test_zeta_step_threads_durable_event_causality(monkeypatch) -> None:
     ) -> zeta_agent.AgentTurnResult:
         del objective, transcript, config
         prompt_event_id = cast(str, kwargs["caused_by"])
-        event_sink = cast("Callable[[Any], None]", kwargs["event_sink"])
+        event_sink = cast("Callable[[DraftEvent], None]", kwargs["event_sink"])
         captured["prompt_event_id"] = prompt_event_id
         drafts = [
             zeta_event_model.model_call_draft(

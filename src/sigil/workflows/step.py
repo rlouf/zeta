@@ -20,7 +20,7 @@ from sigil.agent_io import (
     model_server_ready,
     model_telemetry_fields,
     record_turn_abort,
-    render_final_text,
+    render_final_answer,
 )
 from sigil.display.render import render_tool_result_summary
 from sigil.display.state import PROGRESS_MODE_TRACE
@@ -38,14 +38,15 @@ from sigil.state import append_prompt_submitted_event
 from sigil.tools import ensure_builtin_tools_registered
 from sigil.turn import TurnRecorder
 from zeta.agents.capabilities import AgentConfig
-from zeta.capabilities.base import ExecutionMode, proposed_effect
+from zeta.capabilities.base import proposed_effect
 from zeta.capabilities.registry import CapabilityRegistry
 from zeta.capabilities.registry import registry as _default_tool_registry
 from zeta.context.components import latest_prompt_trace_fields
 from zeta.context.instructions import load_project_instructions
 from zeta.context.system import system_prompt
-from zeta.events import DraftEvent, Event
 from zeta.history import history_event_record
+from zeta.kernel.capabilities import ExecutionMode
+from zeta.kernel.events import DraftEvent, Event
 from zeta.loop import (
     AgentTurnAborted,
     async_run_agent_turn,
@@ -59,6 +60,7 @@ from zeta.session import Session
 
 HandoffOutput = Literal["detail", "summary", "none"]
 Workflow = Literal["ask", "propose", "do"]
+STAGING_TOOL_NAMES = frozenset({"bash", "edit", "write"})
 
 STEP_SYSTEM_PROMPT = f"""You are Zeta, a shell-native coding agent.
 
@@ -128,16 +130,16 @@ def step(
         allowed_tools,
         tool_registry=runtime_context.tool_registry,
     )
-    enabled_tool_aliases = tuple(
-        runtime_context.tool_registry.model_alias(capability_id)
+    enabled_tool_names = tuple(
+        runtime_context.tool_registry.model_name(capability_id)
         for capability_id in enabled_capabilities
     )
-    system = system_with_available_skills(system, enabled_tool_aliases)
+    system = system_with_available_skills(system, enabled_tool_names)
     turn_recorder = TurnRecorder(
         runtime_context=runtime_context,
         workflow=workflow,
         objective=objective,
-        allowed_tools=enabled_tool_aliases,
+        allowed_tools=enabled_tool_names,
         staged=stages_mutations(
             execution_mode,
             enabled_capabilities,
@@ -152,7 +154,7 @@ def step(
         "workflow": workflow,
         "runtime": "zeta",
         "system": system_prompt(system, allowed_capabilities=enabled_capabilities),
-        "available_tools": list(enabled_tool_aliases),
+        "available_tools": list(enabled_tool_names),
         "turn_id": turn_recorder.turn_id,
     }
     if selected_model is not None:
@@ -208,7 +210,7 @@ def step(
         )
         finalize_progress(renderer, turn)
         if context_footer is not None:
-            context_footer.finalize(error.result.model_telemetry)
+            context_footer.finalize(error.result.telemetry)
         raise
     except KeyboardInterrupt as error:
         abort_event = record_turn_abort(
@@ -238,7 +240,7 @@ def step(
     status = recorder.status
     if status is not None:
         record_agent_model_telemetry(
-            result.model_telemetry,
+            result.telemetry,
             workflow=workflow,
             prompt_traces=result.prompt_traces,
             runtime_context=runtime_context,
@@ -248,13 +250,13 @@ def step(
         )
         finalize_progress(renderer, turn)
         if context_footer is not None:
-            context_footer.finalize(result.model_telemetry)
+            context_footer.finalize(result.telemetry)
         return status
-    if result.final_text:
+    if result.final_answer:
         if renderer.stream_renderer is not None:
             renderer.stream_renderer.ensure_trace_boundary()
         record_agent_model_telemetry(
-            result.model_telemetry,
+            result.telemetry,
             workflow=workflow,
             prompt_traces=result.prompt_traces,
             runtime_context=runtime_context,
@@ -267,14 +269,14 @@ def step(
         )
         if context_footer is not None:
             context_footer.clear()
-        render_final_text(
-            result.final_text,
-            streamed=result.final_text_streamed,
+        render_final_answer(
+            result.final_answer,
+            streamed=result.answer_streamed,
             renderer=renderer,
         )
         finalize_progress(renderer, turn)
         if context_footer is not None:
-            context_footer.finalize(result.model_telemetry)
+            context_footer.finalize(result.telemetry)
         return 0
     turn = turn_recorder.finish(TURN_OUTCOME_FAILED, prompt_traces=result.prompt_traces)
     finalize_progress(renderer, turn)
@@ -455,18 +457,17 @@ def stages_mutations(
         ensure_builtin_tools_registered()
     active_tool_registry = tool_registry or _default_tool_registry
     return any(
-        capability.spec.mutates()
+        active_tool_registry.model_name(capability_id) in STAGING_TOOL_NAMES
         for name in enabled_capabilities
         if (capability_id := active_tool_registry.resolve(name)) is not None
-        if (capability := active_tool_registry.get(capability_id)) is not None
     )
 
 
 def system_with_available_skills(
     system: str,
-    enabled_tool_aliases: Iterable[str],
+    enabled_tool_names: Iterable[str],
 ) -> str:
-    if "read" not in enabled_tool_aliases:
+    if "read" not in enabled_tool_names:
         return system
     skills_prompt = available_skills_prompt()
     if not skills_prompt:

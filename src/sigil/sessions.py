@@ -23,13 +23,13 @@ from sigil.protocols import (
     turn_contract,
 )
 from sigil.state import event_store_path, read_events, state_dir
-from zeta.events import Event
 from zeta.history import (
     effect_record,
     publish_effect_record,
     publish_turn_record,
     turn_record,
 )
+from zeta.kernel.events import Event
 
 RUN_WORKFLOW = "run"
 
@@ -199,7 +199,7 @@ def latest_events_by_session(events: list[Event]) -> dict[str, Event]:
 def event_time(event: Event | dict[str, Any]) -> float:
     """Return event time as a sortable float, treating malformed times as zero."""
     if isinstance(event, Event):
-        return event.timestamp_micros / 1_000_000
+        return event.timestamp_ms / 1_000
     value = event.get("time")
     return value if isinstance(value, int | float) else 0.0
 

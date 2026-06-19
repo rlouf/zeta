@@ -7,7 +7,8 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field
 from typing import Any
 
-from zeta.capabilities.base import CapabilityId, CapabilitySpec, error_result
+from zeta.capabilities.base import error_result
+from zeta.kernel.capabilities import Capability, CapabilityId
 from zeta.models.chat_completions import stream_json_sse
 from zeta.models.codex_auth import CodexCredentials, load_codex_credentials
 from zeta.models.responses import codex_request_headers, codex_responses_url
@@ -37,15 +38,13 @@ SEARCH_SCHEMA: dict[str, Any] = {
     },
 }
 
-SEARCH_SPEC = CapabilitySpec(
+SEARCH_SPEC = Capability(
     CapabilityId("sigil", "web_search"),
     (
         "Search public web pages using Codex hosted web search. Provide one "
         "self-contained query; use read for URLs returned by the search."
     ),
     SEARCH_SCHEMA,
-    effects=("search",),
-    aliases=("web_search",),
 )
 
 

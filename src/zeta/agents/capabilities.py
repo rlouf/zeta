@@ -4,7 +4,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Literal
 
-from zeta.capabilities.base import ExecutionMode
+from zeta.kernel.capabilities import ExecutionMode
 
 CompactionStrategy = Literal["structural_trim", "drop_oldest"]
 

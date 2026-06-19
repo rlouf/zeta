@@ -18,19 +18,13 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
+from zeta.kernel.objects import Derivation, Object, ObjectId, Ref, RefUpdate
 from zeta.store.substrate.base import (
     IncompatibleSchemaError,
     StoreBase,
     TraceStats,
     UnknownSessionError,
     escape_like,
-)
-from zeta.substrate import (
-    Derivation,
-    Object,
-    ObjectId,
-    Ref,
-    RefUpdate,
 )
 
 DEFAULT_SQLITE_NAME = "zeta-trace.sqlite3"

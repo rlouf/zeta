@@ -4,8 +4,6 @@ from typing import Any
 
 from zeta.context.builder import project_trace_events
 from zeta.events import (
-    DraftEvent,
-    Event,
     durable_model_event_payload,
     durable_tool_event_payload,
     event_view,
@@ -14,26 +12,31 @@ from zeta.events import (
     tool_call_draft,
 )
 from zeta.history import effect_record, event_from_record, turn_record
+from zeta.kernel.events import DraftEvent, Event
+from zeta.kernel.objects import Derivation, Object
 from zeta.store.substrate import InMemoryStore
-from zeta.substrate import Derivation, Object
 
 SESSION_ID = "session-1"
 TURN_ID = "turn-1"
-TIMESTAMP_MICROS = 1_700_000_000_123_456
-EVENT_TIME = 1_700_000_000.123456
+TIMESTAMP_MS = 1_700_000_000_123
+EVENT_TIME = 1_700_000_000.123
+
+
+def timestamp_time(cursor: int = 0) -> float:
+    return (TIMESTAMP_MS + cursor) / 1_000
 
 
 def event_from_draft(
     draft: DraftEvent,
     *,
     event_id: str,
-    seq: int,
+    cursor: int,
 ) -> Event:
     return replace(
         Event.from_draft(draft),
         id=event_id,
-        timestamp_micros=TIMESTAMP_MICROS + seq,
-        seq=seq,
+        timestamp_ms=TIMESTAMP_MS + cursor,
+        cursor=cursor,
     )
 
 
@@ -179,7 +182,7 @@ def runtime_events() -> list[Event]:
         "abort-1",
     ]
     return [
-        event_from_draft(draft, event_id=event_id, seq=index + 1)
+        event_from_draft(draft, event_id=event_id, cursor=index + 1)
         for index, (draft, event_id) in enumerate(
             zip(runtime_drafts(), event_ids, strict=True)
         )
@@ -389,7 +392,7 @@ def test_zeta_event_view_and_rpc_projection_contract() -> None:
         {
             "type": "model",
             "id": "model-1",
-            "time": EVENT_TIME + 0.000001,
+            "time": timestamp_time(1),
             "session": SESSION_ID,
             "turn_id": TURN_ID,
             "content": "I will inspect the file.",
@@ -408,7 +411,7 @@ def test_zeta_event_view_and_rpc_projection_contract() -> None:
         {
             "type": "tool_call",
             "id": "call-1",
-            "time": EVENT_TIME + 0.000002,
+            "time": timestamp_time(2),
             "session": SESSION_ID,
             "turn_id": TURN_ID,
             "caused_by": "model-1",
@@ -421,7 +424,7 @@ def test_zeta_event_view_and_rpc_projection_contract() -> None:
         {
             "type": "tool_result",
             "id": "result-ok",
-            "time": EVENT_TIME + 0.000003,
+            "time": timestamp_time(3),
             "session": SESSION_ID,
             "turn_id": TURN_ID,
             "tool_call_id": "call-1",
@@ -434,7 +437,7 @@ def test_zeta_event_view_and_rpc_projection_contract() -> None:
         {
             "type": "tool_result",
             "id": "result-failed",
-            "time": EVENT_TIME + 0.000004,
+            "time": timestamp_time(4),
             "session": SESSION_ID,
             "turn_id": TURN_ID,
             "tool_call_id": "call-1",
@@ -450,7 +453,7 @@ def test_zeta_event_view_and_rpc_projection_contract() -> None:
         {
             "type": "tool_result",
             "id": "result-refused",
-            "time": EVENT_TIME + 0.000005,
+            "time": timestamp_time(5),
             "session": SESSION_ID,
             "turn_id": TURN_ID,
             "tool_call_id": "call-1",
@@ -469,7 +472,7 @@ def test_zeta_event_view_and_rpc_projection_contract() -> None:
         {
             "type": "turn_aborted",
             "id": "abort-1",
-            "time": EVENT_TIME + 0.000006,
+            "time": timestamp_time(6),
             "session": SESSION_ID,
             "turn_id": TURN_ID,
             "caused_by": "result-ok",
@@ -487,14 +490,14 @@ def test_zeta_event_view_and_rpc_projection_contract() -> None:
         caused_by="call-1",
         session_id=SESSION_ID,
         turn_id=TURN_ID,
-        timestamp_micros=TIMESTAMP_MICROS,
-        seq=7,
+        timestamp_ms=TIMESTAMP_MS,
+        cursor=7,
     )
     assert event_view(generic) == {
         "type": "runtime.work.completed",
         "id": "external-1",
         "source": "dispatcher",
-        "time": EVENT_TIME,
+        "time": timestamp_time(),
         "work_id": "work-1",
         "result": {"ok": True},
         "session": SESSION_ID,
@@ -535,7 +538,7 @@ def test_zeta_pure_runtime_events_project_to_trace_graph() -> None:
             event_id="model-1",
         ),
         event_id="model-1",
-        seq=1,
+        cursor=1,
     )
     tool_call = event_from_draft(
         tool_call_draft(
@@ -553,7 +556,7 @@ def test_zeta_pure_runtime_events_project_to_trace_graph() -> None:
             event_id="call-1",
         ),
         event_id="call-1",
-        seq=2,
+        cursor=2,
     )
     tool_result = event_from_draft(
         tool_call_draft(
@@ -574,7 +577,7 @@ def test_zeta_pure_runtime_events_project_to_trace_graph() -> None:
             event_id="result-ok",
         ),
         event_id="result-ok",
-        seq=3,
+        cursor=3,
     )
 
     projection = project_trace_events([model, tool_call, tool_result], store)
@@ -751,7 +754,7 @@ def test_zeta_history_record_projection_contract() -> None:
         caused_by="model-1",
         session_id=SESSION_ID,
         turn_id=TURN_ID,
-        timestamp_micros=TIMESTAMP_MICROS,
+        timestamp_ms=TIMESTAMP_MS,
     )
     assert effect_round_trip == Event(
         id="effect-event-1",
@@ -772,5 +775,5 @@ def test_zeta_history_record_projection_contract() -> None:
         caused_by="call-1",
         session_id=SESSION_ID,
         turn_id=TURN_ID,
-        timestamp_micros=TIMESTAMP_MICROS,
+        timestamp_ms=TIMESTAMP_MS,
     )

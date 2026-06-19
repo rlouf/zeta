@@ -25,7 +25,10 @@ from zeta import loop as zeta_agent
 from zeta import models as zeta_models_api
 from zeta.context.builder import PromptBuilder
 from zeta.context.components import chat_messages
-from zeta.events import DraftEvent, event_view
+from zeta.events import event_view
+from zeta.kernel.events import DraftEvent
+from zeta.kernel.objects import Derivation, Object, ObjectId, Ref, RefUpdate
+from zeta.loop import AgentTurnResult
 from zeta.models import chat_completions as zeta_model
 from zeta.models import profiles as zeta_models
 from zeta.session import Session, current_timeline, default_session
@@ -41,7 +44,6 @@ from zeta.store.substrate import (
     zeta_sqlite_path,
 )
 from zeta.store.substrate.base import IncompatibleSchemaError
-from zeta.substrate import Derivation, Object, ObjectId, Ref, RefUpdate
 
 zeta_trace = SimpleNamespace(
     AmbiguousIdError=AmbiguousIdError,
@@ -60,7 +62,7 @@ zeta_trace = SimpleNamespace(
 )
 
 
-def run_agent_turn(*args: Any, **kwargs: Any) -> zeta_agent.AgentTurnResult:
+def run_agent_turn(*args: Any, **kwargs: Any) -> AgentTurnResult:
     return asyncio.run(zeta_agent.async_run_agent_turn(*args, **kwargs))
 
 

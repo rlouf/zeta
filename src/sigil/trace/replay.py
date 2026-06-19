@@ -10,14 +10,10 @@ from sigil.display.summarize import (
     assistant_trace_summary,
     short_trace_id,
 )
-from zeta.models import (
-    ModelOutput,
-    ModelSelection,
-    resolve_active_model,
-    resolve_model_profile,
-)
+from zeta.kernel.models import ModelOutput
+from zeta.kernel.objects import Derivation, Object, ObjectId
+from zeta.models import ModelSelection, resolve_active_model, resolve_model_profile
 from zeta.store.substrate import Store, warn_trace_failure_once
-from zeta.substrate import Derivation, Object, ObjectId
 
 
 def replay_model_selection(model_profile: str | None) -> ModelSelection:
@@ -73,7 +69,7 @@ def record_replay(
                 Object(
                     kind="assistant_message",
                     schema="zeta.model_output.v1",
-                    data=ModelOutput(message=message).to_trace_data(),
+                    data=model_output_trace_data(ModelOutput(message=message)),
                     links=(prompt_id,),
                 )
             )
@@ -89,6 +85,31 @@ def record_replay(
     except Exception as exc:
         warn_trace_failure_once("trace_replay", exc)
         return None
+
+
+def model_output_trace_data(output: ModelOutput) -> dict[str, Any]:
+    model_output: dict[str, Any] = {"message": dict(output.message)}
+    if output.finish_reason is not None:
+        model_output["finish_reason"] = output.finish_reason
+    if output.usage is not None:
+        usage: dict[str, int] = {}
+        if output.usage.prompt_tokens is not None:
+            usage["prompt_tokens"] = output.usage.prompt_tokens
+        if output.usage.completion_tokens is not None:
+            usage["completion_tokens"] = output.usage.completion_tokens
+        if output.usage.total_tokens is not None:
+            usage["total_tokens"] = output.usage.total_tokens
+        model_output["usage"] = usage
+    if output.provider_metadata:
+        model_output["provider_metadata"] = dict(output.provider_metadata)
+    if output.provider_replay_items:
+        model_output["provider_replay_items"] = [
+            dict(item) for item in output.provider_replay_items
+        ]
+    return {
+        "message": dict(output.message),
+        "model_output": model_output,
+    }
 
 
 def render_replay(

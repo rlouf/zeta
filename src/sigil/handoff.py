@@ -23,13 +23,13 @@ from sigil.sessions import event_time, recent_turns, session_id
 from sigil.state import event_store_path
 from zeta.capabilities.base import proposed_effect
 from zeta.events import (
-    Event,
     durable_tool_event_payload,
     event_view,
     exact_event_time,
     tool_call_draft,
 )
 from zeta.history import effect_record, publish_effect_record
+from zeta.kernel.events import Event
 
 HandoffTimelineEvent = Event | dict[str, Any]
 

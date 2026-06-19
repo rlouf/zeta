@@ -4,54 +4,31 @@ import asyncio
 import inspect
 from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass
-from typing import Any, Literal, cast
+from typing import Any, cast
 
-from zeta.events import DraftEvent, Event
+from zeta.kernel.agents import AgentDefinition, AgentInvocation, EventPattern
+from zeta.kernel.events import DraftEvent, Event
 from zeta.store.events import EventWriter
 
-DispatchMode = Literal["one_shot", "session_scoped"]
 AgentResult = dict[str, Any] | Awaitable[dict[str, Any]]
-AgentRunner = Callable[["AgentRun"], AgentResult]
+AgentRunner = Callable[["AgentInvocation"], AgentResult]
+
+__all__ = [
+    "AgentDefinition",
+    "AgentInvocation",
+    "EventDispatcher",
+    "DispatchOutcome",
+    "EventPattern",
+    "RegisteredAgent",
+]
 
 
 @dataclass(frozen=True)
-class TriggerRule:
-    """Event type matcher for a v0 runtime agent."""
+class RegisteredAgent:
+    """Dispatch registration for an agent definition plus executable runner."""
 
-    event_type: str | None = None
-    event_type_prefix: str | None = None
-
-    def matches(self, event: Event) -> bool:
-        if self.event_type is not None and event.event_type != self.event_type:
-            return False
-        if self.event_type_prefix is not None and not event.event_type.startswith(
-            self.event_type_prefix
-        ):
-            return False
-        return self.event_type is not None or self.event_type_prefix is not None
-
-
-@dataclass(frozen=True)
-class AgentDefinition:
-    """In-process v0 agent registration."""
-
-    agent_id: str
-    trigger: TriggerRule
-    allowed_capabilities: tuple[str, ...] = ()
-    system_prompt: str | None = None
-    max_turns: int | None = None
-    dispatch_mode: DispatchMode = "one_shot"
+    definition: AgentDefinition
     run: AgentRunner | None = None
-
-
-@dataclass(frozen=True)
-class AgentRun:
-    """Runtime input for one event-triggered agent attempt."""
-
-    agent: AgentDefinition
-    triggering_event: Event
-    work_id: str
-    pending_event: Event
 
 
 @dataclass(frozen=True)
@@ -64,14 +41,14 @@ class DispatchOutcome:
     agent_results: list[dict[str, Any]]
 
 
-class AsyncEventDispatcher:
+class EventDispatcher:
     """Async event dispatcher that routes matching agents in a task group."""
 
     def __init__(
         self,
         event_sink: EventWriter,
         *,
-        agents: Iterable[AgentDefinition] = (),
+        agents: Iterable[RegisteredAgent] = (),
         publish_event: Callable[[Event], None] | None = None,
     ) -> None:
         self.event_sink = event_sink
@@ -103,21 +80,21 @@ class AsyncEventDispatcher:
                 agent_results.append(result)
         return DispatchOutcome(outcome.event, True, work_events, agent_results)
 
-    def matching_agents(self, event: Event) -> list[AgentDefinition]:
-        return [agent for agent in self.agents if agent.trigger.matches(event)]
+    def matching_agents(self, event: Event) -> list[RegisteredAgent]:
+        return [agent for agent in self.agents if agent.definition.accepts(event)]
 
     async def _run_agent_into(
         self,
         results: list[tuple[dict[str, Any] | None, list[Event]] | None],
         index: int,
-        agent: AgentDefinition,
+        agent: RegisteredAgent,
         triggering_event: Event,
     ) -> None:
         results[index] = await self._run_agent(agent, triggering_event)
 
     async def _run_agent(
         self,
-        agent: AgentDefinition,
+        agent: RegisteredAgent,
         triggering_event: Event,
     ) -> tuple[dict[str, Any] | None, list[Event]]:
         work_id = work_id_for_event(agent, triggering_event)
@@ -141,7 +118,7 @@ class AsyncEventDispatcher:
         events.append(claimed)
         try:
             result = await maybe_await(
-                agent.run(AgentRun(agent, triggering_event, work_id, pending))
+                agent.run(AgentInvocation(agent.definition, triggering_event))
             )
         except Exception as exc:
             failed = self._append_work_event(
@@ -158,7 +135,7 @@ class AsyncEventDispatcher:
             return {
                 "outcome": "failed",
                 "error": str(exc),
-                "final_event_cursor": str(failed.seq),
+                "final_event_cursor": str(failed.cursor),
             }, events
         terminal_type = terminal_work_event_type(result)
         completed = self._append_work_event(
@@ -171,14 +148,14 @@ class AsyncEventDispatcher:
         events.append(completed)
         result = {
             **result,
-            "final_event_cursor": str(completed.seq),
+            "final_event_cursor": str(completed.cursor),
         }
         return result, events
 
     def _append_work_event(
         self,
         event_type: str,
-        agent: AgentDefinition,
+        agent: RegisteredAgent,
         triggering_event: Event,
         work_id: str,
         payload: dict[str, Any],
@@ -188,7 +165,7 @@ class AsyncEventDispatcher:
             "zeta",
             {
                 "work_id": work_id,
-                "agent_id": agent.agent_id,
+                "agent_id": agent.definition.agent_id,
                 "triggering_event_id": triggering_event.id,
                 "triggering_event_type": triggering_event.event_type,
                 **payload,
@@ -213,8 +190,8 @@ async def maybe_await(result: AgentResult) -> dict[str, Any]:
     return result
 
 
-def work_id_for_event(agent: AgentDefinition, event: Event) -> str:
-    agent_id = agent.agent_id.replace(":", "_").replace(".", "_")
+def work_id_for_event(agent: RegisteredAgent, event: Event) -> str:
+    agent_id = agent.definition.agent_id.replace(":", "_").replace(".", "_")
     return f"work_{event.id}_{agent_id}"
 
 

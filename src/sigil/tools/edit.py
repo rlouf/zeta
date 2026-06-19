@@ -9,14 +9,13 @@ from pathlib import Path
 from typing import Any
 
 from zeta.capabilities.base import (
-    CapabilityId,
-    CapabilitySpec,
     change_hashes,
     content_hash,
     error_result,
     proposed_command_effect,
     write_temp,
 )
+from zeta.kernel.capabilities import Capability, CapabilityId
 
 SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -34,13 +33,10 @@ SCHEMA: dict[str, Any] = {
     },
 }
 
-SPEC = CapabilitySpec(
+SPEC = Capability(
     CapabilityId("sigil", "edit"),
     "Edit a file. Prefer tagged input from read: [path#tag] plus SWAP, DEL, INS.PRE, or INS.POST line operations.",
     SCHEMA,
-    interactive=True,
-    effects=("write",),
-    aliases=("edit",),
 )
 
 HEADER_RE = re.compile(r"^\[(?P<path>.+)\]$")

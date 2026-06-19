@@ -15,7 +15,6 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
 
-from zeta import loop as zeta_agent
 from zeta.context.builder import (
     PreparedPrompt,
     ReconstructedPrompt,
@@ -24,17 +23,17 @@ from zeta.context.builder import (
 )
 from zeta.context.components import PromptComponent, prompt_components
 from zeta.events import (
-    DraftEvent,
-    Event,
     boundary_event_draft,
     draft_event_view,
     event_view,
 )
+from zeta.kernel.events import DraftEvent, Event
+from zeta.kernel.objects import Object, ObjectId
+from zeta.loop import AgentTurnResult
 from zeta.models import chat_completions as zeta_model
 from zeta.session import Session
 from zeta.store.events import Filter
 from zeta.store.substrate import InMemoryStore, Store
-from zeta.substrate import Object, ObjectId
 
 zeta_context = SimpleNamespace(
     PreparedPrompt=PreparedPrompt,
@@ -233,7 +232,7 @@ def record_durable_timeline_event(
                 caused_by=draft.caused_by,
                 session_id=draft.session_id,
                 turn_id=draft.turn_id,
-                timestamp_micros=event_timestamp_micros(event),
+                timestamp_ms=event_timestamp_ms(event),
             )
         )
         durable_event = appended.event
@@ -277,13 +276,13 @@ def draft_id(draft: DraftEvent, event: dict[str, Any] | DraftEvent) -> str:
     return event_id(event)
 
 
-def event_timestamp_micros(event: dict[str, Any] | DraftEvent) -> int:
+def event_timestamp_ms(event: dict[str, Any] | DraftEvent) -> int:
     if isinstance(event, DraftEvent):
-        return time.time_ns() // 1_000
+        return time.time_ns() // 1_000_000
     value = event.get("time")
     if isinstance(value, int | float) and not isinstance(value, bool):
-        return int(float(value) * 1_000_000)
-    return time.time_ns() // 1_000
+        return int(float(value) * 1_000)
+    return time.time_ns() // 1_000_000
 
 
 def read_tool_call_response(target: Path) -> dict[str, Any]:
@@ -375,7 +374,7 @@ def assert_task_state_graph(
 
 def assert_tool_result_derivation_graph(
     store: InMemoryStore,
-    result: zeta_agent.AgentTurnResult,
+    result: AgentTurnResult,
     call_event: dict[str, Any],
     result_event: dict[str, Any],
 ) -> None:
@@ -437,7 +436,7 @@ def assert_prompt_trace_replay_graph(
 
 def assert_tool_call_derivation(
     store: InMemoryStore,
-    result: zeta_agent.AgentTurnResult,
+    result: AgentTurnResult,
     call_object_id: ObjectId,
 ) -> None:
     call_object = store.get_object(call_object_id)
@@ -465,7 +464,7 @@ def assert_tool_result_derivation(
 
 def assert_prompt_closure_contains_tool_result(
     store: InMemoryStore,
-    result: zeta_agent.AgentTurnResult,
+    result: AgentTurnResult,
     call_object_id: ObjectId,
     result_object_id: ObjectId,
 ) -> None:

@@ -10,15 +10,15 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, cast
 
 from zeta.agents.capabilities import AgentConfig
-from zeta.capabilities.base import ExecutionMode
 from zeta.context.builder import event_timeline_type, project_trace_events
-from zeta.dispatch import AgentDefinition, AgentRun, AsyncEventDispatcher, TriggerRule
+from zeta.dispatch import EventDispatcher, RegisteredAgent
 from zeta.events import (
-    DraftEvent,
-    Event,
     draft_event_id,
     user_message_draft,
 )
+from zeta.kernel.agents import AgentDefinition, AgentInvocation, EventPattern
+from zeta.kernel.capabilities import ExecutionMode
+from zeta.kernel.events import DraftEvent, Event
 from zeta.loop import (
     AgentTurnAborted,
     AgentTurnResult,
@@ -203,7 +203,7 @@ def current_timeline(*, runtime_context: Session) -> list[Event]:
 
 
 async def run_session_turn_from_event(
-    run: AgentRun,
+    run: AgentInvocation,
     *,
     runtime_context: Session,
     publish_event: Callable[[RuntimePublishedEvent], None],
@@ -296,8 +296,8 @@ async def run_session_turn(
             agent_result=exc.result,
         )
     return session_result(
-        session_outcome(result.staged_effect, result.final_text),
-        result.final_text,
+        session_outcome(result.staged_effect, result.final_answer),
+        result.final_answer,
         run_id=run_id,
         runtime_context=runtime_context,
         agent_result=result,
@@ -309,13 +309,15 @@ def session_event_dispatcher(
     *,
     publish_event: Callable[[RuntimePublishedEvent], None],
     cancellation_event: CancellationToken | None = None,
-) -> AsyncEventDispatcher:
-    return AsyncEventDispatcher(
+) -> EventDispatcher:
+    return EventDispatcher(
         runtime_context.event_sink,
         agents=[
-            AgentDefinition(
-                "zeta.session.turn",
-                TriggerRule(event_type="session.turn.requested"),
+            RegisteredAgent(
+                AgentDefinition(
+                    "zeta.session.turn",
+                    (EventPattern("session.turn.requested"),),
+                ),
                 run=lambda run: run_session_turn_from_event(
                     run,
                     runtime_context=runtime_context,
@@ -414,7 +416,7 @@ def live_runtime_event(
 
 def session_result(
     outcome: str,
-    final_text: str,
+    final_answer: str,
     *,
     run_id: str,
     runtime_context: Session,
@@ -423,7 +425,7 @@ def session_result(
     result: dict[str, Any] = {
         "run_id": run_id,
         "outcome": outcome,
-        "final_text": final_text,
+        "final_answer": final_answer,
         "trace": session_trace_result(
             agent_result,
             runtime_context=runtime_context,
@@ -578,7 +580,7 @@ def final_event_cursor(runtime_context: Session, run_id: str) -> str | None:
     )
     if not events:
         return None
-    return str(events[-1].seq)
+    return str(events[-1].cursor) if events[-1].cursor is not None else None
 
 
 def session_agent_config(
@@ -615,11 +617,10 @@ def optional_string(value: object) -> str | None:
     return value if isinstance(value, str) and value else None
 
 
-def session_outcome(staged_effect: dict[str, Any] | None, final_text: str) -> str:
+def session_outcome(staged_effect: dict[str, Any] | None, final_answer: str) -> str:
+    del final_answer
     if staged_effect is not None:
         return "staged"
-    if final_text:
-        return "answered"
     return "completed"
 
 

@@ -7,12 +7,8 @@ from html import unescape
 from pathlib import Path
 from typing import Any
 
-from zeta.capabilities.base import (
-    CapabilityId,
-    CapabilitySpec,
-    content_hash,
-    error_result,
-)
+from zeta.capabilities.base import content_hash, error_result
+from zeta.kernel.capabilities import Capability, CapabilityId
 
 DEFAULT_READ_LIMIT = 2_000
 MAX_READ_CHARS = 50_000
@@ -41,12 +37,10 @@ SCHEMA: dict[str, Any] = {
     },
 }
 
-SPEC = CapabilitySpec(
+SPEC = Capability(
     CapabilityId("sigil", "read"),
     "Read a UTF-8 text file or public HTTP(S) URL. Returns a [path#tag] snapshot header and numbered lines.",
     SCHEMA,
-    effects=("read",),
-    aliases=("read",),
 )
 
 

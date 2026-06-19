@@ -16,8 +16,8 @@ from click.testing import CliRunner
 
 from sigil.cli import cli as sigil_cli
 from sigil.sessions import session_dir
-from zeta import models as zeta_models_api
 from zeta.context.compaction import TASK_STATE_SCHEMA
+from zeta.kernel import models as zeta_models_api
 from zeta.models import chat_completions as zeta_model
 from zeta.models import profiles as zeta_models
 
@@ -100,7 +100,7 @@ def test_zeta_model_input_renders_existing_chat_completion_request() -> None:
 def test_zeta_model_output_from_chat_completion_preserves_message_usage_metadata() -> (
     None
 ):
-    output = zeta_models_api.ModelOutput.from_chat_completion(
+    output = zeta_model.model_output_from_chat_completion(
         {
             "id": "chatcmpl-1",
             "model": "unit-model",

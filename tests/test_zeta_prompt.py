@@ -21,16 +21,10 @@ from _zeta_helpers import (
 
 from agents import skills as zeta_skills
 from sigil.tools import ensure_builtin_tools_registered
-from zeta import events as zeta_event_model
-from zeta import models as zeta_models_api
 from zeta.capabilities.base import (
-    Capability,
-    CapabilityId,
-    CapabilityPolicy,
-    CapabilitySpec,
     InProcessCapabilityExecutor,
 )
-from zeta.capabilities.registry import CapabilityRegistry
+from zeta.capabilities.registry import CapabilityRegistry, RegisteredCapability
 from zeta.context import builder as context_builder
 from zeta.context import prompt_transform_from_env
 from zeta.context import transforms as context_transforms
@@ -60,9 +54,15 @@ from zeta.context.instructions import (
     load_project_instructions,
 )
 from zeta.context.system import model_capability_descriptors, system_prompt
+from zeta.kernel import models as zeta_models_api
+from zeta.kernel.capabilities import (
+    Capability,
+    CapabilityId,
+)
+from zeta.kernel.events import Event
+from zeta.kernel.objects import Derivation, Object
 from zeta.models import chat_completions as zeta_model
 from zeta.store.substrate import InMemoryStore
-from zeta.substrate import Derivation, Object
 
 ensure_builtin_tools_registered()
 
@@ -113,18 +113,11 @@ def prepare_prompt(
 def test_model_capability_descriptors_are_generated_from_projection() -> None:
     registry = CapabilityRegistry()
     registry.register(
-        Capability(
-            CapabilitySpec(
+        RegisteredCapability(
+            Capability(
                 CapabilityId("test", "read"),
                 "Projected read.",
                 {"type": "object"},
-                effects=("read",),
-                aliases=("read",),
-            ),
-            CapabilityPolicy(
-                supports_staging=False,
-                supports_direct=True,
-                trust="host",
             ),
             InProcessCapabilityExecutor(lambda params: {"ok": True}),
         )
@@ -147,40 +140,24 @@ def test_model_capability_descriptors_are_generated_from_projection() -> None:
     ]
 
 
-def test_model_capability_descriptors_omit_low_trust_mutating_auto_enabled_tools() -> (
-    None
-):
+def test_model_capability_descriptors_include_auto_enabled_tools() -> None:
     registry = CapabilityRegistry()
     registry.register(
-        Capability(
-            CapabilitySpec(
+        RegisteredCapability(
+            Capability(
                 CapabilityId("host", "read"),
                 "Host read.",
                 {"type": "object"},
-                effects=("read",),
-                aliases=("read",),
-            ),
-            CapabilityPolicy(
-                supports_staging=False,
-                supports_direct=True,
-                trust="host",
             ),
             InProcessCapabilityExecutor(lambda params: {"ok": True}),
         )
     )
     registry.register(
-        Capability(
-            CapabilitySpec(
+        RegisteredCapability(
+            Capability(
                 CapabilityId("rpc", "write"),
                 "Client write.",
                 {"type": "object"},
-                effects=("write",),
-                aliases=("write",),
-            ),
-            CapabilityPolicy(
-                supports_staging=True,
-                supports_direct=True,
-                trust="client",
             ),
             InProcessCapabilityExecutor(
                 lambda params: {"ok": True},
@@ -191,7 +168,10 @@ def test_model_capability_descriptors_omit_low_trust_mutating_auto_enabled_tools
 
     descriptors = model_capability_descriptors(None, tool_registry=registry)
 
-    assert [descriptor["function"]["name"] for descriptor in descriptors] == ["read"]
+    assert [descriptor["function"]["name"] for descriptor in descriptors] == [
+        "read",
+        "write",
+    ]
 
 
 def test_zeta_prompt_builder_noop_transform_matches_chat_messages() -> None:
@@ -458,7 +438,7 @@ def test_zeta_prompt_projects_model_output_from_event() -> None:
         allowed_capabilities=(),
     )
     assert prepared.prompt_object_id is not None
-    event = zeta_event_model.Event(
+    event = Event(
         id="model-1",
         event_type="zeta.model_call.completed",
         source="zeta",
@@ -471,7 +451,7 @@ def test_zeta_prompt_projects_model_output_from_event() -> None:
         caused_by=None,
         session_id="session-1",
         turn_id="turn-1",
-        timestamp_micros=1,
+        timestamp_ms=1,
     )
 
     projection = zeta_context.project_trace_events([event], store)

@@ -33,17 +33,16 @@ from sigil.state import append_prompt_submitted_event
 from sigil.tools import ensure_builtin_tools_registered
 from sigil.turn import TurnRecorder
 from zeta.agents.capabilities import AgentConfig
-from zeta.capabilities.base import ExecutionMode
 from zeta.context.instructions import load_project_instructions
 from zeta.events import (
-    DraftEvent,
-    Event,
     draft_event_id,
     draft_event_view,
     event_view,
     exact_event_time,
     user_message_draft,
 )
+from zeta.kernel.capabilities import ExecutionMode
+from zeta.kernel.events import DraftEvent, Event
 from zeta.loop import (
     AgentTurnAborted,
     AgentTurnResult,
@@ -63,6 +62,7 @@ from zeta.store.events import EventReader, Filter, SqliteEventStore
 from zeta.store.substrate import Store, warn_trace_failure_once
 
 RuntimePublishedEvent = Event | DraftEvent
+STAGING_TOOL_NAMES = frozenset({"bash", "edit", "write"})
 
 
 def current_timeline(*, runtime_context: Session) -> list[Event]:
@@ -147,7 +147,7 @@ def record_runtime_draft(
                 caused_by=tagged_draft.caused_by,
                 session_id=tagged_draft.session_id,
                 turn_id=tagged_draft.turn_id,
-                timestamp_micros=time_micros(),
+                timestamp_ms=time_ms(),
             )
         )
     else:
@@ -160,10 +160,10 @@ def project_runtime_draft(draft: DraftEvent) -> DraftEvent:
     return draft
 
 
-def time_micros() -> int:
+def time_ms() -> int:
     import time
 
-    return time.time_ns() // 1_000
+    return time.time_ns() // 1_000_000
 
 
 def model_server_ready(selected_model: ModelSelection | None) -> bool:
@@ -346,7 +346,7 @@ class TurnEventRecorder:
         raise NotImplementedError
 
 
-def render_final_text(
+def render_final_answer(
     content: str,
     *,
     streamed: bool,
@@ -427,8 +427,8 @@ async def run_zeta_rpc_session(
         allowed_capabilities,
         tool_registry=runtime_context.tool_registry,
     )
-    enabled_tool_aliases = tuple(
-        runtime_context.tool_registry.model_alias(capability_id)
+    enabled_tool_names = tuple(
+        runtime_context.tool_registry.model_name(capability_id)
         for capability_id in enabled_capabilities
     )
     execution_mode: ExecutionMode = "direct" if workflow == "do" else "stage"
@@ -436,11 +436,12 @@ async def run_zeta_rpc_session(
         runtime_context=runtime_context,
         workflow=workflow,
         objective=objective,
-        allowed_tools=enabled_tool_aliases,
+        allowed_tools=enabled_tool_names,
         staged=any(
-            capability.spec.mutates()
-            for name in enabled_capabilities
-            if (capability := runtime_context.tool_registry.get(name)) is not None
+            runtime_context.tool_registry.model_name(capability_id)
+            in STAGING_TOOL_NAMES
+            for capability_id in enabled_capabilities
+            if runtime_context.tool_registry.get(capability_id) is not None
         )
         and execution_mode == "stage",
         agent=model_selection_event(selected_model) if selected_model else None,
@@ -453,7 +454,7 @@ async def run_zeta_rpc_session(
             "workflow": workflow,
             "runtime": "zeta-rpc",
             "turn_id": turn_recorder.turn_id,
-            "available_tools": list(enabled_tool_aliases),
+            "available_tools": list(enabled_tool_names),
         },
         runtime_context=runtime_context,
     )
@@ -530,7 +531,7 @@ async def run_zeta_rpc_session(
             "turn_id": turn_recorder.turn_id,
             "session_id": session_id(),
             "outcome": TURN_OUTCOME_ABORTED,
-            "final_text": "",
+            "final_answer": "",
         }
     except KeyboardInterrupt as error:
         abort_event = record_turn_abort(
@@ -558,19 +559,22 @@ async def run_zeta_rpc_session(
     turn_recorder.add_model_calls(result.model_telemetry_calls)
     if result.staged_effect is not None:
         outcome = TURN_OUTCOME_STAGED
-    elif result.final_text:
+        zeta_outcome = "staged"
+    elif result.final_answer:
         outcome = (
             TURN_OUTCOME_EXECUTED if turn_recorder.effect_ids else TURN_OUTCOME_ANSWERED
         )
+        zeta_outcome = "completed"
     else:
         outcome = TURN_OUTCOME_FAILED
+        zeta_outcome = "failed"
     turn = turn_recorder.finish(outcome, prompt_traces=result.prompt_traces)
     publish_event(turn)
     return {
         "turn_id": turn_recorder.turn_id,
         "session_id": session_id(),
-        "outcome": outcome,
-        "final_text": result.final_text,
+        "outcome": zeta_outcome,
+        "final_answer": result.final_answer,
     }
 
 

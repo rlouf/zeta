@@ -2,7 +2,9 @@
 
 from typing import Protocol, runtime_checkable
 
-from zeta.events import AppendOutcome, DraftEvent, Event, Filter
+from zeta.events import AppendOutcome
+from zeta.kernel.events import DraftEvent, Event
+from zeta.store.events.filter import Filter
 from zeta.store.events.memory import MemoryEventStore
 from zeta.store.events.sqlite import (
     EVENT_STORE_NAME,

@@ -18,8 +18,10 @@ from zeta.context.components import (
     prompt_components,
 )
 from zeta.context.transforms import NoOpPromptTransform, PromptTransform
-from zeta.events import DraftEvent, Event, draft_event_id
-from zeta.models import ModelInput
+from zeta.events import draft_event_id
+from zeta.kernel.events import DraftEvent, Event
+from zeta.kernel.models import ModelInput
+from zeta.kernel.objects import Derivation, Object, ObjectId
 from zeta.models.chat_completions import (
     DEFAULT_MAX_COMPLETION_TOKENS,
     chat_completion_request_body,
@@ -28,7 +30,6 @@ from zeta.store.substrate import (
     Store,
     warn_trace_failure_once,
 )
-from zeta.substrate import Derivation, Object, ObjectId
 
 
 @dataclass(frozen=True)
@@ -167,7 +168,7 @@ def project_trace_drafts(
                 caused_by=draft.caused_by,
                 session_id=draft.session_id,
                 turn_id=draft.turn_id,
-                timestamp_micros=0,
+                timestamp_ms=0,
             )
             for draft in drafts
         ),

@@ -6,12 +6,11 @@ from typing import TYPE_CHECKING
 
 from sigil.tools import bash, edit, grep, ls, query_log, read, web, write
 from zeta.capabilities.base import (
-    Capability,
     CapabilityFunction,
-    CapabilityPolicy,
-    CapabilitySpec,
     InProcessCapabilityExecutor,
 )
+from zeta.capabilities.registry import RegisteredCapability
+from zeta.kernel.capabilities import Capability
 
 if TYPE_CHECKING:
     from zeta.capabilities.registry import CapabilityRegistry
@@ -27,11 +26,11 @@ def ensure_builtin_tools_registered() -> None:
 
 def register_builtin_tools(registry: CapabilityRegistry) -> None:
     for capability in builtin_capabilities().values():
-        if registry.get(capability.spec.id.canonical()) is None:
+        if registry.get(capability.declaration.id.canonical()) is None:
             registry.register(capability)
 
 
-def builtin_capabilities() -> dict[str, Capability]:
+def builtin_capabilities() -> dict[str, RegisteredCapability]:
     return {
         "sigil.bash": builtin_capability(bash.SPEC, bash.run, bash.stage),
         "sigil.ast_grep": builtin_capability(grep.AST_GREP_SPEC, grep.run_ast_grep),
@@ -46,27 +45,15 @@ def builtin_capabilities() -> dict[str, Capability]:
 
 
 def builtin_capability(
-    spec: CapabilitySpec,
+    declaration: Capability,
     run: CapabilityFunction,
     stage: CapabilityFunction | None = None,
-) -> Capability:
+) -> RegisteredCapability:
     typed_stage = stage if callable(stage) else None
-    return Capability(
-        spec,
-        CapabilityPolicy(
-            supports_staging=typed_stage is not None,
-            supports_direct=True,
-            trust="host",
-            timeout_seconds=DEFAULT_TIMEOUT_SECONDS_BY_ALIAS.get(
-                spec.aliases[0] if spec.aliases else "",
-            ),
-            stop_turn_after_stage="edit" in spec.aliases,
-        ),
+    return RegisteredCapability(
+        declaration,
         InProcessCapabilityExecutor(
             run,
             typed_stage,
         ),
     )
-
-
-DEFAULT_TIMEOUT_SECONDS_BY_ALIAS = {"bash": bash.DEFAULT_TIMEOUT_SECONDS}

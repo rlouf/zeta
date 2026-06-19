@@ -6,12 +6,8 @@ import subprocess
 import time
 from typing import Any
 
-from zeta.capabilities.base import (
-    CapabilityId,
-    CapabilitySpec,
-    error_result,
-    proposed_command_effect,
-)
+from zeta.capabilities.base import error_result, proposed_command_effect
+from zeta.kernel.capabilities import Capability, CapabilityId
 
 DEFAULT_TIMEOUT_SECONDS = 120.0
 MAX_OUTPUT_CHARS = 12_000
@@ -26,13 +22,10 @@ SCHEMA: dict[str, Any] = {
     },
 }
 
-SPEC = CapabilitySpec(
+SPEC = Capability(
     CapabilityId("sigil", "bash"),
     "Execute or stage a shell command, depending on the active workflow.",
     SCHEMA,
-    interactive=True,
-    effects=("execute",),
-    aliases=("bash",),
 )
 
 

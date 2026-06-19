@@ -9,87 +9,22 @@ import tempfile
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal, Protocol, cast, get_args
+from typing import Any, Protocol, cast
 
-EffectKind = Literal["read", "write", "delete", "execute", "search"]
-
-EFFECT_KINDS = frozenset(get_args(EffectKind))
-READ_ONLY_EFFECT_KINDS = frozenset({"read", "search"})
-TrustLevel = Literal["kernel", "host", "client", "remote"]
-
-
-@dataclass(frozen=True)
-class CapabilityId:
-    provider: str
-    name: str
-
-    def canonical(self) -> str:
-        return f"{self.provider}.{self.name}"
-
-
-@dataclass(frozen=True)
-class CapabilitySpec:
-    """Runtime metadata for one Zeta capability."""
-
-    id: CapabilityId
-    description: str
-    input_schema: dict[str, Any]
-    effects: tuple[EffectKind, ...] = ()
-    aliases: tuple[str, ...] = ()
-    interactive: bool = False
-
-    def mutates(self) -> bool:
-        """Whether the capability declares effects beyond reading.
-
-        Undeclared effects count as mutating so an unannotated capability can
-        never run unreviewed in propose mode.
-        """
-        if not self.effects:
-            return True
-        return any(kind not in READ_ONLY_EFFECT_KINDS for kind in self.effects)
-
-    def metadata(self) -> dict[str, Any]:
-        return {
-            "id": self.id.canonical(),
-            "provider": self.id.provider,
-            "name": self.id.name,
-            "aliases": list(self.aliases),
-            "description": self.description,
-            "input_schema": self.input_schema,
-            "interactive": self.interactive,
-            "effects": list(self.effects),
-        }
-
-
-@dataclass(frozen=True)
-class CapabilityPolicy:
-    supports_staging: bool
-    supports_direct: bool
-    trust: TrustLevel
-    timeout_seconds: float | None = None
-    stop_turn_after_stage: bool = False
-
-
-@dataclass(frozen=True)
-class CapabilityResult:
-    payload: dict[str, Any]
-
-    @classmethod
-    def from_mapping(cls, value: dict[str, Any]) -> CapabilityResult:
-        return cls(dict(value))
+from zeta.kernel.capabilities import Capability as _Capability
+from zeta.kernel.capabilities import ExecutionMode as _ExecutionMode
 
 
 class CapabilityExecutor(Protocol):
     def invoke(
         self,
-        capability: CapabilitySpec,
+        capability: _Capability,
         params: dict[str, Any],
         *,
-        mode: ExecutionMode,
-    ) -> CapabilityResult | Awaitable[CapabilityResult]: ...
+        mode: _ExecutionMode,
+    ) -> dict[str, Any] | Awaitable[dict[str, Any]]: ...
 
 
-ExecutionMode = Literal["stage", "direct"]
 CapabilityFunction = Callable[
     [dict[str, Any]], dict[str, Any] | Awaitable[dict[str, Any]]
 ]
@@ -102,27 +37,18 @@ class InProcessCapabilityExecutor:
 
     async def invoke(
         self,
-        capability: CapabilitySpec,
+        capability: _Capability,
         params: dict[str, Any],
         *,
-        mode: ExecutionMode,
-    ) -> CapabilityResult:
-        if mode == "stage" and self.stage is not None and capability.mutates():
+        mode: _ExecutionMode,
+    ) -> dict[str, Any]:
+        if mode == "stage" and self.stage is not None:
             result = self.stage(params)
         else:
             result = self.run(params)
         if inspect.isawaitable(result):
             result = await result
-        return CapabilityResult.from_mapping(cast(dict[str, Any], result))
-
-
-@dataclass(frozen=True)
-class Capability:
-    """Executable runtime capability."""
-
-    spec: CapabilitySpec
-    policy: CapabilityPolicy
-    executor: CapabilityExecutor
+        return dict(cast(dict[str, Any], result))
 
 
 def diagnostic(

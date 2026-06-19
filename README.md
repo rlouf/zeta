@@ -120,7 +120,7 @@ Notifications omit `id`. Responses contain either `result` or `error`.
 Protocol `0.1` is additive while Zeta is alpha software: clients should ignore
 unknown result fields and unknown notification params. Existing `session.run`
 callers that pass only `objective`, `tools`, and `context` still receive
-`outcome` and `final_text`.
+`outcome` and `final_answer`.
 
 ### Methods
 
@@ -128,7 +128,7 @@ callers that pass only `objective`, `tools`, and `context` still receive
 
 - `run_id`: stable `run_*` id for cancellation, events, and trace refs.
 - `outcome`: `answered`, `staged`, `aborted`, or `failed`.
-- `final_text`: final assistant text when available.
+- `final_answer`: final assistant text when available.
 - `final_event_cursor`: durable event cursor for the last event in the run.
 - `trace`: prompt, assistant message, model event, tool event, tool call, and
   tool result object ids recorded for the run.

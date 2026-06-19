@@ -6,7 +6,9 @@ runtimes, including idempotency and sequence ordering, without creating files.
 
 from __future__ import annotations
 
-from zeta.events import AppendOutcome, DraftEvent, Event, Filter, immutable_payload
+from zeta.events import AppendOutcome
+from zeta.kernel.events import DraftEvent, Event
+from zeta.store.events.filter import Filter
 
 
 class MemoryEventStore:
@@ -29,13 +31,13 @@ class MemoryEventStore:
             id=event.id,
             event_type=event.event_type,
             source=event.source,
-            payload=immutable_payload(event.payload),
+            payload=dict(event.payload),
             idempotency_key=event.idempotency_key,
             caused_by=event.caused_by,
             session_id=event.session_id,
             turn_id=event.turn_id,
-            timestamp_micros=event.timestamp_micros,
-            seq=self._next_seq,
+            timestamp_ms=event.timestamp_ms,
+            cursor=self._next_seq,
         )
         self._next_seq += 1
         self._events.append(inserted)
@@ -118,6 +120,6 @@ def matches_filter(event: Event, filter: Filter) -> bool:
         return False
     if filter.caused_by is not None and event.caused_by != filter.caused_by:
         return False
-    if filter.after_seq is None:
+    if filter.after_cursor is None:
         return True
-    return event.seq > filter.after_seq
+    return event.cursor is not None and event.cursor > filter.after_cursor

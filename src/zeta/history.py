@@ -10,10 +10,7 @@ from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import Any, cast
 
-from zeta.events import (
-    DraftEvent,
-    Event,
-)
+from zeta.kernel.events import DraftEvent, Event
 from zeta.store.events import (
     Filter,
     SqliteEventStore,
@@ -494,7 +491,7 @@ def history_event_record(event: Event) -> dict[str, Any]:
         {
             "id": event.id,
             "type": event.event_type,
-            "time": event.timestamp_micros / 1_000_000,
+            "time": event.timestamp_ms / 1_000,
         }
     )
     if event.session_id is not None:
@@ -519,7 +516,7 @@ def effect_event_record(
 
 
 def event_time(event: Event) -> float:
-    return event.timestamp_micros / 1_000_000
+    return event.timestamp_ms / 1_000
 
 
 def event_from_effect_record(record: dict[str, Any]) -> Event:
@@ -544,8 +541,8 @@ def event_from_effect_record(record: dict[str, Any]) -> Event:
         turn_id=(
             str(record["turn_id"]) if isinstance(record.get("turn_id"), str) else None
         ),
-        timestamp_micros=(
-            int(float(record["time"]) * 1_000_000)
+        timestamp_ms=(
+            int(float(record["time"]) * 1_000)
             if isinstance(record.get("time"), int | float)
             and not isinstance(record.get("time"), bool)
             else 0
@@ -571,8 +568,8 @@ def event_from_record(record: dict[str, Any]) -> Event:
         turn_id=(
             str(record["turn_id"]) if isinstance(record.get("turn_id"), str) else None
         ),
-        timestamp_micros=(
-            int(float(record["time"]) * 1_000_000)
+        timestamp_ms=(
+            int(float(record["time"]) * 1_000)
             if isinstance(record.get("time"), int | float)
             and not isinstance(record.get("time"), bool)
             else 0

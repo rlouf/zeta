@@ -1,8 +1,8 @@
-"""Core content-addressed substrate for Zeta.
+"""Content-addressed substrate for Zeta.
 
-The substrate separates three concerns that are easy to blur in agent systems:
-immutable objects, mutable refs, and derivations that explain how objects were
-built.
+The substrate separates three concerns: immutable objects, mutable refs, and
+derivations that explain how objects were built.
+
 """
 
 import hashlib
@@ -16,11 +16,11 @@ RefName = str
 
 @dataclass(frozen=True)
 class Object:
-    """Immutable content-addressed value.
+    """An immutable value in the content-addressed trace substrate.
 
-    `kind` is the broad object kind, such as `message` or `context`. `schema`
-    identifies the payload shape. `data` is the JSON payload. `links` are
-    ordered structural dependencies included in the content address.
+    Objects represent prompts, messages, tool calls, tool results, effects, and
+    other traceable artifacts. Stores address them by hashing their kind,
+    schema, payload, and structural links.
     """
 
     kind: str
@@ -29,7 +29,7 @@ class Object:
     links: tuple[ObjectId, ...] = ()
 
     def content_address(self) -> ObjectId:
-        """Return the hash of `kind`, `schema`, `data`, and structural links."""
+        """Return the hash of identity-bearing object fields."""
         payload: dict[str, Any] = {
             "kind": self.kind,
             "schema": self.schema,
@@ -49,11 +49,11 @@ class Object:
 
 @dataclass(frozen=True)
 class Derivation:
-    """Semantic build record for an object.
+    """A graph edge explaining how one trace object was produced.
 
-    This is not an execution event. It records the durable build relationship
-    needed for replay and cache reasoning, not latency, retries, request ids,
-    worker identity, or logs.
+    Derivations connect an output object to its input objects, producer name,
+    and stable parameters. Trace replay and graph queries use them to explain
+    prompt assembly, model responses, and tool-result construction.
     """
 
     producer: str
@@ -62,7 +62,7 @@ class Derivation:
     params: dict[str, Any] = field(default_factory=dict)
 
     def content_address(self) -> str:
-        """Return the hash of the identity-bearing derivation fields."""
+        """Return the hash of identity-bearing derivation fields."""
         payload: dict[str, Any] = {
             "producer": self.producer,
             "output_id": self.output_id,
@@ -82,7 +82,12 @@ class Derivation:
 
 @dataclass(frozen=True)
 class Ref:
-    """Resolved ref: stable mutable name plus current object id."""
+    """A named pointer to an object in the trace substrate.
+
+    Stores resolve refs when callers need a stable name for a moving object,
+    such as a session head or latest projection, while keeping the pointed-to
+    objects immutable.
+    """
 
     name: RefName
     object_id: ObjectId

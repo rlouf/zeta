@@ -8,7 +8,7 @@ import click
 from sigil.cli._base import cli, examples
 from sigil.cli._shared import pretty_print_json
 from sigil.state import causal_chain, event_store_path, events_for_turn, read_events
-from zeta.events import Event
+from zeta.kernel.events import Event
 from zeta.store.events import Filter, SqliteEventStore
 
 EVENT_LIST_COLUMNS = ("time", "workflow", "event", "session", "detail")
@@ -258,8 +258,8 @@ def normalized_event(event: Event) -> dict[str, object]:
         "caused_by": event.caused_by,
         "session_id": event.session_id,
         "turn_id": event.turn_id,
-        "timestamp_micros": event.timestamp_micros,
-        "time": event.timestamp_micros / 1_000_000,
+        "timestamp_ms": event.timestamp_ms,
+        "time": event.timestamp_ms / 1_000,
     }
 
 
@@ -300,7 +300,7 @@ def event_summary(event: Event) -> dict[str, object]:
     event_id = event.id
     session = event.session_id or ""
     event_type = event.event_type
-    event_time = event.timestamp_micros / 1_000_000
+    event_time = event.timestamp_ms / 1_000
     workflow = event_workflow(payload)
     return {
         "id": event_id or "-",

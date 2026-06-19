@@ -3,7 +3,8 @@
 from pathlib import Path
 from typing import Any
 
-from zeta.capabilities.base import CapabilityId, CapabilitySpec, error_result
+from zeta.capabilities.base import error_result
+from zeta.kernel.capabilities import Capability, CapabilityId
 
 SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -28,12 +29,10 @@ SCHEMA: dict[str, Any] = {
     },
 }
 
-SPEC = CapabilitySpec(
+SPEC = Capability(
     CapabilityId("sigil", "ls"),
     "List files with type and byte sizes.",
     SCHEMA,
-    effects=("read",),
-    aliases=("ls",),
 )
 
 

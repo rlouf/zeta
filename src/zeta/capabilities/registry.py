@@ -11,18 +11,15 @@ from typing import Any, cast
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import SchemaError, ValidationError
 
-from zeta.capabilities.base import (
-    Capability,
-    CapabilityResult,
-    ExecutionMode,
-    error_result,
-)
+from zeta.capabilities.base import error_result
+from zeta.kernel.capabilities import Capability, ExecutionMode
 
 __all__ = [
     "ExecutionMode",
     "CapabilityError",
     "CapabilityProjection",
     "CapabilityRegistry",
+    "RegisteredCapability",
     "registry",
 ]
 
@@ -77,50 +74,43 @@ def validated_capability_result_payload(
 
 @dataclass(frozen=True)
 class CapabilityProjection:
-    alias_to_id: dict[str, str]
+    name_to_id: dict[str, str]
     descriptors: list[dict[str, Any]]
+
+
+@dataclass(frozen=True)
+class RegisteredCapability:
+    declaration: Capability
+    executor: Any
 
 
 class CapabilityRegistry:
     """Registry for Zeta capabilities."""
 
     def __init__(self) -> None:
-        self._capabilities: dict[str, Capability] = {}
-        self._aliases: dict[str, list[str]] = {}
+        self._capabilities: dict[str, RegisteredCapability] = {}
+        self._names: dict[str, list[str]] = {}
 
-    def register(self, capability: Capability) -> None:
+    def register(self, capability: RegisteredCapability) -> None:
         """Register a capability implementation under its canonical id."""
-        capability_id = capability.spec.id.canonical()
+        capability_id = capability.declaration.id.canonical()
         if capability_id in self._capabilities:
             raise ValueError(f"capability {capability_id!r} is already registered")
         try:
-            Draft202012Validator.check_schema(capability.spec.input_schema)
+            Draft202012Validator.check_schema(capability.declaration.input_schema)
         except SchemaError as exc:
             raise ValueError(
                 f"invalid schema for capability {capability_id!r}: {exc.message}"
             ) from exc
-        if capability.policy.supports_staging and not capability.spec.mutates():
-            raise ValueError(
-                f"capability {capability_id!r} declares staging for read-only effects"
-            )
-        if (
-            capability.spec.mutates()
-            and not capability.policy.supports_staging
-            and not capability.policy.supports_direct
-        ):
-            raise ValueError(
-                f"capability {capability_id!r} supports neither staging nor direct execution"
-            )
         self._capabilities[capability_id] = capability
-        for alias in capability.spec.aliases:
-            self._aliases.setdefault(alias, []).append(capability_id)
+        self._names.setdefault(capability.declaration.id.name, []).append(capability_id)
 
-    def get(self, capability_id: str) -> Capability | None:
+    def get(self, capability_id: str) -> RegisteredCapability | None:
         """Get a registered capability implementation by canonical id."""
         return self._capabilities.get(capability_id)
 
-    def get_by_alias(self, alias: str) -> Capability | None:
-        capability_id = self.resolve(alias)
+    def get_by_name(self, name: str) -> RegisteredCapability | None:
+        capability_id = self.resolve(name)
         if capability_id is None:
             return None
         return self.get(capability_id)
@@ -128,35 +118,31 @@ class CapabilityRegistry:
     def resolve(self, name: str) -> str | None:
         if name in self._capabilities:
             return name
-        matches = self._aliases.get(name, [])
+        matches = self._names.get(name, [])
         if len(matches) != 1:
             return None
         return matches[0]
 
-    def model_alias(self, capability_id: str) -> str:
+    def model_name(self, capability_id: str) -> str:
         capability = self._capabilities[capability_id]
-        return capability.spec.aliases[0] if capability.spec.aliases else capability_id
+        return capability.declaration.id.name
 
     def list_capability_ids(self) -> list[str]:
         """List registered canonical capability ids."""
         return sorted(self._capabilities)
 
     def list_auto_enabled_capability_ids(self) -> list[str]:
-        return [
-            capability_id
-            for capability_id in self.list_capability_ids()
-            if capability_auto_enabled(self._capabilities[capability_id])
-        ]
+        return self.list_capability_ids()
 
     def project(
         self,
         enabled_ids: tuple[str, ...],
         *,
-        alias_overrides: dict[str, str] | None = None,
+        name_overrides: dict[str, str] | None = None,
     ) -> CapabilityProjection:
         """Build the per-run model-visible projection for capabilities."""
-        alias_overrides = alias_overrides or {}
-        alias_to_id: dict[str, str] = {}
+        name_overrides = name_overrides or {}
+        name_to_id: dict[str, str] = {}
         descriptors = []
         for requested_id in enabled_ids:
             capability_id = self.resolve(requested_id)
@@ -165,16 +151,16 @@ class CapabilityRegistry:
             capability = self.get(capability_id)
             if capability is None:
                 continue
-            alias = alias_overrides.get(capability_id, self.model_alias(capability_id))
-            existing = alias_to_id.get(alias)
+            name = name_overrides.get(capability_id, self.model_name(capability_id))
+            existing = name_to_id.get(name)
             if existing is not None and existing != capability_id:
                 raise ValueError(
-                    f"ambiguous capability alias {alias!r}: "
+                    f"ambiguous capability name {name!r}: "
                     f"{existing!r} and {capability_id!r}"
                 )
-            alias_to_id[alias] = capability_id
-            descriptors.append(model_descriptor(alias, capability))
-        return CapabilityProjection(alias_to_id=alias_to_id, descriptors=descriptors)
+            name_to_id[name] = capability_id
+            descriptors.append(model_descriptor(name, capability))
+        return CapabilityProjection(name_to_id=name_to_id, descriptors=descriptors)
 
     def validate_capability_args(
         self, capability_id: str, params: dict[str, Any]
@@ -185,7 +171,7 @@ class CapabilityRegistry:
         if capability is None:
             return [f"unknown capability: {capability_id}"]
         try:
-            validator = Draft202012Validator(capability.spec.input_schema)
+            validator = Draft202012Validator(capability.declaration.input_schema)
         except SchemaError as exc:
             return [f"invalid schema for capability {capability_id}: {exc.message}"]
         errors = sorted(validator.iter_errors(params), key=_validation_error_sort_key)
@@ -210,44 +196,12 @@ class CapabilityRegistry:
             return error_result(
                 "unknown-capability", f"unknown capability: {capability_id}"
             )
-        if not capability.spec.mutates():
-            return invoke_executor(
-                capability_id,
-                capability,
-                params,
-                execution_mode,
-            ).payload
-        if execution_mode == "direct":
-            if not capability.policy.supports_direct:
-                return error_result(
-                    "direct-execution-disallowed",
-                    f"capability {capability_id} does not allow direct execution",
-                )
-            if low_trust_mutating_capability(capability):
-                return error_result(
-                    "trust-direct-disallowed",
-                    f"capability {capability_id} with {capability.policy.trust} trust "
-                    "cannot run mutating effects directly",
-                )
-            return invoke_executor(
-                capability_id,
-                capability,
-                params,
-                execution_mode,
-            ).payload
-        if not capability.policy.supports_staging:
-            declared = ", ".join(capability.spec.effects) or "undeclared"
-            return error_result(
-                "staging-unsupported",
-                f"capability {capability_id} has effects ({declared}) that cannot be staged "
-                "for review; rerun in the do workflow (,,,)",
-            )
         return invoke_executor(
             capability_id,
             capability,
             params,
             execution_mode,
-        ).payload
+        )
 
     async def invoke_async(
         self,
@@ -262,120 +216,66 @@ class CapabilityRegistry:
             return error_result(
                 "unknown-capability", f"unknown capability: {capability_id}"
             )
-        if not capability.spec.mutates():
-            return (
-                await invoke_executor_async(
-                    capability_id,
-                    capability,
-                    params,
-                    execution_mode,
-                )
-            ).payload
-        if execution_mode == "direct":
-            if not capability.policy.supports_direct:
-                return error_result(
-                    "direct-execution-disallowed",
-                    f"capability {capability_id} does not allow direct execution",
-                )
-            if low_trust_mutating_capability(capability):
-                return error_result(
-                    "trust-direct-disallowed",
-                    f"capability {capability_id} with {capability.policy.trust} trust "
-                    "cannot run mutating effects directly",
-                )
-            return (
-                await invoke_executor_async(
-                    capability_id,
-                    capability,
-                    params,
-                    execution_mode,
-                )
-            ).payload
-        if not capability.policy.supports_staging:
-            declared = ", ".join(capability.spec.effects) or "undeclared"
-            return error_result(
-                "staging-unsupported",
-                f"capability {capability_id} has effects ({declared}) that cannot be staged "
-                "for review; rerun in the do workflow (,,,)",
-            )
-        return (
-            await invoke_executor_async(
-                capability_id,
-                capability,
-                params,
-                execution_mode,
-            )
-        ).payload
+        return await invoke_executor_async(
+            capability_id,
+            capability,
+            params,
+            execution_mode,
+        )
 
 
 registry = CapabilityRegistry()
 
 
-def capability_auto_enabled(capability: Capability) -> bool:
-    return not low_trust_mutating_capability(capability)
-
-
-def low_trust_mutating_capability(capability: Capability) -> bool:
-    return capability.policy.trust in {"client", "remote"} and capability.spec.mutates()
-
-
 def invoke_executor(
     capability_id: str,
-    capability: Capability,
+    capability: RegisteredCapability,
     params: dict[str, Any],
     mode: ExecutionMode,
-) -> CapabilityResult:
+) -> dict[str, Any]:
     try:
-        result = capability.executor.invoke(capability.spec, params, mode=mode)
+        result = capability.executor.invoke(capability.declaration, params, mode=mode)
         if inspect.isawaitable(result):
-            result = asyncio.run(cast(Coroutine[Any, Any, CapabilityResult], result))
+            result = asyncio.run(cast(Coroutine[Any, Any, dict[str, Any]], result))
     except Exception as exc:
-        return CapabilityResult.from_mapping(
-            error_result(
-                "executor-exception",
-                f"{type(exc).__name__}: {exc}",
-                data={"capability_id": capability_id},
-            )
+        return error_result(
+            "executor-exception",
+            f"{type(exc).__name__}: {exc}",
+            data={"capability_id": capability_id},
         )
-    return CapabilityResult.from_mapping(
-        validated_capability_result_payload(capability_id, result.payload)
-    )
+    return validated_capability_result_payload(capability_id, result)
 
 
 async def invoke_executor_async(
     capability_id: str,
-    capability: Capability,
+    capability: RegisteredCapability,
     params: dict[str, Any],
     mode: ExecutionMode,
-) -> CapabilityResult:
+) -> dict[str, Any]:
     try:
         if inspect.iscoroutinefunction(capability.executor.invoke):
             result = await capability.executor.invoke(
-                capability.spec,
+                capability.declaration,
                 params,
                 mode=mode,
             )
         else:
             result = await asyncio.to_thread(
                 capability.executor.invoke,
-                capability.spec,
+                capability.declaration,
                 params,
                 mode=mode,
             )
     except Exception as exc:
-        return CapabilityResult.from_mapping(
-            error_result(
-                "executor-exception",
-                f"{type(exc).__name__}: {exc}",
-                data={"capability_id": capability_id},
-            )
+        return error_result(
+            "executor-exception",
+            f"{type(exc).__name__}: {exc}",
+            data={"capability_id": capability_id},
         )
     if inspect.isawaitable(result):
         result = await result
-    result = cast(CapabilityResult, result)
-    return CapabilityResult.from_mapping(
-        validated_capability_result_payload(capability_id, result.payload)
-    )
+    result = cast(dict[str, Any], result)
+    return validated_capability_result_payload(capability_id, result)
 
 
 def invalid_capability_result_error(capability_id: str) -> dict[str, Any]:
@@ -390,13 +290,13 @@ def _validation_error_sort_key(error: ValidationError) -> tuple[str, str]:
     return (_json_path(error.absolute_path), error.message)
 
 
-def model_descriptor(alias: str, capability: Capability) -> dict[str, Any]:
+def model_descriptor(alias: str, capability: RegisteredCapability) -> dict[str, Any]:
     return {
         "type": "function",
         "function": {
             "name": alias,
-            "description": capability.spec.description,
-            "parameters": capability.spec.input_schema,
+            "description": capability.declaration.description,
+            "parameters": capability.declaration.input_schema,
         },
     }
 

@@ -14,28 +14,23 @@ from jsonschema import Draft202012Validator
 from jsonschema.exceptions import SchemaError
 
 from zeta.capabilities.base import (
-    EFFECT_KINDS,
-    READ_ONLY_EFFECT_KINDS,
-    Capability,
-    CapabilityId,
-    CapabilityPolicy,
-    CapabilityResult,
-    CapabilitySpec,
-    EffectKind,
-    ExecutionMode,
     error_result,
 )
-from zeta.capabilities.registry import CapabilityRegistry
+from zeta.capabilities.registry import CapabilityRegistry, RegisteredCapability
 from zeta.capabilities.registry import registry as _runtime_tool_registry
-from zeta.dispatch import AsyncEventDispatcher
+from zeta.dispatch import EventDispatcher
 from zeta.events import (
-    DraftEvent,
-    Event,
     EventSink,
     boundary_event_draft,
     draft_event_view,
     event_view,
 )
+from zeta.kernel.capabilities import (
+    Capability,
+    CapabilityId,
+    ExecutionMode,
+)
+from zeta.kernel.events import DraftEvent, Event
 from zeta.session import (
     Session,
     SessionRequestError,
@@ -85,14 +80,14 @@ class RpcRunState:
 @dataclass(frozen=True)
 class EventSubscription:
     id: str
-    after_seq: int | None = None
+    after_cursor: int | None = None
     session_id: str | None = None
     run_id: str | None = None
 
 
 @dataclass(frozen=True)
 class EventListParams:
-    after_seq: int | None = None
+    after_cursor: int | None = None
     limit: int | None = None
     session_id: str | None = None
     run_id: str | None = None
@@ -100,7 +95,7 @@ class EventListParams:
     @classmethod
     def from_mapping(cls, params: dict[str, Any]) -> "EventListParams":
         return cls(
-            after_seq=event_cursor(params.get("after")),
+            after_cursor=event_cursor(params.get("after")),
             limit=positive_limit(params.get("limit")),
             session_id=optional_string(params.get("session_id")),
             run_id=optional_string(params.get("run_id")),
@@ -109,14 +104,14 @@ class EventListParams:
 
 @dataclass(frozen=True)
 class EventSubscribeParams:
-    after_seq: int | None = None
+    after_cursor: int | None = None
     session_id: str | None = None
     run_id: str | None = None
 
     @classmethod
     def from_mapping(cls, params: dict[str, Any]) -> "EventSubscribeParams":
         return cls(
-            after_seq=event_cursor(params.get("after")),
+            after_cursor=event_cursor(params.get("after")),
             session_id=optional_string(params.get("session_id")),
             run_id=optional_string(params.get("run_id")),
         )
@@ -124,7 +119,7 @@ class EventSubscribeParams:
     def subscription(self) -> EventSubscription:
         return EventSubscription(
             id=f"sub_{uuid.uuid4().hex}",
-            after_seq=self.after_seq,
+            after_cursor=self.after_cursor,
             session_id=self.session_id,
             run_id=self.run_id,
         )
@@ -163,19 +158,17 @@ class RpcClientCapabilityExecutor:
 
     def invoke(
         self,
-        capability: CapabilitySpec,
+        capability: Capability,
         params: dict[str, Any],
         *,
         mode: ExecutionMode,
-    ) -> CapabilityResult:
+    ) -> dict[str, Any]:
         del capability, mode
-        return CapabilityResult.from_mapping(
-            self.call_client_tool(
-                str(uuid.uuid4()),
-                self.name,
-                params,
-                timeout_sec=self.timeout_seconds,
-            )
+        return self.call_client_tool(
+            str(uuid.uuid4()),
+            self.name,
+            params,
+            timeout_sec=self.timeout_seconds,
         )
 
 
@@ -221,7 +214,7 @@ async def run_rpc_session(
     return {
         "run_id": run_id,
         "outcome": "duplicate" if not outcome.inserted else "unhandled",
-        "final_text": "",
+        "final_answer": "",
         "trace": empty_session_trace_result(),
     }
 
@@ -306,56 +299,17 @@ def client_tool_schema(item: dict[str, Any], name: str) -> dict[str, Any]:
     return schema
 
 
-def validate_client_tool_trust(item: dict[str, Any], name: str) -> None:
-    trust = item.get("trust")
-    if trust is None or trust == "client":
-        return
-    raise RpcError(
-        -32602,
-        "invalid_tool_trust",
-        "Invalid params",
-        {
-            "message": "client tools are always registered with client trust",
-            "tool": name,
-        },
-    )
-
-
-def client_tool_aliases(item: dict[str, Any], name: str) -> tuple[str, ...]:
-    aliases = item.get("aliases")
-    if not isinstance(aliases, list):
-        return (name,)
-    normalized = tuple(alias for alias in aliases if isinstance(alias, str) and alias)
-    return normalized or (name,)
-
-
-def client_tool_effects(item: dict[str, Any]) -> tuple[EffectKind, ...]:
-    raw_effects = item.get("effects")
-    if not isinstance(raw_effects, list):
-        return ()
-    return tuple(
-        cast(EffectKind, effect)
-        for effect in raw_effects
-        if isinstance(effect, str) and effect in EFFECT_KINDS
-    )
-
-
-def client_tool_supports_direct(
-    item: dict[str, Any],
-    effects: tuple[EffectKind, ...],
-) -> bool:
-    if "supports_direct" in item:
-        return item.get("supports_direct") is True
-    return bool(effects) and all(effect in READ_ONLY_EFFECT_KINDS for effect in effects)
-
-
-def client_capability_declaration(capability: Capability) -> dict[str, Any]:
-    declaration = capability.spec.metadata()
-    declaration["supports_staging"] = capability.policy.supports_staging
-    declaration["supports_direct"] = capability.policy.supports_direct
-    declaration["trust"] = capability.policy.trust
-    if capability.policy.timeout_seconds is not None:
-        declaration["timeout_sec"] = capability.policy.timeout_seconds
+def client_capability_declaration(capability: RegisteredCapability) -> dict[str, Any]:
+    declaration: dict[str, Any] = {
+        "id": capability.declaration.id.canonical(),
+        "provider": capability.declaration.id.provider,
+        "name": capability.declaration.id.name,
+        "description": capability.declaration.description,
+        "input_schema": capability.declaration.input_schema,
+    }
+    timeout_seconds = getattr(capability.executor, "timeout_seconds", None)
+    if timeout_seconds is not None:
+        declaration["timeout_sec"] = timeout_seconds
     return declaration
 
 
@@ -364,26 +318,15 @@ def client_tool_capability(
     item: dict[str, Any],
     *,
     call_client_tool: Callable[..., dict[str, Any]],
-) -> Capability:
+) -> RegisteredCapability:
     provider = client_tool_provider(item, name)
     schema = client_tool_schema(item, name)
-    validate_client_tool_trust(item, name)
-    effects = client_tool_effects(item)
     timeout_seconds = client_tool_timeout_sec(item)
-    return Capability(
-        CapabilitySpec(
+    return RegisteredCapability(
+        Capability(
             CapabilityId(provider, name),
             str(item.get("description") or ""),
             schema,
-            interactive=item.get("interactive") is not False,
-            effects=effects,
-            aliases=client_tool_aliases(item, name),
-        ),
-        CapabilityPolicy(
-            supports_staging=item.get("supports_staging") is True,
-            supports_direct=client_tool_supports_direct(item, effects),
-            trust="client",
-            timeout_seconds=timeout_seconds,
         ),
         RpcClientCapabilityExecutor(
             call_client_tool,
@@ -492,12 +435,11 @@ def optional_string(value: Any) -> str | None:
     return value if isinstance(value, str) and value else None
 
 
-def rpc_outcome(staged_effect: dict[str, Any] | None, final_text: str) -> str:
+def rpc_outcome(staged_effect: dict[str, Any] | None, final_answer: str) -> str:
+    del final_answer
     if staged_effect is not None:
         return "staged"
-    if final_text:
-        return "answered"
-    return "failed"
+    return "completed"
 
 
 def event_matches_subscription(
@@ -511,11 +453,11 @@ def event_matches_subscription(
         return False
     if subscription.run_id is not None and event.turn_id != subscription.run_id:
         return False
-    if subscription.after_seq is None:
+    if subscription.after_cursor is None:
         return True
     if not isinstance(event, Event):
         return False
-    return event.seq > subscription.after_seq
+    return event.cursor is not None and event.cursor > subscription.after_cursor
 
 
 class JsonRpcProtocol:
@@ -537,7 +479,7 @@ class JsonRpcProtocol:
         self.event_sink = event_sink
         if self.event_sink is None and hasattr(event_reader, "accept"):
             self.event_sink = cast(EventSink, event_reader)
-        self.event_dispatcher: AsyncEventDispatcher | None = None
+        self.event_dispatcher: EventDispatcher | None = None
         self.tool_responses: dict[str, dict[str, Any]] = {}
         self.tool_calls: dict[str, ClientToolCall] = {}
         self.client_tools: set[str] = set()
@@ -652,14 +594,16 @@ class JsonRpcProtocol:
             Filter(
                 session_id=request.session_id,
                 turn_id=request.run_id,
-                after_seq=request.after_seq,
+                after_cursor=request.after_cursor,
                 limit=request.limit,
             )
         )
         next_cursor = (
-            str(events[-1].seq)
+            str(events[-1].cursor)
             if events
-            else (str(request.after_seq) if request.after_seq is not None else None)
+            else (
+                str(request.after_cursor) if request.after_cursor is not None else None
+            )
         )
         return {
             "events": [event_view(event) for event in events],
@@ -673,8 +617,8 @@ class JsonRpcProtocol:
         return {
             "subscribed": True,
             "subscription_id": subscription.id,
-            "next_cursor": str(request.after_seq)
-            if request.after_seq is not None
+            "next_cursor": str(request.after_cursor)
+            if request.after_cursor is not None
             else None,
         }
 
@@ -697,7 +641,7 @@ class JsonRpcProtocol:
             item,
             call_client_tool=self.call_client_tool,
         )
-        capability_id = capability.spec.id.canonical()
+        capability_id = capability.declaration.id.canonical()
         existing = self.tool_registry.get(capability_id)
         if existing is not None:
             raise RpcError(
@@ -967,7 +911,7 @@ class JsonRpcServer(JsonRpcProtocol):
                     "Server error",
                     {"message": "events.publish is not configured"},
                 )
-            dispatcher = AsyncEventDispatcher(
+            dispatcher = EventDispatcher(
                 self.event_sink,
                 publish_event=self.publish_event,
             )
@@ -1024,7 +968,7 @@ class JsonRpcServer(JsonRpcProtocol):
             state.status = "cancelled"
             self.write_response(
                 state.request_id,
-                {"run_id": state.run_id, "outcome": "aborted", "final_text": ""},
+                {"run_id": state.run_id, "outcome": "aborted", "final_answer": ""},
             )
             return
         except RpcError as exc:

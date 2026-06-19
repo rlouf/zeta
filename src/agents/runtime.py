@@ -10,14 +10,15 @@ from agents.events import EventEnvelope
 from agents.prompts import render_prompt
 from agents.spec import AgentSpec
 from zeta.agents.capabilities import AgentConfig
-from zeta.dispatch import AgentDefinition, AgentRun, TriggerRule
+from zeta.dispatch import RegisteredAgent
+from zeta.kernel.agents import AgentDefinition, AgentInvocation, EventPattern
 
 if TYPE_CHECKING:
     from zeta.loop import AgentTurnResult
 
 AgentTurnRunner = Callable[..., Awaitable["AgentTurnResult"]]
-TimelineFactory = Callable[[AgentRun], list[dict[str, Any]]]
-ContextFactory = Callable[[AgentRun], str]
+TimelineFactory = Callable[[AgentInvocation], list[dict[str, Any]]]
+ContextFactory = Callable[[AgentInvocation], str]
 
 
 def compile_agent_definition(
@@ -27,7 +28,7 @@ def compile_agent_definition(
     context: str | ContextFactory = "",
     timeline: Sequence[dict[str, Any]] | TimelineFactory = (),
     run_turn: AgentTurnRunner | None = None,
-) -> AgentDefinition:
+) -> RegisteredAgent:
     """Compile a single-accept spec into an in-process runtime agent."""
     if len(spec.accepts) != 1:
         raise ValueError("compile_agent_definition requires exactly one accepted event")
@@ -47,18 +48,20 @@ def compile_agent_definitions(
     context: str | ContextFactory = "",
     timeline: Sequence[dict[str, Any]] | TimelineFactory = (),
     run_turn: AgentTurnRunner | None = None,
-) -> list[AgentDefinition]:
+) -> list[RegisteredAgent]:
     """Compile one authored spec into runtime definitions for each accepted event."""
     if not spec.accepts:
         return []
     return [
-        AgentDefinition(
-            agent_id=spec.slug,
-            trigger=TriggerRule(event_type=event_type),
-            allowed_capabilities=spec.tools,
-            system_prompt=spec.description,
-            max_turns=config.max_turns if config is not None else None,
-            dispatch_mode="session_scoped" if spec.resumable else "one_shot",
+        RegisteredAgent(
+            AgentDefinition(
+                agent_id=spec.slug,
+                triggers=(EventPattern(event_type),),
+                allowed_capabilities=spec.tools,
+                system_prompt=spec.description,
+                max_turns=config.max_turns if config is not None else None,
+                dispatch_mode="session_scoped" if spec.resumable else "one_shot",
+            ),
             run=agent_runner(
                 spec,
                 config,
@@ -77,8 +80,8 @@ def agent_runner(
     context: str | ContextFactory,
     timeline: Sequence[dict[str, Any]] | TimelineFactory,
     run_turn: AgentTurnRunner,
-) -> Callable[[AgentRun], Awaitable[dict[str, Any]]]:
-    async def run(agent_run: AgentRun) -> dict[str, Any]:
+) -> Callable[[AgentInvocation], Awaitable[dict[str, Any]]]:
+    async def run(agent_run: AgentInvocation) -> dict[str, Any]:
         effective_config = config_for_spec(spec, config)
         objective = render_prompt(
             spec, EventEnvelope.from_event(agent_run.triggering_event)
@@ -117,7 +120,7 @@ def config_for_spec(spec: AgentSpec, config: AgentConfig | None) -> AgentConfig:
 
 
 def agent_turn_result_mapping(result: AgentTurnResult) -> dict[str, Any]:
-    payload: dict[str, Any] = {"final_text": result.final_text}
+    payload: dict[str, Any] = {"final_answer": result.final_answer}
     if result.events:
         payload["events"] = result.events
     if result.staged_effect is not None:

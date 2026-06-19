@@ -43,7 +43,7 @@ from zeta import events as zeta_event_model
 from zeta import loop as zeta_agent
 from zeta import models as zeta_models_api
 from zeta.context.components import PromptTrace, chat_messages
-from zeta.events import DraftEvent, event_view
+from zeta.events import event_view
 from zeta.history import (
     effect_record,
     history_event_record,
@@ -51,11 +51,13 @@ from zeta.history import (
     is_turn_record,
     turn_record,
 )
+from zeta.kernel.events import DraftEvent, Event
+from zeta.kernel.objects import Ref
+from zeta.loop import AgentTurnResult
 from zeta.models import chat_completions as zeta_model
 from zeta.models import profiles as zeta_models
 from zeta.store.events import Filter, SqliteEventStore, event_store_path
 from zeta.store.substrate import resolve_object_id
-from zeta.substrate import Ref
 
 zeta_trace = SimpleNamespace(Ref=Ref, resolve_object_id=resolve_object_id)
 
@@ -97,7 +99,7 @@ def test_sigil_step_writes_handoff_file(
     monkeypatch.setattr(
         zeta_runner,
         "run_agent_turn",
-        lambda *args, **kwargs: zeta_agent.AgentTurnResult(
+        lambda *args, **kwargs: AgentTurnResult(
             events=draft_events(
                 [
                     {
@@ -154,8 +156,8 @@ def test_sigil_step_keeps_trace_off_stdout(monkeypatch) -> None:
     monkeypatch.setattr(
         zeta_runner,
         "run_agent_turn",
-        lambda *args, **kwargs: zeta_agent.AgentTurnResult(
-            final_text="summary",
+        lambda *args, **kwargs: AgentTurnResult(
+            final_answer="summary",
             events=draft_events(
                 [
                     {
@@ -200,11 +202,11 @@ def test_zeta_agent_step_separates_trace_from_final_answer(
         transcript: list[dict[str, Any]],
         config: zeta_agent.AgentConfig,
         **kwargs: object,
-    ) -> zeta_agent.AgentTurnResult:
+    ) -> AgentTurnResult:
         del objective, transcript, config
         captured["context"] = kwargs.get("context")
-        return zeta_agent.AgentTurnResult(
-            final_text="The answer.",
+        return AgentTurnResult(
+            final_answer="The answer.",
             events=draft_events(
                 [
                     {
@@ -259,11 +261,11 @@ def test_zeta_agent_step_renders_context_usage_on_trace_stream(
         transcript: list[dict[str, Any]],
         config: zeta_agent.AgentConfig,
         **kwargs: object,
-    ) -> zeta_agent.AgentTurnResult:
+    ) -> AgentTurnResult:
         del objective, transcript, config, kwargs
-        return zeta_agent.AgentTurnResult(
-            final_text="done",
-            model_telemetry=telemetry,
+        return AgentTurnResult(
+            final_answer="done",
+            telemetry=telemetry,
         )
 
     monkeypatch.setattr(agent_io, "ensure_server", lambda: True)
@@ -294,11 +296,11 @@ def test_zeta_agent_step_renders_context_usage_after_buffered_answer(
         transcript: list[dict[str, Any]],
         config: zeta_agent.AgentConfig,
         **kwargs: object,
-    ) -> zeta_agent.AgentTurnResult:
+    ) -> AgentTurnResult:
         del objective, transcript, config, kwargs
-        return zeta_agent.AgentTurnResult(
-            final_text="done",
-            model_telemetry=telemetry,
+        return AgentTurnResult(
+            final_answer="done",
+            telemetry=telemetry,
         )
 
     monkeypatch.setattr(agent_io, "ensure_server", lambda: True)
@@ -326,7 +328,7 @@ def test_zeta_agent_step_renders_context_usage_at_bottom_after_tools(
         transcript: list[dict[str, Any]],
         config: zeta_agent.AgentConfig,
         **kwargs: object,
-    ) -> zeta_agent.AgentTurnResult:
+    ) -> AgentTurnResult:
         del objective, transcript, config
         event_sink = cast("Callable[[DraftEvent], None]", kwargs.get("event_sink"))
         first_call = {
@@ -365,10 +367,10 @@ def test_zeta_agent_step_renders_context_usage_at_bottom_after_tools(
         events = [first_call, first_result, second_call, second_result]
         for draft in draft_events(events):
             event_sink(draft)
-        return zeta_agent.AgentTurnResult(
-            final_text="done",
+        return AgentTurnResult(
+            final_answer="done",
             events=draft_events(events),
-            model_telemetry={
+            telemetry={
                 "usage": {"prompt_tokens": 456, "completion_tokens": 4},
                 "model_context_tokens": 262_144,
             },
@@ -402,10 +404,10 @@ def test_zeta_agent_step_does_not_pass_current_user_event_as_transcript(
         transcript: list[dict[str, Any]],
         config: zeta_agent.AgentConfig,
         **kwargs: object,
-    ) -> zeta_agent.AgentTurnResult:
+    ) -> AgentTurnResult:
         del objective, config, kwargs
         captured["transcript"] = transcript
-        return zeta_agent.AgentTurnResult(final_text="done")
+        return AgentTurnResult(final_answer="done")
 
     monkeypatch.setattr(agent_io, "ensure_server", lambda: True)
     monkeypatch.setattr(zeta_runner, "run_agent_turn", fake_run_agent_turn)
@@ -429,10 +431,10 @@ def test_zeta_agent_step_double_comma_uses_handoff_mode(
         transcript: list[dict[str, Any]],
         config: zeta_agent.AgentConfig,
         **kwargs: object,
-    ) -> zeta_agent.AgentTurnResult:
+    ) -> AgentTurnResult:
         del objective, transcript, kwargs
         captured["config"] = config
-        return zeta_agent.AgentTurnResult(final_text="done")
+        return AgentTurnResult(final_answer="done")
 
     monkeypatch.setattr(agent_io, "ensure_server", lambda: True)
     monkeypatch.setattr(zeta_runner, "run_agent_turn", fake_run_agent_turn)
@@ -456,10 +458,10 @@ def test_zeta_agent_step_supplies_the_workflow_persona(
         transcript: list[dict[str, Any]],
         config: zeta_agent.AgentConfig,
         **kwargs: object,
-    ) -> zeta_agent.AgentTurnResult:
+    ) -> AgentTurnResult:
         del objective, transcript, kwargs
         captured["config"] = config
-        return zeta_agent.AgentTurnResult(final_text="done")
+        return AgentTurnResult(final_answer="done")
 
     monkeypatch.setattr(agent_io, "ensure_server", lambda: True)
     monkeypatch.setattr(zeta_runner, "run_agent_turn", fake_run_agent_turn)
@@ -486,10 +488,10 @@ def test_zeta_ask_workflow_has_no_default_step_budget(monkeypatch) -> None:
         transcript: list[dict[str, Any]],
         config: zeta_agent.AgentConfig,
         **kwargs: object,
-    ) -> zeta_agent.AgentTurnResult:
+    ) -> AgentTurnResult:
         del objective, transcript, kwargs
         captured["config"] = config
-        return zeta_agent.AgentTurnResult(final_text="done")
+        return AgentTurnResult(final_answer="done")
 
     monkeypatch.setattr(agent_io, "ensure_server", lambda: True)
     monkeypatch.setattr(zeta_runner, "run_agent_turn", fake_run_agent_turn)
@@ -558,7 +560,7 @@ def test_zeta_agent_step_prints_tool_start_while_agent_runs(
         transcript: list[dict[str, Any]],
         config: zeta_agent.AgentConfig,
         **kwargs: object,
-    ) -> zeta_agent.AgentTurnResult:
+    ) -> AgentTurnResult:
         del objective, transcript, config
         event_sink = cast("Callable[[DraftEvent], None]", kwargs.get("event_sink"))
         assert callable(event_sink)
@@ -581,8 +583,8 @@ def test_zeta_agent_step_prints_tool_start_while_agent_runs(
             },
         }
         event_sink(draft_event(tool_result))
-        return zeta_agent.AgentTurnResult(
-            final_text="It is a README.",
+        return AgentTurnResult(
+            final_answer="It is a README.",
             events=draft_events([tool_call, tool_result]),
         )
 
@@ -605,7 +607,7 @@ def test_zeta_agent_step_streams_text_before_tool_trace(
         transcript: list[dict[str, Any]],
         config: zeta_agent.AgentConfig,
         **kwargs: object,
-    ) -> zeta_agent.AgentTurnResult:
+    ) -> AgentTurnResult:
         del objective, transcript, config
         event_sink = cast("Callable[[DraftEvent], None]", kwargs.get("event_sink"))
         event_sink(
@@ -626,8 +628,8 @@ def test_zeta_agent_step_streams_text_before_tool_trace(
             "input": {"path": "README.md"},
         }
         event_sink(draft_event(tool_call))
-        return zeta_agent.AgentTurnResult(
-            final_text="It is a README.",
+        return AgentTurnResult(
+            final_answer="It is a README.",
             events=draft_events([tool_call]),
         )
 
@@ -654,7 +656,7 @@ def test_zeta_agent_step_separates_tool_result_from_later_streamed_text(
         transcript: list[dict[str, Any]],
         config: zeta_agent.AgentConfig,
         **kwargs: object,
-    ) -> zeta_agent.AgentTurnResult:
+    ) -> AgentTurnResult:
         del objective, transcript, config
         event_sink = cast("Callable[[DraftEvent], None]", kwargs.get("event_sink"))
         event_sink(
@@ -692,10 +694,10 @@ def test_zeta_agent_step_separates_tool_result_from_later_streamed_text(
                 {"text": "It is a README.", "_timeline_type": "runtime.stream.chunk"},
             )
         )
-        return zeta_agent.AgentTurnResult(
-            final_text="It is a README.",
+        return AgentTurnResult(
+            final_answer="It is a README.",
             events=draft_events([tool_call, tool_result]),
-            final_text_streamed=True,
+            answer_streamed=True,
         )
 
     monkeypatch.setattr(agent_io, "ensure_server", lambda: True)
@@ -722,7 +724,7 @@ def test_zeta_agent_step_does_not_insert_blank_lines_between_tool_calls(
         transcript: list[dict[str, Any]],
         config: zeta_agent.AgentConfig,
         **kwargs: object,
-    ) -> zeta_agent.AgentTurnResult:
+    ) -> AgentTurnResult:
         del objective, transcript, config
         event_sink = cast("Callable[[DraftEvent], None]", kwargs.get("event_sink"))
         events = [
@@ -761,9 +763,7 @@ def test_zeta_agent_step_does_not_insert_blank_lines_between_tool_calls(
         ]
         for draft in draft_events(events):
             event_sink(draft)
-        return zeta_agent.AgentTurnResult(
-            final_text="Done.", events=draft_events(events)
-        )
+        return AgentTurnResult(final_answer="Done.", events=draft_events(events))
 
     monkeypatch.setattr(agent_io, "ensure_server", lambda: True)
     monkeypatch.setattr(zeta_runner, "run_agent_turn", fake_run_agent_turn)
@@ -791,7 +791,7 @@ def test_zeta_agent_step_aligns_thinking_status_after_tool_trace(
         transcript: list[dict[str, Any]],
         config: zeta_agent.AgentConfig,
         **kwargs: object,
-    ) -> zeta_agent.AgentTurnResult:
+    ) -> AgentTurnResult:
         del objective, transcript, config
         event_sink = cast("Callable[[DraftEvent], None]", kwargs.get("event_sink"))
         tool_call = {
@@ -823,7 +823,7 @@ def test_zeta_agent_step_aligns_thinking_status_after_tool_trace(
                 },
             )
         )
-        return zeta_agent.AgentTurnResult(final_text="Done.", events=[])
+        return AgentTurnResult(final_answer="Done.", events=[])
 
     monkeypatch.setattr(agent_io, "ensure_server", lambda: True)
     monkeypatch.setattr(zeta_runner, "run_agent_turn", fake_run_agent_turn)
@@ -850,8 +850,8 @@ def test_zeta_agent_step_prints_final_answer_after_direct_edit(
     monkeypatch.setattr(
         zeta_runner,
         "run_agent_turn",
-        lambda *args, **kwargs: zeta_agent.AgentTurnResult(
-            final_text="edited and verified",
+        lambda *args, **kwargs: AgentTurnResult(
+            final_answer="edited and verified",
             events=draft_events(
                 [
                     {
@@ -967,10 +967,10 @@ thinking = "low"
         transcript: list[dict[str, Any]],
         config: zeta_agent.AgentConfig,
         **kwargs: object,
-    ) -> zeta_agent.AgentTurnResult:
+    ) -> AgentTurnResult:
         del objective, transcript, kwargs
         captured["config"] = config
-        return zeta_agent.AgentTurnResult(final_text="done")
+        return AgentTurnResult(final_answer="done")
 
     monkeypatch.setattr(agent_io, "ensure_server", fake_ensure_server)
     monkeypatch.setattr(zeta_runner, "run_agent_turn", fake_run_agent_turn)
@@ -1060,11 +1060,11 @@ url = "http://127.0.0.1:8081/v1/chat/completions"
         transcript: list[dict[str, Any]],
         config: zeta_agent.AgentConfig,
         **kwargs: object,
-    ) -> zeta_agent.AgentTurnResult:
+    ) -> AgentTurnResult:
         del objective, kwargs
         captured["transcript"] = transcript
         captured["config"] = config
-        return zeta_agent.AgentTurnResult(final_text="answered")
+        return AgentTurnResult(final_answer="answered")
 
     monkeypatch.setattr(agent_io, "ensure_server", fake_ensure_server)
     monkeypatch.setattr(zeta_runner, "run_agent_turn", fake_run_agent_turn)
@@ -1392,11 +1392,11 @@ def test_zeta_question_loop_feeds_current_tool_result_to_next_step(
         transcript: list[dict[str, Any]],
         config: zeta_agent.AgentConfig,
         **kwargs: object,
-    ) -> zeta_agent.AgentTurnResult:
+    ) -> AgentTurnResult:
         del objective, config, kwargs
         transcripts.append(transcript)
-        return zeta_agent.AgentTurnResult(
-            final_text="It contains project metadata.",
+        return AgentTurnResult(
+            final_answer="It contains project metadata.",
             events=draft_events(
                 [
                     {
@@ -1469,11 +1469,11 @@ def test_zeta_ask_workflow_prints_context_usage_and_records_telemetry(
         transcript: list[dict[str, Any]],
         config: zeta_agent.AgentConfig,
         **kwargs: object,
-    ) -> zeta_agent.AgentTurnResult:
+    ) -> AgentTurnResult:
         del objective, transcript, config, kwargs
-        return zeta_agent.AgentTurnResult(
-            final_text="It contains project metadata.",
-            model_telemetry=telemetry,
+        return AgentTurnResult(
+            final_answer="It contains project metadata.",
+            telemetry=telemetry,
             model_telemetry_calls=[telemetry],
         )
 
@@ -1495,7 +1495,7 @@ def test_zeta_ask_workflow_prints_context_usage_and_records_telemetry(
     assert turn["cost"]["model_calls"] == 1
 
 
-def test_zeta_ask_workflow_streams_final_text_without_duplicate(
+def test_zeta_ask_workflow_streams_final_answer_without_duplicate(
     monkeypatch,
     capsys,
 ) -> None:
@@ -1504,7 +1504,7 @@ def test_zeta_ask_workflow_streams_final_text_without_duplicate(
         transcript: list[dict[str, Any]],
         config: zeta_agent.AgentConfig,
         **kwargs: object,
-    ) -> zeta_agent.AgentTurnResult:
+    ) -> AgentTurnResult:
         del objective, transcript, config
         event_sink = cast("Callable[[DraftEvent], None]", kwargs.get("event_sink"))
         event_sink(
@@ -1514,10 +1514,10 @@ def test_zeta_ask_workflow_streams_final_text_without_duplicate(
                 {"text": "streamed answer", "_timeline_type": "runtime.stream.chunk"},
             )
         )
-        return zeta_agent.AgentTurnResult(
-            final_text="streamed answer",
+        return AgentTurnResult(
+            final_answer="streamed answer",
             events=draft_events([{"type": "model", "content": "streamed answer"}]),
-            final_text_streamed=True,
+            answer_streamed=True,
         )
 
     monkeypatch.setattr(agent_io, "ensure_server", lambda: True)
@@ -1539,7 +1539,7 @@ def test_zeta_ask_workflow_streams_markdown_with_rich_for_tty(
         transcript: list[dict[str, Any]],
         config: zeta_agent.AgentConfig,
         **kwargs: object,
-    ) -> zeta_agent.AgentTurnResult:
+    ) -> AgentTurnResult:
         del objective, transcript, config
         event_sink = cast("Callable[[DraftEvent], None]", kwargs.get("event_sink"))
         event_sink(
@@ -1552,10 +1552,10 @@ def test_zeta_ask_workflow_streams_markdown_with_rich_for_tty(
                 },
             )
         )
-        return zeta_agent.AgentTurnResult(
-            final_text="streamed answer",
+        return AgentTurnResult(
+            final_answer="streamed answer",
             events=draft_events([{"type": "model", "content": "streamed answer"}]),
-            final_text_streamed=True,
+            answer_streamed=True,
         )
 
     monkeypatch.setattr(sys, "stdout", output)
@@ -1577,7 +1577,7 @@ def test_zeta_ask_workflow_streams_text_before_tool_trace(
         transcript: list[dict[str, Any]],
         config: zeta_agent.AgentConfig,
         **kwargs: object,
-    ) -> zeta_agent.AgentTurnResult:
+    ) -> AgentTurnResult:
         del objective, transcript, config
         event_sink = cast("Callable[[DraftEvent], None]", kwargs.get("event_sink"))
         event_sink(
@@ -1615,10 +1615,10 @@ def test_zeta_ask_workflow_streams_text_before_tool_trace(
                 {"text": "It is a README.", "_timeline_type": "runtime.stream.chunk"},
             )
         )
-        return zeta_agent.AgentTurnResult(
-            final_text="It is a README.",
+        return AgentTurnResult(
+            final_answer="It is a README.",
             events=draft_events([tool_call, tool_result]),
-            final_text_streamed=True,
+            answer_streamed=True,
         )
 
     monkeypatch.setattr(agent_io, "ensure_server", lambda: True)
@@ -1654,7 +1654,7 @@ def test_zeta_ask_workflow_renders_context_usage_at_bottom_after_tools(
         transcript: list[dict[str, Any]],
         config: zeta_agent.AgentConfig,
         **kwargs: object,
-    ) -> zeta_agent.AgentTurnResult:
+    ) -> AgentTurnResult:
         del objective, transcript, config
         event_sink = cast("Callable[[DraftEvent], None]", kwargs.get("event_sink"))
         first_call = {
@@ -1693,10 +1693,10 @@ def test_zeta_ask_workflow_renders_context_usage_at_bottom_after_tools(
         events = [first_call, first_result, second_call, second_result]
         for draft in draft_events(events):
             event_sink(draft)
-        return zeta_agent.AgentTurnResult(
-            final_text="It is a README.",
+        return AgentTurnResult(
+            final_answer="It is a README.",
             events=draft_events(events),
-            model_telemetry=telemetry,
+            telemetry=telemetry,
         )
 
     monkeypatch.setattr(agent_io, "ensure_server", lambda: True)
@@ -1722,7 +1722,7 @@ def test_zeta_question_loop_prints_tool_start_while_agent_runs(
         transcript: list[dict[str, Any]],
         config: zeta_agent.AgentConfig,
         **kwargs: object,
-    ) -> zeta_agent.AgentTurnResult:
+    ) -> AgentTurnResult:
         del objective, transcript, config
         event_sink = cast("Callable[[DraftEvent], None]", kwargs.get("event_sink"))
         assert callable(event_sink)
@@ -1745,8 +1745,8 @@ def test_zeta_question_loop_prints_tool_start_while_agent_runs(
             },
         }
         event_sink(draft_event(tool_result))
-        return zeta_agent.AgentTurnResult(
-            final_text="It is a README.",
+        return AgentTurnResult(
+            final_answer="It is a README.",
             events=draft_events([tool_call, tool_result]),
         )
 
@@ -1770,12 +1770,12 @@ def test_zeta_question_loop_passes_prior_timeline_as_turns(
         transcript: list[dict[str, Any]],
         config: zeta_agent.AgentConfig,
         **kwargs: object,
-    ) -> zeta_agent.AgentTurnResult:
+    ) -> AgentTurnResult:
         del objective, config
         transcripts.append(transcript)
         captured["context"] = kwargs.get("context")
-        return zeta_agent.AgentTurnResult(
-            final_text="follow-up answer",
+        return AgentTurnResult(
+            final_answer="follow-up answer",
             events=draft_events([{"type": "model", "content": "follow-up answer"}]),
         )
 
@@ -1791,7 +1791,7 @@ def test_zeta_question_loop_passes_prior_timeline_as_turns(
     assert code == 0
     contents = [
         str(event_view(event).get("content") or "")
-        if isinstance(event, zeta_event_model.Event)
+        if isinstance(event, Event)
         else str(event.get("content") or "")
         for event in transcripts[0]
     ]
@@ -1813,9 +1813,9 @@ def test_zeta_ask_workflow_reports_stall_without_final_answer(
         transcript: list[dict[str, Any]],
         config: zeta_agent.AgentConfig,
         **kwargs: object,
-    ) -> zeta_agent.AgentTurnResult:
+    ) -> AgentTurnResult:
         del objective, transcript, config, kwargs
-        return zeta_agent.AgentTurnResult(
+        return AgentTurnResult(
             events=draft_events(
                 [
                     {
@@ -1927,7 +1927,7 @@ def test_zeta_ask_workflow_keeps_stdout_clean_for_pipes(
         transcript: list[dict[str, Any]],
         config: zeta_agent.AgentConfig,
         **kwargs: object,
-    ) -> zeta_agent.AgentTurnResult:
+    ) -> AgentTurnResult:
         del objective, transcript, config
         event_sink = cast("Callable[[DraftEvent], None]", kwargs.get("event_sink"))
         assert callable(event_sink)
@@ -1948,10 +1948,10 @@ def test_zeta_ask_workflow_keeps_stdout_clean_for_pipes(
         ]
         for draft in draft_events(events):
             event_sink(draft)
-        return zeta_agent.AgentTurnResult(
-            final_text="grep-safe answer",
+        return AgentTurnResult(
+            final_answer="grep-safe answer",
             events=draft_events(events),
-            model_telemetry={
+            telemetry={
                 "usage": {"prompt_tokens": 10, "completion_tokens": 2},
                 "model_context_tokens": 1000,
             },
@@ -2073,7 +2073,7 @@ def test_zeta_step_threads_durable_event_causality(monkeypatch) -> None:
         transcript: list[dict[str, Any]],
         config: zeta_agent.AgentConfig,
         **kwargs: object,
-    ) -> zeta_agent.AgentTurnResult:
+    ) -> AgentTurnResult:
         del objective, transcript, config
         prompt_event_id = cast(str, kwargs["caused_by"])
         event_sink = cast("Callable[[DraftEvent], None]", kwargs["event_sink"])
@@ -2122,8 +2122,8 @@ def test_zeta_step_threads_durable_event_causality(monkeypatch) -> None:
         ]
         for draft in drafts:
             event_sink(draft)
-        return zeta_agent.AgentTurnResult(
-            final_text="done",
+        return AgentTurnResult(
+            final_answer="done",
             events=drafts,
         )
 
@@ -2160,7 +2160,7 @@ def test_zeta_step_records_staged_turn_record(monkeypatch) -> None:
     monkeypatch.setattr(
         zeta_runner,
         "run_agent_turn",
-        lambda *args, **kwargs: zeta_agent.AgentTurnResult(
+        lambda *args, **kwargs: AgentTurnResult(
             events=draft_events(
                 [
                     {
@@ -2241,8 +2241,8 @@ def test_do_step_records_executed_turn_with_file_effect(monkeypatch) -> None:
     monkeypatch.setattr(
         zeta_runner,
         "run_agent_turn",
-        lambda *args, **kwargs: zeta_agent.AgentTurnResult(
-            final_text="done",
+        lambda *args, **kwargs: AgentTurnResult(
+            final_answer="done",
             events=draft_events(
                 [
                     {
@@ -2298,8 +2298,8 @@ def test_zeta_step_bridges_turn_record_into_trace_graph(monkeypatch) -> None:
     monkeypatch.setattr(
         zeta_runner,
         "run_agent_turn",
-        lambda *args, **kwargs: zeta_agent.AgentTurnResult(
-            final_text="done",
+        lambda *args, **kwargs: AgentTurnResult(
+            final_answer="done",
             events=draft_events(
                 [
                     {
@@ -2372,8 +2372,8 @@ def test_turn_bridge_failure_does_not_break_the_step(monkeypatch) -> None:
     monkeypatch.setattr(
         zeta_runner,
         "run_agent_turn",
-        lambda *args, **kwargs: zeta_agent.AgentTurnResult(
-            final_text="done",
+        lambda *args, **kwargs: AgentTurnResult(
+            final_answer="done",
             events=draft_events([{"type": "model", "content": "done"}]),
         ),
     )
@@ -2390,8 +2390,8 @@ def test_zeta_step_tags_timeline_events_with_turn_id(monkeypatch) -> None:
     monkeypatch.setattr(
         zeta_runner,
         "run_agent_turn",
-        lambda *args, **kwargs: zeta_agent.AgentTurnResult(
-            final_text="done",
+        lambda *args, **kwargs: AgentTurnResult(
+            final_answer="done",
             events=draft_events([{"type": "model", "content": "done"}]),
         ),
     )
@@ -2413,7 +2413,7 @@ def test_zeta_step_records_failed_turn_without_answer(monkeypatch) -> None:
     monkeypatch.setattr(
         zeta_runner,
         "run_agent_turn",
-        lambda *args, **kwargs: zeta_agent.AgentTurnResult(events=[]),
+        lambda *args, **kwargs: AgentTurnResult(events=[]),
     )
 
     code = zeta_runner.step("do nothing", workflow="propose")
@@ -2424,7 +2424,7 @@ def test_zeta_step_records_failed_turn_without_answer(monkeypatch) -> None:
 
 
 def test_zeta_step_records_aborted_turn_on_runtime_error(monkeypatch) -> None:
-    def raise_runtime_error(*args, **kwargs) -> zeta_agent.AgentTurnResult:
+    def raise_runtime_error(*args, **kwargs) -> AgentTurnResult:
         raise RuntimeError("model endpoint is not reachable")
 
     monkeypatch.setattr(agent_io, "ensure_server", lambda: True)
@@ -2440,7 +2440,7 @@ def test_zeta_step_records_aborted_turn_on_runtime_error(monkeypatch) -> None:
 
 
 def test_zeta_step_records_aborted_turn_on_keyboard_interrupt(monkeypatch) -> None:
-    def raise_keyboard_interrupt(*args, **kwargs) -> zeta_agent.AgentTurnResult:
+    def raise_keyboard_interrupt(*args, **kwargs) -> AgentTurnResult:
         raise KeyboardInterrupt()
 
     monkeypatch.setattr(agent_io, "ensure_server", lambda: True)
@@ -2462,8 +2462,8 @@ def test_ask_records_answered_turn_record(monkeypatch, capsys) -> None:
     monkeypatch.setattr(
         zeta_runner,
         "run_agent_turn",
-        lambda *args, **kwargs: zeta_agent.AgentTurnResult(
-            final_text="the answer",
+        lambda *args, **kwargs: AgentTurnResult(
+            final_answer="the answer",
             events=draft_events([{"type": "model", "content": "the answer"}]),
             model_telemetry_calls=[
                 {"usage": {"prompt_tokens": 21, "completion_tokens": 6}}

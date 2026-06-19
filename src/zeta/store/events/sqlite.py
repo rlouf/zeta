@@ -12,7 +12,9 @@ import time
 from pathlib import Path
 from typing import Any
 
-from zeta.events import AppendOutcome, DraftEvent, Event, Filter, immutable_payload
+from zeta.events import AppendOutcome
+from zeta.kernel.events import DraftEvent, Event
+from zeta.store.events.filter import Filter
 
 EVENT_STORE_NAME = "events.sqlite3"
 ZETA_STORE_NAME = "zeta.sqlite3"
@@ -110,7 +112,7 @@ class SqliteEventStore:
                 event.caused_by,
                 event.session_id,
                 event.turn_id,
-                event.timestamp_micros,
+                event.timestamp_ms,
             ),
         )
         self.connection.commit()
@@ -151,9 +153,9 @@ class SqliteEventStore:
         if filter.caused_by is not None:
             clauses.append("caused_by = ?")
             params.append(filter.caused_by)
-        if filter.after_seq is not None:
+        if filter.after_cursor is not None:
             clauses.append("seq > ?")
-            params.append(filter.after_seq)
+            params.append(filter.after_cursor)
         where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
         limit = ""
         if filter.limit is not None:
@@ -246,13 +248,13 @@ def _row_to_event(row: sqlite3.Row) -> Event:
         id=str(row["id"]),
         event_type=str(row["type"]),
         source=str(row["source"]),
-        payload=immutable_payload(payload),
+        payload=dict(payload),
         idempotency_key=_optional_str(row["idempotency_key"]),
         caused_by=_optional_str(row["caused_by"]),
         session_id=_optional_str(row["session_id"]),
         turn_id=_optional_str(row["turn_id"]),
-        timestamp_micros=int(row["timestamp"]),
-        seq=int(row["seq"]),
+        timestamp_ms=int(row["timestamp"]),
+        cursor=int(row["seq"]),
     )
 
 

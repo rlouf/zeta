@@ -5,13 +5,12 @@ from pathlib import Path
 from typing import Any
 
 from zeta.capabilities.base import (
-    CapabilityId,
-    CapabilitySpec,
     change_hashes,
     error_result,
     proposed_command_effect,
     write_temp,
 )
+from zeta.kernel.capabilities import Capability, CapabilityId
 
 SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -24,13 +23,10 @@ SCHEMA: dict[str, Any] = {
     },
 }
 
-SPEC = CapabilitySpec(
+SPEC = Capability(
     CapabilityId("sigil", "write"),
     "Write content directly or stage a proposed cp command.",
     SCHEMA,
-    interactive=True,
-    effects=("write",),
-    aliases=("write",),
 )
 
 

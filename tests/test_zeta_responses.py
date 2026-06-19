@@ -5,7 +5,7 @@ from typing import Any
 
 import pytest
 
-from zeta import models as zeta_models_api
+from zeta.kernel import models as zeta_model_shapes
 from zeta.models import codex_auth
 from zeta.models import responses as zeta_responses
 
@@ -70,7 +70,7 @@ def test_zeta_responses_body_moves_system_prompt_to_instructions() -> None:
 
 
 def test_zeta_model_input_renders_existing_responses_request() -> None:
-    model_input = zeta_models_api.ModelInput(
+    model_input = zeta_model_shapes.ModelInput(
         messages=[
             {"role": "system", "content": "Be terse."},
             {"role": "user", "content": "hi"},
@@ -326,7 +326,7 @@ def test_zeta_model_output_from_responses_payload_preserves_replay_items() -> No
 
     assert output.message["content"] == "done"
     assert output.finish_reason == "stop"
-    assert output.usage == zeta_models_api.ModelUsage(
+    assert output.usage == zeta_model_shapes.ModelUsage(
         prompt_tokens=100,
         completion_tokens=20,
         total_tokens=120,
@@ -360,9 +360,9 @@ def test_zeta_responses_codex_completion_returns_adapter_message(monkeypatch) ->
 
     def fake_model_output(
         raw_payload: dict[str, Any],
-    ) -> zeta_models_api.ModelOutput:
+    ) -> zeta_model_shapes.ModelOutput:
         converted.append(raw_payload)
-        return zeta_models_api.ModelOutput(
+        return zeta_model_shapes.ModelOutput(
             message={"role": "assistant", "content": "converted"},
             finish_reason="stop",
         )

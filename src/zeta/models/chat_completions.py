@@ -14,7 +14,7 @@ from urllib.parse import urlparse, urlunparse
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import ValidationError
 
-from zeta.models import ModelInput, ModelOutput
+from zeta.kernel.models import ModelInput, ModelOutput, ModelUsage
 from zeta.models.profiles import model_name, model_url
 
 MUTED = "\033[38;2;110;106;134m"
@@ -700,7 +700,49 @@ def model_output_from_chat_completion(payload: dict[str, Any]) -> ModelOutput:
         raise RuntimeError("model request failed: response choice was invalid")
     if not isinstance(first_choice.get("message"), dict):
         raise RuntimeError("model request failed: assistant message was invalid")
-    return ModelOutput.from_chat_completion(payload)
+    message = dict(first_choice["message"])
+    usage_payload = payload.get("usage")
+    replay_items = message.get("_responses_items")
+    return ModelOutput(
+        message=message,
+        finish_reason=first_choice.get("finish_reason")
+        if isinstance(first_choice.get("finish_reason"), str)
+        else None,
+        usage=model_usage_from_payload(usage_payload)
+        if isinstance(usage_payload, dict)
+        else None,
+        provider_metadata={
+            key: value
+            for key in ("id", "object", "created", "model", "system_fingerprint")
+            if (value := payload.get(key)) is not None
+        },
+        provider_replay_items=tuple(
+            item for item in replay_items if isinstance(item, dict)
+        )
+        if isinstance(replay_items, list)
+        else (),
+    )
+
+
+def model_usage_from_payload(payload: dict[str, Any]) -> ModelUsage | None:
+    usage = ModelUsage(
+        prompt_tokens=usage_token_count(payload.get("prompt_tokens")),
+        completion_tokens=usage_token_count(payload.get("completion_tokens")),
+        total_tokens=usage_token_count(payload.get("total_tokens")),
+    )
+    if (
+        usage.prompt_tokens is None
+        and usage.completion_tokens is None
+        and usage.total_tokens is None
+    ):
+        return None
+    return usage
+
+
+def usage_token_count(value: Any) -> int | None:
+    if isinstance(value, bool) or not isinstance(value, int):
+        return None
+    return value
 
 
 def json_schema_response_format(

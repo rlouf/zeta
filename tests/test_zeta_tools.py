@@ -7,7 +7,7 @@ import asyncio
 import hashlib
 import shutil
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 import pytest
 
@@ -17,31 +17,32 @@ from sigil.tools import grep as grep_tool
 from sigil.tools import read as read_tool
 from sigil.tools import web as web_tool
 from zeta.capabilities.base import (
-    Capability,
-    CapabilityId,
-    CapabilityPolicy,
-    CapabilitySpec,
-    EffectKind,
     InProcessCapabilityExecutor,
-    TrustLevel,
 )
 from zeta.capabilities.registry import (
     CapabilityRegistry,
+    RegisteredCapability,
     validated_capability_result_payload,
 )
 from zeta.capabilities.registry import registry as tool_registry
+from zeta.kernel.capabilities import (
+    Capability,
+    CapabilityId,
+)
 
 ensure_builtin_tools_registered()
 
 
 def tool_metadata(name: str) -> dict[str, Any]:
-    capability = tool_registry.get_by_alias(name)
+    capability = tool_registry.get_by_name(name)
     assert capability is not None
-    metadata = capability.spec.metadata()
-    metadata["supports_staging"] = capability.policy.supports_staging
-    metadata["supports_direct"] = capability.policy.supports_direct
-    metadata["timeout_seconds"] = capability.policy.timeout_seconds
-    return metadata
+    return {
+        "id": capability.declaration.id.canonical(),
+        "provider": capability.declaration.id.provider,
+        "name": capability.declaration.id.name,
+        "description": capability.declaration.description,
+        "input_schema": capability.declaration.input_schema,
+    }
 
 
 def _test_capability(
@@ -49,44 +50,33 @@ def _test_capability(
     *,
     provider: str = "test",
     schema: dict[str, Any] | None = None,
-    effects: tuple[EffectKind, ...] = (),
-    aliases: tuple[str, ...] | None = None,
     run_result: dict[str, Any] | None = None,
-    supports_staging: bool = False,
-    supports_direct: bool = True,
-    trust: TrustLevel = "host",
-) -> Capability:
-    return Capability(
-        CapabilitySpec(
+    with_stage_executor: bool = False,
+) -> RegisteredCapability:
+    return RegisteredCapability(
+        Capability(
             CapabilityId(provider, name),
             "Unit test capability.",
             schema or {"type": "object"},
-            effects=effects,
-            aliases=aliases or (name,),
-        ),
-        CapabilityPolicy(
-            supports_staging=supports_staging,
-            supports_direct=supports_direct,
-            trust=trust,
         ),
         InProcessCapabilityExecutor(
             lambda params: run_result or {"ok": True, "metadata": params},
             (lambda params: {"ok": True, "effect": {"status": "proposed"}})
-            if supports_staging
+            if with_stage_executor
             else None,
         ),
     )
 
 
 def test_zeta_capability_registry_registers_and_lists_capabilities() -> None:
-    capability = _test_capability("unit", effects=("read",))
+    capability = _test_capability("unit")
     registry = CapabilityRegistry()
 
     registry.register(capability)
 
     assert registry.get("test.unit") is capability
     assert registry.list_capability_ids() == ["test.unit"]
-    assert capability.spec.metadata()["id"] == "test.unit"
+    assert capability.declaration.id.canonical() == "test.unit"
 
 
 def test_zeta_capability_registry_rejects_invalid_capability_schema() -> None:
@@ -100,37 +90,13 @@ def test_zeta_capability_registry_rejects_invalid_capability_schema() -> None:
         registry.register(capability)
 
 
-def test_zeta_capability_registry_refuses_undeclared_effects_in_stage_mode() -> None:
+def test_zeta_capability_registry_runs_direct_only_capability_in_stage_mode() -> None:
     registry = CapabilityRegistry()
     registry.register(_test_capability("unit"))
 
     result = registry.invoke("unit", {})
 
-    assert result["ok"] is False
-    assert result["error"]["code"] == "staging-unsupported"
-    assert "undeclared" in result["error"]["message"]
-
-
-def test_zeta_capability_registry_requires_direct_execution_permission() -> None:
-    registry = CapabilityRegistry()
-    registry.register(
-        _test_capability(
-            "unit",
-            effects=("write",),
-            supports_staging=True,
-            supports_direct=False,
-        )
-    )
-
-    result = registry.invoke("unit", {}, execution_mode="direct")
-
-    assert result == {
-        "ok": False,
-        "error": {
-            "code": "direct-execution-disallowed",
-            "message": "capability test.unit does not allow direct execution",
-        },
-    }
+    assert result == {"ok": True, "metadata": {}}
 
 
 def test_zeta_capability_registry_normalizes_malformed_executor_result() -> None:
@@ -138,7 +104,6 @@ def test_zeta_capability_registry_normalizes_malformed_executor_result() -> None
     registry.register(
         _test_capability(
             "unit",
-            effects=("read",),
             run_result={"content": [{"type": "text", "text": "raw text"}]},
         )
     )
@@ -234,18 +199,11 @@ def test_zeta_capability_registry_converts_executor_exception_to_error_result() 
         raise RuntimeError("boom")
 
     registry.register(
-        Capability(
-            CapabilitySpec(
+        RegisteredCapability(
+            Capability(
                 CapabilityId("test", "crash"),
                 "Crash test capability.",
                 {"type": "object"},
-                effects=("read",),
-                aliases=("crash",),
-            ),
-            CapabilityPolicy(
-                supports_staging=False,
-                supports_direct=True,
-                trust="host",
             ),
             InProcessCapabilityExecutor(crash),
         )
@@ -263,39 +221,12 @@ def test_zeta_capability_registry_converts_executor_exception_to_error_result() 
     }
 
 
-def test_zeta_capability_registry_rejects_low_trust_mutating_direct_execution() -> None:
+def test_zeta_capability_registry_allows_stage_execution() -> None:
     registry = CapabilityRegistry()
     registry.register(
         _test_capability(
             "write",
-            effects=("write",),
-            run_result={"ok": True, "content": [{"type": "text", "text": "wrote"}]},
-            supports_staging=True,
-            supports_direct=True,
-            trust="client",
-        )
-    )
-
-    result = registry.invoke("write", {}, execution_mode="direct")
-
-    assert result == {
-        "ok": False,
-        "error": {
-            "code": "trust-direct-disallowed",
-            "message": "capability test.write with client trust cannot run mutating effects directly",
-        },
-    }
-
-
-def test_zeta_capability_registry_allows_low_trust_mutating_stage_execution() -> None:
-    registry = CapabilityRegistry()
-    registry.register(
-        _test_capability(
-            "write",
-            effects=("write",),
-            supports_staging=True,
-            supports_direct=True,
-            trust="client",
+            with_stage_executor=True,
         )
     )
 
@@ -304,42 +235,35 @@ def test_zeta_capability_registry_allows_low_trust_mutating_stage_execution() ->
     assert result == {"ok": True, "effect": {"status": "proposed"}}
 
 
-def test_zeta_in_process_capability_executor_runs_read_capability() -> None:
-    capability = _test_capability("read", effects=("read",))
+def test_zeta_in_process_capability_executor_runs_direct_capability() -> None:
+    capability = _test_capability("read")
 
     result = asyncio.run(
-        cast(
-            Any,
-            capability.executor.invoke(
-                capability.spec,
-                {"path": "README.md"},
-                mode="stage",
-            ),
+        capability.executor.invoke(
+            capability.declaration,
+            {"path": "README.md"},
+            mode="stage",
         )
     )
 
-    assert result.payload == {"ok": True, "metadata": {"path": "README.md"}}
+    assert result == {"ok": True, "metadata": {"path": "README.md"}}
 
 
 def test_zeta_in_process_capability_executor_stages_mutating_capability() -> None:
     capability = _test_capability(
         "write",
-        effects=("write",),
-        supports_staging=True,
+        with_stage_executor=True,
     )
 
     result = asyncio.run(
-        cast(
-            Any,
-            capability.executor.invoke(
-                capability.spec,
-                {"path": "README.md"},
-                mode="stage",
-            ),
+        capability.executor.invoke(
+            capability.declaration,
+            {"path": "README.md"},
+            mode="stage",
         )
     )
 
-    assert result.payload == {"ok": True, "effect": {"status": "proposed"}}
+    assert result == {"ok": True, "effect": {"status": "proposed"}}
 
 
 def test_zeta_capability_registry_rejects_duplicate_canonical_ids() -> None:
@@ -352,29 +276,29 @@ def test_zeta_capability_registry_rejects_duplicate_canonical_ids() -> None:
         registry.register(_test_capability("read"))
 
 
-def test_zeta_capability_projection_rejects_ambiguous_aliases() -> None:
+def test_zeta_capability_projection_rejects_ambiguous_names() -> None:
     registry = CapabilityRegistry()
-    registry.register(_test_capability("read", provider="host", aliases=("read",)))
-    registry.register(_test_capability("read", provider="rpc", aliases=("read",)))
+    registry.register(_test_capability("read", provider="host"))
+    registry.register(_test_capability("read", provider="rpc"))
 
-    with pytest.raises(ValueError, match="ambiguous capability alias 'read'"):
+    with pytest.raises(ValueError, match="ambiguous capability name 'read'"):
         registry.project(("host.read", "rpc.read"))
 
 
-def test_zeta_capability_projection_can_use_qualified_aliases() -> None:
+def test_zeta_capability_projection_can_use_qualified_names() -> None:
     registry = CapabilityRegistry()
-    registry.register(_test_capability("read", provider="host", aliases=("read",)))
-    registry.register(_test_capability("read", provider="rpc", aliases=("read",)))
+    registry.register(_test_capability("read", provider="host"))
+    registry.register(_test_capability("read", provider="rpc"))
 
     projection = registry.project(
         ("host.read", "rpc.read"),
-        alias_overrides={
+        name_overrides={
             "host.read": "host.read",
             "rpc.read": "rpc.read",
         },
     )
 
-    assert projection.alias_to_id == {
+    assert projection.name_to_id == {
         "host.read": "host.read",
         "rpc.read": "rpc.read",
     }
@@ -461,7 +385,6 @@ def test_zeta_ast_grep_metadata_guides_model_tool_choice() -> None:
     metadata = tool_metadata("ast_grep")
     schema = metadata["input_schema"]
 
-    assert metadata["effects"] == ["search"]
     assert metadata["description"] == (
         "Search code structurally with ast-grep. Use when looking for syntax "
         "patterns rather than plain text. Results include [path#tag] snapshot "
@@ -474,12 +397,10 @@ def test_zeta_ast_grep_metadata_guides_model_tool_choice() -> None:
 
 
 def test_sigil_web_search_schema_matches_codex_contract() -> None:
-    metadata = web_tool.SEARCH_SPEC.metadata()
-    schema = metadata["input_schema"]
+    schema = web_tool.SEARCH_SPEC.input_schema
 
-    assert metadata["id"] == "sigil.web_search"
-    assert metadata["aliases"] == ["web_search"]
-    assert metadata["effects"] == ["search"]
+    assert web_tool.SEARCH_SPEC.id.canonical() == "sigil.web_search"
+    assert web_tool.SEARCH_SPEC.id.name == "web_search"
     assert schema["required"] == ["query"]
     assert schema["properties"]["query"]["type"] == "string"
     assert schema["properties"]["limit"]["minimum"] == 1
@@ -1178,25 +1099,10 @@ def test_zeta_tool_edit_marks_no_newline_exact_replacement(tmp_path: Path) -> No
     assert "+new\n\\ No newline at end of file\n" in patch
 
 
-def test_zeta_builtin_metadata_declares_effects() -> None:
-    assert tool_metadata("bash")["effects"] == ["execute"]
-    assert tool_metadata("write")["effects"] == ["write"]
-    assert tool_metadata("edit")["effects"] == ["write"]
-    assert tool_metadata("read")["effects"] == ["read"]
-    assert tool_metadata("grep")["effects"] == ["search"]
-    assert tool_metadata("ast_grep")["effects"] == ["search"]
-    assert tool_metadata("ls")["effects"] == ["read"]
-
-
-def test_zeta_builtin_metadata_declares_execution_capabilities() -> None:
-    assert tool_metadata("bash")["supports_staging"] is True
-    assert tool_metadata("bash")["supports_direct"] is True
-    assert tool_metadata("bash")["timeout_seconds"] == 120.0
-    assert tool_metadata("write")["supports_staging"] is True
-    assert tool_metadata("edit")["supports_staging"] is True
-    assert tool_metadata("read")["supports_staging"] is False
-    assert tool_metadata("read")["supports_direct"] is True
-    assert tool_metadata("read")["timeout_seconds"] is None
+def test_zeta_builtin_metadata_declares_model_shape() -> None:
+    assert tool_metadata("bash")["name"] == "bash"
+    assert tool_metadata("read")["name"] == "read"
+    assert tool_metadata("edit")["name"] == "edit"
 
 
 def test_zeta_tool_bash_direct_records_duration() -> None:
@@ -1429,6 +1335,6 @@ def test_zeta_tool_query_log_is_a_readonly_ask_builtin() -> None:
     from sigil.tools import query_log as query_log_tool
     from sigil.workflows.ask import ASK_TOOLS
 
-    assert query_log_tool.SPEC.mutates() is False
-    assert tool_registry.get_by_alias("query_log") is not None
+    assert query_log_tool.SPEC.id.name == "query_log"
+    assert tool_registry.get_by_name("query_log") is not None
     assert "query_log" in ASK_TOOLS

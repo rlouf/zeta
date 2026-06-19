@@ -11,12 +11,8 @@ from pathlib import Path
 from typing import Any
 
 from sigil.tools.read import snapshot_tag
-from zeta.capabilities.base import (
-    CapabilityId,
-    CapabilitySpec,
-    content_hash,
-    error_result,
-)
+from zeta.capabilities.base import content_hash, error_result
+from zeta.kernel.capabilities import Capability, CapabilityId
 
 MAX_TOOL_RESULT_CHARS = 12_000
 
@@ -72,7 +68,7 @@ AST_GREP_SCHEMA: dict[str, Any] = {
     },
 }
 
-SPEC = CapabilitySpec(
+SPEC = Capability(
     CapabilityId("sigil", "grep"),
     (
         "Search file contents recursively. Use before read when looking for "
@@ -80,11 +76,9 @@ SPEC = CapabilitySpec(
         "[path#tag] snapshot headers and numbered lines for grounded edits."
     ),
     SCHEMA,
-    effects=("search",),
-    aliases=("grep",),
 )
 
-AST_GREP_SPEC = CapabilitySpec(
+AST_GREP_SPEC = Capability(
     CapabilityId("sigil", "ast_grep"),
     (
         "Search code structurally with ast-grep. Use when looking for syntax "
@@ -92,8 +86,6 @@ AST_GREP_SPEC = CapabilitySpec(
         "headers and numbered matched lines for grounded edits."
     ),
     AST_GREP_SCHEMA,
-    effects=("search",),
-    aliases=("ast_grep",),
 )
 
 

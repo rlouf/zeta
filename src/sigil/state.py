@@ -12,7 +12,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from zeta.events import Event
+from zeta.kernel.events import Event
 from zeta.store.events import (
     EVENT_STORE_NAME,
     Filter,
@@ -107,7 +107,7 @@ def append_prompt_submitted_event(event: Event) -> Event:
                 caused_by=event.id,
                 session_id=event.session_id,
                 turn_id=event.turn_id,
-                timestamp_micros=int(time.time_ns() // 1_000),
+                timestamp_ms=int(time.time_ns() // 1_000_000),
             )
         )
         .event
@@ -139,7 +139,7 @@ def durable_log_event(event: dict[str, Any], *, session_id: str) -> Event:
         caused_by=caused_by,
         session_id=event_session_id,
         turn_id=turn_id,
-        timestamp_micros=timestamp_micros(payload.get("time")),
+        timestamp_ms=timestamp_ms(payload.get("time")),
     )
 
 
@@ -159,10 +159,10 @@ def durable_idempotency_key(
     return None
 
 
-def timestamp_micros(value: Any) -> int:
+def timestamp_ms(value: Any) -> int:
     if isinstance(value, int | float) and not isinstance(value, bool):
-        return int(float(value) * 1_000_000)
-    return time.time_ns() // 1_000
+        return int(float(value) * 1_000)
+    return time.time_ns() // 1_000_000
 
 
 def optional_string(value: Any) -> str | None:

@@ -15,7 +15,7 @@ from typing import Any
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import ValidationError
 
-from zeta.models import ModelInput, ModelOutput
+from zeta.kernel.models import ModelInput, ModelOutput
 from zeta.models.chat_completions import (
     DEFAULT_MAX_COMPLETION_TOKENS,
     ChatCompletionStreamSink,
@@ -23,6 +23,7 @@ from zeta.models.chat_completions import (
     emit_model_telemetry,
     model_first_output_timeout,
     model_idle_timeout,
+    model_output_from_chat_completion,
     parse_structured_message_content,
     stream_json_sse,
 )
@@ -310,7 +311,7 @@ def model_output_from_responses_payload(payload: dict[str, Any]) -> ModelOutput:
         raise RuntimeError("model request failed: response choice was invalid")
     if not isinstance(first_choice.get("message"), dict):
         raise RuntimeError("model request failed: assistant message was invalid")
-    return ModelOutput.from_chat_completion(payload)
+    return model_output_from_chat_completion(payload)
 
 
 def codex_structured_output(

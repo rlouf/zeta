@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from zeta.capabilities.base import CapabilityId, CapabilitySpec, error_result
+from zeta.capabilities.base import error_result
+from zeta.kernel.capabilities import Capability, CapabilityId
 
 if TYPE_CHECKING:
     from zeta.history import HistoryView
@@ -60,7 +61,7 @@ SCHEMA: dict[str, Any] = {
     },
 }
 
-SPEC = CapabilitySpec(
+SPEC = Capability(
     CapabilityId("sigil", "query_log"),
     (
         "Query the user's turn history: what ran, in which workflow, "
@@ -69,8 +70,6 @@ SPEC = CapabilitySpec(
         "Pass turn_id to expand one record."
     ),
     SCHEMA,
-    effects=("read",),
-    aliases=("query_log",),
 )
 
 

@@ -17,14 +17,14 @@ from agents.spec import ScheduleEntry, matches
 from zeta import dispatch as zeta_dispatch
 from zeta.agents.capabilities import AgentConfig
 from zeta.capabilities.base import (
-    Capability,
-    CapabilityId,
-    CapabilityPolicy,
-    CapabilitySpec,
     InProcessCapabilityExecutor,
 )
-from zeta.capabilities.registry import CapabilityRegistry
-from zeta.events import DraftEvent
+from zeta.capabilities.registry import CapabilityRegistry, RegisteredCapability
+from zeta.kernel.capabilities import (
+    Capability,
+    CapabilityId,
+)
+from zeta.kernel.events import DraftEvent
 from zeta.loop import AgentTurnResult
 from zeta.store.events import SqliteEventStore
 
@@ -50,19 +50,12 @@ def _write_spec(path: Path, content: str) -> Path:
     return path
 
 
-def _read_capability() -> Capability:
-    return Capability(
-        CapabilitySpec(
+def _read_capability() -> RegisteredCapability:
+    return RegisteredCapability(
+        Capability(
             CapabilityId("host", "read"),
             "Read a file.",
             {"type": "object"},
-            effects=("read",),
-            aliases=("Read",),
-        ),
-        CapabilityPolicy(
-            supports_staging=False,
-            supports_direct=True,
-            trust="host",
         ),
         InProcessCapabilityExecutor(lambda params: {"ok": True}),
     )
@@ -81,7 +74,7 @@ accepts:
 returns:
   - message.delivery.requested
 tools:
-  - Read
+  - read
 schedules:
   - cron: "* * * * *"
     event: slack.dm.received
@@ -104,7 +97,7 @@ User asked: {{ event.payload.text }}
     assert spec.resumable is True
     assert spec.accepts == ("slack.dm.received",)
     assert spec.returns == ("message.delivery.requested",)
-    assert spec.tools == ("Read",)
+    assert spec.tools == ("read",)
     assert spec.schedules == (
         zeta_agents.ScheduleEntry(
             cron="* * * * *",
@@ -132,7 +125,7 @@ accepts:
 returns:
   - message.delivery.requested
 tools:
-  - Read
+  - read
 ---
 User asked: {{ event.payload.text }}
 """,
@@ -262,11 +255,11 @@ User asked: {{ event.payload.text }}
                 "kwargs": kwargs,
             }
         )
-        return AgentTurnResult(final_text="done")
+        return AgentTurnResult(final_answer="done")
 
     compiled = zeta_agents.compile_agent_definition(spec, run_turn=run_turn)
     store = zeta_events.SqliteEventStore(tmp_path / "events.sqlite3")
-    dispatcher = zeta_dispatch.AsyncEventDispatcher(store, agents=[compiled])
+    dispatcher = zeta_dispatch.EventDispatcher(store, agents=[compiled])
 
     outcome = asyncio.run(
         dispatcher.dispatch(
@@ -279,11 +272,13 @@ User asked: {{ event.payload.text }}
         )
     )
 
-    assert compiled.agent_id == "slack-qa"
+    assert compiled.definition.agent_id == "slack-qa"
     assert len(calls) == 1
     assert calls[0]["objective"] == "User asked: hello"
     assert calls[0]["timeline"] == []
     assert calls[0]["config"].system_prompt == "Answers workspace questions in Slack."
     assert tuple(calls[0]["config"].allowed_capabilities or ()) == ("Read",)
     assert calls[0]["kwargs"]["caused_by"] == outcome.event.id
-    assert outcome.agent_results == [{"final_text": "done", "final_event_cursor": "4"}]
+    assert outcome.agent_results == [
+        {"final_answer": "done", "final_event_cursor": "4"}
+    ]

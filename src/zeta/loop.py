@@ -11,8 +11,11 @@ from dataclasses import dataclass, field
 from typing import Any, Literal, Protocol, cast
 
 from zeta.agents.capabilities import AgentConfig
-from zeta.capabilities.base import ExecutionMode, proposed_effect
-from zeta.capabilities.registry import CapabilityProjection, CapabilityRegistry
+from zeta.capabilities.base import proposed_effect
+from zeta.capabilities.registry import (
+    CapabilityProjection,
+    CapabilityRegistry,
+)
 from zeta.capabilities.registry import registry as _runtime_tool_registry
 from zeta.context import prompt_transform_from_policy
 from zeta.context.builder import (
@@ -25,8 +28,6 @@ from zeta.context.builder import (
 )
 from zeta.context.components import PromptTrace
 from zeta.events import (
-    DraftEvent,
-    Event,
     draft_event_view,
     event_view,
     normalized_tool_result,
@@ -36,10 +37,11 @@ from zeta.events import (
     tool_result_status,
     turn_aborted_draft,
 )
+from zeta.kernel.capabilities import ExecutionMode
+from zeta.kernel.events import DraftEvent, Event
+from zeta.kernel.models import ModelInput, ModelOutput
 from zeta.models import (
     DefaultModelGateway,
-    ModelInput,
-    ModelOutput,
 )
 from zeta.models.chat_completions import tool_call_id
 from zeta.store.substrate import Store
@@ -76,13 +78,11 @@ class StepResult:
 
 @dataclass(frozen=True)
 class AgentTurnResult:
-    """Result from one native tool-call loop."""
-
-    final_text: str = ""
+    final_answer: str = ""
+    telemetry: dict[str, Any] = field(default_factory=dict)
     events: list[DraftEvent] = field(default_factory=list)
     staged_effect: dict[str, Any] | None = None
-    final_text_streamed: bool = False
-    model_telemetry: dict[str, Any] = field(default_factory=dict)
+    answer_streamed: bool = False
     model_telemetry_calls: list[dict[str, Any]] = field(default_factory=list)
     prompt_traces: list[PromptTrace] = field(default_factory=list)
     steps: list[StepResult] = field(default_factory=list)
@@ -100,16 +100,16 @@ class RunState:
     def result(
         self,
         *,
-        final_text: str = "",
+        final_answer: str = "",
         staged_effect: dict[str, Any] | None = None,
-        final_text_streamed: bool = False,
+        answer_streamed: bool = False,
     ) -> AgentTurnResult:
         return AgentTurnResult(
-            final_text=final_text,
+            final_answer=final_answer,
             events=self.events,
             staged_effect=staged_effect,
-            final_text_streamed=final_text_streamed,
-            model_telemetry=self.latest_model_telemetry,
+            answer_streamed=answer_streamed,
+            telemetry=self.latest_model_telemetry,
             model_telemetry_calls=self.model_telemetry_calls,
             prompt_traces=self.prompt_traces,
             steps=self.steps,
@@ -286,8 +286,8 @@ async def run_agent_steps(
         if not tool_calls:
             state.note_step("finish_run")
             return state.result(
-                final_text=turn.assistant.content,
-                final_text_streamed=turn.streamed_content,
+                final_answer=turn.assistant.content,
+                answer_streamed=turn.streamed_content,
             )
         outcome = await run_capability_calls(
             tool_calls,
@@ -1111,7 +1111,7 @@ def validate_tool_call(
 ) -> ToolCallValidation:
     if invocation.parse_error:
         return ToolCallValidation(error=("invalid-json-args", invocation.parse_error))
-    capability_id = projection.alias_to_id.get(invocation.name)
+    capability_id = projection.name_to_id.get(invocation.name)
     if capability_id is None:
         if tool_registry.resolve(invocation.name) is not None:
             return ToolCallValidation(
@@ -1185,20 +1185,10 @@ async def run_valid_tool_call(
         result = await invoked if inspect.isawaitable(invoked) else invoked
     except Exception as exc:
         result = tool_error("tool-crashed", f"{type(exc).__name__}: {exc}")
-    staged_effect = (
-        result_staged_effect(result)
-        if tool_call_stages_effect(
-            capability_id,
-            execution_mode,
-            tool_registry=ctx.tool_registry,
-        )
-        else None
-    )
+    staged_effect = result_staged_effect(result)
     stop = bool(
         execution_mode == "stage"
-        and capability_stops_turn_after_stage(
-            capability_id, tool_registry=ctx.tool_registry
-        )
+        and staged_effect is not None
         and result.get("ok") is True
     )
     result_event = tool_result_event(
@@ -1300,31 +1290,6 @@ def tool_result_event(
 
 def tool_error(code: str, message: str) -> dict[str, Any]:
     return {"ok": False, "error": {"code": code, "message": message}}
-
-
-def tool_call_stages_effect(
-    name: str,
-    execution_mode: ExecutionMode,
-    *,
-    tool_registry: CapabilityRegistry | None = None,
-) -> bool:
-    if execution_mode != "stage":
-        return False
-    active_tool_registry = tool_registry or _runtime_tool_registry
-    capability_id = active_tool_registry.resolve(name)
-    if capability_id is None:
-        return False
-    capability = active_tool_registry.get(capability_id)
-    return capability is not None and capability.spec.mutates()
-
-
-def capability_stops_turn_after_stage(
-    capability_id: str,
-    *,
-    tool_registry: CapabilityRegistry,
-) -> bool:
-    capability = tool_registry.get(capability_id)
-    return capability is not None and capability.policy.stop_turn_after_stage
 
 
 def result_staged_effect(result: dict[str, Any]) -> dict[str, Any] | None:

@@ -496,44 +496,28 @@ def projected_session_trace_result(
     )
     projection = project_trace_events(events, runtime_context.trace_store)
     for event in events:
-        add_projected_event_trace(trace, event, projection)
+        event_type = event_timeline_type(event)
+        if event_type == "model":
+            add_unique(trace["model_event_ids"], event.id)
+            add_unique(trace["prompt_ids"], projection.prompt_object_ids.get(event.id))
+            add_unique(
+                trace["assistant_message_ids"],
+                projection.assistant_message_ids.get(event.id),
+            )
+            continue
+        if event_type == "tool_call":
+            add_unique(trace["tool_event_ids"], event.id)
+            add_unique(
+                trace["tool_call_ids"], projection.tool_call_object_ids.get(event.id)
+            )
+            continue
+        if event_type == "tool_result":
+            add_unique(trace["tool_event_ids"], event.id)
+            add_unique(
+                trace["tool_result_ids"],
+                projection.tool_result_object_ids.get(event.id),
+            )
     return trace
-
-
-def add_projected_event_trace(
-    trace: dict[str, list[str]],
-    event: Event,
-    projection: Any,
-) -> None:
-    event_type = event_timeline_type(event)
-    if event_type == "model":
-        add_projected_model_trace(trace, event, projection)
-        return
-    if event_type == "tool_call":
-        add_unique(trace["tool_event_ids"], event.id)
-        add_unique(
-            trace["tool_call_ids"], projection.tool_call_object_ids.get(event.id)
-        )
-        return
-    if event_type == "tool_result":
-        add_unique(trace["tool_event_ids"], event.id)
-        add_unique(
-            trace["tool_result_ids"],
-            projection.tool_result_object_ids.get(event.id),
-        )
-
-
-def add_projected_model_trace(
-    trace: dict[str, list[str]],
-    event: Event,
-    projection: Any,
-) -> None:
-    add_unique(trace["model_event_ids"], event.id)
-    add_unique(trace["prompt_ids"], projection.prompt_object_ids.get(event.id))
-    add_unique(
-        trace["assistant_message_ids"],
-        projection.assistant_message_ids.get(event.id),
-    )
 
 
 def draft_timeline_type(draft: DraftEvent) -> str:

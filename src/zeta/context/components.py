@@ -6,6 +6,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
+from zeta.agents.skills import Skill, available_skills, expand_skill_directive
 from zeta.capabilities.base import content_hash, effect_resolution, proposed_effect
 from zeta.context.system import (
     can_read_skill_files,
@@ -13,7 +14,6 @@ from zeta.context.system import (
     skill_prompt_items,
     system_prompt,
 )
-from zeta.skills import Skill, available_skills, expand_skill_directive
 from zeta.substrate import Object, ObjectId
 
 Representation = Literal["full", "summary", "stub"]

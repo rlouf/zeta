@@ -10,6 +10,7 @@ from contextlib import nullcontext
 from dataclasses import dataclass, replace
 from typing import Any
 
+from zeta.agents.skills import Skill, available_skills
 from zeta.capabilities.base import content_hash
 from zeta.context.components import (
     PromptComponent,
@@ -25,7 +26,6 @@ from zeta.models.chat_completions import (
     DEFAULT_MAX_COMPLETION_TOKENS,
     chat_completion_request_body,
 )
-from zeta.skills import Skill, available_skills
 from zeta.store.substrate import (
     Store,
     warn_trace_failure_once,

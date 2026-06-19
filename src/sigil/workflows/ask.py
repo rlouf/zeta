@@ -11,7 +11,7 @@ from __future__ import annotations
 from sigil.agent_io import last_event_time
 from sigil.sessions import active_failure_context, recent_turns_context
 from sigil.workflows.step import step
-from zeta.skills import expand_skill_directive
+from zeta.agents.skills import expand_skill_directive
 
 ASK_SYSTEM_PROMPT = (
     "Answer concisely. You are responding to a quick question typed at a shell "

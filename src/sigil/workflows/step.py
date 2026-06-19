@@ -37,6 +37,7 @@ from sigil.state import append_prompt_submitted_event
 from sigil.tools import ensure_builtin_tools_registered
 from sigil.turn import TurnRecorder
 from zeta.agents.capabilities import AgentConfig
+from zeta.agents.skills import expand_skill_directive
 from zeta.capabilities.base import ExecutionMode, proposed_effect
 from zeta.capabilities.registry import CapabilityRegistry
 from zeta.capabilities.registry import registry as _default_tool_registry
@@ -55,7 +56,6 @@ from zeta.models import (
     model_selection_event,
 )
 from zeta.session import Session
-from zeta.skills import expand_skill_directive
 
 HandoffOutput = Literal["detail", "summary", "none"]
 Workflow = Literal["ask", "propose", "do"]

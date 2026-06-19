@@ -6,9 +6,9 @@ from typing import Any
 
 from jinja2 import Environment, StrictUndefined
 
+from zeta.agents.skills import Skill, available_skills
 from zeta.capabilities.registry import CapabilityRegistry
 from zeta.capabilities.registry import registry as _runtime_tool_registry
-from zeta.skills import Skill, available_skills
 
 PROMPT_TEMPLATE_ENV = Environment(
     autoescape=False,

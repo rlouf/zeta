@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import json
+import os
 import re
 import time
 import uuid
@@ -21,9 +22,14 @@ from zeta.context.builder import (
     reconstructed_prompt_request,
 )
 from zeta.context.components import PromptComponent, prompt_components
-from zeta.events import DraftEvent, Event, draft_event_view, event_view
+from zeta.events import (
+    DraftEvent,
+    Event,
+    boundary_event_draft,
+    draft_event_view,
+    event_view,
+)
 from zeta.models import chat_completions as zeta_model
-from zeta.rpc import rpc_event_dict_draft
 from zeta.session import Session
 from zeta.store.substrate import InMemoryStore, Store
 from zeta.substrate import Object, ObjectId
@@ -200,7 +206,10 @@ def record_durable_timeline_event(
     draft = (
         event
         if isinstance(event, DraftEvent)
-        else rpc_event_dict_draft(event, session_id=runtime_context.session_id)
+        else boundary_event_draft(
+            {"cwd": os.getcwd(), **event},
+            session_id=runtime_context.session_id,
+        )
     )
     if draft.session_id is None:
         draft = DraftEvent(

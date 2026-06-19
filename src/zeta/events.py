@@ -347,6 +347,73 @@ def runtime_event_draft(
     )
 
 
+def boundary_event_draft(
+    event: Mapping[str, Any],
+    *,
+    session_id: str,
+) -> DraftEvent:
+    payload = dict(event)
+    event_type = str(payload.get("type") or "event")
+    event_session_id = str(payload.get("session") or session_id)
+    if event_type in {"model", "tool_call", "tool_result", "turn_aborted"}:
+        turn_id = optional_event_string(payload.get("turn_id"))
+        return runtime_event_draft(
+            payload,
+            session_id=event_session_id,
+            turn_id=turn_id,
+        )
+    event_id = optional_event_string(payload.get("id"))
+    turn_id = optional_event_string(payload.get("turn_id"))
+    caused_by = optional_event_string(payload.get("caused_by"))
+    domain_payload = {
+        key: value
+        for key, value in payload.items()
+        if key not in {"id", "type", "time", "session", "source", "caused_by"}
+    }
+    if event_type == "model_usage":
+        domain_payload["_timeline_type"] = "model_usage"
+    durable_type = durable_event_type(event_type)
+    return DraftEvent(
+        durable_type,
+        "zeta"
+        if durable_type.startswith("zeta.")
+        else str(payload.get("source") or "zeta"),
+        domain_payload,
+        idempotency_key=durable_event_idempotency_key(
+            durable_type,
+            event_id=event_id,
+            turn_id=turn_id,
+        ),
+        caused_by=caused_by,
+        session_id=event_session_id,
+        turn_id=turn_id,
+    )
+
+
+def durable_event_type(event_type: str) -> str:
+    return {
+        "user_message": "zeta.user_message",
+        "model_usage": "zeta.model_call.completed",
+    }.get(event_type, event_type)
+
+
+def durable_event_idempotency_key(
+    event_type: str,
+    *,
+    event_id: str | None,
+    turn_id: str | None,
+) -> str | None:
+    if event_type in EVENT_IDEMPOTENT_TYPES:
+        return f"{event_type}:{event_id}" if event_id is not None else None
+    if event_type in TURN_IDEMPOTENT_TYPES:
+        return f"{event_type}:{turn_id}" if turn_id is not None else None
+    return None
+
+
+def optional_event_string(value: Any) -> str | None:
+    return value if isinstance(value, str) and value else None
+
+
 def model_call_draft(
     *,
     payload: dict[str, Any],
@@ -672,6 +739,7 @@ __all__ = [
     "draft_event_view",
     "event_view",
     "event_views",
+    "boundary_event_draft",
     "model_call_draft",
     "model_durable_object_links",
     "model_durable_payload",

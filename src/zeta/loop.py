@@ -147,13 +147,6 @@ class RunState:
     def note_step(self, step: StepName, *effects: StepEffect) -> None:
         self.steps.append(StepResult(step, effects))
 
-    def timeline_events(self) -> list[dict[str, Any]]:
-        return [
-            draft_timeline_event(draft)
-            for draft in self.events
-            if not is_runtime_ui_event(draft)
-        ]
-
 
 AgentTurnState = RunState
 
@@ -374,7 +367,11 @@ async def request_model_turn(
         config=config,
         allowed_capabilities=allowed_capabilities,
         context=context,
-        current_events=state.timeline_events(),
+        current_events=[
+            draft_event_view(draft)
+            for draft in state.events
+            if not is_runtime_ui_event(draft)
+        ],
         tools=tools,
         state=state,
         builder=ctx.builder,
@@ -562,7 +559,7 @@ def terminal_capability_result_event(
     call_id: str,
 ) -> dict[str, Any] | None:
     for draft in reversed(events):
-        event = draft_timeline_event(draft)
+        event = draft_event_view(draft)
         if event.get("type") != "tool_result":
             continue
         if event.get("tool_call_id") != call_id:
@@ -779,10 +776,6 @@ def normalize_draft_event(event: DraftEvent | dict[str, Any]) -> DraftEvent:
     )
 
 
-def draft_timeline_event(draft: DraftEvent) -> dict[str, Any]:
-    return draft_event_view(draft)
-
-
 def emit_event(
     events: list[DraftEvent],
     event: DraftEvent,
@@ -885,7 +878,7 @@ def record_model_event(
 
 def next_model_parent(events: list[DraftEvent]) -> str | None:
     for draft in reversed(events):
-        event = draft_timeline_event(draft)
+        event = draft_event_view(draft)
         if str(event.get("type") or "") != "tool_result":
             continue
         event_id = event.get("id")

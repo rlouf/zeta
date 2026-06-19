@@ -14,7 +14,6 @@ from zeta.capabilities.base import ExecutionMode
 from zeta.dispatch import AgentDefinition, AgentRun, AsyncEventDispatcher, TriggerRule
 from zeta.events import (
     DraftEvent,
-    Event,
     draft_event_view,
     event_view,
     user_message_draft,
@@ -168,17 +167,15 @@ async def run_session_turn(
         },
         runtime_context=runtime_context,
     )
-    publish_event(session_event_with_cursor(runtime_context, user_event, run_id))
+    publish_event(user_event)
 
     def sink(draft: DraftEvent) -> None:
         if is_runtime_ui_event(draft):
             publish_event(
-                session_event_with_cursor(
-                    runtime_context,
-                    live_runtime_event(
-                        draft, runtime_context=runtime_context, run_id=run_id
-                    ),
-                    run_id,
+                live_runtime_event(
+                    draft,
+                    runtime_context=runtime_context,
+                    run_id=run_id,
                 )
             )
             return
@@ -187,7 +184,7 @@ async def run_session_turn(
             runtime_context=runtime_context,
             run_id=run_id,
         )
-        publish_event(session_event_with_cursor(runtime_context, persisted, run_id))
+        publish_event(persisted)
 
     try:
         result = await async_run_agent_turn(
@@ -419,36 +416,6 @@ def final_event_cursor(runtime_context: Session, run_id: str) -> str | None:
     if not events:
         return None
     return str(events[-1].seq)
-
-
-def session_event_with_cursor(
-    runtime_context: Session,
-    event: dict[str, Any],
-    run_id: str,
-) -> dict[str, Any]:
-    durable_event = durable_event_for_session_event(runtime_context, event, run_id)
-    if durable_event is None:
-        return event
-    return event_view(durable_event)
-
-
-def durable_event_for_session_event(
-    runtime_context: Session,
-    event: dict[str, Any],
-    run_id: str,
-) -> Event | None:
-    if not isinstance(runtime_context.event_sink, EventReader):
-        return None
-    event_id = event.get("id")
-    if not isinstance(event_id, str):
-        return None
-    events = runtime_context.event_sink.list_events(
-        Filter(session_id=runtime_context.session_id, turn_id=run_id)
-    )
-    for durable_event in events:
-        if durable_event.id == event_id:
-            return durable_event
-    return None
 
 
 def session_objective(params: dict[str, Any]) -> str:

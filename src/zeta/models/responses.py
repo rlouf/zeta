@@ -9,8 +9,6 @@ their encrypted content) and item ids replay verbatim on the next request.
 import json
 import os
 import time
-import urllib.error
-import urllib.request
 from collections.abc import Iterable
 from typing import Any
 
@@ -23,12 +21,10 @@ from zeta.models.chat_completions import (
     ChatCompletionStreamSink,
     ModelTelemetrySink,
     emit_model_telemetry,
-    http_error_detail,
-    iter_sse_data,
     model_first_output_timeout,
     model_idle_timeout,
     parse_structured_message_content,
-    stream_with_idle_timeout,
+    stream_json_sse,
 )
 from zeta.models.codex_auth import CodexCredentials, load_codex_credentials
 from zeta.models.profiles import DEFAULT_CODEX_BASE_URL
@@ -240,25 +236,16 @@ def request_codex_response(
 ) -> dict[str, Any]:
     """POST one streaming Codex request and return the final payload."""
     credentials = load_codex_credentials()
-    request = urllib.request.Request(
-        codex_responses_url(selected_url),
-        data=json.dumps(body).encode("utf-8"),
-        headers=codex_request_headers(credentials, session),
-        method="POST",
+    return read_streamed_responses(
+        stream_json_sse(
+            codex_responses_url(selected_url),
+            body,
+            headers=codex_request_headers(credentials, session),
+            first_output_timeout=model_first_output_timeout(),
+            idle_timeout=model_idle_timeout(),
+        ),
+        stream_sink=stream_sink,
     )
-    try:
-        with urllib.request.urlopen(
-            request, timeout=model_first_output_timeout()
-        ) as response:
-            payload = read_streamed_responses(
-                stream_with_idle_timeout(response, model_idle_timeout()),
-                stream_sink=stream_sink,
-            )
-    except urllib.error.HTTPError as exc:
-        raise RuntimeError(f"model request failed: {http_error_detail(exc)}") from exc
-    except (OSError, TimeoutError, urllib.error.URLError) as exc:
-        raise RuntimeError(f"model request failed: {exc}") from exc
-    return payload
 
 
 def codex_model_name(selected_model: str | None) -> str:
@@ -365,13 +352,13 @@ def codex_structured_output(
 
 
 def read_streamed_responses(
-    lines: Iterable[bytes],
+    events: Iterable[str],
     *,
     stream_sink: ChatCompletionStreamSink | None = None,
 ) -> dict[str, Any]:
     """Read Responses SSE frames into one chat-completions-shaped payload."""
     accumulator = ResponsesStreamAccumulator(stream_sink=stream_sink)
-    for data in iter_sse_data(lines):
+    for data in events:
         if data == "[DONE]":
             break
         try:

@@ -1,17 +1,13 @@
 """Model request, streaming, and model-selection tests."""
 
-import email.message
-import io
 import json
-import urllib.error
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any, cast
 
+import httpx
 import pytest
 from _zeta_helpers import (
     DeltaSink,
-    FakeStreamingResponse,
     sse_lines,
     task_state_fixture,
     write_models_config,
@@ -191,39 +187,41 @@ def test_zeta_chat_completion_model_output_from_stream_payload() -> None:
 
 def test_zeta_request_chat_completion_streams_final_message(monkeypatch) -> None:
     captured: dict[str, Any] = {}
-    response = FakeStreamingResponse(
-        sse_lines(
-            {
-                "id": "chatcmpl-test",
-                "choices": [
-                    {
-                        "index": 0,
-                        "delta": {"role": "assistant", "content": "hel"},
-                        "finish_reason": None,
-                    }
-                ],
-            },
-            {
-                "choices": [
-                    {
-                        "index": 0,
-                        "delta": {"content": "lo"},
-                        "finish_reason": "stop",
-                    }
-                ],
-            },
-            "[DONE]",
-        )
+    events = sse_lines(
+        {
+            "id": "chatcmpl-test",
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {"role": "assistant", "content": "hel"},
+                    "finish_reason": None,
+                }
+            ],
+        },
+        {
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {"content": "lo"},
+                    "finish_reason": "stop",
+                }
+            ],
+        },
+        "[DONE]",
     )
 
-    def fake_urlopen(req: Any, timeout: float | None = None) -> FakeStreamingResponse:
-        captured["body"] = json.loads(req.data.decode("utf-8"))
-        captured["accept"] = req.get_header("Accept")
-        captured["timeout"] = timeout
-        return response
+    def fake_stream_json_sse(
+        url: str,
+        body: dict[str, Any],
+        *,
+        headers: dict[str, str],
+    ) -> list[str]:
+        captured["url"] = url
+        captured["body"] = body
+        captured["accept"] = headers["Accept"]
+        return events
 
-    monkeypatch.delenv("ZETA_MODEL_FIRST_OUTPUT_TIMEOUT_SECONDS", raising=False)
-    monkeypatch.setattr(zeta_model.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(zeta_model, "stream_json_sse", fake_stream_json_sse)
     body = {"model": "local-model", "messages": []}
 
     payload = zeta_model.request_chat_completion(body)
@@ -231,8 +229,6 @@ def test_zeta_request_chat_completion_streams_final_message(monkeypatch) -> None
     assert body == {"model": "local-model", "messages": []}
     assert captured["body"]["stream"] is True
     assert captured["accept"] == "text/event-stream"
-    assert captured["timeout"] == zeta_model.DEFAULT_MODEL_FIRST_OUTPUT_TIMEOUT_SECONDS
-    assert response.closed is True
     assert payload["id"] == "chatcmpl-test"
     assert payload["choices"][0]["message"] == {
         "role": "assistant",
@@ -241,29 +237,28 @@ def test_zeta_request_chat_completion_streams_final_message(monkeypatch) -> None
     assert payload["choices"][0]["finish_reason"] == "stop"
 
 
-def test_zeta_stream_replaces_invalid_utf8_bytes() -> None:
-    chunk = (
-        b'data: {"choices":[{"index":0,"delta":{"content":"caf\xff"},'
-        b'"finish_reason":"stop"}]}\n'
+def test_zeta_model_stream_timeout_uses_first_output_and_idle_timeouts() -> None:
+    timeout = zeta_model.model_stream_timeout(
+        first_output_timeout=10.0,
+        idle_timeout=2.5,
     )
-    lines = [chunk, b"\n", b"data: [DONE]\n"]
 
-    payload = zeta_model.read_streamed_chat_completion(iter(lines))
+    assert timeout.connect == 10.0
+    assert timeout.write == 10.0
+    assert timeout.pool == 10.0
+    assert timeout.read == 2.5
 
-    assert payload["choices"][0]["message"]["content"] == "caf�"
 
+def test_zeta_model_stream_timeout_can_disable_all_bounds() -> None:
+    timeout = zeta_model.model_stream_timeout(
+        first_output_timeout=None,
+        idle_timeout=None,
+    )
 
-def test_zeta_stream_reassembles_chunks_split_mid_character() -> None:
-    frame = (
-        'data: {"choices":[{"index":0,"delta":{"content":"café"},'
-        '"finish_reason":"stop"}]}\n'
-    ).encode()
-    split = frame.index(b"\xc3") + 1
-    lines = [frame[:split], frame[split:], b"\n", b"data: [DONE]\n"]
-
-    payload = zeta_model.read_streamed_chat_completion(iter(lines))
-
-    assert payload["choices"][0]["message"]["content"] == "café"
+    assert timeout.connect is None
+    assert timeout.write is None
+    assert timeout.pool is None
+    assert timeout.read is None
 
 
 def test_zeta_stream_forwards_reasoning_deltas_to_sink() -> None:
@@ -590,102 +585,55 @@ def test_zeta_stream_orders_multiple_tool_calls_by_index() -> None:
 
 
 def test_zeta_request_chat_completion_closes_stream_on_error(monkeypatch) -> None:
-    response = FakeStreamingResponse(
-        sse_lines({"error": {"message": "generation failed"}})
-    )
+    closed = False
 
-    def fake_urlopen(req: Any, timeout: float | None = None) -> FakeStreamingResponse:
-        return response
+    def fake_stream_json_sse(
+        url: str,
+        body: dict[str, Any],
+        *,
+        headers: dict[str, str],
+    ) -> Any:
+        del url, body, headers
+        nonlocal closed
+        try:
+            yield from sse_lines({"error": {"message": "generation failed"}})
+        finally:
+            closed = True
 
-    monkeypatch.setattr(zeta_model.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(zeta_model, "stream_json_sse", fake_stream_json_sse)
 
     with pytest.raises(RuntimeError, match="generation failed"):
         zeta_model.request_chat_completion({"model": "local-model", "messages": []})
 
-    assert response.closed is True
+    assert closed is True
 
 
 def test_zeta_stream_rejects_malformed_events() -> None:
     with pytest.raises(RuntimeError, match="invalid JSON event"):
-        zeta_model.read_streamed_chat_completion([b"data: nope\n", b"\n"])
+        zeta_model.read_streamed_chat_completion(["nope"])
 
 
-def test_zeta_stream_tightens_socket_timeout_after_first_chunk(monkeypatch) -> None:
-    class SocketSpy:
-        def __init__(self) -> None:
-            self.timeouts: list[float | None] = []
-
-        def settimeout(self, timeout: float | None) -> None:
-            self.timeouts.append(timeout)
-
-    sock = SocketSpy()
-    response = FakeStreamingResponse(
-        sse_lines(
-            {
-                "choices": [
-                    {
-                        "index": 0,
-                        "delta": {"role": "assistant", "content": "hi"},
-                        "finish_reason": "stop",
-                    }
-                ],
-            },
-            "[DONE]",
-        ),
-        fp=SimpleNamespace(raw=SimpleNamespace(_sock=sock)),
-    )
-
-    def fake_urlopen(req: Any, timeout: float | None = None) -> FakeStreamingResponse:
-        return response
-
-    monkeypatch.delenv("ZETA_MODEL_IDLE_TIMEOUT_SECONDS", raising=False)
-    monkeypatch.setattr(zeta_model.urllib.request, "urlopen", fake_urlopen)
-
-    zeta_model.request_chat_completion({"model": "local-model", "messages": []})
-
-    assert sock.timeouts == [zeta_model.DEFAULT_MODEL_IDLE_TIMEOUT_SECONDS]
-
-
-def test_zeta_request_chat_completion_surfaces_http_error_body(monkeypatch) -> None:
+def test_zeta_http_error_detail_surfaces_json_error_body() -> None:
     body = json.dumps(
         {"error": {"code": 500, "message": "Failed to parse tool call arguments"}}
-    ).encode("utf-8")
+    )
+    request = httpx.Request("POST", "http://127.0.0.1:8080/v1/chat/completions")
+    response = httpx.Response(500, content=body, request=request)
+    error = httpx.HTTPStatusError("boom", request=request, response=response)
 
-    def fake_urlopen(req: Any, timeout: float | None = None) -> FakeStreamingResponse:
-        raise urllib.error.HTTPError(
-            "http://127.0.0.1:8080/v1/chat/completions",
-            500,
-            "Internal Server Error",
-            email.message.Message(),
-            io.BytesIO(body),
-        )
-
-    monkeypatch.setattr(zeta_model.urllib.request, "urlopen", fake_urlopen)
-
-    with pytest.raises(RuntimeError) as excinfo:
-        zeta_model.request_chat_completion({"model": "local-model", "messages": []})
-
-    message = str(excinfo.value)
-    assert "500" in message
+    message = zeta_model.http_error_detail(error)
+    assert "boom" in message
     assert "Failed to parse tool call arguments" in message
 
 
-def test_zeta_request_chat_completion_surfaces_plain_http_error_body(
-    monkeypatch,
-) -> None:
-    def fake_urlopen(req: Any, timeout: float | None = None) -> FakeStreamingResponse:
-        raise urllib.error.HTTPError(
-            "http://127.0.0.1:8080/v1/chat/completions",
-            502,
-            "Bad Gateway",
-            email.message.Message(),
-            io.BytesIO(b"upstream exploded"),
-        )
+def test_zeta_http_error_detail_surfaces_plain_error_body() -> None:
+    request = httpx.Request("POST", "http://127.0.0.1:8080/v1/chat/completions")
+    response = httpx.Response(502, content=b"upstream exploded", request=request)
+    error = httpx.HTTPStatusError("boom", request=request, response=response)
 
-    monkeypatch.setattr(zeta_model.urllib.request, "urlopen", fake_urlopen)
-
-    with pytest.raises(RuntimeError, match="upstream exploded"):
-        zeta_model.request_chat_completion({"model": "local-model", "messages": []})
+    message = zeta_model.http_error_detail(error)
+    assert "boom" in message
+    assert "upstream exploded" in message
 
 
 def test_zeta_model_profiles_load_user_config(

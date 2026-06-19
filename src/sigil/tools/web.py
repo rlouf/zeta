@@ -3,14 +3,12 @@
 import json
 import os
 import re
-import urllib.error
-import urllib.request
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from typing import Any
 
 from zeta.capabilities.base import CapabilityId, CapabilitySpec, error_result
-from zeta.models.chat_completions import iter_sse_data
+from zeta.models.chat_completions import stream_json_sse
 from zeta.models.codex_auth import CodexCredentials, load_codex_credentials
 from zeta.models.responses import codex_request_headers, codex_responses_url
 
@@ -157,9 +155,7 @@ def config_from_env(*, limit: int) -> WebConfig:
 def request_or_error(query: str, config: WebConfig) -> dict[str, Any]:
     try:
         return {"ok": True, "result": codex_search(query, config)}
-    except TimeoutError as exc:
-        return error_result("codex-timeout", str(exc))
-    except OSError as exc:
+    except RuntimeError as exc:
         return error_result("codex-request-failed", str(exc))
     except ValueError as exc:
         return error_result("codex-bad-response", str(exc))
@@ -189,29 +185,20 @@ def codex_search(query: str, config: WebConfig) -> CodexSearch:
             "URL citations when possible."
         ),
     }
-    request = urllib.request.Request(
-        codex_responses_url(config.selected_url),
-        data=json.dumps(body).encode("utf-8"),
-        headers=codex_request_headers(config.credentials, "sigil-web-search"),
-        method="POST",
+    return parse_codex_search_events(
+        stream_json_sse(
+            codex_responses_url(config.selected_url),
+            body,
+            headers=codex_request_headers(config.credentials, "sigil-web-search"),
+            first_output_timeout=config.timeout_sec,
+            idle_timeout=config.timeout_sec,
+        )
     )
-    try:
-        with urllib.request.urlopen(request, timeout=config.timeout_sec) as response:
-            return parse_codex_search_events(response)
-    except urllib.error.HTTPError as exc:
-        message = exc.reason
-        try:
-            error_body = exc.read().decode("utf-8", errors="replace")
-        except OSError:
-            error_body = ""
-        if error_body:
-            message = error_body
-        raise OSError(f"Codex HTTP {exc.code}: {message}") from exc
 
 
-def parse_codex_search_events(chunks: Iterable[bytes]) -> CodexSearch:
+def parse_codex_search_events(events: Iterable[str]) -> CodexSearch:
     acc = CodexSearchAccumulator()
-    for payload in iter_sse_data(chunks):
+    for payload in events:
         if payload == "[DONE]":
             break
         handle_codex_event(load_codex_event(payload), acc)

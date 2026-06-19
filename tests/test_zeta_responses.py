@@ -4,21 +4,18 @@ import json
 from typing import Any
 
 import pytest
-from _zeta_helpers import FakeStreamingResponse
 
 from zeta import models as zeta_models_api
 from zeta.models import codex_auth
 from zeta.models import responses as zeta_responses
 
 
-def sse_frames(events: list[dict[str, Any]], *, done: bool = False) -> list[bytes]:
+def sse_frames(events: list[dict[str, Any]], *, done: bool = False) -> list[str]:
     frames = []
     for event in events:
-        frames.append(f"data: {json.dumps(event)}\n".encode())
-        frames.append(b"\n")
+        frames.append(json.dumps(event))
     if done:
-        frames.append(b"data: [DONE]\n")
-        frames.append(b"\n")
+        frames.append("[DONE]")
     return frames
 
 
@@ -505,14 +502,22 @@ def test_zeta_responses_codex_completion_round_trip(monkeypatch) -> None:
     ]
     captured: dict[str, Any] = {}
 
-    def fake_urlopen(request: Any, timeout: float | None = None) -> Any:
-        captured["url"] = request.full_url
-        captured["headers"] = dict(request.headers)
-        captured["body"] = json.loads(request.data)
-        captured["timeout"] = timeout
-        return FakeStreamingResponse(sse_frames(events))
+    def fake_stream_json_sse(
+        url: str,
+        body: dict[str, Any],
+        *,
+        headers: dict[str, str],
+        first_output_timeout: float | None,
+        idle_timeout: float | None,
+    ) -> list[str]:
+        captured["url"] = url
+        captured["headers"] = headers
+        captured["body"] = body
+        captured["first_output_timeout"] = first_output_timeout
+        captured["idle_timeout"] = idle_timeout
+        return sse_frames(events)
 
-    monkeypatch.setattr(zeta_responses.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(zeta_responses, "stream_json_sse", fake_stream_json_sse)
     monkeypatch.setattr(
         zeta_responses,
         "load_codex_credentials",
@@ -534,7 +539,7 @@ def test_zeta_responses_codex_completion_round_trip(monkeypatch) -> None:
     assert message["content"] == "Hello world"
     assert captured["url"] == "https://chatgpt.com/backend-api/codex/responses"
     assert captured["headers"]["Authorization"] == "Bearer tok-1"
-    assert captured["headers"]["Originator"] == "zeta"
+    assert captured["headers"]["originator"] == "zeta"
     assert captured["body"]["model"] == "gpt-5.5"
     assert captured["body"]["store"] is False
     assert captured["body"]["prompt_cache_key"] == "session-1"
@@ -570,9 +575,9 @@ def test_zeta_responses_codex_guards_truncated_tool_calls(monkeypatch) -> None:
     ]
 
     monkeypatch.setattr(
-        zeta_responses.urllib.request,
-        "urlopen",
-        lambda request, timeout=None: FakeStreamingResponse(sse_frames(events)),
+        zeta_responses,
+        "stream_json_sse",
+        lambda *args, **kwargs: sse_frames(events),
     )
     monkeypatch.setattr(
         zeta_responses,
@@ -602,11 +607,16 @@ def test_zeta_responses_codex_structured_output(monkeypatch) -> None:
     ]
     captured: dict[str, Any] = {}
 
-    def fake_urlopen(request: Any, timeout: float | None = None) -> Any:
-        captured["body"] = json.loads(request.data)
-        return FakeStreamingResponse(sse_frames(events))
+    def fake_stream_json_sse(
+        url: str,
+        body: dict[str, Any],
+        **kwargs: Any,
+    ) -> list[str]:
+        del url, kwargs
+        captured["body"] = body
+        return sse_frames(events)
 
-    monkeypatch.setattr(zeta_responses.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(zeta_responses, "stream_json_sse", fake_stream_json_sse)
     monkeypatch.setattr(
         zeta_responses,
         "load_codex_credentials",

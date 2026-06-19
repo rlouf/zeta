@@ -288,72 +288,87 @@ def request_chat_completion(
 ) -> dict[str, Any]:
     """POST one streaming chat completions request and return the final response."""
     stream_body = {**body, "stream": True}
-    data = json.dumps(stream_body).encode("utf-8")
-    req = urllib.request.Request(
-        model_url(selected_url),
-        data=data,
-        headers={
-            "Accept": "text/event-stream",
-            "Content-Type": "application/json",
-        },
-        method="POST",
+    payload = read_streamed_chat_completion(
+        stream_json_sse(
+            model_url(selected_url),
+            stream_body,
+            headers={"Accept": "text/event-stream"},
+        ),
+        stream_sink=stream_sink,
     )
-    try:
-        with urllib.request.urlopen(req, timeout=model_first_output_timeout()) as resp:
-            payload = read_streamed_chat_completion(
-                stream_with_idle_timeout(resp, model_idle_timeout()),
-                stream_sink=stream_sink,
-            )
-    except urllib.error.HTTPError as exc:
-        raise RuntimeError(f"model request failed: {http_error_detail(exc)}") from exc
-    except (
-        OSError,
-        TimeoutError,
-        urllib.error.URLError,
-        json.JSONDecodeError,
-    ) as exc:
-        raise RuntimeError(f"model request failed: {exc}") from exc
     if not isinstance(payload, dict):
         raise RuntimeError("model request failed: response was not a JSON object")
     return payload
 
 
-def stream_with_idle_timeout(
-    resp: Any,
+def stream_json_sse(
+    url: str,
+    body: dict[str, Any],
+    *,
+    headers: Mapping[str, str],
+    first_output_timeout: float | None = None,
+    idle_timeout: float | None = None,
+) -> Iterator[str]:
+    """POST JSON and yield Server-Sent Event data payloads."""
+    import httpx
+    from httpx_sse import SSEError, connect_sse
+
+    timeout = model_stream_timeout(
+        first_output_timeout=model_first_output_timeout()
+        if first_output_timeout is None
+        else first_output_timeout,
+        idle_timeout=model_idle_timeout() if idle_timeout is None else idle_timeout,
+    )
+    request_headers = {
+        "Accept": "text/event-stream",
+        "Content-Type": "application/json",
+        **dict(headers),
+    }
+    try:
+        with httpx.Client(timeout=timeout) as client:
+            with connect_sse(
+                client,
+                "POST",
+                url,
+                json=body,
+                headers=request_headers,
+            ) as event_source:
+                event_source.response.raise_for_status()
+                for event in event_source.iter_sse():
+                    yield event.data
+    except httpx.HTTPStatusError as exc:
+        raise RuntimeError(f"model request failed: {http_error_detail(exc)}") from exc
+    except (
+        httpx.TimeoutException,
+        httpx.NetworkError,
+        httpx.ProtocolError,
+        httpx.RequestError,
+        SSEError,
+        json.JSONDecodeError,
+    ) as exc:
+        raise RuntimeError(f"model request failed: {exc}") from exc
+
+
+def model_stream_timeout(
+    *,
+    first_output_timeout: float | None,
     idle_timeout: float | None,
-) -> Iterator[bytes]:
-    """Yield response chunks, tightening the socket timeout after the first.
+) -> Any:
+    """Map model timeout intent onto httpx's explicit timeout fields."""
+    import httpx
 
-    The request timeout must cover connect plus prompt processing (a long
-    prefill sends nothing); once output flows, only mid-stream silence should
-    be bounded.
-    """
-    first = True
-    for chunk in resp:
-        yield chunk
-        if first:
-            set_response_socket_timeout(resp, idle_timeout)
-            first = False
+    return httpx.Timeout(
+        timeout=None,
+        connect=first_output_timeout,
+        write=first_output_timeout,
+        pool=first_output_timeout,
+        read=idle_timeout,
+    )
 
 
-def set_response_socket_timeout(resp: Any, timeout: float | None) -> None:
-    """Best-effort adjustment of the socket timeout behind an HTTP response."""
-    sock = getattr(getattr(getattr(resp, "fp", None), "raw", None), "_sock", None)
-    settimeout = getattr(sock, "settimeout", None)
-    if settimeout is None:
-        return
-    try:
-        settimeout(timeout)
-    except OSError:
-        return
-
-
-def http_error_detail(error: urllib.error.HTTPError) -> str:
+def http_error_detail(error: Any) -> str:
     """Return an HTTP failure message including the server's error body."""
-    try:
-        body = error.read(2048).decode("utf-8", errors="replace").strip()
-    except OSError:
-        body = ""
+    body = error.response.text[:2048].strip()
     if not body:
         return str(error)
     try:
@@ -368,14 +383,14 @@ def http_error_detail(error: urllib.error.HTTPError) -> str:
 
 
 def read_streamed_chat_completion(
-    lines: Iterable[bytes],
+    events: Iterable[str],
     *,
     stream_sink: ChatCompletionStreamSink | None = None,
 ) -> dict[str, Any]:
     """Read OpenAI-style chat completion SSE frames into one final response."""
     accumulator = ChatStreamAccumulator(stream_sink=stream_sink)
     done = False
-    for data in iter_sse_data(lines):
+    for data in events:
         if data == "[DONE]":
             done = True
             break
@@ -394,50 +409,6 @@ def read_streamed_chat_completion(
     if not done:
         raise RuntimeError("model stream failed: stream ended before [DONE]")
     return accumulator.response()
-
-
-def iter_sse_data(chunks: Iterable[bytes]) -> Iterator[str]:
-    """Yield joined ``data:`` payloads from a Server-Sent Events byte stream.
-
-    Chunks are buffered until a full line is available, so multibyte UTF-8
-    sequences split across chunks decode correctly; invalid bytes are replaced
-    instead of failing the stream.
-    """
-    data_lines: list[str] = []
-    buffer = b""
-    for chunk in chunks:
-        buffer += chunk
-        while b"\n" in buffer:
-            raw_line, buffer = buffer.split(b"\n", 1)
-            payload = consume_sse_line(raw_line, data_lines)
-            if payload is not None:
-                yield payload
-    if buffer:
-        payload = consume_sse_line(buffer, data_lines)
-        if payload is not None:
-            yield payload
-    if data_lines:
-        yield "\n".join(data_lines)
-
-
-def consume_sse_line(raw_line: bytes, data_lines: list[str]) -> str | None:
-    """Consume one SSE line; return the joined event payload on a blank line."""
-    line = raw_line.decode("utf-8", errors="replace").rstrip("\r")
-    if line == "":
-        if data_lines:
-            payload = "\n".join(data_lines)
-            data_lines.clear()
-            return payload
-        return None
-    if line.startswith(":"):
-        return None
-    if not line.startswith("data:"):
-        return None
-    data = line[5:]
-    if data.startswith(" "):
-        data = data[1:]
-    data_lines.append(data)
-    return None
 
 
 def format_stream_error(error: Any) -> str:

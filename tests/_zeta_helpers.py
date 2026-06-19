@@ -94,13 +94,11 @@ def required_stream_sink(
     return cast(zeta_model.ChatCompletionStreamSink, stream_sink)
 
 
-def sse_lines(*payloads: dict[str, Any] | str) -> list[bytes]:
-    lines: list[bytes] = []
-    for payload in payloads:
-        data = payload if isinstance(payload, str) else json.dumps(payload)
-        lines.append(f"data: {data}\n".encode())
-        lines.append(b"\n")
-    return lines
+def sse_lines(*payloads: dict[str, Any] | str) -> list[str]:
+    return [
+        payload if isinstance(payload, str) else json.dumps(payload)
+        for payload in payloads
+    ]
 
 
 def write_models_config(home: Path, text: str) -> Path:

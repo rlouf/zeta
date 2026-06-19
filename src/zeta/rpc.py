@@ -87,6 +87,63 @@ class EventSubscription:
     run_id: str | None = None
 
 
+@dataclass(frozen=True)
+class EventListParams:
+    after_seq: int | None = None
+    limit: int | None = None
+    session_id: str | None = None
+    run_id: str | None = None
+
+    @classmethod
+    def from_mapping(cls, params: dict[str, Any]) -> "EventListParams":
+        return cls(
+            after_seq=event_cursor(params.get("after")),
+            limit=positive_limit(params.get("limit")),
+            session_id=optional_string(params.get("session_id")),
+            run_id=optional_string(params.get("run_id")),
+        )
+
+
+@dataclass(frozen=True)
+class EventSubscribeParams:
+    after_seq: int | None = None
+    session_id: str | None = None
+    run_id: str | None = None
+
+    @classmethod
+    def from_mapping(cls, params: dict[str, Any]) -> "EventSubscribeParams":
+        return cls(
+            after_seq=event_cursor(params.get("after")),
+            session_id=optional_string(params.get("session_id")),
+            run_id=optional_string(params.get("run_id")),
+        )
+
+    def subscription(self) -> EventSubscription:
+        return EventSubscription(
+            id=f"sub_{uuid.uuid4().hex}",
+            after_seq=self.after_seq,
+            session_id=self.session_id,
+            run_id=self.run_id,
+        )
+
+
+@dataclass(frozen=True)
+class SessionCancelParams:
+    run_id: str
+
+    @classmethod
+    def from_mapping(cls, params: dict[str, Any]) -> "SessionCancelParams":
+        run_id = optional_string(params.get("run_id"))
+        if run_id is None:
+            raise RpcError(
+                -32602,
+                "invalid_run_id",
+                "Invalid params",
+                {"message": "run_id must be a non-empty string"},
+            )
+        return cls(run_id)
+
+
 def rpc_session_runner_cancel_mode(runner: RpcSessionRunner) -> RpcCancelMode:
     target = getattr(runner, "func", runner)
     mode = getattr(target, "__rpc_cancel_mode__", None)
@@ -394,7 +451,7 @@ def normalized_client_tool_response(
     return cast(dict[str, Any], raw_result), "responded"
 
 
-def event_cursor_param(value: Any) -> int | None:
+def event_cursor(value: Any) -> int | None:
     if value is None:
         return None
     if not isinstance(value, str):
@@ -415,7 +472,7 @@ def event_cursor_param(value: Any) -> int | None:
         ) from None
 
 
-def positive_limit_param(value: Any) -> int | None:
+def positive_limit(value: Any) -> int | None:
     if value is None:
         return None
     if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
@@ -569,22 +626,19 @@ class JsonRpcProtocol:
                 "Server error",
                 {"message": "events.list is not configured"},
             )
-        after_seq = event_cursor_param(params.get("after"))
-        limit = positive_limit_param(params.get("limit"))
-        session_id = optional_string(params.get("session_id"))
-        run_id = optional_string(params.get("run_id"))
+        request = EventListParams.from_mapping(params)
         events = self.event_reader.list_events(
             Filter(
-                session_id=session_id,
-                turn_id=run_id,
-                after_seq=after_seq,
-                limit=limit,
+                session_id=request.session_id,
+                turn_id=request.run_id,
+                after_seq=request.after_seq,
+                limit=request.limit,
             )
         )
         next_cursor = (
             str(events[-1].seq)
             if events
-            else (str(after_seq) if after_seq is not None else None)
+            else (str(request.after_seq) if request.after_seq is not None else None)
         )
         return {
             "events": [event_view(event) for event in events],
@@ -592,18 +646,15 @@ class JsonRpcProtocol:
         }
 
     def subscribe_events(self, params: dict[str, Any]) -> dict[str, Any]:
-        after_seq = event_cursor_param(params.get("after"))
-        subscription = EventSubscription(
-            id=f"sub_{uuid.uuid4().hex}",
-            after_seq=after_seq,
-            session_id=optional_string(params.get("session_id")),
-            run_id=optional_string(params.get("run_id")),
-        )
+        request = EventSubscribeParams.from_mapping(params)
+        subscription = request.subscription()
         self.event_subscriptions[subscription.id] = subscription
         return {
             "subscribed": True,
             "subscription_id": subscription.id,
-            "next_cursor": str(after_seq) if after_seq is not None else None,
+            "next_cursor": str(request.after_seq)
+            if request.after_seq is not None
+            else None,
         }
 
     def register_client_tools(self, tools: Any) -> list[dict[str, Any]]:
@@ -975,14 +1026,8 @@ class JsonRpcServer(JsonRpcProtocol):
         return await self.session_runner(params)
 
     def cancel_session(self, params: dict[str, Any]) -> dict[str, Any]:
-        run_id = optional_string(params.get("run_id"))
-        if run_id is None:
-            raise RpcError(
-                -32602,
-                "invalid_run_id",
-                "Invalid params",
-                {"message": "run_id must be a non-empty string"},
-            )
+        request = SessionCancelParams.from_mapping(params)
+        run_id = request.run_id
         state = self.runs.get(run_id)
         if state is None:
             return {"cancelled": False, "run_id": run_id, "status": "unknown"}

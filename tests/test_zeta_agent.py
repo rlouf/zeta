@@ -1384,6 +1384,27 @@ def test_zeta_rpc_session_run_rejects_invalid_workflow() -> None:
     ]
 
 
+def test_zeta_session_run_params_capture_defaults_and_options() -> None:
+    params = zeta_session.SessionRunParams.from_mapping(
+        {
+            "objective": "answer",
+            "tools": ["read", "", 12, "bash"],
+            "context": "existing notes",
+            "model": "gpt-test",
+            "max_steps": 3,
+            "max_wall_seconds": 1,
+        }
+    )
+
+    assert params.objective == "answer"
+    assert params.workflow == "ask"
+    assert params.tools == ("read", "", "bash")
+    assert params.context == "existing notes"
+    assert params.model == "gpt-test"
+    assert params.max_steps == 3
+    assert params.max_wall_seconds == 1.0
+
+
 def test_zeta_event_trigger_rule_matches_exact_and_prefix() -> None:
     exact = zeta_dispatch.TriggerRule(event_type="session.turn.requested")
     prefix = zeta_dispatch.TriggerRule(event_type_prefix="github.issue.")
@@ -3141,6 +3162,28 @@ def test_zeta_rpc_events_list_filters_by_session_and_run(tmp_path: Path) -> None
     ]
 
 
+def test_zeta_rpc_event_list_params_reject_invalid_cursor() -> None:
+    with pytest.raises(zeta_rpc.RpcError) as raised:
+        zeta_rpc.EventListParams.from_mapping({"after": 1})
+
+    assert raised.value.jsonrpc_code == -32602
+    assert raised.value.error_data() == {
+        "code": "invalid_cursor",
+        "message": "after must be an event cursor string",
+    }
+
+
+def test_zeta_rpc_event_list_params_reject_invalid_limit() -> None:
+    with pytest.raises(zeta_rpc.RpcError) as raised:
+        zeta_rpc.EventListParams.from_mapping({"limit": 0})
+
+    assert raised.value.jsonrpc_code == -32602
+    assert raised.value.error_data() == {
+        "code": "invalid_limit",
+        "message": "limit must be a positive integer",
+    }
+
+
 def test_zeta_rpc_events_subscribe_filters_after_cursor() -> None:
     input_stream = StringIO(
         json.dumps(
@@ -3167,6 +3210,17 @@ def test_zeta_rpc_events_subscribe_filters_after_cursor() -> None:
         for message in messages
         if message.get("method") == "events.publish"
     ] == ["new"]
+
+
+def test_zeta_rpc_session_cancel_params_require_run_id() -> None:
+    with pytest.raises(zeta_rpc.RpcError) as raised:
+        zeta_rpc.SessionCancelParams.from_mapping({"run_id": ""})
+
+    assert raised.value.jsonrpc_code == -32602
+    assert raised.value.error_data() == {
+        "code": "invalid_run_id",
+        "message": "run_id must be a non-empty string",
+    }
 
 
 def test_zeta_rpc_events_subscribe_filters_by_session_and_run() -> None:

@@ -7,7 +7,7 @@ import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 from zeta.agents.capabilities import AgentConfig
 from zeta.capabilities.base import ExecutionMode
@@ -57,6 +57,90 @@ class SessionRequestError(ValueError):
 
     def __post_init__(self) -> None:
         super().__init__(self.message)
+
+
+SessionWorkflow = Literal["ask", "propose", "do"]
+
+
+@dataclass(frozen=True)
+class SessionRunParams:
+    objective: str
+    workflow: SessionWorkflow = "ask"
+    tools: tuple[str, ...] | None = None
+    context: str = ""
+    system: str | None = None
+    model: str | None = None
+    url: str | None = None
+    thinking: str | None = None
+    api: str | None = None
+    max_steps: int | None = None
+    max_wall_seconds: float | None = None
+
+    @classmethod
+    def from_mapping(cls, params: dict[str, Any]) -> SessionRunParams:
+        objective = str(params.get("objective") or "")
+        if not objective:
+            raise SessionRequestError(
+                "missing_objective",
+                "session.run requires objective",
+                {"message": "session.run requires objective"},
+            )
+        workflow = str(params.get("workflow") or "ask")
+        if workflow not in {"ask", "propose", "do"}:
+            raise SessionRequestError(
+                "invalid_workflow",
+                "workflow must be ask, propose, or do",
+                {
+                    "message": "workflow must be ask, propose, or do",
+                    "workflow": workflow,
+                },
+            )
+        requested_tools = params.get("tools")
+        tools = (
+            tuple(tool for tool in requested_tools if isinstance(tool, str))
+            if isinstance(requested_tools, list)
+            else None
+        )
+        return cls(
+            objective=objective,
+            workflow=cast(SessionWorkflow, workflow),
+            tools=tools,
+            context=str(params["context"])
+            if isinstance(params.get("context"), str)
+            else "",
+            system=optional_string(params.get("system")),
+            model=optional_string(params.get("model")),
+            url=optional_string(params.get("url")),
+            thinking=optional_string(params.get("thinking")),
+            api=optional_string(params.get("api")),
+            max_steps=params.get("max_steps")
+            if isinstance(params.get("max_steps"), int)
+            else None,
+            max_wall_seconds=optional_float(params.get("max_wall_seconds")),
+        )
+
+    def turn_payload(self, run_id: str) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "objective": self.objective,
+            "workflow": self.workflow,
+            "runtime": "zeta-rpc",
+            "run_id": run_id,
+            "tools": list(self.tools or ()),
+            "context": self.context,
+        }
+        for key in (
+            "system",
+            "model",
+            "url",
+            "thinking",
+            "api",
+            "max_steps",
+            "max_wall_seconds",
+        ):
+            value = getattr(self, key)
+            if value is not None:
+                payload[key] = value
+        return payload
 
 
 def default_session() -> Session:
@@ -147,19 +231,18 @@ async def run_session_turn(
     runtime_context: Session,
     cancellation_event: CancellationToken | None,
 ) -> dict[str, Any]:
-    objective = session_objective(params)
-    workflow = session_workflow(params)
+    request = SessionRunParams.from_mapping(params)
     enabled_capabilities = registered_capabilities(
-        session_allowed_tools(params),
+        request.tools,
         tool_registry=runtime_context.tool_registry,
     )
-    execution_mode: ExecutionMode = "direct" if workflow == "do" else "stage"
+    execution_mode: ExecutionMode = "direct" if request.workflow == "do" else "stage"
     prior_timeline = current_timeline(runtime_context=runtime_context)
     user_event = record_user_message(
         {
             "type": "user_message",
-            "content": objective,
-            "workflow": workflow,
+            "content": request.objective,
+            "workflow": request.workflow,
             "runtime": "zeta-rpc",
             "available_tools": list(enabled_capabilities),
             "run_id": run_id,
@@ -188,15 +271,15 @@ async def run_session_turn(
 
     try:
         result = await async_run_agent_turn(
-            objective,
+            request.objective,
             prior_timeline,
             session_agent_config(
-                params,
+                request,
                 enabled_capabilities=enabled_capabilities,
                 execution_mode=execution_mode,
                 session_id=runtime_context.session_id,
             ),
-            context=session_context(params),
+            context=request.context,
             event_sink=sink,
             trace_store=runtime_context.trace_store,
             tool_registry=runtime_context.tool_registry,
@@ -250,28 +333,7 @@ def session_turn_requested_draft(
     run_id: str,
     runtime_context: Session,
 ) -> DraftEvent:
-    objective = session_objective(params)
-    workflow = session_workflow(params)
-    payload: dict[str, Any] = {
-        "objective": objective,
-        "workflow": workflow,
-        "runtime": "zeta-rpc",
-        "run_id": run_id,
-        "tools": list(session_allowed_tools(params) or ()),
-        "context": session_context(params),
-    }
-    for key in (
-        "system",
-        "model",
-        "url",
-        "thinking",
-        "api",
-        "max_steps",
-        "max_wall_seconds",
-    ):
-        value = params.get(key)
-        if isinstance(value, str | int | float) and not isinstance(value, bool):
-            payload[key] = value
+    payload = SessionRunParams.from_mapping(params).turn_payload(run_id)
     return DraftEvent(
         "session.turn.requested",
         "zeta",
@@ -418,74 +480,29 @@ def final_event_cursor(runtime_context: Session, run_id: str) -> str | None:
     return str(events[-1].seq)
 
 
-def session_objective(params: dict[str, Any]) -> str:
-    objective = str(params.get("objective") or "")
-    if not objective:
-        raise SessionRequestError(
-            "missing_objective",
-            "session.run requires objective",
-            {"message": "session.run requires objective"},
-        )
-    return objective
-
-
-def session_workflow(params: dict[str, Any]) -> str:
-    workflow = str(params.get("workflow") or "ask")
-    if workflow not in {"ask", "propose", "do"}:
-        raise SessionRequestError(
-            "invalid_workflow",
-            "workflow must be ask, propose, or do",
-            {
-                "message": "workflow must be ask, propose, or do",
-                "workflow": workflow,
-            },
-        )
-    return workflow
-
-
-def session_allowed_tools(params: dict[str, Any]) -> tuple[str, ...] | None:
-    requested_tools = params.get("tools")
-    if not isinstance(requested_tools, list):
-        return None
-    return tuple(str(tool) for tool in requested_tools if isinstance(tool, str))
-
-
 def session_agent_config(
-    params: dict[str, Any],
+    params: SessionRunParams,
     *,
     enabled_capabilities: tuple[str, ...],
     execution_mode: ExecutionMode,
     session_id: str,
 ) -> AgentConfig:
     return AgentConfig(
-        system_prompt=optional_str_param(params, "system"),
+        system_prompt=params.system,
         allowed_capabilities=enabled_capabilities,
-        max_turns=params.get("max_steps")
-        if isinstance(params.get("max_steps"), int)
-        else None,
+        max_turns=params.max_steps,
         stop_on_staged_effect=True,
         execution_mode=execution_mode,
-        model_name=optional_str_param(params, "model"),
-        model_url=optional_str_param(params, "url"),
+        model_name=params.model,
+        model_url=params.url,
         model_session_id=session_id,
-        thinking=optional_str_param(params, "thinking"),
-        model_api=optional_str_param(params, "api"),
-        max_wall_seconds=optional_float_param(params, "max_wall_seconds"),
+        thinking=params.thinking,
+        model_api=params.api,
+        max_wall_seconds=params.max_wall_seconds,
     )
 
 
-def session_context(params: dict[str, Any]) -> str:
-    context = params.get("context")
-    return str(context) if isinstance(context, str) else ""
-
-
-def optional_str_param(params: dict[str, Any], key: str) -> str | None:
-    value = params.get(key)
-    return value if isinstance(value, str) else None
-
-
-def optional_float_param(params: dict[str, Any], key: str) -> float | None:
-    value = params.get(key)
+def optional_float(value: Any) -> float | None:
     if isinstance(value, bool):
         return None
     if isinstance(value, int | float):

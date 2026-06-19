@@ -312,7 +312,7 @@ def runtime_event_draft(
     event_dict = dict(event)
     if event_type == "model":
         return model_call_draft(
-            payload=model_durable_payload(event_dict),
+            payload=durable_model_event_payload(event_dict),
             turn_id=turn_id,
             session_id=session_id,
             caused_by=caused_by,
@@ -320,7 +320,7 @@ def runtime_event_draft(
         )
     if event_type in {"tool_call", "tool_result"}:
         return tool_call_draft(
-            payload=tool_durable_payload(event_dict),
+            payload=durable_tool_event_payload(event_dict),
             turn_id=turn_id,
             session_id=session_id,
             caused_by=caused_by,
@@ -547,49 +547,13 @@ def tool_call_failed(payload: Mapping[str, Any]) -> bool:
     return isinstance(result, dict) and result.get("ok") is False
 
 
-def model_durable_payload(event: Mapping[str, Any]) -> dict[str, Any]:
+def durable_model_event_payload(event: Mapping[str, Any]) -> dict[str, Any]:
     event_dict = dict(event)
     payload = durable_payload(event_dict)
     payload["_timeline_type"] = "model"
-    used_objects, returned_objects = model_durable_object_links(event_dict)
-    add_link_payload(payload, used_objects, returned_objects)
-    return payload
-
-
-def tool_durable_payload(event: Mapping[str, Any]) -> dict[str, Any]:
-    event_dict = dict(event)
-    payload = durable_payload(event_dict)
-    payload["_timeline_type"] = str(event.get("type") or "")
-    used_objects, returned_objects = tool_durable_object_links(event_dict)
-    add_link_payload(payload, used_objects, returned_objects)
-    return payload
-
-
-def durable_payload(event: Mapping[str, Any]) -> dict[str, Any]:
-    return {
-        key: value
-        for key, value in event.items()
-        if key not in RUNTIME_DURABLE_EXCLUDED_KEYS
-    }
-
-
-def add_link_payload(
-    payload: dict[str, Any],
-    used_objects: list[dict[str, str]],
-    returned_objects: list[dict[str, str]],
-) -> None:
-    if used_objects:
-        payload["used_objects"] = used_objects
-    if returned_objects:
-        payload["returned_objects"] = returned_objects
-
-
-def model_durable_object_links(
-    event: Mapping[str, Any],
-) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
     used_objects: list[dict[str, str]] = []
     returned_objects: list[dict[str, str]] = []
-    prompt_trace = event.get("prompt_trace")
+    prompt_trace = event_dict.get("prompt_trace")
     if isinstance(prompt_trace, dict):
         add_durable_object_link(
             used_objects,
@@ -601,67 +565,63 @@ def model_durable_object_links(
             "assistant_message",
             trace_object_id(prompt_trace, "assistant_message_object_id"),
         )
-    add_durable_object_links(
-        returned_objects,
-        "tool_call",
-        event.get("tool_call_object_ids"),
-    )
+    object_ids = event_dict.get("tool_call_object_ids")
+    if isinstance(object_ids, (list, tuple)):
+        for object_id in object_ids:
+            add_durable_object_link(
+                returned_objects,
+                "tool_call",
+                object_id if isinstance(object_id, str) else None,
+            )
     add_durable_object_link(
         returned_objects,
         "tool_call",
-        trace_object_id(dict(event), "tool_call_object_id"),
+        trace_object_id(event_dict, "tool_call_object_id"),
     )
-    return used_objects, returned_objects
+    if used_objects:
+        payload["used_objects"] = used_objects
+    if returned_objects:
+        payload["returned_objects"] = returned_objects
+    return payload
 
 
-def tool_durable_object_links(
-    event: Mapping[str, Any],
-) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
+def durable_tool_event_payload(event: Mapping[str, Any]) -> dict[str, Any]:
+    event_dict = dict(event)
+    payload = durable_payload(event_dict)
     event_type = str(event.get("type") or "")
-    if event_type == "tool_result":
-        return tool_result_durable_object_links(event)
-    if event_type != "tool_call":
-        return [], []
-    returned_objects: list[dict[str, str]] = []
-    add_durable_object_link(
-        returned_objects,
-        "tool_call",
-        trace_object_id(dict(event), "tool_call_object_id"),
-    )
-    return [], returned_objects
-
-
-def tool_result_durable_object_links(
-    event: Mapping[str, Any],
-) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
+    payload["_timeline_type"] = event_type
     used_objects: list[dict[str, str]] = []
     returned_objects: list[dict[str, str]] = []
-    add_durable_object_link(
-        used_objects,
-        "tool_call",
-        trace_object_id(dict(event), "tool_call_object_id"),
-    )
-    add_durable_object_link(
-        returned_objects,
-        "tool_result",
-        trace_object_id(dict(event), "tool_result_object_id"),
-    )
-    return used_objects, returned_objects
-
-
-def add_durable_object_links(
-    links: list[dict[str, str]],
-    kind: str,
-    object_ids: Any,
-) -> None:
-    if not isinstance(object_ids, (list, tuple)):
-        return
-    for object_id in object_ids:
+    if event_type == "tool_call":
         add_durable_object_link(
-            links,
-            kind,
-            object_id if isinstance(object_id, str) else None,
+            returned_objects,
+            "tool_call",
+            trace_object_id(event_dict, "tool_call_object_id"),
         )
+    if event_type == "tool_result":
+        add_durable_object_link(
+            used_objects,
+            "tool_call",
+            trace_object_id(event_dict, "tool_call_object_id"),
+        )
+        add_durable_object_link(
+            returned_objects,
+            "tool_result",
+            trace_object_id(event_dict, "tool_result_object_id"),
+        )
+    if used_objects:
+        payload["used_objects"] = used_objects
+    if returned_objects:
+        payload["returned_objects"] = returned_objects
+    return payload
+
+
+def durable_payload(event: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        key: value
+        for key, value in event.items()
+        if key not in RUNTIME_DURABLE_EXCLUDED_KEYS
+    }
 
 
 def add_durable_object_link(
@@ -740,9 +700,9 @@ __all__ = [
     "event_view",
     "event_views",
     "boundary_event_draft",
+    "durable_model_event_payload",
+    "durable_tool_event_payload",
     "model_call_draft",
-    "model_durable_object_links",
-    "model_durable_payload",
     "immutable_payload",
     "normalized_tool_result",
     "publish_event",
@@ -750,9 +710,6 @@ __all__ = [
     "status_update_draft",
     "stream_chunk_draft",
     "tool_call_draft",
-    "tool_durable_object_links",
-    "tool_durable_payload",
-    "tool_result_durable_object_links",
     "tool_result_status",
     "turn_aborted_draft",
     "user_message_draft",

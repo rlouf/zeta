@@ -583,34 +583,54 @@ class JsonRpcProtocol:
             return True
         return bool(readable)
 
+    def sync_method_handlers(
+        self,
+    ) -> dict[str, Callable[[dict[str, Any]], dict[str, Any] | None]]:
+        return {
+            "initialize": self.initialize,
+            "tools.register": self.register_tools_rpc,
+            "tools.respond": self.respond_tools_rpc,
+            "events.list": self.list_events,
+            "events.subscribe": self.subscribe_events,
+            "events.publish": self.events_publish_unavailable,
+            "session.run": self.session_run_unavailable,
+        }
+
+    def initialize(self, params: dict[str, Any]) -> dict[str, Any]:
+        del params
+        return {"server": "zeta", "protocol": "0.1"}
+
+    def register_tools_rpc(self, params: dict[str, Any]) -> dict[str, Any]:
+        return {"registered": self.register_client_tools(params.get("tools"))}
+
+    def respond_tools_rpc(self, params: dict[str, Any]) -> None:
+        self.record_tool_response(params)
+        return None
+
+    def events_publish_unavailable(self, params: dict[str, Any]) -> None:
+        del params
+        raise RpcError(
+            -32000,
+            "events_unavailable",
+            "Server error",
+            {"message": "events.publish requires an active async server"},
+        )
+
+    def session_run_unavailable(self, params: dict[str, Any]) -> None:
+        del params
+        raise RpcError(
+            -32000,
+            "session_run_unavailable",
+            "Server error",
+            {"message": "session.run requires an active async server"},
+        )
+
     def dispatch_sync(
         self, method: str, params: dict[str, Any]
     ) -> dict[str, Any] | None:
-        if method == "initialize":
-            return {"server": "zeta", "protocol": "0.1"}
-        if method == "tools.register":
-            return {"registered": self.register_client_tools(params.get("tools"))}
-        if method == "tools.respond":
-            self.record_tool_response(params)
-            return None
-        if method == "events.list":
-            return self.list_events(params)
-        if method == "events.subscribe":
-            return self.subscribe_events(params)
-        if method == "events.publish":
-            raise RpcError(
-                -32000,
-                "events_unavailable",
-                "Server error",
-                {"message": "events.publish requires an active async server"},
-            )
-        if method == "session.run":
-            raise RpcError(
-                -32000,
-                "session_run_unavailable",
-                "Server error",
-                {"message": "session.run requires an active async server"},
-            )
+        handler = self.sync_method_handlers().get(method)
+        if handler is not None:
+            return handler(params)
         raise RpcError(
             -32601,
             "method_not_found",
@@ -914,11 +934,21 @@ class JsonRpcServer(JsonRpcProtocol):
         method: str,
         params: dict[str, Any],
     ) -> dict[str, Any] | None:
-        if method == "session.cancel":
-            return self.cancel_session(params)
-        if method == "events.publish":
-            return await self.publish_runtime_event_async(params)
+        handler = self.async_method_handlers().get(method)
+        if handler is not None:
+            return await handler(params)
         return super().dispatch_sync(method, params)
+
+    def async_method_handlers(
+        self,
+    ) -> dict[str, Callable[[dict[str, Any]], Awaitable[dict[str, Any] | None]]]:
+        return {
+            "session.cancel": self.cancel_session_async,
+            "events.publish": self.publish_runtime_event_async,
+        }
+
+    async def cancel_session_async(self, params: dict[str, Any]) -> dict[str, Any]:
+        return self.cancel_session(params)
 
     async def publish_runtime_event_async(
         self,

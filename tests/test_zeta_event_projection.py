@@ -5,13 +5,13 @@ from typing import Any
 from zeta.events import (
     DraftEvent,
     Event,
+    durable_model_event_payload,
+    durable_tool_event_payload,
     event_view,
     event_views,
     model_call_draft,
-    model_durable_payload,
     runtime_event_draft,
     tool_call_draft,
-    tool_durable_payload,
 )
 from zeta.history import effect_record, event_from_record, turn_record
 
@@ -130,32 +130,32 @@ def runtime_drafts() -> list[DraftEvent]:
     aborted = turn_aborted_event()
     return [
         model_call_draft(
-            payload=model_durable_payload(model),
+            payload=durable_model_event_payload(model),
             turn_id=TURN_ID,
             session_id=SESSION_ID,
             event_id="model-1",
         ),
         tool_call_draft(
-            payload=tool_durable_payload(call),
+            payload=durable_tool_event_payload(call),
             turn_id=TURN_ID,
             session_id=SESSION_ID,
             caused_by="model-1",
             event_id="call-1",
         ),
         tool_call_draft(
-            payload=tool_durable_payload(result_ok),
+            payload=durable_tool_event_payload(result_ok),
             turn_id=TURN_ID,
             session_id=SESSION_ID,
             event_id="result-ok",
         ),
         tool_call_draft(
-            payload=tool_durable_payload(result_failed),
+            payload=durable_tool_event_payload(result_failed),
             turn_id=TURN_ID,
             session_id=SESSION_ID,
             event_id="result-failed",
         ),
         tool_call_draft(
-            payload=tool_durable_payload(result_refused),
+            payload=durable_tool_event_payload(result_refused),
             turn_id=TURN_ID,
             session_id=SESSION_ID,
             event_id="result-refused",
@@ -232,6 +232,33 @@ def test_zeta_runtime_events_project_to_durable_drafts() -> None:
     assert [asdict(draft) for draft in drafts] == [
         asdict(draft) for draft in runtime_drafts()
     ]
+
+
+def test_zeta_runtime_event_draft_handles_special_and_generic_events() -> None:
+    generic = {
+        "type": "custom.event",
+        "id": "custom-1",
+        "content": "kept",
+    }
+
+    drafts = [
+        runtime_event_draft(model_event(), session_id=SESSION_ID, turn_id=TURN_ID),
+        runtime_event_draft(tool_call_event(), session_id=SESSION_ID, turn_id=TURN_ID),
+        runtime_event_draft(
+            turn_aborted_event(),
+            session_id=SESSION_ID,
+            turn_id=TURN_ID,
+        ),
+        runtime_event_draft(generic, session_id=SESSION_ID, turn_id=TURN_ID),
+    ]
+
+    assert [draft.event_type for draft in drafts] == [
+        "zeta.model_call.completed",
+        "zeta.tool_call.started",
+        "zeta.turn.failed",
+        "custom.event",
+    ]
+    assert drafts[-1].payload == {"content": "kept"}
 
 
 def test_zeta_runtime_event_projection_contract() -> None:

@@ -21,7 +21,7 @@ from sigil.protocols import (
 from sigil.sessions import event_time, recent_turns, session_id
 from sigil.state import event_store_path
 from zeta.capabilities.base import proposed_effect
-from zeta.events import event_view, tool_call_draft, tool_durable_payload
+from zeta.events import durable_tool_event_payload, event_view, tool_call_draft
 from zeta.history import effect_record, publish_effect_record
 
 
@@ -58,7 +58,7 @@ def record_shell_tool_result(event: dict[str, Any]) -> dict[str, Any]:
     runtime_context = zeta_session_for_sigil()
     outcome = runtime_context.event_sink.accept(
         tool_call_draft(
-            payload=tool_durable_payload(event),
+            payload=durable_tool_event_payload(event),
             turn_id=event.get("turn_id")
             if isinstance(event.get("turn_id"), str)
             else None,

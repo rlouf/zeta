@@ -345,9 +345,12 @@ def test_zeta_model_called_draft_sets_durable_metadata() -> None:
     assert draft.idempotency_key == "zeta.model_call.completed:model-1"
 
 
-def test_zeta_model_durable_object_links_extract_trace_refs() -> None:
-    used_objects, returned_objects = zeta_event_model.model_durable_object_links(
+def test_zeta_durable_model_event_payload_extracts_trace_refs() -> None:
+    payload = zeta_event_model.durable_model_event_payload(
         {
+            "type": "model",
+            "id": "model-1",
+            "content": "done",
             "prompt_trace": {
                 "prompt_object_id": "sha256:prompt",
                 "assistant_message_object_id": "sha256:assistant",
@@ -357,12 +360,16 @@ def test_zeta_model_durable_object_links_extract_trace_refs() -> None:
         }
     )
 
-    assert used_objects == [{"kind": "prompt", "id": "sha256:prompt"}]
-    assert returned_objects == [
-        {"kind": "assistant_message", "id": "sha256:assistant"},
-        {"kind": "tool_call", "id": "sha256:call-1"},
-        {"kind": "tool_call", "id": "sha256:call-2"},
-    ]
+    assert payload == {
+        "_timeline_type": "model",
+        "content": "done",
+        "used_objects": [{"kind": "prompt", "id": "sha256:prompt"}],
+        "returned_objects": [
+            {"kind": "assistant_message", "id": "sha256:assistant"},
+            {"kind": "tool_call", "id": "sha256:call-1"},
+            {"kind": "tool_call", "id": "sha256:call-2"},
+        ],
+    }
 
 
 def test_zeta_tool_call_event_has_boundary_dict_shape() -> None:
@@ -403,16 +410,40 @@ def test_zeta_tool_called_draft_sets_durable_metadata() -> None:
     assert draft.idempotency_key == "zeta.tool_call.started:tool-1"
 
 
-def test_zeta_tool_result_durable_object_links_extract_trace_refs() -> None:
-    used_objects, returned_objects = zeta_event_model.tool_result_durable_object_links(
+def test_zeta_durable_tool_result_event_payload_extracts_trace_refs() -> None:
+    payload = zeta_event_model.durable_tool_event_payload(
         {
+            "type": "tool_result",
+            "id": "result-1",
+            "result": {"ok": True},
             "tool_call_object_id": "sha256:call",
             "tool_result_object_id": "sha256:result",
         }
     )
 
-    assert used_objects == [{"kind": "tool_call", "id": "sha256:call"}]
-    assert returned_objects == [{"kind": "tool_result", "id": "sha256:result"}]
+    assert payload == {
+        "_timeline_type": "tool_result",
+        "result": {"ok": True},
+        "used_objects": [{"kind": "tool_call", "id": "sha256:call"}],
+        "returned_objects": [{"kind": "tool_result", "id": "sha256:result"}],
+    }
+
+
+def test_zeta_durable_tool_call_event_payload_extracts_trace_refs() -> None:
+    payload = zeta_event_model.durable_tool_event_payload(
+        {
+            "type": "tool_call",
+            "id": "call-1",
+            "name": "read",
+            "tool_call_object_id": "sha256:call",
+        }
+    )
+
+    assert payload == {
+        "_timeline_type": "tool_call",
+        "name": "read",
+        "returned_objects": [{"kind": "tool_call", "id": "sha256:call"}],
+    }
 
 
 def test_zeta_tool_result_event_has_boundary_dict_shape() -> None:
@@ -1239,6 +1270,36 @@ def test_zeta_rpc_unknown_method_returns_structured_error() -> None:
             },
         }
     ]
+
+
+def test_zeta_rpc_sync_dispatch_uses_registered_method_handlers() -> None:
+    server = zeta_rpc.JsonRpcServer(StringIO(), StringIO())
+
+    assert server.dispatch_sync("initialize", {}) == {
+        "server": "zeta",
+        "protocol": "0.1",
+    }
+    assert server.dispatch_sync("tools.register", {"tools": []}) == {"registered": []}
+
+
+def test_zeta_async_rpc_dispatch_uses_registered_method_handlers() -> None:
+    async def run() -> None:
+        server = zeta_rpc.JsonRpcServer(StringIO(), StringIO())
+        server.runs["run_active"] = zeta_rpc.RpcRunState(
+            run_id="run_active",
+            request_id=1,
+            cancellation_event=asyncio.Event(),
+        )
+
+        result = await server.dispatch(
+            "session.cancel",
+            {"run_id": "run_active"},
+        )
+
+        assert result == {"cancelled": True, "run_id": "run_active"}
+        assert server.runs["run_active"].status == "cancelling"
+
+    asyncio.run(run())
 
 
 def test_zeta_rpc_session_run_requires_objective() -> None:

@@ -1,5 +1,6 @@
 """Authored agent spec tests."""
 
+import asyncio
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -247,7 +248,7 @@ User asked: {{ event.payload.text }}
     )
     calls: list[dict[str, Any]] = []
 
-    def run_turn(
+    async def run_turn(
         objective: str,
         timeline: list[dict[str, Any]],
         config: AgentConfig,
@@ -265,14 +266,16 @@ User asked: {{ event.payload.text }}
 
     compiled = zeta_agents.compile_agent_definition(spec, run_turn=run_turn)
     store = zeta_events.SqliteEventStore(tmp_path / "events.sqlite3")
-    dispatcher = zeta_dispatch.EventDispatcher(store, agents=[compiled])
+    dispatcher = zeta_dispatch.AsyncEventDispatcher(store, agents=[compiled])
 
-    outcome = dispatcher.dispatch(
-        zeta_events.DraftEvent(
-            "slack.dm.received",
-            "test",
-            {"text": "hello"},
-            session_id="s1",
+    outcome = asyncio.run(
+        dispatcher.dispatch(
+            zeta_events.DraftEvent(
+                "slack.dm.received",
+                "test",
+                {"text": "hello"},
+                session_id="s1",
+            )
         )
     )
 

@@ -179,12 +179,12 @@ def cmd_zeta_rpc(stdio: bool) -> int:
     import asyncio
     from functools import partial
 
-    from sigil.agent_io import run_zeta_rpc_session_task
+    from sigil.agent_io import run_zeta_rpc_session
     from zeta.rpc import JsonRpcServer
 
     server = JsonRpcServer(sys.stdin, sys.stdout)
     server.session_runner = partial(
-        run_zeta_rpc_session_task,
+        run_zeta_rpc_session,
         publish_event=server.publish_event,
     )
     asyncio.run(server.serve())

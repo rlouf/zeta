@@ -1,9 +1,11 @@
 """Trace store and run-timeline tests."""
 
+import asyncio
 import json
 import sqlite3
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 from _zeta_helpers import (
@@ -57,6 +59,10 @@ zeta_trace = SimpleNamespace(
     resolve_object_id=resolve_object_id,
     zeta_sqlite_path=zeta_sqlite_path,
 )
+
+
+def run_agent_turn(*args: Any, **kwargs: Any) -> zeta_agent.AgentTurnResult:
+    return asyncio.run(zeta_agent.async_run_agent_turn(*args, **kwargs))
 
 
 def zeta_event_store() -> SqliteEventStore:
@@ -873,7 +879,7 @@ def test_zeta_agent_durable_events_link_trace_objects(
     def record_runtime_event(event: DraftEvent) -> None:
         record_zeta_event(event, runtime_context=runtime_context)
 
-    result = zeta_agent.run_agent_turn(
+    result = run_agent_turn(
         "inspect",
         [],
         zeta_agent.AgentConfig(allowed_capabilities=("read",), max_turns=2),

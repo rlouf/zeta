@@ -1,7 +1,6 @@
 """Newline-delimited JSON-RPC transport for the Zeta runtime."""
 
 import asyncio
-import inspect
 import json
 import os
 import select
@@ -28,7 +27,7 @@ from zeta.capabilities.base import (
 )
 from zeta.capabilities.registry import CapabilityRegistry
 from zeta.capabilities.registry import registry as _runtime_tool_registry
-from zeta.dispatch import EventDispatcher
+from zeta.dispatch import AsyncEventDispatcher, EventDispatcher
 from zeta.events import DraftEvent, Event, EventSink
 from zeta.runtime_events import runtime_event_draft
 from zeta.session import (
@@ -46,8 +45,7 @@ from zeta.session import (
 )
 from zeta.store.events import EventReader, Filter
 
-RpcSessionRunner = Callable[[dict[str, Any]], dict[str, Any]]
-AsyncRpcSessionRunner = Callable[[dict[str, Any]], Awaitable[dict[str, Any]]]
+RpcSessionRunner = Callable[[dict[str, Any]], Awaitable[dict[str, Any]]]
 ToolCallStatus = Literal["requested", "responded", "failed", "cancelled", "timed_out"]
 RpcRunStatus = Literal["running", "cancelling", "completed", "cancelled", "failed"]
 RpcCancelMode = Literal["cooperative", "task"]
@@ -89,16 +87,12 @@ class EventSubscription:
     run_id: str | None = None
 
 
-def rpc_session_runner_cancel_mode(
-    runner: RpcSessionRunner | AsyncRpcSessionRunner,
-) -> RpcCancelMode:
+def rpc_session_runner_cancel_mode(runner: RpcSessionRunner) -> RpcCancelMode:
     target = getattr(runner, "func", runner)
     mode = getattr(target, "__rpc_cancel_mode__", None)
     if mode in ("cooperative", "task"):
         return cast(RpcCancelMode, mode)
-    if inspect.iscoroutinefunction(runner):
-        return "task"
-    return "cooperative"
+    return "task"
 
 
 @dataclass(frozen=True)
@@ -139,7 +133,7 @@ class RpcError(RuntimeError):
         return {"code": self.zeta_code, **self.data}
 
 
-def run_rpc_session(
+async def run_rpc_session(
     params: dict[str, Any],
     *,
     publish_event: Callable[[dict[str, Any]], None],
@@ -161,7 +155,7 @@ def run_rpc_session(
         )
     except SessionRequestError as exc:
         raise rpc_error_from_session_request(exc) from exc
-    outcome = dispatcher.dispatch(draft)
+    outcome = await dispatcher.dispatch(draft)
     if outcome.agent_results:
         return outcome.agent_results[0]
     return {
@@ -170,23 +164,6 @@ def run_rpc_session(
         "final_text": "",
         "trace": empty_rpc_trace_result(),
     }
-
-
-async def run_rpc_session_task(
-    params: dict[str, Any],
-    *,
-    publish_event: Callable[[dict[str, Any]], None],
-    runtime_context: Session | None = None,
-) -> dict[str, Any]:
-    return await asyncio.to_thread(
-        run_rpc_session,
-        params,
-        publish_event=publish_event,
-        runtime_context=runtime_context,
-    )
-
-
-cast(Any, run_rpc_session_task).__rpc_cancel_mode__ = "cooperative"
 
 
 def rpc_run_id() -> str:
@@ -594,7 +571,7 @@ class JsonRpcProtocol:
         self.event_sink = event_sink
         if self.event_sink is None and hasattr(event_reader, "accept"):
             self.event_sink = cast(EventSink, event_reader)
-        self.event_dispatcher: EventDispatcher | None = None
+        self.event_dispatcher: EventDispatcher | AsyncEventDispatcher | None = None
         self.tool_responses: dict[str, dict[str, Any]] = {}
         self.tool_calls: dict[str, ClientToolCall] = {}
         self.client_tools: set[str] = set()
@@ -658,14 +635,12 @@ class JsonRpcProtocol:
         if method == "events.publish":
             return self.publish_runtime_event(params)
         if method == "session.run":
-            if self.session_runner is None:
-                raise RpcError(
-                    -32000,
-                    "session_run_unavailable",
-                    "Server error",
-                    {"message": "session.run is not configured"},
-                )
-            return self.session_runner(params)
+            raise RpcError(
+                -32000,
+                "session_run_unavailable",
+                "Server error",
+                {"message": "session.run requires an active async server"},
+            )
         raise RpcError(
             -32601,
             "method_not_found",
@@ -720,6 +695,13 @@ class JsonRpcProtocol:
 
     def publish_runtime_event(self, params: dict[str, Any]) -> dict[str, Any]:
         dispatcher = self.event_dispatcher
+        if isinstance(dispatcher, AsyncEventDispatcher):
+            raise RpcError(
+                -32000,
+                "events_unavailable",
+                "Server error",
+                {"message": "events.publish requires an active async server"},
+            )
         if dispatcher is None:
             if self.event_sink is None:
                 raise RpcError(
@@ -931,7 +913,7 @@ class JsonRpcServer(JsonRpcProtocol):
         input: TextIO,
         output: TextIO,
         *,
-        session_runner: RpcSessionRunner | AsyncRpcSessionRunner | None = None,
+        session_runner: RpcSessionRunner | None = None,
         tool_registry: CapabilityRegistry | None = None,
         event_reader: EventReader | None = None,
         event_sink: EventSink | None = None,
@@ -939,7 +921,7 @@ class JsonRpcServer(JsonRpcProtocol):
         super().__init__(
             input,
             output,
-            session_runner=cast(RpcSessionRunner | None, session_runner),
+            session_runner=session_runner,
             tool_registry=tool_registry,
             event_reader=event_reader,
             event_sink=event_sink,
@@ -1003,7 +985,41 @@ class JsonRpcServer(JsonRpcProtocol):
     ) -> dict[str, Any] | None:
         if method == "session.cancel":
             return self.cancel_session(params)
+        if method == "events.publish":
+            return await self.publish_runtime_event_async(params)
         return super().dispatch_sync(method, params)
+
+    async def publish_runtime_event_async(
+        self,
+        params: dict[str, Any],
+    ) -> dict[str, Any]:
+        dispatcher = self.event_dispatcher
+        if dispatcher is None:
+            if self.event_sink is None:
+                raise RpcError(
+                    -32000,
+                    "events_unavailable",
+                    "Server error",
+                    {"message": "events.publish is not configured"},
+                )
+            dispatcher = AsyncEventDispatcher(
+                self.event_sink,
+                publish_event=lambda event: self.publish_event(
+                    rpc_event_from_durable_event(event)
+                ),
+            )
+        if isinstance(dispatcher, EventDispatcher):
+            outcome = dispatcher.dispatch(rpc_publish_event_draft(params))
+        else:
+            outcome = await dispatcher.dispatch(rpc_publish_event_draft(params))
+        return {
+            "inserted": outcome.inserted,
+            "event": rpc_event_from_durable_event(outcome.event),
+            "work_events": [
+                rpc_event_from_durable_event(event) for event in outcome.work_events
+            ],
+            "agent_results": outcome.agent_results,
+        }
 
     def start_session_run(self, request_id: Any, params: dict[str, Any]) -> None:
         if self.session_runner is None:
@@ -1083,10 +1099,7 @@ class JsonRpcServer(JsonRpcProtocol):
 
     async def call_session_runner(self, params: dict[str, Any]) -> dict[str, Any]:
         assert self.session_runner is not None
-        result = self.session_runner(params)
-        if inspect.isawaitable(result):
-            return await cast(Awaitable[dict[str, Any]], result)
-        return cast(dict[str, Any], result)
+        return await self.session_runner(params)
 
     def cancel_session(self, params: dict[str, Any]) -> dict[str, Any]:
         run_id = optional_string(params.get("run_id"))

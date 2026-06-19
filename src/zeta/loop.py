@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 import uuid
@@ -206,7 +207,7 @@ class TurnContext:
     model_gateway: ModelGateway = field(default_factory=DefaultModelGateway)
 
 
-def run_agent_turn(
+def _run_agent_turn_blocking(
     objective: str,
     timeline: list[dict[str, Any]],
     config: AgentConfig,
@@ -257,6 +258,38 @@ def run_agent_turn(
         tools=tools,
         state=state,
         ctx=ctx,
+    )
+
+
+async def async_run_agent_turn(
+    objective: str,
+    timeline: list[dict[str, Any]],
+    config: AgentConfig,
+    *,
+    context: str = "",
+    event_sink: AgentEventSink | None = None,
+    prompt_builder: PromptBuilder | None = None,
+    trace_store: Store | None = None,
+    tool_registry: CapabilityRegistry | None = None,
+    model_gateway: ModelGateway | None = None,
+    caused_by: str | None = None,
+    cancellation_event: CancellationToken | None = None,
+    deadline: float | None = None,
+) -> AgentTurnResult:
+    return await asyncio.to_thread(
+        _run_agent_turn_blocking,
+        objective,
+        timeline,
+        config,
+        context=context,
+        event_sink=event_sink,
+        prompt_builder=prompt_builder,
+        trace_store=trace_store,
+        tool_registry=tool_registry,
+        model_gateway=model_gateway,
+        caused_by=caused_by,
+        cancellation_event=cancellation_event,
+        deadline=deadline,
     )
 
 

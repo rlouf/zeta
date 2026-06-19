@@ -6,11 +6,10 @@ recorder missed. This module owns that skeleton; workflow modules own
 workflow-specific tagging, logging, and handoff handling.
 """
 
-import asyncio
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass, replace
-from typing import Any, TextIO, cast
+from typing import Any, TextIO
 
 from sigil.display.render import render_tool_start
 from sigil.display.state import (
@@ -40,9 +39,9 @@ from zeta.events import DraftEvent, Event
 from zeta.loop import (
     AgentTurnAborted,
     AgentTurnResult,
+    async_run_agent_turn,
     is_runtime_ui_event,
     registered_capabilities,
-    run_agent_turn,
 )
 from zeta.models import (
     CODEX_RESPONSES_API,
@@ -395,7 +394,7 @@ def record_turn_abort(
     return timeline_event_from_durable_event(outcome.event)
 
 
-def run_zeta_rpc_session(
+async def run_zeta_rpc_session(
     params: dict[str, Any],
     *,
     publish_event: Callable[[dict[str, Any]], None],
@@ -477,7 +476,7 @@ def run_zeta_rpc_session(
         publish_event(persisted)
 
     try:
-        result = run_agent_turn(
+        result = await async_run_agent_turn(
             objective,
             prior_timeline,
             AgentConfig(
@@ -565,21 +564,6 @@ def run_zeta_rpc_session(
         "outcome": outcome,
         "final_text": result.final_text,
     }
-
-
-async def run_zeta_rpc_session_task(
-    params: dict[str, Any],
-    *,
-    publish_event: Callable[[dict[str, Any]], None],
-) -> dict[str, Any]:
-    return await asyncio.to_thread(
-        run_zeta_rpc_session,
-        params,
-        publish_event=publish_event,
-    )
-
-
-cast(Any, run_zeta_rpc_session_task).__rpc_cancel_mode__ = "cooperative"
 
 
 def optional_float_param(params: dict[str, Any], key: str) -> float | None:

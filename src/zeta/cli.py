@@ -6,7 +6,7 @@ from functools import partial
 
 import click
 
-from zeta.rpc import JsonRpcServer, run_rpc_session_task, session_event_dispatcher
+from zeta.rpc import JsonRpcServer, run_rpc_session, session_event_dispatcher
 from zeta.session import default_session
 from zeta.store.events import EventReader
 
@@ -37,7 +37,7 @@ def rpc(stdio: bool) -> int:
     )
 
     server.session_runner = partial(
-        run_rpc_session_task,
+        run_rpc_session,
         publish_event=server.publish_event,
         runtime_context=runtime_context,
     )

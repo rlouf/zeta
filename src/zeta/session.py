@@ -12,15 +12,15 @@ from typing import TYPE_CHECKING, Any
 
 from zeta.agents.capabilities import AgentConfig
 from zeta.capabilities.base import ExecutionMode
-from zeta.dispatch import AgentDefinition, AgentRun, EventDispatcher, TriggerRule
+from zeta.dispatch import AgentDefinition, AgentRun, AsyncEventDispatcher, TriggerRule
 from zeta.events import DraftEvent, Event
 from zeta.loop import (
     AgentTurnAborted,
     AgentTurnResult,
     CancellationToken,
+    async_run_agent_turn,
     is_runtime_ui_event,
     registered_capabilities,
-    run_agent_turn,
 )
 from zeta.store.events import EventReader, Filter
 from zeta.timeline import current_timeline, timeline_event_from_durable_event
@@ -95,7 +95,7 @@ def zeta_state_dir() -> Path:
     return Path(root).expanduser() if root else Path.home() / ".zeta"
 
 
-def run_session_turn_from_event(
+async def run_session_turn_from_event(
     run: AgentRun,
     *,
     runtime_context: Session,
@@ -106,7 +106,7 @@ def run_session_turn_from_event(
     run_id = run.triggering_event.turn_id or optional_string(params.get("run_id"))
     if run_id is None:
         run_id = session_run_id()
-    return run_session_turn(
+    return await run_session_turn(
         params,
         run_id=run_id,
         caused_by=run.triggering_event.id,
@@ -116,7 +116,7 @@ def run_session_turn_from_event(
     )
 
 
-def run_session_turn(
+async def run_session_turn(
     params: dict[str, Any],
     *,
     run_id: str,
@@ -167,7 +167,7 @@ def run_session_turn(
         publish_event(session_event_with_cursor(runtime_context, persisted, run_id))
 
     try:
-        result = run_agent_turn(
+        result = await async_run_agent_turn(
             objective,
             prior_timeline,
             session_agent_config(
@@ -205,8 +205,8 @@ def session_event_dispatcher(
     *,
     publish_event: Callable[[dict[str, Any]], None],
     cancellation_event: CancellationToken | None = None,
-) -> EventDispatcher:
-    return EventDispatcher(
+) -> AsyncEventDispatcher:
+    return AsyncEventDispatcher(
         runtime_context.event_sink,
         agents=[
             AgentDefinition(

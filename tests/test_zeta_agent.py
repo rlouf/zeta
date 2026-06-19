@@ -72,6 +72,14 @@ zeta_events = SimpleNamespace(
 )
 
 
+def run_agent_turn(*args: Any, **kwargs: Any) -> zeta_agent.AgentTurnResult:
+    return asyncio.run(zeta_agent.async_run_agent_turn(*args, **kwargs))
+
+
+def run_rpc_session(*args: Any, **kwargs: Any) -> dict[str, Any]:
+    return asyncio.run(zeta_rpc.run_rpc_session(*args, **kwargs))
+
+
 def _test_capability(
     name: str,
     *,
@@ -128,7 +136,7 @@ def test_zeta_agent_turn_carries_reasoning_into_event(monkeypatch) -> None:
         zeta_models_api, "chat_completion_messages", fake_chat_completion_messages
     )
 
-    result = zeta_agent.run_agent_turn(
+    result = run_agent_turn(
         "answer",
         [],
         zeta_agent.AgentConfig(allowed_capabilities=("read",), max_turns=1),
@@ -148,7 +156,7 @@ def test_zeta_agent_turn_emits_model_draft(monkeypatch) -> None:
         lambda *args, **kwargs: {"content": "done"},
     )
 
-    result = zeta_agent.run_agent_turn(
+    result = run_agent_turn(
         "answer",
         [],
         zeta_agent.AgentConfig(allowed_capabilities=("read",), max_turns=1),
@@ -879,7 +887,7 @@ def test_zeta_agent_compaction_policy_bounds_model_input() -> None:
         },
     ]
 
-    result = zeta_agent.run_agent_turn(
+    result = run_agent_turn(
         "answer now",
         prior_timeline,
         zeta_agent.AgentConfig(
@@ -897,6 +905,54 @@ def test_zeta_agent_compaction_policy_bounds_model_input() -> None:
     assert "old context" not in rendered_messages
     assert "old answer" not in rendered_messages
     assert "answer now" in rendered_messages
+
+
+def test_zeta_async_agent_turn_runs_turns_concurrently() -> None:
+    barrier = threading.Barrier(2)
+    seen: list[str] = []
+
+    class BlockingGateway:
+        def available(self, config: zeta_agent.AgentConfig) -> bool:
+            return True
+
+        def generate(
+            self,
+            model_input: zeta_models_api.ModelInput,
+            config: zeta_agent.AgentConfig,
+            *,
+            stream: zeta_agent.ModelStream | None = None,
+            telemetry_sink: Callable[[dict[str, Any]], None] | None = None,
+        ) -> zeta_models_api.ModelOutput:
+            del config, stream, telemetry_sink
+            objective = str(model_input.messages[-1]["content"]).splitlines()[0]
+            seen.append(objective)
+            barrier.wait(timeout=2)
+            return zeta_models_api.ModelOutput(message={"content": objective})
+
+    async def run() -> None:
+        gateway = BlockingGateway()
+        first, second = await asyncio.wait_for(
+            asyncio.gather(
+                zeta_agent.async_run_agent_turn(
+                    "first",
+                    [],
+                    zeta_agent.AgentConfig(max_turns=1),
+                    model_gateway=gateway,
+                ),
+                zeta_agent.async_run_agent_turn(
+                    "second",
+                    [],
+                    zeta_agent.AgentConfig(max_turns=1),
+                    model_gateway=gateway,
+                ),
+            ),
+            timeout=3,
+        )
+
+        assert {first.final_text, second.final_text} == {"first", "second"}
+
+    asyncio.run(run())
+    assert set(seen) == {"first", "second"}
 
 
 def test_zeta_record_assistant_step_links_output_to_prompt() -> None:
@@ -1229,10 +1285,10 @@ def test_zeta_rpc_session_run_requires_objective() -> None:
     ]
 
 
-def test_zeta_rpc_session_task_uses_shared_runner_boundary(monkeypatch) -> None:
+def test_zeta_rpc_session_uses_shared_runner_boundary(monkeypatch) -> None:
     captured: dict[str, Any] = {}
 
-    def fake_run_rpc_session(
+    async def fake_run_rpc_session(
         params: dict[str, Any],
         *,
         publish_event: Callable[[dict[str, Any]], None],
@@ -1247,7 +1303,7 @@ def test_zeta_rpc_session_task_uses_shared_runner_boundary(monkeypatch) -> None:
     monkeypatch.setattr(zeta_rpc, "run_rpc_session", fake_run_rpc_session)
 
     result = asyncio.run(
-        zeta_rpc.run_rpc_session_task(
+        zeta_rpc.run_rpc_session(
             {"objective": "answer"},
             publish_event=published.append,
             runtime_context=None,
@@ -1260,10 +1316,10 @@ def test_zeta_rpc_session_task_uses_shared_runner_boundary(monkeypatch) -> None:
     assert published == [{"type": "seen"}]
 
 
-def test_sigil_zeta_rpc_session_task_uses_shared_runner_boundary(monkeypatch) -> None:
+def test_sigil_zeta_rpc_session_uses_shared_runner_boundary(monkeypatch) -> None:
     captured: dict[str, Any] = {}
 
-    def fake_run_zeta_rpc_session(
+    async def fake_run_zeta_rpc_session(
         params: dict[str, Any],
         *,
         publish_event: Callable[[dict[str, Any]], None],
@@ -1280,7 +1336,7 @@ def test_sigil_zeta_rpc_session_task_uses_shared_runner_boundary(monkeypatch) ->
     )
 
     result = asyncio.run(
-        sigil_agent_io.run_zeta_rpc_session_task(
+        sigil_agent_io.run_zeta_rpc_session(
             {"objective": "answer"},
             publish_event=published.append,
         )
@@ -1847,7 +1903,7 @@ def test_zeta_rpc_session_uses_explicit_context(monkeypatch, tmp_path: Path) -> 
         lambda *args, **kwargs: {"content": "done"},
     )
 
-    result = zeta_rpc.run_rpc_session(
+    result = run_rpc_session(
         {"objective": "answer", "tools": [], "context": ""},
         publish_event=published.append,
         runtime_context=context,
@@ -1922,7 +1978,7 @@ def test_zeta_rpc_session_result_returns_prompt_trace_refs(
         lambda *args, **kwargs: {"content": "done"},
     )
 
-    result = zeta_rpc.run_rpc_session(
+    result = run_rpc_session(
         {"objective": "answer", "tools": [], "context": ""},
         publish_event=lambda event: None,
         runtime_context=context,
@@ -1984,7 +2040,7 @@ def test_zeta_rpc_tool_run_result_returns_tool_trace_refs(
         lambda *args, **kwargs: next(responses),
     )
 
-    result = zeta_rpc.run_rpc_session(
+    result = run_rpc_session(
         {"objective": "answer", "tools": ["ctx_echo"], "context": "", "max_steps": 2},
         publish_event=lambda event: None,
         runtime_context=context,
@@ -2027,7 +2083,7 @@ def test_zeta_rpc_session_trace_refs_degrade_when_trace_data_is_missing(
         lambda self, prepared, assistant: None,
     )
 
-    result = zeta_rpc.run_rpc_session(
+    result = run_rpc_session(
         {"objective": "answer", "tools": [], "context": ""},
         publish_event=lambda event: None,
         runtime_context=context,
@@ -2063,12 +2119,12 @@ def test_zeta_rpc_sequential_runs_get_distinct_run_ids(
         lambda *args, **kwargs: {"content": "done"},
     )
 
-    first = zeta_rpc.run_rpc_session(
+    first = run_rpc_session(
         {"objective": "first", "tools": [], "context": ""},
         publish_event=lambda event: None,
         runtime_context=context,
     )
-    second = zeta_rpc.run_rpc_session(
+    second = run_rpc_session(
         {"objective": "second", "tools": [], "context": ""},
         publish_event=lambda event: None,
         runtime_context=context,
@@ -2105,7 +2161,7 @@ def test_zeta_rpc_session_returns_aborted_on_wall_clock_budget(
         zeta_models_api, "chat_completion_messages", fail_chat_completion_messages
     )
 
-    result = zeta_rpc.run_rpc_session(
+    result = run_rpc_session(
         {
             "objective": "answer",
             "tools": [],
@@ -3222,7 +3278,7 @@ def test_zeta_agent_turn_uses_explicit_tool_registry(monkeypatch) -> None:
         lambda *args, **kwargs: next(responses),
     )
 
-    result = zeta_agent.run_agent_turn(
+    result = run_agent_turn(
         "echo",
         [],
         zeta_agent.AgentConfig(allowed_capabilities=("ctx_echo",), max_turns=2),
@@ -3278,7 +3334,7 @@ def test_zeta_agent_turn_resolves_model_alias_through_projection(monkeypatch) ->
     )
     monkeypatch.setattr(zeta_agent, "invoke_capability", fake_invoke)
 
-    result = zeta_agent.run_agent_turn(
+    result = run_agent_turn(
         "read",
         [],
         zeta_agent.AgentConfig(allowed_capabilities=("host.read",), max_turns=2),
@@ -3318,7 +3374,7 @@ def test_zeta_agent_turn_passes_thinking_to_the_model(monkeypatch) -> None:
         zeta_models_api, "chat_completion_messages", fake_chat_completion_messages
     )
 
-    zeta_agent.run_agent_turn(
+    run_agent_turn(
         "answer",
         [],
         zeta_agent.AgentConfig(
@@ -3367,7 +3423,7 @@ def test_zeta_agent_tool_call_is_caused_by_assistant_event(
         zeta_models_api, "chat_completion_messages", fake_chat_completion_messages
     )
 
-    result = zeta_agent.run_agent_turn(
+    result = run_agent_turn(
         "read",
         [],
         zeta_agent.AgentConfig(allowed_capabilities=("read",), max_turns=1),
@@ -3402,7 +3458,7 @@ def test_zeta_agent_turn_finalizes_text(monkeypatch) -> None:
         zeta_models_api, "chat_completion_messages", fake_chat_completion_messages
     )
 
-    result = zeta_agent.run_agent_turn(
+    result = run_agent_turn(
         "answer",
         [],
         zeta_agent.AgentConfig(allowed_capabilities=("read",), max_turns=1),
@@ -3442,7 +3498,7 @@ def test_zeta_agent_turn_stores_prompt_and_assistant_trace(monkeypatch) -> None:
         zeta_models_api, "chat_completion_messages", fake_chat_completion_messages
     )
 
-    result = zeta_agent.run_agent_turn(
+    result = run_agent_turn(
         "answer",
         [{"role": "user", "content": "prior"}],
         zeta_agent.AgentConfig(
@@ -3505,7 +3561,7 @@ def test_zeta_agent_turn_captures_model_telemetry(monkeypatch) -> None:
         zeta_models_api, "chat_completion_messages", fake_chat_completion_messages
     )
 
-    result = zeta_agent.run_agent_turn(
+    result = run_agent_turn(
         "answer",
         [],
         zeta_agent.AgentConfig(allowed_capabilities=("read",), max_turns=1),
@@ -3585,7 +3641,7 @@ def test_zeta_agent_turn_attaches_model_telemetry_to_first_tool_result(
         zeta_models_api, "chat_completion_messages", fake_chat_completion_messages
     )
 
-    result = zeta_agent.run_agent_turn(
+    result = run_agent_turn(
         "inspect",
         [],
         zeta_agent.AgentConfig(allowed_capabilities=("read",), max_turns=2),
@@ -3622,7 +3678,7 @@ def test_zeta_agent_turn_records_one_prompt_trace_per_model_request(
         lambda name, params: read_tool_payload(target),
     )
 
-    result = zeta_agent.run_agent_turn(
+    result = run_agent_turn(
         "inspect",
         [],
         zeta_agent.AgentConfig(allowed_capabilities=("read",), max_turns=2),
@@ -3670,7 +3726,7 @@ def test_zeta_agent_turn_records_tool_result_derivation(
         lambda name, params: read_tool_payload(target),
     )
 
-    result = zeta_agent.run_agent_turn(
+    result = run_agent_turn(
         "inspect",
         [],
         zeta_agent.AgentConfig(allowed_capabilities=("read",), max_turns=2),
@@ -3707,7 +3763,7 @@ def test_zeta_agent_turn_emits_stream_chunks_and_marks_final(monkeypatch) -> Non
         fake_chat_completion_messages,
     )
 
-    result = zeta_agent.run_agent_turn(
+    result = run_agent_turn(
         "answer",
         [],
         zeta_agent.AgentConfig(max_turns=1),
@@ -3742,7 +3798,7 @@ def test_zeta_agent_reasoning_deltas_emit_status_updates(monkeypatch) -> None:
         fake_chat_completion_messages,
     )
 
-    result = zeta_agent.run_agent_turn(
+    result = run_agent_turn(
         "answer",
         [],
         zeta_agent.AgentConfig(max_turns=1),
@@ -3786,7 +3842,7 @@ def test_zeta_agent_runtime_ui_events_do_not_feed_next_prompt(monkeypatch) -> No
         lambda name, params: {"ok": True, "content": [{"type": "text", "text": name}]},
     )
 
-    result = zeta_agent.run_agent_turn(
+    result = run_agent_turn(
         "answer",
         [],
         zeta_agent.AgentConfig(allowed_capabilities=("read",), max_turns=2),
@@ -3816,7 +3872,7 @@ def test_zeta_agent_turn_uses_request_model(monkeypatch) -> None:
         zeta_models_api, "chat_completion_messages", fake_chat_completion_messages
     )
 
-    result = zeta_agent.run_agent_turn(
+    result = run_agent_turn(
         "answer",
         [],
         zeta_agent.AgentConfig(
@@ -3877,7 +3933,7 @@ def test_zeta_agent_turn_runs_multiple_read_only_tools_in_order(monkeypatch) -> 
 
     monkeypatch.setattr(zeta_agent, "invoke_capability", fake_invoke)
 
-    result = zeta_agent.run_agent_turn(
+    result = run_agent_turn(
         "inspect",
         [],
         zeta_agent.AgentConfig(allowed_capabilities=("read", "ls"), max_turns=2),
@@ -3958,7 +4014,7 @@ def test_zeta_agent_turn_streams_text_between_tool_turns(monkeypatch) -> None:
         },
     )
 
-    result = zeta_agent.run_agent_turn(
+    result = run_agent_turn(
         "inspect",
         [],
         zeta_agent.AgentConfig(allowed_capabilities=("read",), max_turns=2),
@@ -4000,7 +4056,7 @@ def test_zeta_agent_turn_does_not_duplicate_current_objective(monkeypatch) -> No
         fake_chat_completion_messages,
     )
 
-    result = zeta_agent.run_agent_turn(
+    result = run_agent_turn(
         "inspect the repo",
         [],
         zeta_agent.AgentConfig(allowed_capabilities=("read",), max_turns=1),
@@ -4063,7 +4119,7 @@ def test_zeta_agent_turn_orders_prior_timeline_before_current_events(
         },
     )
 
-    result = zeta_agent.run_agent_turn(
+    result = run_agent_turn(
         "How would you improve it?",
         [
             {"role": "user", "content": "What is this vault about?"},
@@ -4122,7 +4178,7 @@ def test_zeta_agent_turn_streams_tool_call_before_running_tool(monkeypatch) -> N
 
     monkeypatch.setattr(zeta_agent, "invoke_capability", fake_invoke)
 
-    result = zeta_agent.run_agent_turn(
+    result = run_agent_turn(
         "inspect",
         [],
         zeta_agent.AgentConfig(allowed_capabilities=("read",), max_turns=1),
@@ -4188,7 +4244,7 @@ def test_zeta_agent_turn_stops_after_staged_tool(monkeypatch) -> None:
         },
     )
 
-    result = zeta_agent.run_agent_turn(
+    result = run_agent_turn(
         "test",
         [],
         zeta_agent.AgentConfig(allowed_capabilities=("bash",), max_turns=3),
@@ -4251,7 +4307,7 @@ def test_zeta_agent_turn_stops_after_capability_policy_stage_success(
         fake_chat_completion_messages,
     )
 
-    result = zeta_agent.run_agent_turn(
+    result = run_agent_turn(
         "mutate",
         [],
         zeta_agent.AgentConfig(
@@ -4304,7 +4360,7 @@ def test_zeta_agent_direct_mode_continues_after_bash(monkeypatch) -> None:
         zeta_models_api, "chat_completion_messages", fake_chat_completion_messages
     )
 
-    result = zeta_agent.run_agent_turn(
+    result = run_agent_turn(
         "test",
         [],
         zeta_agent.AgentConfig(
@@ -4350,7 +4406,7 @@ def test_zeta_agent_turn_stops_after_default_max_turns(monkeypatch) -> None:
         zeta_agent, "invoke_capability", lambda name, params, **kwargs: {"ok": True}
     )
 
-    result = zeta_agent.run_agent_turn(
+    result = run_agent_turn(
         "test",
         [],
         zeta_agent.AgentConfig(allowed_capabilities=("ls",)),
@@ -4374,7 +4430,7 @@ def test_zeta_agent_turn_aborts_before_model_when_cancelled(monkeypatch) -> None
     )
 
     with pytest.raises(zeta_agent.AgentTurnAborted) as raised:
-        zeta_agent.run_agent_turn(
+        run_agent_turn(
             "test",
             [],
             zeta_agent.AgentConfig(allowed_capabilities=("ls",), max_turns=1),
@@ -4427,7 +4483,7 @@ def test_zeta_agent_turn_aborts_on_deadline_between_model_turns(
     )
 
     with pytest.raises(zeta_agent.AgentTurnAborted) as raised:
-        zeta_agent.run_agent_turn(
+        run_agent_turn(
             "test",
             [],
             zeta_agent.AgentConfig(
@@ -4501,7 +4557,7 @@ def test_zeta_agent_turn_converts_tool_crash_to_error_result(monkeypatch) -> Non
     )
     monkeypatch.setattr(zeta_agent, "invoke_capability", crash_invoke)
 
-    result = zeta_agent.run_agent_turn(
+    result = run_agent_turn(
         "test",
         [],
         zeta_agent.AgentConfig(allowed_capabilities=("read",), max_turns=3),
@@ -4546,7 +4602,7 @@ def test_zeta_agent_turn_rejects_schema_mismatch_before_running(monkeypatch) -> 
     )
     monkeypatch.setattr(zeta_agent, "invoke_capability", fail_invoke)
 
-    result = zeta_agent.run_agent_turn(
+    result = run_agent_turn(
         "inspect",
         [],
         zeta_agent.AgentConfig(allowed_capabilities=("read",), max_turns=1),
@@ -4590,7 +4646,7 @@ def test_zeta_agent_turn_rejects_disallowed_tool_before_running(monkeypatch) -> 
     )
     monkeypatch.setattr(zeta_agent, "invoke_capability", fail_invoke)
 
-    result = zeta_agent.run_agent_turn(
+    result = run_agent_turn(
         "inspect",
         [],
         zeta_agent.AgentConfig(allowed_capabilities=("read",), max_turns=1),
@@ -4654,7 +4710,7 @@ def test_zeta_agent_direct_mode_continues_after_edit(
         fake_chat_completion_messages,
     )
 
-    result = zeta_agent.run_agent_turn(
+    result = run_agent_turn(
         "edit",
         [],
         zeta_agent.AgentConfig(
@@ -4695,7 +4751,7 @@ def test_zeta_agent_turn_passes_api_to_the_model(monkeypatch) -> None:
         zeta_models_api, "chat_completion_messages", fake_chat_completion_messages
     )
 
-    zeta_agent.run_agent_turn(
+    run_agent_turn(
         "answer",
         [],
         zeta_agent.AgentConfig(allowed_capabilities=("read",), max_turns=1),

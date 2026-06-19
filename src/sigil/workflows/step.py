@@ -4,6 +4,7 @@ The sourced shell bindings own the primary interactive loop. This module keeps
 CLI workflow steps on the same Zeta service layer without an external agent.
 """
 
+import asyncio
 import sys
 from collections.abc import Iterable, Sequence
 from pathlib import Path
@@ -44,8 +45,8 @@ from zeta.context.system import system_prompt
 from zeta.events import DraftEvent
 from zeta.loop import (
     AgentTurnAborted,
+    async_run_agent_turn,
     registered_capabilities,
-    run_agent_turn,
 )
 from zeta.models import (
     active_model_selection,
@@ -86,6 +87,10 @@ as the source of truth for what happened after a shell handoff. If the outcome i
 cancelled, do not assume the proposed command ran; use the recorded shell_turns
 as user-chosen context and explain the cancellation plainly if it matters.
 """
+
+
+def run_agent_turn(*args: Any, **kwargs: Any) -> Any:
+    return asyncio.run(async_run_agent_turn(*args, **kwargs))
 
 
 def step(

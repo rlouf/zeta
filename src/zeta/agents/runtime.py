@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any, cast
 
@@ -15,7 +15,7 @@ from zeta.dispatch import AgentDefinition, AgentRun, TriggerRule
 if TYPE_CHECKING:
     from zeta.loop import AgentTurnResult
 
-AgentTurnRunner = Callable[..., "AgentTurnResult"]
+AgentTurnRunner = Callable[..., Awaitable["AgentTurnResult"]]
 TimelineFactory = Callable[[AgentRun], list[dict[str, Any]]]
 ContextFactory = Callable[[AgentRun], str]
 
@@ -77,8 +77,8 @@ def agent_runner(
     context: str | ContextFactory,
     timeline: Sequence[dict[str, Any]] | TimelineFactory,
     run_turn: AgentTurnRunner,
-) -> Callable[[AgentRun], dict[str, Any]]:
-    def run(agent_run: AgentRun) -> dict[str, Any]:
+) -> Callable[[AgentRun], Awaitable[dict[str, Any]]]:
+    async def run(agent_run: AgentRun) -> dict[str, Any]:
         effective_config = config_for_spec(spec, config)
         objective = render_prompt(
             spec, EventEnvelope.from_event(agent_run.triggering_event)
@@ -91,7 +91,7 @@ def agent_runner(
             run_context = cast(ContextFactory, context)(agent_run)
         else:
             run_context = context
-        result = run_turn(
+        result = await run_turn(
             objective,
             run_timeline,
             effective_config,
@@ -126,6 +126,6 @@ def agent_turn_result_mapping(result: AgentTurnResult) -> dict[str, Any]:
 
 
 def default_agent_turn_runner() -> AgentTurnRunner:
-    from zeta.loop import run_agent_turn
+    from zeta.loop import async_run_agent_turn
 
-    return run_agent_turn
+    return async_run_agent_turn

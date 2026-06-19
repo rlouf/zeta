@@ -346,18 +346,18 @@ def replacement_patch(location: str, old: str, new: str) -> str:
         fromfile=patch_label(location, "a"),
         tofile=patch_label(location, "b"),
     )
-    return "".join(normalize_diff_lines(lines))
+    return "".join(mark_diff_lines_without_trailing_newline(lines))
 
 
-def normalize_diff_lines(lines: Iterable[str]) -> list[str]:
-    normalized = []
+def mark_diff_lines_without_trailing_newline(lines: Iterable[str]) -> list[str]:
+    marked = []
     for line in lines:
         if line.endswith("\n"):
-            normalized.append(line)
+            marked.append(line)
         else:
-            normalized.append(f"{line}\n")
-            normalized.append("\\ No newline at end of file\n")
-    return normalized
+            marked.append(f"{line}\n")
+            marked.append("\\ No newline at end of file\n")
+    return marked
 
 
 def patch_label(path: str, prefix: str) -> str:

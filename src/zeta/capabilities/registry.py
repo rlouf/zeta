@@ -23,11 +23,8 @@ __all__ = [
     "CapabilityError",
     "CapabilityProjection",
     "CapabilityRegistry",
-    "CapabilityResultPayload",
     "registry",
 ]
-
-CAPABILITY_RESULT_FIELDS = frozenset({"ok", "content", "metadata", "effect", "error"})
 
 
 @dataclass(frozen=True)
@@ -63,86 +60,19 @@ class CapabilityError:
         return payload
 
 
-@dataclass(frozen=True)
-class CapabilityResultPayload:
-    ok: bool
-    content: Any | None = None
-    metadata: dict[str, Any] | None = None
-    effect: dict[str, Any] | None = None
-    error: CapabilityError | dict[str, Any] | None = None
-    extra: dict[str, Any] = field(default_factory=dict)
-    _present_fields: frozenset[str] = field(default_factory=frozenset, repr=False)
-
-    @classmethod
-    def from_mapping(
-        cls,
-        capability_id: str,
-        value: dict[str, Any],
-    ) -> CapabilityResultPayload:
-        normalized = normalized_capability_result_mapping(capability_id, value)
-        return cls(
-            ok=normalized["ok"],
-            content=normalized.get("content"),
-            metadata=dict_field(normalized, "metadata"),
-            effect=dict_field(normalized, "effect"),
-            error=capability_result_error(normalized),
-            extra=capability_result_extra(normalized),
-            _present_fields=capability_result_present_fields(normalized),
-        )
-
-    def to_mapping(self) -> dict[str, Any]:
-        payload = {"ok": self.ok, **self.extra}
-        if "content" in self._present_fields:
-            payload["content"] = self.content
-        if "metadata" in self._present_fields:
-            payload["metadata"] = self.metadata
-        if "effect" in self._present_fields:
-            payload["effect"] = self.effect
-        if "error" in self._present_fields:
-            if isinstance(self.error, CapabilityError):
-                payload["error"] = self.error.to_mapping()
-            else:
-                payload["error"] = self.error
-        return payload
-
-
-def normalized_capability_result_mapping(
+def validated_capability_result_payload(
     capability_id: str,
     value: dict[str, Any],
 ) -> dict[str, Any]:
-    normalized = dict(value)
-    ok = normalized.get("ok")
+    validated = dict(value)
+    ok = validated.get("ok")
     if isinstance(ok, bool):
-        if ok is False and not isinstance(normalized.get("error"), dict):
-            normalized["error"] = invalid_capability_result_error(capability_id)
-        return normalized
-    normalized["ok"] = False
-    normalized["error"] = invalid_capability_result_error(capability_id)
-    return normalized
-
-
-def dict_field(value: dict[str, Any], key: str) -> dict[str, Any] | None:
-    field_value = value.get(key)
-    return field_value if isinstance(field_value, dict) else None
-
-
-def capability_result_error(
-    value: dict[str, Any],
-) -> CapabilityError | dict[str, Any] | None:
-    error = value.get("error")
-    return CapabilityError.from_mapping(error) if isinstance(error, dict) else None
-
-
-def capability_result_extra(value: dict[str, Any]) -> dict[str, Any]:
-    return {
-        key: item for key, item in value.items() if key not in CAPABILITY_RESULT_FIELDS
-    }
-
-
-def capability_result_present_fields(value: dict[str, Any]) -> frozenset[str]:
-    return frozenset(
-        key for key in CAPABILITY_RESULT_FIELDS if key in value and key != "ok"
-    )
+        if ok is False and not isinstance(validated.get("error"), dict):
+            validated["error"] = invalid_capability_result_error(capability_id)
+        return validated
+    validated["ok"] = False
+    validated["error"] = invalid_capability_result_error(capability_id)
+    return validated
 
 
 @dataclass(frozen=True)
@@ -408,7 +338,7 @@ def invoke_executor(
             )
         )
     return CapabilityResult.from_mapping(
-        normalize_capability_result_payload(capability_id, result.payload)
+        validated_capability_result_payload(capability_id, result.payload)
     )
 
 
@@ -444,15 +374,8 @@ async def invoke_executor_async(
         result = await result
     result = cast(CapabilityResult, result)
     return CapabilityResult.from_mapping(
-        normalize_capability_result_payload(capability_id, result.payload)
+        validated_capability_result_payload(capability_id, result.payload)
     )
-
-
-def normalize_capability_result_payload(
-    capability_id: str,
-    payload: dict[str, Any],
-) -> dict[str, Any]:
-    return CapabilityResultPayload.from_mapping(capability_id, payload).to_mapping()
 
 
 def invalid_capability_result_error(capability_id: str) -> dict[str, Any]:

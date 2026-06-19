@@ -19,7 +19,6 @@ from zeta.capabilities.registry import (
     CapabilityError,
     CapabilityProjection,
     CapabilityRegistry,
-    CapabilityResultPayload,
     registry,
 )
 
@@ -33,7 +32,6 @@ __all__ = [
     "CapabilityProjection",
     "CapabilityRegistry",
     "CapabilityResult",
-    "CapabilityResultPayload",
     "CapabilitySpec",
     "EffectKind",
     "ExecutionMode",

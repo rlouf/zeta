@@ -26,9 +26,8 @@ from zeta.capabilities.base import (
     TrustLevel,
 )
 from zeta.capabilities.registry import (
-    CapabilityError,
     CapabilityRegistry,
-    CapabilityResultPayload,
+    validated_capability_result_payload,
 )
 from zeta.capabilities.registry import registry as tool_registry
 
@@ -157,8 +156,8 @@ def test_zeta_capability_registry_normalizes_malformed_executor_result() -> None
     }
 
 
-def test_zeta_capability_result_payload_round_trips_success_fields() -> None:
-    payload = CapabilityResultPayload.from_mapping(
+def test_zeta_capability_result_validation_keeps_success_fields() -> None:
+    payload = validated_capability_result_payload(
         "test.unit",
         {
             "ok": True,
@@ -168,10 +167,7 @@ def test_zeta_capability_result_payload_round_trips_success_fields() -> None:
         },
     )
 
-    assert payload.ok is True
-    assert payload.content == [{"type": "text", "text": "done"}]
-    assert payload.metadata == {"path": "README.md"}
-    assert payload.to_mapping() == {
+    assert payload == {
         "ok": True,
         "content": [{"type": "text", "text": "done"}],
         "metadata": {"path": "README.md"},
@@ -179,21 +175,20 @@ def test_zeta_capability_result_payload_round_trips_success_fields() -> None:
     }
 
 
-def test_zeta_capability_result_payload_round_trips_proposed_effect() -> None:
-    payload = CapabilityResultPayload.from_mapping(
+def test_zeta_capability_result_validation_keeps_proposed_effect() -> None:
+    payload = validated_capability_result_payload(
         "test.write",
         {"ok": True, "effect": {"status": "proposed", "kind": "file"}},
     )
 
-    assert payload.effect == {"status": "proposed", "kind": "file"}
-    assert payload.to_mapping() == {
+    assert payload == {
         "ok": True,
         "effect": {"status": "proposed", "kind": "file"},
     }
 
 
-def test_zeta_capability_result_payload_round_trips_structured_error() -> None:
-    payload = CapabilityResultPayload.from_mapping(
+def test_zeta_capability_result_validation_keeps_structured_error() -> None:
+    payload = validated_capability_result_payload(
         "test.read",
         {
             "ok": False,
@@ -205,12 +200,7 @@ def test_zeta_capability_result_payload_round_trips_structured_error() -> None:
         },
     )
 
-    assert payload.error == CapabilityError(
-        code="read-failed",
-        message="missing",
-        data={"path": "missing.txt"},
-    )
-    assert payload.to_mapping() == {
+    assert payload == {
         "ok": False,
         "error": {
             "code": "read-failed",
@@ -220,18 +210,13 @@ def test_zeta_capability_result_payload_round_trips_structured_error() -> None:
     }
 
 
-def test_zeta_capability_result_payload_normalizes_malformed_result_to_error() -> None:
-    payload = CapabilityResultPayload.from_mapping(
+def test_zeta_capability_result_validation_marks_malformed_result_as_error() -> None:
+    payload = validated_capability_result_payload(
         "test.unit",
         {"content": [{"type": "text", "text": "raw text"}]},
     )
 
-    assert payload.error == CapabilityError(
-        code="invalid-capability-result",
-        message="capability result must include boolean ok",
-        data={"capability_id": "test.unit"},
-    )
-    assert payload.to_mapping() == {
+    assert payload == {
         "ok": False,
         "content": [{"type": "text", "text": "raw text"}],
         "error": {

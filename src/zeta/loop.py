@@ -750,23 +750,7 @@ def add_projection_fields_for_prompt(
 ) -> None:
     event_type = view.get("type")
     if event_type == "model":
-        prompt_id = projection.prompt_object_ids.get(event_id)
-        assistant_id = projection.assistant_message_ids.get(event_id)
-        if prompt_id is not None:
-            view["prompt_trace"] = {"prompt_object_id": prompt_id}
-            if assistant_id is not None:
-                view["prompt_trace"]["assistant_message_object_id"] = assistant_id
-        tool_calls = view.get("tool_calls")
-        if isinstance(tool_calls, list):
-            tool_call_ids = [
-                projection.tool_call_object_ids[tool_call["id"]]
-                for tool_call in tool_calls
-                if isinstance(tool_call, dict)
-                and isinstance(tool_call.get("id"), str)
-                and tool_call["id"] in projection.tool_call_object_ids
-            ]
-            if tool_call_ids:
-                view["tool_call_object_ids"] = tool_call_ids
+        add_model_projection_fields(view, event_id, projection)
         return
     if event_type == "tool_call":
         call_id = projection.tool_call_object_ids.get(event_id)
@@ -774,17 +758,57 @@ def add_projection_fields_for_prompt(
             view["tool_call_object_id"] = call_id
         return
     if event_type == "tool_result":
-        tool_call_id = view.get("tool_call_id")
-        call_id = (
-            projection.tool_call_object_ids.get(tool_call_id)
-            if isinstance(tool_call_id, str)
-            else None
-        )
-        result_id = projection.tool_result_object_ids.get(event_id)
-        if call_id is not None:
-            view["tool_call_object_id"] = call_id
-        if result_id is not None:
-            view["tool_result_object_id"] = result_id
+        add_tool_result_projection_fields(view, event_id, projection)
+
+
+def add_model_projection_fields(
+    view: dict[str, Any],
+    event_id: str,
+    projection: TraceProjection,
+) -> None:
+    prompt_id = projection.prompt_object_ids.get(event_id)
+    assistant_id = projection.assistant_message_ids.get(event_id)
+    if prompt_id is not None:
+        view["prompt_trace"] = {"prompt_object_id": prompt_id}
+        if assistant_id is not None:
+            view["prompt_trace"]["assistant_message_object_id"] = assistant_id
+    tool_call_ids = projected_tool_call_ids(view, projection)
+    if tool_call_ids:
+        view["tool_call_object_ids"] = tool_call_ids
+
+
+def projected_tool_call_ids(
+    view: dict[str, Any],
+    projection: TraceProjection,
+) -> list[str]:
+    tool_calls = view.get("tool_calls")
+    if not isinstance(tool_calls, list):
+        return []
+    return [
+        projection.tool_call_object_ids[tool_call["id"]]
+        for tool_call in tool_calls
+        if isinstance(tool_call, dict)
+        and isinstance(tool_call.get("id"), str)
+        and tool_call["id"] in projection.tool_call_object_ids
+    ]
+
+
+def add_tool_result_projection_fields(
+    view: dict[str, Any],
+    event_id: str,
+    projection: TraceProjection,
+) -> None:
+    tool_call_id = view.get("tool_call_id")
+    call_id = (
+        projection.tool_call_object_ids.get(tool_call_id)
+        if isinstance(tool_call_id, str)
+        else None
+    )
+    result_id = projection.tool_result_object_ids.get(event_id)
+    if call_id is not None:
+        view["tool_call_object_id"] = call_id
+    if result_id is not None:
+        view["tool_result_object_id"] = result_id
 
 
 def draft_event_id(draft: DraftEvent) -> str | None:

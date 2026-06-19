@@ -204,8 +204,8 @@ def project_model_event(
     store: Store,
     projection: TraceProjection,
 ) -> ObjectId | None:
-    prompt_id = optional_object_id(event.payload.get("prompt_object_id"))
-    if prompt_id is None:
+    prompt_id = event.payload.get("prompt_object_id")
+    if not isinstance(prompt_id, str) or not prompt_id.startswith("sha256:"):
         return None
     assistant_id = store.put_object(
         Object(
@@ -297,10 +297,6 @@ def project_tool_result_event(
     )
     projection.tool_result_object_ids[event.id] = result_id
     return result_id
-
-
-def optional_object_id(value: Any) -> ObjectId | None:
-    return value if isinstance(value, str) and value.startswith("sha256:") else None
 
 
 def model_trace_data(event: Event) -> dict[str, Any]:

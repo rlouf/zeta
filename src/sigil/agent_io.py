@@ -34,7 +34,6 @@ from sigil.tools import ensure_builtin_tools_registered
 from sigil.turn import TurnRecorder
 from zeta.agents.capabilities import AgentConfig
 from zeta.capabilities.base import ExecutionMode
-from zeta.context.builder import project_trace_events
 from zeta.context.instructions import load_project_instructions
 from zeta.events import (
     DraftEvent,
@@ -59,7 +58,7 @@ from zeta.models import (
     model_selection_event,
 )
 from zeta.models.chat_completions import ensure_server
-from zeta.session import Session
+from zeta.session import Session, project_trace_for_turn
 from zeta.store.events import EventReader, Filter, SqliteEventStore
 from zeta.store.substrate import Store, warn_trace_failure_once
 
@@ -159,24 +158,6 @@ def record_runtime_draft(
 
 def project_runtime_draft(draft: DraftEvent) -> DraftEvent:
     return draft
-
-
-def project_trace_for_turn(runtime_context: Session, turn_id: str | None) -> None:
-    if turn_id is None or not isinstance(runtime_context.event_sink, EventReader):
-        return
-    try:
-        project_trace_events(
-            runtime_context.event_sink.list_events(
-                Filter(
-                    session_id=runtime_context.session_id,
-                    turn_id=turn_id,
-                    event_type_prefix="zeta.",
-                )
-            ),
-            runtime_context.trace_store,
-        )
-    except Exception as exc:
-        warn_trace_failure_once("project_trace_for_turn", exc)
 
 
 def time_micros() -> int:

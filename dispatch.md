@@ -326,7 +326,7 @@ Once tests pass through the event-sourced path:
 
 - remove `run_session_turn_from_event` if it is only adapter glue
 - remove per-run construction of `session_event_dispatcher`
-- reduce or remove `DispatchOutcome.work_events`
+- remove compatibility references to the old `DispatchOutcome.work_events` name
 - reduce or remove `DispatchOutcome.agent_results`
 - remove any remaining compatibility references to legacy work-event names
 - keep compatibility aliases only where external callers still need them

@@ -919,7 +919,9 @@ class JsonRpcServer(JsonRpcProtocol):
         return {
             "inserted": outcome.inserted,
             "event": event_view(outcome.event),
-            "work_events": [event_view(event) for event in outcome.work_events],
+            "lifecycle_events": [
+                event_view(event) for event in outcome.lifecycle_events
+            ],
             "agent_results": outcome.agent_results,
         }
 

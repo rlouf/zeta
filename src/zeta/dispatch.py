@@ -38,7 +38,7 @@ class DispatchOutcome:
 
     event: Event
     inserted: bool
-    work_events: list[Event]
+    lifecycle_events: list[Event]
     agent_results: list[dict[str, Any]]
 
 
@@ -61,12 +61,14 @@ class EventDispatcher:
         if not outcome.inserted:
             return DispatchOutcome(outcome.event, False, [], [])
         self._publish(outcome.event)
-        work_events: list[Event] = []
+        lifecycle_events: list[Event] = []
         agent_results: list[dict[str, Any]] = []
         matching_agents = self.matching_agents(outcome.event)
         if not matching_agents:
-            work_events.append(self._append_unhandled_queue_item_event(outcome.event))
-            return DispatchOutcome(outcome.event, True, work_events, [])
+            lifecycle_events.append(
+                self._append_unhandled_queue_item_event(outcome.event)
+            )
+            return DispatchOutcome(outcome.event, True, lifecycle_events, [])
         task_results: list[tuple[dict[str, Any] | None, list[Event]] | None] = [
             None
         ] * len(matching_agents)
@@ -79,10 +81,10 @@ class EventDispatcher:
             if task_result is None:
                 continue
             result, events = task_result
-            work_events.extend(events)
+            lifecycle_events.extend(events)
             if result is not None:
                 agent_results.append(result)
-        return DispatchOutcome(outcome.event, True, work_events, agent_results)
+        return DispatchOutcome(outcome.event, True, lifecycle_events, agent_results)
 
     def matching_agents(self, event: Event) -> list[RegisteredAgent]:
         return [agent for agent in self.agents if agent.definition.accepts(event)]

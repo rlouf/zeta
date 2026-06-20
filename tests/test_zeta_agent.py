@@ -1535,7 +1535,7 @@ def test_zeta_event_dispatcher_persists_unmatched_event(tmp_path: Path) -> None:
     )
 
     assert outcome.inserted is True
-    assert [event.event_type for event in outcome.work_events] == [
+    assert [event.event_type for event in outcome.lifecycle_events] == [
         "runtime.queue_item.unhandled"
     ]
     assert [event.event_type for event in published] == [
@@ -1587,15 +1587,15 @@ def test_zeta_event_dispatcher_creates_work_for_matching_agent(
     assert len(seen) == 1
     assert seen[0].agent.agent_id == "issue-triage"
     assert seen[0].triggering_event.event_type == "github.issue.opened"
-    assert [event.event_type for event in outcome.work_events] == [
+    assert [event.event_type for event in outcome.lifecycle_events] == [
         "runtime.queue_item.created",
         "runtime.queue_item.claimed",
         "runtime.attempt.started",
         "runtime.attempt.completed",
         "runtime.queue_item.completed",
     ]
-    assert {event.caused_by for event in outcome.work_events} == {outcome.event.id}
-    assert [event.payload["target_agent"] for event in outcome.work_events] == [
+    assert {event.caused_by for event in outcome.lifecycle_events} == {outcome.event.id}
+    assert [event.payload["target_agent"] for event in outcome.lifecycle_events] == [
         "issue-triage",
         "issue-triage",
         "issue-triage",
@@ -1651,7 +1651,7 @@ def test_zeta_event_dispatcher_runs_matching_agents_in_task_group() -> None:
         )
 
         assert started == ["agent.one", "agent.two"]
-        assert [event.event_type for event in outcome.work_events] == [
+        assert [event.event_type for event in outcome.lifecycle_events] == [
             "runtime.queue_item.created",
             "runtime.queue_item.claimed",
             "runtime.attempt.started",
@@ -1707,7 +1707,7 @@ def test_zeta_event_dispatcher_matches_exact_event_type(tmp_path: Path) -> None:
 
     assert len(calls) == 1
     assert calls == [outcome.event.id]
-    assert [event.payload["target_agent"] for event in outcome.work_events] == [
+    assert [event.payload["target_agent"] for event in outcome.lifecycle_events] == [
         "exact-agent",
         "exact-agent",
         "exact-agent",
@@ -1744,7 +1744,7 @@ def test_zeta_event_dispatcher_records_pending_work_without_runner(
         ),
     )
 
-    assert [event.event_type for event in outcome.work_events] == [
+    assert [event.event_type for event in outcome.lifecycle_events] == [
         "runtime.queue_item.created"
     ]
     assert outcome.agent_results == []
@@ -1791,7 +1791,7 @@ def test_zeta_event_dispatcher_does_not_route_duplicate_events(
     assert first.inserted is True
     assert second.inserted is False
     assert calls == 1
-    assert second.work_events == []
+    assert second.lifecycle_events == []
     assert [
         event.event_type for event in event_store.list_events(zeta_events.Filter())
     ] == [
@@ -1834,14 +1834,14 @@ def test_zeta_event_dispatcher_records_failed_work(tmp_path: Path) -> None:
         ),
     )
 
-    assert [event.event_type for event in outcome.work_events] == [
+    assert [event.event_type for event in outcome.lifecycle_events] == [
         "runtime.queue_item.created",
         "runtime.queue_item.claimed",
         "runtime.attempt.started",
         "runtime.attempt.failed",
         "runtime.queue_item.failed",
     ]
-    assert outcome.work_events[-1].payload["status"] == "failed"
+    assert outcome.lifecycle_events[-1].payload["status"] == "failed"
     assert outcome.agent_results == [
         {"outcome": "failed", "error": "boom", "final_event_cursor": "6"}
     ]
@@ -1996,6 +1996,14 @@ def test_zeta_rpc_events_publish_triggers_session_turn(
     assert response["result"]["inserted"] is True
     assert response["result"]["event"]["type"] == "session.turn.requested"
     assert response["result"]["agent_results"][0]["outcome"] == "completed"
+    assert [event["type"] for event in response["result"]["lifecycle_events"]] == [
+        "runtime.queue_item.created",
+        "runtime.queue_item.claimed",
+        "runtime.attempt.started",
+        "runtime.attempt.completed",
+        "runtime.queue_item.completed",
+    ]
+    assert "work_events" not in response["result"]
     assert [event["type"] for event in published] == [
         "session.turn.requested",
         "runtime.queue_item.created",

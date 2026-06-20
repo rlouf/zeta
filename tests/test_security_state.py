@@ -48,7 +48,9 @@ from sigil.workflows.ask import (
 )
 from zeta import events as zeta_events
 from zeta.events import event_view, publish_event
+from zeta.kernel import dispatch as zeta_kernel_dispatch
 from zeta.kernel import events as zeta_kernel_events
+from zeta.kernel.dispatch import Attempt, QueueItem
 from zeta.kernel.events import DraftEvent, Event
 from zeta.store.events import (
     AppendOutcome,
@@ -100,6 +102,37 @@ def test_zeta_events_exports_the_canonical_event_boundary() -> None:
     assert {"event_view", "draft_event_view"}.issubset(set(zeta_events.__all__))
     assert {"DraftEvent", "Event"}.issubset(set(zeta_kernel_events.__all__))
     assert "EventFilter" not in set(zeta_kernel_events.__all__)
+
+
+def test_zeta_dispatch_kernel_defines_queue_item_and_attempt_shapes() -> None:
+    assert {
+        "Attempt",
+        "AttemptId",
+        "AttemptStatus",
+        "QueueItem",
+        "QueueItemId",
+        "QueueItemStatus",
+    }.issubset(set(zeta_kernel_dispatch.__all__))
+
+    queue_item = QueueItem(
+        queue_item_id="qi_evt_123_zeta_interactive",
+        event_id="evt_123",
+        target_agent="zeta.interactive",
+        status="available",
+    )
+    attempt = Attempt(
+        attempt_id="att_qi_evt_123_zeta_interactive_1",
+        queue_item_id=queue_item.queue_item_id,
+        event_id=queue_item.event_id,
+        attempt_number=1,
+        target_agent=queue_item.target_agent,
+        status="running",
+        started_at="2026-06-20T10:00:01Z",
+    )
+
+    assert attempt.finished_at is None
+    assert attempt.error is None
+    assert attempt.session_id is None
 
 
 def resolved_import_module(

@@ -1535,11 +1535,16 @@ def test_zeta_event_dispatcher_persists_unmatched_event(tmp_path: Path) -> None:
     )
 
     assert outcome.inserted is True
-    assert outcome.work_events == []
-    assert [event.event_type for event in published] == ["github.issue.opened"]
+    assert [event.event_type for event in outcome.work_events] == [
+        "runtime.queue_item.unhandled"
+    ]
+    assert [event.event_type for event in published] == [
+        "github.issue.opened",
+        "runtime.queue_item.unhandled",
+    ]
     assert [
         event.event_type for event in event_store.list_events(zeta_events.Filter())
-    ] == ["github.issue.opened"]
+    ] == ["github.issue.opened", "runtime.queue_item.unhandled"]
 
 
 def test_zeta_event_dispatcher_creates_work_for_matching_agent(
@@ -1583,22 +1588,28 @@ def test_zeta_event_dispatcher_creates_work_for_matching_agent(
     assert seen[0].agent.agent_id == "issue-triage"
     assert seen[0].triggering_event.event_type == "github.issue.opened"
     assert [event.event_type for event in outcome.work_events] == [
-        "runtime.work.pending",
-        "runtime.work.claimed",
-        "runtime.work.completed",
+        "runtime.queue_item.created",
+        "runtime.queue_item.claimed",
+        "runtime.attempt.started",
+        "runtime.attempt.completed",
+        "runtime.queue_item.completed",
     ]
     assert {event.caused_by for event in outcome.work_events} == {outcome.event.id}
-    assert [event.payload["agent_id"] for event in outcome.work_events] == [
+    assert [event.payload["target_agent"] for event in outcome.work_events] == [
+        "issue-triage",
+        "issue-triage",
         "issue-triage",
         "issue-triage",
         "issue-triage",
     ]
-    assert outcome.agent_results == [{"outcome": "handled", "final_event_cursor": "4"}]
+    assert outcome.agent_results == [{"outcome": "handled", "final_event_cursor": "6"}]
     assert [event.event_type for event in published] == [
         "github.issue.opened",
-        "runtime.work.pending",
-        "runtime.work.claimed",
-        "runtime.work.completed",
+        "runtime.queue_item.created",
+        "runtime.queue_item.claimed",
+        "runtime.attempt.started",
+        "runtime.attempt.completed",
+        "runtime.queue_item.completed",
     ]
 
 
@@ -1641,12 +1652,16 @@ def test_zeta_event_dispatcher_runs_matching_agents_in_task_group() -> None:
 
         assert started == ["agent.one", "agent.two"]
         assert [event.event_type for event in outcome.work_events] == [
-            "runtime.work.pending",
-            "runtime.work.claimed",
-            "runtime.work.completed",
-            "runtime.work.pending",
-            "runtime.work.claimed",
-            "runtime.work.completed",
+            "runtime.queue_item.created",
+            "runtime.queue_item.claimed",
+            "runtime.attempt.started",
+            "runtime.attempt.completed",
+            "runtime.queue_item.completed",
+            "runtime.queue_item.created",
+            "runtime.queue_item.claimed",
+            "runtime.attempt.started",
+            "runtime.attempt.completed",
+            "runtime.queue_item.completed",
         ]
         assert [result["agent"] for result in outcome.agent_results] == [
             "agent.one",
@@ -1692,7 +1707,9 @@ def test_zeta_event_dispatcher_matches_exact_event_type(tmp_path: Path) -> None:
 
     assert len(calls) == 1
     assert calls == [outcome.event.id]
-    assert [event.payload["agent_id"] for event in outcome.work_events] == [
+    assert [event.payload["target_agent"] for event in outcome.work_events] == [
+        "exact-agent",
+        "exact-agent",
         "exact-agent",
         "exact-agent",
         "exact-agent",
@@ -1728,12 +1745,12 @@ def test_zeta_event_dispatcher_records_pending_work_without_runner(
     )
 
     assert [event.event_type for event in outcome.work_events] == [
-        "runtime.work.pending"
+        "runtime.queue_item.created"
     ]
     assert outcome.agent_results == []
     assert [event.event_type for event in published] == [
         "github.issue.opened",
-        "runtime.work.pending",
+        "runtime.queue_item.created",
     ]
 
 
@@ -1779,9 +1796,11 @@ def test_zeta_event_dispatcher_does_not_route_duplicate_events(
         event.event_type for event in event_store.list_events(zeta_events.Filter())
     ] == [
         "github.issue.opened",
-        "runtime.work.pending",
-        "runtime.work.claimed",
-        "runtime.work.completed",
+        "runtime.queue_item.created",
+        "runtime.queue_item.claimed",
+        "runtime.attempt.started",
+        "runtime.attempt.completed",
+        "runtime.queue_item.completed",
     ]
 
 
@@ -1816,13 +1835,15 @@ def test_zeta_event_dispatcher_records_failed_work(tmp_path: Path) -> None:
     )
 
     assert [event.event_type for event in outcome.work_events] == [
-        "runtime.work.pending",
-        "runtime.work.claimed",
-        "runtime.work.failed",
+        "runtime.queue_item.created",
+        "runtime.queue_item.claimed",
+        "runtime.attempt.started",
+        "runtime.attempt.failed",
+        "runtime.queue_item.failed",
     ]
     assert outcome.work_events[-1].payload["status"] == "failed"
     assert outcome.agent_results == [
-        {"outcome": "failed", "error": "boom", "final_event_cursor": "4"}
+        {"outcome": "failed", "error": "boom", "final_event_cursor": "6"}
     ]
 
 
@@ -1891,11 +1912,13 @@ def test_zeta_rpc_cli_runs_pure_session_without_sigil_turn(monkeypatch) -> None:
     ]
     assert [event["type"] for event in published] == [
         "session.turn.requested",
-        "runtime.work.pending",
-        "runtime.work.claimed",
+        "runtime.queue_item.created",
+        "runtime.queue_item.claimed",
+        "runtime.attempt.started",
         "user_message",
         "model",
-        "runtime.work.completed",
+        "runtime.attempt.completed",
+        "runtime.queue_item.completed",
     ]
     assert messages[-1]["result"]["outcome"] == "completed"
     assert messages[-1]["result"]["final_answer"] == "done"
@@ -1975,21 +1998,25 @@ def test_zeta_rpc_events_publish_triggers_session_turn(
     assert response["result"]["agent_results"][0]["outcome"] == "completed"
     assert [event["type"] for event in published] == [
         "session.turn.requested",
-        "runtime.work.pending",
-        "runtime.work.claimed",
+        "runtime.queue_item.created",
+        "runtime.queue_item.claimed",
+        "runtime.attempt.started",
         "user_message",
         "model",
-        "runtime.work.completed",
+        "runtime.attempt.completed",
+        "runtime.queue_item.completed",
     ]
     assert [
         event.event_type for event in event_store.list_events(zeta_events.Filter())
     ] == [
         "session.turn.requested",
-        "runtime.work.pending",
-        "runtime.work.claimed",
+        "runtime.queue_item.created",
+        "runtime.queue_item.claimed",
+        "runtime.attempt.started",
         "zeta.user_message",
         "zeta.model_call.completed",
-        "runtime.work.completed",
+        "runtime.attempt.completed",
+        "runtime.queue_item.completed",
     ]
     assert [
         event["type"]
@@ -1998,11 +2025,13 @@ def test_zeta_rpc_events_publish_triggers_session_turn(
         )["events"]
     ] == [
         "session.turn.requested",
-        "runtime.work.pending",
-        "runtime.work.claimed",
+        "runtime.queue_item.created",
+        "runtime.queue_item.claimed",
+        "runtime.attempt.started",
         "user_message",
         "model",
-        "runtime.work.completed",
+        "runtime.attempt.completed",
+        "runtime.queue_item.completed",
     ]
 
 
@@ -2035,15 +2064,17 @@ def test_zeta_rpc_session_uses_explicit_context(monkeypatch, tmp_path: Path) -> 
     assert result["outcome"] == "completed"
     assert result["final_answer"] == "done"
     assert result["run_id"].startswith("run_")
-    assert result["final_event_cursor"] == "6"
+    assert result["final_event_cursor"] == "8"
     published_views = published_event_views(published)
     assert [event["type"] for event in published_views] == [
         "session.turn.requested",
-        "runtime.work.pending",
-        "runtime.work.claimed",
+        "runtime.queue_item.created",
+        "runtime.queue_item.claimed",
+        "runtime.attempt.started",
         "user_message",
         "model",
-        "runtime.work.completed",
+        "runtime.attempt.completed",
+        "runtime.queue_item.completed",
     ]
     assert {event["session"] for event in published_views} == {"ctx-session"}
     assert {event["run_id"] for event in published_views if "run_id" in event} == {
@@ -2056,17 +2087,21 @@ def test_zeta_rpc_session_uses_explicit_context(monkeypatch, tmp_path: Path) -> 
         "4",
         "5",
         "6",
+        "7",
+        "8",
     ]
     assert {event["turn_id"] for event in published_views} == {result["run_id"]}
     assert [
         event.event_type for event in event_store.list_events(zeta_events.Filter())
     ] == [
         "session.turn.requested",
-        "runtime.work.pending",
-        "runtime.work.claimed",
+        "runtime.queue_item.created",
+        "runtime.queue_item.claimed",
+        "runtime.attempt.started",
         "zeta.user_message",
         "zeta.model_call.completed",
-        "runtime.work.completed",
+        "runtime.attempt.completed",
+        "runtime.queue_item.completed",
     ]
     assert [
         event.turn_id
@@ -2074,6 +2109,8 @@ def test_zeta_rpc_session_uses_explicit_context(monkeypatch, tmp_path: Path) -> 
             zeta_events.Filter(turn_id=result["run_id"])
         )
     ] == [
+        result["run_id"],
+        result["run_id"],
         result["run_id"],
         result["run_id"],
         result["run_id"],
@@ -2258,8 +2295,8 @@ def test_zeta_rpc_sequential_runs_get_distinct_run_ids(
     assert first["run_id"].startswith("run_")
     assert second["run_id"].startswith("run_")
     assert first["run_id"] != second["run_id"]
-    assert first["final_event_cursor"] == "6"
-    assert second["final_event_cursor"] == "12"
+    assert first["final_event_cursor"] == "8"
+    assert second["final_event_cursor"] == "16"
 
 
 def test_zeta_rpc_session_returns_aborted_on_wall_clock_budget(
@@ -2300,29 +2337,33 @@ def test_zeta_rpc_session_returns_aborted_on_wall_clock_budget(
     assert result["outcome"] == "aborted"
     assert result["final_answer"] == ""
     assert result["run_id"].startswith("run_")
-    assert result["final_event_cursor"] == "6"
+    assert result["final_event_cursor"] == "8"
     published_views = published_event_views(published)
     assert [event["type"] for event in published_views] == [
         "session.turn.requested",
-        "runtime.work.pending",
-        "runtime.work.claimed",
+        "runtime.queue_item.created",
+        "runtime.queue_item.claimed",
+        "runtime.attempt.started",
         "user_message",
         "turn_aborted",
-        "runtime.work.cancelled",
+        "runtime.attempt.cancelled",
+        "runtime.queue_item.cancelled",
     ]
     assert {event["run_id"] for event in published_views if "run_id" in event} == {
         result["run_id"]
     }
-    assert published_views[-2]["reason"] == "deadline_exceeded"
+    assert published_views[-3]["reason"] == "deadline_exceeded"
     assert [
         event.event_type for event in event_store.list_events(zeta_events.Filter())
     ] == [
         "session.turn.requested",
-        "runtime.work.pending",
-        "runtime.work.claimed",
+        "runtime.queue_item.created",
+        "runtime.queue_item.claimed",
+        "runtime.attempt.started",
         "zeta.user_message",
         "zeta.turn.failed",
-        "runtime.work.cancelled",
+        "runtime.attempt.cancelled",
+        "runtime.queue_item.cancelled",
     ]
 
 

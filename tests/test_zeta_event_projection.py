@@ -483,9 +483,9 @@ def test_zeta_event_view_and_rpc_projection_contract() -> None:
     assert event_view(events[1])["cursor"] == "2"
     generic = Event(
         id="external-1",
-        event_type="runtime.work.completed",
+        event_type="runtime.queue_item.completed",
         source="dispatcher",
-        payload={"work_id": "work-1", "result": {"ok": True}},
+        payload={"queue_item_id": "qi-1", "result": {"ok": True}},
         idempotency_key=None,
         caused_by="call-1",
         session_id=SESSION_ID,
@@ -494,11 +494,11 @@ def test_zeta_event_view_and_rpc_projection_contract() -> None:
         cursor=7,
     )
     assert event_view(generic) == {
-        "type": "runtime.work.completed",
+        "type": "runtime.queue_item.completed",
         "id": "external-1",
         "source": "dispatcher",
         "time": timestamp_time(),
-        "work_id": "work-1",
+        "queue_item_id": "qi-1",
         "result": {"ok": True},
         "session": SESSION_ID,
         "turn_id": TURN_ID,

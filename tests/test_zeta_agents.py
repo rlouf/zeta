@@ -280,5 +280,5 @@ User asked: {{ event.payload.text }}
     assert tuple(calls[0]["config"].allowed_capabilities or ()) == ("Read",)
     assert calls[0]["kwargs"]["caused_by"] == outcome.event.id
     assert outcome.agent_results == [
-        {"final_answer": "done", "final_event_cursor": "4"}
+        {"final_answer": "done", "final_event_cursor": "6"}
     ]

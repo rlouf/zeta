@@ -1390,6 +1390,108 @@ def test_zeta_rpc_session_uses_shared_runner_boundary(monkeypatch) -> None:
     assert [event["type"] for event in published_event_views(published)] == ["seen"]
 
 
+def test_zeta_dispatch_terminal_agent_result_comes_from_lifecycle_event() -> None:
+    event = Event(
+        id="evt_terminal",
+        event_type="runtime.queue_item.completed",
+        source="zeta",
+        payload={
+            "queue_item_id": "qi_evt_request_zeta_interactive",
+            "event_id": "evt_request",
+            "target_agent": "zeta.interactive",
+            "status": "completed",
+            "result": {
+                "run_id": "run_lifecycle",
+                "outcome": "completed",
+                "final_answer": "from lifecycle",
+            },
+        },
+        idempotency_key=None,
+        caused_by="evt_request",
+        session_id="ctx-session",
+        turn_id="run_lifecycle",
+        timestamp_ms=1,
+        cursor=9,
+    )
+
+    assert zeta_dispatch.terminal_agent_result([event]) == {
+        "run_id": "run_lifecycle",
+        "outcome": "completed",
+        "final_answer": "from lifecycle",
+        "final_event_cursor": "9",
+    }
+
+
+def test_zeta_rpc_session_returns_lifecycle_result_without_agent_results(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    context = zeta_session.Session(
+        session_id="ctx-session",
+        event_sink=zeta_events.MemoryEventStore(),
+        trace_store=zeta_trace.InMemoryStore(),
+        tool_registry=CapabilityRegistry(),
+        state_dir=tmp_path,
+        session_dir=tmp_path / "sessions" / "ctx-session",
+    )
+
+    class FakeDispatcher:
+        async def dispatch(self, draft: DraftEvent) -> zeta_dispatch.DispatchOutcome:
+            request_event = Event.from_draft(draft)
+            terminal_event = Event(
+                id="evt_terminal",
+                event_type="runtime.queue_item.completed",
+                source="zeta",
+                payload={
+                    "queue_item_id": "qi_evt_request_zeta_interactive",
+                    "event_id": request_event.id,
+                    "target_agent": "zeta.interactive",
+                    "status": "completed",
+                    "result": {
+                        "run_id": draft.turn_id,
+                        "outcome": "completed",
+                        "final_answer": "from lifecycle",
+                    },
+                },
+                idempotency_key=None,
+                caused_by=request_event.id,
+                session_id=draft.session_id,
+                turn_id=draft.turn_id,
+                timestamp_ms=1,
+                cursor=9,
+            )
+            return zeta_dispatch.DispatchOutcome(
+                request_event,
+                True,
+                [terminal_event],
+                [],
+            )
+
+    monkeypatch.setattr(
+        zeta_rpc,
+        "session_event_dispatcher",
+        lambda *args, **kwargs: FakeDispatcher(),
+    )
+
+    result = run_rpc_session(
+        {
+            "objective": "answer",
+            "tools": [],
+            "context": "",
+            zeta_rpc.RPC_RUN_ID_PARAM: "run_lifecycle",
+        },
+        publish_event=lambda event: None,
+        runtime_context=context,
+    )
+
+    assert result == {
+        "run_id": "run_lifecycle",
+        "outcome": "completed",
+        "final_answer": "from lifecycle",
+        "final_event_cursor": "9",
+    }
+
+
 def test_sigil_zeta_rpc_session_uses_shared_runner_boundary(monkeypatch) -> None:
     captured: dict[str, Any] = {}
 

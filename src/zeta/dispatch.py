@@ -21,6 +21,7 @@ __all__ = [
     "DispatchOutcome",
     "EventPattern",
     "RegisteredAgent",
+    "terminal_agent_result",
 ]
 
 
@@ -319,6 +320,47 @@ def terminal_queue_item_event_type(result: dict[str, Any]) -> str:
     if outcome in {"aborted", "cancelled"}:
         return "runtime.queue_item.cancelled"
     return "runtime.queue_item.completed"
+
+
+TERMINAL_QUEUE_ITEM_EVENT_TYPES = {
+    "runtime.queue_item.completed",
+    "runtime.queue_item.failed",
+    "runtime.queue_item.cancelled",
+}
+
+
+def terminal_agent_result(lifecycle_events: Iterable[Event]) -> dict[str, Any] | None:
+    for event in reversed(tuple(lifecycle_events)):
+        result = terminal_event_result(event)
+        if result is not None:
+            return result
+    return None
+
+
+def terminal_event_result(event: Event) -> dict[str, Any] | None:
+    if event.event_type not in TERMINAL_QUEUE_ITEM_EVENT_TYPES:
+        return None
+    result = event.payload.get("result")
+    if isinstance(result, dict):
+        return result_with_final_cursor(result, event)
+    return result_with_final_cursor(terminal_fallback_result(event), event)
+
+
+def terminal_fallback_result(event: Event) -> dict[str, Any]:
+    status = event.payload.get("status")
+    fallback: dict[str, Any] = {
+        "outcome": status if isinstance(status, str) and status else "unknown",
+    }
+    error = event.payload.get("error")
+    if isinstance(error, str) and error:
+        fallback["error"] = error
+    return fallback
+
+
+def result_with_final_cursor(result: dict[str, Any], event: Event) -> dict[str, Any]:
+    if event.cursor is None:
+        return dict(result)
+    return {**result, "final_event_cursor": str(event.cursor)}
 
 
 def event_timestamp() -> str:

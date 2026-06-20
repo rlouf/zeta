@@ -18,7 +18,7 @@ from zeta.capabilities.base import (
 )
 from zeta.capabilities.registry import CapabilityRegistry, RegisteredCapability
 from zeta.capabilities.registry import registry as _runtime_tool_registry
-from zeta.dispatch import EventDispatcher
+from zeta.dispatch import EventDispatcher, terminal_agent_result
 from zeta.events import (
     EventSink,
     boundary_event_draft,
@@ -209,6 +209,9 @@ async def run_rpc_session(
     except SessionRequestError as exc:
         raise rpc_error_from_session_request(exc) from exc
     outcome = await dispatcher.dispatch(draft)
+    result = terminal_agent_result(outcome.lifecycle_events)
+    if result is not None:
+        return result
     if outcome.agent_results:
         return outcome.agent_results[0]
     return {

@@ -7,15 +7,15 @@ from typing import Any
 
 import pytest
 
-from agents.events import EventEnvelope, EventRegistry
+from agents.events import EventRegistry
 from agents.loader import load_spec
 from agents.manifest import Manifest, ManifestError
 from agents.prompts import TemplateError, render_prompt, validate_prompt
 from agents.returns import derive_returns_schema
-from agents.runtime import compile_agent_definition
 from agents.spec import ScheduleEntry, matches
 from zeta import dispatch as zeta_dispatch
 from zeta.agents.capabilities import AgentConfig
+from zeta.agents.runtime import compile_agent_definition
 from zeta.capabilities.base import (
     InProcessCapabilityExecutor,
 )
@@ -29,7 +29,6 @@ from zeta.loop import AgentTurnResult
 from zeta.store.events import SqliteEventStore
 
 zeta_agents = SimpleNamespace(
-    EventEnvelope=EventEnvelope,
     EventRegistry=EventRegistry,
     Manifest=Manifest,
     ManifestError=ManifestError,
@@ -154,10 +153,7 @@ User asked: {{ event.payload.text }}
     zeta_agents.Manifest(tools=tools, events=events).validate(spec)
     rendered = zeta_agents.render_prompt(
         spec,
-        zeta_agents.EventEnvelope(
-            event_type="slack.dm.received",
-            payload={"text": "why is this slow?"},
-        ),
+        {"event_type": "slack.dm.received", "payload": {"text": "why is this slow?"}},
     )
     returns_schema = zeta_agents.derive_returns_schema(spec, events)
 

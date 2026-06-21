@@ -1,8 +1,9 @@
 """Authored-agent prompt rendering and validation."""
 
+from typing import Any
+
 from jinja2 import Environment, meta
 
-from agents.events import EventEnvelope
 from agents.spec import AgentSpec
 
 
@@ -10,11 +11,11 @@ class TemplateError(ValueError):
     """Raised when an authored prompt template is invalid or cannot render."""
 
 
-def render_prompt(spec: AgentSpec, envelope: EventEnvelope) -> str:
+def render_prompt(spec: AgentSpec, event: dict[str, Any]) -> str:
     """Render an authored prompt with one root variable, ``event``."""
     try:
         template = Environment(autoescape=False).from_string(spec.instructions)
-        return template.render(event=envelope.to_template_context())
+        return template.render(event=event)
     except Exception as exc:
         raise TemplateError(
             f"template render error in agent {spec.slug!r}: {exc}"

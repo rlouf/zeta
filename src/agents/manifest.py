@@ -2,12 +2,11 @@
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Protocol, runtime_checkable
 
 from agents.events import EventRegistry
 from agents.prompts import validate_prompt
 from agents.spec import AgentSpec
-from zeta.capabilities.registry import CapabilityRegistry
 
 RESERVED_TOOL_NAMES = frozenset({"__return"})
 
@@ -16,11 +15,18 @@ class ManifestError(ValueError):
     """Raised when an authored spec does not match a deployment manifest."""
 
 
+@runtime_checkable
+class ToolResolver(Protocol):
+    """Anything that can look up a tool by name."""
+
+    def resolve(self, name: str) -> Any: ...
+
+
 @dataclass(frozen=True)
 class Manifest:
     """Deployment manifest used to validate authored agent specs."""
 
-    tools: CapabilityRegistry | None = None
+    tools: ToolResolver | None = None
     events: EventRegistry | None = None
     extensions: Mapping[str, type[Any]] | None = None
 
@@ -31,7 +37,7 @@ class Manifest:
         validate_extensions(spec, self.extensions or {})
 
 
-def validate_tools(spec: AgentSpec, registry: CapabilityRegistry | None) -> None:
+def validate_tools(spec: AgentSpec, registry: ToolResolver | None) -> None:
     if registry is None:
         if spec.tools:
             raise ManifestError(

@@ -3,28 +3,10 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
 from typing import Any
 
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import SchemaError
-
-from zeta.kernel.events import Event
-
-
-@dataclass(frozen=True)
-class EventEnvelope:
-    """Minimal event shape exposed to authored prompt templates."""
-
-    event_type: str
-    payload: dict[str, Any]
-
-    @classmethod
-    def from_event(cls, event: Event) -> EventEnvelope:
-        return cls(event_type=event.event_type, payload=dict(event.payload))
-
-    def to_template_context(self) -> dict[str, Any]:
-        return {"event_type": self.event_type, "payload": self.payload}
 
 
 class EventRegistryError(ValueError):

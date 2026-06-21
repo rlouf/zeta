@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Any, Literal, cast
 
 from zeta.agents.capabilities import AgentConfig
 from zeta.context.builder import event_timeline_type, project_trace_events
-from zeta.dispatch import RegisteredAgent
+from zeta.dispatch import EventDispatcher, RegisteredAgent, terminal_queue_item_result
 from zeta.events import (
     user_message_draft,
 )
@@ -228,6 +228,35 @@ def session_turn_agent(
         ),
         run=run_agent,
     )
+
+
+async def submit_session_turn(
+    params: dict[str, Any],
+    *,
+    run_id: str | None = None,
+    runtime_context: Session,
+    event_dispatcher: EventDispatcher,
+) -> dict[str, Any]:
+    run_id = run_id or session_run_id()
+    draft = session_turn_requested_draft(
+        params,
+        run_id=run_id,
+        runtime_context=runtime_context,
+    )
+    outcome = await event_dispatcher.publish_event(draft)
+    result = terminal_queue_item_result(
+        outcome.lifecycle_events,
+        event_id=outcome.event.id,
+        target_agent=SESSION_TURN_AGENT_ID,
+    )
+    if result is not None:
+        return result
+    return {
+        "run_id": run_id,
+        "outcome": "duplicate" if not outcome.inserted else "unhandled",
+        "final_answer": "",
+        "trace": empty_session_trace_result(),
+    }
 
 
 async def run_session_turn(

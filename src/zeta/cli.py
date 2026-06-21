@@ -11,10 +11,15 @@ from zeta.loop import CancellationToken
 from zeta.rpc import (
     JsonRpcServer,
     rpc_cancellation_event_param,
+    rpc_error_from_session_request,
     rpc_run_id_param,
-    run_rpc_session,
 )
-from zeta.session import default_session, session_turn_agent
+from zeta.session import (
+    SessionRequestError,
+    default_session,
+    session_turn_agent,
+    submit_session_turn,
+)
 from zeta.store.events import EventReader
 
 
@@ -62,12 +67,14 @@ def rpc(stdio: bool) -> int:
         if run_id is not None and cancellation_event is not None:
             cancellation_events[run_id] = cast(CancellationToken, cancellation_event)
         try:
-            return await run_rpc_session(
+            return await submit_session_turn(
                 params,
-                publish_event=server.publish_event,
+                run_id=run_id,
                 runtime_context=runtime_context,
                 event_dispatcher=dispatcher,
             )
+        except SessionRequestError as exc:
+            raise rpc_error_from_session_request(exc) from exc
         finally:
             if run_id is not None:
                 cancellation_events.pop(run_id, None)

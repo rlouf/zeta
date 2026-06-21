@@ -23,7 +23,7 @@ from sigil.agent_io import (
     render_final_answer,
 )
 from sigil.display.render import render_tool_result_summary
-from sigil.display.state import PROGRESS_MODE_TRACE
+from sigil.display.state import PROGRESS_MODE_TRACE, context_bar_text
 from sigil.display.summarize import render_handoff_lines
 from sigil.protocols import (
     SHELL_HANDOFF_RESULT_SCHEMA,
@@ -208,9 +208,7 @@ def step(
             TURN_OUTCOME_ABORTED,
             prompt_traces=error.result.prompt_traces,
         )
-        finalize_progress(renderer, turn)
-        if context_footer is not None:
-            context_footer.finalize(error.result.telemetry)
+        finalize_progress(renderer, turn, context_footer, error.result.telemetry)
         raise
     except KeyboardInterrupt as error:
         abort_event = record_turn_abort(
@@ -248,9 +246,7 @@ def step(
         turn = turn_recorder.finish(
             TURN_OUTCOME_STAGED, prompt_traces=result.prompt_traces
         )
-        finalize_progress(renderer, turn)
-        if context_footer is not None:
-            context_footer.finalize(result.telemetry)
+        finalize_progress(renderer, turn, context_footer, result.telemetry)
         return status
     if result.final_answer:
         if renderer.stream_renderer is not None:
@@ -274,9 +270,7 @@ def step(
             streamed=result.answer_streamed,
             renderer=renderer,
         )
-        finalize_progress(renderer, turn)
-        if context_footer is not None:
-            context_footer.finalize(result.telemetry)
+        finalize_progress(renderer, turn, context_footer, result.telemetry)
         return 0
     turn = turn_recorder.finish(TURN_OUTCOME_FAILED, prompt_traces=result.prompt_traces)
     finalize_progress(renderer, turn)
@@ -387,12 +381,20 @@ def record_user_message(
     return outcome.event
 
 
-def finalize_progress(renderer: TurnRenderer, turn: Event) -> None:
+def finalize_progress(
+    renderer: TurnRenderer,
+    turn: Event,
+    context_footer: Any = None,
+    telemetry: dict[str, Any] | None = None,
+) -> None:
+    context_bar = context_bar_text(telemetry) if context_footer is not None else ""
     if (
         renderer.progress_renderer is not None
         and renderer.progress_renderer.mode != PROGRESS_MODE_TRACE
     ):
-        renderer.progress_renderer.finalize(history_event_record(turn))
+        renderer.progress_renderer.finalize(history_event_record(turn), context_bar)
+    if context_footer is not None:
+        context_footer.finalize(telemetry, print_line=False)
 
 
 def write_handoff(path: str | Path | None, handoff: dict[str, Any]) -> None:

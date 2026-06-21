@@ -218,8 +218,8 @@ class TerminalDigestRenderer:
             self.intent_phase = phase
             self.current_phase = phase
 
-    def finalize(self, turn: dict[str, Any]) -> None:
-        line = final_digest_line(turn, self)
+    def finalize(self, turn: dict[str, Any], context_bar: str = "") -> None:
+        line = final_digest_line(turn, self, context_bar)
         if line:
             print(file=self.output)
             print(line, file=self.output)
@@ -451,6 +451,7 @@ def progress_mode_from_env(env: Mapping[str, str] | None = None) -> str:
 def final_digest_line(
     turn: dict[str, Any],
     renderer: TerminalDigestRenderer,
+    context_bar: str = "",
 ) -> str:
     cost = turn.get("cost")
     cost = cost if isinstance(cost, dict) else {}
@@ -469,6 +470,8 @@ def final_digest_line(
     turn_id = str(turn.get("turn_id") or "")
     if turn_id:
         parts.append(f"log {short_trace_id(turn_id)}")
+    if context_bar:
+        parts.append(context_bar)
     return " · ".join(parts)
 
 
@@ -786,12 +789,22 @@ class ContextUsageFooter:
     def current_line(self) -> str:
         return self.last_line
 
-    def finalize(self, telemetry: dict[str, Any] | None = None) -> bool:
-        """Leave one final context line in scrollback."""
+    def finalize(
+        self,
+        telemetry: dict[str, Any] | None = None,
+        *,
+        print_line: bool = True,
+    ) -> bool:
+        """Leave one final context line in scrollback, or just clear if print_line=False."""
         usage = provider_context_usage_tokens(telemetry)
         if usage is not None:
             self.current_context_tokens, self.model_context_tokens = usage
             self.pending_context_tokens = 0
+        if not print_line:
+            if self.active:
+                self.write("\r\x1b[2K")
+                self.active = False
+            return True
         line = context_usage_line(telemetry) or self.last_line
         if not line:
             return False
@@ -810,7 +823,7 @@ class ContextUsageFooter:
         print(text, file=self.output, end="", flush=True)
 
 
-def context_usage_line(telemetry: dict[str, Any] | None) -> str:
+def context_bar_text(telemetry: dict[str, Any] | None) -> str:
     if not isinstance(telemetry, dict):
         return ""
     estimated_context_tokens = usage_token_count(
@@ -829,7 +842,12 @@ def context_usage_line(telemetry: dict[str, Any] | None) -> str:
     percent = context_usage_percent(context_tokens, model_context_tokens)
     bar = context_usage_bar(context_tokens, model_context_tokens)
     suffix = " est." if estimated_context_tokens is not None else ""
-    return f"context  [{bar}] {percent}%{suffix}"
+    return f"[{bar}] {percent}%{suffix}"
+
+
+def context_usage_line(telemetry: dict[str, Any] | None) -> str:
+    bar = context_bar_text(telemetry)
+    return f"context  {bar}" if bar else ""
 
 
 def provider_context_usage_tokens(

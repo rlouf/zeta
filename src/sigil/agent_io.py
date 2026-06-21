@@ -7,9 +7,8 @@ workflow-specific tagging, logging, and handoff handling.
 """
 
 import sys
-from collections.abc import Callable
 from dataclasses import dataclass, replace
-from typing import Any, TextIO, cast
+from typing import Any, TextIO
 
 from sigil.display.render import render_tool_start
 from sigil.display.state import (
@@ -21,19 +20,7 @@ from sigil.display.state import (
     create_stream_renderer,
     progress_mode_from_env,
 )
-from sigil.protocols import (
-    TURN_OUTCOME_ABORTED,
-    TURN_OUTCOME_ANSWERED,
-    TURN_OUTCOME_EXECUTED,
-    TURN_OUTCOME_FAILED,
-    TURN_OUTCOME_STAGED,
-)
-from sigil.sessions import session_id
-from sigil.state import append_prompt_submitted_event
-from sigil.tools import ensure_builtin_tools_registered
 from sigil.turn import TurnRecorder
-from zeta.agents.capabilities import AgentConfig
-from zeta.context.instructions import load_project_instructions
 from zeta.events import (
     draft_event_id,
     draft_event_view,
@@ -41,20 +28,14 @@ from zeta.events import (
     exact_event_time,
     user_message_draft,
 )
-from zeta.kernel.capabilities import ExecutionMode
 from zeta.kernel.events import DraftEvent, Event
 from zeta.loop import (
-    AgentTurnAborted,
     AgentTurnResult,
-    async_run_agent_turn,
     is_runtime_ui_event,
-    registered_capabilities,
 )
 from zeta.models import (
     CODEX_RESPONSES_API,
     ModelSelection,
-    active_model_selection,
-    model_selection_event,
 )
 from zeta.models.chat_completions import ensure_server
 from zeta.session import Session, project_trace_for_turn
@@ -399,169 +380,6 @@ def record_turn_abort(
         )
     )
     return outcome.event
-
-
-async def run_zeta_rpc_session(
-    params: dict[str, Any],
-    *,
-    publish_event: Callable[[RuntimePublishedEvent], None],
-) -> dict[str, Any]:
-    from sigil import zeta_session_for_sigil
-
-    runtime_context = zeta_session_for_sigil()
-    objective = params.get("objective")
-    workflow = params["workflow"] if "workflow" in params else "propose"
-    requested_tools = params.get("tools")
-    allowed_capabilities = requested_tools if requested_tools is not None else None
-    ensure_builtin_tools_registered()
-    selected_model = active_model_selection(session_dir=runtime_context.session_dir)
-    enabled_capabilities = registered_capabilities(
-        allowed_capabilities,
-        tool_registry=runtime_context.tool_registry,
-    )
-    enabled_tool_names = tuple(
-        runtime_context.tool_registry.model_name(capability_id)
-        for capability_id in enabled_capabilities
-    )
-    execution_mode: ExecutionMode = "direct" if workflow == "do" else "stage"
-    turn_recorder = TurnRecorder(
-        runtime_context=runtime_context,
-        workflow=cast(str, workflow),
-        objective=cast(str, objective),
-        allowed_tools=enabled_tool_names,
-        staged=any(
-            runtime_context.tool_registry.model_name(capability_id)
-            in STAGING_TOOL_NAMES
-            for capability_id in enabled_capabilities
-            if runtime_context.tool_registry.get(capability_id) is not None
-        )
-        and execution_mode == "stage",
-        agent=model_selection_event(selected_model) if selected_model else None,
-    )
-    prior_timeline = current_timeline(runtime_context=runtime_context)
-    user_event = record_user_message(
-        {
-            "type": "user_message",
-            "content": objective,
-            "workflow": workflow,
-            "runtime": "zeta-rpc",
-            "turn_id": turn_recorder.turn_id,
-            "available_tools": list(enabled_tool_names),
-        },
-        runtime_context=runtime_context,
-    )
-    turn_recorder.note_root_event(user_event)
-    prompt_submitted = append_prompt_submitted_event(user_event)
-    turn_recorder.note_root_event(prompt_submitted)
-    publish_event(user_event)
-
-    def sink(draft: DraftEvent) -> None:
-        if is_runtime_ui_event(draft):
-            live_event = project_runtime_draft(
-                replace(
-                    draft,
-                    session_id=runtime_context.session_id,
-                    turn_id=turn_recorder.turn_id,
-                )
-            )
-            publish_event(live_event)
-            return
-        persisted = record_runtime_draft(
-            draft,
-            runtime_context=runtime_context,
-            turn_id=turn_recorder.turn_id,
-        )
-        if persisted.payload.get("_timeline_type") == "tool_result":
-            turn_recorder.attach_tool_result_effect(dict(persisted.payload))
-        turn_recorder.note_runtime_event(persisted)
-        publish_event(persisted)
-
-    try:
-        result = await async_run_agent_turn(
-            cast(str, objective),
-            prior_timeline,
-            AgentConfig(
-                system_prompt=params.get("system"),
-                allowed_capabilities=enabled_capabilities,
-                max_turns=params.get("max_steps"),
-                stop_on_staged_effect=True,
-                execution_mode=execution_mode,
-                model_profile=selected_model.profile
-                if selected_model is not None
-                else None,
-                model_name=selected_model.model if selected_model is not None else None,
-                model_url=selected_model.url if selected_model is not None else None,
-                model_session_id=runtime_context.session_id,
-                thinking=selected_model.thinking
-                if selected_model is not None
-                else None,
-                model_api=selected_model.api if selected_model is not None else None,
-                max_wall_seconds=params.get("max_wall_seconds"),
-            ),
-            context=params["context"]
-            if "context" in params
-            else load_project_instructions(),
-            event_sink=sink,
-            trace_store=runtime_context.trace_store,
-            tool_registry=runtime_context.tool_registry,
-            caused_by=turn_recorder.root_event_id,
-        )
-    except AgentTurnAborted as error:
-        turn_recorder.add_model_calls(error.result.model_telemetry_calls)
-        turn = turn_recorder.finish(
-            TURN_OUTCOME_ABORTED,
-            prompt_traces=error.result.prompt_traces,
-        )
-        publish_event(turn)
-        return {
-            "turn_id": turn_recorder.turn_id,
-            "session_id": session_id(),
-            "outcome": TURN_OUTCOME_ABORTED,
-            "final_answer": "",
-        }
-    except KeyboardInterrupt as error:
-        abort_event = record_turn_abort(
-            error,
-            runtime_context=runtime_context,
-            workflow=workflow,
-            caused_by=turn_recorder.causal_parent_event_id(),
-            reason="keyboard_interrupt",
-        )
-        turn_recorder.note_runtime_event(abort_event)
-        turn = turn_recorder.finish(TURN_OUTCOME_ABORTED)
-        publish_event(turn)
-        raise
-    except RuntimeError as error:
-        abort_event = record_turn_abort(
-            error,
-            runtime_context=runtime_context,
-            workflow=workflow,
-            caused_by=turn_recorder.causal_parent_event_id(),
-        )
-        turn_recorder.note_runtime_event(abort_event)
-        turn = turn_recorder.finish(TURN_OUTCOME_ABORTED)
-        publish_event(turn)
-        raise
-    turn_recorder.add_model_calls(result.model_telemetry_calls)
-    if result.staged_effect is not None:
-        outcome = TURN_OUTCOME_STAGED
-        zeta_outcome = "staged"
-    elif result.final_answer:
-        outcome = (
-            TURN_OUTCOME_EXECUTED if turn_recorder.effect_ids else TURN_OUTCOME_ANSWERED
-        )
-        zeta_outcome = "completed"
-    else:
-        outcome = TURN_OUTCOME_FAILED
-        zeta_outcome = "failed"
-    turn = turn_recorder.finish(outcome, prompt_traces=result.prompt_traces)
-    publish_event(turn)
-    return {
-        "turn_id": turn_recorder.turn_id,
-        "session_id": session_id(),
-        "outcome": zeta_outcome,
-        "final_answer": result.final_answer,
-    }
 
 
 def model_telemetry_fields(

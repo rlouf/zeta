@@ -106,8 +106,8 @@ cancellation guarantee.
 
 ## Zeta JSON-RPC Protocol
 
-`zeta rpc --stdio` and `sigil zeta rpc --stdio` serve a newline-delimited
-JSON-RPC 2.0 protocol. Each line is one JSON object. Requests include
+`zeta rpc --stdio` serves a newline-delimited JSON-RPC 2.0 protocol. Each line
+is one JSON object. Requests include
 `jsonrpc: "2.0"`, an `id`, a `method`, and optional object `params`.
 Notifications omit `id`. Responses contain either `result` or `error`.
 
@@ -146,13 +146,13 @@ Params are:
 "unknown"`, `completed`, `cancelled`, or `failed`.
 
 `events.list` returns durable events in append order. Params are optional
-`after` cursor, `limit`, `session_id`, and `run_id`. Results contain `events`
-and `next_cursor`. Event cursors are durable sequence cursors encoded as
-strings; clients resume by passing the last `next_cursor` as `after`.
+`after_cursor`, `limit`, `session_id`, and `turn_id`. Results contain `events`
+and `next_cursor`.
 
-`events.subscribe` records an in-memory stdio subscription for future
-`events.publish` notifications. Params match `events.list` filters. The result
-contains `subscription_id` and `next_cursor`.
+`events.publish` appends a client-authored durable event and returns
+immediately with `inserted`, `event`, and an empty `lifecycle_events` list.
+Routing happens in the background; clients observe routed runtime events with
+`events.notify` or by resuming from `events.list`.
 
 `tools.register` registers client-hosted capabilities. Each capability item
 contains:
@@ -183,9 +183,8 @@ boolean `ok` field.
 
 ### Notifications And Errors
 
-`events.publish` carries a persisted event. Runtime events include `run_id`,
-`turn_id`, `session`, and `cursor` when backed by the durable event store.
-With an active subscription the notification also includes `subscription_id`.
+`events.notify` carries a persisted event. Runtime events include `run_id`,
+`turn_id`, `session_id`, and `cursor` when backed by the durable event store.
 
 `tools.call` asks the client to execute a registered capability. Params include
 `id`, `name`, `arguments`, `status: "requested"`, and optional `timeout_sec`.

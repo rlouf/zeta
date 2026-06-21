@@ -7,7 +7,7 @@ import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal, cast
+from typing import TYPE_CHECKING, Any, Literal
 
 from zeta.agents.capabilities import AgentConfig
 from zeta.context.builder import event_timeline_type, project_trace_events
@@ -65,7 +65,7 @@ SessionWorkflow = Literal["ask", "propose", "do"]
 class SessionRunParams:
     objective: str
     workflow: SessionWorkflow = "ask"
-    tools: tuple[str, ...] | None = None
+    tools: list[str] | None = None
     context: str = ""
     system: str | None = None
     model: str | None = None
@@ -74,41 +74,6 @@ class SessionRunParams:
     api: str | None = None
     max_steps: int | None = None
     max_wall_seconds: float | None = None
-
-    @classmethod
-    def from_mapping(cls, params: dict[str, Any]) -> SessionRunParams:
-        objective = params.get("objective")
-        if objective is None or objective == "":
-            raise SessionRequestError(
-                "missing_objective",
-                "session.run requires objective",
-                {"message": "session.run requires objective"},
-            )
-        workflow = params["workflow"] if "workflow" in params else "ask"
-        if workflow not in {"ask", "propose", "do"}:
-            raise SessionRequestError(
-                "invalid_workflow",
-                "workflow must be ask, propose, or do",
-                {
-                    "message": "workflow must be ask, propose, or do",
-                    "workflow": workflow,
-                },
-            )
-        requested_tools = params.get("tools")
-        tools = requested_tools if requested_tools is not None else None
-        return cls(
-            objective=cast(str, objective),
-            workflow=cast(SessionWorkflow, workflow),
-            tools=cast(tuple[str, ...] | None, tools),
-            context=params.get("context", ""),
-            system=params.get("system"),
-            model=params.get("model"),
-            url=params.get("url"),
-            thinking=params.get("thinking"),
-            api=params.get("api"),
-            max_steps=params.get("max_steps"),
-            max_wall_seconds=params.get("max_wall_seconds"),
-        )
 
     def turn_payload(self, run_id: str) -> dict[str, Any]:
         payload: dict[str, Any] = {
@@ -132,6 +97,43 @@ class SessionRunParams:
             if value is not None:
                 payload[key] = value
         return payload
+
+
+def session_run_params(params: dict[str, Any]) -> SessionRunParams:
+    """Construct validated session run params without reviving mapping parser methods."""
+
+    try:
+        request = SessionRunParams(**params)
+    except TypeError as exc:
+        raise SessionRequestError(
+            "invalid_params",
+            f"SessionRunParams parameters are invalid: {exc}",
+            {"message": f"SessionRunParams parameters are invalid: {exc}"},
+        ) from exc
+    if not request.objective:
+        raise SessionRequestError(
+            "missing_objective",
+            "session.run requires objective",
+            {"message": "session.run requires objective"},
+        )
+    if request.workflow not in {"ask", "propose", "do"}:
+        raise SessionRequestError(
+            "invalid_workflow",
+            "workflow must be ask, propose, or do",
+            {
+                "message": "workflow must be ask, propose, or do",
+                "workflow": request.workflow,
+            },
+        )
+    if request.tools is not None:
+        for tool in request.tools:
+            if not isinstance(tool, str) or not tool:
+                raise SessionRequestError(
+                    "invalid_tools",
+                    "tools must contain non-empty strings",
+                    {"message": "tools must contain non-empty strings"},
+                )
+    return request
 
 
 def default_session() -> Session:
@@ -174,7 +176,7 @@ def zeta_state_dir() -> Path:
     return Path(root).expanduser() if root else Path.home() / ".zeta"
 
 
-RuntimePublishedEvent = Event | DraftEvent
+RuntimePublishedEvent = Event
 CancellationEventForRun = Callable[[str], CancellationToken | None]
 SESSION_TURN_AGENT_ID = "zeta.session.turn"
 
@@ -268,7 +270,7 @@ async def run_session_turn(
     runtime_context: Session,
     cancellation_event: CancellationToken | None,
 ) -> dict[str, Any]:
-    request = SessionRunParams.from_mapping(params)
+    request = session_run_params(params)
     enabled_capabilities = registered_capabilities(
         request.tools,
         tool_registry=runtime_context.tool_registry,
@@ -291,14 +293,6 @@ async def run_session_turn(
 
     def sink(draft: DraftEvent) -> None:
         if is_runtime_ui_event(draft):
-            publish_event(
-                replace(
-                    draft,
-                    payload={**draft.payload, "run_id": run_id},
-                    session_id=runtime_context.session_id,
-                    turn_id=run_id,
-                )
-            )
             return
         persisted = record_runtime_draft(
             draft,
@@ -345,7 +339,7 @@ def session_turn_requested_draft(
     run_id: str,
     runtime_context: Session,
 ) -> DraftEvent:
-    payload = SessionRunParams.from_mapping(params).turn_payload(run_id)
+    payload = session_run_params(params).turn_payload(run_id)
     return DraftEvent(
         "session.turn.requested",
         "zeta",

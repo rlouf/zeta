@@ -1,0 +1,48 @@
+"""JSON-RPC entrypoints for the Zeta runtime."""
+
+from zeta.rpc.jsonrpc import JsonRpcConnection, JsonRpcRouter, RpcError, RpcHandler
+from zeta.rpc.routes import (
+    CapabilityRegistration,
+    RpcClient,
+    RunState,
+    ToolResponse,
+    call_client_tool,
+    capability_to_wire,
+    event_to_wire,
+    events_list,
+    events_publish,
+    initialize,
+    route_event,
+    route_run,
+    run_status_from_lifecycle,
+    session_cancel,
+    session_run,
+    tools_register,
+    tools_respond,
+)
+from zeta.rpc.stdio import run_stdio
+
+__all__ = [
+    "CapabilityRegistration",
+    "JsonRpcConnection",
+    "JsonRpcRouter",
+    "RpcClient",
+    "RpcError",
+    "RpcHandler",
+    "RunState",
+    "ToolResponse",
+    "call_client_tool",
+    "capability_to_wire",
+    "event_to_wire",
+    "events_list",
+    "events_publish",
+    "initialize",
+    "route_event",
+    "route_run",
+    "run_status_from_lifecycle",
+    "run_stdio",
+    "session_cancel",
+    "session_run",
+    "tools_register",
+    "tools_respond",
+]

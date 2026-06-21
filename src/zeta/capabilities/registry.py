@@ -210,7 +210,7 @@ def invoke_executor(
     mode: ExecutionMode,
 ) -> dict[str, Any]:
     try:
-        result = capability.executor.invoke(capability.declaration, params, mode=mode)
+        result = capability.executor(params, mode=mode)
         if inspect.isawaitable(result):
             result = asyncio.run(cast(Coroutine[Any, Any, dict[str, Any]], result))
     except Exception as exc:
@@ -229,16 +229,11 @@ async def invoke_executor_async(
     mode: ExecutionMode,
 ) -> dict[str, Any]:
     try:
-        if inspect.iscoroutinefunction(capability.executor.invoke):
-            result = await capability.executor.invoke(
-                capability.declaration,
-                params,
-                mode=mode,
-            )
+        if inspect.iscoroutinefunction(capability.executor):
+            result = await capability.executor(params, mode=mode)
         else:
             result = await asyncio.to_thread(
-                capability.executor.invoke,
-                capability.declaration,
+                capability.executor,
                 params,
                 mode=mode,
             )

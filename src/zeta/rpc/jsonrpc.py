@@ -1,0 +1,164 @@
+"""Newline-delimited JSON-RPC protocol mechanics for Zeta transports."""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import threading
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Any, TextIO, TypeAlias, cast
+
+if TYPE_CHECKING:
+    from zeta.rpc.routes import RpcClient
+
+
+RpcResult = dict[str, Any] | None
+if TYPE_CHECKING:
+    RpcHandler: TypeAlias = Callable[[dict[str, Any], RpcClient], Awaitable[RpcResult]]
+else:
+    RpcHandler: TypeAlias = Callable[[dict[str, Any], Any], Awaitable[RpcResult]]
+
+
+@dataclass
+class RpcError(RuntimeError):
+    """JSON-RPC route error with both protocol and Zeta-specific failure codes."""
+
+    jsonrpc_code: int
+    zeta_code: str
+    summary: str
+    data: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        super().__init__(self.summary)
+
+    def error_data(self) -> dict[str, Any]:
+        return {"code": self.zeta_code, **self.data}
+
+
+class JsonRpcConnection:
+    """Newline-delimited JSON-RPC stream that owns read, write, and notify rules."""
+
+    def __init__(self, input: TextIO, output: TextIO) -> None:
+        self.input = input
+        self.output = output
+        self.write_lock = threading.Lock()
+
+    async def serve(self, router: JsonRpcRouter) -> None:
+        async with asyncio.TaskGroup() as tasks:
+            while (message := await asyncio.to_thread(self.read_message)) is not None:
+                tasks.create_task(router.handle_message(message))
+
+    def read_message(self) -> dict[str, Any] | None:
+        for line in self.input:
+            if not line.strip():
+                continue
+            try:
+                message = json.loads(line)
+            except json.JSONDecodeError as exc:
+                self.write_error(
+                    None,
+                    -32700,
+                    "Parse error",
+                    {"message": str(exc)},
+                )
+                continue
+            if isinstance(message, dict):
+                return cast(dict[str, Any], message)
+            self.write_error(None, -32600, "Invalid Request")
+        return None
+
+    def notify(self, method: str, params: dict[str, Any]) -> None:
+        self.write_message({"jsonrpc": "2.0", "method": method, "params": params})
+
+    def write_response(self, request_id: Any, result: Any) -> None:
+        self.write_message({"jsonrpc": "2.0", "id": request_id, "result": result})
+
+    def write_error(
+        self,
+        request_id: Any,
+        code: int,
+        message: str,
+        data: dict[str, Any] | None = None,
+    ) -> None:
+        error: dict[str, Any] = {"code": code, "message": message}
+        if data is not None:
+            error["data"] = data
+        self.write_message({"jsonrpc": "2.0", "id": request_id, "error": error})
+
+    def write_message(self, message: dict[str, Any]) -> None:
+        payload = json.dumps(message, separators=(",", ":")) + "\n"
+        with self.write_lock:
+            self.output.write(payload)
+            self.output.flush()
+
+
+class JsonRpcRouter:
+    """Async JSON-RPC method router backed by an explicit method-to-callable map."""
+
+    def __init__(
+        self,
+        client: RpcClient,
+        routes: dict[str, RpcHandler] | None = None,
+    ) -> None:
+        self.client = client
+        self.routes = dict(routes or {})
+
+    def route(self, method: str, handler: RpcHandler) -> None:
+        self.routes[method] = handler
+
+    async def handle_message(self, message: dict[str, Any]) -> None:
+        connection = self.client.connection
+        has_request_id = "id" in message
+        request_id = message.get("id")
+        method = message.get("method")
+        params = message.get("params", {})
+
+        if not isinstance(method, str) or not method:
+            if has_request_id:
+                connection.write_error(request_id, -32600, "Invalid Request")
+            return
+        if params is None:
+            params = {}
+        if not isinstance(params, dict):
+            if has_request_id:
+                connection.write_error(request_id, -32602, "Invalid params")
+            return
+
+        handler = self.routes.get(method)
+        if handler is None:
+            if has_request_id:
+                connection.write_error(
+                    request_id,
+                    -32601,
+                    "Method not found",
+                    {"code": "method_not_found", "method": method},
+                )
+            return
+
+        try:
+            result = await handler(cast(dict[str, Any], params), self.client)
+        except RpcError as exc:
+            if has_request_id:
+                connection.write_error(
+                    request_id,
+                    exc.jsonrpc_code,
+                    exc.summary,
+                    exc.error_data(),
+                )
+            return
+        except Exception as exc:
+            if has_request_id:
+                connection.write_error(
+                    request_id,
+                    -32603,
+                    "Internal error",
+                    {
+                        "code": "internal_error",
+                        "message": f"{type(exc).__name__}: {exc}",
+                    },
+                )
+            return
+
+        if has_request_id:
+            connection.write_response(request_id, result)

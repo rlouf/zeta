@@ -153,39 +153,3 @@ def render_shell_result(
 ) -> None:
     for line in shell_result_summary(event):
         print(line, file=output)
-
-
-@cli.group(
-    "zeta",
-    epilog=examples(
-        "sigil zeta rpc --stdio",
-    ),
-)
-def cmd_zeta() -> None:
-    """Zeta runtime protocol commands."""
-
-
-@cmd_zeta.command(
-    "rpc",
-    epilog=examples(
-        "sigil zeta rpc --stdio",
-    ),
-)
-@click.option("--stdio", is_flag=True, help="Serve newline-delimited JSON-RPC.")
-def cmd_zeta_rpc(stdio: bool) -> int:
-    """Serve the Zeta JSON-RPC protocol."""
-    if not stdio:
-        raise click.UsageError("only --stdio is supported")
-    import asyncio
-    from functools import partial
-
-    from sigil.agent_io import run_zeta_rpc_session
-    from zeta.rpc import JsonRpcServer
-
-    server = JsonRpcServer(sys.stdin, sys.stdout)
-    server.session_runner = partial(
-        run_zeta_rpc_session,
-        publish_event=server.publish_event,
-    )
-    asyncio.run(server.serve())
-    return 0

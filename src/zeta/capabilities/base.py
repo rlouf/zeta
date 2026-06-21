@@ -11,14 +11,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol, cast
 
-from zeta.kernel.capabilities import Capability as _Capability
 from zeta.kernel.capabilities import ExecutionMode as _ExecutionMode
 
 
 class CapabilityExecutor(Protocol):
-    def invoke(
+    def __call__(
         self,
-        capability: _Capability,
         params: dict[str, Any],
         *,
         mode: _ExecutionMode,
@@ -35,9 +33,8 @@ class InProcessCapabilityExecutor:
     run: CapabilityFunction
     stage: CapabilityFunction | None = None
 
-    async def invoke(
+    async def __call__(
         self,
-        capability: _Capability,
         params: dict[str, Any],
         *,
         mode: _ExecutionMode,

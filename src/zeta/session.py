@@ -13,7 +13,6 @@ from zeta.agents.capabilities import AgentConfig
 from zeta.context.builder import event_timeline_type, project_trace_events
 from zeta.dispatch import RegisteredAgent
 from zeta.events import (
-    draft_event_id,
     user_message_draft,
 )
 from zeta.kernel.agents import AgentDefinition, AgentInvocation, EventPattern
@@ -21,7 +20,6 @@ from zeta.kernel.capabilities import ExecutionMode
 from zeta.kernel.events import DraftEvent, Event
 from zeta.loop import (
     AgentTurnAborted,
-    AgentTurnResult,
     CancellationToken,
     async_run_agent_turn,
     is_runtime_ui_event,
@@ -265,10 +263,11 @@ async def run_session_turn(
     def sink(draft: DraftEvent) -> None:
         if is_runtime_ui_event(draft):
             publish_event(
-                live_runtime_event(
+                replace(
                     draft,
-                    runtime_context=runtime_context,
-                    run_id=run_id,
+                    payload={**draft.payload, "run_id": run_id},
+                    session_id=runtime_context.session_id,
+                    turn_id=run_id,
                 )
             )
             return
@@ -296,20 +295,18 @@ async def run_session_turn(
             caused_by=caused_by,
             cancellation_event=cancellation_event,
         )
-    except AgentTurnAborted as exc:
+    except AgentTurnAborted:
         return session_result(
             "aborted",
             "",
             run_id=run_id,
             runtime_context=runtime_context,
-            agent_result=exc.result,
         )
     return session_result(
         session_outcome(result.staged_effect, result.final_answer),
         result.final_answer,
         run_id=run_id,
         runtime_context=runtime_context,
-        agent_result=result,
     )
 
 
@@ -383,88 +380,25 @@ def project_trace_for_turn(runtime_context: Session, turn_id: str | None) -> Non
         warn_trace_failure_once("project_trace_for_turn", exc)
 
 
-def live_runtime_event(
-    draft: DraftEvent,
-    *,
-    runtime_context: Session,
-    run_id: str,
-) -> DraftEvent:
-    return replace(
-        draft,
-        payload={**draft.payload, "run_id": run_id},
-        session_id=runtime_context.session_id,
-        turn_id=run_id,
-    )
-
-
 def session_result(
     outcome: str,
     final_answer: str,
     *,
     run_id: str,
     runtime_context: Session,
-    agent_result: AgentTurnResult | None = None,
 ) -> dict[str, Any]:
     result: dict[str, Any] = {
         "run_id": run_id,
         "outcome": outcome,
         "final_answer": final_answer,
-        "trace": session_trace_result(
-            agent_result,
-            runtime_context=runtime_context,
-            run_id=run_id,
-        ),
+        "trace": projected_session_trace_result(runtime_context, run_id)
+        if isinstance(runtime_context.event_sink, EventReader)
+        else empty_session_trace_result(),
     }
     cursor = final_event_cursor(runtime_context, run_id)
     if cursor is not None:
         result["final_event_cursor"] = cursor
     return result
-
-
-def session_trace_result(
-    agent_result: AgentTurnResult | None,
-    *,
-    runtime_context: Session | None = None,
-    run_id: str | None = None,
-) -> dict[str, list[str]]:
-    trace = empty_session_trace_result()
-    if (
-        runtime_context is not None
-        and run_id is not None
-        and isinstance(runtime_context.event_sink, EventReader)
-    ):
-        return projected_session_trace_result(runtime_context, run_id)
-    if agent_result is None:
-        return trace
-    for prompt_trace in agent_result.prompt_traces:
-        add_unique(trace["prompt_ids"], prompt_trace.prompt_object_id)
-        add_unique(
-            trace["assistant_message_ids"],
-            prompt_trace.assistant_message_object_id,
-        )
-    for draft in agent_result.events:
-        event_type = draft_timeline_type(draft)
-        if event_type == "model":
-            add_unique(trace["model_event_ids"], draft_event_id(draft))
-            add_unique_list(
-                trace["tool_call_ids"], draft_object_ids(draft, "tool_call")
-            )
-            continue
-        if event_type == "tool_call":
-            add_unique(trace["tool_event_ids"], draft_event_id(draft))
-            add_unique_list(
-                trace["tool_call_ids"], draft_object_ids(draft, "tool_call")
-            )
-            continue
-        if event_type == "tool_result":
-            add_unique(trace["tool_event_ids"], draft_event_id(draft))
-            add_unique_list(
-                trace["tool_call_ids"], draft_object_ids(draft, "tool_call")
-            )
-            add_unique_list(
-                trace["tool_result_ids"], draft_object_ids(draft, "tool_result")
-            )
-    return trace
 
 
 def projected_session_trace_result(
@@ -503,33 +437,6 @@ def projected_session_trace_result(
                 projection.tool_result_object_ids.get(event.id),
             )
     return trace
-
-
-def draft_timeline_type(draft: DraftEvent) -> str:
-    view_type = draft.payload.get("_timeline_type")
-    if isinstance(view_type, str) and view_type:
-        return view_type
-    prefix = "zeta."
-    if draft.event_type.startswith(prefix):
-        return draft.event_type[len(prefix) :]
-    return draft.event_type
-
-
-def draft_object_ids(draft: DraftEvent, kind: str) -> list[str]:
-    object_ids: list[str] = []
-    for collection in ("used_objects", "returned_objects"):
-        links = draft.payload.get(collection)
-        if not isinstance(links, list):
-            continue
-        for link in links:
-            if not isinstance(link, dict):
-                continue
-            if link.get("kind") != kind:
-                continue
-            object_id = link.get("id")
-            if isinstance(object_id, str):
-                object_ids.append(object_id)
-    return object_ids
 
 
 def empty_session_trace_result() -> dict[str, list[str]]:

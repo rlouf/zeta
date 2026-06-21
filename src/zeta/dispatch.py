@@ -8,7 +8,7 @@ from datetime import UTC, datetime
 from typing import Any, cast
 
 from zeta.kernel.agents import AgentDefinition, AgentInvocation, EventPattern
-from zeta.kernel.dispatch import Attempt, QueueItem
+from zeta.kernel.dispatch import Attempt, AttemptStatus, QueueItem, QueueItemStatus
 from zeta.kernel.events import DraftEvent, Event
 from zeta.store.events import EventWriter
 
@@ -17,22 +17,16 @@ AgentRunner = Callable[["AgentInvocation"], AgentResult]
 
 __all__ = [
     "AgentDefinition",
-    "AgentPublicationHopLimitError",
     "AgentInvocation",
     "EventDispatcher",
     "DispatchOutcome",
     "EventPattern",
     "RegisteredAgent",
     "ReservedRuntimeEventError",
-    "MAX_AGENT_PUBLICATION_HOPS",
-    "RecursiveAgentPublicationError",
-    "terminal_agent_result",
     "terminal_queue_item_result",
 ]
 
 RESERVED_RUNTIME_EVENT_PREFIXES = ("runtime.queue_item.", "runtime.attempt.")
-AGENT_PUBLICATION_HOP_KEY = "_zeta_dispatch_hop"
-MAX_AGENT_PUBLICATION_HOPS = 8
 
 
 @dataclass(frozen=True)
@@ -60,30 +54,6 @@ class ReservedRuntimeEventError(ValueError):
 
     def __post_init__(self) -> None:
         super().__init__(f"external event ingress cannot accept {self.event_type!r}")
-
-
-@dataclass(frozen=True)
-class RecursiveAgentPublicationError(ValueError):
-    agent_id: str
-    event_type: str
-
-    def __post_init__(self) -> None:
-        super().__init__(
-            f"agent {self.agent_id!r} cannot publish recursive event "
-            f"{self.event_type!r}"
-        )
-
-
-@dataclass(frozen=True)
-class AgentPublicationHopLimitError(ValueError):
-    event_type: str
-    hop: int
-
-    def __post_init__(self) -> None:
-        super().__init__(
-            f"agent-published event {self.event_type!r} exceeds hop limit "
-            f"{MAX_AGENT_PUBLICATION_HOPS}"
-        )
 
 
 class EventDispatcher:
@@ -149,11 +119,11 @@ class EventDispatcher:
         triggering_event: Event,
     ) -> list[Event]:
         queue_item_id = queue_item_id_for_event(agent, triggering_event)
-        available_queue_item = queue_item_for_agent(
-            agent,
-            triggering_event,
-            queue_item_id,
-            "available",
+        available_queue_item = QueueItem(
+            queue_item_id=queue_item_id,
+            event_id=triggering_event.id,
+            target_agent=agent.definition.agent_id,
+            status="available",
         )
         created = self._append_lifecycle_event(
             "runtime.queue_item.created",
@@ -170,11 +140,11 @@ class EventDispatcher:
             return events
         attempt_number = 1
         attempt_id = attempt_id_for_queue_item(queue_item_id, attempt_number)
-        claimed_queue_item = queue_item_for_agent(
-            agent,
-            triggering_event,
-            queue_item_id,
-            "claimed",
+        claimed_queue_item = QueueItem(
+            queue_item_id=queue_item_id,
+            event_id=triggering_event.id,
+            target_agent=agent.definition.agent_id,
+            status="claimed",
         )
         claimed = self._append_lifecycle_event(
             "runtime.queue_item.claimed",
@@ -189,14 +159,15 @@ class EventDispatcher:
         )
         events.append(claimed)
         started_at = event_timestamp()
-        running_attempt = attempt_for_agent(
-            agent,
-            triggering_event,
-            queue_item_id,
-            attempt_id,
-            attempt_number,
-            "running",
+        running_attempt = Attempt(
+            attempt_id=attempt_id,
+            queue_item_id=queue_item_id,
+            event_id=triggering_event.id,
+            attempt_number=attempt_number,
+            target_agent=agent.definition.agent_id,
+            status="running",
             started_at=started_at,
+            session_id=triggering_event.session_id,
         )
         started = self._append_lifecycle_event(
             "runtime.attempt.started",
@@ -226,16 +197,17 @@ class EventDispatcher:
             )
         except Exception as exc:
             error = f"{type(exc).__name__}: {exc}"
-            failed_attempt_value = attempt_for_agent(
-                agent,
-                triggering_event,
-                queue_item_id,
-                attempt_id,
-                attempt_number,
-                "failed",
+            failed_attempt_value = Attempt(
+                attempt_id=attempt_id,
+                queue_item_id=queue_item_id,
+                event_id=triggering_event.id,
+                attempt_number=attempt_number,
+                target_agent=agent.definition.agent_id,
+                status="failed",
                 started_at=started_at,
                 finished_at=event_timestamp(),
                 error=error,
+                session_id=triggering_event.session_id,
             )
             failed_attempt = self._append_lifecycle_event(
                 "runtime.attempt.failed",
@@ -248,11 +220,11 @@ class EventDispatcher:
                 ),
             )
             events.append(failed_attempt)
-            failed_queue_item_value = queue_item_for_agent(
-                agent,
-                triggering_event,
-                queue_item_id,
-                "failed",
+            failed_queue_item_value = QueueItem(
+                queue_item_id=queue_item_id,
+                event_id=triggering_event.id,
+                target_agent=agent.definition.agent_id,
+                status="failed",
             )
             failed_queue_item = self._append_lifecycle_event(
                 "runtime.queue_item.failed",
@@ -267,16 +239,17 @@ class EventDispatcher:
             events.append(failed_queue_item)
             return events
         attempt_terminal_type = terminal_attempt_event_type(result)
-        attempt_status = attempt_terminal_type.rsplit(".", 1)[-1]
-        terminal_attempt_value = attempt_for_agent(
-            agent,
-            triggering_event,
-            queue_item_id,
-            attempt_id,
-            attempt_number,
-            attempt_status,
+        attempt_status = cast(AttemptStatus, attempt_terminal_type.rsplit(".", 1)[-1])
+        terminal_attempt_value = Attempt(
+            attempt_id=attempt_id,
+            queue_item_id=queue_item_id,
+            event_id=triggering_event.id,
+            attempt_number=attempt_number,
+            target_agent=agent.definition.agent_id,
+            status=attempt_status,
             started_at=started_at,
             finished_at=event_timestamp(),
+            session_id=triggering_event.session_id,
         )
         completed_attempt = self._append_lifecycle_event(
             attempt_terminal_type,
@@ -290,12 +263,12 @@ class EventDispatcher:
         )
         events.append(completed_attempt)
         queue_terminal_type = terminal_queue_item_event_type(result)
-        queue_status = queue_terminal_type.rsplit(".", 1)[-1]
-        terminal_queue_item_value = queue_item_for_agent(
-            agent,
-            triggering_event,
-            queue_item_id,
-            queue_status,
+        queue_status = cast(QueueItemStatus, queue_terminal_type.rsplit(".", 1)[-1])
+        terminal_queue_item_value = QueueItem(
+            queue_item_id=queue_item_id,
+            event_id=triggering_event.id,
+            target_agent=agent.definition.agent_id,
+            status=queue_status,
         )
         completed_queue_item = self._append_lifecycle_event(
             queue_terminal_type,
@@ -358,12 +331,6 @@ class EventDispatcher:
         attempt_id: str,
     ) -> Callable[[DraftEvent], Awaitable[Event]]:
         async def publish(draft: DraftEvent) -> Event:
-            if agent_accepts_draft(agent, draft):
-                raise RecursiveAgentPublicationError(
-                    agent.definition.agent_id,
-                    draft.event_type,
-                )
-            next_hop = agent_publication_next_hop(triggering_event, draft)
             tagged = DraftEvent(
                 draft.event_type,
                 draft.source,
@@ -373,7 +340,6 @@ class EventDispatcher:
                     "_zeta_attempt_id": attempt_id,
                     "_zeta_target_agent": agent.definition.agent_id,
                     "_zeta_triggering_event_id": triggering_event.id,
-                    AGENT_PUBLICATION_HOP_KEY: next_hop,
                 },
                 idempotency_key=draft.idempotency_key,
                 caused_by=draft.caused_by or triggering_event.id,
@@ -395,28 +361,6 @@ async def maybe_await(result: AgentResult) -> dict[str, Any]:
 def reject_reserved_runtime_event(draft: DraftEvent) -> None:
     if draft.event_type.startswith(RESERVED_RUNTIME_EVENT_PREFIXES):
         raise ReservedRuntimeEventError(draft.event_type)
-
-
-def agent_accepts_draft(agent: RegisteredAgent, draft: DraftEvent) -> bool:
-    event = Event.from_draft(draft)
-    return agent.definition.accepts(event)
-
-
-def agent_publication_next_hop(
-    triggering_event: Event,
-    draft: DraftEvent,
-) -> int:
-    hop = event_publication_hop(triggering_event)
-    if hop >= MAX_AGENT_PUBLICATION_HOPS:
-        raise AgentPublicationHopLimitError(draft.event_type, hop)
-    return hop + 1
-
-
-def event_publication_hop(event: Event) -> int:
-    value = event.payload.get(AGENT_PUBLICATION_HOP_KEY)
-    if isinstance(value, int) and value >= 0:
-        return value
-    return 0
 
 
 def required_payload_string(event: Event, key: str) -> str | None:
@@ -474,51 +418,11 @@ def attempt_idempotency_key(
     return f"attempt:{queue_item_id}:{attempt_number}:{status}"
 
 
-def queue_item_for_agent(
-    agent: RegisteredAgent,
-    event: Event,
-    queue_item_id: str,
-    status: Any,
-) -> QueueItem:
-    return QueueItem(
-        queue_item_id=queue_item_id,
-        event_id=event.id,
-        target_agent=agent.definition.agent_id,
-        status=status,
-    )
-
-
 def queue_item_payload(
     queue_item: QueueItem,
     **extra: Any,
 ) -> dict[str, Any]:
     return {**asdict(queue_item), **extra}
-
-
-def attempt_for_agent(
-    agent: RegisteredAgent,
-    event: Event,
-    queue_item_id: str,
-    attempt_id: str,
-    attempt_number: int,
-    status: Any,
-    *,
-    started_at: str,
-    finished_at: str | None = None,
-    error: str | None = None,
-) -> Attempt:
-    return Attempt(
-        attempt_id=attempt_id,
-        queue_item_id=queue_item_id,
-        event_id=event.id,
-        attempt_number=attempt_number,
-        target_agent=agent.definition.agent_id,
-        status=status,
-        started_at=started_at,
-        finished_at=finished_at,
-        error=error,
-        session_id=event.session_id,
-    )
 
 
 def attempt_payload(
@@ -547,14 +451,6 @@ TERMINAL_QUEUE_ITEM_EVENT_TYPES = {
     "runtime.queue_item.failed",
     "runtime.queue_item.cancelled",
 }
-
-
-def terminal_agent_result(lifecycle_events: Iterable[Event]) -> dict[str, Any] | None:
-    for event in reversed(tuple(lifecycle_events)):
-        result = terminal_queue_item_event_result(event)
-        if result is not None:
-            return result
-    return None
 
 
 def terminal_queue_item_result(

@@ -4,7 +4,7 @@ import asyncio
 from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
-from typing import Any, cast
+from typing import Any
 
 from zeta.kernel.agents import AgentDefinition, AgentInvocation, EventPattern
 from zeta.kernel.dispatch import Attempt, AttemptStatus, QueueItem, QueueItemStatus
@@ -117,68 +117,43 @@ class EventDispatcher:
         triggering_event: Event,
     ) -> list[Event]:
         queue_item_id = queue_item_id_for_event(agent, triggering_event)
-        available_queue_item = QueueItem(
-            queue_item_id=queue_item_id,
-            event_id=triggering_event.id,
-            target_agent=agent.definition.agent_id,
-            status="available",
-        )
-        created = self._append_lifecycle_event(
-            "runtime.queue_item.created",
-            triggering_event,
-            queue_item_payload(available_queue_item),
-            idempotency_key=queue_item_idempotency_key(
+        events = [
+            self._append_queue_item_event(
                 triggering_event,
-                agent.definition.agent_id,
-                "created",
-            ),
-        )
-        events = [created]
+                agent,
+                queue_item_id,
+                event_suffix="created",
+                status="available",
+            )
+        ]
         if agent.run is None:
             return events
+
         attempt_number = 1
         attempt_id = attempt_id_for_queue_item(queue_item_id, attempt_number)
-        claimed_queue_item = QueueItem(
-            queue_item_id=queue_item_id,
-            event_id=triggering_event.id,
-            target_agent=agent.definition.agent_id,
-            status="claimed",
-        )
-        claimed = self._append_lifecycle_event(
-            "runtime.queue_item.claimed",
-            triggering_event,
-            queue_item_payload(claimed_queue_item),
-            idempotency_key=queue_item_idempotency_key(
+        events.append(
+            self._append_queue_item_event(
                 triggering_event,
-                agent.definition.agent_id,
-                "claimed",
-                attempt_number=attempt_number,
-            ),
-        )
-        events.append(claimed)
-        started_at = event_timestamp()
-        running_attempt = Attempt(
-            attempt_id=attempt_id,
-            queue_item_id=queue_item_id,
-            event_id=triggering_event.id,
-            attempt_number=attempt_number,
-            target_agent=agent.definition.agent_id,
-            status="running",
-            started_at=started_at,
-            session_id=triggering_event.session_id,
-            run_id=triggering_event.run_id,
-        )
-        started = self._append_lifecycle_event(
-            "runtime.attempt.started",
-            triggering_event,
-            attempt_payload(running_attempt),
-            idempotency_key=attempt_idempotency_key(
+                agent,
                 queue_item_id,
-                attempt_number,
-                "started",
-            ),
+                event_suffix="claimed",
+                status="claimed",
+                attempt_number=attempt_number,
+            )
         )
-        events.append(started)
+        started_at = event_timestamp()
+        events.append(
+            self._append_attempt_event(
+                triggering_event,
+                agent,
+                queue_item_id,
+                attempt_id,
+                attempt_number,
+                event_suffix="started",
+                status="running",
+                started_at=started_at,
+            )
+        )
         try:
             result = await agent.run(
                 AgentInvocation(
@@ -196,94 +171,168 @@ class EventDispatcher:
                 )
             )
         except Exception as exc:
-            error = f"{type(exc).__name__}: {exc}"
-            failed_attempt_value = Attempt(
-                attempt_id=attempt_id,
-                queue_item_id=queue_item_id,
-                event_id=triggering_event.id,
-                attempt_number=attempt_number,
-                target_agent=agent.definition.agent_id,
-                status="failed",
-                started_at=started_at,
-                finished_at=event_timestamp(),
-                error=error,
-                session_id=triggering_event.session_id,
-                run_id=triggering_event.run_id,
-            )
-            failed_attempt = self._append_lifecycle_event(
-                "runtime.attempt.failed",
-                triggering_event,
-                attempt_payload(failed_attempt_value),
-                idempotency_key=attempt_idempotency_key(
-                    queue_item_id,
-                    attempt_number,
-                    "failed",
-                ),
-            )
-            events.append(failed_attempt)
-            failed_queue_item_value = QueueItem(
-                queue_item_id=queue_item_id,
-                event_id=triggering_event.id,
-                target_agent=agent.definition.agent_id,
-                status="failed",
-            )
-            failed_queue_item = self._append_lifecycle_event(
-                "runtime.queue_item.failed",
-                triggering_event,
-                queue_item_payload(failed_queue_item_value, error=error),
-                idempotency_key=queue_item_idempotency_key(
+            events.extend(
+                self._failed_agent_events(
+                    exc,
                     triggering_event,
-                    agent.definition.agent_id,
-                    "failed",
-                ),
+                    agent,
+                    queue_item_id,
+                    attempt_id,
+                    attempt_number,
+                    started_at,
+                )
             )
-            events.append(failed_queue_item)
             return events
-        attempt_terminal_type = terminal_attempt_event_type(result)
-        attempt_status = cast(AttemptStatus, attempt_terminal_type.rsplit(".", 1)[-1])
-        terminal_attempt_value = Attempt(
+
+        events.extend(
+            self._terminal_agent_events(
+                result,
+                triggering_event,
+                agent,
+                queue_item_id,
+                attempt_id,
+                attempt_number,
+                started_at,
+            )
+        )
+        return events
+
+    def _append_queue_item_event(
+        self,
+        triggering_event: Event,
+        agent: RegisteredAgent,
+        queue_item_id: str,
+        *,
+        event_suffix: str,
+        status: QueueItemStatus,
+        attempt_number: int | None = None,
+        **payload_extra: Any,
+    ) -> Event:
+        queue_item = QueueItem(
+            queue_item_id=queue_item_id,
+            event_id=triggering_event.id,
+            target_agent=agent.definition.agent_id,
+            status=status,
+        )
+        return self._append_lifecycle_event(
+            f"runtime.queue_item.{event_suffix}",
+            triggering_event,
+            queue_item_payload(queue_item, **payload_extra),
+            idempotency_key=queue_item_idempotency_key(
+                triggering_event,
+                agent.definition.agent_id,
+                event_suffix,
+                attempt_number=attempt_number,
+            ),
+        )
+
+    def _append_attempt_event(
+        self,
+        triggering_event: Event,
+        agent: RegisteredAgent,
+        queue_item_id: str,
+        attempt_id: str,
+        attempt_number: int,
+        *,
+        event_suffix: str,
+        status: AttemptStatus,
+        started_at: str,
+        finished_at: str | None = None,
+        error: str | None = None,
+        **payload_extra: Any,
+    ) -> Event:
+        attempt = Attempt(
             attempt_id=attempt_id,
             queue_item_id=queue_item_id,
             event_id=triggering_event.id,
             attempt_number=attempt_number,
             target_agent=agent.definition.agent_id,
-            status=attempt_status,
+            status=status,
             started_at=started_at,
-            finished_at=event_timestamp(),
+            finished_at=finished_at,
+            error=error,
             session_id=triggering_event.session_id,
             run_id=triggering_event.run_id,
         )
-        completed_attempt = self._append_lifecycle_event(
-            attempt_terminal_type,
+        return self._append_lifecycle_event(
+            f"runtime.attempt.{event_suffix}",
             triggering_event,
-            attempt_payload(terminal_attempt_value, result=result),
+            attempt_payload(attempt, **payload_extra),
             idempotency_key=attempt_idempotency_key(
                 queue_item_id,
                 attempt_number,
-                attempt_status,
+                event_suffix,
             ),
         )
-        events.append(completed_attempt)
-        queue_terminal_type = terminal_queue_item_event_type(result)
-        queue_status = cast(QueueItemStatus, queue_terminal_type.rsplit(".", 1)[-1])
-        terminal_queue_item_value = QueueItem(
-            queue_item_id=queue_item_id,
-            event_id=triggering_event.id,
-            target_agent=agent.definition.agent_id,
-            status=queue_status,
-        )
-        completed_queue_item = self._append_lifecycle_event(
-            queue_terminal_type,
-            triggering_event,
-            queue_item_payload(terminal_queue_item_value, result=result),
-            idempotency_key=queue_item_idempotency_key(
+
+    def _failed_agent_events(
+        self,
+        exc: Exception,
+        triggering_event: Event,
+        agent: RegisteredAgent,
+        queue_item_id: str,
+        attempt_id: str,
+        attempt_number: int,
+        started_at: str,
+    ) -> list[Event]:
+        error = f"{type(exc).__name__}: {exc}"
+        return [
+            self._append_attempt_event(
                 triggering_event,
-                agent.definition.agent_id,
-                queue_status,
+                agent,
+                queue_item_id,
+                attempt_id,
+                attempt_number,
+                event_suffix="failed",
+                status="failed",
+                started_at=started_at,
+                finished_at=event_timestamp(),
+                error=error,
             ),
-        )
-        events.append(completed_queue_item)
-        return events
+            self._append_queue_item_event(
+                triggering_event,
+                agent,
+                queue_item_id,
+                event_suffix="failed",
+                status="failed",
+                error=error,
+            ),
+        ]
+
+    def _terminal_agent_events(
+        self,
+        result: dict[str, Any],
+        triggering_event: Event,
+        agent: RegisteredAgent,
+        queue_item_id: str,
+        attempt_id: str,
+        attempt_number: int,
+        started_at: str,
+    ) -> list[Event]:
+        attempt_status = terminal_attempt_status(result)
+        queue_status = terminal_queue_item_status(result)
+        return [
+            self._append_attempt_event(
+                triggering_event,
+                agent,
+                queue_item_id,
+                attempt_id,
+                attempt_number,
+                event_suffix=attempt_status,
+                status=attempt_status,
+                started_at=started_at,
+                finished_at=event_timestamp(),
+                result=result,
+            ),
+            self._append_queue_item_event(
+                triggering_event,
+                agent,
+                queue_item_id,
+                event_suffix=queue_status,
+                status=queue_status,
+                result=result,
+            ),
+        ]
 
     def _append_lifecycle_event(
         self,
@@ -430,18 +479,18 @@ def attempt_payload(
     return {**asdict(attempt), **extra}
 
 
-def terminal_attempt_event_type(result: dict[str, Any]) -> str:
+def terminal_attempt_status(result: dict[str, Any]) -> AttemptStatus:
     outcome = result.get("outcome")
     if outcome in {"aborted", "cancelled"}:
-        return "runtime.attempt.cancelled"
-    return "runtime.attempt.completed"
+        return "cancelled"
+    return "completed"
 
 
-def terminal_queue_item_event_type(result: dict[str, Any]) -> str:
+def terminal_queue_item_status(result: dict[str, Any]) -> QueueItemStatus:
     outcome = result.get("outcome")
     if outcome in {"aborted", "cancelled"}:
-        return "runtime.queue_item.cancelled"
-    return "runtime.queue_item.completed"
+        return "cancelled"
+    return "completed"
 
 
 TERMINAL_QUEUE_ITEM_EVENT_TYPES = {

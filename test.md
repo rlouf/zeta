@@ -1,25 +1,28 @@
-# Clean-Slate Test Suite Plan
+# Lean Test Suite Plan
 
 ## Goal
 
-Delete the current test suite and rewrite it from scratch to pin observable
-behavior only.
+Rewrite the deleted test suite as a small behavior-pinning suite.
 
-The new suite should be split by ownership:
+We do not want broad coverage for its own sake. We want a compact set of tests
+that makes real simplification safer by pinning only the behaviors that external
+callers and users rely on.
 
-- `tests/zeta/` pins the Zeta runtime, protocol, event, model, prompt, trace,
-  and agent behavior.
-- `tests/sigil/` pins the Sigil CLI, shell integration, workflows, history,
-  display, install, and builtin user tools.
-- `tests/shared/` contains only test harness pieces that are genuinely shared
-  across both sides.
+The suite should be split by ownership:
 
-The suite should not mirror the current source tree blindly. It should answer:
+- `tests/zeta/` covers the Zeta runtime boundary.
+- `tests/sigil/` covers the Sigil user-facing boundary.
+- `tests/shared/` contains only tiny harness helpers that are genuinely shared.
 
-> What behavior can an outside caller, CLI user, JSON-RPC client, shell binding,
-> persisted event reader, model provider adapter, or tool caller rely on?
+Target size for the first rewritten suite:
 
-Everything else is implementation detail.
+- about 10-14 test files
+- about 50-80 tests total
+- no large catch-all file
+- no test file over roughly 250 lines without a strong reason
+
+If a proposed test does not protect a behavior that would matter to a user,
+client, persisted-data reader, or provider adapter, do not write it.
 
 ## Core Rule
 
@@ -51,1205 +54,333 @@ When in doubt, test through the narrowest public observation that proves the
 behavior. For example, test that `session.run` emits the right requested-turn
 event or JSON-RPC result, not that `SessionRunParams.tools` is a tuple.
 
-## Delete Policy
+## What Not To Rebuild
 
-Delete the existing tests and helpers instead of migrating them.
+Do not recreate the old suite in smaller folders.
 
-Do not keep compatibility shims for old helper modules. The rewrite should
-create a small new harness that matches the behavior boundaries below.
+Do not write tests just because the old suite had a case for it.
 
-Do not carry over tests that only assert:
+Do not write tests for:
 
-- private helper return shapes
-- tuple vs list internal storage
-- exact dataclass field normalization
-- monkeypatch call paths
-- private method dispatch
-- line-by-line internal event dicts outside event contract tests
-- defensive validation for internal Python call sites
+- every branch of defensive validation
+- every helper function
+- every CLI help line
+- every display formatting variant
+- every model stream edge case
+- every shell quoting corner
+- every trace query mode
+- every builtin tool option
+- internal type coercion
+- compatibility behavior we intentionally removed
 
-If an old behavior still matters, rewrite the oracle:
+Prefer one representative behavior test per contract. Add another only when it
+protects a materially different failure mode.
 
-| Old-style assertion | New behavior assertion |
-|---|---|
-| `params.tools == ("read", "bash")` | the persisted requested-turn event exposes the requested tools |
-| `build_prompt_step()` returns a specific tuple | the model gateway receives the expected prompt behavior |
-| `record_runtime_draft()` is called once | the event store contains one durable runtime event |
-| private helper raises `ValueError` | the CLI/RPC boundary returns the documented user-facing error |
-| exact internal tool result dict | the public timeline shows the tool result status and content |
+## Test Budget
+
+Use this budget as a hard default. Exceed it only after writing down why the
+extra tests protect distinct observable behavior.
+
+| Area | Files | Target tests |
+|---|---:|---:|
+| Global fixtures/shared helpers | 3-4 | helper code only |
+| Zeta contracts | 3 | 15-22 |
+| Zeta runtime/model smoke | 2-3 | 10-16 |
+| Sigil CLI/workflow | 3 | 12-18 |
+| Sigil shell/tools/state | 3-4 | 12-20 |
+
+Initial total target: 50-80 tests.
+
+## Sigil Must Keep Working
+
+The lean suite is only acceptable if it protects the behaviors that make Sigil
+feel good today. These are not optional.
+
+The first rewritten suite must include a small Sigil golden path that exercises
+real user workflows through public entrypoints:
+
+- [ ] `ask` can answer a piped question without polluting stdout with trace
+  output.
+- [ ] `step` can propose a mutating action without executing it immediately.
+- [ ] `do` can execute a mutating action directly.
+- [ ] a staged shell command can be resumed by the matching shell command.
+- [ ] history/status can report the last meaningful turn.
+- [ ] the shell binding routes comma, plus, and status glyphs to the public CLI
+  behavior.
+- [ ] the read/search/mutate tools work on real temporary files.
+
+If these pass, Sigil has a high-signal safety net. If any are missing, the suite
+may be lean, but it is not protecting the product.
+
+Keep this golden path small. Do not expand it into a matrix of every option.
+One realistic path per workflow is better than twenty brittle unit tests.
 
 ## Target Layout
+
+Keep the first pass intentionally small:
 
 ```text
 tests/
   conftest.py
 
   shared/
-    cli.py
     events.py
     models.py
     rpc.py
-    shell.py
-    tools.py
-    trace.py
+    cli.py
 
   zeta/
     conftest.py
-
-    contracts/
-      test_jsonrpc.py
-      test_events.py
-      test_event_store.py
-      test_capabilities.py
-
-    runtime/
-      test_agent_loop.py
-      test_dispatcher.py
-      test_session_turn.py
-      test_cancellation.py
-
-    cli/
-      test_server.py
-
-    models/
-      test_profiles.py
-      test_chat_payloads.py
-      test_chat_streaming.py
-      test_responses_payloads.py
-      test_responses_streaming.py
-      test_codex_auth.py
-
-    context/
-      test_prompt_components.py
-      test_prompt_builder.py
-      test_project_context.py
-      test_skills.py
-      test_system_prompt.py
-      test_compaction.py
-
-    trace/
-      test_store.py
-      test_projection.py
-      test_replay.py
-      test_diff.py
-      test_tools_view.py
-      test_tree.py
-
-    agents/
-      test_spec.py
-      test_manifest.py
-      test_runtime_compile.py
+    test_events.py
+    test_rpc.py
+    test_runtime.py
+    test_models.py
+    test_trace.py
 
   sigil/
     conftest.py
-
-    cli/
-      test_help.py
-      test_ask_step_do.py
-      test_events.py
-      test_history.py
-      test_install_doctor.py
-      test_model.py
-      test_session.py
-      test_status.py
-      test_trace.py
-      test_operators.py
-
-    workflows/
-      test_handoff.py
-      test_shell_resume.py
-      test_rendering.py
-      test_turn_records.py
-
-    shell/
-      test_binding.py
-      test_glyphs.py
-      test_recording.py
-      test_interactive.py
-      test_completion.py
-
-    state/
-      test_history_records.py
-      test_failure_context.py
-      test_sessions.py
-      test_bundle.py
-      test_spool.py
-
-    display/
-      test_terminal_digest.py
-      test_transcript.py
-      test_context_footer.py
-
-    tools/
-      test_read.py
-      test_grep.py
-      test_bash.py
-      test_write.py
-      test_edit.py
-      test_ls.py
-      test_web.py
-      test_query_log.py
+    test_cli.py
+    test_workflows.py
+    test_shell.py
+    test_tools.py
+    test_state.py
 ```
+
+Do not split into many files until a file becomes hard to scan. A file can cover
+a domain if each test is behavior-oriented and short.
 
 Keep the separation strict:
 
 - Zeta tests should not import Sigil workflow modules unless the behavior being
-  tested is explicitly the Sigil-to-Zeta integration.
+  tested is explicitly Sigil-to-Zeta integration.
 - Sigil tests may exercise Zeta through public integration points, but should
   not assert Zeta internals.
 - Shared helpers must stay behavior-oriented and small. If a helper is only used
-  by one side, put it under that side's `conftest.py` or local helper module.
+  by one side, keep it under that side's `conftest.py`.
 
-## Global Fixtures
+## Todo List
 
-### `tests/conftest.py`
+Follow this in order.
 
-Responsibilities:
+### 0. Confirm The Starting Point
 
-- isolate `HOME`
-- isolate `SIGIL_STATE_DIR`
-- isolate `ZETA_STATE_DIR`
-- clear `SIGIL_SESSION_ID`
-- clear `SIGIL_SESSION_DIR`
-- clear `ZETA_SESSION_ID` unless a test explicitly sets it
-- prevent tests from reading or writing real developer state
+- [ ] Run `git status --short`.
+- [ ] Confirm the old `tests/` suite is gone.
+- [ ] Read this file before creating tests.
+- [ ] Do not inspect deleted test files from Git history unless source behavior
+  is genuinely unclear.
+- [ ] Inspect `src/` modules directly when deciding behavior.
+- [ ] Keep a running count of test files and test functions. If the count starts
+  drifting past the budget, stop and prune.
 
-Keep it small. Do not put domain-specific helpers here.
+### 1. Create Minimal Global Isolation
 
-### `tests/zeta/conftest.py`
+Create `tests/conftest.py`.
 
-Responsibilities:
+Add one autouse fixture that isolates:
 
-- create isolated Zeta runtime sessions
-- create in-memory and SQLite event stores
-- create in-memory and SQLite trace stores
-- provide fake model gateways
-- provide small capability registries
-
-No Sigil CLI or shell helpers here.
-
-### `tests/sigil/conftest.py`
-
-Responsibilities:
-
-- create isolated Sigil sessions
-- provide CLI runner helpers for `sigil`
-- provide temporary shell binding install roots
-- provide history/state seeders
-
-No direct Zeta runtime internals here unless the test is explicitly an
-integration test.
-
-## Shared Helpers
-
-### `tests/shared/rpc.py`
-
-Provide:
-
-- `rpc_request(method, params=None, id=1)`
-- `rpc_notification(method, params=None)`
-- `rpc_messages(output)`
-- `assert_rpc_result(message, id=1)`
-- `assert_rpc_error(message, code, zeta_code, id=1)`
-
-Used by:
-
-- `tests/zeta/contracts/test_jsonrpc.py`
-- `tests/zeta/cli/test_server.py`
-- Sigil RPC integration tests only if they interact through JSON-RPC.
+- [ ] `HOME`
+- [ ] `SIGIL_STATE_DIR`
+- [ ] `ZETA_STATE_DIR`
+- [ ] `SIGIL_SESSION_ID`
+- [ ] `SIGIL_SESSION_DIR`
+- [ ] `ZETA_SESSION_ID`
 
 Rules:
 
-- Own JSON-RPC envelope assertions.
-- Do not expose protocol handler internals.
+- [ ] Use `tmp_path` or `tmp_path_factory`.
+- [ ] Do not read or write real user state.
+- [ ] Do not put domain helpers here.
+- [ ] Run `uv run pytest -q` after adding it.
 
-### `tests/shared/events.py`
+### 2. Add Shared Helpers Only On Demand
 
-Provide:
+Create these only when the first test needs them:
 
-- `draft_event(type, payload=None, session_id=None, turn_id=None)`
-- `event(type, payload=None, session_id=None, turn_id=None, cursor=None)`
-- `append_events(store, *drafts)`
-- `event_views(events)`
-- `event_of_type(events, type)`
-- `assert_event_subset(event, **fields)`
-
-Rules:
-
-- Exact event representation assertions belong in Zeta event contract tests.
-- Other tests should assert the behavior-relevant subset.
-
-### `tests/shared/models.py`
-
-Provide:
-
-- `FakeModelGateway`
-- `text_response(content, reasoning=None)`
-- `tool_call_response(name, arguments=None, call_id="call-1")`
-- `streaming_response(chunks, final)`
-- `chat_sse_lines(*payloads)`
-- `responses_sse_frames(*payloads)`
+- [ ] `tests/shared/events.py`
+- [ ] `tests/shared/rpc.py`
+- [ ] `tests/shared/models.py`
+- [ ] `tests/shared/cli.py`
 
 Rules:
 
-- Runtime behavior tests use fake gateways.
-- Provider adapter tests use exact provider payload fixtures.
+- [ ] Helpers may build inputs.
+- [ ] Helpers may parse public outputs.
+- [ ] Helpers may assert public envelopes.
+- [ ] Helpers must not expose private runtime state as the test oracle.
+- [ ] If a helper has more than three call sites in one file only, keep it local
+  instead of shared.
 
-### `tests/shared/tools.py`
+### 3. Write Zeta Contract Tests
 
-Provide:
+Create `tests/zeta/test_events.py`.
 
-- `registered_capability(name, provider="test", run=None, stage=None)`
-- `tool_registry_with(*capabilities)`
-- `recording_tool(result=None)`
-- `mutating_tool(stage_result=None, direct_result=None)`
+Write only these tests:
 
-Rules:
+- [ ] durable event view preserves public type/session/turn/cursor behavior
+- [ ] model/tool/tool-result runtime events project to durable public views
+- [ ] event store appends and lists in cursor order for SQLite
+- [ ] event store filters by session and turn
+- [ ] idempotent append returns the existing event
 
-- Assert observable invocations and results.
-- Do not expose registry private maps.
+Do not test every event helper. Do not test both memory and SQLite unless the
+source behavior differs materially. SQLite is the more important contract.
 
-### `tests/shared/cli.py`
+Create `tests/zeta/test_rpc.py`.
 
-Provide:
+Write only these tests:
 
-- `invoke_cli(args, *, env=None, input=None)`
-- `assert_exit(result, code=0)`
-- `json_stdout(result)`
-- `plain_stdout(result)`
-- `plain_stderr(result)`
+- [ ] `initialize` returns the public server metadata
+- [ ] unknown method returns a JSON-RPC error
+- [ ] `events.list` returns filtered events with cursor behavior
+- [ ] `tools.register` exposes a client tool and duplicate registration fails
+- [ ] client tool call emits `tools.call` and consumes `tools.respond`
+- [ ] `session.run` returns a lifecycle result for a fake runner
+- [ ] `session.cancel` cancels an active run or reports no active run
 
-Rules:
+Do not test every malformed JSON-RPC input. One malformed/unknown-method path is
+enough unless another path protects a different public error contract.
 
-- Preserve stdout/stderr separation.
-- Strip ANSI only when the test is not about terminal styling.
+Run:
 
-### `tests/shared/shell.py`
+```bash
+uv run pytest tests/zeta/test_events.py tests/zeta/test_rpc.py -q
+```
 
-Provide:
+### 4. Write Zeta Runtime And Provider Smoke Tests
 
-- static zsh binding runner
-- stub executable creation
-- shell log parsing
-- interactive PTY harness
+Create `tests/zeta/test_runtime.py`.
 
-Rules:
+Write only these tests:
 
-- Used by `tests/sigil/shell/` and shell-resume workflow tests only.
+- [ ] text-only model answer finalizes with a final answer
+- [ ] model tool call invokes an allowed tool and feeds the result into the next
+  turn
+- [ ] disallowed tool is refused and not invoked
+- [ ] staged mutating tool stops with a staged effect
+- [ ] direct mutating tool can continue
+- [ ] cancellation or wall-clock budget records an abort outcome
 
-### `tests/shared/trace.py`
+Create `tests/zeta/test_models.py`.
 
-Provide:
+Write only these tests:
 
-- trace store builders
-- object graph seeders
-- short object ref helper
+- [ ] chat-completions request body contains model, messages, tools, and
+  reasoning fields when configured
+- [ ] chat-completions stream reconstructs one text response and one tool call
+- [ ] Responses request body converts system/tool/model messages correctly
+- [ ] model profile resolution prefers session selection, then configured
+  default, then builtin fallback
 
-Rules:
+Create `tests/zeta/test_trace.py`.
 
-- Trace graph tests can assert exact persisted graph behavior.
-- Sigil trace CLI tests should assert user-visible output.
+Write only these tests:
 
-## Zeta Tests
+- [ ] trace object IDs are stable for equivalent data
+- [ ] durable model/tool events project into a trace graph sufficient for replay
+- [ ] replay can reconstruct one model/tool exchange
 
-### `tests/zeta/contracts/test_jsonrpc.py`
+Run:
 
-Pin JSON-RPC behavior as a client sees it.
+```bash
+uv run pytest tests/zeta -q
+```
 
-Cases:
+### 5. Write Sigil CLI And Workflow Tests
 
-- `initialize` returns server metadata.
-- unknown method returns method-not-found error.
-- invalid JSON writes parse error.
-- non-object JSON-RPC messages are rejected.
-- notifications do not produce responses.
-- `events.list` without configured reader returns server error.
-- `events.list` returns events in cursor order.
-- `events.list` filters by session and run.
-- `events.list` handles invalid cursor values according to policy.
-- `events.list` handles invalid limit values according to policy.
-- `events.subscribe` returns subscription id and next cursor.
-- published events are sent only to matching subscriptions.
-- `events.publish` rejects runtime lifecycle ingress.
-- `tools.register` registers RPC client tools.
-- `tools.register` rejects duplicate client-owned tools.
-- `tools.register` rejects non-`rpc` providers.
-- `tools.respond` records successful, malformed, cancelled, and missing results.
-- client tool calls emit `tools.call`.
-- client tool calls time out.
-- client disconnect returns failed tool result.
-- `session.run` starts a run and returns lifecycle result.
-- `session.cancel` cancels running task-backed runs.
-- `session.cancel` handles unknown and completed runs.
+Create `tests/sigil/test_cli.py`.
 
-Pinned observations:
+Write only these tests:
 
-- JSON-RPC envelope.
-- method names.
-- public error codes.
-- public result fields.
+- [ ] top-level help exposes the main command groups
+- [ ] `ask` keeps stdout clean for a piped answer
+- [ ] `status --json` exposes model/session state
+- [ ] model selection command stores and reports the active profile
+- [ ] session transcript renders a simple conversation
 
-Do not assert:
+Create `tests/sigil/test_workflows.py`.
 
-- internal protocol handler maps.
-- dataclass field representation.
-- private run-state storage.
-
-### `tests/zeta/contracts/test_events.py`
+Write only these tests:
 
-Pin runtime event projection and public event views.
+- [ ] `step` stages a mutating tool handoff instead of executing it
+- [ ] `do` executes a mutating tool directly
+- [ ] resolved shell handoff appends a tool result
+- [ ] workflow records an answered/staged/executed turn outcome
+- [ ] trace/progress output stays separate from final answer
 
-Cases:
+Run:
 
-- model event draft becomes durable model-call event.
-- tool call draft becomes durable tool-call event.
-- tool result draft becomes durable completed, failed, or refused event.
-- user message draft preserves session and turn behavior.
-- turn abort draft preserves reason.
-- `event_view()` returns public timeline representation.
-- idempotency keys produce stable event ids where promised.
-- payload timeline type overrides durable event type.
-- model usage event projects as model usage.
-
-Pinned observations:
+```bash
+uv run pytest tests/sigil/test_cli.py tests/sigil/test_workflows.py -q
+```
 
-- public event representation.
-- idempotency behavior.
-- cursor stringification in public views.
+### 6. Write Sigil Shell, Tool, And State Tests
 
-### `tests/zeta/contracts/test_event_store.py`
+Create `tests/sigil/test_shell.py`.
 
-Pin event store behavior.
+Write only these tests:
 
-Cases:
+- [ ] zsh binding routes comma/plus/status glyphs to the public CLI behavior
+- [ ] glyph parsing preserves raw user text
+- [ ] shell recording skips Sigil commands and records normal shell commands
+- [ ] staged command resume matches the originating staged command
 
-- memory and SQLite stores append events.
-- SQLite assigns monotonic cursors.
-- filters by session, turn, prefix, cursor, and limit.
-- idempotent append returns existing event.
-- payload snapshots are immutable from caller mutation.
-- causality traversal follows `caused_by`.
-- causality traversal stops on cycles.
-- event store path respects isolated state dir.
-- large events survive process boundaries.
+Create `tests/sigil/test_tools.py`.
 
-Pinned observations:
+Write only these tests:
 
-- event ordering.
-- cursor behavior.
-- idempotency behavior.
-- storage compatibility.
+- [ ] read tool reads text with offset/limit behavior
+- [ ] grep tool returns matches with enough metadata to ground edits
+- [ ] bash stages by default and executes in direct mode
+- [ ] write/edit direct mode changes file contents and staged mode returns a
+  reviewable effect
+- [ ] query-log reports an empty history and one cited turn
 
-### `tests/zeta/contracts/test_capabilities.py`
+Create `tests/sigil/test_state.py`.
 
-Pin Zeta capability registry behavior.
+Write only these tests:
 
-Cases:
+- [ ] history records turn and effect outcomes
+- [ ] failure context stores redacted snippets and is cleared after success
+- [ ] session IDs are traversal-safe
+- [ ] bundle export/import round-trips one session with trace closure
+- [ ] spool ingestion records one shell command and skips malformed records
 
-- duplicate canonical capability id rejected.
-- ambiguous model-visible name rejected.
-- qualified capability ids disambiguate.
-- unknown capability returns failed result.
-- executor exception becomes failed result.
-- malformed capability result becomes failed result.
-- stage mode stages mutating capability.
-- direct mode executes mutating capability.
-- projection exposes model-visible descriptor.
+Run:
 
-Pinned observations:
+```bash
+uv run pytest tests/sigil -q
+```
 
-- model-visible projection representation.
-- public result representation.
-- stage/direct behavior.
+### 7. Prune Before Expanding
 
-### `tests/zeta/runtime/test_agent_loop.py`
+Before adding any extra test, ask:
 
-Use fake model gateways and fake registries.
+- [ ] Would this catch a user-visible or client-visible regression not caught by
+  an existing test?
+- [ ] Is this testing behavior rather than implementation?
+- [ ] Is the failure mode likely enough to justify permanent test weight?
+- [ ] Can this be covered by strengthening an existing test instead?
+- [ ] Does this test make a future simplification harder for no product reason?
 
-Cases:
+If any answer is uncomfortable, do not add the test.
 
-- text-only model answer finalizes with `final_answer`.
-- model reasoning is recorded on model event.
-- model tool call emits tool call before invoking tool.
-- read-only tool result feeds next model turn.
-- multiple read-only tools run in order.
-- streamed text emits runtime chunks and final answer is marked streamed.
-- reasoning deltas emit runtime status updates.
-- runtime UI events are not included in next prompt.
-- disallowed tool is refused and not invoked.
-- unknown tool is refused and not invoked.
-- invalid JSON tool arguments are refused and not invoked.
-- tool executor crash becomes failed tool result.
-- staged mutating tool stops when configured to stop.
-- direct mutating tool continues to next model turn.
-- default max turns stops runaway loops.
-- prompt trace exists for each model request.
-- model telemetry attaches to first tool result and run result.
+### 8. Final Verification
 
-Pinned observations:
-
-- public event types.
-- tool invocation or non-invocation.
-- final outcome.
-- staged effect behavior.
-
-Do not assert:
-
-- step helper names.
-- internal `RunState` layout.
-
-### `tests/zeta/runtime/test_dispatcher.py`
-
-Cases:
-
-- unmatched event persists but routes nowhere.
-- matching event creates work for matching agent.
-- exact and prefix patterns match.
-- duplicate events do not route twice.
-- dispatcher rejects external lifecycle events.
-- dispatcher rejects recursive agent publication.
-- publication hop limit is enforced.
-- failed agent work is recorded.
-- matching agents can run concurrently.
-
-Pinned observations:
-
-- durable lifecycle events.
-- routed agent ids.
-- failure state.
-
-### `tests/zeta/runtime/test_session_turn.py`
-
-Cases:
-
-- session-turn request creates a durable requested-turn behavior.
-- session turn records user message.
-- enabled tools are projected from requested tools.
-- `ask` and `propose` run in stage mode.
-- `do` runs in direct mode.
-- explicit context is passed to the model prompt behavior.
-- current timeline excludes current user event from prior timeline.
-- session result includes trace refs when trace projection succeeds.
-- session result degrades when trace data is missing.
-
-Pinned observations:
-
-- event/output boundary.
-- public session result.
-
-Do not assert:
-
-- `SessionRunParams` internal field types.
-
-### `tests/zeta/runtime/test_cancellation.py`
-
-Cases:
-
-- cancellation before model call aborts.
-- cancellation while run is active publishes cancelled result.
-- wall-clock budget aborts.
-- cooperative cancellation keeps cooperative runner alive when intended.
-- task cancellation cancels native async runner.
-
-Pinned observations:
-
-- public outcome.
-- abort event reason.
-
-### `tests/zeta/cli/test_server.py`
-
-Cases:
-
-- `zeta` console script is declared.
-- stdio server handles `initialize`.
-- stdio server reports structured errors.
-- pure Zeta session run does not create Sigil turn records.
-
-Pinned observations:
-
-- process behavior.
-- stdout/stderr or JSON-RPC output.
-
-### `tests/zeta/models/test_profiles.py`
-
-Cases:
-
-- loads user config.
-- reads thinking and API.
-- rejects unknown thinking/API.
-- rejects multiple defaults.
-- configured default resolves without session selection.
-- session selection beats default.
-- vanished session profile falls back.
-- builtin fallback works.
-- context token metadata from `/props` and `/v1/models`.
-
-Policy decision:
-
-- decide whether malformed config types are rejected, preserved, or allowed to
-  fail naturally. Pin only the chosen user-facing behavior.
-
-### `tests/zeta/models/test_chat_payloads.py`
-
-Cases:
-
-- `ModelInput` renders chat completion request.
-- request body leaves thinking to model by default.
-- `thinking="none"` disables thinking.
-- reasoning effort is sent when configured.
-- native tools are sent.
-- structured output sends JSON schema.
-- invalid structured output schema is rejected.
-- large max tokens default.
-- model telemetry reported.
-
-Pinned observations:
-
-- provider request payload.
-
-### `tests/zeta/models/test_chat_streaming.py`
-
-Cases:
-
-- stream forwards content deltas in order.
-- stream forwards reasoning deltas.
-- usage chunk preserved.
-- tool call fragments reconstructed.
-- multiple tool calls ordered by index.
-- malformed stream events rejected.
-- stream closes on error.
-- HTTP error detail from JSON and plain bodies.
-- missing content type accepted if stream is valid.
-- truncated tool calls rejected.
-- text cut by max tokens accepted according to policy.
-
-### `tests/zeta/models/test_responses_payloads.py`
-
-Cases:
-
-- system prompt moves to instructions.
-- assistant and tool messages convert correctly.
-- recorded replay items replay verbatim.
-- tools convert with `strict`.
-- thinking maps to reasoning effort.
-- session cache key carried.
-- Codex URL and headers.
-- Codex requires model name.
-- structured output.
-
-### `tests/zeta/models/test_responses_streaming.py`
-
-Cases:
-
-- text and reasoning accumulate.
-- tool calls collected.
-- incomplete response marked length.
-- error events raise.
-- quota errors render reset hint.
-- terminal event required.
-
-### `tests/zeta/models/test_codex_auth.py`
-
-Cases:
-
-- fresh credentials load without refresh.
-- account ID read from tokens.
-- expired token refreshes and writes back.
-- missing file reports login instruction.
-- unreadable file rejected.
-- refresh failure reported.
-- concurrent refresh rereads after lock.
-
-### `tests/zeta/context/test_prompt_components.py`
-
-Cases:
-
-- user message boundary round trip.
-- assistant message boundary round trip.
-- tool call boundary round trip.
-- tool result boundary round trip.
-- representation and token cost.
-- prefix order.
-- source events retained.
-
-### `tests/zeta/context/test_prompt_builder.py`
-
-Cases:
-
-- noop transform matches chat messages.
-- prompt links components.
-- request reconstructs and verifies.
-- pure plan is repeatable.
-- commit object ID is idempotent.
-- render model input matches prepared prompt.
-- model output projects from event.
-- reconstruction flags changed component.
-- prompt object stores payload hash, not payload.
-
-### `tests/zeta/context/test_project_context.py`
-
-Cases:
-
-- global-to-local context loading.
-- exact `AGENTS.md` filename required.
-- missing global directory ignored.
-- oversized files capped.
-- total cap drops broadest first.
-
-### `tests/zeta/context/test_skills.py`
-
-Cases:
-
-- user and project skills discovered.
-- collision precedence.
-- duplicate canonical paths.
-- invalid metadata reported.
-- leading directive expansion.
-- inline skill expansion.
-- unknown skills unchanged.
-
-### `tests/zeta/context/test_system_prompt.py`
-
-Cases:
-
-- does not advertise skills incorrectly.
-- product-neutral and dynamic.
-- states today's date.
-- points at query log for older history.
-
-### `tests/zeta/context/test_compaction.py`
-
-Cases:
-
-- structural trim compacts old bulky read/grep results.
-- non-read/grep results skipped.
-- default trim is late safety valve.
-- current tool results preserved.
-- works without trace IDs.
-- task state replaces transcript.
-- task state fails open.
-- task state extraction input omits duplicates.
-- extraction cached per source set.
-- budget thresholds escalate.
-- drop-oldest removes historical messages until under budget.
-- drop-oldest drops tool results with their calls.
-- trim env modes build ladders.
-- unknown trim mode warns.
-
-### `tests/zeta/trace/test_store.py`
-
-Cases:
-
-- object IDs ignore dict key order.
-- object IDs change for schema/data/links.
-- SQLite persists objects, refs, derivations, closure.
-- incompatible schema reported.
-- read-only store rejects writes.
-- read-only other-session open.
-- search matches data and filters kind.
-- wildcard characters treated literally.
-- derivations forward and backward queries.
-- derivation IDs content-scoped across sessions.
-- object listing newest first.
-- filter by multiple kinds.
-
-### `tests/zeta/trace/test_projection.py`
-
-Cases:
-
-- durable events project trace objects.
-- tool result is durable.
-- tool call caused by assistant event.
-- model/tool drafts keep trace links out of public payload.
-- fresh session timeline projects from durable log.
-- timeline rehydrates assistant content and reasoning from graph.
-- untraced assistant content remains inline.
-- orphan tool result rendering strips trace fields.
-- truncated tool call arguments repaired for transcript where intended.
-
-### `tests/zeta/trace/test_replay.py`
-
-Cases:
-
-- replay records traced answer.
-- replay diffs old and new prompt.
-- replay renders tool call answers.
-- replay honors named profile.
-
-### `tests/zeta/trace/test_diff.py`
-
-Cases:
-
-- component changes reported.
-- stat output one line per change.
-- prompt object requirement enforced.
-
-### `tests/zeta/trace/test_tools_view.py`
-
-Cases:
-
-- tool calls and results joined in JSON.
-- failed filter recovers content and bash errors.
-- plain output uses uniform error.
-- successful filter.
-- status filter conflicts.
-- all-sessions sort by trace time.
-
-### `tests/zeta/trace/test_tree.py`
-
-Cases:
-
-- producer walk by default.
-- consumer walk with down.
-- depth respected.
-
-### `tests/zeta/agents/test_spec.py`
-
-Cases:
-
-- loads frontmatter, body, slug, and content hash.
-- renders prompt.
-- event matching.
-- return schema derivation.
-- schedule subset behavior.
-
-### `tests/zeta/agents/test_manifest.py`
-
-Cases:
-
-- unknown tool rejected.
-- unknown event rejected.
-- unknown extension rejected.
-- extension policy follows current product decision.
-
-### `tests/zeta/agents/test_runtime_compile.py`
-
-Cases:
-
-- spec compiles to event dispatch agent.
-- prompt validation rejects unknown root.
-
-## Sigil Tests
-
-### `tests/sigil/cli/test_help.py`
-
-Cases:
-
-- top-level help lists public commands.
-- command help includes required examples or exit-contract text.
-- no-command invocation shows help.
-- lazy commands resolve.
-- lazy import boundaries for expensive workflow/display/model modules.
-
-Pinned observations:
-
-- command names.
-- documented exit-contract phrases.
-
-### `tests/sigil/cli/test_ask_step_do.py`
-
-Cases:
-
-- `ask` accepts piped input.
-- `ask` opens editor when no question and no stdin.
-- `ask` aborts on empty editor save.
-- `step` writes handoff file.
-- `step` keeps trace off stdout.
-- `step` supplies workflow persona.
-- `do` executes directly.
-- model unavailable returns documented failure.
-- stdout stays clean for pipes.
-
-### `tests/sigil/cli/test_events.py`
-
-Cases:
-
-- events list defaults to recent events.
-- filters by session.
-- causality subcommands.
-- raw JSON validation.
-- failure recorded label is not prefixed as glyph.
-
-### `tests/sigil/cli/test_history.py`
-
-Cases:
-
-- log lists sessions newest first.
-- log filters workflow, failed, session, and touched path.
-- log JSON output behavior.
-- log show renders full record.
-- log show handles ambiguous and unknown IDs.
-- blame lists turns touching a file.
-- blame reports untouched files.
-
-### `tests/sigil/cli/test_install_doctor.py`
-
-Cases:
-
-- zsh binding install copies binding and updates rc idempotently.
-- glyph aliases can be disabled.
-- runtime bins are resolved.
-- JSON install output reports paths.
-- doctor reports expected checks.
-- doctor endpoint checks.
-- doctor Codex auth checks.
-
-### `tests/sigil/cli/test_model.py`
-
-Cases:
-
-- model switch stores active profile per session.
-- unknown profile rejected.
-- list resolves URLs and marks active profile.
-- show reports source.
-- default profile visible when active.
-
-### `tests/sigil/cli/test_session.py`
-
-Cases:
-
-- session list includes last event context.
-- session rename stores display name.
-- blank rename rejected.
-- transcript renders conversation.
-- transcript limit and JSON output.
-- empty session message.
-- traversal-safe session IDs.
-
-### `tests/sigil/cli/test_status.py`
-
-Cases:
-
-- clean status with no live state.
-- model line reports session selection and stale profile.
-- last failure reported.
-- pending staged handoff reported.
-- JSON output includes model and history behavior.
-
-### `tests/sigil/cli/test_trace.py`
-
-Cases:
-
-- trace reinit recreates unified database.
-- trace log default narrative kinds.
-- trace log filters by kind/all/session.
-- trace grep lists matches and no-match output.
-- trace diff reports component changes.
-- trace replay records traced answer.
-- trace tools joins calls and results.
-- trace tools filters failed/success/status.
-- trace tree walks producers and consumers.
-- trace show renders humans first.
-- ref resolution handles refs, prefixes, ambiguity, and unknown IDs.
-
-### `tests/sigil/cli/test_operators.py`
-
-Cases:
-
-- command verb is not registered.
-- ask verb accepts piped input.
-- ask/step editor behavior.
-- step continue behavior.
-- main rewrites model runtime error behavior.
-
-### `tests/sigil/workflows/test_handoff.py`
-
-Cases:
-
-- staged bash handoff created.
-- shell result appends tool result.
-- whitespace-edited staged command still matches when intended.
-- unrelated command cancels or ignores staged handoff according to policy.
-- intervening shell turns are included.
-- resolved handoff is not reused.
-- cancelled handoff emits cancelled effect.
-
-### `tests/sigil/workflows/test_shell_resume.py`
-
-Cases:
-
-- staged command writes resume file.
-- unrelated command leaves resume file untouched.
-- interrupted command skips resume.
-- auto-continue opt-out.
-
-### `tests/sigil/workflows/test_rendering.py`
-
-Cases:
-
-- final answer separated from trace.
-- context usage renders on trace stream.
-- context usage renders after buffered answer.
-- context usage remains at bottom after tools.
-- tool start prints while agent runs.
-- streamed text appears before tool trace.
-- no duplicate final answer after streaming.
-- no extra blank lines between tool calls.
-
-### `tests/sigil/workflows/test_turn_records.py`
-
-Cases:
-
-- answered turn behavior.
-- staged turn behavior.
-- executed turn behavior.
-- failed turn behavior.
-- aborted turn behavior.
-- effect record behavior.
-- optional blocks omitted when absent.
-- model telemetry included when present.
-- prompt trace refs included when present.
-
-Pinned observations:
-
-- persisted turn/effect record representation.
-
-Do not assert:
-
-- recorder method call order.
-
-### `tests/sigil/shell/test_binding.py`
-
-Cases:
-
-- wrappers call current CLI behavior.
-- zeta step wrapper calls zeta handoff directly.
-- binding functions survive hostile user options.
-- dispatch word falls back without UTF-8 locale.
-
-### `tests/sigil/shell/test_glyphs.py`
-
-Cases:
-
-- comma dispatch routes to ask.
-- plus dispatch routes to run.
-- status glyph routes to status.
-- glyph split preserves raw text and multiline buffers.
-- glyph widget rewrites buffer to safe dispatch line.
-- question-mark globbing preserved.
-
-### `tests/sigil/shell/test_recording.py`
-
-Cases:
-
-- shell turns recorded without handoff.
-- leading space skips recording.
-- sigil commands skip recording.
-- unsupported caret text recorded.
-- opt-out disables recording.
-- two PTYs get distinct sessions.
-- same TTY keeps session.
-
-### `tests/sigil/shell/test_interactive.py`
-
-Cases:
-
-- interactive comma dispatch.
-- interactive plus dispatch with pipeline.
-- quoted prompts preserve shell semantics.
-- glyph line recall behavior.
-- display decoration does not leak.
-- ctrl-c and job-control behavior.
-- autosuggestions and syntax-highlighting compatibility.
-
-### `tests/sigil/shell/test_completion.py`
-
-Cases:
-
-- plus completion registered after `compinit`.
-- plus completes like underlying command.
-
-### `tests/sigil/state/test_history_records.py`
-
-Cases:
-
-- turn record writes durable event.
-- effect record writes durable tool event.
-- latest turn record per ID.
-- history ignores non-history events.
-- query filters workflow, outcome, since, session, touched path.
-- turn ID prefix matching.
-- pending staged command clears on resolution.
-- cost since sums session turns.
-
-### `tests/sigil/state/test_failure_context.py`
-
-Cases:
-
-- failure prompt uses recorded failure without inventing output.
-- common failure fixtures.
-- snippets and safe context.
-- redaction before storage.
-- unrelated question attaches active failure context.
-- successful turn clears active failure context.
-- already-seen failure omitted.
-
-### `tests/sigil/state/test_sessions.py`
-
-Cases:
-
-- recent turns missing file returns empty.
-- recent turns returns last N in order.
-- malformed lines skipped.
-- session clear removes continuity.
-- session dir traversal blocked.
-- plain session ID preserved.
-- unsafe session ID maps deterministically.
-
-### `tests/sigil/state/test_bundle.py`
-
-Cases:
-
-- export collects turns, effects, and trace closure.
-- export honors since and session filters.
-- skips sessions without trace stores.
-- import restores history and trace queries.
-- import idempotent.
-- event causality preserved.
-
-### `tests/sigil/state/test_spool.py`
-
-Cases:
-
-- spool ingestion records command with spool time.
-- removes spool after ingest.
-- malformed records skipped.
-- failure fanout.
-- missing spool noop.
-- orphaned claims recovered.
-- fresh claims left alone.
-- CLI invocation ingests spool.
-
-### `tests/sigil/display/test_terminal_digest.py`
-
-Cases:
-
-- summarizes tool results.
-- classifies progress events.
-- keeps short turns compact.
-- quotes web search query.
-- no empty status detail.
-- switches to chapters.
-- bounds repeated chapter lines.
-- quiet mode keeps failures and final digest.
-- final receipt summarizes effects.
-- reasoning phase behavior.
-
-### `tests/sigil/display/test_transcript.py`
-
-Cases:
-
-- conversation blocks.
-- tool calls joined to results.
-- failed results marked.
-- redundant failure prefix stripped.
-- tool exchanges contiguous.
-- unmatched results standalone.
-- embedded tool calls.
-- noise and empty events skipped.
-- reasoning before answer.
-- user scaffolding dimmed.
-
-### `tests/sigil/display/test_context_footer.py`
-
-Cases:
-
-- context estimate summary.
-- total token summary.
-- estimates tool result tokens.
-- telemetry replaces stale estimates.
-- TTY footer ephemeral.
-- non-TTY footer final only.
-
-### `tests/sigil/tools/test_read.py`
-
-Cases:
-
-- file read behavior.
-- offset and limit behavior.
-- limit past end behavior.
-- binary file rejection.
-- returned character cap.
-- public URL fetch if retained.
-
-### `tests/sigil/tools/test_grep.py`
-
-Cases:
-
-- metadata guides model tool choice.
-- total limited metadata.
-- content truncation.
-- fallback without ripgrep.
-- fallback stops at limit.
-- invalid pattern error.
-- tagged matches ground hashline edit.
-- ast-grep metadata and tagged structural matches.
-
-### `tests/sigil/tools/test_bash.py`
-
-Cases:
-
-- staged command effect.
-- direct execution.
-- failure error normalization.
-- invalid UTF-8 replacement.
-- timeout kills command.
-- large output truncation.
-- duration metadata.
-
-### `tests/sigil/tools/test_write.py`
-
-Cases:
-
-- direct write.
-- staged hash metadata.
-- direct hash metadata.
-- before hash omitted for new file.
-
-### `tests/sigil/tools/test_edit.py`
-
-Cases:
-
-- writes patch artifact.
-- exact replacement.
-- hashline swap from read tag.
-- hashline insert/delete direct.
-- stale tag rejection.
-- malformed hashline rejection.
-- no-op rejection.
-- direct replace.
-- non-UTF-8 rejection.
-- write failure.
-- ambiguous exact replacement.
-- no-newline marker.
-- direct and staged hashes.
-
-### `tests/sigil/tools/test_ls.py`
-
-Cases:
-
-- directory listing.
-- large-file filtering without shelling out.
-
-### `tests/sigil/tools/test_web.py`
-
-Cases:
-
-- web search schema matches Codex behavior.
-- missing Codex credentials reported.
-- Codex payload posted.
-
-### `tests/sigil/tools/test_query_log.py`
-
-Cases:
-
-- all sessions listed with cited IDs.
-- current session filter.
-- filters and limit cap.
-- one turn expanded by prefix.
-- bad IDs and bad since reported.
-- empty history reported.
-- readonly ask builtin.
+- [ ] Run `uv run pytest -q`.
+- [ ] Run `uv run ruff check`.
+- [ ] Run `uv run ty check`.
+- [ ] Run `uvx --with radon radon cc src tests -s`.
+- [ ] If docs or config changed, run `uv run pre-commit run --all`.
+- [ ] Run `git status --short`.
+- [ ] Confirm no untracked cache files are left under `tests/`.
+- [ ] Confirm test names describe behavior, not implementation.
+- [ ] Confirm Zeta tests do not import Sigil internals except explicit
+  integration tests.
+- [ ] Confirm Sigil tests do not assert Zeta internal shapes.
+- [ ] Confirm each exact dict/list assertion is for an observable boundary.
+- [ ] Count tests. If the first rewrite is above 80 tests, prune before
+  committing.
 
 ## Validation Policy Decisions
 
@@ -1258,7 +389,7 @@ relevant behavior boundary.
 
 | Question | Boundary | Default recommendation |
 |---|---|---|
-| Should malformed JSON-RPC params return structured errors? | Zeta RPC | Yes |
+| Should malformed JSON-RPC params return structured errors? | Zeta RPC | Yes, but test one representative malformed path |
 | Should internal Python call sites validate argument types? | Internal | No |
 | Should `session.run.objective` require a string? | Zeta RPC/session | Yes, unless raw JSON values are intentionally accepted |
 | Should `events.list.after` require a string cursor? | Zeta RPC | Yes |
@@ -1266,142 +397,30 @@ relevant behavior boundary.
 | Should client tools require schemas? | Zeta RPC/tools | No, unless model provider behavior needs strict schemas |
 | Should capability schemas be validated at registration? | Zeta capabilities | No, unless registration is a public config boundary |
 | Should tool-call args be JSON-schema validated before invocation? | Zeta runtime/tools | No, unless this is a product safety policy |
-| Should authored specs reject wrong field types? | Zeta agents | Yes for user-authored files, but keep checks semantic and minimal |
-| Should model profile TOML reject wrong field types? | Zeta models | Yes for user-authored config, but avoid defensive internal validation |
-| Should old persisted events stay readable? | Zeta/Sigil storage | Yes |
-
-## Build Order
-
-This is the order to build the replacement suite from zero.
-
-### Step 1: Zeta contracts
-
-Create:
-
-- `tests/conftest.py`
-- `tests/shared/events.py`
-- `tests/shared/rpc.py`
-- `tests/zeta/conftest.py`
-- `tests/zeta/contracts/test_events.py`
-- `tests/zeta/contracts/test_event_store.py`
-- `tests/zeta/contracts/test_jsonrpc.py`
-- `tests/zeta/contracts/test_capabilities.py`
-
-Run:
-
-```bash
-uv run pytest tests/zeta/contracts -q
-```
-
-### Step 2: Zeta runtime
-
-Create:
-
-- `tests/shared/models.py`
-- `tests/shared/tools.py`
-- `tests/zeta/runtime/test_agent_loop.py`
-- `tests/zeta/runtime/test_dispatcher.py`
-- `tests/zeta/runtime/test_session_turn.py`
-- `tests/zeta/runtime/test_cancellation.py`
-
-Run:
-
-```bash
-uv run pytest tests/zeta/contracts tests/zeta/runtime -q
-```
-
-### Step 3: Zeta models, context, trace, agents
-
-Create:
-
-- `tests/zeta/models/*.py`
-- `tests/zeta/context/*.py`
-- `tests/zeta/trace/*.py`
-- `tests/zeta/agents/*.py`
-- `tests/zeta/cli/test_server.py`
-
-Run:
-
-```bash
-uv run pytest tests/zeta -q
-```
-
-### Step 4: Sigil tools and state
-
-Create:
-
-- `tests/sigil/conftest.py`
-- `tests/sigil/tools/*.py`
-- `tests/sigil/state/*.py`
-
-Run:
-
-```bash
-uv run pytest tests/sigil/tools tests/sigil/state -q
-```
-
-### Step 5: Sigil CLI, workflows, display
-
-Create:
-
-- `tests/shared/cli.py`
-- `tests/sigil/cli/*.py`
-- `tests/sigil/workflows/*.py`
-- `tests/sigil/display/*.py`
-
-Run:
-
-```bash
-uv run pytest tests/sigil/cli tests/sigil/workflows tests/sigil/display -q
-```
-
-### Step 6: Sigil shell
-
-Create:
-
-- `tests/shared/shell.py`
-- `tests/sigil/shell/*.py`
-
-Run:
-
-```bash
-uv run pytest tests/sigil/shell -q
-```
-
-### Step 7: Full suite
-
-Run:
-
-```bash
-uv run pytest -q
-uv run ruff check
-uv run ty check
-uvx --with radon radon cc src tests -s
-```
-
-Run `pre-commit` only when docs or config changed:
-
-```bash
-uv run pre-commit run --all
-```
+| Should authored specs reject wrong field types? | Zeta agents | Yes for user-authored files, but do not exhaustively test wrong types |
+| Should model profile TOML reject wrong field types? | Zeta models | Yes for user-authored config, but one malformed-config test is enough |
+| Should old persisted events stay readable? | Zeta/Sigil storage | Yes, but test one representative old event shape |
 
 ## Coverage Targets
 
-The goal is contract coverage, not line coverage.
+The goal is contract confidence, not line coverage.
 
 Minimum acceptable coverage:
 
-- every public Zeta JSON-RPC method has success and failure behavior tests.
-- Zeta event store behavior is pinned for memory and SQLite stores.
-- Zeta agent loop has text, tool, staged, direct, error, stream, telemetry, and
-  abort paths.
-- Zeta model provider adapters have exact request payload and stream
-  reconstruction tests.
-- Zeta trace replay can reconstruct at least one full model/tool exchange.
-- Sigil CLI has at least one behavior test per public command group.
-- Sigil shell has static binding tests and critical interactive glyph tests.
-- Sigil builtin tools have side-effect tests for direct and staged behavior.
-- Sigil history and bundle records round trip.
+- every public Zeta JSON-RPC method family has at least one behavior test.
+- Zeta event storage has append/list/filter/idempotency coverage.
+- Zeta agent loop has text, tool, staged, direct, refused, and abort paths.
+- Zeta model adapters have one exact request payload test and one stream
+  reconstruction test.
+- Zeta trace replay can reconstruct one model/tool exchange.
+- Sigil golden path covers `ask`, `step`, `do`, shell resume, status/history,
+  shell glyph routing, and real-file tools.
+- Sigil CLI has one behavior test for the command groups that users touch every
+  day.
+- Sigil shell has static binding behavior and one resume path.
+- Sigil builtin tools have representative read/search/mutate/query behavior on
+  real temporary files.
+- Sigil history records round trip at least one meaningful turn.
 
 ## Anti-Goals
 
@@ -1413,6 +432,7 @@ Do not rebuild:
 - tests that exist only to make coverage numbers high.
 - compatibility tests for behavior intentionally removed.
 - validation tests for internal call paths.
+- a case matrix for every option.
 
 ## Expected End State
 

@@ -1130,12 +1130,6 @@ def validate_tool_call(
                 f"tool is not allowed in this workflow: {invocation.name}",
             )
         )
-    schema_errors = tool_registry.validate_capability_args(
-        capability_id,
-        invocation.params,
-    )
-    if schema_errors:
-        return ToolCallValidation(error=("schema-mismatch", "; ".join(schema_errors)))
     return ToolCallValidation(capability_id=capability_id)
 
 

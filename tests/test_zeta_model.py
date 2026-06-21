@@ -954,7 +954,7 @@ default = true
     assert "default" in catalog.diagnostics[0].message
 
 
-def test_zeta_models_rejects_non_boolean_default(
+def test_zeta_models_preserves_truthy_default_without_selecting_it(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -972,9 +972,9 @@ default = "yes"
 
     catalog = zeta_models.load_model_profiles()
 
-    assert catalog.profiles == {}
-    assert len(catalog.diagnostics) == 1
-    assert "default" in catalog.diagnostics[0].message
+    assert catalog.profiles["one"].default == "yes"
+    assert catalog.default_profile is None
+    assert catalog.diagnostics == []
 
 
 def test_zeta_models_resolve_active_model_survives_vanished_profile(

@@ -5,7 +5,7 @@ import re
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import yaml
 
@@ -74,28 +74,35 @@ def load_spec(path: str | Path) -> AgentSpec:
         raise SpecError(f"{path} is not valid UTF-8: {exc}") from exc
     frontmatter, instructions = split_frontmatter(content, path)
     slug = derive_slug(path)
-    accepts = string_tuple(frontmatter.get("accepts", ()), "accepts", path)
-    schedules = schedule_tuple(frontmatter.get("schedules", ()), path)
-    validate_schedules_subset_of_accepts(schedules, accepts, path)
-    return AgentSpec(
-        slug=slug,
-        name=required_string(frontmatter, "name", path),
-        description=required_string(frontmatter, "description", path),
-        instructions=instructions,
-        path=relative_to_cwd(path),
-        sha256=hashlib.sha256(raw_bytes).hexdigest(),
-        enabled=bool_field(frontmatter.get("enabled", True), "enabled", path),
-        resumable=bool_field(frontmatter.get("resumable", False), "resumable", path),
-        accepts=accepts,
-        returns=string_tuple(frontmatter.get("returns", ()), "returns", path),
-        tools=string_tuple(frontmatter.get("tools", ()), "tools", path),
-        schedules=schedules,
-        extensions={
-            key: value
-            for key, value in frontmatter.items()
-            if key not in BUILT_IN_FRONTMATTER_KEYS
-        },
-    )
+    try:
+        accepts = string_tuple(frontmatter.get("accepts", ()), "accepts", path)
+        schedules = schedule_tuple(frontmatter.get("schedules", ()), path)
+        validate_schedules_subset_of_accepts(schedules, accepts, path)
+        return AgentSpec(
+            slug=slug,
+            name=required_string(frontmatter, "name", path),
+            description=required_string(frontmatter, "description", path),
+            instructions=instructions,
+            path=relative_to_cwd(path),
+            sha256=hashlib.sha256(raw_bytes).hexdigest(),
+            enabled=bool_field(frontmatter.get("enabled", True), "enabled", path),
+            resumable=bool_field(
+                frontmatter.get("resumable", False), "resumable", path
+            ),
+            accepts=accepts,
+            returns=string_tuple(frontmatter.get("returns", ()), "returns", path),
+            tools=string_tuple(frontmatter.get("tools", ()), "tools", path),
+            schedules=schedules,
+            extensions={
+                key: value
+                for key, value in frontmatter.items()
+                if key not in BUILT_IN_FRONTMATTER_KEYS
+            },
+        )
+    except SpecError:
+        raise
+    except (AttributeError, TypeError, ValueError) as exc:
+        raise SpecError(f"invalid spec in {path}: {exc}") from exc
 
 
 def matches(spec: AgentSpec, event_type: str) -> bool:
@@ -133,41 +140,32 @@ def derive_slug(path: Path) -> str:
 
 def required_string(frontmatter: Mapping[str, Any], field: str, path: Path) -> str:
     value = frontmatter.get(field)
-    if not isinstance(value, str) or not value:
+    if value is None or value == "":
         raise SpecError(f"missing required field {field!r} in {path}")
-    return value
+    return cast(str, value)
 
 
 def bool_field(value: Any, field: str, path: Path) -> bool:
-    if not isinstance(value, bool):
-        raise SpecError(f"invalid value for {field!r} in {path}: expected boolean")
-    return value
+    del field, path
+    return cast(bool, value)
 
 
 def string_tuple(value: Any, field: str, path: Path) -> tuple[str, ...]:
+    del field, path
     if value is None or value == ():
         return ()
-    if not isinstance(value, list):
-        raise SpecError(f"invalid value for {field!r} in {path}: expected list")
-    out = []
-    for item in value:
-        if not isinstance(item, str):
-            raise SpecError(f"invalid value for {field!r}: expected strings")
-        out.append(item)
-    return tuple(out)
+    return cast(tuple[str, ...], value)
 
 
 def schedule_tuple(value: Any, path: Path) -> tuple[ScheduleEntry, ...]:
     if value is None or value == ():
         return ()
-    if not isinstance(value, list):
-        raise SpecError(f"invalid value for 'schedules' in {path}: expected list")
-    return tuple(schedule_entry(item, path) for item in value)
+    return cast(
+        tuple[ScheduleEntry, ...], [schedule_entry(item, path) for item in value]
+    )
 
 
 def schedule_entry(value: Any, path: Path) -> ScheduleEntry:
-    if not isinstance(value, dict):
-        raise SpecError(f"invalid value for 'schedules' in {path}: expected objects")
     cron = required_schedule_string(value, "cron", path)
     event = required_schedule_string(value, "event", path)
     payload = schedule_payload(value.get("payload", {}), path)
@@ -182,25 +180,19 @@ def schedule_entry(value: Any, path: Path) -> ScheduleEntry:
 
 def required_schedule_string(value: Mapping[str, Any], field: str, path: Path) -> str:
     item = value.get(field)
-    if not isinstance(item, str):
+    if item is None or item == "":
         raise SpecError(f"invalid value for 'schedules' in {path}: {field} is required")
-    return item
+    return cast(str, item)
 
 
 def schedule_payload(value: Any, path: Path) -> dict[str, Any]:
-    if not isinstance(value, dict):
-        raise SpecError(
-            f"invalid value for 'schedules' in {path}: payload must be an object"
-        )
-    return dict(value)
+    del path
+    return cast(dict[str, Any], value)
 
 
 def schedule_timezone(value: Any, path: Path) -> str | None:
-    if value is None or isinstance(value, str):
-        return value
-    raise SpecError(
-        f"invalid value for 'schedules' in {path}: timezone must be a string"
-    )
+    del path
+    return cast(str | None, value)
 
 
 def validate_schedules_subset_of_accepts(

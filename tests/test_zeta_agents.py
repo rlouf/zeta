@@ -94,17 +94,17 @@ User asked: {{ event.payload.text }}
     assert spec.description == "Answers workspace questions in Slack."
     assert spec.enabled is True
     assert spec.resumable is True
-    assert spec.accepts == ("slack.dm.received",)
-    assert spec.returns == ("message.delivery.requested",)
-    assert spec.tools == ("read",)
-    assert spec.schedules == (
+    assert spec.accepts == ["slack.dm.received"]
+    assert spec.returns == ["message.delivery.requested"]
+    assert spec.tools == ["read"]
+    assert spec.schedules == [
         zeta_agents.ScheduleEntry(
             cron="* * * * *",
             event="slack.dm.received",
             payload={"text": "scheduled"},
             timezone=None,
         ),
-    )
+    ]
     assert spec.extensions == {"writes": {"paths": ["docs/**.md"]}}
     assert spec.instructions == "User asked: {{ event.payload.text }}\n"
     assert len(spec.sha256) == 64

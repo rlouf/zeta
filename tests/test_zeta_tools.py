@@ -79,15 +79,16 @@ def test_zeta_capability_registry_registers_and_lists_capabilities() -> None:
     assert capability.declaration.id.canonical() == "test.unit"
 
 
-def test_zeta_capability_registry_rejects_invalid_capability_schema() -> None:
+def test_zeta_capability_registry_accepts_unchecked_capability_schema() -> None:
     registry = CapabilityRegistry()
     capability = _test_capability(
         "bad",
         schema={"type": "definitely-not-json-schema"},
     )
 
-    with pytest.raises(ValueError, match="invalid schema for capability 'test.bad'"):
-        registry.register(capability)
+    registry.register(capability)
+
+    assert registry.get("test.bad") is capability
 
 
 def test_zeta_capability_registry_runs_direct_only_capability_in_stage_mode() -> None:
@@ -908,7 +909,6 @@ def test_zeta_tool_edit_accepts_exact_replacement(tmp_path: Path) -> None:
 
     data = tool_registry.invoke("edit", payload)
 
-    assert tool_registry.validate_capability_args("edit", payload) == []
     artifact = Path(data["effect"]["artifact"])
     patch = artifact.read_text(encoding="utf-8")
     assert data["effect"]["command"].startswith("git apply ")

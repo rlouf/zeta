@@ -5,7 +5,6 @@ import os
 import re
 import tempfile
 import tomllib
-from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal, cast
@@ -119,7 +118,7 @@ def load_model_profiles(config_path: Path | None = None) -> ModelCatalog:
         if profile is None:
             continue
         profiles[profile.name] = profile
-        if not profile.default:
+        if profile.default is not True:
             continue
         if default_profile is None:
             default_profile = profile.name
@@ -301,27 +300,16 @@ def _parse_profile(
     return _profile_from_config(value), None
 
 
-ProfileValidator = Callable[[Path, str, dict[str, Any]], ModelDiagnostic | None]
-
-
 def _profile_validation_diagnostic(
     path: Path,
     label: str,
     value: dict[str, Any],
 ) -> ModelDiagnostic | None:
-    validators: tuple[ProfileValidator, ...] = (
-        _validate_profile_name,
-        _validate_profile_model,
-        _validate_profile_url,
-        _validate_profile_thinking,
-        _validate_profile_api,
-        _validate_profile_default,
+    return (
+        _validate_profile_name(path, label, value)
+        or _validate_profile_thinking(path, label, value)
+        or _validate_profile_api(path, label, value)
     )
-    for validator in validators:
-        diagnostic = validator(path, label, value)
-        if diagnostic is not None:
-            return diagnostic
-    return None
 
 
 def _validate_profile_name(
@@ -335,28 +323,6 @@ def _validate_profile_name(
             path,
             f"{label}.name must use lowercase letters, digits, and hyphens",
         )
-    return None
-
-
-def _validate_profile_model(
-    path: Path,
-    label: str,
-    value: dict[str, Any],
-) -> ModelDiagnostic | None:
-    model = value.get("model")
-    if not isinstance(model, str) or not model.strip():
-        return ModelDiagnostic(path, f"{label}.model must be a non-empty string")
-    return None
-
-
-def _validate_profile_url(
-    path: Path,
-    label: str,
-    value: dict[str, Any],
-) -> ModelDiagnostic | None:
-    url = value.get("url")
-    if url is not None and (not isinstance(url, str) or not url.strip()):
-        return ModelDiagnostic(path, f"{label}.url must be a non-empty string")
     return None
 
 
@@ -388,25 +354,14 @@ def _validate_profile_api(
     return None
 
 
-def _validate_profile_default(
-    path: Path,
-    label: str,
-    value: dict[str, Any],
-) -> ModelDiagnostic | None:
-    default = value.get("default")
-    if default is not None and not isinstance(default, bool):
-        return ModelDiagnostic(path, f"{label}.default must be a boolean")
-    return None
-
-
 def _profile_from_config(value: dict[str, Any]) -> ModelProfile:
     url = value.get("url")
     default = value.get("default")
     return ModelProfile(
         name=cast(str, value["name"]),
-        model=cast(str, value["model"]).strip(),
-        url=url.strip() if url else None,
+        model=cast(str, value["model"]),
+        url=cast(str | None, url),
         thinking=cast(str | None, value.get("thinking")),
         api=cast(str | None, value.get("api")),
-        default=bool(default),
+        default=cast(bool, default) if default is not None else False,
     )

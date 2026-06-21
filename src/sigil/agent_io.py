@@ -9,7 +9,7 @@ workflow-specific tagging, logging, and handoff handling.
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass, replace
-from typing import Any, TextIO
+from typing import Any, TextIO, cast
 
 from sigil.display.render import render_tool_start
 from sigil.display.state import (
@@ -409,18 +409,10 @@ async def run_zeta_rpc_session(
     from sigil import zeta_session_for_sigil
 
     runtime_context = zeta_session_for_sigil()
-    objective = str(params.get("objective") or "")
-    if not objective:
-        raise ValueError("session.run requires objective")
-    workflow = str(params.get("workflow") or "propose")
-    if workflow not in {"ask", "propose", "do"}:
-        raise ValueError("workflow must be ask, propose, or do")
+    objective = params.get("objective")
+    workflow = params["workflow"] if "workflow" in params else "propose"
     requested_tools = params.get("tools")
-    allowed_capabilities = (
-        tuple(str(tool) for tool in requested_tools if isinstance(tool, str))
-        if isinstance(requested_tools, list)
-        else None
-    )
+    allowed_capabilities = requested_tools if requested_tools is not None else None
     ensure_builtin_tools_registered()
     selected_model = active_model_selection(session_dir=runtime_context.session_dir)
     enabled_capabilities = registered_capabilities(
@@ -434,8 +426,8 @@ async def run_zeta_rpc_session(
     execution_mode: ExecutionMode = "direct" if workflow == "do" else "stage"
     turn_recorder = TurnRecorder(
         runtime_context=runtime_context,
-        workflow=workflow,
-        objective=objective,
+        workflow=cast(str, workflow),
+        objective=cast(str, objective),
         allowed_tools=enabled_tool_names,
         staged=any(
             runtime_context.tool_registry.model_name(capability_id)
@@ -486,16 +478,12 @@ async def run_zeta_rpc_session(
 
     try:
         result = await async_run_agent_turn(
-            objective,
+            cast(str, objective),
             prior_timeline,
             AgentConfig(
-                system_prompt=params.get("system")
-                if isinstance(params.get("system"), str)
-                else None,
+                system_prompt=params.get("system"),
                 allowed_capabilities=enabled_capabilities,
-                max_turns=params.get("max_steps")
-                if isinstance(params.get("max_steps"), int)
-                else None,
+                max_turns=params.get("max_steps"),
                 stop_on_staged_effect=True,
                 execution_mode=execution_mode,
                 model_profile=selected_model.profile
@@ -508,13 +496,11 @@ async def run_zeta_rpc_session(
                 if selected_model is not None
                 else None,
                 model_api=selected_model.api if selected_model is not None else None,
-                max_wall_seconds=optional_float_param(params, "max_wall_seconds"),
+                max_wall_seconds=params.get("max_wall_seconds"),
             ),
-            context=(
-                str(params.get("context"))
-                if isinstance(params.get("context"), str)
-                else load_project_instructions()
-            ),
+            context=params["context"]
+            if "context" in params
+            else load_project_instructions(),
             event_sink=sink,
             trace_store=runtime_context.trace_store,
             tool_registry=runtime_context.tool_registry,
@@ -576,15 +562,6 @@ async def run_zeta_rpc_session(
         "outcome": zeta_outcome,
         "final_answer": result.final_answer,
     }
-
-
-def optional_float_param(params: dict[str, Any], key: str) -> float | None:
-    value = params.get(key)
-    if isinstance(value, bool):
-        return None
-    if isinstance(value, int | float):
-        return float(value)
-    return None
 
 
 def model_telemetry_fields(

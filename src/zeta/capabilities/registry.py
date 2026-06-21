@@ -8,9 +8,6 @@ from collections.abc import Coroutine
 from dataclasses import dataclass, field
 from typing import Any, cast
 
-from jsonschema import Draft202012Validator
-from jsonschema.exceptions import SchemaError, ValidationError
-
 from zeta.capabilities.base import error_result
 from zeta.kernel.capabilities import Capability, ExecutionMode
 
@@ -96,12 +93,6 @@ class CapabilityRegistry:
         capability_id = capability.declaration.id.canonical()
         if capability_id in self._capabilities:
             raise ValueError(f"capability {capability_id!r} is already registered")
-        try:
-            Draft202012Validator.check_schema(capability.declaration.input_schema)
-        except SchemaError as exc:
-            raise ValueError(
-                f"invalid schema for capability {capability_id!r}: {exc.message}"
-            ) from exc
         self._capabilities[capability_id] = capability
         self._names.setdefault(capability.declaration.id.name, []).append(capability_id)
 
@@ -161,21 +152,6 @@ class CapabilityRegistry:
             name_to_id[name] = capability_id
             descriptors.append(model_descriptor(name, capability))
         return CapabilityProjection(name_to_id=name_to_id, descriptors=descriptors)
-
-    def validate_capability_args(
-        self, capability_id: str, params: dict[str, Any]
-    ) -> list[str]:
-        """Validate params against the capability's JSON Schema."""
-        capability_id = self.resolve(capability_id) or capability_id
-        capability = self.get(capability_id)
-        if capability is None:
-            return [f"unknown capability: {capability_id}"]
-        try:
-            validator = Draft202012Validator(capability.declaration.input_schema)
-        except SchemaError as exc:
-            return [f"invalid schema for capability {capability_id}: {exc.message}"]
-        errors = sorted(validator.iter_errors(params), key=_validation_error_sort_key)
-        return [_format_validation_error(error) for error in errors]
 
     def invoke(
         self,
@@ -286,10 +262,6 @@ def invalid_capability_result_error(capability_id: str) -> dict[str, Any]:
     ).to_mapping()
 
 
-def _validation_error_sort_key(error: ValidationError) -> tuple[str, str]:
-    return (_json_path(error.absolute_path), error.message)
-
-
 def model_descriptor(alias: str, capability: RegisteredCapability) -> dict[str, Any]:
     return {
         "type": "function",
@@ -299,17 +271,3 @@ def model_descriptor(alias: str, capability: RegisteredCapability) -> dict[str, 
             "parameters": capability.declaration.input_schema,
         },
     }
-
-
-def _format_validation_error(error: ValidationError) -> str:
-    return f"{_json_path(error.absolute_path)}: {error.message}"
-
-
-def _json_path(parts: Any) -> str:
-    path = "$"
-    for part in parts:
-        if isinstance(part, int):
-            path += f"[{part}]"
-        else:
-            path += f".{part}"
-    return path

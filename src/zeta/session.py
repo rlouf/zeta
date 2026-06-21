@@ -79,14 +79,14 @@ class SessionRunParams:
 
     @classmethod
     def from_mapping(cls, params: dict[str, Any]) -> SessionRunParams:
-        objective = str(params.get("objective") or "")
-        if not objective:
+        objective = params.get("objective")
+        if objective is None or objective == "":
             raise SessionRequestError(
                 "missing_objective",
                 "session.run requires objective",
                 {"message": "session.run requires objective"},
             )
-        workflow = str(params.get("workflow") or "ask")
+        workflow = params["workflow"] if "workflow" in params else "ask"
         if workflow not in {"ask", "propose", "do"}:
             raise SessionRequestError(
                 "invalid_workflow",
@@ -97,27 +97,19 @@ class SessionRunParams:
                 },
             )
         requested_tools = params.get("tools")
-        tools = (
-            tuple(tool for tool in requested_tools if isinstance(tool, str))
-            if isinstance(requested_tools, list)
-            else None
-        )
+        tools = requested_tools if requested_tools is not None else None
         return cls(
-            objective=objective,
+            objective=cast(str, objective),
             workflow=cast(SessionWorkflow, workflow),
-            tools=tools,
-            context=str(params["context"])
-            if isinstance(params.get("context"), str)
-            else "",
-            system=optional_string(params.get("system")),
-            model=optional_string(params.get("model")),
-            url=optional_string(params.get("url")),
-            thinking=optional_string(params.get("thinking")),
-            api=optional_string(params.get("api")),
-            max_steps=params.get("max_steps")
-            if isinstance(params.get("max_steps"), int)
-            else None,
-            max_wall_seconds=optional_float(params.get("max_wall_seconds")),
+            tools=cast(tuple[str, ...] | None, tools),
+            context=params.get("context", ""),
+            system=params.get("system"),
+            model=params.get("model"),
+            url=params.get("url"),
+            thinking=params.get("thinking"),
+            api=params.get("api"),
+            max_steps=params.get("max_steps"),
+            max_wall_seconds=params.get("max_wall_seconds"),
         )
 
     def turn_payload(self, run_id: str) -> dict[str, Any]:
@@ -594,14 +586,6 @@ def session_agent_config(
         model_api=params.api,
         max_wall_seconds=params.max_wall_seconds,
     )
-
-
-def optional_float(value: Any) -> float | None:
-    if isinstance(value, bool):
-        return None
-    if isinstance(value, int | float):
-        return float(value)
-    return None
 
 
 def optional_string(value: object) -> str | None:

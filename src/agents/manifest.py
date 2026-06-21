@@ -75,11 +75,6 @@ def validate_events(spec: AgentSpec, registry: EventRegistry | None) -> None:
 
 
 def validate_extensions(spec: AgentSpec, extensions: Mapping[str, type[Any]]) -> None:
-    for key, value in (spec.extensions or {}).items():
-        expected = extensions.get(key)
-        if expected is None:
+    for key in spec.extensions or {}:
+        if key not in extensions:
             raise ManifestError(f"agent {spec.slug!r} uses unknown extension {key!r}")
-        if not isinstance(value, expected):
-            raise ManifestError(
-                f"agent {spec.slug!r} extension {key!r} has invalid shape"
-            )

@@ -10,9 +10,6 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any, Literal, Protocol, TextIO, cast
 
-from jsonschema import Draft202012Validator
-from jsonschema.exceptions import SchemaError
-
 from zeta.capabilities.base import (
     error_result,
 )
@@ -136,15 +133,15 @@ class SessionCancelParams:
 
     @classmethod
     def from_mapping(cls, params: dict[str, Any]) -> "SessionCancelParams":
-        run_id = optional_string(params.get("run_id"))
-        if run_id is None:
+        run_id = params.get("run_id")
+        if run_id is None or run_id == "":
             raise RpcError(
                 -32602,
                 "invalid_run_id",
                 "Invalid params",
                 {"message": "run_id must be a non-empty string"},
             )
-        return cls(run_id)
+        return cls(cast(str, run_id))
 
 
 def rpc_session_runner_cancel_mode(runner: RpcSessionRunner) -> RpcCancelMode:
@@ -264,12 +261,7 @@ def rpc_event_with_run_id(event: dict[str, Any], run_id: str) -> dict[str, Any]:
 
 
 def client_tool_timeout_sec(item: dict[str, Any]) -> float | None:
-    value = item.get("timeout_sec")
-    if isinstance(value, bool):
-        return None
-    if isinstance(value, int | float) and value > 0:
-        return float(value)
-    return None
+    return cast(float | None, item.get("timeout_sec"))
 
 
 def client_tool_provider(item: dict[str, Any], name: str) -> str:
@@ -290,30 +282,8 @@ def client_tool_provider(item: dict[str, Any], name: str) -> str:
 
 
 def client_tool_schema(item: dict[str, Any], name: str) -> dict[str, Any]:
-    schema = item.get("schema")
-    if not isinstance(schema, dict):
-        raise RpcError(
-            -32602,
-            "missing_tool_schema",
-            "Invalid params",
-            {
-                "message": f"tool {name!r} must declare a JSON schema",
-                "tool": name,
-            },
-        )
-    try:
-        Draft202012Validator.check_schema(schema)
-    except SchemaError as exc:
-        raise RpcError(
-            -32602,
-            "invalid_tool_schema",
-            "Invalid params",
-            {
-                "message": exc.message,
-                "tool": name,
-            },
-        ) from exc
-    return schema
+    del name
+    return cast(dict[str, Any], item["schema"] if "schema" in item else {})
 
 
 def client_capability_declaration(capability: RegisteredCapability) -> dict[str, Any]:
@@ -342,7 +312,7 @@ def client_tool_capability(
     return RegisteredCapability(
         Capability(
             CapabilityId(provider, name),
-            str(item.get("description") or ""),
+            cast(str, item["description"] if "description" in item else ""),
             schema,
         ),
         RpcClientCapabilityExecutor(
@@ -561,7 +531,15 @@ class JsonRpcProtocol:
         return {"server": "zeta", "protocol": "0.1"}
 
     def register_tools_rpc(self, params: dict[str, Any]) -> dict[str, Any]:
-        return {"registered": self.register_client_tools(params.get("tools"))}
+        try:
+            return {"registered": self.register_client_tools(params.get("tools"))}
+        except (AttributeError, TypeError) as exc:
+            raise RpcError(
+                -32602,
+                "invalid_tools",
+                "Invalid params",
+                {"message": str(exc)},
+            ) from exc
 
     def respond_tools_rpc(self, params: dict[str, Any]) -> None:
         self.record_tool_response(params)
@@ -640,16 +618,12 @@ class JsonRpcProtocol:
         }
 
     def register_client_tools(self, tools: Any) -> list[dict[str, Any]]:
-        if not isinstance(tools, list):
-            return []
         registered = []
-        for item in tools:
-            if not isinstance(item, dict):
+        for item in tools or ():
+            name = item.get("name")
+            if name is None or name == "":
                 continue
-            name = str(item.get("name") or "")
-            if not name:
-                continue
-            registered.append(self.register_client_tool(name, item))
+            registered.append(self.register_client_tool(cast(str, name), item))
         return registered
 
     def register_client_tool(self, name: str, item: dict[str, Any]) -> dict[str, Any]:

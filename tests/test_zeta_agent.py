@@ -1774,11 +1774,29 @@ def test_zeta_session_run_params_capture_defaults_and_options() -> None:
 
     assert params.objective == "answer"
     assert params.workflow == "ask"
-    assert params.tools == ("read", "", "bash")
+    assert params.tools == ["read", "", 12, "bash"]
     assert params.context == "existing notes"
     assert params.model == "gpt-test"
     assert params.max_steps == 3
-    assert params.max_wall_seconds == 1.0
+    assert params.max_wall_seconds == 1
+
+
+def test_zeta_session_run_params_preserve_boundary_values() -> None:
+    params = zeta_session.SessionRunParams.from_mapping(
+        {
+            "objective": 12,
+            "tools": {"read", "bash"},
+            "context": None,
+            "system": 34,
+            "max_wall_seconds": "1",
+        }
+    )
+
+    assert params.objective == 12
+    assert params.tools == {"read", "bash"}
+    assert params.context is None
+    assert params.system == 34
+    assert params.max_wall_seconds == "1"
 
 
 def test_zeta_event_trigger_rule_matches_exact_and_prefix() -> None:
@@ -3339,7 +3357,7 @@ def test_zeta_rpc_registered_client_tool_exposes_capability_metadata() -> None:
     assert capability.executor.timeout_seconds == 2.5
 
 
-def test_zeta_rpc_rejects_missing_client_tool_schema() -> None:
+def test_zeta_rpc_registers_client_tool_without_schema() -> None:
     input_stream = StringIO(
         json.dumps(
             {
@@ -3366,13 +3384,21 @@ def test_zeta_rpc_rejects_missing_client_tool_schema() -> None:
     asyncio.run(server.serve())
 
     message = rpc_messages(output)[0]
-    assert message["error"]["code"] == -32602
-    assert message["error"]["message"] == "Invalid params"
-    assert message["error"]["data"]["code"] == "missing_tool_schema"
-    assert message["error"]["data"]["tool"] == "client.bad"
+    assert message["result"]["registered"] == [
+        {
+            "id": "rpc.client.bad",
+            "provider": "rpc",
+            "name": "client.bad",
+            "description": "Bad client schema.",
+            "input_schema": {},
+        }
+    ]
+    capability = server.tool_registry.get("rpc.client.bad")
+    assert capability is not None
+    assert capability.declaration.input_schema == {}
 
 
-def test_zeta_rpc_rejects_invalid_client_tool_schema() -> None:
+def test_zeta_rpc_registers_client_tool_with_unchecked_schema() -> None:
     input_stream = StringIO(
         json.dumps(
             {
@@ -3400,10 +3426,18 @@ def test_zeta_rpc_rejects_invalid_client_tool_schema() -> None:
     asyncio.run(server.serve())
 
     message = rpc_messages(output)[0]
-    assert message["error"]["code"] == -32602
-    assert message["error"]["message"] == "Invalid params"
-    assert message["error"]["data"]["code"] == "invalid_tool_schema"
-    assert message["error"]["data"]["tool"] == "client.bad"
+    assert message["result"]["registered"] == [
+        {
+            "id": "rpc.client.bad",
+            "provider": "rpc",
+            "name": "client.bad",
+            "description": "Bad client schema.",
+            "input_schema": {"type": "definitely-not-json-schema"},
+        }
+    ]
+    capability = server.tool_registry.get("rpc.client.bad")
+    assert capability is not None
+    assert capability.declaration.input_schema == {"type": "definitely-not-json-schema"}
 
 
 def test_zeta_rpc_direct_only_client_tool_runs_in_stage_mode() -> None:
@@ -3928,9 +3962,20 @@ def test_zeta_rpc_events_list_filters_by_session_and_run(tmp_path: Path) -> None
     ]
 
 
-def test_zeta_rpc_event_list_params_reject_invalid_cursor() -> None:
+def test_zeta_rpc_event_list_params_reject_numeric_cursor() -> None:
     with pytest.raises(zeta_rpc.RpcError) as raised:
         zeta_rpc.EventListParams.from_mapping({"after": 1})
+
+    assert raised.value.jsonrpc_code == -32602
+    assert raised.value.error_data() == {
+        "code": "invalid_cursor",
+        "message": "after must be an event cursor string",
+    }
+
+
+def test_zeta_rpc_event_list_params_reject_non_numeric_cursor() -> None:
+    with pytest.raises(zeta_rpc.RpcError) as raised:
+        zeta_rpc.EventListParams.from_mapping({"after": "nope"})
 
     assert raised.value.jsonrpc_code == -32602
     assert raised.value.error_data() == {
@@ -3942,6 +3987,17 @@ def test_zeta_rpc_event_list_params_reject_invalid_cursor() -> None:
 def test_zeta_rpc_event_list_params_reject_invalid_limit() -> None:
     with pytest.raises(zeta_rpc.RpcError) as raised:
         zeta_rpc.EventListParams.from_mapping({"limit": 0})
+
+    assert raised.value.jsonrpc_code == -32602
+    assert raised.value.error_data() == {
+        "code": "invalid_limit",
+        "message": "limit must be a positive integer",
+    }
+
+
+def test_zeta_rpc_event_list_params_reject_string_limit() -> None:
+    with pytest.raises(zeta_rpc.RpcError) as raised:
+        zeta_rpc.EventListParams.from_mapping({"limit": "10"})
 
     assert raised.value.jsonrpc_code == -32602
     assert raised.value.error_data() == {
@@ -5377,12 +5433,16 @@ def test_zeta_agent_turn_converts_tool_crash_to_error_result(monkeypatch) -> Non
     assert tool_result["status"] == "failed"
 
 
-def test_zeta_agent_turn_rejects_schema_mismatch_before_running(monkeypatch) -> None:
-    ran = False
+def test_zeta_agent_turn_runs_tool_call_without_schema_validation(monkeypatch) -> None:
+    ran_with: list[dict[str, Any]] = []
 
-    def fail_invoke(name: str, params: dict[str, Any]) -> dict[str, Any]:
-        nonlocal ran
-        ran = True
+    def fake_invoke(
+        name: str,
+        params: dict[str, Any],
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        del name, kwargs
+        ran_with.append(params)
         return {"ok": True}
 
     monkeypatch.setattr(zeta_model, "model_endpoint_open", lambda: True)
@@ -5402,7 +5462,7 @@ def test_zeta_agent_turn_rejects_schema_mismatch_before_running(monkeypatch) -> 
             ]
         },
     )
-    monkeypatch.setattr(zeta_agent, "invoke_capability", fail_invoke)
+    monkeypatch.setattr(zeta_agent, "invoke_capability", fake_invoke)
 
     result = run_agent_turn(
         "inspect",
@@ -5410,15 +5470,14 @@ def test_zeta_agent_turn_rejects_schema_mismatch_before_running(monkeypatch) -> 
         zeta_agent.AgentConfig(allowed_capabilities=("read",), max_turns=1),
     )
 
-    assert ran is False
+    assert ran_with == [{"path": "README.md", "unexpected": True}]
     tool_result = next(
         event
         for event in timeline_events(result.events)
         if event.get("type") == "tool_result"
     )
-    assert tool_result["result"]["ok"] is False
-    assert tool_result["result"]["error"]["code"] == "schema-mismatch"
-    assert tool_result["status"] == "refused"
+    assert tool_result["result"]["ok"] is True
+    assert tool_result["status"] == "completed"
 
 
 def test_zeta_agent_turn_rejects_disallowed_tool_before_running(monkeypatch) -> None:

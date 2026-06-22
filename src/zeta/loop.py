@@ -172,7 +172,7 @@ class ModelGateway(Protocol):
 
 
 @dataclass(frozen=True)
-class TurnContext:
+class RunDependencies:
     event_sink: AgentEventSink | None
     trace_store: Store | None
     tool_registry: CapabilityRegistry
@@ -180,6 +180,113 @@ class TurnContext:
     cancellation_event: CancellationToken | None
     deadline: float | None
     model_gateway: ModelGateway = field(default_factory=DefaultModelGateway)
+
+
+class TurnContext(RunDependencies):
+    """Compatibility name while loop internals move to run terminology."""
+
+
+@dataclass(frozen=True)
+class RunStepOutcome:
+    kind: Literal["continue", "finished", "staged_effect", "aborted"]
+    final_answer: str = ""
+    staged_effect: dict[str, Any] | None = None
+    answer_streamed: bool = False
+
+
+@dataclass
+class AgentRun:
+    objective: str
+    timeline: Sequence[TimelineEvent]
+    config: AgentConfig
+    context: str
+    deps: RunDependencies
+    allowed_capabilities: tuple[str, ...]
+    projection: CapabilityProjection
+    tools: list[dict[str, Any]]
+    state: RunState
+
+    async def run(self) -> AgentTurnResult:
+        for _ in turn_indices(self.config.max_turns):
+            outcome = await self.model_step()
+            if outcome.kind == "continue":
+                continue
+            self.state.note_step("finish_run")
+            return self.state.result(
+                final_answer=outcome.final_answer,
+                staged_effect=outcome.staged_effect,
+                answer_streamed=outcome.answer_streamed,
+            )
+        self.state.note_step("finish_run")
+        return self.state.result()
+
+    async def model_step(self) -> RunStepOutcome:
+        self.state.note_step("check_budget")
+        check_turn_budget(
+            self.state,
+            ctx=self.deps,
+        )
+        turn = await request_model_turn(
+            self.objective,
+            self.timeline,
+            config=self.config,
+            allowed_capabilities=self.allowed_capabilities,
+            context=self.context,
+            tools=self.tools,
+            state=self.state,
+            ctx=self.deps,
+        )
+        if (
+            self.deps.cancellation_event is not None
+            and self.deps.cancellation_event.is_set()
+        ):
+            check_turn_budget(
+                self.state,
+                ctx=self.deps,
+                check_deadline=False,
+            )
+        assistant = turn.assistant.to_provider()
+        assistant_event_id, tool_calls = record_model_event(
+            assistant,
+            self.state.events,
+            prompt_trace=turn.prompt_trace,
+            caused_by=self.state.next_model_caused_by,
+            ctx=self.deps,
+        )
+        update_prompt_trace_from_projection(
+            assistant_event_id,
+            state=self.state,
+            ctx=self.deps,
+        )
+        if not tool_calls:
+            return RunStepOutcome(
+                kind="finished",
+                final_answer=turn.assistant.content,
+                answer_streamed=turn.streamed_content,
+            )
+        return await self.tool_step(
+            tool_calls,
+            model_telemetry=turn.model_telemetry,
+            assistant_event_id=assistant_event_id,
+        )
+
+    async def tool_step(
+        self,
+        tool_calls: list[dict[str, Any]],
+        *,
+        model_telemetry: dict[str, Any],
+        assistant_event_id: str | None,
+    ) -> RunStepOutcome:
+        return await run_capability_calls(
+            tool_calls,
+            config=self.config,
+            allowed_capabilities=self.allowed_capabilities,
+            projection=self.projection,
+            model_telemetry=model_telemetry,
+            assistant_event_id=assistant_event_id,
+            state=self.state,
+            ctx=self.deps,
+        )
 
 
 async def async_run_agent_turn(
@@ -212,7 +319,7 @@ async def async_run_agent_turn(
         store=trace_store,
         transform=prompt_transform_from_policy(config.compaction_policy),
     )
-    ctx = TurnContext(
+    deps = RunDependencies(
         event_sink=event_sink,
         trace_store=trace_store,
         tool_registry=active_tool_registry,
@@ -232,7 +339,7 @@ async def async_run_agent_turn(
         projection=projection,
         tools=tools,
         state=state,
-        ctx=ctx,
+        ctx=deps,
     )
 
 
@@ -246,63 +353,19 @@ async def run_agent_steps(
     projection: CapabilityProjection,
     tools: list[dict[str, Any]],
     state: RunState,
-    ctx: TurnContext,
+    ctx: RunDependencies,
 ) -> AgentTurnResult:
-    for _ in turn_indices(config.max_turns):
-        state.note_step("check_budget")
-        check_turn_budget(
-            state,
-            ctx=ctx,
-        )
-        turn = await request_model_turn(
-            objective,
-            timeline,
-            config=config,
-            allowed_capabilities=allowed_capabilities,
-            context=context,
-            tools=tools,
-            state=state,
-            ctx=ctx,
-        )
-        if ctx.cancellation_event is not None and ctx.cancellation_event.is_set():
-            check_turn_budget(
-                state,
-                ctx=ctx,
-                check_deadline=False,
-            )
-        assistant = turn.assistant.to_provider()
-        assistant_event_id, tool_calls = record_model_event(
-            assistant,
-            state.events,
-            prompt_trace=turn.prompt_trace,
-            caused_by=state.next_model_caused_by,
-            ctx=ctx,
-        )
-        update_prompt_trace_from_projection(
-            assistant_event_id,
-            state=state,
-            ctx=ctx,
-        )
-        if not tool_calls:
-            state.note_step("finish_run")
-            return state.result(
-                final_answer=turn.assistant.content,
-                answer_streamed=turn.streamed_content,
-            )
-        outcome = await run_capability_calls(
-            tool_calls,
-            config=config,
-            allowed_capabilities=allowed_capabilities,
-            projection=projection,
-            model_telemetry=turn.model_telemetry,
-            assistant_event_id=assistant_event_id,
-            state=state,
-            ctx=ctx,
-        )
-        if outcome is not None:
-            return outcome
-    state.note_step("finish_run")
-    return state.result()
+    return await AgentRun(
+        objective=objective,
+        timeline=timeline,
+        config=config,
+        context=context,
+        deps=ctx,
+        allowed_capabilities=allowed_capabilities,
+        projection=projection,
+        tools=tools,
+        state=state,
+    ).run()
 
 
 @dataclass(frozen=True)
@@ -344,7 +407,7 @@ async def request_model_turn(
     context: str,
     tools: list[dict[str, Any]],
     state: AgentTurnState,
-    ctx: TurnContext,
+    ctx: RunDependencies,
 ) -> ModelTurn:
     prepared_prompt, model_input = build_prompt_step(
         objective,
@@ -464,8 +527,8 @@ async def run_capability_calls(
     model_telemetry: dict[str, Any],
     assistant_event_id: str | None,
     state: AgentTurnState,
-    ctx: TurnContext,
-) -> AgentTurnResult | None:
+    ctx: RunDependencies,
+) -> RunStepOutcome:
     for index, tool_call in enumerate(tool_calls):
         result_event = await run_capability_step(
             tool_call,
@@ -483,12 +546,13 @@ async def run_capability_calls(
             project_trace_drafts(state.events, ctx.builder.store())
         state.next_model_caused_by = next_model_parent(result_event.events)
         if result_event.staged_effect is not None and config.stop_on_staged_effect:
-            state.note_step("finish_run")
-            return state.result(staged_effect=result_event.staged_effect)
+            return RunStepOutcome(
+                kind="staged_effect",
+                staged_effect=result_event.staged_effect,
+            )
         if result_event.stop:
-            state.note_step("finish_run")
-            return state.result()
-    return None
+            return RunStepOutcome(kind="finished")
+    return RunStepOutcome(kind="continue")
 
 
 async def run_capability_step(
@@ -501,7 +565,7 @@ async def run_capability_step(
     model_telemetry: dict[str, Any] | None,
     assistant_event_id: str | None,
     state: RunState,
-    ctx: TurnContext,
+    ctx: RunDependencies,
 ) -> CapabilityCallResult:
     state.note_step("check_budget")
     check_turn_budget(
@@ -554,7 +618,7 @@ def terminal_capability_result_event(
 def check_turn_budget(
     state: AgentTurnState,
     *,
-    ctx: TurnContext,
+    ctx: RunDependencies,
     check_deadline: bool = True,
 ) -> None:
     raise_if_agent_turn_aborted(
@@ -576,7 +640,7 @@ def agent_deadline(config: AgentConfig, deadline: float | None) -> float | None:
 def raise_if_agent_turn_aborted(
     state: AgentTurnState,
     *,
-    ctx: TurnContext,
+    ctx: RunDependencies,
     deadline: float | None,
 ) -> None:
     reason = agent_abort_reason(ctx.cancellation_event, deadline)
@@ -834,7 +898,7 @@ def emit_tool_event(
     events: list[DraftEvent],
     event: dict[str, Any],
     *,
-    ctx: TurnContext,
+    ctx: RunDependencies,
 ) -> None:
     record_runtime_event(
         events, runtime_event_draft(event, session_id=None, turn_id=None), ctx=ctx
@@ -845,7 +909,7 @@ def record_runtime_event(
     events: list[DraftEvent],
     draft: DraftEvent,
     *,
-    ctx: TurnContext,
+    ctx: RunDependencies,
 ) -> DraftEvent:
     emit_event(events, draft, ctx.event_sink)
     if ctx.event_sink is None:
@@ -896,7 +960,7 @@ def record_model_event(
     *,
     prompt_trace: PromptTrace | None,
     caused_by: str | None = None,
-    ctx: TurnContext,
+    ctx: RunDependencies,
 ) -> tuple[str | None, list[dict[str, Any]]]:
     event = model_event(assistant)
     if caused_by is not None:
@@ -918,7 +982,7 @@ def update_prompt_trace_from_projection(
     assistant_event_id: str | None,
     *,
     state: RunState,
-    ctx: TurnContext,
+    ctx: RunDependencies,
 ) -> None:
     if assistant_event_id is None or not state.prompt_traces:
         return
@@ -1048,7 +1112,7 @@ async def handle_tool_call(
     execution_mode: ExecutionMode = "stage",
     model_telemetry: dict[str, Any] | None = None,
     caused_by: str | None = None,
-    ctx: TurnContext,
+    ctx: RunDependencies,
 ) -> CapabilityCallResult:
     call_id = tool_call_id(tool_call, index=index)
     invocation = tool_call_invocation(tool_call, index=index, caused_by=caused_by)
@@ -1139,7 +1203,7 @@ def reject_tool_call(
     message: str,
     *,
     model_telemetry: dict[str, Any] | None,
-    ctx: TurnContext,
+    ctx: RunDependencies,
 ) -> CapabilityCallResult:
     return invalid_tool_result(
         invocation.call_id,
@@ -1159,7 +1223,7 @@ async def run_valid_tool_call(
     capability_id: str,
     execution_mode: ExecutionMode,
     model_telemetry: dict[str, Any] | None,
-    ctx: TurnContext,
+    ctx: RunDependencies,
 ) -> CapabilityCallResult:
     events: list[DraftEvent] = []
     call_event = invocation.call_event
@@ -1226,7 +1290,7 @@ def invalid_tool_result(
     call_event: dict[str, Any] | None = None,
     model_telemetry: dict[str, Any] | None = None,
     caused_by: str | None = None,
-    ctx: TurnContext,
+    ctx: RunDependencies,
 ) -> CapabilityCallResult:
     event = call_event or {
         "type": "tool_call",

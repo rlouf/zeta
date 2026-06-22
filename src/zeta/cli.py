@@ -14,6 +14,7 @@ from zeta.dispatch import (
     EventDispatcher,
     QueueItemSnapshot,
     RegisteredAgent,
+    attempt_snapshots,
     queue_item_snapshots,
     queue_item_status_counts,
 )
@@ -151,6 +152,55 @@ def queue(project_root: Path, state_dir: Path | None, json_output: bool) -> int:
                     snapshot.queue_item_id,
                     snapshot.target_agent,
                     snapshot.event_id,
+                ]
+            )
+        )
+    return 0
+
+
+@cli.command("attempts")
+@click.option(
+    "--project-root",
+    type=click.Path(file_okay=False, path_type=Path),
+    default=Path("."),
+    show_default=True,
+    help="Project root containing .zeta runtime state.",
+)
+@click.option(
+    "--state-dir",
+    type=click.Path(file_okay=False, path_type=Path),
+    help="Override the runtime state directory.",
+)
+@click.option("--json", "json_output", is_flag=True, help="Emit JSON.")
+def attempts(project_root: Path, state_dir: Path | None, json_output: bool) -> int:
+    """List projected runtime attempts."""
+
+    event_store = runtime_event_store(project_root, state_dir)
+    try:
+        snapshots = attempt_snapshots(
+            event_store.list_events(Filter(event_type_prefix="runtime.attempt."))
+        )
+    finally:
+        event_store.close()
+    if json_output:
+        click.echo(
+            json.dumps(
+                [asdict(snapshot) for snapshot in snapshots],
+                ensure_ascii=False,
+            )
+        )
+        return 0
+    if not snapshots:
+        click.echo("attempts empty")
+        return 0
+    for snapshot in snapshots:
+        click.echo(
+            "\t".join(
+                [
+                    snapshot.status,
+                    snapshot.attempt_id,
+                    snapshot.queue_item_id,
+                    snapshot.target_agent,
                 ]
             )
         )

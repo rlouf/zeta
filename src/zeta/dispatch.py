@@ -16,6 +16,7 @@ AgentRunner = Callable[["AgentInvocation"], Awaitable[dict[str, Any]]]
 __all__ = [
     "AgentDefinition",
     "AgentInvocation",
+    "AttemptSnapshot",
     "EventDispatcher",
     "DispatchOutcome",
     "EventPattern",
@@ -25,6 +26,8 @@ __all__ = [
     "QueueItemSnapshot",
     "RouteOutcome",
     "TerminalQueueItemError",
+    "attempt_snapshots",
+    "attempt_status_counts",
     "queue_item_snapshots",
     "queue_item_status_counts",
     "terminal_queue_item_result",
@@ -42,6 +45,7 @@ QUEUE_ITEM_STATUSES = frozenset(
         "unhandled",
     }
 )
+ATTEMPT_STATUSES = frozenset({"running", "completed", "failed", "cancelled"})
 
 
 @dataclass(frozen=True)
@@ -82,6 +86,26 @@ class QueueItemSnapshot:
     cursor: int | None
     result: dict[str, Any] | None = None
     error: str | None = None
+
+
+@dataclass(frozen=True)
+class AttemptSnapshot:
+    """Latest durable attempt state projected from lifecycle events."""
+
+    attempt_id: str
+    queue_item_id: str
+    event_id: str
+    attempt_number: int
+    target_agent: str
+    status: AttemptStatus
+    last_event_type: str
+    cursor: int | None
+    started_at: str
+    finished_at: str | None = None
+    error: str | None = None
+    session_id: str | None = None
+    run_id: str | None = None
+    result: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -672,6 +696,70 @@ def queue_item_status_counts(
     snapshots: Iterable[QueueItemSnapshot],
 ) -> dict[QueueItemStatus, int]:
     counts: dict[QueueItemStatus, int] = {}
+    for snapshot in snapshots:
+        counts[snapshot.status] = counts.get(snapshot.status, 0) + 1
+    return counts
+
+
+def attempt_snapshots(events: Iterable[Event]) -> list[AttemptSnapshot]:
+    snapshots: dict[str, AttemptSnapshot] = {}
+    for event in events:
+        snapshot = attempt_snapshot_from_event(event)
+        if snapshot is None:
+            continue
+        snapshots[snapshot.attempt_id] = snapshot
+    return list(snapshots.values())
+
+
+def attempt_snapshot_from_event(event: Event) -> AttemptSnapshot | None:
+    if not event.event_type.startswith("runtime.attempt."):
+        return None
+    attempt_id = required_payload_string(event, "attempt_id")
+    queue_item_id = required_payload_string(event, "queue_item_id")
+    event_id = required_payload_string(event, "event_id")
+    target_agent = required_payload_string(event, "target_agent")
+    started_at = required_payload_string(event, "started_at")
+    attempt_number = event.payload.get("attempt_number")
+    if (
+        attempt_id is None
+        or queue_item_id is None
+        or event_id is None
+        or target_agent is None
+        or started_at is None
+        or not isinstance(attempt_number, int)
+    ):
+        return None
+    return AttemptSnapshot(
+        attempt_id=attempt_id,
+        queue_item_id=queue_item_id,
+        event_id=event_id,
+        attempt_number=attempt_number,
+        target_agent=target_agent,
+        status=attempt_event_status(event),
+        last_event_type=event.event_type,
+        cursor=event.cursor,
+        started_at=started_at,
+        finished_at=optional_payload_string(event, "finished_at"),
+        error=optional_payload_string(event, "error"),
+        session_id=event.session_id,
+        run_id=event.run_id,
+        result=queue_item_result(event),
+    )
+
+
+def attempt_event_status(event: Event) -> AttemptStatus:
+    status = optional_payload_string(event, "status")
+    if status not in ATTEMPT_STATUSES:
+        status = event.event_type.rsplit(".", 1)[-1]
+    if status not in ATTEMPT_STATUSES:
+        raise ValueError(f"unsupported attempt status {status!r}")
+    return cast("AttemptStatus", status)
+
+
+def attempt_status_counts(
+    snapshots: Iterable[AttemptSnapshot],
+) -> dict[AttemptStatus, int]:
+    counts: dict[AttemptStatus, int] = {}
     for snapshot in snapshots:
         counts[snapshot.status] = counts.get(snapshot.status, 0) + 1
     return counts

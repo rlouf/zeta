@@ -23,6 +23,7 @@ from sigil.display.summarize import assistant_trace_summary
 from sigil.trace.replay import latest_model_answer
 from zeta import loop as zeta_agent
 from zeta import models as zeta_models_api
+from zeta.capabilities import execution as zeta_capability_execution
 from zeta.context.builder import PromptBuilder
 from zeta.context.components import chat_messages
 from zeta.execute import current_timeline
@@ -855,7 +856,7 @@ def test_zeta_agent_durable_events_project_trace_objects(
         lambda *args, **kwargs: next(responses),
     )
     monkeypatch.setattr(
-        zeta_agent,
+        zeta_capability_execution,
         "invoke_capability",
         lambda name, params, **kwargs: read_tool_payload(target),
     )

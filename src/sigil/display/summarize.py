@@ -11,7 +11,7 @@ from sigil.protocols import (
     SHELL_HANDOFF_OUTCOME_EXECUTED,
     SHELL_HANDOFF_OUTCOME_NO_PENDING,
 )
-from zeta.capabilities.base import proposed_effect
+from zeta.capabilities.execution import proposed_effect
 from zeta.context.budget import estimated_tokens_for_text
 from zeta.records.objects import Object
 

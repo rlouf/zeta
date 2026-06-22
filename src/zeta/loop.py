@@ -3,21 +3,23 @@
 from __future__ import annotations
 
 import inspect
-import json
 import time
 import uuid
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
-from typing import Any, Literal, Protocol, cast
+from typing import Any, Literal, Protocol
 
 from zeta.agents.capabilities import AgentConfig, ModelStatus
-from zeta.capabilities.base import proposed_effect
+from zeta.capabilities.execution import (
+    CapabilityCallResult,
+    CapabilityExecutionContext,
+    handle_tool_call,
+)
 from zeta.capabilities.registry import (
     CapabilityProjection,
     CapabilityRegistry,
 )
 from zeta.capabilities.registry import registry as _runtime_tool_registry
-from zeta.capabilities.types import ExecutionMode
 from zeta.context import prompt_transform_from_policy
 from zeta.context.builder import (
     PreparedPrompt,
@@ -36,11 +38,9 @@ from zeta.records.events import (
     Event,
     draft_event_view,
     event_view,
-    normalized_tool_result,
     runtime_event_draft,
     status_update_draft,
     stream_chunk_draft,
-    tool_result_status,
     turn_aborted_draft,
 )
 from zeta.records.provenance import TraceProjection, project_trace_drafts
@@ -531,6 +531,11 @@ async def run_capability_step(
         return CapabilityCallResult(events=[])
     state.note_step("record_capability_call")
     state.note_step("execute_capability")
+    capability_ctx = CapabilityExecutionContext(
+        event_sink=ctx.event_sink,
+        trace_store=ctx.builder.store(),
+        tool_registry=ctx.tool_registry,
+    )
     handled = handle_tool_call(
         tool_call,
         allowed_capabilities=allowed_capabilities,
@@ -539,7 +544,7 @@ async def run_capability_step(
         execution_mode=config.execution_mode,
         model_telemetry=model_telemetry,
         caused_by=assistant_event_id,
-        ctx=ctx,
+        ctx=capability_ctx,
     )
     result = await handled if inspect.isawaitable(handled) else handled
     state.note_step("record_capability_result")
@@ -676,21 +681,6 @@ def registered_capabilities(
         if capability_id is not None:
             enabled.append(capability_id)
     return tuple(enabled)
-
-
-async def invoke_capability(
-    capability_id: str,
-    params: dict[str, Any],
-    *,
-    execution_mode: ExecutionMode = "stage",
-    tool_registry: CapabilityRegistry | None = None,
-) -> dict[str, Any]:
-    active_tool_registry = tool_registry or _runtime_tool_registry
-    return await active_tool_registry.invoke_async(
-        capability_id,
-        params,
-        execution_mode=execution_mode,
-    )
 
 
 def turn_indices(max_turns: int | None) -> Iterable[int]:
@@ -918,13 +908,6 @@ def record_runtime_event(
     return draft
 
 
-@dataclass(frozen=True)
-class CapabilityCallResult:
-    events: list[DraftEvent]
-    staged_effect: dict[str, Any] | None = None
-    stop: bool = False
-
-
 def model_event(assistant: dict[str, Any]) -> dict[str, Any]:
     content = assistant.get("content")
     reasoning = assistant.get("reasoning_content")
@@ -1016,340 +999,3 @@ def draft_timeline_type(draft: DraftEvent) -> str:
     if draft.event_type.startswith(prefix):
         return draft.event_type[len(prefix) :]
     return draft.event_type
-
-
-def model_tool_call_event(
-    tool_call: dict[str, Any],
-    *,
-    index: int,
-    caused_by: str | None,
-) -> dict[str, Any]:
-    record = ModelToolCall.from_provider(tool_call, index=index)
-    if record is None:
-        return {}
-    return record.event(caused_by=caused_by)
-
-
-@dataclass(frozen=True)
-class ModelToolCall:
-    call_id: str
-    name: str
-    raw_arguments: str
-    params: dict[str, Any]
-    parse_error: str = ""
-
-    @classmethod
-    def from_provider(
-        cls,
-        tool_call: dict[str, Any],
-        *,
-        index: int,
-    ) -> ModelToolCall | None:
-        call_id = tool_call_id(tool_call, index=index)
-        function = tool_call.get("function")
-        if not isinstance(function, dict):
-            return None
-        name = str(function.get("name") or "")
-        arguments = function.get("arguments")
-        params, parse_error = parse_tool_arguments(arguments)
-        raw_arguments = arguments if isinstance(arguments, str) else json.dumps(params)
-        return cls(
-            call_id=call_id,
-            name=name,
-            raw_arguments=raw_arguments,
-            params=params,
-            parse_error=parse_error,
-        )
-
-    def event(self, *, caused_by: str | None) -> dict[str, Any]:
-        event: dict[str, Any] = {
-            "type": "tool_call",
-            "id": self.call_id,
-            "tool_call_id": self.call_id,
-            "status": "pending",
-            "name": self.name,
-            "input": self.params,
-            "arguments": self.raw_arguments,
-        }
-        if caused_by is not None:
-            event["caused_by"] = caused_by
-        return event
-
-
-@dataclass(frozen=True)
-class CapabilityCallInvocation:
-    tool_call: ModelToolCall
-    call_event: dict[str, Any]
-
-    @property
-    def call_id(self) -> str:
-        return self.tool_call.call_id
-
-    @property
-    def name(self) -> str:
-        return self.tool_call.name
-
-    @property
-    def params(self) -> dict[str, Any]:
-        return self.tool_call.params
-
-    @property
-    def parse_error(self) -> str:
-        return self.tool_call.parse_error
-
-
-@dataclass(frozen=True)
-class ToolCallValidation:
-    capability_id: str = ""
-    error: tuple[str, str] | None = None
-
-
-async def handle_tool_call(
-    tool_call: dict[str, Any],
-    *,
-    allowed_capabilities: tuple[str, ...],
-    projection: CapabilityProjection,
-    index: int,
-    execution_mode: ExecutionMode = "stage",
-    model_telemetry: dict[str, Any] | None = None,
-    caused_by: str | None = None,
-    ctx: RunDependencies,
-) -> CapabilityCallResult:
-    call_id = tool_call_id(tool_call, index=index)
-    invocation = tool_call_invocation(tool_call, index=index, caused_by=caused_by)
-    if invocation is None:
-        return invalid_tool_result(
-            call_id,
-            "",
-            {},
-            "invalid-tool-call",
-            "tool call did not include a function payload",
-            model_telemetry=model_telemetry,
-            caused_by=caused_by,
-            ctx=ctx,
-        )
-    validation = validate_tool_call(
-        invocation,
-        allowed_capabilities=allowed_capabilities,
-        projection=projection,
-        tool_registry=ctx.tool_registry,
-    )
-    if validation.error is not None:
-        code, message = validation.error
-        return reject_tool_call(
-            invocation,
-            code,
-            message,
-            model_telemetry=model_telemetry,
-            ctx=ctx,
-        )
-    return await run_valid_tool_call(
-        invocation,
-        capability_id=validation.capability_id,
-        execution_mode=execution_mode,
-        model_telemetry=model_telemetry,
-        ctx=ctx,
-    )
-
-
-def tool_call_invocation(
-    tool_call: dict[str, Any],
-    *,
-    index: int,
-    caused_by: str | None,
-) -> CapabilityCallInvocation | None:
-    record = ModelToolCall.from_provider(tool_call, index=index)
-    if record is None:
-        return None
-    return CapabilityCallInvocation(
-        tool_call=record,
-        call_event=record.event(caused_by=caused_by),
-    )
-
-
-def validate_tool_call(
-    invocation: CapabilityCallInvocation,
-    *,
-    allowed_capabilities: tuple[str, ...],
-    projection: CapabilityProjection,
-    tool_registry: CapabilityRegistry,
-) -> ToolCallValidation:
-    if invocation.parse_error:
-        return ToolCallValidation(error=("invalid-json-args", invocation.parse_error))
-    capability_id = projection.name_to_id.get(invocation.name)
-    if capability_id is None:
-        if tool_registry.resolve(invocation.name) is not None:
-            return ToolCallValidation(
-                error=(
-                    "disallowed-tool",
-                    f"tool is not allowed in this workflow: {invocation.name}",
-                )
-            )
-        return ToolCallValidation(
-            error=("unknown-tool", f"unknown tool: {invocation.name}")
-        )
-    if capability_id not in allowed_capabilities:
-        return ToolCallValidation(
-            error=(
-                "disallowed-tool",
-                f"tool is not allowed in this workflow: {invocation.name}",
-            )
-        )
-    return ToolCallValidation(capability_id=capability_id)
-
-
-def reject_tool_call(
-    invocation: CapabilityCallInvocation,
-    code: str,
-    message: str,
-    *,
-    model_telemetry: dict[str, Any] | None,
-    ctx: RunDependencies,
-) -> CapabilityCallResult:
-    return invalid_tool_result(
-        invocation.call_id,
-        invocation.name,
-        invocation.params,
-        code,
-        message,
-        call_event=invocation.call_event,
-        model_telemetry=model_telemetry,
-        ctx=ctx,
-    )
-
-
-async def run_valid_tool_call(
-    invocation: CapabilityCallInvocation,
-    *,
-    capability_id: str,
-    execution_mode: ExecutionMode,
-    model_telemetry: dict[str, Any] | None,
-    ctx: RunDependencies,
-) -> CapabilityCallResult:
-    events: list[DraftEvent] = []
-    call_event = invocation.call_event
-    call_event["capability_id"] = capability_id
-    emit_tool_event(
-        events,
-        call_event,
-        ctx=ctx,
-    )
-    try:
-        invoked = invoke_capability(
-            capability_id,
-            invocation.params,
-            execution_mode=execution_mode,
-            tool_registry=ctx.tool_registry,
-        )
-        result = await invoked if inspect.isawaitable(invoked) else invoked
-    except Exception as exc:
-        result = tool_error("tool-crashed", f"{type(exc).__name__}: {exc}")
-    staged_effect = result_staged_effect(result)
-    stop = bool(
-        execution_mode == "stage"
-        and staged_effect is not None
-        and result.get("ok") is True
-    )
-    result_event = tool_result_event(
-        invocation.call_id,
-        invocation.name,
-        result,
-        capability_id=capability_id,
-        model_telemetry=model_telemetry,
-    )
-    if isinstance(call_event.get("caused_by"), str):
-        result_event["caused_by"] = call_event["caused_by"]
-    emit_tool_event(events, result_event, ctx=ctx)
-    return CapabilityCallResult(
-        events=events,
-        staged_effect=staged_effect,
-        stop=stop,
-    )
-
-
-def parse_tool_arguments(arguments: Any) -> tuple[dict[str, Any], str]:
-    if isinstance(arguments, dict):
-        return cast(dict[str, Any], arguments), ""
-    if not isinstance(arguments, str):
-        return {}, "function arguments were not a JSON object string"
-    try:
-        params = json.loads(arguments or "{}")
-    except json.JSONDecodeError as exc:
-        return {}, str(exc)
-    if not isinstance(params, dict):
-        return {}, "function arguments JSON was not an object"
-    return cast(dict[str, Any], params), ""
-
-
-def invalid_tool_result(
-    call_id: str,
-    name: str,
-    params: dict[str, Any],
-    code: str,
-    message: str,
-    *,
-    call_event: dict[str, Any] | None = None,
-    model_telemetry: dict[str, Any] | None = None,
-    caused_by: str | None = None,
-    ctx: RunDependencies,
-) -> CapabilityCallResult:
-    event = call_event or {
-        "type": "tool_call",
-        "id": call_id,
-        "tool_call_id": call_id,
-        "name": name,
-        "input": params,
-    }
-    if caused_by is not None:
-        event["caused_by"] = caused_by
-    events: list[DraftEvent] = []
-    result_event = tool_result_event(
-        call_id,
-        name,
-        tool_error(code, message),
-        model_telemetry=model_telemetry,
-    )
-    if isinstance(event.get("caused_by"), str):
-        result_event["caused_by"] = event["caused_by"]
-    emit_tool_event(
-        events,
-        event,
-        ctx=ctx,
-    )
-    emit_tool_event(
-        events,
-        result_event,
-        ctx=ctx,
-    )
-    return CapabilityCallResult(events=events)
-
-
-def tool_result_event(
-    call_id: str,
-    name: str,
-    result: dict[str, Any],
-    *,
-    capability_id: str = "",
-    model_telemetry: dict[str, Any] | None = None,
-) -> dict[str, Any]:
-    event: dict[str, Any] = {
-        "type": "tool_result",
-        "tool_call_id": call_id,
-        "status": tool_result_status(result),
-        "name": name,
-        "result": normalized_tool_result(name, result),
-    }
-    ensure_event_id(event)
-    if capability_id:
-        event["capability_id"] = capability_id
-    if model_telemetry:
-        event["model_telemetry"] = dict(model_telemetry)
-    return event
-
-
-def tool_error(code: str, message: str) -> dict[str, Any]:
-    return {"ok": False, "error": {"code": code, "message": message}}
-
-
-def result_staged_effect(result: dict[str, Any]) -> dict[str, Any] | None:
-    return proposed_effect(result)

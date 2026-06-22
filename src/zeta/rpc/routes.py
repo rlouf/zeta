@@ -7,7 +7,7 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
-from zeta.capabilities.base import error_result
+from zeta.capabilities.execution import error_result
 from zeta.capabilities.registry import RegisteredCapability
 from zeta.capabilities.types import Capability, CapabilityId
 from zeta.dispatch import EventDispatcher, ReservedRuntimeEventError

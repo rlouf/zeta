@@ -7,7 +7,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field
 from typing import Any
 
-from zeta.capabilities.base import error_result
+from zeta.capabilities.execution import error_result
 from zeta.capabilities.types import Capability, CapabilityId
 from zeta.models.chat_completions import stream_json_sse
 from zeta.models.codex_auth import CodexCredentials, load_codex_credentials

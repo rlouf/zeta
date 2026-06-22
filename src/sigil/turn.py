@@ -13,7 +13,7 @@ from sigil.protocols import (
 )
 from sigil.sessions import session_id
 from sigil.state import event_store_path
-from zeta.capabilities.base import proposed_effect
+from zeta.capabilities.execution import proposed_effect
 from zeta.context.components import PromptTrace
 from zeta.records.events import DraftEvent, Event
 from zeta.records.objects import Derivation, Object, ObjectId

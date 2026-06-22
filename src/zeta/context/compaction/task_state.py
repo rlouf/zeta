@@ -6,7 +6,7 @@ from typing import Any, Protocol
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import ValidationError
 
-from zeta.capabilities.base import content_hash
+from zeta.capabilities.execution import content_hash
 from zeta.context.components import PromptComponent
 from zeta.models import chat_structured_output
 

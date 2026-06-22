@@ -6,7 +6,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
-from zeta.capabilities.base import content_hash, effect_resolution, proposed_effect
+from zeta.capabilities.execution import content_hash, effect_resolution, proposed_effect
 from zeta.context.system import (
     enabled_capability_ids,
     system_prompt,

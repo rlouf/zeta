@@ -25,7 +25,7 @@ from sigil.display.summarize import (
     tool_result_summary,
 )
 from sigil.display.tty import iris_italic, is_interactive, muted, should_color
-from zeta.capabilities.base import proposed_effect
+from zeta.capabilities.execution import proposed_effect
 from zeta.context.budget import estimated_tokens_for_text
 
 THINKING_STATUS_INTERVAL_SECONDS = 1.0

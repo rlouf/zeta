@@ -38,7 +38,7 @@ from sigil.state import append_prompt_submitted_event
 from sigil.tools import ensure_builtin_tools_registered
 from sigil.turn import TurnRecorder
 from zeta.agents.capabilities import AgentConfig
-from zeta.capabilities.base import proposed_effect
+from zeta.capabilities.execution import proposed_effect
 from zeta.capabilities.registry import CapabilityRegistry
 from zeta.capabilities.registry import registry as _default_tool_registry
 from zeta.capabilities.types import ExecutionMode

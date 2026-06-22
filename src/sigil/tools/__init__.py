@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from sigil.tools import bash, edit, grep, ls, query_log, read, web, write
-from zeta.capabilities.base import (
+from zeta.capabilities.execution import (
     CapabilityFunction,
     InProcessCapabilityExecutor,
 )

@@ -10,7 +10,7 @@ from contextlib import nullcontext
 from dataclasses import dataclass, replace
 from typing import Any
 
-from zeta.capabilities.base import content_hash
+from zeta.capabilities.execution import content_hash
 from zeta.context.components import (
     PromptComponent,
     component_messages,

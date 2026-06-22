@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from zeta.capabilities.base import (
+from zeta.capabilities.execution import (
     CapabilityExecutor,
     CapabilityFunction,
     InProcessCapabilityExecutor,

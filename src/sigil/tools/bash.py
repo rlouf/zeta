@@ -6,7 +6,7 @@ import subprocess
 import time
 from typing import Any
 
-from zeta.capabilities.base import error_result, proposed_command_effect
+from zeta.capabilities.execution import error_result, proposed_command_effect
 from zeta.capabilities.types import Capability, CapabilityId
 
 DEFAULT_TIMEOUT_SECONDS = 120.0

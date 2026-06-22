@@ -4,7 +4,7 @@ import shlex
 from pathlib import Path
 from typing import Any
 
-from zeta.capabilities.base import (
+from zeta.capabilities.execution import (
     change_hashes,
     error_result,
     proposed_command_effect,

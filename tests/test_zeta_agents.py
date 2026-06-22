@@ -16,7 +16,7 @@ from agents.spec import ScheduleEntry, matches
 from zeta import dispatch as zeta_dispatch
 from zeta.agents.capabilities import AgentConfig
 from zeta.agents.runtime import compile_agent_definition, compile_agent_definitions
-from zeta.capabilities.base import (
+from zeta.capabilities.execution import (
     InProcessCapabilityExecutor,
 )
 from zeta.capabilities.registry import CapabilityRegistry, RegisteredCapability

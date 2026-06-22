@@ -16,7 +16,7 @@ from sigil.tools import ensure_builtin_tools_registered, register_builtin_tools
 from sigil.tools import grep as grep_tool
 from sigil.tools import read as read_tool
 from sigil.tools import web as web_tool
-from zeta.capabilities.base import (
+from zeta.capabilities.execution import (
     InProcessCapabilityExecutor,
 )
 from zeta.capabilities.registry import (

@@ -8,7 +8,6 @@ from collections.abc import Coroutine
 from dataclasses import dataclass, field
 from typing import Any, cast
 
-from zeta.capabilities.base import error_result
 from zeta.capabilities.types import Capability, ExecutionMode
 
 __all__ = [
@@ -67,6 +66,18 @@ def validated_capability_result_payload(
     validated["ok"] = False
     validated["error"] = invalid_capability_result_error(capability_id)
     return validated
+
+
+def error_result(
+    code: str,
+    message: str,
+    *,
+    data: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    error: dict[str, Any] = {"code": code, "message": message}
+    if data is not None:
+        error["data"] = data
+    return {"ok": False, "error": error}
 
 
 @dataclass(frozen=True)

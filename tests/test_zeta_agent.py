@@ -37,7 +37,8 @@ from zeta import loop as zeta_agent
 from zeta import models as zeta_models_api
 from zeta import rpc as zeta_rpc
 from zeta.agents.capabilities import CompactionPolicy
-from zeta.capabilities.base import (
+from zeta.capabilities import execution as zeta_capability_execution
+from zeta.capabilities.execution import (
     InProcessCapabilityExecutor,
 )
 from zeta.capabilities.registry import CapabilityRegistry, RegisteredCapability
@@ -248,7 +249,7 @@ def test_zeta_agent_turn_emits_model_draft(monkeypatch) -> None:
 
 
 def test_zeta_tool_result_event_records_error_for_failed_content_result() -> None:
-    event = zeta_agent.tool_result_event(
+    event = zeta_capability_execution.tool_result_event(
         "call-1",
         "grep",
         {
@@ -271,7 +272,7 @@ def test_zeta_tool_result_event_records_error_for_failed_content_result() -> Non
 
 
 def test_zeta_tool_result_event_uses_generic_failed_content_message() -> None:
-    event = zeta_agent.tool_result_event(
+    event = zeta_capability_execution.tool_result_event(
         "call-1",
         "bash",
         {
@@ -293,7 +294,7 @@ def test_zeta_tool_result_event_uses_generic_failed_content_message() -> None:
 
 
 def test_zeta_tool_result_event_preserves_explicit_error() -> None:
-    event = zeta_agent.tool_result_event(
+    event = zeta_capability_execution.tool_result_event(
         "call-1",
         "read",
         {"ok": False, "error": {"code": "read-failed", "message": "missing"}},
@@ -303,7 +304,7 @@ def test_zeta_tool_result_event_preserves_explicit_error() -> None:
 
 
 def test_zeta_model_tool_call_round_trips_provider_payload_to_event() -> None:
-    record = zeta_agent.ModelToolCall.from_provider(
+    record = zeta_capability_execution.ModelToolCall.from_provider(
         {
             "id": "call-1",
             "type": "function",
@@ -316,7 +317,7 @@ def test_zeta_model_tool_call_round_trips_provider_payload_to_event() -> None:
     )
 
     assert record is not None
-    assert record == zeta_agent.ModelToolCall(
+    assert record == zeta_capability_execution.ModelToolCall(
         call_id="call-1",
         name="read",
         raw_arguments='{"path": "README.md"}',
@@ -335,9 +336,12 @@ def test_zeta_model_tool_call_round_trips_provider_payload_to_event() -> None:
 
 
 def test_zeta_model_tool_call_rejects_missing_function_payload() -> None:
-    assert zeta_agent.ModelToolCall.from_provider({"id": "call-1"}, index=0) is None
     assert (
-        zeta_agent.model_tool_call_event(
+        zeta_capability_execution.ModelToolCall.from_provider({"id": "call-1"}, index=0)
+        is None
+    )
+    assert (
+        zeta_capability_execution.model_tool_call_event(
             {"id": "call-1"},
             index=0,
             caused_by="assistant-1",
@@ -353,8 +357,8 @@ def test_zeta_model_tool_call_preserves_invalid_json_error() -> None:
         "function": {"name": "read", "arguments": '{"path":'},
     }
 
-    record = zeta_agent.ModelToolCall.from_provider(tool_call, index=0)
-    invocation = zeta_agent.tool_call_invocation(
+    record = zeta_capability_execution.ModelToolCall.from_provider(tool_call, index=0)
+    invocation = zeta_capability_execution.tool_call_invocation(
         tool_call,
         index=0,
         caused_by="assistant-1",
@@ -440,7 +444,7 @@ def test_zeta_durable_model_event_payload_keeps_domain_fields() -> None:
 
 
 def test_zeta_tool_call_event_has_boundary_dict_shape() -> None:
-    model_tool_call = zeta_agent.ModelToolCall(
+    model_tool_call = zeta_capability_execution.ModelToolCall(
         call_id="call-1",
         name="read",
         raw_arguments="{}",
@@ -514,7 +518,7 @@ def test_zeta_durable_tool_call_event_payload_keeps_domain_fields() -> None:
 
 
 def test_zeta_tool_result_event_has_boundary_dict_shape() -> None:
-    event = zeta_agent.tool_result_event(
+    event = zeta_capability_execution.tool_result_event(
         "call-1",
         "read",
         {"ok": True, "content": [{"type": "text", "text": "done"}]},
@@ -610,12 +614,10 @@ def test_zeta_handle_tool_call_emits_drafts() -> None:
         )
     )
     allowed_capabilities = ("test.read",)
-    ctx = zeta_agent.RunDependencies(
+    ctx = zeta_capability_execution.CapabilityExecutionContext(
         event_sink=drafts.append,
         trace_store=None,
         tool_registry=registry,
-        builder=zeta_context.PromptBuilder(),
-        abort_reason=never_abort,
     )
 
     result = asyncio.run(
@@ -4491,7 +4493,7 @@ def test_zeta_agent_turn_resolves_model_name_through_projection(monkeypatch) -> 
         "chat_completion_messages",
         lambda *args, **kwargs: next(responses),
     )
-    monkeypatch.setattr(zeta_agent, "invoke_capability", fake_invoke)
+    monkeypatch.setattr(zeta_capability_execution, "invoke_capability", fake_invoke)
 
     result = run_agent_turn(
         "read",
@@ -4832,7 +4834,7 @@ def test_zeta_agent_turn_records_one_prompt_trace_per_model_request(
         lambda messages, **kwargs: next(responses),
     )
     monkeypatch.setattr(
-        zeta_agent,
+        zeta_capability_execution,
         "invoke_capability",
         lambda name, params: read_tool_payload(target),
     )
@@ -4880,7 +4882,7 @@ def test_zeta_agent_turn_records_tool_result_derivation(
         lambda messages, **kwargs: next(responses),
     )
     monkeypatch.setattr(
-        zeta_agent,
+        zeta_capability_execution,
         "invoke_capability",
         lambda name, params: read_tool_payload(target),
     )
@@ -4996,7 +4998,7 @@ def test_zeta_agent_runtime_ui_events_do_not_feed_next_prompt(monkeypatch) -> No
         fake_chat_completion_messages,
     )
     monkeypatch.setattr(
-        zeta_agent,
+        zeta_capability_execution,
         "invoke_capability",
         lambda name, params: {"ok": True, "content": [{"type": "text", "text": name}]},
     )
@@ -5090,7 +5092,7 @@ def test_zeta_agent_turn_runs_multiple_read_only_tools_in_order(monkeypatch) -> 
         ran.append((name, params))
         return {"ok": True, "content": [{"type": "text", "text": name}]}
 
-    monkeypatch.setattr(zeta_agent, "invoke_capability", fake_invoke)
+    monkeypatch.setattr(zeta_capability_execution, "invoke_capability", fake_invoke)
 
     result = run_agent_turn(
         "inspect",
@@ -5165,7 +5167,7 @@ def test_zeta_agent_turn_streams_text_between_tool_turns(monkeypatch) -> None:
         fake_chat_completion_messages,
     )
     monkeypatch.setattr(
-        zeta_agent,
+        zeta_capability_execution,
         "invoke_capability",
         lambda name, params: {
             "ok": True,
@@ -5269,7 +5271,7 @@ def test_zeta_agent_turn_orders_prior_timeline_before_current_events(
         fake_chat_completion_messages,
     )
     monkeypatch.setattr(
-        zeta_agent,
+        zeta_capability_execution,
         "invoke_capability",
         lambda name, params: {
             "ok": True,
@@ -5335,7 +5337,7 @@ def test_zeta_agent_turn_streams_tool_call_before_running_tool(monkeypatch) -> N
         ]
         return {"ok": True, "content": [{"type": "text", "text": "README"}]}
 
-    monkeypatch.setattr(zeta_agent, "invoke_capability", fake_invoke)
+    monkeypatch.setattr(zeta_capability_execution, "invoke_capability", fake_invoke)
 
     result = run_agent_turn(
         "inspect",
@@ -5390,7 +5392,7 @@ def test_zeta_agent_turn_stops_after_staged_tool(monkeypatch) -> None:
         zeta_models_api, "chat_completion_messages", fake_chat_completion_messages
     )
     monkeypatch.setattr(
-        zeta_agent,
+        zeta_capability_execution,
         "invoke_capability",
         lambda name, params, **kwargs: {
             "ok": True,
@@ -5562,7 +5564,9 @@ def test_zeta_agent_turn_stops_after_default_max_turns(monkeypatch) -> None:
         zeta_models_api, "chat_completion_messages", fake_chat_completion_messages
     )
     monkeypatch.setattr(
-        zeta_agent, "invoke_capability", lambda name, params, **kwargs: {"ok": True}
+        zeta_capability_execution,
+        "invoke_capability",
+        lambda name, params, **kwargs: {"ok": True},
     )
 
     result = run_agent_turn(
@@ -5636,7 +5640,7 @@ def test_zeta_agent_turn_aborts_on_deadline_between_model_turns(
         lambda *args, **kwargs: next(responses),
     )
     monkeypatch.setattr(
-        zeta_agent,
+        zeta_capability_execution,
         "invoke_capability",
         lambda name, params, **kwargs: read_tool_payload(target),
     )
@@ -5716,7 +5720,7 @@ def test_zeta_agent_turn_converts_tool_crash_to_error_result(monkeypatch) -> Non
     monkeypatch.setattr(
         zeta_models_api, "chat_completion_messages", fake_chat_completion_messages
     )
-    monkeypatch.setattr(zeta_agent, "invoke_capability", crash_invoke)
+    monkeypatch.setattr(zeta_capability_execution, "invoke_capability", crash_invoke)
 
     result = run_agent_turn(
         "test",
@@ -5765,7 +5769,7 @@ def test_zeta_agent_turn_runs_tool_call_without_schema_validation(monkeypatch) -
             ]
         },
     )
-    monkeypatch.setattr(zeta_agent, "invoke_capability", fake_invoke)
+    monkeypatch.setattr(zeta_capability_execution, "invoke_capability", fake_invoke)
 
     result = run_agent_turn(
         "inspect",
@@ -5808,7 +5812,7 @@ def test_zeta_agent_turn_rejects_disallowed_tool_before_running(monkeypatch) -> 
             ]
         },
     )
-    monkeypatch.setattr(zeta_agent, "invoke_capability", fail_invoke)
+    monkeypatch.setattr(zeta_capability_execution, "invoke_capability", fail_invoke)
 
     result = run_agent_turn(
         "inspect",

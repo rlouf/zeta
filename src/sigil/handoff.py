@@ -21,7 +21,7 @@ from sigil.protocols import (
 )
 from sigil.sessions import event_time, recent_turns, session_id
 from sigil.state import event_store_path
-from zeta.capabilities.base import proposed_effect
+from zeta.capabilities.execution import proposed_effect
 from zeta.records.events import (
     Event,
     durable_tool_event_payload,

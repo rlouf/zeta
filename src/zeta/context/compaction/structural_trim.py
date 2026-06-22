@@ -4,7 +4,7 @@ import json
 from dataclasses import replace
 from typing import Any
 
-from zeta.capabilities.base import content_hash
+from zeta.capabilities.execution import content_hash
 from zeta.context.budget import render_stub
 from zeta.context.components import PromptComponent
 

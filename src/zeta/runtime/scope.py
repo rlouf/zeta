@@ -8,8 +8,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from zeta.capabilities.registry import CapabilityRegistry
-    from zeta.store.events import EventStoreProtocol
-    from zeta.store.substrate import Store
+    from zeta.records.stores import EventStoreProtocol, Store
 
 
 @dataclass(frozen=True)

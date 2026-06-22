@@ -108,7 +108,16 @@ class JsonRpcRouter:
         self.routes[method] = handler
 
     async def handle_message(self, message: dict[str, Any]) -> None:
+        response = await self.response_for_message(message)
+        if response is None:
+            return
         connection = self.client.connection
+        if connection is not None:
+            connection.write_message(response)
+
+    async def response_for_message(
+        self, message: dict[str, Any]
+    ) -> dict[str, Any] | None:
         has_request_id = "id" in message
         request_id = message.get("id")
         method = message.get("method")
@@ -116,40 +125,40 @@ class JsonRpcRouter:
 
         if not isinstance(method, str) or not method:
             if has_request_id:
-                connection.write_error(request_id, -32600, "Invalid Request")
-            return
+                return rpc_error_message(request_id, -32600, "Invalid Request")
+            return None
         if params is None:
             params = {}
         if not isinstance(params, dict):
             if has_request_id:
-                connection.write_error(request_id, -32602, "Invalid params")
-            return
+                return rpc_error_message(request_id, -32602, "Invalid params")
+            return None
 
         handler = self.routes.get(method)
         if handler is None:
             if has_request_id:
-                connection.write_error(
+                return rpc_error_message(
                     request_id,
                     -32601,
                     "Method not found",
                     {"code": "method_not_found", "method": method},
                 )
-            return
+            return None
 
         try:
             result = await handler(cast(dict[str, Any], params), self.client)
         except RpcError as exc:
             if has_request_id:
-                connection.write_error(
+                return rpc_error_message(
                     request_id,
                     exc.jsonrpc_code,
                     exc.summary,
                     exc.error_data(),
                 )
-            return
+            return None
         except Exception as exc:
             if has_request_id:
-                connection.write_error(
+                return rpc_error_message(
                     request_id,
                     -32603,
                     "Internal error",
@@ -158,7 +167,20 @@ class JsonRpcRouter:
                         "message": f"{type(exc).__name__}: {exc}",
                     },
                 )
-            return
+            return None
 
         if has_request_id:
-            connection.write_response(request_id, result)
+            return {"jsonrpc": "2.0", "id": request_id, "result": result}
+        return None
+
+
+def rpc_error_message(
+    request_id: Any,
+    code: int,
+    message: str,
+    data: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    error: dict[str, Any] = {"code": code, "message": message}
+    if data is not None:
+        error["data"] = data
+    return {"jsonrpc": "2.0", "id": request_id, "error": error}

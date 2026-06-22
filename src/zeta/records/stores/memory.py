@@ -6,9 +6,11 @@ runtimes, including idempotency and sequence ordering, without creating files.
 
 from __future__ import annotations
 
-from zeta.events import AppendOutcome
-from zeta.kernel.events import DraftEvent, Event, json_native_payload
-from zeta.store.events.filter import Filter
+from zeta.records.events import AppendOutcome, DraftEvent, Event, json_native_payload
+from zeta.records.stores._object_memory import InMemoryStore
+from zeta.records.stores.event_store import Filter
+
+__all__ = ["InMemoryStore", "MemoryEventStore"]
 
 
 class MemoryEventStore:

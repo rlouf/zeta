@@ -10,8 +10,8 @@ from typing import Any, Protocol, cast, runtime_checkable
 
 from zeta.kernel.agents import AgentDefinition, AgentInvocation, EventPattern
 from zeta.kernel.dispatch import Attempt, AttemptStatus, QueueItem, QueueItemStatus
-from zeta.kernel.events import DraftEvent, Event
-from zeta.store.events import EventReader, EventStoreProtocol, EventWriter, Filter
+from zeta.records.events import DraftEvent, Event
+from zeta.records.stores import EventReader, EventStoreProtocol, EventWriter, Filter
 
 AgentRunner = Callable[["AgentInvocation"], Awaitable[dict[str, Any]]]
 

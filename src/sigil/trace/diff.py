@@ -3,8 +3,8 @@
 import difflib
 
 from sigil.display.summarize import short_trace_id, trace_object_summary
-from zeta.kernel.objects import Object, ObjectId
-from zeta.store.substrate import Store
+from zeta.records.objects import Object, ObjectId
+from zeta.records.stores import Store
 
 
 def render_prompt_diff(

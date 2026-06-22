@@ -1,7 +1,16 @@
-"""Substrate store implementations."""
+"""Record store implementations and contracts."""
 
-from zeta.store.substrate.base import (
+from zeta.records.events import AppendOutcome
+from zeta.records.stores.event_store import (
+    EventReader,
+    EventStoreProtocol,
+    EventWriter,
+    Filter,
+)
+from zeta.records.stores.memory import InMemoryStore, MemoryEventStore
+from zeta.records.stores.object_store import (
     AmbiguousIdError,
+    IncompatibleSchemaError,
     Store,
     StoreBase,
     TraceStats,
@@ -11,13 +20,16 @@ from zeta.store.substrate.base import (
     resolve_object_id,
     warn_trace_failure_once,
 )
-from zeta.store.substrate.memory import InMemoryStore
-from zeta.store.substrate.sqlite import (
+from zeta.records.stores.sqlite import (
     DEFAULT_SQLITE_NAME,
+    EVENT_STORE_NAME,
     ZETA_SQLITE_NAME,
+    ZETA_STORE_NAME,
+    SqliteEventStore,
     SqliteStore,
     available_session_ids,
     default_sqlite_path,
+    event_store_path,
     export_trace_refs,
     import_trace_graph,
     open_existing_trace_store,
@@ -28,8 +40,17 @@ from zeta.store.substrate.sqlite import (
 
 __all__ = [
     "AmbiguousIdError",
+    "AppendOutcome",
     "DEFAULT_SQLITE_NAME",
+    "EVENT_STORE_NAME",
+    "EventReader",
+    "EventStoreProtocol",
+    "EventWriter",
+    "Filter",
     "InMemoryStore",
+    "IncompatibleSchemaError",
+    "MemoryEventStore",
+    "SqliteEventStore",
     "SqliteStore",
     "Store",
     "StoreBase",
@@ -37,9 +58,11 @@ __all__ = [
     "UnknownIdError",
     "UnknownSessionError",
     "ZETA_SQLITE_NAME",
+    "ZETA_STORE_NAME",
     "available_session_ids",
     "default_sqlite_path",
     "escape_like",
+    "event_store_path",
     "export_trace_refs",
     "import_trace_graph",
     "open_existing_trace_store",

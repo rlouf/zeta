@@ -10,8 +10,8 @@ from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import Any, cast
 
-from zeta.kernel.events import DraftEvent, Event
-from zeta.store.events import (
+from zeta.records.events import DraftEvent, Event
+from zeta.records.stores import (
     Filter,
     SqliteEventStore,
 )

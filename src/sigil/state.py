@@ -12,8 +12,8 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from zeta.kernel.events import Event
-from zeta.store.events import (
+from zeta.records.events import Event
+from zeta.records.stores import (
     EVENT_STORE_NAME,
     Filter,
     SqliteEventStore,
@@ -61,7 +61,7 @@ def read_events() -> list[Event]:
 
 def history_view(events: list[Event] | None = None) -> Any:
     """Return a Zeta history view over Sigil's durable events."""
-    from zeta.history import HistoryView
+    from zeta.records.timeline import HistoryView
 
     if events is not None:
         return HistoryView(events)

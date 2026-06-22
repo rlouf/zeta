@@ -196,7 +196,7 @@ def print_session_transcript(limit: int | None, json_output: bool) -> int:
     # Imported lazily: `sigil.cli` must not load zeta or rich at import time.
     from sigil import zeta_session_for_sigil
     from sigil.agent_io import current_timeline
-    from zeta.events import event_view
+    from zeta.records.events import event_view
 
     events = [
         event_view(event)

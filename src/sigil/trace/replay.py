@@ -11,9 +11,9 @@ from sigil.display.summarize import (
     short_trace_id,
 )
 from zeta.kernel.models import ModelOutput
-from zeta.kernel.objects import Derivation, Object, ObjectId
 from zeta.models import ModelSelection, resolve_active_model, resolve_model_profile
-from zeta.store.substrate import Store, warn_trace_failure_once
+from zeta.records.objects import Derivation, Object, ObjectId
+from zeta.records.stores import Store, warn_trace_failure_once
 
 
 def replay_model_selection(model_profile: str | None) -> ModelSelection:

@@ -25,27 +25,28 @@ from zeta import loop as zeta_agent
 from zeta import models as zeta_models_api
 from zeta.context.builder import PromptBuilder
 from zeta.context.components import chat_messages
-from zeta.events import event_view
 from zeta.execute import current_timeline
-from zeta.kernel.events import DraftEvent
-from zeta.kernel.objects import Derivation, Object, ObjectId, Ref, RefUpdate
 from zeta.loop import AgentRunResult
 from zeta.models import chat_completions as zeta_model
 from zeta.models import profiles as zeta_models
-from zeta.runtime.local import default_session
-from zeta.runtime.scope import SessionScope
-from zeta.store.events import Filter, SqliteEventStore, event_store_path
-from zeta.store.substrate import (
+from zeta.records.events import DraftEvent, event_view
+from zeta.records.objects import Derivation, Object, ObjectId, Ref, RefUpdate
+from zeta.records.stores import (
     AmbiguousIdError,
+    Filter,
     InMemoryStore,
+    SqliteEventStore,
     SqliteStore,
     Store,
     UnknownIdError,
     available_session_ids,
+    event_store_path,
     resolve_object_id,
     zeta_sqlite_path,
 )
-from zeta.store.substrate.base import IncompatibleSchemaError
+from zeta.records.stores.object_store import IncompatibleSchemaError
+from zeta.runtime.local import default_session
+from zeta.runtime.scope import SessionScope
 
 zeta_trace = SimpleNamespace(
     AmbiguousIdError=AmbiguousIdError,

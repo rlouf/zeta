@@ -18,8 +18,8 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
-from zeta.kernel.objects import Derivation, Object, ObjectId, Ref, RefUpdate
-from zeta.store.substrate.base import (
+from zeta.records.objects import Derivation, Object, ObjectId, Ref, RefUpdate
+from zeta.records.stores.object_store import (
     IncompatibleSchemaError,
     StoreBase,
     TraceStats,

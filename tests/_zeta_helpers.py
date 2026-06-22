@@ -22,18 +22,18 @@ from zeta.context.builder import (
     reconstructed_prompt_request,
 )
 from zeta.context.components import PromptComponent, prompt_components
-from zeta.events import (
+from zeta.loop import AgentRunResult
+from zeta.models import chat_completions as zeta_model
+from zeta.records.events import (
+    DraftEvent,
+    Event,
     boundary_event_draft,
     draft_event_view,
     event_view,
 )
-from zeta.kernel.events import DraftEvent, Event
-from zeta.kernel.objects import Object, ObjectId
-from zeta.loop import AgentRunResult
-from zeta.models import chat_completions as zeta_model
+from zeta.records.objects import Object, ObjectId
+from zeta.records.stores import Filter, InMemoryStore, Store
 from zeta.runtime.scope import SessionScope
-from zeta.store.events import Filter
-from zeta.store.substrate import InMemoryStore, Store
 
 zeta_context = SimpleNamespace(
     PreparedPrompt=PreparedPrompt,

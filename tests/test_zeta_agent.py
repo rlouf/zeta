@@ -32,7 +32,6 @@ from click.testing import CliRunner
 from sigil.tools import ensure_builtin_tools_registered
 from zeta import cli as zeta_cli
 from zeta import dispatch as zeta_dispatch
-from zeta import events as zeta_event_model
 from zeta import execute as zeta_execute
 from zeta import loop as zeta_agent
 from zeta import models as zeta_models_api
@@ -49,19 +48,20 @@ from zeta.kernel.capabilities import (
     CapabilityId,
 )
 from zeta.kernel.dispatch import Attempt, QueueItem
-from zeta.kernel.events import DraftEvent, Event
 from zeta.loop import AgentRunResult
 from zeta.models import chat_completions as zeta_model
-from zeta.runtime import local as zeta_runtime_local
-from zeta.runtime import requests as zeta_requests
-from zeta.runtime import scope as zeta_scope
-from zeta.store.events import (
+from zeta.records import events as zeta_event_model
+from zeta.records.events import DraftEvent, Event
+from zeta.records.stores import (
     Filter,
+    InMemoryStore,
     MemoryEventStore,
     SqliteEventStore,
     event_store_path,
 )
-from zeta.store.substrate import InMemoryStore
+from zeta.runtime import local as zeta_runtime_local
+from zeta.runtime import requests as zeta_requests
+from zeta.runtime import scope as zeta_scope
 
 zeta_trace = SimpleNamespace(InMemoryStore=InMemoryStore)
 
@@ -1382,6 +1382,22 @@ def test_zeta_rpc_unknown_method_returns_structured_error() -> None:
     ]
 
 
+def test_zeta_rpc_router_response_for_message_does_not_write_to_connection() -> None:
+    output = StringIO()
+    _, _, router = rpc_client(output=output)
+
+    response = asyncio.run(
+        router.response_for_message({"jsonrpc": "2.0", "id": 1, "method": "initialize"})
+    )
+
+    assert response == {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {"server": "zeta", "protocol": "0.1"},
+    }
+    assert output.getvalue() == ""
+
+
 def test_zeta_rpc_events_publish_uses_constructor_shaped_event(
     tmp_path: Path,
 ) -> None:
@@ -1588,6 +1604,108 @@ def test_zeta_rpc_events_list_uses_event_store_filter_names(tmp_path: Path) -> N
     assert message["result"]["next_cursor"] == 3
 
 
+def test_zeta_rpc_eventlog_events_list_request_produces_response() -> None:
+    event_store = zeta_events.MemoryEventStore()
+    stored = event_store.accept(
+        DraftEvent(
+            event_type="zeta.user_message",
+            source="test",
+            payload={"content": "hello"},
+            session_id="ctx-session",
+        )
+    ).event
+    request = event_store.accept(
+        zeta_rpc.rpc_requested_draft(
+            "events.list",
+            {"event_type": "zeta.user_message"},
+            request_id="req_1",
+            session_id="ctx-session",
+        )
+    ).event
+    session = zeta_scope.SessionScope(
+        session_id="ctx-session",
+        event_sink=event_store,
+        trace_store=zeta_trace.InMemoryStore(),
+        tool_registry=CapabilityRegistry(),
+        state_dir=Path("/tmp"),
+        session_dir=Path("/tmp") / "sessions" / "ctx-session",
+    )
+    _, _, router = rpc_client(session=session)
+
+    response = asyncio.run(zeta_rpc.run_eventlog_rpc_once(router))
+
+    assert response is not None
+    assert response.event_type == "rpc.responded"
+    assert response.caused_by == request.id
+    assert response.payload["request_id"] == "req_1"
+    assert response.payload["result"]["events"][0]["id"] == stored.id
+
+
+def test_zeta_rpc_eventlog_invalid_session_run_produces_failed_event() -> None:
+    event_store = zeta_events.MemoryEventStore()
+    request = event_store.accept(
+        zeta_rpc.rpc_requested_draft(
+            "session.run",
+            {},
+            request_id="req_invalid",
+            session_id="ctx-session",
+        )
+    ).event
+    session = zeta_scope.SessionScope(
+        session_id="ctx-session",
+        event_sink=event_store,
+        trace_store=zeta_trace.InMemoryStore(),
+        tool_registry=CapabilityRegistry(),
+        state_dir=Path("/tmp"),
+        session_dir=Path("/tmp") / "sessions" / "ctx-session",
+    )
+    _, _, router = rpc_client(session=session)
+
+    response = asyncio.run(zeta_rpc.run_eventlog_rpc_once(router))
+
+    assert response is not None
+    assert response.event_type == "rpc.failed"
+    assert response.caused_by == request.id
+    assert response.payload["request_id"] == "req_invalid"
+    assert response.payload["error"]["code"] == -32602
+    assert response.payload["error"]["data"]["code"] == "invalid_params"
+
+
+def test_zeta_rpc_eventlog_session_run_request_produces_started_response(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    event_store = zeta_events.MemoryEventStore()
+    request = event_store.accept(
+        zeta_rpc.rpc_requested_draft(
+            "session.run",
+            {"objective": "answer", "tools": []},
+            request_id="req_run",
+            session_id="ctx-session",
+        )
+    ).event
+    session = zeta_scope.SessionScope(
+        session_id="ctx-session",
+        event_sink=event_store,
+        trace_store=zeta_trace.InMemoryStore(),
+        tool_registry=CapabilityRegistry(),
+        state_dir=Path("/tmp"),
+        session_dir=Path("/tmp") / "sessions" / "ctx-session",
+    )
+    _, _, router = rpc_client(session=session)
+    monkeypatch.setattr(zeta_rpc.routes, "session_run_id", lambda: "run_eventlog")
+
+    response = asyncio.run(zeta_rpc.run_eventlog_rpc_once(router))
+
+    assert response is not None
+    assert response.event_type == "rpc.responded"
+    assert response.caused_by == request.id
+    assert response.payload["request_id"] == "req_run"
+    result = response.payload["result"]
+    assert result["run_id"] == "run_eventlog"
+    assert result["status"] == "started"
+    assert result["event"]["event_type"] == "session.turn.requested"
+
+
 def test_zeta_rpc_session_run_returns_started_event_from_shared_draft(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1704,6 +1822,63 @@ def test_zeta_rpc_tools_register_uses_capability_shape() -> None:
     }
     assert registry.get("rpc.pick_file") is not None
     assert registry.get("rpc.open_panel") is not None
+
+
+def test_zeta_rpc_registered_tool_invokes_peer_call_tool() -> None:
+    registry = CapabilityRegistry()
+    event_store = zeta_events.MemoryEventStore()
+    session = zeta_scope.SessionScope(
+        session_id="ctx-session",
+        event_sink=event_store,
+        trace_store=zeta_trace.InMemoryStore(),
+        tool_registry=registry,
+        state_dir=Path("/tmp"),
+        session_dir=Path("/tmp") / "sessions" / "ctx-session",
+    )
+    _, client, _ = rpc_client(session=session)
+    captured: dict[str, Any] = {}
+
+    async def fake_call_tool(
+        name: str,
+        params: dict[str, Any],
+        *,
+        timeout_seconds: int | float | None,
+    ) -> dict[str, Any]:
+        captured["name"] = name
+        captured["params"] = params
+        captured["timeout_seconds"] = timeout_seconds
+        return {"ok": True, "path": "README.md"}
+
+    cast(Any, client).call_tool = fake_call_tool
+
+    async def run() -> dict[str, Any]:
+        await zeta_rpc.tools_register(
+            {
+                "capabilities": [
+                    {
+                        "name": "pick_file",
+                        "description": "Pick a file.",
+                        "input_schema": {"type": "object"},
+                        "timeout_seconds": 2,
+                    }
+                ]
+            },
+            client,
+        )
+        return await registry.invoke_async(
+            "rpc.pick_file",
+            {"pattern": "*.md"},
+            execution_mode="direct",
+        )
+
+    result = asyncio.run(run())
+
+    assert result == {"ok": True, "path": "README.md"}
+    assert captured == {
+        "name": "pick_file",
+        "params": {"pattern": "*.md"},
+        "timeout_seconds": 2,
+    }
 
 
 def test_zeta_rpc_tools_respond_resolves_pending_call() -> None:
@@ -3786,6 +3961,44 @@ def test_zeta_local_runtime_run_once_fans_out_pending_queue_item(
         (f"qi_{accepted.id}_agent_one", "agent.one", "available"),
         (f"qi_{accepted.id}_agent_two", "agent.two", "available"),
     ]
+
+
+def test_zeta_local_runtime_run_once_handles_eventlog_rpc_request(
+    tmp_path: Path,
+) -> None:
+    event_store = zeta_events.SqliteEventStore(tmp_path / "events.sqlite3")
+    stored = event_store.accept(
+        DraftEvent(
+            event_type="zeta.user_message",
+            source="test",
+            payload={"content": "hello"},
+            session_id="ctx-session",
+        )
+    ).event
+    request = event_store.accept(
+        zeta_rpc.rpc_requested_draft(
+            "events.list",
+            {"event_type": "zeta.user_message"},
+            request_id="req_runtime",
+            session_id="ctx-session",
+        )
+    ).event
+    runtime = zeta_runtime_local.RuntimeServices(
+        project_root=tmp_path,
+        state_dir=tmp_path,
+        events=event_store,
+        specs=(),
+        executors=(),
+    )
+
+    message = asyncio.run(zeta_runtime_local.run_once(runtime))
+    response = event_store.children(request.id)[0]
+
+    assert message == f"rpc {request.id}"
+    assert response.event_type == "rpc.responded"
+    assert response.payload["request_id"] == "req_runtime"
+    assert response.payload["result"]["events"][0]["id"] == stored.id
+    assert event_store.list_queue_items() == []
 
 
 @pytest.mark.parametrize(

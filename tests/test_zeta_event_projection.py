@@ -3,7 +3,9 @@ from dataclasses import asdict, replace
 from typing import Any
 
 from zeta.context.builder import project_trace_events
-from zeta.events import (
+from zeta.records.events import (
+    DraftEvent,
+    Event,
     durable_model_event_payload,
     durable_tool_event_payload,
     event_view,
@@ -11,10 +13,9 @@ from zeta.events import (
     runtime_event_draft,
     tool_call_draft,
 )
-from zeta.history import effect_record, event_from_record, turn_record
-from zeta.kernel.events import DraftEvent, Event
-from zeta.kernel.objects import Derivation, Object
-from zeta.store.substrate import InMemoryStore
+from zeta.records.objects import Derivation, Object
+from zeta.records.stores import InMemoryStore
+from zeta.records.timeline import effect_record, event_from_record, turn_record
 
 SESSION_ID = "session-1"
 TURN_ID = "turn-1"

@@ -39,25 +39,28 @@ from sigil.sessions import record_turn, session_dir
 from sigil.state import history_view, read_events
 from sigil.workflows import ask as ask_runner
 from sigil.workflows import step as zeta_runner
-from zeta import events as zeta_event_model
 from zeta import loop as zeta_agent
 from zeta import models as zeta_models_api
 from zeta.context.components import PromptTrace, chat_messages
-from zeta.events import event_view
-from zeta.history import (
+from zeta.loop import AgentRunResult
+from zeta.models import chat_completions as zeta_model
+from zeta.models import profiles as zeta_models
+from zeta.records import events as zeta_event_model
+from zeta.records.events import DraftEvent, Event, event_view
+from zeta.records.objects import Ref
+from zeta.records.stores import (
+    Filter,
+    SqliteEventStore,
+    event_store_path,
+    resolve_object_id,
+)
+from zeta.records.timeline import (
     effect_record,
     history_event_record,
     is_effect_record,
     is_turn_record,
     turn_record,
 )
-from zeta.kernel.events import DraftEvent, Event
-from zeta.kernel.objects import Ref
-from zeta.loop import AgentRunResult
-from zeta.models import chat_completions as zeta_model
-from zeta.models import profiles as zeta_models
-from zeta.store.events import Filter, SqliteEventStore, event_store_path
-from zeta.store.substrate import resolve_object_id
 
 zeta_trace = SimpleNamespace(Ref=Ref, resolve_object_id=resolve_object_id)
 

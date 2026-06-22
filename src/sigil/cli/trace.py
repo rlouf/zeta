@@ -31,7 +31,7 @@ from sigil.trace.replay import (
 from sigil.trace.tools import tool_call_rows, tool_failure_detail
 from zeta.context.builder import reconstructed_prompt_request
 from zeta.models import chat_completion_messages
-from zeta.store.substrate import (
+from zeta.records.stores import (
     SqliteStore,
     Store,
     UnknownSessionError,

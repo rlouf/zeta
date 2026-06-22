@@ -16,14 +16,17 @@ from zeta.execute import (
     session_turn_requested_draft,
 )
 from zeta.kernel.capabilities import Capability, CapabilityId
-from zeta.kernel.events import DraftEvent, Event
 from zeta.kernel.runs import RunStatus
-from zeta.rpc.jsonrpc import JsonRpcConnection, RpcError
+from zeta.records.events import DraftEvent, Event
+from zeta.records.stores import EventReader, EventStoreProtocol, Filter
+from zeta.rpc.jsonrpc import JsonRpcConnection, JsonRpcRouter, RpcError
 from zeta.runtime.requests import SessionRequestError
 from zeta.runtime.scope import SessionScope
-from zeta.store.events import EventReader, Filter
 
 ToolCallStatus = Literal["requested", "responded", "failed", "cancelled", "timed_out"]
+RPC_REQUESTED = "rpc.requested"
+RPC_RESPONDED = "rpc.responded"
+RPC_FAILED = "rpc.failed"
 
 
 @dataclass
@@ -60,11 +63,49 @@ class ToolResponse:
 class RpcClient:
     """Per-RPC peer context shared by route adapters for stdio runtime calls."""
 
-    connection: JsonRpcConnection
+    connection: JsonRpcConnection | None
     session: SessionScope
     dispatcher: EventDispatcher
     pending_runs: dict[str, RunState]
     pending_tool_calls: dict[str, asyncio.Future[dict[str, Any]]]
+
+    def notify(self, method: str, params: dict[str, Any]) -> None:
+        if self.connection is not None:
+            self.connection.notify(method, params)
+
+    async def call_tool(
+        self,
+        name: str,
+        params: dict[str, Any],
+        *,
+        timeout_seconds: int | float | None,
+    ) -> dict[str, Any]:
+        call_id = str(uuid.uuid4())
+        future: asyncio.Future[dict[str, Any]] = (
+            asyncio.get_running_loop().create_future()
+        )
+        self.pending_tool_calls[call_id] = future
+        notification_params: dict[str, Any] = {
+            "call_id": call_id,
+            "name": name,
+            "arguments": params,
+            "status": "requested",
+        }
+        if timeout_seconds is not None:
+            notification_params["timeout_seconds"] = timeout_seconds
+        self.notify("tools.call", notification_params)
+        try:
+            if timeout_seconds is None:
+                return await future
+            return await asyncio.wait_for(future, timeout=timeout_seconds)
+        except TimeoutError:
+            return error_result(
+                "client-tool-timeout",
+                f"client tool {name} timed out after {timeout_seconds:g}s",
+            )
+        finally:
+            if self.pending_tool_calls.get(call_id) is future:
+                self.pending_tool_calls.pop(call_id, None)
 
 
 def invalid_params(code: str, message: str, **extra: Any) -> RpcError:
@@ -73,39 +114,108 @@ def invalid_params(code: str, message: str, **extra: Any) -> RpcError:
     return RpcError(-32602, code, "Invalid params", {"message": message, **extra})
 
 
-async def call_client_tool(
-    client: RpcClient,
-    name: str,
+def rpc_requested_draft(
+    method: str,
     params: dict[str, Any],
     *,
-    timeout_seconds: int | float | None,
-) -> dict[str, Any]:
-    """Call an RPC client tool and wait for its matching `tools.respond`."""
+    request_id: str | None = None,
+    source: str = "zeta",
+    session_id: str | None = None,
+    run_id: str | None = None,
+) -> DraftEvent:
+    request_id = request_id or f"req_{uuid.uuid4().hex}"
+    return DraftEvent(
+        RPC_REQUESTED,
+        source,
+        {"request_id": request_id, "method": method, "params": params},
+        idempotency_key=f"{RPC_REQUESTED}:{request_id}",
+        session_id=session_id,
+        run_id=run_id,
+    )
 
-    call_id = str(uuid.uuid4())
-    future: asyncio.Future[dict[str, Any]] = asyncio.get_running_loop().create_future()
-    client.pending_tool_calls[call_id] = future
-    notification_params: dict[str, Any] = {
-        "call_id": call_id,
-        "name": name,
-        "arguments": params,
-        "status": "requested",
-    }
-    if timeout_seconds is not None:
-        notification_params["timeout_seconds"] = timeout_seconds
-    client.connection.notify("tools.call", notification_params)
-    try:
-        if timeout_seconds is None:
-            return await future
-        return await asyncio.wait_for(future, timeout=timeout_seconds)
-    except TimeoutError:
-        return error_result(
-            "client-tool-timeout",
-            f"client tool {name} timed out after {timeout_seconds:g}s",
+
+def rpc_responded_draft(request: Event, result: Any) -> DraftEvent:
+    request_id = rpc_request_id(request)
+    return DraftEvent(
+        RPC_RESPONDED,
+        "zeta",
+        {"request_id": request_id, "result": result},
+        idempotency_key=f"{RPC_RESPONDED}:{request.id}",
+        caused_by=request.id,
+        session_id=request.session_id,
+        run_id=request.run_id,
+    )
+
+
+def rpc_failed_draft(request: Event, error: dict[str, Any]) -> DraftEvent:
+    request_id = rpc_request_id(request)
+    return DraftEvent(
+        RPC_FAILED,
+        "zeta",
+        {"request_id": request_id, "error": error},
+        idempotency_key=f"{RPC_FAILED}:{request.id}",
+        caused_by=request.id,
+        session_id=request.session_id,
+        run_id=request.run_id,
+    )
+
+
+def rpc_request_id(request: Event) -> str:
+    request_id = request.payload.get("request_id")
+    return request_id if isinstance(request_id, str) and request_id else request.id
+
+
+async def run_eventlog_rpc_once(
+    router: JsonRpcRouter,
+    *,
+    after_cursor: int | None = None,
+) -> Event | None:
+    store = router.client.session.event_sink
+    if not isinstance(store, EventStoreProtocol):
+        raise RpcError(
+            -32000,
+            "events_unavailable",
+            "Server error",
+            {"message": "event-log RPC requires a full event store"},
         )
-    finally:
-        if client.pending_tool_calls.get(call_id) is future:
-            client.pending_tool_calls.pop(call_id, None)
+    for request in store.list_events(
+        Filter(event_type=RPC_REQUESTED, after_cursor=after_cursor)
+    ):
+        if rpc_request_has_terminal_response(store, request):
+            continue
+        response = await router.response_for_message(rpc_message_from_event(request))
+        if response is None:
+            draft = rpc_responded_draft(request, None)
+        elif "error" in response:
+            draft = rpc_failed_draft(request, response["error"])
+        else:
+            draft = rpc_responded_draft(request, response.get("result"))
+        return store.accept(draft).event
+    return None
+
+
+def rpc_request_has_terminal_response(
+    store: EventStoreProtocol,
+    request: Event,
+) -> bool:
+    return any(
+        child.event_type in {RPC_RESPONDED, RPC_FAILED}
+        for child in store.children(request.id)
+    )
+
+
+def rpc_message_from_event(request: Event) -> dict[str, Any]:
+    payload = request.payload
+    method = payload.get("method")
+    params = payload.get("params")
+    if params is None:
+        params = {}
+    return {
+        "jsonrpc": "2.0",
+        "id": rpc_request_id(request),
+        "method": method,
+        "params": params,
+    }
 
 
 def event_to_wire(event: Event) -> dict[str, Any]:
@@ -390,8 +500,7 @@ async def tools_register(params: dict[str, Any], client: RpcClient) -> dict[str,
             timeout_seconds: int | float | None = registration.timeout_seconds,
             **_ignored: Any,
         ) -> dict[str, Any]:
-            return await call_client_tool(
-                client,
+            return await client.call_tool(
                 name,
                 params,
                 timeout_seconds=timeout_seconds,

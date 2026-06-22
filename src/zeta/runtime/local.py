@@ -18,10 +18,17 @@ from zeta.dispatch import (
     EventDispatcher,
     ExecutableAgent,
 )
-from zeta.kernel.events import DraftEvent, Event
+from zeta.execute import session_turn_agent
+from zeta.records.events import DraftEvent, Event
+from zeta.records.stores import (
+    Filter,
+    SqliteEventStore,
+    SqliteStore,
+    event_store_path,
+    zeta_sqlite_path,
+)
 from zeta.runtime.config import zeta_state_dir
 from zeta.runtime.scope import SessionScope
-from zeta.store.events import Filter, SqliteEventStore, event_store_path
 
 LOCAL_WORKER_NAME = "local-runtime"
 QUEUE_LEASE_MS = 60_000
@@ -65,8 +72,12 @@ def session_for_id(
 ) -> SessionScope:
     """Build the default Zeta runtime dependencies for one session scope."""
 
-    from zeta.store.events import SqliteEventStore, event_store_path
-    from zeta.store.substrate import SqliteStore, zeta_sqlite_path
+    from zeta.records.stores import (
+        SqliteEventStore,
+        SqliteStore,
+        event_store_path,
+        zeta_sqlite_path,
+    )
 
     if tool_registry is None:
         from zeta.capabilities.registry import registry as tool_registry
@@ -119,6 +130,10 @@ def is_runtime_event(event: Event) -> bool:
 
 async def run_once(runtime: RuntimeServices) -> str:
     emit_due_schedules(runtime)
+    rpc_request = pending_rpc_request(runtime)
+    if rpc_request is not None:
+        await run_eventlog_rpc_request(runtime, rpc_request)
+        return f"rpc {rpc_request.id}"
     enqueue_pending_events(runtime)
     dispatcher = EventDispatcher(
         runtime.events,
@@ -158,13 +173,95 @@ async def run_once(runtime: RuntimeServices) -> str:
 def enqueue_pending_events(runtime: RuntimeServices) -> int:
     queued = 0
     for event in runtime.events.list_events(Filter()):
-        if is_runtime_event(event) or event.event_type.startswith("zeta."):
+        if is_runtime_event(event) or event.event_type.startswith(("zeta.", "rpc.")):
             continue
         if runtime.events.event_has_queue_item(event.id):
             continue
         runtime.events.ensure_pending_queue_item(event)
         queued += 1
     return queued
+
+
+def pending_rpc_request(runtime: RuntimeServices) -> Event | None:
+    from zeta.rpc.routes import RPC_REQUESTED, rpc_request_has_terminal_response
+
+    for event in runtime.events.list_events(Filter(event_type=RPC_REQUESTED)):
+        if not rpc_request_has_terminal_response(runtime.events, event):
+            return event
+    return None
+
+
+async def run_eventlog_rpc_request(
+    runtime: RuntimeServices,
+    request: Event,
+) -> Event | None:
+    from zeta.capabilities.registry import registry as tool_registry
+    from zeta.rpc.jsonrpc import JsonRpcRouter
+    from zeta.rpc.routes import (
+        RpcClient,
+        RunState,
+        events_list,
+        events_publish,
+        initialize,
+        run_eventlog_rpc_once,
+        session_cancel,
+        session_run,
+        tools_register,
+        tools_respond,
+    )
+
+    session_id = request.session_id or "default"
+    trace_store = SqliteStore(
+        zeta_sqlite_path(runtime.state_dir),
+        session_id=session_id,
+    )
+    session = SessionScope(
+        session_id=session_id,
+        event_sink=runtime.events,
+        trace_store=trace_store,
+        tool_registry=tool_registry,
+        state_dir=runtime.state_dir,
+        session_dir=runtime.state_dir / "sessions" / session_id,
+    )
+    pending_runs: dict[str, RunState] = {}
+
+    def cancellation_event_for_run(run_id: str) -> asyncio.Event | None:
+        state = pending_runs.get(run_id)
+        return state.cancellation_event if state is not None else None
+
+    dispatcher = EventDispatcher(
+        runtime.events,
+        executors=(
+            session_turn_agent(
+                session,
+                publish_event=lambda _event: None,
+                cancellation_event_for_run=cancellation_event_for_run,
+            ),
+            *runtime.executors,
+        ),
+        worker_name=runtime.worker_name,
+        heartbeat_interval_seconds=ATTEMPT_HEARTBEAT_INTERVAL_SECONDS,
+        lease_ms=QUEUE_LEASE_MS,
+    )
+    client = RpcClient(
+        connection=None,
+        session=session,
+        dispatcher=dispatcher,
+        pending_runs=pending_runs,
+        pending_tool_calls={},
+    )
+    router = JsonRpcRouter(client)
+    router.route("initialize", initialize)
+    router.route("events.publish", events_publish)
+    router.route("events.list", events_list)
+    router.route("session.run", session_run)
+    router.route("session.cancel", session_cancel)
+    router.route("tools.register", tools_register)
+    router.route("tools.respond", tools_respond)
+    try:
+        return await run_eventlog_rpc_once(router)
+    finally:
+        trace_store.close()
 
 
 def run_once_message(queue_item_id: str, lifecycle_events: list[Event]) -> str:

@@ -22,14 +22,6 @@ from sigil.display.state import (
 )
 from sigil.turn import TurnRecorder
 from zeta.context.builder import project_trace_events
-from zeta.events import (
-    draft_event_id,
-    draft_event_view,
-    event_view,
-    exact_event_time,
-    user_message_draft,
-)
-from zeta.kernel.events import DraftEvent, Event
 from zeta.loop import (
     AgentRunResult,
     is_runtime_ui_event,
@@ -39,9 +31,23 @@ from zeta.models import (
     ModelSelection,
 )
 from zeta.models.chat_completions import ensure_server
+from zeta.records.events import (
+    DraftEvent,
+    Event,
+    draft_event_id,
+    draft_event_view,
+    event_view,
+    exact_event_time,
+    user_message_draft,
+)
+from zeta.records.stores import (
+    EventReader,
+    Filter,
+    SqliteEventStore,
+    Store,
+    warn_trace_failure_once,
+)
 from zeta.runtime.scope import SessionScope
-from zeta.store.events import EventReader, Filter, SqliteEventStore
-from zeta.store.substrate import Store, warn_trace_failure_once
 
 RuntimePublishedEvent = Event | DraftEvent
 STAGING_TOOL_NAMES = frozenset({"bash", "edit", "write"})

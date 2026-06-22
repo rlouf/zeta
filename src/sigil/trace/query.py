@@ -5,8 +5,8 @@ from typing import Any
 import click
 
 from sigil.display.summarize import estimated_prompt_tokens
-from zeta.kernel.objects import Object, ObjectId
-from zeta.store.substrate import (
+from zeta.records.objects import Object, ObjectId
+from zeta.records.stores import (
     AmbiguousIdError,
     Store,
     UnknownIdError,

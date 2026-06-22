@@ -13,9 +13,39 @@ from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
-from zeta.events import AppendOutcome
-from zeta.kernel.events import DraftEvent, Event, json_native_payload
-from zeta.store.events.filter import Filter
+from zeta.records.events import AppendOutcome, DraftEvent, Event, json_native_payload
+from zeta.records.stores._object_sqlite import (
+    DEFAULT_SQLITE_NAME,
+    ZETA_SQLITE_NAME,
+    SqliteStore,
+    available_session_ids,
+    default_sqlite_path,
+    export_trace_refs,
+    import_trace_graph,
+    open_existing_trace_store,
+    open_trace_store,
+    trace_state_dir,
+    zeta_sqlite_path,
+)
+from zeta.records.stores.event_store import Filter
+
+__all__ = [
+    "DEFAULT_SQLITE_NAME",
+    "EVENT_STORE_NAME",
+    "ZETA_SQLITE_NAME",
+    "ZETA_STORE_NAME",
+    "SqliteEventStore",
+    "SqliteStore",
+    "available_session_ids",
+    "default_sqlite_path",
+    "event_store_path",
+    "export_trace_refs",
+    "import_trace_graph",
+    "open_existing_trace_store",
+    "open_trace_store",
+    "trace_state_dir",
+    "zeta_sqlite_path",
+]
 
 EVENT_STORE_NAME = "events.sqlite3"
 ZETA_STORE_NAME = "zeta.sqlite3"

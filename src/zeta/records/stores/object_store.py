@@ -11,7 +11,7 @@ from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from typing import Protocol, cast
 
-from zeta.kernel.objects import Derivation, Object, ObjectId, Ref, RefUpdate
+from zeta.records.objects import Derivation, Object, ObjectId, Ref, RefUpdate
 
 LOGGER = logging.getLogger("zeta.substrate")
 _WARNED_FAILURES: set[str] = set()

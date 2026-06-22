@@ -23,13 +23,13 @@ from sigil.protocols import (
     turn_contract,
 )
 from sigil.state import event_store_path, read_events, state_dir
-from zeta.history import (
+from zeta.records.events import Event
+from zeta.records.timeline import (
     effect_record,
     publish_effect_record,
     publish_turn_record,
     turn_record,
 )
-from zeta.kernel.events import Event
 
 RUN_WORKFLOW = "run"
 

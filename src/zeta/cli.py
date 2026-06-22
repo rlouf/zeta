@@ -9,10 +9,10 @@ from typing import Any
 
 import click
 
-from zeta.kernel.events import Event
+from zeta.records.events import Event
+from zeta.records.stores import Filter, SqliteEventStore, event_store_path
 from zeta.rpc import run_stdio
 from zeta.runtime import local as runtime_local
-from zeta.store.events import Filter, SqliteEventStore, event_store_path
 
 QUEUE_STATUS_ORDER = (
     "pending",

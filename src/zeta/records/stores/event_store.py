@@ -1,17 +1,23 @@
-"""Event store implementations."""
+"""Event store contracts and query shapes."""
 
+from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
-from zeta.events import AppendOutcome
-from zeta.kernel.events import DraftEvent, Event
-from zeta.store.events.filter import Filter
-from zeta.store.events.memory import MemoryEventStore
-from zeta.store.events.sqlite import (
-    EVENT_STORE_NAME,
-    ZETA_STORE_NAME,
-    SqliteEventStore,
-    event_store_path,
-)
+from zeta.records.events import AppendOutcome, DraftEvent, Event
+
+
+@dataclass(frozen=True)
+class Filter:
+    """Criteria for selecting events from the append-only log."""
+
+    event_type: str | None = None
+    event_type_prefix: str | None = None
+    session_id: str | None = None
+    run_id: str | None = None
+    turn_id: str | None = None
+    caused_by: str | None = None
+    after_cursor: int | None = None
+    limit: int | None = None
 
 
 @runtime_checkable
@@ -57,17 +63,3 @@ class EventStoreProtocol(EventReader, EventWriter, Protocol):
 
     def close(self) -> None:
         """Release store resources."""
-
-
-__all__ = [
-    "AppendOutcome",
-    "EVENT_STORE_NAME",
-    "EventReader",
-    "EventStoreProtocol",
-    "EventWriter",
-    "Filter",
-    "MemoryEventStore",
-    "SqliteEventStore",
-    "ZETA_STORE_NAME",
-    "event_store_path",
-]

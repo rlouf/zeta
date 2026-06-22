@@ -4,8 +4,8 @@ import json
 from collections.abc import Iterator
 from contextlib import contextmanager
 
-from zeta.kernel.objects import Derivation, Object, ObjectId, Ref, RefUpdate
-from zeta.store.substrate.base import StoreBase, TraceStats
+from zeta.records.objects import Derivation, Object, ObjectId, Ref, RefUpdate
+from zeta.records.stores.object_store import StoreBase, TraceStats
 
 
 class InMemoryStore(StoreBase):

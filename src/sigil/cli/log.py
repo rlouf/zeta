@@ -62,7 +62,7 @@ def cmd_log(
     # Imported lazily: `sigil.cli` must stay light at import time.
     from sigil.display.summarize import format_turn_line
     from sigil.state import history_view
-    from zeta.history import query_history
+    from zeta.records.timeline import query_history
 
     turns = query_history(
         history_view(),
@@ -92,7 +92,7 @@ def cmd_log(
 
 def since_epoch(value: str) -> float:
     """Parse a --since value, mapping parse errors onto CLI errors."""
-    from zeta.history import parse_since
+    from zeta.records.timeline import parse_since
 
     try:
         return parse_since(value)
@@ -228,7 +228,7 @@ def cmd_blame(file: str) -> int:
     find those with `sigil log` and the command text.
     """
     from sigil.state import history_view
-    from zeta.history import touched_path_variants
+    from zeta.records.timeline import touched_path_variants
 
     history = history_view()
     effects: list[dict[str, Any]] = []
@@ -252,7 +252,11 @@ def cmd_blame(file: str) -> int:
 
 def resolve_cli_turn_id(history: Any, token: str) -> str:
     """Resolve a turn id token, mapping resolver errors onto CLI errors."""
-    from zeta.history import AmbiguousTurnError, UnknownTurnError, resolve_turn_id
+    from zeta.records.timeline import (
+        AmbiguousTurnError,
+        UnknownTurnError,
+        resolve_turn_id,
+    )
 
     try:
         return resolve_turn_id(history, token)

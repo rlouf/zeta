@@ -59,10 +59,10 @@ from zeta.kernel.capabilities import (
     Capability,
     CapabilityId,
 )
-from zeta.kernel.events import Event
-from zeta.kernel.objects import Derivation, Object
 from zeta.models import chat_completions as zeta_model
-from zeta.store.substrate import InMemoryStore
+from zeta.records.events import Event
+from zeta.records.objects import Derivation, Object
+from zeta.records.stores import InMemoryStore
 
 ensure_builtin_tools_registered()
 

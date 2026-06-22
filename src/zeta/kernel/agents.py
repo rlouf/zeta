@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from fnmatch import fnmatchcase
 from typing import Literal
 
-from zeta.kernel.events import DraftEvent, Event
+from zeta.records.events import DraftEvent, Event
 
 DispatchMode = Literal["one_shot", "session_scoped"]
 AgentEventPublisher = Callable[[DraftEvent], Awaitable[Event]]

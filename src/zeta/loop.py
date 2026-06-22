@@ -27,7 +27,15 @@ from zeta.context.builder import (
     render_model_input,
 )
 from zeta.context.components import PromptTrace
-from zeta.events import (
+from zeta.kernel.capabilities import ExecutionMode
+from zeta.kernel.models import ModelInput, ModelOutput
+from zeta.models import (
+    DefaultModelGateway,
+)
+from zeta.models.chat_completions import tool_call_id
+from zeta.records.events import (
+    DraftEvent,
+    Event,
     draft_event_view,
     event_view,
     normalized_tool_result,
@@ -37,14 +45,7 @@ from zeta.events import (
     tool_result_status,
     turn_aborted_draft,
 )
-from zeta.kernel.capabilities import ExecutionMode
-from zeta.kernel.events import DraftEvent, Event
-from zeta.kernel.models import ModelInput, ModelOutput
-from zeta.models import (
-    DefaultModelGateway,
-)
-from zeta.models.chat_completions import tool_call_id
-from zeta.store.substrate import Store
+from zeta.records.stores import Store
 
 AgentEventSink = Callable[[DraftEvent], None]
 TimelineEvent = Event | dict[str, Any]

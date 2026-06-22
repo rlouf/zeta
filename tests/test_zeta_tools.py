@@ -1197,7 +1197,7 @@ def seed_query_log_history(monkeypatch) -> None:
     from sigil.protocols import turn_contract
     from sigil.sessions import session_id
     from sigil.state import append_event, event_store_path
-    from zeta.history import effect_record, publish_effect_record, turn_record
+    from zeta.records.timeline import effect_record, publish_effect_record, turn_record
 
     monkeypatch.setenv("SIGIL_SESSION_ID", "query-log-here")
     append_event(

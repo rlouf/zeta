@@ -8,8 +8,8 @@ import click
 from sigil.cli._base import cli, examples
 from sigil.cli._shared import pretty_print_json
 from sigil.state import causal_chain, event_store_path, events_for_turn, read_events
-from zeta.kernel.events import Event
-from zeta.store.events import Filter, SqliteEventStore
+from zeta.records.events import Event
+from zeta.records.stores import Filter, SqliteEventStore
 
 EVENT_LIST_COLUMNS = ("time", "workflow", "event", "session", "detail")
 WORKFLOW_GLYPHS = frozenset({",", ",,", ",,,", "?", "ask"})

@@ -61,6 +61,22 @@ def runtime_agents(project_root: Path) -> list[RegisteredAgent]:
     ]
 
 
+def event_record(event: Event) -> dict[str, object]:
+    return {
+        "id": event.id,
+        "type": event.event_type,
+        "source": event.source,
+        "payload": dict(event.payload),
+        "idempotency_key": event.idempotency_key,
+        "caused_by": event.caused_by,
+        "session_id": event.session_id,
+        "run_id": event.run_id,
+        "turn_id": event.turn_id,
+        "timestamp_ms": event.timestamp_ms,
+        "cursor": event.cursor,
+    }
+
+
 def is_runtime_event(event: Event) -> bool:
     return event.event_type.startswith(("runtime.queue_item.", "runtime.attempt."))
 
@@ -201,6 +217,70 @@ def attempts(project_root: Path, state_dir: Path | None, json_output: bool) -> i
                     snapshot.attempt_id,
                     snapshot.queue_item_id,
                     snapshot.target_agent,
+                ]
+            )
+        )
+    return 0
+
+
+@cli.command("events")
+@click.option(
+    "--project-root",
+    type=click.Path(file_okay=False, path_type=Path),
+    default=Path("."),
+    show_default=True,
+    help="Project root containing .zeta runtime state.",
+)
+@click.option(
+    "--state-dir",
+    type=click.Path(file_okay=False, path_type=Path),
+    help="Override the runtime state directory.",
+)
+@click.option("--type-prefix", help="Only show events with this type prefix.")
+@click.option("--session", "session_id", help="Only show events for one session.")
+@click.option(
+    "--limit",
+    type=click.IntRange(min=1),
+    default=50,
+    show_default=True,
+    help="Maximum number of events to show.",
+)
+@click.option("--json", "json_output", is_flag=True, help="Emit JSON.")
+def events(
+    project_root: Path,
+    state_dir: Path | None,
+    type_prefix: str | None,
+    session_id: str | None,
+    limit: int,
+    json_output: bool,
+) -> int:
+    """List durable runtime events."""
+
+    event_store = runtime_event_store(project_root, state_dir)
+    try:
+        durable_events = event_store.list_events(
+            Filter(
+                event_type_prefix=type_prefix,
+                session_id=session_id,
+                limit=limit,
+            )
+        )
+    finally:
+        event_store.close()
+    if json_output:
+        click.echo(json.dumps([event_record(event) for event in durable_events]))
+        return 0
+    if not durable_events:
+        click.echo("events empty")
+        return 0
+    for event in durable_events:
+        click.echo(
+            "\t".join(
+                [
+                    str(event.cursor or ""),
+                    event.event_type,
+                    event.source,
+                    event.id,
                 ]
             )
         )

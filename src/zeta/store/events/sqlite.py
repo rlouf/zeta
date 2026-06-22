@@ -93,7 +93,11 @@ class SqliteEventStore:
               finished_at TEXT,
               error TEXT,
               session_id TEXT,
-              run_id TEXT
+              run_id TEXT,
+              summary TEXT,
+              input_tokens INTEGER,
+              output_tokens INTEGER,
+              tool_calls_json TEXT
             ) STRICT;
 
             CREATE TABLE IF NOT EXISTS attempt_results (
@@ -127,6 +131,20 @@ class SqliteEventStore:
         }
         if "run_id" not in columns:
             self.connection.execute("ALTER TABLE events ADD COLUMN run_id TEXT")
+        attempt_columns = {
+            str(row["name"])
+            for row in self.connection.execute("PRAGMA table_info(attempts)").fetchall()
+        }
+        for name, kind in (
+            ("summary", "TEXT"),
+            ("input_tokens", "INTEGER"),
+            ("output_tokens", "INTEGER"),
+            ("tool_calls_json", "TEXT"),
+        ):
+            if name not in attempt_columns:
+                self.connection.execute(
+                    f"ALTER TABLE attempts ADD COLUMN {name} {kind}"
+                )
         self.connection.executescript(
             """
             CREATE INDEX IF NOT EXISTS idx_events_type_ts
@@ -281,8 +299,10 @@ class SqliteEventStore:
             SELECT a.attempt_id, a.queue_item_id, a.event_id, a.attempt_number,
                    a.target_agent, a.worker_name, a.status, a.started_at,
                    a.heartbeat_at, a.finished_at, a.error, a.session_id, a.run_id,
-                   r.final_status, r.summary, r.result_json, r.events_json,
-                   r.tool_calls_json, r.usage_json
+                   COALESCE(a.summary, r.summary) AS summary,
+                   a.input_tokens, a.output_tokens,
+                   COALESCE(a.tool_calls_json, r.tool_calls_json) AS tool_calls_json,
+                   r.final_status, r.result_json, r.events_json, r.usage_json
             FROM attempts a
             LEFT JOIN attempt_results r ON r.attempt_id = a.attempt_id
             ORDER BY a.started_at ASC, a.attempt_id ASC
@@ -469,15 +489,20 @@ class SqliteEventStore:
             INSERT INTO attempts
               (attempt_id, queue_item_id, event_id, attempt_number, target_agent,
                worker_name, status, started_at, heartbeat_at, finished_at, error,
-               session_id, run_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               session_id, run_id, summary, input_tokens, output_tokens,
+               tool_calls_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(attempt_id) DO UPDATE SET
               status = excluded.status,
               heartbeat_at = excluded.heartbeat_at,
               finished_at = excluded.finished_at,
               error = excluded.error,
               session_id = excluded.session_id,
-              run_id = excluded.run_id
+              run_id = excluded.run_id,
+              summary = excluded.summary,
+              input_tokens = excluded.input_tokens,
+              output_tokens = excluded.output_tokens,
+              tool_calls_json = excluded.tool_calls_json
             """,
             (
                 attempt_id,
@@ -493,6 +518,10 @@ class SqliteEventStore:
                 _payload_str(event, "error"),
                 event.session_id,
                 event.run_id,
+                _payload_str(event, "summary"),
+                _usage_token(event, "input_tokens", "prompt_tokens"),
+                _usage_token(event, "output_tokens", "completion_tokens"),
+                _payload_json(event, "tool_calls"),
             ),
         )
         if status == "running":
@@ -801,6 +830,7 @@ def _row_to_event(row: sqlite3.Row) -> Event:
 
 
 def _row_to_attempt(row: sqlite3.Row) -> dict[str, Any]:
+    usage = _json_column(row["usage_json"])
     return {
         "attempt_id": str(row["attempt_id"]),
         "queue_item_id": str(row["queue_item_id"]),
@@ -815,12 +845,14 @@ def _row_to_attempt(row: sqlite3.Row) -> dict[str, Any]:
         "error": _optional_str(row["error"]),
         "session_id": _optional_str(row["session_id"]),
         "run_id": _optional_str(row["run_id"]),
+        "input_tokens": _row_token_count(row["input_tokens"], usage, "input_tokens"),
+        "output_tokens": _row_token_count(row["output_tokens"], usage, "output_tokens"),
         "final_status": _optional_str(row["final_status"]),
         "summary": _optional_str(row["summary"]),
         "result": _json_column(row["result_json"]),
         "events": _json_column(row["events_json"]),
         "tool_calls": _json_column(row["tool_calls_json"]),
-        "usage": _json_column(row["usage_json"]),
+        "usage": usage,
     }
 
 
@@ -843,6 +875,31 @@ def _payload_json(event: Event, key: str) -> str | None:
     if value is None:
         return None
     return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+
+
+def _row_token_count(
+    value: Any,
+    usage: Any,
+    key: str,
+) -> int | None:
+    if isinstance(value, int):
+        return value
+    if isinstance(usage, dict):
+        token_count = usage.get(key)
+        if isinstance(token_count, int):
+            return token_count
+    return None
+
+
+def _usage_token(event: Event, *keys: str) -> int | None:
+    usage = event.payload.get("usage")
+    if not isinstance(usage, dict):
+        return None
+    for key in keys:
+        value = usage.get(key)
+        if isinstance(value, int):
+            return value
+    return None
 
 
 def _runtime_status(event: Event) -> str:

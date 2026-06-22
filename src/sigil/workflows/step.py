@@ -23,7 +23,7 @@ from sigil.agent_io import (
     render_final_answer,
 )
 from sigil.display.render import render_tool_result_summary
-from sigil.display.state import PROGRESS_MODE_TRACE, context_bar_text
+from sigil.display.state import PROGRESS_MODE_TRACE
 from sigil.display.summarize import render_handoff_lines
 from sigil.protocols import (
     SHELL_HANDOFF_RESULT_SCHEMA,
@@ -387,14 +387,13 @@ def finalize_progress(
     context_footer: Any = None,
     telemetry: dict[str, Any] | None = None,
 ) -> None:
-    context_bar = context_bar_text(telemetry) if context_footer is not None else ""
     if (
         renderer.progress_renderer is not None
         and renderer.progress_renderer.mode != PROGRESS_MODE_TRACE
     ):
-        renderer.progress_renderer.finalize(history_event_record(turn), context_bar)
+        renderer.progress_renderer.finalize(history_event_record(turn))
     if context_footer is not None:
-        context_footer.finalize(telemetry, print_line=False)
+        context_footer.finalize(telemetry)
 
 
 def write_handoff(path: str | Path | None, handoff: dict[str, Any]) -> None:

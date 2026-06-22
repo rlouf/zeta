@@ -177,6 +177,7 @@ class RunDependencies:
     cancellation_event: CancellationToken | None
     deadline: float | None
     model_gateway: ModelGateway = field(default_factory=DefaultModelGateway)
+    clock: Callable[[], float] = field(default_factory=lambda: time_monotonic)
 
 
 @dataclass(frozen=True)
@@ -318,7 +319,8 @@ async def run_agent(
     gateway = model_gateway or DefaultModelGateway()
     if not gateway.available(config):
         raise RuntimeError("model endpoint is not reachable")
-    deadline = agent_deadline(config, deadline)
+    clock = time_monotonic
+    deadline = agent_deadline(config, deadline, clock=clock)
     active_tool_registry = tool_registry or _runtime_tool_registry
     allowed_capabilities = agent_allowed_capabilities(
         config,
@@ -337,6 +339,7 @@ async def run_agent(
         model_gateway=gateway,
         cancellation_event=cancellation_event,
         deadline=deadline,
+        clock=clock,
     )
     projection = active_tool_registry.project(allowed_capabilities)
     tools = projection.descriptors
@@ -576,10 +579,15 @@ def check_turn_budget(
     )
 
 
-def agent_deadline(config: AgentConfig, deadline: float | None) -> float | None:
+def agent_deadline(
+    config: AgentConfig,
+    deadline: float | None,
+    *,
+    clock: Callable[[], float],
+) -> float | None:
     if config.max_wall_seconds is None:
         return deadline
-    configured = time_monotonic() + max(config.max_wall_seconds, 0.0)
+    configured = clock() + max(config.max_wall_seconds, 0.0)
     if deadline is None:
         return configured
     return min(deadline, configured)
@@ -591,7 +599,7 @@ def raise_if_agent_turn_aborted(
     ctx: RunDependencies,
     deadline: float | None,
 ) -> None:
-    reason = agent_abort_reason(ctx.cancellation_event, deadline)
+    reason = agent_abort_reason(ctx.cancellation_event, deadline, clock=ctx.clock)
     if reason is None:
         return
     state.note_step("abort_run")
@@ -615,10 +623,12 @@ def raise_if_agent_turn_aborted(
 def agent_abort_reason(
     cancellation_event: CancellationToken | None,
     deadline: float | None,
+    *,
+    clock: Callable[[], float],
 ) -> str | None:
     if cancellation_event is not None and cancellation_event.is_set():
         return "cancelled"
-    if deadline is not None and time_monotonic() >= deadline:
+    if deadline is not None and clock() >= deadline:
         return "deadline_exceeded"
     return None
 

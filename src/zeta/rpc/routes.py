@@ -190,7 +190,8 @@ async def route_event(client: RpcClient, event: Event) -> None:
     """Let RPC ingress return before agent routing work runs."""
 
     try:
-        await client.dispatcher.route(event)
+        route_outcome = await client.dispatcher.route(event)
+        await client.dispatcher.run_queue_items(route_outcome.queue_items)
     except asyncio.CancelledError:
         raise
     except Exception:
@@ -275,7 +276,11 @@ async def route_run(client: RpcClient, state: RunState, event: Event) -> None:
     """Route the requested-turn event in the background after `session.run` returns."""
 
     try:
-        lifecycle_events = await client.dispatcher.route(event)
+        route_outcome = await client.dispatcher.route(event)
+        lifecycle_events = [
+            *route_outcome.lifecycle_events,
+            *await client.dispatcher.run_queue_items(route_outcome.queue_items),
+        ]
     except asyncio.CancelledError:
         state.status = "cancelled"
         raise

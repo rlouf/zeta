@@ -9,7 +9,7 @@ from typing import Any
 from zeta.kernel.agents import AgentDefinition, AgentInvocation, EventPattern
 from zeta.kernel.dispatch import Attempt, AttemptStatus, QueueItem, QueueItemStatus
 from zeta.kernel.events import DraftEvent, Event
-from zeta.store.events import EventWriter
+from zeta.store.events import EventReader, EventStoreProtocol, EventWriter, Filter
 
 AgentRunner = Callable[["AgentInvocation"], Awaitable[dict[str, Any]]]
 
@@ -21,6 +21,8 @@ __all__ = [
     "EventPattern",
     "RegisteredAgent",
     "ReservedRuntimeEventError",
+    "RoutedQueueItem",
+    "RouteOutcome",
     "terminal_queue_item_result",
 ]
 
@@ -42,6 +44,24 @@ class DispatchOutcome:
     event: Event
     inserted: bool
     lifecycle_events: list[Event]
+
+
+@dataclass(frozen=True)
+class RoutedQueueItem:
+    """Durable work made available by routing an event to an agent."""
+
+    queue_item_id: str
+    event_id: str
+    target_agent: str
+
+
+@dataclass(frozen=True)
+class RouteOutcome:
+    """Result of routing one durable event to available queue items."""
+
+    event: Event
+    lifecycle_events: list[Event]
+    queue_items: list[RoutedQueueItem]
 
 
 @dataclass(frozen=True)
@@ -83,19 +103,58 @@ class EventDispatcher:
         outcome = await self.publish_event(draft)
         if not outcome.inserted:
             return outcome
-        lifecycle_events = await self.route(outcome.event)
+        route_outcome = await self.route(outcome.event)
+        lifecycle_events = [
+            *route_outcome.lifecycle_events,
+            *await self.run_queue_items(route_outcome.queue_items),
+        ]
         return DispatchOutcome(outcome.event, True, lifecycle_events)
 
-    async def route(self, event: Event) -> list[Event]:
+    async def route(self, event: Event) -> RouteOutcome:
         lifecycle_events: list[Event] = []
+        queue_items: list[RoutedQueueItem] = []
         matching_agents = self.matching_agents(event)
         if not matching_agents:
-            return [self._append_unhandled_queue_item_event(event)]
-        task_results: list[list[Event] | None] = [None] * len(matching_agents)
+            return RouteOutcome(
+                event,
+                [self._append_unhandled_queue_item_event(event)],
+                [],
+            )
+        for agent in matching_agents:
+            queue_item_id = queue_item_id_for_event(agent, event)
+            lifecycle_events.append(
+                self._append_queue_item_event(
+                    event,
+                    agent,
+                    queue_item_id,
+                    event_suffix="available",
+                    status="available",
+                )
+            )
+            queue_items.append(
+                RoutedQueueItem(
+                    queue_item_id=queue_item_id,
+                    event_id=event.id,
+                    target_agent=agent.definition.agent_id,
+                )
+            )
+        return RouteOutcome(event, lifecycle_events, queue_items)
+
+    async def run_queue_items(
+        self,
+        queue_items: Iterable[RoutedQueueItem],
+    ) -> list[Event]:
+        lifecycle_events: list[Event] = []
+        runnable_items: list[RoutedQueueItem] = []
+        for queue_item in queue_items:
+            agent = self._agent_for_id(queue_item.target_agent)
+            if agent is not None and agent.run is not None:
+                runnable_items.append(queue_item)
+        task_results: list[list[Event] | None] = [None] * len(runnable_items)
         async with asyncio.TaskGroup() as task_group:
-            for index, agent in enumerate(matching_agents):
+            for index, queue_item in enumerate(runnable_items):
                 task_group.create_task(
-                    self._run_agent_into(task_results, index, agent, event)
+                    self._run_queue_item_into(task_results, index, queue_item)
                 )
         for task_result in task_results:
             if task_result is None:
@@ -103,38 +162,41 @@ class EventDispatcher:
             lifecycle_events.extend(task_result)
         return lifecycle_events
 
+    async def run_queue_item(
+        self,
+        queue_item: RoutedQueueItem | str,
+    ) -> list[Event]:
+        routed_queue_item = self._resolve_queue_item(queue_item)
+        triggering_event = self._stored_event(routed_queue_item.event_id)
+        agent = self._agent_for_id(routed_queue_item.target_agent)
+        if agent is None or agent.run is None:
+            return self._missing_executor_events(triggering_event, routed_queue_item)
+        return await self._run_agent(agent, triggering_event, routed_queue_item)
+
     def matching_agents(self, event: Event) -> list[RegisteredAgent]:
         return [agent for agent in self.agents if agent.definition.accepts(event)]
 
-    async def _run_agent_into(
+    async def _run_queue_item_into(
         self,
         results: list[list[Event] | None],
         index: int,
-        agent: RegisteredAgent,
-        triggering_event: Event,
+        queue_item: RoutedQueueItem,
     ) -> None:
-        results[index] = await self._run_agent(agent, triggering_event)
+        results[index] = await self.run_queue_item(queue_item)
 
     async def _run_agent(
         self,
         agent: RegisteredAgent,
         triggering_event: Event,
+        queue_item: RoutedQueueItem,
     ) -> list[Event]:
-        queue_item_id = queue_item_id_for_event(agent, triggering_event)
-        events = [
-            self._append_queue_item_event(
-                triggering_event,
-                agent,
-                queue_item_id,
-                event_suffix="created",
-                status="available",
-            )
-        ]
-        if agent.run is None:
-            return events
-
+        queue_item_id = queue_item.queue_item_id
+        events: list[Event] = []
         attempt_number = 1
         attempt_id = attempt_id_for_queue_item(queue_item_id, attempt_number)
+        runner = agent.run
+        if runner is None:
+            return self._missing_executor_events(triggering_event, queue_item)
         events.append(
             self._append_queue_item_event(
                 triggering_event,
@@ -159,7 +221,7 @@ class EventDispatcher:
             )
         )
         try:
-            result = await agent.run(
+            result = await runner(
                 AgentInvocation(
                     agent.definition,
                     triggering_event,
@@ -201,6 +263,59 @@ class EventDispatcher:
         )
         return events
 
+    def _agent_for_id(self, agent_id: str) -> RegisteredAgent | None:
+        for agent in self.agents:
+            if agent.definition.agent_id == agent_id:
+                return agent
+        return None
+
+    def _resolve_queue_item(self, queue_item: RoutedQueueItem | str) -> RoutedQueueItem:
+        if isinstance(queue_item, RoutedQueueItem):
+            return queue_item
+        return self._stored_queue_item(queue_item)
+
+    def _stored_queue_item(self, queue_item_id: str) -> RoutedQueueItem:
+        reader = self._event_reader()
+        for event in reversed(
+            reader.list_events(Filter(event_type="runtime.queue_item.available"))
+        ):
+            if required_payload_string(event, "queue_item_id") == queue_item_id:
+                return routed_queue_item_from_event(event)
+        raise LookupError(f"queue item {queue_item_id!r} is not available")
+
+    def _stored_event(self, event_id: str) -> Event:
+        if isinstance(self.event_sink, EventStoreProtocol):
+            event = self.event_sink.get(event_id)
+            if event is not None:
+                return event
+        reader = self._event_reader()
+        for event in reader.list_events(Filter()):
+            if event.id == event_id:
+                return event
+        raise LookupError(f"event {event_id!r} was not found")
+
+    def _event_reader(self) -> EventReader:
+        if isinstance(self.event_sink, EventReader):
+            return self.event_sink
+        raise RuntimeError("queue item execution requires a readable event store")
+
+    def _missing_executor_events(
+        self,
+        triggering_event: Event,
+        queue_item: RoutedQueueItem,
+    ) -> list[Event]:
+        error = f"no executor registered for {queue_item.target_agent!r}"
+        return [
+            self._append_queue_item_event_for_target(
+                triggering_event,
+                queue_item.queue_item_id,
+                queue_item.target_agent,
+                event_suffix="failed",
+                status="failed",
+                error=error,
+            )
+        ]
+
     def _append_queue_item_event(
         self,
         triggering_event: Event,
@@ -212,10 +327,31 @@ class EventDispatcher:
         attempt_number: int | None = None,
         **payload_extra: Any,
     ) -> Event:
+        return self._append_queue_item_event_for_target(
+            triggering_event,
+            queue_item_id,
+            agent.definition.agent_id,
+            event_suffix=event_suffix,
+            status=status,
+            attempt_number=attempt_number,
+            **payload_extra,
+        )
+
+    def _append_queue_item_event_for_target(
+        self,
+        triggering_event: Event,
+        queue_item_id: str,
+        target_agent: str,
+        *,
+        event_suffix: str,
+        status: QueueItemStatus,
+        attempt_number: int | None = None,
+        **payload_extra: Any,
+    ) -> Event:
         queue_item = QueueItem(
             queue_item_id=queue_item_id,
             event_id=triggering_event.id,
-            target_agent=agent.definition.agent_id,
+            target_agent=target_agent,
             status=status,
         )
         return self._append_lifecycle_event(
@@ -224,7 +360,7 @@ class EventDispatcher:
             queue_item_payload(queue_item, **payload_extra),
             idempotency_key=queue_item_idempotency_key(
                 triggering_event,
-                agent.definition.agent_id,
+                target_agent,
                 event_suffix,
                 attempt_number=attempt_number,
             ),
@@ -433,6 +569,19 @@ def queue_item_result(event: Event) -> dict[str, Any] | None:
     if isinstance(result, dict):
         return result
     return None
+
+
+def routed_queue_item_from_event(event: Event) -> RoutedQueueItem:
+    queue_item_id = required_payload_string(event, "queue_item_id")
+    event_id = required_payload_string(event, "event_id")
+    target_agent = required_payload_string(event, "target_agent")
+    if queue_item_id is None or event_id is None or target_agent is None:
+        raise ValueError("available queue item event is missing required payload")
+    return RoutedQueueItem(
+        queue_item_id=queue_item_id,
+        event_id=event_id,
+        target_agent=target_agent,
+    )
 
 
 def queue_item_id_for_event(agent: RegisteredAgent, event: Event) -> str:

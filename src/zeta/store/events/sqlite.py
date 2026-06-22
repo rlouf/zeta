@@ -9,6 +9,7 @@ import json
 import os
 import sqlite3
 import time
+from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
@@ -270,6 +271,96 @@ class SqliteEventStore:
             """
         ).fetchall()
         return [dict(row) for row in rows]
+
+    def list_locks(self) -> list[dict[str, Any]]:
+        rows = self.connection.execute(
+            """
+            SELECT key, owner, acquired_at, expires_at
+            FROM locks
+            ORDER BY key ASC
+            """
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def acquire_locks(
+        self,
+        keys: Iterable[str],
+        owner: str,
+        *,
+        lease_ms: int,
+        now_ms: int,
+    ) -> bool:
+        requested = tuple(dict.fromkeys(keys))
+        if not requested:
+            return True
+        placeholders = _sql_placeholders(requested)
+        _execute_with_retry(self.connection, "BEGIN IMMEDIATE")
+        try:
+            self.connection.execute(
+                "DELETE FROM locks WHERE expires_at < ?",
+                (now_ms,),
+            )
+            conflict = self.connection.execute(
+                f"""
+                SELECT key
+                FROM locks
+                WHERE key IN ({placeholders})
+                  AND owner != ?
+                  AND expires_at >= ?
+                LIMIT 1
+                """,
+                (*requested, owner, now_ms),
+            ).fetchone()
+            if conflict is not None:
+                self.connection.rollback()
+                return False
+            for key in requested:
+                self.connection.execute(
+                    """
+                    INSERT INTO locks
+                      (key, owner, acquired_at, expires_at)
+                    VALUES (?, ?, ?, ?)
+                    ON CONFLICT(key) DO UPDATE SET
+                      owner = excluded.owner,
+                      acquired_at = excluded.acquired_at,
+                      expires_at = excluded.expires_at
+                    WHERE locks.owner = excluded.owner
+                       OR locks.expires_at < ?
+                    """,
+                    (key, owner, now_ms, now_ms + lease_ms, now_ms),
+                )
+            self.connection.commit()
+            return True
+        except Exception:
+            self.connection.rollback()
+            raise
+
+    def release_locks(self, keys: Iterable[str], owner: str) -> int:
+        requested = tuple(dict.fromkeys(keys))
+        if not requested:
+            return 0
+        placeholders = _sql_placeholders(requested)
+        cursor = self.connection.execute(
+            f"""
+            DELETE FROM locks
+            WHERE owner = ?
+              AND key IN ({placeholders})
+            """,
+            (owner, *requested),
+        )
+        self.connection.commit()
+        return int(cursor.rowcount)
+
+    def reconcile_expired_locks(self, *, now_ms: int) -> int:
+        cursor = self.connection.execute(
+            """
+            DELETE FROM locks
+            WHERE expires_at < ?
+            """,
+            (now_ms,),
+        )
+        self.connection.commit()
+        return int(cursor.rowcount)
 
     def heartbeat_attempt(
         self,
@@ -692,6 +783,10 @@ def _optional_str(value: object) -> str | None:
 def _like_prefix(prefix: str) -> str:
     escaped = prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
     return f"{escaped}%"
+
+
+def _sql_placeholders(values: tuple[object, ...]) -> str:
+    return ", ".join("?" for _ in values)
 
 
 def _execute_with_retry(connection: sqlite3.Connection, sql: str) -> None:

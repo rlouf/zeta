@@ -1,554 +1,619 @@
-# Refactor Boundary Sketch
+# Zeta Refactor Plan
 
-Thought experiment: if Zeta/Sigil were rewritten from scratch, the main
-boundary correction would be to stop using "session" as the meeting point for
-resource construction, turn orchestration, event dispatch, event recording, and
-trace projection.
+## What We Want
 
-## Core Principle
-
-Separate concepts by runtime ownership:
-
-- Kernel primitives are pure data.
-- Runtime executes turns using explicit ports.
-- Sessions bind resources to a named scope.
-- Dispatch routes already-accepted events.
-- Trace projects durable history into object/read models.
-- Sigil is a host UX over Zeta.
-
-The test for a boundary is: "what kind of change should make this file change?"
-For example, changing SQLite schema should not change turn orchestration.
-Changing prompt compaction should not change session construction. Adding a new
-RPC method should not change kernel event definitions unless it needs a new
-domain concept.
-
-## Kernel
-
-Location:
+Opening `src/zeta/` should make the system obvious:
 
 ```text
-zeta/kernel/
-  events.py
-  objects.py
-  capabilities.py
-  model.py
-  turns.py
+records       what happened and what it means
+run           how one run happens
+context       what the model sees for a run
+models        how providers become normalized model input/output
+capabilities  how tools are declared, resolved, authorized, staged, invoked
+orchestration how accepted events become work
+rpc           how external clients talk to Zeta
+cli.py        how humans inspect and drive Zeta from a shell
+process.py    how Zeta is assembled for this machine/process
 ```
 
-Owns:
+The code should read as a set of clear lifecycles:
 
-- `Event`, `DraftEvent`, `EventFilter`
-- `Object`, `Derivation`, `Ref`
-- `Capability`, `CapabilitySpec`, `CapabilityPolicy`, `CapabilityResult`
-- `ModelInput`, `ModelOutput`, `ModelUsage`
-- `TurnRequest`, `TurnResult`, `TurnOutcome`
+- Records remember durable facts and reconstruct meaning from them.
+- Context builds the model input for a run.
+- Runtime executes one run inside a thread.
+- Models normalize provider APIs.
+- Capabilities normalize tool declarations and execution.
+- Orchestration turns accepted events into work.
+- RPC and CLI expose operations without owning behavior.
+- Process wires concrete local services without owning behavior.
 
-Rule: kernel modules contain dataclasses, literals/enums, and pure conversion
-functions. They do not know about SQLite, RPC, the filesystem, network
-transports, or the CLI.
+The most important boundaries:
 
-Kernel should answer questions like:
+- Records do not execute.
+- Context does not execute.
+- Runtime does not persist directly or know whether it was called by CLI, RPC,
+  worker, or test.
+- Models do not decide when to call a model.
+- Capabilities do not decide when a tool call should be handled.
+- Orchestration does not know the model/tool loop.
+- RPC and CLI do not own runtime, dispatch, model, or store behavior.
+- Process wires components together; it does not define their behavior.
 
-- What is an event?
-- What is a turn request?
-- What does a capability declare?
-- What is the shape of model input and output?
-- What is the difference between a draft event and a durable event?
+## Refactoring Style
 
-Kernel should not answer questions like:
+This is not a compatibility-preserving file shuffle. Each phase should use the
+move to simplify the code in that slice.
 
-- Where are events stored?
-- Which model endpoint is active?
-- Which session directory is used?
-- Which agents should react to an event?
-- How should a terminal render progress?
+- Delete compatibility shims unless there is a real external import contract.
+- Inline single-use helpers when their name does not clarify the story.
+- Prefer fewer readable functions over many tiny forwarding helpers.
+- Collapse dead abstractions exposed by the move.
+- Remove old modules when emptied.
+- Avoid new `manager`, `handler`, `utils`, or `common` buckets.
+- Keep public seams only where they map to the agreed concepts: records, run,
+  context, models, capabilities, orchestration, rpc, cli, and process.
+- Let tests follow behavior, not the old internal structure.
 
-This layer should be boring and stable. Most objects should be immutable.
-Validation here should protect domain invariants, not transport-specific
-schemas. For instance, an event timestamp or idempotency key shape can live
-here; JSON-RPC error formatting should not.
+Aggressive cleanup should stay inside the active slice. For example, a records
+phase may aggressively clean records/events/stores/timeline code, but should not
+opportunistically rewrite the run loop.
 
-## Ports
-
-Location:
+## Target Shape
 
 ```text
-zeta/ports/
-  event_log.py
-  object_store.py
-  model_gateway.py
-  capability_registry.py
-  clock.py
+src/zeta/
+  __init__.py
+  cli.py
+  process.py
+
+  records/
+    __init__.py
+    events.py
+    objects.py
+    timeline.py
+    provenance.py
+    stores/
+      __init__.py
+      event_store.py
+      object_store.py
+      sqlite.py
+      memory.py
+
+  run/
+    __init__.py
+    runs.py
+    threads.py
+    runtime.py
+    thread_run.py
+    cancellation.py
+    outcomes.py
+
+  context/
+    __init__.py
+    builder.py
+    prompts.py
+    components.py
+    instructions.py
+    system.py
+    budget.py
+    transforms.py
+    compaction/
+      __init__.py
+      drop_oldest.py
+      structural_trim.py
+      task_state.py
+
+  models/
+    __init__.py
+    types.py
+    profiles.py
+    chat_completions.py
+    responses.py
+    codex_auth.py
+
+  capabilities/
+    __init__.py
+    types.py
+    registry.py
+    execution.py
+
+  orchestration/
+    __init__.py
+    agents.py
+    dispatch.py
+    worker.py
+    scheduling.py
+    queue.py
+    attempts.py
+
+  rpc/
+    __init__.py
+    jsonrpc.py
+    stdio.py
+    routes.py
 ```
 
-Owns explicit interfaces for external dependencies:
-
-```python
-class EventLog:
-    def append(self, draft: DraftEvent) -> Event: ...
-    def list(self, filter: EventFilter) -> list[Event]: ...
-
-
-class ObjectStore:
-    def put(self, obj: Object) -> ObjectId: ...
-    def get(self, id: ObjectId) -> Object | None: ...
-
-
-class ModelGateway:
-    async def generate(
-        self,
-        input: ModelInput,
-        config: ModelConfig,
-    ) -> ModelOutput: ...
-```
-
-Rule: orchestration code depends on ports, not concrete SQLite stores, concrete
-registries, or model transport modules.
-
-Ports describe what runtime needs from the outside world. They should be
-minimal, capability-shaped, and easy to fake in tests.
-
-Useful ports:
-
-- `EventLog`: append durable events and list slices.
-- `ObjectStore`: write/read content-addressed objects and derivations.
-- `CapabilityRegistry`: resolve model-visible tool names to executable
-  capabilities.
-- `CapabilityExecutor`: run or stage one capability.
-- `ModelGateway`: call the selected model transport.
-- `Clock`: provide timestamps and deadlines without hard-coding wall time.
-- `Publisher`: notify subscribers after an event is accepted.
-
-Ports should avoid policy. For example, an `EventLog` should not decide whether
-an event triggers an agent. A `ModelGateway` should not decide whether a tool
-call may run directly. A `CapabilityRegistry` may validate arguments, but the
-runtime decides execution mode.
-
-The practical payoff is that runtime tests can use in-memory fakes without
-pulling in SQLite, filesystem state, or real model transport behavior.
-
-## Runtime
-
-Location:
+The nouns live with the package that uses them:
 
 ```text
-zeta/runtime/
-  runner.py
-  context.py
-  tool_calls.py
-  model_turns.py
-  cancellation.py
+Event, DraftEvent       records/events.py
+Object, Derivation      records/objects.py
+EventStore              records/stores/event_store.py
+ObjectStore             records/stores/object_store.py
+Run, RunStatus          run/runs.py
+Thread                  run/threads.py
+ModelInput/Output       models/types.py
+Capability              capabilities/types.py
+AgentDefinition         orchestration/agents.py
+QueueItem               orchestration/queue.py
+Attempt                 orchestration/attempts.py
 ```
 
-Owns:
+## Current Module Map
 
-- `TurnRunner`
-- `TurnContext`
-- tool-call parsing, validation, and execution
-- model call loop
-- cancellation/deadline behavior
-- runtime event emission
+### Records
 
-Main API:
+Current modules:
 
-```python
-result = await TurnRunner(deps).run(TurnRequest(...))
-```
+- `src/zeta/events.py`
+- `src/zeta/history.py`
+- `src/zeta/kernel/events.py`
+- `src/zeta/kernel/objects.py`
+- `src/zeta/store/events/filter.py`
+- `src/zeta/store/events/memory.py`
+- `src/zeta/store/events/sqlite.py`
+- `src/zeta/store/events/__init__.py`
+- `src/zeta/store/substrate/base.py`
+- `src/zeta/store/substrate/memory.py`
+- `src/zeta/store/substrate/sqlite.py`
+- `src/zeta/store/substrate/__init__.py`
+- `src/zeta/store/__init__.py`
 
-Rule: runtime does not know about RPC request names such as
-`session.turn.requested`. It runs turns.
+Target destinations:
 
-Runtime is the agent loop boundary. It takes a validated `TurnRequest`, a
-timeline, runtime dependencies, and execution policy; it returns a `TurnResult`.
+- `kernel/events.py` and durable-event helpers from `events.py` become
+  `records/events.py`.
+- `history.py` becomes `records/timeline.py`.
+- `kernel/objects.py` becomes `records/objects.py`.
+- Trace-object projection currently in `context/builder.py` becomes
+  `records/provenance.py`.
+- Store protocols currently in `store/events/__init__.py` and
+  `store/substrate/base.py` become `records/stores/event_store.py` and
+  `records/stores/object_store.py`.
+- SQLite and in-memory store implementations move into
+  `records/stores/sqlite.py` and `records/stores/memory.py`.
 
-Runtime owns sequencing:
+### Run
 
-1. Load the prior timeline.
-2. Build and commit a prompt.
-3. Call the model.
-4. Parse assistant output and tool calls.
-5. Validate capability calls.
-6. Execute or stage capabilities.
-7. Emit runtime events.
-8. Stop on final text, staged effect, budget, deadline, or cancellation.
+Current modules:
 
-Runtime should emit events through a narrow recorder/publisher interface. It
-should not know whether events are being displayed in a terminal, streamed over
-RPC, written to SQLite, or routed to agents.
+- `src/zeta/loop.py`
+- `src/zeta/execute.py`
+- `src/zeta/kernel/runs.py`
+- `src/zeta/runtime/requests.py`
+- `src/zeta/runtime/scope.py`
+- `src/zeta/runtime/config.py`
+- `src/zeta/agents/capabilities.py`
 
-Runtime is also the right place for turn-local concepts:
+Target destinations:
 
-- `TurnContext`
-- `RunState`
-- `ModelTurn`
-- `AssistantMessage`
-- `ModelToolCall`
-- `ToolCallValidation`
-- `CapabilityCallInvocation`
-- cancellation/deadline checks
-- step accounting
+- `kernel/runs.py` becomes `run/runs.py`.
+- Thread scope concepts from `runtime/scope.py` become `run/threads.py`.
+- Session/thread request parsing from `runtime/requests.py` becomes either
+  `run/thread_run.py` if it is run-specific, or `rpc/routes.py` if it is only
+  RPC input parsing.
+- The model/tool loop from `loop.py` becomes `run/runtime.py`.
+- Cancellation/deadline behavior from `loop.py` becomes `run/cancellation.py`.
+- Run result and outcome shapes from `loop.py` become `run/outcomes.py`.
+- Thread-run adaptation from `execute.py` becomes `run/thread_run.py` when it is
+  a direct "run inside a thread" adapter.
+- Agent run configuration from `agents/capabilities.py` should be split:
+  run policy belongs in `run/runs.py` or `run/outcomes.py`; model status
+  plumbing belongs near `models/types.py` or `run/runtime.py`.
 
-Runtime should not construct sessions, open stores, parse JSON-RPC params, or
-produce UI-specific summaries.
+### Context
 
-## Sessions
+Current modules:
 
-Location:
+- `src/zeta/context/__init__.py`
+- `src/zeta/context/budget.py`
+- `src/zeta/context/builder.py`
+- `src/zeta/context/components.py`
+- `src/zeta/context/instructions.py`
+- `src/zeta/context/system.py`
+- `src/zeta/context/transforms.py`
+- `src/zeta/context/compaction/drop_oldest.py`
+- `src/zeta/context/compaction/structural_trim.py`
+- `src/zeta/context/compaction/task_state.py`
+- `src/zeta/context/compaction/__init__.py`
+
+Target destinations:
+
+- Keep the package top-level as `context/`.
+- Keep prompt components in `context/components.py`.
+- Keep instruction/system loading in `context/instructions.py` and
+  `context/system.py`.
+- Keep compaction under `context/compaction/`.
+- Split `context/builder.py`:
+  - context planning and rendering stay in `context/builder.py` or
+    `context/prompts.py`;
+  - provenance projection moves to `records/provenance.py`.
+
+### Models
+
+Current modules:
+
+- `src/zeta/models/__init__.py`
+- `src/zeta/models/chat_completions.py`
+- `src/zeta/models/codex_auth.py`
+- `src/zeta/models/profiles.py`
+- `src/zeta/models/responses.py`
+- `src/zeta/kernel/models.py`
+
+Target destinations:
+
+- Keep the package top-level as `models/`.
+- `kernel/models.py` becomes `models/types.py`.
+- Provider adapters remain in `models/chat_completions.py` and
+  `models/responses.py`.
+- `models/codex_auth.py` stays with the Codex responses provider.
+- `models/profiles.py` keeps model profile semantics, but process-local active
+  profile state may move to `process.py` if it is only local assembly state.
+
+### Capabilities
+
+Current modules:
+
+- `src/zeta/capabilities/base.py`
+- `src/zeta/capabilities/registry.py`
+- `src/zeta/capabilities/__init__.py`
+- `src/zeta/kernel/capabilities.py`
+
+Target destinations:
+
+- Keep the package top-level as `capabilities/`.
+- `kernel/capabilities.py` and capability declaration shapes become
+  `capabilities/types.py`.
+- `capabilities/registry.py` stays the registry/resolution boundary.
+- Capability execution and staging behavior currently embedded in `loop.py` and
+  `capabilities/base.py` should become `capabilities/execution.py`.
+
+### Orchestration
+
+Current modules:
+
+- `src/zeta/dispatch.py`
+- `src/zeta/agents/runtime.py`
+- `src/zeta/agents/capabilities.py`
+- `src/zeta/agents/__init__.py`
+- `src/zeta/kernel/agents.py`
+- `src/zeta/kernel/dispatch.py`
+- `src/zeta/runtime/local.py`
+- event-triggered pieces of `src/zeta/execute.py`
+
+Target destinations:
+
+- `kernel/agents.py` and compiled executable-agent concepts become
+  `orchestration/agents.py`.
+- `kernel/dispatch.py` queue/attempt shapes split into
+  `orchestration/queue.py` and `orchestration/attempts.py`.
+- Event routing and lifecycle behavior from `dispatch.py` becomes
+  `orchestration/dispatch.py`.
+- Worker claiming, leases, heartbeats, and queued execution from
+  `runtime/local.py` become `orchestration/worker.py`.
+- Schedule emission from `runtime/local.py` becomes
+  `orchestration/scheduling.py`.
+- If the `session.turn.requested` executable agent remains event-triggered, the
+  relevant `execute.py` code becomes `orchestration/session_turn_agent.py`
+  rather than `run/thread_run.py`.
+
+### RPC
+
+Current modules:
+
+- `src/zeta/rpc/jsonrpc.py`
+- `src/zeta/rpc/routes.py`
+- `src/zeta/rpc/stdio.py`
+- `src/zeta/rpc/__init__.py`
+
+Target destinations:
+
+- Keep `rpc/jsonrpc.py` and `rpc/stdio.py`.
+- Keep route adapters in `rpc/routes.py` initially.
+- Later split `routes.py` only when it improves navigation, for example:
+  `rpc/session_routes.py`, `rpc/event_routes.py`, and `rpc/tool_routes.py`.
+
+### CLI
+
+Current module:
+
+- `src/zeta/cli.py`
+
+Target destination:
+
+- Keep as top-level `zeta/cli.py`.
+- It should parse flags, call `process.py`, and render output.
+- It should not own worker, dispatch, store, model, or run behavior.
+
+### Process
+
+Current modules:
+
+- `src/zeta/runtime/local.py`
+- `src/zeta/runtime/config.py`
+- `src/zeta/runtime/scope.py`
+- local-state parts of `src/zeta/models/profiles.py`
+- construction pieces of `src/zeta/execute.py`
+
+Target destination:
+
+- `zeta/process.py` is the high-level local entrypoint.
+- It resolves state dirs/config files, opens stores, loads agent specs, selects
+  models, opens threads, constructs workers, and provides concrete services to
+  CLI/RPC/tests.
+- It should not own the behavior of stores, workers, dispatch, models,
+  capabilities, runtime, or RPC.
+
+## Phased Plan
+
+### Phase 0: Lock Current Behavior
+
+Goal: make the refactor observable and reversible.
+
+Tasks:
+
+- Run the current test suite and record failures, if any.
+- Identify the tests that cover:
+  - `session.run` RPC behavior;
+  - `events.publish` / `events.list`;
+  - dispatch queue item and attempt lifecycle;
+  - model request payloads and response parsing;
+  - capability staging/direct execution;
+  - trace/provenance projection;
+  - Sigil workflows that call Zeta.
+- Add focused tests only where a later move would otherwise be unpinned.
+
+Do not move code in this phase.
+
+### Phase 1: Create Records
+
+Goal: move durable memory concepts without touching execution.
+
+Tasks:
+
+- Create `records/` and `records/stores/`.
+- Move event domain shapes and event helper functions into `records/events.py`.
+- Move object and derivation shapes into `records/objects.py`.
+- Move event store and object store protocols into
+  `records/stores/event_store.py` and `records/stores/object_store.py`.
+- Move SQLite and memory implementations into `records/stores/sqlite.py` and
+  `records/stores/memory.py`.
+- Move `history.py` to `records/timeline.py`.
+- Update imports in place.
+- Remove old modules by the end of the phase; avoid long-lived compatibility
+  shims.
+
+Validation:
+
+- Event store tests.
+- History/timeline tests.
+- RPC `events.list` tests.
+- Dispatch lifecycle tests that read event history.
+
+### Phase 2: Split Provenance From Context
+
+Goal: keep context about model input, and records about replayable evidence.
+
+Tasks:
+
+- Move trace projection functions from `context/builder.py` into
+  `records/provenance.py`.
+- Keep prompt planning/rendering in `context/`.
+- Introduce `context/prompts.py` only if it makes `context/builder.py` read
+  better.
+- Update runtime to record provenance through the new records boundary.
+
+Validation:
+
+- Prompt trace tests.
+- Trace replay/render/query tests.
+- Any tests asserting prompt component object ids.
+
+### Phase 3: Promote Models And Capabilities
+
+Goal: make the two extension seams explicit before splitting the run loop.
+
+Tasks:
+
+- Move `kernel/models.py` to `models/types.py`.
+- Keep provider adapters under `models/`.
+- Separate model profile semantics from local active-profile file state if that
+  split is clear; otherwise leave `models/profiles.py` intact and flag the
+  local state for the process phase.
+- Move capability domain shapes to `capabilities/types.py`.
+- Keep capability registry in `capabilities/registry.py`.
+- Extract capability call handling/staging/execution from `loop.py` into
+  `capabilities/execution.py`.
+
+Validation:
+
+- Model payload tests.
+- Responses/Codex auth tests.
+- Tool registration and schema validation tests.
+- Staging/direct execution tests.
+
+### Phase 4: Build The Run Package
+
+Goal: make `run/` mean exactly "one run happens here."
+
+Tasks:
+
+- Create `run/`.
+- Move run identity/status shapes to `run/runs.py`.
+- Move thread scope/request shapes to `run/threads.py` and `run/thread_run.py`.
+- Split `loop.py`:
+  - main orchestration into `run/runtime.py`;
+  - cancellation/deadline checks into `run/cancellation.py`;
+  - result/outcome shapes into `run/outcomes.py`;
+  - capability execution calls should use `capabilities/execution.py`;
+  - model calls should use `models/`.
+- Keep runtime invocation independent from CLI/RPC/worker.
+- Ensure runtime writes events/provenance only through explicit ports.
+
+Validation:
+
+- Run-loop tests from `tests/test_zeta_agent.py`.
+- Cancellation/deadline tests.
+- Capability/tool-call tests.
+- Model telemetry tests.
+- Thread/run result tests.
+
+### Phase 5: Split Orchestration
+
+Goal: make event-driven work separate from the run loop and process wiring.
+
+Tasks:
+
+- Create `orchestration/`.
+- Move agent definitions/invocations and authored-agent compilation to
+  `orchestration/agents.py`.
+- Split queue item shape/helpers into `orchestration/queue.py`.
+- Split attempt shape/helpers into `orchestration/attempts.py`.
+- Move event routing/lifecycle code from `dispatch.py` into
+  `orchestration/dispatch.py`.
+- Move worker claiming/lease/heartbeat behavior from `runtime/local.py` into
+  `orchestration/worker.py`.
+- Move schedule emission from `runtime/local.py` into
+  `orchestration/scheduling.py`.
+- Decide where `session.turn.requested` lives:
+  - `run/thread_run.py` if it is direct run adaptation;
+  - `orchestration/session_turn_agent.py` if it remains an event-triggered
+    built-in agent.
+
+Validation:
+
+- Dispatch tests.
+- Queue/attempt lifecycle tests.
+- Worker run-once tests.
+- Schedule emission tests.
+- RPC session-run tests, because they observe terminal queue item results.
+
+### Phase 6: Introduce Process
+
+Goal: make local construction explicit and boring.
+
+Tasks:
+
+- Create top-level `process.py`.
+- Move state dir resolution, event/object store opening, agent spec loading,
+  worker construction, model selection, and RPC service construction there.
+- Keep `process.py` high-level. If path/env logic grows, consider a local helper
+  later, but do not add a package prematurely.
+- Update CLI and RPC stdio entrypoints to request concrete services from
+  `process.py`.
+
+Validation:
+
+- CLI smoke tests.
+- RPC stdio tests.
+- Worker construction tests.
+- Model profile selection tests.
+
+### Phase 7: Clean RPC And CLI Boundaries
+
+Goal: keep interfaces as adapters, not behavior owners.
+
+Tasks:
+
+- Keep `zeta/cli.py` top-level and thin.
+- Keep `rpc/jsonrpc.py`, `rpc/stdio.py`, and `rpc/routes.py`.
+- Make route adapters call `process.py`, `run/`, `records/`, and
+  `orchestration/` boundaries instead of reaching into old modules.
+- Split `rpc/routes.py` only after behavior is stable and route groups are
+  obvious.
+
+Validation:
+
+- RPC protocol tests.
+- CLI command tests.
+- End-to-end `session.run` tests.
+
+### Phase 8: Remove Old Structure
+
+Goal: make the repo match the story.
+
+Tasks:
+
+- Delete emptied `kernel/`, old `store/`, old broad `runtime/`, old `loop.py`,
+  old `execute.py`, and old `dispatch.py` once imports are gone.
+- Keep no long-lived compatibility modules unless a real external import
+  contract is explicitly required.
+- Update docs and README references.
+- Re-run the full test suite and pre-commit.
+
+Validation:
+
+- `uv run pytest`
+- `uv run pre-commit run --all`
+- Optional complexity checks after the largest moves:
+  - `uvx --with radon radon cc src tests -s`
+  - repository complexity gate if still configured.
+
+## Test Reorganization
+
+The current tests should eventually mirror the target packages:
 
 ```text
-zeta/sessions/
-  session.py
-  factory.py
-  state_dir.py
+tests/zeta/records/
+tests/zeta/run/
+tests/zeta/context/
+tests/zeta/models/
+tests/zeta/capabilities/
+tests/zeta/orchestration/
+tests/zeta/rpc/
+tests/zeta/process/
+tests/integration/
 ```
 
-Owns:
-
-- `Session`
-- `SessionFactory`
-- state directory conventions
-- binding concrete stores, registries, and model gateways into runtime deps
-
-Rule: a session is a named resource scope. It can create a `TurnRunner`, but it
-is not itself the runner.
-
-```python
-session = SessionFactory.default().open("abc")
-runner = session.turn_runner()
-```
-
-A session is a handle to durable resources under a stable identity. It answers:
-
-- What is the session id?
-- Which event log belongs to it?
-- Which object store scope belongs to it?
-- Which capability registry is available?
-- Which state/session directories are used?
-- Which model gateway is configured by default?
-
-Session creation may touch the filesystem and concrete adapters. That is the
-point of the boundary: it is where abstract runtime ports become concrete local
-resources.
-
-Session should not:
-
-- parse a `session.run` RPC payload
-- decide whether a workflow is `ask`, `propose`, or `do`
-- execute a model/tool loop
-- route event-triggered agents
-- summarize trace ids for a response payload
-
-If a host wants to run a turn, it should ask the session for dependencies and
-construct a runtime runner. If a host wants event-driven execution, dispatch
-should call a handler that uses the session to construct the runner.
-
-## Event Bus And Dispatch
-
-Location:
-
-```text
-zeta/dispatch/
-  bus.py
-  dispatcher.py
-  subscriptions.py
-  agents.py
-```
-
-Dispatch is not persistence. It is routing after persistence.
-
-```text
-producer -> EventLog.append(draft) -> Event
-         -> EventBus.publish(event)
-         -> Dispatcher subscribers may react
-```
-
-For request events:
-
-```text
-session.turn.requested
-  -> dispatcher routes to SessionTurnHandler
-  -> handler calls TurnRunner
-```
-
-Direct turn execution should still be possible without dispatch:
-
-```python
-await TurnRunner(...).run(request)
-```
-
-This keeps dispatch optional instead of foundational.
-
-The append path and the routing path should be separate:
-
-- `EventLog.append(draft)` normalizes and persists facts.
-- `EventBus.publish(event)` notifies listeners about accepted facts.
-- `Dispatcher` subscribes to events and starts follow-up work.
-
-Dispatch owns:
-
-- event subscriptions
-- trigger matching
-- work-event lifecycle, such as pending/running/completed/failed
-- event-triggered agent attempts
-- fanout to in-process subscribers
-
-Dispatch does not own:
-
-- the durable shape of events
-- idempotency semantics beyond respecting append results
-- core turn execution
-- prompt construction
-- object trace projection
-
-The important failure mode to avoid is accidental replay side effects. Reading
-or importing old events must not silently re-run agents. That means dispatch
-should react only to events that were explicitly published as newly accepted,
-not to every event returned by a query.
-
-This boundary also makes high-volume events easier to reason about. Model stream
-chunks and status updates may be persisted or published to UI subscribers
-without necessarily going through agent trigger matching.
-
-## Prompt And Context Assembly
-
-Location:
-
-```text
-zeta/context/
-  components.py
-  builder.py
-  transforms.py
-  compaction/
-  instructions.py
-  skills.py
-```
-
-Owns:
-
-- prompt components
-- trace object creation for prompts
-- compaction
-- system/project instructions
-- skill prompt injection
-
-Interface:
-
-```python
-plan = prompt_builder.plan(request, timeline, capabilities)
-stored = prompt_builder.commit(plan)
-model_input = prompt_builder.render(stored)
-```
-
-Context assembly owns model-facing context, not turn control flow.
-
-It should decide:
-
-- which timeline events become chat messages
-- how system/project instructions are represented
-- where tool descriptors appear
-- how skills are discovered and injected
-- how prompt components are traced as objects
-- how compaction transforms reduce prompt size
-- how context usage is measured
-
-It should not decide:
-
-- whether a tool call may execute directly
-- whether the turn should stop after a staged effect
-- how events are stored
-- how RPC response payloads are formatted
-- how terminal progress is rendered
-
-The prompt builder should have a pure planning phase and a side-effecting commit
-phase. Planning should be easy to test without a store. Commit should be the
-only step that writes prompt/component objects and derivations.
-
-This keeps prompt bugs localized. A change to compaction should affect prompt
-tests and trace object expectations, not session construction or event dispatch.
-
-## Trace Projection
-
-Location:
-
-```text
-zeta/trace/
-  projection.py
-  replay.py
-  query.py
-  render.py
-```
-
-Owns:
-
-- reconstructing prompt/tool/model object graphs from durable events
-- trace summaries
-- replay/query/render helpers
-
-Rule: runtime may write events and objects, but trace projection is a read model
-over durable events and stored objects. It should not be mixed into session
-construction or turn orchestration except through a small optional hook.
-
-Trace projection answers: "given durable events and stored objects, what graph
-or summary can we reconstruct?"
-
-It owns:
-
-- mapping model events to prompt object ids
-- mapping assistant responses to message object ids
-- mapping tool call/result events to tool object ids
-- rebuilding trace closures
-- replaying a turn or session timeline
-- rendering/querying trace data for humans and tests
-
-It should tolerate partial data. Missing trace objects should degrade into a
-diagnostic or empty projection, not break turn execution. Projection failures
-are observability failures unless the caller explicitly requested strict replay.
-
-Runtime may opportunistically call projection after appending a durable event to
-keep stores warm, but the projection code should remain callable later from the
-event log alone. That keeps trace repair and replay possible.
-
-## Adapters
-
-Location:
-
-```text
-zeta/adapters/
-  sqlite_event_log.py
-  sqlite_object_store.py
-  memory_event_log.py
-  memory_object_store.py
-  openai_chat_completions.py
-  codex_responses.py
-  rpc.py
-```
-
-Rule: adapters implement ports. They do not own domain policy.
-
-Adapters are the concrete edge of the system:
-
-- SQLite event log
-- SQLite object store
-- in-memory stores for tests
-- chat-completions transport
-- Codex responses transport
-- JSON-RPC transport
-- filesystem-backed config/profile loading
-
-Adapters may translate between external schemas and kernel/runtime objects.
-They should keep that translation close to the external dependency. For example,
-OpenAI chat-completions response parsing belongs near the chat-completions
-adapter; the runtime should receive a normalized `ModelOutput`.
-
-Adapters should not import host UI code. They should also avoid reaching upward
-into runtime policy. A model adapter can expose provider metadata; it should not
-decide whether a returned tool call is allowed.
-
-The expected test shape is:
-
-- adapter tests cover schema translation and persistence behavior
-- runtime tests use fake ports
-- integration tests wire real adapters together
-
-## Host Apps
-
-`sigil` is one host app using the Zeta runtime.
-
-```text
-sigil/
-  cli/
-  workflows/
-  display/
-  tools/
-  shell/
-  status.py
-```
-
-Sigil owns:
-
-- CLI command UX
-- shell bindings
-- terminal display
-- workflow names: `ask`, `propose`, `do`
-- local built-in tools
-- turn history UX
-
-Sigil should not own generic agent runtime behavior.
-
-Sigil translates human workflows into runtime requests. It can choose defaults,
-name workflows, register local tools, and render output.
-
-Sigil owns the UX contract:
-
-- shell integration
-- command naming and flags
-- `ask`, `propose`, and `do` semantics from the user's point of view
-- terminal progress and Markdown streaming
-- built-in local tools and their review/staging behavior
-- status reporting
-- turn history presentation
-
-Sigil should delegate generic mechanics to Zeta:
-
-- event log semantics
-- content-addressed object storage
-- model/tool loop execution
-- capability validation and invocation protocol
-- prompt component tracing
-- trace projection
-
-This keeps Zeta usable by other hosts. A daemon, RPC server, test harness, or
-future GUI should not have to depend on Sigil's shell/display assumptions to run
-an agent turn.
-
-## Current `session.py` Split
-
-The current `src/zeta/session.py` pieces would move roughly like this:
-
-```text
-Session
-  zeta/sessions/session.py
-
-default_session, session_for_id, zeta_state_dir
-  zeta/sessions/factory.py
-
-SessionRunParams, SessionRequestError
-  zeta/runtime/requests.py
-  or zeta/sessions/requests.py if only RPC-session scoped
-
-run_session_turn
-  zeta/runtime/session_turn_handler.py
-  possibly renamed handle_session_turn_request
-
-run_session_turn_from_event
-  zeta/dispatch/session_handlers.py
-
-session_event_dispatcher
-  zeta/dispatch/session_dispatch.py
-
-record_user_message, record_runtime_draft, live_runtime_event
-  zeta/runtime/event_recorder.py
-
-project_trace_for_turn, session_trace_result
-  zeta/trace/projection.py
-
-session_result
-  zeta/runtime/results.py
-```
-
-## Boundary To Enforce
-
-Do not let "session" become the place where orchestration, event recording,
-dispatch, and trace summaries meet.
-
-Session should be a resource boundary. Turn execution should be a runtime
-boundary. Dispatch should be a routing boundary. Trace should be a projection
-boundary.
-
-When in doubt, ask which object should be able to exist without the others:
-
-- A `Session` should exist without running a turn.
-- A `TurnRunner` should run against fake ports without a concrete session.
-- A dispatcher should route an accepted event without knowing SQLite details.
-- A trace projector should rebuild summaries without triggering agents.
-- Sigil should provide UX without owning the runtime loop.
+Suggested migration:
+
+- Split `tests/test_zeta_agent.py` across `run`, `capabilities`,
+  `orchestration`, and integration tests.
+- Split `tests/test_zeta_prompt.py` into `context` and `records/provenance`.
+- Split `tests/test_zeta_trace.py` into `records/timeline` and
+  `records/provenance`.
+- Keep provider payload tests under `models`.
+- Keep RPC wire-shape tests under `rpc`.
+- Keep Sigil workflow tests separate from Zeta runtime tests.
+
+## Risks
+
+- Import churn can hide behavior changes. Move in small phases and run focused
+  tests after each phase.
+- `execute.py` is ambiguous. Decide whether its core identity is direct thread
+  execution or event-triggered built-in agent execution before moving it.
+- `context/builder.py` currently mixes prompt construction and provenance.
+  Split behavior carefully so prompt object ids remain stable where tests
+  expect them.
+- `runtime/local.py` mixes process setup, worker mechanics, scheduling, and
+  event-log RPC handling. This should be split before deeper runtime changes.
+- Model profile state mixes provider semantics with local active-selection
+  files. Do not move it blindly; first decide what is model semantics and what
+  is process-local state.
+- Avoid adding abstract service layers. Introduce only the interfaces already
+  implied by stores, models, capabilities, and process construction.
+
+## Acceptance Criteria
+
+The refactor is successful when:
+
+- A new reader can open `src/zeta/` and predict where to change a behavior.
+- Runtime executes one run and does not know its caller.
+- Orchestration turns accepted events into work and does not know the model
+  loop.
+- Context builds model input and does not execute.
+- Models and capabilities are visible extension seams.
+- Records own durable facts, timeline, provenance, and persistence.
+- CLI and RPC are thin adapters.
+- `process.py` is the only high-level local assembly entrypoint.
+- The full test suite and pre-commit pass.

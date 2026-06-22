@@ -311,7 +311,9 @@ def test_zeta_agent_step_renders_context_usage_after_buffered_answer(
     assert code == 0
     output = capsys.readouterr().out
     assert output.index("done") < output.index("context  [")
-    assert output.index("Done in") < output.index("context  [")
+    assert "Done in" in output
+    assert " · context  [" in output
+    assert "\ncontext  [" not in output
 
 
 def test_zeta_agent_step_renders_context_usage_at_bottom_after_tools(
@@ -390,7 +392,9 @@ def test_zeta_agent_step_renders_context_usage_at_bottom_after_tools(
     assert ("✓ read a.md · 1 lines\n✓ read b.md · 1 lines") in output
     assert output.count("context  [") == 1
     assert "123 / 262,144 tokens" not in output
-    assert output.index("Done in") < output.index("context  [░░░░░░░░░░░░░░░░░░░░] 0%")
+    assert "Done in" in output
+    assert " · context  [░░░░░░░░░░░░░░░░░░░░] 0%" in output
+    assert "\ncontext  [" not in output
 
 
 def test_zeta_agent_step_does_not_pass_current_user_event_as_transcript(
@@ -840,6 +844,37 @@ def test_zeta_agent_step_aligns_thinking_status_after_tool_trace(
     assert "❯" not in out_text
     trace_text = visible_terminal_text(output.getvalue())
     assert "✓ read README.md · 1 lines" in trace_text
+
+
+def test_zeta_agent_step_renders_prefill_status_during_model_request(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("NO_COLOR", "1")
+    output = TtyBuffer()
+
+    def fake_run_agent_turn(
+        objective: str,
+        transcript: list[dict[str, Any]],
+        config: zeta_agent.AgentConfig,
+        **kwargs: object,
+    ) -> AgentRunResult:
+        del objective, transcript, kwargs
+        assert config.model_status_factory is not None
+        with config.model_status_factory():
+            pass
+        return AgentRunResult(final_answer="Done.", events=[])
+
+    monkeypatch.setattr(agent_io, "ensure_server", lambda: True)
+    monkeypatch.setattr(zeta_runner, "run_agent_turn", fake_run_agent_turn)
+
+    code = zeta_runner.step(
+        "inspect",
+        workflow="propose",
+        trace_output=output,
+    )
+
+    assert code == 0
+    assert "prefill 0s" in output.getvalue()
 
 
 def test_zeta_agent_step_prints_final_answer_after_direct_edit(
@@ -1710,7 +1745,9 @@ def test_zeta_ask_workflow_renders_context_usage_at_bottom_after_tools(
     assert output.err.count("context  [") == 1
     assert "It is a README." in output.out
     assert "context  [" not in output.out
-    assert output.err.index("Done in") < output.err.index("context  [")
+    assert "Done in" in output.err
+    assert " · context  [" in output.err
+    assert "\ncontext  [" not in output.err
 
 
 def test_zeta_question_loop_prints_tool_start_while_agent_runs(

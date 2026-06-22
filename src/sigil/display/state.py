@@ -800,15 +800,18 @@ class ContextUsageFooter:
         if usage is not None:
             self.current_context_tokens, self.model_context_tokens = usage
             self.pending_context_tokens = 0
+        line = context_usage_line(telemetry) or self.last_line
+        if line:
+            self.last_line = line
         if not print_line:
             if self.active:
                 self.write("\r\x1b[2K")
                 self.active = False
+            if not line:
+                return False
             return True
-        line = context_usage_line(telemetry) or self.last_line
         if not line:
             return False
-        self.last_line = line
         if self.enabled:
             prefix = "\r\x1b[2K" if self.active else ""
             self.write(f"{prefix}{muted(line, enabled=should_color(self.output))}\n")

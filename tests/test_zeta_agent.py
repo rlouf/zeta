@@ -941,6 +941,66 @@ def test_zeta_call_model_step_returns_output_and_telemetry() -> None:
     assert model_telemetry == {"usage": {"prompt_tokens": 1}}
 
 
+def test_zeta_call_model_step_updates_model_status_during_request() -> None:
+    status_events: list[str] = []
+    emitted: list[DraftEvent] = []
+
+    class FakeStatus:
+        def __enter__(self) -> "FakeStatus":
+            status_events.append("enter")
+            return self
+
+        def __exit__(
+            self,
+            exc_type: type[BaseException] | None,
+            exc: BaseException | None,
+            traceback: object,
+        ) -> bool:
+            del exc_type, exc, traceback
+            status_events.append("exit")
+            return False
+
+        def reasoning_delta(self, text: str) -> None:
+            status_events.append(f"reasoning:{text}")
+
+    class FakeGateway:
+        def available(self, config: zeta_agent.AgentConfig) -> bool:
+            return True
+
+        async def generate(
+            self,
+            model_input: zeta_model_shapes.ModelInput,
+            config: zeta_agent.AgentConfig,
+            *,
+            stream: zeta_agent.ModelStream | None = None,
+            telemetry_sink: Callable[[dict[str, Any]], None] | None = None,
+        ) -> zeta_model_shapes.ModelOutput:
+            del model_input, config, telemetry_sink
+            assert status_events == ["enter"]
+            assert stream is not None
+            stream.reasoning_delta("checking")
+            return zeta_model_shapes.ModelOutput(message={"content": "done"})
+
+    state = zeta_agent.RunState()
+
+    asyncio.run(
+        zeta_agent.call_model_step(
+            zeta_model_shapes.ModelInput(
+                messages=[{"role": "user", "content": "answer"}],
+                tools=[],
+                tool_choice="auto",
+            ),
+            config=zeta_agent.AgentConfig(model_status_factory=FakeStatus),
+            state=state,
+            model_gateway=FakeGateway(),
+            event_sink=emitted.append,
+        )
+    )
+
+    assert status_events == ["enter", "reasoning:checking", "exit"]
+    assert [draft.payload["text"] for draft in emitted] == ["checking"]
+
+
 def test_zeta_agent_compaction_policy_bounds_model_input() -> None:
     captured: dict[str, zeta_model_shapes.ModelInput] = {}
 

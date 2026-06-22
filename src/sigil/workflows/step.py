@@ -23,7 +23,7 @@ from sigil.agent_io import (
     render_final_answer,
 )
 from sigil.display.render import render_tool_result_summary
-from sigil.display.state import PROGRESS_MODE_TRACE
+from sigil.display.state import PROGRESS_MODE_TRACE, thinking_status_factory
 from sigil.display.summarize import render_handoff_lines
 from sigil.protocols import (
     SHELL_HANDOFF_RESULT_SCHEMA,
@@ -194,6 +194,22 @@ def step(
                     selected_model.thinking if selected_model is not None else None
                 ),
                 model_api=selected_model.api if selected_model is not None else None,
+                model_status_factory=thinking_status_factory(
+                    output,
+                    before_start=(
+                        context_footer.clear if context_footer is not None else None
+                    ),
+                    detail=(
+                        context_footer.current_line
+                        if context_footer is not None
+                        else None
+                    ),
+                    reasoning_observer=(
+                        renderer.progress_renderer.observe_reasoning_delta
+                        if renderer.progress_renderer is not None
+                        else None
+                    ),
+                ),
             ),
             context=context,
             event_sink=recorder.record,
@@ -387,12 +403,16 @@ def finalize_progress(
     context_footer: Any = None,
     telemetry: dict[str, Any] | None = None,
 ) -> None:
+    context_bar = ""
+    if context_footer is not None:
+        context_footer.finalize(telemetry, print_line=False)
+        context_bar = context_footer.current_line()
     if (
         renderer.progress_renderer is not None
         and renderer.progress_renderer.mode != PROGRESS_MODE_TRACE
     ):
-        renderer.progress_renderer.finalize(history_event_record(turn))
-    if context_footer is not None:
+        renderer.progress_renderer.finalize(history_event_record(turn), context_bar)
+    elif context_footer is not None:
         context_footer.finalize(telemetry)
 
 

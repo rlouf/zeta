@@ -10,7 +10,7 @@ from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Literal, Protocol, cast
 
-from zeta.agents.capabilities import AgentConfig
+from zeta.agents.capabilities import AgentConfig, ModelStatus
 from zeta.capabilities.base import proposed_effect
 from zeta.capabilities.registry import (
     CapabilityProjection,
@@ -711,13 +711,26 @@ async def request_assistant_message(
     recorded_events = events if events is not None else []
     turn_stream_sink = ModelTurnStreamSink(recorded_events, event_sink)
     gateway = model_gateway or DefaultModelGateway()
-    generated = gateway.generate(
-        model_input,
-        config,
-        stream=turn_stream_sink,
-        telemetry_sink=model_telemetry.update,
-    )
-    model_output = await generated if inspect.isawaitable(generated) else generated
+    status_factory = config.model_status_factory
+    if status_factory is None:
+        generated = gateway.generate(
+            model_input,
+            config,
+            stream=turn_stream_sink,
+            telemetry_sink=model_telemetry.update,
+        )
+        model_output = await generated if inspect.isawaitable(generated) else generated
+    else:
+        with status_factory() as status:
+            generated = gateway.generate(
+                model_input,
+                config,
+                stream=StatusAwareModelStream(turn_stream_sink, status),
+                telemetry_sink=model_telemetry.update,
+            )
+            model_output = (
+                await generated if inspect.isawaitable(generated) else generated
+            )
     return (
         model_output,
         turn_stream_sink.streamed_content,
@@ -755,6 +768,23 @@ class ModelTurnStreamSink:
             status_update_draft("reasoning_delta", text),
             self.event_sink,
         )
+
+
+class StatusAwareModelStream:
+    def __init__(self, stream: ModelTurnStreamSink, status: ModelStatus) -> None:
+        self.stream = stream
+        self.status = status
+
+    @property
+    def streamed_content(self) -> bool:
+        return self.stream.streamed_content
+
+    def content_delta(self, text: str) -> None:
+        self.stream.content_delta(text)
+
+    def reasoning_delta(self, text: str) -> None:
+        self.status.reasoning_delta(text)
+        self.stream.reasoning_delta(text)
 
 
 def is_runtime_ui_event(draft: DraftEvent) -> bool:

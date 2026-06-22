@@ -580,6 +580,32 @@ class SqliteEventStore:
             self.connection.rollback()
             raise
 
+    def release_queue_claim(
+        self,
+        queue_item_id: str,
+        worker_name: str,
+        *,
+        now_ms: int,
+    ) -> bool:
+        cursor = self.connection.execute(
+            """
+            UPDATE queue_items
+            SET status = CASE
+                  WHEN target_agent = '' THEN 'pending'
+                  ELSE 'available'
+                END,
+                claimed_by = NULL,
+                claimed_until = NULL,
+                updated_at = ?
+            WHERE queue_item_id = ?
+              AND claimed_by = ?
+              AND status = 'claimed'
+            """,
+            (now_ms, queue_item_id, worker_name),
+        )
+        self.connection.commit()
+        return cursor.rowcount == 1
+
     def reconcile_expired_queue_claims(self, *, now_ms: int) -> int:
         cursor = self.connection.execute(
             """

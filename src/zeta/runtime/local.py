@@ -134,8 +134,26 @@ async def run_once(runtime: RuntimeServices) -> str:
     claimed = claim_available_queue_item(runtime)
     if claimed is None:
         return "queue empty"
-    lifecycle_events = await dispatcher.run_queue_item(claimed)
-    return run_once_message(claimed, lifecycle_events)
+    lock_keys = queue_item_lock_keys(runtime, claimed)
+    lock_owner = queue_item_lock_owner(runtime, claimed)
+    now_ms = runtime_time_ms()
+    if not runtime.events.acquire_locks(
+        lock_keys,
+        lock_owner,
+        lease_ms=QUEUE_LEASE_MS,
+        now_ms=now_ms,
+    ):
+        runtime.events.release_queue_claim(
+            claimed,
+            runtime.worker_name,
+            now_ms=now_ms,
+        )
+        return "queue empty"
+    try:
+        lifecycle_events = await dispatcher.run_queue_item(claimed)
+        return run_once_message(claimed, lifecycle_events)
+    finally:
+        runtime.events.release_locks(lock_keys, lock_owner)
 
 
 def enqueue_pending_events(runtime: RuntimeServices) -> int:
@@ -164,11 +182,45 @@ def run_once_message(queue_item_id: str, lifecycle_events: list[Event]) -> str:
 def claim_available_queue_item(runtime: RuntimeServices) -> str | None:
     now_ms = runtime_time_ms()
     runtime.events.reconcile_expired_queue_claims(now_ms=now_ms)
+    runtime.events.reconcile_expired_locks(now_ms=now_ms)
     return runtime.events.claim_next_queue_item(
         runtime.worker_name,
         lease_ms=QUEUE_LEASE_MS,
         now_ms=now_ms,
     )
+
+
+def queue_item_lock_keys(
+    runtime: RuntimeServices, queue_item_id: str
+) -> tuple[str, ...]:
+    row = runtime.events.queue_item(queue_item_id)
+    if row is None:
+        return ()
+    target_agent = str(row["target_agent"])
+    if target_agent:
+        return agent_lock_keys(runtime, target_agent)
+    event = runtime.events.get(str(row["event_id"]))
+    if event is None:
+        return ()
+    matching_agents = [
+        agent
+        for agent in runtime.agents
+        if agent.definition.accepts(event) and agent.run is not None
+    ]
+    if len(matching_agents) != 1:
+        return ()
+    return matching_agents[0].definition.lock_keys
+
+
+def agent_lock_keys(runtime: RuntimeServices, agent_id: str) -> tuple[str, ...]:
+    for agent in runtime.agents:
+        if agent.definition.agent_id == agent_id:
+            return agent.definition.lock_keys
+    return ()
+
+
+def queue_item_lock_owner(runtime: RuntimeServices, queue_item_id: str) -> str:
+    return f"{runtime.worker_name}:{queue_item_id}"
 
 
 def runtime_time_ms() -> int:

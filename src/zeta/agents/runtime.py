@@ -63,6 +63,7 @@ def compile_agent_definitions(
                 max_turns=config.max_turns if config is not None else None,
                 dispatch_mode="session_scoped" if spec.resumable else "one_shot",
                 returns=tuple(spec.returns),
+                lock_keys=runtime_lock_keys(spec),
             ),
             run=agent_runner(
                 spec,
@@ -74,6 +75,19 @@ def compile_agent_definitions(
         )
         for event_type in spec.accepts
     ]
+
+
+def runtime_lock_keys(spec: AgentSpec) -> tuple[str, ...]:
+    value = spec.extension("locks")
+    if value is None:
+        return ()
+    if isinstance(value, str):
+        return (value,)
+    if not isinstance(value, Sequence):
+        raise ValueError("locks extension must be a string or list of strings")
+    if not all(isinstance(item, str) for item in value):
+        raise ValueError("locks extension must be a string or list of strings")
+    return tuple(value)
 
 
 def agent_runner(

@@ -42,6 +42,7 @@ class AgentDefinition:
     max_turns: int | None = None
     dispatch_mode: DispatchMode = "one_shot"
     returns: tuple[str, ...] = ()
+    lock_keys: tuple[str, ...] = ()
 
     def accepts(self, event: Event) -> bool:
         return any(trigger.matches(event) for trigger in self.triggers)

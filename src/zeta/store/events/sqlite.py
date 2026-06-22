@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from zeta.events import AppendOutcome
-from zeta.kernel.events import DraftEvent, Event
+from zeta.kernel.events import DraftEvent, Event, json_native_payload
 from zeta.store.events.filter import Filter
 
 EVENT_STORE_NAME = "events.sqlite3"
@@ -182,7 +182,9 @@ class SqliteEventStore:
 
     def append(self, event: Event) -> AppendOutcome:
         payload = json.dumps(
-            dict(event.payload), ensure_ascii=False, separators=(",", ":")
+            json_native_payload(event.payload),
+            ensure_ascii=False,
+            separators=(",", ":"),
         )
         cursor = self.connection.execute(
             """

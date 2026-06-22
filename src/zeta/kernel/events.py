@@ -1,5 +1,6 @@
 """Event domain shapes."""
 
+import json
 import time
 from collections.abc import Mapping
 from dataclasses import KW_ONLY, dataclass
@@ -61,7 +62,7 @@ class Event:
             id=f"evt_{uuid4().hex}",
             event_type=draft.event_type,
             source=draft.source,
-            payload=dict(draft.payload),
+            payload=json_native_payload(draft.payload),
             idempotency_key=idempotency_key,
             caused_by=draft.caused_by,
             session_id=draft.session_id,
@@ -69,3 +70,9 @@ class Event:
             turn_id=draft.turn_id,
             timestamp_ms=time.time_ns() // 1_000_000,
         )
+
+
+def json_native_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
+    return json.loads(
+        json.dumps(dict(payload), ensure_ascii=False, separators=(",", ":"))
+    )

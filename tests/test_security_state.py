@@ -470,6 +470,59 @@ def test_event_stores_return_payload_snapshots(tmp_path: Path) -> None:
     assert sqlite_event.payload == {"turn_id": "turn-1"}
 
 
+def test_event_stores_normalize_payloads_to_json_native(tmp_path: Path) -> None:
+    draft = DraftEvent(
+        event_type="zeta.turn.completed",
+        source="test",
+        payload={
+            "turn_id": "turn-1",
+            "steps": ("model", "tool"),
+            "nested": {"values": (1, 2)},
+        },
+    )
+
+    memory_event = MemoryEventStore().accept(draft).event
+    sqlite_store = SqliteEventStore(tmp_path / "events.sqlite3")
+    sqlite_event = sqlite_store.accept(draft).event
+    expected = {
+        "turn_id": "turn-1",
+        "steps": ["model", "tool"],
+        "nested": {"values": [1, 2]},
+    }
+    direct_event = Event(
+        id="direct-event",
+        event_type="zeta.turn.completed",
+        source="test",
+        payload={"steps": ("direct",)},
+        idempotency_key=None,
+        caused_by=None,
+        session_id=None,
+        timestamp_ms=1,
+    )
+
+    assert memory_event.payload == expected
+    assert sqlite_event.payload == expected
+    assert MemoryEventStore().append(direct_event).event.payload == {
+        "steps": ["direct"]
+    }
+    assert sqlite_store.append(direct_event).event.payload == {"steps": ["direct"]}
+    assert json.loads(json.dumps(memory_event.payload)) == memory_event.payload
+    assert json.loads(json.dumps(sqlite_event.payload)) == sqlite_event.payload
+
+
+def test_event_stores_reject_non_json_payloads(tmp_path: Path) -> None:
+    draft = DraftEvent(
+        event_type="zeta.turn.completed",
+        source="test",
+        payload={"path": tmp_path},
+    )
+
+    with pytest.raises(TypeError):
+        MemoryEventStore().accept(draft)
+    with pytest.raises(TypeError):
+        SqliteEventStore(tmp_path / "events.sqlite3").accept(draft)
+
+
 def test_event_stores_share_the_event_store_protocol(tmp_path: Path) -> None:
     assert isinstance(MemoryEventStore(), EventStoreProtocol)
     sqlite_store = SqliteEventStore(tmp_path / "events.sqlite3")

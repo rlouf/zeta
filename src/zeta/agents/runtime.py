@@ -29,6 +29,8 @@ def compile_agent_definition(
     run_turn: AgentTurnRunner | None = None,
 ) -> RegisteredAgent:
     """Compile a single-accept spec into an in-process runtime agent."""
+    if not spec.enabled:
+        raise ValueError("compile_agent_definition requires an enabled agent")
     if len(spec.accepts) != 1:
         raise ValueError("compile_agent_definition requires exactly one accepted event")
     return compile_agent_definitions(
@@ -49,7 +51,7 @@ def compile_agent_definitions(
     run_turn: AgentTurnRunner | None = None,
 ) -> list[RegisteredAgent]:
     """Compile one authored spec into runtime definitions for each accepted event."""
-    if not spec.accepts:
+    if not spec.enabled or not spec.accepts:
         return []
     return [
         RegisteredAgent(

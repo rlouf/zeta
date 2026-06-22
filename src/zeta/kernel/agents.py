@@ -41,6 +41,7 @@ class AgentDefinition:
     system_prompt: str | None = None
     max_turns: int | None = None
     dispatch_mode: DispatchMode = "one_shot"
+    returns: tuple[str, ...] = ()
 
     def accepts(self, event: Event) -> bool:
         return any(trigger.matches(event) for trigger in self.triggers)

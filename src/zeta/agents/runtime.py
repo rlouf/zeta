@@ -62,6 +62,7 @@ def compile_agent_definitions(
                 system_prompt=spec.description,
                 max_turns=config.max_turns if config is not None else None,
                 dispatch_mode="session_scoped" if spec.resumable else "one_shot",
+                returns=tuple(spec.returns),
             ),
             run=agent_runner(
                 spec,

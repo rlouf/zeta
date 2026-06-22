@@ -36,6 +36,7 @@ class RuntimeServices:
     specs: tuple[AgentSpec, ...]
     agents: tuple[RegisteredAgent, ...]
     worker_name: str = LOCAL_WORKER_NAME
+    max_concurrent: int = 1
 
     def close(self) -> None:
         self.events.close()
@@ -277,7 +278,23 @@ async def run_forever(
     poll_interval_seconds: float = 1.0,
     stop_event: asyncio.Event | None = None,
 ) -> None:
+    running: set[asyncio.Task[str]] = set()
     while stop_event is None or not stop_event.is_set():
-        outcome = await run_once(runtime)
-        if outcome == "queue empty":
+        while len(running) < runtime.max_concurrent:
+            task = asyncio.create_task(run_once(runtime))
+            running.add(task)
+            await asyncio.sleep(0)
+            if task.done() and task.result() == "queue empty":
+                running.remove(task)
+                break
+        if not running:
             await asyncio.sleep(poll_interval_seconds)
+            continue
+        done, running = await asyncio.wait(
+            running,
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        if all(task.result() == "queue empty" for task in done):
+            await asyncio.sleep(poll_interval_seconds)
+    if running:
+        await asyncio.gather(*running)

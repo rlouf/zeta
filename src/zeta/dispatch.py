@@ -1,7 +1,9 @@
 """Append events, publish them, and route matching agents."""
 
 import asyncio
+import time
 from collections.abc import Awaitable, Callable, Iterable, Mapping
+from contextlib import suppress
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from typing import Any, Protocol, cast, runtime_checkable
@@ -55,6 +57,22 @@ class QueueItemRecordReader(Protocol):
 
     def queue_item(self, queue_item_id: str) -> Mapping[str, Any] | None:
         """Return one queue item row by id."""
+
+
+@runtime_checkable
+class AttemptHeartbeatStore(Protocol):
+    """Operational attempt index used to keep worker leases alive."""
+
+    def heartbeat_attempt(
+        self,
+        attempt_id: str,
+        queue_item_id: str,
+        worker_name: str,
+        *,
+        lease_ms: int,
+        now_ms: int,
+    ) -> bool:
+        """Refresh a running attempt heartbeat and its queue lease."""
 
 
 @dataclass(frozen=True)
@@ -160,11 +178,15 @@ class EventDispatcher:
         agents: Iterable[RegisteredAgent] = (),
         publish_event: Callable[[Event], None] | None = None,
         worker_name: str | None = None,
+        heartbeat_interval_seconds: float | None = None,
+        lease_ms: int = 60_000,
     ) -> None:
         self.event_sink = event_sink
         self.agents = tuple(agents)
         self.publish_callback = publish_event
         self.worker_name = worker_name
+        self.heartbeat_interval_seconds = heartbeat_interval_seconds
+        self.lease_ms = lease_ms
 
     async def publish_event(
         self,
@@ -319,35 +341,39 @@ class EventDispatcher:
                 started_at=started_at,
             )
         )
+        heartbeat_task = self._start_attempt_heartbeat(attempt_id, queue_item_id)
         try:
-            result = await runner(
-                AgentInvocation(
-                    agent.definition,
-                    triggering_event,
-                    publish_event=self._agent_event_publisher(
-                        agent,
+            try:
+                result = await runner(
+                    AgentInvocation(
+                        agent.definition,
                         triggering_event,
+                        publish_event=self._agent_event_publisher(
+                            agent,
+                            triggering_event,
+                            queue_item_id,
+                            attempt_id,
+                        ),
+                        queue_item_id=queue_item_id,
+                        attempt_id=attempt_id,
+                        run_id=triggering_event.run_id,
+                    )
+                )
+            except Exception as exc:
+                events.extend(
+                    self._failed_agent_events(
+                        exc,
+                        triggering_event,
+                        agent,
                         queue_item_id,
                         attempt_id,
-                    ),
-                    queue_item_id=queue_item_id,
-                    attempt_id=attempt_id,
-                    run_id=triggering_event.run_id,
+                        attempt_number,
+                        started_at,
+                    )
                 )
-            )
-        except Exception as exc:
-            events.extend(
-                self._failed_agent_events(
-                    exc,
-                    triggering_event,
-                    agent,
-                    queue_item_id,
-                    attempt_id,
-                    attempt_number,
-                    started_at,
-                )
-            )
-            return events
+                return events
+        finally:
+            await self._stop_attempt_heartbeat(heartbeat_task)
 
         events.extend(
             self._terminal_agent_events(
@@ -361,6 +387,50 @@ class EventDispatcher:
             )
         )
         return events
+
+    def _start_attempt_heartbeat(
+        self,
+        attempt_id: str,
+        queue_item_id: str,
+    ) -> asyncio.Task[None] | None:
+        if (
+            self.worker_name is None
+            or self.heartbeat_interval_seconds is None
+            or self.heartbeat_interval_seconds <= 0
+            or not isinstance(self.event_sink, AttemptHeartbeatStore)
+        ):
+            return None
+        return asyncio.create_task(
+            self._heartbeat_attempt(self.event_sink, attempt_id, queue_item_id)
+        )
+
+    async def _stop_attempt_heartbeat(
+        self,
+        heartbeat_task: asyncio.Task[None] | None,
+    ) -> None:
+        if heartbeat_task is None:
+            return
+        heartbeat_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await heartbeat_task
+
+    async def _heartbeat_attempt(
+        self,
+        store: AttemptHeartbeatStore,
+        attempt_id: str,
+        queue_item_id: str,
+    ) -> None:
+        if self.worker_name is None or self.heartbeat_interval_seconds is None:
+            return
+        while True:
+            await asyncio.sleep(self.heartbeat_interval_seconds)
+            store.heartbeat_attempt(
+                attempt_id,
+                queue_item_id,
+                self.worker_name,
+                lease_ms=self.lease_ms,
+                now_ms=current_time_ms(),
+            )
 
     def _agent_for_id(self, agent_id: str) -> RegisteredAgent | None:
         for agent in self.agents:
@@ -997,3 +1067,7 @@ def result_with_final_cursor(result: dict[str, Any], event: Event) -> dict[str, 
 
 def event_timestamp() -> str:
     return datetime.now(UTC).isoformat().replace("+00:00", "Z")
+
+
+def current_time_ms() -> int:
+    return time.time_ns() // 1_000_000

@@ -271,6 +271,41 @@ class SqliteEventStore:
         ).fetchall()
         return [dict(row) for row in rows]
 
+    def heartbeat_attempt(
+        self,
+        attempt_id: str,
+        queue_item_id: str,
+        worker_name: str,
+        *,
+        lease_ms: int,
+        now_ms: int,
+    ) -> bool:
+        cursor = self.connection.execute(
+            """
+            UPDATE attempts
+            SET heartbeat_at = ?
+            WHERE attempt_id = ?
+              AND queue_item_id = ?
+              AND worker_name = ?
+              AND status = 'running'
+            """,
+            (now_ms, attempt_id, queue_item_id, worker_name),
+        )
+        if cursor.rowcount == 1:
+            self.connection.execute(
+                """
+                UPDATE queue_items
+                SET claimed_until = ?,
+                    updated_at = ?
+                WHERE queue_item_id = ?
+                  AND claimed_by = ?
+                  AND status = 'claimed'
+                """,
+                (now_ms + lease_ms, now_ms, queue_item_id, worker_name),
+            )
+        self.connection.commit()
+        return cursor.rowcount == 1
+
     def _project_queue_item_event(self, event: Event) -> None:
         queue_item_id = _payload_str(event, "queue_item_id")
         event_id = _payload_str(event, "event_id")

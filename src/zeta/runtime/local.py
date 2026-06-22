@@ -24,6 +24,8 @@ from zeta.runtime.scope import SessionScope
 from zeta.store.events import Filter, SqliteEventStore, event_store_path
 
 LOCAL_WORKER_NAME = "local-runtime"
+QUEUE_LEASE_MS = 60_000
+ATTEMPT_HEARTBEAT_INTERVAL_SECONDS = 15.0
 
 
 @dataclass(frozen=True)
@@ -126,6 +128,8 @@ async def run_once(runtime: RuntimeServices) -> str:
         runtime.events,
         agents=runtime.agents,
         worker_name=runtime.worker_name,
+        heartbeat_interval_seconds=ATTEMPT_HEARTBEAT_INTERVAL_SECONDS,
+        lease_ms=QUEUE_LEASE_MS,
     )
     claimed = claim_available_queue_item(runtime)
     if claimed is None:
@@ -162,7 +166,7 @@ def claim_available_queue_item(runtime: RuntimeServices) -> str | None:
     runtime.events.reconcile_expired_queue_claims(now_ms=now_ms)
     return runtime.events.claim_next_queue_item(
         runtime.worker_name,
-        lease_ms=60_000,
+        lease_ms=QUEUE_LEASE_MS,
         now_ms=now_ms,
     )
 

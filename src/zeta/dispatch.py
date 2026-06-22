@@ -260,6 +260,18 @@ class EventDispatcher:
             return self._missing_executor_events(triggering_event, routed_queue_item)
         return await self._run_agent(agent, triggering_event, routed_queue_item)
 
+    def schedule_retry(self, queue_item: RoutedQueueItem | str) -> Event:
+        routed_queue_item = self._resolve_queue_item(queue_item)
+        triggering_event = self._stored_event(routed_queue_item.event_id)
+        return self._append_queue_item_event_for_target(
+            triggering_event,
+            routed_queue_item.queue_item_id,
+            routed_queue_item.target_agent,
+            event_suffix="available",
+            status="available",
+            attempt_number=self._next_attempt_number(routed_queue_item.queue_item_id),
+        )
+
     def matching_agents(self, event: Event) -> list[RegisteredAgent]:
         return [agent for agent in self.agents if agent.definition.accepts(event)]
 
@@ -279,7 +291,7 @@ class EventDispatcher:
     ) -> list[Event]:
         queue_item_id = queue_item.queue_item_id
         events: list[Event] = []
-        attempt_number = 1
+        attempt_number = self._next_attempt_number(queue_item_id)
         attempt_id = attempt_id_for_queue_item(queue_item_id, attempt_number)
         runner = agent.run
         if runner is None:
@@ -439,16 +451,30 @@ class EventDispatcher:
         for event in reversed(
             reader.list_events(Filter(event_type_prefix="runtime.queue_item."))
         ):
-            if event.event_type not in TERMINAL_QUEUE_ITEM_EVENT_TYPES:
-                continue
             if required_payload_string(event, "queue_item_id") == queue_item_id:
-                return event
+                if event.event_type in TERMINAL_QUEUE_ITEM_EVENT_TYPES:
+                    return event
+                return None
         return None
 
     def _event_reader(self) -> EventReader:
         if isinstance(self.event_sink, EventReader):
             return self.event_sink
         raise RuntimeError("queue item execution requires a readable event store")
+
+    def _next_attempt_number(self, queue_item_id: str) -> int:
+        attempt_numbers = [
+            attempt.attempt_number
+            for attempt in attempt_snapshots(
+                self._event_reader().list_events(
+                    Filter(event_type_prefix="runtime.attempt.")
+                )
+            )
+            if attempt.queue_item_id == queue_item_id
+        ]
+        if not attempt_numbers:
+            return 1
+        return max(attempt_numbers) + 1
 
     def _missing_executor_events(
         self,

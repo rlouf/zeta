@@ -711,7 +711,7 @@ class EventDispatcher:
                 status=attempt_status,
                 started_at=started_at,
                 finished_at=event_timestamp(),
-                result=result,
+                **attempt_result_payload(result),
             ),
             self._append_queue_item_event(
                 triggering_event,
@@ -999,6 +999,20 @@ def attempt_payload(
     **extra: Any,
 ) -> dict[str, Any]:
     return {**asdict(attempt), **extra}
+
+
+def attempt_result_payload(result: dict[str, Any]) -> dict[str, Any]:
+    payload: dict[str, Any] = {"result": result}
+    summary = result.get("summary")
+    if not isinstance(summary, str):
+        summary = result.get("final_answer")
+    if isinstance(summary, str):
+        payload["summary"] = summary
+    for key in ("events", "tool_calls", "usage"):
+        value = result.get(key)
+        if value is not None:
+            payload[key] = value
+    return payload
 
 
 def terminal_attempt_status(result: dict[str, Any]) -> AttemptStatus:

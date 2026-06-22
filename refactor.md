@@ -44,9 +44,20 @@ The most important boundaries:
 This is not a compatibility-preserving file shuffle. Each phase should use the
 move to simplify the code in that slice.
 
+We are allowed to clean aggressively. The goal is not to preserve the current
+shape under new filenames; the goal is to make the code read clearly after each
+move. If the old structure created a dozen tiny functions, forwarding layers,
+or names that no longer explain anything, inline them or delete them in the
+same phase. It is better to start with a few direct, readable functions and
+split them later than to carry a million small helpers whose only purpose was
+to survive the refactor.
+
+- Clean aggressively inside the active slice. If a name, helper, class, module,
+  or layer exists only because the old structure made it necessary, remove it.
 - Delete compatibility shims unless there is a real external import contract.
 - Inline single-use helpers when their name does not clarify the story.
-- Prefer fewer readable functions over many tiny forwarding helpers.
+- Prefer fewer readable functions over many tiny forwarding helpers; splitting
+  can happen later when a concept has earned its own name.
 - Collapse dead abstractions exposed by the move.
 - Remove old modules when emptied.
 - Avoid new `manager`, `handler`, `utils`, or `common` buckets.

@@ -21,9 +21,7 @@ from zeta.context import prompt_transform_from_policy
 from zeta.context.builder import (
     PreparedPrompt,
     PromptBuilder,
-    TraceProjection,
     prepared_prompt_from,
-    project_trace_drafts,
     render_model_input,
 )
 from zeta.context.components import PromptTrace
@@ -45,6 +43,7 @@ from zeta.records.events import (
     tool_result_status,
     turn_aborted_draft,
 )
+from zeta.records.provenance import TraceProjection, project_trace_drafts
 from zeta.records.stores import Store
 
 AgentEventSink = Callable[[DraftEvent], None]

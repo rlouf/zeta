@@ -2,7 +2,6 @@ import json
 from dataclasses import asdict, replace
 from typing import Any
 
-from zeta.context.builder import project_trace_events
 from zeta.records.events import (
     DraftEvent,
     Event,
@@ -14,6 +13,7 @@ from zeta.records.events import (
     tool_call_draft,
 )
 from zeta.records.objects import Derivation, Object
+from zeta.records.provenance import project_trace_events
 from zeta.records.stores import InMemoryStore
 from zeta.records.timeline import effect_record, event_from_record, turn_record
 

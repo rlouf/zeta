@@ -62,6 +62,7 @@ from zeta.kernel.capabilities import (
 from zeta.models import chat_completions as zeta_model
 from zeta.records.events import Event
 from zeta.records.objects import Derivation, Object
+from zeta.records.provenance import project_trace_events
 from zeta.records.stores import InMemoryStore
 
 ensure_builtin_tools_registered()
@@ -86,7 +87,7 @@ zeta_context = SimpleNamespace(
     estimated_tokens=estimated_tokens,
     measure=measure,
     payload_sha256=payload_sha256,
-    project_trace_events=context_builder.project_trace_events,
+    project_trace_events=project_trace_events,
     prompt_components=prompt_components,
     prompt_transform_from_env=prompt_transform_from_env,
     reconstructed_prompt_request=reconstructed_prompt_request,

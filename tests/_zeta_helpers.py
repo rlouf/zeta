@@ -18,7 +18,6 @@ from typing import Any, cast
 from zeta.context.builder import (
     PreparedPrompt,
     ReconstructedPrompt,
-    project_trace_events,
     reconstructed_prompt_request,
 )
 from zeta.context.components import PromptComponent, prompt_components
@@ -32,6 +31,7 @@ from zeta.records.events import (
     event_view,
 )
 from zeta.records.objects import Object, ObjectId
+from zeta.records.provenance import project_trace_events
 from zeta.records.stores import Filter, InMemoryStore, Store
 from zeta.runtime.scope import SessionScope
 

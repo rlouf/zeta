@@ -7,7 +7,6 @@ from collections.abc import Callable
 from dataclasses import replace
 from typing import Any
 
-from zeta.context.builder import event_timeline_type, project_trace_events
 from zeta.dispatch import EventDispatcher, ExecutableAgent, terminal_queue_item_result
 from zeta.kernel.agents import AgentDefinition, AgentInvocation, EventPattern
 from zeta.kernel.capabilities import ExecutionMode
@@ -19,6 +18,7 @@ from zeta.loop import (
     run_agent,
 )
 from zeta.records.events import DraftEvent, Event, user_message_draft
+from zeta.records.provenance import event_timeline_type, project_trace_events
 from zeta.records.stores import EventReader, Filter, warn_trace_failure_once
 from zeta.runtime.config import session_agent_config
 from zeta.runtime.requests import session_run_params

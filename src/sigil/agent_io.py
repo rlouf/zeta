@@ -21,7 +21,6 @@ from sigil.display.state import (
     progress_mode_from_env,
 )
 from sigil.turn import TurnRecorder
-from zeta.context.builder import project_trace_events
 from zeta.loop import (
     AgentRunResult,
     is_runtime_ui_event,
@@ -40,6 +39,7 @@ from zeta.records.events import (
     exact_event_time,
     user_message_draft,
 )
+from zeta.records.provenance import project_trace_events
 from zeta.records.stores import (
     EventReader,
     Filter,

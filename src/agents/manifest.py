@@ -38,29 +38,15 @@ class Manifest:
 
 
 def validate_tools(spec: AgentSpec, registry: ToolResolver | None) -> None:
-    if registry is None:
-        if spec.tools:
-            raise ManifestError(
-                f"agent {spec.slug!r} lists unknown tool {spec.tools[0]!r}"
-            )
-        return
     for name in spec.tools:
         if name in RESERVED_TOOL_NAMES:
             raise ManifestError(f"agent {spec.slug!r} lists reserved tool {name!r}")
-        if registry.resolve(name) is None:
+        if registry is not None and registry.resolve(name) is None:
             raise ManifestError(f"agent {spec.slug!r} lists unknown tool {name!r}")
 
 
 def validate_events(spec: AgentSpec, registry: EventRegistry | None) -> None:
     if registry is None:
-        if spec.accepts:
-            raise ManifestError(
-                f"agent {spec.slug!r} references unknown event {spec.accepts[0]!r}"
-            )
-        if spec.returns:
-            raise ManifestError(
-                f"agent {spec.slug!r} references unknown event {spec.returns[0]!r}"
-            )
         return
     for event_type in spec.accepts:
         if not registry.knows(event_type):

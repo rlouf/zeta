@@ -335,6 +335,74 @@ class SqliteEventStore:
             ),
         )
 
+    def claim_next_queue_item(
+        self,
+        worker_name: str,
+        *,
+        lease_ms: int,
+        now_ms: int,
+    ) -> str | None:
+        _execute_with_retry(self.connection, "BEGIN IMMEDIATE")
+        try:
+            row = self.connection.execute(
+                """
+                SELECT queue_item_id
+                FROM queue_items
+                WHERE status = 'available'
+                  AND (available_at IS NULL OR available_at <= ?)
+                ORDER BY available_at ASC, queue_item_id ASC
+                LIMIT 1
+                """,
+                (now_ms,),
+            ).fetchone()
+            if row is None:
+                self.connection.commit()
+                return None
+            queue_item_id = str(row["queue_item_id"])
+            cursor = self.connection.execute(
+                """
+                UPDATE queue_items
+                SET status = 'claimed',
+                    claimed_by = ?,
+                    claimed_until = ?,
+                    updated_at = ?
+                WHERE queue_item_id = ?
+                  AND status = 'available'
+                  AND (available_at IS NULL OR available_at <= ?)
+                """,
+                (
+                    worker_name,
+                    now_ms + lease_ms,
+                    now_ms,
+                    queue_item_id,
+                    now_ms,
+                ),
+            )
+            self.connection.commit()
+            if cursor.rowcount != 1:
+                return None
+            return queue_item_id
+        except Exception:
+            self.connection.rollback()
+            raise
+
+    def reconcile_expired_queue_claims(self, *, now_ms: int) -> int:
+        cursor = self.connection.execute(
+            """
+            UPDATE queue_items
+            SET status = 'available',
+                claimed_by = NULL,
+                claimed_until = NULL,
+                updated_at = ?
+            WHERE status = 'claimed'
+              AND claimed_until IS NOT NULL
+              AND claimed_until < ?
+            """,
+            (now_ms, now_ms),
+        )
+        self.connection.commit()
+        return int(cursor.rowcount)
+
     def get(self, event_id: str) -> Event | None:
         row = self.connection.execute(
             """

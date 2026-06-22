@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -116,15 +117,6 @@ def is_runtime_event(event: Event) -> bool:
     return event.event_type.startswith(("runtime.queue_item.", "runtime.attempt."))
 
 
-def next_available_queue_item(
-    snapshots: list[QueueItemSnapshot],
-) -> QueueItemSnapshot | None:
-    for snapshot in snapshots:
-        if snapshot.status == "available":
-            return snapshot
-    return None
-
-
 def next_unrouted_event(
     events: list[Event],
     snapshots: list[QueueItemSnapshot],
@@ -141,21 +133,39 @@ def next_unrouted_event(
 async def run_once(runtime: RuntimeServices) -> str:
     emit_due_schedules(runtime)
     dispatcher = EventDispatcher(runtime.events, agents=runtime.agents)
+    claimed = claim_available_queue_item(runtime)
+    if claimed is not None:
+        await dispatcher.run_queue_item(claimed)
+        return f"ran {claimed}"
     events = runtime.events.list_events(Filter())
     snapshots = queue_item_snapshots(events)
-    available = next_available_queue_item(snapshots)
-    if available is not None:
-        await dispatcher.run_queue_item(available.queue_item_id)
-        return f"ran {available.queue_item_id}"
     event = next_unrouted_event(events, snapshots)
     if event is None:
         return "queue empty"
     route = await dispatcher.route(event)
     if not route.queue_items:
         return f"routed {event.id}"
+    claimed = claim_available_queue_item(runtime)
+    if claimed is not None:
+        await dispatcher.run_queue_item(claimed)
+        return f"ran {claimed}"
     queue_item = route.queue_items[0]
     await dispatcher.run_queue_item(queue_item)
     return f"ran {queue_item.queue_item_id}"
+
+
+def claim_available_queue_item(runtime: RuntimeServices) -> str | None:
+    now_ms = runtime_time_ms()
+    runtime.events.reconcile_expired_queue_claims(now_ms=now_ms)
+    return runtime.events.claim_next_queue_item(
+        "local-runtime",
+        lease_ms=60_000,
+        now_ms=now_ms,
+    )
+
+
+def runtime_time_ms() -> int:
+    return time.time_ns() // 1_000_000
 
 
 def utc_now() -> datetime:

@@ -77,7 +77,7 @@ class StepResult:
 
 
 @dataclass(frozen=True)
-class AgentTurnResult:
+class AgentRunResult:
     final_answer: str = ""
     telemetry: dict[str, Any] = field(default_factory=dict)
     events: list[DraftEvent] = field(default_factory=list)
@@ -103,8 +103,8 @@ class RunState:
         final_answer: str = "",
         staged_effect: dict[str, Any] | None = None,
         answer_streamed: bool = False,
-    ) -> AgentTurnResult:
-        return AgentTurnResult(
+    ) -> AgentRunResult:
+        return AgentRunResult(
             final_answer=final_answer,
             events=self.events,
             staged_effect=staged_effect,
@@ -129,14 +129,14 @@ class RunState:
         self.steps.append(StepResult(step, effects))
 
 
-class AgentTurnAborted(RuntimeError):
+class AgentRunAborted(RuntimeError):
     """Raised when a cooperative turn budget or cancellation request aborts."""
 
     def __init__(
         self,
         reason: str,
         *,
-        result: AgentTurnResult,
+        result: AgentRunResult,
         event_recorded: bool,
     ) -> None:
         super().__init__(reason.replace("_", " "))
@@ -200,7 +200,7 @@ class AgentRun:
     tools: list[dict[str, Any]]
     state: RunState
 
-    async def run(self) -> AgentTurnResult:
+    async def run(self) -> AgentRunResult:
         for _ in turn_indices(self.config.max_turns):
             outcome = await self.model_step()
             if outcome.kind == "continue":
@@ -314,7 +314,7 @@ async def run_agent(
     caused_by: str | None = None,
     cancellation_event: CancellationToken | None = None,
     deadline: float | None = None,
-) -> AgentTurnResult:
+) -> AgentRunResult:
     """Run an assistant/tool loop without mutating session state."""
     gateway = model_gateway or DefaultModelGateway()
     if not gateway.available(config):
@@ -613,7 +613,7 @@ def raise_if_agent_turn_aborted(
         ),
         ctx=ctx,
     )
-    raise AgentTurnAborted(
+    raise AgentRunAborted(
         reason,
         result=state.result(),
         event_recorded=True,

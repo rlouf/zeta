@@ -31,7 +31,7 @@ from zeta.events import (
 )
 from zeta.kernel.events import DraftEvent, Event
 from zeta.loop import (
-    AgentTurnResult,
+    AgentRunResult,
     is_runtime_ui_event,
 )
 from zeta.models import (
@@ -290,7 +290,7 @@ class TurnEventRecorder:
         if status is not None:
             self.status = status
 
-    def replay(self, result: AgentTurnResult) -> None:
+    def replay(self, result: AgentRunResult) -> None:
         """Record any turn events the live sink did not see."""
         for draft in result.events:
             if id(draft) in self.recorded_event_ids:

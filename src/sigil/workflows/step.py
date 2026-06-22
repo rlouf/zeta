@@ -48,7 +48,7 @@ from zeta.history import history_event_record
 from zeta.kernel.capabilities import ExecutionMode
 from zeta.kernel.events import DraftEvent, Event
 from zeta.loop import (
-    AgentTurnAborted,
+    AgentRunAborted,
     registered_capabilities,
     run_agent,
 )
@@ -201,7 +201,7 @@ def step(
             tool_registry=runtime_context.tool_registry,
             caused_by=turn_recorder.root_event_id,
         )
-    except AgentTurnAborted as error:
+    except AgentRunAborted as error:
         recorder.replay(error.result)
         turn_recorder.add_model_calls(error.result.model_telemetry_calls)
         turn = turn_recorder.finish(

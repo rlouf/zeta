@@ -14,7 +14,7 @@ from zeta.kernel.agents import AgentDefinition, AgentInvocation, EventPattern
 from zeta.kernel.capabilities import ExecutionMode
 from zeta.kernel.events import DraftEvent, Event
 from zeta.loop import (
-    AgentTurnAborted,
+    AgentRunAborted,
     CancellationToken,
     is_runtime_ui_event,
     registered_capabilities,
@@ -168,7 +168,7 @@ async def run_session_turn(
             caused_by=caused_by,
             cancellation_event=cancellation_event,
         )
-    except AgentTurnAborted:
+    except AgentRunAborted:
         return _session_result(
             "aborted",
             "",

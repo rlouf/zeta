@@ -13,9 +13,9 @@ from zeta.dispatch import RegisteredAgent
 from zeta.kernel.agents import AgentDefinition, AgentInvocation, EventPattern
 
 if TYPE_CHECKING:
-    from zeta.loop import AgentTurnResult
+    from zeta.loop import AgentRunResult
 
-AgentTurnRunner = Callable[..., Awaitable["AgentTurnResult"]]
+AgentRunRunner = Callable[..., Awaitable["AgentRunResult"]]
 TimelineFactory = Callable[[AgentInvocation], list[dict[str, Any]]]
 ContextFactory = Callable[[AgentInvocation], str]
 
@@ -26,7 +26,7 @@ def compile_agent_definition(
     config: AgentConfig | None = None,
     context: str | ContextFactory = "",
     timeline: Sequence[dict[str, Any]] | TimelineFactory = (),
-    run_turn: AgentTurnRunner | None = None,
+    run_turn: AgentRunRunner | None = None,
 ) -> RegisteredAgent:
     """Compile a single-accept spec into an in-process runtime agent."""
     if not spec.enabled:
@@ -48,7 +48,7 @@ def compile_agent_definitions(
     config: AgentConfig | None = None,
     context: str | ContextFactory = "",
     timeline: Sequence[dict[str, Any]] | TimelineFactory = (),
-    run_turn: AgentTurnRunner | None = None,
+    run_turn: AgentRunRunner | None = None,
 ) -> list[RegisteredAgent]:
     """Compile one authored spec into runtime definitions for each accepted event."""
     if not spec.enabled or not spec.accepts:
@@ -70,7 +70,7 @@ def compile_agent_definitions(
                 config,
                 context,
                 timeline,
-                run_turn or default_agent_turn_runner(),
+                run_turn or default_agent_run_runner(),
             ),
         )
         for event_type in spec.accepts
@@ -95,7 +95,7 @@ def agent_runner(
     config: AgentConfig | None,
     context: str | ContextFactory,
     timeline: Sequence[dict[str, Any]] | TimelineFactory,
-    run_turn: AgentTurnRunner,
+    run_turn: AgentRunRunner,
 ) -> Callable[[AgentInvocation], Awaitable[dict[str, Any]]]:
     async def run(agent_run: AgentInvocation) -> dict[str, Any]:
         effective_config = config_for_spec(spec, config)
@@ -119,7 +119,7 @@ def agent_runner(
             context=run_context,
             caused_by=event.id,
         )
-        return agent_turn_result_mapping(result)
+        return agent_run_result_mapping(result)
 
     return run
 
@@ -137,7 +137,7 @@ def config_for_spec(spec: AgentSpec, config: AgentConfig | None) -> AgentConfig:
     )
 
 
-def agent_turn_result_mapping(result: AgentTurnResult) -> dict[str, Any]:
+def agent_run_result_mapping(result: AgentRunResult) -> dict[str, Any]:
     payload: dict[str, Any] = {"final_answer": result.final_answer}
     if result.events:
         payload["events"] = result.events
@@ -146,7 +146,7 @@ def agent_turn_result_mapping(result: AgentTurnResult) -> dict[str, Any]:
     return payload
 
 
-def default_agent_turn_runner() -> AgentTurnRunner:
+def default_agent_run_runner() -> AgentRunRunner:
     from zeta.loop import run_agent
 
     return run_agent

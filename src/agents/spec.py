@@ -10,6 +10,7 @@ from typing import Any, cast
 import yaml
 
 SLUG_PATTERN = re.compile(r"^[a-z0-9_-]+$")
+DEFAULT_SCHEDULE_EVENT = "runtime.schedule.triggered"
 BUILT_IN_FRONTMATTER_KEYS = frozenset(
     {
         "name",
@@ -167,7 +168,7 @@ def schedule_tuple(value: Any, path: Path) -> tuple[ScheduleEntry, ...]:
 
 def schedule_entry(value: Any, path: Path) -> ScheduleEntry:
     cron = required_schedule_string(value, "cron", path)
-    event = required_schedule_string(value, "event", path)
+    event = schedule_event(value, path)
     payload = schedule_payload(value.get("payload", {}), path)
     timezone = schedule_timezone(value.get("timezone"), path)
     return ScheduleEntry(
@@ -183,6 +184,15 @@ def required_schedule_string(value: Mapping[str, Any], field: str, path: Path) -
     if item is None or item == "":
         raise SpecError(f"invalid value for 'schedules' in {path}: {field} is required")
     return cast(str, item)
+
+
+def schedule_event(value: Mapping[str, Any], path: Path) -> str:
+    event = value.get("event")
+    if event is None:
+        return DEFAULT_SCHEDULE_EVENT
+    if event == "":
+        raise SpecError(f"invalid value for 'schedules' in {path}: event is required")
+    return cast(str, event)
 
 
 def schedule_payload(value: Any, path: Path) -> dict[str, Any]:

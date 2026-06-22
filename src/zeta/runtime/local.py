@@ -11,7 +11,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from agents.loader import load_specs_recursive
-from agents.spec import AgentSpec, ScheduleEntry
+from agents.spec import DEFAULT_SCHEDULE_EVENT, AgentSpec, ScheduleEntry
 from zeta.agents.runtime import compile_agent_definitions
 from zeta.capabilities.registry import CapabilityRegistry
 from zeta.dispatch import (
@@ -197,7 +197,7 @@ def emit_due_schedules(
                 DraftEvent(
                     schedule.event,
                     "runtime:scheduler",
-                    dict(schedule.payload),
+                    schedule_event_payload(spec, schedule),
                     idempotency_key=schedule_idempotency_key(
                         spec.slug,
                         schedule,
@@ -208,6 +208,19 @@ def emit_due_schedules(
             if outcome.inserted:
                 emitted.append(outcome.event)
     return emitted
+
+
+def schedule_event_payload(
+    spec: AgentSpec,
+    schedule: ScheduleEntry,
+) -> dict[str, object]:
+    if schedule.event != DEFAULT_SCHEDULE_EVENT:
+        return dict(schedule.payload)
+    return {
+        "agent_name": spec.name,
+        "cron": schedule.cron,
+        **schedule.payload,
+    }
 
 
 def schedule_current_time(schedule: ScheduleEntry, now: datetime) -> datetime:

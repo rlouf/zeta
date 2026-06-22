@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from zeta.capabilities.base import error_result
-from zeta.kernel.capabilities import Capability, CapabilityId
+from zeta.capabilities.types import Capability, CapabilityId
 from zeta.models.chat_completions import stream_json_sse
 from zeta.models.codex_auth import CodexCredentials, load_codex_credentials
 from zeta.models.responses import codex_request_headers, codex_responses_url

@@ -17,9 +17,9 @@ from click.testing import CliRunner
 from sigil.cli import cli as sigil_cli
 from sigil.sessions import session_dir
 from zeta.context.compaction import TASK_STATE_SCHEMA
-from zeta.kernel import models as zeta_models_api
 from zeta.models import chat_completions as zeta_model
 from zeta.models import profiles as zeta_models
+from zeta.models import types as zeta_models_api
 
 
 def test_zeta_model_config_ignores_model_env_vars(monkeypatch) -> None:

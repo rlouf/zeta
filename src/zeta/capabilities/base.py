@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol, cast
 
-from zeta.kernel.capabilities import ExecutionMode as _ExecutionMode
+from zeta.capabilities.types import ExecutionMode as _ExecutionMode
 
 
 class CapabilityExecutor(Protocol):

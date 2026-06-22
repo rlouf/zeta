@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from types import TracebackType
 from typing import Literal, Protocol
 
-from zeta.kernel.capabilities import ExecutionMode
+from zeta.capabilities.types import ExecutionMode
 
 CompactionStrategy = Literal["structural_trim", "drop_oldest"]
 

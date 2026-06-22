@@ -18,11 +18,11 @@ from zeta.context.components import (
     prompt_components,
 )
 from zeta.context.transforms import NoOpPromptTransform, PromptTransform
-from zeta.kernel.models import ModelInput
 from zeta.models.chat_completions import (
     DEFAULT_MAX_COMPLETION_TOKENS,
     chat_completion_request_body,
 )
+from zeta.models.types import ModelInput
 from zeta.records.objects import Derivation, Object, ObjectId
 from zeta.records.stores import (
     Store,

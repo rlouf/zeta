@@ -13,13 +13,17 @@ from zeta.capabilities.registry import (
     CapabilityRegistry,
     registry,
 )
+from zeta.capabilities.types import Capability, CapabilityId, ExecutionMode
 
 __all__ = [
+    "Capability",
     "CapabilityError",
     "CapabilityExecutor",
     "CapabilityFunction",
+    "CapabilityId",
     "CapabilityProjection",
     "CapabilityRegistry",
+    "ExecutionMode",
     "InProcessCapabilityExecutor",
     "registry",
 ]

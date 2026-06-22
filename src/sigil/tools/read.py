@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from zeta.capabilities.base import content_hash, error_result
-from zeta.kernel.capabilities import Capability, CapabilityId
+from zeta.capabilities.types import Capability, CapabilityId
 
 DEFAULT_READ_LIMIT = 2_000
 MAX_READ_CHARS = 50_000

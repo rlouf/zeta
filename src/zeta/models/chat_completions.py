@@ -14,8 +14,8 @@ from urllib.parse import urlparse, urlunparse
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import ValidationError
 
-from zeta.kernel.models import ModelInput, ModelOutput, ModelUsage
 from zeta.models.profiles import model_name, model_url
+from zeta.models.types import ModelInput, ModelOutput, ModelUsage
 
 MUTED = "\033[38;2;110;106;134m"
 LOVE = "\033[38;2;235;111;146m"

@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from typing import Any, cast
 
 from zeta.capabilities.base import error_result
-from zeta.kernel.capabilities import Capability, ExecutionMode
+from zeta.capabilities.types import Capability, ExecutionMode
 
 __all__ = [
     "ExecutionMode",

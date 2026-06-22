@@ -25,7 +25,7 @@ from zeta.capabilities.registry import (
     validated_capability_result_payload,
 )
 from zeta.capabilities.registry import registry as tool_registry
-from zeta.kernel.capabilities import (
+from zeta.capabilities.types import (
     Capability,
     CapabilityId,
 )

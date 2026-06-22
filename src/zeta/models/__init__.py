@@ -10,8 +10,6 @@ import asyncio
 from collections.abc import Callable
 from typing import Any
 
-from zeta.kernel.models import ModelInput as _ModelInput
-from zeta.kernel.models import ModelOutput as _ModelOutput
 from zeta.models.profiles import (
     CHAT_COMPLETIONS_API,
     CODEX_RESPONSES_API,
@@ -40,6 +38,7 @@ from zeta.models.profiles import (
     set_active_model_profile,
     user_models_config_path,
 )
+from zeta.models.types import ModelInput, ModelOutput, ModelUsage
 
 
 class DefaultModelGateway:
@@ -55,12 +54,12 @@ class DefaultModelGateway:
 
     async def generate(
         self,
-        model_input: _ModelInput,
+        model_input: ModelInput,
         config: Any,
         *,
         stream: Any | None = None,
         telemetry_sink: Callable[[dict[str, Any]], None] | None = None,
-    ) -> _ModelOutput:
+    ) -> ModelOutput:
         assistant = await asyncio.to_thread(
             chat_completion_messages,
             model_input.messages,
@@ -74,7 +73,7 @@ class DefaultModelGateway:
             telemetry_sink=telemetry_sink,
             thinking=getattr(config, "thinking", None),
         )
-        return _ModelOutput(message=assistant)
+        return ModelOutput(message=assistant)
 
 
 __all__ = [
@@ -88,10 +87,13 @@ __all__ = [
     "THINKING_EFFORTS",
     "ModelCatalog",
     "ModelDiagnostic",
+    "ModelInput",
+    "ModelOutput",
     "ModelProfile",
     "ModelResolution",
     "ModelSelection",
     "ModelSource",
+    "ModelUsage",
     "active_model_profile",
     "active_model_selection",
     "chat_completion_messages",

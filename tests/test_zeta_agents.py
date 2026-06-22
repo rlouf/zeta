@@ -20,7 +20,7 @@ from zeta.capabilities.base import (
     InProcessCapabilityExecutor,
 )
 from zeta.capabilities.registry import CapabilityRegistry, RegisteredCapability
-from zeta.kernel.capabilities import (
+from zeta.capabilities.types import (
     Capability,
     CapabilityId,
 )

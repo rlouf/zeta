@@ -41,10 +41,10 @@ from zeta.agents.capabilities import AgentConfig
 from zeta.capabilities.base import proposed_effect
 from zeta.capabilities.registry import CapabilityRegistry
 from zeta.capabilities.registry import registry as _default_tool_registry
+from zeta.capabilities.types import ExecutionMode
 from zeta.context.components import latest_prompt_trace_fields
 from zeta.context.instructions import load_project_instructions
 from zeta.context.system import system_prompt
-from zeta.kernel.capabilities import ExecutionMode
 from zeta.loop import (
     AgentRunAborted,
     registered_capabilities,

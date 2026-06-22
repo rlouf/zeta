@@ -41,15 +41,15 @@ from zeta.capabilities.base import (
     InProcessCapabilityExecutor,
 )
 from zeta.capabilities.registry import CapabilityRegistry, RegisteredCapability
-from zeta.context import builder as zeta_context
-from zeta.kernel import models as zeta_model_shapes
-from zeta.kernel.capabilities import (
+from zeta.capabilities.types import (
     Capability,
     CapabilityId,
 )
+from zeta.context import builder as zeta_context
 from zeta.kernel.dispatch import Attempt, QueueItem
 from zeta.loop import AgentRunResult
 from zeta.models import chat_completions as zeta_model
+from zeta.models import types as zeta_model_shapes
 from zeta.records import events as zeta_event_model
 from zeta.records.events import DraftEvent, Event
 from zeta.records.stores import (

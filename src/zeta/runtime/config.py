@@ -4,7 +4,7 @@ import os
 from pathlib import Path
 
 from zeta.agents.capabilities import AgentConfig
-from zeta.kernel.capabilities import ExecutionMode
+from zeta.capabilities.types import ExecutionMode
 from zeta.runtime.requests import SessionRunParams
 
 

@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Any
 
 from zeta.capabilities.base import error_result
-from zeta.kernel.capabilities import Capability, CapabilityId
+from zeta.capabilities.types import Capability, CapabilityId
 
 SCHEMA: dict[str, Any] = {
     "type": "object",

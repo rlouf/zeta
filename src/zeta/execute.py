@@ -7,9 +7,9 @@ from collections.abc import Callable
 from dataclasses import replace
 from typing import Any
 
+from zeta.capabilities.types import ExecutionMode
 from zeta.dispatch import EventDispatcher, ExecutableAgent, terminal_queue_item_result
 from zeta.kernel.agents import AgentDefinition, AgentInvocation, EventPattern
-from zeta.kernel.capabilities import ExecutionMode
 from zeta.loop import (
     AgentRunAborted,
     CancellationToken,

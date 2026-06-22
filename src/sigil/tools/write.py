@@ -10,7 +10,7 @@ from zeta.capabilities.base import (
     proposed_command_effect,
     write_temp,
 )
-from zeta.kernel.capabilities import Capability, CapabilityId
+from zeta.capabilities.types import Capability, CapabilityId
 
 SCHEMA: dict[str, Any] = {
     "type": "object",

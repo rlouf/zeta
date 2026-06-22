@@ -10,7 +10,7 @@ from zeta.capabilities.base import (
     InProcessCapabilityExecutor,
 )
 from zeta.capabilities.registry import RegisteredCapability
-from zeta.kernel.capabilities import Capability
+from zeta.capabilities.types import Capability
 
 if TYPE_CHECKING:
     from zeta.capabilities.registry import CapabilityRegistry

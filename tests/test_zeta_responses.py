@@ -5,9 +5,9 @@ from typing import Any
 
 import pytest
 
-from zeta.kernel import models as zeta_model_shapes
 from zeta.models import codex_auth
 from zeta.models import responses as zeta_responses
+from zeta.models import types as zeta_model_shapes
 
 
 def sse_frames(events: list[dict[str, Any]], *, done: bool = False) -> list[str]:

@@ -7,7 +7,7 @@ import time
 from typing import Any
 
 from zeta.capabilities.base import error_result, proposed_command_effect
-from zeta.kernel.capabilities import Capability, CapabilityId
+from zeta.capabilities.types import Capability, CapabilityId
 
 DEFAULT_TIMEOUT_SECONDS = 120.0
 MAX_OUTPUT_CHARS = 12_000

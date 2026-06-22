@@ -25,6 +25,10 @@ from zeta.capabilities.base import (
     InProcessCapabilityExecutor,
 )
 from zeta.capabilities.registry import CapabilityRegistry, RegisteredCapability
+from zeta.capabilities.types import (
+    Capability,
+    CapabilityId,
+)
 from zeta.context import builder as context_builder
 from zeta.context import prompt_transform_from_env
 from zeta.context import transforms as context_transforms
@@ -54,12 +58,8 @@ from zeta.context.instructions import (
     load_project_instructions,
 )
 from zeta.context.system import model_capability_descriptors, system_prompt
-from zeta.kernel import models as zeta_models_api
-from zeta.kernel.capabilities import (
-    Capability,
-    CapabilityId,
-)
 from zeta.models import chat_completions as zeta_model
+from zeta.models import types as zeta_models_api
 from zeta.records.events import Event
 from zeta.records.objects import Derivation, Object
 from zeta.records.provenance import project_trace_events

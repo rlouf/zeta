@@ -17,6 +17,7 @@ from zeta.capabilities.registry import (
     CapabilityRegistry,
 )
 from zeta.capabilities.registry import registry as _runtime_tool_registry
+from zeta.capabilities.types import ExecutionMode
 from zeta.context import prompt_transform_from_policy
 from zeta.context.builder import (
     PreparedPrompt,
@@ -25,12 +26,11 @@ from zeta.context.builder import (
     render_model_input,
 )
 from zeta.context.components import PromptTrace
-from zeta.kernel.capabilities import ExecutionMode
-from zeta.kernel.models import ModelInput, ModelOutput
 from zeta.models import (
     DefaultModelGateway,
 )
 from zeta.models.chat_completions import tool_call_id
+from zeta.models.types import ModelInput, ModelOutput
 from zeta.records.events import (
     DraftEvent,
     Event,

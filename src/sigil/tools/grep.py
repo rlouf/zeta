@@ -12,7 +12,7 @@ from typing import Any
 
 from sigil.tools.read import snapshot_tag
 from zeta.capabilities.base import content_hash, error_result
-from zeta.kernel.capabilities import Capability, CapabilityId
+from zeta.capabilities.types import Capability, CapabilityId
 
 MAX_TOOL_RESULT_CHARS = 12_000
 

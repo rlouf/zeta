@@ -10,8 +10,8 @@ from sigil.display.summarize import (
     assistant_trace_summary,
     short_trace_id,
 )
-from zeta.kernel.models import ModelOutput
 from zeta.models import ModelSelection, resolve_active_model, resolve_model_profile
+from zeta.models.types import ModelOutput
 from zeta.records.objects import Derivation, Object, ObjectId
 from zeta.records.stores import Store, warn_trace_failure_once
 

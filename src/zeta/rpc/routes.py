@@ -9,13 +9,13 @@ from typing import Any, Literal
 
 from zeta.capabilities.base import error_result
 from zeta.capabilities.registry import RegisteredCapability
+from zeta.capabilities.types import Capability, CapabilityId
 from zeta.dispatch import EventDispatcher, ReservedRuntimeEventError
 from zeta.execute import (
     SESSION_TURN_AGENT_ID,
     session_run_id,
     session_turn_requested_draft,
 )
-from zeta.kernel.capabilities import Capability, CapabilityId
 from zeta.kernel.runs import RunStatus
 from zeta.records.events import DraftEvent, Event
 from zeta.records.stores import EventReader, EventStoreProtocol, Filter

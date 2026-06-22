@@ -1,4 +1,4 @@
-"""Headless native-tool-call turn execution for Zeta."""
+"""Headless native-tool-call run execution for Zeta."""
 
 from __future__ import annotations
 
@@ -130,7 +130,7 @@ class RunState:
 
 
 class AgentRunAborted(RuntimeError):
-    """Raised when a cooperative turn budget or cancellation request aborts."""
+    """Raised when a cooperative run budget or cancellation request aborts."""
 
     def __init__(
         self,
@@ -218,7 +218,7 @@ class AgentRun:
 
     async def model_step(self) -> RunStepOutcome:
         self.state.note_step("check_budget")
-        check_turn_budget(
+        check_run_abort(
             self.state,
             ctx=self.deps,
         )
@@ -233,7 +233,7 @@ class AgentRun:
             ctx=self.deps,
         )
         if self.deps.abort_reason(check_deadline=False) is not None:
-            check_turn_budget(
+            check_run_abort(
                 self.state,
                 ctx=self.deps,
                 check_deadline=False,
@@ -516,7 +516,7 @@ async def run_capability_step(
     ctx: RunDependencies,
 ) -> CapabilityCallResult:
     state.note_step("check_budget")
-    check_turn_budget(
+    check_run_abort(
         state,
         ctx=ctx,
     )
@@ -563,13 +563,13 @@ def terminal_capability_result_event(
     return None
 
 
-def check_turn_budget(
+def check_run_abort(
     state: RunState,
     *,
     ctx: RunDependencies,
     check_deadline: bool = True,
 ) -> None:
-    raise_if_agent_turn_aborted(
+    raise_if_agent_run_aborted(
         state,
         ctx=ctx,
         check_deadline=check_deadline,
@@ -590,7 +590,7 @@ def agent_deadline(
     return min(deadline, configured)
 
 
-def raise_if_agent_turn_aborted(
+def raise_if_agent_run_aborted(
     state: RunState,
     *,
     ctx: RunDependencies,

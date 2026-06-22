@@ -5,8 +5,12 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
-from zeta.dispatch import EventDispatcher, ExecutableAgent, terminal_queue_item_result
-from zeta.kernel.agents import AgentDefinition, AgentInvocation, EventPattern
+from zeta.orchestration.agents import AgentDefinition, AgentInvocation, EventPattern
+from zeta.orchestration.dispatch import (
+    EventDispatcher,
+    ExecutableAgent,
+    terminal_queue_item_result,
+)
 from zeta.records.events import Event
 from zeta.run.cancellation import CancellationToken
 from zeta.run.thread_run import (

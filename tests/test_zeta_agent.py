@@ -31,7 +31,6 @@ from click.testing import CliRunner
 
 from sigil.tools import ensure_builtin_tools_registered
 from zeta import cli as zeta_cli
-from zeta import dispatch as zeta_dispatch
 from zeta import execute as zeta_execute
 from zeta import models as zeta_models_api
 from zeta import rpc as zeta_rpc
@@ -46,9 +45,11 @@ from zeta.capabilities.types import (
     CapabilityId,
 )
 from zeta.context import builder as zeta_context
-from zeta.kernel.dispatch import Attempt, QueueItem
 from zeta.models import chat_completions as zeta_model
 from zeta.models import types as zeta_model_shapes
+from zeta.orchestration import dispatch as zeta_dispatch
+from zeta.orchestration.attempts import Attempt
+from zeta.orchestration.queue import QueueItem
 from zeta.records import events as zeta_event_model
 from zeta.records.events import DraftEvent, Event
 from zeta.records.stores import (

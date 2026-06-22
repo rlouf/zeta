@@ -8,8 +8,9 @@ from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from typing import Any, Protocol, cast, runtime_checkable
 
-from zeta.kernel.agents import AgentDefinition, AgentInvocation, EventPattern
-from zeta.kernel.dispatch import Attempt, AttemptStatus, QueueItem, QueueItemStatus
+from zeta.orchestration.agents import AgentDefinition, AgentInvocation, EventPattern
+from zeta.orchestration.attempts import Attempt, AttemptStatus
+from zeta.orchestration.queue import QueueItem, QueueItemStatus
 from zeta.records.events import DraftEvent, Event
 from zeta.records.stores import EventReader, EventStoreProtocol, EventWriter, Filter
 

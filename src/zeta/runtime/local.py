@@ -14,11 +14,11 @@ from agents.loader import load_specs_recursive
 from agents.spec import DEFAULT_SCHEDULE_EVENT, AgentSpec, ScheduleEntry
 from zeta.agents.runtime import compile_agent_definitions
 from zeta.capabilities.registry import CapabilityRegistry
-from zeta.dispatch import (
+from zeta.execute import session_turn_agent
+from zeta.orchestration.dispatch import (
     EventDispatcher,
     ExecutableAgent,
 )
-from zeta.execute import session_turn_agent
 from zeta.records.events import DraftEvent, Event
 from zeta.records.stores import (
     Filter,

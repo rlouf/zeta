@@ -46,8 +46,9 @@ from sigil.workflows.ask import (
     ASK_SYSTEM_PROMPT,
     ask,
 )
-from zeta.kernel import dispatch as zeta_kernel_dispatch
-from zeta.kernel.dispatch import Attempt, QueueItem
+from zeta.orchestration import dispatch as zeta_kernel_dispatch
+from zeta.orchestration.attempts import Attempt
+from zeta.orchestration.queue import QueueItem
 from zeta.records import events as zeta_events
 from zeta.records import events as zeta_kernel_events
 from zeta.records.events import DraftEvent, Event, event_view, publish_event

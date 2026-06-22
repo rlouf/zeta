@@ -9,8 +9,8 @@ from typing import TYPE_CHECKING, Any, cast
 from agents.prompts import render_prompt
 from agents.spec import AgentSpec
 from zeta.agents.capabilities import AgentConfig
-from zeta.dispatch import ExecutableAgent
-from zeta.kernel.agents import AgentDefinition, AgentInvocation, EventPattern
+from zeta.orchestration.agents import AgentDefinition, AgentInvocation, EventPattern
+from zeta.orchestration.dispatch import ExecutableAgent
 
 if TYPE_CHECKING:
     from zeta.run.runtime import AgentRunResult

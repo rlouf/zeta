@@ -7,7 +7,7 @@ import time
 import uuid
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
-from typing import Any, Literal, Protocol
+from typing import Any, Protocol
 
 from zeta.agents.capabilities import AgentConfig, ModelStatus
 from zeta.capabilities.execution import (
@@ -45,112 +45,24 @@ from zeta.records.events import (
 )
 from zeta.records.provenance import TraceProjection, project_trace_drafts
 from zeta.records.stores import Store
+from zeta.run.cancellation import (
+    AbortReason,
+    AgentRunAborted,
+    CancellationToken,
+    agent_deadline,
+    run_abort_reason,
+)
+from zeta.run.outcomes import (
+    AgentRunResult,
+    RunState,
+    RunStepOutcome,
+)
 
 AgentEventSink = Callable[[DraftEvent], None]
 TimelineEvent = Event | dict[str, Any]
 DEFAULT_MAX_TURNS = 25
 tool_registry = _runtime_tool_registry
 time_monotonic = time.monotonic
-StepName = Literal[
-    "check_budget",
-    "build_prompt",
-    "call_model",
-    "record_assistant",
-    "record_capability_call",
-    "execute_capability",
-    "record_capability_result",
-    "finish_run",
-    "abort_run",
-]
-
-
-@dataclass(frozen=True)
-class StepEffect:
-    kind: str
-    payload: dict[str, Any] = field(default_factory=dict)
-
-
-@dataclass(frozen=True)
-class StepResult:
-    step: StepName
-    effects: tuple[StepEffect, ...] = ()
-
-
-@dataclass(frozen=True)
-class AgentRunResult:
-    final_answer: str = ""
-    telemetry: dict[str, Any] = field(default_factory=dict)
-    events: list[DraftEvent] = field(default_factory=list)
-    staged_effect: dict[str, Any] | None = None
-    answer_streamed: bool = False
-    model_telemetry_calls: list[dict[str, Any]] = field(default_factory=list)
-    prompt_traces: list[PromptTrace] = field(default_factory=list)
-    steps: list[StepResult] = field(default_factory=list)
-
-
-@dataclass
-class RunState:
-    events: list[DraftEvent] = field(default_factory=list)
-    latest_model_telemetry: dict[str, Any] = field(default_factory=dict)
-    model_telemetry_calls: list[dict[str, Any]] = field(default_factory=list)
-    prompt_traces: list[PromptTrace] = field(default_factory=list)
-    steps: list[StepResult] = field(default_factory=list)
-    next_model_caused_by: str | None = None
-
-    def result(
-        self,
-        *,
-        final_answer: str = "",
-        staged_effect: dict[str, Any] | None = None,
-        answer_streamed: bool = False,
-    ) -> AgentRunResult:
-        return AgentRunResult(
-            final_answer=final_answer,
-            events=self.events,
-            staged_effect=staged_effect,
-            answer_streamed=answer_streamed,
-            telemetry=self.latest_model_telemetry,
-            model_telemetry_calls=self.model_telemetry_calls,
-            prompt_traces=self.prompt_traces,
-            steps=self.steps,
-        )
-
-    def note_model_telemetry(self, model_telemetry: dict[str, Any]) -> None:
-        if not model_telemetry:
-            return
-        self.latest_model_telemetry = model_telemetry
-        self.model_telemetry_calls.append(model_telemetry)
-
-    def note_prompt_trace(self, prompt_trace: PromptTrace | None) -> None:
-        if prompt_trace is not None:
-            self.prompt_traces.append(prompt_trace)
-
-    def note_step(self, step: StepName, *effects: StepEffect) -> None:
-        self.steps.append(StepResult(step, effects))
-
-
-class AgentRunAborted(RuntimeError):
-    """Raised when a cooperative run budget or cancellation request aborts."""
-
-    def __init__(
-        self,
-        reason: str,
-        *,
-        result: AgentRunResult,
-        event_recorded: bool,
-    ) -> None:
-        super().__init__(reason.replace("_", " "))
-        self.reason = reason
-        self.result = result
-        self.event_recorded = event_recorded
-
-
-class CancellationToken(Protocol):
-    def is_set(self) -> bool: ...
-
-
-class AbortReason(Protocol):
-    def __call__(self, *, check_deadline: bool = True) -> str | None: ...
 
 
 class ModelStream(Protocol):
@@ -180,14 +92,6 @@ class RunDependencies:
     builder: PromptBuilder
     abort_reason: AbortReason
     model_gateway: ModelGateway = field(default_factory=DefaultModelGateway)
-
-
-@dataclass(frozen=True)
-class RunStepOutcome:
-    kind: Literal["continue", "finished", "staged_effect", "aborted"]
-    final_answer: str = ""
-    staged_effect: dict[str, Any] | None = None
-    answer_streamed: bool = False
 
 
 @dataclass
@@ -319,7 +223,7 @@ async def run_agent(
     if not gateway.available(config):
         raise RuntimeError("model endpoint is not reachable")
     clock = time_monotonic
-    deadline = agent_deadline(config, deadline, clock=clock)
+    deadline = agent_deadline(config.max_wall_seconds, deadline, clock=clock)
     active_tool_registry = tool_registry or _runtime_tool_registry
     allowed_capabilities = agent_allowed_capabilities(
         config,
@@ -581,20 +485,6 @@ def check_run_abort(
     )
 
 
-def agent_deadline(
-    config: AgentConfig,
-    deadline: float | None,
-    *,
-    clock: Callable[[], float],
-) -> float | None:
-    if config.max_wall_seconds is None:
-        return deadline
-    configured = clock() + max(config.max_wall_seconds, 0.0)
-    if deadline is None:
-        return configured
-    return min(deadline, configured)
-
-
 def raise_if_agent_run_aborted(
     state: RunState,
     *,
@@ -620,35 +510,6 @@ def raise_if_agent_run_aborted(
         result=state.result(),
         event_recorded=True,
     )
-
-
-def agent_abort_reason(
-    cancellation_event: CancellationToken | None,
-    deadline: float | None,
-    *,
-    clock: Callable[[], float],
-) -> str | None:
-    if cancellation_event is not None and cancellation_event.is_set():
-        return "cancelled"
-    if deadline is not None and clock() >= deadline:
-        return "deadline_exceeded"
-    return None
-
-
-def run_abort_reason(
-    cancellation_event: CancellationToken | None,
-    deadline: float | None,
-    *,
-    clock: Callable[[], float],
-) -> AbortReason:
-    def current_abort_reason(*, check_deadline: bool = True) -> str | None:
-        return agent_abort_reason(
-            cancellation_event,
-            deadline if check_deadline else None,
-            clock=clock,
-        )
-
-    return current_abort_reason
 
 
 def agent_model_endpoint_open(config: AgentConfig) -> bool:

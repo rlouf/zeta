@@ -8,13 +8,17 @@ from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from typing import Any, Protocol, cast, runtime_checkable
 
-from zeta.orchestration.agents import AgentDefinition, AgentInvocation, EventPattern
+from zeta.orchestration.agents import (
+    AgentDefinition,
+    AgentInvocation,
+    AgentRoute,
+    EventPattern,
+    ExecutableAgent,
+)
 from zeta.orchestration.attempts import Attempt, AttemptStatus
 from zeta.orchestration.queue import QueueItem, QueueItemStatus
 from zeta.records.events import DraftEvent, Event
 from zeta.records.stores import EventReader, EventStoreProtocol, EventWriter, Filter
-
-AgentRunner = Callable[["AgentInvocation"], Awaitable[dict[str, Any]]]
 
 __all__ = [
     "AgentDefinition",
@@ -75,42 +79,6 @@ class AttemptHeartbeatStore(Protocol):
         now_ms: int,
     ) -> bool:
         """Refresh a running attempt heartbeat and its queue lease."""
-
-
-@dataclass(frozen=True)
-class AgentRoute:
-    """Deterministic event route for one agent."""
-
-    agent_id: str
-    accepts: tuple[EventPattern, ...]
-    lock_keys: tuple[str, ...] = ()
-
-    @classmethod
-    def from_definition(cls, definition: AgentDefinition) -> "AgentRoute":
-        return cls(
-            agent_id=definition.agent_id,
-            accepts=definition.triggers,
-            lock_keys=definition.lock_keys,
-        )
-
-    def matches(self, event: Event) -> bool:
-        return any(pattern.matches(event) for pattern in self.accepts)
-
-
-@dataclass(frozen=True)
-class ExecutableAgent:
-    """Local executable bound to an agent definition."""
-
-    definition: AgentDefinition
-    run: AgentRunner
-
-    @property
-    def agent_id(self) -> str:
-        return self.definition.agent_id
-
-    @property
-    def route(self) -> AgentRoute:
-        return AgentRoute.from_definition(self.definition)
 
 
 @dataclass(frozen=True)

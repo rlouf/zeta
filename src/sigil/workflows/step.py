@@ -37,7 +37,6 @@ from sigil.protocols import (
 from sigil.state import append_prompt_submitted_event
 from sigil.tools import ensure_builtin_tools_registered
 from sigil.turn import TurnRecorder
-from zeta.agents.capabilities import AgentConfig
 from zeta.capabilities.execution import proposed_effect
 from zeta.capabilities.registry import CapabilityRegistry
 from zeta.capabilities.registry import registry as _default_tool_registry
@@ -51,6 +50,7 @@ from zeta.models import (
 )
 from zeta.records.events import DraftEvent, Event
 from zeta.records.timeline import history_event_record
+from zeta.run.config import AgentConfig
 from zeta.run.runtime import (
     AgentRunAborted,
     registered_capabilities,

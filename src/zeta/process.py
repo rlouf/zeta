@@ -7,10 +7,9 @@ from pathlib import Path
 
 from agents.loader import load_specs_recursive
 from agents.spec import AgentSpec
-from zeta.agents.runtime import compile_agent_definitions
 from zeta.capabilities.registry import CapabilityRegistry
 from zeta.orchestration import worker
-from zeta.orchestration.dispatch import ExecutableAgent
+from zeta.orchestration.agents import ExecutableAgent, compile_agent_definitions
 from zeta.records.stores import (
     SqliteEventStore,
     SqliteStore,

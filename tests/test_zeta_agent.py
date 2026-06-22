@@ -34,7 +34,6 @@ from zeta import cli as zeta_cli
 from zeta import models as zeta_models_api
 from zeta import process as zeta_process
 from zeta import rpc as zeta_rpc
-from zeta.agents.capabilities import CompactionPolicy
 from zeta.capabilities import execution as zeta_capability_execution
 from zeta.capabilities.execution import (
     InProcessCapabilityExecutor,
@@ -65,6 +64,7 @@ from zeta.records.stores import (
 from zeta.run import runtime as zeta_agent
 from zeta.run import thread_run as zeta_requests
 from zeta.run import threads as zeta_scope
+from zeta.run.config import CompactionPolicy
 from zeta.run.runtime import AgentRunResult
 
 zeta_trace = SimpleNamespace(InMemoryStore=InMemoryStore)

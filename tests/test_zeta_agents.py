@@ -13,8 +13,6 @@ from agents.manifest import Manifest, ManifestError
 from agents.prompts import TemplateError, render_prompt, validate_prompt
 from agents.returns import derive_returns_schema
 from agents.spec import ScheduleEntry, matches
-from zeta.agents.capabilities import AgentConfig
-from zeta.agents.runtime import compile_agent_definition, compile_agent_definitions
 from zeta.capabilities.execution import (
     InProcessCapabilityExecutor,
 )
@@ -24,8 +22,13 @@ from zeta.capabilities.types import (
     CapabilityId,
 )
 from zeta.orchestration import dispatch as zeta_dispatch
+from zeta.orchestration.agents import (
+    compile_agent_definition,
+    compile_agent_definitions,
+)
 from zeta.records.events import DraftEvent
 from zeta.records.stores import SqliteEventStore
+from zeta.run.config import AgentConfig
 from zeta.run.runtime import AgentRunResult
 
 zeta_agents = SimpleNamespace(

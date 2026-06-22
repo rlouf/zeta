@@ -5,10 +5,14 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
-from zeta.orchestration.agents import AgentDefinition, AgentInvocation, EventPattern
+from zeta.orchestration.agents import (
+    AgentDefinition,
+    AgentInvocation,
+    EventPattern,
+    ExecutableAgent,
+)
 from zeta.orchestration.dispatch import (
     EventDispatcher,
-    ExecutableAgent,
     terminal_queue_item_result,
 )
 from zeta.records.events import Event

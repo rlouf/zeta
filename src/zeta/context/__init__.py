@@ -4,7 +4,6 @@ import logging
 import os
 from collections.abc import Mapping
 
-from zeta.agents.capabilities import CompactionPolicy
 from zeta.context.compaction import (
     DropOldestPromptTransform,
     StructuralTrimPromptTransform,
@@ -15,6 +14,7 @@ from zeta.context.transforms import (
     NoOpPromptTransform,
     PromptTransform,
 )
+from zeta.run.config import CompactionPolicy
 
 DEFAULT_TRIM_THRESHOLD_TOKENS = 100_000
 LOGGER = logging.getLogger("zeta.context")

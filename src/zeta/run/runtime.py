@@ -9,7 +9,6 @@ from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
-from zeta.agents.capabilities import AgentConfig, ModelStatus
 from zeta.capabilities.execution import (
     CapabilityCallResult,
     CapabilityExecutionContext,
@@ -52,6 +51,7 @@ from zeta.run.cancellation import (
     agent_deadline,
     run_abort_reason,
 )
+from zeta.run.config import AgentConfig, ModelStatus
 from zeta.run.outcomes import (
     AgentRunResult,
     RunState,

@@ -8,7 +8,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from agents.spec import AgentSpec
-from zeta.orchestration.dispatch import EventDispatcher, ExecutableAgent
+from zeta.orchestration.agents import ExecutableAgent
+from zeta.orchestration.dispatch import EventDispatcher
 from zeta.orchestration.scheduling import emit_due_schedules
 from zeta.orchestration.session_turn_agent import session_turn_agent
 from zeta.records.events import Event

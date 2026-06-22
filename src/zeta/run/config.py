@@ -1,4 +1,6 @@
-"""Authored-agent capability declarations."""
+"""Configuration for one Zeta run."""
+
+from __future__ import annotations
 
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
@@ -11,7 +13,7 @@ CompactionStrategy = Literal["structural_trim", "drop_oldest"]
 
 
 class ModelStatus(Protocol):
-    def __enter__(self) -> "ModelStatus": ...
+    def __enter__(self) -> ModelStatus: ...
 
     def __exit__(
         self,

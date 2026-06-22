@@ -16,9 +16,7 @@ from zeta.agents.runtime import compile_agent_definitions
 from zeta.capabilities.registry import CapabilityRegistry
 from zeta.dispatch import (
     EventDispatcher,
-    QueueItemSnapshot,
     RegisteredAgent,
-    queue_item_snapshots,
 )
 from zeta.kernel.events import DraftEvent, Event
 from zeta.runtime.config import zeta_state_dir
@@ -117,41 +115,38 @@ def is_runtime_event(event: Event) -> bool:
     return event.event_type.startswith(("runtime.queue_item.", "runtime.attempt."))
 
 
-def next_unrouted_event(
-    events: list[Event],
-    snapshots: list[QueueItemSnapshot],
-) -> Event | None:
-    routed_event_ids = {snapshot.event_id for snapshot in snapshots}
-    for event in events:
-        if is_runtime_event(event):
-            continue
-        if event.id not in routed_event_ids:
-            return event
-    return None
-
-
 async def run_once(runtime: RuntimeServices) -> str:
     emit_due_schedules(runtime)
+    enqueue_pending_events(runtime)
     dispatcher = EventDispatcher(runtime.events, agents=runtime.agents)
     claimed = claim_available_queue_item(runtime)
-    if claimed is not None:
-        await dispatcher.run_queue_item(claimed)
-        return f"ran {claimed}"
-    events = runtime.events.list_events(Filter())
-    snapshots = queue_item_snapshots(events)
-    event = next_unrouted_event(events, snapshots)
-    if event is None:
+    if claimed is None:
         return "queue empty"
-    route = await dispatcher.route(event)
-    if not route.queue_items:
-        return f"routed {event.id}"
-    claimed = claim_available_queue_item(runtime)
-    if claimed is not None:
-        await dispatcher.run_queue_item(claimed)
-        return f"ran {claimed}"
-    queue_item = route.queue_items[0]
-    await dispatcher.run_queue_item(queue_item)
-    return f"ran {queue_item.queue_item_id}"
+    lifecycle_events = await dispatcher.run_queue_item(claimed)
+    return run_once_message(claimed, lifecycle_events)
+
+
+def enqueue_pending_events(runtime: RuntimeServices) -> int:
+    queued = 0
+    for event in runtime.events.list_events(Filter()):
+        if is_runtime_event(event) or event.event_type.startswith("zeta."):
+            continue
+        if runtime.events.event_has_queue_item(event.id):
+            continue
+        runtime.events.ensure_pending_queue_item(event)
+        queued += 1
+    return queued
+
+
+def run_once_message(queue_item_id: str, lifecycle_events: list[Event]) -> str:
+    for event in lifecycle_events:
+        if event.event_type == "runtime.queue_item.unhandled":
+            return f"routed {event.payload['event_id']}"
+        if event.event_type == "runtime.queue_item.available" and event.payload.get(
+            "target_agent"
+        ):
+            return f"routed {event.payload['event_id']}"
+    return f"ran {queue_item_id}"
 
 
 def claim_available_queue_item(runtime: RuntimeServices) -> str | None:

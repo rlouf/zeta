@@ -203,6 +203,51 @@ class SqliteEventStore:
         if event.event_type.startswith("runtime.attempt."):
             self._project_attempt_event(event)
 
+    def ensure_pending_queue_item(self, event: Event) -> str:
+        queue_item_id = pending_queue_item_id(event)
+        self.connection.execute(
+            """
+            INSERT INTO queue_items
+              (queue_item_id, event_id, target_agent, status, available_at,
+               updated_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(queue_item_id) DO NOTHING
+            """,
+            (
+                queue_item_id,
+                event.id,
+                "",
+                "pending",
+                event.timestamp_ms,
+                event.timestamp_ms,
+            ),
+        )
+        self.connection.commit()
+        return queue_item_id
+
+    def event_has_queue_item(self, event_id: str) -> bool:
+        row = self.connection.execute(
+            """
+            SELECT 1
+            FROM queue_items
+            WHERE event_id = ?
+            LIMIT 1
+            """,
+            (event_id,),
+        ).fetchone()
+        return row is not None
+
+    def queue_item(self, queue_item_id: str) -> dict[str, Any] | None:
+        row = self.connection.execute(
+            """
+            SELECT queue_item_id, event_id, target_agent, status
+            FROM queue_items
+            WHERE queue_item_id = ?
+            """,
+            (queue_item_id,),
+        ).fetchone()
+        return dict(row) if row is not None else None
+
     def _project_queue_item_event(self, event: Event) -> None:
         queue_item_id = _payload_str(event, "queue_item_id")
         event_id = _payload_str(event, "event_id")
@@ -348,7 +393,7 @@ class SqliteEventStore:
                 """
                 SELECT queue_item_id
                 FROM queue_items
-                WHERE status = 'available'
+                WHERE status IN ('pending', 'available')
                   AND (available_at IS NULL OR available_at <= ?)
                 ORDER BY available_at ASC, queue_item_id ASC
                 LIMIT 1
@@ -367,7 +412,7 @@ class SqliteEventStore:
                     claimed_until = ?,
                     updated_at = ?
                 WHERE queue_item_id = ?
-                  AND status = 'available'
+                  AND status IN ('pending', 'available')
                   AND (available_at IS NULL OR available_at <= ?)
                 """,
                 (
@@ -390,7 +435,10 @@ class SqliteEventStore:
         cursor = self.connection.execute(
             """
             UPDATE queue_items
-            SET status = 'available',
+            SET status = CASE
+                  WHEN target_agent = '' THEN 'pending'
+                  ELSE 'available'
+                END,
                 claimed_by = NULL,
                 claimed_until = NULL,
                 updated_at = ?
@@ -524,6 +572,10 @@ def event_store_path(root: Path | None = None) -> Path:
     state_dir = os.environ.get("ZETA_STATE_DIR")
     base = Path(state_dir).expanduser() if state_dir else Path.home() / ".zeta"
     return base / ZETA_STORE_NAME
+
+
+def pending_queue_item_id(event: Event) -> str:
+    return f"qi_{event.id}"
 
 
 def _row_to_event(row: sqlite3.Row) -> Event:

@@ -7,6 +7,7 @@ QueueItemId = str
 AttemptId = str
 
 QueueItemStatus = Literal[
+    "pending",
     "available",
     "claimed",
     "completed",

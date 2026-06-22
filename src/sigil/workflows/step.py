@@ -56,7 +56,7 @@ from zeta.models import (
     active_model_selection,
     model_selection_event,
 )
-from zeta.session import Session
+from zeta.runtime.scope import SessionScope
 
 HandoffOutput = Literal["detail", "summary", "none"]
 Workflow = Literal["ask", "propose", "do"]
@@ -290,7 +290,7 @@ class AgentStepEventRecorder(TurnEventRecorder):
         handoff_output: HandoffOutput,
         render_output: TextIO,
         turn_recorder: TurnRecorder | None = None,
-        runtime_context: Session,
+        runtime_context: SessionScope,
     ) -> None:
         super().__init__(
             renderer,
@@ -361,7 +361,7 @@ def shell_handoff_from_tool_result(result: dict[str, Any]) -> dict[str, Any] | N
 def record_user_message(
     event: dict[str, Any],
     *,
-    runtime_context: Session,
+    runtime_context: SessionScope,
 ) -> Event:
     payload = {key: value for key, value in event.items() if key != "type"}
     payload["_timeline_type"] = "user_message"
@@ -423,7 +423,7 @@ def record_agent_model_telemetry(
     *,
     workflow: str,
     prompt_traces: Sequence[Any] = (),
-    runtime_context: Session,
+    runtime_context: SessionScope,
 ) -> None:
     del workflow
     fields = model_telemetry_fields(model_telemetry)

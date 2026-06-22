@@ -20,7 +20,9 @@ from zeta.loop import (
     is_runtime_ui_event,
     registered_capabilities,
 )
-from zeta.session import Session, session_agent_config, session_run_params
+from zeta.runtime.config import session_agent_config
+from zeta.runtime.requests import session_run_params
+from zeta.runtime.scope import SessionScope
 from zeta.store.events import EventReader, Filter
 from zeta.store.substrate import warn_trace_failure_once
 
@@ -29,7 +31,7 @@ CancellationEventForRun = Callable[[str], CancellationToken | None]
 SESSION_TURN_AGENT_ID = "zeta.session.turn"
 
 
-def current_timeline(*, runtime_context: Session) -> list[Event]:
+def current_timeline(*, runtime_context: SessionScope) -> list[Event]:
     try:
         if not isinstance(runtime_context.event_sink, EventReader):
             return []
@@ -45,7 +47,7 @@ def current_timeline(*, runtime_context: Session) -> list[Event]:
 
 
 def session_turn_agent(
-    runtime_context: Session,
+    runtime_context: SessionScope,
     *,
     publish_event: Callable[[RuntimePublishedEvent], None],
     cancellation_event_for_run: CancellationEventForRun | None = None,
@@ -84,7 +86,7 @@ async def submit_session_turn(
     params: dict[str, Any],
     *,
     run_id: str | None = None,
-    runtime_context: Session,
+    runtime_context: SessionScope,
     event_dispatcher: EventDispatcher,
 ) -> dict[str, Any]:
     run_id = run_id or session_run_id()
@@ -115,7 +117,7 @@ async def run_session_turn(
     run_id: str,
     caused_by: str,
     publish_event: Callable[[RuntimePublishedEvent], None],
-    runtime_context: Session,
+    runtime_context: SessionScope,
     cancellation_event: CancellationToken | None,
 ) -> dict[str, Any]:
     request = session_run_params(params)
@@ -185,7 +187,7 @@ def session_turn_requested_draft(
     params: dict[str, Any],
     *,
     run_id: str,
-    runtime_context: Session,
+    runtime_context: SessionScope,
 ) -> DraftEvent:
     payload = session_run_params(params).run_payload(run_id)
     return DraftEvent(
@@ -201,7 +203,7 @@ def session_turn_requested_draft(
 def _record_user_message(
     event: dict[str, Any],
     *,
-    runtime_context: Session,
+    runtime_context: SessionScope,
     run_id: str | None = None,
 ) -> Event:
     payload = {key: value for key, value in event.items() if key != "type"}
@@ -221,7 +223,7 @@ def _record_user_message(
 def _record_runtime_draft(
     draft: DraftEvent,
     *,
-    runtime_context: Session,
+    runtime_context: SessionScope,
     run_id: str,
 ) -> Event:
     tagged = replace(
@@ -235,7 +237,7 @@ def _record_runtime_draft(
     return outcome.event
 
 
-def _project_trace_for_run(runtime_context: Session, run_id: str | None) -> None:
+def _project_trace_for_run(runtime_context: SessionScope, run_id: str | None) -> None:
     if run_id is None or not isinstance(runtime_context.event_sink, EventReader):
         return
     try:
@@ -258,7 +260,7 @@ def _session_result(
     final_answer: str,
     *,
     run_id: str,
-    runtime_context: Session,
+    runtime_context: SessionScope,
 ) -> dict[str, Any]:
     result: dict[str, Any] = {
         "run_id": run_id,
@@ -275,7 +277,7 @@ def _session_result(
 
 
 def _projected_session_trace_result(
-    runtime_context: Session,
+    runtime_context: SessionScope,
     run_id: str,
 ) -> dict[str, list[str]]:
     trace = _empty_session_trace_result()
@@ -328,7 +330,7 @@ def _add_unique(values: list[str], value: Any) -> None:
         values.append(value)
 
 
-def _final_event_cursor(runtime_context: Session, run_id: str) -> str | None:
+def _final_event_cursor(runtime_context: SessionScope, run_id: str) -> str | None:
     if not isinstance(runtime_context.event_sink, EventReader):
         return None
     events = runtime_context.event_sink.list_events(

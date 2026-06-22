@@ -22,7 +22,7 @@ from zeta.rpc.routes import (
     tools_register,
     tools_respond,
 )
-from zeta.session import default_session
+from zeta.runtime.local import default_session
 
 
 def run_stdio(input: TextIO, output: TextIO) -> None:

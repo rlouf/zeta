@@ -52,6 +52,12 @@ same phase. It is better to start with a few direct, readable functions and
 split them later than to carry a million small helpers whose only purpose was
 to survive the refactor.
 
+Treat the existing boundaries as evidence, not as a contract. When a move shows
+that a layer was only preserving legacy shape, remove the layer. If a helper is
+single-use and its name does not carry real domain meaning, inline it. The plan
+should leave behind the simplest readable version of each slice, not a
+temporarily renamed copy of the old system.
+
 - Clean aggressively inside the active slice. If a name, helper, class, module,
   or layer exists only because the old structure made it necessary, remove it.
 - Delete compatibility shims unless there is a real external import contract.

@@ -82,6 +82,9 @@ class EventDispatcher:
         lifecycle_events = await self.route(outcome.event) if route else []
         return DispatchOutcome(outcome.event, True, lifecycle_events)
 
+    async def publish_and_run(self, draft: DraftEvent) -> DispatchOutcome:
+        return await self.publish_event(draft, route=True)
+
     async def route(self, event: Event) -> list[Event]:
         lifecycle_events: list[Event] = []
         matching_agents = self.matching_agents(event)

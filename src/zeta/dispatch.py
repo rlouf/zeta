@@ -23,6 +23,7 @@ __all__ = [
     "ReservedRuntimeEventError",
     "RoutedQueueItem",
     "RouteOutcome",
+    "TerminalQueueItemError",
     "terminal_queue_item_result",
 ]
 
@@ -72,6 +73,20 @@ class ReservedRuntimeEventError(ValueError):
 
     def __post_init__(self) -> None:
         super().__init__(f"external event ingress cannot accept {self.event_type!r}")
+
+
+@dataclass(frozen=True)
+class TerminalQueueItemError(RuntimeError):
+    """Raised when execution is requested for already terminal work."""
+
+    queue_item_id: str
+    event_type: str
+
+    def __post_init__(self) -> None:
+        super().__init__(
+            f"queue item {self.queue_item_id!r} is already terminal "
+            f"at {self.event_type!r}"
+        )
 
 
 class EventDispatcher:
@@ -167,6 +182,14 @@ class EventDispatcher:
         queue_item: RoutedQueueItem | str,
     ) -> list[Event]:
         routed_queue_item = self._resolve_queue_item(queue_item)
+        terminal_event = self._terminal_queue_item_event(
+            routed_queue_item.queue_item_id
+        )
+        if terminal_event is not None:
+            raise TerminalQueueItemError(
+                routed_queue_item.queue_item_id,
+                terminal_event.event_type,
+            )
         triggering_event = self._stored_event(routed_queue_item.event_id)
         agent = self._agent_for_id(routed_queue_item.target_agent)
         if agent is None or agent.run is None:
@@ -293,6 +316,17 @@ class EventDispatcher:
             if event.id == event_id:
                 return event
         raise LookupError(f"event {event_id!r} was not found")
+
+    def _terminal_queue_item_event(self, queue_item_id: str) -> Event | None:
+        reader = self._event_reader()
+        for event in reversed(
+            reader.list_events(Filter(event_type_prefix="runtime.queue_item."))
+        ):
+            if event.event_type not in TERMINAL_QUEUE_ITEM_EVENT_TYPES:
+                continue
+            if required_payload_string(event, "queue_item_id") == queue_item_id:
+                return event
+        return None
 
     def _event_reader(self) -> EventReader:
         if isinstance(self.event_sink, EventReader):

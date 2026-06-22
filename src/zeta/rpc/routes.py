@@ -10,8 +10,8 @@ from typing import Any, Literal
 from zeta.capabilities.execution import error_result
 from zeta.capabilities.registry import RegisteredCapability
 from zeta.capabilities.types import Capability, CapabilityId
-from zeta.execute import SESSION_TURN_AGENT_ID
 from zeta.orchestration.dispatch import EventDispatcher, ReservedRuntimeEventError
+from zeta.orchestration.session_turn_agent import SESSION_TURN_AGENT_ID
 from zeta.records.events import DraftEvent, Event
 from zeta.records.stores import EventReader, EventStoreProtocol, Filter
 from zeta.rpc.jsonrpc import JsonRpcConnection, JsonRpcRouter, RpcError

@@ -7,6 +7,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from typing import Any, Literal
 
+from zeta.agents.capabilities import AgentConfig
 from zeta.capabilities.types import ExecutionMode
 from zeta.records.events import DraftEvent, Event, user_message_draft
 from zeta.records.provenance import event_timeline_type, project_trace_events
@@ -19,7 +20,6 @@ from zeta.run.runtime import (
     run_agent,
 )
 from zeta.run.threads import SessionScope
-from zeta.runtime.config import session_agent_config
 
 RuntimePublishedEvent = Event
 
@@ -173,11 +173,18 @@ async def run_session_turn(
         result = await run_agent(
             request.objective,
             prior_timeline,
-            session_agent_config(
-                request,
-                enabled_capabilities=enabled_capabilities,
+            AgentConfig(
+                system_prompt=request.system,
+                allowed_capabilities=enabled_capabilities,
+                max_turns=request.max_steps,
+                stop_on_staged_effect=True,
                 execution_mode=execution_mode,
-                session_id=runtime_context.session_id,
+                model_name=request.model,
+                model_url=request.url,
+                model_session_id=runtime_context.session_id,
+                thinking=request.thinking,
+                model_api=request.api,
+                max_wall_seconds=request.max_wall_seconds,
             ),
             context=request.context,
             event_sink=sink,

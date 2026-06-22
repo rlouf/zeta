@@ -1,4 +1,4 @@
-"""Event-triggered session-turn adapter."""
+"""Event-triggered session-turn agent."""
 
 from __future__ import annotations
 

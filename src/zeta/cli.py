@@ -9,10 +9,11 @@ from typing import Any
 
 import click
 
+from zeta import process
+from zeta.orchestration import worker
 from zeta.records.events import Event
 from zeta.records.stores import Filter, SqliteEventStore, event_store_path
 from zeta.rpc import run_stdio
-from zeta.runtime import local as runtime_local
 
 QUEUE_STATUS_ORDER = (
     "pending",
@@ -232,15 +233,13 @@ def events(
 def run(project_root: Path, state_dir: Path | None, once: bool) -> int:
     """Run the local runtime worker."""
 
-    runtime = runtime_local.build_runtime(
-        project_root=project_root, state_dir=state_dir
-    )
+    runtime = process.build_runtime(project_root=project_root, state_dir=state_dir)
     try:
         if once:
-            message = asyncio.run(runtime_local.run_once(runtime))
+            message = asyncio.run(worker.run_once(runtime))
             click.echo(message)
         else:
-            asyncio.run(runtime_local.run_forever(runtime))
+            asyncio.run(worker.run_forever(runtime))
     finally:
         runtime.close()
     return 0

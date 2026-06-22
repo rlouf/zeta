@@ -31,8 +31,8 @@ from click.testing import CliRunner
 
 from sigil.tools import ensure_builtin_tools_registered
 from zeta import cli as zeta_cli
-from zeta import execute as zeta_execute
 from zeta import models as zeta_models_api
+from zeta import process as zeta_process
 from zeta import rpc as zeta_rpc
 from zeta.agents.capabilities import CompactionPolicy
 from zeta.capabilities import execution as zeta_capability_execution
@@ -48,6 +48,9 @@ from zeta.context import builder as zeta_context
 from zeta.models import chat_completions as zeta_model
 from zeta.models import types as zeta_model_shapes
 from zeta.orchestration import dispatch as zeta_dispatch
+from zeta.orchestration import scheduling as zeta_scheduling
+from zeta.orchestration import session_turn_agent as zeta_session_turn_agent
+from zeta.orchestration import worker as zeta_worker
 from zeta.orchestration.attempts import Attempt
 from zeta.orchestration.queue import QueueItem
 from zeta.records import events as zeta_event_model
@@ -63,7 +66,6 @@ from zeta.run import runtime as zeta_agent
 from zeta.run import thread_run as zeta_requests
 from zeta.run import threads as zeta_scope
 from zeta.run.runtime import AgentRunResult
-from zeta.runtime import local as zeta_runtime_local
 
 zeta_trace = SimpleNamespace(InMemoryStore=InMemoryStore)
 
@@ -136,7 +138,7 @@ def run_rpc_session(*args: Any, **kwargs: Any) -> dict[str, Any]:
         event_dispatcher = zeta_dispatch.EventDispatcher(
             runtime_context.event_sink,
             executors=[
-                zeta_execute.session_turn_agent(
+                zeta_session_turn_agent.session_turn_agent(
                     runtime_context,
                     publish_event=kwargs["publish_event"],
                 )
@@ -144,7 +146,7 @@ def run_rpc_session(*args: Any, **kwargs: Any) -> dict[str, Any]:
             publish_event=kwargs["publish_event"],
         )
     return asyncio.run(
-        zeta_execute.submit_session_turn(
+        zeta_session_turn_agent.submit_session_turn(
             params,
             runtime_context=runtime_context,
             event_dispatcher=event_dispatcher,
@@ -1976,9 +1978,11 @@ def test_zeta_session_turn_agent_adapts_requested_event_to_turn_runner(
         return {"run_id": run_id, "outcome": "completed"}
 
     cancellation_event = asyncio.Event()
-    monkeypatch.setattr(zeta_execute, "run_session_turn", fake_run_session_turn)
+    monkeypatch.setattr(
+        zeta_session_turn_agent, "run_session_turn", fake_run_session_turn
+    )
 
-    agent = zeta_execute.session_turn_agent(
+    agent = zeta_session_turn_agent.session_turn_agent(
         context,
         publish_event=published.append,
         cancellation_event_for_run=lambda run_id: (
@@ -3588,7 +3592,7 @@ def test_zeta_cli_run_once_routes_unhandled_event(tmp_path: Path) -> None:
 
 
 def test_zeta_local_runtime_builds_project_services(tmp_path: Path) -> None:
-    runtime = zeta_runtime_local.build_runtime(project_root=tmp_path)
+    runtime = zeta_process.build_runtime(project_root=tmp_path)
 
     try:
         assert runtime.project_root == tmp_path.resolve()
@@ -3637,11 +3641,11 @@ Triage the issue.
 """,
         encoding="utf-8",
     )
-    monkeypatch.setattr(zeta_runtime_local, "compile_agent_definitions", compile_agents)
-    runtime = zeta_runtime_local.build_runtime(project_root=tmp_path)
+    monkeypatch.setattr(zeta_process, "compile_agent_definitions", compile_agents)
+    runtime = zeta_process.build_runtime(project_root=tmp_path)
 
     try:
-        message = asyncio.run(zeta_runtime_local.run_once(runtime))
+        message = asyncio.run(zeta_worker.run_once(runtime))
         snapshots = zeta_dispatch.queue_item_snapshots(
             event_store.list_events(zeta_events.Filter())
         )
@@ -3703,17 +3707,17 @@ def test_zeta_local_runtime_heartbeats_running_attempt(
         ),
         run=run_agent,
     )
-    runtime = zeta_runtime_local.RuntimeServices(
+    runtime = zeta_worker.RuntimeServices(
         project_root=tmp_path,
         state_dir=tmp_path,
         events=event_store,
         specs=(),
         executors=(agent,),
     )
-    monkeypatch.setattr(zeta_runtime_local, "ATTEMPT_HEARTBEAT_INTERVAL_SECONDS", 0.01)
-    monkeypatch.setattr(zeta_runtime_local, "QUEUE_LEASE_MS", 1_000)
+    monkeypatch.setattr(zeta_worker, "ATTEMPT_HEARTBEAT_INTERVAL_SECONDS", 0.01)
+    monkeypatch.setattr(zeta_worker, "QUEUE_LEASE_MS", 1_000)
 
-    message = asyncio.run(zeta_runtime_local.run_once(runtime))
+    message = asyncio.run(zeta_worker.run_once(runtime))
     attempt = event_store.list_attempts()[0]
     queue_item = event_store.list_queue_items()[0]
 
@@ -3753,7 +3757,7 @@ def test_zeta_local_runtime_run_once_skips_leased_queue_item(tmp_path: Path) -> 
         lease_ms=60_000,
         now_ms=accepted.timestamp_ms + 1_000,
     )
-    runtime = zeta_runtime_local.RuntimeServices(
+    runtime = zeta_worker.RuntimeServices(
         project_root=tmp_path,
         state_dir=tmp_path,
         events=event_store,
@@ -3761,7 +3765,7 @@ def test_zeta_local_runtime_run_once_skips_leased_queue_item(tmp_path: Path) -> 
         executors=(agent,),
     )
 
-    message = asyncio.run(zeta_runtime_local.run_once(runtime))
+    message = asyncio.run(zeta_worker.run_once(runtime))
     queue_row = event_store.connection.execute(
         "SELECT status, claimed_by FROM queue_items WHERE queue_item_id = ?",
         (queue_item_id,),
@@ -3803,7 +3807,7 @@ def test_zeta_local_runtime_run_once_releases_claim_when_lock_is_busy(
         lease_ms=60_000,
         now_ms=accepted.timestamp_ms + 1_000,
     )
-    runtime = zeta_runtime_local.RuntimeServices(
+    runtime = zeta_worker.RuntimeServices(
         project_root=tmp_path,
         state_dir=tmp_path,
         events=event_store,
@@ -3811,7 +3815,7 @@ def test_zeta_local_runtime_run_once_releases_claim_when_lock_is_busy(
         executors=(agent,),
     )
 
-    message = asyncio.run(zeta_runtime_local.run_once(runtime))
+    message = asyncio.run(zeta_worker.run_once(runtime))
     queue_row = event_store.connection.execute(
         "SELECT status, claimed_by FROM queue_items WHERE queue_item_id = ?",
         (f"qi_{accepted.id}_issue-triage",),
@@ -3875,9 +3879,9 @@ def test_zeta_local_runtime_run_once_skips_lock_busy_item_and_runs_next(
         ["context:repo"],
         "worker-a",
         lease_ms=60_000,
-        now_ms=zeta_runtime_local.runtime_time_ms(),
+        now_ms=zeta_worker.runtime_time_ms(),
     )
-    runtime = zeta_runtime_local.RuntimeServices(
+    runtime = zeta_worker.RuntimeServices(
         project_root=tmp_path,
         state_dir=tmp_path,
         events=event_store,
@@ -3885,7 +3889,7 @@ def test_zeta_local_runtime_run_once_skips_lock_busy_item_and_runs_next(
         executors=(locked_agent, free_agent),
     )
 
-    message = asyncio.run(zeta_runtime_local.run_once(runtime))
+    message = asyncio.run(zeta_worker.run_once(runtime))
     queue_rows = {
         row["queue_item_id"]: row
         for row in event_store.connection.execute(
@@ -3941,7 +3945,7 @@ def test_zeta_local_runtime_run_once_fans_out_pending_queue_item(
             run=run_agent,
         ),
     )
-    runtime = zeta_runtime_local.RuntimeServices(
+    runtime = zeta_worker.RuntimeServices(
         project_root=tmp_path,
         state_dir=tmp_path,
         events=event_store,
@@ -3949,7 +3953,7 @@ def test_zeta_local_runtime_run_once_fans_out_pending_queue_item(
         executors=agents,
     )
 
-    message = asyncio.run(zeta_runtime_local.run_once(runtime))
+    message = asyncio.run(zeta_worker.run_once(runtime))
     snapshots = zeta_dispatch.queue_item_snapshots(
         event_store.list_events(zeta_events.Filter())
     )
@@ -3986,7 +3990,7 @@ def test_zeta_local_runtime_run_once_handles_eventlog_rpc_request(
             session_id="ctx-session",
         )
     ).event
-    runtime = zeta_runtime_local.RuntimeServices(
+    runtime = zeta_worker.RuntimeServices(
         project_root=tmp_path,
         state_dir=tmp_path,
         events=event_store,
@@ -3994,7 +3998,7 @@ def test_zeta_local_runtime_run_once_handles_eventlog_rpc_request(
         executors=(),
     )
 
-    message = asyncio.run(zeta_runtime_local.run_once(runtime))
+    message = asyncio.run(zeta_worker.run_once(runtime))
     response = event_store.children(request.id)[0]
 
     assert message == f"rpc {request.id}"
@@ -4018,7 +4022,7 @@ def test_zeta_local_runtime_cron_matcher_supports_basic_v0_shapes(
     expected: bool,
 ) -> None:
     assert (
-        zeta_runtime_local.cron_matches(
+        zeta_scheduling.cron_matches(
             cron,
             datetime(2026, 6, 22, 12, 34, tzinfo=UTC),
         )
@@ -4047,15 +4051,17 @@ Summarize the repo.
 """,
         encoding="utf-8",
     )
-    runtime = zeta_runtime_local.build_runtime(project_root=tmp_path)
+    runtime = zeta_process.build_runtime(project_root=tmp_path)
 
     try:
-        first = zeta_runtime_local.emit_due_schedules(
-            runtime,
+        first = zeta_scheduling.emit_due_schedules(
+            runtime.events,
+            runtime.specs,
             now=datetime(2026, 6, 22, 12, 34, 56, tzinfo=UTC),
         )
-        second = zeta_runtime_local.emit_due_schedules(
-            runtime,
+        second = zeta_scheduling.emit_due_schedules(
+            runtime.events,
+            runtime.specs,
             now=datetime(2026, 6, 22, 12, 34, 59, tzinfo=UTC),
         )
         events = runtime.events.list_events(zeta_events.Filter())
@@ -4087,11 +4093,12 @@ Summarize the repo.
 """,
         encoding="utf-8",
     )
-    runtime = zeta_runtime_local.build_runtime(project_root=tmp_path)
+    runtime = zeta_process.build_runtime(project_root=tmp_path)
 
     try:
-        emitted = zeta_runtime_local.emit_due_schedules(
-            runtime,
+        emitted = zeta_scheduling.emit_due_schedules(
+            runtime.events,
+            runtime.specs,
             now=datetime(2026, 6, 22, 12, 34, 56, tzinfo=UTC),
         )
     finally:
@@ -4145,16 +4152,16 @@ Summarize the repo.
 """,
         encoding="utf-8",
     )
-    monkeypatch.setattr(zeta_runtime_local, "compile_agent_definitions", compile_agents)
+    monkeypatch.setattr(zeta_process, "compile_agent_definitions", compile_agents)
     monkeypatch.setattr(
-        zeta_runtime_local,
+        zeta_scheduling,
         "utc_now",
         lambda: datetime(2026, 6, 22, 12, 34, tzinfo=UTC),
     )
-    runtime = zeta_runtime_local.build_runtime(project_root=tmp_path)
+    runtime = zeta_process.build_runtime(project_root=tmp_path)
 
     try:
-        message = asyncio.run(zeta_runtime_local.run_once(runtime))
+        message = asyncio.run(zeta_worker.run_once(runtime))
         snapshots = zeta_dispatch.queue_item_snapshots(
             runtime.events.list_events(zeta_events.Filter())
         )
@@ -4213,13 +4220,13 @@ Triage the issue.
             encoding="utf-8",
         )
         monkeypatch.setattr(
-            zeta_runtime_local,
+            zeta_process,
             "compile_agent_definitions",
             compile_agents,
         )
-        runtime = zeta_runtime_local.build_runtime(project_root=tmp_path)
+        runtime = zeta_process.build_runtime(project_root=tmp_path)
         try:
-            await zeta_runtime_local.run_forever(
+            await zeta_worker.run_forever(
                 runtime,
                 poll_interval_seconds=0,
                 stop_event=stop_event,
@@ -4266,7 +4273,7 @@ def test_zeta_local_runtime_run_forever_respects_max_concurrent(
             stop_event.set()
             return {"event_id": run.triggering_event.id}
 
-        runtime = zeta_runtime_local.RuntimeServices(
+        runtime = zeta_worker.RuntimeServices(
             project_root=tmp_path,
             state_dir=tmp_path,
             events=event_store,
@@ -4284,7 +4291,7 @@ def test_zeta_local_runtime_run_forever_respects_max_concurrent(
         )
 
         worker = asyncio.create_task(
-            zeta_runtime_local.run_forever(
+            zeta_worker.run_forever(
                 runtime,
                 poll_interval_seconds=0,
                 stop_event=stop_event,
@@ -4308,10 +4315,10 @@ def test_zeta_cli_run_forever_invokes_runtime_loop(
 ) -> None:
     captured: dict[str, Path] = {}
 
-    async def run_forever(runtime: zeta_runtime_local.RuntimeServices) -> None:
+    async def run_forever(runtime: zeta_worker.RuntimeServices) -> None:
         captured["project_root"] = runtime.project_root
 
-    monkeypatch.setattr(zeta_runtime_local, "run_forever", run_forever)
+    monkeypatch.setattr(zeta_worker, "run_forever", run_forever)
 
     result = CliRunner().invoke(
         zeta_cli.cli,
@@ -4362,7 +4369,7 @@ Triage {{ event.payload.title }}
 """,
         encoding="utf-8",
     )
-    monkeypatch.setattr(zeta_runtime_local, "compile_agent_definitions", compile_agents)
+    monkeypatch.setattr(zeta_process, "compile_agent_definitions", compile_agents)
 
     result = CliRunner().invoke(
         zeta_cli.cli,

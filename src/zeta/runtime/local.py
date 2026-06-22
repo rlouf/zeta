@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -144,3 +145,15 @@ async def run_once(runtime: RuntimeServices) -> str:
     queue_item = route.queue_items[0]
     await dispatcher.run_queue_item(queue_item)
     return f"ran {queue_item.queue_item_id}"
+
+
+async def run_forever(
+    runtime: RuntimeServices,
+    *,
+    poll_interval_seconds: float = 1.0,
+    stop_event: asyncio.Event | None = None,
+) -> None:
+    while stop_event is None or not stop_event.is_set():
+        outcome = await run_once(runtime)
+        if outcome == "queue empty":
+            await asyncio.sleep(poll_interval_seconds)

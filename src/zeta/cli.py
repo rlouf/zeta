@@ -241,16 +241,17 @@ def events(
 def run(project_root: Path, state_dir: Path | None, once: bool) -> int:
     """Run the local runtime worker."""
 
-    if not once:
-        raise click.UsageError("only --once is supported")
     runtime = runtime_local.build_runtime(
         project_root=project_root, state_dir=state_dir
     )
     try:
-        message = asyncio.run(runtime_local.run_once(runtime))
+        if once:
+            message = asyncio.run(runtime_local.run_once(runtime))
+            click.echo(message)
+        else:
+            asyncio.run(runtime_local.run_forever(runtime))
     finally:
         runtime.close()
-    click.echo(message)
     return 0
 
 

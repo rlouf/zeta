@@ -149,6 +149,10 @@ class CancellationToken(Protocol):
     def is_set(self) -> bool: ...
 
 
+class AbortReason(Protocol):
+    def __call__(self, *, check_deadline: bool = True) -> str | None: ...
+
+
 class ModelStream(Protocol):
     def content_delta(self, text: str) -> None: ...
 
@@ -174,10 +178,8 @@ class RunDependencies:
     trace_store: Store | None
     tool_registry: CapabilityRegistry
     builder: PromptBuilder
-    cancellation_event: CancellationToken | None
-    deadline: float | None
+    abort_reason: AbortReason
     model_gateway: ModelGateway = field(default_factory=DefaultModelGateway)
-    clock: Callable[[], float] = field(default_factory=lambda: time_monotonic)
 
 
 @dataclass(frozen=True)
@@ -230,10 +232,7 @@ class AgentRun:
             state=self.state,
             ctx=self.deps,
         )
-        if (
-            self.deps.cancellation_event is not None
-            and self.deps.cancellation_event.is_set()
-        ):
+        if self.deps.abort_reason(check_deadline=False) is not None:
             check_turn_budget(
                 self.state,
                 ctx=self.deps,
@@ -337,9 +336,7 @@ async def run_agent(
         tool_registry=active_tool_registry,
         builder=builder,
         model_gateway=gateway,
-        cancellation_event=cancellation_event,
-        deadline=deadline,
-        clock=clock,
+        abort_reason=run_abort_reason(cancellation_event, deadline, clock=clock),
     )
     projection = active_tool_registry.project(allowed_capabilities)
     tools = projection.descriptors
@@ -575,7 +572,7 @@ def check_turn_budget(
     raise_if_agent_turn_aborted(
         state,
         ctx=ctx,
-        deadline=ctx.deadline if check_deadline else None,
+        check_deadline=check_deadline,
     )
 
 
@@ -597,9 +594,9 @@ def raise_if_agent_turn_aborted(
     state: RunState,
     *,
     ctx: RunDependencies,
-    deadline: float | None,
+    check_deadline: bool,
 ) -> None:
-    reason = agent_abort_reason(ctx.cancellation_event, deadline, clock=ctx.clock)
+    reason = ctx.abort_reason(check_deadline=check_deadline)
     if reason is None:
         return
     state.note_step("abort_run")
@@ -631,6 +628,22 @@ def agent_abort_reason(
     if deadline is not None and clock() >= deadline:
         return "deadline_exceeded"
     return None
+
+
+def run_abort_reason(
+    cancellation_event: CancellationToken | None,
+    deadline: float | None,
+    *,
+    clock: Callable[[], float],
+) -> AbortReason:
+    def current_abort_reason(*, check_deadline: bool = True) -> str | None:
+        return agent_abort_reason(
+            cancellation_event,
+            deadline if check_deadline else None,
+            clock=clock,
+        )
+
+    return current_abort_reason
 
 
 def agent_model_endpoint_open(config: AgentConfig) -> bool:

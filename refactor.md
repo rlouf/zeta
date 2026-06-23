@@ -175,68 +175,6 @@ Target direction:
   they encode run event schema. Inline or move them if they are just local dict
   construction.
 
-### Context Components
-
-File: `src/zeta/context/components.py`
-
-Current names that look like projection/conversion points:
-
-- `prompt_components`
-- `timeline_message_components`
-- `non_message_components`
-- `chat_messages`
-- `component_messages`
-- `timeline_chat_message`
-- `role_or_event_chat_message`
-- `structured_*_event`
-
-Target direction:
-
-- Apply the convention where a function projects timeline records/events into
-  prompt components:
-  `timeline_message_components` could become
-  `project_timeline_message_components`.
-- Single-event/component helpers should follow `project_one_*` only when they
-  are actual projectors. For example, `role_or_event_chat_message` should become
-  a target-oriented name such as `project_one_chat_message` if it projects one
-  timeline entry into a chat message.
-
-### SQLite Store Projections
-
-File: `src/zeta/records/stores/sqlite.py`
-
-Current names:
-
-- `_project_session_mapping`
-- `_project_runtime_event`
-- `_project_queue_item_event`
-- `_project_attempt_event`
-- `_project_attempt_result`
-
-Target direction:
-
-- These are write-side index updates, not pure read-model projectors.
-- Rename them to make the target index explicit:
-  `_index_one_session_mapping`, `_index_one_queue_item`,
-  `_index_one_attempt`, `_index_one_attempt_result`.
-
-### Sigil Runtime Draft Projection
-
-File: `src/sigil/agent_io.py`
-
-Current names:
-
-- `project_trace_for_turn`
-- `project_runtime_draft`
-
-Target direction:
-
-- Rename `project_trace_for_turn` so the side effect is visible if it writes to
-  a store, for example `record_trace_for_turn` or `update_trace_for_turn`.
-- `project_runtime_draft` should be checked carefully. If it converts one draft
-  into a durable/user-facing draft, rename it to `project_one_runtime_draft` or
-  choose a more specific target noun.
-
 ### Capability Projection
 
 File: `src/zeta/capabilities/registry.py`
@@ -252,25 +190,6 @@ Current direction:
   ids, handles name overrides, detects ambiguous names, and builds provider
   descriptors. Rename it around the model-visible target or provider-schema
   target.
-
-### Context Compaction Projection Helpers
-
-File: `src/zeta/context/compaction/structural_trim.py`
-
-Current names:
-
-- `is_tool_result_projection`
-- `trimmed_message_projection`
-
-Target direction:
-
-- If they produce projected messages, use the convention:
-  `project_one_trimmed_message`.
-- `is_tool_result_projection` is an inspector, not a projector. Rename around
-  what it detects if the current word "projection" is misleading.
-- `structural_trim_payload` encodes trace/audit metadata for trimmed content,
-  so it may be worth keeping. The name should say it is trim metadata if that
-  is the policy being centralized.
 
 ### Project Directory Loading Conflict
 
@@ -366,11 +285,6 @@ Current direction:
 - `EventDispatcher.publish_event` accepts and publishes the event, but does not
   route it by itself. `publish_and_run` accepts, routes, and runs matching queue
   items.
-- Rename persistence functions that take an existing draft instead of creating
-  one:
-  `_record_runtime_draft` and `record_runtime_draft` should become names like
-  `record_runtime_event` or `accept_runtime_event_draft`.
-- Delete `project_runtime_draft`; it is currently an identity function.
 - Keep RPC draft constructors separate from dispatch:
   `rpc_requested_draft`, `rpc_responded_draft`, and `rpc_failed_draft`
   construct wire/protocol lifecycle drafts; route handlers decide whether to
@@ -432,9 +346,6 @@ Current direction:
 - `optional_string`, `event_id_value`, `handoff_event_payload`,
   `handoff_event_time`, and `handoff_event_turn_id` look like field-access
   helpers. Inline them unless repeated validation pressure justifies them.
-- `project_runtime_draft` should be rechecked against the naming convention. If
-  it only tags or converts one draft, either rename it to the target it produces
-  or inline it at the caller.
 
 ### Sigil Status And Trace Rows
 

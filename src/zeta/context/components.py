@@ -62,21 +62,6 @@ class PromptComponent:
     links: tuple[ObjectId, ...] = ()
     object_id: ObjectId | None = None
 
-    def message_payload(self) -> dict[str, Any] | None:
-        return self.message
-
-    def object_data(self) -> dict[str, Any]:
-        data = dict(self.data)
-        if self.message is not None and "message" not in data:
-            data["message"] = self.message
-        data["representation"] = self.representation
-        if self.source_object_id is not None:
-            data["source_object_id"] = self.source_object_id
-        return data
-
-    def object_links(self) -> tuple[ObjectId, ...]:
-        return self.links
-
 
 @dataclass(frozen=True)
 class ChatMessageEntry:
@@ -155,7 +140,11 @@ def _chat_message_entries(
         )
         if message is not None:
             entries.append(ChatMessageEntry(index, event, message))
-            record_tool_call_ids(message, tool_call_ids)
+            tool_calls = message.get("tool_calls")
+            if isinstance(tool_calls, list):
+                for call in tool_calls:
+                    if isinstance(call, dict):
+                        tool_call_ids.add(str(call.get("id") or ""))
     return entries
 
 
@@ -290,18 +279,6 @@ def has_unanswered_tool_call(
         if isinstance(call, dict) and call.get("id")
     ]
     return any(call_id not in answered_call_ids for call_id in call_ids)
-
-
-def record_tool_call_ids(
-    message: dict[str, Any],
-    tool_call_ids: set[str],
-) -> None:
-    tool_calls = message.get("tool_calls")
-    if not isinstance(tool_calls, list):
-        return
-    for call in tool_calls:
-        if isinstance(call, dict):
-            tool_call_ids.add(str(call.get("id") or ""))
 
 
 def tool_call_message(
@@ -454,9 +431,14 @@ def project_timeline_message_components(
         tool_name = (
             tool_call_names.get(str(entry.event.get("tool_call_id") or "")) or ""
         )
+        kind = "user_message"
+        if entry.message.get("role") == "tool":
+            kind = "tool_result"
+        elif entry.message.get("role") == "assistant":
+            kind = "assistant_message"
         components.append(
             PromptComponent(
-                kind=message_component_kind(entry.message),
+                kind=kind,
                 data=timeline_message_component_data(
                     message_index,
                     entry,
@@ -467,7 +449,17 @@ def project_timeline_message_components(
                 links=timeline_message_component_links(entry.event),
             )
         )
-        record_tool_call_names(entry.message, tool_call_names)
+        tool_calls = entry.message.get("tool_calls")
+        if not isinstance(tool_calls, list):
+            continue
+        for call in tool_calls:
+            if not isinstance(call, dict):
+                continue
+            call_id = str(call.get("id") or "")
+            function = call.get("function")
+            name = function.get("name") if isinstance(function, dict) else None
+            if call_id and isinstance(name, str) and name:
+                tool_call_names[call_id] = name
     return components
 
 
@@ -478,7 +470,7 @@ def timeline_message_component_data(
     tool_name: str = "",
     historical: bool = False,
 ) -> dict[str, Any]:
-    data = {
+    data: dict[str, Any] = {
         "index": message_index,
         "event_index": entry.event_index,
         "message": entry.message,
@@ -487,116 +479,63 @@ def timeline_message_component_data(
     }
     if historical:
         data["historical"] = True
+    data.update(timeline_message_source_fields(entry.event, tool_name=tool_name))
+    return data
+
+
+def timeline_message_source_fields(
+    event: dict[str, Any],
+    *,
+    tool_name: str = "",
+) -> dict[str, Any]:
+    data: dict[str, Any] = {}
     if tool_name:
         data["source_tool_name"] = tool_name
-    source_event_value = _source_event_metadata(entry.event, tool_name=tool_name)
-    if source_event_value:
-        data["source_event"] = source_event_value
+    event_type = str(event.get("type") or "")
+    if event_type == "tool_result":
+        data["source_tool_call_id"] = str(event.get("tool_call_id") or "")
+        result = event.get("result")
+        if isinstance(result, dict):
+            data["source_tool_result"] = result
+        data.update(
+            {
+                f"source_{field_name}": object_id
+                for field_name in ("tool_result_object_id", "tool_call_object_id")
+                if (object_id := event.get(field_name)) is not None
+            }
+        )
+    elif event_type == "tool_call":
+        data["source_tool_call_id"] = str(
+            event.get("tool_call_id") or event.get("id") or ""
+        )
+        data["source_tool_name"] = str(event.get("name") or "")
+        tool_input = event.get("input")
+        data["source_tool_input"] = tool_input if isinstance(tool_input, dict) else {}
+        object_id = event.get("tool_call_object_id")
+        if object_id is not None:
+            data["source_tool_call_object_id"] = object_id
+    elif event_type == "model" and isinstance(event.get("tool_calls"), list):
+        data["source_model_tool_calls"] = event.get("tool_calls") or []
+        prompt_trace = event.get("prompt_trace")
+        if isinstance(prompt_trace, dict):
+            object_id = prompt_trace.get("assistant_message_object_id")
+            if object_id is not None:
+                data["source_assistant_message_object_id"] = object_id
     return data
 
 
 def timeline_message_component_links(event: dict[str, Any]) -> tuple[ObjectId, ...]:
     links: list[ObjectId] = []
-    add_event_link(links, assistant_message_object_id(event))
-    for trace_field in ("tool_result_object_id", "tool_call_object_id"):
-        add_event_link(links, event.get(trace_field))
-    return tuple(links)
-
-
-def add_event_link(links: list[ObjectId], object_id: ObjectId | None) -> None:
-    if object_id and object_id not in links:
-        links.append(object_id)
-
-
-def assistant_message_object_id(event: dict[str, Any]) -> ObjectId | None:
     prompt_trace = event.get("prompt_trace")
-    if not isinstance(prompt_trace, dict):
-        return None
-    return prompt_trace.get("assistant_message_object_id")
-
-
-def record_tool_call_names(
-    message: dict[str, Any],
-    tool_call_names: dict[str, str],
-) -> None:
-    tool_calls = message.get("tool_calls")
-    if not isinstance(tool_calls, list):
-        return
-    for call in tool_calls:
-        if not isinstance(call, dict):
-            continue
-        call_id = str(call.get("id") or "")
-        function = call.get("function")
-        name = function.get("name") if isinstance(function, dict) else None
-        if call_id and isinstance(name, str) and name:
-            tool_call_names[call_id] = name
-
-
-def _source_event_metadata(
-    event: dict[str, Any],
-    *,
-    tool_name: str = "",
-) -> dict[str, Any]:
-    event_type = str(event.get("type") or "")
-    if event_type == "tool_result":
-        return _tool_result_source_event_metadata(event, tool_name=tool_name)
-    if event_type == "tool_call":
-        return _tool_call_source_event_metadata(event)
-    if event_type == "model" and isinstance(event.get("tool_calls"), list):
-        return _model_source_event_metadata(event)
-    return {}
-
-
-def _tool_result_source_event_metadata(
-    event: dict[str, Any],
-    *,
-    tool_name: str = "",
-) -> dict[str, Any]:
-    data: dict[str, Any] = {
-        "type": "tool_result",
-        "tool_call_id": str(event.get("tool_call_id") or ""),
-    }
-    add_trace_object_field(data, event, "tool_result_object_id")
-    add_trace_object_field(data, event, "tool_call_object_id")
-    if tool_name:
-        data["tool_name"] = tool_name
-    result = event.get("result")
-    if isinstance(result, dict):
-        data["result"] = result
-    return data
-
-
-def _tool_call_source_event_metadata(event: dict[str, Any]) -> dict[str, Any]:
-    data = {
-        "type": "tool_call",
-        "id": str(event.get("id") or ""),
-        "tool_call_id": str(event.get("tool_call_id") or ""),
-        "name": str(event.get("name") or ""),
-        "input": event.get("input") if isinstance(event.get("input"), dict) else {},
-    }
-    add_trace_object_field(data, event, "tool_call_object_id")
-    return data
-
-
-def _model_source_event_metadata(event: dict[str, Any]) -> dict[str, Any]:
-    data = {
-        "type": "model",
-        "tool_calls": event.get("tool_calls") or [],
-    }
-    object_id = assistant_message_object_id(event)
-    if object_id is not None:
-        data["assistant_message_object_id"] = object_id
-    return data
-
-
-def add_trace_object_field(
-    data: dict[str, Any],
-    event: dict[str, Any],
-    field_name: str,
-) -> None:
-    object_id = event.get(field_name)
-    if object_id is not None:
-        data[field_name] = object_id
+    if isinstance(prompt_trace, dict):
+        object_id = prompt_trace.get("assistant_message_object_id")
+        if object_id:
+            links.append(object_id)
+    for trace_field in ("tool_result_object_id", "tool_call_object_id"):
+        object_id = event.get(trace_field)
+        if object_id and object_id not in links:
+            links.append(object_id)
+    return tuple(links)
 
 
 def non_message_components(
@@ -633,26 +572,24 @@ def non_message_components(
     return components
 
 
-def message_component_kind(message: dict[str, Any]) -> str:
-    if message.get("role") == "tool":
-        return "tool_result"
-    if message.get("role") == "assistant":
-        return "assistant_message"
-    return "user_message"
-
-
 def component_messages(components: list[PromptComponent]) -> list[dict[str, Any]]:
     return [
         message
         for component in components
-        if (message := component.message_payload()) is not None
+        if (message := component.message) is not None
     ]
 
 
 def prompt_component_object(component: PromptComponent) -> Object:
+    data = dict(component.data)
+    if component.message is not None and "message" not in data:
+        data["message"] = component.message
+    data["representation"] = component.representation
+    if component.source_object_id is not None:
+        data["source_object_id"] = component.source_object_id
     return Object(
         kind=component.kind,
         schema="zeta.prompt_component.v1",
-        data=component.object_data(),
-        links=component.object_links(),
+        data=data,
+        links=component.links,
     )

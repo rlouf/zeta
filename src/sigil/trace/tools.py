@@ -88,11 +88,13 @@ def tool_call_rows(
     results = tool_result_records_by_call_id(store)
     rows: list[dict[str, Any]] = []
     for call_object_id, call in store.objects(("tool_call",), 10_000):
+        call_data = call.data if isinstance(call.data, dict) else {}
+        call_id = str(call_data.get("tool_call_id") or "")
         row = tool_call_row_from_objects(
             session=session,
             call_object_id=call_object_id,
-            call=call,
-            result_record=results.get(tool_call_id_from_object(call)),
+            call_data=call_data,
+            result_record=results.get(call_id),
         )
         row["created_at"] = tool_row_created_at(
             store,
@@ -114,7 +116,8 @@ def tool_result_records_by_call_id(
 ) -> dict[str, tuple[ObjectId, Object]]:
     results: dict[str, tuple[ObjectId, Object]] = {}
     for result_object_id, result in store.objects(("tool_result",), 10_000):
-        call_id = tool_call_id_from_object(result)
+        data = result.data if isinstance(result.data, dict) else {}
+        call_id = str(data.get("tool_call_id") or "")
         if call_id and call_id not in results:
             results[call_id] = (result_object_id, result)
     return results
@@ -124,10 +127,9 @@ def tool_call_row_from_objects(
     *,
     session: str | None,
     call_object_id: ObjectId,
-    call: Object,
+    call_data: dict[str, Any],
     result_record: tuple[ObjectId, Object] | None,
 ) -> dict[str, Any]:
-    call_data = call.data if isinstance(call.data, dict) else {}
     result_object_id: ObjectId | None = None
     result_data: dict[str, Any] = {}
     result_payload: dict[str, Any] | None = None
@@ -136,34 +138,10 @@ def tool_call_row_from_objects(
         result_data = result.data if isinstance(result.data, dict) else {}
         payload = result_data.get("result")
         result_payload = payload if isinstance(payload, dict) else None
-    row = tool_call_row_from_call_object(
-        session=session,
-        call_object_id=call_object_id,
-        call=call,
-        call_data=call_data,
-        result_object_id=result_object_id,
-        result_payload=result_payload,
-        name=str(result_data.get("name") or call_data.get("name") or ""),
-    )
-    if result_payload is not None:
-        attach_tool_result(row, result_payload)
-    return row
-
-
-def tool_call_row_from_call_object(
-    *,
-    session: str | None,
-    call_object_id: ObjectId,
-    call: Object,
-    call_data: dict[str, Any],
-    result_object_id: ObjectId | None,
-    result_payload: dict[str, Any] | None,
-    name: str,
-) -> dict[str, Any]:
-    return {
+    row = {
         "session": session,
-        "tool_call_id": tool_call_id_from_object(call),
-        "name": name,
+        "tool_call_id": str(call_data.get("tool_call_id") or ""),
+        "name": str(result_data.get("name") or call_data.get("name") or ""),
         "input": call_data.get("input")
         if isinstance(call_data.get("input"), dict)
         else {},
@@ -171,17 +149,14 @@ def tool_call_row_from_call_object(
         "tool_call_object_id": call_object_id,
         "tool_result_object_id": result_object_id,
     }
-
-
-def attach_tool_result(row: dict[str, Any], result_payload: dict[str, Any]) -> None:
-    row["result"] = result_payload
-    error = result_payload.get("error")
-    if isinstance(error, dict):
-        row["error"] = error
-        return
-    recovered_error = recovered_tool_error(row)
-    if recovered_error is not None:
-        row["error"] = recovered_error
+    if result_payload is not None:
+        row["result"] = result_payload
+        error = result_payload.get("error")
+        if isinstance(error, dict):
+            row["error"] = error
+        elif (recovered_error := recovered_tool_error(row)) is not None:
+            row["error"] = recovered_error
+    return row
 
 
 def recovered_tool_error(row: dict[str, Any]) -> dict[str, str] | None:
@@ -204,11 +179,6 @@ def recovered_tool_error(row: dict[str, Any]) -> dict[str, str] | None:
         "code": f"{name or 'tool'}-failed",
         "message": message,
     }
-
-
-def tool_call_id_from_object(obj: Object) -> str:
-    data = obj.data if isinstance(obj.data, dict) else {}
-    return str(data.get("tool_call_id") or "")
 
 
 def tool_row_created_at(

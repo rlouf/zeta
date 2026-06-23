@@ -216,7 +216,12 @@ def transcript_assistant_block(
         renderables.append(Markdown(reasoning, style="italic magenta"))
     content = str(event.get("content") or "")
     if content:
-        prompt_id = transcript_prompt_id(event)
+        prompt_id = ""
+        prompt_trace = event.get("prompt_trace")
+        if isinstance(prompt_trace, dict):
+            object_id = str(prompt_trace.get("prompt_object_id") or "")
+            if object_id:
+                prompt_id = short_trace_id(object_id)
         renderables.append(
             Panel(
                 Markdown(content),
@@ -317,11 +322,3 @@ def transcript_tool_result_lines(event: dict[str, Any]) -> list[Any]:
     if not lines:
         return []
     return [Text("\n".join(f"  {line}" for line in lines), style="dim")]
-
-
-def transcript_prompt_id(event: dict[str, Any]) -> str:
-    prompt_trace = event.get("prompt_trace")
-    if not isinstance(prompt_trace, dict):
-        return ""
-    object_id = str(prompt_trace.get("prompt_object_id") or "")
-    return short_trace_id(object_id) if object_id else ""

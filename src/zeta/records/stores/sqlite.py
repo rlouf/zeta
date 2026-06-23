@@ -11,8 +11,10 @@ import sqlite3
 import time
 from collections.abc import Iterable
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
+from zeta.orchestration.attempts import Attempt, AttemptStatus
+from zeta.orchestration.queue import pending_queue_item_id, project_one_queue_item
 from zeta.records.events import AppendOutcome, DraftEvent, Event, json_native_payload
 from zeta.records.stores._object_sqlite import (
     DEFAULT_SQLITE_NAME,
@@ -468,12 +470,11 @@ class SqliteEventStore:
         return cursor.rowcount == 1
 
     def _index_one_queue_item(self, event: Event) -> None:
-        queue_item_id = _payload_str(event, "queue_item_id")
-        event_id = _payload_str(event, "event_id")
-        target_agent = _payload_str(event, "target_agent")
-        if queue_item_id is None or event_id is None or target_agent is None:
+        queue_item = project_one_queue_item(event)
+        if queue_item is None:
             return
-        status = _runtime_status(event)
+        raw_error = event.payload.get("error")
+        error = raw_error if isinstance(raw_error, str) else None
         self.connection.execute(
             """
             INSERT INTO queue_items
@@ -489,33 +490,58 @@ class SqliteEventStore:
               updated_at = excluded.updated_at
             """,
             (
-                queue_item_id,
-                event_id,
-                target_agent,
-                status,
-                event.timestamp_ms if status == "available" else None,
-                _payload_str(event, "error"),
+                queue_item.queue_item_id,
+                queue_item.event_id,
+                queue_item.target_agent,
+                queue_item.status,
+                event.timestamp_ms if queue_item.status == "available" else None,
+                error,
                 event.timestamp_ms,
             ),
         )
 
     def _index_one_attempt(self, event: Event) -> None:
-        attempt_id = _payload_str(event, "attempt_id")
-        queue_item_id = _payload_str(event, "queue_item_id")
-        event_id = _payload_str(event, "event_id")
-        target_agent = _payload_str(event, "target_agent")
-        started_at = _payload_str(event, "started_at")
-        attempt_number = _payload_int(event, "attempt_number")
+        raw_attempt_id = event.payload.get("attempt_id")
+        raw_queue_item_id = event.payload.get("queue_item_id")
+        raw_event_id = event.payload.get("event_id")
+        raw_target_agent = event.payload.get("target_agent")
+        raw_started_at = event.payload.get("started_at")
+        raw_attempt_number = event.payload.get("attempt_number")
         if (
-            attempt_id is None
-            or queue_item_id is None
-            or event_id is None
-            or target_agent is None
-            or started_at is None
-            or attempt_number is None
+            not isinstance(raw_attempt_id, str)
+            or not isinstance(raw_queue_item_id, str)
+            or not isinstance(raw_event_id, str)
+            or not isinstance(raw_target_agent, str)
+            or not isinstance(raw_started_at, str)
+            or not isinstance(raw_attempt_number, int)
         ):
             return
-        status = _runtime_status(event)
+        status = cast("AttemptStatus", _runtime_status(event))
+        raw_finished_at = event.payload.get("finished_at")
+        raw_error = event.payload.get("error")
+        attempt = Attempt(
+            attempt_id=raw_attempt_id,
+            queue_item_id=raw_queue_item_id,
+            event_id=raw_event_id,
+            attempt_number=raw_attempt_number,
+            target_agent=raw_target_agent,
+            status=status,
+            started_at=raw_started_at,
+            finished_at=raw_finished_at if isinstance(raw_finished_at, str) else None,
+            error=raw_error if isinstance(raw_error, str) else None,
+            session_id=event.session_id,
+            run_id=event.run_id,
+        )
+        raw_worker_name = event.payload.get("worker_name")
+        worker_name = raw_worker_name if isinstance(raw_worker_name, str) else None
+        raw_summary = event.payload.get("summary")
+        summary = raw_summary if isinstance(raw_summary, str) else None
+        raw_tool_calls = event.payload.get("tool_calls")
+        tool_calls_json = (
+            json.dumps(raw_tool_calls, ensure_ascii=False, separators=(",", ":"))
+            if raw_tool_calls is not None
+            else None
+        )
         self.connection.execute(
             """
             INSERT INTO attempts
@@ -537,26 +563,26 @@ class SqliteEventStore:
               tool_calls_json = excluded.tool_calls_json
             """,
             (
-                attempt_id,
-                queue_item_id,
-                event_id,
-                attempt_number,
-                target_agent,
-                _payload_str(event, "worker_name"),
-                status,
-                started_at,
+                attempt.attempt_id,
+                attempt.queue_item_id,
+                attempt.event_id,
+                attempt.attempt_number,
+                attempt.target_agent,
+                worker_name,
+                attempt.status,
+                attempt.started_at,
                 event.timestamp_ms,
-                _payload_str(event, "finished_at"),
-                _payload_str(event, "error"),
-                event.session_id,
-                event.run_id,
-                _payload_str(event, "summary"),
+                attempt.finished_at,
+                attempt.error,
+                attempt.session_id,
+                attempt.run_id,
+                summary,
                 _usage_token(event, "input_tokens", "prompt_tokens"),
                 _usage_token(event, "output_tokens", "completion_tokens"),
-                _payload_json(event, "tool_calls"),
+                tool_calls_json,
             ),
         )
-        if status == "running":
+        if attempt.status == "running":
             self.connection.execute(
                 """
                 UPDATE queue_items
@@ -566,10 +592,14 @@ class SqliteEventStore:
                 END
                 WHERE queue_item_id = ?
                 """,
-                (attempt_number, attempt_number, queue_item_id),
+                (
+                    attempt.attempt_number,
+                    attempt.attempt_number,
+                    attempt.queue_item_id,
+                ),
             )
-        if status in {"completed", "failed", "cancelled"}:
-            self._index_one_attempt_result(event, attempt_id, status)
+        if attempt.status in {"completed", "failed", "cancelled"}:
+            self._index_one_attempt_result(event, attempt.attempt_id, attempt.status)
 
     def _index_one_attempt_result(
         self,
@@ -581,6 +611,28 @@ class SqliteEventStore:
         result_json = None
         if result is not None:
             result_json = json.dumps(result, ensure_ascii=False, separators=(",", ":"))
+        raw_summary = event.payload.get("summary")
+        summary = raw_summary if isinstance(raw_summary, str) else None
+        raw_events = event.payload.get("events")
+        events_json = (
+            json.dumps(raw_events, ensure_ascii=False, separators=(",", ":"))
+            if raw_events is not None
+            else None
+        )
+        raw_tool_calls = event.payload.get("tool_calls")
+        tool_calls_json = (
+            json.dumps(raw_tool_calls, ensure_ascii=False, separators=(",", ":"))
+            if raw_tool_calls is not None
+            else None
+        )
+        raw_usage = event.payload.get("usage")
+        usage_json = (
+            json.dumps(raw_usage, ensure_ascii=False, separators=(",", ":"))
+            if raw_usage is not None
+            else None
+        )
+        raw_finished_at = event.payload.get("finished_at")
+        finished_at = raw_finished_at if isinstance(raw_finished_at, str) else None
         self.connection.execute(
             """
             INSERT INTO attempt_results
@@ -599,12 +651,12 @@ class SqliteEventStore:
             (
                 attempt_id,
                 status,
-                _payload_str(event, "summary"),
+                summary,
                 result_json,
-                _payload_json(event, "events"),
-                _payload_json(event, "tool_calls"),
-                _payload_json(event, "usage"),
-                _payload_str(event, "finished_at"),
+                events_json,
+                tool_calls_json,
+                usage_json,
+                finished_at,
             ),
         )
 
@@ -838,10 +890,6 @@ def event_store_path(root: Path | None = None) -> Path:
     return base / ZETA_STORE_NAME
 
 
-def pending_queue_item_id(event: Event) -> str:
-    return f"qi_{event.id}"
-
-
 def _row_to_event(row: sqlite3.Row) -> Event:
     payload = json.loads(str(row["payload"]))
     if not isinstance(payload, dict):
@@ -888,27 +936,6 @@ def _row_to_attempt(row: sqlite3.Row) -> dict[str, Any]:
     }
 
 
-def _payload_str(event: Event, key: str) -> str | None:
-    value = event.payload.get(key)
-    if isinstance(value, str):
-        return value
-    return None
-
-
-def _payload_int(event: Event, key: str) -> int | None:
-    value = event.payload.get(key)
-    if isinstance(value, int):
-        return value
-    return None
-
-
-def _payload_json(event: Event, key: str) -> str | None:
-    value = event.payload.get(key)
-    if value is None:
-        return None
-    return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
-
-
 def _row_token_count(
     value: Any,
     usage: Any,
@@ -935,8 +962,8 @@ def _usage_token(event: Event, *keys: str) -> int | None:
 
 
 def _runtime_status(event: Event) -> str:
-    status = _payload_str(event, "status")
-    if status is not None:
+    status = event.payload.get("status")
+    if isinstance(status, str):
         return status
     if event.event_type == "runtime.attempt.started":
         return "running"

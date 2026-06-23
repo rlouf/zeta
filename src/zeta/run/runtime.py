@@ -612,20 +612,18 @@ class ModelTurnStreamSink:
         if not text:
             return
         self.streamed_content = True
-        emit_event(
-            self.events,
-            stream_chunk_draft(text),
-            self.event_sink,
-        )
+        draft = stream_chunk_draft(text)
+        self.events.append(draft)
+        if self.event_sink is not None:
+            self.event_sink(draft)
 
     def reasoning_delta(self, text: str) -> None:
         if not text:
             return
-        emit_event(
-            self.events,
-            status_update_draft("reasoning_delta", text),
-            self.event_sink,
-        )
+        draft = status_update_draft("reasoning_delta", text)
+        self.events.append(draft)
+        if self.event_sink is not None:
+            self.event_sink(draft)
 
 
 class StatusAwareModelStream:
@@ -734,34 +732,15 @@ def add_tool_result_trace_fields(
         view["tool_result_object_id"] = result_id
 
 
-def emit_event(
-    events: list[DraftEvent],
-    event: DraftEvent,
-    event_sink: AgentEventSink | None = None,
-) -> None:
-    events.append(event)
-    if event_sink is not None:
-        event_sink(event)
-
-
-def emit_tool_event(
-    events: list[DraftEvent],
-    event: dict[str, Any],
-    *,
-    ctx: RunDependencies,
-) -> None:
-    record_runtime_event(
-        events, draft_from_runtime_event(event, session_id=None, turn_id=None), ctx=ctx
-    )
-
-
 def record_runtime_event(
     events: list[DraftEvent],
     draft: DraftEvent,
     *,
     ctx: RunDependencies,
 ) -> DraftEvent:
-    emit_event(events, draft, ctx.event_sink)
+    events.append(draft)
+    if ctx.event_sink is not None:
+        ctx.event_sink(draft)
     if ctx.event_sink is None:
         project_prompt_trace_projection(events, ctx.builder.store())
     return draft

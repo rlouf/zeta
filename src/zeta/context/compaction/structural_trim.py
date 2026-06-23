@@ -43,7 +43,7 @@ class StructuralTrimPromptTransform:
             return False
         # Limit default structural trimming to reproducible read/search outputs.
         # Trimming arbitrary tools can hide non-recoverable evidence from the model.
-        if tool_name(component) not in STRUCTURAL_TRIM_TOOL_NAMES:
+        if component_tool_name(component) not in STRUCTURAL_TRIM_TOOL_NAMES:
             return False
         return message_content_length(component.message) > self.max_content_chars
 
@@ -51,7 +51,7 @@ class StructuralTrimPromptTransform:
 def trimmed_component(component: PromptComponent) -> PromptComponent:
     assert component.message is not None
     source_id = component.object_id
-    trimmed_message = project_one_trimmed_message(component)
+    trimmed_message = replacement_message(component)
     data: dict[str, Any] = {
         "method": "structural_trim",
         "source_kind": component.kind,
@@ -73,9 +73,8 @@ def trimmed_component(component: PromptComponent) -> PromptComponent:
 
 
 def is_tool_result_component(component: PromptComponent) -> bool:
-    source_event_value = source_event(component)
-    if source_event_value is not None:
-        return str(source_event_value.get("type") or "") == "tool_result"
+    if component.data.get("source_event_type") == "tool_result":
+        return True
     assert component.message is not None
     return is_tool_result_message(component.message)
 
@@ -94,12 +93,12 @@ def message_content_length(message: dict[str, Any]) -> int:
     return len(content)
 
 
-def project_one_trimmed_message(component: PromptComponent) -> dict[str, Any]:
+def replacement_message(component: PromptComponent) -> dict[str, Any]:
     assert component.message is not None
     if component.message.get("role") == "tool":
         return {
             "role": "tool",
-            "tool_call_id": tool_call_id(component),
+            "tool_call_id": component_tool_call_id(component),
             "content": render_stub(component),
         }
     return {
@@ -108,36 +107,21 @@ def project_one_trimmed_message(component: PromptComponent) -> dict[str, Any]:
     }
 
 
-def source_event(component: PromptComponent) -> dict[str, Any] | None:
-    value = component.data.get("source_event")
-    return value if isinstance(value, dict) else None
-
-
-def tool_call_id(component: PromptComponent) -> str:
-    event = source_event(component)
-    if event is not None:
-        tool_call_id_value = str(event.get("tool_call_id") or event.get("id") or "")
-        if tool_call_id_value:
-            return tool_call_id_value
+def component_tool_call_id(component: PromptComponent) -> str:
+    tool_call_id_value = str(component.data.get("source_tool_call_id") or "")
+    if tool_call_id_value:
+        return tool_call_id_value
     if component.message is None:
         return ""
     return str(component.message.get("tool_call_id") or "")
 
 
-def tool_name(component: PromptComponent) -> str:
-    event = source_event(component)
-    if event is not None:
-        name = str(event.get("tool_name") or event.get("name") or "")
-        if name:
-            return name
+def component_tool_name(component: PromptComponent) -> str:
     return str(component.data.get("source_tool_name") or "")
 
 
-def tool_result(component: PromptComponent) -> dict[str, Any] | None:
-    event = source_event(component)
-    if event is None:
-        return None
-    result = event.get("result")
+def component_tool_result(component: PromptComponent) -> dict[str, Any] | None:
+    result = component.data.get("source_tool_result")
     return result if isinstance(result, dict) else None
 
 
@@ -145,8 +129,8 @@ def structural_trim_payload(component: PromptComponent) -> dict[str, Any]:
     """Describe the trimmed content so the trace records what was elided."""
     assert component.message is not None
     content = str(component.message.get("content") or "")
-    call_id = tool_call_id(component)
-    parsed_result = tool_result(component)
+    call_id = component_tool_call_id(component)
+    parsed_result = component_tool_result(component)
     if component.message.get("role") == "tool":
         parsed_result = parsed_result or parse_json_object(content)
     else:

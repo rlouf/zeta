@@ -49,6 +49,7 @@ from zeta.context.compaction import (
 from zeta.context.components import (
     PromptComponent,
     component_messages,
+    prompt_component_object,
     prompt_components,
     zeta_context_message,
 )
@@ -88,6 +89,7 @@ zeta_context = SimpleNamespace(
     measure=measure,
     payload_sha256=payload_sha256,
     project_prompt_trace_projection=project_prompt_trace_projection,
+    prompt_component_object=prompt_component_object,
     prompt_components=prompt_components,
     prompt_transform_from_env=prompt_transform_from_env,
     reconstructed_prompt_request=reconstructed_prompt_request,
@@ -218,12 +220,15 @@ def test_zeta_prompt_component_user_message_boundary_round_trips() -> None:
         message={"role": "user", "content": "inspect"},
     )
 
-    assert component.message_payload() == {"role": "user", "content": "inspect"}
-    assert component.object_data() == {
+    obj = zeta_context.prompt_component_object(component)
+
+    assert component.message == {"role": "user", "content": "inspect"}
+    assert obj.data == {
         "index": 0,
         "message": {"role": "user", "content": "inspect"},
         "representation": "full",
     }
+    assert obj.links == ()
 
 
 def test_zeta_prompt_component_assistant_message_boundary_round_trips() -> None:
@@ -235,13 +240,16 @@ def test_zeta_prompt_component_assistant_message_boundary_round_trips() -> None:
         source_object_id="assistant-obj",
     )
 
-    assert component.message_payload() == {"role": "assistant", "content": "done"}
-    assert component.object_data() == {
+    obj = zeta_context.prompt_component_object(component)
+
+    assert component.message == {"role": "assistant", "content": "done"}
+    assert obj.data == {
         "source_event_type": "model",
         "message": {"role": "assistant", "content": "done"},
         "representation": "summary",
         "source_object_id": "assistant-obj",
     }
+    assert obj.links == ()
 
 
 def test_zeta_prompt_component_tool_call_boundary_round_trips() -> None:
@@ -261,12 +269,15 @@ def test_zeta_prompt_component_tool_call_boundary_round_trips() -> None:
         message=message,
     )
 
-    assert component.message_payload() == message
-    assert component.object_data() == {
+    obj = zeta_context.prompt_component_object(component)
+
+    assert component.message == message
+    assert obj.data == {
         "message": message,
         "source_event_type": "model",
         "representation": "full",
     }
+    assert obj.links == ()
 
 
 def test_zeta_prompt_component_tool_result_boundary_round_trips() -> None:
@@ -277,12 +288,14 @@ def test_zeta_prompt_component_tool_result_boundary_round_trips() -> None:
         links=("tool-call-obj",),
     )
 
-    assert component.message_payload() == {
+    obj = zeta_context.prompt_component_object(component)
+
+    assert component.message == {
         "role": "tool",
         "tool_call_id": "call-1",
         "content": "done",
     }
-    assert component.object_data() == {
+    assert obj.data == {
         "source_tool_name": "read",
         "message": {
             "role": "tool",
@@ -291,6 +304,7 @@ def test_zeta_prompt_component_tool_result_boundary_round_trips() -> None:
         },
         "representation": "full",
     }
+    assert obj.links == ("tool-call-obj",)
 
 
 def test_zeta_prompt_builder_links_prompt_components() -> None:
@@ -811,7 +825,7 @@ def test_zeta_task_state_transform_fails_open() -> None:
     assert "task_state" not in linked_kinds(store, prompt)
 
 
-def test_zeta_prompt_components_keep_source_events() -> None:
+def test_zeta_prompt_components_keep_source_fields() -> None:
     transcript = [
         {"type": "model", "tool_calls": tool_call_fixture()},
         tool_result_event_payload(
@@ -831,16 +845,13 @@ def test_zeta_prompt_components_keep_source_events() -> None:
     tool_component = next(
         component
         for component in components
-        if component.data.get("source_event", {}).get("type") == "tool_result"
+        if component.data.get("source_event_type") == "tool_result"
     )
     assert tool_component.kind == "tool_result"
     assert tool_component.data.get("historical") is True
     assert tool_component.data["source_tool_name"] == "read"
-    assert tool_component.data["source_event"]["tool_call_id"] == "call-read"
-    assert tool_component.data["source_event"]["tool_name"] == "read"
-    assert tool_component.data["source_event"]["result"]["metadata"] == {
-        "path": "big.txt"
-    }
+    assert tool_component.data["source_tool_call_id"] == "call-read"
+    assert tool_component.data["source_tool_result"]["metadata"] == {"path": "big.txt"}
     assert tool_component.message is not None
     assert json.loads(str(tool_component.message["content"]))["metadata"] == {
         "path": "big.txt"
@@ -946,11 +957,9 @@ def test_zeta_structural_trim_default_is_late_safety_valve() -> None:
         kind="tool_result",
         data={
             "historical": True,
-            "source_event": {
-                "type": "tool_result",
-                "tool_call_id": "call-below",
-                "tool_name": "read",
-            },
+            "source_event_type": "tool_result",
+            "source_tool_call_id": "call-below",
+            "source_tool_name": "read",
         },
         message={
             "role": "tool",
@@ -963,11 +972,9 @@ def test_zeta_structural_trim_default_is_late_safety_valve() -> None:
         kind="tool_result",
         data={
             "historical": True,
-            "source_event": {
-                "type": "tool_result",
-                "tool_call_id": "call-above",
-                "tool_name": "read",
-            },
+            "source_event_type": "tool_result",
+            "source_tool_call_id": "call-above",
+            "source_tool_name": "read",
         },
         message={
             "role": "tool",
@@ -1024,21 +1031,19 @@ def test_zeta_structural_trim_preserves_current_tool_results_by_default() -> Non
     assert "compacted_context" not in kinds
 
 
-def test_zeta_structural_trim_uses_source_event_without_message_json() -> None:
+def test_zeta_structural_trim_uses_source_result_without_message_json() -> None:
     raw_text = "invalid json but still bulky " * 20
     component = zeta_context.PromptComponent(
         kind="tool_result",
         data={
             "historical": True,
-            "source_event": {
-                "type": "tool_result",
-                "tool_call_id": "call-structured",
-                "tool_name": "read",
-                "result": {
-                    "ok": True,
-                    "content": [{"type": "text", "text": raw_text}],
-                    "metadata": {"path": "structured.txt"},
-                },
+            "source_event_type": "tool_result",
+            "source_tool_call_id": "call-structured",
+            "source_tool_name": "read",
+            "source_tool_result": {
+                "ok": True,
+                "content": [{"type": "text", "text": raw_text}],
+                "metadata": {"path": "structured.txt"},
             },
         },
         message={
@@ -1426,15 +1431,13 @@ def test_zeta_structural_trim_works_without_trace_ids() -> None:
         kind="tool_result",
         data={
             "historical": True,
-            "source_event": {
-                "type": "tool_result",
-                "tool_call_id": "call-untraced",
-                "tool_name": "read",
-                "result": {
-                    "ok": True,
-                    "content": [{"type": "text", "text": raw_text}],
-                    "metadata": {"path": "big.txt"},
-                },
+            "source_event_type": "tool_result",
+            "source_tool_call_id": "call-untraced",
+            "source_tool_name": "read",
+            "source_tool_result": {
+                "ok": True,
+                "content": [{"type": "text", "text": raw_text}],
+                "metadata": {"path": "big.txt"},
             },
         },
         message={
@@ -1462,15 +1465,13 @@ def test_zeta_structural_trim_embeds_trim_payload_in_component_data() -> None:
         kind="tool_result",
         data={
             "historical": True,
-            "source_event": {
-                "type": "tool_result",
-                "tool_call_id": "call-read",
-                "tool_name": "read",
-                "result": {
-                    "ok": True,
-                    "content": [{"type": "text", "text": raw_text}],
-                    "metadata": {"path": "big.txt"},
-                },
+            "source_event_type": "tool_result",
+            "source_tool_call_id": "call-read",
+            "source_tool_name": "read",
+            "source_tool_result": {
+                "ok": True,
+                "content": [{"type": "text", "text": raw_text}],
+                "metadata": {"path": "big.txt"},
             },
         },
         message={"role": "tool", "tool_call_id": "call-read", "content": raw_text},
@@ -1578,17 +1579,17 @@ def test_zeta_task_state_transform_keeps_newest_messages_verbatim() -> None:
     assert "recent message six" in joined
 
 
-def test_zeta_task_state_extraction_input_omits_duplicate_source_event() -> None:
+def test_zeta_task_state_extraction_input_omits_duplicate_source_result() -> None:
     component = zeta_context.PromptComponent(
         kind="tool_result",
         data={
             "historical": True,
             "source_event_type": "tool_result",
             "source_event_role": "",
-            "source_event": {
-                "type": "tool_result",
-                "tool_call_id": "call-1",
-                "result": {"ok": True, "content": [{"type": "text", "text": "big"}]},
+            "source_tool_call_id": "call-1",
+            "source_tool_result": {
+                "ok": True,
+                "content": [{"type": "text", "text": "big"}],
             },
         },
         message={"role": "tool", "tool_call_id": "call-1", "content": "big"},
@@ -1599,7 +1600,7 @@ def test_zeta_task_state_extraction_input_omits_duplicate_source_event() -> None
     payload = json.loads(
         str(messages[1]["content"]).removeprefix("Prior timeline components JSON:\n")
     )
-    assert "source_event" not in payload[0]
+    assert "source_tool_result" not in payload[0]
     assert payload[0]["source_event_type"] == "tool_result"
     assert payload[0]["message"]["content"] == "big"
 

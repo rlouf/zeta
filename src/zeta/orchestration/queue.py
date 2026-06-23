@@ -1,11 +1,15 @@
 """Dispatch queue item domain shapes."""
 
+from __future__ import annotations
+
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
-from typing import Any, Literal, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 
-from zeta.orchestration.agents import AgentRoute
 from zeta.records.events import Event
+
+if TYPE_CHECKING:
+    from zeta.orchestration.agents import AgentRoute
 
 QueueItemId = str
 
@@ -143,6 +147,10 @@ def queue_item_from_record(record: Mapping[str, Any]) -> RoutedQueueItem:
 def queue_item_id_for_event(route: AgentRoute, event: Event) -> str:
     agent_id = route.agent_id.replace(":", "_").replace(".", "_")
     return f"qi_{event.id}_{agent_id}"
+
+
+def pending_queue_item_id(event: Event) -> str:
+    return f"qi_{event.id}"
 
 
 def queue_item_idempotency_key(

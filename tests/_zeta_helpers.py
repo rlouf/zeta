@@ -349,8 +349,8 @@ def assert_structural_trim_graph(
     assert compacted.links == (payload["source_object_id"],)
     source = store.get_object(payload["source_object_id"])
     assert source is not None
-    assert source.data["source_event"]["type"] == "tool_result"
-    assert source.data["source_event"]["result"]["metadata"] == metadata
+    assert source.data["source_event_type"] == "tool_result"
+    assert source.data["source_tool_result"]["metadata"] == metadata
     assert store.derivations_for_output(compacted_ids[0])[0].producer == (
         "PromptStructuralTrim:v1"
     )

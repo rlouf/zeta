@@ -10,7 +10,7 @@ from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import Any, cast
 
-from zeta.records.events import DraftEvent, Event
+from zeta.records.events import Event
 from zeta.records.stores import (
     Filter,
     SqliteEventStore,
@@ -213,7 +213,7 @@ def project_effect_records_by_id(events: list[Event]) -> dict[str, dict[str, Any
                 continue
             record = project_one_effect_record(
                 effect,
-                timestamp=event_time(event),
+                timestamp=event.timestamp_ms / 1_000,
                 session_id=event.session_id,
                 cwd=event.payload.get("cwd"),
             )
@@ -321,16 +321,19 @@ def publish_turn_record(
     payload = dict(record)
     if payload.get("outcome") == "aborted":
         payload.setdefault("reason", "aborted")
-    return append_event(
-        path,
-        event_from_record(
-            {
-                "cwd": cwd or os.getcwd(),
-                **payload,
-                "type": event_type,
-                "session": session_id,
-            }
-        ),
+    return (
+        SqliteEventStore(path)
+        .append(
+            event_from_record(
+                {
+                    "cwd": cwd or os.getcwd(),
+                    **payload,
+                    "type": event_type,
+                    "session": session_id,
+                }
+            )
+        )
+        .event
     )
 
 
@@ -342,30 +345,25 @@ def publish_effect_record(
     cwd: str | None = None,
 ) -> dict[str, Any]:
     """Append one durable tool-effect event and return its history record."""
-    appended = append_event(
-        path,
-        event_from_effect_record(
-            {
-                "cwd": cwd or os.getcwd(),
-                "session": session_id,
-                **record,
-            }
-        ),
+    appended = (
+        SqliteEventStore(path)
+        .append(
+            event_from_effect_record(
+                {
+                    "cwd": cwd or os.getcwd(),
+                    "session": session_id,
+                    **record,
+                }
+            )
+        )
+        .event
     )
     return project_one_effect_record(
         record,
-        timestamp=event_time(appended),
+        timestamp=appended.timestamp_ms / 1_000,
         session_id=appended.session_id or session_id,
         cwd=appended.payload.get("cwd"),
     )
-
-
-def append_draft(path: str | Path, draft: DraftEvent) -> Event:
-    return SqliteEventStore(path).accept(draft).event
-
-
-def append_event(path: str | Path, event: Event) -> Event:
-    return SqliteEventStore(path).append(event).event
 
 
 def import_history_records(
@@ -378,6 +376,7 @@ def import_history_records(
     imported = 0
     imported_turn_ids: set[str] = set()
     imported_effect_ids: set[str] = set()
+    store = SqliteEventStore(path)
     for record in records:
         if not isinstance(record, dict):
             continue
@@ -386,7 +385,7 @@ def import_history_records(
             if record_id in imported_turn_ids or history.turn(record_id) is not None:
                 continue
             imported_turn_ids.add(record_id)
-            append_event(path, event_from_record(record))
+            store.append(event_from_record(record))
             imported += 1
             continue
         if is_effect_record(record):
@@ -397,7 +396,7 @@ def import_history_records(
             ):
                 continue
             imported_effect_ids.add(record_id)
-            append_event(path, event_from_effect_record(record))
+            store.append(event_from_effect_record(record))
             imported += 1
     return imported
 
@@ -434,17 +433,13 @@ def turn_matches_filters(
 ) -> bool:
     turn_id = str(turn.get("turn_id") or "")
     checks = (
-        optional_match(turn.get("session"), session),
-        optional_match(turn.get("workflow"), workflow),
+        session is None or turn.get("session") == session,
+        workflow is None or turn.get("workflow") == workflow,
         since is None or float(turn.get("time") or 0.0) >= since,
         not failed or turn.get("outcome") in {"failed", "aborted"},
         touched_turns is None or turn_id in touched_turns,
     )
     return all(checks)
-
-
-def optional_match(value: Any, expected: Any | None) -> bool:
-    return expected is None or value == expected
 
 
 def turn_sort_key(turn: dict[str, Any]) -> tuple[float, str]:
@@ -509,10 +504,6 @@ def project_one_effect_record(
     return payload
 
 
-def event_time(event: Event) -> float:
-    return event.timestamp_ms / 1_000
-
-
 def event_from_effect_record(record: dict[str, Any]) -> Event:
     return Event(
         id=str(record.get("id") or record["effect_id"]),
@@ -546,11 +537,16 @@ def event_from_effect_record(record: dict[str, Any]) -> Event:
 
 
 def event_from_record(record: dict[str, Any]) -> Event:
+    payload = {
+        key: value
+        for key, value in record.items()
+        if key not in {"id", "type", "time", "session", "source", "caused_by"}
+    }
     return Event(
         id=str(record.get("id") or f"evt_{uuid.uuid4().hex}"),
         event_type=str(record["type"]),
         source=str(record.get("source") or "zeta"),
-        payload=domain_payload(record),
+        payload=payload,
         idempotency_key=None,
         caused_by=(
             str(record["caused_by"])
@@ -573,11 +569,3 @@ def event_from_record(record: dict[str, Any]) -> Event:
             else 0
         ),
     )
-
-
-def domain_payload(record: dict[str, Any]) -> dict[str, Any]:
-    return {
-        key: value
-        for key, value in record.items()
-        if key not in {"id", "type", "time", "session", "source", "caused_by"}
-    }

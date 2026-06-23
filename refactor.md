@@ -61,32 +61,3 @@ def project_queue_items(events: Iterable[Event]) -> list[QueueItem]:
 def project_one_queue_item(event: Event) -> QueueItem | None:
     ...
 ```
-
-## Separate Noun Refactors
-
-These are related naming issues, but they are not part of the `project_*`
-function convention. Track and implement them separately.
-
-### History Or Timeline
-
-File: `src/sigil/history.py`
-
-Question:
-
-- Should `HistoryView` become a Sigil-owned run history read model?
-
-Current direction:
-
-- `HistoryView`, history querying, touched-file filters, cost summaries,
-  import/export helpers, and Sigil turn/effect record projection now live in
-  Sigil.
-- Do not move canonical run lifecycle event names with the Sigil history read
-  model. Those belong under `zeta/run/`.
-- Rename the old `turn_*` history names to `run_*` only after deciding whether
-  Sigil's user-facing noun is also "run."
-
-## Suggested Order
-
-1. Handle the noun refactors separately where they unblock function names.
-2. Revisit prompt/component projection names once timeline names
-   are stable.

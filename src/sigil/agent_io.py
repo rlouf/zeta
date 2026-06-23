@@ -36,7 +36,7 @@ from zeta.records.events import (
     exact_event_time,
     user_message_draft,
 )
-from zeta.records.provenance import project_trace_events
+from zeta.records.provenance import project_trace_projection
 from zeta.records.stores import (
     EventReader,
     Filter,
@@ -73,7 +73,7 @@ def record_trace_for_turn(runtime_context: SessionScope, turn_id: str | None) ->
     if turn_id is None or not isinstance(runtime_context.event_sink, EventReader):
         return
     try:
-        project_trace_events(
+        project_trace_projection(
             runtime_context.event_sink.list_events(
                 Filter(
                     session_id=runtime_context.session_id,

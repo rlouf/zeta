@@ -44,7 +44,7 @@ from zeta.records.events import (
     stream_chunk_draft,
     turn_aborted_draft,
 )
-from zeta.records.provenance import TraceProjection, project_trace_drafts
+from zeta.records.provenance import TraceProjection, project_trace_projection
 from zeta.records.stores import Store
 from zeta.run.cancellation import (
     AbortReason,
@@ -190,7 +190,7 @@ class AgentRun:
             )
             self.state.events.extend(result_event.events)
             if result_event.events:
-                project_trace_drafts(self.state.events, self.deps.builder.store())
+                project_trace_projection(self.state.events, self.deps.builder.store())
             self.state.next_model_caused_by = next_model_parent(result_event.events)
             if (
                 result_event.staged_effect is not None
@@ -648,7 +648,7 @@ def draft_views_for_prompt(
     drafts: list[DraftEvent],
     builder: PromptBuilder,
 ) -> list[dict[str, Any]]:
-    projection = project_trace_drafts(drafts, builder.store())
+    projection = project_trace_projection(drafts, builder.store())
     views = []
     for draft in drafts:
         if is_runtime_ui_event(draft):
@@ -758,7 +758,7 @@ def record_runtime_event(
 ) -> DraftEvent:
     emit_event(events, draft, ctx.event_sink)
     if ctx.event_sink is None:
-        project_trace_drafts(events, ctx.builder.store())
+        project_trace_projection(events, ctx.builder.store())
     return draft
 
 
@@ -815,7 +815,7 @@ def update_prompt_trace_from_events(
 ) -> None:
     if assistant_event_id is None or not state.prompt_traces:
         return
-    projection = project_trace_drafts(state.events, ctx.builder.store())
+    projection = project_trace_projection(state.events, ctx.builder.store())
     assistant_id = projection.assistant_message_ids.get(assistant_event_id)
     if assistant_id is None:
         return

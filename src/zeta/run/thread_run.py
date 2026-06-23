@@ -14,7 +14,7 @@ from zeta.records.events import (
     event_timeline_type,
     user_message_draft,
 )
-from zeta.records.provenance import project_trace_events
+from zeta.records.provenance import project_trace_projection
 from zeta.records.stores import EventReader, Filter, warn_trace_failure_once
 from zeta.run.config import AgentConfig
 from zeta.run.runtime import (
@@ -271,7 +271,7 @@ def _record_trace_for_run(runtime_context: SessionScope, run_id: str | None) -> 
     if run_id is None or not isinstance(runtime_context.event_sink, EventReader):
         return
     try:
-        project_trace_events(
+        project_trace_projection(
             runtime_context.event_sink.list_events(
                 Filter(
                     session_id=runtime_context.session_id,
@@ -318,7 +318,7 @@ def _session_trace_result(
             event_type_prefix="zeta.",
         )
     )
-    projection = project_trace_events(events, runtime_context.trace_store)
+    projection = project_trace_projection(events, runtime_context.trace_store)
     for event in events:
         event_type = event_timeline_type(event)
         if event_type == "model":

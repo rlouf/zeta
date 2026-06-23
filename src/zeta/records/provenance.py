@@ -19,14 +19,15 @@ class TraceProjection:
     tool_result_object_ids: dict[str, ObjectId]
 
 
-def project_trace_events(
-    events: Iterable[Event], store: Store | None
+def project_trace_projection(
+    sources: Iterable[Event | DraftEvent], store: Store | None
 ) -> TraceProjection:
     projection = TraceProjection({}, {}, {}, {})
     if store is None:
         return projection
     latest_assistant_id: ObjectId | None = None
-    for event in events:
+    for source in sources:
+        event = _trace_projection_event(source)
         timeline_type = event_timeline_type(event)
         if timeline_type == "model":
             latest_assistant_id = _project_one_trace_model_event(
@@ -46,27 +47,20 @@ def project_trace_events(
     return projection
 
 
-def project_trace_drafts(
-    drafts: Iterable[DraftEvent],
-    store: Store | None,
-) -> TraceProjection:
-    return project_trace_events(
-        (
-            Event(
-                id=draft_event_id(draft) or "",
-                event_type=draft.event_type,
-                source=draft.source,
-                payload=draft.payload,
-                idempotency_key=draft.idempotency_key,
-                caused_by=draft.caused_by,
-                session_id=draft.session_id,
-                run_id=draft.run_id,
-                turn_id=draft.turn_id,
-                timestamp_ms=0,
-            )
-            for draft in drafts
-        ),
-        store,
+def _trace_projection_event(source: Event | DraftEvent) -> Event:
+    if isinstance(source, Event):
+        return source
+    return Event(
+        id=draft_event_id(source) or "",
+        event_type=source.event_type,
+        source=source.source,
+        payload=source.payload,
+        idempotency_key=source.idempotency_key,
+        caused_by=source.caused_by,
+        session_id=source.session_id,
+        run_id=source.run_id,
+        turn_id=source.turn_id,
+        timestamp_ms=0,
     )
 
 

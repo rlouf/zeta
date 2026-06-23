@@ -64,28 +64,6 @@ def project_one_queue_item(event: Event) -> QueueItem | None:
 
 ## Apply This Convention
 
-### Records Provenance
-
-File: `src/zeta/records/provenance.py`
-
-Current names:
-
-- `project_trace_events`
-- `project_trace_drafts`
-- `_project_one_trace_model_event`
-- `_project_one_trace_tool_call`
-- `_project_one_trace_tool_result`
-
-Target direction:
-
-- Rename the many-item functions so the target is explicit once the target noun
-  is chosen. Do not name the function after the source events.
-- Keep single-event functions private if only the top-level projector calls
-  them.
-- Avoid mixing source nouns and target nouns in the public function names.
-
-The target type decision is tracked under "Separate Noun Refactors."
-
 ### Project Directory Loading Conflict
 
 File: `src/zeta/process.py`
@@ -210,9 +188,8 @@ Current direction:
 
 ## Suggested Order
 
-1. Clean up `records/provenance.py`.
-2. Rename `SessionScope` / `run/threads.py` to `RuntimeContext` /
+1. Rename `SessionScope` / `run/threads.py` to `RuntimeContext` /
    `run/context.py`.
-3. Handle the noun refactors separately where they unblock function names.
-4. Revisit prompt/component projection names once provenance and timeline names
+2. Handle the noun refactors separately where they unblock function names.
+3. Revisit prompt/component projection names once provenance and timeline names
    are stable.

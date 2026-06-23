@@ -44,7 +44,10 @@ from zeta.records.events import (
     stream_chunk_draft,
     turn_aborted_draft,
 )
-from zeta.records.provenance import TraceProjection, project_trace_projection
+from zeta.records.provenance import (
+    PromptTraceProjection,
+    project_prompt_trace_projection,
+)
 from zeta.records.stores import Store
 from zeta.run.cancellation import (
     AbortReason,
@@ -190,7 +193,9 @@ class AgentRun:
             )
             self.state.events.extend(result_event.events)
             if result_event.events:
-                project_trace_projection(self.state.events, self.deps.builder.store())
+                project_prompt_trace_projection(
+                    self.state.events, self.deps.builder.store()
+                )
             self.state.next_model_caused_by = next_model_parent(result_event.events)
             if (
                 result_event.staged_effect is not None
@@ -648,7 +653,7 @@ def draft_views_for_prompt(
     drafts: list[DraftEvent],
     builder: PromptBuilder,
 ) -> list[dict[str, Any]]:
-    projection = project_trace_projection(drafts, builder.store())
+    projection = project_prompt_trace_projection(drafts, builder.store())
     views = []
     for draft in drafts:
         if is_runtime_ui_event(draft):
@@ -664,7 +669,7 @@ def draft_views_for_prompt(
 def add_prompt_trace_fields(
     view: dict[str, Any],
     event_id: str,
-    projection: TraceProjection,
+    projection: PromptTraceProjection,
 ) -> None:
     event_type = view.get("type")
     if event_type == "model":
@@ -682,7 +687,7 @@ def add_prompt_trace_fields(
 def add_model_prompt_trace_fields(
     view: dict[str, Any],
     event_id: str,
-    projection: TraceProjection,
+    projection: PromptTraceProjection,
 ) -> None:
     prompt_id = projection.prompt_object_ids.get(event_id)
     assistant_id = projection.assistant_message_ids.get(event_id)
@@ -697,7 +702,7 @@ def add_model_prompt_trace_fields(
 
 def projected_tool_call_ids(
     view: dict[str, Any],
-    projection: TraceProjection,
+    projection: PromptTraceProjection,
 ) -> list[str]:
     tool_calls = view.get("tool_calls")
     if not isinstance(tool_calls, list):
@@ -714,7 +719,7 @@ def projected_tool_call_ids(
 def add_tool_result_trace_fields(
     view: dict[str, Any],
     event_id: str,
-    projection: TraceProjection,
+    projection: PromptTraceProjection,
 ) -> None:
     tool_call_id = view.get("tool_call_id")
     call_id = (
@@ -758,7 +763,7 @@ def record_runtime_event(
 ) -> DraftEvent:
     emit_event(events, draft, ctx.event_sink)
     if ctx.event_sink is None:
-        project_trace_projection(events, ctx.builder.store())
+        project_prompt_trace_projection(events, ctx.builder.store())
     return draft
 
 
@@ -815,7 +820,7 @@ def update_prompt_trace_from_events(
 ) -> None:
     if assistant_event_id is None or not state.prompt_traces:
         return
-    projection = project_trace_projection(state.events, ctx.builder.store())
+    projection = project_prompt_trace_projection(state.events, ctx.builder.store())
     assistant_id = projection.assistant_message_ids.get(assistant_event_id)
     if assistant_id is None:
         return

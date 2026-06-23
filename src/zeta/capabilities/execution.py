@@ -26,7 +26,7 @@ from zeta.records.events import (
     normalized_tool_result,
     tool_result_status,
 )
-from zeta.records.provenance import project_trace_projection
+from zeta.records.provenance import project_prompt_trace_projection
 from zeta.records.stores import Store
 
 
@@ -529,7 +529,7 @@ def emit_capability_event_draft(
     if ctx.event_sink is not None:
         ctx.event_sink(draft)
     else:
-        project_trace_projection(events, ctx.trace_store)
+        project_prompt_trace_projection(events, ctx.trace_store)
     return draft
 
 

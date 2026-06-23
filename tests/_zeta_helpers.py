@@ -30,7 +30,7 @@ from zeta.records.events import (
     event_view,
 )
 from zeta.records.objects import Object, ObjectId
-from zeta.records.provenance import project_trace_projection
+from zeta.records.provenance import project_prompt_trace_projection
 from zeta.records.stores import Filter, InMemoryStore, Store
 from zeta.run.context import RuntimeContext
 from zeta.run.runtime import AgentRunResult
@@ -260,7 +260,7 @@ def record_durable_timeline_event(
                 event_type_prefix="zeta.",
             )
         )
-        project_trace_projection(
+        project_prompt_trace_projection(
             event_reader(event_filter),
             runtime_context.trace_store,
         )

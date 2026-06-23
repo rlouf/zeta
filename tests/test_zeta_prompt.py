@@ -62,7 +62,7 @@ from zeta.models import chat_completions as zeta_model
 from zeta.models import types as zeta_models_api
 from zeta.records.events import Event
 from zeta.records.objects import Derivation, Object
-from zeta.records.provenance import project_trace_projection
+from zeta.records.provenance import project_prompt_trace_projection
 from zeta.records.stores import InMemoryStore
 
 ensure_builtin_tools_registered()
@@ -87,7 +87,7 @@ zeta_context = SimpleNamespace(
     estimated_tokens=estimated_tokens,
     measure=measure,
     payload_sha256=payload_sha256,
-    project_trace_projection=project_trace_projection,
+    project_prompt_trace_projection=project_prompt_trace_projection,
     prompt_components=prompt_components,
     prompt_transform_from_env=prompt_transform_from_env,
     reconstructed_prompt_request=reconstructed_prompt_request,
@@ -455,7 +455,7 @@ def test_zeta_prompt_projects_model_output_from_event() -> None:
         timestamp_ms=1,
     )
 
-    projection = zeta_context.project_trace_projection([event], store)
+    projection = zeta_context.project_prompt_trace_projection([event], store)
 
     assistant = store.get_object(projection.assistant_message_ids["model-1"])
     assert assistant is not None

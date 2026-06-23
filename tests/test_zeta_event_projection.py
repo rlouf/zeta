@@ -14,7 +14,7 @@ from zeta.records.events import (
     tool_call_draft,
 )
 from zeta.records.objects import Derivation, Object
-from zeta.records.provenance import project_trace_projection
+from zeta.records.provenance import project_prompt_trace_projection
 from zeta.records.stores import InMemoryStore
 
 SESSION_ID = "session-1"
@@ -593,8 +593,8 @@ def test_zeta_pure_runtime_events_project_to_trace_graph() -> None:
         cursor=3,
     )
 
-    projection = project_trace_projection([model, tool_call, tool_result], store)
-    replayed = project_trace_projection([model, tool_call, tool_result], store)
+    projection = project_prompt_trace_projection([model, tool_call, tool_result], store)
+    replayed = project_prompt_trace_projection([model, tool_call, tool_result], store)
 
     assistant_id = projection.assistant_message_ids["model-1"]
     tool_call_id = projection.tool_call_object_ids["call-1"]

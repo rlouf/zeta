@@ -10,8 +10,8 @@ from zeta.records.stores import Store
 
 
 @dataclass(frozen=True)
-class TraceProjection:
-    """Trace ids derived from replaying domain events."""
+class PromptTraceProjection:
+    """Prompt trace object ids derived from replaying domain events."""
 
     prompt_object_ids: dict[str, ObjectId]
     assistant_message_ids: dict[str, ObjectId]
@@ -19,15 +19,15 @@ class TraceProjection:
     tool_result_object_ids: dict[str, ObjectId]
 
 
-def project_trace_projection(
+def project_prompt_trace_projection(
     sources: Iterable[Event | DraftEvent], store: Store | None
-) -> TraceProjection:
-    projection = TraceProjection({}, {}, {}, {})
+) -> PromptTraceProjection:
+    projection = PromptTraceProjection({}, {}, {}, {})
     if store is None:
         return projection
     latest_assistant_id: ObjectId | None = None
     for source in sources:
-        event = _trace_projection_event(source)
+        event = _prompt_trace_projection_event(source)
         timeline_type = event_timeline_type(event)
         if timeline_type == "model":
             latest_assistant_id = _project_one_trace_model_event(
@@ -47,7 +47,7 @@ def project_trace_projection(
     return projection
 
 
-def _trace_projection_event(source: Event | DraftEvent) -> Event:
+def _prompt_trace_projection_event(source: Event | DraftEvent) -> Event:
     if isinstance(source, Event):
         return source
     return Event(
@@ -67,7 +67,7 @@ def _trace_projection_event(source: Event | DraftEvent) -> Event:
 def _project_one_trace_model_event(
     event: Event,
     store: Store,
-    projection: TraceProjection,
+    projection: PromptTraceProjection,
 ) -> ObjectId | None:
     prompt_id = event.payload.get("prompt_object_id")
     if not isinstance(prompt_id, str) or not prompt_id.startswith("sha256:"):
@@ -96,7 +96,7 @@ def _project_one_trace_model_event(
 def _project_one_trace_tool_call(
     event: Event,
     store: Store,
-    projection: TraceProjection,
+    projection: PromptTraceProjection,
     *,
     latest_assistant_id: ObjectId | None,
 ) -> ObjectId | None:
@@ -133,7 +133,7 @@ def _project_one_trace_tool_call(
 def _project_one_trace_tool_result(
     event: Event,
     store: Store,
-    projection: TraceProjection,
+    projection: PromptTraceProjection,
 ) -> ObjectId | None:
     payload = dict(event.payload)
     tool_call_id = payload.get("tool_call_id")

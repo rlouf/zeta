@@ -111,22 +111,6 @@ Current direction:
 These are related naming issues, but they are not part of the `project_*`
 function convention. Track and implement them separately.
 
-### Trace Or Provenance
-
-File: `src/zeta/records/provenance.py`
-
-Question:
-
-- Should the target noun be `TraceProjection` or `ProvenanceProjection`?
-
-Current direction:
-
-- If "trace" is the user-facing artifact and "provenance" is the internal
-  explanation model, use `ProvenanceProjection` internally and convert to
-  prompt trace artifacts at the boundary.
-- If this object is specifically the prompt trace projection, keep the trace
-  noun and make the function names explicit about that target.
-
 ### History Or Timeline
 
 File: `src/sigil/history.py`
@@ -148,5 +132,5 @@ Current direction:
 ## Suggested Order
 
 1. Handle the noun refactors separately where they unblock function names.
-2. Revisit prompt/component projection names once provenance and timeline names
+2. Revisit prompt/component projection names once timeline names
    are stable.

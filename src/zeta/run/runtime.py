@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import inspect
 import time
-import uuid
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Protocol
@@ -37,6 +36,7 @@ from zeta.records.events import (
     Event,
     draft_event_view,
     draft_from_runtime_event,
+    ensure_runtime_event_id,
     event_view,
     status_update_draft,
     stream_chunk_draft,
@@ -783,15 +783,6 @@ def model_event_payload(assistant: dict[str, Any]) -> dict[str, Any]:
     return event
 
 
-def ensure_event_id(event: dict[str, Any]) -> str:
-    event_id = event.get("id")
-    if isinstance(event_id, str) and event_id:
-        return event_id
-    event_id = str(uuid.uuid4())
-    event["id"] = event_id
-    return event_id
-
-
 def assistant_tool_calls(assistant: dict[str, Any]) -> list[dict[str, Any]]:
     raw_tool_calls = assistant.get("tool_calls")
     if not isinstance(raw_tool_calls, list):
@@ -812,7 +803,7 @@ def record_model_event(
         event["caused_by"] = caused_by
     if prompt_trace is not None:
         event["prompt_object_id"] = prompt_trace.prompt_object_id
-    event_id = ensure_event_id(event) if event else None
+    event_id = ensure_runtime_event_id(event) if event else None
     tool_calls = assistant_tool_calls(assistant)
     if event:
         record_runtime_event(

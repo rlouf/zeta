@@ -7,7 +7,6 @@ import inspect
 import json
 import os
 import tempfile
-import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -23,6 +22,7 @@ from zeta.models.chat_completions import tool_call_id
 from zeta.records.events import (
     DraftEvent,
     draft_from_runtime_event,
+    ensure_runtime_event_id,
     normalized_tool_result,
     tool_result_status,
 )
@@ -501,21 +501,12 @@ def tool_result_event_payload(
         "name": name,
         "result": normalized_tool_result(name, result),
     }
-    ensure_event_id(event)
+    ensure_runtime_event_id(event)
     if capability_id:
         event["capability_id"] = capability_id
     if model_telemetry:
         event["model_telemetry"] = dict(model_telemetry)
     return event
-
-
-def ensure_event_id(event: dict[str, Any]) -> str:
-    event_id = event.get("id")
-    if isinstance(event_id, str) and event_id:
-        return event_id
-    event_id = str(uuid.uuid4())
-    event["id"] = event_id
-    return event_id
 
 
 def emit_tool_event(

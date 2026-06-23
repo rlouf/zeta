@@ -223,9 +223,9 @@ Target direction:
   records/provenance instead of carrying parallel local helpers.
 - `draft_event_id` also exists in `records/events.py`. Prefer one canonical
   helper if idempotency-key parsing remains a shared event contract.
-- `ensure_event_id`, `model_event`, and `assistant_tool_calls` are only worth
-  keeping if they encode run event schema. Inline or move them if they are just
-  local dict construction.
+- `model_event_payload` and `assistant_tool_calls` are only worth keeping if
+  they encode run event schema. Inline or move them if they are just local dict
+  construction.
 
 ### Context Components
 
@@ -437,8 +437,7 @@ Current direction:
 
 - Keep `proposed_effect`, `effect_resolution`, and `tool_result_status`-driven
   behavior when they encode capability lifecycle policy.
-- `ensure_event_id` duplicates the run-loop helper. Consolidate event-id
-  mutation if both remain.
+- Event-id mutation is centralized in `ensure_runtime_event_id`.
 - `emit_event` / `emit_tool_event` duplicate run-loop event plumbing. If both
   remain, names should say whether the event is a capability event or a generic
   run event.

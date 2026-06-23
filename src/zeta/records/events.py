@@ -202,6 +202,15 @@ def draft_event_id(draft: DraftEvent) -> str | None:
     return event_id or None
 
 
+def ensure_runtime_event_id(event: dict[str, Any]) -> str:
+    event_id = event.get("id")
+    if isinstance(event_id, str) and event_id:
+        return event_id
+    event_id = str(uuid4())
+    event["id"] = event_id
+    return event_id
+
+
 def draft_from_runtime_event(
     event: Mapping[str, Any],
     *,
@@ -551,6 +560,7 @@ __all__ = [
     "TURN_IDEMPOTENT_TYPES",
     "draft_event_id",
     "draft_event_view",
+    "ensure_runtime_event_id",
     "event_view",
     "draft_from_boundary_event",
     "durable_model_event_payload",

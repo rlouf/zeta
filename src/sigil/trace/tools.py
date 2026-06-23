@@ -85,10 +85,10 @@ def tool_call_rows(
     successful: bool,
     limit: int,
 ) -> list[dict[str, Any]]:
-    results = tool_results_by_call_id(store)
+    results = tool_result_records_by_call_id(store)
     rows: list[dict[str, Any]] = []
     for call_object_id, call in store.objects(("tool_call",), 10_000):
-        row = tool_call_row(
+        row = tool_call_row_from_objects(
             session=session,
             call_object_id=call_object_id,
             call=call,
@@ -109,7 +109,7 @@ def tool_call_rows(
     return rows
 
 
-def tool_results_by_call_id(
+def tool_result_records_by_call_id(
     store: Store,
 ) -> dict[str, tuple[ObjectId, Object]]:
     results: dict[str, tuple[ObjectId, Object]] = {}
@@ -120,7 +120,7 @@ def tool_results_by_call_id(
     return results
 
 
-def tool_call_row(
+def tool_call_row_from_objects(
     *,
     session: str | None,
     call_object_id: ObjectId,
@@ -136,7 +136,7 @@ def tool_call_row(
         result_data = result.data if isinstance(result.data, dict) else {}
         payload = result_data.get("result")
         result_payload = payload if isinstance(payload, dict) else None
-    row = base_tool_call_row(
+    row = tool_call_row_from_call_object(
         session=session,
         call_object_id=call_object_id,
         call=call,
@@ -150,7 +150,7 @@ def tool_call_row(
     return row
 
 
-def base_tool_call_row(
+def tool_call_row_from_call_object(
     *,
     session: str | None,
     call_object_id: ObjectId,

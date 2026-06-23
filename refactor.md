@@ -496,10 +496,8 @@ Current direction:
 
 - `history_status_fields` is a read aggregation, not simple field access. Keep
   it if status stays as a separate read model.
-- In `sigil/trace/tools.py`, `tool_call_row`,
-  `tool_results_by_call_id`, and `base_tool_call_row` are CLI read-model
-  construction. Rename them with clearer `row`/`view` vocabulary unless they
-  become general trace projections.
+- In `sigil/trace/tools.py`, CLI trace row helpers are named around the row
+  target they build.
 - `object_data`, `result_fields`, and `tool_call_id` are field-access helpers.
   Inline them unless their validation is reused enough to justify local
   decoders.

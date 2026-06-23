@@ -398,7 +398,7 @@ async def run_valid_tool_call(
         result = await invoked if inspect.isawaitable(invoked) else invoked
     except Exception as exc:
         result = tool_error("tool-crashed", f"{type(exc).__name__}: {exc}")
-    staged_effect = result_staged_effect(result)
+    staged_effect = proposed_effect(result)
     stop = bool(
         execution_mode == "stage"
         and staged_effect is not None
@@ -549,7 +549,3 @@ def emit_event(
 
 def tool_error(code: str, message: str) -> dict[str, Any]:
     return {"ok": False, "error": {"code": code, "message": message}}
-
-
-def result_staged_effect(result: dict[str, Any]) -> dict[str, Any] | None:
-    return proposed_effect(result)

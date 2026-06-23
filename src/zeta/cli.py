@@ -3,9 +3,7 @@
 import asyncio
 import json
 import sys
-from collections.abc import Iterable, Mapping
 from pathlib import Path
-from typing import Any
 
 import click
 
@@ -58,14 +56,6 @@ def event_record(event: Event) -> dict[str, object]:
         "timestamp_ms": event.timestamp_ms,
         "cursor": event.cursor,
     }
-
-
-def queue_status_counts(rows: Iterable[Mapping[str, Any]]) -> dict[str, int]:
-    counts: dict[str, int] = {}
-    for row in rows:
-        status = str(row["status"])
-        counts[status] = counts.get(status, 0) + 1
-    return counts
 
 
 @cli.command("queue")
@@ -266,7 +256,10 @@ def status(project_root: Path, state_dir: Path | None) -> int:
         rows = event_store.list_queue_items()
     finally:
         event_store.close()
-    counts = queue_status_counts(rows)
+    counts: dict[str, int] = {}
+    for row in rows:
+        status_name = str(row["status"])
+        counts[status_name] = counts.get(status_name, 0) + 1
     if not counts:
         click.echo("queue empty")
         return 0

@@ -74,7 +74,7 @@ class TurnRecorder:
 
     def attach_tool_result_effect(self, event: dict[str, Any]) -> None:
         """Attach the effect record a tool result implies, if any."""
-        fields = tool_result_effect_fields(
+        fields = effect_fields_for_tool_result(
             str(event.get("name") or ""),
             event.get("result"),
         )
@@ -223,7 +223,7 @@ def usage_tokens(usage: dict[str, Any], field_name: str) -> int:
     return 0
 
 
-def tool_result_effect_fields(name: str, result: Any) -> dict[str, Any] | None:
+def effect_fields_for_tool_result(name: str, result: Any) -> dict[str, Any] | None:
     """Map one tool result onto history effect fields, or None for no effect."""
     if not isinstance(result, dict):
         return None
@@ -232,15 +232,14 @@ def tool_result_effect_fields(name: str, result: Any) -> dict[str, Any] | None:
     staged_effect = proposed_effect(result)
     staged = staged_effect is not None
     if name in {"write", "edit"}:
-        return file_effect_fields(name, result, metadata, staged=staged)
+        return effect_fields_for_file_result(name, result, metadata, staged=staged)
     if name == "bash":
-        return command_effect_fields(result, metadata, staged_effect=staged_effect)
+        return effect_fields_for_command_result(
+            result,
+            metadata,
+            staged_effect=staged_effect,
+        )
     return None
-
-
-def event_id_value(event: dict[str, Any]) -> str | None:
-    event_id = event.get("id")
-    return event_id if isinstance(event_id, str) and event_id else None
 
 
 def is_durable_runtime_event(event: Event) -> bool:
@@ -276,7 +275,7 @@ def first_object_link_id(
     return ""
 
 
-def file_effect_fields(
+def effect_fields_for_file_result(
     name: str,
     result: dict[str, Any],
     metadata: dict[str, Any],
@@ -300,7 +299,7 @@ def file_effect_fields(
     return fields
 
 
-def command_effect_fields(
+def effect_fields_for_command_result(
     result: dict[str, Any],
     metadata: dict[str, Any],
     *,

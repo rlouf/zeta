@@ -376,7 +376,7 @@ async def run_valid_tool_call(
     events: list[DraftEvent] = []
     call_event = invocation.call_event
     call_event["capability_id"] = capability_id
-    emit_tool_event(
+    emit_capability_tool_event(
         events,
         call_event,
         ctx=ctx,
@@ -406,7 +406,7 @@ async def run_valid_tool_call(
     )
     if isinstance(call_event.get("caused_by"), str):
         result_event["caused_by"] = call_event["caused_by"]
-    emit_tool_event(events, result_event, ctx=ctx)
+    emit_capability_tool_event(events, result_event, ctx=ctx)
     return CapabilityCallResult(
         events=events,
         staged_effect=staged_effect,
@@ -473,12 +473,12 @@ def invalid_tool_result(
     )
     if isinstance(event.get("caused_by"), str):
         result_event["caused_by"] = event["caused_by"]
-    emit_tool_event(
+    emit_capability_tool_event(
         events,
         event,
         ctx=ctx,
     )
-    emit_tool_event(
+    emit_capability_tool_event(
         events,
         result_event,
         ctx=ctx,
@@ -509,18 +509,18 @@ def tool_result_event_payload(
     return event
 
 
-def emit_tool_event(
+def emit_capability_tool_event(
     events: list[DraftEvent],
     event: dict[str, Any],
     *,
     ctx: CapabilityExecutionContext,
 ) -> None:
-    emit_event(
+    emit_capability_event_draft(
         events, draft_from_runtime_event(event, session_id=None, turn_id=None), ctx
     )
 
 
-def emit_event(
+def emit_capability_event_draft(
     events: list[DraftEvent],
     draft: DraftEvent,
     ctx: CapabilityExecutionContext,

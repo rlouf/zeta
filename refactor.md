@@ -226,19 +226,6 @@ Current direction:
   construct wire/protocol lifecycle drafts; route handlers decide whether to
   accept, publish, or route them.
 
-### Capability Execution
-
-File: `src/zeta/capabilities/execution.py`
-
-Current direction:
-
-- Keep `proposed_effect`, `effect_resolution`, and `tool_result_status`-driven
-  behavior when they encode capability lifecycle policy.
-- Event-id mutation is centralized in `ensure_runtime_event_id`.
-- `emit_event` / `emit_tool_event` duplicate run-loop event plumbing. If both
-  remain, names should say whether the event is a capability event or a generic
-  run event.
-
 ### CLI Read Models
 
 File: `src/zeta/cli.py`

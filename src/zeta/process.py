@@ -69,7 +69,7 @@ def build_runtime(
         if state_dir is not None
         else resolved_project_root / ".zeta"
     )
-    specs = project_specs(resolved_project_root)
+    specs = load_project_specs(resolved_project_root)
     return worker.RuntimeServices(
         project_root=resolved_project_root,
         state_dir=resolved_state_dir,
@@ -79,7 +79,7 @@ def build_runtime(
     )
 
 
-def project_specs(project_root: Path) -> tuple[AgentSpec, ...]:
+def load_project_specs(project_root: Path) -> tuple[AgentSpec, ...]:
     agents_dir = project_root / "agents"
     if not agents_dir.exists():
         return ()

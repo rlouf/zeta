@@ -147,7 +147,7 @@ def _chat_message_entries(
     tool_call_ids: set[str] = set()
     resolved_effects = resolved_effect_call_ids(timeline)
     for index, event in enumerate(timeline):
-        message = timeline_chat_message(
+        message = _project_one_chat_message(
             event,
             index=index,
             tool_call_ids=tool_call_ids,
@@ -159,14 +159,14 @@ def _chat_message_entries(
     return entries
 
 
-def timeline_chat_message(
+def _project_one_chat_message(
     event: dict[str, Any],
     *,
     index: int,
     tool_call_ids: set[str],
     resolved_effects: set[str],
 ) -> dict[str, Any] | None:
-    message = role_or_event_chat_message(event)
+    message = _chat_message_from_role_or_event(event)
     if message is not None:
         return message
     event_type = str(event.get("type") or "")
@@ -212,7 +212,7 @@ def is_resolved_proposed_effect(
     return effect is not None
 
 
-def role_or_event_chat_message(event: dict[str, Any]) -> dict[str, Any] | None:
+def _chat_message_from_role_or_event(event: dict[str, Any]) -> dict[str, Any] | None:
     role = str(event.get("role") or "")
     if role not in {"user", "assistant"}:
         role = {
@@ -415,7 +415,7 @@ def prompt_components(
             )
         )
     components.extend(
-        timeline_message_components(
+        project_timeline_message_components(
             from_message_boundary(timeline[-TIMELINE_TAIL_LIMIT:]),
             historical=True,
         )
@@ -434,7 +434,7 @@ def prompt_components(
         )
     )
     components.extend(
-        timeline_message_components(
+        project_timeline_message_components(
             list(current_events),
             historical=False,
         )
@@ -442,7 +442,7 @@ def prompt_components(
     return components
 
 
-def timeline_message_components(
+def project_timeline_message_components(
     events: list[dict[str, Any]],
     *,
     historical: bool,

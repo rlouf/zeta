@@ -64,7 +64,7 @@ def append_history_record(record: dict[str, Any]) -> dict[str, Any]:
             session_id=session_id(),
         )
     event = append_event(record)
-    return sigil_history.history_event_record(event)
+    return sigil_history.project_one_turn_record(event)
 
 
 def publish_sigil_draft(draft: DraftEvent) -> None:
@@ -77,7 +77,7 @@ def test_history_publish_turn_record_writes_log_and_history() -> None:
         path=sigil_state.event_store_path(),
         session_id=session_id(),
     )
-    payload = sigil_history.history_event_record(event)
+    payload = sigil_history.project_one_turn_record(event)
 
     (stored_event,) = read_events()
     assert event.event_type == "zeta.turn.completed"

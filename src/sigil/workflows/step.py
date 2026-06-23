@@ -24,7 +24,7 @@ from sigil.agent_io import (
 from sigil.display.render import render_tool_result_summary
 from sigil.display.state import PROGRESS_MODE_TRACE, thinking_status_factory
 from sigil.display.summarize import render_handoff_lines
-from sigil.history import history_event_record
+from sigil.history import project_one_turn_record
 from sigil.protocols import (
     SHELL_HANDOFF_RESULT_SCHEMA,
     TURN_OUTCOME_ABORTED,
@@ -411,7 +411,7 @@ def finalize_progress(
         renderer.progress_renderer is not None
         and renderer.progress_renderer.mode != PROGRESS_MODE_TRACE
     ):
-        renderer.progress_renderer.finalize(history_event_record(turn), context_bar)
+        renderer.progress_renderer.finalize(project_one_turn_record(turn), context_bar)
     elif context_footer is not None:
         context_footer.finalize(telemetry)
 

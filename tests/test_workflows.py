@@ -23,9 +23,9 @@ from sigil import handoff as sigil_handoff
 from sigil.cli import cli as sigil_cli
 from sigil.history import (
     effect_record,
-    history_event_record,
     is_effect_record,
     is_turn_record,
+    project_one_turn_record,
     turn_record,
 )
 from sigil.protocols import (
@@ -2080,7 +2080,7 @@ def test_effect_record_keeps_only_set_optionals() -> None:
 
 def history_turns() -> list[dict[str, Any]]:
     return [
-        history_event_record(event)
+        project_one_turn_record(event)
         for event in read_events()
         if event.event_type.startswith("zeta.turn.")
     ]

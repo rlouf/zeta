@@ -86,49 +86,6 @@ Target direction:
 
 The target type decision is tracked under "Separate Noun Refactors."
 
-### Sigil History
-
-File: `src/sigil/history.py`
-
-Current names:
-
-- `history_event_record`
-- `effect_event_record`
-- `event_from_effect_record`
-- `event_from_record`
-- `turn_record`
-- `effect_record`
-
-Target direction:
-
-- The Sigil-facing history read model now lives in `src/sigil/history.py`.
-- Zeta run lifecycle event vocabulary now lives in `zeta/run/events.py`.
-  The current `zeta.turn.completed` / `zeta.turn.failed` names still carry
-  the old noun after the turn-to-run rename.
-- Rename the lifecycle events around the current domain noun, for example
-  `zeta.run.completed` / `zeta.run.failed`, unless the runtime package settles
-  on a narrower prefix.
-- Move any remaining run lifecycle draft/event constructors near the run
-  domain once the `DraftEvent` dependency can move without creating a circular
-  import. Sigil history can project those events, but it should not own their
-  canonical event names.
-- Rename event-to-record projectors:
-  `history_event_record` should become `project_one_timeline_record` or a more
-  specific target like `project_one_turn_record`.
-- Rename `effect_event_record` to `project_one_effect_record`.
-
-The `HistoryView` noun decision is tracked under "Separate Noun Refactors."
-
-- `turns_by_id` and `effects_by_id` are many-event projections. Rename them
-  toward the read model they produce, for example `project_turn_records_by_id`
-  and `project_effect_records_by_id`.
-- `history_event_record` and `effect_event_record` are single-item projections.
-  Rename them only if the projected record is still useful; otherwise inline
-  the direct event/record conversion at the caller.
-- `event_time`, `turn_sort_key`, `effect_sort_key`, and `optional_match` are
-  small local helpers. Inline them if they remain single-use and do not name a
-  policy.
-
 ### Project Directory Loading Conflict
 
 File: `src/zeta/process.py`
@@ -253,11 +210,9 @@ Current direction:
 
 ## Suggested Order
 
-1. Rename the remaining Sigil history projection helpers under
-   `src/sigil/history.py`.
-2. Clean up `records/provenance.py`.
-3. Rename `SessionScope` / `run/threads.py` to `RuntimeContext` /
+1. Clean up `records/provenance.py`.
+2. Rename `SessionScope` / `run/threads.py` to `RuntimeContext` /
    `run/context.py`.
-4. Handle the noun refactors separately where they unblock function names.
-5. Revisit prompt/component projection names once provenance and timeline names
+3. Handle the noun refactors separately where they unblock function names.
+4. Revisit prompt/component projection names once provenance and timeline names
    are stable.

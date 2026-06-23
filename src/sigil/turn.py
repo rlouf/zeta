@@ -7,7 +7,7 @@ from typing import Any
 
 from sigil.history import (
     effect_record,
-    history_event_record,
+    project_one_turn_record,
     publish_effect_record,
     publish_turn_record,
     turn_record,
@@ -140,7 +140,7 @@ class TurnRecorder:
             path=event_store_path(),
             session_id=session_id(),
         )
-        payload = history_event_record(event)
+        payload = project_one_turn_record(event)
         record_turn_trace_object(
             payload,
             self.effects,

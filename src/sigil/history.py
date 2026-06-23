@@ -76,8 +76,8 @@ class HistoryView:
     """Derived turn/effect history over durable events."""
 
     def __init__(self, events: list[Event]) -> None:
-        self._turns_by_id = turns_by_id(events)
-        self._effects_by_id = effects_by_id(events)
+        self._turns_by_id = project_turn_records_by_id(events)
+        self._effects_by_id = project_effect_records_by_id(events)
 
     @classmethod
     def from_store(cls, path: str | Path) -> HistoryView:
@@ -188,19 +188,19 @@ class HistoryView:
         return effects
 
 
-def turns_by_id(events: list[Event]) -> dict[str, dict[str, Any]]:
+def project_turn_records_by_id(events: list[Event]) -> dict[str, dict[str, Any]]:
     turns: dict[str, dict[str, Any]] = {}
     for event in events:
         if not event.event_type.startswith("zeta.turn."):
             continue
-        record = history_event_record(event)
+        record = project_one_turn_record(event)
         turn_id = str(record.get("turn_id") or "")
         if turn_id:
             turns[turn_id] = record
     return turns
 
 
-def effects_by_id(events: list[Event]) -> dict[str, dict[str, Any]]:
+def project_effect_records_by_id(events: list[Event]) -> dict[str, dict[str, Any]]:
     effects: dict[str, dict[str, Any]] = {}
     for event in events:
         if event.event_type != "zeta.tool_call.completed":
@@ -211,7 +211,7 @@ def effects_by_id(events: list[Event]) -> dict[str, dict[str, Any]]:
         for effect in raw_effects:
             if not is_effect_record(effect):
                 continue
-            record = effect_event_record(
+            record = project_one_effect_record(
                 effect,
                 timestamp=event_time(event),
                 session_id=event.session_id,
@@ -352,7 +352,7 @@ def publish_effect_record(
             }
         ),
     )
-    return effect_event_record(
+    return project_one_effect_record(
         record,
         timestamp=event_time(appended),
         session_id=appended.session_id or session_id,
@@ -479,7 +479,7 @@ def effect_sort_key(effect: dict[str, Any]) -> tuple[float, str]:
     return (float(effect.get("time") or 0.0), str(effect.get("effect_id") or ""))
 
 
-def history_event_record(event: Event) -> dict[str, Any]:
+def project_one_turn_record(event: Event) -> dict[str, Any]:
     record = dict(event.payload)
     record.update(
         {
@@ -495,7 +495,7 @@ def history_event_record(event: Event) -> dict[str, Any]:
     return record
 
 
-def effect_event_record(
+def project_one_effect_record(
     record: dict[str, Any],
     *,
     timestamp: float,

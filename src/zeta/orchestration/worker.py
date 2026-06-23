@@ -14,7 +14,7 @@ from zeta.orchestration.scheduling import emit_due_schedules
 from zeta.orchestration.session_turn_agent import session_turn_agent
 from zeta.records.events import Event
 from zeta.records.stores import Filter, SqliteEventStore, SqliteStore, zeta_sqlite_path
-from zeta.run.threads import SessionScope
+from zeta.run.context import RuntimeContext
 
 LOCAL_WORKER_NAME = "local-runtime"
 QUEUE_LEASE_MS = 60_000
@@ -151,7 +151,7 @@ async def run_eventlog_rpc_request(
         zeta_sqlite_path(runtime.state_dir),
         session_id=session_id,
     )
-    session = SessionScope(
+    session = RuntimeContext(
         session_id=session_id,
         event_sink=runtime.events,
         trace_store=trace_store,

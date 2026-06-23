@@ -77,7 +77,7 @@ Target direction:
 
 - `process.py` is also awkward as the home for runtime-context construction.
   The functions that assemble event sinks, trace stores, tool registries, and
-  directories should move with `RuntimeContext` once `SessionScope` is renamed.
+  directories should move with `RuntimeContext`.
 
 ### Records Event Helpers
 
@@ -162,19 +162,15 @@ Current direction:
 
 ### Runtime Context
 
-File: `src/zeta/run/threads.py`
+File: `src/zeta/run/context.py`
 
 Question:
 
-- Should `SessionScope` become `RuntimeContext`?
+- Should runtime context construction stay in `src/zeta/process.py`?
 
 Current direction:
 
-- Do not rename it to `ThreadScope`. The object has little to do with a
-  conversation thread; it is a runtime resource bundle plus the continuity
-  partition used for events and traces.
-- Rename `SessionScope` to `RuntimeContext`.
-- Rename `src/zeta/run/threads.py` away from thread vocabulary, for example to
+- `SessionScope` is now `RuntimeContext` and lives in
   `src/zeta/run/context.py`.
 - Move `default_session` and `session_for_id` out of `src/zeta/process.py` or
   rename that module so the construction path reads as runtime-context setup,
@@ -188,8 +184,7 @@ Current direction:
 
 ## Suggested Order
 
-1. Rename `SessionScope` / `run/threads.py` to `RuntimeContext` /
-   `run/context.py`.
+1. Rename or move the runtime-context constructors in `src/zeta/process.py`.
 2. Handle the noun refactors separately where they unblock function names.
 3. Revisit prompt/component projection names once provenance and timeline names
    are stable.

@@ -16,7 +16,7 @@ from zeta.records.stores import (
     event_store_path,
     zeta_sqlite_path,
 )
-from zeta.run.threads import SessionScope
+from zeta.run.context import RuntimeContext
 
 
 def zeta_state_dir() -> Path:
@@ -24,7 +24,7 @@ def zeta_state_dir() -> Path:
     return Path(root).expanduser() if root else Path.home() / ".zeta"
 
 
-def default_session() -> SessionScope:
+def default_session() -> RuntimeContext:
     """Return the default process session for pure Zeta runtime calls."""
 
     state_dir = zeta_state_dir()
@@ -42,13 +42,13 @@ def session_for_id(
     state_dir: Path,
     session_dir: Path,
     tool_registry: CapabilityRegistry | None = None,
-) -> SessionScope:
+) -> RuntimeContext:
     """Build the default Zeta runtime dependencies for one session scope."""
 
     if tool_registry is None:
         from zeta.capabilities.registry import registry as tool_registry
 
-    return SessionScope(
+    return RuntimeContext(
         session_id=session_id,
         event_sink=SqliteEventStore(event_store_path(state_dir)),
         trace_store=SqliteStore(zeta_sqlite_path(state_dir), session_id=session_id),

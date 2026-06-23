@@ -25,8 +25,8 @@ from zeta.context.components import PromptTrace
 from zeta.records.events import DraftEvent, Event
 from zeta.records.objects import Derivation, Object, ObjectId
 from zeta.records.stores import warn_trace_failure_once
+from zeta.run.context import RuntimeContext
 from zeta.run.events import TURN_RECORD_SCHEMA
-from zeta.run.threads import SessionScope
 
 
 class TurnRecorder:
@@ -40,7 +40,7 @@ class TurnRecorder:
     def __init__(
         self,
         *,
-        runtime_context: SessionScope,
+        runtime_context: RuntimeContext,
         workflow: str,
         objective: str,
         allowed_tools: Iterable[str],
@@ -180,7 +180,7 @@ def record_turn_trace_object(
     effects: list[dict[str, Any]],
     effect_object_ids: list[str],
     *,
-    runtime_context: SessionScope,
+    runtime_context: RuntimeContext,
 ) -> None:
     """Bridge one turn record into the session trace graph, fail-open.
 

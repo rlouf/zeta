@@ -61,9 +61,9 @@ from zeta.records.stores import (
     SqliteEventStore,
     event_store_path,
 )
+from zeta.run import context as zeta_runtime_context
 from zeta.run import runtime as zeta_agent
 from zeta.run import thread_run as zeta_requests
-from zeta.run import threads as zeta_scope
 from zeta.run.config import CompactionPolicy
 from zeta.run.runtime import AgentRunResult
 
@@ -1335,14 +1335,14 @@ def rpc_client(
     input_stream: asyncio.StreamReader | None = None,
     output: RpcMemoryTransport | None = None,
     *,
-    session: zeta_scope.SessionScope | None = None,
+    session: zeta_runtime_context.RuntimeContext | None = None,
     dispatcher: zeta_dispatch.EventDispatcher | None = None,
 ) -> tuple[zeta_rpc.JsonRpcConnection, zeta_rpc.RpcClient, zeta_rpc.JsonRpcRouter]:
     reader, writer, output = rpc_streams(output=output)
     connection = zeta_rpc.JsonRpcConnection(input_stream or reader, writer)
     if session is None:
         event_store = zeta_events.MemoryEventStore()
-        session = zeta_scope.SessionScope(
+        session = zeta_runtime_context.RuntimeContext(
             session_id="ctx-session",
             event_sink=event_store,
             trace_store=zeta_trace.InMemoryStore(),
@@ -1383,7 +1383,7 @@ def run_rpc_messages(
     input_text: str,
     output: RpcMemoryTransport,
     *,
-    session: zeta_scope.SessionScope | None = None,
+    session: zeta_runtime_context.RuntimeContext | None = None,
     dispatcher: zeta_dispatch.EventDispatcher | None = None,
 ) -> zeta_rpc.RpcClient:
     input_stream, _, _ = rpc_streams(input_text)
@@ -1453,7 +1453,7 @@ def test_zeta_rpc_events_publish_uses_constructor_shaped_event(
     tmp_path: Path,
 ) -> None:
     event_store = zeta_events.SqliteEventStore(tmp_path / "events.sqlite3")
-    session = zeta_scope.SessionScope(
+    session = zeta_runtime_context.RuntimeContext(
         session_id="ctx-session",
         event_sink=event_store,
         trace_store=zeta_trace.InMemoryStore(),
@@ -1500,7 +1500,7 @@ def test_zeta_rpc_events_publish_returns_before_routing_finishes(
 ) -> None:
     async def run() -> None:
         event_store = zeta_events.SqliteEventStore(tmp_path / "events.sqlite3")
-        session = zeta_scope.SessionScope(
+        session = zeta_runtime_context.RuntimeContext(
             session_id="ctx-session",
             event_sink=event_store,
             trace_store=zeta_trace.InMemoryStore(),
@@ -1569,7 +1569,7 @@ def test_zeta_rpc_events_publish_rejects_lifecycle_event_ingress(
     tmp_path: Path,
 ) -> None:
     event_store = zeta_events.SqliteEventStore(tmp_path / "events.sqlite3")
-    session = zeta_scope.SessionScope(
+    session = zeta_runtime_context.RuntimeContext(
         session_id="ctx-session",
         event_sink=event_store,
         trace_store=zeta_trace.InMemoryStore(),
@@ -1617,7 +1617,7 @@ def test_zeta_rpc_events_list_uses_event_store_filter_names(tmp_path: Path) -> N
                 run_id="run_1",
             )
         )
-    session = zeta_scope.SessionScope(
+    session = zeta_runtime_context.RuntimeContext(
         session_id="ctx-session",
         event_sink=event_store,
         trace_store=zeta_trace.InMemoryStore(),
@@ -1673,7 +1673,7 @@ def test_zeta_rpc_eventlog_events_list_request_produces_response() -> None:
             session_id="ctx-session",
         )
     ).event
-    session = zeta_scope.SessionScope(
+    session = zeta_runtime_context.RuntimeContext(
         session_id="ctx-session",
         event_sink=event_store,
         trace_store=zeta_trace.InMemoryStore(),
@@ -1702,7 +1702,7 @@ def test_zeta_rpc_eventlog_invalid_session_run_produces_failed_event() -> None:
             session_id="ctx-session",
         )
     ).event
-    session = zeta_scope.SessionScope(
+    session = zeta_runtime_context.RuntimeContext(
         session_id="ctx-session",
         event_sink=event_store,
         trace_store=zeta_trace.InMemoryStore(),
@@ -1734,7 +1734,7 @@ def test_zeta_rpc_eventlog_session_run_request_produces_started_response(
             session_id="ctx-session",
         )
     ).event
-    session = zeta_scope.SessionScope(
+    session = zeta_runtime_context.RuntimeContext(
         session_id="ctx-session",
         event_sink=event_store,
         trace_store=zeta_trace.InMemoryStore(),
@@ -1820,7 +1820,7 @@ def test_zeta_rpc_session_cancel_updates_run_state() -> None:
 def test_zeta_rpc_tools_register_uses_capability_shape() -> None:
     registry = CapabilityRegistry()
     event_store = zeta_events.MemoryEventStore()
-    session = zeta_scope.SessionScope(
+    session = zeta_runtime_context.RuntimeContext(
         session_id="ctx-session",
         event_sink=event_store,
         trace_store=zeta_trace.InMemoryStore(),
@@ -1878,7 +1878,7 @@ def test_zeta_rpc_tools_register_uses_capability_shape() -> None:
 def test_zeta_rpc_registered_tool_invokes_peer_call_tool() -> None:
     registry = CapabilityRegistry()
     event_store = zeta_events.MemoryEventStore()
-    session = zeta_scope.SessionScope(
+    session = zeta_runtime_context.RuntimeContext(
         session_id="ctx-session",
         event_sink=event_store,
         trace_store=zeta_trace.InMemoryStore(),
@@ -1994,7 +1994,7 @@ def test_zeta_session_turn_agent_adapts_requested_event_to_turn_runner(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
-    context = zeta_scope.SessionScope(
+    context = zeta_runtime_context.RuntimeContext(
         session_id="ctx-session",
         event_sink=zeta_events.MemoryEventStore(),
         trace_store=zeta_trace.InMemoryStore(),
@@ -2011,7 +2011,7 @@ def test_zeta_session_turn_agent_adapts_requested_event_to_turn_runner(
         run_id: str,
         caused_by: str,
         publish_event: Callable[[Event | DraftEvent], None],
-        runtime_context: zeta_scope.SessionScope,
+        runtime_context: zeta_runtime_context.RuntimeContext,
         cancellation_event: asyncio.Event | None,
     ) -> dict[str, Any]:
         captured["params"] = params
@@ -2074,7 +2074,7 @@ def test_zeta_run_session_turn_records_user_message_and_returns_result(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    context = zeta_scope.SessionScope(
+    context = zeta_runtime_context.RuntimeContext(
         session_id="ctx-session",
         event_sink=zeta_events.MemoryEventStore(),
         trace_store=zeta_trace.InMemoryStore(),

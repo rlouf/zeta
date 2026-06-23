@@ -32,8 +32,8 @@ from zeta.records.events import (
 from zeta.records.objects import Object, ObjectId
 from zeta.records.provenance import project_trace_projection
 from zeta.records.stores import Filter, InMemoryStore, Store
+from zeta.run.context import RuntimeContext
 from zeta.run.runtime import AgentRunResult
-from zeta.run.threads import SessionScope
 
 zeta_context = SimpleNamespace(
     PreparedPrompt=PreparedPrompt,
@@ -200,7 +200,7 @@ def timeline_events(
 def record_durable_timeline_event(
     event: dict[str, Any] | DraftEvent,
     *,
-    runtime_context: SessionScope,
+    runtime_context: RuntimeContext,
 ) -> dict[str, Any]:
     draft = (
         event

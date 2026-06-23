@@ -15,13 +15,13 @@ from zeta.orchestration.session_turn_agent import SESSION_TURN_AGENT_ID
 from zeta.records.events import DraftEvent, Event
 from zeta.records.stores import EventReader, EventStoreProtocol, Filter
 from zeta.rpc.jsonrpc import JsonRpcConnection, JsonRpcRouter, RpcError
+from zeta.run.context import RuntimeContext
 from zeta.run.runs import RunStatus
 from zeta.run.thread_run import (
     SessionRequestError,
     session_run_id,
     session_turn_requested_draft,
 )
-from zeta.run.threads import SessionScope
 
 ToolCallStatus = Literal["requested", "responded", "failed", "cancelled", "timed_out"]
 RPC_REQUESTED = "rpc.requested"
@@ -64,7 +64,7 @@ class RpcClient:
     """Per-RPC peer context shared by route adapters for stdio runtime calls."""
 
     connection: JsonRpcConnection | None
-    session: SessionScope
+    session: RuntimeContext
     dispatcher: EventDispatcher
     pending_runs: dict[str, RunState]
     pending_tool_calls: dict[str, asyncio.Future[dict[str, Any]]]

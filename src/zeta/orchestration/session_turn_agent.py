@@ -17,13 +17,13 @@ from zeta.orchestration.dispatch import (
 from zeta.orchestration.queue import terminal_queue_item_result
 from zeta.records.events import Event
 from zeta.run.cancellation import CancellationToken
+from zeta.run.context import RuntimeContext
 from zeta.run.thread_run import (
     empty_session_trace_result,
     run_session_turn,
     session_run_id,
     session_turn_requested_draft,
 )
-from zeta.run.threads import SessionScope
 
 RuntimePublishedEvent = Event
 CancellationEventForRun = Callable[[str], CancellationToken | None]
@@ -31,7 +31,7 @@ SESSION_TURN_AGENT_ID = "zeta.session.turn"
 
 
 def session_turn_agent(
-    runtime_context: SessionScope,
+    runtime_context: RuntimeContext,
     *,
     publish_event: Callable[[RuntimePublishedEvent], None],
     cancellation_event_for_run: CancellationEventForRun | None = None,
@@ -70,7 +70,7 @@ async def submit_session_turn(
     params: dict[str, Any],
     *,
     run_id: str | None = None,
-    runtime_context: SessionScope,
+    runtime_context: RuntimeContext,
     event_dispatcher: EventDispatcher,
 ) -> dict[str, Any]:
     run_id = run_id or session_run_id()

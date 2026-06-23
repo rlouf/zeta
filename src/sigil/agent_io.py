@@ -44,17 +44,17 @@ from zeta.records.stores import (
     Store,
     warn_trace_failure_once,
 )
+from zeta.run.context import RuntimeContext
 from zeta.run.runtime import (
     AgentRunResult,
     is_runtime_ui_event,
 )
-from zeta.run.threads import SessionScope
 
 RuntimePublishedEvent = Event | DraftEvent
 STAGING_TOOL_NAMES = frozenset({"bash", "edit", "write"})
 
 
-def current_timeline(*, runtime_context: SessionScope) -> list[Event]:
+def current_timeline(*, runtime_context: RuntimeContext) -> list[Event]:
     try:
         if not isinstance(runtime_context.event_sink, EventReader):
             return []
@@ -69,7 +69,7 @@ def current_timeline(*, runtime_context: SessionScope) -> list[Event]:
         return []
 
 
-def record_trace_for_turn(runtime_context: SessionScope, turn_id: str | None) -> None:
+def record_trace_for_turn(runtime_context: RuntimeContext, turn_id: str | None) -> None:
     if turn_id is None or not isinstance(runtime_context.event_sink, EventReader):
         return
     try:
@@ -107,7 +107,7 @@ def last_event_time(*, store: Store, run_id: str | None = None) -> float | None:
 def record_user_message(
     event: dict[str, Any],
     *,
-    runtime_context: SessionScope,
+    runtime_context: RuntimeContext,
 ) -> Event:
     payload = {key: value for key, value in event.items() if key != "type"}
     outcome = runtime_context.event_sink.accept(
@@ -125,7 +125,7 @@ def record_user_message(
 def record_runtime_event(
     draft: DraftEvent,
     *,
-    runtime_context: SessionScope,
+    runtime_context: RuntimeContext,
     tag_fields: dict[str, Any] | None = None,
     strip_fields: frozenset[str] = frozenset(),
     turn_id: str | None = None,
@@ -234,7 +234,7 @@ class TurnEventRecorder:
         *,
         render_output: TextIO,
         turn_recorder: TurnRecorder | None = None,
-        runtime_context: SessionScope,
+        runtime_context: RuntimeContext,
     ) -> None:
         self.renderer = renderer
         self.render_output = render_output
@@ -373,7 +373,7 @@ def render_final_answer(
 def record_turn_abort(
     error: BaseException,
     *,
-    runtime_context: SessionScope,
+    runtime_context: RuntimeContext,
     reason: str | None = None,
     **fields: Any,
 ) -> Event:

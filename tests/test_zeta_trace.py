@@ -45,9 +45,9 @@ from zeta.records.stores import (
 )
 from zeta.records.stores.object_store import IncompatibleSchemaError
 from zeta.run import runtime as zeta_agent
+from zeta.run.context import RuntimeContext
 from zeta.run.runtime import AgentRunResult
 from zeta.run.thread_run import current_timeline
-from zeta.run.threads import SessionScope
 
 zeta_trace = SimpleNamespace(
     AmbiguousIdError=AmbiguousIdError,
@@ -76,11 +76,11 @@ def zeta_event_store() -> SqliteEventStore:
 
 def zeta_runtime_context(
     trace_store: zeta_trace.Store | None = None,
-) -> SessionScope:
+) -> RuntimeContext:
     context = default_session()
     if trace_store is None:
         return context
-    return SessionScope(
+    return RuntimeContext(
         session_id=context.session_id,
         event_sink=context.event_sink,
         trace_store=trace_store,
@@ -93,7 +93,7 @@ def zeta_runtime_context(
 def record_zeta_event(
     event: dict[str, object] | DraftEvent,
     *,
-    runtime_context: SessionScope | None = None,
+    runtime_context: RuntimeContext | None = None,
 ) -> dict[str, object]:
     return record_durable_timeline_event(
         event,
@@ -108,7 +108,7 @@ def current_zeta_timeline() -> list[dict[str, object]]:
     ]
 
 
-def timeline_views(runtime_context: SessionScope) -> list[dict[str, Any]]:
+def timeline_views(runtime_context: RuntimeContext) -> list[dict[str, Any]]:
     return [
         event_view(event) for event in current_timeline(runtime_context=runtime_context)
     ]

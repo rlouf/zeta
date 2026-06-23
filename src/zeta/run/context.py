@@ -1,4 +1,4 @@
-"""Execution resource scope for Zeta runtime calls."""
+"""Runtime context for Zeta calls."""
 
 from __future__ import annotations
 
@@ -12,8 +12,8 @@ if TYPE_CHECKING:
 
 
 @dataclass(frozen=True)
-class SessionScope:
-    """Runtime dependencies for one durable session scope."""
+class RuntimeContext:
+    """Runtime dependencies for one durable continuity scope."""
 
     session_id: str
     event_sink: EventStoreProtocol

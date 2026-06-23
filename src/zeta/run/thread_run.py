@@ -162,7 +162,7 @@ async def run_session_turn(
     def sink(draft: DraftEvent) -> None:
         if is_runtime_ui_event(draft):
             return
-        persisted = _record_runtime_draft(
+        persisted = _record_runtime_event(
             draft,
             runtime_context=runtime_context,
             run_id=run_id,
@@ -245,7 +245,7 @@ def _record_user_message(
     return outcome.event
 
 
-def _record_runtime_draft(
+def _record_runtime_event(
     draft: DraftEvent,
     *,
     runtime_context: SessionScope,
@@ -258,11 +258,11 @@ def _record_runtime_draft(
         run_id=run_id,
     )
     outcome = runtime_context.event_sink.accept(tagged)
-    _project_trace_for_run(runtime_context, outcome.event.run_id)
+    _record_trace_for_run(runtime_context, outcome.event.run_id)
     return outcome.event
 
 
-def _project_trace_for_run(runtime_context: SessionScope, run_id: str | None) -> None:
+def _record_trace_for_run(runtime_context: SessionScope, run_id: str | None) -> None:
     if run_id is None or not isinstance(runtime_context.event_sink, EventReader):
         return
     try:
@@ -277,7 +277,7 @@ def _project_trace_for_run(runtime_context: SessionScope, run_id: str | None) ->
             runtime_context.trace_store,
         )
     except Exception as exc:
-        warn_trace_failure_once("project_trace_for_run", exc)
+        warn_trace_failure_once("record_trace_for_run", exc)
 
 
 def _session_result(

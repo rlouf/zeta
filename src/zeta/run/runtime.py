@@ -152,7 +152,7 @@ class AgentRun:
             caused_by=self.state.next_model_caused_by,
             ctx=self.deps,
         )
-        update_prompt_trace_from_projection(
+        update_prompt_trace_from_events(
             assistant_event_id,
             state=self.state,
             ctx=self.deps,
@@ -656,19 +656,19 @@ def draft_views_for_prompt(
         view = draft_event_view(draft)
         event_id = draft_event_id(draft)
         if event_id is not None:
-            add_projection_fields_for_prompt(view, event_id, projection)
+            add_prompt_trace_fields(view, event_id, projection)
         views.append(view)
     return views
 
 
-def add_projection_fields_for_prompt(
+def add_prompt_trace_fields(
     view: dict[str, Any],
     event_id: str,
     projection: TraceProjection,
 ) -> None:
     event_type = view.get("type")
     if event_type == "model":
-        add_model_projection_fields(view, event_id, projection)
+        add_model_prompt_trace_fields(view, event_id, projection)
         return
     if event_type == "tool_call":
         call_id = projection.tool_call_object_ids.get(event_id)
@@ -676,10 +676,10 @@ def add_projection_fields_for_prompt(
             view["tool_call_object_id"] = call_id
         return
     if event_type == "tool_result":
-        add_tool_result_projection_fields(view, event_id, projection)
+        add_tool_result_trace_fields(view, event_id, projection)
 
 
-def add_model_projection_fields(
+def add_model_prompt_trace_fields(
     view: dict[str, Any],
     event_id: str,
     projection: TraceProjection,
@@ -711,7 +711,7 @@ def projected_tool_call_ids(
     ]
 
 
-def add_tool_result_projection_fields(
+def add_tool_result_trace_fields(
     view: dict[str, Any],
     event_id: str,
     projection: TraceProjection,
@@ -807,7 +807,7 @@ def record_model_event(
     return event_id, tool_calls
 
 
-def update_prompt_trace_from_projection(
+def update_prompt_trace_from_events(
     assistant_event_id: str | None,
     *,
     state: RunState,

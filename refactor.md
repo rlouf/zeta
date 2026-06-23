@@ -146,35 +146,6 @@ The `HistoryView` noun decision is tracked under "Separate Noun Refactors."
   small local helpers. Inline them if they remain single-use and do not name a
   policy.
 
-### Run Prompt Projection
-
-File: `src/zeta/run/runtime.py`
-
-Current names:
-
-- `add_projection_fields_for_prompt`
-- `add_model_projection_fields`
-- `add_tool_result_projection_fields`
-- `update_prompt_trace_from_projection`
-
-Target direction:
-
-- These functions mutate prompt trace/projection payloads and should either move
-  closer to `context` / `records/provenance.py` or be renamed around the target
-  they produce.
-- If they remain projection helpers, prefer names like
-  `project_one_prompt_trace_model_event` or keep them private under the
-  top-level trace projector.
-- Avoid generic `add_*_projection_fields` names because they describe mechanics,
-  not the read model being produced.
-- Timeline-type decoding for events and drafts is centralized in
-  `records/events.py`.
-- Idempotency-key parsing for draft event ids is centralized in
-  `records/events.py`.
-- `model_event_payload` and `assistant_tool_calls` are only worth keeping if
-  they encode run event schema. Inline or move them if they are just local dict
-  construction.
-
 ### Project Directory Loading Conflict
 
 File: `src/zeta/process.py`

@@ -15,12 +15,13 @@ from zeta.records.stores import (
     Filter,
     SqliteEventStore,
 )
+from zeta.run.events import (
+    TURN_RECORD_SCHEMA,
+    turn_event_type,
+)
 
 SINCE_PATTERN = re.compile(r"(\d+)([dhm])")
 SINCE_SCALES = {"d": 86400, "h": 3600, "m": 60}
-TURN_EVENT_COMPLETED = "zeta.turn.completed"
-TURN_EVENT_FAILED = "zeta.turn.failed"
-TURN_RECORD_SCHEMA = "zeta.turn"
 EFFECT_RECORD_TYPE = "zeta.effect"
 EFFECT_RECORD_SCHEMA = "zeta.effect"
 
@@ -291,13 +292,6 @@ def effect_record(
     }
     record.update({key: value for key, value in optionals.items() if value is not None})
     return record
-
-
-def turn_event_type(outcome: str) -> str:
-    """Return the durable event type for a turn outcome."""
-    if outcome in {"failed", "aborted"}:
-        return TURN_EVENT_FAILED
-    return TURN_EVENT_COMPLETED
 
 
 def is_turn_record(value: object) -> bool:

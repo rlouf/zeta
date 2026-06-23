@@ -98,24 +98,21 @@ Current names:
 - `event_from_record`
 - `turn_record`
 - `effect_record`
-- `TURN_EVENT_COMPLETED`
-- `TURN_EVENT_FAILED`
-- `TURN_RECORD_SCHEMA`
-- `turn_event_type`
 
 Target direction:
 
 - Eliminate `src/zeta/records/timeline.py` from Zeta. It currently mixes two
   concerns that should move elsewhere.
-- Move Zeta run lifecycle event vocabulary out of this module and into
-  `zeta/run/`. The current `zeta.turn.completed` / `zeta.turn.failed` names
-  still carry the old noun after the turn-to-run rename.
+- Zeta run lifecycle event vocabulary now lives in `zeta/run/events.py`.
+  The current `zeta.turn.completed` / `zeta.turn.failed` names still carry
+  the old noun after the turn-to-run rename.
 - Rename the lifecycle events around the current domain noun, for example
   `zeta.run.completed` / `zeta.run.failed`, unless the runtime package settles
   on a narrower prefix.
-- Move run lifecycle draft/event constructors near the run domain. Sigil
-  history can project those events, but it should not own their canonical event
-  names.
+- Move any remaining run lifecycle draft/event constructors near the run
+  domain once the `DraftEvent` dependency can move without creating a circular
+  import. Sigil history can project those events, but it should not own their
+  canonical event names.
 - Rename event-to-record projectors:
   `history_event_record` should become `project_one_timeline_record` or a more
   specific target like `project_one_turn_record`.
@@ -165,8 +162,9 @@ Current direction:
   `draft_from_runtime_event`, `draft_from_boundary_event`, `model_call_draft`,
   `tool_call_draft`, `turn_aborted_draft`, `stream_chunk_draft`,
   `status_update_draft`, `user_message_draft`, and `durable_event_draft`.
-- Move `turn_aborted_draft` with the run lifecycle event vocabulary. It still
-  emits `zeta.turn.failed` after the turn-to-run rename.
+- `turn_aborted_draft` now uses the failed lifecycle event name from
+  `zeta.run.events`, but the constructor still lives in `records/events.py`.
+  Move it only if the `DraftEvent` dependency can move without circular imports.
 - Inline thin forwarding constructors if they only choose an event type and add
   no schema, idempotency, or lifecycle policy.
 - Use `*_draft` when the function returns a `DraftEvent`.

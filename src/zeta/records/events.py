@@ -15,6 +15,8 @@ from dataclasses import KW_ONLY, dataclass
 from typing import Any, Protocol, cast
 from uuid import uuid4
 
+from zeta.run.events import TURN_EVENT_COMPLETED, TURN_EVENT_FAILED
+
 EVENT_IDEMPOTENT_TYPES = frozenset(
     {
         "zeta.model_call.completed",
@@ -27,8 +29,8 @@ EVENT_IDEMPOTENT_TYPES = frozenset(
 TURN_IDEMPOTENT_TYPES = frozenset(
     {
         "zeta.prompt.submitted",
-        "zeta.turn.completed",
-        "zeta.turn.failed",
+        TURN_EVENT_COMPLETED,
+        TURN_EVENT_FAILED,
     }
 )
 RUNTIME_DURABLE_EXCLUDED_KEYS = {
@@ -420,7 +422,7 @@ def turn_aborted_draft(
         "content": content or f"(turn aborted: {reason.replace('_', ' ')})",
     }
     return DraftEvent(
-        event_type="zeta.turn.failed",
+        event_type=TURN_EVENT_FAILED,
         source="zeta",
         payload=payload,
         idempotency_key=None,

@@ -66,13 +66,6 @@ TERMINAL_QUEUE_ITEM_EVENT_TYPES = {
 }
 
 
-def required_payload_string(event: Event, key: str) -> str | None:
-    value = event.payload.get(key)
-    if isinstance(value, str):
-        return value
-    return None
-
-
 def project_queue_items(events: Iterable[Event]) -> list[QueueItem]:
     items: dict[str, QueueItem] = {}
     for event in events:
@@ -86,10 +79,14 @@ def project_queue_items(events: Iterable[Event]) -> list[QueueItem]:
 def project_one_queue_item(event: Event) -> QueueItem | None:
     if not event.event_type.startswith("runtime.queue_item."):
         return None
-    queue_item_id = required_payload_string(event, "queue_item_id")
-    event_id = required_payload_string(event, "event_id")
-    target_agent = required_payload_string(event, "target_agent")
-    if queue_item_id is None or event_id is None or target_agent is None:
+    queue_item_id = event.payload.get("queue_item_id")
+    event_id = event.payload.get("event_id")
+    target_agent = event.payload.get("target_agent")
+    if (
+        not isinstance(queue_item_id, str)
+        or not isinstance(event_id, str)
+        or not isinstance(target_agent, str)
+    ):
         return None
     return QueueItem(
         queue_item_id=queue_item_id,
@@ -119,10 +116,14 @@ def queue_item_status_counts(
 
 
 def routed_queue_item_from_event(event: Event) -> RoutedQueueItem:
-    queue_item_id = required_payload_string(event, "queue_item_id")
-    event_id = required_payload_string(event, "event_id")
-    target_agent = required_payload_string(event, "target_agent")
-    if queue_item_id is None or event_id is None or target_agent is None:
+    queue_item_id = event.payload.get("queue_item_id")
+    event_id = event.payload.get("event_id")
+    target_agent = event.payload.get("target_agent")
+    if (
+        not isinstance(queue_item_id, str)
+        or not isinstance(event_id, str)
+        or not isinstance(target_agent, str)
+    ):
         raise ValueError("available queue item event is missing required payload")
     return RoutedQueueItem(
         queue_item_id=queue_item_id,
@@ -170,9 +171,9 @@ def terminal_queue_item_result(
     for event in reversed(tuple(lifecycle_events)):
         if event.event_type not in TERMINAL_QUEUE_ITEM_EVENT_TYPES:
             continue
-        if required_payload_string(event, "event_id") != event_id:
+        if event.payload.get("event_id") != event_id:
             continue
-        if required_payload_string(event, "target_agent") != target_agent:
+        if event.payload.get("target_agent") != target_agent:
             continue
         return terminal_queue_item_event_result(event)
     return None

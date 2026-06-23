@@ -64,57 +64,6 @@ def project_one_queue_item(event: Event) -> QueueItem | None:
 
 ## Apply This Convention
 
-### Orchestration Queue
-
-File: `src/zeta/orchestration/queue.py`
-
-- Rename `queue_item_snapshots` to `project_queue_items`.
-- Rename `queue_item_snapshot_from_event` to `project_one_queue_item`.
-- Rename `queue_item_event_status` to `queue_item_status_from_event` or make it
-  private if it is only used by `project_one_queue_item`.
-
-The target type decision is tracked under "Separate Noun Refactors."
-
-- Re-evaluate `required_payload_string`, `optional_payload_string`, and
-  `queue_item_result`. They currently read like generic field-access helpers.
-  Inline them unless they become shared schema decoders with a neutral home.
-- Keep `queue_item_idempotency_key` and
-  `unhandled_queue_item_idempotency_key` only if they define event dedupe
-  policy; consider renaming them to `*_event_key` if that is the real contract.
-- Re-evaluate `queue_item_payload` and `terminal_queue_item_status` with the
-  same rule as attempts: inline mechanical payload assembly, keep/rename
-  lifecycle policy.
-
-### Orchestration Attempts
-
-File: `src/zeta/orchestration/attempts.py`
-
-Current names:
-
-- `AttemptSnapshot`
-- `attempt_snapshots`
-- `attempt_snapshot_from_event`
-- `attempt_event_status`
-- `attempt_status_counts`
-
-Target direction:
-
-- Delete the attempt projection object and helpers instead of renaming them.
-- The event log already carries the attempt lifecycle data. Do not introduce a
-  separate read object unless a caller needs normalized attempt state.
-- Inline the only production read where it is needed: `_next_attempt_number`
-  can scan `runtime.attempt.*` events, filter by `queue_item_id`, read
-  `attempt_number` from the payload, and return `max(..., default=0) + 1`.
-- Keep `attempt_idempotency_key` because it encodes event dedupe policy, not a
-  field lookup.
-- Re-evaluate `attempt_id_for_queue_item`, `attempt_payload`,
-  `attempt_result_payload`, and `terminal_attempt_status`. If they only wrap
-  one local lookup or a mechanical `asdict`/payload shape, inline them. If they
-  encode lifecycle event schema or terminal status policy, rename them so that
-  policy is visible.
-- Delete tests that only pin `AttemptSnapshot` projection behavior unless they
-  are replaced by behavior-level retry/attempt-number tests.
-
 ### Records Provenance
 
 File: `src/zeta/records/provenance.py`
@@ -329,14 +278,11 @@ File: `src/zeta/process.py`
 
 Current name:
 
-- `project_specs`
 - `default_session`
 - `session_for_id`
 
 Target direction:
 
-- Rename it away from the reserved `project_*` prefix, for example:
-  `load_project_specs`, `load_agent_specs`, or `agent_specs_for_project`.
 - `process.py` is also awkward as the home for runtime-context construction.
   The functions that assemble event sinks, trace stores, tool registries, and
   directories should move with `RuntimeContext` once `SessionScope` is renamed.
@@ -586,32 +532,6 @@ Current direction:
 These are related naming issues, but they are not part of the `project_*`
 function convention. Track and implement them separately.
 
-### Queue Item Projection Target
-
-File: `src/zeta/orchestration/queue.py`
-
-Question:
-
-- Do we need `QueueItemSnapshot` at all?
-
-Current direction:
-
-- The extra fields look unnecessary for queue item projection.
-- Prefer deleting `QueueItemSnapshot` and projecting directly to `QueueItem`.
-- Keep terminal result/error/cursor behavior in explicit terminal-result
-  helpers, not in the queue item projection.
-
-The resulting projection target would be:
-
-```python
-QueueItem(
-    queue_item_id=...,
-    event_id=...,
-    target_agent=...,
-    status=...,
-)
-```
-
 ### Trace Or Provenance
 
 File: `src/zeta/records/provenance.py`
@@ -689,16 +609,12 @@ Current direction:
 
 ## Suggested Order
 
-1. Apply the convention to `orchestration/queue.py`.
-2. Apply the same shape to `orchestration/attempts.py`.
-3. Move shared event payload string readers out of `queue.py`.
-4. Rename `project_specs` so `project_*` is reserved for projection.
-5. Move run lifecycle event vocabulary out of `records/timeline.py` and into
+1. Move run lifecycle event vocabulary out of `records/timeline.py` and into
    `zeta/run/`.
-6. Move the Sigil-facing history read model out of Zeta.
-7. Clean up `records/provenance.py`.
-8. Rename `SessionScope` / `run/threads.py` to `RuntimeContext` /
+2. Move the Sigil-facing history read model out of Zeta.
+3. Clean up `records/provenance.py`.
+4. Rename `SessionScope` / `run/threads.py` to `RuntimeContext` /
    `run/context.py`.
-9. Handle the noun refactors separately where they unblock function names.
-10. Revisit prompt/component projection names once provenance and timeline names
+5. Handle the noun refactors separately where they unblock function names.
+6. Revisit prompt/component projection names once provenance and timeline names
    are stable.

@@ -28,7 +28,6 @@ from zeta.orchestration.queue import (
     queue_item_from_record,
     queue_item_id_for_event,
     queue_item_idempotency_key,
-    required_payload_string,
     routed_queue_item_from_event,
     unhandled_queue_item_idempotency_key,
 )
@@ -403,7 +402,7 @@ class EventDispatcher:
         for event in reversed(
             reader.list_events(Filter(event_type="runtime.queue_item.available"))
         ):
-            if required_payload_string(event, "queue_item_id") == queue_item_id:
+            if event.payload.get("queue_item_id") == queue_item_id:
                 return routed_queue_item_from_event(event)
         raise LookupError(f"queue item {queue_item_id!r} is not available")
 
@@ -473,7 +472,7 @@ class EventDispatcher:
         for event in reversed(
             reader.list_events(Filter(event_type_prefix="runtime.queue_item."))
         ):
-            if required_payload_string(event, "queue_item_id") == queue_item_id:
+            if event.payload.get("queue_item_id") == queue_item_id:
                 if event.event_type in TERMINAL_QUEUE_ITEM_EVENT_TYPES:
                     return event
                 return None

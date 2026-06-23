@@ -1,1 +1,1 @@
-"""Durable records, timeline, provenance, and stores."""
+"""Durable records, provenance, and stores."""

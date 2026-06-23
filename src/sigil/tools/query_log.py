@@ -8,7 +8,7 @@ from zeta.capabilities.execution import error_result
 from zeta.capabilities.types import Capability, CapabilityId
 
 if TYPE_CHECKING:
-    from zeta.records.timeline import HistoryView
+    from sigil.history import HistoryView
 
 DEFAULT_TURNS = 20
 MAX_TURNS = 50
@@ -78,9 +78,9 @@ def run(params: dict[str, Any]) -> dict[str, Any]:
     # display layer reaches back into zeta.context — a module-level import
     # here closes that loop into a cycle.
     from sigil.display.summarize import format_turn_line
+    from sigil.history import query_history
     from sigil.sessions import session_id
     from sigil.state import history_view
-    from zeta.records.timeline import query_history
 
     history = history_view()
     turn_token = str(params.get("turn_id") or "")
@@ -124,7 +124,7 @@ def run(params: dict[str, Any]) -> dict[str, Any]:
 
 def run_expand(history: HistoryView, token: str) -> dict[str, Any]:
     from sigil.display.summarize import render_turn_record
-    from zeta.records.timeline import (
+    from sigil.history import (
         AmbiguousTurnError,
         UnknownTurnError,
         resolve_turn_id,

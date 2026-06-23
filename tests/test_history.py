@@ -5,6 +5,7 @@ from typing import Any
 
 from click.testing import CliRunner
 
+from sigil import history as sigil_history
 from sigil import state as sigil_state
 from sigil.cli import cli as sigil_cli
 from sigil.protocols import (
@@ -22,13 +23,12 @@ from sigil.state import (
     read_events,
     state_dir,
 )
-from zeta.records import timeline as zeta_history
 from zeta.records.events import DraftEvent
 from zeta.records.stores import SqliteEventStore
 
 
 def sample_turn_record(turn_id: str = "turn-1", **overrides: Any) -> dict[str, Any]:
-    record = zeta_history.turn_record(
+    record = sigil_history.turn_record(
         turn_id,
         workflow="run",
         objective="ls",
@@ -44,7 +44,7 @@ def sample_effect_record(
     turn_id: str = "turn-1",
     **overrides: Any,
 ) -> dict[str, Any]:
-    record = zeta_history.effect_record(
+    record = sigil_history.effect_record(
         effect_id,
         turn_id=turn_id,
         kind=EFFECT_KIND_COMMAND,
@@ -58,13 +58,13 @@ def sample_effect_record(
 
 def append_history_record(record: dict[str, Any]) -> dict[str, Any]:
     if record.get("type") == "zeta.effect":
-        return zeta_history.publish_effect_record(
+        return sigil_history.publish_effect_record(
             record,
             path=sigil_state.event_store_path(),
             session_id=session_id(),
         )
     event = append_event(record)
-    return zeta_history.history_event_record(event)
+    return sigil_history.history_event_record(event)
 
 
 def publish_sigil_draft(draft: DraftEvent) -> None:
@@ -72,12 +72,12 @@ def publish_sigil_draft(draft: DraftEvent) -> None:
 
 
 def test_history_publish_turn_record_writes_log_and_history() -> None:
-    event = zeta_history.publish_turn_record(
+    event = sigil_history.publish_turn_record(
         sample_turn_record(caused_by="prompt-event"),
         path=sigil_state.event_store_path(),
         session_id=session_id(),
     )
-    payload = zeta_history.history_event_record(event)
+    payload = sigil_history.history_event_record(event)
 
     (stored_event,) = read_events()
     assert event.event_type == "zeta.turn.completed"
@@ -88,12 +88,12 @@ def test_history_publish_turn_record_writes_log_and_history() -> None:
 
 
 def test_history_publish_turn_record_uses_outcome_event_names() -> None:
-    failed = zeta_history.publish_turn_record(
+    failed = sigil_history.publish_turn_record(
         sample_turn_record("turn-failed", outcome=TURN_OUTCOME_FAILED),
         path=sigil_state.event_store_path(),
         session_id=session_id(),
     )
-    aborted = zeta_history.publish_turn_record(
+    aborted = sigil_history.publish_turn_record(
         sample_turn_record("turn-aborted", outcome=TURN_OUTCOME_ABORTED),
         path=sigil_state.event_store_path(),
         session_id=session_id(),
@@ -105,7 +105,7 @@ def test_history_publish_turn_record_uses_outcome_event_names() -> None:
 
 
 def test_history_publish_effect_record_writes_durable_tool_event() -> None:
-    payload = zeta_history.publish_effect_record(
+    payload = sigil_history.publish_effect_record(
         sample_effect_record(),
         path=sigil_state.event_store_path(),
         session_id=session_id(),
@@ -456,7 +456,7 @@ def test_sigil_log_empty_history_prints_friendly_line(monkeypatch) -> None:
 
 def seed_show_and_blame_history(monkeypatch) -> None:
     monkeypatch.setenv("SIGIL_SESSION_ID", "show-cli")
-    record = zeta_history.turn_record(
+    record = sigil_history.turn_record(
         "turn-do-1111",
         workflow="do",
         objective="refactor the staging path",
@@ -742,7 +742,7 @@ def test_sigil_log_export_and_import_round_trip_via_cli(
 
 
 def test_history_survives_session_clear() -> None:
-    zeta_history.publish_turn_record(
+    sigil_history.publish_turn_record(
         sample_turn_record(),
         path=sigil_state.event_store_path(),
         session_id=session_id(),

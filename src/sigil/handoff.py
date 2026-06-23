@@ -7,6 +7,7 @@ from collections.abc import Sequence
 from typing import Any, cast
 
 from sigil.agent_io import current_timeline
+from sigil.history import effect_record, publish_effect_record
 from sigil.protocols import (
     EFFECT_KIND_HANDOFF,
     SHELL_HANDOFF_CANCEL_EXPECTED_NOT_EXECUTED,
@@ -29,7 +30,6 @@ from zeta.records.events import (
     exact_event_time,
     tool_call_draft,
 )
-from zeta.records.timeline import effect_record, publish_effect_record
 
 HandoffTimelineEvent = Event | dict[str, Any]
 

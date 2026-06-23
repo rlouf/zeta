@@ -24,6 +24,7 @@ from sigil.agent_io import (
 from sigil.display.render import render_tool_result_summary
 from sigil.display.state import PROGRESS_MODE_TRACE, thinking_status_factory
 from sigil.display.summarize import render_handoff_lines
+from sigil.history import history_event_record
 from sigil.protocols import (
     SHELL_HANDOFF_RESULT_SCHEMA,
     TURN_OUTCOME_ABORTED,
@@ -49,7 +50,6 @@ from zeta.models import (
     model_selection_event,
 )
 from zeta.records.events import DraftEvent, Event
-from zeta.records.timeline import history_event_record
 from zeta.run.config import AgentConfig
 from zeta.run.runtime import (
     AgentRunAborted,

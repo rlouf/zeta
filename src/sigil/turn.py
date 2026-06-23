@@ -5,6 +5,13 @@ import uuid
 from collections.abc import Iterable
 from typing import Any
 
+from sigil.history import (
+    effect_record,
+    history_event_record,
+    publish_effect_record,
+    publish_turn_record,
+    turn_record,
+)
 from sigil.protocols import (
     EFFECT_KIND_COMMAND,
     EFFECT_KIND_FILE_EDIT,
@@ -18,13 +25,6 @@ from zeta.context.components import PromptTrace
 from zeta.records.events import DraftEvent, Event
 from zeta.records.objects import Derivation, Object, ObjectId
 from zeta.records.stores import warn_trace_failure_once
-from zeta.records.timeline import (
-    effect_record,
-    history_event_record,
-    publish_effect_record,
-    publish_turn_record,
-    turn_record,
-)
 from zeta.run.events import TURN_RECORD_SCHEMA
 from zeta.run.threads import SessionScope
 

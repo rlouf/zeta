@@ -16,6 +16,12 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+from sigil.history import (
+    effect_record,
+    publish_effect_record,
+    publish_turn_record,
+    turn_record,
+)
 from sigil.protocols import (
     EFFECT_KIND_COMMAND,
     TURN_OUTCOME_EXECUTED,
@@ -24,12 +30,6 @@ from sigil.protocols import (
 )
 from sigil.state import event_store_path, read_events, state_dir
 from zeta.records.events import Event
-from zeta.records.timeline import (
-    effect_record,
-    publish_effect_record,
-    publish_turn_record,
-    turn_record,
-)
 
 RUN_WORKFLOW = "run"
 

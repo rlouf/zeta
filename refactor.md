@@ -86,9 +86,9 @@ Target direction:
 
 The target type decision is tracked under "Separate Noun Refactors."
 
-### Records Timeline
+### Sigil History
 
-File: `src/zeta/records/timeline.py`
+File: `src/sigil/history.py`
 
 Current names:
 
@@ -101,8 +101,7 @@ Current names:
 
 Target direction:
 
-- Eliminate `src/zeta/records/timeline.py` from Zeta. It currently mixes two
-  concerns that should move elsewhere.
+- The Sigil-facing history read model now lives in `src/sigil/history.py`.
 - Zeta run lifecycle event vocabulary now lives in `zeta/run/events.py`.
   The current `zeta.turn.completed` / `zeta.turn.failed` names still carry
   the old noun after the turn-to-run rename.
@@ -120,9 +119,6 @@ Target direction:
 
 The `HistoryView` noun decision is tracked under "Separate Noun Refactors."
 
-- Move the Sigil-facing history read model out of Zeta after the run lifecycle
-  event vocabulary is owned by `zeta/run/`. The target should be Sigil history,
-  not a renamed Zeta records module.
 - `turns_by_id` and `effects_by_id` are many-event projections. Rename them
   toward the read model they produce, for example `project_turn_records_by_id`
   and `project_effect_records_by_id`.
@@ -213,7 +209,7 @@ Current direction:
 
 ### History Or Timeline
 
-File: `src/zeta/records/timeline.py`
+File: `src/sigil/history.py`
 
 Question:
 
@@ -221,8 +217,9 @@ Question:
 
 Current direction:
 
-- Move `HistoryView`, history querying, touched-file filters, cost summaries,
-  import/export helpers, and Sigil turn/effect record projection to Sigil.
+- `HistoryView`, history querying, touched-file filters, cost summaries,
+  import/export helpers, and Sigil turn/effect record projection now live in
+  Sigil.
 - Do not move canonical run lifecycle event names with the Sigil history read
   model. Those belong under `zeta/run/`.
 - Rename the old `turn_*` history names to `run_*` only after deciding whether
@@ -256,12 +253,11 @@ Current direction:
 
 ## Suggested Order
 
-1. Move run lifecycle event vocabulary out of `records/timeline.py` and into
-   `zeta/run/`.
-2. Move the Sigil-facing history read model out of Zeta.
-3. Clean up `records/provenance.py`.
-4. Rename `SessionScope` / `run/threads.py` to `RuntimeContext` /
+1. Rename the remaining Sigil history projection helpers under
+   `src/sigil/history.py`.
+2. Clean up `records/provenance.py`.
+3. Rename `SessionScope` / `run/threads.py` to `RuntimeContext` /
    `run/context.py`.
-5. Handle the noun refactors separately where they unblock function names.
-6. Revisit prompt/component projection names once provenance and timeline names
+4. Handle the noun refactors separately where they unblock function names.
+5. Revisit prompt/component projection names once provenance and timeline names
    are stable.

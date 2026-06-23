@@ -49,8 +49,8 @@ def read_events() -> list[Event]:
 
 
 def history_view(events: list[Event] | None = None) -> Any:
-    """Return a Zeta history view over Sigil's durable events."""
-    from zeta.records.timeline import HistoryView
+    """Return a history view over Sigil's durable events."""
+    from sigil.history import HistoryView
 
     if events is not None:
         return HistoryView(events)

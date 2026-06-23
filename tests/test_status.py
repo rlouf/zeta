@@ -7,12 +7,12 @@ from _zeta_helpers import write_models_config
 from click.testing import CliRunner
 
 from sigil.cli import cli
+from sigil.history import effect_record, publish_effect_record, turn_record
 from sigil.protocols import turn_contract
 from sigil.sessions import record_turn, session_dir, session_id
 from sigil.state import append_event, event_store_path
 from sigil.status import current_status, format_status
 from zeta.models import set_active_model_profile
-from zeta.records.timeline import effect_record, publish_effect_record, turn_record
 
 
 def test_status_clean_when_no_live_state() -> None:

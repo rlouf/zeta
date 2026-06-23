@@ -2,6 +2,7 @@ import json
 from dataclasses import asdict, replace
 from typing import Any
 
+from sigil.history import effect_record, event_from_record, turn_record
 from zeta.records.events import (
     DraftEvent,
     Event,
@@ -15,7 +16,6 @@ from zeta.records.events import (
 from zeta.records.objects import Derivation, Object
 from zeta.records.provenance import project_trace_events
 from zeta.records.stores import InMemoryStore
-from zeta.records.timeline import effect_record, event_from_record, turn_record
 
 SESSION_ID = "session-1"
 TURN_ID = "turn-1"
@@ -686,7 +686,7 @@ def test_zeta_pure_runtime_events_project_to_trace_graph() -> None:
     ]
 
 
-def test_zeta_history_record_projection_contract() -> None:
+def test_sigil_history_record_projection_contract() -> None:
     turn = turn_record(
         TURN_ID,
         workflow="do",

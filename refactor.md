@@ -266,24 +266,6 @@ Current direction:
 - `attach_tool_result` and `recovered_tool_error` encode error recovery/display
   policy. Keep them if that fallback behavior stays centralized.
 
-### Session Run Trace Projection
-
-File: `src/zeta/run/thread_run.py`
-
-Current names:
-
-- `_record_trace_for_run`
-- `_project_session_trace_result`
-- `empty_session_trace_result`
-
-Current direction:
-
-- `_record_trace_for_run` performs a side-effecting trace-store update, so the
-  side-effecting name is appropriate.
-- `_project_session_trace_result` does return a read-side result derived from
-  events plus trace projection maps. It can keep projection language, but the
-  target should be the RPC result shape, not the source trace mechanics.
-
 ### Agent Schedule Spec Parsing
 
 File: `src/zeta/agents/spec.py`

@@ -127,8 +127,15 @@ def tool_call_row(
     call: Object,
     result_record: tuple[ObjectId, Object] | None,
 ) -> dict[str, Any]:
-    call_data = object_data(call)
-    result_object_id, result_data, result_payload = result_fields(result_record)
+    call_data = call.data if isinstance(call.data, dict) else {}
+    result_object_id: ObjectId | None = None
+    result_data: dict[str, Any] = {}
+    result_payload: dict[str, Any] | None = None
+    if result_record is not None:
+        result_object_id, result = result_record
+        result_data = result.data if isinstance(result.data, dict) else {}
+        payload = result_data.get("result")
+        result_payload = payload if isinstance(payload, dict) else None
     row = base_tool_call_row(
         session=session,
         call_object_id=call_object_id,
@@ -141,22 +148,6 @@ def tool_call_row(
     if result_payload is not None:
         attach_tool_result(row, result_payload)
     return row
-
-
-def object_data(obj: Object) -> dict[str, Any]:
-    return obj.data if isinstance(obj.data, dict) else {}
-
-
-def result_fields(
-    result_record: tuple[ObjectId, Object] | None,
-) -> tuple[ObjectId | None, dict[str, Any], dict[str, Any] | None]:
-    if result_record is None:
-        return None, {}, None
-    result_object_id, result = result_record
-    result_data = object_data(result)
-    payload = result_data.get("result")
-    result_payload = payload if isinstance(payload, dict) else None
-    return result_object_id, result_data, result_payload
 
 
 def base_tool_call_row(

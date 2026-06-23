@@ -242,13 +242,13 @@ class SqliteEventStore:
             inserted = self.get(event.id)
             if inserted is None:
                 raise sqlite3.IntegrityError(f"append failed for event {event.id}")
-            self._project_session_mapping(inserted)
-            self._project_runtime_event(inserted)
+            self._index_one_session_mapping(inserted)
+            self._index_one_runtime_event(inserted)
             self.connection.commit()
             return AppendOutcome(event=inserted, inserted=True)
         return AppendOutcome(event=self._duplicate_for(event), inserted=False)
 
-    def _project_session_mapping(self, event: Event) -> None:
+    def _index_one_session_mapping(self, event: Event) -> None:
         if event.session_id is None or event.run_id is None:
             return
         self.connection.execute(
@@ -262,12 +262,12 @@ class SqliteEventStore:
             (event.session_id, event.run_id, event.timestamp_ms),
         )
 
-    def _project_runtime_event(self, event: Event) -> None:
+    def _index_one_runtime_event(self, event: Event) -> None:
         if event.event_type.startswith("runtime.queue_item."):
-            self._project_queue_item_event(event)
+            self._index_one_queue_item(event)
             return
         if event.event_type.startswith("runtime.attempt."):
-            self._project_attempt_event(event)
+            self._index_one_attempt(event)
 
     def ensure_pending_queue_item(self, event: Event) -> str:
         queue_item_id = pending_queue_item_id(event)
@@ -467,7 +467,7 @@ class SqliteEventStore:
         self.connection.commit()
         return cursor.rowcount == 1
 
-    def _project_queue_item_event(self, event: Event) -> None:
+    def _index_one_queue_item(self, event: Event) -> None:
         queue_item_id = _payload_str(event, "queue_item_id")
         event_id = _payload_str(event, "event_id")
         target_agent = _payload_str(event, "target_agent")
@@ -499,7 +499,7 @@ class SqliteEventStore:
             ),
         )
 
-    def _project_attempt_event(self, event: Event) -> None:
+    def _index_one_attempt(self, event: Event) -> None:
         attempt_id = _payload_str(event, "attempt_id")
         queue_item_id = _payload_str(event, "queue_item_id")
         event_id = _payload_str(event, "event_id")
@@ -569,9 +569,9 @@ class SqliteEventStore:
                 (attempt_number, attempt_number, queue_item_id),
             )
         if status in {"completed", "failed", "cancelled"}:
-            self._project_attempt_result(event, attempt_id, status)
+            self._index_one_attempt_result(event, attempt_id, status)
 
-    def _project_attempt_result(
+    def _index_one_attempt_result(
         self,
         event: Event,
         attempt_id: str,

@@ -168,9 +168,9 @@ def schedule_tuple(value: Any, path: Path) -> tuple[ScheduleEntry, ...]:
 
 def schedule_entry(value: Any, path: Path) -> ScheduleEntry:
     cron = required_schedule_string(value, "cron", path)
-    event = schedule_event(value, path)
-    payload = schedule_payload(value.get("payload", {}), path)
-    timezone = schedule_timezone(value.get("timezone"), path)
+    event = schedule_event_type(value, path)
+    payload = cast(dict[str, Any], value.get("payload", {}))
+    timezone = schedule_timezone_name(value.get("timezone"), path)
     return ScheduleEntry(
         cron=cron,
         event=event,
@@ -186,7 +186,7 @@ def required_schedule_string(value: Mapping[str, Any], field: str, path: Path) -
     return cast(str, item)
 
 
-def schedule_event(value: Mapping[str, Any], path: Path) -> str:
+def schedule_event_type(value: Mapping[str, Any], path: Path) -> str:
     event = value.get("event")
     if event is None:
         return DEFAULT_SCHEDULE_EVENT
@@ -195,12 +195,7 @@ def schedule_event(value: Mapping[str, Any], path: Path) -> str:
     return cast(str, event)
 
 
-def schedule_payload(value: Any, path: Path) -> dict[str, Any]:
-    del path
-    return cast(dict[str, Any], value)
-
-
-def schedule_timezone(value: Any, path: Path) -> str | None:
+def schedule_timezone_name(value: Any, path: Path) -> str | None:
     del path
     return cast(str | None, value)
 

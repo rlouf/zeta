@@ -20,6 +20,7 @@ from sigil.display.state import (
     create_stream_renderer,
     progress_mode_from_env,
 )
+from sigil.display.tty import is_interactive
 from sigil.turn import TurnRecorder
 from zeta.models import (
     CODEX_RESPONSES_API,
@@ -365,10 +366,12 @@ def render_final_answer(
         if renderer.stream_renderer is not None:
             renderer.stream_renderer.finish()
         return
-    if not renderer.trace_state.render_text_separator(sys.stdout):
-        print()
+    if is_interactive(sys.stdout):
+        if not renderer.trace_state.render_text_separator(sys.stdout):
+            print()
     print(content)
-    print()
+    if is_interactive(sys.stdout):
+        print()
 
 
 def record_turn_abort(

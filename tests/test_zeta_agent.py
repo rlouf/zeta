@@ -633,7 +633,7 @@ def test_zeta_handle_tool_call_emits_drafts() -> None:
                 "function": {"name": "read", "arguments": '{"path": "README.md"}'},
             },
             allowed_capabilities=allowed_capabilities,
-            projection=registry.project(allowed_capabilities),
+            tool_schema=registry.model_tool_schema(allowed_capabilities),
             index=0,
             execution_mode="direct",
             caused_by="model-1",
@@ -1147,7 +1147,7 @@ def test_zeta_run_capability_step_records_call_execution_and_result(
 ) -> None:
     state = zeta_agent.RunState()
     registry = CapabilityRegistry()
-    projection = registry.project(())
+    tool_schema = registry.model_tool_schema(())
     tool_call = {"id": "call-1", "function": {"name": "read", "arguments": "{}"}}
     ctx = zeta_agent.RunDependencies(
         event_sink=None,
@@ -1191,7 +1191,7 @@ def test_zeta_run_capability_step_records_call_execution_and_result(
             index=0,
             config=zeta_agent.AgentConfig(),
             allowed_capabilities=(),
-            projection=projection,
+            tool_schema=tool_schema,
             model_telemetry={},
             assistant_event_id="assistant-1",
             state=state,
@@ -1242,7 +1242,7 @@ def test_zeta_run_capability_step_reconciles_existing_terminal_result(
         ]
     )
     registry = CapabilityRegistry()
-    projection = registry.project(())
+    tool_schema = registry.model_tool_schema(())
     invoked = False
     ctx = zeta_agent.RunDependencies(
         event_sink=None,
@@ -1267,7 +1267,7 @@ def test_zeta_run_capability_step_reconciles_existing_terminal_result(
             index=0,
             config=zeta_agent.AgentConfig(),
             allowed_capabilities=(),
-            projection=projection,
+            tool_schema=tool_schema,
             model_telemetry={},
             assistant_event_id="assistant-1",
             state=state,

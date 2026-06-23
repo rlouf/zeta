@@ -14,8 +14,8 @@ from pathlib import Path
 from typing import Any, Protocol, cast
 
 from zeta.capabilities.registry import (
-    CapabilityProjection,
     CapabilityRegistry,
+    CapabilityToolSchema,
 )
 from zeta.capabilities.registry import registry as _default_tool_registry
 from zeta.capabilities.types import ExecutionMode
@@ -262,7 +262,7 @@ async def handle_tool_call(
     tool_call: dict[str, Any],
     *,
     allowed_capabilities: tuple[str, ...],
-    projection: CapabilityProjection,
+    tool_schema: CapabilityToolSchema,
     index: int,
     execution_mode: ExecutionMode = "stage",
     model_telemetry: dict[str, Any] | None = None,
@@ -285,7 +285,7 @@ async def handle_tool_call(
     validation = validate_tool_call(
         invocation,
         allowed_capabilities=allowed_capabilities,
-        projection=projection,
+        tool_schema=tool_schema,
         tool_registry=ctx.tool_registry,
     )
     if validation.error is not None:
@@ -325,12 +325,12 @@ def validate_tool_call(
     invocation: CapabilityCallInvocation,
     *,
     allowed_capabilities: tuple[str, ...],
-    projection: CapabilityProjection,
+    tool_schema: CapabilityToolSchema,
     tool_registry: CapabilityRegistry,
 ) -> ToolCallValidation:
     if invocation.parse_error:
         return ToolCallValidation(error=("invalid-json-args", invocation.parse_error))
-    capability_id = projection.name_to_id.get(invocation.name)
+    capability_id = tool_schema.name_to_id.get(invocation.name)
     if capability_id is None:
         if tool_registry.resolve(invocation.name) is not None:
             return ToolCallValidation(

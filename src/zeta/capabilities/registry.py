@@ -13,7 +13,7 @@ from zeta.capabilities.types import Capability, ExecutionMode
 __all__ = [
     "ExecutionMode",
     "CapabilityError",
-    "CapabilityProjection",
+    "CapabilityToolSchema",
     "CapabilityRegistry",
     "RegisteredCapability",
     "registry",
@@ -81,7 +81,7 @@ def error_result(
 
 
 @dataclass(frozen=True)
-class CapabilityProjection:
+class CapabilityToolSchema:
     name_to_id: dict[str, str]
     descriptors: list[dict[str, Any]]
 
@@ -136,13 +136,13 @@ class CapabilityRegistry:
     def list_auto_enabled_capability_ids(self) -> list[str]:
         return self.list_capability_ids()
 
-    def project(
+    def model_tool_schema(
         self,
         enabled_ids: tuple[str, ...],
         *,
         name_overrides: dict[str, str] | None = None,
-    ) -> CapabilityProjection:
-        """Build the per-run model-visible projection for capabilities."""
+    ) -> CapabilityToolSchema:
+        """Build the per-run model-visible tool schema for capabilities."""
         name_overrides = name_overrides or {}
         name_to_id: dict[str, str] = {}
         descriptors = []
@@ -162,7 +162,7 @@ class CapabilityRegistry:
                 )
             name_to_id[name] = capability_id
             descriptors.append(model_descriptor(name, capability))
-        return CapabilityProjection(name_to_id=name_to_id, descriptors=descriptors)
+        return CapabilityToolSchema(name_to_id=name_to_id, descriptors=descriptors)
 
     def invoke(
         self,

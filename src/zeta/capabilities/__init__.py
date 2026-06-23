@@ -9,8 +9,8 @@ from zeta.capabilities.execution import (
 )
 from zeta.capabilities.registry import (
     CapabilityError,
-    CapabilityProjection,
     CapabilityRegistry,
+    CapabilityToolSchema,
     registry,
 )
 from zeta.capabilities.types import Capability, CapabilityId, ExecutionMode
@@ -21,8 +21,8 @@ __all__ = [
     "CapabilityExecutor",
     "CapabilityFunction",
     "CapabilityId",
-    "CapabilityProjection",
     "CapabilityRegistry",
+    "CapabilityToolSchema",
     "ExecutionMode",
     "InProcessCapabilityExecutor",
     "registry",

@@ -111,7 +111,7 @@ def prepare_prompt(
     return zeta_context.builder.prepared_prompt_from(stored)
 
 
-def test_model_capability_descriptors_are_generated_from_projection() -> None:
+def test_model_capability_descriptors_are_generated_from_tool_schema() -> None:
     registry = CapabilityRegistry()
     registry.register(
         RegisteredCapability(

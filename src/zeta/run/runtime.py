@@ -15,8 +15,8 @@ from zeta.capabilities.execution import (
     handle_tool_call,
 )
 from zeta.capabilities.registry import (
-    CapabilityProjection,
     CapabilityRegistry,
+    CapabilityToolSchema,
 )
 from zeta.capabilities.registry import registry as _runtime_tool_registry
 from zeta.context import prompt_transform_from_policy
@@ -102,7 +102,7 @@ class AgentRun:
     context: str
     deps: RunDependencies
     allowed_capabilities: tuple[str, ...]
-    projection: CapabilityProjection
+    tool_schema: CapabilityToolSchema
     tools: list[dict[str, Any]]
     state: RunState
 
@@ -180,7 +180,7 @@ class AgentRun:
                 index=index,
                 config=self.config,
                 allowed_capabilities=self.allowed_capabilities,
-                projection=self.projection,
+                tool_schema=self.tool_schema,
                 model_telemetry=(model_telemetry if index == 0 else None),
                 assistant_event_id=assistant_event_id,
                 state=self.state,
@@ -242,8 +242,8 @@ async def run_agent(
         model_gateway=gateway,
         abort_reason=run_abort_reason(cancellation_event, deadline, clock=clock),
     )
-    projection = active_tool_registry.project(allowed_capabilities)
-    tools = projection.descriptors
+    tool_schema = active_tool_registry.model_tool_schema(allowed_capabilities)
+    tools = tool_schema.descriptors
     return await AgentRun(
         objective=objective,
         timeline=timeline,
@@ -251,7 +251,7 @@ async def run_agent(
         context=context,
         deps=deps,
         allowed_capabilities=allowed_capabilities,
-        projection=projection,
+        tool_schema=tool_schema,
         tools=tools,
         state=state,
     ).run()
@@ -413,7 +413,7 @@ async def run_capability_step(
     index: int,
     config: AgentConfig,
     allowed_capabilities: tuple[str, ...],
-    projection: CapabilityProjection,
+    tool_schema: CapabilityToolSchema,
     model_telemetry: dict[str, Any] | None,
     assistant_event_id: str | None,
     state: RunState,
@@ -443,7 +443,7 @@ async def run_capability_step(
     handled = handle_tool_call(
         tool_call,
         allowed_capabilities=allowed_capabilities,
-        projection=projection,
+        tool_schema=tool_schema,
         index=index,
         execution_mode=config.execution_mode,
         model_telemetry=model_telemetry,

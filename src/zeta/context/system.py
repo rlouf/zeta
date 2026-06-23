@@ -204,4 +204,4 @@ def model_capability_descriptors(
         allowed_capabilities,
         tool_registry=active_tool_registry,
     )
-    return active_tool_registry.project(enabled_ids).descriptors
+    return active_tool_registry.model_tool_schema(enabled_ids).descriptors

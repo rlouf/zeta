@@ -275,21 +275,21 @@ def test_zeta_capability_registry_rejects_duplicate_canonical_ids() -> None:
         registry.register(_test_capability("read"))
 
 
-def test_zeta_capability_projection_rejects_ambiguous_names() -> None:
+def test_zeta_capability_tool_schema_rejects_ambiguous_names() -> None:
     registry = CapabilityRegistry()
     registry.register(_test_capability("read", provider="host"))
     registry.register(_test_capability("read", provider="rpc"))
 
     with pytest.raises(ValueError, match="ambiguous capability name 'read'"):
-        registry.project(("host.read", "rpc.read"))
+        registry.model_tool_schema(("host.read", "rpc.read"))
 
 
-def test_zeta_capability_projection_can_use_qualified_names() -> None:
+def test_zeta_capability_tool_schema_can_use_qualified_names() -> None:
     registry = CapabilityRegistry()
     registry.register(_test_capability("read", provider="host"))
     registry.register(_test_capability("read", provider="rpc"))
 
-    projection = registry.project(
+    tool_schema = registry.model_tool_schema(
         ("host.read", "rpc.read"),
         name_overrides={
             "host.read": "host.read",
@@ -297,12 +297,12 @@ def test_zeta_capability_projection_can_use_qualified_names() -> None:
         },
     )
 
-    assert projection.name_to_id == {
+    assert tool_schema.name_to_id == {
         "host.read": "host.read",
         "rpc.read": "rpc.read",
     }
     assert [
-        descriptor["function"]["name"] for descriptor in projection.descriptors
+        descriptor["function"]["name"] for descriptor in tool_schema.descriptors
     ] == ["host.read", "rpc.read"]
 
 

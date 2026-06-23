@@ -51,7 +51,7 @@ class StructuralTrimPromptTransform:
 def trimmed_component(component: PromptComponent) -> PromptComponent:
     assert component.message is not None
     source_id = component.object_id
-    trimmed_message = trimmed_message_projection(component)
+    trimmed_message = project_one_trimmed_message(component)
     data: dict[str, Any] = {
         "method": "structural_trim",
         "source_kind": component.kind,
@@ -77,10 +77,10 @@ def is_tool_result_component(component: PromptComponent) -> bool:
     if source_event_value is not None:
         return str(source_event_value.get("type") or "") == "tool_result"
     assert component.message is not None
-    return is_tool_result_projection(component.message)
+    return is_tool_result_message(component.message)
 
 
-def is_tool_result_projection(message: dict[str, Any]) -> bool:
+def is_tool_result_message(message: dict[str, Any]) -> bool:
     if message.get("role") == "tool":
         return True
     content = message.get("content")
@@ -94,7 +94,7 @@ def message_content_length(message: dict[str, Any]) -> int:
     return len(content)
 
 
-def trimmed_message_projection(component: PromptComponent) -> dict[str, Any]:
+def project_one_trimmed_message(component: PromptComponent) -> dict[str, Any]:
     assert component.message is not None
     if component.message.get("role") == "tool":
         return {

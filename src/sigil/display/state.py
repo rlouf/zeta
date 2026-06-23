@@ -1038,7 +1038,7 @@ class ThinkingStatus:
             lines.append(iris_italic(tail_line, enabled=color))
         if tail:
             lines.append("")
-        phase = "thinking" if self.reasoning_seen else "prefill"
+        phase = "thinking" if self.reasoning_seen else "waiting"
         lines.append(
             muted(status_wait_text(phase, seconds, self.left_padding), enabled=color)
         )

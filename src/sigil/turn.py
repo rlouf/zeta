@@ -98,7 +98,17 @@ class TurnRecorder:
         self.effects.append(payload)
         object_id = str(event.get("tool_result_object_id") or "")
         if not object_id:
-            object_id = first_object_link_id(event, "returned_objects", "tool_result")
+            links = event.get("returned_objects")
+            if isinstance(links, list):
+                for link in links:
+                    if not isinstance(link, dict):
+                        continue
+                    if link.get("kind") != "tool_result":
+                        continue
+                    link_id = link.get("id")
+                    if isinstance(link_id, str):
+                        object_id = link_id
+                        break
         if object_id:
             self.effect_object_ids.append(object_id)
 
@@ -254,25 +264,6 @@ def is_durable_runtime_event(event: Event) -> bool:
         or "returned_objects" in event.payload
         or bool(event.payload.get("tool_result_object_id"))
     )
-
-
-def first_object_link_id(
-    event: dict[str, Any],
-    collection: str,
-    kind: str,
-) -> str:
-    links = event.get(collection)
-    if not isinstance(links, list):
-        return ""
-    for link in links:
-        if not isinstance(link, dict):
-            continue
-        if link.get("kind") != kind:
-            continue
-        object_id = link.get("id")
-        if isinstance(object_id, str):
-            return object_id
-    return ""
 
 
 def effect_fields_for_file_result(

@@ -302,8 +302,6 @@ Current direction:
 - `emit_event` / `emit_tool_event` duplicate run-loop event plumbing. If both
   remain, names should say whether the event is a capability event or a generic
   run event.
-- `result_staged_effect` is a wrapper over `proposed_effect`; delete it unless
-  callers need a different semantic name.
 
 ### CLI Read Models
 
@@ -343,9 +341,9 @@ Files:
 
 Current direction:
 
-- `optional_string`, `event_id_value`, `handoff_event_payload`,
-  `handoff_event_time`, and `handoff_event_turn_id` look like field-access
-  helpers. Inline them unless repeated validation pressure justifies them.
+- `handoff_event_payload`, `handoff_event_time`, and `handoff_event_turn_id`
+  look like field-access helpers. Inline them unless repeated validation
+  pressure justifies them.
 
 ### Sigil Status And Trace Rows
 
@@ -398,28 +396,6 @@ Current direction:
   they encode defaults and validation.
 - `required_schedule_string` is a validation helper. Keep it only if the shared
   error message remains useful across several schedule fields.
-
-### Sigil Turn Effect Field Builders
-
-File: `src/sigil/turn.py`
-
-Current names:
-
-- `tool_result_effect_fields`
-- `file_effect_fields`
-- `command_effect_fields`
-- `event_id_value`
-- `first_object_link_id`
-
-Current direction:
-
-- `tool_result_effect_fields`, `file_effect_fields`, and
-  `command_effect_fields` encode the policy that maps tool results to history
-  effects. Prefer target-oriented names like `effect_fields_for_tool_result`.
-- `event_id_value` is a plain field accessor. Inline it if still used.
-- `first_object_link_id` is a small traversal helper over trace-link schema.
-  Keep it only if it is reused or if the trace-link schema needs one local
-  interpretation point.
 
 ### Display Progress Read Models
 

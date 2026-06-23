@@ -119,10 +119,19 @@ def durable_log_event(event: dict[str, Any], *, session_id: str) -> Event:
     source = str(payload.get("source") or "zeta")
     event_type = str(payload.get("type") or "event")
     durable_type = TIMELINE_DURABLE_TYPES.get(event_type, event_type)
-    event_id = optional_string(payload.get("id")) or f"evt_{uuid.uuid4().hex}"
-    turn_id = optional_string(payload.get("turn_id"))
+    raw_event_id = payload.get("id")
+    event_id = (
+        raw_event_id
+        if isinstance(raw_event_id, str) and raw_event_id
+        else f"evt_{uuid.uuid4().hex}"
+    )
+    raw_turn_id = payload.get("turn_id")
+    turn_id = raw_turn_id if isinstance(raw_turn_id, str) and raw_turn_id else None
     event_session_id = str(payload.get("session") or session_id)
-    caused_by = optional_string(payload.get("caused_by"))
+    raw_caused_by = payload.get("caused_by")
+    caused_by = (
+        raw_caused_by if isinstance(raw_caused_by, str) and raw_caused_by else None
+    )
     domain_payload = {
         key: value
         for key, value in payload.items()
@@ -163,7 +172,3 @@ def timestamp_ms(value: Any) -> int:
     if isinstance(value, int | float) and not isinstance(value, bool):
         return int(float(value) * 1_000)
     return time.time_ns() // 1_000_000
-
-
-def optional_string(value: Any) -> str | None:
-    return value if isinstance(value, str) and value else None

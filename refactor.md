@@ -64,21 +64,6 @@ def project_one_queue_item(event: Event) -> QueueItem | None:
 
 ## Apply This Convention
 
-### Project Directory Loading Conflict
-
-File: `src/zeta/process.py`
-
-Current name:
-
-- `default_session`
-- `session_for_id`
-
-Target direction:
-
-- `process.py` is also awkward as the home for runtime-context construction.
-  The functions that assemble event sinks, trace stores, tool registries, and
-  directories should move with `RuntimeContext`.
-
 ### Records Event Helpers
 
 File: `src/zeta/records/events.py`
@@ -160,31 +145,8 @@ Current direction:
 - Rename the old `turn_*` history names to `run_*` only after deciding whether
   Sigil's user-facing noun is also "run."
 
-### Runtime Context
-
-File: `src/zeta/run/context.py`
-
-Question:
-
-- Should runtime context construction stay in `src/zeta/process.py`?
-
-Current direction:
-
-- `SessionScope` is now `RuntimeContext` and lives in
-  `src/zeta/run/context.py`.
-- Move `default_session` and `session_for_id` out of `src/zeta/process.py` or
-  rename that module so the construction path reads as runtime-context setup,
-  not process-global session management.
-- Keep Sigil `session_id` as the shell-continuity noun at the Sigil boundary.
-- In Zeta internals, avoid `thread_id` unless a real durable conversation
-  thread exists. The id on `RuntimeContext` should describe the runtime
-  continuity partition, not an OpenAI-style thread.
-- Introduce a separate `Thread` noun only if Zeta later gets a real durable
-  conversation object with its own lifecycle/metadata.
-
 ## Suggested Order
 
-1. Rename or move the runtime-context constructors in `src/zeta/process.py`.
-2. Handle the noun refactors separately where they unblock function names.
-3. Revisit prompt/component projection names once provenance and timeline names
+1. Handle the noun refactors separately where they unblock function names.
+2. Revisit prompt/component projection names once provenance and timeline names
    are stable.

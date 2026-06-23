@@ -519,16 +519,15 @@ File: `src/zeta/run/thread_run.py`
 
 Current names:
 
-- `_project_trace_for_run`
-- `_projected_session_trace_result`
+- `_record_trace_for_run`
+- `_project_session_trace_result`
 - `empty_session_trace_result`
 
 Current direction:
 
-- `_project_trace_for_run` performs a side-effecting trace-store update. If the
-  function stays, name the side effect instead of making it sound like a pure
-  projector, for example `_record_trace_for_run` or `_update_trace_for_run`.
-- `_projected_session_trace_result` does return a read-side result derived from
+- `_record_trace_for_run` performs a side-effecting trace-store update, so the
+  side-effecting name is appropriate.
+- `_project_session_trace_result` does return a read-side result derived from
   events plus trace projection maps. It can keep projection language, but the
   target should be the RPC result shape, not the source trace mechanics.
 

@@ -291,7 +291,7 @@ def _session_result(
         "run_id": run_id,
         "outcome": outcome,
         "final_answer": final_answer,
-        "trace": _projected_session_trace_result(runtime_context, run_id)
+        "trace": _project_session_trace_result(runtime_context, run_id)
         if isinstance(runtime_context.event_sink, EventReader)
         else empty_session_trace_result(),
     }
@@ -301,7 +301,7 @@ def _session_result(
     return result
 
 
-def _projected_session_trace_result(
+def _project_session_trace_result(
     runtime_context: SessionScope,
     run_id: str,
 ) -> dict[str, list[str]]:

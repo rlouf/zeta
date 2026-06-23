@@ -175,22 +175,6 @@ Target direction:
   they encode run event schema. Inline or move them if they are just local dict
   construction.
 
-### Capability Projection
-
-File: `src/zeta/capabilities/registry.py`
-
-Current direction:
-
-- If this remains a projection concept, add projector functions that follow the
-  convention:
-  `project_capability_tools` / `project_one_capability_tool`.
-- The `CapabilityProjection` type decision is tracked under "Separate Noun
-  Refactors."
-- `CapabilityRegistry.project` is not just field access: it resolves capability
-  ids, handles name overrides, detects ambiguous names, and builds provider
-  descriptors. Rename it around the model-visible target or provider-schema
-  target.
-
 ### Project Directory Loading Conflict
 
 File: `src/zeta/process.py`
@@ -205,20 +189,6 @@ Target direction:
 - `process.py` is also awkward as the home for runtime-context construction.
   The functions that assemble event sinks, trace stores, tool registries, and
   directories should move with `RuntimeContext` once `SessionScope` is renamed.
-
-### Scheduling
-
-File: `src/zeta/orchestration/scheduling.py`
-
-Current direction:
-
-- Re-evaluate `utc_now` and `schedule_current_time`. `utc_now` is a one-line
-  clock wrapper; inline it unless tests need injection through a named seam.
-  `schedule_current_time` may be worth keeping only if the timezone conversion
-  policy is reused or needs focused tests.
-- `schedule_event_payload` encodes the emitted schedule event schema. Keep it
-  if schedule payload construction appears in more than one place; otherwise
-  inline it inside `emit_due_schedules`.
 
 ### Records Event Helpers
 
@@ -254,11 +224,6 @@ Current direction:
 - Use `*_event_payload` for dict builders that shape the payload for a future
   event draft. Do not use plain `*_event` for these functions because durable
   facts should pass through `DraftEvent` intentionally.
-- Rename current plain-dict event builders around this rule. Examples:
-  `model_event` -> `model_event_payload`,
-  `model_tool_call_event` -> `model_tool_call_event_payload`,
-  `tool_result_event` -> `tool_result_event_payload`, and
-  `shell_result_event` -> `shell_result_event_payload`.
 - `durable_view_type`, `event_timeline_type`, and `draft_timeline_type` share
   one timeline-type decoder in `records/events.py`.
 - `durable_model_event_payload`, `durable_tool_event_payload`, and
@@ -311,9 +276,6 @@ Current direction:
 
 - `event_record` is a CLI serialization helper. Do not call it a projection
   unless the CLI has a broader event read model.
-- `queue_status_counts` is small aggregation logic for display. Inline it if it
-  remains local to one command, or rename around the rendered status summary if
-  it becomes shared.
 - `runtime_state_dir` and `runtime_event_store` are process/CLI wiring helpers,
   not projection helpers. If process assembly owns runtime state paths, move or
   rename them there.
@@ -329,21 +291,6 @@ Current direction:
 - `run_status_from_lifecycle` encodes RPC-visible status policy from lifecycle
   events. Keep it as policy, but consider whether direct event checks are more
   readable than extra helper layers.
-
-### Sigil Event Adapters
-
-Files:
-
-- `src/sigil/state.py`
-- `src/sigil/handoff.py`
-- `src/sigil/turn.py`
-- `src/sigil/agent_io.py`
-
-Current direction:
-
-- `handoff_event_payload`, `handoff_event_time`, and `handoff_event_turn_id`
-  look like field-access helpers. Inline them unless repeated validation
-  pressure justifies them.
 
 ### Sigil Status And Trace Rows
 
@@ -396,23 +343,6 @@ Current direction:
   they encode defaults and validation.
 - `required_schedule_string` is a validation helper. Keep it only if the shared
   error message remains useful across several schedule fields.
-
-### Display Progress Read Models
-
-File: `src/sigil/display/state.py`
-
-Current names:
-
-- `progress_event_for_tool_result`
-- `progress_event_for_tool_call`
-- `mutation_progress_event`
-- `command_progress_event`
-- `progress_subject_fields`
-
-Current direction:
-
-- `progress_subject_fields` is lookup policy for display subjects. Keep it if
-  the mapping stays centralized; otherwise inline small per-tool cases.
 
 ## Separate Noun Refactors
 
@@ -477,22 +407,6 @@ Current direction:
   continuity partition, not an OpenAI-style thread.
 - Introduce a separate `Thread` noun only if Zeta later gets a real durable
   conversation object with its own lifecycle/metadata.
-
-### Capability Projection Type
-
-File: `src/zeta/capabilities/registry.py`
-
-Question:
-
-- Is `CapabilityProjection` really a projection, or is it a provider-facing
-  tool schema?
-
-Current direction:
-
-- If it is the provider-facing schema, rename it to a target noun such as
-  `CapabilityToolSchema`.
-- If it remains a projection concept, keep the projection noun and add
-  `project_*` functions around it.
 
 ## Suggested Order
 

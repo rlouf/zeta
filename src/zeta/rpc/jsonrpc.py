@@ -4,10 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import json
-import threading
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, TextIO, TypeAlias, cast
+from typing import TYPE_CHECKING, Any, TypeAlias, cast
 
 if TYPE_CHECKING:
     from zeta.rpc.routes import RpcClient
@@ -39,42 +38,47 @@ class RpcError(RuntimeError):
 class JsonRpcConnection:
     """Newline-delimited JSON-RPC stream that owns read, write, and notify rules."""
 
-    def __init__(self, input: TextIO, output: TextIO) -> None:
-        self.input = input
-        self.output = output
-        self.write_lock = threading.Lock()
+    def __init__(
+        self,
+        reader: asyncio.StreamReader,
+        writer: asyncio.StreamWriter,
+    ) -> None:
+        self.reader = reader
+        self.writer = writer
+        self.write_lock = asyncio.Lock()
 
     async def serve(self, router: JsonRpcRouter) -> None:
-        async with asyncio.TaskGroup() as tasks:
-            while (message := await asyncio.to_thread(self.read_message)) is not None:
-                tasks.create_task(router.handle_message(message))
+        try:
+            async with asyncio.TaskGroup() as tasks:
+                while line_bytes := await self.reader.readline():
+                    if not line_bytes.strip():
+                        continue
+                    try:
+                        message = json.loads(line_bytes.decode("utf-8").strip())
+                    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                        await self.write_error(
+                            None,
+                            -32700,
+                            "Parse error",
+                            {"message": str(exc)},
+                        )
+                        continue
+                    if isinstance(message, dict):
+                        tasks.create_task(
+                            router.handle_message(cast(dict[str, Any], message))
+                        )
+                        continue
+                    await self.write_error(None, -32600, "Invalid Request")
+        finally:
+            await self.close()
 
-    def read_message(self) -> dict[str, Any] | None:
-        for line in self.input:
-            if not line.strip():
-                continue
-            try:
-                message = json.loads(line)
-            except json.JSONDecodeError as exc:
-                self.write_error(
-                    None,
-                    -32700,
-                    "Parse error",
-                    {"message": str(exc)},
-                )
-                continue
-            if isinstance(message, dict):
-                return cast(dict[str, Any], message)
-            self.write_error(None, -32600, "Invalid Request")
-        return None
+    async def notify(self, method: str, params: dict[str, Any]) -> None:
+        await self.write_message({"jsonrpc": "2.0", "method": method, "params": params})
 
-    def notify(self, method: str, params: dict[str, Any]) -> None:
-        self.write_message({"jsonrpc": "2.0", "method": method, "params": params})
+    async def write_response(self, request_id: Any, result: Any) -> None:
+        await self.write_message({"jsonrpc": "2.0", "id": request_id, "result": result})
 
-    def write_response(self, request_id: Any, result: Any) -> None:
-        self.write_message({"jsonrpc": "2.0", "id": request_id, "result": result})
-
-    def write_error(
+    async def write_error(
         self,
         request_id: Any,
         code: int,
@@ -84,13 +88,16 @@ class JsonRpcConnection:
         error: dict[str, Any] = {"code": code, "message": message}
         if data is not None:
             error["data"] = data
-        self.write_message({"jsonrpc": "2.0", "id": request_id, "error": error})
+        await self.write_message({"jsonrpc": "2.0", "id": request_id, "error": error})
 
-    def write_message(self, message: dict[str, Any]) -> None:
-        payload = json.dumps(message, separators=(",", ":")) + "\n"
-        with self.write_lock:
-            self.output.write(payload)
-            self.output.flush()
+    async def write_message(self, message: dict[str, Any]) -> None:
+        payload = (json.dumps(message, separators=(",", ":")) + "\n").encode()
+        async with self.write_lock:
+            self.writer.write(payload)
+            await self.writer.drain()
+
+    async def close(self) -> None:
+        self.writer.close()
 
 
 class JsonRpcRouter:
@@ -113,7 +120,7 @@ class JsonRpcRouter:
             return
         connection = self.client.connection
         if connection is not None:
-            connection.write_message(response)
+            await connection.write_message(response)
 
     async def response_for_message(
         self, message: dict[str, Any]

@@ -7,7 +7,6 @@ import tomllib
 from collections.abc import Callable, Coroutine, Iterable
 from dataclasses import asdict, fields
 from datetime import UTC, datetime
-from io import StringIO
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -1281,20 +1280,63 @@ def test_zeta_run_capability_step_reconciles_existing_terminal_result(
     ]
 
 
-def rpc_messages(output: StringIO) -> list[dict[str, Any]]:
+class RpcMemoryTransport(asyncio.Transport):
+    def __init__(self) -> None:
+        self.buffer = bytearray()
+        self.closed = False
+
+    def write(self, data: bytes | bytearray | memoryview) -> None:
+        self.buffer.extend(data)
+
+    def is_closing(self) -> bool:
+        return self.closed
+
+    def close(self) -> None:
+        self.closed = True
+
+    def getvalue(self) -> str:
+        return self.buffer.decode()
+
+
+class RpcImmediateDrainProtocol(asyncio.Protocol):
+    async def _drain_helper(self) -> None:
+        return None
+
+
+_RPC_STREAM_LOOP = asyncio.new_event_loop()
+
+
+def rpc_streams(
+    input_text: str = "",
+    output: RpcMemoryTransport | None = None,
+) -> tuple[asyncio.StreamReader, asyncio.StreamWriter, RpcMemoryTransport]:
+    reader = asyncio.StreamReader()
+    if input_text:
+        reader.feed_data(input_text.encode())
+    reader.feed_eof()
+    output = output or RpcMemoryTransport()
+    writer = asyncio.StreamWriter(
+        output,
+        RpcImmediateDrainProtocol(),
+        None,
+        _RPC_STREAM_LOOP,
+    )
+    return reader, writer, output
+
+
+def rpc_messages(output: RpcMemoryTransport) -> list[dict[str, Any]]:
     return [json.loads(line) for line in output.getvalue().splitlines()]
 
 
 def rpc_client(
-    input_stream: StringIO | None = None,
-    output: StringIO | None = None,
+    input_stream: asyncio.StreamReader | None = None,
+    output: RpcMemoryTransport | None = None,
     *,
     session: zeta_scope.SessionScope | None = None,
     dispatcher: zeta_dispatch.EventDispatcher | None = None,
 ) -> tuple[zeta_rpc.JsonRpcConnection, zeta_rpc.RpcClient, zeta_rpc.JsonRpcRouter]:
-    input_stream = input_stream or StringIO()
-    output = output or StringIO()
-    connection = zeta_rpc.JsonRpcConnection(input_stream, output)
+    reader, writer, output = rpc_streams(output=output)
+    connection = zeta_rpc.JsonRpcConnection(input_stream or reader, writer)
     if session is None:
         event_store = zeta_events.MemoryEventStore()
         session = zeta_scope.SessionScope(
@@ -1307,7 +1349,9 @@ def rpc_client(
         )
 
     def notify_event(event: Event) -> None:
-        connection.notify("events.notify", {"event": zeta_rpc.event_to_wire(event)})
+        asyncio.create_task(
+            connection.notify("events.notify", {"event": zeta_rpc.event_to_wire(event)})
+        )
 
     if dispatcher is None:
         dispatcher = zeta_dispatch.EventDispatcher(
@@ -1333,12 +1377,13 @@ def rpc_client(
 
 
 def run_rpc_messages(
-    input_stream: StringIO,
-    output: StringIO,
+    input_text: str,
+    output: RpcMemoryTransport,
     *,
     session: zeta_scope.SessionScope | None = None,
     dispatcher: zeta_dispatch.EventDispatcher | None = None,
 ) -> zeta_rpc.RpcClient:
+    input_stream, _, _ = rpc_streams(input_text)
     connection, client, router = rpc_client(
         input_stream,
         output,
@@ -1350,12 +1395,10 @@ def run_rpc_messages(
 
 
 def test_zeta_rpc_initialize_returns_server_metadata() -> None:
-    input_stream = StringIO(
-        json.dumps({"jsonrpc": "2.0", "id": 1, "method": "initialize"}) + "\n"
-    )
-    output = StringIO()
+    input_text = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "initialize"}) + "\n"
+    output = RpcMemoryTransport()
 
-    run_rpc_messages(input_stream, output)
+    run_rpc_messages(input_text, output)
 
     assert rpc_messages(output) == [
         {
@@ -1367,12 +1410,12 @@ def test_zeta_rpc_initialize_returns_server_metadata() -> None:
 
 
 def test_zeta_rpc_unknown_method_returns_structured_error() -> None:
-    input_stream = StringIO(
+    input_text = (
         json.dumps({"jsonrpc": "2.0", "id": 1, "method": "events.subscribe"}) + "\n"
     )
-    output = StringIO()
+    output = RpcMemoryTransport()
 
-    run_rpc_messages(input_stream, output)
+    run_rpc_messages(input_text, output)
 
     assert rpc_messages(output) == [
         {
@@ -1388,7 +1431,7 @@ def test_zeta_rpc_unknown_method_returns_structured_error() -> None:
 
 
 def test_zeta_rpc_router_response_for_message_does_not_write_to_connection() -> None:
-    output = StringIO()
+    output = RpcMemoryTransport()
     _, _, router = rpc_client(output=output)
 
     response = asyncio.run(
@@ -1415,7 +1458,7 @@ def test_zeta_rpc_events_publish_uses_constructor_shaped_event(
         state_dir=tmp_path,
         session_dir=tmp_path / "sessions" / "ctx-session",
     )
-    input_stream = StringIO(
+    input_text = (
         json.dumps(
             {
                 "jsonrpc": "2.0",
@@ -1432,9 +1475,9 @@ def test_zeta_rpc_events_publish_uses_constructor_shaped_event(
         )
         + "\n"
     )
-    output = StringIO()
+    output = RpcMemoryTransport()
 
-    run_rpc_messages(input_stream, output, session=session)
+    run_rpc_messages(input_text, output, session=session)
 
     messages = rpc_messages(output)
     message = next(message for message in messages if message.get("id") == 1)
@@ -1487,7 +1530,7 @@ def test_zeta_rpc_events_publish_returns_before_routing_finishes(
                 )
             ],
         )
-        output = StringIO()
+        output = RpcMemoryTransport()
         _, _, router = rpc_client(output=output, session=session, dispatcher=dispatcher)
 
         await router.handle_message(
@@ -1531,7 +1574,7 @@ def test_zeta_rpc_events_publish_rejects_lifecycle_event_ingress(
         state_dir=tmp_path,
         session_dir=tmp_path / "sessions" / "ctx-session",
     )
-    input_stream = StringIO(
+    input_text = (
         json.dumps(
             {
                 "jsonrpc": "2.0",
@@ -1547,9 +1590,9 @@ def test_zeta_rpc_events_publish_rejects_lifecycle_event_ingress(
         )
         + "\n"
     )
-    output = StringIO()
+    output = RpcMemoryTransport()
 
-    run_rpc_messages(input_stream, output, session=session)
+    run_rpc_messages(input_text, output, session=session)
 
     message = next(
         message for message in rpc_messages(output) if message.get("id") == 1
@@ -1579,7 +1622,7 @@ def test_zeta_rpc_events_list_uses_event_store_filter_names(tmp_path: Path) -> N
         state_dir=tmp_path,
         session_dir=tmp_path / "sessions" / "ctx-session",
     )
-    input_stream = StringIO(
+    input_text = (
         json.dumps(
             {
                 "jsonrpc": "2.0",
@@ -1595,9 +1638,9 @@ def test_zeta_rpc_events_list_uses_event_store_filter_names(tmp_path: Path) -> N
         )
         + "\n"
     )
-    output = StringIO()
+    output = RpcMemoryTransport()
 
-    run_rpc_messages(input_stream, output, session=session)
+    run_rpc_messages(input_text, output, session=session)
 
     message = next(
         message for message in rpc_messages(output) if message.get("id") == 1
@@ -1714,7 +1757,7 @@ def test_zeta_rpc_eventlog_session_run_request_produces_started_response(
 def test_zeta_rpc_session_run_returns_started_event_from_shared_draft(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    input_stream = StringIO(
+    input_text = (
         json.dumps(
             {
                 "jsonrpc": "2.0",
@@ -1725,10 +1768,10 @@ def test_zeta_rpc_session_run_returns_started_event_from_shared_draft(
         )
         + "\n"
     )
-    output = StringIO()
+    output = RpcMemoryTransport()
     monkeypatch.setattr(zeta_rpc.routes, "session_run_id", lambda: "run_test")
 
-    client = run_rpc_messages(input_stream, output)
+    client = run_rpc_messages(input_text, output)
 
     message = next(
         message for message in rpc_messages(output) if message.get("id") == 1

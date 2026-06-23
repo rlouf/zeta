@@ -69,9 +69,9 @@ class RpcClient:
     pending_runs: dict[str, RunState]
     pending_tool_calls: dict[str, asyncio.Future[dict[str, Any]]]
 
-    def notify(self, method: str, params: dict[str, Any]) -> None:
+    async def notify(self, method: str, params: dict[str, Any]) -> None:
         if self.connection is not None:
-            self.connection.notify(method, params)
+            await self.connection.notify(method, params)
 
     async def call_tool(
         self,
@@ -93,7 +93,7 @@ class RpcClient:
         }
         if timeout_seconds is not None:
             notification_params["timeout_seconds"] = timeout_seconds
-        self.notify("tools.call", notification_params)
+        await self.notify("tools.call", notification_params)
         try:
             if timeout_seconds is None:
                 return await future

@@ -28,7 +28,12 @@ from zeta.run.runtime import CancellationToken
 def run_stdio(input: TextIO, output: TextIO) -> None:
     """Run the Zeta JSON-RPC server over stdio with explicit route wiring."""
 
-    connection = JsonRpcConnection(input, output)
+    asyncio.run(run_stdio_async(input, output))
+
+
+async def run_stdio_async(input: TextIO, output: TextIO) -> None:
+    reader, writer = await stdio_streams(input, output)
+    connection = JsonRpcConnection(reader, writer)
     session = default_session()
     pending_runs: dict[str, RunState] = {}
     pending_tool_calls: dict[str, asyncio.Future[dict[str, Any]]] = {}
@@ -38,7 +43,9 @@ def run_stdio(input: TextIO, output: TextIO) -> None:
         return state.cancellation_event if state is not None else None
 
     def notify_event(event: Event) -> None:
-        connection.notify("events.notify", {"event": event_to_wire(event)})
+        asyncio.create_task(
+            connection.notify("events.notify", {"event": event_to_wire(event)})
+        )
 
     dispatcher = EventDispatcher(
         session.event_sink,
@@ -66,4 +73,20 @@ def run_stdio(input: TextIO, output: TextIO) -> None:
     router.route("session.cancel", session_cancel)
     router.route("tools.register", tools_register)
     router.route("tools.respond", tools_respond)
-    asyncio.run(connection.serve(router))
+    await connection.serve(router)
+
+
+async def stdio_streams(
+    input: TextIO,
+    output: TextIO,
+) -> tuple[asyncio.StreamReader, asyncio.StreamWriter]:
+    loop = asyncio.get_running_loop()
+    reader = asyncio.StreamReader()
+    reader_protocol = asyncio.StreamReaderProtocol(reader)
+    await loop.connect_read_pipe(lambda: reader_protocol, input)
+    write_transport, write_protocol = await loop.connect_write_pipe(
+        lambda: asyncio.streams.FlowControlMixin(loop=loop),
+        output,
+    )
+    writer = asyncio.StreamWriter(write_transport, write_protocol, None, loop)
+    return reader, writer

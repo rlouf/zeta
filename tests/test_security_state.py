@@ -47,8 +47,16 @@ from sigil.workflows.ask import (
     ask,
 )
 from zeta.orchestration import dispatch as zeta_kernel_dispatch
-from zeta.orchestration.attempts import Attempt
-from zeta.orchestration.queue import QueueItem
+from zeta.orchestration.attempts import (
+    Attempt,
+    attempt_event_payload,
+    attempt_from_event_payload,
+)
+from zeta.orchestration.queue import (
+    QueueItem,
+    queue_item_event_payload,
+    queue_item_from_event_payload,
+)
 from zeta.records import events as zeta_events
 from zeta.records import events as zeta_kernel_events
 from zeta.records.events import DraftEvent, Event, event_view, publish_event
@@ -58,6 +66,7 @@ from zeta.records.stores import (
     Filter,
     MemoryEventStore,
     SqliteEventStore,
+    SqliteObjectStore,
     event_store_path,
 )
 from zeta.run import runs as zeta_kernel_runs
@@ -107,6 +116,16 @@ def test_zeta_events_exports_the_canonical_event_boundary() -> None:
     assert zeta_kernel_runs.Run(run_id="run_1", status="running").run_id == "run_1"
 
 
+def test_zeta_record_stores_exports_named_sqlite_stores() -> None:
+    import zeta.records.stores as stores
+
+    assert stores.SqliteEventStore is SqliteEventStore
+    assert stores.SqliteObjectStore is SqliteObjectStore
+    assert "SqliteObjectStore" in stores.__all__
+    assert "SqliteStore" not in stores.__all__
+    assert not hasattr(stores, "SqliteStore")
+
+
 def test_zeta_dispatch_kernel_defines_queue_item_and_attempt_shapes() -> None:
     queue_item = QueueItem(
         queue_item_id="qi_evt_123_zeta_session_turn",
@@ -131,6 +150,59 @@ def test_zeta_dispatch_kernel_defines_queue_item_and_attempt_shapes() -> None:
     assert attempt.run_id == "run_123"
     assert zeta_kernel_dispatch.QueueItem is QueueItem
     assert zeta_kernel_dispatch.Attempt is Attempt
+
+
+def test_zeta_queue_item_runtime_payload_round_trips() -> None:
+    queue_item = QueueItem(
+        queue_item_id="qi_evt_123_zeta_session_turn",
+        event_id="evt_123",
+        target_agent="zeta.session.turn",
+        status="completed",
+    )
+
+    payload = queue_item_event_payload(queue_item, result={"ok": True})
+
+    assert payload == {
+        "queue_item_id": "qi_evt_123_zeta_session_turn",
+        "event_id": "evt_123",
+        "target_agent": "zeta.session.turn",
+        "status": "completed",
+        "result": {"ok": True},
+    }
+    assert queue_item_from_event_payload(payload) == queue_item
+
+
+def test_zeta_attempt_runtime_payload_round_trips() -> None:
+    attempt = Attempt(
+        attempt_id="att_qi_evt_123_zeta_session_turn_1",
+        queue_item_id="qi_evt_123_zeta_session_turn",
+        event_id="evt_123",
+        attempt_number=1,
+        target_agent="zeta.session.turn",
+        status="completed",
+        started_at="2026-06-20T10:00:01Z",
+        finished_at="2026-06-20T10:00:02Z",
+        session_id="session-1",
+        run_id="run-123",
+    )
+
+    payload = attempt_event_payload(attempt, result={"ok": True})
+
+    assert payload == {
+        "attempt_id": "att_qi_evt_123_zeta_session_turn_1",
+        "queue_item_id": "qi_evt_123_zeta_session_turn",
+        "event_id": "evt_123",
+        "attempt_number": 1,
+        "target_agent": "zeta.session.turn",
+        "status": "completed",
+        "started_at": "2026-06-20T10:00:01Z",
+        "finished_at": "2026-06-20T10:00:02Z",
+        "error": None,
+        "session_id": "session-1",
+        "run_id": "run-123",
+        "result": {"ok": True},
+    }
+    assert attempt_from_event_payload(payload) == attempt
 
 
 def resolved_import_module(
@@ -508,6 +580,39 @@ def test_event_stores_normalize_payloads_to_json_native(tmp_path: Path) -> None:
     assert sqlite_store.append(direct_event).event.payload == {"steps": ["direct"]}
     assert json.loads(json.dumps(memory_event.payload)) == memory_event.payload
     assert json.loads(json.dumps(sqlite_event.payload)) == sqlite_event.payload
+
+
+def test_sqlite_event_store_rolls_back_event_when_projection_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = SqliteEventStore(tmp_path / "events.sqlite3")
+    event = Event(
+        id="evt_projection_failure",
+        event_type="runtime.queue_item.available",
+        source="zeta",
+        payload={
+            "queue_item_id": "qi_projection_failure",
+            "event_id": "evt_source",
+            "target_agent": "agent",
+            "status": "available",
+        },
+        idempotency_key=None,
+        caused_by=None,
+        session_id=None,
+        timestamp_ms=1,
+    )
+
+    def fail_projection(_event: Event) -> None:
+        raise RuntimeError("projection failed")
+
+    monkeypatch.setattr(store, "_index_one_runtime_event", fail_projection)
+
+    with pytest.raises(RuntimeError, match="projection failed"):
+        store.append(event)
+
+    assert store.list_events(Filter()) == []
+    assert store.list_queue_items() == []
 
 
 def test_event_stores_reject_non_json_payloads(tmp_path: Path) -> None:

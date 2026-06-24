@@ -5,7 +5,7 @@ from typing import Any, cast
 
 from sigil.display.summarize import truncate
 from zeta.records.objects import Object, ObjectId
-from zeta.records.stores import SqliteStore, Store
+from zeta.records.stores import SqliteObjectStore, Store
 
 
 def tool_failure_detail(row: dict[str, Any]) -> str:
@@ -187,7 +187,7 @@ def tool_row_created_at(
     result_object_id: Any,
     call_object_id: ObjectId,
 ) -> float | None:
-    if not isinstance(store, SqliteStore):
+    if not isinstance(store, SqliteObjectStore):
         return None
     object_id_value = result_object_id if isinstance(result_object_id, str) else None
     records = store.derivation_records_for_output(object_id_value or call_object_id)

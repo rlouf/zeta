@@ -32,7 +32,7 @@ from sigil.trace.tools import tool_call_rows, tool_failure_detail
 from zeta.context.builder import reconstructed_prompt_request
 from zeta.models import chat_completion_messages
 from zeta.records.stores import (
-    SqliteStore,
+    SqliteObjectStore,
     Store,
     UnknownSessionError,
     available_session_ids,
@@ -97,7 +97,7 @@ def current_store() -> Store:
     return zeta_session_for_sigil().trace_store
 
 
-def open_session_store(session_id: str) -> SqliteStore:
+def open_session_store(session_id: str) -> SqliteObjectStore:
     """Open a named session's store, mapping lookup errors onto CLI errors."""
     try:
         return open_existing_trace_store(session_id, read_only=True)
@@ -131,7 +131,7 @@ def trace_reinit_store(yes: bool) -> int:
         )
     if path.exists():
         path.unlink()
-    store = SqliteStore(path)
+    store = SqliteObjectStore(path)
     store.close()
     click.echo(f"reinitialized {path}")
     return 0

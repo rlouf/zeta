@@ -557,7 +557,7 @@ def test_sigil_blame_reports_untouched_files(monkeypatch) -> None:
 def seed_bundle_state(monkeypatch) -> dict[str, str]:
     """Record one turn with an effect, bridged into its session trace store."""
     from zeta.records.objects import Derivation, Object
-    from zeta.records.stores import SqliteStore, zeta_sqlite_path
+    from zeta.records.stores import SqliteObjectStore, zeta_sqlite_path
 
     monkeypatch.setenv("SIGIL_SESSION_ID", "bundle-src")
     append_event(
@@ -578,7 +578,7 @@ def seed_bundle_state(monkeypatch) -> dict[str, str]:
             time=101.0,
         )
     )
-    store = SqliteStore(zeta_sqlite_path(), session_id="bundle-src")
+    store = SqliteObjectStore(zeta_sqlite_path(), session_id="bundle-src")
     prompt_id = store.put_object(
         Object(
             kind="prompt",

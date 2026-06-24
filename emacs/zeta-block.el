@@ -276,7 +276,6 @@ When the current block is not a Zeta question, dispatch to the binding that
   "Return the JSON-RPC descriptor for the Emacs read tool."
   '(("name" . "emacs_read")
     ("description" . "Read the current live Emacs buffer, including unsaved edits.")
-    ("effects" . ["read"])
     ("schema" . (("type" . "object")
                  ("additionalProperties" . :json-false)
                  ("properties" . (("start_line" . (("type" . "integer")

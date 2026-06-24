@@ -2,6 +2,8 @@
 
 import asyncio
 import json
+import logging
+import sqlite3
 import threading
 import tomllib
 from collections.abc import Callable, Coroutine, Iterable
@@ -62,6 +64,7 @@ from zeta.records.stores import (
     event_store_path,
 )
 from zeta.run import context as zeta_runtime_context
+from zeta.run import outcomes as zeta_outcomes
 from zeta.run import runtime as zeta_agent
 from zeta.run import thread_run as zeta_requests
 from zeta.run.config import CompactionPolicy
@@ -78,6 +81,27 @@ zeta_events = SimpleNamespace(
     MemoryEventStore=MemoryEventStore,
     SqliteEventStore=SqliteEventStore,
 )
+
+
+def test_zeta_agent_run_result_payload_serializes_result_boundary() -> None:
+    draft = DraftEvent(
+        event_type="issue.triaged",
+        source="agent",
+        payload={"status": "done"},
+        session_id="session-1",
+        run_id="run-1",
+    )
+    result = AgentRunResult(
+        final_answer="done",
+        events=[draft],
+        staged_effect={"effect": {"status": "proposed"}},
+    )
+
+    assert zeta_outcomes.agent_run_result_payload(result) == {
+        "final_answer": "done",
+        "events": [asdict(draft)],
+        "staged_effect": {"effect": {"status": "proposed"}},
+    }
 
 
 def rpc_event(
@@ -1292,7 +1316,7 @@ class RpcMemoryTransport(asyncio.Transport):
         self.buffer.extend(data)
 
     def is_closing(self) -> bool:
-        return self.closed
+        return True
 
     def close(self) -> None:
         self.closed = True
@@ -1313,7 +1337,7 @@ def rpc_streams(
     input_text: str = "",
     output: RpcMemoryTransport | None = None,
 ) -> tuple[asyncio.StreamReader, asyncio.StreamWriter, RpcMemoryTransport]:
-    reader = asyncio.StreamReader()
+    reader = asyncio.StreamReader(loop=_RPC_STREAM_LOOP)
     if input_text:
         reader.feed_data(input_text.encode())
     reader.feed_eof()
@@ -1377,6 +1401,29 @@ def rpc_client(
     router.route("tools.register", zeta_rpc.tools_register)
     router.route("tools.respond", zeta_rpc.tools_respond)
     return connection, client, router
+
+
+def rpc_client_without_connection(
+    *,
+    session: zeta_runtime_context.RuntimeContext | None = None,
+) -> zeta_rpc.RpcClient:
+    if session is None:
+        event_store = zeta_events.MemoryEventStore()
+        session = zeta_runtime_context.RuntimeContext(
+            session_id="ctx-session",
+            event_sink=event_store,
+            trace_store=zeta_trace.InMemoryStore(),
+            tool_registry=CapabilityRegistry(),
+            state_dir=Path("/tmp"),
+            session_dir=Path("/tmp") / "sessions" / "ctx-session",
+        )
+    return zeta_rpc.RpcClient(
+        connection=None,
+        session=session,
+        dispatcher=zeta_dispatch.EventDispatcher(session.event_sink),
+        pending_runs={},
+        pending_tool_calls={},
+    )
 
 
 def run_rpc_messages(
@@ -1793,7 +1840,7 @@ def test_zeta_rpc_session_run_returns_started_event_from_shared_draft(
             runtime_context=client.session,
         ).payload
     )
-    assert "turn_id" not in message["result"]["event"]
+    assert message["result"]["event"]["turn_id"] is None
     assert client.pending_runs["run_test"].task is not None
 
 
@@ -1817,7 +1864,7 @@ def test_zeta_rpc_session_cancel_updates_run_state() -> None:
     assert cancellation_event.is_set()
 
 
-def test_zeta_rpc_tools_register_uses_capability_shape() -> None:
+def test_zeta_rpc_tools_register_uses_documented_tool_shape() -> None:
     registry = CapabilityRegistry()
     event_store = zeta_events.MemoryEventStore()
     session = zeta_runtime_context.RuntimeContext(
@@ -1828,22 +1875,22 @@ def test_zeta_rpc_tools_register_uses_capability_shape() -> None:
         state_dir=Path("/tmp"),
         session_dir=Path("/tmp") / "sessions" / "ctx-session",
     )
-    _, client, _ = rpc_client(session=session)
+    client = rpc_client_without_connection(session=session)
 
     result = asyncio.run(
         zeta_rpc.tools_register(
             {
-                "capabilities": [
+                "tools": [
                     {
                         "name": "pick_file",
                         "description": "Pick a file.",
-                        "input_schema": {"type": "object"},
-                        "timeout_seconds": 2,
+                        "schema": {"type": "object"},
+                        "timeout_sec": 2,
                     },
                     {
                         "name": "open_panel",
                         "description": "Open a panel.",
-                        "input_schema": {"type": "object"},
+                        "schema": {"type": "object"},
                     },
                 ]
             },
@@ -1858,21 +1905,139 @@ def test_zeta_rpc_tools_register_uses_capability_shape() -> None:
                 "provider": "rpc",
                 "name": "pick_file",
                 "description": "Pick a file.",
-                "input_schema": {"type": "object"},
-                "timeout_seconds": 2,
+                "schema": {"type": "object"},
+                "timeout_sec": 2,
             },
             {
                 "id": "rpc.open_panel",
                 "provider": "rpc",
                 "name": "open_panel",
                 "description": "Open a panel.",
-                "input_schema": {"type": "object"},
-                "timeout_seconds": None,
+                "schema": {"type": "object"},
+                "timeout_sec": None,
             },
         ]
     }
     assert registry.get("rpc.pick_file") is not None
     assert registry.get("rpc.open_panel") is not None
+
+
+def test_zeta_rpc_tools_register_rejects_old_capability_shape() -> None:
+    client = rpc_client_without_connection()
+
+    with pytest.raises(zeta_rpc.RpcError) as error:
+        asyncio.run(
+            zeta_rpc.tools_register(
+                {
+                    "capabilities": [
+                        {
+                            "name": "pick_file",
+                            "description": "Pick a file.",
+                            "input_schema": {"type": "object"},
+                        }
+                    ]
+                },
+                client,
+            )
+        )
+
+    assert error.value.error_data() == {
+        "code": "invalid_tools",
+        "message": "tools must be a list",
+    }
+
+
+def test_zeta_rpc_tools_register_rejects_unknown_tool_fields() -> None:
+    client = rpc_client_without_connection()
+
+    with pytest.raises(zeta_rpc.RpcError) as error:
+        asyncio.run(
+            zeta_rpc.tools_register(
+                {
+                    "tools": [
+                        {
+                            "name": "pick_file",
+                            "description": "Pick a file.",
+                            "schema": {"type": "object"},
+                            "effects": ["read"],
+                        }
+                    ]
+                },
+                client,
+            )
+        )
+
+    assert error.value.error_data() == {
+        "code": "unknown_tool_fields",
+        "message": "tool contains unsupported fields: effects",
+        "fields": ["effects"],
+    }
+
+
+def test_zeta_rpc_tools_register_rejects_missing_tool_schema() -> None:
+    client = rpc_client_without_connection()
+
+    with pytest.raises(zeta_rpc.RpcError) as error:
+        asyncio.run(
+            zeta_rpc.tools_register(
+                {"tools": [{"name": "pick_file", "description": "Pick a file."}]},
+                client,
+            )
+        )
+
+    assert error.value.error_data() == {
+        "code": "missing_tool_schema",
+        "message": "tool schema is required",
+    }
+
+
+def test_zeta_rpc_tools_register_rejects_malformed_tool_schema() -> None:
+    client = rpc_client_without_connection()
+
+    with pytest.raises(zeta_rpc.RpcError) as error:
+        asyncio.run(
+            zeta_rpc.tools_register(
+                {
+                    "tools": [
+                        {
+                            "name": "pick_file",
+                            "description": "Pick a file.",
+                            "schema": {"type": "definitely-not-json-schema"},
+                        }
+                    ]
+                },
+                client,
+            )
+        )
+
+    assert error.value.error_data()["code"] == "invalid_tool_schema"
+    assert error.value.error_data()["message"].startswith("tool schema is invalid")
+
+
+def test_zeta_rpc_tools_register_rejects_invalid_timeout() -> None:
+    client = rpc_client_without_connection()
+
+    with pytest.raises(zeta_rpc.RpcError) as error:
+        asyncio.run(
+            zeta_rpc.tools_register(
+                {
+                    "tools": [
+                        {
+                            "name": "pick_file",
+                            "description": "Pick a file.",
+                            "schema": {"type": "object"},
+                            "timeout_sec": 0,
+                        }
+                    ]
+                },
+                client,
+            )
+        )
+
+    assert error.value.error_data() == {
+        "code": "invalid_timeout_sec",
+        "message": "timeout_sec must be positive",
+    }
 
 
 def test_zeta_rpc_registered_tool_invokes_peer_call_tool() -> None:
@@ -1886,7 +2051,7 @@ def test_zeta_rpc_registered_tool_invokes_peer_call_tool() -> None:
         state_dir=Path("/tmp"),
         session_dir=Path("/tmp") / "sessions" / "ctx-session",
     )
-    _, client, _ = rpc_client(session=session)
+    client = rpc_client_without_connection(session=session)
     captured: dict[str, Any] = {}
 
     async def fake_call_tool(
@@ -1905,12 +2070,12 @@ def test_zeta_rpc_registered_tool_invokes_peer_call_tool() -> None:
     async def run() -> dict[str, Any]:
         await zeta_rpc.tools_register(
             {
-                "capabilities": [
+                "tools": [
                     {
                         "name": "pick_file",
                         "description": "Pick a file.",
-                        "input_schema": {"type": "object"},
-                        "timeout_seconds": 2,
+                        "schema": {"type": "object"},
+                        "timeout_sec": 2,
                     }
                 ]
             },
@@ -1933,7 +2098,7 @@ def test_zeta_rpc_registered_tool_invokes_peer_call_tool() -> None:
 
 
 def test_zeta_rpc_tools_respond_resolves_pending_call() -> None:
-    _, client, _ = rpc_client()
+    client = rpc_client_without_connection()
 
     async def run() -> None:
         future: asyncio.Future[dict[str, Any]] = (
@@ -1942,8 +2107,7 @@ def test_zeta_rpc_tools_respond_resolves_pending_call() -> None:
         client.pending_tool_calls["call_1"] = future
         await zeta_rpc.tools_respond(
             {
-                "call_id": "call_1",
-                "status": "responded",
+                "id": "call_1",
                 "result": {"ok": True},
             },
             client,
@@ -3143,6 +3307,195 @@ def test_zeta_sqlite_event_store_projects_runtime_lifecycle_tables(
     assert dict(session_mapping_row) == {"session_id": "repo", "run_id": "run-1"}
 
 
+def test_zeta_sqlite_event_store_does_not_patch_existing_projection_schema(
+    tmp_path: Path,
+) -> None:
+    database = tmp_path / "events.sqlite3"
+    connection = sqlite3.connect(database)
+    connection.executescript(
+        """
+        CREATE TABLE queue_items (
+          queue_item_id TEXT PRIMARY KEY,
+          event_id TEXT NOT NULL,
+          target_agent TEXT NOT NULL,
+          status TEXT NOT NULL,
+          available_at INTEGER,
+          claimed_by TEXT,
+          claimed_until INTEGER,
+          attempt_count INTEGER NOT NULL DEFAULT 0,
+          last_error TEXT,
+          updated_at INTEGER NOT NULL
+        ) STRICT;
+
+        CREATE TABLE attempts (
+          attempt_id TEXT PRIMARY KEY,
+          queue_item_id TEXT NOT NULL,
+          event_id TEXT NOT NULL,
+          attempt_number INTEGER NOT NULL,
+          target_agent TEXT NOT NULL,
+          worker_name TEXT,
+          status TEXT NOT NULL,
+          started_at TEXT NOT NULL,
+          heartbeat_at INTEGER,
+          finished_at TEXT,
+          error TEXT,
+          session_id TEXT,
+          run_id TEXT
+        ) STRICT;
+        """
+    )
+    connection.commit()
+    connection.close()
+
+    event_store = zeta_events.SqliteEventStore(database)
+
+    queue_columns = {
+        row["name"]
+        for row in event_store.connection.execute("PRAGMA table_info(queue_items)")
+    }
+    attempt_columns = {
+        row["name"]
+        for row in event_store.connection.execute("PRAGMA table_info(attempts)")
+    }
+    assert "claimed_token" not in queue_columns
+    assert "claim_token" not in attempt_columns
+    assert "summary" not in attempt_columns
+
+
+def test_zeta_sqlite_event_store_serializes_threaded_appends(
+    tmp_path: Path,
+) -> None:
+    event_store = zeta_events.SqliteEventStore(tmp_path / "events.sqlite3")
+    append_started = threading.Event()
+    release_append = threading.Event()
+    first_projection = threading.Event()
+    errors: list[BaseException] = []
+    original_projection = event_store._index_one_runtime_event
+
+    def blocked_first_projection(event: Event) -> None:
+        if not first_projection.is_set():
+            first_projection.set()
+            append_started.set()
+            assert release_append.wait(timeout=2.0)
+        original_projection(event)
+
+    event_store._index_one_runtime_event = blocked_first_projection
+
+    def append_event(event_id: str) -> None:
+        try:
+            event_store.append(
+                Event(
+                    id=event_id,
+                    event_type="github.issue.opened",
+                    source="github",
+                    payload={"id": event_id},
+                    idempotency_key=None,
+                    caused_by=None,
+                    session_id=None,
+                    run_id=None,
+                    turn_id=None,
+                    timestamp_ms=1,
+                )
+            )
+        except BaseException as error:
+            errors.append(error)
+
+    first = threading.Thread(target=append_event, args=("evt_thread_1",))
+    second = threading.Thread(target=append_event, args=("evt_thread_2",))
+
+    first.start()
+    assert append_started.wait(timeout=2.0)
+    second.start()
+    release_append.set()
+    first.join(timeout=2.0)
+    second.join(timeout=2.0)
+
+    assert not first.is_alive()
+    assert not second.is_alive()
+    assert errors == []
+    assert [event.id for event in event_store.list_events(Filter())] == [
+        "evt_thread_1",
+        "evt_thread_2",
+    ]
+
+
+def test_zeta_sqlite_event_store_rebuilds_projection_tables(
+    tmp_path: Path,
+) -> None:
+    event_store = zeta_events.SqliteEventStore(tmp_path / "events.sqlite3")
+
+    async def run_agent(run: zeta_dispatch.AgentInvocation) -> dict[str, object]:
+        return {
+            "final_answer": "handled issue",
+            "events": [{"type": "issue.triaged", "event": run.triggering_event.id}],
+            "tool_calls": [{"name": "read"}],
+            "usage": {"input_tokens": 12, "output_tokens": 3},
+        }
+
+    dispatcher = zeta_dispatch.EventDispatcher(
+        event_store,
+        executors=[
+            zeta_dispatch.ExecutableAgent(
+                zeta_dispatch.AgentDefinition(
+                    "issue-triage",
+                    (zeta_dispatch.EventPattern("github.issue.opened"),),
+                ),
+                run=run_agent,
+            )
+        ],
+    )
+    dispatch_event(
+        dispatcher,
+        zeta_events.DraftEvent(
+            "github.issue.opened",
+            "github",
+            {},
+            session_id="repo",
+            run_id="run-1",
+        ),
+    )
+    expected_queue_items = event_store.list_queue_items()
+    expected_attempts = event_store.list_attempts()
+    expected_session_mappings = [
+        dict(row)
+        for row in event_store.connection.execute(
+            """
+            SELECT session_id, run_id, updated_at
+            FROM session_mappings
+            ORDER BY session_id ASC
+            """
+        ).fetchall()
+    ]
+
+    event_store.connection.executescript(
+        """
+        DELETE FROM attempt_results;
+        DELETE FROM attempts;
+        DELETE FROM queue_items;
+        DELETE FROM session_mappings;
+        """
+    )
+    event_store.connection.commit()
+
+    rebuilt = event_store.rebuild_projections()
+    replayed = event_store.rebuild_projections()
+
+    assert rebuilt == len(event_store.list_events(zeta_events.Filter()))
+    assert replayed == rebuilt
+    assert event_store.list_queue_items() == expected_queue_items
+    assert event_store.list_attempts() == expected_attempts
+    assert [
+        dict(row)
+        for row in event_store.connection.execute(
+            """
+            SELECT session_id, run_id, updated_at
+            FROM session_mappings
+            ORDER BY session_id ASC
+            """
+        ).fetchall()
+    ] == expected_session_mappings
+
+
 def test_zeta_sqlite_event_store_projects_attempt_result_details(
     tmp_path: Path,
 ) -> None:
@@ -3236,7 +3589,8 @@ def test_zeta_sqlite_event_store_claims_and_reconciles_queue_leases(
         now_ms=now_ms + 1_001,
     )
 
-    assert first_claim == queue_item_id
+    assert first_claim is not None
+    assert first_claim.queue_item_id == queue_item_id
     assert second_claim is None
     assert dict(claimed_row) == {
         "status": "claimed",
@@ -3244,7 +3598,8 @@ def test_zeta_sqlite_event_store_claims_and_reconciles_queue_leases(
         "claimed_until": now_ms + 1_000,
     }
     assert reconciled == 1
-    assert reclaimed == queue_item_id
+    assert reclaimed is not None
+    assert reclaimed.queue_item_id == queue_item_id
 
 
 def test_zeta_sqlite_event_store_claims_pending_queue_items(
@@ -3279,10 +3634,119 @@ def test_zeta_sqlite_event_store_claims_pending_queue_items(
     ).fetchall()
 
     assert queue_item_id == f"qi_{accepted.id}"
-    assert claimed == queue_item_id
+    assert claimed is not None
+    assert claimed.queue_item_id == queue_item_id
     assert reconciled == 1
-    assert reclaimed == queue_item_id
+    assert reclaimed is not None
+    assert reclaimed.queue_item_id == queue_item_id
     assert [row["queue_item_id"] for row in rows] == [queue_item_id]
+
+
+def test_zeta_sqlite_event_store_rejects_stale_queue_claim_tokens(
+    tmp_path: Path,
+) -> None:
+    event_store = zeta_events.SqliteEventStore(tmp_path / "events.sqlite3")
+    accepted = event_store.accept(
+        zeta_events.DraftEvent("github.issue.opened", "github", {})
+    ).event
+    queue_item_id = event_store.ensure_pending_queue_item(accepted)
+    now_ms = accepted.timestamp_ms + 1_000
+
+    first_claim = event_store.claim_next_queue_item(
+        "worker",
+        lease_ms=1_000,
+        now_ms=now_ms,
+    )
+    event_store.reconcile_expired_queue_claims(now_ms=now_ms + 1_001)
+    second_claim = event_store.claim_next_queue_item(
+        "worker",
+        lease_ms=1_000,
+        now_ms=now_ms + 1_001,
+    )
+
+    assert first_claim is not None
+    assert second_claim is not None
+    assert first_claim.queue_item_id == queue_item_id
+    assert second_claim.queue_item_id == queue_item_id
+    assert first_claim.token != second_claim.token
+    assert (
+        event_store.release_queue_claim(
+            queue_item_id,
+            "worker",
+            claim_token=first_claim.token,
+            now_ms=now_ms + 1_002,
+        )
+        is False
+    )
+    assert event_store.list_queue_items()[0]["status"] == "claimed"
+    assert (
+        event_store.release_queue_claim(
+            queue_item_id,
+            "worker",
+            claim_token=second_claim.token,
+            now_ms=now_ms + 1_003,
+        )
+        is True
+    )
+
+
+def test_zeta_sqlite_event_store_rejects_stale_attempt_heartbeats(
+    tmp_path: Path,
+) -> None:
+    event_store = zeta_events.SqliteEventStore(tmp_path / "events.sqlite3")
+    accepted = event_store.accept(
+        zeta_events.DraftEvent("github.issue.opened", "github", {})
+    ).event
+    queue_item_id = event_store.ensure_pending_queue_item(accepted)
+    now_ms = accepted.timestamp_ms + 1_000
+    first_claim = event_store.claim_next_queue_item(
+        "worker",
+        lease_ms=1_000,
+        now_ms=now_ms,
+    )
+    assert first_claim is not None
+    event_store.append(
+        zeta_events.Event(
+            id="attempt-started",
+            event_type="runtime.attempt.started",
+            source="zeta",
+            payload={
+                "attempt_id": f"att_{queue_item_id}_1",
+                "queue_item_id": queue_item_id,
+                "event_id": accepted.id,
+                "attempt_number": 1,
+                "target_agent": "issue-triage",
+                "status": "running",
+                "started_at": "2026-06-20T10:00:01Z",
+                "worker_name": "worker",
+            },
+            idempotency_key=None,
+            caused_by=accepted.id,
+            session_id=None,
+            timestamp_ms=now_ms + 1,
+        )
+    )
+    event_store.reconcile_expired_queue_claims(now_ms=now_ms + 1_001)
+    second_claim = event_store.claim_next_queue_item(
+        "worker",
+        lease_ms=1_000,
+        now_ms=now_ms + 1_001,
+    )
+
+    assert second_claim is not None
+    assert (
+        event_store.heartbeat_attempt(
+            f"att_{queue_item_id}_1",
+            queue_item_id,
+            "worker",
+            claim_token=first_claim.token,
+            lease_ms=1_000,
+            now_ms=now_ms + 1_002,
+        )
+        is False
+    )
+    assert event_store.list_attempts()[0]["heartbeat_at"] == now_ms + 1
+    assert event_store.list_queue_items()[0]["claimed_until"] == now_ms + 2_001
 
 
 def test_zeta_sqlite_event_store_acquires_locks_all_or_none(
@@ -3744,6 +4208,57 @@ def test_zeta_local_runtime_heartbeats_running_attempt(
     assert int(attempt["heartbeat_at"]) >= heartbeat_rows[0]["heartbeat_at"]
     assert int(queue_item["claimed_until"]) >= heartbeat_rows[0]["claimed_until"]
     assert queue_item["claimed_by"] == "local-runtime"
+
+
+def test_zeta_local_runtime_does_not_complete_stale_queue_claim(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    event_store = zeta_events.SqliteEventStore(tmp_path / "events.sqlite3")
+    accepted = event_store.accept(
+        zeta_events.DraftEvent("github.issue.opened", "github", {})
+    ).event
+
+    async def run_agent(run: zeta_dispatch.AgentInvocation) -> dict[str, object]:
+        now_ms = accepted.timestamp_ms + 10_000
+        event_store.reconcile_expired_queue_claims(now_ms=now_ms)
+        replacement = event_store.claim_next_queue_item(
+            "local-runtime",
+            lease_ms=60_000,
+            now_ms=now_ms,
+        )
+        assert replacement is not None
+        assert replacement.queue_item_id == run.queue_item_id
+        return {"event_id": run.triggering_event.id}
+
+    agent = zeta_dispatch.ExecutableAgent(
+        zeta_dispatch.AgentDefinition(
+            "issue-triage",
+            (zeta_dispatch.EventPattern("github.issue.opened"),),
+        ),
+        run=run_agent,
+    )
+    monkeypatch.setattr(zeta_worker, "project_executors", lambda _runtime: (agent,))
+    runtime = zeta_worker.WorkerServices(
+        project_root=tmp_path,
+        state_dir=tmp_path,
+        events=event_store,
+    )
+    monkeypatch.setattr(zeta_worker, "QUEUE_LEASE_MS", 1_000)
+
+    message = asyncio.run(zeta_worker.run_once(runtime))
+    event_types = [
+        event.event_type for event in event_store.list_events(zeta_events.Filter())
+    ]
+    queue_item = event_store.list_queue_items()[0]
+    attempt = event_store.list_attempts()[0]
+
+    assert message == f"ran qi_{accepted.id}"
+    assert "runtime.attempt.completed" not in event_types
+    assert "runtime.queue_item.completed" not in event_types
+    assert queue_item["status"] == "claimed"
+    assert queue_item["claimed_by"] == "local-runtime"
+    assert attempt["status"] == "running"
 
 
 def test_zeta_local_runtime_run_once_skips_leased_queue_item(
@@ -4324,6 +4839,94 @@ def test_zeta_local_runtime_run_forever_respects_max_concurrent(
 
     assert sorted(started) == sorted(event.id for event in events)
     assert [item.status for item in items] == ["completed", "completed"]
+
+
+def test_zeta_local_runtime_run_forever_logs_and_continues_after_run_once_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    event_store = zeta_events.SqliteEventStore(tmp_path / "events.sqlite3")
+    runtime = zeta_worker.WorkerServices(
+        project_root=tmp_path,
+        state_dir=tmp_path,
+        events=event_store,
+    )
+    calls = 0
+
+    async def run_once(runtime: zeta_worker.WorkerServices) -> str:
+        nonlocal calls
+        del runtime
+        calls += 1
+        if calls == 1:
+            raise RuntimeError("poisoned queue item")
+        stop_event.set()
+        return "queue empty"
+
+    async def exercise() -> None:
+        with caplog.at_level(logging.ERROR, logger=zeta_worker.__name__):
+            await zeta_worker.run_forever(
+                runtime,
+                poll_interval_seconds=0,
+                stop_event=stop_event,
+            )
+
+    stop_event = asyncio.Event()
+    monkeypatch.setattr(zeta_worker, "run_once", run_once)
+
+    asyncio.run(exercise())
+
+    assert calls == 2
+    assert "queue worker task failed" in caplog.text
+
+
+def test_zeta_local_runtime_run_forever_reaps_done_tasks_before_refilling(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    event_store = zeta_events.SqliteEventStore(tmp_path / "events.sqlite3")
+    runtime = zeta_worker.WorkerServices(
+        project_root=tmp_path,
+        state_dir=tmp_path,
+        events=event_store,
+        max_concurrent=2,
+    )
+    started = 0
+    release_first_batch = asyncio.Event()
+    first_batch_done = asyncio.Event()
+
+    async def run_once(runtime: zeta_worker.WorkerServices) -> str:
+        nonlocal started
+        del runtime
+        started += 1
+        if started <= 2:
+            await release_first_batch.wait()
+            if started == 2:
+                first_batch_done.set()
+            return f"ran {started}"
+        stop_event.set()
+        return "queue empty"
+
+    async def exercise() -> None:
+        worker = asyncio.create_task(
+            zeta_worker.run_forever(
+                runtime,
+                poll_interval_seconds=0,
+                stop_event=stop_event,
+            )
+        )
+        while started < 2:
+            await asyncio.sleep(0)
+        release_first_batch.set()
+        await asyncio.wait_for(first_batch_done.wait(), timeout=1)
+        await asyncio.wait_for(worker, timeout=1)
+
+    stop_event = asyncio.Event()
+    monkeypatch.setattr(zeta_worker, "run_once", run_once)
+
+    asyncio.run(exercise())
+
+    assert started == 4
 
 
 def test_zeta_cli_run_forever_invokes_runtime_loop(

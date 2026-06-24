@@ -1,6 +1,6 @@
 """SQLite substrate store and session helpers.
 
-`SqliteStore` provides durable local storage for the substrate. It keeps
+`SqliteObjectStore` provides durable local storage for the substrate. It keeps
 objects content-addressed, scopes refs and derivations by session when a
 session id is supplied, and indexes derivation inputs so callers can traverse
 both producer and consumer relationships.
@@ -77,9 +77,9 @@ def open_trace_store(
     *,
     read_only: bool = False,
     root: Path | None = None,
-) -> SqliteStore:
+) -> SqliteObjectStore:
     """Open the unified Zeta trace store for one session."""
-    return SqliteStore(
+    return SqliteObjectStore(
         zeta_sqlite_path(root), session_id=session_id, read_only=read_only
     )
 
@@ -89,7 +89,7 @@ def open_existing_trace_store(
     *,
     read_only: bool = True,
     root: Path | None = None,
-) -> SqliteStore:
+) -> SqliteObjectStore:
     """Open a recorded session trace store or raise with known sessions."""
     available = available_session_ids(root)
     if session_id not in available:
@@ -200,7 +200,7 @@ def _derivation_from_row(row: sqlite3.Row) -> Derivation:
     )
 
 
-class SqliteStore(StoreBase):
+class SqliteObjectStore(StoreBase):
     """Synchronous SQLite implementation of the substrate store protocol."""
 
     def __init__(

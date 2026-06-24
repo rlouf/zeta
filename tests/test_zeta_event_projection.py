@@ -2,6 +2,8 @@ import json
 from dataclasses import asdict, replace
 from typing import Any
 
+import pytest
+
 from sigil.history import effect_record, event_from_record, turn_record
 from zeta.events import DraftEvent, Event
 from zeta.objects import Derivation, Object
@@ -9,6 +11,8 @@ from zeta.records.events import (
     draft_from_runtime_event,
     durable_model_event_payload,
     durable_tool_event_payload,
+    event_from_wire,
+    event_to_wire,
     event_view,
     model_call_draft,
     tool_call_draft,
@@ -517,6 +521,58 @@ def test_zeta_event_view_and_rpc_projection_contract() -> None:
         "caused_by": "call-1",
         "cursor": "7",
     }
+
+
+def test_zeta_event_wire_schema_round_trips_durable_event() -> None:
+    event = Event(
+        id="evt_wire",
+        event_type="runtime.queue_item.completed",
+        source="zeta",
+        payload={"queue_item_id": "qi_1", "nested": {"values": [1, 2]}},
+        idempotency_key="queue_item:evt_parent:agent:completed",
+        caused_by="evt_parent",
+        session_id=SESSION_ID,
+        run_id="run-1",
+        turn_id=TURN_ID,
+        timestamp_ms=TIMESTAMP_MS,
+        cursor=9,
+    )
+
+    wire = event_to_wire(event)
+
+    assert wire == {
+        "id": "evt_wire",
+        "event_type": "runtime.queue_item.completed",
+        "source": "zeta",
+        "payload": {"queue_item_id": "qi_1", "nested": {"values": [1, 2]}},
+        "idempotency_key": "queue_item:evt_parent:agent:completed",
+        "caused_by": "evt_parent",
+        "session_id": SESSION_ID,
+        "run_id": "run-1",
+        "turn_id": TURN_ID,
+        "timestamp_ms": TIMESTAMP_MS,
+        "cursor": 9,
+    }
+    assert event_from_wire(wire) == event
+
+
+def test_zeta_event_wire_schema_rejects_invalid_payload() -> None:
+    wire = {
+        "id": "evt_wire",
+        "event_type": "runtime.queue_item.completed",
+        "source": "zeta",
+        "payload": [],
+        "idempotency_key": None,
+        "caused_by": None,
+        "session_id": SESSION_ID,
+        "run_id": "run-1",
+        "turn_id": TURN_ID,
+        "timestamp_ms": TIMESTAMP_MS,
+        "cursor": 9,
+    }
+
+    with pytest.raises(ValueError, match="payload must be an object"):
+        event_from_wire(wire)
 
 
 def test_zeta_pure_runtime_events_project_to_trace_graph() -> None:

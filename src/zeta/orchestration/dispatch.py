@@ -4,7 +4,7 @@ import asyncio
 import time
 from collections.abc import Awaitable, Callable, Iterable, Mapping
 from contextlib import suppress
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Protocol, runtime_checkable
 
@@ -18,6 +18,7 @@ from zeta.orchestration.agents import (
 from zeta.orchestration.attempts import (
     Attempt,
     AttemptStatus,
+    attempt_event_payload,
     attempt_idempotency_key,
 )
 from zeta.orchestration.queue import (
@@ -25,6 +26,7 @@ from zeta.orchestration.queue import (
     QueueItem,
     QueueItemStatus,
     RoutedQueueItem,
+    queue_item_event_payload,
     queue_item_from_record,
     queue_item_id_for_event,
     queue_item_idempotency_key,
@@ -68,10 +70,24 @@ class AttemptHeartbeatStore(Protocol):
         queue_item_id: str,
         worker_name: str,
         *,
+        claim_token: str,
         lease_ms: int,
         now_ms: int,
     ) -> bool:
         """Refresh a running attempt heartbeat and its queue lease."""
+
+
+@runtime_checkable
+class QueueClaimOwnershipStore(Protocol):
+    """Operational queue index used to fence lifecycle writes."""
+
+    def queue_claim_is_current(
+        self,
+        queue_item_id: str,
+        worker_name: str,
+        claim_token: str,
+    ) -> bool:
+        """Return whether the queue claim token still owns the item."""
 
 
 @dataclass(frozen=True)
@@ -129,6 +145,7 @@ class EventDispatcher:
         worker_name: str | None = None,
         heartbeat_interval_seconds: float | None = None,
         lease_ms: int = 60_000,
+        claim_token: str | None = None,
     ) -> None:
         self.event_sink = event_sink
         self.executors = tuple(executors)
@@ -140,6 +157,7 @@ class EventDispatcher:
         self.worker_name = worker_name
         self.heartbeat_interval_seconds = heartbeat_interval_seconds
         self.lease_ms = lease_ms
+        self.claim_token = claim_token
 
     async def publish_event(
         self,
@@ -268,6 +286,8 @@ class EventDispatcher:
         events: list[Event] = []
         attempt_number = self._next_attempt_number(queue_item_id)
         attempt_id = f"att_{queue_item_id}_{attempt_number}"
+        if not self._queue_claim_is_current(queue_item_id):
+            return events
         events.append(
             self._append_queue_item_event(
                 triggering_event,
@@ -310,6 +330,8 @@ class EventDispatcher:
                     )
                 )
             except Exception as exc:
+                if not self._queue_claim_is_current(queue_item_id):
+                    return events
                 events.extend(
                     self._failed_agent_events(
                         exc,
@@ -325,6 +347,8 @@ class EventDispatcher:
         finally:
             await self._stop_attempt_heartbeat(heartbeat_task)
 
+        if not self._queue_claim_is_current(queue_item_id):
+            return events
         events.extend(
             self._terminal_agent_events(
                 result,
@@ -338,6 +362,17 @@ class EventDispatcher:
         )
         return events
 
+    def _queue_claim_is_current(self, queue_item_id: str) -> bool:
+        if self.worker_name is None or self.claim_token is None:
+            return True
+        if not isinstance(self.event_sink, QueueClaimOwnershipStore):
+            return True
+        return self.event_sink.queue_claim_is_current(
+            queue_item_id,
+            self.worker_name,
+            self.claim_token,
+        )
+
     def _start_attempt_heartbeat(
         self,
         attempt_id: str,
@@ -345,6 +380,7 @@ class EventDispatcher:
     ) -> asyncio.Task[None] | None:
         if (
             self.worker_name is None
+            or self.claim_token is None
             or self.heartbeat_interval_seconds is None
             or self.heartbeat_interval_seconds <= 0
             or not isinstance(self.event_sink, AttemptHeartbeatStore)
@@ -372,12 +408,15 @@ class EventDispatcher:
     ) -> None:
         if self.worker_name is None or self.heartbeat_interval_seconds is None:
             return
+        if self.claim_token is None:
+            return
         while True:
             await asyncio.sleep(self.heartbeat_interval_seconds)
             store.heartbeat_attempt(
                 attempt_id,
                 queue_item_id,
                 self.worker_name,
+                claim_token=self.claim_token,
                 lease_ms=self.lease_ms,
                 now_ms=current_time_ms(),
             )
@@ -553,7 +592,7 @@ class EventDispatcher:
         return self._append_lifecycle_event(
             f"runtime.queue_item.{event_suffix}",
             triggering_event,
-            {**asdict(queue_item), **payload_extra},
+            queue_item_event_payload(queue_item, **payload_extra),
             idempotency_key=queue_item_idempotency_key(
                 triggering_event,
                 target_agent,
@@ -595,7 +634,7 @@ class EventDispatcher:
         return self._append_lifecycle_event(
             f"runtime.attempt.{event_suffix}",
             triggering_event,
-            {**asdict(attempt), **payload_extra},
+            attempt_event_payload(attempt, **payload_extra),
             idempotency_key=attempt_idempotency_key(
                 queue_item_id,
                 attempt_number,
@@ -716,7 +755,7 @@ class EventDispatcher:
         return self._append_lifecycle_event(
             "runtime.queue_item.unhandled",
             triggering_event,
-            asdict(queue_item),
+            queue_item_event_payload(queue_item),
             idempotency_key=unhandled_queue_item_idempotency_key(triggering_event),
         )
 

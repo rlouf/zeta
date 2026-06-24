@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING
 
 from zeta.records.stores import (
     SqliteEventStore,
-    SqliteStore,
+    SqliteObjectStore,
     event_store_path,
     zeta_sqlite_path,
 )
@@ -63,7 +63,9 @@ def session_for_id(
     return RuntimeContext(
         session_id=session_id,
         event_sink=SqliteEventStore(event_store_path(state_dir)),
-        trace_store=SqliteStore(zeta_sqlite_path(state_dir), session_id=session_id),
+        trace_store=SqliteObjectStore(
+            zeta_sqlite_path(state_dir), session_id=session_id
+        ),
         tool_registry=tool_registry,
         state_dir=state_dir,
         session_dir=session_dir,

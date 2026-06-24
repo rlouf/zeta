@@ -5,14 +5,17 @@ from __future__ import annotations
 import asyncio
 import uuid
 from dataclasses import dataclass, field
-from typing import Any, Literal
+from typing import Any
+
+from jsonschema import Draft202012Validator
+from jsonschema.exceptions import SchemaError
 
 from zeta.capabilities.execution import error_result
 from zeta.capabilities.registry import RegisteredCapability
 from zeta.capabilities.types import Capability, CapabilityId
 from zeta.orchestration.dispatch import EventDispatcher, ReservedRuntimeEventError
 from zeta.orchestration.session_turn_agent import SESSION_TURN_AGENT_ID
-from zeta.records.events import DraftEvent, Event
+from zeta.records.events import DraftEvent, Event, event_to_wire
 from zeta.records.stores import EventReader, EventStoreProtocol, Filter
 from zeta.rpc.jsonrpc import JsonRpcConnection, JsonRpcRouter, RpcError
 from zeta.run.context import RuntimeContext
@@ -23,7 +26,6 @@ from zeta.run.thread_run import (
     session_turn_requested_draft,
 )
 
-ToolCallStatus = Literal["requested", "responded", "failed", "cancelled", "timed_out"]
 RPC_REQUESTED = "rpc.requested"
 RPC_RESPONDED = "rpc.responded"
 RPC_FAILED = "rpc.failed"
@@ -46,16 +48,15 @@ class CapabilityRegistration:
     name: str
     provider: str = "rpc"
     description: str = ""
-    input_schema: dict[str, Any] = field(default_factory=dict)
-    timeout_seconds: int | float | None = None
+    schema: dict[str, Any] = field(default_factory=dict)
+    timeout_sec: int | float | None = None
 
 
 @dataclass(frozen=True)
 class ToolResponse:
     """Client `tools.respond` payload used to resolve a pending tool call."""
 
-    call_id: str
-    status: ToolCallStatus
+    id: str
     result: dict[str, Any]
 
 
@@ -86,13 +87,13 @@ class RpcClient:
         )
         self.pending_tool_calls[call_id] = future
         notification_params: dict[str, Any] = {
-            "call_id": call_id,
+            "id": call_id,
             "name": name,
             "arguments": params,
             "status": "requested",
         }
         if timeout_seconds is not None:
-            notification_params["timeout_seconds"] = timeout_seconds
+            notification_params["timeout_sec"] = timeout_seconds
         await self.notify("tools.call", notification_params)
         try:
             if timeout_seconds is None:
@@ -112,6 +113,73 @@ def invalid_params(code: str, message: str, **extra: Any) -> RpcError:
     """Build a stable JSON-RPC invalid-params error for route validation failures."""
 
     return RpcError(-32602, code, "Invalid params", {"message": message, **extra})
+
+
+def parse_capability_registration(value: dict[str, Any]) -> CapabilityRegistration:
+    """Validate and normalize one client-hosted RPC tool declaration."""
+
+    supported = {"name", "provider", "description", "schema", "timeout_sec"}
+    unknown = sorted(set(value) - supported)
+    if unknown:
+        raise invalid_params(
+            "unknown_tool_fields",
+            f"tool contains unsupported fields: {', '.join(unknown)}",
+            fields=unknown,
+        )
+
+    provider = value.get("provider", "rpc")
+    if provider != "rpc":
+        raise invalid_params(
+            "invalid_tool_provider",
+            "client tools must use the rpc provider",
+        )
+
+    name = value.get("name")
+    if not isinstance(name, str) or not name:
+        raise invalid_params(
+            "invalid_tool_name",
+            "tool name must be a non-empty string",
+        )
+
+    description = value.get("description", "")
+    if not isinstance(description, str):
+        raise invalid_params(
+            "invalid_tool_description",
+            "tool description must be a string",
+        )
+
+    if "schema" not in value:
+        raise invalid_params("missing_tool_schema", "tool schema is required")
+    schema = value["schema"]
+    if not isinstance(schema, dict):
+        raise invalid_params("invalid_tool_schema", "tool schema must be an object")
+    try:
+        Draft202012Validator.check_schema(schema)
+    except SchemaError as exc:
+        raise invalid_params(
+            "invalid_tool_schema",
+            f"tool schema is invalid: {exc.message}",
+        ) from exc
+
+    timeout_sec = value.get("timeout_sec")
+    if timeout_sec is not None:
+        if (
+            not isinstance(timeout_sec, int | float)
+            or isinstance(timeout_sec, bool)
+            or timeout_sec <= 0
+        ):
+            raise invalid_params(
+                "invalid_timeout_sec",
+                "timeout_sec must be positive",
+            )
+
+    return CapabilityRegistration(
+        name=name,
+        provider=provider,
+        description=description,
+        schema=schema,
+        timeout_sec=timeout_sec,
+    )
 
 
 def rpc_requested_draft(
@@ -218,27 +286,10 @@ def rpc_message_from_event(request: Event) -> dict[str, Any]:
     }
 
 
-def event_to_wire(event: Event) -> dict[str, Any]:
-    """Convert a durable Zeta event to the RPC event object sent on the wire."""
-
-    return {
-        "id": event.id,
-        "event_type": event.event_type,
-        "source": event.source,
-        "payload": dict(event.payload),
-        "idempotency_key": event.idempotency_key,
-        "caused_by": event.caused_by,
-        "session_id": event.session_id,
-        "run_id": event.run_id,
-        "timestamp_ms": event.timestamp_ms,
-        "cursor": event.cursor,
-    }
-
-
 def capability_to_wire(
     capability: RegisteredCapability,
     *,
-    timeout_seconds: int | float | None = None,
+    timeout_sec: int | float | None = None,
 ) -> dict[str, Any]:
     """Convert a registered capability to the RPC tool declaration response."""
 
@@ -247,8 +298,8 @@ def capability_to_wire(
         "provider": capability.declaration.id.provider,
         "name": capability.declaration.id.name,
         "description": capability.declaration.description,
-        "input_schema": capability.declaration.input_schema,
-        "timeout_seconds": timeout_seconds,
+        "schema": capability.declaration.input_schema,
+        "timeout_sec": timeout_sec,
     }
 
 
@@ -452,52 +503,23 @@ async def session_cancel(params: dict[str, Any], client: RpcClient) -> dict[str,
 async def tools_register(params: dict[str, Any], client: RpcClient) -> dict[str, Any]:
     """Register RPC client tools as Zeta capabilities for later agent calls."""
 
-    raw_capabilities = params.get("capabilities")
-    if not isinstance(raw_capabilities, list):
-        raise invalid_params("invalid_capabilities", "capabilities must be a list")
+    raw_tools = params.get("tools")
+    if not isinstance(raw_tools, list):
+        raise invalid_params("invalid_tools", "tools must be a list")
     registered = []
-    for item in raw_capabilities:
+    for item in raw_tools:
         if not isinstance(item, dict):
             raise invalid_params(
-                "invalid_capability",
-                "each capability must be an object",
+                "invalid_tool",
+                "each tool must be an object",
             )
-        try:
-            registration = CapabilityRegistration(**item)
-        except TypeError as exc:
-            raise invalid_params(
-                "invalid_params",
-                f"CapabilityRegistration parameters are invalid: {exc}",
-            ) from exc
-        if registration.provider != "rpc":
-            raise invalid_params(
-                "invalid_tool_provider",
-                "client capabilities must use the rpc provider",
-            )
-        if not registration.name:
-            raise invalid_params(
-                "invalid_capability_name",
-                "capability name must be non-empty",
-            )
-        if not isinstance(registration.input_schema, dict):
-            raise invalid_params(
-                "invalid_input_schema",
-                "input_schema must be an object",
-            )
-        if (
-            registration.timeout_seconds is not None
-            and registration.timeout_seconds <= 0
-        ):
-            raise invalid_params(
-                "invalid_timeout_seconds",
-                "timeout_seconds must be positive",
-            )
+        registration = parse_capability_registration(item)
 
         async def execute_client_tool(
             params: dict[str, Any],
             *,
             name: str = registration.name,
-            timeout_seconds: int | float | None = registration.timeout_seconds,
+            timeout_seconds: int | float | None = registration.timeout_sec,
             **_ignored: Any,
         ) -> dict[str, Any]:
             return await client.call_tool(
@@ -510,7 +532,7 @@ async def tools_register(params: dict[str, Any], client: RpcClient) -> dict[str,
             Capability(
                 CapabilityId(registration.provider, registration.name),
                 registration.description,
-                registration.input_schema,
+                registration.schema,
             ),
             execute_client_tool,
         )
@@ -532,7 +554,7 @@ async def tools_register(params: dict[str, Any], client: RpcClient) -> dict[str,
         registered.append(
             capability_to_wire(
                 capability,
-                timeout_seconds=registration.timeout_seconds,
+                timeout_sec=registration.timeout_sec,
             )
         )
     return {"registered": registered}
@@ -541,27 +563,27 @@ async def tools_register(params: dict[str, Any], client: RpcClient) -> dict[str,
 async def tools_respond(params: dict[str, Any], client: RpcClient) -> None:
     """Resolve a pending RPC client tool call with a `tools.respond` payload."""
 
-    try:
-        response = ToolResponse(**params)
-    except TypeError as exc:
+    supported = {"id", "result"}
+    unknown = sorted(set(params) - supported)
+    if unknown:
         raise invalid_params(
-            "invalid_params",
-            f"ToolResponse parameters are invalid: {exc}",
-        ) from exc
-
-    if not response.call_id:
-        raise invalid_params("invalid_call_id", "call_id must be non-empty")
-    if response.status not in {"responded", "failed", "cancelled", "timed_out"}:
-        raise invalid_params(
-            "invalid_tool_status",
-            "status must be responded, failed, cancelled, or timed_out",
+            "unknown_tool_response_fields",
+            f"tool response contains unsupported fields: {', '.join(unknown)}",
+            fields=unknown,
         )
-    if not isinstance(response.result, dict):
+
+    raw_id = params.get("id")
+    if not isinstance(raw_id, str) or not raw_id:
+        raise invalid_params("invalid_tool_call_id", "id must be non-empty")
+    raw_result = params.get("result")
+    if not isinstance(raw_result, dict):
         raise invalid_params("invalid_result", "result must be an object")
+
+    response = ToolResponse(id=raw_id, result=raw_result)
     if not isinstance(response.result.get("ok"), bool):
         raise invalid_params("invalid_result", "result.ok must be a boolean")
 
-    future = client.pending_tool_calls.get(response.call_id)
+    future = client.pending_tool_calls.get(response.id)
     if future is None or future.done():
         return None
 

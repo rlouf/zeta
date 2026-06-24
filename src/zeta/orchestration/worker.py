@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -14,12 +15,15 @@ from zeta.orchestration.dispatch import EventDispatcher
 from zeta.orchestration.session_turn_agent import session_turn_agent
 from zeta.records.stores import (
     Filter,
+    QueueClaim,
     SqliteEventStore,
-    SqliteStore,
+    SqliteObjectStore,
     event_store_path,
     zeta_sqlite_path,
 )
 from zeta.run.context import RuntimeContext
+
+logger = logging.getLogger(__name__)
 
 LOCAL_WORKER_NAME = "local-runtime"
 QUEUE_LEASE_MS = 60_000
@@ -105,8 +109,8 @@ async def run_available_queue_item(
         )
         if claimed is None:
             return "queue empty"
-        lock_keys = queue_item_lock_keys(events, executors, claimed)
-        lock_owner = queue_item_lock_owner(worker_name, claimed)
+        lock_keys = queue_item_lock_keys(events, executors, claimed.queue_item_id)
+        lock_owner = queue_item_lock_owner(claimed)
         now_ms = runtime_time_ms()
         if not events.acquire_locks(
             lock_keys,
@@ -115,15 +119,17 @@ async def run_available_queue_item(
             now_ms=now_ms,
         ):
             events.release_queue_claim(
-                claimed,
+                claimed.queue_item_id,
                 worker_name,
+                claim_token=claimed.token,
                 now_ms=now_ms,
             )
-            skipped.add(claimed)
+            skipped.add(claimed.queue_item_id)
             continue
+        dispatcher.claim_token = claimed.token
         try:
-            lifecycle_events = await dispatcher.run_queue_item(claimed)
-            return run_once_message(claimed, lifecycle_events)
+            lifecycle_events = await dispatcher.run_queue_item(claimed.queue_item_id)
+            return run_once_message(claimed.queue_item_id, lifecycle_events)
         finally:
             events.release_locks(lock_keys, lock_owner)
 
@@ -173,7 +179,7 @@ async def run_eventlog_rpc_request(
     )
 
     session_id = request.session_id or "default"
-    trace_store = SqliteStore(
+    trace_store = SqliteObjectStore(
         zeta_sqlite_path(runtime.state_dir),
         session_id=session_id,
     )
@@ -243,7 +249,7 @@ def claim_available_queue_item(
     worker_name: str,
     skipped_queue_items: set[str] | None = None,
     lease_ms: int = QUEUE_LEASE_MS,
-) -> str | None:
+) -> QueueClaim | None:
     now_ms = runtime_time_ms()
     events.reconcile_expired_queue_claims(now_ms=now_ms)
     events.reconcile_expired_locks(now_ms=now_ms)
@@ -287,8 +293,8 @@ def agent_lock_keys(
     return ()
 
 
-def queue_item_lock_owner(worker_name: str, queue_item_id: str) -> str:
-    return f"{worker_name}:{queue_item_id}"
+def queue_item_lock_owner(claim: QueueClaim) -> str:
+    return claim.token
 
 
 def runtime_time_ms() -> int:
@@ -302,22 +308,44 @@ async def run_forever(
     stop_event: asyncio.Event | None = None,
 ) -> None:
     running: set[asyncio.Task[str]] = set()
+    should_refill = True
     while stop_event is None or not stop_event.is_set():
-        while len(running) < runtime.max_concurrent:
-            task = asyncio.create_task(run_once(runtime))
-            running.add(task)
-            await asyncio.sleep(0)
-            if task.done() and task.result() == "queue empty":
-                running.remove(task)
-                break
+        if should_refill:
+            while len(running) < runtime.max_concurrent:
+                running.add(asyncio.create_task(run_once(runtime)))
         if not running:
             await asyncio.sleep(poll_interval_seconds)
+            should_refill = True
             continue
         done, running = await asyncio.wait(
             running,
             return_when=asyncio.FIRST_COMPLETED,
         )
-        if all(task.result() == "queue empty" for task in done):
+        finished = {task for task in running if task.done()}
+        if finished:
+            done.update(finished)
+            running.difference_update(finished)
+        saw_empty_queue = False
+        for task in done:
+            if _run_once_task_result(task) == "queue empty":
+                saw_empty_queue = True
+        should_refill = not saw_empty_queue
+        if saw_empty_queue and not running:
             await asyncio.sleep(poll_interval_seconds)
+            should_refill = True
     if running:
-        await asyncio.gather(*running)
+        results = await asyncio.gather(*running, return_exceptions=True)
+        for result in results:
+            if isinstance(result, Exception):
+                logger.error(
+                    "queue worker task failed",
+                    exc_info=(type(result), result, result.__traceback__),
+                )
+
+
+def _run_once_task_result(task: asyncio.Task[str]) -> str | None:
+    try:
+        return task.result()
+    except Exception:
+        logger.exception("queue worker task failed")
+        return None

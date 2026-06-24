@@ -7,19 +7,22 @@ table so readers can replay stable slices without decoding payloads.
 
 import json
 import os
+import secrets
 import sqlite3
+import threading
 import time
 from collections.abc import Iterable
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
-from zeta.orchestration.attempts import Attempt, AttemptStatus
+from zeta.orchestration.attempts import attempt_from_event_payload
 from zeta.orchestration.queue import pending_queue_item_id, project_one_queue_item
 from zeta.records.events import AppendOutcome, DraftEvent, Event, json_native_payload
 from zeta.records.stores._object_sqlite import (
     DEFAULT_SQLITE_NAME,
     ZETA_SQLITE_NAME,
-    SqliteStore,
+    SqliteObjectStore,
     available_session_ids,
     default_sqlite_path,
     export_trace_refs,
@@ -34,10 +37,11 @@ from zeta.records.stores.event_store import Filter
 __all__ = [
     "DEFAULT_SQLITE_NAME",
     "EVENT_STORE_NAME",
+    "QueueClaim",
     "ZETA_SQLITE_NAME",
     "ZETA_STORE_NAME",
     "SqliteEventStore",
-    "SqliteStore",
+    "SqliteObjectStore",
     "available_session_ids",
     "default_sqlite_path",
     "event_store_path",
@@ -51,6 +55,14 @@ __all__ = [
 
 EVENT_STORE_NAME = "events.sqlite3"
 ZETA_STORE_NAME = "zeta.sqlite3"
+
+
+@dataclass(frozen=True)
+class QueueClaim:
+    """Opaque ownership token for one active queue claim."""
+
+    queue_item_id: str
+    token: str
 
 
 class SqliteEventStore:
@@ -71,6 +83,7 @@ class SqliteEventStore:
         if self.path != Path(":memory:"):
             _execute_with_retry(self.connection, "PRAGMA journal_mode=WAL")
             _execute_with_retry(self.connection, "PRAGMA synchronous=NORMAL")
+        self._write_lock = threading.RLock()
         self._init_schema()
 
     def close(self) -> None:
@@ -83,131 +96,114 @@ class SqliteEventStore:
             pass
 
     def _init_schema(self) -> None:
-        self.connection.executescript(
-            """
-            CREATE TABLE IF NOT EXISTS events (
-              seq INTEGER PRIMARY KEY AUTOINCREMENT,
-              id TEXT UNIQUE NOT NULL,
-              type TEXT NOT NULL,
-              source TEXT NOT NULL,
-              payload TEXT NOT NULL,
-              idempotency_key TEXT,
-              caused_by TEXT,
-              session_id TEXT,
-              run_id TEXT,
-              turn_id TEXT,
-              timestamp INTEGER NOT NULL
-            ) STRICT;
+        with self._write_lock:
+            self.connection.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS events (
+                  seq INTEGER PRIMARY KEY AUTOINCREMENT,
+                  id TEXT UNIQUE NOT NULL,
+                  type TEXT NOT NULL,
+                  source TEXT NOT NULL,
+                  payload TEXT NOT NULL,
+                  idempotency_key TEXT,
+                  caused_by TEXT,
+                  session_id TEXT,
+                  run_id TEXT,
+                  turn_id TEXT,
+                  timestamp INTEGER NOT NULL
+                ) STRICT;
 
-            CREATE TABLE IF NOT EXISTS queue_items (
-              queue_item_id TEXT PRIMARY KEY,
-              event_id TEXT NOT NULL,
-              target_agent TEXT NOT NULL,
-              status TEXT NOT NULL,
-              available_at INTEGER,
-              claimed_by TEXT,
-              claimed_until INTEGER,
-              attempt_count INTEGER NOT NULL DEFAULT 0,
-              last_error TEXT,
-              updated_at INTEGER NOT NULL
-            ) STRICT;
+                CREATE TABLE IF NOT EXISTS queue_items (
+                  queue_item_id TEXT PRIMARY KEY,
+                  event_id TEXT NOT NULL,
+                  target_agent TEXT NOT NULL,
+                  status TEXT NOT NULL,
+                  available_at INTEGER,
+                  claimed_by TEXT,
+                  claimed_token TEXT,
+                  claimed_until INTEGER,
+                  attempt_count INTEGER NOT NULL DEFAULT 0,
+                  last_error TEXT,
+                  updated_at INTEGER NOT NULL
+                ) STRICT;
 
-            CREATE TABLE IF NOT EXISTS attempts (
-              attempt_id TEXT PRIMARY KEY,
-              queue_item_id TEXT NOT NULL,
-              event_id TEXT NOT NULL,
-              attempt_number INTEGER NOT NULL,
-              target_agent TEXT NOT NULL,
-              worker_name TEXT,
-              status TEXT NOT NULL,
-              started_at TEXT NOT NULL,
-              heartbeat_at INTEGER,
-              finished_at TEXT,
-              error TEXT,
-              session_id TEXT,
-              run_id TEXT,
-              summary TEXT,
-              input_tokens INTEGER,
-              output_tokens INTEGER,
-              tool_calls_json TEXT
-            ) STRICT;
+                CREATE TABLE IF NOT EXISTS attempts (
+                  attempt_id TEXT PRIMARY KEY,
+                  queue_item_id TEXT NOT NULL,
+                  event_id TEXT NOT NULL,
+                  attempt_number INTEGER NOT NULL,
+                  target_agent TEXT NOT NULL,
+                  worker_name TEXT,
+                  claim_token TEXT,
+                  status TEXT NOT NULL,
+                  started_at TEXT NOT NULL,
+                  heartbeat_at INTEGER,
+                  finished_at TEXT,
+                  error TEXT,
+                  session_id TEXT,
+                  run_id TEXT,
+                  summary TEXT,
+                  input_tokens INTEGER,
+                  output_tokens INTEGER,
+                  tool_calls_json TEXT
+                ) STRICT;
 
-            CREATE TABLE IF NOT EXISTS attempt_results (
-              attempt_id TEXT PRIMARY KEY,
-              final_status TEXT NOT NULL,
-              summary TEXT,
-              result_json TEXT,
-              events_json TEXT,
-              tool_calls_json TEXT,
-              usage_json TEXT,
-              finished_at TEXT
-            ) STRICT;
+                CREATE TABLE IF NOT EXISTS attempt_results (
+                  attempt_id TEXT PRIMARY KEY,
+                  final_status TEXT NOT NULL,
+                  summary TEXT,
+                  result_json TEXT,
+                  events_json TEXT,
+                  tool_calls_json TEXT,
+                  usage_json TEXT,
+                  finished_at TEXT
+                ) STRICT;
 
-            CREATE TABLE IF NOT EXISTS session_mappings (
-              session_id TEXT PRIMARY KEY,
-              run_id TEXT,
-              updated_at INTEGER NOT NULL
-            ) STRICT;
+                CREATE TABLE IF NOT EXISTS session_mappings (
+                  session_id TEXT PRIMARY KEY,
+                  run_id TEXT,
+                  updated_at INTEGER NOT NULL
+                ) STRICT;
 
-            CREATE TABLE IF NOT EXISTS locks (
-              key TEXT PRIMARY KEY,
-              owner TEXT NOT NULL,
-              acquired_at INTEGER NOT NULL,
-              expires_at INTEGER NOT NULL
-            ) STRICT;
-            """
-        )
-        columns = {
-            str(row["name"])
-            for row in self.connection.execute("PRAGMA table_info(events)").fetchall()
-        }
-        if "run_id" not in columns:
-            self.connection.execute("ALTER TABLE events ADD COLUMN run_id TEXT")
-        attempt_columns = {
-            str(row["name"])
-            for row in self.connection.execute("PRAGMA table_info(attempts)").fetchall()
-        }
-        for name, kind in (
-            ("summary", "TEXT"),
-            ("input_tokens", "INTEGER"),
-            ("output_tokens", "INTEGER"),
-            ("tool_calls_json", "TEXT"),
-        ):
-            if name not in attempt_columns:
-                self.connection.execute(
-                    f"ALTER TABLE attempts ADD COLUMN {name} {kind}"
-                )
-        self.connection.executescript(
-            """
-            CREATE INDEX IF NOT EXISTS idx_events_type_ts
-              ON events(type, timestamp);
-            CREATE UNIQUE INDEX IF NOT EXISTS idx_events_idempotency_key
-              ON events(idempotency_key)
-              WHERE idempotency_key IS NOT NULL;
-            CREATE INDEX IF NOT EXISTS idx_events_session_ts
-              ON events(session_id, timestamp)
-              WHERE session_id IS NOT NULL;
-            CREATE INDEX IF NOT EXISTS idx_events_session_seq
-              ON events(session_id, seq)
-              WHERE session_id IS NOT NULL;
-            CREATE INDEX IF NOT EXISTS idx_events_caused_by_ts
-              ON events(caused_by, timestamp)
-              WHERE caused_by IS NOT NULL;
-            CREATE INDEX IF NOT EXISTS idx_events_run_ts
-              ON events(run_id, timestamp)
-              WHERE run_id IS NOT NULL;
-            CREATE INDEX IF NOT EXISTS idx_events_run_seq
-              ON events(run_id, seq)
-              WHERE run_id IS NOT NULL;
-            CREATE INDEX IF NOT EXISTS idx_events_turn_ts
-              ON events(turn_id, timestamp)
-              WHERE turn_id IS NOT NULL;
-            CREATE INDEX IF NOT EXISTS idx_events_turn_seq
-              ON events(turn_id, seq)
-              WHERE turn_id IS NOT NULL;
-            """
-        )
-        self.connection.commit()
+                CREATE TABLE IF NOT EXISTS locks (
+                  key TEXT PRIMARY KEY,
+                  owner TEXT NOT NULL,
+                  acquired_at INTEGER NOT NULL,
+                  expires_at INTEGER NOT NULL
+                ) STRICT;
+                """
+            )
+            self.connection.executescript(
+                """
+                CREATE INDEX IF NOT EXISTS idx_events_type_ts
+                  ON events(type, timestamp);
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_events_idempotency_key
+                  ON events(idempotency_key)
+                  WHERE idempotency_key IS NOT NULL;
+                CREATE INDEX IF NOT EXISTS idx_events_session_ts
+                  ON events(session_id, timestamp)
+                  WHERE session_id IS NOT NULL;
+                CREATE INDEX IF NOT EXISTS idx_events_session_seq
+                  ON events(session_id, seq)
+                  WHERE session_id IS NOT NULL;
+                CREATE INDEX IF NOT EXISTS idx_events_caused_by_ts
+                  ON events(caused_by, timestamp)
+                  WHERE caused_by IS NOT NULL;
+                CREATE INDEX IF NOT EXISTS idx_events_run_ts
+                  ON events(run_id, timestamp)
+                  WHERE run_id IS NOT NULL;
+                CREATE INDEX IF NOT EXISTS idx_events_run_seq
+                  ON events(run_id, seq)
+                  WHERE run_id IS NOT NULL;
+                CREATE INDEX IF NOT EXISTS idx_events_turn_ts
+                  ON events(turn_id, timestamp)
+                  WHERE turn_id IS NOT NULL;
+                CREATE INDEX IF NOT EXISTS idx_events_turn_seq
+                  ON events(turn_id, seq)
+                  WHERE turn_id IS NOT NULL;
+                """
+            )
+            self.connection.commit()
 
     def accept(self, draft: DraftEvent) -> AppendOutcome:
         return self.append(Event.from_draft(draft))
@@ -218,37 +214,45 @@ class SqliteEventStore:
             ensure_ascii=False,
             separators=(",", ":"),
         )
-        cursor = self.connection.execute(
-            """
-            INSERT INTO events
-              (id, type, source, payload, idempotency_key, caused_by, session_id,
-               run_id, turn_id, timestamp)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT DO NOTHING
-            """,
-            (
-                event.id,
-                event.event_type,
-                event.source,
-                payload,
-                event.idempotency_key,
-                event.caused_by,
-                event.session_id,
-                event.run_id,
-                event.turn_id,
-                event.timestamp_ms,
-            ),
-        )
-        self.connection.commit()
-        if cursor.rowcount == 1:
-            inserted = self.get(event.id)
-            if inserted is None:
-                raise sqlite3.IntegrityError(f"append failed for event {event.id}")
-            self._index_one_session_mapping(inserted)
-            self._index_one_runtime_event(inserted)
-            self.connection.commit()
-            return AppendOutcome(event=inserted, inserted=True)
-        return AppendOutcome(event=self._duplicate_for(event), inserted=False)
+        with self._write_lock:
+            _execute_with_retry(self.connection, "BEGIN IMMEDIATE")
+            try:
+                cursor = self.connection.execute(
+                    """
+                    INSERT INTO events
+                      (id, type, source, payload, idempotency_key, caused_by,
+                       session_id, run_id, turn_id, timestamp)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT DO NOTHING
+                    """,
+                    (
+                        event.id,
+                        event.event_type,
+                        event.source,
+                        payload,
+                        event.idempotency_key,
+                        event.caused_by,
+                        event.session_id,
+                        event.run_id,
+                        event.turn_id,
+                        event.timestamp_ms,
+                    ),
+                )
+                if cursor.rowcount != 1:
+                    self.connection.commit()
+                    return AppendOutcome(
+                        event=self._duplicate_for(event), inserted=False
+                    )
+                inserted = self.get(event.id)
+                if inserted is None:
+                    raise sqlite3.IntegrityError(f"append failed for event {event.id}")
+                self._index_one_session_mapping(inserted)
+                self._index_one_runtime_event(inserted)
+                self.connection.commit()
+                return AppendOutcome(event=inserted, inserted=True)
+            except Exception:
+                self.connection.rollback()
+                raise
 
     def _index_one_session_mapping(self, event: Event) -> None:
         if event.session_id is None or event.run_id is None:
@@ -271,26 +275,49 @@ class SqliteEventStore:
         if event.event_type.startswith("runtime.attempt."):
             self._index_one_attempt(event)
 
+    def rebuild_projections(self) -> int:
+        with self._write_lock:
+            _execute_with_retry(self.connection, "BEGIN IMMEDIATE")
+            try:
+                events = self.list_events(Filter())
+                self.connection.executescript(
+                    """
+                    DELETE FROM attempt_results;
+                    DELETE FROM attempts;
+                    DELETE FROM queue_items;
+                    DELETE FROM session_mappings;
+                    """
+                )
+                for event in events:
+                    self._index_one_session_mapping(event)
+                    self._index_one_runtime_event(event)
+                self.connection.commit()
+                return len(events)
+            except Exception:
+                self.connection.rollback()
+                raise
+
     def ensure_pending_queue_item(self, event: Event) -> str:
         queue_item_id = pending_queue_item_id(event)
-        self.connection.execute(
-            """
-            INSERT INTO queue_items
-              (queue_item_id, event_id, target_agent, status, available_at,
-               updated_at)
-            VALUES (?, ?, ?, ?, ?, ?)
-            ON CONFLICT(queue_item_id) DO NOTHING
-            """,
-            (
-                queue_item_id,
-                event.id,
-                "",
-                "pending",
-                event.timestamp_ms,
-                event.timestamp_ms,
-            ),
-        )
-        self.connection.commit()
+        with self._write_lock:
+            self.connection.execute(
+                """
+                INSERT INTO queue_items
+                  (queue_item_id, event_id, target_agent, status, available_at,
+                   updated_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(queue_item_id) DO NOTHING
+                """,
+                (
+                    queue_item_id,
+                    event.id,
+                    "",
+                    "pending",
+                    event.timestamp_ms,
+                    event.timestamp_ms,
+                ),
+            )
+            self.connection.commit()
         return queue_item_id
 
     def event_has_queue_item(self, event_id: str) -> bool:
@@ -366,72 +393,75 @@ class SqliteEventStore:
         if not requested:
             return True
         placeholders = _sql_placeholders(requested)
-        _execute_with_retry(self.connection, "BEGIN IMMEDIATE")
-        try:
-            self.connection.execute(
-                "DELETE FROM locks WHERE expires_at < ?",
-                (now_ms,),
-            )
-            conflict = self.connection.execute(
-                f"""
-                SELECT key
-                FROM locks
-                WHERE key IN ({placeholders})
-                  AND owner != ?
-                  AND expires_at >= ?
-                LIMIT 1
-                """,
-                (*requested, owner, now_ms),
-            ).fetchone()
-            if conflict is not None:
-                self.connection.rollback()
-                return False
-            for key in requested:
+        with self._write_lock:
+            _execute_with_retry(self.connection, "BEGIN IMMEDIATE")
+            try:
                 self.connection.execute(
-                    """
-                    INSERT INTO locks
-                      (key, owner, acquired_at, expires_at)
-                    VALUES (?, ?, ?, ?)
-                    ON CONFLICT(key) DO UPDATE SET
-                      owner = excluded.owner,
-                      acquired_at = excluded.acquired_at,
-                      expires_at = excluded.expires_at
-                    WHERE locks.owner = excluded.owner
-                       OR locks.expires_at < ?
-                    """,
-                    (key, owner, now_ms, now_ms + lease_ms, now_ms),
+                    "DELETE FROM locks WHERE expires_at < ?",
+                    (now_ms,),
                 )
-            self.connection.commit()
-            return True
-        except Exception:
-            self.connection.rollback()
-            raise
+                conflict = self.connection.execute(
+                    f"""
+                    SELECT key
+                    FROM locks
+                    WHERE key IN ({placeholders})
+                      AND owner != ?
+                      AND expires_at >= ?
+                    LIMIT 1
+                    """,
+                    (*requested, owner, now_ms),
+                ).fetchone()
+                if conflict is not None:
+                    self.connection.rollback()
+                    return False
+                for key in requested:
+                    self.connection.execute(
+                        """
+                        INSERT INTO locks
+                          (key, owner, acquired_at, expires_at)
+                        VALUES (?, ?, ?, ?)
+                        ON CONFLICT(key) DO UPDATE SET
+                          owner = excluded.owner,
+                          acquired_at = excluded.acquired_at,
+                          expires_at = excluded.expires_at
+                        WHERE locks.owner = excluded.owner
+                           OR locks.expires_at < ?
+                        """,
+                        (key, owner, now_ms, now_ms + lease_ms, now_ms),
+                    )
+                self.connection.commit()
+                return True
+            except Exception:
+                self.connection.rollback()
+                raise
 
     def release_locks(self, keys: Iterable[str], owner: str) -> int:
         requested = tuple(dict.fromkeys(keys))
         if not requested:
             return 0
         placeholders = _sql_placeholders(requested)
-        cursor = self.connection.execute(
-            f"""
-            DELETE FROM locks
-            WHERE owner = ?
-              AND key IN ({placeholders})
-            """,
-            (owner, *requested),
-        )
-        self.connection.commit()
+        with self._write_lock:
+            cursor = self.connection.execute(
+                f"""
+                DELETE FROM locks
+                WHERE owner = ?
+                  AND key IN ({placeholders})
+                """,
+                (owner, *requested),
+            )
+            self.connection.commit()
         return int(cursor.rowcount)
 
     def reconcile_expired_locks(self, *, now_ms: int) -> int:
-        cursor = self.connection.execute(
-            """
-            DELETE FROM locks
-            WHERE expires_at < ?
-            """,
-            (now_ms,),
-        )
-        self.connection.commit()
+        with self._write_lock:
+            cursor = self.connection.execute(
+                """
+                DELETE FROM locks
+                WHERE expires_at < ?
+                """,
+                (now_ms,),
+            )
+            self.connection.commit()
         return int(cursor.rowcount)
 
     def heartbeat_attempt(
@@ -440,34 +470,68 @@ class SqliteEventStore:
         queue_item_id: str,
         worker_name: str,
         *,
+        claim_token: str,
         lease_ms: int,
         now_ms: int,
     ) -> bool:
-        cursor = self.connection.execute(
-            """
-            UPDATE attempts
-            SET heartbeat_at = ?
-            WHERE attempt_id = ?
-              AND queue_item_id = ?
-              AND worker_name = ?
-              AND status = 'running'
-            """,
-            (now_ms, attempt_id, queue_item_id, worker_name),
-        )
-        if cursor.rowcount == 1:
-            self.connection.execute(
-                """
-                UPDATE queue_items
-                SET claimed_until = ?,
-                    updated_at = ?
-                WHERE queue_item_id = ?
-                  AND claimed_by = ?
-                  AND status = 'claimed'
-                """,
-                (now_ms + lease_ms, now_ms, queue_item_id, worker_name),
-            )
-        self.connection.commit()
-        return cursor.rowcount == 1
+        with self._write_lock:
+            _execute_with_retry(self.connection, "BEGIN IMMEDIATE")
+            try:
+                cursor = self.connection.execute(
+                    """
+                    UPDATE attempts
+                    SET heartbeat_at = ?
+                    WHERE attempt_id = ?
+                      AND queue_item_id = ?
+                      AND worker_name = ?
+                      AND claim_token = ?
+                      AND status = 'running'
+                      AND EXISTS (
+                        SELECT 1
+                        FROM queue_items
+                        WHERE queue_item_id = ?
+                          AND claimed_by = ?
+                          AND claimed_token = ?
+                          AND status = 'claimed'
+                      )
+                    """,
+                    (
+                        now_ms,
+                        attempt_id,
+                        queue_item_id,
+                        worker_name,
+                        claim_token,
+                        queue_item_id,
+                        worker_name,
+                        claim_token,
+                    ),
+                )
+                if cursor.rowcount != 1:
+                    self.connection.rollback()
+                    return False
+                self.connection.execute(
+                    """
+                    UPDATE queue_items
+                    SET claimed_until = ?,
+                        updated_at = ?
+                    WHERE queue_item_id = ?
+                      AND claimed_by = ?
+                      AND claimed_token = ?
+                      AND status = 'claimed'
+                    """,
+                    (
+                        now_ms + lease_ms,
+                        now_ms,
+                        queue_item_id,
+                        worker_name,
+                        claim_token,
+                    ),
+                )
+                self.connection.commit()
+                return True
+            except Exception:
+                self.connection.rollback()
+                raise
 
     def _index_one_queue_item(self, event: Event) -> None:
         queue_item = project_one_queue_item(event)
@@ -501,39 +565,27 @@ class SqliteEventStore:
         )
 
     def _index_one_attempt(self, event: Event) -> None:
-        raw_attempt_id = event.payload.get("attempt_id")
-        raw_queue_item_id = event.payload.get("queue_item_id")
-        raw_event_id = event.payload.get("event_id")
-        raw_target_agent = event.payload.get("target_agent")
-        raw_started_at = event.payload.get("started_at")
-        raw_attempt_number = event.payload.get("attempt_number")
-        if (
-            not isinstance(raw_attempt_id, str)
-            or not isinstance(raw_queue_item_id, str)
-            or not isinstance(raw_event_id, str)
-            or not isinstance(raw_target_agent, str)
-            or not isinstance(raw_started_at, str)
-            or not isinstance(raw_attempt_number, int)
-        ):
-            return
-        status = cast("AttemptStatus", _runtime_status(event))
-        raw_finished_at = event.payload.get("finished_at")
-        raw_error = event.payload.get("error")
-        attempt = Attempt(
-            attempt_id=raw_attempt_id,
-            queue_item_id=raw_queue_item_id,
-            event_id=raw_event_id,
-            attempt_number=raw_attempt_number,
-            target_agent=raw_target_agent,
-            status=status,
-            started_at=raw_started_at,
-            finished_at=raw_finished_at if isinstance(raw_finished_at, str) else None,
-            error=raw_error if isinstance(raw_error, str) else None,
-            session_id=event.session_id,
-            run_id=event.run_id,
+        attempt = attempt_from_event_payload(
+            {**event.payload, "status": _runtime_status(event)}
         )
+        if attempt is None:
+            return
         raw_worker_name = event.payload.get("worker_name")
         worker_name = raw_worker_name if isinstance(raw_worker_name, str) else None
+        claim_token = None
+        if attempt.status == "running" and worker_name is not None:
+            claim_token_row = self.connection.execute(
+                """
+                SELECT claimed_token
+                FROM queue_items
+                WHERE queue_item_id = ?
+                  AND claimed_by = ?
+                  AND status = 'claimed'
+                """,
+                (attempt.queue_item_id, worker_name),
+            ).fetchone()
+            if claim_token_row is not None:
+                claim_token = _optional_str(claim_token_row["claimed_token"])
         raw_summary = event.payload.get("summary")
         summary = raw_summary if isinstance(raw_summary, str) else None
         raw_tool_calls = event.payload.get("tool_calls")
@@ -546,11 +598,12 @@ class SqliteEventStore:
             """
             INSERT INTO attempts
               (attempt_id, queue_item_id, event_id, attempt_number, target_agent,
-               worker_name, status, started_at, heartbeat_at, finished_at, error,
-               session_id, run_id, summary, input_tokens, output_tokens,
+               worker_name, claim_token, status, started_at, heartbeat_at,
+               finished_at, error, session_id, run_id, summary, input_tokens, output_tokens,
                tool_calls_json)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(attempt_id) DO UPDATE SET
+              claim_token = COALESCE(attempts.claim_token, excluded.claim_token),
               status = excluded.status,
               heartbeat_at = excluded.heartbeat_at,
               finished_at = excluded.finished_at,
@@ -569,6 +622,7 @@ class SqliteEventStore:
                 attempt.attempt_number,
                 attempt.target_agent,
                 worker_name,
+                claim_token,
                 attempt.status,
                 attempt.started_at,
                 event.timestamp_ms,
@@ -667,7 +721,7 @@ class SqliteEventStore:
         lease_ms: int,
         now_ms: int,
         exclude_queue_item_ids: Iterable[str] = (),
-    ) -> str | None:
+    ) -> QueueClaim | None:
         excluded = tuple(dict.fromkeys(exclude_queue_item_ids))
         excluded_clause = ""
         excluded_params: tuple[str, ...] = ()
@@ -676,95 +730,125 @@ class SqliteEventStore:
                 f"AND queue_item_id NOT IN ({_sql_placeholders(excluded)})"
             )
             excluded_params = excluded
-        _execute_with_retry(self.connection, "BEGIN IMMEDIATE")
-        try:
-            row = self.connection.execute(
-                f"""
-                SELECT queue_item_id
-                FROM queue_items
-                WHERE status IN ('pending', 'available')
-                  AND (available_at IS NULL OR available_at <= ?)
-                  {excluded_clause}
-                ORDER BY available_at ASC, queue_item_id ASC
-                LIMIT 1
-                """,
-                (now_ms, *excluded_params),
-            ).fetchone()
-            if row is None:
+        with self._write_lock:
+            _execute_with_retry(self.connection, "BEGIN IMMEDIATE")
+            try:
+                row = self.connection.execute(
+                    f"""
+                    SELECT queue_item_id
+                    FROM queue_items
+                    WHERE status IN ('pending', 'available')
+                      AND (available_at IS NULL OR available_at <= ?)
+                      {excluded_clause}
+                    ORDER BY available_at ASC, queue_item_id ASC
+                    LIMIT 1
+                    """,
+                    (now_ms, *excluded_params),
+                ).fetchone()
+                if row is None:
+                    self.connection.commit()
+                    return None
+                queue_item_id = str(row["queue_item_id"])
+                claim_token = secrets.token_urlsafe(24)
+                cursor = self.connection.execute(
+                    """
+                    UPDATE queue_items
+                    SET status = 'claimed',
+                        claimed_by = ?,
+                        claimed_token = ?,
+                        claimed_until = ?,
+                        updated_at = ?
+                    WHERE queue_item_id = ?
+                      AND status IN ('pending', 'available')
+                      AND (available_at IS NULL OR available_at <= ?)
+                    """,
+                    (
+                        worker_name,
+                        claim_token,
+                        now_ms + lease_ms,
+                        now_ms,
+                        queue_item_id,
+                        now_ms,
+                    ),
+                )
                 self.connection.commit()
-                return None
-            queue_item_id = str(row["queue_item_id"])
-            cursor = self.connection.execute(
-                """
-                UPDATE queue_items
-                SET status = 'claimed',
-                    claimed_by = ?,
-                    claimed_until = ?,
-                    updated_at = ?
-                WHERE queue_item_id = ?
-                  AND status IN ('pending', 'available')
-                  AND (available_at IS NULL OR available_at <= ?)
-                """,
-                (
-                    worker_name,
-                    now_ms + lease_ms,
-                    now_ms,
-                    queue_item_id,
-                    now_ms,
-                ),
-            )
-            self.connection.commit()
-            if cursor.rowcount != 1:
-                return None
-            return queue_item_id
-        except Exception:
-            self.connection.rollback()
-            raise
+                if cursor.rowcount != 1:
+                    return None
+                return QueueClaim(queue_item_id, claim_token)
+            except Exception:
+                self.connection.rollback()
+                raise
 
     def release_queue_claim(
         self,
         queue_item_id: str,
         worker_name: str,
         *,
+        claim_token: str,
         now_ms: int,
     ) -> bool:
-        cursor = self.connection.execute(
-            """
-            UPDATE queue_items
-            SET status = CASE
-                  WHEN target_agent = '' THEN 'pending'
-                  ELSE 'available'
-                END,
-                claimed_by = NULL,
-                claimed_until = NULL,
-                updated_at = ?
-            WHERE queue_item_id = ?
-              AND claimed_by = ?
-              AND status = 'claimed'
-            """,
-            (now_ms, queue_item_id, worker_name),
-        )
-        self.connection.commit()
+        with self._write_lock:
+            cursor = self.connection.execute(
+                """
+                UPDATE queue_items
+                SET status = CASE
+                      WHEN target_agent = '' THEN 'pending'
+                      ELSE 'available'
+                    END,
+                    claimed_by = NULL,
+                    claimed_token = NULL,
+                    claimed_until = NULL,
+                    updated_at = ?
+                WHERE queue_item_id = ?
+                  AND claimed_by = ?
+                  AND claimed_token = ?
+                  AND status = 'claimed'
+                """,
+                (now_ms, queue_item_id, worker_name, claim_token),
+            )
+            self.connection.commit()
         return cursor.rowcount == 1
 
-    def reconcile_expired_queue_claims(self, *, now_ms: int) -> int:
-        cursor = self.connection.execute(
+    def queue_claim_is_current(
+        self,
+        queue_item_id: str,
+        worker_name: str,
+        claim_token: str,
+    ) -> bool:
+        row = self.connection.execute(
             """
-            UPDATE queue_items
-            SET status = CASE
-                  WHEN target_agent = '' THEN 'pending'
-                  ELSE 'available'
-                END,
-                claimed_by = NULL,
-                claimed_until = NULL,
-                updated_at = ?
-            WHERE status = 'claimed'
-              AND claimed_until IS NOT NULL
-              AND claimed_until < ?
+            SELECT 1
+            FROM queue_items
+            WHERE queue_item_id = ?
+              AND claimed_by = ?
+              AND claimed_token = ?
+              AND status = 'claimed'
+            LIMIT 1
             """,
-            (now_ms, now_ms),
-        )
-        self.connection.commit()
+            (queue_item_id, worker_name, claim_token),
+        ).fetchone()
+        return row is not None
+
+    def reconcile_expired_queue_claims(self, *, now_ms: int) -> int:
+        with self._write_lock:
+            cursor = self.connection.execute(
+                """
+                UPDATE queue_items
+                SET status = CASE
+                      WHEN target_agent = '' THEN 'pending'
+                      ELSE 'available'
+                    END,
+                    claimed_by = NULL,
+                    claimed_token = NULL,
+                    claimed_until = NULL,
+                    updated_at = ?
+                WHERE status = 'claimed'
+                  AND claimed_until IS NOT NULL
+                  AND claimed_until < ?
+                """,
+                (now_ms, now_ms),
+            )
+            self.connection.commit()
         return int(cursor.rowcount)
 
     def get(self, event_id: str) -> Event | None:
@@ -844,14 +928,15 @@ class SqliteEventStore:
         return self.list_events(Filter(run_id=run_id))
 
     def clear_session_events(self, session_id: str, *, event_type_prefix: str) -> int:
-        cursor = self.connection.execute(
-            """
-            DELETE FROM events
-            WHERE session_id = ? AND type LIKE ? ESCAPE '\\'
-            """,
-            (session_id, _like_prefix(event_type_prefix)),
-        )
-        self.connection.commit()
+        with self._write_lock:
+            cursor = self.connection.execute(
+                """
+                DELETE FROM events
+                WHERE session_id = ? AND type LIKE ? ESCAPE '\\'
+                """,
+                (session_id, _like_prefix(event_type_prefix)),
+            )
+            self.connection.commit()
         return int(cursor.rowcount)
 
     def _duplicate_for(self, event: Event) -> Event:

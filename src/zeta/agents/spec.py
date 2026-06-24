@@ -5,7 +5,7 @@ import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 import yaml
 
@@ -154,29 +154,39 @@ def derive_slug(path: Path) -> str:
 
 def required_string(frontmatter: Mapping[str, Any], field: str, path: Path) -> str:
     value = frontmatter.get(field)
-    if value is None or value == "":
+    if not isinstance(value, str) or value == "":
         raise SpecError(f"missing required field {field!r} in {path}")
-    return cast(str, value)
+    return value
 
 
 def bool_field(value: Any, field: str, path: Path) -> bool:
-    del field, path
-    return cast(bool, value)
+    if not isinstance(value, bool):
+        raise SpecError(f"invalid value for {field!r} in {path}: expected boolean")
+    return value
 
 
 def string_tuple(value: Any, field: str, path: Path) -> tuple[str, ...]:
-    del field, path
     if value is None or value == ():
         return ()
-    return cast(tuple[str, ...], value)
+    if not isinstance(value, list | tuple):
+        raise SpecError(f"invalid value for {field!r} in {path}: expected list")
+    items: list[str] = []
+    for index, item in enumerate(value):
+        if not isinstance(item, str) or item == "":
+            raise SpecError(
+                f"invalid value for {field!r} in {path}: item {index} "
+                "must be a non-empty string"
+            )
+        items.append(item)
+    return tuple(items)
 
 
 def schedule_tuple(value: Any, path: Path) -> tuple[ScheduleEntry, ...]:
     if value is None or value == ():
         return ()
-    return cast(
-        tuple[ScheduleEntry, ...], [schedule_entry(item, path) for item in value]
-    )
+    if not isinstance(value, list | tuple):
+        raise SpecError(f"invalid value for 'schedules' in {path}: expected list")
+    return tuple(schedule_entry(item, path) for item in value)
 
 
 def schedule_entry(value: Any, path: Path) -> ScheduleEntry:
@@ -200,14 +210,19 @@ def schedule_entry(value: Any, path: Path) -> ScheduleEntry:
 
 def required_schedule_string(value: Mapping[str, Any], field: str, path: Path) -> str:
     item = value.get(field)
-    if item is None or item == "":
+    if not isinstance(item, str) or item == "":
         raise SpecError(f"invalid value for 'schedules' in {path}: {field} is required")
-    return cast(str, item)
+    return item
 
 
 def schedule_timezone_name(value: Any, path: Path) -> str | None:
-    del path
-    return cast(str | None, value)
+    if value is None:
+        return None
+    if not isinstance(value, str) or value == "":
+        raise SpecError(
+            f"invalid value for 'schedules' in {path}: timezone must be a string"
+        )
+    return value
 
 
 def accepts_with_schedules(

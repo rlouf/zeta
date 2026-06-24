@@ -191,7 +191,7 @@ def test_sigil_step_keeps_trace_off_stdout(monkeypatch) -> None:
     )
 
     assert result.exit_code == 0
-    assert result.stdout == "\nsummary\n\n"
+    assert result.stdout == "summary\n"
     assert "✓ read" in result.stderr
     assert "✓ read" not in result.stdout
 
@@ -851,7 +851,7 @@ def test_zeta_agent_step_aligns_thinking_status_after_tool_trace(
     assert "✓ read README.md · 1 lines" in trace_text
 
 
-def test_zeta_agent_step_renders_prefill_status_during_model_request(
+def test_zeta_agent_step_renders_waiting_status_during_model_request(
     monkeypatch,
 ) -> None:
     monkeypatch.setenv("NO_COLOR", "1")
@@ -879,7 +879,7 @@ def test_zeta_agent_step_renders_prefill_status_during_model_request(
     )
 
     assert code == 0
-    assert "prefill 0s" in output.getvalue()
+    assert "waiting 0s" in output.getvalue()
 
 
 def test_zeta_agent_step_prints_final_answer_after_direct_edit(
@@ -1798,7 +1798,7 @@ def test_zeta_question_loop_prints_tool_start_while_agent_runs(
     code = ask_runner.ask("What does README.md contain?")
 
     assert code == 0
-    assert "\nIt is a README.\n" in capsys.readouterr().out
+    assert "It is a README.\n" in capsys.readouterr().out
 
 
 def test_zeta_question_loop_passes_prior_timeline_as_turns(

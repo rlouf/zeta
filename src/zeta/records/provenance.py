@@ -4,8 +4,9 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any
 
-from zeta.records.events import DraftEvent, Event, draft_event_id, event_timeline_type
-from zeta.records.objects import Derivation, Object, ObjectId
+from zeta.events import DraftEvent, Event
+from zeta.objects import Derivation, Object, ObjectId
+from zeta.records.events import draft_event_id, event_timeline_type
 from zeta.records.stores import Store
 
 

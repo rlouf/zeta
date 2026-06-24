@@ -3,9 +3,9 @@ from dataclasses import asdict, replace
 from typing import Any
 
 from sigil.history import effect_record, event_from_record, turn_record
+from zeta.events import DraftEvent, Event
+from zeta.objects import Derivation, Object
 from zeta.records.events import (
-    DraftEvent,
-    Event,
     draft_from_runtime_event,
     durable_model_event_payload,
     durable_tool_event_payload,
@@ -13,7 +13,6 @@ from zeta.records.events import (
     model_call_draft,
     tool_call_draft,
 )
-from zeta.records.objects import Derivation, Object
 from zeta.records.provenance import project_prompt_trace_projection
 from zeta.records.stores import InMemoryStore
 

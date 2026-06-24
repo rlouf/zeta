@@ -3,26 +3,69 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
+from dataclasses import dataclass
 from datetime import UTC, datetime
+from pathlib import Path
+from typing import Any
 from zoneinfo import ZoneInfo
 
-from zeta.agents.spec import DEFAULT_SCHEDULE_EVENT, AgentSpec, ScheduleEntry
-from zeta.records.events import DraftEvent, Event
-from zeta.records.stores import EventWriter
+from zeta.agents.spec import AgentSpec, ScheduleEntry, load_specs, scheduled_event_type
+from zeta.events import DraftEvent, Event
+from zeta.records.stores import EventWriter, SqliteEventStore, event_store_path
+from zeta.rpc.routes import rpc_requested_draft
+
+
+@dataclass(frozen=True)
+class SchedulerServices:
+    """Project-local resources consumed by the scheduler service."""
+
+    project_root: Path
+    state_dir: Path
+    events: SqliteEventStore
+
+    def close(self) -> None:
+        self.events.close()
+
+
+def build_scheduler_services(
+    *,
+    project_root: Path,
+    state_dir: Path | None = None,
+) -> SchedulerServices:
+    resolved_project_root = project_root.expanduser().resolve()
+    resolved_state_dir = (
+        state_dir.expanduser().resolve()
+        if state_dir is not None
+        else resolved_project_root / ".zeta"
+    )
+    return SchedulerServices(
+        project_root=resolved_project_root,
+        state_dir=resolved_state_dir,
+        events=SqliteEventStore(event_store_path(resolved_state_dir)),
+    )
 
 
 def utc_now() -> datetime:
     return datetime.now(UTC)
 
 
-def emit_due_schedules(
+def request_due_project_schedules(
+    runtime: SchedulerServices,
+    *,
+    now: datetime | None = None,
+) -> list[Event]:
+    specs = load_specs(runtime.project_root / "agents")
+    return request_due_schedules(runtime.events, specs, now=now)
+
+
+def request_due_schedules(
     event_sink: EventWriter,
     specs: Iterable[AgentSpec],
     *,
     now: datetime | None = None,
 ) -> list[Event]:
     current = now or utc_now()
-    emitted: list[Event] = []
+    requested: list[Event] = []
     for spec in specs:
         if not spec.enabled:
             continue
@@ -30,33 +73,47 @@ def emit_due_schedules(
             scheduled_time = schedule_current_time(schedule, current)
             if not cron_matches(schedule.cron, scheduled_time):
                 continue
+            draft = schedule_event_draft(spec, schedule, scheduled_time)
             outcome = event_sink.accept(
-                DraftEvent(
-                    schedule.event,
-                    "runtime:scheduler",
-                    schedule_event_payload(spec, schedule),
-                    idempotency_key=schedule_idempotency_key(
-                        spec.slug,
-                        schedule,
-                        scheduled_time,
-                    ),
+                rpc_requested_draft(
+                    "events.publish",
+                    draft_event_params(draft),
+                    request_id=draft.idempotency_key,
+                    source="zeta:scheduler",
                 )
             )
             if outcome.inserted:
-                emitted.append(outcome.event)
-    return emitted
+                requested.append(outcome.event)
+    return requested
 
 
-def schedule_event_payload(
+def schedule_event_draft(
     spec: AgentSpec,
     schedule: ScheduleEntry,
-) -> dict[str, object]:
-    if schedule.event != DEFAULT_SCHEDULE_EVENT:
-        return dict(schedule.payload)
+    scheduled_time: datetime,
+) -> DraftEvent:
+    return DraftEvent(
+        scheduled_event_type(spec.slug),
+        "zeta:scheduler",
+        {},
+        idempotency_key=schedule_idempotency_key(
+            spec.slug,
+            schedule,
+            scheduled_time,
+        ),
+    )
+
+
+def draft_event_params(draft: DraftEvent) -> dict[str, Any]:
     return {
-        "agent_name": spec.name,
-        "cron": schedule.cron,
-        **schedule.payload,
+        "event_type": draft.event_type,
+        "source": draft.source,
+        "payload": dict(draft.payload),
+        "idempotency_key": draft.idempotency_key,
+        "caused_by": draft.caused_by,
+        "session_id": draft.session_id,
+        "run_id": draft.run_id,
+        "turn_id": draft.turn_id,
     }
 
 

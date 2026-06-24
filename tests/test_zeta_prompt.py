@@ -59,10 +59,10 @@ from zeta.context.instructions import (
     load_project_instructions,
 )
 from zeta.context.system import model_capability_descriptors, system_prompt
+from zeta.events import Event
 from zeta.models import chat_completions as zeta_model
 from zeta.models import types as zeta_models_api
-from zeta.records.events import Event
-from zeta.records.objects import Derivation, Object
+from zeta.objects import Derivation, Object
 from zeta.records.provenance import project_prompt_trace_projection
 from zeta.records.stores import InMemoryStore
 

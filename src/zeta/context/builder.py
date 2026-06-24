@@ -23,7 +23,7 @@ from zeta.models.chat_completions import (
     chat_completion_request_body,
 )
 from zeta.models.types import ModelInput
-from zeta.records.objects import Derivation, Object, ObjectId
+from zeta.objects import Derivation, Object, ObjectId
 from zeta.records.stores import (
     Store,
     warn_trace_failure_once,

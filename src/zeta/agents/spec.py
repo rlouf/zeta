@@ -2,7 +2,7 @@
 
 import hashlib
 import re
-from collections.abc import Iterable, Mapping
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
@@ -10,7 +10,6 @@ from typing import Any, cast
 import yaml
 
 SLUG_PATTERN = re.compile(r"^[a-z0-9_-]+$")
-DEFAULT_SCHEDULE_EVENT = "runtime.schedule.triggered"
 BUILT_IN_FRONTMATTER_KEYS = frozenset(
     {
         "name",
@@ -30,8 +29,6 @@ class ScheduleEntry:
     """Structural schedule declaration for an authored agent."""
 
     cron: str
-    event: str
-    payload: dict[str, Any]
     timezone: str | None = None
 
 
@@ -76,9 +73,9 @@ def load_spec(path: str | Path) -> AgentSpec:
     frontmatter, instructions = split_frontmatter(content, path)
     slug = derive_slug(path)
     try:
-        accepts = string_tuple(frontmatter.get("accepts", ()), "accepts", path)
+        authored_accepts = string_tuple(frontmatter.get("accepts", ()), "accepts", path)
         schedules = schedule_tuple(frontmatter.get("schedules", ()), path)
-        validate_schedules_subset_of_accepts(schedules, accepts, path)
+        accepts = accepts_with_schedules(authored_accepts, schedules, slug)
         return AgentSpec(
             slug=slug,
             name=required_string(frontmatter, "name", path),
@@ -104,6 +101,22 @@ def load_spec(path: str | Path) -> AgentSpec:
         raise
     except (AttributeError, TypeError, ValueError) as exc:
         raise SpecError(f"invalid spec in {path}: {exc}") from exc
+
+
+def load_specs(agents_dir: Path) -> tuple[AgentSpec, ...]:
+    if not agents_dir.exists():
+        return ()
+    specs: list[AgentSpec] = []
+    for path in sorted(agents_dir.iterdir()):
+        if path.is_dir() and not path.is_symlink():
+            specs.extend(load_specs(path))
+            continue
+        if path.suffix != ".md" or not path.is_file() or path.is_symlink():
+            continue
+        spec = load_spec(path)
+        if spec.enabled:
+            specs.append(spec)
+    return tuple(specs)
 
 
 def matches(spec: AgentSpec, event_type: str) -> bool:
@@ -167,14 +180,20 @@ def schedule_tuple(value: Any, path: Path) -> tuple[ScheduleEntry, ...]:
 
 
 def schedule_entry(value: Any, path: Path) -> ScheduleEntry:
+    if not isinstance(value, Mapping):
+        raise SpecError(f"invalid value for 'schedules' in {path}: expected object")
+    if "event" in value:
+        raise SpecError(
+            f"invalid value for 'schedules' in {path}: event is not supported"
+        )
+    if "payload" in value:
+        raise SpecError(
+            f"invalid value for 'schedules' in {path}: payload is not supported"
+        )
     cron = required_schedule_string(value, "cron", path)
-    event = schedule_event_type(value, path)
-    payload = cast(dict[str, Any], value.get("payload", {}))
     timezone = schedule_timezone_name(value.get("timezone"), path)
     return ScheduleEntry(
         cron=cron,
-        event=event,
-        payload=payload,
         timezone=timezone,
     )
 
@@ -186,31 +205,26 @@ def required_schedule_string(value: Mapping[str, Any], field: str, path: Path) -
     return cast(str, item)
 
 
-def schedule_event_type(value: Mapping[str, Any], path: Path) -> str:
-    event = value.get("event")
-    if event is None:
-        return DEFAULT_SCHEDULE_EVENT
-    if event == "":
-        raise SpecError(f"invalid value for 'schedules' in {path}: event is required")
-    return cast(str, event)
-
-
 def schedule_timezone_name(value: Any, path: Path) -> str | None:
     del path
     return cast(str | None, value)
 
 
-def validate_schedules_subset_of_accepts(
-    schedules: Iterable[ScheduleEntry],
+def accepts_with_schedules(
     accepts: tuple[str, ...],
-    path: Path,
-) -> None:
-    for schedule in schedules:
-        if schedule.event not in accepts:
-            raise SpecError(
-                f"invalid value for 'schedules' in {path}: schedule emits event "
-                f"{schedule.event!r} that is not listed in accepts"
-            )
+    schedules: tuple[ScheduleEntry, ...],
+    slug: str,
+) -> tuple[str, ...]:
+    if not schedules:
+        return accepts
+    scheduled_event = scheduled_event_type(slug)
+    if scheduled_event in accepts:
+        return accepts
+    return (*accepts, scheduled_event)
+
+
+def scheduled_event_type(agent_slug: str) -> str:
+    return f"agent.{agent_slug}.scheduled"
 
 
 def relative_to_cwd(path: Path) -> Path:

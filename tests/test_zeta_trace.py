@@ -25,10 +25,11 @@ from zeta import models as zeta_models_api
 from zeta.capabilities import execution as zeta_capability_execution
 from zeta.context.builder import PromptBuilder
 from zeta.context.components import chat_messages
+from zeta.events import DraftEvent
 from zeta.models import chat_completions as zeta_model
 from zeta.models import profiles as zeta_models
-from zeta.records.events import DraftEvent, event_view
-from zeta.records.objects import Derivation, Object, ObjectId, Ref, RefUpdate
+from zeta.objects import Derivation, Object, ObjectId, Ref, RefUpdate
+from zeta.records.events import event_view
 from zeta.records.stores import (
     AmbiguousIdError,
     Filter,

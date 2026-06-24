@@ -286,7 +286,7 @@ async def events_publish(
             event_type=exc.event_type,
         ) from exc
 
-    if outcome.inserted:
+    if outcome.inserted and client.connection is not None:
         asyncio.create_task(route_event(client, outcome.event))
 
     return {

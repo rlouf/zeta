@@ -3,13 +3,13 @@
 import asyncio
 import json
 import sys
+import time
 from pathlib import Path
 
 import click
 
-from zeta import process
-from zeta.orchestration import worker
-from zeta.records.events import Event
+from zeta.events import Event
+from zeta.orchestration import scheduling, worker
 from zeta.records.stores import Filter, SqliteEventStore, event_store_path
 from zeta.rpc import run_stdio
 
@@ -223,7 +223,10 @@ def events(
 def run(project_root: Path, state_dir: Path | None, once: bool) -> int:
     """Run the local runtime worker."""
 
-    runtime = process.build_runtime(project_root=project_root, state_dir=state_dir)
+    runtime = worker.build_worker_services(
+        project_root=project_root,
+        state_dir=state_dir,
+    )
     try:
         if once:
             message = asyncio.run(worker.run_once(runtime))
@@ -233,6 +236,44 @@ def run(project_root: Path, state_dir: Path | None, once: bool) -> int:
     finally:
         runtime.close()
     return 0
+
+
+@cli.command("schedule")
+@click.option(
+    "--project-root",
+    type=click.Path(file_okay=False, path_type=Path),
+    default=Path("."),
+    show_default=True,
+    help="Project root containing .zeta runtime state and agents/ specs.",
+)
+@click.option(
+    "--state-dir",
+    type=click.Path(file_okay=False, path_type=Path),
+    help="Override the runtime state directory.",
+)
+@click.option("--once", is_flag=True, help="Request due schedules, then exit.")
+def schedule(project_root: Path, state_dir: Path | None, once: bool) -> int:
+    """Run the local scheduler service."""
+
+    runtime = scheduling.build_scheduler_services(
+        project_root=project_root,
+        state_dir=state_dir,
+    )
+    try:
+        while True:
+            requested = scheduling.request_due_project_schedules(runtime)
+            for request in requested:
+                event_type = request.payload["params"]["event_type"]
+                click.echo(f"requested {event_type} {request.id}")
+            if once:
+                return 0
+            time.sleep(seconds_until_next_minute())
+    finally:
+        runtime.close()
+
+
+def seconds_until_next_minute() -> float:
+    return 60 - (time.time() % 60)
 
 
 @cli.command("status")

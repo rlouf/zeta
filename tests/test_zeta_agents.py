@@ -8,11 +8,17 @@ from typing import Any
 import pytest
 
 from zeta.agents.events import EventRegistry
-from zeta.agents.loader import load_spec
 from zeta.agents.manifest import Manifest, ManifestError
 from zeta.agents.prompts import TemplateError, render_prompt, validate_prompt
 from zeta.agents.returns import derive_returns_schema
-from zeta.agents.spec import ScheduleEntry, matches
+from zeta.agents.spec import (
+    ScheduleEntry,
+    SpecError,
+    load_spec,
+    load_specs,
+    matches,
+    scheduled_event_type,
+)
 from zeta.capabilities.execution import (
     InProcessCapabilityExecutor,
 )
@@ -21,13 +27,13 @@ from zeta.capabilities.types import (
     Capability,
     CapabilityId,
 )
+from zeta.events import DraftEvent
 from zeta.orchestration import dispatch as zeta_dispatch
 from zeta.orchestration import queue as zeta_queue
 from zeta.orchestration.agents import (
     compile_agent_definition,
     compile_agent_definitions,
 )
-from zeta.records.events import DraftEvent
 from zeta.records.stores import SqliteEventStore
 from zeta.run.config import AgentConfig
 from zeta.run.runtime import AgentRunResult
@@ -37,13 +43,16 @@ zeta_agents = SimpleNamespace(
     Manifest=Manifest,
     ManifestError=ManifestError,
     ScheduleEntry=ScheduleEntry,
+    SpecError=SpecError,
     TemplateError=TemplateError,
     compile_agent_definition=compile_agent_definition,
     compile_agent_definitions=compile_agent_definitions,
     derive_returns_schema=derive_returns_schema,
     load_spec=load_spec,
+    load_specs=load_specs,
     matches=matches,
     render_prompt=render_prompt,
+    scheduled_event_type=scheduled_event_type,
     validate_prompt=validate_prompt,
 )
 zeta_events = SimpleNamespace(DraftEvent=DraftEvent, SqliteEventStore=SqliteEventStore)
@@ -81,9 +90,6 @@ tools:
   - read
 schedules:
   - cron: "* * * * *"
-    event: slack.dm.received
-    payload:
-      text: scheduled
 writes:
   paths:
     - docs/**.md
@@ -99,14 +105,12 @@ User asked: {{ event.payload.text }}
     assert spec.description == "Answers workspace questions in Slack."
     assert spec.enabled is True
     assert spec.resumable is True
-    assert spec.accepts == ["slack.dm.received"]
+    assert spec.accepts == ("slack.dm.received", "agent.slack-qa.scheduled")
     assert spec.returns == ["message.delivery.requested"]
     assert spec.tools == ["read"]
     assert spec.schedules == [
         zeta_agents.ScheduleEntry(
             cron="* * * * *",
-            event="slack.dm.received",
-            payload={"text": "scheduled"},
             timezone=None,
         ),
     ]
@@ -115,7 +119,7 @@ User asked: {{ event.payload.text }}
     assert len(spec.sha256) == 64
 
 
-def test_zeta_agent_spec_defaults_schedule_event_to_runtime_trigger(
+def test_zeta_agent_spec_adds_synthetic_schedule_event(
     tmp_path: Path,
 ) -> None:
     spec = zeta_agents.load_spec(
@@ -124,8 +128,6 @@ def test_zeta_agent_spec_defaults_schedule_event_to_runtime_trigger(
             """---
 name: Scheduled
 description: Runs on a schedule.
-accepts:
-  - runtime.schedule.triggered
 schedules:
   - cron: "* * * * *"
 ---
@@ -134,14 +136,41 @@ Summarize the repo.
         )
     )
 
+    assert spec.accepts == ("agent.scheduled.scheduled",)
     assert spec.schedules == [
         zeta_agents.ScheduleEntry(
             cron="* * * * *",
-            event="runtime.schedule.triggered",
-            payload={},
             timezone=None,
         )
     ]
+    assert zeta_agents.scheduled_event_type("scheduled") == "agent.scheduled.scheduled"
+
+
+@pytest.mark.parametrize("field", ["event", "payload"])
+def test_zeta_agent_spec_rejects_schedule_event_source_fields(
+    tmp_path: Path,
+    field: str,
+) -> None:
+    extra = (
+        "    event: repo.digest.requested\n"
+        if field == "event"
+        else "    payload:\n      reason: scheduled\n"
+    )
+
+    with pytest.raises(zeta_agents.SpecError, match=f"{field} is not supported"):
+        zeta_agents.load_spec(
+            _write_spec(
+                tmp_path / "scheduled.md",
+                f"""---
+name: Scheduled
+description: Runs on a schedule.
+schedules:
+  - cron: "* * * * *"
+{extra}---
+Summarize the repo.
+""",
+            )
+        )
 
 
 def test_zeta_agent_spec_validates_renders_matches_and_derives_schema(

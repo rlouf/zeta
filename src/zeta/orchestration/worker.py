@@ -7,13 +7,18 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from zeta.agents.spec import AgentSpec
-from zeta.orchestration.agents import ExecutableAgent
+from zeta.agents.spec import load_specs
+from zeta.events import Event
+from zeta.orchestration.agents import ExecutableAgent, compile_agent_definitions
 from zeta.orchestration.dispatch import EventDispatcher
-from zeta.orchestration.scheduling import emit_due_schedules
 from zeta.orchestration.session_turn_agent import session_turn_agent
-from zeta.records.events import Event
-from zeta.records.stores import Filter, SqliteEventStore, SqliteStore, zeta_sqlite_path
+from zeta.records.stores import (
+    Filter,
+    SqliteEventStore,
+    SqliteStore,
+    event_store_path,
+    zeta_sqlite_path,
+)
 from zeta.run.context import RuntimeContext
 
 LOCAL_WORKER_NAME = "local-runtime"
@@ -22,14 +27,12 @@ ATTEMPT_HEARTBEAT_INTERVAL_SECONDS = 15.0
 
 
 @dataclass(frozen=True)
-class RuntimeServices:
+class WorkerServices:
     """Project-local resources consumed by the queue worker."""
 
     project_root: Path
     state_dir: Path
     events: SqliteEventStore
-    specs: tuple[AgentSpec, ...]
-    executors: tuple[ExecutableAgent, ...]
     worker_name: str = LOCAL_WORKER_NAME
     max_concurrent: int = 1
 
@@ -37,20 +40,43 @@ class RuntimeServices:
         self.events.close()
 
 
-async def run_once(runtime: RuntimeServices) -> str:
-    emit_due_schedules(runtime.events, runtime.specs)
+def build_worker_services(
+    *,
+    project_root: Path,
+    state_dir: Path | None = None,
+) -> WorkerServices:
+    resolved_project_root = project_root.expanduser().resolve()
+    resolved_state_dir = (
+        state_dir.expanduser().resolve()
+        if state_dir is not None
+        else resolved_project_root / ".zeta"
+    )
+    return WorkerServices(
+        project_root=resolved_project_root,
+        state_dir=resolved_state_dir,
+        events=SqliteEventStore(event_store_path(resolved_state_dir)),
+    )
+
+
+async def run_once(runtime: WorkerServices) -> str:
     rpc_request = pending_rpc_request(runtime)
     if rpc_request is not None:
         await run_eventlog_rpc_request(runtime, rpc_request)
         return f"rpc {rpc_request.id}"
     enqueue_pending_events(runtime.events)
+    executors = project_executors(runtime)
     return await run_available_queue_item(
         runtime.events,
-        executors=runtime.executors,
+        executors=executors,
         worker_name=runtime.worker_name,
         heartbeat_interval_seconds=ATTEMPT_HEARTBEAT_INTERVAL_SECONDS,
         lease_ms=QUEUE_LEASE_MS,
     )
+
+
+def project_executors(runtime: WorkerServices) -> tuple[ExecutableAgent, ...]:
+    specs = load_specs(runtime.project_root / "agents")
+    return tuple(agent for spec in specs for agent in compile_agent_definitions(spec))
 
 
 async def run_available_queue_item(
@@ -118,7 +144,7 @@ def is_runtime_event(event: Event) -> bool:
     return event.event_type.startswith(("runtime.queue_item.", "runtime.attempt."))
 
 
-def pending_rpc_request(runtime: RuntimeServices) -> Event | None:
+def pending_rpc_request(runtime: WorkerServices) -> Event | None:
     from zeta.rpc.routes import RPC_REQUESTED, rpc_request_has_terminal_response
 
     for event in runtime.events.list_events(Filter(event_type=RPC_REQUESTED)):
@@ -128,7 +154,7 @@ def pending_rpc_request(runtime: RuntimeServices) -> Event | None:
 
 
 async def run_eventlog_rpc_request(
-    runtime: RuntimeServices,
+    runtime: WorkerServices,
     request: Event,
 ) -> Event | None:
     from zeta.capabilities.registry import registry as tool_registry
@@ -173,7 +199,7 @@ async def run_eventlog_rpc_request(
                 publish_event=lambda _event: None,
                 cancellation_event_for_run=cancellation_event_for_run,
             ),
-            *runtime.executors,
+            *project_executors(runtime),
         ),
         worker_name=runtime.worker_name,
         heartbeat_interval_seconds=ATTEMPT_HEARTBEAT_INTERVAL_SECONDS,
@@ -270,7 +296,7 @@ def runtime_time_ms() -> int:
 
 
 async def run_forever(
-    runtime: RuntimeServices,
+    runtime: WorkerServices,
     *,
     poll_interval_seconds: float = 1.0,
     stop_event: asyncio.Event | None = None,

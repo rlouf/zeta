@@ -218,29 +218,32 @@ class SqliteEventStore:
             ensure_ascii=False,
             separators=(",", ":"),
         )
-        cursor = self.connection.execute(
-            """
-            INSERT INTO events
-              (id, type, source, payload, idempotency_key, caused_by, session_id,
-               run_id, turn_id, timestamp)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT DO NOTHING
-            """,
-            (
-                event.id,
-                event.event_type,
-                event.source,
-                payload,
-                event.idempotency_key,
-                event.caused_by,
-                event.session_id,
-                event.run_id,
-                event.turn_id,
-                event.timestamp_ms,
-            ),
-        )
-        self.connection.commit()
-        if cursor.rowcount == 1:
+        _execute_with_retry(self.connection, "BEGIN IMMEDIATE")
+        try:
+            cursor = self.connection.execute(
+                """
+                INSERT INTO events
+                  (id, type, source, payload, idempotency_key, caused_by, session_id,
+                   run_id, turn_id, timestamp)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT DO NOTHING
+                """,
+                (
+                    event.id,
+                    event.event_type,
+                    event.source,
+                    payload,
+                    event.idempotency_key,
+                    event.caused_by,
+                    event.session_id,
+                    event.run_id,
+                    event.turn_id,
+                    event.timestamp_ms,
+                ),
+            )
+            if cursor.rowcount != 1:
+                self.connection.commit()
+                return AppendOutcome(event=self._duplicate_for(event), inserted=False)
             inserted = self.get(event.id)
             if inserted is None:
                 raise sqlite3.IntegrityError(f"append failed for event {event.id}")
@@ -248,7 +251,9 @@ class SqliteEventStore:
             self._index_one_runtime_event(inserted)
             self.connection.commit()
             return AppendOutcome(event=inserted, inserted=True)
-        return AppendOutcome(event=self._duplicate_for(event), inserted=False)
+        except Exception:
+            self.connection.rollback()
+            raise
 
     def _index_one_session_mapping(self, event: Event) -> None:
         if event.session_id is None or event.run_id is None:

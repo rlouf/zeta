@@ -571,6 +571,39 @@ def test_event_stores_normalize_payloads_to_json_native(tmp_path: Path) -> None:
     assert json.loads(json.dumps(sqlite_event.payload)) == sqlite_event.payload
 
 
+def test_sqlite_event_store_rolls_back_event_when_projection_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = SqliteEventStore(tmp_path / "events.sqlite3")
+    event = Event(
+        id="evt_projection_failure",
+        event_type="runtime.queue_item.available",
+        source="zeta",
+        payload={
+            "queue_item_id": "qi_projection_failure",
+            "event_id": "evt_source",
+            "target_agent": "agent",
+            "status": "available",
+        },
+        idempotency_key=None,
+        caused_by=None,
+        session_id=None,
+        timestamp_ms=1,
+    )
+
+    def fail_projection(_event: Event) -> None:
+        raise RuntimeError("projection failed")
+
+    monkeypatch.setattr(store, "_index_one_runtime_event", fail_projection)
+
+    with pytest.raises(RuntimeError, match="projection failed"):
+        store.append(event)
+
+    assert store.list_events(Filter()) == []
+    assert store.list_queue_items() == []
+
+
 def test_event_stores_reject_non_json_payloads(tmp_path: Path) -> None:
     draft = DraftEvent(
         event_type="zeta.turn.completed",

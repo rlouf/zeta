@@ -99,17 +99,17 @@ User asked: {{ event.payload.text }}
     assert spec.description == "Answers workspace questions in Slack."
     assert spec.enabled is True
     assert spec.resumable is True
-    assert spec.accepts == ["slack.dm.received"]
-    assert spec.returns == ["message.delivery.requested"]
-    assert spec.tools == ["read"]
-    assert spec.schedules == [
+    assert spec.accepts == ("slack.dm.received",)
+    assert spec.returns == ("message.delivery.requested",)
+    assert spec.tools == ("read",)
+    assert spec.schedules == (
         zeta_agents.ScheduleEntry(
             cron="* * * * *",
             event="slack.dm.received",
             payload={"text": "scheduled"},
             timezone=None,
         ),
-    ]
+    )
     assert spec.extensions == {"writes": {"paths": ["docs/**.md"]}}
     assert spec.instructions == "User asked: {{ event.payload.text }}\n"
     assert len(spec.sha256) == 64
@@ -134,14 +134,61 @@ Summarize the repo.
         )
     )
 
-    assert spec.schedules == [
+    assert spec.schedules == (
         zeta_agents.ScheduleEntry(
             cron="* * * * *",
             event="runtime.schedule.triggered",
             payload={},
             timezone=None,
-        )
-    ]
+        ),
+    )
+
+
+@pytest.mark.parametrize(
+    ("frontmatter", "message"),
+    [
+        ("name: 1\ndescription: Worker\n", "name"),
+        ("name: Worker\ndescription: 1\n", "description"),
+        ("name: Worker\ndescription: Worker\nenabled: maybe\n", "enabled"),
+        ("name: Worker\ndescription: Worker\nresumable: later\n", "resumable"),
+        ("name: Worker\ndescription: Worker\naccepts: github.issue.opened\n", "accepts"),
+        ("name: Worker\ndescription: Worker\nreturns:\n  - 1\n", "returns"),
+        ("name: Worker\ndescription: Worker\ntools:\n  - read\n  - 2\n", "tools"),
+        ("name: Worker\ndescription: Worker\nschedules: hourly\n", "schedules"),
+        (
+            "name: Worker\ndescription: Worker\naccepts:\n"
+            "  - runtime.schedule.triggered\nschedules:\n  - soon\n",
+            "schedules",
+        ),
+        (
+            "name: Worker\ndescription: Worker\naccepts:\n"
+            "  - runtime.schedule.triggered\nschedules:\n"
+            "  - cron: '* * * * *'\n    payload: scheduled\n",
+            "payload",
+        ),
+        (
+            "name: Worker\ndescription: Worker\naccepts:\n"
+            "  - runtime.schedule.triggered\nschedules:\n"
+            "  - cron: '* * * * *'\n    timezone: 1\n",
+            "timezone",
+        ),
+    ],
+)
+def test_zeta_agent_spec_rejects_invalid_frontmatter_values(
+    tmp_path: Path,
+    frontmatter: str,
+    message: str,
+) -> None:
+    spec_path = _write_spec(
+        tmp_path / "worker.md",
+        f"""---
+{frontmatter}---
+Do work.
+""",
+    )
+
+    with pytest.raises(ValueError, match=message):
+        zeta_agents.load_spec(spec_path)
 
 
 def test_zeta_agent_spec_validates_renders_matches_and_derives_schema(

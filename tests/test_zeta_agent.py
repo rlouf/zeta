@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import logging
 import sqlite3
 import threading
 import tomllib
@@ -4795,6 +4796,98 @@ def test_zeta_local_runtime_run_forever_respects_max_concurrent(
 
     assert sorted(started) == sorted(event.id for event in events)
     assert [item.status for item in items] == ["completed", "completed"]
+
+
+def test_zeta_local_runtime_run_forever_logs_and_continues_after_run_once_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    event_store = zeta_events.SqliteEventStore(tmp_path / "events.sqlite3")
+    runtime = zeta_worker.RuntimeServices(
+        project_root=tmp_path,
+        state_dir=tmp_path,
+        events=event_store,
+        specs=(),
+        executors=(),
+    )
+    calls = 0
+
+    async def run_once(runtime: zeta_worker.RuntimeServices) -> str:
+        nonlocal calls
+        del runtime
+        calls += 1
+        if calls == 1:
+            raise RuntimeError("poisoned queue item")
+        stop_event.set()
+        return "queue empty"
+
+    async def exercise() -> None:
+        with caplog.at_level(logging.ERROR, logger=zeta_worker.__name__):
+            await zeta_worker.run_forever(
+                runtime,
+                poll_interval_seconds=0,
+                stop_event=stop_event,
+            )
+
+    stop_event = asyncio.Event()
+    monkeypatch.setattr(zeta_worker, "run_once", run_once)
+
+    asyncio.run(exercise())
+
+    assert calls == 2
+    assert "queue worker task failed" in caplog.text
+
+
+def test_zeta_local_runtime_run_forever_reaps_done_tasks_before_refilling(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    event_store = zeta_events.SqliteEventStore(tmp_path / "events.sqlite3")
+    runtime = zeta_worker.RuntimeServices(
+        project_root=tmp_path,
+        state_dir=tmp_path,
+        events=event_store,
+        specs=(),
+        executors=(),
+        max_concurrent=2,
+    )
+    started = 0
+    release_first_batch = asyncio.Event()
+    first_batch_done = asyncio.Event()
+
+    async def run_once(runtime: zeta_worker.RuntimeServices) -> str:
+        nonlocal started
+        del runtime
+        started += 1
+        if started <= 2:
+            await release_first_batch.wait()
+            if started == 2:
+                first_batch_done.set()
+            return f"ran {started}"
+        stop_event.set()
+        return "queue empty"
+
+    async def exercise() -> None:
+        worker = asyncio.create_task(
+            zeta_worker.run_forever(
+                runtime,
+                poll_interval_seconds=0,
+                stop_event=stop_event,
+            )
+        )
+        while started < 2:
+            await asyncio.sleep(0)
+        release_first_batch.set()
+        await asyncio.wait_for(first_batch_done.wait(), timeout=1)
+        await asyncio.wait_for(worker, timeout=1)
+
+    stop_event = asyncio.Event()
+    monkeypatch.setattr(zeta_worker, "run_once", run_once)
+
+    asyncio.run(exercise())
+
+    assert started == 4
 
 
 def test_zeta_cli_run_forever_invokes_runtime_loop(

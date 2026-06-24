@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -21,6 +22,8 @@ from zeta.records.stores import (
     zeta_sqlite_path,
 )
 from zeta.run.context import RuntimeContext
+
+logger = logging.getLogger(__name__)
 
 LOCAL_WORKER_NAME = "local-runtime"
 QUEUE_LEASE_MS = 60_000
@@ -284,22 +287,44 @@ async def run_forever(
     stop_event: asyncio.Event | None = None,
 ) -> None:
     running: set[asyncio.Task[str]] = set()
+    should_refill = True
     while stop_event is None or not stop_event.is_set():
-        while len(running) < runtime.max_concurrent:
-            task = asyncio.create_task(run_once(runtime))
-            running.add(task)
-            await asyncio.sleep(0)
-            if task.done() and task.result() == "queue empty":
-                running.remove(task)
-                break
+        if should_refill:
+            while len(running) < runtime.max_concurrent:
+                running.add(asyncio.create_task(run_once(runtime)))
         if not running:
             await asyncio.sleep(poll_interval_seconds)
+            should_refill = True
             continue
         done, running = await asyncio.wait(
             running,
             return_when=asyncio.FIRST_COMPLETED,
         )
-        if all(task.result() == "queue empty" for task in done):
+        finished = {task for task in running if task.done()}
+        if finished:
+            done.update(finished)
+            running.difference_update(finished)
+        saw_empty_queue = False
+        for task in done:
+            if _run_once_task_result(task) == "queue empty":
+                saw_empty_queue = True
+        should_refill = not saw_empty_queue
+        if saw_empty_queue and not running:
             await asyncio.sleep(poll_interval_seconds)
+            should_refill = True
     if running:
-        await asyncio.gather(*running)
+        results = await asyncio.gather(*running, return_exceptions=True)
+        for result in results:
+            if isinstance(result, Exception):
+                logger.error(
+                    "queue worker task failed",
+                    exc_info=(type(result), result, result.__traceback__),
+                )
+
+
+def _run_once_task_result(task: asyncio.Task[str]) -> str | None:
+    try:
+        return task.result()
+    except Exception:
+        logger.exception("queue worker task failed")
+        return None

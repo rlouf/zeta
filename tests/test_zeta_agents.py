@@ -399,22 +399,30 @@ def test_zeta_agent_resource_loaders_read_flat_skills_and_events(
     skills_dir.mkdir(parents=True)
     events_dir.mkdir()
     _write_spec(skills_dir / "code-review.md", "Review for correctness.\n")
-    (events_dir / "github.pr.opened.yaml").write_text(
-        """schema:
-  type: object
-  required:
-    - title
-  properties:
-    title:
-      type: string
+    (events_dir / "github.pr.opened.json").write_text(
+        """{
+  "schema": {
+    "type": "object",
+    "required": ["title"],
+    "properties": {
+      "title": {
+        "type": "string"
+      }
+    }
+  }
+}
 """,
         encoding="utf-8",
     )
-    (events_dir / "release.ready.yml").write_text(
-        """type: object
-properties:
-  version:
-    type: string
+    (events_dir / "release.ready.json").write_text(
+        """{
+  "type": "object",
+  "properties": {
+    "version": {
+      "type": "string"
+    }
+  }
+}
 """,
         encoding="utf-8",
     )

@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
-
-import yaml
 
 from zeta.agents.events import EventRegistry, EventRegistryError
 from zeta.agents.spec import AgentSpec
@@ -64,7 +63,7 @@ def load_event_registry(agents_dir: Path) -> EventRegistry:
     if not events_dir.exists():
         return registry
     for path in sorted(events_dir.iterdir()):
-        if path.suffix not in {".yaml", ".yml"}:
+        if path.suffix != ".json":
             continue
         if not path.is_file() or path.is_symlink():
             continue
@@ -79,9 +78,9 @@ def load_event_registry(agents_dir: Path) -> EventRegistry:
 
 def load_event_schema(path: Path) -> Mapping[str, Any] | None:
     try:
-        raw = yaml.safe_load(path.read_text(encoding="utf-8"))
-    except yaml.YAMLError as exc:
-        raise ResourceError(f"invalid YAML in {path}: {exc}") from exc
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ResourceError(f"invalid JSON in {path}: {exc}") from exc
     except OSError as exc:
         raise ResourceError(f"I/O error reading {path}: {exc}") from exc
     if raw is None:

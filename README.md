@@ -129,8 +129,8 @@ agents/
     code-review.md
     release-notes.md
   events/
-    github.pr.opened.yaml
-    release.summary.ready.yaml
+    github.pr.opened.json
+    release.summary.ready.json
   tools/
 ```
 
@@ -163,7 +163,7 @@ Core frontmatter fields are `name`, `description`, `enabled`, `resumable`,
 kept as resource extensions for hosts that need extra policy.
 
 Files under `agents/events/` define optional event payload JSON Schemas. The
-file stem is the event type, so `github.pr.opened.yaml` registers
+file stem is the event type, so `github.pr.opened.json` registers
 `github.pr.opened`. The file may either be a JSON Schema object directly or an
 object with a `schema:` field whose value is the JSON Schema. Files under
 `agents/skills/` define shared Markdown skills that agents may explicitly list

@@ -110,6 +110,77 @@ def json_native_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
     )
 
 
+def event_to_wire(event: Event) -> dict[str, Any]:
+    """Serialize a durable event for RPC and other external readers."""
+
+    return {
+        "id": event.id,
+        "event_type": event.event_type,
+        "source": event.source,
+        "payload": json_native_payload(event.payload),
+        "idempotency_key": event.idempotency_key,
+        "caused_by": event.caused_by,
+        "session_id": event.session_id,
+        "run_id": event.run_id,
+        "turn_id": event.turn_id,
+        "timestamp_ms": event.timestamp_ms,
+        "cursor": event.cursor,
+    }
+
+
+def event_from_wire(value: Mapping[str, Any]) -> Event:
+    """Parse the authoritative durable event wire object."""
+
+    payload = value.get("payload")
+    if not isinstance(payload, Mapping):
+        raise ValueError("payload must be an object")
+    return Event(
+        id=required_wire_string(value, "id"),
+        event_type=required_wire_string(value, "event_type"),
+        source=required_wire_string(value, "source"),
+        payload=json_native_payload(payload),
+        idempotency_key=optional_wire_string(value, "idempotency_key"),
+        caused_by=optional_wire_string(value, "caused_by"),
+        session_id=optional_wire_string(value, "session_id"),
+        run_id=optional_wire_string(value, "run_id"),
+        turn_id=optional_wire_string(value, "turn_id"),
+        timestamp_ms=required_wire_int(value, "timestamp_ms"),
+        cursor=optional_wire_int(value, "cursor"),
+    )
+
+
+def required_wire_string(value: Mapping[str, Any], field: str) -> str:
+    item = value.get(field)
+    if not isinstance(item, str) or not item:
+        raise ValueError(f"{field} must be a non-empty string")
+    return item
+
+
+def optional_wire_string(value: Mapping[str, Any], field: str) -> str | None:
+    item = value.get(field)
+    if item is None:
+        return None
+    if not isinstance(item, str) or not item:
+        raise ValueError(f"{field} must be null or a non-empty string")
+    return item
+
+
+def required_wire_int(value: Mapping[str, Any], field: str) -> int:
+    item = value.get(field)
+    if not isinstance(item, int) or isinstance(item, bool):
+        raise ValueError(f"{field} must be an integer")
+    return item
+
+
+def optional_wire_int(value: Mapping[str, Any], field: str) -> int | None:
+    item = value.get(field)
+    if item is None:
+        return None
+    if not isinstance(item, int) or isinstance(item, bool):
+        raise ValueError(f"{field} must be null or an integer")
+    return item
+
+
 @dataclass(frozen=True)
 class AppendOutcome:
     """Append result that preserves idempotent producer semantics.
@@ -593,7 +664,9 @@ __all__ = [
     "draft_event_view",
     "draft_timeline_type",
     "ensure_runtime_event_id",
+    "event_from_wire",
     "event_timeline_type",
+    "event_to_wire",
     "event_view",
     "draft_from_boundary_event",
     "durable_model_event_payload",

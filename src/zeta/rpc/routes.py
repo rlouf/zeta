@@ -15,7 +15,7 @@ from zeta.capabilities.registry import RegisteredCapability
 from zeta.capabilities.types import Capability, CapabilityId
 from zeta.orchestration.dispatch import EventDispatcher, ReservedRuntimeEventError
 from zeta.orchestration.session_turn_agent import SESSION_TURN_AGENT_ID
-from zeta.records.events import DraftEvent, Event
+from zeta.records.events import DraftEvent, Event, event_to_wire
 from zeta.records.stores import EventReader, EventStoreProtocol, Filter
 from zeta.rpc.jsonrpc import JsonRpcConnection, JsonRpcRouter, RpcError
 from zeta.run.context import RuntimeContext
@@ -283,23 +283,6 @@ def rpc_message_from_event(request: Event) -> dict[str, Any]:
         "id": rpc_request_id(request),
         "method": method,
         "params": params,
-    }
-
-
-def event_to_wire(event: Event) -> dict[str, Any]:
-    """Convert a durable Zeta event to the RPC event object sent on the wire."""
-
-    return {
-        "id": event.id,
-        "event_type": event.event_type,
-        "source": event.source,
-        "payload": dict(event.payload),
-        "idempotency_key": event.idempotency_key,
-        "caused_by": event.caused_by,
-        "session_id": event.session_id,
-        "run_id": event.run_id,
-        "timestamp_ms": event.timestamp_ms,
-        "cursor": event.cursor,
     }
 
 

@@ -1816,7 +1816,7 @@ def test_zeta_rpc_session_run_returns_started_event_from_shared_draft(
             runtime_context=client.session,
         ).payload
     )
-    assert "turn_id" not in message["result"]["event"]
+    assert message["result"]["event"]["turn_id"] is None
     assert client.pending_runs["run_test"].task is not None
 
 

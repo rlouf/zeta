@@ -83,20 +83,46 @@ def project_queue_items(events: Iterable[Event]) -> list[QueueItem]:
 def project_one_queue_item(event: Event) -> QueueItem | None:
     if not event.event_type.startswith("runtime.queue_item."):
         return None
-    queue_item_id = event.payload.get("queue_item_id")
-    event_id = event.payload.get("event_id")
-    target_agent = event.payload.get("target_agent")
+    return queue_item_from_event_payload(
+        event.payload, status=_queue_item_status_from_event(event)
+    )
+
+
+def queue_item_event_payload(
+    queue_item: QueueItem,
+    **extra: Any,
+) -> dict[str, Any]:
+    return {
+        "queue_item_id": queue_item.queue_item_id,
+        "event_id": queue_item.event_id,
+        "target_agent": queue_item.target_agent,
+        "status": queue_item.status,
+        **extra,
+    }
+
+
+def queue_item_from_event_payload(
+    payload: Mapping[str, Any],
+    *,
+    status: str | None = None,
+) -> QueueItem | None:
+    queue_item_id = payload.get("queue_item_id")
+    event_id = payload.get("event_id")
+    target_agent = payload.get("target_agent")
     if (
         not isinstance(queue_item_id, str)
         or not isinstance(event_id, str)
         or not isinstance(target_agent, str)
     ):
         return None
+    item_status = status if status is not None else payload.get("status")
+    if item_status not in QUEUE_ITEM_STATUSES:
+        raise ValueError(f"unsupported queue item status {item_status!r}")
     return QueueItem(
         queue_item_id=queue_item_id,
         event_id=event_id,
         target_agent=target_agent,
-        status=_queue_item_status_from_event(event),
+        status=cast("QueueItemStatus", item_status),
     )
 
 

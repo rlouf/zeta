@@ -11,9 +11,9 @@ import sqlite3
 import time
 from collections.abc import Iterable
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
-from zeta.orchestration.attempts import Attempt, AttemptStatus
+from zeta.orchestration.attempts import attempt_from_event_payload
 from zeta.orchestration.queue import pending_queue_item_id, project_one_queue_item
 from zeta.records.events import AppendOutcome, DraftEvent, Event, json_native_payload
 from zeta.records.stores._object_sqlite import (
@@ -501,37 +501,11 @@ class SqliteEventStore:
         )
 
     def _index_one_attempt(self, event: Event) -> None:
-        raw_attempt_id = event.payload.get("attempt_id")
-        raw_queue_item_id = event.payload.get("queue_item_id")
-        raw_event_id = event.payload.get("event_id")
-        raw_target_agent = event.payload.get("target_agent")
-        raw_started_at = event.payload.get("started_at")
-        raw_attempt_number = event.payload.get("attempt_number")
-        if (
-            not isinstance(raw_attempt_id, str)
-            or not isinstance(raw_queue_item_id, str)
-            or not isinstance(raw_event_id, str)
-            or not isinstance(raw_target_agent, str)
-            or not isinstance(raw_started_at, str)
-            or not isinstance(raw_attempt_number, int)
-        ):
-            return
-        status = cast("AttemptStatus", _runtime_status(event))
-        raw_finished_at = event.payload.get("finished_at")
-        raw_error = event.payload.get("error")
-        attempt = Attempt(
-            attempt_id=raw_attempt_id,
-            queue_item_id=raw_queue_item_id,
-            event_id=raw_event_id,
-            attempt_number=raw_attempt_number,
-            target_agent=raw_target_agent,
-            status=status,
-            started_at=raw_started_at,
-            finished_at=raw_finished_at if isinstance(raw_finished_at, str) else None,
-            error=raw_error if isinstance(raw_error, str) else None,
-            session_id=event.session_id,
-            run_id=event.run_id,
+        attempt = attempt_from_event_payload(
+            {**event.payload, "status": _runtime_status(event)}
         )
+        if attempt is None:
+            return
         raw_worker_name = event.payload.get("worker_name")
         worker_name = raw_worker_name if isinstance(raw_worker_name, str) else None
         raw_summary = event.payload.get("summary")

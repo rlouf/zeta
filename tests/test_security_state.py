@@ -47,8 +47,16 @@ from sigil.workflows.ask import (
     ask,
 )
 from zeta.orchestration import dispatch as zeta_kernel_dispatch
-from zeta.orchestration.attempts import Attempt
-from zeta.orchestration.queue import QueueItem
+from zeta.orchestration.attempts import (
+    Attempt,
+    attempt_event_payload,
+    attempt_from_event_payload,
+)
+from zeta.orchestration.queue import (
+    QueueItem,
+    queue_item_event_payload,
+    queue_item_from_event_payload,
+)
 from zeta.records import events as zeta_events
 from zeta.records import events as zeta_kernel_events
 from zeta.records.events import DraftEvent, Event, event_view, publish_event
@@ -131,6 +139,59 @@ def test_zeta_dispatch_kernel_defines_queue_item_and_attempt_shapes() -> None:
     assert attempt.run_id == "run_123"
     assert zeta_kernel_dispatch.QueueItem is QueueItem
     assert zeta_kernel_dispatch.Attempt is Attempt
+
+
+def test_zeta_queue_item_runtime_payload_round_trips() -> None:
+    queue_item = QueueItem(
+        queue_item_id="qi_evt_123_zeta_session_turn",
+        event_id="evt_123",
+        target_agent="zeta.session.turn",
+        status="completed",
+    )
+
+    payload = queue_item_event_payload(queue_item, result={"ok": True})
+
+    assert payload == {
+        "queue_item_id": "qi_evt_123_zeta_session_turn",
+        "event_id": "evt_123",
+        "target_agent": "zeta.session.turn",
+        "status": "completed",
+        "result": {"ok": True},
+    }
+    assert queue_item_from_event_payload(payload) == queue_item
+
+
+def test_zeta_attempt_runtime_payload_round_trips() -> None:
+    attempt = Attempt(
+        attempt_id="att_qi_evt_123_zeta_session_turn_1",
+        queue_item_id="qi_evt_123_zeta_session_turn",
+        event_id="evt_123",
+        attempt_number=1,
+        target_agent="zeta.session.turn",
+        status="completed",
+        started_at="2026-06-20T10:00:01Z",
+        finished_at="2026-06-20T10:00:02Z",
+        session_id="session-1",
+        run_id="run-123",
+    )
+
+    payload = attempt_event_payload(attempt, result={"ok": True})
+
+    assert payload == {
+        "attempt_id": "att_qi_evt_123_zeta_session_turn_1",
+        "queue_item_id": "qi_evt_123_zeta_session_turn",
+        "event_id": "evt_123",
+        "attempt_number": 1,
+        "target_agent": "zeta.session.turn",
+        "status": "completed",
+        "started_at": "2026-06-20T10:00:01Z",
+        "finished_at": "2026-06-20T10:00:02Z",
+        "error": None,
+        "session_id": "session-1",
+        "run_id": "run-123",
+        "result": {"ok": True},
+    }
+    assert attempt_from_event_payload(payload) == attempt
 
 
 def resolved_import_module(

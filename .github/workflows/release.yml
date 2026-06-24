@@ -33,8 +33,11 @@ jobs:
         with:
           python-version: "3.13"
 
-      - name: Install zsh for shell binding tests
-        run: sudo apt-get update && sudo apt-get install -y zsh
+      - name: Install shell test packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y zsh
+          npm install -g @ast-grep/cli
 
       - name: Sync dependencies
         run: uv sync --group dev

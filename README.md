@@ -154,32 +154,21 @@ immediately with `inserted`, `event`, and an empty `lifecycle_events` list.
 Routing happens in the background; clients observe routed runtime events with
 `events.notify` or by resuming from `events.list`.
 
-`tools.register` registers client-hosted capabilities. Each capability item
-contains:
+`tools.register` registers client-hosted capabilities. Params contain a `tools`
+array. Each tool item contains:
 
 - `name`, `description`, and required JSON Schema `schema`.
 - optional `provider`, which must be `rpc` when present. The server assigns
   the `rpc` provider by default.
-- optional `aliases`; when omitted, the model-visible alias defaults to `name`.
-- `effects`: any of `read`, `search`, `write`, `delete`, or `execute`.
-- `supports_staging`: whether Zeta may call it in staged workflows.
-- `supports_direct`: whether Zeta may call it in `do`. Read-only capabilities
-  default to direct execution support when this field is omitted.
-- `interactive`: true for client-hosted capabilities.
 - `timeout_sec`: optional positive timeout for client calls.
 
-Schemas are validated with JSON Schema Draft 2020-12. Missing `effects` count
-as mutating, so an undeclared capability cannot run unreviewed in staged
-workflows. Clients cannot claim privileged trust; RPC tools are always
-registered with `client` trust. The result contains normalized registered
-capability declarations, including `id`, `provider`, `name`, `aliases`,
-`input_schema`, `effects`, `supports_staging`, `supports_direct`, and `trust`.
-Duplicate capability ids are rejected. Duplicate aliases may be registered, but
-ambiguous aliases are rejected when Zeta builds a per-run capability projection.
+Schemas are validated with JSON Schema Draft 2020-12. The result contains
+normalized registered tool declarations: `id`, `provider`, `name`,
+`description`, `schema`, and `timeout_sec`. Duplicate capability ids are
+rejected.
 
 `tools.respond` answers a server `tools.call` notification. Params include
-`id` and either `result` or `cancelled: true`. `result` must be an object with a
-boolean `ok` field.
+`id` and `result`. `result` must be an object with a boolean `ok` field.
 
 ### Notifications And Errors
 
@@ -192,10 +181,10 @@ boolean `ok` field.
 Expected protocol failures use JSON-RPC standard codes with stable Zeta error
 codes in `error.data.code`: `method_not_found`, `missing_objective`,
 `invalid_workflow`, `duplicate_tool`, `missing_tool_schema`,
-`invalid_tool_schema`, `invalid_tool_provider`, `invalid_tool_trust`,
-`invalid_tool_capability`, `invalid_cursor`, `invalid_limit`, `invalid_run_id`,
-`session_run_unavailable`, and `events_unavailable`. Unexpected exceptions are
-returned as `-32603` with `internal_error`.
+`invalid_tool_schema`, `invalid_tool_provider`, `invalid_tool_capability`,
+`invalid_cursor`, `invalid_limit`, `invalid_run_id`, `session_run_unavailable`,
+and `events_unavailable`. Unexpected exceptions are returned as `-32603` with
+`internal_error`.
 
 ## Changing Models Mid-Session
 

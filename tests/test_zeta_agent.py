@@ -1292,7 +1292,7 @@ class RpcMemoryTransport(asyncio.Transport):
         self.buffer.extend(data)
 
     def is_closing(self) -> bool:
-        return self.closed
+        return True
 
     def close(self) -> None:
         self.closed = True
@@ -1313,7 +1313,7 @@ def rpc_streams(
     input_text: str = "",
     output: RpcMemoryTransport | None = None,
 ) -> tuple[asyncio.StreamReader, asyncio.StreamWriter, RpcMemoryTransport]:
-    reader = asyncio.StreamReader()
+    reader = asyncio.StreamReader(loop=_RPC_STREAM_LOOP)
     if input_text:
         reader.feed_data(input_text.encode())
     reader.feed_eof()
@@ -1377,6 +1377,29 @@ def rpc_client(
     router.route("tools.register", zeta_rpc.tools_register)
     router.route("tools.respond", zeta_rpc.tools_respond)
     return connection, client, router
+
+
+def rpc_client_without_connection(
+    *,
+    session: zeta_runtime_context.RuntimeContext | None = None,
+) -> zeta_rpc.RpcClient:
+    if session is None:
+        event_store = zeta_events.MemoryEventStore()
+        session = zeta_runtime_context.RuntimeContext(
+            session_id="ctx-session",
+            event_sink=event_store,
+            trace_store=zeta_trace.InMemoryStore(),
+            tool_registry=CapabilityRegistry(),
+            state_dir=Path("/tmp"),
+            session_dir=Path("/tmp") / "sessions" / "ctx-session",
+        )
+    return zeta_rpc.RpcClient(
+        connection=None,
+        session=session,
+        dispatcher=zeta_dispatch.EventDispatcher(session.event_sink),
+        pending_runs={},
+        pending_tool_calls={},
+    )
 
 
 def run_rpc_messages(
@@ -1817,7 +1840,7 @@ def test_zeta_rpc_session_cancel_updates_run_state() -> None:
     assert cancellation_event.is_set()
 
 
-def test_zeta_rpc_tools_register_uses_capability_shape() -> None:
+def test_zeta_rpc_tools_register_uses_documented_tool_shape() -> None:
     registry = CapabilityRegistry()
     event_store = zeta_events.MemoryEventStore()
     session = zeta_runtime_context.RuntimeContext(
@@ -1828,22 +1851,22 @@ def test_zeta_rpc_tools_register_uses_capability_shape() -> None:
         state_dir=Path("/tmp"),
         session_dir=Path("/tmp") / "sessions" / "ctx-session",
     )
-    _, client, _ = rpc_client(session=session)
+    client = rpc_client_without_connection(session=session)
 
     result = asyncio.run(
         zeta_rpc.tools_register(
             {
-                "capabilities": [
+                "tools": [
                     {
                         "name": "pick_file",
                         "description": "Pick a file.",
-                        "input_schema": {"type": "object"},
-                        "timeout_seconds": 2,
+                        "schema": {"type": "object"},
+                        "timeout_sec": 2,
                     },
                     {
                         "name": "open_panel",
                         "description": "Open a panel.",
-                        "input_schema": {"type": "object"},
+                        "schema": {"type": "object"},
                     },
                 ]
             },
@@ -1858,21 +1881,139 @@ def test_zeta_rpc_tools_register_uses_capability_shape() -> None:
                 "provider": "rpc",
                 "name": "pick_file",
                 "description": "Pick a file.",
-                "input_schema": {"type": "object"},
-                "timeout_seconds": 2,
+                "schema": {"type": "object"},
+                "timeout_sec": 2,
             },
             {
                 "id": "rpc.open_panel",
                 "provider": "rpc",
                 "name": "open_panel",
                 "description": "Open a panel.",
-                "input_schema": {"type": "object"},
-                "timeout_seconds": None,
+                "schema": {"type": "object"},
+                "timeout_sec": None,
             },
         ]
     }
     assert registry.get("rpc.pick_file") is not None
     assert registry.get("rpc.open_panel") is not None
+
+
+def test_zeta_rpc_tools_register_rejects_old_capability_shape() -> None:
+    client = rpc_client_without_connection()
+
+    with pytest.raises(zeta_rpc.RpcError) as error:
+        asyncio.run(
+            zeta_rpc.tools_register(
+                {
+                    "capabilities": [
+                        {
+                            "name": "pick_file",
+                            "description": "Pick a file.",
+                            "input_schema": {"type": "object"},
+                        }
+                    ]
+                },
+                client,
+            )
+        )
+
+    assert error.value.error_data() == {
+        "code": "invalid_tools",
+        "message": "tools must be a list",
+    }
+
+
+def test_zeta_rpc_tools_register_rejects_unknown_tool_fields() -> None:
+    client = rpc_client_without_connection()
+
+    with pytest.raises(zeta_rpc.RpcError) as error:
+        asyncio.run(
+            zeta_rpc.tools_register(
+                {
+                    "tools": [
+                        {
+                            "name": "pick_file",
+                            "description": "Pick a file.",
+                            "schema": {"type": "object"},
+                            "effects": ["read"],
+                        }
+                    ]
+                },
+                client,
+            )
+        )
+
+    assert error.value.error_data() == {
+        "code": "unknown_tool_fields",
+        "message": "tool contains unsupported fields: effects",
+        "fields": ["effects"],
+    }
+
+
+def test_zeta_rpc_tools_register_rejects_missing_tool_schema() -> None:
+    client = rpc_client_without_connection()
+
+    with pytest.raises(zeta_rpc.RpcError) as error:
+        asyncio.run(
+            zeta_rpc.tools_register(
+                {"tools": [{"name": "pick_file", "description": "Pick a file."}]},
+                client,
+            )
+        )
+
+    assert error.value.error_data() == {
+        "code": "missing_tool_schema",
+        "message": "tool schema is required",
+    }
+
+
+def test_zeta_rpc_tools_register_rejects_malformed_tool_schema() -> None:
+    client = rpc_client_without_connection()
+
+    with pytest.raises(zeta_rpc.RpcError) as error:
+        asyncio.run(
+            zeta_rpc.tools_register(
+                {
+                    "tools": [
+                        {
+                            "name": "pick_file",
+                            "description": "Pick a file.",
+                            "schema": {"type": "definitely-not-json-schema"},
+                        }
+                    ]
+                },
+                client,
+            )
+        )
+
+    assert error.value.error_data()["code"] == "invalid_tool_schema"
+    assert error.value.error_data()["message"].startswith("tool schema is invalid")
+
+
+def test_zeta_rpc_tools_register_rejects_invalid_timeout() -> None:
+    client = rpc_client_without_connection()
+
+    with pytest.raises(zeta_rpc.RpcError) as error:
+        asyncio.run(
+            zeta_rpc.tools_register(
+                {
+                    "tools": [
+                        {
+                            "name": "pick_file",
+                            "description": "Pick a file.",
+                            "schema": {"type": "object"},
+                            "timeout_sec": 0,
+                        }
+                    ]
+                },
+                client,
+            )
+        )
+
+    assert error.value.error_data() == {
+        "code": "invalid_timeout_sec",
+        "message": "timeout_sec must be positive",
+    }
 
 
 def test_zeta_rpc_registered_tool_invokes_peer_call_tool() -> None:
@@ -1886,7 +2027,7 @@ def test_zeta_rpc_registered_tool_invokes_peer_call_tool() -> None:
         state_dir=Path("/tmp"),
         session_dir=Path("/tmp") / "sessions" / "ctx-session",
     )
-    _, client, _ = rpc_client(session=session)
+    client = rpc_client_without_connection(session=session)
     captured: dict[str, Any] = {}
 
     async def fake_call_tool(
@@ -1905,12 +2046,12 @@ def test_zeta_rpc_registered_tool_invokes_peer_call_tool() -> None:
     async def run() -> dict[str, Any]:
         await zeta_rpc.tools_register(
             {
-                "capabilities": [
+                "tools": [
                     {
                         "name": "pick_file",
                         "description": "Pick a file.",
-                        "input_schema": {"type": "object"},
-                        "timeout_seconds": 2,
+                        "schema": {"type": "object"},
+                        "timeout_sec": 2,
                     }
                 ]
             },
@@ -1933,7 +2074,7 @@ def test_zeta_rpc_registered_tool_invokes_peer_call_tool() -> None:
 
 
 def test_zeta_rpc_tools_respond_resolves_pending_call() -> None:
-    _, client, _ = rpc_client()
+    client = rpc_client_without_connection()
 
     async def run() -> None:
         future: asyncio.Future[dict[str, Any]] = (
@@ -1942,8 +2083,7 @@ def test_zeta_rpc_tools_respond_resolves_pending_call() -> None:
         client.pending_tool_calls["call_1"] = future
         await zeta_rpc.tools_respond(
             {
-                "call_id": "call_1",
-                "status": "responded",
+                "id": "call_1",
                 "result": {"ok": True},
             },
             client,

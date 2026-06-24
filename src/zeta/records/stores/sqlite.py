@@ -170,38 +170,6 @@ class SqliteEventStore:
             ) STRICT;
             """
         )
-        columns = {
-            str(row["name"])
-            for row in self.connection.execute("PRAGMA table_info(events)").fetchall()
-        }
-        if "run_id" not in columns:
-            self.connection.execute("ALTER TABLE events ADD COLUMN run_id TEXT")
-        attempt_columns = {
-            str(row["name"])
-            for row in self.connection.execute("PRAGMA table_info(attempts)").fetchall()
-        }
-        queue_columns = {
-            str(row["name"])
-            for row in self.connection.execute(
-                "PRAGMA table_info(queue_items)"
-            ).fetchall()
-        }
-        if "claimed_token" not in queue_columns:
-            self.connection.execute(
-                "ALTER TABLE queue_items ADD COLUMN claimed_token TEXT"
-            )
-        if "claim_token" not in attempt_columns:
-            self.connection.execute("ALTER TABLE attempts ADD COLUMN claim_token TEXT")
-        for name, kind in (
-            ("summary", "TEXT"),
-            ("input_tokens", "INTEGER"),
-            ("output_tokens", "INTEGER"),
-            ("tool_calls_json", "TEXT"),
-        ):
-            if name not in attempt_columns:
-                self.connection.execute(
-                    f"ALTER TABLE attempts ADD COLUMN {name} {kind}"
-                )
         self.connection.executescript(
             """
             CREATE INDEX IF NOT EXISTS idx_events_type_ts

@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import sqlite3
 import threading
 import tomllib
 from collections.abc import Callable, Coroutine, Iterable
@@ -3303,6 +3304,61 @@ def test_zeta_sqlite_event_store_projects_runtime_lifecycle_tables(
         "usage": {"input_tokens": 12, "output_tokens": 3},
     }
     assert dict(session_mapping_row) == {"session_id": "repo", "run_id": "run-1"}
+
+
+def test_zeta_sqlite_event_store_does_not_patch_existing_projection_schema(
+    tmp_path: Path,
+) -> None:
+    database = tmp_path / "events.sqlite3"
+    connection = sqlite3.connect(database)
+    connection.executescript(
+        """
+        CREATE TABLE queue_items (
+          queue_item_id TEXT PRIMARY KEY,
+          event_id TEXT NOT NULL,
+          target_agent TEXT NOT NULL,
+          status TEXT NOT NULL,
+          available_at INTEGER,
+          claimed_by TEXT,
+          claimed_until INTEGER,
+          attempt_count INTEGER NOT NULL DEFAULT 0,
+          last_error TEXT,
+          updated_at INTEGER NOT NULL
+        ) STRICT;
+
+        CREATE TABLE attempts (
+          attempt_id TEXT PRIMARY KEY,
+          queue_item_id TEXT NOT NULL,
+          event_id TEXT NOT NULL,
+          attempt_number INTEGER NOT NULL,
+          target_agent TEXT NOT NULL,
+          worker_name TEXT,
+          status TEXT NOT NULL,
+          started_at TEXT NOT NULL,
+          heartbeat_at INTEGER,
+          finished_at TEXT,
+          error TEXT,
+          session_id TEXT,
+          run_id TEXT
+        ) STRICT;
+        """
+    )
+    connection.commit()
+    connection.close()
+
+    event_store = zeta_events.SqliteEventStore(database)
+
+    queue_columns = {
+        row["name"]
+        for row in event_store.connection.execute("PRAGMA table_info(queue_items)")
+    }
+    attempt_columns = {
+        row["name"]
+        for row in event_store.connection.execute("PRAGMA table_info(attempts)")
+    }
+    assert "claimed_token" not in queue_columns
+    assert "claim_token" not in attempt_columns
+    assert "summary" not in attempt_columns
 
 
 def test_zeta_sqlite_event_store_rebuilds_projection_tables(

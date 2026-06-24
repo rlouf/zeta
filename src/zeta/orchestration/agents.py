@@ -11,6 +11,7 @@ from zeta.agents.prompts import render_prompt
 from zeta.agents.spec import AgentSpec
 from zeta.records.events import DraftEvent, Event
 from zeta.run.config import AgentConfig
+from zeta.run.outcomes import agent_run_result_payload
 
 if TYPE_CHECKING:
     from zeta.run.outcomes import AgentRunResult
@@ -236,12 +237,7 @@ def config_for_spec(spec: AgentSpec, config: AgentConfig | None) -> AgentConfig:
 
 
 def agent_run_result_mapping(result: AgentRunResult) -> dict[str, Any]:
-    payload: dict[str, Any] = {"final_answer": result.final_answer}
-    if result.events:
-        payload["events"] = result.events
-    if result.staged_effect is not None:
-        payload["staged_effect"] = result.staged_effect
-    return payload
+    return agent_run_result_payload(result)
 
 
 def default_agent_run_runner() -> AgentRunRunner:

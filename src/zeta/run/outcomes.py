@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from typing import Any, Literal
 
 from zeta.context.components import PromptTrace
@@ -43,6 +43,15 @@ class AgentRunResult:
     model_telemetry_calls: list[dict[str, Any]] = field(default_factory=list)
     prompt_traces: list[PromptTrace] = field(default_factory=list)
     steps: list[StepResult] = field(default_factory=list)
+
+
+def agent_run_result_payload(result: AgentRunResult) -> dict[str, Any]:
+    payload: dict[str, Any] = {"final_answer": result.final_answer}
+    if result.events:
+        payload["events"] = [asdict(event) for event in result.events]
+    if result.staged_effect is not None:
+        payload["staged_effect"] = result.staged_effect
+    return payload
 
 
 @dataclass

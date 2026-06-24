@@ -62,6 +62,7 @@ from zeta.records.stores import (
     event_store_path,
 )
 from zeta.run import context as zeta_runtime_context
+from zeta.run import outcomes as zeta_outcomes
 from zeta.run import runtime as zeta_agent
 from zeta.run import thread_run as zeta_requests
 from zeta.run.config import CompactionPolicy
@@ -78,6 +79,27 @@ zeta_events = SimpleNamespace(
     MemoryEventStore=MemoryEventStore,
     SqliteEventStore=SqliteEventStore,
 )
+
+
+def test_zeta_agent_run_result_payload_serializes_result_boundary() -> None:
+    draft = DraftEvent(
+        event_type="issue.triaged",
+        source="agent",
+        payload={"status": "done"},
+        session_id="session-1",
+        run_id="run-1",
+    )
+    result = AgentRunResult(
+        final_answer="done",
+        events=[draft],
+        staged_effect={"effect": {"status": "proposed"}},
+    )
+
+    assert zeta_outcomes.agent_run_result_payload(result) == {
+        "final_answer": "done",
+        "events": [asdict(draft)],
+        "staged_effect": {"effect": {"status": "proposed"}},
+    }
 
 
 def rpc_event(

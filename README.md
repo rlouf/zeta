@@ -169,6 +169,27 @@ object with a `schema:` field whose value is the JSON Schema. Files under
 `agents/skills/` define shared Markdown skills that agents may explicitly list
 in `skills:`.
 
+Worker and scheduler project loading validates authored agents before running
+them. External events listed in `accepts:` and all events listed in `returns:`
+must have a matching file under `agents/events/`. Synthetic scheduled events
+such as `agent.release-manager.scheduled` are registered internally with an
+empty payload schema.
+
+When an agent declares `returns:`, Zeta treats the normal agent/tool loop as
+working context. After the loop finishes, Zeta performs one final structured
+generation step with no tools available and a JSON Schema derived from the
+declared return events. The validated JSON is published as a durable event
+from `agent:<slug>`:
+
+```json
+{
+  "type": "release.summary.ready",
+  "payload": {
+    "summary": "Release notes are ready."
+  }
+}
+```
+
 `agents/tools/` is reserved for project-local tool definitions. Runtime tool
 execution still goes through Zeta's capability registry and Sigil's built-in
 tools.

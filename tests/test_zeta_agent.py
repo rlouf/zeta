@@ -35,6 +35,7 @@ from zeta import cli as zeta_cli
 from zeta import models as zeta_models_api
 from zeta import rpc as zeta_rpc
 from zeta.agents import spec as zeta_agent_spec
+from zeta.agents.manifest import ManifestError
 from zeta.capabilities import execution as zeta_capability_execution
 from zeta.capabilities.execution import (
     InProcessCapabilityExecutor,
@@ -81,6 +82,19 @@ zeta_events = SimpleNamespace(
     MemoryEventStore=MemoryEventStore,
     SqliteEventStore=SqliteEventStore,
 )
+
+
+def write_project_event_schema(
+    project_root: Path,
+    event_type: str,
+    schema: dict[str, Any] | None = None,
+) -> None:
+    events_dir = project_root / "agents" / "events"
+    events_dir.mkdir(parents=True, exist_ok=True)
+    (events_dir / f"{event_type}.json").write_text(
+        json.dumps(schema or {"type": "object"}),
+        encoding="utf-8",
+    )
 
 
 def test_zeta_agent_run_result_payload_serializes_result_boundary() -> None:
@@ -4102,7 +4116,10 @@ def test_zeta_local_runtime_run_once_executes_available_queue_item(
     async def run_agent(run: zeta_dispatch.AgentInvocation) -> dict[str, object]:
         return {"event_id": run.triggering_event.id}
 
-    def compile_agents(spec: object) -> list[zeta_dispatch.ExecutableAgent]:
+    def compile_agents(
+        spec: object,
+        **_kwargs: object,
+    ) -> list[zeta_dispatch.ExecutableAgent]:
         del spec
         return [
             zeta_dispatch.ExecutableAgent(
@@ -4116,6 +4133,7 @@ def test_zeta_local_runtime_run_once_executes_available_queue_item(
 
     agents_dir = tmp_path / "agents"
     agents_dir.mkdir()
+    write_project_event_schema(tmp_path, "github.issue.opened")
     (agents_dir / "triage.md").write_text(
         """---
 name: Triage
@@ -4149,6 +4167,71 @@ Triage the issue.
             status="completed",
         )
     ]
+
+
+def test_zeta_worker_validates_project_event_schemas_before_compile(
+    tmp_path: Path,
+) -> None:
+    agents_dir = tmp_path / "agents"
+    agents_dir.mkdir()
+    (agents_dir / "triage.md").write_text(
+        """---
+name: Triage
+description: Triage issues.
+accepts:
+  - github.issue.opened
+---
+Triage the issue.
+""",
+        encoding="utf-8",
+    )
+    runtime = zeta_worker.build_worker_services(project_root=tmp_path)
+
+    try:
+        with pytest.raises(ManifestError, match="unknown event 'github.issue.opened'"):
+            zeta_worker.project_executors(runtime)
+    finally:
+        runtime.close()
+
+
+def test_zeta_worker_passes_project_event_registry_to_compiler(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, Any] = {}
+
+    def compile_agents(
+        spec: object,
+        **kwargs: object,
+    ) -> list[zeta_dispatch.ExecutableAgent]:
+        captured["spec"] = spec
+        captured["event_registry"] = kwargs["event_registry"]
+        return []
+
+    agents_dir = tmp_path / "agents"
+    agents_dir.mkdir()
+    write_project_event_schema(tmp_path, "github.issue.opened")
+    (agents_dir / "triage.md").write_text(
+        """---
+name: Triage
+description: Triage issues.
+accepts:
+  - github.issue.opened
+---
+Triage the issue.
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(zeta_worker, "compile_agent_definitions", compile_agents)
+    runtime = zeta_worker.build_worker_services(project_root=tmp_path)
+
+    try:
+        assert zeta_worker.project_executors(runtime) == ()
+    finally:
+        runtime.close()
+
+    assert captured["spec"].slug == "triage"
+    assert captured["event_registry"].knows("github.issue.opened")
 
 
 def test_zeta_local_runtime_heartbeats_running_attempt(
@@ -4609,6 +4692,36 @@ Summarize the repo.
     )
 
 
+def test_zeta_scheduler_validates_project_event_schemas_before_scheduling(
+    tmp_path: Path,
+) -> None:
+    agents_dir = tmp_path / "agents"
+    agents_dir.mkdir()
+    (agents_dir / "scheduled.md").write_text(
+        """---
+name: Scheduled
+description: Runs on a schedule.
+accepts:
+  - github.issue.opened
+schedules:
+  - cron: "* * * * *"
+---
+Summarize the repo.
+""",
+        encoding="utf-8",
+    )
+    runtime = zeta_scheduling.build_scheduler_services(project_root=tmp_path)
+
+    try:
+        with pytest.raises(ManifestError, match="unknown event 'github.issue.opened'"):
+            zeta_scheduling.request_due_project_schedules(
+                runtime,
+                now=datetime(2026, 6, 22, 12, 34, tzinfo=UTC),
+            )
+    finally:
+        runtime.close()
+
+
 def test_zeta_local_runtime_scheduled_event_is_accepted_by_agent(
     tmp_path: Path,
 ) -> None:
@@ -4641,7 +4754,10 @@ def test_zeta_scheduler_published_event_runs_on_worker(
         calls.append(run)
         return {"event_type": run.triggering_event.event_type}
 
-    def compile_agents(spec: object) -> list[zeta_dispatch.ExecutableAgent]:
+    def compile_agents(
+        spec: object,
+        **_kwargs: object,
+    ) -> list[zeta_dispatch.ExecutableAgent]:
         del spec
         return [
             zeta_dispatch.ExecutableAgent(
@@ -4716,7 +4832,10 @@ def test_zeta_local_runtime_run_forever_reuses_run_once_path(
             stop_event.set()
             return {"event_id": run.triggering_event.id}
 
-        def compile_agents(spec: object) -> list[zeta_dispatch.ExecutableAgent]:
+        def compile_agents(
+            spec: object,
+            **_kwargs: object,
+        ) -> list[zeta_dispatch.ExecutableAgent]:
             del spec
             return [
                 zeta_dispatch.ExecutableAgent(
@@ -4730,6 +4849,7 @@ def test_zeta_local_runtime_run_forever_reuses_run_once_path(
 
         agents_dir = tmp_path / "agents"
         agents_dir.mkdir()
+        write_project_event_schema(tmp_path, "github.issue.opened")
         (agents_dir / "triage.md").write_text(
             """---
 name: Triage
@@ -4953,7 +5073,10 @@ def test_zeta_cli_run_once_executes_one_available_queue_item(
         calls.append(run)
         return {"outcome": "handled"}
 
-    def compile_agents(spec: object) -> list[zeta_dispatch.ExecutableAgent]:
+    def compile_agents(
+        spec: object,
+        **_kwargs: object,
+    ) -> list[zeta_dispatch.ExecutableAgent]:
         del spec
         return [
             zeta_dispatch.ExecutableAgent(
@@ -4967,6 +5090,7 @@ def test_zeta_cli_run_once_executes_one_available_queue_item(
 
     agents_dir = tmp_path / "agents"
     agents_dir.mkdir()
+    write_project_event_schema(tmp_path, "github.issue.opened")
     (agents_dir / "issue-triage.md").write_text(
         """---
 name: Issue Triage

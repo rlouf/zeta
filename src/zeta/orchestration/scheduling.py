@@ -8,7 +8,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from zeta.agents.spec import AgentSpec, ScheduleEntry, load_specs, scheduled_event_type
+from zeta.agents.resources import load_agent_project, validate_agent_project
+from zeta.agents.spec import AgentSpec, ScheduleEntry, scheduled_event_type
 from zeta.events import DraftEvent, Event
 from zeta.records.stores import EventWriter, SqliteEventStore, event_store_path
 
@@ -52,8 +53,9 @@ def request_due_project_schedules(
     *,
     now: datetime | None = None,
 ) -> list[Event]:
-    specs = load_specs(runtime.project_root / "agents")
-    return request_due_schedules(runtime.events, specs, now=now)
+    project = load_agent_project(runtime.project_root / "agents")
+    validate_agent_project(project)
+    return request_due_schedules(runtime.events, project.specs, now=now)
 
 
 def request_due_schedules(

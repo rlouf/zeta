@@ -8,7 +8,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from zeta.agents.spec import load_specs
+from zeta.agents.resources import load_agent_project, validate_agent_project
 from zeta.events import Event
 from zeta.orchestration.agents import ExecutableAgent, compile_agent_definitions
 from zeta.orchestration.dispatch import EventDispatcher
@@ -79,8 +79,13 @@ async def run_once(runtime: WorkerServices) -> str:
 
 
 def project_executors(runtime: WorkerServices) -> tuple[ExecutableAgent, ...]:
-    specs = load_specs(runtime.project_root / "agents")
-    return tuple(agent for spec in specs for agent in compile_agent_definitions(spec))
+    project = load_agent_project(runtime.project_root / "agents")
+    validate_agent_project(project)
+    return tuple(
+        agent
+        for spec in project.specs
+        for agent in compile_agent_definitions(spec, event_registry=project.events)
+    )
 
 
 async def run_available_queue_item(

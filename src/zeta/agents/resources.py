@@ -9,7 +9,8 @@ from pathlib import Path
 from typing import Any
 
 from zeta.agents.events import EventRegistry, EventRegistryError
-from zeta.agents.spec import AgentSpec
+from zeta.agents.manifest import Manifest
+from zeta.agents.spec import AgentSpec, load_specs, scheduled_event_type
 
 
 class ResourceError(ValueError):
@@ -31,9 +32,51 @@ class SkillRegistry:
         return name in self.skills
 
 
+@dataclass(frozen=True)
+class AgentProject:
+    specs: tuple[AgentSpec, ...]
+    events: EventRegistry
+    skills: SkillRegistry
+
+
 def resource_extensions(spec: AgentSpec) -> dict[str, object]:
     """Return non-core frontmatter extensions for resource-aware hosts."""
     return dict(spec.extensions or {})
+
+
+def load_agent_project(agents_dir: Path) -> AgentProject:
+    """Load flat authored agents and their shared validation resources."""
+    specs = load_specs(agents_dir)
+    events = load_event_registry(agents_dir)
+    register_scheduled_events(events, specs)
+    return AgentProject(
+        specs=specs,
+        events=events,
+        skills=load_skill_registry(agents_dir),
+    )
+
+
+def validate_agent_project(project: AgentProject) -> None:
+    manifest = Manifest(events=project.events, skills=project.skills)
+    for spec in project.specs:
+        manifest.validate(spec)
+
+
+def register_scheduled_events(
+    events: EventRegistry,
+    specs: tuple[AgentSpec, ...],
+) -> None:
+    for spec in specs:
+        if not spec.schedules:
+            continue
+        event_type = scheduled_event_type(spec.slug)
+        if events.knows(event_type):
+            continue
+        events.register(event_type, empty_payload_schema())
+
+
+def empty_payload_schema() -> dict[str, object]:
+    return {"type": "object", "additionalProperties": False}
 
 
 def load_skill_registry(agents_dir: Path) -> SkillRegistry:

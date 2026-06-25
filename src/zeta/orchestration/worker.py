@@ -5,12 +5,12 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 from zeta.agents.resources import load_agent_project, validate_agent_project
-from zeta.capabilities.registry import registry as tool_registry
+from zeta.capabilities.registry import CapabilityRegistry
 from zeta.events import Event
 from zeta.orchestration.agents import (
     AgentInvocation,
@@ -46,6 +46,7 @@ class WorkerServices:
     project_root: Path
     state_dir: Path
     events: SqliteEventStore
+    tool_registry: CapabilityRegistry = field(default_factory=CapabilityRegistry)
     worker_name: str = LOCAL_WORKER_NAME
     max_concurrent: int = 1
 
@@ -57,6 +58,7 @@ def build_worker_services(
     *,
     project_root: Path,
     state_dir: Path | None = None,
+    tool_registry: CapabilityRegistry | None = None,
 ) -> WorkerServices:
     resolved_project_root = project_root.expanduser().resolve()
     resolved_state_dir = (
@@ -68,6 +70,7 @@ def build_worker_services(
         project_root=resolved_project_root,
         state_dir=resolved_state_dir,
         events=SqliteEventStore(event_store_path(resolved_state_dir)),
+        tool_registry=tool_registry or CapabilityRegistry(),
     )
 
 
@@ -121,7 +124,7 @@ def project_agent_run_turn(runtime: WorkerServices):
             session_id=session_id,
             event_sink=runtime.events,
             trace_store=trace_store,
-            tool_registry=tool_registry,
+            tool_registry=runtime.tool_registry,
             state_dir=runtime.state_dir,
             session_dir=runtime.state_dir / "sessions" / session_id,
         )
@@ -232,7 +235,6 @@ async def run_eventlog_rpc_request(
     runtime: WorkerServices,
     request: Event,
 ) -> Event | None:
-    from zeta.capabilities.registry import registry as tool_registry
     from zeta.rpc.jsonrpc import JsonRpcRouter
     from zeta.rpc.routes import (
         RpcClient,
@@ -256,7 +258,7 @@ async def run_eventlog_rpc_request(
         session_id=session_id,
         event_sink=runtime.events,
         trace_store=trace_store,
-        tool_registry=tool_registry,
+        tool_registry=runtime.tool_registry,
         state_dir=runtime.state_dir,
         session_dir=runtime.state_dir / "sessions" / session_id,
     )

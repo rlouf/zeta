@@ -4177,6 +4177,21 @@ def test_zeta_local_runtime_builds_project_services(tmp_path: Path) -> None:
         assert runtime.project_root == tmp_path.resolve()
         assert runtime.state_dir == tmp_path.resolve() / ".zeta"
         assert runtime.events.path == event_store_path(runtime.state_dir)
+        assert runtime.tool_registry.get("sigil.read") is None
+    finally:
+        runtime.close()
+
+
+def test_zeta_local_runtime_accepts_explicit_tool_registry(tmp_path: Path) -> None:
+    registry = CapabilityRegistry()
+    runtime = zeta_worker.build_worker_services(
+        project_root=tmp_path,
+        tool_registry=registry,
+    )
+
+    try:
+        assert runtime.tool_registry is registry
+        assert runtime.tool_registry.get("sigil.read") is None
     finally:
         runtime.close()
 
@@ -4224,7 +4239,11 @@ Triage the issue.
         encoding="utf-8",
     )
     monkeypatch.setattr(zeta_worker, "compile_agent_definitions", compile_agents)
-    runtime = zeta_worker.build_worker_services(project_root=tmp_path)
+    registry = CapabilityRegistry()
+    runtime = zeta_worker.build_worker_services(
+        project_root=tmp_path,
+        tool_registry=registry,
+    )
 
     try:
         message = asyncio.run(zeta_worker.run_once(runtime))
@@ -4342,7 +4361,11 @@ Triage the issue.
         encoding="utf-8",
     )
     monkeypatch.setattr(zeta_worker, "run_agent", fake_run_agent)
-    runtime = zeta_worker.build_worker_services(project_root=tmp_path)
+    registry = CapabilityRegistry()
+    runtime = zeta_worker.build_worker_services(
+        project_root=tmp_path,
+        tool_registry=registry,
+    )
 
     try:
         agent = zeta_worker.project_executors(runtime)[0]
@@ -4376,6 +4399,7 @@ Triage the issue.
 
     assert result["final_answer"] == "done"
     assert captured["runtime_context"].session_id == "agent/triage"
+    assert captured["runtime_context"].tool_registry is registry
     assert captured["run_id"] == "run_att_qi_evt_issue_triage_1"
     assert captured["request"].objective == "Triage the issue."
 
@@ -4803,6 +4827,7 @@ def test_zeta_local_runtime_run_once_fans_out_pending_queue_item(
 
 def test_zeta_local_runtime_run_once_handles_eventlog_rpc_request(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     event_store = zeta_events.SqliteEventStore(tmp_path / "events.sqlite3")
     stored = event_store.accept(
@@ -4821,10 +4846,31 @@ def test_zeta_local_runtime_run_once_handles_eventlog_rpc_request(
             session_id="ctx-session",
         )
     ).event
+    registry = CapabilityRegistry()
+    captured: dict[str, object] = {}
+    original_session_turn_agent = zeta_worker.session_turn_agent
+
+    def capture_session_turn_agent(
+        session: zeta_runtime_context.RuntimeContext,
+        *,
+        publish_event: Callable[[zeta_session_turn_agent.RuntimePublishedEvent], None],
+        cancellation_event_for_run: (
+            zeta_session_turn_agent.CancellationEventForRun | None
+        ) = None,
+    ) -> zeta_dispatch.ExecutableAgent:
+        captured["tool_registry"] = session.tool_registry
+        return original_session_turn_agent(
+            session,
+            publish_event=publish_event,
+            cancellation_event_for_run=cancellation_event_for_run,
+        )
+
+    monkeypatch.setattr(zeta_worker, "session_turn_agent", capture_session_turn_agent)
     runtime = zeta_worker.WorkerServices(
         project_root=tmp_path,
         state_dir=tmp_path,
         events=event_store,
+        tool_registry=registry,
     )
 
     message = asyncio.run(zeta_worker.run_once(runtime))
@@ -4834,6 +4880,7 @@ def test_zeta_local_runtime_run_once_handles_eventlog_rpc_request(
     assert response.event_type == "rpc.responded"
     assert response.payload["request_id"] == "req_runtime"
     assert response.payload["result"]["events"][0]["id"] == stored.id
+    assert captured["tool_registry"] is registry
     assert event_store.list_queue_items() == []
 
 

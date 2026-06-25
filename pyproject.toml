@@ -36,6 +36,7 @@ classifiers = [
 ]
 dependencies = [
   "click>=8.1",
+  "croniter",
   "httpx",
   "httpx-sse",
   "jinja2>=3.1",

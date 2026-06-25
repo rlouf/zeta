@@ -9,9 +9,15 @@ from typing import Any
 import pytest
 
 from zeta.agents.events import EventRegistry
-from zeta.agents.manifest import Manifest, ManifestError
+from zeta.agents.manifest import AgentPlugin, Manifest, ManifestError
 from zeta.agents.prompts import TemplateError, render_prompt, validate_prompt
-from zeta.agents.resources import load_event_registry, load_skill_registry
+from zeta.agents.resources import (
+    ResourceError,
+    load_agent_project,
+    load_event_registry,
+    load_skill_registry,
+    validate_agent_project,
+)
 from zeta.agents.returns import derive_returns_schema
 from zeta.agents.spec import (
     AgentSpec,
@@ -50,14 +56,17 @@ zeta_agents = SimpleNamespace(
     EgressBinding=EgressBinding,
     EventRegistry=EventRegistry,
     IngressBinding=IngressBinding,
+    AgentPlugin=AgentPlugin,
     Manifest=Manifest,
     ManifestError=ManifestError,
+    ResourceError=ResourceError,
     ScheduleEntry=ScheduleEntry,
     SpecError=SpecError,
     TemplateError=TemplateError,
     compile_agent_definition=compile_agent_definition,
     compile_agent_definitions=compile_agent_definitions,
     derive_returns_schema=derive_returns_schema,
+    load_agent_project=load_agent_project,
     load_event_registry=load_event_registry,
     load_spec=load_spec,
     load_specs=load_specs,
@@ -65,6 +74,7 @@ zeta_agents = SimpleNamespace(
     matches=matches,
     render_prompt=render_prompt,
     scheduled_event_type=scheduled_event_type,
+    validate_agent_project=validate_agent_project,
     validate_prompt=validate_prompt,
 )
 zeta_events = SimpleNamespace(
@@ -88,6 +98,66 @@ def _read_capability() -> RegisteredCapability:
         ),
         InProcessCapabilityExecutor(lambda params: {"ok": True}),
     )
+
+
+def _slack_plugin(
+    *,
+    message_schema: dict[str, Any] | None = None,
+) -> AgentPlugin:
+    return zeta_agents.AgentPlugin(
+        name="slack",
+        events={
+            "slack.dm.received": message_schema
+            or {
+                "type": "object",
+                "required": ["text"],
+                "properties": {"text": {"type": "string"}},
+                "additionalProperties": False,
+            },
+            "slack.message.send.requested": {
+                "type": "object",
+                "required": ["channel_id", "text"],
+                "properties": {
+                    "channel_id": {"type": "string"},
+                    "text": {"type": "string"},
+                },
+                "additionalProperties": False,
+            },
+        },
+        ingress={
+            "slack.dm.received": {
+                "type": "object",
+                "required": ["channel_ids"],
+                "properties": {
+                    "channel_ids": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                    }
+                },
+                "additionalProperties": False,
+            }
+        },
+        egress={
+            "slack.message.send.requested": {
+                "type": "object",
+                "properties": {
+                    "channel_ids": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                    }
+                },
+                "additionalProperties": False,
+            }
+        },
+    )
+
+
+class PluginMap:
+    def __init__(self, *plugins: AgentPlugin) -> None:
+        self.plugins = {plugin.name: plugin for plugin in plugins}
+
+    def resolve(self, name: str) -> AgentPlugin | None:
+        return self.plugins.get(name)
 
 
 def _slack_return_agent_spec(tmp_path: Path) -> AgentSpec:
@@ -633,6 +703,226 @@ def test_zeta_agent_resource_loaders_read_flat_skills_and_events(
         "type": "object",
         "properties": {"version": {"type": "string"}},
     }
+
+
+def test_zeta_agent_project_merges_plugin_event_schemas(
+    tmp_path: Path,
+) -> None:
+    agents_dir = tmp_path / "agents"
+    agents_dir.mkdir()
+    _write_spec(
+        agents_dir / "support.md",
+        """---
+name: Support
+description: Replies to Slack support messages.
+accepts:
+  - slack.dm.received
+returns:
+  - slack.message.send.requested
+ingress:
+  - source: slack
+    filter:
+      channel_ids: ["C123"]
+    idempotency_key: "slack:message:{team_id}:{channel_id}:{message_ts}"
+egress:
+  - sink: slack
+    filter:
+      channel_ids: ["C123"]
+---
+Reply.
+""",
+    )
+
+    project = zeta_agents.load_agent_project(
+        agents_dir,
+        plugin_resolver=PluginMap(_slack_plugin()),
+    )
+    zeta_agents.validate_agent_project(project)
+
+    assert project.events.knows("slack.dm.received")
+    assert project.events.knows("slack.message.send.requested")
+    assert project.specs[0].ingress[0].produces is None
+    assert project.specs[0].egress[0].accepts is None
+
+
+def test_zeta_agent_project_rejects_conflicting_plugin_event_schema(
+    tmp_path: Path,
+) -> None:
+    agents_dir = tmp_path / "agents"
+    events_dir = agents_dir / "events"
+    events_dir.mkdir(parents=True)
+    _write_spec(
+        agents_dir / "support.md",
+        """---
+name: Support
+description: Replies to Slack support messages.
+accepts:
+  - slack.dm.received
+ingress:
+  - source: slack
+    filter:
+      channel_ids: ["C123"]
+    idempotency_key: "slack:message:{team_id}:{channel_id}:{message_ts}"
+---
+Reply.
+""",
+    )
+    (events_dir / "slack.dm.received.json").write_text(
+        '{"type":"object","required":["body"],"properties":{"body":{"type":"string"}}}',
+        encoding="utf-8",
+    )
+
+    with pytest.raises(zeta_agents.ResourceError, match="conflicts"):
+        zeta_agents.load_agent_project(
+            agents_dir,
+            plugin_resolver=PluginMap(_slack_plugin()),
+        )
+
+
+def test_zeta_agent_project_accepts_identical_local_plugin_event_schema(
+    tmp_path: Path,
+) -> None:
+    agents_dir = tmp_path / "agents"
+    events_dir = agents_dir / "events"
+    events_dir.mkdir(parents=True)
+    schema = {
+        "type": "object",
+        "required": ["text"],
+        "properties": {"text": {"type": "string"}},
+        "additionalProperties": False,
+    }
+    _write_spec(
+        agents_dir / "support.md",
+        """---
+name: Support
+description: Replies to Slack support messages.
+accepts:
+  - slack.dm.received
+ingress:
+  - source: slack
+    filter:
+      channel_ids: ["C123"]
+    idempotency_key: "slack:message:{team_id}:{channel_id}:{message_ts}"
+---
+Reply.
+""",
+    )
+    (events_dir / "slack.dm.received.json").write_text(
+        '{"type":"object","required":["text"],"properties":{"text":{"type":"string"}},"additionalProperties":false}',
+        encoding="utf-8",
+    )
+
+    project = zeta_agents.load_agent_project(
+        agents_dir,
+        plugin_resolver=PluginMap(_slack_plugin(message_schema=schema)),
+    )
+
+    assert project.events.schema("slack.dm.received") == schema
+
+
+@pytest.mark.parametrize(
+    ("frontmatter", "message"),
+    [
+        (
+            """accepts:
+  - slack.dm.received
+ingress:
+  - source: missing
+    idempotency_key: "k"
+""",
+            "unknown ingress source 'missing'",
+        ),
+        (
+            """accepts:
+  - slack.dm.received
+ingress:
+  - source: slack
+    produces: slack.channel.joined
+    idempotency_key: "k"
+""",
+            "cannot produce 'slack.channel.joined'",
+        ),
+        (
+            """accepts:
+  - other.event
+ingress:
+  - source: slack
+    produces: slack.dm.received
+    idempotency_key: "k"
+""",
+            "not listed in accepts",
+        ),
+        (
+            """accepts:
+  - slack.dm.received
+ingress:
+  - source: slack
+""",
+            "requires idempotency_key",
+        ),
+        (
+            """accepts:
+  - slack.dm.received
+ingress:
+  - source: slack
+    filter:
+      channel_ids: [1]
+    idempotency_key: "k"
+""",
+            "invalid ingress filter",
+        ),
+        (
+            """returns:
+  - slack.message.send.requested
+egress:
+  - sink: missing
+    accepts: slack.message.send.requested
+""",
+            "unknown egress sink 'missing'",
+        ),
+        (
+            """returns:
+  - slack.message.send.requested
+egress:
+  - sink: slack
+    accepts: slack.message.delete.requested
+""",
+            "cannot accept 'slack.message.delete.requested'",
+        ),
+        (
+            """returns:
+  - other.event
+egress:
+  - sink: slack
+    accepts: slack.message.send.requested
+""",
+            "not listed in returns",
+        ),
+    ],
+)
+def test_zeta_agent_project_validates_plugin_bindings(
+    tmp_path: Path,
+    frontmatter: str,
+    message: str,
+) -> None:
+    agents_dir = tmp_path / "agents"
+    agents_dir.mkdir()
+    _write_spec(
+        agents_dir / "support.md",
+        f"""---
+name: Support
+description: Replies to Slack support messages.
+{frontmatter}---
+Reply.
+""",
+    )
+    project = zeta_agents.load_agent_project(
+        agents_dir,
+        plugin_resolver=PluginMap(_slack_plugin()),
+    )
+
+    with pytest.raises(zeta_agents.ManifestError, match=message):
+        zeta_agents.validate_agent_project(project)
 
 
 def test_zeta_agent_manifest_allows_unvalidated_runtime_vocabularies(

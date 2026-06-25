@@ -1,12 +1,15 @@
 """Deployment manifest validation for authored agents."""
 
 from collections.abc import Mapping
-from dataclasses import dataclass
-from typing import Any, Protocol, runtime_checkable
+from dataclasses import dataclass, field
+from typing import Any, Protocol, cast, runtime_checkable
+
+from jsonschema import Draft202012Validator
+from jsonschema.exceptions import SchemaError, ValidationError
 
 from zeta.agents.events import EventRegistry
 from zeta.agents.prompts import validate_prompt
-from zeta.agents.spec import AgentSpec
+from zeta.agents.spec import AgentSpec, EgressBinding, IngressBinding
 
 RESERVED_TOOL_NAMES = frozenset({"__return"})
 
@@ -30,18 +33,37 @@ class SkillResolver(Protocol):
 
 
 @dataclass(frozen=True)
+class AgentPlugin:
+    """Static ingress/egress plugin metadata used by Zeta core validation."""
+
+    name: str
+    events: Mapping[str, Mapping[str, Any] | None] = field(default_factory=dict)
+    ingress: Mapping[str, Mapping[str, Any] | None] = field(default_factory=dict)
+    egress: Mapping[str, Mapping[str, Any] | None] = field(default_factory=dict)
+
+
+@runtime_checkable
+class PluginResolver(Protocol):
+    """Anything that can resolve installed ingress/egress plugin metadata."""
+
+    def resolve(self, name: str) -> AgentPlugin | None: ...
+
+
+@dataclass(frozen=True)
 class Manifest:
     """Deployment manifest used to validate authored agent specs."""
 
     tools: ToolResolver | None = None
     skills: SkillResolver | Mapping[str, Any] | None = None
     events: EventRegistry | None = None
+    plugins: PluginResolver | Mapping[str, AgentPlugin] | None = None
     extensions: Mapping[str, type[Any]] | None = None
 
     def validate(self, spec: AgentSpec) -> None:
         validate_prompt(spec)
         validate_tools(spec, self.tools)
         validate_skills(spec, self.skills)
+        validate_plugin_bindings(spec, self.plugins)
         validate_events(spec, self.events)
         validate_extensions(spec, self.extensions or {})
 
@@ -82,6 +104,128 @@ def validate_events(spec: AgentSpec, registry: EventRegistry | None) -> None:
             raise ManifestError(
                 f"agent {spec.slug!r} references unknown event {event_type!r} in returns"
             )
+
+
+def validate_plugin_bindings(
+    spec: AgentSpec,
+    plugins: PluginResolver | Mapping[str, AgentPlugin] | None,
+) -> None:
+    for binding in spec.ingress:
+        validate_ingress_binding(spec, binding, plugins)
+    for binding in spec.egress:
+        validate_egress_binding(spec, binding, plugins)
+
+
+def validate_ingress_binding(
+    spec: AgentSpec,
+    binding: IngressBinding,
+    plugins: PluginResolver | Mapping[str, AgentPlugin] | None,
+) -> None:
+    plugin = resolve_plugin(plugins, binding.source)
+    if plugin is None:
+        raise ManifestError(
+            f"agent {spec.slug!r} references unknown ingress source {binding.source!r}"
+        )
+    event_type = selected_plugin_event(
+        binding.produces,
+        plugin.ingress,
+        "ingress source",
+        binding.source,
+        "produce",
+    )
+    if event_type not in spec.accepts:
+        raise ManifestError(
+            f"agent {spec.slug!r} ingress event {event_type!r} is not listed in accepts"
+        )
+    if binding.idempotency_key is None:
+        raise ManifestError(
+            f"agent {spec.slug!r} ingress source {binding.source!r} requires idempotency_key"
+        )
+    validate_binding_filter(
+        binding.filter,
+        plugin.ingress[event_type],
+        f"agent {spec.slug!r} has invalid ingress filter for {binding.source!r}",
+    )
+
+
+def validate_egress_binding(
+    spec: AgentSpec,
+    binding: EgressBinding,
+    plugins: PluginResolver | Mapping[str, AgentPlugin] | None,
+) -> None:
+    plugin = resolve_plugin(plugins, binding.sink)
+    if plugin is None:
+        raise ManifestError(
+            f"agent {spec.slug!r} references unknown egress sink {binding.sink!r}"
+        )
+    event_type = selected_plugin_event(
+        binding.accepts,
+        plugin.egress,
+        "egress sink",
+        binding.sink,
+        "accept",
+    )
+    if event_type not in spec.returns:
+        raise ManifestError(
+            f"agent {spec.slug!r} egress event {event_type!r} is not listed in returns"
+        )
+    validate_binding_filter(
+        binding.filter,
+        plugin.egress[event_type],
+        f"agent {spec.slug!r} has invalid egress filter for {binding.sink!r}",
+    )
+
+
+def resolve_plugin(
+    plugins: PluginResolver | Mapping[str, AgentPlugin] | None,
+    name: str,
+) -> AgentPlugin | None:
+    if plugins is None:
+        return None
+    if isinstance(plugins, Mapping):
+        return cast(Mapping[str, AgentPlugin], plugins).get(name)
+    return plugins.resolve(name)
+
+
+def selected_plugin_event(
+    event_type: str | None,
+    available: Mapping[str, Mapping[str, Any] | None],
+    binding_kind: str,
+    plugin_name: str,
+    verb: str,
+) -> str:
+    if event_type is not None:
+        if event_type not in available:
+            raise ManifestError(
+                f"{binding_kind} {plugin_name!r} cannot {verb} {event_type!r}"
+            )
+        return event_type
+    if len(available) != 1:
+        raise ManifestError(
+            f"{binding_kind} {plugin_name!r} requires an event type because it has "
+            f"{len(available)} event types"
+        )
+    return next(iter(available))
+
+
+def validate_binding_filter(
+    value: Mapping[str, Any],
+    schema: Mapping[str, Any] | None,
+    message: str,
+) -> None:
+    if schema is None:
+        if value:
+            raise ManifestError(f"{message}: filter is not supported")
+        return
+    try:
+        Draft202012Validator.check_schema(schema)
+        Draft202012Validator(schema).validate(dict(value))
+    except SchemaError as exc:
+        raise ManifestError(
+            f"{message}: plugin filter schema is invalid: {exc.message}"
+        ) from exc
+    except ValidationError as exc:
+        raise ManifestError(f"{message}: {exc.message}") from exc
 
 
 def validate_extensions(spec: AgentSpec, extensions: Mapping[str, type[Any]]) -> None:

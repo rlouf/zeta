@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 from zeta.agents.events import EventRegistry, EventRegistryError
-from zeta.agents.manifest import Manifest
+from zeta.agents.manifest import AgentPlugin, Manifest, PluginResolver
 from zeta.agents.spec import AgentSpec, load_specs, scheduled_event_type
 
 
@@ -37,6 +37,7 @@ class AgentProject:
     specs: tuple[AgentSpec, ...]
     events: EventRegistry
     skills: SkillRegistry
+    plugins: dict[str, AgentPlugin] = field(default_factory=dict)
 
 
 def resource_extensions(spec: AgentSpec) -> dict[str, object]:
@@ -44,20 +45,30 @@ def resource_extensions(spec: AgentSpec) -> dict[str, object]:
     return dict(spec.extensions or {})
 
 
-def load_agent_project(agents_dir: Path) -> AgentProject:
+def load_agent_project(
+    agents_dir: Path,
+    *,
+    plugin_resolver: PluginResolver | None = None,
+) -> AgentProject:
     """Load flat authored agents and their shared validation resources."""
     specs = load_specs(agents_dir)
-    events = load_event_registry(agents_dir)
+    plugins = resolve_agent_plugins(specs, plugin_resolver)
+    events = load_event_registry(agents_dir, plugins=plugins.values())
     register_scheduled_events(events, specs)
     return AgentProject(
         specs=specs,
         events=events,
         skills=load_skill_registry(agents_dir),
+        plugins=plugins,
     )
 
 
 def validate_agent_project(project: AgentProject) -> None:
-    manifest = Manifest(events=project.events, skills=project.skills)
+    manifest = Manifest(
+        events=project.events,
+        skills=project.skills,
+        plugins=project.plugins,
+    )
     for spec in project.specs:
         manifest.validate(spec)
 
@@ -99,10 +110,40 @@ def load_skill_registry(agents_dir: Path) -> SkillRegistry:
     return SkillRegistry(skills)
 
 
-def load_event_registry(agents_dir: Path) -> EventRegistry:
+def resolve_agent_plugins(
+    specs: tuple[AgentSpec, ...],
+    plugin_resolver: PluginResolver | None,
+) -> dict[str, AgentPlugin]:
+    if plugin_resolver is None:
+        return {}
+    names = sorted(
+        {binding.source for spec in specs for binding in spec.ingress}
+        | {binding.sink for spec in specs for binding in spec.egress}
+    )
+    plugins: dict[str, AgentPlugin] = {}
+    for name in names:
+        plugin = plugin_resolver.resolve(name)
+        if plugin is not None:
+            plugins[name] = plugin
+    return plugins
+
+
+def load_event_registry(
+    agents_dir: Path,
+    *,
+    plugins: Iterable[AgentPlugin] = (),
+) -> EventRegistry:
     """Load flat event payload JSON Schemas from ``agents/events``."""
     events_dir = agents_dir / "events"
     registry = EventRegistry()
+    for plugin in plugins:
+        for event_type, schema in plugin.events.items():
+            register_event_schema(
+                registry,
+                event_type,
+                schema,
+                source=f"plugin {plugin.name!r}",
+            )
     if not events_dir.exists():
         return registry
     for path in sorted(events_dir.iterdir()):
@@ -112,11 +153,27 @@ def load_event_registry(agents_dir: Path) -> EventRegistry:
             continue
         event_type = path.stem
         schema = load_event_schema(path)
-        try:
-            registry.register(event_type, schema)
-        except EventRegistryError as exc:
-            raise ResourceError(f"invalid event resource {path}: {exc}") from exc
+        register_event_schema(registry, event_type, schema, source=str(path))
     return registry
+
+
+def register_event_schema(
+    registry: EventRegistry,
+    event_type: str,
+    schema: Mapping[str, Any] | None,
+    *,
+    source: str,
+) -> None:
+    if registry.knows(event_type):
+        if registry.schema(event_type) == (
+            dict(schema) if schema is not None else None
+        ):
+            return
+        raise ResourceError(f"event resource {source} conflicts for {event_type!r}")
+    try:
+        registry.register(event_type, schema)
+    except EventRegistryError as exc:
+        raise ResourceError(f"invalid event resource {source}: {exc}") from exc
 
 
 def load_event_schema(path: Path) -> Mapping[str, Any] | None:

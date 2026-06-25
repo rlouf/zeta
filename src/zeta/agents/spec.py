@@ -3,7 +3,7 @@
 import hashlib
 import re
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -21,6 +21,8 @@ BUILT_IN_FRONTMATTER_KEYS = frozenset(
         "skills",
         "tools",
         "schedules",
+        "ingress",
+        "egress",
     }
 )
 
@@ -31,6 +33,26 @@ class ScheduleEntry:
 
     cron: str
     timezone: str | None = None
+
+
+@dataclass(frozen=True)
+class IngressBinding:
+    """External source binding that can produce an agent-accepted event."""
+
+    source: str
+    produces: str | None = None
+    filter: Mapping[str, Any] = field(default_factory=dict)
+    idempotency_key: str | None = None
+
+
+@dataclass(frozen=True)
+class EgressBinding:
+    """External sink binding that can handle an agent-returned event."""
+
+    sink: str
+    accepts: str | None = None
+    filter: Mapping[str, Any] = field(default_factory=dict)
+    idempotency_key: str | None = None
 
 
 @dataclass(frozen=True)
@@ -50,6 +72,8 @@ class AgentSpec:
     skills: tuple[str, ...] = ()
     tools: tuple[str, ...] = ()
     schedules: tuple[ScheduleEntry, ...] = ()
+    ingress: tuple[IngressBinding, ...] = ()
+    egress: tuple[EgressBinding, ...] = ()
     extensions: dict[str, Any] | None = None
 
     def extension(self, key: str) -> Any | None:
@@ -94,6 +118,8 @@ def load_spec(path: str | Path) -> AgentSpec:
             skills=string_tuple(frontmatter.get("skills", ()), "skills", path),
             tools=string_tuple(frontmatter.get("tools", ()), "tools", path),
             schedules=schedules,
+            ingress=ingress_tuple(frontmatter.get("ingress", ()), path),
+            egress=egress_tuple(frontmatter.get("egress", ()), path),
             extensions={
                 key: value
                 for key, value in frontmatter.items()
@@ -187,6 +213,118 @@ def schedule_tuple(value: Any, path: Path) -> tuple[ScheduleEntry, ...]:
     if not isinstance(value, list | tuple):
         raise SpecError(f"invalid value for 'schedules' in {path}: expected list")
     return tuple(schedule_entry(item, path) for item in value)
+
+
+def ingress_tuple(value: Any, path: Path) -> tuple[IngressBinding, ...]:
+    if value is None or value == ():
+        return ()
+    if not isinstance(value, list | tuple):
+        raise SpecError(f"invalid value for 'ingress' in {path}: expected list")
+    return tuple(ingress_binding(item, path) for item in value)
+
+
+def ingress_binding(value: Any, path: Path) -> IngressBinding:
+    if not isinstance(value, Mapping):
+        raise SpecError(f"invalid value for 'ingress' in {path}: expected object")
+    reject_unknown_binding_fields(
+        value,
+        "ingress",
+        {"source", "produces", "filter", "idempotency_key"},
+        path,
+    )
+    return IngressBinding(
+        source=required_binding_string(value, "ingress", "source", path),
+        produces=optional_binding_string(
+            value.get("produces"), "ingress", "produces", path
+        ),
+        filter=binding_filter(value.get("filter", {}), "ingress", path),
+        idempotency_key=optional_binding_string(
+            value.get("idempotency_key"),
+            "ingress",
+            "idempotency_key",
+            path,
+        ),
+    )
+
+
+def egress_tuple(value: Any, path: Path) -> tuple[EgressBinding, ...]:
+    if value is None or value == ():
+        return ()
+    if not isinstance(value, list | tuple):
+        raise SpecError(f"invalid value for 'egress' in {path}: expected list")
+    return tuple(egress_binding(item, path) for item in value)
+
+
+def egress_binding(value: Any, path: Path) -> EgressBinding:
+    if not isinstance(value, Mapping):
+        raise SpecError(f"invalid value for 'egress' in {path}: expected object")
+    reject_unknown_binding_fields(
+        value,
+        "egress",
+        {"sink", "accepts", "filter", "idempotency_key"},
+        path,
+    )
+    return EgressBinding(
+        sink=required_binding_string(value, "egress", "sink", path),
+        accepts=optional_binding_string(
+            value.get("accepts"), "egress", "accepts", path
+        ),
+        filter=binding_filter(value.get("filter", {}), "egress", path),
+        idempotency_key=optional_binding_string(
+            value.get("idempotency_key"),
+            "egress",
+            "idempotency_key",
+            path,
+        ),
+    )
+
+
+def reject_unknown_binding_fields(
+    value: Mapping[str, Any],
+    field: str,
+    supported: set[str],
+    path: Path,
+) -> None:
+    unknown = sorted(set(value) - supported)
+    if unknown:
+        raise SpecError(
+            f"invalid value for {field!r} in {path}: unsupported field {unknown[0]!r}"
+        )
+
+
+def required_binding_string(
+    value: Mapping[str, Any],
+    field: str,
+    name: str,
+    path: Path,
+) -> str:
+    item = value.get(name)
+    if not isinstance(item, str) or item == "":
+        raise SpecError(f"invalid value for {field!r} in {path}: {name} is required")
+    return item
+
+
+def optional_binding_string(
+    value: Any,
+    field: str,
+    name: str,
+    path: Path,
+) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str) or value == "":
+        raise SpecError(
+            f"invalid value for {field!r} in {path}: {name} must be a string"
+        )
+    return value
+
+
+def binding_filter(value: Any, field: str, path: Path) -> Mapping[str, Any]:
+    if not isinstance(value, Mapping):
+        raise SpecError(
+            f"invalid value for {field!r} in {path}: filter must be an object"
+        )
+    return dict(value)
 
 
 def schedule_entry(value: Any, path: Path) -> ScheduleEntry:

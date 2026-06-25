@@ -15,6 +15,8 @@ from zeta.agents.resources import load_event_registry, load_skill_registry
 from zeta.agents.returns import derive_returns_schema
 from zeta.agents.spec import (
     AgentSpec,
+    EgressBinding,
+    IngressBinding,
     ScheduleEntry,
     SpecError,
     load_spec,
@@ -45,7 +47,9 @@ from zeta.run.config import AgentConfig
 from zeta.run.runtime import AgentRunResult
 
 zeta_agents = SimpleNamespace(
+    EgressBinding=EgressBinding,
     EventRegistry=EventRegistry,
+    IngressBinding=IngressBinding,
     Manifest=Manifest,
     ManifestError=ManifestError,
     ScheduleEntry=ScheduleEntry,
@@ -245,6 +249,53 @@ User asked: {{ event.payload.text }}
     assert len(spec.sha256) == 64
 
 
+def test_zeta_agent_spec_loads_ingress_and_egress_bindings(tmp_path: Path) -> None:
+    spec = zeta_agents.load_spec(
+        _write_spec(
+            tmp_path / "support.md",
+            """---
+name: Support
+description: Replies to Slack support messages.
+accepts:
+  - slack.dm.received
+returns:
+  - slack.message.send.requested
+ingress:
+  - source: slack
+    produces: slack.dm.received
+    filter:
+      channel_ids: ["C123"]
+    idempotency_key: "slack:message:{team_id}:{channel_id}:{message_ts}"
+egress:
+  - sink: slack
+    accepts: slack.message.send.requested
+    filter:
+      channel_ids: ["C123"]
+---
+Reply.
+""",
+        )
+    )
+
+    assert spec.ingress == (
+        zeta_agents.IngressBinding(
+            source="slack",
+            produces="slack.dm.received",
+            filter={"channel_ids": ["C123"]},
+            idempotency_key="slack:message:{team_id}:{channel_id}:{message_ts}",
+        ),
+    )
+    assert spec.egress == (
+        zeta_agents.EgressBinding(
+            sink="slack",
+            accepts="slack.message.send.requested",
+            filter={"channel_ids": ["C123"]},
+            idempotency_key=None,
+        ),
+    )
+    assert spec.extensions == {}
+
+
 def test_zeta_agent_spec_loads_skills_as_core_metadata(tmp_path: Path) -> None:
     spec = zeta_agents.load_spec(
         _write_spec(
@@ -365,6 +416,25 @@ Summarize the repo.
         ("name: Worker\ndescription: Worker\ntools:\n  - read\n  - 2\n", "tools"),
         ("name: Worker\ndescription: Worker\nskills:\n  - review\n  - 2\n", "skills"),
         ("name: Worker\ndescription: Worker\nschedules: hourly\n", "schedules"),
+        ("name: Worker\ndescription: Worker\ningress: slack\n", "ingress"),
+        ("name: Worker\ndescription: Worker\ningress:\n  - source: 1\n", "source"),
+        (
+            "name: Worker\ndescription: Worker\ningress:\n"
+            "  - source: slack\n    extra: nope\n",
+            "extra",
+        ),
+        (
+            "name: Worker\ndescription: Worker\ningress:\n"
+            "  - source: slack\n    filter: C123\n",
+            "filter",
+        ),
+        ("name: Worker\ndescription: Worker\negress: slack\n", "egress"),
+        ("name: Worker\ndescription: Worker\negress:\n  - sink: 1\n", "sink"),
+        (
+            "name: Worker\ndescription: Worker\negress:\n"
+            "  - sink: slack\n    accepts: 1\n",
+            "accepts",
+        ),
         (
             "name: Worker\ndescription: Worker\naccepts:\n"
             "  - runtime.schedule.triggered\nschedules:\n  - soon\n",

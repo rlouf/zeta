@@ -18,9 +18,9 @@ from zeta.orchestration.queue import terminal_queue_item_result
 from zeta.records.events import Event
 from zeta.run.cancellation import CancellationToken
 from zeta.run.context import RuntimeContext
+from zeta.run.runtime import empty_session_trace_result
 from zeta.run.thread_run import (
-    empty_session_trace_result,
-    run_session_turn,
+    run_session_request,
     session_run_id,
     session_turn_requested_draft,
 )
@@ -48,7 +48,7 @@ def session_turn_agent(
             if cancellation_event_for_run is not None
             else None
         )
-        return await run_session_turn(
+        return await run_session_request(
             params,
             run_id=run_id,
             caused_by=invocation.triggering_event.id,

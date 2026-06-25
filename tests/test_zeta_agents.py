@@ -30,10 +30,13 @@ from zeta.capabilities.types import (
     Capability,
     CapabilityId,
 )
-from zeta.events import DraftEvent
+from zeta.events import DraftEvent, Event
 from zeta.orchestration import dispatch as zeta_dispatch
 from zeta.orchestration import queue as zeta_queue
 from zeta.orchestration.agents import (
+    AgentDefinition,
+    EventPattern,
+    agent_session_id,
     compile_agent_definition,
     compile_agent_definitions,
 )
@@ -717,6 +720,66 @@ def test_zeta_agent_with_returns_publishes_structured_return_event(
     _assert_structured_return_called(structured_calls, spec, events)
     _assert_message_delivery_event(returned)
     _assert_terminal_return_event(terminal)
+
+
+def test_zeta_resumable_agent_uses_stable_session_id() -> None:
+    definition = AgentDefinition(
+        "slack-qa",
+        (EventPattern("slack.dm.received"),),
+        dispatch_mode="session_scoped",
+    )
+    first = Event(
+        id="evt_first",
+        event_type="slack.dm.received",
+        source="test",
+        payload={},
+        idempotency_key=None,
+        caused_by=None,
+        session_id=None,
+        run_id=None,
+        turn_id=None,
+        timestamp_ms=1,
+        cursor=1,
+    )
+    second = Event(
+        id="evt_second",
+        event_type="slack.dm.received",
+        source="test",
+        payload={},
+        idempotency_key=None,
+        caused_by=None,
+        session_id=None,
+        run_id=None,
+        turn_id=None,
+        timestamp_ms=2,
+        cursor=2,
+    )
+
+    assert agent_session_id(definition, first) == "agent/slack-qa"
+    assert agent_session_id(definition, second) == "agent/slack-qa"
+
+
+def test_zeta_one_shot_agent_uses_trigger_event_session_id() -> None:
+    definition = AgentDefinition(
+        "slack-qa",
+        (EventPattern("slack.dm.received"),),
+        dispatch_mode="one_shot",
+    )
+    event = Event(
+        id="evt_first",
+        event_type="slack.dm.received",
+        source="test",
+        payload={},
+        idempotency_key=None,
+        caused_by=None,
+        session_id=None,
+        run_id=None,
+        turn_id=None,
+        timestamp_ms=1,
+        cursor=1,
+    )
+
+    assert agent_session_id(definition, event) == "agent/slack-qa/evt_first"
 
 
 def test_zeta_disabled_agent_spec_does_not_compile_for_runtime(

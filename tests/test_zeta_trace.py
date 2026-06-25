@@ -67,7 +67,7 @@ zeta_trace = SimpleNamespace(
 
 
 def run_agent_turn(*args: Any, **kwargs: Any) -> AgentRunResult:
-    return asyncio.run(zeta_agent.run_agent(*args, **kwargs))
+    return asyncio.run(zeta_agent.run_agent_loop(*args, **kwargs))
 
 
 def zeta_event_store() -> SqliteEventStore:

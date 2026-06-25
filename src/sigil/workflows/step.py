@@ -55,7 +55,7 @@ from zeta.run.context import RuntimeContext
 from zeta.run.runtime import (
     AgentRunAborted,
     registered_capabilities,
-    run_agent,
+    run_agent_loop,
 )
 
 HandoffOutput = Literal["detail", "summary", "none"]
@@ -90,7 +90,7 @@ as user-chosen context and explain the cancellation plainly if it matters.
 
 
 def run_agent_turn(*args: Any, **kwargs: Any) -> Any:
-    return asyncio.run(run_agent(*args, **kwargs))
+    return asyncio.run(run_agent_loop(*args, **kwargs))
 
 
 def step(

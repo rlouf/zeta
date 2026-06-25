@@ -175,6 +175,17 @@ must have a matching file under `agents/events/`. Synthetic scheduled events
 such as `agent.release-manager.scheduled` are registered internally with an
 empty payload schema.
 
+Authored agents run in the same durable agent loop as `session.run`. Resumable
+agents share one runtime session, `agent/<slug>`, while one-shot invocations use
+`agent/<slug>/<event_id>` so separate events do not inherit each other's
+timeline. These sessions are inspectable through the same event and trace
+surfaces as interactive runs:
+
+```sh
+zeta events --project-root . --session agent/release-manager
+ZETA_STATE_DIR=.zeta sigil trace --session agent/release-manager log
+```
+
 When an agent declares `returns:`, Zeta treats the normal agent/tool loop as
 working context. After the loop finishes, Zeta performs one final structured
 generation step with no tools available and a JSON Schema derived from the

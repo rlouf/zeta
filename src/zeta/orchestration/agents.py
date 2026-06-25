@@ -126,6 +126,17 @@ class ExecutableAgent:
         return AgentRoute.from_definition(self.definition)
 
 
+def agent_session_id(definition: AgentDefinition, event: Event) -> str:
+    """Return the durable runtime session id for an authored agent invocation."""
+    if definition.dispatch_mode == "session_scoped":
+        return f"agent/{definition.agent_id}"
+    return f"agent/{definition.agent_id}/{event.id}"
+
+
+def agent_run_id(attempt_id: str) -> str:
+    return f"run_{attempt_id}"
+
+
 def compile_agent_definition(
     spec: AgentSpec,
     *,
@@ -236,6 +247,7 @@ def agent_runner(
             effective_config,
             context=run_context,
             caused_by=event.id,
+            agent_invocation=agent_run,
         )
         if spec.returns and event_registry is not None:
             return await finalized_agent_run_result(
@@ -357,9 +369,9 @@ def agent_run_result_mapping(result: AgentRunResult) -> dict[str, Any]:
 
 
 def default_agent_run_runner() -> AgentRunRunner:
-    from zeta.run.runtime import run_agent
+    from zeta.run.runtime import run_agent_loop
 
-    return run_agent
+    return run_agent_loop
 
 
 def default_structured_output_runner() -> StructuredOutputRunner:

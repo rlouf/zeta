@@ -8,6 +8,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+from croniter import croniter
+
 from zeta.agents.resources import load_agent_project, validate_agent_project
 from zeta.agents.spec import AgentSpec, ScheduleEntry, scheduled_event_type
 from zeta.events import DraftEvent, Event
@@ -70,8 +72,8 @@ def request_due_schedules(
         if not spec.enabled:
             continue
         for schedule in spec.schedules:
-            scheduled_time = schedule_current_time(schedule, current)
-            if not cron_matches(schedule.cron, scheduled_time):
+            scheduled_time = due_schedule_time(schedule, current)
+            if scheduled_time is None:
                 continue
             draft = schedule_event_draft(spec, schedule, scheduled_time)
             outcome = event_sink.accept(draft)
@@ -103,6 +105,19 @@ def schedule_current_time(schedule: ScheduleEntry, now: datetime) -> datetime:
     if schedule.timezone is None:
         return now.astimezone(UTC)
     return now.astimezone(ZoneInfo(schedule.timezone))
+
+
+def due_schedule_time(schedule: ScheduleEntry, now: datetime) -> datetime | None:
+    if len(schedule.cron.split()) != 5:
+        raise ValueError(f"unsupported cron expression {schedule.cron!r}")
+    current = schedule_current_time(schedule, now)
+    base = current.replace(second=59, microsecond=999_999)
+    candidate = croniter(schedule.cron, base).get_prev(datetime)
+    if candidate.tzinfo is None:
+        candidate = candidate.replace(tzinfo=base.tzinfo)
+    if candidate.date() == current.date():
+        return candidate
+    return None
 
 
 def schedule_idempotency_key(

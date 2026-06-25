@@ -14,6 +14,8 @@ from zeta.orchestration.agents import (
     AgentRoute,
     EventPattern,
     ExecutableAgent,
+    agent_run_id,
+    agent_session_id,
 )
 from zeta.orchestration.attempts import (
     Attempt,
@@ -286,6 +288,8 @@ class EventDispatcher:
         events: list[Event] = []
         attempt_number = self._next_attempt_number(queue_item_id)
         attempt_id = f"att_{queue_item_id}_{attempt_number}"
+        run_id = triggering_event.run_id or agent_run_id(attempt_id)
+        session_id = invocation_session_id(agent.definition, triggering_event)
         if not self._queue_claim_is_current(queue_item_id):
             return events
         events.append(
@@ -296,6 +300,8 @@ class EventDispatcher:
                 event_suffix="claimed",
                 status="claimed",
                 attempt_number=attempt_number,
+                session_id=session_id,
+                run_id=run_id,
             )
         )
         started_at = event_timestamp()
@@ -309,6 +315,8 @@ class EventDispatcher:
                 event_suffix="started",
                 status="running",
                 started_at=started_at,
+                session_id=session_id,
+                run_id=run_id,
             )
         )
         heartbeat_task = self._start_attempt_heartbeat(attempt_id, queue_item_id)
@@ -323,10 +331,12 @@ class EventDispatcher:
                             triggering_event,
                             queue_item_id,
                             attempt_id,
+                            session_id,
+                            run_id,
                         ),
                         queue_item_id=queue_item_id,
                         attempt_id=attempt_id,
-                        run_id=triggering_event.run_id,
+                        run_id=run_id,
                     )
                 )
             except Exception as exc:
@@ -341,6 +351,8 @@ class EventDispatcher:
                         attempt_id,
                         attempt_number,
                         started_at,
+                        session_id,
+                        run_id,
                     )
                 )
                 return events
@@ -358,6 +370,8 @@ class EventDispatcher:
                 attempt_id,
                 attempt_number,
                 started_at,
+                session_id,
+                run_id,
             )
         )
         return events
@@ -560,6 +574,8 @@ class EventDispatcher:
         event_suffix: str,
         status: QueueItemStatus,
         attempt_number: int | None = None,
+        session_id: str | None = None,
+        run_id: str | None = None,
         **payload_extra: Any,
     ) -> Event:
         return self._append_queue_item_event_for_target(
@@ -569,6 +585,8 @@ class EventDispatcher:
             event_suffix=event_suffix,
             status=status,
             attempt_number=attempt_number,
+            session_id=session_id,
+            run_id=run_id,
             **payload_extra,
         )
 
@@ -581,6 +599,8 @@ class EventDispatcher:
         event_suffix: str,
         status: QueueItemStatus,
         attempt_number: int | None = None,
+        session_id: str | None = None,
+        run_id: str | None = None,
         **payload_extra: Any,
     ) -> Event:
         queue_item = QueueItem(
@@ -599,6 +619,8 @@ class EventDispatcher:
                 event_suffix,
                 attempt_number=attempt_number,
             ),
+            session_id=session_id,
+            run_id=run_id,
         )
 
     def _append_attempt_event(
@@ -614,6 +636,8 @@ class EventDispatcher:
         started_at: str,
         finished_at: str | None = None,
         error: str | None = None,
+        session_id: str | None = None,
+        run_id: str | None = None,
         **payload_extra: Any,
     ) -> Event:
         attempt = Attempt(
@@ -626,8 +650,10 @@ class EventDispatcher:
             started_at=started_at,
             finished_at=finished_at,
             error=error,
-            session_id=triggering_event.session_id,
-            run_id=triggering_event.run_id,
+            session_id=session_id
+            if session_id is not None
+            else triggering_event.session_id,
+            run_id=run_id if run_id is not None else triggering_event.run_id,
         )
         if self.worker_name is not None:
             payload_extra = {"worker_name": self.worker_name, **payload_extra}
@@ -640,6 +666,8 @@ class EventDispatcher:
                 attempt_number,
                 event_suffix,
             ),
+            session_id=session_id,
+            run_id=run_id,
         )
 
     def _failed_agent_events(
@@ -651,6 +679,8 @@ class EventDispatcher:
         attempt_id: str,
         attempt_number: int,
         started_at: str,
+        session_id: str | None,
+        run_id: str | None,
     ) -> list[Event]:
         error = f"{type(exc).__name__}: {exc}"
         return [
@@ -665,6 +695,8 @@ class EventDispatcher:
                 started_at=started_at,
                 finished_at=event_timestamp(),
                 error=error,
+                session_id=session_id,
+                run_id=run_id,
             ),
             self._append_queue_item_event(
                 triggering_event,
@@ -673,6 +705,8 @@ class EventDispatcher:
                 event_suffix="failed",
                 status="failed",
                 error=error,
+                session_id=session_id,
+                run_id=run_id,
             ),
         ]
 
@@ -685,6 +719,8 @@ class EventDispatcher:
         attempt_id: str,
         attempt_number: int,
         started_at: str,
+        session_id: str | None,
+        run_id: str | None,
     ) -> list[Event]:
         cancelled = result.get("outcome") in {"aborted", "cancelled"}
         attempt_status: AttemptStatus = "cancelled" if cancelled else "completed"
@@ -710,6 +746,8 @@ class EventDispatcher:
                 status=attempt_status,
                 started_at=started_at,
                 finished_at=event_timestamp(),
+                session_id=session_id,
+                run_id=run_id,
                 **attempt_payload_extra,
             ),
             self._append_queue_item_event(
@@ -719,6 +757,8 @@ class EventDispatcher:
                 event_suffix=queue_status,
                 status=queue_status,
                 result=result,
+                session_id=session_id,
+                run_id=run_id,
             ),
         ]
 
@@ -729,6 +769,8 @@ class EventDispatcher:
         payload: dict[str, Any],
         *,
         idempotency_key: str,
+        session_id: str | None = None,
+        run_id: str | None = None,
     ) -> Event:
         draft = DraftEvent(
             event_type,
@@ -736,8 +778,10 @@ class EventDispatcher:
             payload,
             idempotency_key=idempotency_key,
             caused_by=triggering_event.id,
-            session_id=triggering_event.session_id,
-            run_id=triggering_event.run_id,
+            session_id=(
+                session_id if session_id is not None else triggering_event.session_id
+            ),
+            run_id=run_id if run_id is not None else triggering_event.run_id,
             turn_id=triggering_event.turn_id,
         )
         event = self.event_sink.accept(draft).event
@@ -769,6 +813,8 @@ class EventDispatcher:
         triggering_event: Event,
         queue_item_id: str,
         attempt_id: str,
+        session_id: str | None,
+        run_id: str | None,
     ) -> Callable[[DraftEvent], Awaitable[Event]]:
         async def publish(draft: DraftEvent) -> Event:
             tagged = DraftEvent(
@@ -783,14 +829,20 @@ class EventDispatcher:
                 },
                 idempotency_key=draft.idempotency_key,
                 caused_by=draft.caused_by or triggering_event.id,
-                session_id=draft.session_id or triggering_event.session_id,
-                run_id=draft.run_id or triggering_event.run_id,
+                session_id=draft.session_id or session_id,
+                run_id=draft.run_id or run_id,
                 turn_id=draft.turn_id or triggering_event.turn_id,
             )
             outcome = await self.publish_and_run(tagged)
             return outcome.event
 
         return publish
+
+
+def invocation_session_id(definition: AgentDefinition, event: Event) -> str | None:
+    if event.event_type == "session.turn.requested" and event.session_id is not None:
+        return event.session_id
+    return agent_session_id(definition, event)
 
 
 def reject_reserved_runtime_event(draft: DraftEvent) -> None:

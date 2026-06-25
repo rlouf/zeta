@@ -5,7 +5,7 @@ from __future__ import annotations
 import inspect
 import time
 from collections.abc import Callable, Iterable, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Protocol
 
 from zeta.capabilities.execution import (
@@ -39,16 +39,18 @@ from zeta.records.events import (
     draft_from_runtime_event,
     draft_timeline_type,
     ensure_runtime_event_id,
+    event_timeline_type,
     event_view,
     status_update_draft,
     stream_chunk_draft,
     turn_aborted_draft,
+    user_message_draft,
 )
 from zeta.records.provenance import (
     PromptTraceProjection,
     project_prompt_trace_projection,
 )
-from zeta.records.stores import Store
+from zeta.records.stores import EventReader, Filter, Store, warn_trace_failure_once
 from zeta.run.cancellation import (
     AbortReason,
     AgentRunAborted,
@@ -57,6 +59,7 @@ from zeta.run.cancellation import (
     run_abort_reason,
 )
 from zeta.run.config import AgentConfig, ModelStatus
+from zeta.run.context import RuntimeContext
 from zeta.run.outcomes import (
     AgentRunResult,
     RunState,
@@ -68,6 +71,18 @@ TimelineEvent = Event | dict[str, Any]
 DEFAULT_MAX_TURNS = 25
 tool_registry = _runtime_tool_registry
 time_monotonic = time.monotonic
+
+
+@dataclass(frozen=True)
+class AgentRunRequest:
+    """Durable request envelope shared by session and authored-agent runs."""
+
+    objective: str
+    workflow: str
+    runtime: str
+    tools: tuple[str, ...]
+    context: str
+    config: AgentConfig
 
 
 class ModelStream(Protocol):
@@ -211,6 +226,64 @@ class AgentRun:
 
 
 async def run_agent(
+    request: AgentRunRequest,
+    *,
+    run_id: str,
+    caused_by: str,
+    publish_event: Callable[[Event], None],
+    runtime_context: RuntimeContext,
+    cancellation_event: CancellationToken | None,
+    model_gateway: ModelGateway | None = None,
+) -> AgentRunResult:
+    """Run one durable agent turn inside a runtime session."""
+    enabled_capabilities = registered_capabilities(
+        request.tools or request.config.allowed_capabilities,
+        tool_registry=runtime_context.tool_registry,
+    )
+    prior_timeline = current_timeline(runtime_context=runtime_context)
+    user_event = _record_user_message(
+        {
+            "type": "user_message",
+            "content": request.objective,
+            "workflow": request.workflow,
+            "runtime": request.runtime,
+            "available_tools": list(enabled_capabilities),
+            "run_id": run_id,
+        },
+        runtime_context=runtime_context,
+        run_id=run_id,
+    )
+    publish_event(user_event)
+
+    def sink(draft: DraftEvent) -> None:
+        if is_runtime_ui_event(draft):
+            return
+        persisted = _record_runtime_event(
+            draft,
+            runtime_context=runtime_context,
+            run_id=run_id,
+        )
+        publish_event(persisted)
+
+    return await run_agent_loop(
+        request.objective,
+        prior_timeline,
+        replace(
+            request.config,
+            allowed_capabilities=enabled_capabilities,
+            model_session_id=runtime_context.session_id,
+        ),
+        context=request.context,
+        event_sink=sink,
+        trace_store=runtime_context.trace_store,
+        tool_registry=runtime_context.tool_registry,
+        model_gateway=model_gateway,
+        caused_by=caused_by,
+        cancellation_event=cancellation_event,
+    )
+
+
+async def run_agent_loop(
     objective: str,
     timeline: Sequence[TimelineEvent],
     config: AgentConfig,
@@ -262,6 +335,143 @@ async def run_agent(
         tools=tools,
         state=state,
     ).run()
+
+
+def current_timeline(*, runtime_context: RuntimeContext) -> list[Event]:
+    try:
+        if not isinstance(runtime_context.event_sink, EventReader):
+            return []
+        return runtime_context.event_sink.list_events(
+            Filter(
+                session_id=runtime_context.session_id,
+                event_type_prefix="zeta.",
+            )
+        )
+    except Exception as exc:
+        warn_trace_failure_once("current_timeline", exc)
+        return []
+
+
+def _record_user_message(
+    event: dict[str, Any],
+    *,
+    runtime_context: RuntimeContext,
+    run_id: str | None = None,
+) -> Event:
+    payload = {key: value for key, value in event.items() if key != "type"}
+    outcome = runtime_context.event_sink.accept(
+        user_message_draft(
+            payload,
+            session_id=runtime_context.session_id,
+            run_id=run_id,
+            turn_id=event.get("turn_id")
+            if isinstance(event.get("turn_id"), str)
+            else None,
+        )
+    )
+    return outcome.event
+
+
+def _record_runtime_event(
+    draft: DraftEvent,
+    *,
+    runtime_context: RuntimeContext,
+    run_id: str,
+) -> Event:
+    tagged = replace(
+        draft,
+        payload={**draft.payload, "run_id": run_id},
+        session_id=runtime_context.session_id,
+        run_id=run_id,
+    )
+    outcome = runtime_context.event_sink.accept(tagged)
+    _record_trace_for_run(runtime_context, outcome.event.run_id)
+    return outcome.event
+
+
+def _record_trace_for_run(runtime_context: RuntimeContext, run_id: str | None) -> None:
+    if run_id is None or not isinstance(runtime_context.event_sink, EventReader):
+        return
+    try:
+        project_prompt_trace_projection(
+            runtime_context.event_sink.list_events(
+                Filter(
+                    session_id=runtime_context.session_id,
+                    run_id=run_id,
+                    event_type_prefix="zeta.",
+                )
+            ),
+            runtime_context.trace_store,
+        )
+    except Exception as exc:
+        warn_trace_failure_once("record_trace_for_run", exc)
+
+
+def session_trace_result(
+    runtime_context: RuntimeContext,
+    run_id: str,
+) -> dict[str, list[str]]:
+    if not isinstance(runtime_context.event_sink, EventReader):
+        return empty_session_trace_result()
+    trace = empty_session_trace_result()
+    events = runtime_context.event_sink.list_events(
+        Filter(
+            session_id=runtime_context.session_id,
+            run_id=run_id,
+            event_type_prefix="zeta.",
+        )
+    )
+    projection = project_prompt_trace_projection(events, runtime_context.trace_store)
+    for event in events:
+        event_type = event_timeline_type(event)
+        if event_type == "model":
+            _add_unique(trace["model_event_ids"], event.id)
+            _add_unique(trace["prompt_ids"], projection.prompt_object_ids.get(event.id))
+            _add_unique(
+                trace["assistant_message_ids"],
+                projection.assistant_message_ids.get(event.id),
+            )
+            continue
+        if event_type == "tool_call":
+            _add_unique(trace["tool_event_ids"], event.id)
+            _add_unique(
+                trace["tool_call_ids"], projection.tool_call_object_ids.get(event.id)
+            )
+            continue
+        if event_type == "tool_result":
+            _add_unique(trace["tool_event_ids"], event.id)
+            _add_unique(
+                trace["tool_result_ids"],
+                projection.tool_result_object_ids.get(event.id),
+            )
+    return trace
+
+
+def empty_session_trace_result() -> dict[str, list[str]]:
+    return {
+        "prompt_ids": [],
+        "assistant_message_ids": [],
+        "model_event_ids": [],
+        "tool_event_ids": [],
+        "tool_call_ids": [],
+        "tool_result_ids": [],
+    }
+
+
+def _add_unique(values: list[str], value: Any) -> None:
+    if isinstance(value, str) and value and value not in values:
+        values.append(value)
+
+
+def final_event_cursor(runtime_context: RuntimeContext, run_id: str) -> str | None:
+    if not isinstance(runtime_context.event_sink, EventReader):
+        return None
+    events = runtime_context.event_sink.list_events(
+        Filter(session_id=runtime_context.session_id, run_id=run_id)
+    )
+    if not events:
+        return None
+    return str(events[-1].cursor) if events[-1].cursor is not None else None
 
 
 @dataclass(frozen=True)

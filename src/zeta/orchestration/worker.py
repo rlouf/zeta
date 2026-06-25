@@ -7,10 +7,17 @@ import logging
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from zeta.agents.resources import load_agent_project, validate_agent_project
+from zeta.capabilities.registry import registry as tool_registry
 from zeta.events import Event
-from zeta.orchestration.agents import ExecutableAgent, compile_agent_definitions
+from zeta.orchestration.agents import (
+    AgentInvocation,
+    ExecutableAgent,
+    agent_session_id,
+    compile_agent_definitions,
+)
 from zeta.orchestration.dispatch import EventDispatcher
 from zeta.orchestration.session_turn_agent import session_turn_agent
 from zeta.records.stores import (
@@ -21,7 +28,9 @@ from zeta.records.stores import (
     event_store_path,
     zeta_sqlite_path,
 )
+from zeta.run.config import AgentConfig
 from zeta.run.context import RuntimeContext
+from zeta.run.runtime import AgentRunRequest, run_agent
 
 logger = logging.getLogger(__name__)
 
@@ -84,8 +93,63 @@ def project_executors(runtime: WorkerServices) -> tuple[ExecutableAgent, ...]:
     return tuple(
         agent
         for spec in project.specs
-        for agent in compile_agent_definitions(spec, event_registry=project.events)
+        for agent in compile_agent_definitions(
+            spec,
+            event_registry=project.events,
+            run_turn=project_agent_run_turn(runtime),
+        )
     )
+
+
+def project_agent_run_turn(runtime: WorkerServices):
+    async def run_turn(
+        objective: str,
+        timeline: list[dict[str, object]],
+        config: AgentConfig,
+        **kwargs: Any,
+    ) -> Any:
+        del timeline
+        invocation = kwargs.get("agent_invocation")
+        if not isinstance(invocation, AgentInvocation):
+            raise RuntimeError("authored agent run requires an invocation")
+        session_id = agent_session_id(invocation.agent, invocation.triggering_event)
+        trace_store = SqliteObjectStore(
+            zeta_sqlite_path(runtime.state_dir),
+            session_id=session_id,
+        )
+        runtime_context = RuntimeContext(
+            session_id=session_id,
+            event_sink=runtime.events,
+            trace_store=trace_store,
+            tool_registry=tool_registry,
+            state_dir=runtime.state_dir,
+            session_dir=runtime.state_dir / "sessions" / session_id,
+        )
+        run_id = invocation.run_id or (
+            f"run_{invocation.attempt_id}"
+            if invocation.attempt_id is not None
+            else f"run_{invocation.triggering_event.id}"
+        )
+        try:
+            return await run_agent(
+                AgentRunRequest(
+                    objective=objective,
+                    workflow="agent",
+                    runtime="zeta-agent",
+                    tools=tuple(config.allowed_capabilities or ()),
+                    context=kwargs.get("context", ""),
+                    config=config,
+                ),
+                run_id=run_id,
+                caused_by=kwargs.get("caused_by") or invocation.triggering_event.id,
+                publish_event=lambda _event: None,
+                runtime_context=runtime_context,
+                cancellation_event=None,
+            )
+        finally:
+            trace_store.close()
+
+    return run_turn
 
 
 async def run_available_queue_item(

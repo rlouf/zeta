@@ -4148,7 +4148,7 @@ Summarize the repo.
     )
     event_store = zeta_events.SqliteEventStore(event_store_path(tmp_path / ".zeta"))
     try:
-        events = event_store.list_events(zeta_events.Filter())
+        events = event_store.list_events(zeta_events.Filter(event_type_prefix="agent."))
     finally:
         event_store.close()
 
@@ -4157,6 +4157,59 @@ Summarize the repo.
     assert [event.event_type for event in events] == ["agent.scheduled.scheduled"]
     assert events[0].source == "zeta:scheduler"
     assert events[0].payload == {}
+
+
+def test_zeta_cli_schedule_status_json_lists_next_and_last_tick(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    agents_dir = tmp_path / "agents"
+    agents_dir.mkdir()
+    (agents_dir / "scheduled.md").write_text(
+        """---
+name: Scheduled
+description: Runs on a schedule.
+schedules:
+  - cron: "0 8 * * *"
+---
+Summarize the repo.
+""",
+        encoding="utf-8",
+    )
+    event_store = zeta_events.SqliteEventStore(event_store_path(tmp_path / ".zeta"))
+    specs = zeta_agent_spec.load_specs(tmp_path / "agents")
+    try:
+        zeta_scheduling.request_due_schedules(
+            event_store,
+            specs,
+            now=datetime(2026, 6, 22, 10, 0, tzinfo=UTC),
+        )
+    finally:
+        event_store.close()
+    monkeypatch.setattr(
+        zeta_scheduling,
+        "utc_now",
+        lambda: datetime(2026, 6, 22, 10, 5, tzinfo=UTC),
+    )
+
+    result = CliRunner().invoke(
+        zeta_cli.cli,
+        ["schedule", "status", "--project-root", str(tmp_path), "--json"],
+    )
+
+    assert result.exit_code == 0
+    rows = json.loads(result.output)
+    assert rows == [
+        {
+            "agent": "scheduled",
+            "cron": "0 8 * * *",
+            "timezone": None,
+            "status": "published",
+            "last_published_at": "2026-06-22T08:00:00+00:00",
+            "next_at": "2026-06-23T08:00:00+00:00",
+            "reason": "same-day backfill",
+        }
+    ]
 
 
 def test_zeta_scheduler_builds_project_services(tmp_path: Path) -> None:
@@ -4936,7 +4989,7 @@ Summarize the repo.
             specs,
             now=datetime(2026, 6, 22, 12, 34, 59, tzinfo=UTC),
         )
-        events = event_store.list_events(zeta_events.Filter())
+        events = event_store.list_events(zeta_events.Filter(event_type_prefix="agent."))
     finally:
         event_store.close()
 
@@ -4987,7 +5040,17 @@ Summarize the repo.
             specs,
             now=datetime(2026, 6, 22, 10, 1, tzinfo=UTC),
         )
-        events = event_store.list_events(zeta_events.Filter())
+        durable_events = event_store.list_events(zeta_events.Filter())
+        events = [
+            event
+            for event in durable_events
+            if event.event_type == "agent.scheduled.scheduled"
+        ]
+        decisions = [
+            event
+            for event in durable_events
+            if event.event_type.startswith("scheduler.")
+        ]
     finally:
         event_store.close()
 
@@ -4995,6 +5058,17 @@ Summarize the repo.
     assert repeated == []
     assert [event.event_type for event in late] == ["agent.scheduled.scheduled"]
     assert [event.event_type for event in events] == ["agent.scheduled.scheduled"]
+    assert [event.event_type for event in decisions] == [
+        "scheduler.tick.published",
+        "scheduler.tick.skipped",
+    ]
+    assert decisions[0].payload["status"] == "published"
+    assert decisions[0].payload["reason"] == "same-day backfill"
+    assert decisions[0].payload["scheduled_at"] == "2026-06-22T08:00:00+00:00"
+    assert decisions[0].payload["observed_at"] == "2026-06-22T10:00:00+00:00"
+    assert decisions[0].payload["published_event_id"] == late[0].id
+    assert decisions[1].payload["status"] == "skipped"
+    assert decisions[1].payload["reason"] == "already published"
     assert (
         late[0].idempotency_key
         == "schedule:scheduled:0 8 * * *:2026-06-22T08:00:00+00:00"
@@ -5021,15 +5095,34 @@ Summarize the repo.
     specs = zeta_agent_spec.load_specs(tmp_path / "agents")
 
     try:
-        events = zeta_scheduling.request_due_schedules(
+        earlier_events = zeta_scheduling.request_due_schedules(
+            event_store,
+            specs,
+            now=datetime(2026, 6, 21, 10, 0, tzinfo=UTC),
+        )
+        scheduled_events = zeta_scheduling.request_due_schedules(
             event_store,
             specs,
             now=datetime(2026, 6, 23, 7, 0, tzinfo=UTC),
         )
+        decisions = event_store.list_events(
+            zeta_events.Filter(event_type_prefix="scheduler.tick.")
+        )
     finally:
         event_store.close()
 
-    assert events == []
+    assert [event.event_type for event in earlier_events] == [
+        "agent.scheduled.scheduled"
+    ]
+    assert scheduled_events == []
+    assert [event.event_type for event in decisions] == [
+        "scheduler.tick.published",
+        "scheduler.tick.missed",
+    ]
+    assert decisions[1].payload["status"] == "missed"
+    assert decisions[1].payload["reason"] == "previous-day tick not backfilled"
+    assert decisions[1].payload["scheduled_at"] == "2026-06-22T08:00:00+00:00"
+    assert decisions[1].payload["observed_at"] == "2026-06-23T07:00:00+00:00"
 
 
 def test_zeta_scheduler_backfill_uses_schedule_timezone(
@@ -5066,6 +5159,109 @@ Summarize the repo.
         events[0].idempotency_key
         == "schedule:scheduled:0 8 * * *:2026-06-22T08:00:00-07:00"
     )
+
+
+def test_zeta_scheduler_status_reports_pending_next_tick(
+    tmp_path: Path,
+) -> None:
+    agents_dir = tmp_path / "agents"
+    agents_dir.mkdir()
+    (agents_dir / "scheduled.md").write_text(
+        """---
+name: Scheduled
+description: Runs on a schedule.
+schedules:
+  - cron: "0 8 * * *"
+---
+Summarize the repo.
+""",
+        encoding="utf-8",
+    )
+    event_store = zeta_events.SqliteEventStore(tmp_path / "events.sqlite3")
+    specs = zeta_agent_spec.load_specs(tmp_path / "agents")
+
+    try:
+        rows = zeta_scheduling.schedule_status(
+            event_store,
+            specs,
+            now=datetime(2026, 6, 22, 7, 30, tzinfo=UTC),
+        )
+        decisions = event_store.list_events(
+            zeta_events.Filter(event_type_prefix="scheduler.tick.")
+        )
+    finally:
+        event_store.close()
+
+    assert decisions == []
+    assert [row.status for row in rows] == ["pending"]
+    assert rows[0].agent == "scheduled"
+    assert rows[0].cron == "0 8 * * *"
+    assert rows[0].last_published_at is None
+    assert rows[0].next_at == "2026-06-22T08:00:00+00:00"
+    assert rows[0].reason == "next tick is in the future"
+
+
+def test_zeta_scheduler_status_reports_last_published_tick(
+    tmp_path: Path,
+) -> None:
+    agents_dir = tmp_path / "agents"
+    agents_dir.mkdir()
+    (agents_dir / "scheduled.md").write_text(
+        """---
+name: Scheduled
+description: Runs on a schedule.
+schedules:
+  - cron: "0 8 * * *"
+---
+Summarize the repo.
+""",
+        encoding="utf-8",
+    )
+    event_store = zeta_events.SqliteEventStore(tmp_path / "events.sqlite3")
+    specs = zeta_agent_spec.load_specs(tmp_path / "agents")
+
+    try:
+        zeta_scheduling.request_due_schedules(
+            event_store,
+            specs,
+            now=datetime(2026, 6, 22, 10, 0, tzinfo=UTC),
+        )
+        rows = zeta_scheduling.schedule_status(
+            event_store,
+            specs,
+            now=datetime(2026, 6, 22, 10, 5, tzinfo=UTC),
+        )
+    finally:
+        event_store.close()
+
+    assert [row.status for row in rows] == ["published"]
+    assert rows[0].last_published_at == "2026-06-22T08:00:00+00:00"
+    assert rows[0].next_at == "2026-06-23T08:00:00+00:00"
+    assert rows[0].reason == "same-day backfill"
+
+
+def test_zeta_scheduler_tick_events_do_not_enter_worker_queue(
+    tmp_path: Path,
+) -> None:
+    event_store = zeta_events.SqliteEventStore(event_store_path(tmp_path / ".zeta"))
+    try:
+        event_store.accept(
+            zeta_events.DraftEvent(
+                "scheduler.tick.published",
+                "zeta:scheduler",
+                {"status": "published"},
+            )
+        )
+
+        queued = zeta_worker.enqueue_pending_events(event_store)
+        items = zeta_queue.project_queue_items(
+            event_store.list_events(zeta_events.Filter())
+        )
+    finally:
+        event_store.close()
+
+    assert queued == 0
+    assert items == []
 
 
 def test_zeta_scheduler_validates_project_event_schemas_before_scheduling(

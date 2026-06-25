@@ -238,7 +238,7 @@ def run(project_root: Path, state_dir: Path | None, once: bool) -> int:
     return 0
 
 
-@cli.command("schedule")
+@cli.group("schedule", invoke_without_command=True)
 @click.option(
     "--project-root",
     type=click.Path(file_okay=False, path_type=Path),
@@ -252,8 +252,16 @@ def run(project_root: Path, state_dir: Path | None, once: bool) -> int:
     help="Override the runtime state directory.",
 )
 @click.option("--once", is_flag=True, help="Request due schedules, then exit.")
-def schedule(project_root: Path, state_dir: Path | None, once: bool) -> int:
+@click.pass_context
+def schedule(
+    ctx: click.Context,
+    project_root: Path,
+    state_dir: Path | None,
+    once: bool,
+) -> int:
     """Run the local scheduler service."""
+    if ctx.invoked_subcommand is not None:
+        return 0
 
     runtime = scheduling.build_scheduler_services(
         project_root=project_root,
@@ -269,6 +277,57 @@ def schedule(project_root: Path, state_dir: Path | None, once: bool) -> int:
             time.sleep(seconds_until_next_minute())
     finally:
         runtime.close()
+
+
+@schedule.command("status")
+@click.option(
+    "--project-root",
+    type=click.Path(file_okay=False, path_type=Path),
+    default=Path("."),
+    show_default=True,
+    help="Project root containing .zeta runtime state and agents/ specs.",
+)
+@click.option(
+    "--state-dir",
+    type=click.Path(file_okay=False, path_type=Path),
+    help="Override the runtime state directory.",
+)
+@click.option("--json", "json_output", is_flag=True, help="Emit JSON.")
+def schedule_status(
+    project_root: Path,
+    state_dir: Path | None,
+    json_output: bool,
+) -> int:
+    """Show authored-agent schedule status."""
+
+    runtime = scheduling.build_scheduler_services(
+        project_root=project_root,
+        state_dir=state_dir,
+    )
+    try:
+        rows = scheduling.project_schedule_status(runtime)
+    finally:
+        runtime.close()
+    if json_output:
+        click.echo(json.dumps([row.as_record() for row in rows], ensure_ascii=False))
+        return 0
+    if not rows:
+        click.echo("schedules empty")
+        return 0
+    for row in rows:
+        click.echo(
+            "\t".join(
+                [
+                    row.agent,
+                    row.cron,
+                    row.status,
+                    row.last_published_at or "-",
+                    row.next_at,
+                    row.reason,
+                ]
+            )
+        )
+    return 0
 
 
 def seconds_until_next_minute() -> float:

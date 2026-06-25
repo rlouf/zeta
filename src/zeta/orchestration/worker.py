@@ -209,7 +209,9 @@ async def run_available_queue_item(
 def enqueue_pending_events(events: SqliteEventStore) -> int:
     queued = 0
     for event in events.list_events(Filter()):
-        if is_runtime_event(event) or event.event_type.startswith(("zeta.", "rpc.")):
+        if is_runtime_event(event) or event.event_type.startswith(
+            ("zeta.", "rpc.", "scheduler.tick.")
+        ):
             continue
         if events.event_has_queue_item(event.id):
             continue

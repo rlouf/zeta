@@ -15,8 +15,9 @@ from typing import Any, Protocol, cast
 from uuid import uuid4
 
 from zeta.events import DraftEvent, Event, json_native_payload
-from zeta.run.events import TURN_EVENT_COMPLETED, TURN_EVENT_FAILED
 
+TURN_EVENT_COMPLETED = "zeta.turn.completed"
+TURN_EVENT_FAILED = "zeta.turn.failed"
 EVENT_IDEMPOTENT_TYPES = frozenset(
     {
         "zeta.model_call.completed",
@@ -603,6 +604,8 @@ __all__ = [
     "EVENT_IDEMPOTENT_TYPES",
     "Event",
     "EventSink",
+    "TURN_EVENT_COMPLETED",
+    "TURN_EVENT_FAILED",
     "TURN_IDEMPOTENT_TYPES",
     "draft_event_id",
     "draft_event_view",

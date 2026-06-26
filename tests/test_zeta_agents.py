@@ -57,9 +57,15 @@ from zeta.orchestration.agents import (
     compile_agent_definition,
     compile_agent_definitions,
 )
+from zeta.orchestration.projections import runtime_event_projection
 from zeta.records.stores import Filter, SqliteEventStore
 from zeta.run.config import AgentConfig
 from zeta.run.runtime import AgentRunResult
+
+
+def runtime_sqlite_event_store(path: Path) -> SqliteEventStore:
+    return SqliteEventStore(path, projections=(runtime_event_projection(),))
+
 
 zeta_agents = SimpleNamespace(
     EgressBinding=EgressBinding,
@@ -92,7 +98,7 @@ zeta_agents = SimpleNamespace(
 zeta_events = SimpleNamespace(
     DraftEvent=DraftEvent,
     Filter=Filter,
-    SqliteEventStore=SqliteEventStore,
+    SqliteEventStore=runtime_sqlite_event_store,
 )
 
 

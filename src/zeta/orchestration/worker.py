@@ -38,6 +38,7 @@ from zeta.orchestration.agents import (
     compile_agent_definitions,
 )
 from zeta.orchestration.dispatch import EventDispatcher
+from zeta.orchestration.projections import runtime_event_projection
 from zeta.orchestration.session_turn_agent import session_turn_agent
 from zeta.records.stores import (
     Filter,
@@ -90,7 +91,10 @@ def build_worker_services(
     return WorkerServices(
         project_root=resolved_project_root,
         state_dir=resolved_state_dir,
-        events=SqliteEventStore(event_store_path(resolved_state_dir)),
+        events=SqliteEventStore(
+            event_store_path(resolved_state_dir),
+            projections=(runtime_event_projection(),),
+        ),
         tool_registry=tool_registry or CapabilityRegistry(),
         plugin_resolver=plugin_resolver,
     )

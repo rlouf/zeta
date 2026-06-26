@@ -1,6 +1,7 @@
 import ast
 import json
 import os
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -123,7 +124,27 @@ def test_zeta_record_stores_exports_named_sqlite_stores() -> None:
     assert stores.SqliteObjectStore is SqliteObjectStore
     assert "SqliteObjectStore" in stores.__all__
     assert "SqliteStore" not in stores.__all__
-    assert not hasattr(stores, "SqliteStore")
+
+
+def test_plain_sqlite_event_store_does_not_import_orchestration(
+    tmp_path: Path,
+) -> None:
+    script = """
+import sys
+from pathlib import Path
+from zeta.records.stores import SqliteEventStore
+
+store = SqliteEventStore(Path(sys.argv[1]) / "events.sqlite3")
+store.close()
+for module in ("zeta.orchestration.queue", "zeta.orchestration.attempts"):
+    if module in sys.modules:
+        raise SystemExit(f"{module} was imported")
+"""
+    subprocess.run(
+        [sys.executable, "-c", script, str(tmp_path)],
+        check=True,
+        text=True,
+    )
 
 
 def test_zeta_dispatch_kernel_defines_queue_item_and_attempt_shapes() -> None:
@@ -584,9 +605,27 @@ def test_event_stores_normalize_payloads_to_json_native(tmp_path: Path) -> None:
 
 def test_sqlite_event_store_rolls_back_event_when_projection_fails(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    store = SqliteEventStore(tmp_path / "events.sqlite3")
+    class FailingProjection:
+        def init_schema(self, connection: sqlite3.Connection) -> None:
+            connection.execute(
+                "CREATE TABLE projection_probe (event_id TEXT NOT NULL) STRICT"
+            )
+
+        def clear(self, connection: sqlite3.Connection) -> None:
+            connection.execute("DELETE FROM projection_probe")
+
+        def index(self, connection: sqlite3.Connection, event: Event) -> None:
+            connection.execute(
+                "INSERT INTO projection_probe (event_id) VALUES (?)",
+                (event.id,),
+            )
+            raise RuntimeError("projection failed")
+
+    store = SqliteEventStore(
+        tmp_path / "events.sqlite3",
+        projections=(FailingProjection(),),
+    )
     event = Event(
         id="evt_projection_failure",
         event_type="runtime.queue_item.available",
@@ -603,16 +642,11 @@ def test_sqlite_event_store_rolls_back_event_when_projection_fails(
         timestamp_ms=1,
     )
 
-    def fail_projection(_event: Event) -> None:
-        raise RuntimeError("projection failed")
-
-    monkeypatch.setattr(store, "_index_one_runtime_event", fail_projection)
-
     with pytest.raises(RuntimeError, match="projection failed"):
         store.append(event)
 
     assert store.list_events(Filter()) == []
-    assert store.list_queue_items() == []
+    assert store.connection.execute("SELECT * FROM projection_probe").fetchall() == []
 
 
 def test_event_stores_reject_non_json_payloads(tmp_path: Path) -> None:

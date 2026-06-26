@@ -55,6 +55,7 @@ from zeta.orchestration import scheduling as zeta_scheduling
 from zeta.orchestration import session_turn_agent as zeta_session_turn_agent
 from zeta.orchestration import worker as zeta_worker
 from zeta.orchestration.attempts import Attempt
+from zeta.orchestration.projections import runtime_event_projection
 from zeta.orchestration.queue import QueueItem
 from zeta.records import events as zeta_event_model
 from zeta.records.stores import (
@@ -75,12 +76,17 @@ zeta_trace = SimpleNamespace(InMemoryStore=InMemoryStore)
 
 ensure_builtin_tools_registered()
 
+
+def runtime_sqlite_event_store(path: Path) -> SqliteEventStore:
+    return SqliteEventStore(path, projections=(runtime_event_projection(),))
+
+
 zeta_events = SimpleNamespace(
     DraftEvent=DraftEvent,
     Event=Event,
     Filter=Filter,
     MemoryEventStore=MemoryEventStore,
-    SqliteEventStore=SqliteEventStore,
+    SqliteEventStore=runtime_sqlite_event_store,
 )
 
 

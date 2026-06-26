@@ -10,6 +10,7 @@ import click
 
 from zeta.events import Event
 from zeta.orchestration import scheduling, worker
+from zeta.orchestration.projections import runtime_event_projection
 from zeta.records.stores import Filter, SqliteEventStore, event_store_path
 from zeta.rpc import run_stdio
 
@@ -38,7 +39,8 @@ def runtime_state_dir(project_root: Path, state_dir: Path | None) -> Path:
 
 def runtime_event_store(project_root: Path, state_dir: Path | None) -> SqliteEventStore:
     return SqliteEventStore(
-        event_store_path(runtime_state_dir(project_root, state_dir))
+        event_store_path(runtime_state_dir(project_root, state_dir)),
+        projections=(runtime_event_projection(),),
     )
 
 

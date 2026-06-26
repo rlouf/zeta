@@ -1,7 +1,7 @@
 """Run lifecycle event vocabulary."""
 
-TURN_EVENT_COMPLETED = "zeta.turn.completed"
-TURN_EVENT_FAILED = "zeta.turn.failed"
+from zeta.records.events import TURN_EVENT_COMPLETED, TURN_EVENT_FAILED
+
 TURN_RECORD_SCHEMA = "zeta.turn"
 
 

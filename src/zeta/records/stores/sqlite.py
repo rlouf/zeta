@@ -14,10 +14,8 @@ import time
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
-from zeta.orchestration.attempts import attempt_from_event_payload
-from zeta.orchestration.queue import pending_queue_item_id, project_one_queue_item
 from zeta.records.events import AppendOutcome, DraftEvent, Event, json_native_payload
 from zeta.records.stores._object_sqlite import (
     DEFAULT_SQLITE_NAME,
@@ -37,6 +35,7 @@ from zeta.records.stores.event_store import Filter
 __all__ = [
     "DEFAULT_SQLITE_NAME",
     "EVENT_STORE_NAME",
+    "EventProjection",
     "QueueClaim",
     "ZETA_SQLITE_NAME",
     "ZETA_STORE_NAME",
@@ -65,11 +64,30 @@ class QueueClaim:
     token: str
 
 
+class EventProjection(Protocol):
+    """Maintains derived SQLite state for one class of durable events."""
+
+    def init_schema(self, connection: sqlite3.Connection) -> None:
+        """Create the projection schema without mutating existing columns."""
+
+    def clear(self, connection: sqlite3.Connection) -> None:
+        """Clear projected rows before rebuilding from durable events."""
+
+    def index(self, connection: sqlite3.Connection, event: Event) -> None:
+        """Project one durable event into derived tables."""
+
+
 class SqliteEventStore:
     """Durable event store backed by a single SQLite database."""
 
-    def __init__(self, path: Path | str) -> None:
+    def __init__(
+        self,
+        path: Path | str,
+        *,
+        projections: Iterable[EventProjection] = (),
+    ) -> None:
         self.path = Path(path)
+        self._projections = tuple(projections)
         if self.path != Path(":memory:"):
             self.path.parent.mkdir(parents=True, exist_ok=True)
         self.connection = sqlite3.connect(
@@ -111,52 +129,6 @@ class SqliteEventStore:
                   run_id TEXT,
                   turn_id TEXT,
                   timestamp INTEGER NOT NULL
-                ) STRICT;
-
-                CREATE TABLE IF NOT EXISTS queue_items (
-                  queue_item_id TEXT PRIMARY KEY,
-                  event_id TEXT NOT NULL,
-                  target_agent TEXT NOT NULL,
-                  status TEXT NOT NULL,
-                  available_at INTEGER,
-                  claimed_by TEXT,
-                  claimed_token TEXT,
-                  claimed_until INTEGER,
-                  attempt_count INTEGER NOT NULL DEFAULT 0,
-                  last_error TEXT,
-                  updated_at INTEGER NOT NULL
-                ) STRICT;
-
-                CREATE TABLE IF NOT EXISTS attempts (
-                  attempt_id TEXT PRIMARY KEY,
-                  queue_item_id TEXT NOT NULL,
-                  event_id TEXT NOT NULL,
-                  attempt_number INTEGER NOT NULL,
-                  target_agent TEXT NOT NULL,
-                  worker_name TEXT,
-                  claim_token TEXT,
-                  status TEXT NOT NULL,
-                  started_at TEXT NOT NULL,
-                  heartbeat_at INTEGER,
-                  finished_at TEXT,
-                  error TEXT,
-                  session_id TEXT,
-                  run_id TEXT,
-                  summary TEXT,
-                  input_tokens INTEGER,
-                  output_tokens INTEGER,
-                  tool_calls_json TEXT
-                ) STRICT;
-
-                CREATE TABLE IF NOT EXISTS attempt_results (
-                  attempt_id TEXT PRIMARY KEY,
-                  final_status TEXT NOT NULL,
-                  summary TEXT,
-                  result_json TEXT,
-                  events_json TEXT,
-                  tool_calls_json TEXT,
-                  usage_json TEXT,
-                  finished_at TEXT
                 ) STRICT;
 
                 CREATE TABLE IF NOT EXISTS session_mappings (
@@ -203,6 +175,8 @@ class SqliteEventStore:
                   WHERE turn_id IS NOT NULL;
                 """
             )
+            for projection in self._projections:
+                projection.init_schema(self.connection)
             self.connection.commit()
 
     def accept(self, draft: DraftEvent) -> AppendOutcome:
@@ -269,25 +243,17 @@ class SqliteEventStore:
         )
 
     def _index_one_runtime_event(self, event: Event) -> None:
-        if event.event_type.startswith("runtime.queue_item."):
-            self._index_one_queue_item(event)
-            return
-        if event.event_type.startswith("runtime.attempt."):
-            self._index_one_attempt(event)
+        for projection in self._projections:
+            projection.index(self.connection, event)
 
     def rebuild_projections(self) -> int:
         with self._write_lock:
             _execute_with_retry(self.connection, "BEGIN IMMEDIATE")
             try:
                 events = self.list_events(Filter())
-                self.connection.executescript(
-                    """
-                    DELETE FROM attempt_results;
-                    DELETE FROM attempts;
-                    DELETE FROM queue_items;
-                    DELETE FROM session_mappings;
-                    """
-                )
+                for projection in self._projections:
+                    projection.clear(self.connection)
+                self.connection.execute("DELETE FROM session_mappings")
                 for event in events:
                     self._index_one_session_mapping(event)
                     self._index_one_runtime_event(event)
@@ -298,7 +264,7 @@ class SqliteEventStore:
                 raise
 
     def ensure_pending_queue_item(self, event: Event) -> str:
-        queue_item_id = pending_queue_item_id(event)
+        queue_item_id = _pending_queue_item_id(event)
         with self._write_lock:
             self.connection.execute(
                 """
@@ -532,187 +498,6 @@ class SqliteEventStore:
             except Exception:
                 self.connection.rollback()
                 raise
-
-    def _index_one_queue_item(self, event: Event) -> None:
-        queue_item = project_one_queue_item(event)
-        if queue_item is None:
-            return
-        raw_error = event.payload.get("error")
-        error = raw_error if isinstance(raw_error, str) else None
-        self.connection.execute(
-            """
-            INSERT INTO queue_items
-              (queue_item_id, event_id, target_agent, status, available_at,
-               last_error, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(queue_item_id) DO UPDATE SET
-              event_id = excluded.event_id,
-              target_agent = excluded.target_agent,
-              status = excluded.status,
-              available_at = COALESCE(queue_items.available_at, excluded.available_at),
-              last_error = excluded.last_error,
-              updated_at = excluded.updated_at
-            """,
-            (
-                queue_item.queue_item_id,
-                queue_item.event_id,
-                queue_item.target_agent,
-                queue_item.status,
-                event.timestamp_ms if queue_item.status == "available" else None,
-                error,
-                event.timestamp_ms,
-            ),
-        )
-
-    def _index_one_attempt(self, event: Event) -> None:
-        attempt = attempt_from_event_payload(
-            {**event.payload, "status": _runtime_status(event)}
-        )
-        if attempt is None:
-            return
-        raw_worker_name = event.payload.get("worker_name")
-        worker_name = raw_worker_name if isinstance(raw_worker_name, str) else None
-        claim_token = None
-        if attempt.status == "running" and worker_name is not None:
-            claim_token_row = self.connection.execute(
-                """
-                SELECT claimed_token
-                FROM queue_items
-                WHERE queue_item_id = ?
-                  AND claimed_by = ?
-                  AND status = 'claimed'
-                """,
-                (attempt.queue_item_id, worker_name),
-            ).fetchone()
-            if claim_token_row is not None:
-                claim_token = _optional_str(claim_token_row["claimed_token"])
-        raw_summary = event.payload.get("summary")
-        summary = raw_summary if isinstance(raw_summary, str) else None
-        raw_tool_calls = event.payload.get("tool_calls")
-        tool_calls_json = (
-            json.dumps(raw_tool_calls, ensure_ascii=False, separators=(",", ":"))
-            if raw_tool_calls is not None
-            else None
-        )
-        self.connection.execute(
-            """
-            INSERT INTO attempts
-              (attempt_id, queue_item_id, event_id, attempt_number, target_agent,
-               worker_name, claim_token, status, started_at, heartbeat_at,
-               finished_at, error, session_id, run_id, summary, input_tokens, output_tokens,
-               tool_calls_json)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(attempt_id) DO UPDATE SET
-              claim_token = COALESCE(attempts.claim_token, excluded.claim_token),
-              status = excluded.status,
-              heartbeat_at = excluded.heartbeat_at,
-              finished_at = excluded.finished_at,
-              error = excluded.error,
-              session_id = excluded.session_id,
-              run_id = excluded.run_id,
-              summary = excluded.summary,
-              input_tokens = excluded.input_tokens,
-              output_tokens = excluded.output_tokens,
-              tool_calls_json = excluded.tool_calls_json
-            """,
-            (
-                attempt.attempt_id,
-                attempt.queue_item_id,
-                attempt.event_id,
-                attempt.attempt_number,
-                attempt.target_agent,
-                worker_name,
-                claim_token,
-                attempt.status,
-                attempt.started_at,
-                event.timestamp_ms,
-                attempt.finished_at,
-                attempt.error,
-                attempt.session_id,
-                attempt.run_id,
-                summary,
-                _usage_token(event, "input_tokens", "prompt_tokens"),
-                _usage_token(event, "output_tokens", "completion_tokens"),
-                tool_calls_json,
-            ),
-        )
-        if attempt.status == "running":
-            self.connection.execute(
-                """
-                UPDATE queue_items
-                SET attempt_count = CASE
-                  WHEN attempt_count < ? THEN ?
-                  ELSE attempt_count
-                END
-                WHERE queue_item_id = ?
-                """,
-                (
-                    attempt.attempt_number,
-                    attempt.attempt_number,
-                    attempt.queue_item_id,
-                ),
-            )
-        if attempt.status in {"completed", "failed", "cancelled"}:
-            self._index_one_attempt_result(event, attempt.attempt_id, attempt.status)
-
-    def _index_one_attempt_result(
-        self,
-        event: Event,
-        attempt_id: str,
-        status: str,
-    ) -> None:
-        result = event.payload.get("result")
-        result_json = None
-        if result is not None:
-            result_json = json.dumps(result, ensure_ascii=False, separators=(",", ":"))
-        raw_summary = event.payload.get("summary")
-        summary = raw_summary if isinstance(raw_summary, str) else None
-        raw_events = event.payload.get("events")
-        events_json = (
-            json.dumps(raw_events, ensure_ascii=False, separators=(",", ":"))
-            if raw_events is not None
-            else None
-        )
-        raw_tool_calls = event.payload.get("tool_calls")
-        tool_calls_json = (
-            json.dumps(raw_tool_calls, ensure_ascii=False, separators=(",", ":"))
-            if raw_tool_calls is not None
-            else None
-        )
-        raw_usage = event.payload.get("usage")
-        usage_json = (
-            json.dumps(raw_usage, ensure_ascii=False, separators=(",", ":"))
-            if raw_usage is not None
-            else None
-        )
-        raw_finished_at = event.payload.get("finished_at")
-        finished_at = raw_finished_at if isinstance(raw_finished_at, str) else None
-        self.connection.execute(
-            """
-            INSERT INTO attempt_results
-              (attempt_id, final_status, summary, result_json, events_json,
-               tool_calls_json, usage_json, finished_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(attempt_id) DO UPDATE SET
-              final_status = excluded.final_status,
-              summary = excluded.summary,
-              result_json = excluded.result_json,
-              events_json = excluded.events_json,
-              tool_calls_json = excluded.tool_calls_json,
-              usage_json = excluded.usage_json,
-              finished_at = excluded.finished_at
-            """,
-            (
-                attempt_id,
-                status,
-                summary,
-                result_json,
-                events_json,
-                tool_calls_json,
-                usage_json,
-                finished_at,
-            ),
-        )
 
     def claim_next_queue_item(
         self,
@@ -1035,24 +820,8 @@ def _row_token_count(
     return None
 
 
-def _usage_token(event: Event, *keys: str) -> int | None:
-    usage = event.payload.get("usage")
-    if not isinstance(usage, dict):
-        return None
-    for key in keys:
-        value = usage.get(key)
-        if isinstance(value, int):
-            return value
-    return None
-
-
-def _runtime_status(event: Event) -> str:
-    status = event.payload.get("status")
-    if isinstance(status, str):
-        return status
-    if event.event_type == "runtime.attempt.started":
-        return "running"
-    return event.event_type.rsplit(".", 1)[-1]
+def _pending_queue_item_id(event: Event) -> str:
+    return f"qi_{event.id}"
 
 
 def _optional_str(value: object) -> str | None:

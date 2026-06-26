@@ -14,6 +14,7 @@ from zeta.agents.manifest import PluginResolver
 from zeta.agents.resources import load_agent_project, validate_agent_project
 from zeta.agents.spec import AgentSpec, ScheduleEntry, scheduled_event_type
 from zeta.events import DraftEvent, Event
+from zeta.orchestration.projections import runtime_event_projection
 from zeta.records.stores import (
     EventReader,
     EventWriter,
@@ -75,7 +76,10 @@ def build_scheduler_services(
     return SchedulerServices(
         project_root=resolved_project_root,
         state_dir=resolved_state_dir,
-        events=SqliteEventStore(event_store_path(resolved_state_dir)),
+        events=SqliteEventStore(
+            event_store_path(resolved_state_dir),
+            projections=(runtime_event_projection(),),
+        ),
         plugin_resolver=plugin_resolver,
     )
 

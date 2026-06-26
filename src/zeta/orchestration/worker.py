@@ -197,7 +197,15 @@ def egress_runner(binding: EgressBinding, handler):
                     idempotency_key=f"runtime.egress.failed:{idempotency_key}",
                 )
             )
-            raise
+            logger.exception("egress sink %r failed", binding.sink)
+            return {
+                "egress": {
+                    "sink": binding.sink,
+                    "event_id": event.id,
+                    "failed": True,
+                    "error": str(exc),
+                }
+            }
         await invocation.publish(
             DraftEvent(
                 "runtime.egress.completed",
@@ -279,7 +287,10 @@ async def run_ingress_forever(
     stop_event: asyncio.Event | None = None,
 ) -> None:
     while stop_event is None or not stop_event.is_set():
-        await run_ingress_once(runtime)
+        try:
+            await run_ingress_once(runtime)
+        except Exception:
+            logger.exception("ingress polling failed")
         await asyncio.sleep(poll_interval_seconds)
 
 

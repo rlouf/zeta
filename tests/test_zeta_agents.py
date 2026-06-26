@@ -1012,6 +1012,88 @@ Reply.
     assert events[0].idempotency_key == "slack:message:T1:C123:42"
 
 
+def test_zeta_ingress_forever_continues_after_plugin_failure(
+    tmp_path: Path,
+) -> None:
+    agents_dir = tmp_path / "agents"
+    agents_dir.mkdir()
+    _write_spec(
+        agents_dir / "support.md",
+        """---
+name: Support
+description: Replies to Slack support messages.
+accepts:
+  - slack.dm.received
+ingress:
+  - source: slack
+    filter:
+      channel_ids: ["C123"]
+    idempotency_key: "slack:message:{team_id}:{channel_id}:{message_ts}"
+---
+Reply.
+""",
+    )
+    stop_event = asyncio.Event()
+    calls = 0
+
+    def poll_slack(_binding: IngressBinding) -> list[DraftEvent]:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise RuntimeError("slack unavailable")
+        stop_event.set()
+        return [
+            zeta_events.DraftEvent(
+                "slack.dm.received",
+                "slack",
+                {
+                    "team_id": "T1",
+                    "channel_id": "C123",
+                    "message_ts": "42",
+                    "text": "hello",
+                },
+            )
+        ]
+
+    plugin = _slack_plugin(
+        message_schema={
+            "type": "object",
+            "required": ["team_id", "channel_id", "message_ts", "text"],
+            "properties": {
+                "team_id": {"type": "string"},
+                "channel_id": {"type": "string"},
+                "message_ts": {"type": "string"},
+                "text": {"type": "string"},
+            },
+            "additionalProperties": False,
+        },
+        ingress_poller=poll_slack,
+    )
+    runtime = zeta_worker.WorkerServices(
+        project_root=tmp_path,
+        state_dir=tmp_path / ".zeta",
+        events=zeta_events.SqliteEventStore(tmp_path / "events.sqlite3"),
+        plugin_resolver=PluginMap(plugin),
+    )
+
+    try:
+        asyncio.run(
+            zeta_worker.run_ingress_forever(
+                runtime,
+                poll_interval_seconds=0,
+                stop_event=stop_event,
+            )
+        )
+        events = runtime.events.list_events(
+            zeta_events.Filter(event_type="slack.dm.received")
+        )
+    finally:
+        runtime.close()
+
+    assert calls == 2
+    assert [event.payload["text"] for event in events] == ["hello"]
+
+
 def test_zeta_egress_binding_handles_returned_event(
     tmp_path: Path,
 ) -> None:
@@ -1075,6 +1157,68 @@ Send.
         "runtime.egress.completed",
     ]
     assert egress_events[1].payload["result"] == {"provider_message_id": "m1"}
+    assert [item.status for item in queue_items] == ["completed"]
+
+
+def test_zeta_egress_binding_records_failure_without_failing_queue_item(
+    tmp_path: Path,
+) -> None:
+    agents_dir = tmp_path / "agents"
+    agents_dir.mkdir()
+    _write_spec(
+        agents_dir / "support.md",
+        """---
+name: Support
+description: Sends Slack support messages.
+returns:
+  - slack.message.send.requested
+egress:
+  - sink: slack
+    filter:
+      channel_ids: ["C123"]
+---
+Send.
+""",
+    )
+
+    async def send_slack(
+        _event: Event,
+        _binding: EgressBinding,
+        _idempotency_key: str,
+    ) -> None:
+        raise RuntimeError("slack unavailable")
+
+    runtime = zeta_worker.WorkerServices(
+        project_root=tmp_path,
+        state_dir=tmp_path / ".zeta",
+        events=zeta_events.SqliteEventStore(tmp_path / "events.sqlite3"),
+        plugin_resolver=PluginMap(_slack_plugin(egress_handler=send_slack)),
+    )
+    runtime.events.accept(
+        zeta_events.DraftEvent(
+            "slack.message.send.requested",
+            "agent:support",
+            {"channel_id": "C123", "text": "hello"},
+        )
+    )
+
+    try:
+        message = asyncio.run(zeta_worker.run_once(runtime))
+        egress_events = runtime.events.list_events(
+            zeta_events.Filter(event_type_prefix="runtime.egress.")
+        )
+        queue_items = zeta_queue.project_queue_items(
+            runtime.events.list_events(zeta_events.Filter())
+        )
+    finally:
+        runtime.close()
+
+    assert message.startswith("ran qi_")
+    assert [event.event_type for event in egress_events] == [
+        "runtime.egress.started",
+        "runtime.egress.failed",
+    ]
+    assert egress_events[1].payload["error"] == "slack unavailable"
     assert [item.status for item in queue_items] == ["completed"]
 
 

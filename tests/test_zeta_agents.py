@@ -175,7 +175,7 @@ def _slack_plugin(
                     "required": ["source"],
                     "properties": {
                         "source": {"const": "slack"},
-                        "produces": {"type": "string"},
+                        "event": {"type": "string"},
                         "filter": {"type": "object"},
                         "idempotency_key": {"type": "string"},
                     },
@@ -190,7 +190,7 @@ def _slack_plugin(
                     "required": ["sink"],
                     "properties": {
                         "sink": {"const": "slack"},
-                        "accepts": {"type": "string"},
+                        "event": {"type": "string"},
                         "filter": {"type": "object"},
                         "idempotency_key": {"type": "string"},
                     },
@@ -438,13 +438,13 @@ returns:
   - slack.message.send.requested
 ingress:
   - source: slack
-    produces: slack.dm.received
+    event: slack.dm.received
     filter:
       channel_ids: ["C123"]
     idempotency_key: "slack:message:{team_id}:{channel_id}:{message_ts}"
 egress:
   - sink: slack
-    accepts: slack.message.send.requested
+    event: slack.message.send.requested
     filter:
       channel_ids: ["C123"]
 ---
@@ -457,7 +457,7 @@ Reply.
         "ingress": [
             {
                 "source": "slack",
-                "produces": "slack.dm.received",
+                "event": "slack.dm.received",
                 "filter": {"channel_ids": ["C123"]},
                 "idempotency_key": "slack:message:{team_id}:{channel_id}:{message_ts}",
             }
@@ -465,7 +465,7 @@ Reply.
         "egress": [
             {
                 "sink": "slack",
-                "accepts": "slack.message.send.requested",
+                "event": "slack.message.send.requested",
                 "filter": {"channel_ids": ["C123"]},
             }
         ],
@@ -473,7 +473,7 @@ Reply.
     assert zeta_agents.ingress_bindings(spec) == (
         zeta_agents.IngressBinding(
             source="slack",
-            produces="slack.dm.received",
+            event="slack.dm.received",
             filter={"channel_ids": ["C123"]},
             idempotency_key="slack:message:{team_id}:{channel_id}:{message_ts}",
         ),
@@ -481,7 +481,7 @@ Reply.
     assert zeta_agents.egress_bindings(spec) == (
         zeta_agents.EgressBinding(
             sink="slack",
-            accepts="slack.message.send.requested",
+            event="slack.message.send.requested",
             filter={"channel_ids": ["C123"]},
             idempotency_key=None,
         ),
@@ -882,8 +882,8 @@ Reply.
 
     assert project.events.knows("slack.dm.received")
     assert project.events.knows("slack.message.send.requested")
-    assert zeta_agents.ingress_bindings(project.specs[0])[0].produces is None
-    assert zeta_agents.egress_bindings(project.specs[0])[0].accepts is None
+    assert zeta_agents.ingress_bindings(project.specs[0])[0].event is None
+    assert zeta_agents.egress_bindings(project.specs[0])[0].event is None
 
 
 def test_zeta_agent_project_rejects_conflicting_plugin_event_schema(
@@ -1077,17 +1077,17 @@ ingress:
   - slack.dm.received
 ingress:
   - source: slack
-    produces: slack.channel.joined
+    event: slack.channel.joined
     idempotency_key: "k"
 """,
-            "cannot produce 'slack.channel.joined'",
+            "does not support event 'slack.channel.joined'",
         ),
         (
             """accepts:
   - other.event
 ingress:
   - source: slack
-    produces: slack.dm.received
+    event: slack.dm.received
     idempotency_key: "k"
 """,
             "not listed in accepts",
@@ -1116,7 +1116,7 @@ ingress:
   - slack.message.send.requested
 egress:
   - sink: missing
-    accepts: slack.message.send.requested
+    event: slack.message.send.requested
 """,
             "unknown egress sink 'missing'",
         ),
@@ -1125,16 +1125,16 @@ egress:
   - slack.message.send.requested
 egress:
   - sink: slack
-    accepts: slack.message.delete.requested
+    event: slack.message.delete.requested
 """,
-            "cannot accept 'slack.message.delete.requested'",
+            "does not support event 'slack.message.delete.requested'",
         ),
         (
             """returns:
   - other.event
 egress:
   - sink: slack
-    accepts: slack.message.send.requested
+    event: slack.message.send.requested
 """,
             "not listed in returns",
         ),
@@ -1462,7 +1462,7 @@ schedules:
   - cron: "* * * * *"
 egress:
   - sink: slack
-    accepts: slack.message.send.requested
+    event: slack.message.send.requested
     filter:
       channel_ids: ["C123"]
 ---

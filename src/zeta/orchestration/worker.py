@@ -145,11 +145,10 @@ def project_egress_executors(
                 continue
             section = plugin_manifest_section(plugin, "egress")
             event_type = selected_plugin_event(
-                binding.accepts,
+                binding.event,
                 section.events,
                 "egress sink",
                 binding.sink,
-                "accept",
             )
             handler = plugin.egress_handlers.get(event_type)
             if handler is None:
@@ -253,11 +252,10 @@ async def run_ingress_once(runtime: WorkerServices) -> int:
                 continue
             section = plugin_manifest_section(plugin, "ingress")
             event_type = selected_plugin_event(
-                binding.produces,
+                binding.event,
                 section.events,
                 "ingress source",
                 binding.source,
-                "produce",
             )
             poller = plugin.ingress_pollers.get(event_type)
             if poller is None:

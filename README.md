@@ -155,13 +155,13 @@ schedules:
     timezone: Europe/Paris
 ingress:
   - source: slack
-    produces: slack.dm.received
+    event: slack.dm.received
     filter:
       channel_ids: ["C123"]
     idempotency_key: "slack:message:{team_id}:{channel_id}:{message_ts}"
 egress:
   - sink: slack
-    accepts: slack.message.send.requested
+    event: slack.message.send.requested
     filter:
       channel_ids: ["C123"]
     idempotency_key: "slack:send:{event.id}"
@@ -188,8 +188,8 @@ stores them as manifest data; the worker interprets them through ingress and
 egress adapters. `ingress.source` names the plugin that polls or receives
 external input and publishes a durable event. `egress.sink` names the plugin
 that handles a returned event. If a plugin exposes exactly one ingress or
-egress event, `produces` or `accepts` may be omitted; otherwise the agent must
-select the event explicitly. `filter` is plugin-defined deterministic
+egress event, `event` may be omitted; otherwise the agent must select the event
+explicitly. `filter` is plugin-defined deterministic
 configuration, such as Slack channel ids, and is validated against the
 plugin-provided section schema. `idempotency_key` is rendered from the event
 payload and `event` object so plugins can avoid duplicate sends or ingests.

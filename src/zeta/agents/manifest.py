@@ -38,7 +38,7 @@ class IngressBinding:
     """External source binding parsed from a plugin-owned manifest section."""
 
     source: str
-    produces: str | None = None
+    event: str | None = None
     filter: Mapping[str, Any] = field(default_factory=dict)
     idempotency_key: str | None = None
 
@@ -48,7 +48,7 @@ class EgressBinding:
     """External sink binding parsed from a plugin-owned manifest section."""
 
     sink: str
-    accepts: str | None = None
+    event: str | None = None
     filter: Mapping[str, Any] = field(default_factory=dict)
     idempotency_key: str | None = None
 
@@ -204,11 +204,10 @@ def validate_ingress_binding(
         f"agent {spec.slug!r} has invalid ingress binding for {binding.source!r}",
     )
     event_type = selected_plugin_event(
-        binding.produces,
+        binding.event,
         section.events,
         "ingress source",
         binding.source,
-        "produce",
     )
     if event_type not in spec.accepts:
         raise ManifestError(
@@ -242,11 +241,10 @@ def validate_egress_binding(
         f"agent {spec.slug!r} has invalid egress binding for {binding.sink!r}",
     )
     event_type = selected_plugin_event(
-        binding.accepts,
+        binding.event,
         section.events,
         "egress sink",
         binding.sink,
-        "accept",
     )
     if event_type not in spec.returns:
         raise ManifestError(
@@ -299,12 +297,11 @@ def selected_plugin_event(
     available: Mapping[str, Mapping[str, Any] | None],
     binding_kind: str,
     plugin_name: str,
-    verb: str,
 ) -> str:
     if event_type is not None:
         if event_type not in available:
             raise ManifestError(
-                f"{binding_kind} {plugin_name!r} cannot {verb} {event_type!r}"
+                f"{binding_kind} {plugin_name!r} does not support event {event_type!r}"
             )
         return event_type
     if len(available) != 1:
@@ -358,9 +355,7 @@ def ingress_bindings(spec: AgentSpec) -> tuple[IngressBinding, ...]:
     return tuple(
         IngressBinding(
             source=required_binding_string(item, "ingress", "source", spec),
-            produces=optional_binding_string(
-                item.get("produces"), "ingress", "produces", spec
-            ),
+            event=optional_binding_string(item.get("event"), "ingress", "event", spec),
             filter=binding_filter(item.get("filter", {}), "ingress", spec),
             idempotency_key=optional_binding_string(
                 item.get("idempotency_key"),
@@ -378,9 +373,7 @@ def egress_bindings(spec: AgentSpec) -> tuple[EgressBinding, ...]:
     return tuple(
         EgressBinding(
             sink=required_binding_string(item, "egress", "sink", spec),
-            accepts=optional_binding_string(
-                item.get("accepts"), "egress", "accepts", spec
-            ),
+            event=optional_binding_string(item.get("event"), "egress", "event", spec),
             filter=binding_filter(item.get("filter", {}), "egress", spec),
             idempotency_key=optional_binding_string(
                 item.get("idempotency_key"),
@@ -413,9 +406,14 @@ def binding_item(value: Any, key: str, spec: AgentSpec) -> Mapping[str, Any]:
             f"agent {spec.slug!r} has invalid {key!r} section: expected object"
         )
     supported = (
-        {"source", "produces", "filter", "idempotency_key"}
+        {"source", "event", "filter", "idempotency_key"}
         if key == "ingress"
-        else {"sink", "accepts", "filter", "idempotency_key"}
+        else {
+            "sink",
+            "event",
+            "filter",
+            "idempotency_key",
+        }
     )
     unknown = sorted(set(value) - supported)
     if unknown:
@@ -468,8 +466,8 @@ def ingress_binding_record(binding: IngressBinding) -> dict[str, Any]:
         "source": binding.source,
         "filter": dict(binding.filter),
     }
-    if binding.produces is not None:
-        record["produces"] = binding.produces
+    if binding.event is not None:
+        record["event"] = binding.event
     if binding.idempotency_key is not None:
         record["idempotency_key"] = binding.idempotency_key
     return record
@@ -480,8 +478,8 @@ def egress_binding_record(binding: EgressBinding) -> dict[str, Any]:
         "sink": binding.sink,
         "filter": dict(binding.filter),
     }
-    if binding.accepts is not None:
-        record["accepts"] = binding.accepts
+    if binding.event is not None:
+        record["event"] = binding.event
     if binding.idempotency_key is not None:
         record["idempotency_key"] = binding.idempotency_key
     return record

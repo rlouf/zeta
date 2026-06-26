@@ -171,9 +171,10 @@ Review {{ event.payload.title }} and produce a concise release summary.
 ```
 
 Core frontmatter fields are `name`, `description`, `enabled`, `resumable`,
-`accepts`, `returns`, `tools`, `skills`, `schedules`, `ingress`, and `egress`.
-Unknown fields are kept as resource extensions for hosts that need extra
-policy.
+`accepts`, `returns`, `tools`, `skills`, and `schedules`. Every other
+top-level key is a manifest section owned by a plugin or runtime adapter.
+Project validation rejects unclaimed sections and validates claimed sections
+with the owning plugin's JSON Schema.
 
 Files under `agents/events/` define optional event payload JSON Schemas. The
 file stem is the event type, so `github.pr.opened.json` registers
@@ -182,21 +183,23 @@ object with a `schema:` field whose value is the JSON Schema. Files under
 `agents/skills/` define shared Markdown skills that agents may explicitly list
 in `skills:`.
 
-Ingress and egress integrations are plugin-owned, but each agent selects its
-bindings in its own manifest. `ingress.source` names the plugin that polls or
-receives external input and publishes a durable event. `egress.sink` names the
-plugin that handles a returned event. If a plugin exposes exactly one ingress
-or egress event, `produces` or `accepts` may be omitted; otherwise the agent
-must select the event explicitly. `filter` is plugin-defined deterministic
+Ingress and egress are conventional plugin-owned manifest sections. Zeta core
+stores them as manifest data; the worker interprets them through ingress and
+egress adapters. `ingress.source` names the plugin that polls or receives
+external input and publishes a durable event. `egress.sink` names the plugin
+that handles a returned event. If a plugin exposes exactly one ingress or
+egress event, `produces` or `accepts` may be omitted; otherwise the agent must
+select the event explicitly. `filter` is plugin-defined deterministic
 configuration, such as Slack channel ids, and is validated against the
-plugin-provided binding schema. `idempotency_key` is rendered from the event
+plugin-provided section schema. `idempotency_key` is rendered from the event
 payload and `event` object so plugins can avoid duplicate sends or ingests.
 
 Plugin event schemas are JSON Schemas too. During project loading, Zeta merges
 plugin-provided event schemas with files under `agents/events/`; duplicate
 schemas must be identical. This keeps ingress/egress provider code outside the
-core library while still making `accepts:`, `returns:`, `ingress:`, and
-`egress:` checkable before the worker or scheduler runs.
+core library while still making `accepts:`, `returns:`, and plugin manifest
+sections such as `ingress:` and `egress:` checkable before the worker or
+scheduler runs.
 
 Worker and scheduler project loading validates authored agents before running
 them. External events listed in `accepts:` and all events listed in `returns:`

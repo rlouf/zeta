@@ -60,13 +60,13 @@ from zeta.run import runtime as zeta_agent
 from zeta.run import thread_run as zeta_requests
 from zeta.run.config import CompactionPolicy
 from zeta.run.runtime import AgentRunResult
-from zetad import cli as zeta_cli
-from zetad import dispatch as zeta_dispatch
-from zetad import queue as zeta_queue
-from zetad import rpc as zeta_rpc
-from zetad import scheduling as zeta_scheduling
-from zetad import session_turn as zeta_session_turn_agent
-from zetad import worker as zeta_worker
+from zetad import cli as zetad_cli
+from zetad import dispatch as zetad_dispatch
+from zetad import queue as zetad_queue
+from zetad import rpc as zetad_rpc
+from zetad import scheduling as zetad_scheduling
+from zetad import session_turn as zetad_session_turn
+from zetad import worker as zetad_worker
 from zetad.attempts import Attempt
 from zetad.queue import QueueItem
 from zetad.store import RuntimeEventStore
@@ -178,10 +178,10 @@ def run_rpc_session(*args: Any, **kwargs: Any) -> dict[str, Any]:
     runtime_context = kwargs["runtime_context"]
     event_dispatcher = kwargs.get("event_dispatcher")
     if event_dispatcher is None:
-        event_dispatcher = zeta_dispatch.EventDispatcher(
+        event_dispatcher = zetad_dispatch.EventDispatcher(
             runtime_context.event_sink,
             executors=[
-                zeta_session_turn_agent.session_turn_agent(
+                zetad_session_turn.session_turn_agent(
                     runtime_context,
                     publish_event=kwargs["publish_event"],
                 )
@@ -189,7 +189,7 @@ def run_rpc_session(*args: Any, **kwargs: Any) -> dict[str, Any]:
             publish_event=kwargs["publish_event"],
         )
     return asyncio.run(
-        zeta_session_turn_agent.submit_session_turn(
+        zetad_session_turn.submit_session_turn(
             params,
             runtime_context=runtime_context,
             event_dispatcher=event_dispatcher,
@@ -198,16 +198,16 @@ def run_rpc_session(*args: Any, **kwargs: Any) -> dict[str, Any]:
 
 
 def dispatch_event(
-    dispatcher: zeta_dispatch.EventDispatcher,
+    dispatcher: zetad_dispatch.EventDispatcher,
     draft: DraftEvent,
-) -> zeta_dispatch.DispatchOutcome:
+) -> zetad_dispatch.DispatchOutcome:
     return asyncio.run(dispatcher.publish_and_run(draft))
 
 
 def record_exact_agent_call(
     calls: list[str],
-) -> Callable[[zeta_dispatch.AgentInvocation], Coroutine[Any, Any, dict[str, Any]]]:
-    async def run(invocation: zeta_dispatch.AgentInvocation) -> dict[str, Any]:
+) -> Callable[[zetad_dispatch.AgentInvocation], Coroutine[Any, Any, dict[str, Any]]]:
+    async def run(invocation: zetad_dispatch.AgentInvocation) -> dict[str, Any]:
         calls.append(invocation.triggering_event.id)
         return {"outcome": None}
 
@@ -1379,10 +1379,10 @@ def rpc_client(
     output: RpcMemoryTransport | None = None,
     *,
     session: zeta_runtime_context.RuntimeContext | None = None,
-    dispatcher: zeta_dispatch.EventDispatcher | None = None,
-) -> tuple[zeta_rpc.JsonRpcConnection, zeta_rpc.RpcClient, zeta_rpc.JsonRpcRouter]:
+    dispatcher: zetad_dispatch.EventDispatcher | None = None,
+) -> tuple[zetad_rpc.JsonRpcConnection, zetad_rpc.RpcClient, zetad_rpc.JsonRpcRouter]:
     reader, writer, output = rpc_streams(output=output)
-    connection = zeta_rpc.JsonRpcConnection(input_stream or reader, writer)
+    connection = zetad_rpc.JsonRpcConnection(input_stream or reader, writer)
     if session is None:
         event_store = zeta_events.MemoryEventStore()
         session = zeta_runtime_context.RuntimeContext(
@@ -1396,36 +1396,38 @@ def rpc_client(
 
     def notify_event(event: Event) -> None:
         asyncio.create_task(
-            connection.notify("events.notify", {"event": zeta_rpc.event_to_wire(event)})
+            connection.notify(
+                "events.notify", {"event": zetad_rpc.event_to_wire(event)}
+            )
         )
 
     if dispatcher is None:
-        dispatcher = zeta_dispatch.EventDispatcher(
+        dispatcher = zetad_dispatch.EventDispatcher(
             session.event_sink,
             publish_event=notify_event,
         )
-    client = zeta_rpc.RpcClient(
+    client = zetad_rpc.RpcClient(
         connection=connection,
         session=session,
         dispatcher=dispatcher,
         pending_runs={},
         pending_tool_calls={},
     )
-    router = zeta_rpc.JsonRpcRouter(client)
-    router.route("initialize", zeta_rpc.initialize)
-    router.route("events.publish", zeta_rpc.events_publish)
-    router.route("events.list", zeta_rpc.events_list)
-    router.route("session.run", zeta_rpc.session_run)
-    router.route("session.cancel", zeta_rpc.session_cancel)
-    router.route("tools.register", zeta_rpc.tools_register)
-    router.route("tools.respond", zeta_rpc.tools_respond)
+    router = zetad_rpc.JsonRpcRouter(client)
+    router.route("initialize", zetad_rpc.initialize)
+    router.route("events.publish", zetad_rpc.events_publish)
+    router.route("events.list", zetad_rpc.events_list)
+    router.route("session.run", zetad_rpc.session_run)
+    router.route("session.cancel", zetad_rpc.session_cancel)
+    router.route("tools.register", zetad_rpc.tools_register)
+    router.route("tools.respond", zetad_rpc.tools_respond)
     return connection, client, router
 
 
 def rpc_client_without_connection(
     *,
     session: zeta_runtime_context.RuntimeContext | None = None,
-) -> zeta_rpc.RpcClient:
+) -> zetad_rpc.RpcClient:
     if session is None:
         event_store = zeta_events.MemoryEventStore()
         session = zeta_runtime_context.RuntimeContext(
@@ -1436,10 +1438,10 @@ def rpc_client_without_connection(
             state_dir=Path("/tmp"),
             session_dir=Path("/tmp") / "sessions" / "ctx-session",
         )
-    return zeta_rpc.RpcClient(
+    return zetad_rpc.RpcClient(
         connection=None,
         session=session,
-        dispatcher=zeta_dispatch.EventDispatcher(session.event_sink),
+        dispatcher=zetad_dispatch.EventDispatcher(session.event_sink),
         pending_runs={},
         pending_tool_calls={},
     )
@@ -1450,8 +1452,8 @@ def run_rpc_messages(
     output: RpcMemoryTransport,
     *,
     session: zeta_runtime_context.RuntimeContext | None = None,
-    dispatcher: zeta_dispatch.EventDispatcher | None = None,
-) -> zeta_rpc.RpcClient:
+    dispatcher: zetad_dispatch.EventDispatcher | None = None,
+) -> zetad_rpc.RpcClient:
     input_stream, _, _ = rpc_streams(input_text)
     connection, client, router = rpc_client(
         input_stream,
@@ -1578,7 +1580,7 @@ def test_zeta_rpc_events_publish_returns_before_routing_finishes(
         release = asyncio.Event()
 
         async def run_agent(
-            invocation: zeta_dispatch.AgentInvocation,
+            invocation: zetad_dispatch.AgentInvocation,
         ) -> dict[str, object]:
             started.set()
             await release.wait()
@@ -1587,13 +1589,13 @@ def test_zeta_rpc_events_publish_returns_before_routing_finishes(
                 "event_id": invocation.triggering_event.id,
             }
 
-        dispatcher = zeta_dispatch.EventDispatcher(
+        dispatcher = zetad_dispatch.EventDispatcher(
             event_store,
             executors=[
-                zeta_dispatch.ExecutableAgent(
-                    zeta_dispatch.AgentDefinition(
+                zetad_dispatch.ExecutableAgent(
+                    zetad_dispatch.AgentDefinition(
                         "slow-agent",
-                        (zeta_dispatch.EventPattern("zeta.user_message"),),
+                        (zetad_dispatch.EventPattern("zeta.user_message"),),
                     ),
                     run=run_agent,
                 )
@@ -1732,7 +1734,7 @@ def test_zeta_rpc_eventlog_events_list_request_produces_response() -> None:
         )
     ).event
     request = event_store.accept(
-        zeta_rpc.rpc_requested_draft(
+        zetad_rpc.rpc_requested_draft(
             "events.list",
             {"event_type": "zeta.user_message"},
             request_id="req_1",
@@ -1749,7 +1751,7 @@ def test_zeta_rpc_eventlog_events_list_request_produces_response() -> None:
     )
     _, _, router = rpc_client(session=session)
 
-    response = asyncio.run(zeta_rpc.run_eventlog_rpc_once(router))
+    response = asyncio.run(zetad_rpc.run_eventlog_rpc_once(router))
 
     assert response is not None
     assert response.event_type == "rpc.responded"
@@ -1761,7 +1763,7 @@ def test_zeta_rpc_eventlog_events_list_request_produces_response() -> None:
 def test_zeta_rpc_eventlog_invalid_session_run_produces_failed_event() -> None:
     event_store = zeta_events.MemoryEventStore()
     request = event_store.accept(
-        zeta_rpc.rpc_requested_draft(
+        zetad_rpc.rpc_requested_draft(
             "session.run",
             {},
             request_id="req_invalid",
@@ -1778,7 +1780,7 @@ def test_zeta_rpc_eventlog_invalid_session_run_produces_failed_event() -> None:
     )
     _, _, router = rpc_client(session=session)
 
-    response = asyncio.run(zeta_rpc.run_eventlog_rpc_once(router))
+    response = asyncio.run(zetad_rpc.run_eventlog_rpc_once(router))
 
     assert response is not None
     assert response.event_type == "rpc.failed"
@@ -1793,7 +1795,7 @@ def test_zeta_rpc_eventlog_session_run_request_produces_started_response(
 ) -> None:
     event_store = zeta_events.MemoryEventStore()
     request = event_store.accept(
-        zeta_rpc.rpc_requested_draft(
+        zetad_rpc.rpc_requested_draft(
             "session.run",
             {"objective": "answer", "tools": []},
             request_id="req_run",
@@ -1809,9 +1811,9 @@ def test_zeta_rpc_eventlog_session_run_request_produces_started_response(
         session_dir=Path("/tmp") / "sessions" / "ctx-session",
     )
     _, _, router = rpc_client(session=session)
-    monkeypatch.setattr(zeta_rpc.routes, "session_run_id", lambda: "run_eventlog")
+    monkeypatch.setattr(zetad_rpc.routes, "session_run_id", lambda: "run_eventlog")
 
-    response = asyncio.run(zeta_rpc.run_eventlog_rpc_once(router))
+    response = asyncio.run(zetad_rpc.run_eventlog_rpc_once(router))
 
     assert response is not None
     assert response.event_type == "rpc.responded"
@@ -1838,7 +1840,7 @@ def test_zeta_rpc_session_run_returns_started_event_from_shared_draft(
         + "\n"
     )
     output = RpcMemoryTransport()
-    monkeypatch.setattr(zeta_rpc.routes, "session_run_id", lambda: "run_test")
+    monkeypatch.setattr(zetad_rpc.routes, "session_run_id", lambda: "run_test")
 
     client = run_rpc_messages(input_text, output)
 
@@ -1866,13 +1868,13 @@ def test_zeta_rpc_session_run_returns_started_event_from_shared_draft(
 def test_zeta_rpc_session_cancel_updates_run_state() -> None:
     _, client, router = rpc_client()
     cancellation_event = asyncio.Event()
-    client.pending_runs["run_active"] = zeta_rpc.RunState(
+    client.pending_runs["run_active"] = zetad_rpc.RunState(
         run_id="run_active",
         cancellation_event=cancellation_event,
     )
 
     result = asyncio.run(
-        zeta_rpc.session_cancel({"run_id": "run_active"}, router.client)
+        zetad_rpc.session_cancel({"run_id": "run_active"}, router.client)
     )
 
     assert result == {
@@ -1897,7 +1899,7 @@ def test_zeta_rpc_tools_register_uses_documented_tool_shape() -> None:
     client = rpc_client_without_connection(session=session)
 
     result = asyncio.run(
-        zeta_rpc.tools_register(
+        zetad_rpc.tools_register(
             {
                 "tools": [
                     {
@@ -1944,9 +1946,9 @@ def test_zeta_rpc_tools_register_uses_documented_tool_shape() -> None:
 def test_zeta_rpc_tools_register_rejects_old_capability_shape() -> None:
     client = rpc_client_without_connection()
 
-    with pytest.raises(zeta_rpc.RpcError) as error:
+    with pytest.raises(zetad_rpc.RpcError) as error:
         asyncio.run(
-            zeta_rpc.tools_register(
+            zetad_rpc.tools_register(
                 {
                     "capabilities": [
                         {
@@ -1969,9 +1971,9 @@ def test_zeta_rpc_tools_register_rejects_old_capability_shape() -> None:
 def test_zeta_rpc_tools_register_rejects_unknown_tool_fields() -> None:
     client = rpc_client_without_connection()
 
-    with pytest.raises(zeta_rpc.RpcError) as error:
+    with pytest.raises(zetad_rpc.RpcError) as error:
         asyncio.run(
-            zeta_rpc.tools_register(
+            zetad_rpc.tools_register(
                 {
                     "tools": [
                         {
@@ -1996,9 +1998,9 @@ def test_zeta_rpc_tools_register_rejects_unknown_tool_fields() -> None:
 def test_zeta_rpc_tools_register_rejects_missing_tool_schema() -> None:
     client = rpc_client_without_connection()
 
-    with pytest.raises(zeta_rpc.RpcError) as error:
+    with pytest.raises(zetad_rpc.RpcError) as error:
         asyncio.run(
-            zeta_rpc.tools_register(
+            zetad_rpc.tools_register(
                 {"tools": [{"name": "pick_file", "description": "Pick a file."}]},
                 client,
             )
@@ -2013,9 +2015,9 @@ def test_zeta_rpc_tools_register_rejects_missing_tool_schema() -> None:
 def test_zeta_rpc_tools_register_rejects_malformed_tool_schema() -> None:
     client = rpc_client_without_connection()
 
-    with pytest.raises(zeta_rpc.RpcError) as error:
+    with pytest.raises(zetad_rpc.RpcError) as error:
         asyncio.run(
-            zeta_rpc.tools_register(
+            zetad_rpc.tools_register(
                 {
                     "tools": [
                         {
@@ -2036,9 +2038,9 @@ def test_zeta_rpc_tools_register_rejects_malformed_tool_schema() -> None:
 def test_zeta_rpc_tools_register_rejects_invalid_timeout() -> None:
     client = rpc_client_without_connection()
 
-    with pytest.raises(zeta_rpc.RpcError) as error:
+    with pytest.raises(zetad_rpc.RpcError) as error:
         asyncio.run(
-            zeta_rpc.tools_register(
+            zetad_rpc.tools_register(
                 {
                     "tools": [
                         {
@@ -2087,7 +2089,7 @@ def test_zeta_rpc_registered_tool_invokes_peer_call_tool() -> None:
     cast(Any, client).call_tool = fake_call_tool
 
     async def run() -> dict[str, Any]:
-        await zeta_rpc.tools_register(
+        await zetad_rpc.tools_register(
             {
                 "tools": [
                     {
@@ -2124,7 +2126,7 @@ def test_zeta_rpc_tools_respond_resolves_pending_call() -> None:
             asyncio.get_running_loop().create_future()
         )
         client.pending_tool_calls["call_1"] = future
-        await zeta_rpc.tools_respond(
+        await zetad_rpc.tools_respond(
             {
                 "id": "call_1",
                 "result": {"ok": True},
@@ -2161,7 +2163,7 @@ def test_zeta_dispatch_terminal_queue_item_result_comes_from_lifecycle_event() -
         cursor=9,
     )
 
-    assert zeta_queue.terminal_queue_item_result(
+    assert zetad_queue.terminal_queue_item_result(
         [event],
         event_id="evt_request",
         target_agent="zeta.session.turn",
@@ -2208,10 +2210,10 @@ def test_zeta_session_turn_agent_adapts_requested_event_to_turn_runner(
 
     cancellation_event = asyncio.Event()
     monkeypatch.setattr(
-        zeta_session_turn_agent, "run_session_request", fake_run_session_request
+        zetad_session_turn, "run_session_request", fake_run_session_request
     )
 
-    agent = zeta_session_turn_agent.session_turn_agent(
+    agent = zetad_session_turn.session_turn_agent(
         context,
         publish_event=published.append,
         cancellation_event_for_run=lambda run_id: (
@@ -2235,7 +2237,7 @@ def test_zeta_session_turn_agent_adapts_requested_event_to_turn_runner(
     result = asyncio.run(
         cast(
             Coroutine[Any, Any, dict[str, Any]],
-            runner(zeta_dispatch.AgentInvocation(agent.definition, triggering_event)),
+            runner(zetad_dispatch.AgentInvocation(agent.definition, triggering_event)),
         )
     )
 
@@ -2346,8 +2348,8 @@ def test_zeta_session_run_params_preserve_boundary_values() -> None:
 
 
 def test_zeta_event_trigger_rule_matches_exact_and_prefix() -> None:
-    exact = zeta_dispatch.EventPattern("session.turn.requested")
-    prefix = zeta_dispatch.EventPattern("github.issue.*")
+    exact = zetad_dispatch.EventPattern("session.turn.requested")
+    prefix = zetad_dispatch.EventPattern("github.issue.*")
     event = zeta_events.Event.from_draft(
         zeta_events.DraftEvent(
             "session.turn.requested",
@@ -2374,7 +2376,7 @@ def test_zeta_event_trigger_rule_matches_exact_and_prefix() -> None:
 def test_zeta_event_dispatcher_persists_unmatched_event(tmp_path: Path) -> None:
     event_store = zeta_events.SqliteEventStore(tmp_path / "events.sqlite3")
     published: list[zeta_events.Event] = []
-    dispatcher = zeta_dispatch.EventDispatcher(
+    dispatcher = zetad_dispatch.EventDispatcher(
         event_store,
         publish_event=published.append,
     )
@@ -2410,19 +2412,19 @@ def test_zeta_event_dispatcher_creates_work_for_matching_agent(
 ) -> None:
     event_store = zeta_events.SqliteEventStore(tmp_path / "events.sqlite3")
     published: list[zeta_events.Event] = []
-    seen: list[zeta_dispatch.AgentInvocation] = []
+    seen: list[zetad_dispatch.AgentInvocation] = []
 
-    async def run_agent(run: zeta_dispatch.AgentInvocation) -> dict[str, object]:
+    async def run_agent(run: zetad_dispatch.AgentInvocation) -> dict[str, object]:
         seen.append(run)
         return {"outcome": "handled"}
 
-    dispatcher = zeta_dispatch.EventDispatcher(
+    dispatcher = zetad_dispatch.EventDispatcher(
         event_store,
         executors=[
-            zeta_dispatch.ExecutableAgent(
-                zeta_dispatch.AgentDefinition(
+            zetad_dispatch.ExecutableAgent(
+                zetad_dispatch.AgentDefinition(
                     "issue-triage",
-                    (zeta_dispatch.EventPattern("github.issue.*"),),
+                    (zetad_dispatch.EventPattern("github.issue.*"),),
                 ),
                 run=run_agent,
             )
@@ -2468,7 +2470,7 @@ def test_zeta_event_dispatcher_creates_work_for_matching_agent(
         f"attempt:{queue_item_id}:1:completed",
         f"queue_item:{outcome.event.id}:issue-triage:completed",
     ]
-    assert zeta_queue.terminal_queue_item_result(
+    assert zetad_queue.terminal_queue_item_result(
         outcome.lifecycle_events,
         event_id=outcome.event.id,
         target_agent="issue-triage",
@@ -2519,16 +2521,16 @@ def test_zeta_event_dispatcher_attempt_uses_resumable_agent_session_id(
 ) -> None:
     event_store = zeta_events.SqliteEventStore(tmp_path / "events.sqlite3")
 
-    async def run_agent(run: zeta_dispatch.AgentInvocation) -> dict[str, object]:
+    async def run_agent(run: zetad_dispatch.AgentInvocation) -> dict[str, object]:
         return {"event_id": run.triggering_event.id}
 
-    dispatcher = zeta_dispatch.EventDispatcher(
+    dispatcher = zetad_dispatch.EventDispatcher(
         event_store,
         executors=[
-            zeta_dispatch.ExecutableAgent(
-                zeta_dispatch.AgentDefinition(
+            zetad_dispatch.ExecutableAgent(
+                zetad_dispatch.AgentDefinition(
                     "issue-triage",
-                    (zeta_dispatch.EventPattern("github.issue.opened"),),
+                    (zetad_dispatch.EventPattern("github.issue.opened"),),
                     dispatch_mode="session_scoped",
                 ),
                 run=run_agent,
@@ -2553,16 +2555,16 @@ def test_zeta_event_dispatcher_attempt_uses_one_shot_agent_session_id(
 ) -> None:
     event_store = zeta_events.SqliteEventStore(tmp_path / "events.sqlite3")
 
-    async def run_agent(run: zeta_dispatch.AgentInvocation) -> dict[str, object]:
+    async def run_agent(run: zetad_dispatch.AgentInvocation) -> dict[str, object]:
         return {"event_id": run.triggering_event.id}
 
-    dispatcher = zeta_dispatch.EventDispatcher(
+    dispatcher = zetad_dispatch.EventDispatcher(
         event_store,
         executors=[
-            zeta_dispatch.ExecutableAgent(
-                zeta_dispatch.AgentDefinition(
+            zetad_dispatch.ExecutableAgent(
+                zetad_dispatch.AgentDefinition(
                     "issue-triage",
-                    (zeta_dispatch.EventPattern("github.issue.opened"),),
+                    (zetad_dispatch.EventPattern("github.issue.opened"),),
                     dispatch_mode="one_shot",
                 ),
                 run=run_agent,
@@ -2587,18 +2589,18 @@ def test_zeta_event_dispatcher_can_publish_without_routing(tmp_path: Path) -> No
     published: list[zeta_events.Event] = []
     calls = 0
 
-    async def run_agent(run: zeta_dispatch.AgentInvocation) -> dict[str, object]:
+    async def run_agent(run: zetad_dispatch.AgentInvocation) -> dict[str, object]:
         nonlocal calls
         calls += 1
         return {"outcome": "handled", "event": run.triggering_event.id}
 
-    dispatcher = zeta_dispatch.EventDispatcher(
+    dispatcher = zetad_dispatch.EventDispatcher(
         event_store,
         executors=[
-            zeta_dispatch.ExecutableAgent(
-                zeta_dispatch.AgentDefinition(
+            zetad_dispatch.ExecutableAgent(
+                zetad_dispatch.AgentDefinition(
                     "issue-triage",
-                    (zeta_dispatch.EventPattern("github.issue.opened"),),
+                    (zetad_dispatch.EventPattern("github.issue.opened"),),
                 ),
                 run=run_agent,
             )
@@ -2632,18 +2634,18 @@ def test_zeta_event_dispatcher_routes_available_work_before_running(
     event_store = zeta_events.SqliteEventStore(tmp_path / "events.sqlite3")
     calls = 0
 
-    async def run_agent(run: zeta_dispatch.AgentInvocation) -> dict[str, object]:
+    async def run_agent(run: zetad_dispatch.AgentInvocation) -> dict[str, object]:
         nonlocal calls
         calls += 1
         return {"outcome": "handled", "event": run.triggering_event.id}
 
-    dispatcher = zeta_dispatch.EventDispatcher(
+    dispatcher = zetad_dispatch.EventDispatcher(
         event_store,
         executors=[
-            zeta_dispatch.ExecutableAgent(
-                zeta_dispatch.AgentDefinition(
+            zetad_dispatch.ExecutableAgent(
+                zetad_dispatch.AgentDefinition(
                     "issue-triage",
-                    (zeta_dispatch.EventPattern("github.issue.opened"),),
+                    (zetad_dispatch.EventPattern("github.issue.opened"),),
                 ),
                 run=run_agent,
             )
@@ -2668,7 +2670,7 @@ def test_zeta_event_dispatcher_routes_available_work_before_running(
         "runtime.queue_item.available"
     ]
     assert route.queue_items == [
-        zeta_queue.RoutedQueueItem(
+        zetad_queue.RoutedQueueItem(
             queue_item_id=queue_item_id,
             event_id=accepted.event.id,
             target_agent="issue-triage",
@@ -2684,7 +2686,7 @@ def test_zeta_event_dispatcher_routes_available_work_before_running(
         "runtime.attempt.completed",
         "runtime.queue_item.completed",
     ]
-    assert zeta_queue.terminal_queue_item_result(
+    assert zetad_queue.terminal_queue_item_result(
         execution_events,
         event_id=accepted.event.id,
         target_agent="issue-triage",
@@ -2701,18 +2703,18 @@ def test_zeta_event_dispatcher_rejects_terminal_queue_item_execution(
     event_store = zeta_events.SqliteEventStore(tmp_path / "events.sqlite3")
     calls = 0
 
-    async def run_agent(run: zeta_dispatch.AgentInvocation) -> dict[str, object]:
+    async def run_agent(run: zetad_dispatch.AgentInvocation) -> dict[str, object]:
         nonlocal calls
         calls += 1
         return {"outcome": "handled", "event": run.triggering_event.id}
 
-    dispatcher = zeta_dispatch.EventDispatcher(
+    dispatcher = zetad_dispatch.EventDispatcher(
         event_store,
         executors=[
-            zeta_dispatch.ExecutableAgent(
-                zeta_dispatch.AgentDefinition(
+            zetad_dispatch.ExecutableAgent(
+                zetad_dispatch.AgentDefinition(
                     "issue-triage",
-                    (zeta_dispatch.EventPattern("github.issue.opened"),),
+                    (zetad_dispatch.EventPattern("github.issue.opened"),),
                 ),
                 run=run_agent,
             )
@@ -2730,7 +2732,7 @@ def test_zeta_event_dispatcher_rejects_terminal_queue_item_execution(
     )
     queue_item_id = f"qi_{outcome.event.id}_issue-triage"
 
-    with pytest.raises(zeta_dispatch.TerminalQueueItemError) as exc_info:
+    with pytest.raises(zetad_dispatch.TerminalQueueItemError) as exc_info:
         asyncio.run(dispatcher.run_queue_item(queue_item_id))
 
     assert calls == 1
@@ -2748,7 +2750,7 @@ def test_zeta_event_dispatcher_rejects_unhandled_queue_item_execution(
     tmp_path: Path,
 ) -> None:
     event_store = zeta_events.SqliteEventStore(tmp_path / "events.sqlite3")
-    dispatcher = zeta_dispatch.EventDispatcher(event_store)
+    dispatcher = zetad_dispatch.EventDispatcher(event_store)
 
     outcome = dispatch_event(
         dispatcher,
@@ -2761,7 +2763,7 @@ def test_zeta_event_dispatcher_rejects_unhandled_queue_item_execution(
     )
     queue_item_id = f"qi_{outcome.event.id}_unhandled"
 
-    with pytest.raises(zeta_dispatch.TerminalQueueItemError) as exc_info:
+    with pytest.raises(zetad_dispatch.TerminalQueueItemError) as exc_info:
         asyncio.run(dispatcher.run_queue_item(queue_item_id))
 
     assert exc_info.value.queue_item_id == queue_item_id
@@ -2773,12 +2775,12 @@ def test_zeta_event_dispatcher_rejects_external_lifecycle_events(
 ) -> None:
     event_store = zeta_events.SqliteEventStore(tmp_path / "events.sqlite3")
     published: list[zeta_events.Event] = []
-    dispatcher = zeta_dispatch.EventDispatcher(
+    dispatcher = zetad_dispatch.EventDispatcher(
         event_store,
         publish_event=published.append,
     )
 
-    with pytest.raises(zeta_dispatch.ReservedRuntimeEventError) as exc_info:
+    with pytest.raises(zetad_dispatch.ReservedRuntimeEventError) as exc_info:
         asyncio.run(
             dispatcher.publish_event(
                 zeta_events.DraftEvent(
@@ -2800,7 +2802,7 @@ def test_zeta_event_dispatcher_routes_agent_published_events(tmp_path: Path) -> 
         event_store = zeta_events.SqliteEventStore(tmp_path / "events.sqlite3")
 
         async def run_agent(
-            invocation: zeta_dispatch.AgentInvocation,
+            invocation: zetad_dispatch.AgentInvocation,
         ) -> dict[str, object]:
             published = await invocation.publish(
                 zeta_events.DraftEvent(
@@ -2812,13 +2814,13 @@ def test_zeta_event_dispatcher_routes_agent_published_events(tmp_path: Path) -> 
             )
             return {"outcome": "handled", "published_event_id": published.id}
 
-        dispatcher = zeta_dispatch.EventDispatcher(
+        dispatcher = zetad_dispatch.EventDispatcher(
             event_store,
             executors=[
-                zeta_dispatch.ExecutableAgent(
-                    zeta_dispatch.AgentDefinition(
+                zetad_dispatch.ExecutableAgent(
+                    zetad_dispatch.AgentDefinition(
                         "issue-triage",
-                        (zeta_dispatch.EventPattern("github.issue.opened"),),
+                        (zetad_dispatch.EventPattern("github.issue.opened"),),
                     ),
                     run=run_agent,
                 )
@@ -2882,27 +2884,27 @@ def test_zeta_event_dispatcher_runs_matching_agents_in_task_group() -> None:
         started: list[str] = []
         release = asyncio.Event()
 
-        async def run_agent(run: zeta_dispatch.AgentInvocation) -> dict[str, Any]:
+        async def run_agent(run: zetad_dispatch.AgentInvocation) -> dict[str, Any]:
             started.append(run.agent.agent_id)
             if len(started) == 2:
                 release.set()
             await release.wait()
             return {"outcome": "handled", "agent": run.agent.agent_id}
 
-        dispatcher = zeta_dispatch.EventDispatcher(
+        dispatcher = zetad_dispatch.EventDispatcher(
             event_store,
             executors=[
-                zeta_dispatch.ExecutableAgent(
-                    zeta_dispatch.AgentDefinition(
+                zetad_dispatch.ExecutableAgent(
+                    zetad_dispatch.AgentDefinition(
                         "agent.one",
-                        (zeta_dispatch.EventPattern("github.issue.opened"),),
+                        (zetad_dispatch.EventPattern("github.issue.opened"),),
                     ),
                     run=run_agent,
                 ),
-                zeta_dispatch.ExecutableAgent(
-                    zeta_dispatch.AgentDefinition(
+                zetad_dispatch.ExecutableAgent(
+                    zetad_dispatch.AgentDefinition(
                         "agent.two",
-                        (zeta_dispatch.EventPattern("github.issue.opened"),),
+                        (zetad_dispatch.EventPattern("github.issue.opened"),),
                     ),
                     run=run_agent,
                 ),
@@ -2942,20 +2944,20 @@ def test_zeta_event_dispatcher_matches_exact_event_type(tmp_path: Path) -> None:
     event_store = zeta_events.SqliteEventStore(tmp_path / "events.sqlite3")
     calls: list[str] = []
 
-    dispatcher = zeta_dispatch.EventDispatcher(
+    dispatcher = zetad_dispatch.EventDispatcher(
         event_store,
         executors=[
-            zeta_dispatch.ExecutableAgent(
-                zeta_dispatch.AgentDefinition(
+            zetad_dispatch.ExecutableAgent(
+                zetad_dispatch.AgentDefinition(
                     "exact-agent",
-                    (zeta_dispatch.EventPattern("github.issue.opened"),),
+                    (zetad_dispatch.EventPattern("github.issue.opened"),),
                 ),
                 run=record_exact_agent_call(calls),
             ),
-            zeta_dispatch.ExecutableAgent(
-                zeta_dispatch.AgentDefinition(
+            zetad_dispatch.ExecutableAgent(
+                zetad_dispatch.AgentDefinition(
                     "other-agent",
-                    (zeta_dispatch.EventPattern("github.issue.closed"),),
+                    (zetad_dispatch.EventPattern("github.issue.closed"),),
                 ),
                 run=record_exact_agent_call(calls),
             ),
@@ -2988,12 +2990,12 @@ def test_zeta_event_dispatcher_records_unhandled_work_without_runner(
 ) -> None:
     event_store = zeta_events.SqliteEventStore(tmp_path / "events.sqlite3")
     published: list[zeta_events.Event] = []
-    dispatcher = zeta_dispatch.EventDispatcher(
+    dispatcher = zetad_dispatch.EventDispatcher(
         event_store,
         routes=[
-            zeta_dispatch.AgentRoute(
+            zetad_dispatch.AgentRoute(
                 "issue-triage",
-                (zeta_dispatch.EventPattern("github.issue.opened"),),
+                (zetad_dispatch.EventPattern("github.issue.opened"),),
             )
         ],
         publish_event=published.append,
@@ -3049,18 +3051,18 @@ def test_zeta_event_dispatcher_does_not_route_duplicate_events(
     event_store = zeta_events.SqliteEventStore(tmp_path / "events.sqlite3")
     calls = 0
 
-    async def run_agent(run: zeta_dispatch.AgentInvocation) -> dict[str, object]:
+    async def run_agent(run: zetad_dispatch.AgentInvocation) -> dict[str, object]:
         nonlocal calls
         calls += 1
         return {"outcome": "handled"}
 
-    dispatcher = zeta_dispatch.EventDispatcher(
+    dispatcher = zetad_dispatch.EventDispatcher(
         event_store,
         executors=[
-            zeta_dispatch.ExecutableAgent(
-                zeta_dispatch.AgentDefinition(
+            zetad_dispatch.ExecutableAgent(
+                zetad_dispatch.AgentDefinition(
                     "issue-triage",
-                    (zeta_dispatch.EventPattern("github.issue.opened"),),
+                    (zetad_dispatch.EventPattern("github.issue.opened"),),
                 ),
                 run=run_agent,
             )
@@ -3096,17 +3098,17 @@ def test_zeta_event_dispatcher_does_not_route_duplicate_events(
 def test_zeta_event_dispatcher_records_failed_work(tmp_path: Path) -> None:
     event_store = zeta_events.SqliteEventStore(tmp_path / "events.sqlite3")
 
-    async def fail_agent(run: zeta_dispatch.AgentInvocation) -> dict[str, object]:
+    async def fail_agent(run: zetad_dispatch.AgentInvocation) -> dict[str, object]:
         del run
         raise RuntimeError("boom")
 
-    dispatcher = zeta_dispatch.EventDispatcher(
+    dispatcher = zetad_dispatch.EventDispatcher(
         event_store,
         executors=[
-            zeta_dispatch.ExecutableAgent(
-                zeta_dispatch.AgentDefinition(
+            zetad_dispatch.ExecutableAgent(
+                zetad_dispatch.AgentDefinition(
                     "issue-triage",
-                    (zeta_dispatch.EventPattern("github.issue.opened"),),
+                    (zetad_dispatch.EventPattern("github.issue.opened"),),
                 ),
                 run=fail_agent,
             )
@@ -3139,7 +3141,7 @@ def test_zeta_event_dispatcher_records_failed_work(tmp_path: Path) -> None:
         f"attempt:{queue_item_id}:1:failed",
         f"queue_item:{outcome.event.id}:issue-triage:failed",
     ]
-    assert zeta_queue.terminal_queue_item_result(
+    assert zetad_queue.terminal_queue_item_result(
         outcome.lifecycle_events,
         event_id=outcome.event.id,
         target_agent="issue-triage",
@@ -3180,20 +3182,20 @@ def test_zeta_event_dispatcher_can_retry_failed_work(tmp_path: Path) -> None:
     event_store = zeta_events.SqliteEventStore(tmp_path / "events.sqlite3")
     attempts = 0
 
-    async def flaky_agent(run: zeta_dispatch.AgentInvocation) -> dict[str, object]:
+    async def flaky_agent(run: zetad_dispatch.AgentInvocation) -> dict[str, object]:
         nonlocal attempts
         attempts += 1
         if attempts == 1:
             raise RuntimeError("boom")
         return {"outcome": "handled", "attempt_id": run.attempt_id}
 
-    dispatcher = zeta_dispatch.EventDispatcher(
+    dispatcher = zetad_dispatch.EventDispatcher(
         event_store,
         executors=[
-            zeta_dispatch.ExecutableAgent(
-                zeta_dispatch.AgentDefinition(
+            zetad_dispatch.ExecutableAgent(
+                zetad_dispatch.AgentDefinition(
                     "issue-triage",
-                    (zeta_dispatch.EventPattern("github.issue.opened"),),
+                    (zetad_dispatch.EventPattern("github.issue.opened"),),
                 ),
                 run=flaky_agent,
             )
@@ -3235,17 +3237,17 @@ def test_zeta_project_queue_items_projects_latest_lifecycle_state(
 ) -> None:
     event_store = zeta_events.SqliteEventStore(tmp_path / "events.sqlite3")
 
-    async def run_agent(run: zeta_dispatch.AgentInvocation) -> dict[str, object]:
+    async def run_agent(run: zetad_dispatch.AgentInvocation) -> dict[str, object]:
         del run
         return {"outcome": "handled"}
 
-    dispatcher = zeta_dispatch.EventDispatcher(
+    dispatcher = zetad_dispatch.EventDispatcher(
         event_store,
         executors=[
-            zeta_dispatch.ExecutableAgent(
-                zeta_dispatch.AgentDefinition(
+            zetad_dispatch.ExecutableAgent(
+                zetad_dispatch.AgentDefinition(
                     "issue-triage",
-                    (zeta_dispatch.EventPattern("github.issue.opened"),),
+                    (zetad_dispatch.EventPattern("github.issue.opened"),),
                 ),
                 run=run_agent,
             )
@@ -3270,7 +3272,7 @@ def test_zeta_project_queue_items_projects_latest_lifecycle_state(
         ),
     )
 
-    items = zeta_queue.project_queue_items(
+    items = zetad_queue.project_queue_items(
         event_store.list_events(zeta_events.Filter())
     )
 
@@ -3288,7 +3290,7 @@ def test_zeta_project_queue_items_projects_latest_lifecycle_state(
             status="unhandled",
         ),
     ]
-    assert zeta_queue.queue_item_status_counts(items) == {
+    assert zetad_queue.queue_item_status_counts(items) == {
         "completed": 1,
         "unhandled": 1,
     }
@@ -3299,7 +3301,7 @@ def test_zeta_sqlite_event_store_projects_runtime_lifecycle_tables(
 ) -> None:
     event_store = zeta_events.SqliteEventStore(tmp_path / "events.sqlite3")
 
-    async def run_agent(run: zeta_dispatch.AgentInvocation) -> dict[str, object]:
+    async def run_agent(run: zetad_dispatch.AgentInvocation) -> dict[str, object]:
         del run
         return {
             "final_answer": "handled",
@@ -3307,13 +3309,13 @@ def test_zeta_sqlite_event_store_projects_runtime_lifecycle_tables(
             "usage": {"input_tokens": 12, "output_tokens": 3},
         }
 
-    dispatcher = zeta_dispatch.EventDispatcher(
+    dispatcher = zetad_dispatch.EventDispatcher(
         event_store,
         executors=[
-            zeta_dispatch.ExecutableAgent(
-                zeta_dispatch.AgentDefinition(
+            zetad_dispatch.ExecutableAgent(
+                zetad_dispatch.AgentDefinition(
                     "issue-triage",
-                    (zeta_dispatch.EventPattern("github.issue.opened"),),
+                    (zetad_dispatch.EventPattern("github.issue.opened"),),
                 ),
                 run=run_agent,
             )
@@ -3519,7 +3521,7 @@ def test_zeta_sqlite_event_store_rebuilds_projection_tables(
 ) -> None:
     event_store = zeta_events.SqliteEventStore(tmp_path / "events.sqlite3")
 
-    async def run_agent(run: zeta_dispatch.AgentInvocation) -> dict[str, object]:
+    async def run_agent(run: zetad_dispatch.AgentInvocation) -> dict[str, object]:
         return {
             "final_answer": "handled issue",
             "events": [{"type": "issue.triaged", "event": run.triggering_event.id}],
@@ -3527,13 +3529,13 @@ def test_zeta_sqlite_event_store_rebuilds_projection_tables(
             "usage": {"input_tokens": 12, "output_tokens": 3},
         }
 
-    dispatcher = zeta_dispatch.EventDispatcher(
+    dispatcher = zetad_dispatch.EventDispatcher(
         event_store,
         executors=[
-            zeta_dispatch.ExecutableAgent(
-                zeta_dispatch.AgentDefinition(
+            zetad_dispatch.ExecutableAgent(
+                zetad_dispatch.AgentDefinition(
                     "issue-triage",
-                    (zeta_dispatch.EventPattern("github.issue.opened"),),
+                    (zetad_dispatch.EventPattern("github.issue.opened"),),
                 ),
                 run=run_agent,
             )
@@ -3596,7 +3598,7 @@ def test_zeta_sqlite_event_store_projects_attempt_result_details(
 ) -> None:
     event_store = zeta_events.SqliteEventStore(tmp_path / "events.sqlite3")
 
-    async def run_agent(run: zeta_dispatch.AgentInvocation) -> dict[str, object]:
+    async def run_agent(run: zetad_dispatch.AgentInvocation) -> dict[str, object]:
         return {
             "final_answer": "handled issue",
             "events": [{"type": "issue.triaged"}],
@@ -3605,14 +3607,14 @@ def test_zeta_sqlite_event_store_projects_attempt_result_details(
             "event_id": run.triggering_event.id,
         }
 
-    agent = zeta_dispatch.ExecutableAgent(
-        zeta_dispatch.AgentDefinition(
+    agent = zetad_dispatch.ExecutableAgent(
+        zetad_dispatch.AgentDefinition(
             "issue-triage",
-            (zeta_dispatch.EventPattern("github.issue.opened"),),
+            (zetad_dispatch.EventPattern("github.issue.opened"),),
         ),
         run=run_agent,
     )
-    dispatcher = zeta_dispatch.EventDispatcher(event_store, executors=[agent])
+    dispatcher = zetad_dispatch.EventDispatcher(event_store, executors=[agent])
 
     outcome = dispatch_event(
         dispatcher,
@@ -3641,12 +3643,12 @@ def test_zeta_sqlite_event_store_claims_and_reconciles_queue_leases(
     tmp_path: Path,
 ) -> None:
     event_store = zeta_events.SqliteEventStore(tmp_path / "events.sqlite3")
-    dispatcher = zeta_dispatch.EventDispatcher(
+    dispatcher = zetad_dispatch.EventDispatcher(
         event_store,
         routes=[
-            zeta_dispatch.AgentRoute(
+            zetad_dispatch.AgentRoute(
                 "issue-triage",
-                (zeta_dispatch.EventPattern("github.issue.opened"),),
+                (zetad_dispatch.EventPattern("github.issue.opened"),),
             )
         ],
     )
@@ -3913,17 +3915,17 @@ def test_zeta_cli_queue_json_projects_runtime_queue(tmp_path: Path) -> None:
     state_dir = tmp_path / ".zeta"
     event_store = zeta_events.SqliteEventStore(event_store_path(state_dir))
 
-    async def run_agent(run: zeta_dispatch.AgentInvocation) -> dict[str, object]:
+    async def run_agent(run: zetad_dispatch.AgentInvocation) -> dict[str, object]:
         del run
         return {"outcome": "handled"}
 
-    dispatcher = zeta_dispatch.EventDispatcher(
+    dispatcher = zetad_dispatch.EventDispatcher(
         event_store,
         executors=[
-            zeta_dispatch.ExecutableAgent(
-                zeta_dispatch.AgentDefinition(
+            zetad_dispatch.ExecutableAgent(
+                zetad_dispatch.AgentDefinition(
                     "issue-triage",
-                    (zeta_dispatch.EventPattern("github.issue.opened"),),
+                    (zetad_dispatch.EventPattern("github.issue.opened"),),
                 ),
                 run=run_agent,
             )
@@ -3935,7 +3937,7 @@ def test_zeta_cli_queue_json_projects_runtime_queue(tmp_path: Path) -> None:
     )
 
     result = CliRunner().invoke(
-        zeta_cli.cli,
+        zetad_cli.cli,
         ["queue", "--project-root", str(tmp_path), "--json"],
     )
 
@@ -3960,7 +3962,7 @@ def test_zeta_cli_attempts_json_projects_runtime_attempts(tmp_path: Path) -> Non
     state_dir = tmp_path / ".zeta"
     event_store = zeta_events.SqliteEventStore(event_store_path(state_dir))
 
-    async def run_agent(run: zeta_dispatch.AgentInvocation) -> dict[str, object]:
+    async def run_agent(run: zetad_dispatch.AgentInvocation) -> dict[str, object]:
         del run
         return {
             "final_answer": "handled",
@@ -3969,13 +3971,13 @@ def test_zeta_cli_attempts_json_projects_runtime_attempts(tmp_path: Path) -> Non
             "usage": {"input_tokens": 12, "output_tokens": 3},
         }
 
-    dispatcher = zeta_dispatch.EventDispatcher(
+    dispatcher = zetad_dispatch.EventDispatcher(
         event_store,
         executors=[
-            zeta_dispatch.ExecutableAgent(
-                zeta_dispatch.AgentDefinition(
+            zetad_dispatch.ExecutableAgent(
+                zetad_dispatch.AgentDefinition(
                     "issue-triage",
-                    (zeta_dispatch.EventPattern("github.issue.opened"),),
+                    (zetad_dispatch.EventPattern("github.issue.opened"),),
                 ),
                 run=run_agent,
             )
@@ -3990,7 +3992,7 @@ def test_zeta_cli_attempts_json_projects_runtime_attempts(tmp_path: Path) -> Non
     run_id = f"run_att_{queue_item_id}_1"
 
     result = CliRunner().invoke(
-        zeta_cli.cli,
+        zetad_cli.cli,
         ["attempts", "--project-root", str(tmp_path), "--json"],
     )
 
@@ -4031,7 +4033,7 @@ def test_zeta_cli_runs_json_projects_runtime_runs(tmp_path: Path) -> None:
     state_dir = tmp_path / ".zeta"
     event_store = zeta_events.SqliteEventStore(event_store_path(state_dir))
 
-    async def run_agent(run: zeta_dispatch.AgentInvocation) -> dict[str, object]:
+    async def run_agent(run: zetad_dispatch.AgentInvocation) -> dict[str, object]:
         del run
         return {
             "final_answer": "handled",
@@ -4040,13 +4042,13 @@ def test_zeta_cli_runs_json_projects_runtime_runs(tmp_path: Path) -> None:
             "usage": {"input_tokens": 12, "output_tokens": 3},
         }
 
-    dispatcher = zeta_dispatch.EventDispatcher(
+    dispatcher = zetad_dispatch.EventDispatcher(
         event_store,
         executors=[
-            zeta_dispatch.ExecutableAgent(
-                zeta_dispatch.AgentDefinition(
+            zetad_dispatch.ExecutableAgent(
+                zetad_dispatch.AgentDefinition(
                     "issue-triage",
-                    (zeta_dispatch.EventPattern("github.issue.opened"),),
+                    (zetad_dispatch.EventPattern("github.issue.opened"),),
                 ),
                 run=run_agent,
             )
@@ -4061,7 +4063,7 @@ def test_zeta_cli_runs_json_projects_runtime_runs(tmp_path: Path) -> None:
     run_id = f"run_att_{queue_item_id}_1"
 
     result = CliRunner().invoke(
-        zeta_cli.cli,
+        zetad_cli.cli,
         ["runs", "--project-root", str(tmp_path), "--json"],
     )
 
@@ -4088,7 +4090,7 @@ def test_zeta_cli_runs_json_projects_runtime_runs(tmp_path: Path) -> None:
 
 def test_zeta_cli_runs_plain_reports_empty_and_rows(tmp_path: Path) -> None:
     empty = CliRunner().invoke(
-        zeta_cli.cli,
+        zetad_cli.cli,
         ["runs", "--project-root", str(tmp_path)],
     )
 
@@ -4098,17 +4100,17 @@ def test_zeta_cli_runs_plain_reports_empty_and_rows(tmp_path: Path) -> None:
     state_dir = tmp_path / ".zeta"
     event_store = zeta_events.SqliteEventStore(event_store_path(state_dir))
 
-    async def run_agent(run: zeta_dispatch.AgentInvocation) -> dict[str, object]:
+    async def run_agent(run: zetad_dispatch.AgentInvocation) -> dict[str, object]:
         del run
         return {"final_answer": "handled"}
 
-    dispatcher = zeta_dispatch.EventDispatcher(
+    dispatcher = zetad_dispatch.EventDispatcher(
         event_store,
         executors=[
-            zeta_dispatch.ExecutableAgent(
-                zeta_dispatch.AgentDefinition(
+            zetad_dispatch.ExecutableAgent(
+                zetad_dispatch.AgentDefinition(
                     "issue-triage",
-                    (zeta_dispatch.EventPattern("github.issue.opened"),),
+                    (zetad_dispatch.EventPattern("github.issue.opened"),),
                 ),
                 run=run_agent,
             )
@@ -4121,7 +4123,7 @@ def test_zeta_cli_runs_plain_reports_empty_and_rows(tmp_path: Path) -> None:
     run_id = f"run_att_qi_{outcome.event.id}_issue-triage_1"
 
     listed = CliRunner().invoke(
-        zeta_cli.cli,
+        zetad_cli.cli,
         ["runs", "--project-root", str(tmp_path)],
     )
 
@@ -4136,7 +4138,7 @@ def test_zeta_cli_run_show_json_projects_runtime_run_details(tmp_path: Path) -> 
     state_dir = tmp_path / ".zeta"
     event_store = zeta_events.SqliteEventStore(event_store_path(state_dir))
 
-    async def run_agent(run: zeta_dispatch.AgentInvocation) -> dict[str, object]:
+    async def run_agent(run: zetad_dispatch.AgentInvocation) -> dict[str, object]:
         del run
         return {
             "final_answer": "handled",
@@ -4145,13 +4147,13 @@ def test_zeta_cli_run_show_json_projects_runtime_run_details(tmp_path: Path) -> 
             "usage": {"input_tokens": 12, "output_tokens": 3},
         }
 
-    dispatcher = zeta_dispatch.EventDispatcher(
+    dispatcher = zetad_dispatch.EventDispatcher(
         event_store,
         executors=[
-            zeta_dispatch.ExecutableAgent(
-                zeta_dispatch.AgentDefinition(
+            zetad_dispatch.ExecutableAgent(
+                zetad_dispatch.AgentDefinition(
                     "issue-triage",
-                    (zeta_dispatch.EventPattern("github.issue.opened"),),
+                    (zetad_dispatch.EventPattern("github.issue.opened"),),
                 ),
                 run=run_agent,
             )
@@ -4165,7 +4167,7 @@ def test_zeta_cli_run_show_json_projects_runtime_run_details(tmp_path: Path) -> 
     run_id = f"run_att_{queue_item_id}_1"
 
     result = CliRunner().invoke(
-        zeta_cli.cli,
+        zetad_cli.cli,
         ["run", "show", run_id, "--project-root", str(tmp_path), "--json"],
     )
 
@@ -4190,17 +4192,17 @@ def test_zeta_cli_run_show_plain_prints_runtime_run_summary(tmp_path: Path) -> N
     state_dir = tmp_path / ".zeta"
     event_store = zeta_events.SqliteEventStore(event_store_path(state_dir))
 
-    async def run_agent(run: zeta_dispatch.AgentInvocation) -> dict[str, object]:
+    async def run_agent(run: zetad_dispatch.AgentInvocation) -> dict[str, object]:
         del run
         return {"final_answer": "handled"}
 
-    dispatcher = zeta_dispatch.EventDispatcher(
+    dispatcher = zetad_dispatch.EventDispatcher(
         event_store,
         executors=[
-            zeta_dispatch.ExecutableAgent(
-                zeta_dispatch.AgentDefinition(
+            zetad_dispatch.ExecutableAgent(
+                zetad_dispatch.AgentDefinition(
                     "issue-triage",
-                    (zeta_dispatch.EventPattern("github.issue.opened"),),
+                    (zetad_dispatch.EventPattern("github.issue.opened"),),
                 ),
                 run=run_agent,
             )
@@ -4214,7 +4216,7 @@ def test_zeta_cli_run_show_plain_prints_runtime_run_summary(tmp_path: Path) -> N
     run_id = f"run_att_{queue_item_id}_1"
 
     result = CliRunner().invoke(
-        zeta_cli.cli,
+        zetad_cli.cli,
         ["run", "show", run_id, "--project-root", str(tmp_path)],
     )
 
@@ -4234,7 +4236,7 @@ def test_zeta_cli_run_show_plain_prints_runtime_run_summary(tmp_path: Path) -> N
 
 def test_zeta_cli_run_show_reports_unknown_run(tmp_path: Path) -> None:
     result = CliRunner().invoke(
-        zeta_cli.cli,
+        zetad_cli.cli,
         ["run", "show", "run_missing", "--project-root", str(tmp_path)],
     )
 
@@ -4257,7 +4259,7 @@ def test_zeta_cli_events_json_lists_durable_events(tmp_path: Path) -> None:
     ).event
 
     result = CliRunner().invoke(
-        zeta_cli.cli,
+        zetad_cli.cli,
         ["events", "--project-root", str(tmp_path), "--json"],
     )
 
@@ -4290,7 +4292,7 @@ def test_zeta_cli_events_filters_default_listing(tmp_path: Path) -> None:
     ).event
 
     result = CliRunner().invoke(
-        zeta_cli.cli,
+        zetad_cli.cli,
         [
             "events",
             "--project-root",
@@ -4311,7 +4313,7 @@ def test_zeta_cli_events_filters_default_listing(tmp_path: Path) -> None:
 def test_zeta_cli_status_counts_runtime_queue(tmp_path: Path) -> None:
     state_dir = tmp_path / ".zeta"
     event_store = zeta_events.SqliteEventStore(event_store_path(state_dir))
-    dispatcher = zeta_dispatch.EventDispatcher(event_store)
+    dispatcher = zetad_dispatch.EventDispatcher(event_store)
 
     dispatch_event(
         dispatcher,
@@ -4319,7 +4321,7 @@ def test_zeta_cli_status_counts_runtime_queue(tmp_path: Path) -> None:
     )
 
     result = CliRunner().invoke(
-        zeta_cli.cli,
+        zetad_cli.cli,
         ["status", "--project-root", str(tmp_path)],
     )
 
@@ -4335,10 +4337,10 @@ def test_zeta_cli_run_once_routes_unhandled_event(tmp_path: Path) -> None:
     ).event
 
     result = CliRunner().invoke(
-        zeta_cli.cli,
+        zetad_cli.cli,
         ["run", "--project-root", str(tmp_path), "--once"],
     )
-    items = zeta_queue.project_queue_items(
+    items = zetad_queue.project_queue_items(
         event_store.list_events(zeta_events.Filter())
     )
 
@@ -4363,7 +4365,7 @@ Summarize the repo.
     )
 
     result = CliRunner().invoke(
-        zeta_cli.cli,
+        zetad_cli.cli,
         ["schedule", "--project-root", str(tmp_path), "--once"],
     )
     event_store = zeta_events.SqliteEventStore(event_store_path(tmp_path / ".zeta"))
@@ -4399,7 +4401,7 @@ Summarize the repo.
     event_store = zeta_events.SqliteEventStore(event_store_path(tmp_path / ".zeta"))
     specs = zeta_agent_spec.load_specs(tmp_path / "agents")
     try:
-        zeta_scheduling.request_due_schedules(
+        zetad_scheduling.request_due_schedules(
             event_store,
             specs,
             now=datetime(2026, 6, 22, 10, 0, tzinfo=UTC),
@@ -4407,13 +4409,13 @@ Summarize the repo.
     finally:
         event_store.close()
     monkeypatch.setattr(
-        zeta_scheduling,
+        zetad_scheduling,
         "utc_now",
         lambda: datetime(2026, 6, 22, 10, 5, tzinfo=UTC),
     )
 
     result = CliRunner().invoke(
-        zeta_cli.cli,
+        zetad_cli.cli,
         ["schedule", "status", "--project-root", str(tmp_path), "--json"],
     )
 
@@ -4433,7 +4435,7 @@ Summarize the repo.
 
 
 def test_zeta_scheduler_builds_project_services(tmp_path: Path) -> None:
-    runtime = zeta_scheduling.build_scheduler_services(project_root=tmp_path)
+    runtime = zetad_scheduling.build_scheduler_services(project_root=tmp_path)
 
     try:
         assert runtime.project_root == tmp_path.resolve()
@@ -4444,7 +4446,7 @@ def test_zeta_scheduler_builds_project_services(tmp_path: Path) -> None:
 
 
 def test_zeta_local_runtime_builds_project_services(tmp_path: Path) -> None:
-    runtime = zeta_worker.build_worker_services(project_root=tmp_path)
+    runtime = zetad_worker.build_worker_services(project_root=tmp_path)
 
     try:
         assert runtime.project_root == tmp_path.resolve()
@@ -4457,7 +4459,7 @@ def test_zeta_local_runtime_builds_project_services(tmp_path: Path) -> None:
 
 def test_zeta_local_runtime_accepts_explicit_tool_registry(tmp_path: Path) -> None:
     registry = CapabilityRegistry()
-    runtime = zeta_worker.build_worker_services(
+    runtime = zetad_worker.build_worker_services(
         project_root=tmp_path,
         tool_registry=registry,
     )
@@ -4479,19 +4481,19 @@ def test_zeta_local_runtime_run_once_executes_available_queue_item(
         zeta_events.DraftEvent("github.issue.opened", "github", {}, session_id="repo")
     ).event
 
-    async def run_agent(run: zeta_dispatch.AgentInvocation) -> dict[str, object]:
+    async def run_agent(run: zetad_dispatch.AgentInvocation) -> dict[str, object]:
         return {"event_id": run.triggering_event.id}
 
     def compile_agents(
         spec: object,
         **_kwargs: object,
-    ) -> list[zeta_dispatch.ExecutableAgent]:
+    ) -> list[zetad_dispatch.ExecutableAgent]:
         del spec
         return [
-            zeta_dispatch.ExecutableAgent(
-                zeta_dispatch.AgentDefinition(
+            zetad_dispatch.ExecutableAgent(
+                zetad_dispatch.AgentDefinition(
                     "issue-triage",
-                    (zeta_dispatch.EventPattern("github.issue.opened"),),
+                    (zetad_dispatch.EventPattern("github.issue.opened"),),
                 ),
                 run=run_agent,
             )
@@ -4511,16 +4513,16 @@ Triage the issue.
 """,
         encoding="utf-8",
     )
-    monkeypatch.setattr(zeta_worker, "compile_agent_definitions", compile_agents)
+    monkeypatch.setattr(zetad_worker, "compile_agent_definitions", compile_agents)
     registry = CapabilityRegistry()
-    runtime = zeta_worker.build_worker_services(
+    runtime = zetad_worker.build_worker_services(
         project_root=tmp_path,
         tool_registry=registry,
     )
 
     try:
-        message = asyncio.run(zeta_worker.run_once(runtime))
-        items = zeta_queue.project_queue_items(
+        message = asyncio.run(zetad_worker.run_once(runtime))
+        items = zetad_queue.project_queue_items(
             event_store.list_events(zeta_events.Filter())
         )
         attempt_rows = event_store.list_attempts()
@@ -4555,11 +4557,11 @@ Triage the issue.
 """,
         encoding="utf-8",
     )
-    runtime = zeta_worker.build_worker_services(project_root=tmp_path)
+    runtime = zetad_worker.build_worker_services(project_root=tmp_path)
 
     try:
         with pytest.raises(ManifestError, match="unknown event 'github.issue.opened'"):
-            zeta_worker.project_executors(runtime)
+            zetad_worker.project_executors(runtime)
     finally:
         runtime.close()
 
@@ -4573,7 +4575,7 @@ def test_zeta_worker_passes_project_event_registry_to_compiler(
     def compile_agents(
         spec: object,
         **kwargs: object,
-    ) -> list[zeta_dispatch.ExecutableAgent]:
+    ) -> list[zetad_dispatch.ExecutableAgent]:
         captured["spec"] = spec
         captured["event_registry"] = kwargs["event_registry"]
         return []
@@ -4592,11 +4594,11 @@ Triage the issue.
 """,
         encoding="utf-8",
     )
-    monkeypatch.setattr(zeta_worker, "compile_agent_definitions", compile_agents)
-    runtime = zeta_worker.build_worker_services(project_root=tmp_path)
+    monkeypatch.setattr(zetad_worker, "compile_agent_definitions", compile_agents)
+    runtime = zetad_worker.build_worker_services(project_root=tmp_path)
 
     try:
-        assert zeta_worker.project_executors(runtime) == ()
+        assert zetad_worker.project_executors(runtime) == ()
     finally:
         runtime.close()
 
@@ -4633,15 +4635,15 @@ Triage the issue.
 """,
         encoding="utf-8",
     )
-    monkeypatch.setattr(zeta_worker, "run_agent", fake_run_agent)
+    monkeypatch.setattr(zetad_worker, "run_agent", fake_run_agent)
     registry = CapabilityRegistry()
-    runtime = zeta_worker.build_worker_services(
+    runtime = zetad_worker.build_worker_services(
         project_root=tmp_path,
         tool_registry=registry,
     )
 
     try:
-        agent = zeta_worker.project_executors(runtime)[0]
+        agent = zetad_worker.project_executors(runtime)[0]
         event = zeta_events.Event(
             id="evt_issue",
             event_type="github.issue.opened",
@@ -4659,7 +4661,7 @@ Triage the issue.
             cast(
                 Coroutine[Any, Any, dict[str, Any]],
                 agent.run(
-                    zeta_dispatch.AgentInvocation(
+                    zetad_dispatch.AgentInvocation(
                         agent.definition,
                         event,
                         attempt_id="att_qi_evt_issue_triage_1",
@@ -4705,11 +4707,11 @@ Triage the issue.
 """,
         encoding="utf-8",
     )
-    monkeypatch.setattr(zeta_worker, "run_agent", fake_run_agent)
-    runtime = zeta_worker.build_worker_services(project_root=tmp_path)
+    monkeypatch.setattr(zetad_worker, "run_agent", fake_run_agent)
+    runtime = zetad_worker.build_worker_services(project_root=tmp_path)
 
     try:
-        agent = zeta_worker.project_executors(runtime)[0]
+        agent = zetad_worker.project_executors(runtime)[0]
         event = zeta_events.Event(
             id="evt_issue",
             event_type="github.issue.opened",
@@ -4727,7 +4729,7 @@ Triage the issue.
             cast(
                 Coroutine[Any, Any, dict[str, Any]],
                 agent.run(
-                    zeta_dispatch.AgentInvocation(
+                    zetad_dispatch.AgentInvocation(
                         agent.definition,
                         event,
                         attempt_id="att_qi_evt_issue_triage_1",
@@ -4754,7 +4756,7 @@ def test_zeta_local_runtime_heartbeats_running_attempt(
     ).event
     heartbeat_rows: list[dict[str, int]] = []
 
-    async def run_agent(run: zeta_dispatch.AgentInvocation) -> dict[str, object]:
+    async def run_agent(run: zetad_dispatch.AgentInvocation) -> dict[str, object]:
         deadline = asyncio.get_running_loop().time() + 1
         first_heartbeat_at: int | None = None
         while asyncio.get_running_loop().time() < deadline:
@@ -4775,23 +4777,23 @@ def test_zeta_local_runtime_heartbeats_running_attempt(
             await asyncio.sleep(0.005)
         raise AssertionError("attempt heartbeat was not refreshed")
 
-    agent = zeta_dispatch.ExecutableAgent(
-        zeta_dispatch.AgentDefinition(
+    agent = zetad_dispatch.ExecutableAgent(
+        zetad_dispatch.AgentDefinition(
             "issue-triage",
-            (zeta_dispatch.EventPattern("github.issue.opened"),),
+            (zetad_dispatch.EventPattern("github.issue.opened"),),
         ),
         run=run_agent,
     )
-    monkeypatch.setattr(zeta_worker, "project_executors", lambda _runtime: (agent,))
-    runtime = zeta_worker.WorkerServices(
+    monkeypatch.setattr(zetad_worker, "project_executors", lambda _runtime: (agent,))
+    runtime = zetad_worker.WorkerServices(
         project_root=tmp_path,
         state_dir=tmp_path,
         events=event_store,
     )
-    monkeypatch.setattr(zeta_worker, "ATTEMPT_HEARTBEAT_INTERVAL_SECONDS", 0.01)
-    monkeypatch.setattr(zeta_worker, "QUEUE_LEASE_MS", 1_000)
+    monkeypatch.setattr(zetad_worker, "ATTEMPT_HEARTBEAT_INTERVAL_SECONDS", 0.01)
+    monkeypatch.setattr(zetad_worker, "QUEUE_LEASE_MS", 1_000)
 
-    message = asyncio.run(zeta_worker.run_once(runtime))
+    message = asyncio.run(zetad_worker.run_once(runtime))
     attempt = event_store.list_attempts()[0]
     queue_item = event_store.list_queue_items()[0]
 
@@ -4812,7 +4814,7 @@ def test_zeta_local_runtime_does_not_complete_stale_queue_claim(
         zeta_events.DraftEvent("github.issue.opened", "github", {})
     ).event
 
-    async def run_agent(run: zeta_dispatch.AgentInvocation) -> dict[str, object]:
+    async def run_agent(run: zetad_dispatch.AgentInvocation) -> dict[str, object]:
         now_ms = accepted.timestamp_ms + 10_000
         event_store.reconcile_expired_queue_claims(now_ms=now_ms)
         replacement = event_store.claim_next_queue_item(
@@ -4824,22 +4826,22 @@ def test_zeta_local_runtime_does_not_complete_stale_queue_claim(
         assert replacement.queue_item_id == run.queue_item_id
         return {"event_id": run.triggering_event.id}
 
-    agent = zeta_dispatch.ExecutableAgent(
-        zeta_dispatch.AgentDefinition(
+    agent = zetad_dispatch.ExecutableAgent(
+        zetad_dispatch.AgentDefinition(
             "issue-triage",
-            (zeta_dispatch.EventPattern("github.issue.opened"),),
+            (zetad_dispatch.EventPattern("github.issue.opened"),),
         ),
         run=run_agent,
     )
-    monkeypatch.setattr(zeta_worker, "project_executors", lambda _runtime: (agent,))
-    runtime = zeta_worker.WorkerServices(
+    monkeypatch.setattr(zetad_worker, "project_executors", lambda _runtime: (agent,))
+    runtime = zetad_worker.WorkerServices(
         project_root=tmp_path,
         state_dir=tmp_path,
         events=event_store,
     )
-    monkeypatch.setattr(zeta_worker, "QUEUE_LEASE_MS", 1_000)
+    monkeypatch.setattr(zetad_worker, "QUEUE_LEASE_MS", 1_000)
 
-    message = asyncio.run(zeta_worker.run_once(runtime))
+    message = asyncio.run(zetad_worker.run_once(runtime))
     event_types = [
         event.event_type for event in event_store.list_events(zeta_events.Filter())
     ]
@@ -4859,20 +4861,20 @@ def test_zeta_local_runtime_run_once_skips_leased_queue_item(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     event_store = zeta_events.SqliteEventStore(tmp_path / "events.sqlite3")
-    calls: list[zeta_dispatch.AgentInvocation] = []
+    calls: list[zetad_dispatch.AgentInvocation] = []
 
-    async def run_agent(run: zeta_dispatch.AgentInvocation) -> dict[str, object]:
+    async def run_agent(run: zetad_dispatch.AgentInvocation) -> dict[str, object]:
         calls.append(run)
         return {"event_id": run.triggering_event.id}
 
-    agent = zeta_dispatch.ExecutableAgent(
-        zeta_dispatch.AgentDefinition(
+    agent = zetad_dispatch.ExecutableAgent(
+        zetad_dispatch.AgentDefinition(
             "issue-triage",
-            (zeta_dispatch.EventPattern("github.issue.opened"),),
+            (zetad_dispatch.EventPattern("github.issue.opened"),),
         ),
         run=run_agent,
     )
-    dispatcher = zeta_dispatch.EventDispatcher(event_store, executors=[agent])
+    dispatcher = zetad_dispatch.EventDispatcher(event_store, executors=[agent])
     accepted = asyncio.run(
         dispatcher.publish_event(
             zeta_events.DraftEvent("github.issue.opened", "github", {})
@@ -4885,14 +4887,14 @@ def test_zeta_local_runtime_run_once_skips_leased_queue_item(
         lease_ms=60_000,
         now_ms=accepted.timestamp_ms + 1_000,
     )
-    monkeypatch.setattr(zeta_worker, "project_executors", lambda _runtime: (agent,))
-    runtime = zeta_worker.WorkerServices(
+    monkeypatch.setattr(zetad_worker, "project_executors", lambda _runtime: (agent,))
+    runtime = zetad_worker.WorkerServices(
         project_root=tmp_path,
         state_dir=tmp_path,
         events=event_store,
     )
 
-    message = asyncio.run(zeta_worker.run_once(runtime))
+    message = asyncio.run(zetad_worker.run_once(runtime))
     queue_row = event_store.connection.execute(
         "SELECT status, claimed_by FROM queue_items WHERE queue_item_id = ?",
         (queue_item_id,),
@@ -4908,21 +4910,21 @@ def test_zeta_local_runtime_run_once_releases_claim_when_lock_is_busy(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     event_store = zeta_events.SqliteEventStore(tmp_path / "events.sqlite3")
-    calls: list[zeta_dispatch.AgentInvocation] = []
+    calls: list[zetad_dispatch.AgentInvocation] = []
 
-    async def run_agent(run: zeta_dispatch.AgentInvocation) -> dict[str, object]:
+    async def run_agent(run: zetad_dispatch.AgentInvocation) -> dict[str, object]:
         calls.append(run)
         return {"event_id": run.triggering_event.id}
 
-    agent = zeta_dispatch.ExecutableAgent(
-        zeta_dispatch.AgentDefinition(
+    agent = zetad_dispatch.ExecutableAgent(
+        zetad_dispatch.AgentDefinition(
             "issue-triage",
-            (zeta_dispatch.EventPattern("github.issue.opened"),),
+            (zetad_dispatch.EventPattern("github.issue.opened"),),
             lock_keys=("context:repo",),
         ),
         run=run_agent,
     )
-    dispatcher = zeta_dispatch.EventDispatcher(event_store, executors=[agent])
+    dispatcher = zetad_dispatch.EventDispatcher(event_store, executors=[agent])
     accepted = asyncio.run(
         dispatcher.publish_event(
             zeta_events.DraftEvent("github.issue.opened", "github", {})
@@ -4935,14 +4937,14 @@ def test_zeta_local_runtime_run_once_releases_claim_when_lock_is_busy(
         lease_ms=60_000,
         now_ms=accepted.timestamp_ms + 1_000,
     )
-    monkeypatch.setattr(zeta_worker, "project_executors", lambda _runtime: (agent,))
-    runtime = zeta_worker.WorkerServices(
+    monkeypatch.setattr(zetad_worker, "project_executors", lambda _runtime: (agent,))
+    runtime = zetad_worker.WorkerServices(
         project_root=tmp_path,
         state_dir=tmp_path,
         events=event_store,
     )
 
-    message = asyncio.run(zeta_worker.run_once(runtime))
+    message = asyncio.run(zetad_worker.run_once(runtime))
     queue_row = event_store.connection.execute(
         "SELECT status, claimed_by FROM queue_items WHERE queue_item_id = ?",
         (f"qi_{accepted.id}_issue-triage",),
@@ -4960,26 +4962,26 @@ def test_zeta_local_runtime_run_once_skips_lock_busy_item_and_runs_next(
     event_store = zeta_events.SqliteEventStore(tmp_path / "events.sqlite3")
     calls: list[str] = []
 
-    async def run_agent(run: zeta_dispatch.AgentInvocation) -> dict[str, object]:
+    async def run_agent(run: zetad_dispatch.AgentInvocation) -> dict[str, object]:
         calls.append(run.agent.agent_id)
         return {"event_id": run.triggering_event.id}
 
-    locked_agent = zeta_dispatch.ExecutableAgent(
-        zeta_dispatch.AgentDefinition(
+    locked_agent = zetad_dispatch.ExecutableAgent(
+        zetad_dispatch.AgentDefinition(
             "locked",
-            (zeta_dispatch.EventPattern("repo.locked"),),
+            (zetad_dispatch.EventPattern("repo.locked"),),
             lock_keys=("context:repo",),
         ),
         run=run_agent,
     )
-    free_agent = zeta_dispatch.ExecutableAgent(
-        zeta_dispatch.AgentDefinition(
+    free_agent = zetad_dispatch.ExecutableAgent(
+        zetad_dispatch.AgentDefinition(
             "free",
-            (zeta_dispatch.EventPattern("repo.free"),),
+            (zetad_dispatch.EventPattern("repo.free"),),
         ),
         run=run_agent,
     )
-    dispatcher = zeta_dispatch.EventDispatcher(
+    dispatcher = zetad_dispatch.EventDispatcher(
         event_store,
         executors=[locked_agent, free_agent],
     )
@@ -5007,20 +5009,20 @@ def test_zeta_local_runtime_run_once_skips_lock_busy_item_and_runs_next(
         ["context:repo"],
         "worker-a",
         lease_ms=60_000,
-        now_ms=zeta_worker.runtime_time_ms(),
+        now_ms=zetad_worker.runtime_time_ms(),
     )
     monkeypatch.setattr(
-        zeta_worker,
+        zetad_worker,
         "project_executors",
         lambda _runtime: (locked_agent, free_agent),
     )
-    runtime = zeta_worker.WorkerServices(
+    runtime = zetad_worker.WorkerServices(
         project_root=tmp_path,
         state_dir=tmp_path,
         events=event_store,
     )
 
-    message = asyncio.run(zeta_worker.run_once(runtime))
+    message = asyncio.run(zetad_worker.run_once(runtime))
     queue_rows = {
         row["queue_item_id"]: row
         for row in event_store.connection.execute(
@@ -5055,37 +5057,37 @@ def test_zeta_local_runtime_run_once_fans_out_pending_queue_item(
     accepted = event_store.accept(
         zeta_events.DraftEvent("github.issue.opened", "github", {})
     ).event
-    calls: list[zeta_dispatch.AgentInvocation] = []
+    calls: list[zetad_dispatch.AgentInvocation] = []
 
-    async def run_agent(run: zeta_dispatch.AgentInvocation) -> dict[str, object]:
+    async def run_agent(run: zetad_dispatch.AgentInvocation) -> dict[str, object]:
         calls.append(run)
         return {"event_id": run.triggering_event.id}
 
     agents = (
-        zeta_dispatch.ExecutableAgent(
-            zeta_dispatch.AgentDefinition(
+        zetad_dispatch.ExecutableAgent(
+            zetad_dispatch.AgentDefinition(
                 "agent.one",
-                (zeta_dispatch.EventPattern("github.issue.opened"),),
+                (zetad_dispatch.EventPattern("github.issue.opened"),),
             ),
             run=run_agent,
         ),
-        zeta_dispatch.ExecutableAgent(
-            zeta_dispatch.AgentDefinition(
+        zetad_dispatch.ExecutableAgent(
+            zetad_dispatch.AgentDefinition(
                 "agent.two",
-                (zeta_dispatch.EventPattern("github.issue.opened"),),
+                (zetad_dispatch.EventPattern("github.issue.opened"),),
             ),
             run=run_agent,
         ),
     )
-    monkeypatch.setattr(zeta_worker, "project_executors", lambda _runtime: agents)
-    runtime = zeta_worker.WorkerServices(
+    monkeypatch.setattr(zetad_worker, "project_executors", lambda _runtime: agents)
+    runtime = zetad_worker.WorkerServices(
         project_root=tmp_path,
         state_dir=tmp_path,
         events=event_store,
     )
 
-    message = asyncio.run(zeta_worker.run_once(runtime))
-    items = zeta_queue.project_queue_items(
+    message = asyncio.run(zetad_worker.run_once(runtime))
+    items = zetad_queue.project_queue_items(
         event_store.list_events(zeta_events.Filter())
     )
 
@@ -5112,7 +5114,7 @@ def test_zeta_local_runtime_run_once_handles_eventlog_rpc_request(
         )
     ).event
     request = event_store.accept(
-        zeta_rpc.rpc_requested_draft(
+        zetad_rpc.rpc_requested_draft(
             "events.list",
             {"event_type": "zeta.user_message"},
             request_id="req_runtime",
@@ -5121,16 +5123,16 @@ def test_zeta_local_runtime_run_once_handles_eventlog_rpc_request(
     ).event
     registry = CapabilityRegistry()
     captured: dict[str, object] = {}
-    original_session_turn_agent = zeta_worker.session_turn_agent
+    original_session_turn_agent = zetad_worker.session_turn_agent
 
     def capture_session_turn_agent(
         session: zeta_runtime_context.RuntimeContext,
         *,
-        publish_event: Callable[[zeta_session_turn_agent.RuntimePublishedEvent], None],
+        publish_event: Callable[[zetad_session_turn.RuntimePublishedEvent], None],
         cancellation_event_for_run: (
-            zeta_session_turn_agent.CancellationEventForRun | None
+            zetad_session_turn.CancellationEventForRun | None
         ) = None,
-    ) -> zeta_dispatch.ExecutableAgent:
+    ) -> zetad_dispatch.ExecutableAgent:
         captured["tool_registry"] = session.tool_registry
         return original_session_turn_agent(
             session,
@@ -5138,15 +5140,15 @@ def test_zeta_local_runtime_run_once_handles_eventlog_rpc_request(
             cancellation_event_for_run=cancellation_event_for_run,
         )
 
-    monkeypatch.setattr(zeta_worker, "session_turn_agent", capture_session_turn_agent)
-    runtime = zeta_worker.WorkerServices(
+    monkeypatch.setattr(zetad_worker, "session_turn_agent", capture_session_turn_agent)
+    runtime = zetad_worker.WorkerServices(
         project_root=tmp_path,
         state_dir=tmp_path,
         events=event_store,
         tool_registry=registry,
     )
 
-    message = asyncio.run(zeta_worker.run_once(runtime))
+    message = asyncio.run(zetad_worker.run_once(runtime))
     response = event_store.children(request.id)[0]
 
     assert message == f"rpc {request.id}"
@@ -5171,7 +5173,7 @@ def test_zeta_local_runtime_cron_matcher_supports_basic_v0_shapes(
     expected: bool,
 ) -> None:
     assert (
-        zeta_scheduling.cron_matches(
+        zetad_scheduling.cron_matches(
             cron,
             datetime(2026, 6, 22, 12, 34, tzinfo=UTC),
         )
@@ -5199,12 +5201,12 @@ Summarize the repo.
     specs = zeta_agent_spec.load_specs(tmp_path / "agents")
 
     try:
-        first = zeta_scheduling.request_due_schedules(
+        first = zetad_scheduling.request_due_schedules(
             event_store,
             specs,
             now=datetime(2026, 6, 22, 12, 34, 56, tzinfo=UTC),
         )
-        second = zeta_scheduling.request_due_schedules(
+        second = zetad_scheduling.request_due_schedules(
             event_store,
             specs,
             now=datetime(2026, 6, 22, 12, 34, 59, tzinfo=UTC),
@@ -5245,17 +5247,17 @@ Summarize the repo.
     specs = zeta_agent_spec.load_specs(tmp_path / "agents")
 
     try:
-        early = zeta_scheduling.request_due_schedules(
+        early = zetad_scheduling.request_due_schedules(
             event_store,
             specs,
             now=datetime(2026, 6, 22, 7, 59, tzinfo=UTC),
         )
-        late = zeta_scheduling.request_due_schedules(
+        late = zetad_scheduling.request_due_schedules(
             event_store,
             specs,
             now=datetime(2026, 6, 22, 10, 0, tzinfo=UTC),
         )
-        repeated = zeta_scheduling.request_due_schedules(
+        repeated = zetad_scheduling.request_due_schedules(
             event_store,
             specs,
             now=datetime(2026, 6, 22, 10, 1, tzinfo=UTC),
@@ -5315,12 +5317,12 @@ Summarize the repo.
     specs = zeta_agent_spec.load_specs(tmp_path / "agents")
 
     try:
-        earlier_events = zeta_scheduling.request_due_schedules(
+        earlier_events = zetad_scheduling.request_due_schedules(
             event_store,
             specs,
             now=datetime(2026, 6, 21, 10, 0, tzinfo=UTC),
         )
-        scheduled_events = zeta_scheduling.request_due_schedules(
+        scheduled_events = zetad_scheduling.request_due_schedules(
             event_store,
             specs,
             now=datetime(2026, 6, 23, 7, 0, tzinfo=UTC),
@@ -5366,7 +5368,7 @@ Summarize the repo.
     specs = zeta_agent_spec.load_specs(tmp_path / "agents")
 
     try:
-        events = zeta_scheduling.request_due_schedules(
+        events = zetad_scheduling.request_due_schedules(
             event_store,
             specs,
             now=datetime(2026, 6, 22, 17, 0, tzinfo=UTC),
@@ -5401,7 +5403,7 @@ Summarize the repo.
     specs = zeta_agent_spec.load_specs(tmp_path / "agents")
 
     try:
-        rows = zeta_scheduling.schedule_status(
+        rows = zetad_scheduling.schedule_status(
             event_store,
             specs,
             now=datetime(2026, 6, 22, 7, 30, tzinfo=UTC),
@@ -5441,12 +5443,12 @@ Summarize the repo.
     specs = zeta_agent_spec.load_specs(tmp_path / "agents")
 
     try:
-        zeta_scheduling.request_due_schedules(
+        zetad_scheduling.request_due_schedules(
             event_store,
             specs,
             now=datetime(2026, 6, 22, 10, 0, tzinfo=UTC),
         )
-        rows = zeta_scheduling.schedule_status(
+        rows = zetad_scheduling.schedule_status(
             event_store,
             specs,
             now=datetime(2026, 6, 22, 10, 5, tzinfo=UTC),
@@ -5473,8 +5475,8 @@ def test_zeta_scheduler_tick_events_do_not_enter_worker_queue(
             )
         )
 
-        queued = zeta_worker.enqueue_pending_events(event_store)
-        items = zeta_queue.project_queue_items(
+        queued = zetad_worker.enqueue_pending_events(event_store)
+        items = zetad_queue.project_queue_items(
             event_store.list_events(zeta_events.Filter())
         )
     finally:
@@ -5502,11 +5504,11 @@ Summarize the repo.
 """,
         encoding="utf-8",
     )
-    runtime = zeta_scheduling.build_scheduler_services(project_root=tmp_path)
+    runtime = zetad_scheduling.build_scheduler_services(project_root=tmp_path)
 
     try:
         with pytest.raises(ManifestError, match="unknown event 'github.issue.opened'"):
-            zeta_scheduling.request_due_project_schedules(
+            zetad_scheduling.request_due_project_schedules(
                 runtime,
                 now=datetime(2026, 6, 22, 12, 34, tzinfo=UTC),
             )
@@ -5540,22 +5542,22 @@ def test_zeta_scheduler_published_event_runs_on_worker(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    calls: list[zeta_dispatch.AgentInvocation] = []
+    calls: list[zetad_dispatch.AgentInvocation] = []
 
-    async def run_agent(run: zeta_dispatch.AgentInvocation) -> dict[str, object]:
+    async def run_agent(run: zetad_dispatch.AgentInvocation) -> dict[str, object]:
         calls.append(run)
         return {"event_type": run.triggering_event.event_type}
 
     def compile_agents(
         spec: object,
         **_kwargs: object,
-    ) -> list[zeta_dispatch.ExecutableAgent]:
+    ) -> list[zetad_dispatch.ExecutableAgent]:
         del spec
         return [
-            zeta_dispatch.ExecutableAgent(
-                zeta_dispatch.AgentDefinition(
+            zetad_dispatch.ExecutableAgent(
+                zetad_dispatch.AgentDefinition(
                     "scheduled",
-                    (zeta_dispatch.EventPattern("agent.scheduled.scheduled"),),
+                    (zetad_dispatch.EventPattern("agent.scheduled.scheduled"),),
                 ),
                 run=run_agent,
             )
@@ -5574,23 +5576,23 @@ Summarize the repo.
 """,
         encoding="utf-8",
     )
-    monkeypatch.setattr(zeta_worker, "compile_agent_definitions", compile_agents)
+    monkeypatch.setattr(zetad_worker, "compile_agent_definitions", compile_agents)
     event_store = zeta_events.SqliteEventStore(event_store_path(tmp_path / ".zeta"))
     specs = zeta_agent_spec.load_specs(tmp_path / "agents")
-    scheduled_events = zeta_scheduling.request_due_schedules(
+    scheduled_events = zetad_scheduling.request_due_schedules(
         event_store,
         specs,
         now=datetime(2026, 6, 22, 12, 34, tzinfo=UTC),
     )
-    runtime = zeta_worker.WorkerServices(
+    runtime = zetad_worker.WorkerServices(
         project_root=tmp_path,
         state_dir=tmp_path / ".zeta",
         events=event_store,
     )
 
     try:
-        message = asyncio.run(zeta_worker.run_once(runtime))
-        items = zeta_queue.project_queue_items(
+        message = asyncio.run(zetad_worker.run_once(runtime))
+        items = zetad_queue.project_queue_items(
             runtime.events.list_events(zeta_events.Filter())
         )
     finally:
@@ -5614,12 +5616,12 @@ def test_zeta_local_runtime_run_forever_reuses_run_once_path(
     event = event_store.accept(
         zeta_events.DraftEvent("github.issue.opened", "github", {}, session_id="repo")
     ).event
-    calls: list[zeta_dispatch.AgentInvocation] = []
+    calls: list[zetad_dispatch.AgentInvocation] = []
 
     async def exercise() -> None:
         stop_event = asyncio.Event()
 
-        async def run_agent(run: zeta_dispatch.AgentInvocation) -> dict[str, object]:
+        async def run_agent(run: zetad_dispatch.AgentInvocation) -> dict[str, object]:
             calls.append(run)
             stop_event.set()
             return {"event_id": run.triggering_event.id}
@@ -5627,13 +5629,13 @@ def test_zeta_local_runtime_run_forever_reuses_run_once_path(
         def compile_agents(
             spec: object,
             **_kwargs: object,
-        ) -> list[zeta_dispatch.ExecutableAgent]:
+        ) -> list[zetad_dispatch.ExecutableAgent]:
             del spec
             return [
-                zeta_dispatch.ExecutableAgent(
-                    zeta_dispatch.AgentDefinition(
+                zetad_dispatch.ExecutableAgent(
+                    zetad_dispatch.AgentDefinition(
                         "issue-triage",
-                        (zeta_dispatch.EventPattern("github.issue.opened"),),
+                        (zetad_dispatch.EventPattern("github.issue.opened"),),
                     ),
                     run=run_agent,
                 )
@@ -5654,13 +5656,13 @@ Triage the issue.
             encoding="utf-8",
         )
         monkeypatch.setattr(
-            zeta_worker,
+            zetad_worker,
             "compile_agent_definitions",
             compile_agents,
         )
-        runtime = zeta_worker.build_worker_services(project_root=tmp_path)
+        runtime = zetad_worker.build_worker_services(project_root=tmp_path)
         try:
-            await zeta_worker.run_forever(
+            await zetad_worker.run_forever(
                 runtime,
                 poll_interval_seconds=0,
                 stop_event=stop_event,
@@ -5669,7 +5671,7 @@ Triage the issue.
             runtime.close()
 
     asyncio.run(exercise())
-    items = zeta_queue.project_queue_items(
+    items = zetad_queue.project_queue_items(
         event_store.list_events(zeta_events.Filter())
     )
 
@@ -5699,7 +5701,7 @@ def test_zeta_local_runtime_run_forever_respects_max_concurrent(
         both_started = asyncio.Event()
         release = asyncio.Event()
 
-        async def run_agent(run: zeta_dispatch.AgentInvocation) -> dict[str, object]:
+        async def run_agent(run: zetad_dispatch.AgentInvocation) -> dict[str, object]:
             started.append(run.triggering_event.id)
             if len(started) == 2:
                 both_started.set()
@@ -5708,15 +5710,17 @@ def test_zeta_local_runtime_run_forever_respects_max_concurrent(
             stop_event.set()
             return {"event_id": run.triggering_event.id}
 
-        agent = zeta_dispatch.ExecutableAgent(
-            zeta_dispatch.AgentDefinition(
+        agent = zetad_dispatch.ExecutableAgent(
+            zetad_dispatch.AgentDefinition(
                 "issue-triage",
-                (zeta_dispatch.EventPattern("github.issue.opened"),),
+                (zetad_dispatch.EventPattern("github.issue.opened"),),
             ),
             run=run_agent,
         )
-        monkeypatch.setattr(zeta_worker, "project_executors", lambda _runtime: (agent,))
-        runtime = zeta_worker.WorkerServices(
+        monkeypatch.setattr(
+            zetad_worker, "project_executors", lambda _runtime: (agent,)
+        )
+        runtime = zetad_worker.WorkerServices(
             project_root=tmp_path,
             state_dir=tmp_path,
             events=event_store,
@@ -5724,7 +5728,7 @@ def test_zeta_local_runtime_run_forever_respects_max_concurrent(
         )
 
         worker = asyncio.create_task(
-            zeta_worker.run_forever(
+            zetad_worker.run_forever(
                 runtime,
                 poll_interval_seconds=0,
                 stop_event=stop_event,
@@ -5734,7 +5738,7 @@ def test_zeta_local_runtime_run_forever_respects_max_concurrent(
         await worker
 
     asyncio.run(exercise())
-    items = zeta_queue.project_queue_items(
+    items = zetad_queue.project_queue_items(
         event_store.list_events(zeta_events.Filter())
     )
 
@@ -5748,14 +5752,14 @@ def test_zeta_local_runtime_run_forever_logs_and_continues_after_run_once_failur
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     event_store = zeta_events.SqliteEventStore(tmp_path / "events.sqlite3")
-    runtime = zeta_worker.WorkerServices(
+    runtime = zetad_worker.WorkerServices(
         project_root=tmp_path,
         state_dir=tmp_path,
         events=event_store,
     )
     calls = 0
 
-    async def run_once(runtime: zeta_worker.WorkerServices) -> str:
+    async def run_once(runtime: zetad_worker.WorkerServices) -> str:
         nonlocal calls
         del runtime
         calls += 1
@@ -5765,15 +5769,15 @@ def test_zeta_local_runtime_run_forever_logs_and_continues_after_run_once_failur
         return "queue empty"
 
     async def exercise() -> None:
-        with caplog.at_level(logging.ERROR, logger=zeta_worker.__name__):
-            await zeta_worker.run_forever(
+        with caplog.at_level(logging.ERROR, logger=zetad_worker.__name__):
+            await zetad_worker.run_forever(
                 runtime,
                 poll_interval_seconds=0,
                 stop_event=stop_event,
             )
 
     stop_event = asyncio.Event()
-    monkeypatch.setattr(zeta_worker, "run_once", run_once)
+    monkeypatch.setattr(zetad_worker, "run_once", run_once)
 
     asyncio.run(exercise())
 
@@ -5786,7 +5790,7 @@ def test_zeta_local_runtime_run_forever_reaps_done_tasks_before_refilling(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     event_store = zeta_events.SqliteEventStore(tmp_path / "events.sqlite3")
-    runtime = zeta_worker.WorkerServices(
+    runtime = zetad_worker.WorkerServices(
         project_root=tmp_path,
         state_dir=tmp_path,
         events=event_store,
@@ -5796,7 +5800,7 @@ def test_zeta_local_runtime_run_forever_reaps_done_tasks_before_refilling(
     release_first_batch = asyncio.Event()
     first_batch_done = asyncio.Event()
 
-    async def run_once(runtime: zeta_worker.WorkerServices) -> str:
+    async def run_once(runtime: zetad_worker.WorkerServices) -> str:
         nonlocal started
         del runtime
         started += 1
@@ -5810,7 +5814,7 @@ def test_zeta_local_runtime_run_forever_reaps_done_tasks_before_refilling(
 
     async def exercise() -> None:
         worker = asyncio.create_task(
-            zeta_worker.run_forever(
+            zetad_worker.run_forever(
                 runtime,
                 poll_interval_seconds=0,
                 stop_event=stop_event,
@@ -5823,7 +5827,7 @@ def test_zeta_local_runtime_run_forever_reaps_done_tasks_before_refilling(
         await asyncio.wait_for(worker, timeout=1)
 
     stop_event = asyncio.Event()
-    monkeypatch.setattr(zeta_worker, "run_once", run_once)
+    monkeypatch.setattr(zetad_worker, "run_once", run_once)
 
     asyncio.run(exercise())
 
@@ -5836,13 +5840,13 @@ def test_zeta_cli_run_forever_invokes_runtime_loop(
 ) -> None:
     captured: dict[str, Path] = {}
 
-    async def run_forever(runtime: zeta_worker.WorkerServices) -> None:
+    async def run_forever(runtime: zetad_worker.WorkerServices) -> None:
         captured["project_root"] = runtime.project_root
 
-    monkeypatch.setattr(zeta_worker, "run_forever", run_forever)
+    monkeypatch.setattr(zetad_worker, "run_forever", run_forever)
 
     result = CliRunner().invoke(
-        zeta_cli.cli,
+        zetad_cli.cli,
         ["run", "--project-root", str(tmp_path)],
     )
 
@@ -5859,22 +5863,22 @@ def test_zeta_cli_run_once_executes_one_available_queue_item(
     event = event_store.accept(
         zeta_events.DraftEvent("github.issue.opened", "github", {}, session_id="repo")
     ).event
-    calls: list[zeta_dispatch.AgentInvocation] = []
+    calls: list[zetad_dispatch.AgentInvocation] = []
 
-    async def run_agent(run: zeta_dispatch.AgentInvocation) -> dict[str, object]:
+    async def run_agent(run: zetad_dispatch.AgentInvocation) -> dict[str, object]:
         calls.append(run)
         return {"outcome": "handled"}
 
     def compile_agents(
         spec: object,
         **_kwargs: object,
-    ) -> list[zeta_dispatch.ExecutableAgent]:
+    ) -> list[zetad_dispatch.ExecutableAgent]:
         del spec
         return [
-            zeta_dispatch.ExecutableAgent(
-                zeta_dispatch.AgentDefinition(
+            zetad_dispatch.ExecutableAgent(
+                zetad_dispatch.AgentDefinition(
                     "issue-triage",
-                    (zeta_dispatch.EventPattern("github.issue.opened"),),
+                    (zetad_dispatch.EventPattern("github.issue.opened"),),
                 ),
                 run=run_agent,
             )
@@ -5894,13 +5898,13 @@ Triage {{ event.payload.title }}
 """,
         encoding="utf-8",
     )
-    monkeypatch.setattr(zeta_worker, "compile_agent_definitions", compile_agents)
+    monkeypatch.setattr(zetad_worker, "compile_agent_definitions", compile_agents)
 
     result = CliRunner().invoke(
-        zeta_cli.cli,
+        zetad_cli.cli,
         ["run", "--project-root", str(tmp_path), "--once"],
     )
-    items = zeta_queue.project_queue_items(
+    items = zetad_queue.project_queue_items(
         event_store.list_events(zeta_events.Filter())
     )
 

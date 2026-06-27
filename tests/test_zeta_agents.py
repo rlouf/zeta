@@ -49,10 +49,10 @@ from zeta.events import DraftEvent, Event
 from zeta.records.stores import Filter
 from zeta.run.config import AgentConfig
 from zeta.run.runtime import AgentRunResult
-from zetad import dispatch as zeta_dispatch
-from zetad import queue as zeta_queue
-from zetad import scheduling as zeta_scheduling
-from zetad import worker as zeta_worker
+from zetad import dispatch as zetad_dispatch
+from zetad import queue as zetad_queue
+from zetad import scheduling as zetad_scheduling
+from zetad import worker as zetad_worker
 from zetad.agents import (
     AgentDefinition,
     EventPattern,
@@ -1222,7 +1222,7 @@ Reply.
         },
         ingress_poller=poll_slack,
     )
-    runtime = zeta_worker.WorkerServices(
+    runtime = zetad_worker.WorkerServices(
         project_root=tmp_path,
         state_dir=tmp_path / ".zeta",
         events=zeta_events.SqliteEventStore(tmp_path / "events.sqlite3"),
@@ -1230,7 +1230,7 @@ Reply.
     )
 
     try:
-        inserted = asyncio.run(zeta_worker.run_ingress_once(runtime))
+        inserted = asyncio.run(zetad_worker.run_ingress_once(runtime))
         events = runtime.events.list_events(
             zeta_events.Filter(event_type="slack.dm.received")
         )
@@ -1301,7 +1301,7 @@ Reply.
         },
         ingress_poller=poll_slack,
     )
-    runtime = zeta_worker.WorkerServices(
+    runtime = zetad_worker.WorkerServices(
         project_root=tmp_path,
         state_dir=tmp_path / ".zeta",
         events=zeta_events.SqliteEventStore(tmp_path / "events.sqlite3"),
@@ -1310,7 +1310,7 @@ Reply.
 
     try:
         asyncio.run(
-            zeta_worker.run_ingress_forever(
+            zetad_worker.run_ingress_forever(
                 runtime,
                 poll_interval_seconds=0,
                 stop_event=stop_event,
@@ -1357,7 +1357,7 @@ Send.
         calls.append((event.payload["text"], idempotency_key))
         return {"provider_message_id": "m1"}
 
-    runtime = zeta_worker.WorkerServices(
+    runtime = zetad_worker.WorkerServices(
         project_root=tmp_path,
         state_dir=tmp_path / ".zeta",
         events=zeta_events.SqliteEventStore(tmp_path / "events.sqlite3"),
@@ -1372,11 +1372,11 @@ Send.
     )
 
     try:
-        message = asyncio.run(zeta_worker.run_once(runtime))
+        message = asyncio.run(zetad_worker.run_once(runtime))
         egress_events = runtime.events.list_events(
             zeta_events.Filter(event_type_prefix="runtime.egress.")
         )
-        queue_items = zeta_queue.project_queue_items(
+        queue_items = zetad_queue.project_queue_items(
             runtime.events.list_events(zeta_events.Filter())
         )
     finally:
@@ -1420,7 +1420,7 @@ Send.
     ) -> None:
         raise RuntimeError("slack unavailable")
 
-    runtime = zeta_worker.WorkerServices(
+    runtime = zetad_worker.WorkerServices(
         project_root=tmp_path,
         state_dir=tmp_path / ".zeta",
         events=zeta_events.SqliteEventStore(tmp_path / "events.sqlite3"),
@@ -1435,11 +1435,11 @@ Send.
     )
 
     try:
-        message = asyncio.run(zeta_worker.run_once(runtime))
+        message = asyncio.run(zetad_worker.run_once(runtime))
         egress_events = runtime.events.list_events(
             zeta_events.Filter(event_type_prefix="runtime.egress.")
         )
-        queue_items = zeta_queue.project_queue_items(
+        queue_items = zetad_queue.project_queue_items(
             runtime.events.list_events(zeta_events.Filter())
         )
     finally:
@@ -1475,13 +1475,13 @@ egress:
 Send a scheduled update.
 """,
     )
-    runtime = zeta_scheduling.build_scheduler_services(
+    runtime = zetad_scheduling.build_scheduler_services(
         project_root=tmp_path,
         plugin_resolver=PluginMap(_slack_plugin()),
     )
 
     try:
-        events = zeta_scheduling.request_due_project_schedules(runtime)
+        events = zetad_scheduling.request_due_project_schedules(runtime)
     finally:
         runtime.close()
 
@@ -1565,7 +1565,7 @@ User asked: {{ event.payload.text }}
 
     compiled = zeta_agents.compile_agent_definition(spec, run_turn=run_turn)
     store = zeta_events.SqliteEventStore(tmp_path / "events.sqlite3")
-    dispatcher = zeta_dispatch.EventDispatcher(store, executors=[compiled])
+    dispatcher = zetad_dispatch.EventDispatcher(store, executors=[compiled])
 
     outcome = asyncio.run(
         dispatcher.publish_and_run(
@@ -1586,7 +1586,7 @@ User asked: {{ event.payload.text }}
     assert calls[0]["config"].system_prompt == "Answers workspace questions in Slack."
     assert tuple(calls[0]["config"].allowed_capabilities or ()) == ("Read",)
     assert calls[0]["kwargs"]["caused_by"] == outcome.event.id
-    assert zeta_queue.terminal_queue_item_result(
+    assert zetad_queue.terminal_queue_item_result(
         outcome.lifecycle_events,
         event_id=outcome.event.id,
         target_agent="slack-qa",
@@ -1618,7 +1618,7 @@ def test_zeta_agent_with_returns_publishes_structured_return_event(
         structured_output=_recording_structured_return(structured_calls),
     )
     store = zeta_events.SqliteEventStore(tmp_path / "events.sqlite3")
-    dispatcher = zeta_dispatch.EventDispatcher(store, executors=[compiled])
+    dispatcher = zetad_dispatch.EventDispatcher(store, executors=[compiled])
 
     outcome = asyncio.run(
         dispatcher.publish_and_run(
@@ -1633,7 +1633,7 @@ def test_zeta_agent_with_returns_publishes_structured_return_event(
     returned = store.list_events(
         zeta_events.Filter(event_type="message.delivery.requested")
     )
-    terminal = zeta_queue.terminal_queue_item_result(
+    terminal = zetad_queue.terminal_queue_item_result(
         outcome.lifecycle_events,
         event_id=outcome.event.id,
         target_agent="slack-qa",

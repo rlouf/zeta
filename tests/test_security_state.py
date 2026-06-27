@@ -60,7 +60,7 @@ from zeta.records.stores import (
     event_store_path,
 )
 from zeta.run import runs as zeta_kernel_runs
-from zetad import dispatch as zeta_kernel_dispatch
+from zetad import dispatch as zetad_dispatch
 from zetad.attempts import (
     Attempt,
     attempt_event_payload,
@@ -210,8 +210,8 @@ def test_zeta_dispatch_kernel_defines_queue_item_and_attempt_shapes() -> None:
     assert attempt.error is None
     assert attempt.session_id is None
     assert attempt.run_id == "run_123"
-    assert zeta_kernel_dispatch.QueueItem is QueueItem
-    assert zeta_kernel_dispatch.Attempt is Attempt
+    assert zetad_dispatch.QueueItem is QueueItem
+    assert zetad_dispatch.Attempt is Attempt
 
 
 def test_zeta_queue_item_runtime_payload_round_trips() -> None:

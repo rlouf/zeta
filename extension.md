@@ -1,8 +1,8 @@
-# Ingress / Egress Plugin Plan
+# EventConnector Plan
 
 ## Goal
 
-Add a small package interface for external systems that can move events into and out of Zeta.
+Add a small connector interface for external systems that can move events into and out of Zeta.
 
 The scope is deliberately narrower than a general extension system:
 
@@ -17,12 +17,12 @@ Tools, skills, resources, and model providers may also become extension points l
 The Python runtime already has most of the required event machinery:
 
 - Agent manifests can declare `ingress` and `egress` sections.
-- Plugin-provided event schemas are merged into the project event registry.
+- EventConnector-provided event schemas are merged into the project event registry.
 - Ingress pollers can produce `DraftEvent`s that are accepted into the durable event log.
 - Egress handlers are wired as durable queue executors for matching event types.
 - Egress lifecycle is recorded as `runtime.egress.started`, `runtime.egress.completed`, or `runtime.egress.failed`.
 
-The missing piece is a public package/discovery/configuration boundary. Today the plugin resolver is mostly a test/runtime injection point.
+The missing piece is a public connector/discovery/configuration boundary. Today the connector resolver is mostly a test/runtime injection point.
 
 ## Event Model
 
@@ -69,7 +69,7 @@ If an egress event has no per-agent filter or config, we may eventually allow th
 
 ## Public Interface Draft
 
-Keep the public interface small: one package object with maps from event type to callables.
+Keep the public interface small: one connector object with maps from event type to callables.
 
 ```python
 from collections.abc import Awaitable, Callable, Iterable, Mapping
@@ -113,7 +113,7 @@ class EventConnector:
     filters: Mapping[str, Mapping[str, Any] | None] = field(default_factory=dict)
 ```
 
-`EventConnector` is the public package object for an external or local event boundary.
+`EventConnector` is the public object for an external or local event boundary.
 
 Runtime meaning:
 
@@ -122,11 +122,11 @@ Runtime meaning:
 - `egress[event_type]` handles durable events of that type.
 - `filters[event_type]` validates the per-agent `filter` for either ingress or egress bindings.
 
-This keeps the plugin authoring surface simple. A package can still implement its internals using classes, clients, cursors, and helpers, but the runtime only needs this object.
+This keeps the connector authoring surface simple. A connector package can still implement its internals using classes, clients, cursors, and helpers, but the runtime only needs this object.
 
 ## Discovery And Enablement
 
-Use package entry points for discovery, but require explicit enablement.
+Use package entry points for discovery, but require explicit connector enablement.
 
 Example package metadata:
 
@@ -142,11 +142,11 @@ event_connectors:
   - slack
 ```
 
-Installed packages should not become active merely because they are importable. Discovery answers "what is available"; project config answers "what may run."
+Installed connector packages should not become active merely because they are importable. Discovery answers "what is available"; project config answers "what may run."
 
-## Slack Package Sketch
+## Slack Connector Sketch
 
-Slack can be the first package because it exercises both ingress and egress.
+Slack can be the first connector because it exercises both ingress and egress.
 
 ```python
 SLACK_MESSAGE_RECEIVED = "slack.message.received"
@@ -192,18 +192,18 @@ Egress should receive an idempotency key derived from the durable event id unles
 
 Ingress:
 
-1. Load enabled event I/O packages.
-2. Load agent specs and validate `ingress` bindings against package-owned event types.
+1. Load enabled event connectors.
+2. Load agent specs and validate `ingress` bindings against connector-owned event types.
 3. Poll enabled ingress handlers.
 4. Validate produced event payloads.
 5. Accept produced events into the durable event log using the binding idempotency key.
 
 Egress:
 
-1. Load enabled event I/O packages.
-2. Load agent specs and validate `egress` bindings against package-owned event types.
+1. Load enabled event connectors.
+2. Load agent specs and validate `egress` bindings against connector-owned event types.
 3. Register durable egress executors for matching event types.
-4. When a matching event is queued, call the package handler.
+4. When a matching event is queued, call the connector handler.
 5. Record `runtime.egress.started`.
 6. Record either `runtime.egress.completed` with handler result or `runtime.egress.failed` with the error.
 
@@ -215,16 +215,16 @@ Start with tests before implementation.
 
 Core tests:
 
-- A package can contribute event schemas.
+- A connector can contribute event schemas.
 - Agent manifests validate `ingress` and `egress` bindings by event type.
 - Unknown ingress/egress event types fail validation.
-- Invalid filters fail validation with the package filter schema.
+- Invalid filters fail validation with the connector filter schema.
 - Ingress-produced events are appended with rendered idempotency keys.
 - Egress handlers are invoked for matching returned events.
 - Egress failures record `runtime.egress.failed` without crashing unrelated work.
-- Package discovery lists available packages but only enabled packages are loaded.
+- Connector discovery lists available connectors but only enabled connectors are loaded.
 
-Slack package tests:
+Slack connector tests:
 
 - Incoming Slack message maps to `slack.message.received`.
 - Slack message ingress sets a stable session id for thread continuity.
@@ -261,10 +261,10 @@ egress:
 Migration steps:
 
 1. Introduce event-first bindings while tests lock current behavior.
-2. Update validation to resolve packages by event type instead of `source` or `sink`.
+2. Update validation to resolve connectors by event type instead of `source` or `sink`.
 3. Update egress executor registration to use `binding.event`.
 4. Update ingress polling to use `binding.event`.
-5. Add package discovery and explicit enablement.
+5. Add connector discovery and explicit enablement.
 6. Rename Slack event examples to the new convention.
 7. Remove `source` and `sink` compatibility rather than carrying legacy behavior.
 
@@ -300,17 +300,17 @@ Options:
   - May be too abstract.
 - `EventAdapter`
   - Technically accurate: adapts external systems to/from Zeta events.
-  - Might imply one event type rather than a package of event types.
+  - Might imply one event type rather than a connector-owned set of event types.
 - `IOProvider`
   - Short.
   - Too generic without the word event.
 
-Current preference: `EventConnector` for the package object and `event_connectors` for config/entry-point naming.
+Decision: `EventConnector` for the public object and `event_connectors` for config/entry-point naming.
 
 ## Open Questions
 
-- Should egress bindings be optional when `returns` includes a package-owned egress event and no filter is needed?
+- Should egress bindings be optional when `returns` includes a connector-owned egress event and no filter is needed?
 - Should filters be split into `ingress_filters` and `egress_filters` if the same event type ever appears in both directions?
-- Should package enablement live in the project config, runtime config, or agent manifest?
+- Should connector enablement live in the project config, runtime config, or agent manifest?
 - Should ingress support long-running async streams in addition to polling?
 - Should config and entry points use `event_connectors`, or is `connectors` clear enough in project files?

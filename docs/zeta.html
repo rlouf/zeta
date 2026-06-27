@@ -1,0 +1,967 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Zeta - Durable Agent Runtime</title>
+    <meta
+      name="description"
+      content="Zeta is a durable event runtime for authored agents, explicit queues, prompt provenance, and replayable traces."
+    />
+    <style>
+      :root {
+        color-scheme: light;
+        --ink: #050505;
+        --muted: #5f625f;
+        --line: #d9ddd5;
+        --panel: #fbfcf8;
+        --panel-strong: #f3f6ee;
+        --accent: #14b86a;
+        --accent-dark: #0d7d4a;
+        --blue: #2b66ff;
+        --red: #f04f45;
+        --yellow: #d8a600;
+        --shadow: 0 18px 45px rgba(16, 24, 18, 0.08);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html {
+        background: #f7f8f4;
+        color: var(--ink);
+        font-family:
+          Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+          "Segoe UI", sans-serif;
+        letter-spacing: 0;
+      }
+
+      body {
+        margin: 0;
+        min-width: 320px;
+        background:
+          linear-gradient(rgba(5, 5, 5, 0.045) 1px, transparent 1px),
+          linear-gradient(90deg, rgba(5, 5, 5, 0.045) 1px, transparent 1px),
+          #f7f8f4;
+        background-size:
+          42px 42px,
+          42px 42px,
+          auto;
+      }
+
+      a {
+        color: inherit;
+        text-decoration: none;
+      }
+
+      .page {
+        min-height: 100vh;
+      }
+
+      .shell {
+        width: min(1180px, calc(100% - 36px));
+        margin: 0 auto;
+      }
+
+      .nav {
+        position: sticky;
+        top: 0;
+        z-index: 10;
+        border-bottom: 1px solid rgba(5, 5, 5, 0.08);
+        background: rgba(247, 248, 244, 0.86);
+        backdrop-filter: blur(18px);
+      }
+
+      .nav-inner {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 20px;
+        min-height: 68px;
+      }
+
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        font-weight: 660;
+      }
+
+      .mark {
+        display: grid;
+        width: 30px;
+        height: 30px;
+        place-items: center;
+        border: 1px solid var(--ink);
+        background: #fff;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 16px;
+        line-height: 1;
+      }
+
+      .nav-links {
+        display: flex;
+        align-items: center;
+        gap: 22px;
+        color: #3d403d;
+        font-size: 14px;
+      }
+
+      .nav-cta {
+        border: 1px solid var(--ink);
+        background: var(--ink);
+        color: #fff;
+        padding: 9px 13px;
+        font-size: 14px;
+      }
+
+      .hero {
+        display: grid;
+        grid-template-columns: minmax(0, 0.9fr) minmax(480px, 1.1fr);
+        gap: 42px;
+        align-items: center;
+        min-height: calc(100vh - 68px);
+        padding: 58px 0 48px;
+      }
+
+      .eyebrow {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        margin-bottom: 28px;
+        border: 1px solid var(--line);
+        background: rgba(255, 255, 255, 0.66);
+        padding: 6px 9px;
+        color: #3e433e;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 12px;
+      }
+
+      .pulse {
+        width: 7px;
+        height: 7px;
+        background: var(--accent);
+        box-shadow: 0 0 0 4px rgba(20, 184, 106, 0.14);
+      }
+
+      h1 {
+        margin: 0;
+        max-width: 9.5ch;
+        font-size: clamp(74px, 12vw, 168px);
+        font-weight: 760;
+        line-height: 0.85;
+      }
+
+      .hero-copy {
+        max-width: 620px;
+        margin: 28px 0 0;
+        color: #333733;
+        font-size: clamp(18px, 2vw, 24px);
+        line-height: 1.35;
+      }
+
+      .hero-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        margin-top: 30px;
+      }
+
+      .button {
+        display: inline-flex;
+        align-items: center;
+        min-height: 42px;
+        border: 1px solid var(--ink);
+        padding: 0 16px;
+        font-weight: 620;
+        font-size: 14px;
+      }
+
+      .button.primary {
+        background: var(--ink);
+        color: #fff;
+      }
+
+      .button.secondary {
+        background: #fff;
+      }
+
+      .metrics {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 1px;
+        margin-top: 38px;
+        border: 1px solid var(--line);
+        background: var(--line);
+      }
+
+      .metric {
+        min-height: 96px;
+        background: rgba(255, 255, 255, 0.7);
+        padding: 14px;
+      }
+
+      .metric strong {
+        display: block;
+        font-size: 26px;
+        line-height: 1;
+      }
+
+      .metric span {
+        display: block;
+        margin-top: 10px;
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.25;
+      }
+
+      .console {
+        position: relative;
+        display: grid;
+        grid-template-columns: 0.72fr 1fr;
+        gap: 12px;
+        min-height: 620px;
+      }
+
+      .panel {
+        border: 1px solid var(--line);
+        background: rgba(255, 255, 255, 0.82);
+        box-shadow: var(--shadow);
+      }
+
+      .panel-title {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        min-height: 42px;
+        border-bottom: 1px solid var(--line);
+        padding: 0 13px;
+        color: #3e433e;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 12px;
+      }
+
+      .status {
+        color: var(--accent-dark);
+      }
+
+      .tree {
+        padding: 15px 13px;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 13px;
+        line-height: 1.9;
+      }
+
+      .tree .muted {
+        color: #777b73;
+      }
+
+      .tree .hot {
+        color: var(--blue);
+      }
+
+      .runner {
+        display: flex;
+        flex-direction: column;
+        min-height: 620px;
+      }
+
+      .code-window {
+        flex: 1;
+        padding: 18px;
+        background: #070807;
+        color: #ecf2e8;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 13px;
+        line-height: 1.7;
+        overflow: hidden;
+      }
+
+      .code-window .dim {
+        color: #899188;
+      }
+
+      .code-window .green {
+        color: #6df2ad;
+      }
+
+      .code-window .blue {
+        color: #8fb0ff;
+      }
+
+      .code-window .yellow {
+        color: #ffd76c;
+      }
+
+      .queue {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 1px;
+        border-top: 1px solid #232623;
+        background: #232623;
+      }
+
+      .queue-cell {
+        min-height: 88px;
+        background: #0e100e;
+        padding: 12px;
+        color: #dfe8dc;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 12px;
+      }
+
+      .queue-cell span {
+        display: block;
+        margin-bottom: 18px;
+        color: #879086;
+      }
+
+      .lane {
+        display: grid;
+        gap: 12px;
+        margin-top: 12px;
+      }
+
+      .event-card {
+        border: 1px solid var(--line);
+        background: rgba(255, 255, 255, 0.72);
+        padding: 14px;
+      }
+
+      .event-card strong {
+        display: block;
+        margin-bottom: 8px;
+        font-size: 13px;
+      }
+
+      .event-card p {
+        margin: 0;
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.35;
+      }
+
+      .section {
+        border-top: 1px solid var(--line);
+        padding: 82px 0;
+      }
+
+      .section-head {
+        display: grid;
+        grid-template-columns: 0.68fr 1fr;
+        gap: 42px;
+        align-items: end;
+        margin-bottom: 34px;
+      }
+
+      .section-kicker {
+        color: var(--accent-dark);
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 12px;
+      }
+
+      h2 {
+        margin: 8px 0 0;
+        max-width: 760px;
+        font-size: clamp(38px, 5vw, 72px);
+        line-height: 0.95;
+      }
+
+      .section-head p {
+        margin: 0;
+        color: #3b403a;
+        font-size: 18px;
+        line-height: 1.45;
+      }
+
+      .grid-3 {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 1px;
+        border: 1px solid var(--line);
+        background: var(--line);
+      }
+
+      .feature {
+        min-height: 260px;
+        background: rgba(255, 255, 255, 0.72);
+        padding: 22px;
+      }
+
+      .feature-index {
+        color: var(--muted);
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 12px;
+      }
+
+      .feature h3 {
+        margin: 44px 0 12px;
+        font-size: 24px;
+        line-height: 1.05;
+      }
+
+      .feature p {
+        margin: 0;
+        color: #494e48;
+        line-height: 1.5;
+      }
+
+      .trace-grid {
+        display: grid;
+        grid-template-columns: 0.9fr 1.1fr;
+        gap: 18px;
+        align-items: stretch;
+      }
+
+      .trace-map {
+        min-height: 520px;
+        padding: 24px;
+      }
+
+      .node-map {
+        width: 100%;
+        height: 100%;
+        min-height: 450px;
+      }
+
+      .node-label {
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 12px;
+        fill: #202420;
+      }
+
+      .node-muted {
+        fill: #747a72;
+      }
+
+      .trace-copy {
+        display: grid;
+        grid-template-rows: repeat(3, 1fr);
+        gap: 1px;
+        border: 1px solid var(--line);
+        background: var(--line);
+      }
+
+      .trace-row {
+        background: rgba(255, 255, 255, 0.75);
+        padding: 22px;
+      }
+
+      .trace-row strong {
+        display: block;
+        margin-bottom: 14px;
+        font-size: 22px;
+      }
+
+      .trace-row p {
+        margin: 0;
+        color: #4c514b;
+        line-height: 1.5;
+      }
+
+      .spec-strip {
+        display: grid;
+        grid-template-columns: 1.1fr 0.9fr;
+        gap: 18px;
+      }
+
+      .spec-code {
+        min-height: 520px;
+        border: 1px solid #171917;
+        background: #080908;
+        color: #eef5eb;
+        padding: 22px;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 13px;
+        line-height: 1.75;
+        overflow: hidden;
+      }
+
+      .spec-code .comment {
+        color: #848d82;
+      }
+
+      .spec-code .key {
+        color: #84a6ff;
+      }
+
+      .spec-code .value {
+        color: #72eead;
+      }
+
+      .poster {
+        position: relative;
+        min-height: 520px;
+        overflow: hidden;
+        border: 1px solid var(--line);
+        background:
+          linear-gradient(135deg, rgba(43, 102, 255, 0.12), transparent 38%),
+          linear-gradient(225deg, rgba(20, 184, 106, 0.2), transparent 42%),
+          #ffffff;
+      }
+
+      .poster-word {
+        position: absolute;
+        left: 22px;
+        right: 22px;
+        bottom: 20px;
+        font-size: clamp(54px, 10vw, 126px);
+        font-weight: 760;
+        line-height: 0.85;
+      }
+
+      .poster-stack {
+        position: absolute;
+        top: 22px;
+        right: 22px;
+        left: 22px;
+        display: grid;
+        gap: 8px;
+      }
+
+      .poster-line {
+        display: flex;
+        justify-content: space-between;
+        border: 1px solid var(--line);
+        background: rgba(255, 255, 255, 0.78);
+        padding: 11px 12px;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 12px;
+      }
+
+      .poster-line b {
+        color: var(--accent-dark);
+      }
+
+      .cta {
+        display: grid;
+        grid-template-columns: 0.8fr 1.2fr;
+        gap: 30px;
+        align-items: center;
+        min-height: 360px;
+        border-top: 1px solid var(--line);
+      }
+
+      .cta h2 {
+        font-size: clamp(48px, 7vw, 96px);
+      }
+
+      .cta-terminal {
+        border: 1px solid #171917;
+        background: #080908;
+        padding: 22px;
+        color: #eef5eb;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 13px;
+        line-height: 1.8;
+      }
+
+      .footer {
+        border-top: 1px solid var(--line);
+        padding: 24px 0 40px;
+        color: var(--muted);
+        font-size: 13px;
+      }
+
+      @media (max-width: 960px) {
+        .hero,
+        .section-head,
+        .trace-grid,
+        .spec-strip,
+        .cta {
+          grid-template-columns: 1fr;
+        }
+
+        .hero {
+          min-height: auto;
+          padding-top: 44px;
+        }
+
+        .console {
+          grid-template-columns: 1fr;
+          min-height: auto;
+        }
+
+        .runner {
+          min-height: 540px;
+        }
+
+        .grid-3 {
+          grid-template-columns: 1fr;
+        }
+
+        .nav-links {
+          display: none;
+        }
+      }
+
+      @media (max-width: 620px) {
+        .shell {
+          width: min(100% - 24px, 1180px);
+        }
+
+        h1 {
+          font-size: 72px;
+        }
+
+        .metrics,
+        .queue {
+          grid-template-columns: 1fr;
+        }
+
+        .runner,
+        .trace-map,
+        .spec-code,
+        .poster {
+          min-height: 420px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="page">
+      <nav class="nav">
+        <div class="shell nav-inner">
+          <a class="brand" href="#top" aria-label="Zeta home">
+            <span class="mark">ζ</span>
+            <span>Zeta</span>
+          </a>
+          <div class="nav-links" aria-label="Primary">
+            <a href="#runtime">Runtime</a>
+            <a href="#trace">Trace</a>
+            <a href="#spec">Spec</a>
+            <a class="nav-cta" href="#start">Start</a>
+          </div>
+        </div>
+      </nav>
+
+      <section id="top" class="shell hero">
+        <div>
+          <div class="eyebrow"><span class="pulse"></span> durable agent runtime</div>
+          <h1>Zeta</h1>
+          <p class="hero-copy">
+            Author agents as files. Run them as durable events. Inspect every
+            model call, tool result, queue claim, and prompt boundary.
+          </p>
+          <div class="hero-actions">
+            <a class="button primary" href="#start">Deploy an agent</a>
+            <a class="button secondary" href="#runtime">Inspect the runtime</a>
+          </div>
+          <div class="metrics" aria-label="Zeta runtime properties">
+            <div class="metric">
+              <strong>01</strong>
+              <span>authored specs become explicit event routes</span>
+            </div>
+            <div class="metric">
+              <strong>02</strong>
+              <span>queues, leases, and locks are durable tables</span>
+            </div>
+            <div class="metric">
+              <strong>03</strong>
+              <span>prompt provenance is replayable by construction</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="console" aria-label="Zeta runtime interface preview">
+          <div>
+            <div class="panel">
+              <div class="panel-title">
+                <span>agents/</span>
+                <span class="status">valid</span>
+              </div>
+              <div class="tree">
+                <div>release-manager.md</div>
+                <div>support-triage.md</div>
+                <div class="muted">skills/</div>
+                <div>&nbsp;&nbsp;<span class="hot">code-review.md</span></div>
+                <div>&nbsp;&nbsp;release-notes.md</div>
+                <div class="muted">events/</div>
+                <div>&nbsp;&nbsp;github.pr.opened.json</div>
+                <div>&nbsp;&nbsp;release.ready.json</div>
+                <div class="muted">tools/</div>
+                <div>&nbsp;&nbsp;read.py</div>
+                <div>&nbsp;&nbsp;grep.py</div>
+              </div>
+            </div>
+
+            <div class="lane" aria-label="Runtime events">
+              <div class="event-card">
+                <strong>github.pr.opened</strong>
+                <p>accepted by release-manager, projected into one queue item</p>
+              </div>
+              <div class="event-card">
+                <strong>runtime.attempt.running</strong>
+                <p>lease token fenced, heartbeat active, locks acquired</p>
+              </div>
+              <div class="event-card">
+                <strong>release.ready</strong>
+                <p>returned event is schema-checked before it composes</p>
+              </div>
+            </div>
+          </div>
+
+          <div class="panel runner">
+            <div class="panel-title">
+              <span>zeta run --forever</span>
+              <span class="status">live</span>
+            </div>
+            <div class="code-window">
+              <div><span class="dim">$</span> zeta run --project-root .</div>
+              <br />
+              <div><span class="green">accepted</span> github.pr.opened</div>
+              <div><span class="blue">queued</span> qi_evt_421_release-manager</div>
+              <div><span class="yellow">claimed</span> worker=local-runtime</div>
+              <div><span class="dim">lock</span> repo:release acquired</div>
+              <div><span class="dim">model</span> local-model streamed 822 tokens</div>
+              <div><span class="dim">tool</span> grep returned 12 grounded lines</div>
+              <div><span class="green">completed</span> att_qi_evt_421_1</div>
+              <div><span class="blue">emitted</span> release.ready</div>
+            </div>
+            <div class="queue">
+              <div class="queue-cell"><span>queue</span>available</div>
+              <div class="queue-cell"><span>attempt</span>completed</div>
+              <div class="queue-cell"><span>trace</span>replayable</div>
+              <div class="queue-cell"><span>schema</span>valid</div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="runtime" class="section">
+        <div class="shell">
+          <div class="section-head">
+            <div>
+              <div class="section-kicker">runtime</div>
+              <h2>Agents that behave like software.</h2>
+            </div>
+            <p>
+              Zeta treats every transition as a durable boundary: incoming
+              events, queue lifecycle, model calls, tool results, prompt
+              components, and returned events all land in an inspectable log.
+            </p>
+          </div>
+
+          <div class="grid-3">
+            <article class="feature">
+              <span class="feature-index">01 / authored</span>
+              <h3>An agent is a contract.</h3>
+              <p>
+                Frontmatter declares what an agent accepts, what it may return,
+                which tools it can reach, and whether it can resume state.
+              </p>
+            </article>
+            <article class="feature">
+              <span class="feature-index">02 / durable</span>
+              <h3>The queue is visible.</h3>
+              <p>
+                Claim tokens, attempt rows, locks, heartbeats, and terminal
+                writes are explicit runtime facts instead of hidden control flow.
+              </p>
+            </article>
+            <article class="feature">
+              <span class="feature-index">03 / bounded</span>
+              <h3>Capabilities stay fenced.</h3>
+              <p>
+                Tools are registered as contracts. Staged effects remain
+                inspectable before they touch the outside world.
+              </p>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      <section id="trace" class="section">
+        <div class="shell">
+          <div class="section-head">
+            <div>
+              <div class="section-kicker">trace graph</div>
+              <h2>Prompt provenance without folklore.</h2>
+            </div>
+            <p>
+              Every answer can be traced back to its prompt components, tool
+              calls, model output, and durable event chain.
+            </p>
+          </div>
+
+          <div class="trace-grid">
+            <div class="panel trace-map" aria-label="Prompt provenance diagram">
+              <svg
+                class="node-map"
+                viewBox="0 0 520 420"
+                role="img"
+                aria-labelledby="trace-title trace-desc"
+              >
+                <title id="trace-title">Zeta trace graph</title>
+                <desc id="trace-desc">
+                  A product diagram connecting events, prompts, model calls,
+                  tools, and returned events.
+                </desc>
+                <defs>
+                  <marker
+                    id="arrow"
+                    viewBox="0 0 10 10"
+                    refX="8"
+                    refY="5"
+                    markerWidth="5"
+                    markerHeight="5"
+                    orient="auto-start-reverse"
+                  >
+                    <path d="M 0 0 L 10 5 L 0 10 z" fill="#202420" />
+                  </marker>
+                </defs>
+                <path
+                  d="M122 82 C206 82 211 152 282 152"
+                  stroke="#202420"
+                  stroke-width="1.5"
+                  fill="none"
+                  marker-end="url(#arrow)"
+                />
+                <path
+                  d="M282 152 C360 152 370 82 438 82"
+                  stroke="#202420"
+                  stroke-width="1.5"
+                  fill="none"
+                  marker-end="url(#arrow)"
+                />
+                <path
+                  d="M282 152 C350 188 360 250 438 282"
+                  stroke="#202420"
+                  stroke-width="1.5"
+                  fill="none"
+                  marker-end="url(#arrow)"
+                />
+                <path
+                  d="M122 312 C210 312 214 238 282 238"
+                  stroke="#202420"
+                  stroke-width="1.5"
+                  fill="none"
+                  marker-end="url(#arrow)"
+                />
+                <path
+                  d="M282 238 C326 238 354 282 438 282"
+                  stroke="#202420"
+                  stroke-width="1.5"
+                  fill="none"
+                  marker-end="url(#arrow)"
+                />
+                <rect x="38" y="48" width="120" height="68" fill="#fff" stroke="#202420" />
+                <text x="58" y="77" class="node-label">event</text>
+                <text x="58" y="96" class="node-label node-muted">github.pr</text>
+                <rect x="222" y="118" width="120" height="68" fill="#eef9f2" stroke="#202420" />
+                <text x="242" y="147" class="node-label">prompt</text>
+                <text x="242" y="166" class="node-label node-muted">components</text>
+                <rect x="378" y="48" width="120" height="68" fill="#fff" stroke="#202420" />
+                <text x="398" y="77" class="node-label">model</text>
+                <text x="398" y="96" class="node-label node-muted">stream</text>
+                <rect x="222" y="204" width="120" height="68" fill="#fff" stroke="#202420" />
+                <text x="242" y="233" class="node-label">tools</text>
+                <text x="242" y="252" class="node-label node-muted">grounded</text>
+                <rect x="38" y="278" width="120" height="68" fill="#fff" stroke="#202420" />
+                <text x="58" y="307" class="node-label">state</text>
+                <text x="58" y="326" class="node-label node-muted">session</text>
+                <rect x="378" y="248" width="120" height="68" fill="#f4f6ff" stroke="#202420" />
+                <text x="398" y="277" class="node-label">return</text>
+                <text x="398" y="296" class="node-label node-muted">schema ok</text>
+              </svg>
+            </div>
+            <div class="trace-copy">
+              <div class="trace-row">
+                <strong>Replay the prompt.</strong>
+                <p>
+                  Reconstruct the exact model request from stored components,
+                  selected tools, token budgets, and current timeline.
+                </p>
+              </div>
+              <div class="trace-row">
+                <strong>Diff the answer.</strong>
+                <p>
+                  Compare two runs by prompt object, tool result, model output,
+                  and returned event instead of guessing from logs.
+                </p>
+              </div>
+              <div class="trace-row">
+                <strong>Trust the boundary.</strong>
+                <p>
+                  Durable event schemas make runtime behavior inspectable before
+                  agents compose into larger systems.
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="spec" class="section">
+        <div class="shell">
+          <div class="section-head">
+            <div>
+              <div class="section-kicker">authoring</div>
+              <h2>Markdown for policy. Events for motion.</h2>
+            </div>
+            <p>
+              Zeta keeps the agent surface small: a Markdown file, explicit
+              event schemas, reusable skills, and a runtime that records what
+              happened.
+            </p>
+          </div>
+
+          <div class="spec-strip">
+            <pre class="spec-code" aria-label="Example Zeta agent specification"><span class="comment">---</span>
+<span class="key">name:</span> <span class="value">Release Manager</span>
+<span class="key">description:</span> <span class="value">Prepare release summaries.</span>
+<span class="key">accepts:</span>
+  - <span class="value">github.pr.opened</span>
+<span class="key">returns:</span>
+  - <span class="value">release.ready</span>
+<span class="key">tools:</span>
+  - <span class="value">read</span>
+  - <span class="value">grep</span>
+<span class="key">skills:</span>
+  - <span class="value">code-review</span>
+<span class="key">schedules:</span>
+  - <span class="key">cron:</span> <span class="value">"0 9 * * 1"</span>
+    <span class="key">timezone:</span> <span class="value">Europe/Paris</span>
+<span class="key">resumable:</span> <span class="value">true</span>
+<span class="comment">---</span>
+Review {{ event.payload.title }} and emit a release summary.</pre>
+            <div class="poster" aria-label="No bad outputs poster">
+              <div class="poster-stack">
+                <div class="poster-line"><span>event</span><b>schema</b></div>
+                <div class="poster-line"><span>queue</span><b>lease</b></div>
+                <div class="poster-line"><span>prompt</span><b>trace</b></div>
+                <div class="poster-line"><span>result</span><b>contract</b></div>
+              </div>
+              <div class="poster-word">
+                No<br />
+                Bad<br />
+                Runs
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="start" class="shell cta">
+        <div>
+          <div class="section-kicker">start</div>
+          <h2>Ship the agent loop you can audit.</h2>
+        </div>
+        <div class="cta-terminal">
+          <div>$ mkdir -p agents/events agents/skills</div>
+          <div>$ edit agents/release-manager.md</div>
+          <div>$ zeta events publish github.pr.opened --json payload.json</div>
+          <div>$ zeta run --forever</div>
+        </div>
+      </section>
+
+      <footer class="footer">
+        <div class="shell">
+          Zeta is the durable agent runtime inside Sigil. Built for reliable AI
+          infrastructure by .txt.
+        </div>
+      </footer>
+    </main>
+  </body>
+</html>

@@ -113,11 +113,3 @@ class RunState:
 
     def note_step(self, step: StepName, *effects: StepEffect) -> None:
         self.steps.append(StepResult(step, effects))
-
-
-@dataclass(frozen=True)
-class RunStepOutcome:
-    kind: Literal["continue", "finished", "staged_effect", "aborted"]
-    final_answer: str = ""
-    staged_effect: dict[str, Any] | None = None
-    answer_streamed: bool = False

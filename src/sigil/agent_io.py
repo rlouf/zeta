@@ -7,6 +7,8 @@ workflow-specific tagging, logging, and handoff handling.
 """
 
 import sys
+import time
+from abc import ABC, abstractmethod
 from dataclasses import dataclass, replace
 from typing import Any, TextIO
 
@@ -31,7 +33,6 @@ from zeta.records.events import (
     draft_event_view,
     event_view,
     exact_event_time,
-    user_message_draft,
 )
 from zeta.records.provenance import project_prompt_trace_projection
 from zeta.records.stores.event_store import EventReader, Filter
@@ -40,26 +41,11 @@ from zeta.records.stores.sqlite import SqliteEventStore
 from zeta.run.context import RuntimeContext
 from zeta.run.runtime import (
     AgentRunResult,
+    current_timeline,  # noqa: F401 — re-exported for sigil importers
     is_runtime_ui_event,
 )
 
 RuntimePublishedEvent = Event | DraftEvent
-STAGING_TOOL_NAMES = frozenset({"bash", "edit", "write"})
-
-
-def current_timeline(*, runtime_context: RuntimeContext) -> list[Event]:
-    try:
-        if not isinstance(runtime_context.event_sink, EventReader):
-            return []
-        return runtime_context.event_sink.list_events(
-            Filter(
-                session_id=runtime_context.session_id,
-                event_type_prefix="zeta.",
-            )
-        )
-    except Exception as exc:
-        warn_trace_failure_once("current_timeline", exc)
-        return []
 
 
 def record_trace_for_turn(runtime_context: RuntimeContext, turn_id: str | None) -> None:
@@ -95,24 +81,6 @@ def last_event_time(*, store: Store, run_id: str | None = None) -> float | None:
     except Exception as exc:
         warn_trace_failure_once("last_event_time", exc)
         return None
-
-
-def record_user_message(
-    event: dict[str, Any],
-    *,
-    runtime_context: RuntimeContext,
-) -> Event:
-    payload = {key: value for key, value in event.items() if key != "type"}
-    outcome = runtime_context.event_sink.accept(
-        user_message_draft(
-            payload,
-            session_id=runtime_context.session_id,
-            turn_id=event.get("turn_id")
-            if isinstance(event.get("turn_id"), str)
-            else None,
-        )
-    )
-    return outcome.event
 
 
 def record_runtime_event(
@@ -157,8 +125,6 @@ def record_runtime_event(
 
 
 def time_ms() -> int:
-    import time
-
     return time.time_ns() // 1_000_000
 
 
@@ -208,7 +174,7 @@ def build_turn_renderer(
     return TurnRenderer(trace_state, context_footer, stream_renderer, progress_renderer)
 
 
-class TurnEventRecorder:
+class TurnEventRecorder(ABC):
     """Persist and render agent events as the loop produces them.
 
     Subclasses set ``tag_fields``/``strip_fields`` for timeline tagging and
@@ -338,8 +304,8 @@ class TurnEventRecorder:
             self.renderer.stream_renderer.ensure_trace_boundary()
         render_tool_start(name, args, output=self.render_output, newline=False)
 
-    def handle_tool_result(self, persisted: dict[str, Any]) -> int | None:
-        raise NotImplementedError
+    @abstractmethod
+    def handle_tool_result(self, persisted: dict[str, Any]) -> int | None: ...
 
 
 def render_final_answer(

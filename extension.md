@@ -18,7 +18,7 @@ The Python runtime already has most of the required event machinery:
 
 - Agent manifests can declare `ingress` and `egress` sections.
 - EventConnector-provided event schemas are merged into the project event registry.
-- Ingress pollers can produce `DraftEvent`s that are accepted into the durable event log.
+- Ingress handlers can produce `DraftEvent`s from either a poll tick or an external request that is accepted into the durable event log.
 - Egress handlers are wired as durable queue executors for matching event types.
 - Egress lifecycle is recorded as `runtime.egress.started`, `runtime.egress.completed`, or `runtime.egress.failed`.
 
@@ -67,9 +67,9 @@ There is no `source` or `sink` field. The runtime resolves the owner from the ev
 
 If an egress event has no per-agent filter or config, we may eventually allow the `egress` section to be omitted and derive subscription from `returns`. For the first implementation, keeping an explicit `egress` section is clearer and leaves room for filtering.
 
-## Public Interface Draft
+## Public Interface
 
-Keep the public interface small: one connector object with maps from event type to callables.
+Keep the public interface small: one connector object with maps from event type to callables. These types live in the high-level `connectors` package, not under agent manifest code.
 
 ```python
 from collections.abc import Awaitable, Callable, Iterable, Mapping
@@ -79,8 +79,10 @@ from typing import Any
 from zeta.events import DraftEvent, Event
 
 
-IngressPoller = Callable[
-    ["IngressBinding"],
+IngressInput = Mapping[str, Any] | None
+
+IngressHandler = Callable[
+    ["IngressBinding", IngressInput],
     Iterable[DraftEvent] | Awaitable[Iterable[DraftEvent]],
 ]
 
@@ -108,7 +110,7 @@ class EgressBinding:
 class EventConnector:
     id: str
     events: Mapping[str, Mapping[str, Any] | None] = field(default_factory=dict)
-    ingress: Mapping[str, IngressPoller] = field(default_factory=dict)
+    ingress: Mapping[str, IngressHandler] = field(default_factory=dict)
     egress: Mapping[str, EgressHandler] = field(default_factory=dict)
     filters: Mapping[str, Mapping[str, Any] | None] = field(default_factory=dict)
 ```
@@ -118,7 +120,7 @@ class EventConnector:
 Runtime meaning:
 
 - `events` contributes event payload schemas.
-- `ingress[event_type]` produces events of that type.
+- `ingress[event_type]` produces events of that type. The runtime passes `None` for a poll tick, or the decoded external request payload for a pushed request.
 - `egress[event_type]` handles durable events of that type.
 - `filters[event_type]` validates the per-agent `filter` for either ingress or egress bindings.
 
@@ -132,7 +134,7 @@ Example package metadata:
 
 ```toml
 [project.entry-points."zeta.event_connectors"]
-slack = "zeta_slack:package"
+slack = "connectors.slack:slack_event_connector"
 ```
 
 Example project/runtime config:
@@ -164,12 +166,7 @@ def package(client: SlackClient) -> EventConnector:
             SLACK_MESSAGE_RECEIVED: SLACK_CHANNEL_FILTER_SCHEMA,
             SLACK_MESSAGE_POST: SLACK_CHANNEL_FILTER_SCHEMA,
         },
-        ingress={
-            SLACK_MESSAGE_RECEIVED: lambda binding: poll_slack_messages(
-                client,
-                binding,
-            ),
-        },
+        ingress={SLACK_MESSAGE_RECEIVED: slack_ingress},
         egress={
             SLACK_MESSAGE_POST: lambda event, binding, key: post_slack_message(
                 client,
@@ -194,7 +191,7 @@ Ingress:
 
 1. Load enabled event connectors.
 2. Load agent specs and validate `ingress` bindings against connector-owned event types.
-3. Poll enabled ingress handlers.
+3. Invoke enabled ingress handlers from a poll tick or external request.
 4. Validate produced event payloads.
 5. Accept produced events into the durable event log using the binding idempotency key.
 

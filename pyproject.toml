@@ -54,7 +54,7 @@ sigil = "sigil.cli:main"
 zeta = "zetad.cli:main"
 
 [project.entry-points."zeta.event_connectors"]
-slack = "zeta.agents.resources:slack_event_connector"
+slack = "connectors.slack:slack_event_connector"
 
 [tool.setuptools]
 package-dir = { "" = "src" }
@@ -102,5 +102,5 @@ paths = ["src", "tests"]
 min_confidence = 80
 
 [tool.deptry]
-known_first_party = ["sigil", "zeta", "zetad"]
+known_first_party = ["connectors", "sigil", "zeta", "zetad"]
 package_module_name_map = { PyYAML = "yaml" }

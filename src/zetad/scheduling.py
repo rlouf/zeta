@@ -10,7 +10,7 @@ from zoneinfo import ZoneInfo
 
 from croniter import croniter
 
-from zeta.agents.manifest import EventConnectorResolver
+from connectors import EventConnectorResolver
 from zeta.agents.resources import load_agent_project, validate_agent_project
 from zeta.agents.spec import AgentSpec, ScheduleEntry, scheduled_event_type
 from zeta.events import DraftEvent, Event

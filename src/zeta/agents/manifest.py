@@ -1,16 +1,21 @@
 """Deployment manifest validation for authored agents."""
 
-from collections.abc import Awaitable, Callable, Iterable, Mapping
-from dataclasses import dataclass, field
+from collections.abc import Mapping
+from dataclasses import dataclass
 from typing import Any, Protocol, cast, runtime_checkable
 
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import SchemaError, ValidationError
 
+from connectors import (
+    EgressBinding,
+    EventConnector,
+    EventConnectorResolver,
+    IngressBinding,
+)
 from zeta.agents.events import EventRegistry
 from zeta.agents.prompts import validate_prompt
 from zeta.agents.spec import AgentSpec
-from zeta.events import DraftEvent, Event
 
 RESERVED_TOOL_NAMES = frozenset({"__return"})
 
@@ -31,54 +36,6 @@ class SkillResolver(Protocol):
     """Anything that can look up a skill by name."""
 
     def knows(self, name: str) -> bool: ...
-
-
-@dataclass(frozen=True)
-class IngressBinding:
-    """External event binding parsed from an ingress manifest section."""
-
-    event: str
-    filter: Mapping[str, Any] = field(default_factory=dict)
-    idempotency_key: str | None = None
-
-
-@dataclass(frozen=True)
-class EgressBinding:
-    """External event binding parsed from an egress manifest section."""
-
-    event: str
-    filter: Mapping[str, Any] = field(default_factory=dict)
-    idempotency_key: str | None = None
-
-
-IngressPoller = Callable[
-    [IngressBinding],
-    Iterable[DraftEvent] | Awaitable[Iterable[DraftEvent]],
-]
-EgressHandler = Callable[
-    [Event, EgressBinding, str],
-    Mapping[str, Any] | None | Awaitable[Mapping[str, Any] | None],
-]
-
-
-@dataclass(frozen=True)
-class EventConnector:
-    """Event ingress and egress contributed by an installed connector."""
-
-    id: str
-    events: Mapping[str, Mapping[str, Any] | None] = field(default_factory=dict)
-    ingress: Mapping[str, IngressPoller] = field(default_factory=dict)
-    egress: Mapping[str, EgressHandler] = field(default_factory=dict)
-    filters: Mapping[str, Mapping[str, Any] | None] = field(default_factory=dict)
-
-
-@runtime_checkable
-class EventConnectorResolver(Protocol):
-    """Anything that can resolve installed event connectors."""
-
-    def resolve(self, connector_id: str) -> EventConnector | None: ...
-
-    def names_for_section(self, key: str, value: Any) -> Iterable[str]: ...
 
 
 @dataclass(frozen=True)

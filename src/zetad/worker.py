@@ -13,10 +13,8 @@ from typing import Any, cast
 
 from jsonschema import Draft202012Validator
 
+from connectors import EgressBinding, EventConnectorResolver, IngressBinding
 from zeta.agents.manifest import (
-    EgressBinding,
-    EventConnectorResolver,
-    IngressBinding,
     connector_for_event,
     egress_bindings,
     ingress_bindings,
@@ -241,10 +239,10 @@ async def run_ingress_once(runtime: WorkerServices) -> int:
             connector = connector_for_event(project.connectors, binding.event)
             if connector is None:
                 continue
-            poller = connector.ingress.get(binding.event)
-            if poller is None:
+            handler = connector.ingress.get(binding.event)
+            if handler is None:
                 continue
-            drafts = poller(binding)
+            drafts = handler(binding, None)
             if inspect.isawaitable(drafts):
                 drafts = await drafts
             for draft in cast(Iterable[DraftEvent], drafts):

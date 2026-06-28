@@ -9,7 +9,9 @@ from typing import Any, cast
 
 import click
 
-from zeta.events import Event
+from sigil.tools import register_builtin_tools
+from zeta.capabilities.registry import CapabilityRegistry
+from zeta.events import DraftEvent, Event
 from zeta.records.stores.event_store import Filter
 from zeta.records.stores.sqlite import event_store_path
 from zetad import scheduling, worker
@@ -46,6 +48,12 @@ def runtime_event_store(
     return RuntimeEventStore.open(
         event_store_path(runtime_state_dir(project_root, state_dir))
     )
+
+
+def cli_tool_registry() -> CapabilityRegistry:
+    registry = CapabilityRegistry()
+    register_builtin_tools(registry)
+    return registry
 
 
 def event_record(event: Event) -> dict[str, object]:
@@ -224,7 +232,7 @@ def attempts(project_root: Path, state_dir: Path | None, json_output: bool) -> i
     return 0
 
 
-@cli.command("events")
+@cli.group("events", invoke_without_command=True)
 @click.option(
     "--project-root",
     type=click.Path(file_okay=False, path_type=Path),
@@ -247,7 +255,9 @@ def attempts(project_root: Path, state_dir: Path | None, json_output: bool) -> i
     help="Maximum number of events to show.",
 )
 @click.option("--json", "json_output", is_flag=True, help="Emit JSON.")
+@click.pass_context
 def events(
+    ctx: click.Context,
     project_root: Path,
     state_dir: Path | None,
     type_prefix: str | None,
@@ -256,6 +266,8 @@ def events(
     json_output: bool,
 ) -> int:
     """List durable runtime events."""
+    if ctx.invoked_subcommand is not None:
+        return 0
 
     event_store = runtime_event_store(project_root, state_dir)
     try:
@@ -286,6 +298,90 @@ def events(
             )
         )
     return 0
+
+
+@events.command("publish")
+@click.argument("event_type")
+@click.option(
+    "--project-root",
+    type=click.Path(file_okay=False, path_type=Path),
+    default=Path("."),
+    show_default=True,
+    help="Project root containing .zeta runtime state.",
+)
+@click.option(
+    "--state-dir",
+    type=click.Path(file_okay=False, path_type=Path),
+    help="Override the runtime state directory.",
+)
+@click.option("--source", default="manual", show_default=True, help="Event source.")
+@click.option(
+    "--payload-json",
+    default="{}",
+    show_default=True,
+    help="JSON object payload.",
+)
+@click.option("--idempotency-key", help="Optional idempotency key.")
+@click.option("--caused-by", help="Optional parent event id.")
+@click.option("--session", "session_id", help="Optional runtime session id.")
+@click.option("--run-id", help="Optional runtime run id.")
+@click.option("--turn-id", help="Optional runtime turn id.")
+@click.option("--json", "json_output", is_flag=True, help="Emit JSON.")
+def events_publish(
+    event_type: str,
+    project_root: Path,
+    state_dir: Path | None,
+    source: str,
+    payload_json: str,
+    idempotency_key: str | None,
+    caused_by: str | None,
+    session_id: str | None,
+    run_id: str | None,
+    turn_id: str | None,
+    json_output: bool,
+) -> int:
+    """Publish one durable event into the local runtime log."""
+    if not event_type:
+        raise click.ClickException("event_type must be non-empty")
+    payload = event_payload_from_json(payload_json)
+    event_store = runtime_event_store(project_root, state_dir)
+    try:
+        outcome = event_store.accept(
+            DraftEvent(
+                event_type,
+                source,
+                payload,
+                idempotency_key=idempotency_key,
+                caused_by=caused_by,
+                session_id=session_id,
+                run_id=run_id,
+                turn_id=turn_id,
+            )
+        )
+    finally:
+        event_store.close()
+
+    if json_output:
+        click.echo(
+            json.dumps(
+                {"inserted": outcome.inserted, "event": event_record(outcome.event)},
+                ensure_ascii=False,
+            )
+        )
+        return 0
+    status = "published" if outcome.inserted else "already published"
+    click.echo(f"{status} {outcome.event.event_type} {outcome.event.id}")
+    return 0
+
+
+def event_payload_from_json(payload_json: str) -> dict[str, object]:
+    try:
+        payload = json.loads(payload_json)
+    except json.JSONDecodeError as exc:
+        raise click.ClickException(f"invalid payload JSON: {exc.msg}") from exc
+    if not isinstance(payload, dict):
+        raise click.ClickException("payload JSON must be an object")
+    return dict(payload)
 
 
 @cli.command("runs")
@@ -360,6 +456,7 @@ def run(
     runtime = worker.build_worker_services(
         project_root=project_root,
         state_dir=state_dir,
+        tool_registry=cli_tool_registry(),
     )
     try:
         if once:

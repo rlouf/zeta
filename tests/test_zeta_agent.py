@@ -4383,6 +4383,69 @@ Summarize the repo.
     assert events[0].payload == {}
 
 
+def test_zeta_cli_events_publish_records_manual_event(tmp_path: Path) -> None:
+    result = CliRunner().invoke(
+        zetad_cli.cli,
+        [
+            "events",
+            "publish",
+            "laptop.resumed",
+            "--project-root",
+            str(tmp_path),
+            "--source",
+            "manual",
+            "--payload-json",
+            '{"path":"heartbeat.txt"}',
+            "--idempotency-key",
+            "resume-1",
+            "--json",
+        ],
+    )
+
+    event_store = zeta_events.SqliteEventStore(event_store_path(tmp_path / ".zeta"))
+    try:
+        events = event_store.list_events(zeta_events.Filter())
+    finally:
+        event_store.close()
+
+    assert result.exit_code == 0
+    assert json.loads(result.output) == {
+        "inserted": True,
+        "event": {
+            "id": events[0].id,
+            "type": "laptop.resumed",
+            "source": "manual",
+            "payload": {"path": "heartbeat.txt"},
+            "idempotency_key": "resume-1",
+            "caused_by": None,
+            "session_id": None,
+            "run_id": None,
+            "turn_id": None,
+            "timestamp_ms": events[0].timestamp_ms,
+            "cursor": 1,
+        },
+    }
+    assert [event.event_type for event in events] == ["laptop.resumed"]
+
+
+def test_zeta_cli_events_publish_rejects_non_object_payload(tmp_path: Path) -> None:
+    result = CliRunner().invoke(
+        zetad_cli.cli,
+        [
+            "events",
+            "publish",
+            "laptop.resumed",
+            "--project-root",
+            str(tmp_path),
+            "--payload-json",
+            "[]",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "payload JSON must be an object" in result.output
+
+
 def test_zeta_cli_schedule_status_json_lists_next_and_last_tick(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -4471,6 +4534,41 @@ def test_zeta_local_runtime_accepts_explicit_tool_registry(tmp_path: Path) -> No
         assert runtime.tool_registry.get("sigil.read") is None
     finally:
         runtime.close()
+
+
+def test_zeta_cli_run_registers_builtin_tools(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, CapabilityRegistry] = {}
+
+    class Runtime:
+        def close(self) -> None:
+            pass
+
+    def build_worker_services(
+        *,
+        project_root: Path,
+        state_dir: Path | None,
+        tool_registry: CapabilityRegistry,
+    ) -> Runtime:
+        del project_root, state_dir
+        captured["tool_registry"] = tool_registry
+        return Runtime()
+
+    async def run_once(_runtime: Runtime) -> str:
+        return "queue empty"
+
+    monkeypatch.setattr(zetad_worker, "build_worker_services", build_worker_services)
+    monkeypatch.setattr(zetad_worker, "run_once", run_once)
+
+    result = CliRunner().invoke(
+        zetad_cli.cli,
+        ["run", "--project-root", str(tmp_path), "--once"],
+    )
+
+    assert result.exit_code == 0
+    assert captured["tool_registry"].get("sigil.write") is not None
 
 
 def test_zeta_local_runtime_run_once_executes_available_queue_item(

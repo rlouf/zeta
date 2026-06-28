@@ -54,14 +54,34 @@ def agent_run_result_payload(result: AgentRunResult) -> dict[str, Any]:
     return payload
 
 
+RunStopReason = Literal["finished", "staged_effect", "aborted", "max_turns"]
+RunInfoKind = Literal["model", "tools", "stopped"]
+
+
+@dataclass(frozen=True)
+class RunInfo:
+    kind: RunInfoKind
+    appended_events: tuple[DraftEvent, ...] = ()
+    prompt_trace: PromptTrace | None = None
+    model_telemetry: dict[str, Any] = field(default_factory=dict)
+    staged_effect: dict[str, Any] | None = None
+    final_answer: str = ""
+    answer_streamed: bool = False
+
+
 @dataclass
 class RunState:
     events: list[DraftEvent] = field(default_factory=list)
+    pending_tool_calls: list[dict[str, Any]] = field(default_factory=list)
+    pending_model_telemetry: dict[str, Any] = field(default_factory=dict)
+    pending_tool_parent_id: str | None = None
     latest_model_telemetry: dict[str, Any] = field(default_factory=dict)
     model_telemetry_calls: list[dict[str, Any]] = field(default_factory=list)
     prompt_traces: list[PromptTrace] = field(default_factory=list)
     steps: list[StepResult] = field(default_factory=list)
     next_model_caused_by: str | None = None
+    turn: int = 0
+    stop: RunStopReason | None = None
 
     def result(
         self,

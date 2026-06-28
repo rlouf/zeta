@@ -1056,7 +1056,7 @@ def test_zeta_agent_compaction_policy_bounds_model_input() -> None:
         def available(self, config: zeta_agent.AgentConfig) -> bool:
             return True
 
-        def generate(
+        async def generate(
             self,
             model_input: zeta_model_shapes.ModelInput,
             config: zeta_agent.AgentConfig,
@@ -1147,6 +1147,167 @@ def test_zeta_async_agent_turn_runs_turns_concurrently() -> None:
 
     asyncio.run(run())
     assert set(seen) == {"first", "second"}
+
+
+def test_zeta_step_model_without_tool_calls_returns_info_and_stops() -> None:
+    class FakeGateway:
+        def available(self, config: zeta_agent.AgentConfig) -> bool:
+            del config
+            return True
+
+        async def generate(
+            self,
+            model_input: zeta_model_shapes.ModelInput,
+            config: zeta_agent.AgentConfig,
+            *,
+            stream: zeta_agent.ModelStream | None = None,
+            telemetry_sink: Callable[[dict[str, Any]], None] | None = None,
+        ) -> zeta_model_shapes.ModelOutput:
+            del model_input, config, stream
+            if telemetry_sink is not None:
+                telemetry_sink({"usage": {"input_tokens": 1}})
+            return zeta_model_shapes.ModelOutput(message={"content": "done"})
+
+    registry = CapabilityRegistry()
+    state = zeta_agent.RunState()
+    ctx = zeta_agent.RunDependencies(
+        event_sink=None,
+        trace_store=None,
+        tool_registry=registry,
+        builder=zeta_context.PromptBuilder(),
+        abort_reason=never_abort,
+        model_gateway=FakeGateway(),
+    )
+
+    state, info = asyncio.run(
+        zeta_agent.step(
+            state,
+            objective="answer",
+            timeline=[],
+            config=zeta_agent.AgentConfig(),
+            allowed_capabilities=(),
+            context="",
+            tool_schema=registry.model_tool_schema(()),
+            tools=[],
+            ctx=ctx,
+        )
+    )
+
+    assert info.kind == "model"
+    assert info.final_answer == "done"
+    assert info.model_telemetry == {"usage": {"input_tokens": 1}}
+    assert info.appended_events == tuple(state.events[-1:])
+    assert state.stop == "finished"
+    assert state.pending_tool_calls == []
+    assert timeline_events(list(info.appended_events))[0]["content"] == "done"
+
+
+def test_zeta_step_model_with_tool_calls_records_pending_tools() -> None:
+    tool_calls = tool_call_fixture("call-1", name="read", path="README.md")
+
+    class FakeGateway:
+        def available(self, config: zeta_agent.AgentConfig) -> bool:
+            del config
+            return True
+
+        async def generate(
+            self,
+            model_input: zeta_model_shapes.ModelInput,
+            config: zeta_agent.AgentConfig,
+            *,
+            stream: zeta_agent.ModelStream | None = None,
+            telemetry_sink: Callable[[dict[str, Any]], None] | None = None,
+        ) -> zeta_model_shapes.ModelOutput:
+            del model_input, config, stream
+            if telemetry_sink is not None:
+                telemetry_sink({"usage": {"input_tokens": 2}})
+            return zeta_model_shapes.ModelOutput(
+                message={"content": "", "tool_calls": tool_calls}
+            )
+
+    registry = CapabilityRegistry()
+    state = zeta_agent.RunState()
+    ctx = zeta_agent.RunDependencies(
+        event_sink=None,
+        trace_store=None,
+        tool_registry=registry,
+        builder=zeta_context.PromptBuilder(),
+        abort_reason=never_abort,
+        model_gateway=FakeGateway(),
+    )
+
+    state, info = asyncio.run(
+        zeta_agent.step(
+            state,
+            objective="answer",
+            timeline=[],
+            config=zeta_agent.AgentConfig(),
+            allowed_capabilities=(),
+            context="",
+            tool_schema=registry.model_tool_schema(()),
+            tools=[],
+            ctx=ctx,
+        )
+    )
+
+    assert info.kind == "model"
+    assert info.final_answer == ""
+    assert state.stop is None
+    assert state.pending_tool_calls == tool_calls
+    assert state.pending_model_telemetry == {"usage": {"input_tokens": 2}}
+    assert isinstance(state.pending_tool_parent_id, str)
+    projected = timeline_events(list(info.appended_events))
+    assert projected[0]["type"] == "model"
+    assert projected[0]["tool_calls"] == tool_calls
+
+
+def test_zeta_step_pending_tools_returns_info_and_clears_pending_tools() -> None:
+    registry = CapabilityRegistry()
+    registry.register(
+        _test_capability(
+            "read",
+            run_result={"ok": True, "content": [{"type": "text", "text": "done"}]},
+        )
+    )
+    allowed_capabilities = ("test.read",)
+    state = zeta_agent.RunState(
+        pending_tool_calls=tool_call_fixture("call-1", name="read", path="README.md"),
+        pending_model_telemetry={"usage": {"input_tokens": 3}},
+        pending_tool_parent_id="assistant-1",
+    )
+    ctx = zeta_agent.RunDependencies(
+        event_sink=None,
+        trace_store=None,
+        tool_registry=registry,
+        builder=zeta_context.PromptBuilder(),
+        abort_reason=never_abort,
+    )
+
+    state, info = asyncio.run(
+        zeta_agent.step(
+            state,
+            objective="answer",
+            timeline=[],
+            config=zeta_agent.AgentConfig(),
+            allowed_capabilities=allowed_capabilities,
+            context="",
+            tool_schema=registry.model_tool_schema(allowed_capabilities),
+            tools=[],
+            ctx=ctx,
+        )
+    )
+
+    assert info.kind == "tools"
+    assert info.appended_events == tuple(state.events)
+    assert state.stop is None
+    assert state.pending_tool_calls == []
+    assert state.pending_model_telemetry == {}
+    assert state.pending_tool_parent_id is None
+    projected = timeline_events(list(info.appended_events))
+    assert [event["type"] for event in projected] == ["tool_call", "tool_result"]
+    assert projected[0]["caused_by"] == "assistant-1"
+    assert projected[1]["caused_by"] == "assistant-1"
+    assert projected[1]["model_telemetry"] == {"usage": {"input_tokens": 3}}
 
 
 def test_zeta_record_assistant_step_links_output_to_prompt() -> None:

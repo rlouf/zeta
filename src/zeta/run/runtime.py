@@ -61,8 +61,8 @@ from zeta.run.config import AgentConfig, ModelStatus
 from zeta.run.context import RuntimeContext
 from zeta.run.outcomes import (
     AgentRunResult,
+    RunInfo,
     RunState,
-    RunStepOutcome,
 )
 
 AgentEventSink = Callable[[DraftEvent], None]
@@ -126,102 +126,197 @@ class AgentRun:
     state: RunState
 
     async def run(self) -> AgentRunResult:
-        for _ in turn_indices(self.config.max_turns):
-            outcome = await self.model_step()
-            if outcome.kind == "continue":
+        model_turns = 0
+        max_model_turns = len(tuple(turn_indices(self.config.max_turns)))
+        while model_turns < max_model_turns or self.state.pending_tool_calls:
+            self.state, info = await step(
+                self.state,
+                objective=self.objective,
+                timeline=self.timeline,
+                config=self.config,
+                allowed_capabilities=self.allowed_capabilities,
+                context=self.context,
+                tool_schema=self.tool_schema,
+                tools=self.tools,
+                ctx=self.deps,
+            )
+            if info.kind == "model":
+                model_turns += 1
+            publish_step_info(info, ctx=self.deps)
+            if self.state.stop is None:
                 continue
             self.state.note_step("finish_run")
             return self.state.result(
-                final_answer=outcome.final_answer,
-                staged_effect=outcome.staged_effect,
-                answer_streamed=outcome.answer_streamed,
+                final_answer=info.final_answer,
+                staged_effect=info.staged_effect,
+                answer_streamed=info.answer_streamed,
             )
         self.state.note_step("finish_run")
         return self.state.result()
 
-    async def model_step(self) -> RunStepOutcome:
-        self.state.note_step("check_budget")
-        check_run_abort(
-            self.state,
-            ctx=self.deps,
-        )
-        turn = await request_model_turn(
-            self.objective,
-            self.timeline,
-            config=self.config,
-            allowed_capabilities=self.allowed_capabilities,
-            context=self.context,
-            tools=self.tools,
-            state=self.state,
-            ctx=self.deps,
-        )
-        if self.deps.abort_reason(check_deadline=False) is not None:
-            check_run_abort(
-                self.state,
-                ctx=self.deps,
-                check_deadline=False,
-            )
-        assistant = turn.assistant.to_provider()
-        assistant_event_id, tool_calls = record_model_event(
-            assistant,
-            self.state.events,
-            prompt_trace=turn.prompt_trace,
-            caused_by=self.state.next_model_caused_by,
-            ctx=self.deps,
-        )
-        update_prompt_trace_from_events(
-            assistant_event_id,
-            state=self.state,
-            ctx=self.deps,
-        )
-        if not tool_calls:
-            return RunStepOutcome(
-                kind="finished",
-                final_answer=turn.assistant.content,
-                answer_streamed=turn.streamed_content,
-            )
-        return await self.tool_step(
-            tool_calls,
-            model_telemetry=turn.model_telemetry,
-            assistant_event_id=assistant_event_id,
-        )
 
-    async def tool_step(
-        self,
-        tool_calls: list[dict[str, Any]],
-        *,
-        model_telemetry: dict[str, Any],
-        assistant_event_id: str | None,
-    ) -> RunStepOutcome:
-        for index, tool_call in enumerate(tool_calls):
-            result_event = await run_capability_step(
-                tool_call,
-                index=index,
-                config=self.config,
-                allowed_capabilities=self.allowed_capabilities,
-                tool_schema=self.tool_schema,
-                model_telemetry=(model_telemetry if index == 0 else None),
-                assistant_event_id=assistant_event_id,
-                state=self.state,
-                ctx=self.deps,
-            )
-            self.state.events.extend(result_event.events)
-            if result_event.events:
-                project_prompt_trace_projection(
-                    self.state.events, self.deps.builder.store()
-                )
-            self.state.next_model_caused_by = next_model_parent(result_event.events)
-            if (
-                result_event.staged_effect is not None
-                and self.config.stop_on_staged_effect
-            ):
-                return RunStepOutcome(
-                    kind="staged_effect",
-                    staged_effect=result_event.staged_effect,
-                )
-            if result_event.stop:
-                return RunStepOutcome(kind="finished")
-        return RunStepOutcome(kind="continue")
+async def step(
+    state: RunState,
+    *,
+    objective: str,
+    timeline: Sequence[TimelineEvent],
+    config: AgentConfig,
+    allowed_capabilities: tuple[str, ...],
+    context: str,
+    tool_schema: CapabilityToolSchema,
+    tools: list[dict[str, Any]],
+    ctx: RunDependencies,
+) -> tuple[RunState, RunInfo]:
+    """Advance the run by one model call or one pending tool batch."""
+    if state.stop is not None:
+        return state, RunInfo(kind="stopped")
+    if state.pending_tool_calls:
+        return await step_tools(
+            state,
+            config=config,
+            allowed_capabilities=allowed_capabilities,
+            tool_schema=tool_schema,
+            ctx=ctx,
+        )
+    return await step_model(
+        state,
+        objective=objective,
+        timeline=timeline,
+        config=config,
+        allowed_capabilities=allowed_capabilities,
+        context=context,
+        tools=tools,
+        ctx=ctx,
+    )
+
+
+async def step_model(
+    state: RunState,
+    *,
+    objective: str,
+    timeline: Sequence[TimelineEvent],
+    config: AgentConfig,
+    allowed_capabilities: tuple[str, ...],
+    context: str,
+    tools: list[dict[str, Any]],
+    ctx: RunDependencies,
+) -> tuple[RunState, RunInfo]:
+    state.note_step("check_budget")
+    check_run_abort(
+        state,
+        ctx=ctx,
+    )
+    turn = await request_model_turn(
+        objective,
+        timeline,
+        config=config,
+        allowed_capabilities=allowed_capabilities,
+        context=context,
+        tools=tools,
+        state=state,
+        ctx=ctx,
+    )
+    if ctx.abort_reason(check_deadline=False) is not None:
+        check_run_abort(
+            state,
+            ctx=ctx,
+            check_deadline=False,
+        )
+    assistant = turn.assistant.to_provider()
+    before = len(state.events)
+    assistant_event_id, tool_calls = record_model_event(
+        assistant,
+        state.events,
+        prompt_trace=turn.prompt_trace,
+        caused_by=state.next_model_caused_by,
+        ctx=silent_run_dependencies(ctx),
+    )
+    update_prompt_trace_from_events(
+        assistant_event_id,
+        state=state,
+        ctx=ctx,
+    )
+    appended_events = tuple(state.events[before:])
+    state.turn += 1
+    state.pending_tool_calls = list(tool_calls)
+    state.pending_model_telemetry = dict(turn.model_telemetry)
+    state.pending_tool_parent_id = assistant_event_id
+    if not tool_calls:
+        state.stop = "finished"
+        return state, RunInfo(
+            kind="model",
+            appended_events=appended_events,
+            prompt_trace=turn.prompt_trace,
+            model_telemetry=turn.model_telemetry,
+            final_answer=turn.assistant.content,
+            answer_streamed=turn.streamed_content,
+        )
+    return state, RunInfo(
+        kind="model",
+        appended_events=appended_events,
+        prompt_trace=turn.prompt_trace,
+        model_telemetry=turn.model_telemetry,
+        answer_streamed=turn.streamed_content,
+    )
+
+
+async def step_tools(
+    state: RunState,
+    *,
+    config: AgentConfig,
+    allowed_capabilities: tuple[str, ...],
+    tool_schema: CapabilityToolSchema,
+    ctx: RunDependencies,
+) -> tuple[RunState, RunInfo]:
+    appended_events: list[DraftEvent] = []
+    staged_effect: dict[str, Any] | None = None
+    tool_calls = list(state.pending_tool_calls)
+    model_telemetry = dict(state.pending_model_telemetry)
+    assistant_event_id = state.pending_tool_parent_id
+    state.pending_tool_calls = []
+    state.pending_model_telemetry = {}
+    state.pending_tool_parent_id = None
+    for index, tool_call in enumerate(tool_calls):
+        result_event = await run_capability_step(
+            tool_call,
+            index=index,
+            config=config,
+            allowed_capabilities=allowed_capabilities,
+            tool_schema=tool_schema,
+            model_telemetry=(model_telemetry if index == 0 else None),
+            assistant_event_id=assistant_event_id,
+            state=state,
+            ctx=ctx,
+        )
+        state.events.extend(result_event.events)
+        appended_events.extend(result_event.events)
+        if result_event.events:
+            project_prompt_trace_projection(state.events, ctx.builder.store())
+        state.next_model_caused_by = next_model_parent(result_event.events)
+        if result_event.staged_effect is not None and config.stop_on_staged_effect:
+            staged_effect = result_event.staged_effect
+            state.stop = "staged_effect"
+            break
+        if result_event.stop:
+            state.stop = "finished"
+            break
+    state.turn += 1
+    return state, RunInfo(
+        kind="tools",
+        appended_events=tuple(appended_events),
+        staged_effect=staged_effect,
+    )
+
+
+def silent_run_dependencies(ctx: RunDependencies) -> RunDependencies:
+    return replace(ctx, event_sink=None)
+
+
+def publish_step_info(info: RunInfo, *, ctx: RunDependencies) -> None:
+    if ctx.event_sink is None or info.kind == "tools":
+        return
+    for draft in info.appended_events:
+        ctx.event_sink(draft)
 
 
 async def run_agent(

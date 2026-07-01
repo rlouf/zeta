@@ -85,6 +85,7 @@ Question answers are inserted below the prompt instead of editing the buffer."
 (defvar zeta-block--active-buffer nil)
 (defvar zeta-block--active-agent-prompt nil)
 (defvar zeta-block--active-mutation-allowed nil)
+(defvar zeta-block--active-protected-line nil)
 (defvar zeta-block--active-requests 0)
 (defvar zeta-block--status 'off)
 (defvar zeta-block--last-error nil)
@@ -174,7 +175,10 @@ When the current block is not a Zeta question, dispatch to the binding that
            (line-number (zeta-block-previous-line-number))
            (line-range (zeta-block-previous-line-range))
            (comment-prefix (zeta-block-comment-prefix line-raw))
-           (placeholder (zeta-block-insert-placeholder (point) comment-prefix))
+           (placeholder (zeta-block-insert-placeholder
+                         (point)
+                         comment-prefix
+                         t))
            (trigger-overlay (zeta-block-add-inline-trigger-overlay
                              (car line-range)
                              (cdr line-range)
@@ -608,9 +612,10 @@ ORIGIN is the symbol `human' or `agent'."
   (mapc #'delete-overlay zeta-block--overlays)
   (setq zeta-block--overlays nil))
 
-(defun zeta-block-insert-placeholder (position comment-prefix)
-  "Insert a thinking placeholder after POSITION and return replacement markers."
-  (save-excursion
+(defun zeta-block-insert-placeholder (position comment-prefix &optional leave-point-after)
+  "Insert a thinking placeholder after POSITION and return replacement markers.
+When LEAVE-POINT-AFTER is non-nil, leave point after the inserted response."
+  (let ((saved-point (point-marker)))
     (goto-char position)
     (unless (bolp)
       (insert "\n"))
@@ -620,6 +625,9 @@ ORIGIN is the symbol `human' or `agent'."
       (let ((end (point-marker)))
         (set-marker-insertion-type start nil)
         (set-marker-insertion-type end t)
+        (unless leave-point-after
+          (goto-char saved-point))
+        (set-marker saved-point nil)
         (cons start end)))))
 
 (defun zeta-block-replace-placeholder (markers text comment-prefix &optional prompt)
@@ -728,7 +736,8 @@ When PROMPT is non-nil, tag the inserted response as agent-authored."
   "Run inline Zeta INSTRUCTION from LINE-NUMBER and call CALLBACK."
   (zeta-block-ensure-process)
   (setq zeta-block--active-agent-prompt instruction
-        zeta-block--active-mutation-allowed t)
+        zeta-block--active-mutation-allowed t
+        zeta-block--active-protected-line line-number)
   (zeta-block-register-tools (list (zeta-block-emacs-replace-tool)))
   (zeta-block-send-request
    "session.run"
@@ -744,7 +753,8 @@ When PROMPT is non-nil, tag the inserted response as agent-authored."
   "Run region-scoped Zeta INSTRUCTION over SCOPE and call CALLBACK."
   (zeta-block-ensure-process)
   (setq zeta-block--active-agent-prompt instruction
-        zeta-block--active-mutation-allowed t)
+        zeta-block--active-mutation-allowed t
+        zeta-block--active-protected-line nil)
   (zeta-block-register-tools (list (zeta-block-emacs-replace-tool)))
   (zeta-block-send-request
    "session.run"
@@ -770,6 +780,8 @@ When PROMPT is non-nil, tag the inserted response as agent-authored."
       "Interpret relative references such as previous paragraph relative to the instruction line."
       "Read it with emacs_read before deciding what to change."
       "If a document change is requested, apply it to the live buffer with emacs_replace."
+      "Do not edit or delete the zeta! instruction line itself."
+      "Do not delete text, blank out a range, or substantially shorten text unless the user explicitly asks to delete, remove, drop, erase, or cut text."
       "emacs_read includes line-number prefixes for reference; pass old/new text to emacs_replace without those prefixes.")
     "\n")
    instruction
@@ -789,6 +801,7 @@ When PROMPT is non-nil, tag the inserted response as agent-authored."
       "Use surrounding buffer context only to preserve meaning, style, and references."
       "Read the live buffer with emacs_read before deciding what to change."
       "Apply changes with emacs_replace to the selected line range."
+      "Do not delete text, blank out a range, or substantially shorten text unless the user explicitly asks to delete, remove, drop, erase, or cut text."
       "emacs_read includes line-number prefixes for reference; pass old/new text to emacs_replace without those prefixes.")
     "\n")
    instruction
@@ -906,6 +919,7 @@ When PROMPT is non-nil, tag the inserted response as agent-authored."
   (clrhash zeta-block--completed-runs)
   (setq zeta-block--active-requests 0
         zeta-block--active-mutation-allowed nil
+        zeta-block--active-protected-line nil
         zeta-block--status 'off
         zeta-block--last-error nil)
   (zeta-block-ensure-process)
@@ -1208,12 +1222,47 @@ ARGUMENTS may contain start_line and end_line."
             '(("ok" . :json-false)
               ("error" . (("code" . "invalid-arguments")
                           ("message" . "emacs_replace requires start_line, end_line, old, and new.")))))
+           ((and zeta-block--active-protected-line
+                 (<= start-line zeta-block--active-protected-line)
+                 (<= zeta-block--active-protected-line end-line))
+            '(("ok" . :json-false)
+              ("error" . (("code" . "protected-instruction-line")
+                          ("message" . "Do not edit or delete the zeta! instruction line itself.")))))
+           ((and (zeta-block-destructive-replacement-p old new)
+                 (not (zeta-block-prompt-allows-destructive-edit-p
+                       zeta-block--active-agent-prompt)))
+            '(("ok" . :json-false)
+              ("error" . (("code" . "destructive-edit-not-explicit")
+                          ("message" . "This replacement deletes or substantially shortens text, but the prompt did not explicitly ask to delete text. Read the buffer again and make the smallest non-destructive edit, or ask the user for a deletion instruction.")))))
            (t
             (zeta-block-apply-line-replacement
              start-line
              end-line
              old
              new)))))))))
+
+(defun zeta-block-destructive-replacement-p (old new)
+  "Return non-nil when replacing OLD with NEW looks destructive."
+  (let* ((old-trimmed (string-trim old))
+         (new-trimmed (string-trim new))
+         (old-lines (length (split-string old "\n")))
+         (new-lines (length (split-string new "\n")))
+         (old-length (length old-trimmed))
+         (new-length (length new-trimmed)))
+    (and (> old-length 0)
+         (or (string-empty-p new-trimmed)
+             (< new-lines old-lines)
+             (and (> old-length 80)
+                  (< new-length (* old-length 0.55)))))))
+
+(defun zeta-block-prompt-allows-destructive-edit-p (prompt)
+  "Return non-nil when PROMPT explicitly asks for destructive editing."
+  (and (stringp prompt)
+       (string-match-p
+        (rx word-start
+            (or "delete" "remove" "drop" "erase" "cut")
+            word-end)
+        (downcase prompt))))
 
 (defun zeta-block-apply-line-replacement (start-line end-line old new)
   "Replace START-LINE..END-LINE when OLD matches current buffer text."

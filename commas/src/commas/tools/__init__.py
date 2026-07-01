@@ -27,10 +27,9 @@ def register_builtin_tools(registry: CapabilityRegistry) -> None:
 
 def builtin_capabilities():
     capabilities = dict(zeta_builtin_capabilities())
-    capabilities["commas.query_log"] = builtin_capability(
-        query_log.SPEC, query_log.run
-    )
+    capabilities["commas.query_log"] = builtin_capability(query_log.SPEC, query_log.run)
     return capabilities
+
 
 __all__ = [
     "bash",

@@ -7,15 +7,15 @@ records the hash of the final payload. This demo walks the two commands
 that cash that design in: `trace diff` and `trace replay`.
 
 All output below is real, captured against a recorded session. To run it
-yourself, point `SIGIL_SESSION_ID` at any session with agent turns
-(`sigil session list`) and have your model endpoint up.
+yourself, point `COMMAS_SESSION_ID` at any session with agent turns
+(`commas session list`) and have your model endpoint up.
 
 ## 1. Find a prompt
 
 `trace log` is the front door; `--kind prompt` narrows it to requests:
 
 ```text
-$ sigil trace log --kind prompt --limit 3
+$ commas trace log --kind prompt --limit 3
 e4976fc1  prompt              10 components · ~8772 tok
 2fc6c722  prompt              8 components · ~8331 tok
 0c56ad85  prompt              6 components · ~8204 tok
@@ -30,7 +30,7 @@ the diff only has to look inside components that actually changed.
 `--stat` gives the shape of the change, one line per component:
 
 ```text
-$ sigil trace diff 0c56ad85 2fc6c722 --stat
+$ commas trace diff 0c56ad85 2fc6c722 --stat
 prompts 0c56ad85 → 2fc6c722
 ~ user_message        e77d66bd → 40d33f4e
 ~ assistant_message   b8e10d8a → 041d8af4
@@ -57,7 +57,7 @@ from a transcript, from the graph — verifies it against the recorded
 payload hash, and resends it:
 
 ```text
-$ sigil trace replay 13b60e1a
+$ commas trace replay 13b60e1a
 prompt   13b60e1a  payload verified
 model    default -> local-model @ http://127.0.0.1:8080/v1/chat/completions
 
@@ -81,7 +81,7 @@ forward walk from the prompt shows the original answer and every replay
 side by side:
 
 ```text
-$ sigil trace tree 13b60e1a --down --depth 1
+$ commas trace tree 13b60e1a --down --depth 1
 13b60e1a  prompt              4 components · ~7761 tok
 ├─ ModelResponse
 │  └─ db5d29fd  assistant_message   → bash
@@ -90,7 +90,7 @@ $ sigil trace tree 13b60e1a --down --depth 1
 ├─ RunEvent
 │  └─ 5526e09a  run_event           tool_result
 ├─ TurnRecord
-│  └─ 1dfb27c6  turn                sigil.turn
+│  └─ 1dfb27c6  turn                commas.turn
 └─ ModelReplay
    └─ 02e5a395  assistant_message   → bash
 ```

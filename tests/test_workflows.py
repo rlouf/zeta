@@ -17,20 +17,20 @@ from _zeta_helpers import (
 )
 from click.testing import CliRunner
 
-import sigil
+import commas
 import zeta.models.chat_completions as zeta_model
 import zeta.models.profiles as zeta_models
-from sigil import agent_io
-from sigil import handoff as sigil_handoff
-from sigil.cli import cli as sigil_cli
-from sigil.history import (
+from commas import agent_io
+from commas import handoff as commas_handoff
+from commas.cli import cli as commas_cli
+from commas.history import (
     effect_record,
     is_effect_record,
     is_turn_record,
     project_one_turn_record,
     turn_record,
 )
-from sigil.protocols import (
+from commas.protocols import (
     EFFECT_KIND_COMMAND,
     SHELL_HANDOFF_CANCEL_EXPECTED_NOT_EXECUTED,
     SHELL_HANDOFF_OUTCOME_CANCELLED,
@@ -44,10 +44,10 @@ from sigil.protocols import (
     TURN_OUTCOME_STAGED,
     turn_contract,
 )
-from sigil.sessions import record_turn, session_dir
-from sigil.state import history_view, read_events
-from sigil.workflows import ask as ask_runner
-from sigil.workflows import step as zeta_runner
+from commas.sessions import record_turn, session_dir
+from commas.state import history_view, read_events
+from commas.workflows import ask as ask_runner
+from commas.workflows import step as zeta_runner
 from zeta import models as zeta_models_api
 from zeta.context.components import PromptTrace, chat_messages
 from zeta.records import events as zeta_event_model
@@ -62,18 +62,18 @@ from zeta.run.runtime import AgentRunResult
 zeta_trace = SimpleNamespace(Ref=Ref, resolve_object_id=resolve_object_id)
 
 
-def record_sigil_event(event: dict[str, Any]) -> dict[str, Any]:
+def record_commas_event(event: dict[str, Any]) -> dict[str, Any]:
     return record_durable_timeline_event(
         event,
-        runtime_context=sigil.zeta_session_for_sigil(),
+        runtime_context=commas.zeta_session_for_commas(),
     )
 
 
-def current_sigil_timeline() -> list[dict[str, Any]]:
+def current_commas_timeline() -> list[dict[str, Any]]:
     return [
         event_view(event)
         for event in agent_io.current_timeline(
-            runtime_context=sigil.zeta_session_for_sigil()
+            runtime_context=commas.zeta_session_for_commas()
         )
     ]
 
@@ -91,7 +91,7 @@ def draft_event(event: dict[str, Any]) -> DraftEvent:
     )
 
 
-def test_sigil_step_writes_handoff_file(
+def test_commas_step_writes_handoff_file(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -137,7 +137,7 @@ def test_sigil_step_writes_handoff_file(
     )
 
     result = CliRunner().invoke(
-        sigil_cli,
+        commas_cli,
         [
             "step",
             "--workflow",
@@ -153,7 +153,7 @@ def test_sigil_step_writes_handoff_file(
     assert handoff_file.read_text(encoding="utf-8") == "uv run pytest\n"
 
 
-def test_sigil_step_keeps_trace_off_stdout(monkeypatch) -> None:
+def test_commas_step_keeps_trace_off_stdout(monkeypatch) -> None:
     monkeypatch.setattr(agent_io, "ensure_server", lambda: True)
     monkeypatch.setattr(
         zeta_runner,
@@ -184,7 +184,7 @@ def test_sigil_step_keeps_trace_off_stdout(monkeypatch) -> None:
     )
 
     result = CliRunner().invoke(
-        sigil_cli, ["step", "--workflow", "propose", "summarize"]
+        commas_cli, ["step", "--workflow", "propose", "summarize"]
     )
 
     assert result.exit_code == 0
@@ -422,7 +422,7 @@ def test_zeta_agent_step_does_not_pass_current_user_event_as_transcript(
 
     assert code == 0
     assert cast(list[dict[str, Any]], captured["transcript"]) == []
-    assert current_sigil_timeline()[-1]["type"] == "user_message"
+    assert current_commas_timeline()[-1]["type"] == "user_message"
     assert capsys.readouterr().out.count("done") == 1
 
 
@@ -481,7 +481,7 @@ def test_zeta_agent_step_supplies_the_workflow_persona(
         "You are Zeta, a shell-native coding agent." in zeta_runner.STEP_SYSTEM_PROMPT
     )
     assert SHELL_HANDOFF_RESULT_SCHEMA in zeta_runner.STEP_SYSTEM_PROMPT
-    user_event = current_sigil_timeline()[-1]
+    user_event = current_commas_timeline()[-1]
     assert user_event["type"] == "user_message"
     assert "You are Zeta, a shell-native coding agent." in user_event["system"]
 
@@ -990,8 +990,8 @@ thinking = "low"
 """,
     )
     monkeypatch.setenv("HOME", str(home))
-    monkeypatch.setenv("SIGIL_STATE_DIR", str(tmp_path / "state"))
-    monkeypatch.setenv("SIGIL_SESSION_ID", "agent-model")
+    monkeypatch.setenv("COMMAS_STATE_DIR", str(tmp_path / "state"))
+    monkeypatch.setenv("COMMAS_SESSION_ID", "agent-model")
     zeta_models.set_active_model_profile("coder", session_dir=session_dir())
     captured: dict[str, Any] = {}
 
@@ -1083,8 +1083,8 @@ url = "http://127.0.0.1:8081/v1/chat/completions"
 """,
     )
     monkeypatch.setenv("HOME", str(home))
-    monkeypatch.setenv("SIGIL_STATE_DIR", str(tmp_path / "state"))
-    monkeypatch.setenv("SIGIL_SESSION_ID", "answer-model")
+    monkeypatch.setenv("COMMAS_STATE_DIR", str(tmp_path / "state"))
+    monkeypatch.setenv("COMMAS_SESSION_ID", "answer-model")
     zeta_models.set_active_model_profile("fast", session_dir=session_dir())
     captured: dict[str, Any] = {}
 
@@ -1119,7 +1119,7 @@ url = "http://127.0.0.1:8081/v1/chat/completions"
     assert config.model_url == "http://127.0.0.1:8081/v1/chat/completions"
     transcript = cast(list[dict[str, Any]], captured["transcript"])
     assert transcript == []
-    assert current_sigil_timeline()[-1]["model"] == {
+    assert current_commas_timeline()[-1]["model"] == {
         "profile": "fast",
         "model": "fast-model",
         "url": "http://127.0.0.1:8081/v1/chat/completions",
@@ -1130,9 +1130,9 @@ def test_append_shell_result_appends_tool_result(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    monkeypatch.setenv("SIGIL_STATE_DIR", str(tmp_path))
-    monkeypatch.setenv("SIGIL_SESSION_ID", "zeta-test")
-    record_sigil_event(
+    monkeypatch.setenv("COMMAS_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("COMMAS_SESSION_ID", "zeta-test")
+    record_commas_event(
         {
             "type": "tool_result",
             "tool_call_id": "call-1",
@@ -1150,7 +1150,7 @@ def test_append_shell_result_appends_tool_result(
     )
     record_turn("uv run pytest", 1, "/repo", stderr_snippet="test failed")
 
-    event = sigil_handoff.append_shell_result()
+    event = commas_handoff.append_shell_result()
 
     assert event["type"] == "tool_result"
     assert event["tool_call_id"] == "call-1"
@@ -1178,9 +1178,9 @@ def test_resolved_shell_handoff_context_keeps_tool_call_with_shell_result(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    monkeypatch.setenv("SIGIL_STATE_DIR", str(tmp_path))
-    monkeypatch.setenv("SIGIL_SESSION_ID", "zeta-test")
-    record_sigil_event(
+    monkeypatch.setenv("COMMAS_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("COMMAS_SESSION_ID", "zeta-test")
+    record_commas_event(
         {
             "type": "model",
             "tool_calls": [
@@ -1195,7 +1195,7 @@ def test_resolved_shell_handoff_context_keeps_tool_call_with_shell_result(
             ],
         }
     )
-    record_sigil_event(
+    record_commas_event(
         {
             "type": "tool_call",
             "id": "call-1",
@@ -1204,7 +1204,7 @@ def test_resolved_shell_handoff_context_keeps_tool_call_with_shell_result(
             "input": {"command": "uv run pytest"},
         }
     )
-    record_sigil_event(
+    record_commas_event(
         {
             "type": "tool_result",
             "tool_call_id": "call-1",
@@ -1222,8 +1222,8 @@ def test_resolved_shell_handoff_context_keeps_tool_call_with_shell_result(
     )
     record_turn("uv run pytest", 1, "/repo", stderr_snippet="test failed")
 
-    sigil_handoff.append_shell_result()
-    messages = chat_messages(current_sigil_timeline())
+    commas_handoff.append_shell_result()
+    messages = chat_messages(current_commas_timeline())
 
     assert messages[0]["role"] == "assistant"
     assert messages[0]["tool_calls"][0]["id"] == "call-1"
@@ -1235,13 +1235,13 @@ def test_resolved_shell_handoff_context_keeps_tool_call_with_shell_result(
     assert tool_content["executed_command"] == "uv run pytest"
 
 
-def test_sigil_transcript_shell_result_reports_extended_handoff_as_edited(
+def test_commas_transcript_shell_result_reports_extended_handoff_as_edited(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    monkeypatch.setenv("SIGIL_STATE_DIR", str(tmp_path))
-    monkeypatch.setenv("SIGIL_SESSION_ID", "zeta-test")
-    record_sigil_event(
+    monkeypatch.setenv("COMMAS_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("COMMAS_SESSION_ID", "zeta-test")
+    record_commas_event(
         {
             "type": "tool_result",
             "tool_call_id": "call-1",
@@ -1259,7 +1259,7 @@ def test_sigil_transcript_shell_result_reports_extended_handoff_as_edited(
     )
     record_turn("uv run pytest -q", 1, "/repo", stderr_snippet="test failed")
 
-    event = sigil_handoff.append_shell_result()
+    event = commas_handoff.append_shell_result()
 
     assert event["type"] == "tool_result"
     assert event["tool_call_id"] == "call-1"
@@ -1271,13 +1271,13 @@ def test_sigil_transcript_shell_result_reports_extended_handoff_as_edited(
     assert "edited" in event["result"]["content"][0]["text"]
 
 
-def test_sigil_transcript_shell_result_matches_despite_whitespace_edits(
+def test_commas_transcript_shell_result_matches_despite_whitespace_edits(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    monkeypatch.setenv("SIGIL_STATE_DIR", str(tmp_path))
-    monkeypatch.setenv("SIGIL_SESSION_ID", "zeta-test")
-    record_sigil_event(
+    monkeypatch.setenv("COMMAS_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("COMMAS_SESSION_ID", "zeta-test")
+    record_commas_event(
         {
             "type": "tool_result",
             "tool_call_id": "call-1",
@@ -1295,20 +1295,20 @@ def test_sigil_transcript_shell_result_matches_despite_whitespace_edits(
     )
     record_turn("uv  run   pytest ", 0, "/repo", stdout_snippet="191 passed")
 
-    event = sigil_handoff.append_shell_result()
+    event = commas_handoff.append_shell_result()
 
     assert event["result"]["outcome"] == SHELL_HANDOFF_OUTCOME_EXECUTED
     assert event["result"]["edited"] is False
     assert event["result"]["executed_command"] == "uv  run   pytest "
 
 
-def test_sigil_transcript_shell_result_cancels_unrelated_command(
+def test_commas_transcript_shell_result_cancels_unrelated_command(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    monkeypatch.setenv("SIGIL_STATE_DIR", str(tmp_path))
-    monkeypatch.setenv("SIGIL_SESSION_ID", "zeta-test")
-    record_sigil_event(
+    monkeypatch.setenv("COMMAS_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("COMMAS_SESSION_ID", "zeta-test")
+    record_commas_event(
         {
             "type": "tool_result",
             "tool_call_id": "call-1",
@@ -1326,7 +1326,7 @@ def test_sigil_transcript_shell_result_cancels_unrelated_command(
     )
     record_turn("git status --short", 0, "/repo")
 
-    event = sigil_handoff.append_shell_result()
+    event = commas_handoff.append_shell_result()
 
     assert event["result"]["ok"] is False
     assert event["result"]["schema"] == SHELL_HANDOFF_RESULT_SCHEMA
@@ -1348,13 +1348,13 @@ def test_sigil_transcript_shell_result_cancels_unrelated_command(
     assert event["result"]["shell_turns"][0]["command"] == "git status --short"
 
 
-def test_sigil_transcript_shell_result_includes_intervening_shell_turns(
+def test_commas_transcript_shell_result_includes_intervening_shell_turns(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    monkeypatch.setenv("SIGIL_STATE_DIR", str(tmp_path))
-    monkeypatch.setenv("SIGIL_SESSION_ID", "zeta-test")
-    record_sigil_event(
+    monkeypatch.setenv("COMMAS_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("COMMAS_SESSION_ID", "zeta-test")
+    record_commas_event(
         {
             "type": "tool_result",
             "tool_call_id": "call-1",
@@ -1373,7 +1373,7 @@ def test_sigil_transcript_shell_result_includes_intervening_shell_turns(
     record_turn("git status --short", 0, "/repo", stdout_snippet=" M README.md")
     record_turn("uv run pytest", 0, "/repo", stdout_snippet="191 passed")
 
-    event = sigil_handoff.append_shell_result()
+    event = commas_handoff.append_shell_result()
 
     assert event["result"]["outcome"] == SHELL_HANDOFF_OUTCOME_EXECUTED
     assert event["result"]["executed_command"] == "uv run pytest"
@@ -1384,13 +1384,13 @@ def test_sigil_transcript_shell_result_includes_intervening_shell_turns(
     assert "1 user shell turn" in event["result"]["content"][0]["text"]
 
 
-def test_sigil_transcript_shell_result_does_not_reuse_resolved_handoff(
+def test_commas_transcript_shell_result_does_not_reuse_resolved_handoff(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    monkeypatch.setenv("SIGIL_STATE_DIR", str(tmp_path))
-    monkeypatch.setenv("SIGIL_SESSION_ID", "zeta-test")
-    record_sigil_event(
+    monkeypatch.setenv("COMMAS_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("COMMAS_SESSION_ID", "zeta-test")
+    record_commas_event(
         {
             "type": "tool_result",
             "tool_call_id": "call-1",
@@ -1408,8 +1408,8 @@ def test_sigil_transcript_shell_result_does_not_reuse_resolved_handoff(
     )
     record_turn("uv run pytest", 0, "/repo", stdout_snippet="191 passed")
 
-    first = sigil_handoff.append_shell_result()
-    second = sigil_handoff.append_shell_result()
+    first = commas_handoff.append_shell_result()
+    second = commas_handoff.append_shell_result()
 
     assert first["type"] == "tool_result"
     assert first["result"]["outcome"] == SHELL_HANDOFF_OUTCOME_EXECUTED
@@ -1463,7 +1463,7 @@ def test_zeta_question_loop_feeds_current_tool_result_to_next_step(
                         "result": {
                             "ok": True,
                             "content": [
-                                {"type": "text", "text": "[project]\nname = 'sigil'\n"}
+                                {"type": "text", "text": "[project]\nname = 'commas'\n"}
                             ],
                         },
                     },
@@ -1822,8 +1822,8 @@ def test_zeta_question_loop_passes_prior_timeline_as_turns(
     monkeypatch.setattr(zeta_runner, "run_agent_turn", fake_run_agent_turn)
     monkeypatch.setattr(zeta_runner, "load_project_instructions", lambda: "ctx")
 
-    record_sigil_event({"type": "user_message", "content": "summarize README"})
-    record_sigil_event({"type": "model", "content": "It is a Sigil README."})
+    record_commas_event({"type": "user_message", "content": "summarize README"})
+    record_commas_event({"type": "model", "content": "It is a Commas README."})
 
     code = ask_runner.ask("and why?")
 
@@ -1834,9 +1834,9 @@ def test_zeta_question_loop_passes_prior_timeline_as_turns(
         else str(event.get("content") or "")
         for event in transcripts[0]
     ]
-    assert contents == ["summarize README", "It is a Sigil README."]
+    assert contents == ["summarize README", "It is a Commas README."]
     assert captured["context"] == "ctx"
-    timeline = current_sigil_timeline()
+    timeline = current_commas_timeline()
     assert [event["content"] for event in timeline[-2:]] == [
         "and why?",
         "follow-up answer",
@@ -1870,7 +1870,7 @@ def test_zeta_ask_workflow_reports_stall_without_final_answer(
                         "name": "read",
                         "result": {
                             "ok": True,
-                            "content": [{"type": "text", "text": "Sigil docs"}],
+                            "content": [{"type": "text", "text": "Commas docs"}],
                         },
                     },
                 ]
@@ -1893,8 +1893,8 @@ def test_zeta_answer_model_failure_records_turn_abort(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    monkeypatch.setenv("SIGIL_STATE_DIR", str(tmp_path))
-    monkeypatch.setenv("SIGIL_SESSION_ID", "zeta-test")
+    monkeypatch.setenv("COMMAS_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("COMMAS_SESSION_ID", "zeta-test")
     monkeypatch.setattr(agent_io, "ensure_server", lambda: True)
 
     def failing_run_agent_turn(*args: object, **kwargs: object) -> None:
@@ -1905,7 +1905,7 @@ def test_zeta_answer_model_failure_records_turn_abort(
     with pytest.raises(RuntimeError):
         ask_runner.ask("question")
 
-    timeline = current_sigil_timeline()
+    timeline = current_commas_timeline()
     assert timeline[-1]["type"] == "turn_aborted"
     assert "model stream failed" in timeline[-1]["error"]
     assert timeline[-2]["type"] == "user_message"
@@ -1918,8 +1918,8 @@ def test_zeta_step_model_failure_records_turn_abort(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    monkeypatch.setenv("SIGIL_STATE_DIR", str(tmp_path))
-    monkeypatch.setenv("SIGIL_SESSION_ID", "zeta-test")
+    monkeypatch.setenv("COMMAS_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("COMMAS_SESSION_ID", "zeta-test")
     monkeypatch.setattr(agent_io, "ensure_server", lambda: True)
 
     def failing_run_agent_turn(*args: object, **kwargs: object) -> None:
@@ -1930,7 +1930,7 @@ def test_zeta_step_model_failure_records_turn_abort(
     with pytest.raises(RuntimeError):
         zeta_runner.step("do the thing", workflow="propose")
 
-    timeline = current_sigil_timeline()
+    timeline = current_commas_timeline()
     assert timeline[-1]["type"] == "turn_aborted"
     assert timeline[-1]["workflow"] == "propose"
     assert "model request failed" in timeline[-1]["error"]
@@ -1941,20 +1941,20 @@ def test_session_clear_removes_zeta_continuity(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    monkeypatch.setenv("SIGIL_STATE_DIR", str(tmp_path))
-    monkeypatch.setenv("SIGIL_SESSION_ID", "zeta-test")
-    record_sigil_event({"type": "user_message", "content": "hello"})
+    monkeypatch.setenv("COMMAS_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("COMMAS_SESSION_ID", "zeta-test")
+    record_commas_event({"type": "user_message", "content": "hello"})
     record_turn("ls", 0, "/repo")
     session_root = tmp_path / "sessions" / "zeta-test"
-    assert current_sigil_timeline() != []
+    assert current_commas_timeline() != []
     assert session_root.exists()
 
-    result = CliRunner().invoke(sigil_cli, ["session", "clear"])
+    result = CliRunner().invoke(commas_cli, ["session", "clear"])
 
     assert result.exit_code == 0
     assert "zeta.sqlite3" in result.output
     assert not session_root.exists()
-    assert current_sigil_timeline() == []
+    assert current_commas_timeline() == []
 
 
 def test_zeta_ask_workflow_keeps_stdout_clean_for_pipes(
@@ -2368,7 +2368,7 @@ def test_zeta_step_bridges_turn_record_into_trace_graph(monkeypatch) -> None:
 
     assert code == 0
     (turn,) = history_turns()
-    store = sigil.zeta_session_for_sigil().trace_store
+    store = commas.zeta_session_for_commas().trace_store
     turn_object_id = zeta_trace.resolve_object_id(store, f"turn/{turn['turn_id']}")
     turn_object = store.get_object(turn_object_id)
     assert turn_object is not None
@@ -2404,9 +2404,9 @@ def test_turn_bridge_failure_does_not_break_the_step(monkeypatch) -> None:
             self.trace_store = BrokenStore()
 
     monkeypatch.setattr(agent_io, "ensure_server", lambda: True)
-    base_context = sigil.zeta_session_for_sigil()
+    base_context = commas.zeta_session_for_commas()
     monkeypatch.setattr(
-        sigil, "zeta_session_for_sigil", lambda: BrokenContext(base_context)
+        commas, "zeta_session_for_commas", lambda: BrokenContext(base_context)
     )
     monkeypatch.setattr(
         zeta_runner,
@@ -2441,7 +2441,7 @@ def test_zeta_step_tags_timeline_events_with_turn_id(monkeypatch) -> None:
     (turn,) = history_turns()
     tagged = [
         event
-        for event in current_sigil_timeline()
+        for event in current_commas_timeline()
         if event.get("turn_id") == turn["turn_id"]
     ]
     assert tagged
@@ -2488,7 +2488,7 @@ def test_zeta_step_records_aborted_turn_on_keyboard_interrupt(monkeypatch) -> No
     with pytest.raises(KeyboardInterrupt):
         zeta_runner.step("stop", workflow="propose")
 
-    timeline = current_sigil_timeline()
+    timeline = current_commas_timeline()
     assert timeline[-1]["type"] == "turn_aborted"
     assert timeline[-1]["reason"] == "keyboard_interrupt"
     (turn,) = history_turns()
@@ -2602,7 +2602,7 @@ def test_shell_handoff_resolution_emits_handoff_effect() -> None:
         }
     ]
 
-    result = sigil_handoff.shell_handoff_result(handoff_meta, turns)
+    result = commas_handoff.shell_handoff_result(handoff_meta, turns)
 
     assert result["outcome"] == SHELL_HANDOFF_OUTCOME_EXECUTED
     (effect,) = history_effects()
@@ -2635,7 +2635,7 @@ def test_cancelled_handoff_resolution_emits_cancelled_effect() -> None:
         }
     ]
 
-    result = sigil_handoff.shell_handoff_result(handoff_meta, turns)
+    result = commas_handoff.shell_handoff_result(handoff_meta, turns)
 
     assert result["outcome"] == SHELL_HANDOFF_OUTCOME_CANCELLED
     (effect,) = history_effects()
@@ -2665,7 +2665,7 @@ def test_latest_unresolved_shell_handoff_surfaces_turn_id() -> None:
         }
     ]
 
-    handoff_meta = sigil_handoff.latest_unresolved_shell_handoff(timeline)
+    handoff_meta = commas_handoff.latest_unresolved_shell_handoff(timeline)
 
     assert handoff_meta["turn_id"] == "turn-stage-1"
 
@@ -2687,19 +2687,19 @@ def test_model_server_ready_skips_probe_for_codex_api(monkeypatch) -> None:
 
 
 def test_command_matches_staged_ignores_whitespace_runs() -> None:
-    assert sigil_handoff.command_matches_staged("uv  run   pytest", "uv run pytest")
+    assert commas_handoff.command_matches_staged("uv  run   pytest", "uv run pytest")
 
 
 def test_command_matches_staged_accepts_extended_arguments() -> None:
-    assert sigil_handoff.command_matches_staged("uv run pytest", "uv run pytest -q")
+    assert commas_handoff.command_matches_staged("uv run pytest", "uv run pytest -q")
 
 
 def test_command_matches_staged_rejects_unrelated_command() -> None:
-    assert not sigil_handoff.command_matches_staged("uv run pytest", "git status")
+    assert not commas_handoff.command_matches_staged("uv run pytest", "git status")
 
 
 def test_command_matches_staged_rejects_empty_staged_command() -> None:
-    assert not sigil_handoff.command_matches_staged("", "git status")
+    assert not commas_handoff.command_matches_staged("", "git status")
 
 
 def staged_handoff_event(command: str) -> dict[str, Any]:
@@ -2723,13 +2723,13 @@ def test_matching_pending_handoff_returns_staged_handoff(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    monkeypatch.setenv("SIGIL_STATE_DIR", str(tmp_path))
-    monkeypatch.setenv("SIGIL_SESSION_ID", "resume-test")
-    record_sigil_event(staged_handoff_event("uv run pytest"))
+    monkeypatch.setenv("COMMAS_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("COMMAS_SESSION_ID", "resume-test")
+    record_commas_event(staged_handoff_event("uv run pytest"))
 
-    handoff = sigil_handoff.matching_pending_handoff(
+    handoff = commas_handoff.matching_pending_handoff(
         "uv run pytest -q",
-        current_sigil_timeline(),
+        current_commas_timeline(),
     )
 
     assert handoff["command"] == "uv run pytest"
@@ -2740,13 +2740,13 @@ def test_matching_pending_handoff_ignores_unrelated_command(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    monkeypatch.setenv("SIGIL_STATE_DIR", str(tmp_path))
-    monkeypatch.setenv("SIGIL_SESSION_ID", "resume-test")
-    record_sigil_event(staged_handoff_event("uv run pytest"))
+    monkeypatch.setenv("COMMAS_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("COMMAS_SESSION_ID", "resume-test")
+    record_commas_event(staged_handoff_event("uv run pytest"))
 
-    handoff = sigil_handoff.matching_pending_handoff(
+    handoff = commas_handoff.matching_pending_handoff(
         "git status",
-        current_sigil_timeline(),
+        current_commas_timeline(),
     )
 
     assert handoff == {}
@@ -2756,28 +2756,28 @@ def test_matching_pending_handoff_without_pending_handoff(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    monkeypatch.setenv("SIGIL_STATE_DIR", str(tmp_path))
-    monkeypatch.setenv("SIGIL_SESSION_ID", "resume-test")
+    monkeypatch.setenv("COMMAS_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("COMMAS_SESSION_ID", "resume-test")
 
-    handoff = sigil_handoff.matching_pending_handoff(
+    handoff = commas_handoff.matching_pending_handoff(
         "uv run pytest",
-        current_sigil_timeline(),
+        current_commas_timeline(),
     )
 
     assert handoff == {}
 
 
-def test_sigil_run_writes_resume_file_for_staged_command(
+def test_commas_run_writes_resume_file_for_staged_command(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    monkeypatch.setenv("SIGIL_STATE_DIR", str(tmp_path))
-    monkeypatch.setenv("SIGIL_SESSION_ID", "resume-test")
-    record_sigil_event(staged_handoff_event("echo staged"))
+    monkeypatch.setenv("COMMAS_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("COMMAS_SESSION_ID", "resume-test")
+    record_commas_event(staged_handoff_event("echo staged"))
     resume_file = tmp_path / "resume"
 
     result = CliRunner().invoke(
-        sigil_cli,
+        commas_cli,
         ["run", "--resume-file", str(resume_file), "--shell", "echo staged"],
     )
 
@@ -2785,17 +2785,17 @@ def test_sigil_run_writes_resume_file_for_staged_command(
     assert resume_file.read_text(encoding="utf-8") == "echo staged\n"
 
 
-def test_sigil_run_leaves_resume_file_untouched_for_unrelated_command(
+def test_commas_run_leaves_resume_file_untouched_for_unrelated_command(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    monkeypatch.setenv("SIGIL_STATE_DIR", str(tmp_path))
-    monkeypatch.setenv("SIGIL_SESSION_ID", "resume-test")
-    record_sigil_event(staged_handoff_event("echo staged"))
+    monkeypatch.setenv("COMMAS_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("COMMAS_SESSION_ID", "resume-test")
+    record_commas_event(staged_handoff_event("echo staged"))
     resume_file = tmp_path / "resume"
 
     result = CliRunner().invoke(
-        sigil_cli,
+        commas_cli,
         ["run", "--resume-file", str(resume_file), "--shell", "echo other"],
     )
 
@@ -2803,17 +2803,17 @@ def test_sigil_run_leaves_resume_file_untouched_for_unrelated_command(
     assert not resume_file.exists()
 
 
-def test_sigil_run_skips_resume_for_interrupted_command(
+def test_commas_run_skips_resume_for_interrupted_command(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    monkeypatch.setenv("SIGIL_STATE_DIR", str(tmp_path))
-    monkeypatch.setenv("SIGIL_SESSION_ID", "resume-test")
-    record_sigil_event(staged_handoff_event("exit 130"))
+    monkeypatch.setenv("COMMAS_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("COMMAS_SESSION_ID", "resume-test")
+    record_commas_event(staged_handoff_event("exit 130"))
     resume_file = tmp_path / "resume"
 
     result = CliRunner().invoke(
-        sigil_cli,
+        commas_cli,
         ["run", "--resume-file", str(resume_file), "--shell", "exit 130"],
     )
 

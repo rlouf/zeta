@@ -369,14 +369,14 @@ components and verified by its stored hash.
 The graph is inspectable and exercisable from the CLI:
 
 ```text
-sigil trace log
-sigil trace show OBJECT_ID
-sigil trace tree OBJECT_ID [--down]
-sigil trace closure OBJECT_ID
-sigil trace diff OLD_PROMPT NEW_PROMPT [--stat]
-sigil trace replay PROMPT_ID [--model PROFILE] [--diff]
-sigil trace refs
-sigil trace prompts
+commas trace log
+commas trace show OBJECT_ID
+commas trace tree OBJECT_ID [--down]
+commas trace closure OBJECT_ID
+commas trace diff OLD_PROMPT NEW_PROMPT [--stat]
+commas trace replay PROMPT_ID [--model PROFILE] [--diff]
+commas trace refs
+commas trace prompts
 ```
 
 `trace diff` is the component-level comparison this design makes cheap:

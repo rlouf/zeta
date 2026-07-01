@@ -1,8 +1,8 @@
 # Zeta
 
 [![CI](https://github.com/rlouf/sigil/actions/workflows/ci.yml/badge.svg)](https://github.com/rlouf/sigil/actions/workflows/ci.yml)
-[![PyPI](https://img.shields.io/pypi/v/sigil-sh.svg)](https://pypi.org/project/sigil-sh/)
-[![Python](https://img.shields.io/pypi/pyversions/sigil-sh.svg)](https://pypi.org/project/sigil-sh/)
+[![PyPI](https://img.shields.io/pypi/v/commas.svg)](https://pypi.org/project/commas/)
+[![Python](https://img.shields.io/pypi/pyversions/commas.svg)](https://pypi.org/project/commas/)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
 Zeta is a local, event-driven runtime for authored agents.
@@ -13,17 +13,17 @@ should run when it is triggered. The runtime stores events, queue state, run
 attempts, tool calls, model calls, and prompt traces in project-local SQLite
 databases so agent behavior can be replayed and inspected.
 
-Zeta is alpha software. The repository also contains Sigil, a shell frontend
+Zeta is alpha software. The repository also contains Commas, a shell frontend
 that uses the same runtime for interactive `ask`, `propose`, `do`, trace, and
 history workflows.
 
 ## Install
 
-The Python package is published as `sigil-sh`; it installs both `zeta` and
-`sigil` commands:
+The Python package is published as `commas`; it installs both `zeta` and
+`commas` commands:
 
 ```sh
-uv tool install sigil-sh
+uv tool install commas
 zeta --help
 ```
 
@@ -32,7 +32,7 @@ For local development:
 ```sh
 uv sync --group dev
 uv run zeta --help
-uv run sigil --help
+uv run commas --help
 ```
 
 Zeta needs Python 3.11+ and a model endpoint. By default, local runs use an
@@ -84,15 +84,15 @@ stored under `.zeta/sessions/default`. For authored agents, the usual choices
 are to set a `default = true` profile in `models.toml` or to set a per-agent
 `model:` override in the agent frontmatter.
 
-The Sigil shell frontend also uses these profiles, but its `sigil model use`
+The Commas shell frontend also uses these profiles, but its `commas model use`
 command selects a profile for the current shell session, not for a project
 worker:
 
 ```sh
-sigil model list
-sigil model use fast
-sigil model show
-sigil model clear
+commas model list
+commas model use fast
+commas model show
+commas model clear
 ```
 
 ## Project Layout
@@ -251,21 +251,21 @@ Connector egress handlers can then deliver those events to external systems.
 
 ## Tools And Skills
 
-The `zeta run` CLI registers the built-in Sigil capabilities with the local
+The `zeta run` CLI registers the built-in Commas capabilities with the local
 runtime. Agent `tools:` entries can use either the bare model name or the
 canonical capability id when it is unambiguous:
 
 | Tool | Capability id | Purpose |
 | --- | --- | --- |
-| `read` | `sigil.read` | Read file contents. |
-| `ls` | `sigil.ls` | List files. |
-| `grep` | `sigil.grep` | Text search. |
-| `ast_grep` | `sigil.ast_grep` | Structural code search. |
-| `web_search` | `sigil.web_search` | Web search. |
-| `query_log` | `sigil.query_log` | Query Sigil history. |
-| `bash` | `sigil.bash` | Run shell commands. |
-| `edit` | `sigil.edit` | Edit files. |
-| `write` | `sigil.write` | Write files. |
+| `read` | `commas.read` | Read file contents. |
+| `ls` | `commas.ls` | List files. |
+| `grep` | `commas.grep` | Text search. |
+| `ast_grep` | `commas.ast_grep` | Structural code search. |
+| `web_search` | `commas.web_search` | Web search. |
+| `query_log` | `commas.query_log` | Query Commas history. |
+| `bash` | `commas.bash` | Run shell commands. |
+| `edit` | `commas.edit` | Edit files. |
+| `write` | `commas.write` | Write files. |
 
 Capability execution goes through the registry and each capability's policy. In
 the local worker, mutating tools use the current staged execution contract unless
@@ -444,7 +444,7 @@ Runtime events use the following prefixes:
 
 Runtime events answer "what happened?" Prompt traces answer "what exactly did
 the model see?" They are stored in `.zeta/zeta.sqlite3`, scoped by session id.
-The trace inspector currently lives under the Sigil CLI. By default, Sigil trace
+The trace inspector currently lives under the Commas CLI. By default, Commas trace
 commands read `~/.zeta`; point them at a project runtime by setting
 `ZETA_STATE_DIR` to the same state directory used by `zeta run`.
 
@@ -452,22 +452,22 @@ commands read `~/.zeta`; point them at a project runtime by setting
 export ZETA_STATE_DIR=.zeta
 
 # List recent prompts and assistant messages across agent sessions.
-sigil trace log --all-sessions
+commas trace log --all-sessions
 
 # List failed or successful tool calls.
-sigil trace tools --failed --all-sessions
-sigil trace tools --successful --json --all-sessions
+commas trace tools --failed --all-sessions
+commas trace tools --successful --json --all-sessions
 
 # Inspect one agent session.
-sigil trace --session agent/issue-triage log
-sigil trace --session agent/issue-triage show 4f9d01c2
-sigil trace --session agent/issue-triage tree 4f9d01c2 --down
+commas trace --session agent/issue-triage log
+commas trace --session agent/issue-triage show 4f9d01c2
+commas trace --session agent/issue-triage tree 4f9d01c2 --down
 
 # Compare two prompts component by component.
-sigil trace --session agent/issue-triage diff A B --stat
+commas trace --session agent/issue-triage diff A B --stat
 
 # Rebuild and resend a stored prompt.
-sigil trace --session agent/issue-triage replay PROMPT_ID --model fast --diff
+commas trace --session agent/issue-triage replay PROMPT_ID --model fast --diff
 ```
 
 Every trace id argument accepts a full id, a unique prefix, or a ref such as
@@ -505,14 +505,14 @@ Server notifications:
 Protocol `0.1` is additive while Zeta is alpha software. Clients should ignore
 unknown result fields and unknown notification params.
 
-## Sigil Shell Frontend
+## Commas Shell Frontend
 
-Sigil is the shell frontend that ships in this repository. It targets zsh and
+Commas is the shell frontend that ships in this repository. It targets zsh and
 wraps Zeta session turns in punctuation shortcuts:
 
 ```sh
-sigil install
-sigil doctor
+commas install
+commas doctor
 ```
 
 | Glyph | Workflow | Behavior |
@@ -536,18 +536,18 @@ Examples:
 The regular CLI remains available without glyphs:
 
 ```text
-sigil ask [QUESTION]
-sigil status [--json]
-sigil log [--touched PATH] [--workflow W] [--since T] [--failed] [--session ID] [--cost] [--json]
-sigil events [--limit N] [--json] [--raw]
-sigil session [show|path|list|clear|transcript] [--json]
-sigil model [list|use|show|clear]
-sigil trace [--session ID] [log|tools|grep|show|tree|closure|refs|prompts|diff|replay]
-sigil install [--install-dir DIR] [--rc FILE] [--glyphs|--no-glyphs]
-sigil doctor [--json]
+commas ask [QUESTION]
+commas status [--json]
+commas log [--touched PATH] [--workflow W] [--since T] [--failed] [--session ID] [--cost] [--json]
+commas events [--limit N] [--json] [--raw]
+commas session [show|path|list|clear|transcript] [--json]
+commas model [list|use|show|clear]
+commas trace [--session ID] [log|tools|grep|show|tree|closure|refs|prompts|diff|replay]
+commas install [--install-dir DIR] [--rc FILE] [--glyphs|--no-glyphs]
+commas doctor [--json]
 ```
 
-Sigil writes shell frontend state under `~/.sigil/` by default. Zeta authored
+Commas writes shell frontend state under `~/.commas/` by default. Zeta authored
 agents write project runtime state under `.zeta/` by default.
 
 ## Development

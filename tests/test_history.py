@@ -5,10 +5,10 @@ from typing import Any
 
 from click.testing import CliRunner
 
-from sigil import history as sigil_history
-from sigil import state as sigil_state
-from sigil.cli import cli as sigil_cli
-from sigil.protocols import (
+from commas import history as commas_history
+from commas import state as commas_state
+from commas.cli import cli as commas_cli
+from commas.protocols import (
     EFFECT_KIND_COMMAND,
     EFFECT_KIND_FILE_WRITE,
     TURN_OUTCOME_ABORTED,
@@ -16,8 +16,8 @@ from sigil.protocols import (
     TURN_OUTCOME_FAILED,
     turn_contract,
 )
-from sigil.sessions import clear_current_session, session_dir, session_id
-from sigil.state import (
+from commas.sessions import clear_current_session, session_dir, session_id
+from commas.state import (
     append_event,
     event_store_path,
     read_events,
@@ -28,7 +28,7 @@ from zeta.records.stores.sqlite import SqliteEventStore
 
 
 def sample_turn_record(turn_id: str = "turn-1", **overrides: Any) -> dict[str, Any]:
-    record = sigil_history.turn_record(
+    record = commas_history.turn_record(
         turn_id,
         workflow="run",
         objective="ls",
@@ -44,7 +44,7 @@ def sample_effect_record(
     turn_id: str = "turn-1",
     **overrides: Any,
 ) -> dict[str, Any]:
-    record = sigil_history.effect_record(
+    record = commas_history.effect_record(
         effect_id,
         turn_id=turn_id,
         kind=EFFECT_KIND_COMMAND,
@@ -58,44 +58,44 @@ def sample_effect_record(
 
 def append_history_record(record: dict[str, Any]) -> dict[str, Any]:
     if record.get("type") == "zeta.effect":
-        return sigil_history.publish_effect_record(
+        return commas_history.publish_effect_record(
             record,
-            path=sigil_state.event_store_path(),
+            path=commas_state.event_store_path(),
             session_id=session_id(),
         )
     event = append_event(record)
-    return sigil_history.project_one_turn_record(event)
+    return commas_history.project_one_turn_record(event)
 
 
-def publish_sigil_draft(draft: DraftEvent) -> None:
+def publish_commas_draft(draft: DraftEvent) -> None:
     SqliteEventStore(event_store_path()).accept(draft)
 
 
 def test_history_publish_turn_record_writes_log_and_history() -> None:
-    event = sigil_history.publish_turn_record(
+    event = commas_history.publish_turn_record(
         sample_turn_record(caused_by="prompt-event"),
-        path=sigil_state.event_store_path(),
+        path=commas_state.event_store_path(),
         session_id=session_id(),
     )
-    payload = sigil_history.project_one_turn_record(event)
+    payload = commas_history.project_one_turn_record(event)
 
     (stored_event,) = read_events()
     assert event.event_type == "zeta.turn.completed"
     assert event.caused_by == "prompt-event"
     assert payload["caused_by"] == "prompt-event"
     assert stored_event == event
-    assert sigil_state.history_view().turn("turn-1") == payload
+    assert commas_state.history_view().turn("turn-1") == payload
 
 
 def test_history_publish_turn_record_uses_outcome_event_names() -> None:
-    failed = sigil_history.publish_turn_record(
+    failed = commas_history.publish_turn_record(
         sample_turn_record("turn-failed", outcome=TURN_OUTCOME_FAILED),
-        path=sigil_state.event_store_path(),
+        path=commas_state.event_store_path(),
         session_id=session_id(),
     )
-    aborted = sigil_history.publish_turn_record(
+    aborted = commas_history.publish_turn_record(
         sample_turn_record("turn-aborted", outcome=TURN_OUTCOME_ABORTED),
-        path=sigil_state.event_store_path(),
+        path=commas_state.event_store_path(),
         session_id=session_id(),
     )
 
@@ -105,16 +105,16 @@ def test_history_publish_turn_record_uses_outcome_event_names() -> None:
 
 
 def test_history_publish_effect_record_writes_durable_tool_event() -> None:
-    payload = sigil_history.publish_effect_record(
+    payload = commas_history.publish_effect_record(
         sample_effect_record(),
-        path=sigil_state.event_store_path(),
+        path=commas_state.event_store_path(),
         session_id=session_id(),
     )
 
     (event,) = read_events()
     assert event.event_type == "zeta.tool_call.completed"
     assert event.payload["effects"][0]["effect_id"] == "effect-1"
-    history = sigil_state.history_view()
+    history = commas_state.history_view()
     assert history.effects_for_turn("turn-1") == [payload]
 
 
@@ -127,21 +127,21 @@ def test_history_uses_latest_turn_record_per_id() -> None:
         )
     )
 
-    (row,) = sigil_state.history_view().turns()
+    (row,) = commas_state.history_view().turns()
     assert row["outcome"] == TURN_OUTCOME_FAILED
 
 
 def test_history_view_ignores_non_history_events() -> None:
     append_event({"type": "user_message", "content": "hi"})
 
-    assert sigil_state.history_view().turns() == []
+    assert commas_state.history_view().turns() == []
 
 
 def test_history_turns_lists_newest_first_and_honors_limit() -> None:
     append_history_record(sample_turn_record("turn-old", time=100.0))
     append_history_record(sample_turn_record("turn-new", time=200.0))
 
-    history = sigil_state.history_view()
+    history = commas_state.history_view()
     listed = history.turns()
     assert [row["turn_id"] for row in listed] == ["turn-new", "turn-old"]
     assert [row["turn_id"] for row in history.turns(limit=1)] == ["turn-new"]
@@ -163,14 +163,14 @@ def test_history_effects_touching_filters_by_exact_path() -> None:
         )
     )
 
-    history = sigil_state.history_view()
+    history = commas_state.history_view()
     assert history.effects_touching("a.txt") == [touched]
     assert history.effects_touching("missing.txt") == []
 
 
 def test_history_history_reads_durable_events() -> None:
     append_event(sample_turn_record("turn-old", time=100.0))
-    publish_sigil_draft(
+    publish_commas_draft(
         DraftEvent(
             event_type="zeta.tool_call.completed",
             source="zeta",
@@ -182,14 +182,14 @@ def test_history_history_reads_durable_events() -> None:
     )
     append_event(sample_turn_record("turn-new", time=200.0))
     append_event({"type": "user_message", "content": "not a history record"})
-    history = sigil_state.history_view()
+    history = commas_state.history_view()
 
     assert [row["turn_id"] for row in history.turns()] == ["turn-new", "turn-old"]
     assert history.effects_for_turn("turn-old")[0]["effect_id"] == "effect-old"
 
 
 def test_history_history_uses_event_metadata() -> None:
-    publish_sigil_draft(
+    publish_commas_draft(
         DraftEvent(
             event_type="zeta.turn.completed",
             source="test",
@@ -207,7 +207,7 @@ def test_history_history_uses_event_metadata() -> None:
         )
     )
 
-    turn = sigil_state.history_view().turn("turn-meta")
+    turn = commas_state.history_view().turn("turn-meta")
     assert turn is not None
     assert turn["time"] >= 1.0
     assert turn["session"] == "event-session"
@@ -225,7 +225,7 @@ def test_history_query_turns_filters_workflow_outcome_and_since() -> None:
     )
     append_history_record(sample_turn_record("turn-run", workflow="run", time=300.0))
 
-    history = sigil_state.history_view()
+    history = commas_state.history_view()
     assert [row["turn_id"] for row in history.query_turns(workflow="ask")] == [
         "turn-ask"
     ]
@@ -251,7 +251,7 @@ def test_history_query_turns_scopes_by_session_and_touched_path() -> None:
         )
     )
 
-    history = sigil_state.history_view()
+    history = commas_state.history_view()
     assert [row["turn_id"] for row in history.query_turns(session="there")] == [
         "turn-there"
     ]
@@ -266,14 +266,14 @@ def test_history_turn_ids_with_prefix_lists_matches_sorted() -> None:
     append_event(sample_turn_record("aaaa-2222"))
     append_event(sample_turn_record("bbbb-3333"))
 
-    history = sigil_state.history_view()
+    history = commas_state.history_view()
     assert history.turn_ids_with_prefix("aaaa") == ["aaaa-1111", "aaaa-2222"]
     assert history.turn_ids_with_prefix("bbbb-3333") == ["bbbb-3333"]
     assert history.turn_ids_with_prefix("cccc") == []
 
 
 def test_history_pending_staged_command_clears_on_resolution(monkeypatch) -> None:
-    monkeypatch.setenv("SIGIL_SESSION_ID", "pending-test")
+    monkeypatch.setenv("COMMAS_SESSION_ID", "pending-test")
     append_history_record(
         sample_effect_record(
             "effect-staged",
@@ -283,7 +283,7 @@ def test_history_pending_staged_command_clears_on_resolution(monkeypatch) -> Non
         )
     )
 
-    history = sigil_state.history_view()
+    history = commas_state.history_view()
     pending = history.pending_staged_command("pending-test")
     assert pending is not None
     assert pending["command"] == "uv run pytest"
@@ -298,11 +298,11 @@ def test_history_pending_staged_command_clears_on_resolution(monkeypatch) -> Non
         )
     )
 
-    assert sigil_state.history_view().pending_staged_command("pending-test") is None
+    assert commas_state.history_view().pending_staged_command("pending-test") is None
 
 
 def test_history_cost_since_sums_session_turns(monkeypatch) -> None:
-    monkeypatch.setenv("SIGIL_SESSION_ID", "cost-test")
+    monkeypatch.setenv("COMMAS_SESSION_ID", "cost-test")
     append_history_record(
         sample_turn_record(
             "turn-early",
@@ -318,7 +318,7 @@ def test_history_cost_since_sums_session_turns(monkeypatch) -> None:
         )
     )
 
-    history = sigil_state.history_view()
+    history = commas_state.history_view()
     today = history.cost_since("cost-test", 200.0)
     assert today == {
         "input_tokens": 100,
@@ -332,7 +332,7 @@ def test_history_cost_since_sums_session_turns(monkeypatch) -> None:
 
 
 def seed_log_cli_history(monkeypatch) -> None:
-    monkeypatch.setenv("SIGIL_SESSION_ID", "log-cli")
+    monkeypatch.setenv("COMMAS_SESSION_ID", "log-cli")
     append_history_record(
         sample_turn_record(
             "turn-do-1111",
@@ -362,10 +362,10 @@ def seed_log_cli_history(monkeypatch) -> None:
     )
 
 
-def test_sigil_log_lists_every_session_newest_first(monkeypatch) -> None:
+def test_commas_log_lists_every_session_newest_first(monkeypatch) -> None:
     seed_log_cli_history(monkeypatch)
 
-    result = CliRunner().invoke(sigil_cli, ["log"])
+    result = CliRunner().invoke(commas_cli, ["log"])
 
     assert result.exit_code == 0
     lines = result.output.splitlines()
@@ -378,13 +378,13 @@ def test_sigil_log_lists_every_session_newest_first(monkeypatch) -> None:
     assert lines[2].startswith("turn-do-")
 
 
-def test_sigil_log_filters_workflow_failed_and_sessions(monkeypatch) -> None:
+def test_commas_log_filters_workflow_failed_and_sessions(monkeypatch) -> None:
     seed_log_cli_history(monkeypatch)
     runner = CliRunner()
 
-    by_workflow = runner.invoke(sigil_cli, ["log", "--workflow", "do"])
-    by_failed = runner.invoke(sigil_cli, ["log", "--failed"])
-    elsewhere = runner.invoke(sigil_cli, ["log", "--session", "elsewhere"])
+    by_workflow = runner.invoke(commas_cli, ["log", "--workflow", "do"])
+    by_failed = runner.invoke(commas_cli, ["log", "--failed"])
+    elsewhere = runner.invoke(commas_cli, ["log", "--session", "elsewhere"])
 
     assert by_workflow.exit_code == 0
     assert len(by_workflow.output.splitlines()) == 1
@@ -397,10 +397,10 @@ def test_sigil_log_filters_workflow_failed_and_sessions(monkeypatch) -> None:
     assert "elsewhere" not in by_workflow.output
 
 
-def test_sigil_log_session_filter_omits_the_session_column(monkeypatch) -> None:
+def test_commas_log_session_filter_omits_the_session_column(monkeypatch) -> None:
     seed_log_cli_history(monkeypatch)
 
-    result = CliRunner().invoke(sigil_cli, ["log", "--session", "log-cli"])
+    result = CliRunner().invoke(commas_cli, ["log", "--session", "log-cli"])
 
     assert result.exit_code == 0
     lines = result.output.splitlines()
@@ -408,12 +408,12 @@ def test_sigil_log_session_filter_omits_the_session_column(monkeypatch) -> None:
     assert all("log-cli" not in line for line in lines)
 
 
-def test_sigil_log_renders_cost_and_json(monkeypatch) -> None:
+def test_commas_log_renders_cost_and_json(monkeypatch) -> None:
     seed_log_cli_history(monkeypatch)
     runner = CliRunner()
 
-    with_cost = runner.invoke(sigil_cli, ["log", "--cost"])
-    as_json = runner.invoke(sigil_cli, ["log", "--json"])
+    with_cost = runner.invoke(commas_cli, ["log", "--cost"])
+    as_json = runner.invoke(commas_cli, ["log", "--json"])
 
     assert with_cost.exit_code == 0
     assert "1200 tok" in with_cost.output
@@ -427,7 +427,7 @@ def test_sigil_log_renders_cost_and_json(monkeypatch) -> None:
     ]
 
 
-def test_sigil_log_touched_filter_finds_writing_turn(monkeypatch) -> None:
+def test_commas_log_touched_filter_finds_writing_turn(monkeypatch) -> None:
     seed_log_cli_history(monkeypatch)
     append_history_record(
         sample_effect_record(
@@ -438,25 +438,25 @@ def test_sigil_log_touched_filter_finds_writing_turn(monkeypatch) -> None:
         )
     )
 
-    result = CliRunner().invoke(sigil_cli, ["log", "--touched", "/tmp/notes.txt"])
+    result = CliRunner().invoke(commas_cli, ["log", "--touched", "/tmp/notes.txt"])
 
     assert result.exit_code == 0
     assert len(result.output.splitlines()) == 1
     assert result.output.startswith("turn-do-")
 
 
-def test_sigil_log_empty_history_prints_friendly_line(monkeypatch) -> None:
-    monkeypatch.setenv("SIGIL_SESSION_ID", "empty-session")
+def test_commas_log_empty_history_prints_friendly_line(monkeypatch) -> None:
+    monkeypatch.setenv("COMMAS_SESSION_ID", "empty-session")
 
-    result = CliRunner().invoke(sigil_cli, ["log"])
+    result = CliRunner().invoke(commas_cli, ["log"])
 
     assert result.exit_code == 0
     assert "no turns recorded" in result.output
 
 
 def seed_show_and_blame_history(monkeypatch) -> None:
-    monkeypatch.setenv("SIGIL_SESSION_ID", "show-cli")
-    record = sigil_history.turn_record(
+    monkeypatch.setenv("COMMAS_SESSION_ID", "show-cli")
+    record = commas_history.turn_record(
         "turn-do-1111",
         workflow="do",
         objective="refactor the staging path",
@@ -487,10 +487,10 @@ def seed_show_and_blame_history(monkeypatch) -> None:
     append_history_record(sample_turn_record("turn-other-22", time=200.0))
 
 
-def test_sigil_log_show_renders_the_full_record(monkeypatch) -> None:
+def test_commas_log_show_renders_the_full_record(monkeypatch) -> None:
     seed_show_and_blame_history(monkeypatch)
 
-    result = CliRunner().invoke(sigil_cli, ["log", "show", "turn-do"])
+    result = CliRunner().invoke(commas_cli, ["log", "show", "turn-do"])
 
     assert result.exit_code == 0
     assert "turn     turn-do-1111" in result.output
@@ -506,12 +506,12 @@ def test_sigil_log_show_renders_the_full_record(monkeypatch) -> None:
     assert "70da571d" in result.output
 
 
-def test_sigil_log_show_reports_ambiguous_and_unknown_ids(monkeypatch) -> None:
+def test_commas_log_show_reports_ambiguous_and_unknown_ids(monkeypatch) -> None:
     seed_show_and_blame_history(monkeypatch)
     runner = CliRunner()
 
-    ambiguous = runner.invoke(sigil_cli, ["log", "show", "turn-"])
-    unknown = runner.invoke(sigil_cli, ["log", "show", "nope"])
+    ambiguous = runner.invoke(commas_cli, ["log", "show", "turn-"])
+    unknown = runner.invoke(commas_cli, ["log", "show", "nope"])
 
     assert ambiguous.exit_code != 0
     assert "turn-do-1111" in ambiguous.output
@@ -520,10 +520,10 @@ def test_sigil_log_show_reports_ambiguous_and_unknown_ids(monkeypatch) -> None:
     assert "nope" in unknown.output
 
 
-def test_sigil_log_show_json_emits_record_and_effects(monkeypatch) -> None:
+def test_commas_log_show_json_emits_record_and_effects(monkeypatch) -> None:
     seed_show_and_blame_history(monkeypatch)
 
-    result = CliRunner().invoke(sigil_cli, ["log", "show", "--json", "turn-do-1111"])
+    result = CliRunner().invoke(commas_cli, ["log", "show", "--json", "turn-do-1111"])
 
     assert result.exit_code == 0
     payload = json.loads(result.output)
@@ -531,10 +531,10 @@ def test_sigil_log_show_json_emits_record_and_effects(monkeypatch) -> None:
     assert payload["effects"][0]["effect_id"] == "effect-edit"
 
 
-def test_sigil_blame_lists_turns_touching_a_file(monkeypatch) -> None:
+def test_commas_blame_lists_turns_touching_a_file(monkeypatch) -> None:
     seed_show_and_blame_history(monkeypatch)
 
-    result = CliRunner().invoke(sigil_cli, ["blame", "/tmp/notes.txt"])
+    result = CliRunner().invoke(commas_cli, ["blame", "/tmp/notes.txt"])
 
     assert result.exit_code == 0
     assert "file_edit" in result.output
@@ -545,10 +545,10 @@ def test_sigil_blame_lists_turns_touching_a_file(monkeypatch) -> None:
     assert "70da571d" in result.output
 
 
-def test_sigil_blame_reports_untouched_files(monkeypatch) -> None:
+def test_commas_blame_reports_untouched_files(monkeypatch) -> None:
     seed_show_and_blame_history(monkeypatch)
 
-    result = CliRunner().invoke(sigil_cli, ["blame", "/tmp/other.txt"])
+    result = CliRunner().invoke(commas_cli, ["blame", "/tmp/other.txt"])
 
     assert result.exit_code == 0
     assert "no recorded writes" in result.output
@@ -559,7 +559,7 @@ def seed_bundle_state(monkeypatch) -> dict[str, str]:
     from zeta.records.objects import Derivation, Object
     from zeta.records.stores.sqlite import SqliteObjectStore, zeta_sqlite_path
 
-    monkeypatch.setenv("SIGIL_SESSION_ID", "bundle-src")
+    monkeypatch.setenv("COMMAS_SESSION_ID", "bundle-src")
     append_event(
         sample_turn_record(
             "turn-bundle-1",
@@ -596,7 +596,7 @@ def seed_bundle_state(monkeypatch) -> dict[str, str]:
     )
     store.record_derivation(
         Derivation(
-            producer="SigilTurnRecord:v1",
+            producer="CommasTurnRecord:v1",
             output_id=turn_object_id,
             input_ids=(prompt_id,),
         )
@@ -609,13 +609,13 @@ def seed_bundle_state(monkeypatch) -> dict[str, str]:
 def test_bundle_export_collects_turns_effects_and_trace_closure(
     monkeypatch,
 ) -> None:
-    from sigil.bundle import export_bundle
+    from commas.bundle import export_bundle
 
     ids = seed_bundle_state(monkeypatch)
 
     bundle = export_bundle()
 
-    assert bundle["sigil_bundle"] == 1
+    assert bundle["commas_bundle"] == 1
     record_ids = {
         record.get("effect_id") or record.get("turn_id") for record in bundle["records"]
     }
@@ -624,12 +624,12 @@ def test_bundle_export_collects_turns_effects_and_trace_closure(
     assert {obj["id"] for obj in graph["objects"]} == set(ids.values())
     assert graph["refs"] == {"turn/turn-bundle-1": ids["turn_object_id"]}
     derivation = graph["derivations"][0]
-    assert derivation["producer"] == "SigilTurnRecord:v1"
+    assert derivation["producer"] == "CommasTurnRecord:v1"
     assert isinstance(derivation["created_at"], float)
 
 
 def test_bundle_export_honors_since_and_session_filters(monkeypatch) -> None:
-    from sigil.bundle import export_bundle
+    from commas.bundle import export_bundle
 
     seed_bundle_state(monkeypatch)
     append_history_record(
@@ -647,9 +647,9 @@ def test_bundle_export_honors_since_and_session_filters(monkeypatch) -> None:
 
 
 def test_bundle_export_skips_sessions_without_trace_stores(monkeypatch) -> None:
-    from sigil.bundle import export_bundle
+    from commas.bundle import export_bundle
 
-    monkeypatch.setenv("SIGIL_SESSION_ID", "no-trace")
+    monkeypatch.setenv("COMMAS_SESSION_ID", "no-trace")
     append_history_record(sample_turn_record("turn-no-trace"))
 
     bundle = export_bundle()
@@ -659,16 +659,16 @@ def test_bundle_export_skips_sessions_without_trace_stores(monkeypatch) -> None:
 
 
 def fresh_state_dir(monkeypatch, tmp_path) -> None:
-    """Re-point sigil state at an empty directory, as on another machine."""
+    """Re-point commas state at an empty directory, as on another machine."""
 
-    monkeypatch.setenv("SIGIL_STATE_DIR", str(tmp_path / "imported-state"))
+    monkeypatch.setenv("COMMAS_STATE_DIR", str(tmp_path / "imported-state"))
 
 
 def test_bundle_import_restores_history_and_trace_queries(
     monkeypatch,
     tmp_path,
 ) -> None:
-    from sigil.bundle import export_bundle, import_bundle
+    from commas.bundle import export_bundle, import_bundle
 
     ids = seed_bundle_state(monkeypatch)
     bundle = export_bundle()
@@ -677,11 +677,11 @@ def test_bundle_import_restores_history_and_trace_queries(
     import_bundle(bundle)
 
     runner = CliRunner()
-    log = runner.invoke(sigil_cli, ["log"])
-    show = runner.invoke(sigil_cli, ["log", "show", "turn-bundle-1"])
-    blame = runner.invoke(sigil_cli, ["blame", "/tmp/deploy-notes.md"])
+    log = runner.invoke(commas_cli, ["log"])
+    show = runner.invoke(commas_cli, ["log", "show", "turn-bundle-1"])
+    blame = runner.invoke(commas_cli, ["blame", "/tmp/deploy-notes.md"])
     trace_show = runner.invoke(
-        sigil_cli,
+        commas_cli,
         ["trace", "--session", "bundle-src", "show", "--json", ids["prompt_id"]],
     )
     assert log.exit_code == 0 and "write the deploy notes" in log.output
@@ -692,7 +692,7 @@ def test_bundle_import_restores_history_and_trace_queries(
 
 
 def test_bundle_import_is_idempotent(monkeypatch, tmp_path) -> None:
-    from sigil.bundle import export_bundle, import_bundle
+    from commas.bundle import export_bundle, import_bundle
 
     seed_bundle_state(monkeypatch)
     bundle = export_bundle()
@@ -711,7 +711,7 @@ def test_bundle_import_is_idempotent(monkeypatch, tmp_path) -> None:
 
 
 def test_bundle_import_preserves_event_causality(monkeypatch, tmp_path) -> None:
-    from sigil.bundle import export_bundle, import_bundle
+    from commas.bundle import export_bundle, import_bundle
 
     append_history_record(sample_turn_record("turn-causal", caused_by="prompt-event"))
     bundle = export_bundle()
@@ -723,7 +723,7 @@ def test_bundle_import_preserves_event_causality(monkeypatch, tmp_path) -> None:
     assert event.caused_by == "prompt-event"
 
 
-def test_sigil_log_export_and_import_round_trip_via_cli(
+def test_commas_log_export_and_import_round_trip_via_cli(
     monkeypatch,
     tmp_path,
 ) -> None:
@@ -731,20 +731,22 @@ def test_sigil_log_export_and_import_round_trip_via_cli(
     bundle_path = tmp_path / "bundle.json"
     runner = CliRunner()
 
-    exported = runner.invoke(sigil_cli, ["log", "export", "--output", str(bundle_path)])
+    exported = runner.invoke(
+        commas_cli, ["log", "export", "--output", str(bundle_path)]
+    )
     assert exported.exit_code == 0
     fresh_state_dir(monkeypatch, tmp_path)
-    imported = runner.invoke(sigil_cli, ["log", "import", str(bundle_path)])
+    imported = runner.invoke(commas_cli, ["log", "import", str(bundle_path)])
 
     assert imported.exit_code == 0
-    listed = runner.invoke(sigil_cli, ["log"])
+    listed = runner.invoke(commas_cli, ["log"])
     assert "write the deploy notes" in listed.output
 
 
 def test_history_survives_session_clear() -> None:
-    sigil_history.publish_turn_record(
+    commas_history.publish_turn_record(
         sample_turn_record(),
-        path=sigil_state.event_store_path(),
+        path=commas_state.event_store_path(),
         session_id=session_id(),
     )
     root = session_dir()
@@ -755,4 +757,4 @@ def test_history_survives_session_clear() -> None:
 
     assert not root.exists()
     assert (state_dir() / "events.sqlite3").exists()
-    assert sigil_state.history_view().turn("turn-1") is not None
+    assert commas_state.history_view().turn("turn-1") is not None

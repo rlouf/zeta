@@ -4,7 +4,7 @@ from typing import Any
 
 import pytest
 
-from sigil.history import effect_record, event_from_record, turn_record
+from commas.history import effect_record, event_from_record, turn_record
 from zeta.events import DraftEvent, Event
 from zeta.objects import Derivation, Object
 from zeta.records.events import (
@@ -86,7 +86,7 @@ def tool_result_event_payload(
         "status": status,
         "name": "read",
         "result": result,
-        "capability_id": "sigil.read",
+        "capability_id": "commas.read",
         "model_telemetry": {"input_tokens": 10, "output_tokens": 2},
     }
 
@@ -324,7 +324,7 @@ def test_zeta_runtime_event_projection_contract() -> None:
                     "ok": True,
                     "content": [{"type": "text", "text": "contents"}],
                 },
-                "capability_id": "sigil.read",
+                "capability_id": "commas.read",
                 "model_telemetry": {"input_tokens": 10, "output_tokens": 2},
                 "_timeline_type": "tool_result",
             },
@@ -345,7 +345,7 @@ def test_zeta_runtime_event_projection_contract() -> None:
                     "ok": False,
                     "error": {"code": "read_failed", "message": "missing file"},
                 },
-                "capability_id": "sigil.read",
+                "capability_id": "commas.read",
                 "model_telemetry": {"input_tokens": 10, "output_tokens": 2},
                 "_timeline_type": "tool_result",
             },
@@ -369,7 +369,7 @@ def test_zeta_runtime_event_projection_contract() -> None:
                         "message": "read is not allowed",
                     },
                 },
-                "capability_id": "sigil.read",
+                "capability_id": "commas.read",
                 "model_telemetry": {"input_tokens": 10, "output_tokens": 2},
                 "_timeline_type": "tool_result",
             },
@@ -447,7 +447,7 @@ def test_zeta_event_view_and_rpc_projection_contract() -> None:
             "status": "completed",
             "name": "read",
             "result": {"ok": True, "content": [{"type": "text", "text": "contents"}]},
-            "capability_id": "sigil.read",
+            "capability_id": "commas.read",
             "model_telemetry": {"input_tokens": 10, "output_tokens": 2},
         },
         {
@@ -463,7 +463,7 @@ def test_zeta_event_view_and_rpc_projection_contract() -> None:
                 "ok": False,
                 "error": {"code": "read_failed", "message": "missing file"},
             },
-            "capability_id": "sigil.read",
+            "capability_id": "commas.read",
             "model_telemetry": {"input_tokens": 10, "output_tokens": 2},
         },
         {
@@ -482,7 +482,7 @@ def test_zeta_event_view_and_rpc_projection_contract() -> None:
                     "message": "read is not allowed",
                 },
             },
-            "capability_id": "sigil.read",
+            "capability_id": "commas.read",
             "model_telemetry": {"input_tokens": 10, "output_tokens": 2},
         },
         {
@@ -637,7 +637,7 @@ def test_zeta_pure_runtime_events_project_to_trace_graph() -> None:
                     "ok": True,
                     "content": [{"type": "text", "text": "contents"}],
                 },
-                "capability_id": "sigil.read",
+                "capability_id": "commas.read",
                 "model_telemetry": {"input_tokens": 10, "output_tokens": 2},
             },
             turn_id=TURN_ID,
@@ -741,7 +741,7 @@ def test_zeta_pure_runtime_events_project_to_trace_graph() -> None:
     ]
 
 
-def test_sigil_history_record_projection_contract() -> None:
+def test_commas_history_record_projection_contract() -> None:
     turn = turn_record(
         TURN_ID,
         workflow="do",

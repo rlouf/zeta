@@ -6,12 +6,12 @@ import pytest
 from _zeta_helpers import write_models_config
 from click.testing import CliRunner
 
-from sigil.cli import cli
-from sigil.history import effect_record, publish_effect_record, turn_record
-from sigil.protocols import turn_contract
-from sigil.sessions import record_turn, session_dir, session_id
-from sigil.state import append_event, event_store_path
-from sigil.status import current_status, format_status
+from commas.cli import cli
+from commas.history import effect_record, publish_effect_record, turn_record
+from commas.protocols import turn_contract
+from commas.sessions import record_turn, session_dir, session_id
+from commas.state import append_event, event_store_path
+from commas.status import current_status, format_status
 from zeta.models.profiles import set_active_model_profile
 
 
@@ -54,7 +54,7 @@ url = "http://127.0.0.1:8081/v1/chat/completions"
 """,
     )
     monkeypatch.setenv("HOME", str(home))
-    monkeypatch.setenv("SIGIL_SESSION_ID", "status-model")
+    monkeypatch.setenv("COMMAS_SESSION_ID", "status-model")
     set_active_model_profile("fast", session_dir=session_dir())
 
     status = current_status()
@@ -75,7 +75,7 @@ def test_status_model_line_reports_stale_profile(
     home = tmp_path / "home"
     write_models_config(home, "")
     monkeypatch.setenv("HOME", str(home))
-    monkeypatch.setenv("SIGIL_SESSION_ID", "status-stale-model")
+    monkeypatch.setenv("COMMAS_SESSION_ID", "status-stale-model")
     set_active_model_profile("gone", session_dir=session_dir())
 
     status = current_status()
@@ -122,7 +122,7 @@ def test_status_cli_is_public_surface() -> None:
 def test_status_reports_last_delegation_and_today_cost(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("SIGIL_SESSION_ID", "status-history")
+    monkeypatch.setenv("COMMAS_SESSION_ID", "status-history")
     append_event(
         turn_record(
             "turn-do-1111",
@@ -156,7 +156,7 @@ def test_status_reports_last_delegation_and_today_cost(
 def test_status_reports_pending_staged_handoff(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("SIGIL_SESSION_ID", "status-pending")
+    monkeypatch.setenv("COMMAS_SESSION_ID", "status-pending")
     publish_effect_record(
         effect_record(
             "effect-staged",
@@ -183,7 +183,7 @@ def test_status_reports_pending_staged_handoff(
 def test_status_omits_history_lines_for_quiet_sessions(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("SIGIL_SESSION_ID", "status-quiet")
+    monkeypatch.setenv("COMMAS_SESSION_ID", "status-quiet")
 
     rendered = format_status(current_status())
 
@@ -193,7 +193,7 @@ def test_status_omits_history_lines_for_quiet_sessions(
 
 
 def test_status_json_carries_history_fields(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("SIGIL_SESSION_ID", "status-json")
+    monkeypatch.setenv("COMMAS_SESSION_ID", "status-json")
     append_event(
         turn_record(
             "turn-ask-1",

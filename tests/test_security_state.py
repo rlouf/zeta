@@ -17,8 +17,8 @@ from _patch import patch, patch_dict
 from _zeta_helpers import record_durable_timeline_event
 from click.testing import CliRunner
 
-from sigil.cli import cli, main
-from sigil.cli._base import (
+from commas.cli import cli, main
+from commas.cli._base import (
     EXIT_COMMAND_NOT_FOUND,
     EXIT_ERROR,
     EXIT_INTERRUPTED,
@@ -26,9 +26,9 @@ from sigil.cli._base import (
     EXIT_SIGNAL_BASE,
     EXIT_USAGE,
 )
-from sigil.display.tty import should_color
-from sigil.failure import failure_context_prompt, record_failure, truncate_snippet
-from sigil.sessions import (
+from commas.display.tty import should_color
+from commas.failure import failure_context_prompt, record_failure, truncate_snippet
+from commas.sessions import (
     ingest_spooled_turns,
     recent_turns,
     recent_turns_context,
@@ -36,14 +36,14 @@ from sigil.sessions import (
     session_dir,
     session_id,
 )
-from sigil.state import (
+from commas.state import (
     append_event,
     causal_chain,
     event_children,
     events_for_turn,
     state_dir,
 )
-from sigil.workflows.ask import (
+from commas.workflows.ask import (
     ASK_SYSTEM_PROMPT,
     ask,
 )
@@ -81,7 +81,7 @@ class TtyStringIO(StringIO):
         return True
 
 
-def test_zeta_package_does_not_import_parent_sigil_modules() -> None:
+def test_zeta_package_does_not_import_parent_commas_modules() -> None:
     zeta_root = Path("src/zeta")
     violations: list[str] = []
     for path in sorted(zeta_root.rglob("*.py")):
@@ -90,11 +90,11 @@ def test_zeta_package_does_not_import_parent_sigil_modules() -> None:
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):
                 for alias in node.names:
-                    if alias.name == "sigil" or alias.name.startswith("sigil."):
+                    if alias.name == "commas" or alias.name.startswith("commas."):
                         violations.append(f"{path}:{node.lineno}: import {alias.name}")
             if isinstance(node, ast.ImportFrom):
                 resolved = resolved_import_module(package_parts, node)
-                if resolved and resolved[0] == "sigil":
+                if resolved and resolved[0] == "commas":
                     module = "." * node.level + (node.module or "")
                     violations.append(f"{path}:{node.lineno}: from {module}")
     assert violations == []
@@ -383,8 +383,8 @@ def test_top_level_help_lists_commands() -> None:
     assert "named command:" not in result.output
     assert "named shell function:" not in result.output
     assert "Setup and diagnostics:" in result.output
-    assert "sigil doctor" in result.output
-    assert "sigil status" in result.output
+    assert "commas doctor" in result.output
+    assert "commas status" in result.output
     assert "Commands:" in result.output
     for command in [
         "ask",
@@ -463,26 +463,26 @@ def test_trace_group_help_explains_id_resolution() -> None:
 
 
 HEAVY_MODULES_PROBE = (
-    "heavy = [name for name in sys.modules if name.startswith('sigil.workflows') "
+    "heavy = [name for name in sys.modules if name.startswith('commas.workflows') "
     "or name.startswith('zeta') or name.startswith('rich')]; "
     "assert not heavy, heavy"
 )
 
 
 def test_cli_import_does_not_load_workflow_modules() -> None:
-    script = "import sys; import sigil.cli; " + HEAVY_MODULES_PROBE
+    script = "import sys; import commas.cli; " + HEAVY_MODULES_PROBE
     subprocess.run([sys.executable, "-c", script], check=True)
 
 
 def test_status_dispatch_does_not_load_workflow_modules() -> None:
     with tempfile.TemporaryDirectory() as tmp:
-        env = {**os.environ, "SIGIL_STATE_DIR": tmp, "SIGIL_SESSION_ID": "test"}
+        env = {**os.environ, "COMMAS_STATE_DIR": tmp, "COMMAS_SESSION_ID": "test"}
         script = (
-            "import sys; from sigil.cli import main; "
+            "import sys; from commas.cli import main; "
             "code = main(['status']); "
             "assert code in (0, 1), code; "
             "heavy = [name for name in sys.modules "
-            "if name.startswith('sigil.workflows') or name.startswith('rich') "
+            "if name.startswith('commas.workflows') or name.startswith('rich') "
             "or name in ('zeta.models.chat_completions', 'zeta.run.runtime', 'jsonschema')]; "
             "assert not heavy, heavy"
         )
@@ -498,16 +498,16 @@ def test_spool_ingestion_does_not_load_display_or_model() -> None:
     # Every CLI start ingests the spool; the ingestion path must stay light
     # or glyph latency regresses for all commands at once.
     with tempfile.TemporaryDirectory() as tmp:
-        env = {**os.environ, "SIGIL_STATE_DIR": tmp, "SIGIL_SESSION_ID": "test"}
+        env = {**os.environ, "COMMAS_STATE_DIR": tmp, "COMMAS_SESSION_ID": "test"}
         spool = Path(tmp) / "sessions" / "test" / "shell-turns.spool"
         spool.parent.mkdir(parents=True)
         spool.write_text("1700000000.0\x1fecho hi\x1f0\x1f/repo\x1e", encoding="utf-8")
         script = (
-            "import sys; from sigil.sessions import ingest_spooled_turns; "
+            "import sys; from commas.sessions import ingest_spooled_turns; "
             "count = ingest_spooled_turns(); "
             "assert count == 1, count; "
             "heavy = [name for name in sys.modules "
-            "if name.startswith('sigil.display') "
+            "if name.startswith('commas.display') "
             "or name.startswith('zeta.run.runtime') "
             "or name.startswith('zeta.model') "
             "or name.startswith('rich')]; "
@@ -535,10 +535,10 @@ def test_model_selection_import_does_not_load_transport() -> None:
 def test_tty_helpers_do_not_load_display_renderer() -> None:
     script = (
         "import sys; "
-        "import sigil.display.tty; "
+        "import commas.display.tty; "
         "import zeta.models.chat_completions; "
         "heavy = [name for name in sys.modules "
-        "if name == 'sigil.display.render' or name.startswith('rich')]; "
+        "if name == 'commas.display.render' or name.startswith('rich')]; "
         "assert not heavy, heavy"
     )
     subprocess.run([sys.executable, "-c", script], check=True)
@@ -556,7 +556,7 @@ def test_every_lazy_command_resolves() -> None:
 def test_main_rewrites_missing_executable_errors() -> None:
     stderr = StringIO()
     missing = FileNotFoundError(2, "No such file or directory", "zeta")
-    with patch("sigil.cli.cli.main", side_effect=missing):
+    with patch("commas.cli.cli.main", side_effect=missing):
         with redirect_stderr(stderr):
             assert main(["ask", "hello"]) == EXIT_COMMAND_NOT_FOUND
     assert "missing executable: zeta" in stderr.getvalue()
@@ -565,7 +565,7 @@ def test_main_rewrites_missing_executable_errors() -> None:
 def test_main_rewrites_permission_errors() -> None:
     stderr = StringIO()
     denied = PermissionError(1, "Operation not permitted", "/nope/events.sqlite3")
-    with patch("sigil.cli.cli.main", side_effect=denied):
+    with patch("commas.cli.cli.main", side_effect=denied):
         with redirect_stderr(stderr):
             assert main(["ask", "hello"]) == EXIT_ERROR
     assert "permission denied: /nope/events.sqlite3" in stderr.getvalue()
@@ -575,7 +575,7 @@ APPEND_LARGE_EVENTS_SCRIPT = """
 import os
 import sys
 import time
-from sigil.state import append_event
+from commas.state import append_event
 
 marker, ready_path, start_path = sys.argv[1:4]
 open(ready_path, "w").close()
@@ -588,7 +588,7 @@ for _ in range(25):
 
 def test_event_store_records_large_events_across_processes() -> None:
     with tempfile.TemporaryDirectory() as tmp:
-        env = {**os.environ, "SIGIL_STATE_DIR": tmp, "SIGIL_SESSION_ID": "test"}
+        env = {**os.environ, "COMMAS_STATE_DIR": tmp, "COMMAS_SESSION_ID": "test"}
         start_gate = Path(tmp) / "start"
         ready_gates = [Path(tmp) / "ready-a", Path(tmp) / "ready-b"]
         procs = [
@@ -1012,7 +1012,7 @@ def test_sqlite_event_store_traverses_causality(tmp_path: Path) -> None:
         Event(
             id="prompt-event",
             event_type="zeta.prompt.submitted",
-            source="sigil",
+            source="commas",
             payload={"turn_id": "turn-1"},
             turn_id="turn-1",
             idempotency_key=None,
@@ -1051,7 +1051,7 @@ def test_sqlite_event_store_traverses_causality(tmp_path: Path) -> None:
         Event(
             id="turn-event",
             event_type="zeta.turn.completed",
-            source="sigil",
+            source="commas",
             payload={"turn_id": "turn-1"},
             turn_id="turn-1",
             caused_by=tool.id,
@@ -1111,11 +1111,11 @@ def test_sqlite_event_store_causal_chain_stops_on_cycles(tmp_path: Path) -> None
     ]
 
 
-def test_sigil_event_query_helpers_use_zeta_event_log() -> None:
+def test_commas_event_query_helpers_use_zeta_event_log() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         with patch_dict(
             os.environ,
-            {"SIGIL_STATE_DIR": tmp, "SIGIL_SESSION_ID": "test"},
+            {"COMMAS_STATE_DIR": tmp, "COMMAS_SESSION_ID": "test"},
         ):
             prompt = append_event(
                 {"type": "zeta.prompt.submitted", "turn_id": "turn-1"}
@@ -1296,7 +1296,7 @@ def test_sqlite_event_store_accepts_events_without_idempotency_keys(
     store = SqliteEventStore(tmp_path / "events.sqlite3")
     event = Event.from_draft(
         DraftEvent(
-            event_type="sigil.command.accepted",
+            event_type="commas.command.accepted",
             source="test",
             payload={"command": "ls"},
         )
@@ -1309,10 +1309,10 @@ def test_sqlite_event_store_accepts_events_without_idempotency_keys(
 
 def test_events_default_lists_recent_events() -> None:
     with tempfile.TemporaryDirectory() as tmp:
-        old_state_dir = os.environ.get("SIGIL_STATE_DIR")
-        old_session_id = os.environ.get("SIGIL_SESSION_ID")
-        os.environ["SIGIL_STATE_DIR"] = tmp
-        os.environ["SIGIL_SESSION_ID"] = "test"
+        old_state_dir = os.environ.get("COMMAS_STATE_DIR")
+        old_session_id = os.environ.get("COMMAS_SESSION_ID")
+        os.environ["COMMAS_STATE_DIR"] = tmp
+        os.environ["COMMAS_SESSION_ID"] = "test"
         try:
             first = append_event({"type": "first"})
             second = append_event(
@@ -1328,13 +1328,13 @@ def test_events_default_lists_recent_events() -> None:
             raw = CliRunner().invoke(cli, ["events", "--json", "--raw"])
         finally:
             if old_state_dir is None:
-                os.environ.pop("SIGIL_STATE_DIR", None)
+                os.environ.pop("COMMAS_STATE_DIR", None)
             else:
-                os.environ["SIGIL_STATE_DIR"] = old_state_dir
+                os.environ["COMMAS_STATE_DIR"] = old_state_dir
             if old_session_id is None:
-                os.environ.pop("SIGIL_SESSION_ID", None)
+                os.environ.pop("COMMAS_SESSION_ID", None)
             else:
-                os.environ["SIGIL_SESSION_ID"] = old_session_id
+                os.environ["COMMAS_SESSION_ID"] = old_session_id
 
     assert text.exit_code == 0, text.output
     assert text.output.splitlines()[0].split() == [
@@ -1361,7 +1361,7 @@ def test_events_default_lists_recent_events() -> None:
     assert raw.exit_code == 0, raw.output
     raw_events = json.loads(raw.output)
     assert raw_events[0]["type"] == "first"
-    assert raw_events[0]["source"] == "sigil"
+    assert raw_events[0]["source"] == "commas"
     assert raw_events[0]["session_id"] == "test"
     assert raw_events[0]["payload"]["cwd"]
     assert raw_events[1]["payload"]["command"] == "git status --short"
@@ -1373,7 +1373,7 @@ def test_events_list_subcommand_filters_by_session() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         with patch_dict(
             os.environ,
-            {"SIGIL_STATE_DIR": tmp, "SIGIL_SESSION_ID": "test"},
+            {"COMMAS_STATE_DIR": tmp, "COMMAS_SESSION_ID": "test"},
         ):
             append_event({"type": "alpha", "session": "s1", "content": "one"})
             append_event({"type": "beta", "session": "s2", "content": "two"})
@@ -1393,7 +1393,7 @@ def test_events_causality_subcommands() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         with patch_dict(
             os.environ,
-            {"SIGIL_STATE_DIR": tmp, "SIGIL_SESSION_ID": "test"},
+            {"COMMAS_STATE_DIR": tmp, "COMMAS_SESSION_ID": "test"},
         ):
             append_event(
                 {
@@ -1476,10 +1476,10 @@ def test_events_subcommands_raw_requires_json() -> None:
 
 def test_events_failure_recorded_label_is_not_prefixed_as_glyph() -> None:
     with tempfile.TemporaryDirectory() as tmp:
-        old_state_dir = os.environ.get("SIGIL_STATE_DIR")
-        old_session_id = os.environ.get("SIGIL_SESSION_ID")
-        os.environ["SIGIL_STATE_DIR"] = tmp
-        os.environ["SIGIL_SESSION_ID"] = "test"
+        old_state_dir = os.environ.get("COMMAS_STATE_DIR")
+        old_session_id = os.environ.get("COMMAS_SESSION_ID")
+        os.environ["COMMAS_STATE_DIR"] = tmp
+        os.environ["COMMAS_SESSION_ID"] = "test"
         try:
             event = append_event(
                 {
@@ -1493,13 +1493,13 @@ def test_events_failure_recorded_label_is_not_prefixed_as_glyph() -> None:
             listed = CliRunner().invoke(cli, ["events", "--json"])
         finally:
             if old_state_dir is None:
-                os.environ.pop("SIGIL_STATE_DIR", None)
+                os.environ.pop("COMMAS_STATE_DIR", None)
             else:
-                os.environ["SIGIL_STATE_DIR"] = old_state_dir
+                os.environ["COMMAS_STATE_DIR"] = old_state_dir
             if old_session_id is None:
-                os.environ.pop("SIGIL_SESSION_ID", None)
+                os.environ.pop("COMMAS_SESSION_ID", None)
             else:
-                os.environ["SIGIL_SESSION_ID"] = old_session_id
+                os.environ["COMMAS_SESSION_ID"] = old_session_id
 
     assert text.exit_code == 0, text.output
     assert event.id[:8] not in text.output
@@ -1515,10 +1515,10 @@ def test_events_failure_recorded_label_is_not_prefixed_as_glyph() -> None:
 
 def test_session_list_includes_last_event_context() -> None:
     with tempfile.TemporaryDirectory() as tmp:
-        old_state_dir = os.environ.get("SIGIL_STATE_DIR")
-        old_session_id = os.environ.get("SIGIL_SESSION_ID")
-        os.environ["SIGIL_STATE_DIR"] = tmp
-        os.environ["SIGIL_SESSION_ID"] = "alpha"
+        old_state_dir = os.environ.get("COMMAS_STATE_DIR")
+        old_session_id = os.environ.get("COMMAS_SESSION_ID")
+        os.environ["COMMAS_STATE_DIR"] = tmp
+        os.environ["COMMAS_SESSION_ID"] = "alpha"
         alpha_root = Path(tmp) / "sessions" / "alpha"
         beta_root = Path(tmp) / "sessions" / "beta"
         alpha_root.mkdir(parents=True)
@@ -1527,20 +1527,20 @@ def test_session_list_includes_last_event_context() -> None:
         try:
             append_event({"type": "old_alpha", "time": 1.0, "cwd": "/old"})
             append_event({"type": "new_alpha", "time": 2.0, "cwd": "/repo"})
-            os.environ["SIGIL_SESSION_ID"] = "beta"
+            os.environ["COMMAS_SESSION_ID"] = "beta"
             append_event({"type": "beta_event", "time": 3.0, "cwd": "/other"})
 
             listed = CliRunner().invoke(cli, ["session", "list", "--json"])
             text = CliRunner().invoke(cli, ["session", "list"])
         finally:
             if old_state_dir is None:
-                os.environ.pop("SIGIL_STATE_DIR", None)
+                os.environ.pop("COMMAS_STATE_DIR", None)
             else:
-                os.environ["SIGIL_STATE_DIR"] = old_state_dir
+                os.environ["COMMAS_STATE_DIR"] = old_state_dir
             if old_session_id is None:
-                os.environ.pop("SIGIL_SESSION_ID", None)
+                os.environ.pop("COMMAS_SESSION_ID", None)
             else:
-                os.environ["SIGIL_SESSION_ID"] = old_session_id
+                os.environ["COMMAS_SESSION_ID"] = old_session_id
 
     assert listed.exit_code == 0, listed.output
     sessions = {session["session_id"]: session for session in json.loads(listed.output)}
@@ -1558,8 +1558,8 @@ def test_session_rename_adds_display_name_to_current_session(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("SIGIL_STATE_DIR", str(tmp_path))
-    monkeypatch.setenv("SIGIL_SESSION_ID", "alpha")
+    monkeypatch.setenv("COMMAS_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("COMMAS_SESSION_ID", "alpha")
     append_event({"type": "session_event", "time": 1.0, "cwd": "/repo"})
 
     renamed = CliRunner().invoke(cli, ["session", "rename", "frontend", "work"])
@@ -1585,10 +1585,10 @@ def test_session_rename_rejects_blank_name() -> None:
 
 def test_question_workflows_record_glyph_and_local_tools() -> None:
     with tempfile.TemporaryDirectory() as tmp:
-        old_state_dir = os.environ.get("SIGIL_STATE_DIR")
-        old_session_id = os.environ.get("SIGIL_SESSION_ID")
-        os.environ["SIGIL_STATE_DIR"] = tmp
-        os.environ["SIGIL_SESSION_ID"] = "test"
+        old_state_dir = os.environ.get("COMMAS_STATE_DIR")
+        old_session_id = os.environ.get("COMMAS_SESSION_ID")
+        os.environ["COMMAS_STATE_DIR"] = tmp
+        os.environ["COMMAS_SESSION_ID"] = "test"
         try:
             calls = []
 
@@ -1596,10 +1596,10 @@ def test_question_workflows_record_glyph_and_local_tools() -> None:
                 calls.append((args, kwargs))
                 return 0
 
-            with patch("sigil.workflows.ask.step", side_effect=fake_answer):
-                assert ask("what is sigil?") == 0
-            with patch("sigil.workflows.ask.step", side_effect=fake_answer):
-                assert ask("what is sigil?", tools=("read", "grep", "ls")) == 0
+            with patch("commas.workflows.ask.step", side_effect=fake_answer):
+                assert ask("what is commas?") == 0
+            with patch("commas.workflows.ask.step", side_effect=fake_answer):
+                assert ask("what is commas?", tools=("read", "grep", "ls")) == 0
             assert len(calls) == 2
             assert calls[0][1]["workflow"] == "ask"
             assert calls[0][1]["system"] == ASK_SYSTEM_PROMPT
@@ -1615,24 +1615,24 @@ def test_question_workflows_record_glyph_and_local_tools() -> None:
                 "web_search",
             )
             assert calls[1][1]["allowed_tools"] == ("read", "grep", "ls")
-            assert calls[1][1]["prompt"] == "what is sigil?"
-            assert calls[1][0] == ("what is sigil?",)
+            assert calls[1][1]["prompt"] == "what is commas?"
+            assert calls[1][0] == ("what is commas?",)
         finally:
             if old_state_dir is None:
-                os.environ.pop("SIGIL_STATE_DIR", None)
+                os.environ.pop("COMMAS_STATE_DIR", None)
             else:
-                os.environ["SIGIL_STATE_DIR"] = old_state_dir
+                os.environ["COMMAS_STATE_DIR"] = old_state_dir
             if old_session_id is None:
-                os.environ.pop("SIGIL_SESSION_ID", None)
+                os.environ.pop("COMMAS_SESSION_ID", None)
             else:
-                os.environ["SIGIL_SESSION_ID"] = old_session_id
+                os.environ["COMMAS_SESSION_ID"] = old_session_id
 
 
 def test_question_workflow_requests_tool_calls_on_stdout() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         with patch_dict(
             os.environ,
-            {"SIGIL_STATE_DIR": tmp, "SIGIL_SESSION_ID": "test"},
+            {"COMMAS_STATE_DIR": tmp, "COMMAS_SESSION_ID": "test"},
         ):
             captured_args: list[object] = []
 
@@ -1641,7 +1641,7 @@ def test_question_workflow_requests_tool_calls_on_stdout() -> None:
                 captured_args.extend(args)
                 return 0
 
-            with patch("sigil.workflows.ask.step", side_effect=fake_answer):
+            with patch("commas.workflows.ask.step", side_effect=fake_answer):
                 assert ask("inspect pyproject") == 0
 
     assert captured_args == ["inspect pyproject"]
@@ -1651,10 +1651,10 @@ def test_failure_context_prompt_uses_recorded_failure_without_inventing_output()
     None
 ):
     with tempfile.TemporaryDirectory() as tmp:
-        old_state_dir = os.environ.get("SIGIL_STATE_DIR")
-        old_session_id = os.environ.get("SIGIL_SESSION_ID")
-        os.environ["SIGIL_STATE_DIR"] = tmp
-        os.environ["SIGIL_SESSION_ID"] = "test"
+        old_state_dir = os.environ.get("COMMAS_STATE_DIR")
+        old_session_id = os.environ.get("COMMAS_SESSION_ID")
+        os.environ["COMMAS_STATE_DIR"] = tmp
+        os.environ["COMMAS_SESSION_ID"] = "test"
         try:
             record_failure("bad command", 2, "/tmp")
             failure = json.loads(
@@ -1671,13 +1671,13 @@ def test_failure_context_prompt_uses_recorded_failure_without_inventing_output()
             assert "Do not invent missing stdout or stderr." in prompt
         finally:
             if old_state_dir is None:
-                os.environ.pop("SIGIL_STATE_DIR", None)
+                os.environ.pop("COMMAS_STATE_DIR", None)
             else:
-                os.environ["SIGIL_STATE_DIR"] = old_state_dir
+                os.environ["COMMAS_STATE_DIR"] = old_state_dir
             if old_session_id is None:
-                os.environ.pop("SIGIL_SESSION_ID", None)
+                os.environ.pop("COMMAS_SESSION_ID", None)
             else:
-                os.environ["SIGIL_SESSION_ID"] = old_session_id
+                os.environ["COMMAS_SESSION_ID"] = old_session_id
 
 
 @pytest.mark.parametrize(
@@ -1730,9 +1730,9 @@ def test_failure_context_prompt_covers_common_failure_fixtures(
     with tempfile.TemporaryDirectory() as tmp:
         with patch_dict(
             os.environ,
-            {"SIGIL_STATE_DIR": tmp, "SIGIL_SESSION_ID": "test"},
+            {"COMMAS_STATE_DIR": tmp, "COMMAS_SESSION_ID": "test"},
         ):
-            with patch("sigil.failure.cwd_context", return_value={"cwd": "/repo"}):
+            with patch("commas.failure.cwd_context", return_value={"cwd": "/repo"}):
                 record_failure(
                     command,
                     status,
@@ -1755,13 +1755,13 @@ def test_failure_context_prompt_covers_common_failure_fixtures(
 
 def test_failure_records_snippets_and_safe_context() -> None:
     with tempfile.TemporaryDirectory() as tmp:
-        old_state_dir = os.environ.get("SIGIL_STATE_DIR")
-        old_session_id = os.environ.get("SIGIL_SESSION_ID")
-        os.environ["SIGIL_STATE_DIR"] = tmp
-        os.environ["SIGIL_SESSION_ID"] = "test"
+        old_state_dir = os.environ.get("COMMAS_STATE_DIR")
+        old_session_id = os.environ.get("COMMAS_SESSION_ID")
+        os.environ["COMMAS_STATE_DIR"] = tmp
+        os.environ["COMMAS_SESSION_ID"] = "test"
         try:
             with patch(
-                "sigil.failure.cwd_context",
+                "commas.failure.cwd_context",
                 return_value={
                     "cwd": "/repo",
                     "git_branch": "main",
@@ -1786,13 +1786,13 @@ def test_failure_records_snippets_and_safe_context() -> None:
             assert failure["context"]["git_status"] == [" M file.py"]
         finally:
             if old_state_dir is None:
-                os.environ.pop("SIGIL_STATE_DIR", None)
+                os.environ.pop("COMMAS_STATE_DIR", None)
             else:
-                os.environ["SIGIL_STATE_DIR"] = old_state_dir
+                os.environ["COMMAS_STATE_DIR"] = old_state_dir
             if old_session_id is None:
-                os.environ.pop("SIGIL_SESSION_ID", None)
+                os.environ.pop("COMMAS_SESSION_ID", None)
             else:
-                os.environ["SIGIL_SESSION_ID"] = old_session_id
+                os.environ["COMMAS_SESSION_ID"] = old_session_id
 
 
 def test_failure_snippets_are_redacted_before_storage() -> None:
@@ -1819,7 +1819,7 @@ def test_record_turn_appends_command_with_glyph() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         with patch_dict(
             os.environ,
-            {"SIGIL_STATE_DIR": tmp, "SIGIL_SESSION_ID": "test"},
+            {"COMMAS_STATE_DIR": tmp, "COMMAS_SESSION_ID": "test"},
         ):
             record_turn("ls -la", 0, "/repo")
 
@@ -1836,7 +1836,7 @@ def test_record_turn_trims_buffer_to_last_fifty_entries() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         with patch_dict(
             os.environ,
-            {"SIGIL_STATE_DIR": tmp, "SIGIL_SESSION_ID": "test"},
+            {"COMMAS_STATE_DIR": tmp, "COMMAS_SESSION_ID": "test"},
         ):
             for index in range(60):
                 record_turn(f"cmd-{index}", 0, "/repo")
@@ -1851,7 +1851,7 @@ def test_record_turn_appends_in_place_under_the_buffer_limit() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         with patch_dict(
             os.environ,
-            {"SIGIL_STATE_DIR": tmp, "SIGIL_SESSION_ID": "test"},
+            {"COMMAS_STATE_DIR": tmp, "COMMAS_SESSION_ID": "test"},
         ):
             record_turn("cmd-1", 0, "/repo")
             path = Path(tmp) / "sessions" / "test" / "recent-turns.jsonl"
@@ -1867,7 +1867,7 @@ RECORD_TURNS_SCRIPT = """
 import os
 import sys
 import time
-from sigil.sessions import record_turn
+from commas.sessions import record_turn
 
 marker, ready_path, start_path = sys.argv[1:4]
 open(ready_path, "w").close()
@@ -1880,7 +1880,7 @@ for index in range(10):
 
 def test_record_turn_keeps_all_turns_across_concurrent_processes() -> None:
     with tempfile.TemporaryDirectory() as tmp:
-        env = {**os.environ, "SIGIL_STATE_DIR": tmp, "SIGIL_SESSION_ID": "test"}
+        env = {**os.environ, "COMMAS_STATE_DIR": tmp, "COMMAS_SESSION_ID": "test"}
         start_gate = Path(tmp) / "start"
         ready_gates = [Path(tmp) / "ready-a", Path(tmp) / "ready-b"]
         procs = [
@@ -1913,7 +1913,7 @@ def test_record_turn_skips_empty_command() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         with patch_dict(
             os.environ,
-            {"SIGIL_STATE_DIR": tmp, "SIGIL_SESSION_ID": "test"},
+            {"COMMAS_STATE_DIR": tmp, "COMMAS_SESSION_ID": "test"},
         ):
             record_turn("", 0, "/repo")
             record_turn("   ", 0, "/repo")
@@ -1924,23 +1924,23 @@ def test_record_turn_skips_leading_whitespace_command() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         with patch_dict(
             os.environ,
-            {"SIGIL_STATE_DIR": tmp, "SIGIL_SESSION_ID": "test"},
+            {"COMMAS_STATE_DIR": tmp, "COMMAS_SESSION_ID": "test"},
         ):
             record_turn(" curl -H 'Authorization: Bearer secret' x", 0, "/repo")
             record_turn("\tprintenv SECRET", 0, "/repo")
         assert read_recent_turns(tmp) == []
 
 
-def test_record_turn_skips_comma_and_sigil_commands() -> None:
+def test_record_turn_skips_comma_and_commas_commands() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         with patch_dict(
             os.environ,
-            {"SIGIL_STATE_DIR": tmp, "SIGIL_SESSION_ID": "test"},
+            {"COMMAS_STATE_DIR": tmp, "COMMAS_SESSION_ID": "test"},
         ):
             record_turn(", run tests", 0, "/repo")
             record_turn("? what is this", 0, "/repo")
-            record_turn("sigil ask hello", 0, "/repo")
-            record_turn("__sigil_precmd", 0, "/repo")
+            record_turn("commas ask hello", 0, "/repo")
+            record_turn("__commas_precmd", 0, "/repo")
         rows = read_recent_turns(tmp)
         assert len(rows) == 1
         assert rows[0]["command"] == "? what is this"
@@ -1950,7 +1950,7 @@ def test_record_turn_records_unsupported_caret_text() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         with patch_dict(
             os.environ,
-            {"SIGIL_STATE_DIR": tmp, "SIGIL_SESSION_ID": "test"},
+            {"COMMAS_STATE_DIR": tmp, "COMMAS_SESSION_ID": "test"},
         ):
             record_turn("^^", 0, "/repo")
         rows = read_recent_turns(tmp)
@@ -1962,9 +1962,9 @@ def test_record_turn_fans_out_to_record_failure_on_nonzero_status() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         with patch_dict(
             os.environ,
-            {"SIGIL_STATE_DIR": tmp, "SIGIL_SESSION_ID": "test"},
+            {"COMMAS_STATE_DIR": tmp, "COMMAS_SESSION_ID": "test"},
         ):
-            with patch("sigil.failure.cwd_context", return_value={"cwd": "/repo"}):
+            with patch("commas.failure.cwd_context", return_value={"cwd": "/repo"}):
                 record_turn(
                     "pytest tests",
                     1,
@@ -1990,7 +1990,7 @@ def test_record_turn_persists_redacted_snippets_in_recent_turns() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         with patch_dict(
             os.environ,
-            {"SIGIL_STATE_DIR": tmp, "SIGIL_SESSION_ID": "test"},
+            {"COMMAS_STATE_DIR": tmp, "COMMAS_SESSION_ID": "test"},
         ):
             record_turn(
                 "pytest tests",
@@ -2009,7 +2009,7 @@ def test_recent_turns_context_includes_compact_snippets() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         with patch_dict(
             os.environ,
-            {"SIGIL_STATE_DIR": tmp, "SIGIL_SESSION_ID": "test"},
+            {"COMMAS_STATE_DIR": tmp, "COMMAS_SESSION_ID": "test"},
         ):
             record_turn(
                 "pytest tests",
@@ -2029,7 +2029,7 @@ def test_record_turn_does_not_record_failure_on_zero_status() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         with patch_dict(
             os.environ,
-            {"SIGIL_STATE_DIR": tmp, "SIGIL_SESSION_ID": "test"},
+            {"COMMAS_STATE_DIR": tmp, "COMMAS_SESSION_ID": "test"},
         ):
             record_turn("ls", 0, "/repo")
 
@@ -2054,7 +2054,7 @@ def test_ingest_spooled_turns_records_commands_with_spool_time() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         with patch_dict(
             os.environ,
-            {"SIGIL_STATE_DIR": tmp, "SIGIL_SESSION_ID": "test"},
+            {"COMMAS_STATE_DIR": tmp, "COMMAS_SESSION_ID": "test"},
         ):
             write_spool(
                 tmp,
@@ -2079,7 +2079,7 @@ def test_ingest_spooled_turns_removes_the_spool() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         with patch_dict(
             os.environ,
-            {"SIGIL_STATE_DIR": tmp, "SIGIL_SESSION_ID": "test"},
+            {"COMMAS_STATE_DIR": tmp, "COMMAS_SESSION_ID": "test"},
         ):
             path = write_spool(tmp, [("1700000000.0", "echo hi", "0", "/repo")])
             ingest_spooled_turns()
@@ -2092,7 +2092,7 @@ def test_ingest_spooled_turns_skips_malformed_records() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         with patch_dict(
             os.environ,
-            {"SIGIL_STATE_DIR": tmp, "SIGIL_SESSION_ID": "test"},
+            {"COMMAS_STATE_DIR": tmp, "COMMAS_SESSION_ID": "test"},
         ):
             write_spool(
                 tmp,
@@ -2112,7 +2112,7 @@ def test_ingest_spooled_turns_fans_out_failure_recording() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         with patch_dict(
             os.environ,
-            {"SIGIL_STATE_DIR": tmp, "SIGIL_SESSION_ID": "test"},
+            {"COMMAS_STATE_DIR": tmp, "COMMAS_SESSION_ID": "test"},
         ):
             write_spool(tmp, [("1700000000.0", "make build", "2", "/repo")])
             ingest_spooled_turns()
@@ -2127,7 +2127,7 @@ def test_ingest_spooled_turns_without_spool_is_noop() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         with patch_dict(
             os.environ,
-            {"SIGIL_STATE_DIR": tmp, "SIGIL_SESSION_ID": "test"},
+            {"COMMAS_STATE_DIR": tmp, "COMMAS_SESSION_ID": "test"},
         ):
             assert ingest_spooled_turns() == 0
         assert read_recent_turns(tmp) == []
@@ -2139,7 +2139,7 @@ def test_ingest_spooled_turns_recovers_orphaned_claims() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         with patch_dict(
             os.environ,
-            {"SIGIL_STATE_DIR": tmp, "SIGIL_SESSION_ID": "test"},
+            {"COMMAS_STATE_DIR": tmp, "COMMAS_SESSION_ID": "test"},
         ):
             path = write_spool(tmp, [("1700000000.0", "echo orphan", "0", "/repo")])
             orphan = path.with_name("shell-turns.spool.999.ingesting")
@@ -2158,7 +2158,7 @@ def test_ingest_spooled_turns_leaves_fresh_claims_alone() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         with patch_dict(
             os.environ,
-            {"SIGIL_STATE_DIR": tmp, "SIGIL_SESSION_ID": "test"},
+            {"COMMAS_STATE_DIR": tmp, "COMMAS_SESSION_ID": "test"},
         ):
             path = write_spool(tmp, [("1700000000.0", "echo live", "0", "/repo")])
             claim = path.with_name("shell-turns.spool.999.ingesting")
@@ -2171,7 +2171,7 @@ def test_cli_invocation_ingests_spooled_turns() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         with patch_dict(
             os.environ,
-            {"SIGIL_STATE_DIR": tmp, "SIGIL_SESSION_ID": "test"},
+            {"COMMAS_STATE_DIR": tmp, "COMMAS_SESSION_ID": "test"},
         ):
             write_spool(tmp, [("1700000000.0", "echo spooled", "0", "/repo")])
             result = CliRunner().invoke(cli, ["events", "--limit", "1"])
@@ -2195,7 +2195,7 @@ def test_run_cli_streams_output_and_records_snippets() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         with patch_dict(
             os.environ,
-            {"SIGIL_STATE_DIR": tmp, "SIGIL_SESSION_ID": "test"},
+            {"COMMAS_STATE_DIR": tmp, "COMMAS_SESSION_ID": "test"},
         ):
             result = CliRunner().invoke(
                 cli,
@@ -2236,9 +2236,9 @@ def test_run_cli_shell_mode_captures_raw_command_string() -> None:
         with patch_dict(
             os.environ,
             {
-                "SIGIL_RUN_SHELL": "/bin/sh",
-                "SIGIL_STATE_DIR": tmp,
-                "SIGIL_SESSION_ID": "test",
+                "COMMAS_RUN_SHELL": "/bin/sh",
+                "COMMAS_STATE_DIR": tmp,
+                "COMMAS_SESSION_ID": "test",
             },
         ):
             result = CliRunner().invoke(
@@ -2258,7 +2258,7 @@ def test_run_cli_maps_signal_death_to_shell_exit_code() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         with patch_dict(
             os.environ,
-            {"SIGIL_STATE_DIR": tmp, "SIGIL_SESSION_ID": "test"},
+            {"COMMAS_STATE_DIR": tmp, "COMMAS_SESSION_ID": "test"},
         ):
             result = CliRunner().invoke(
                 cli,
@@ -2294,10 +2294,10 @@ def test_run_cli_records_turn_and_exits_130_on_ctrl_c() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         with patch_dict(
             os.environ,
-            {"SIGIL_STATE_DIR": tmp, "SIGIL_SESSION_ID": "test"},
+            {"COMMAS_STATE_DIR": tmp, "COMMAS_SESSION_ID": "test"},
         ):
             with patch(
-                "sigil.cli.run.start_process",
+                "commas.cli.run.start_process",
                 return_value=InterruptedProcess(),
             ):
                 result = CliRunner().invoke(cli, ["run", "sleep", "100"])
@@ -2319,7 +2319,7 @@ def test_run_cli_records_missing_executable() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         with patch_dict(
             os.environ,
-            {"SIGIL_STATE_DIR": tmp, "SIGIL_SESSION_ID": "test"},
+            {"COMMAS_STATE_DIR": tmp, "COMMAS_SESSION_ID": "test"},
         ):
             result = CliRunner().invoke(cli, ["run", "definitely-not-a-command"])
 
@@ -2335,7 +2335,7 @@ def test_recent_turns_returns_empty_when_file_missing() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         with patch_dict(
             os.environ,
-            {"SIGIL_STATE_DIR": tmp, "SIGIL_SESSION_ID": "test"},
+            {"COMMAS_STATE_DIR": tmp, "COMMAS_SESSION_ID": "test"},
         ):
             assert recent_turns() == []
 
@@ -2344,7 +2344,7 @@ def test_recent_turns_returns_last_n_entries_in_order() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         with patch_dict(
             os.environ,
-            {"SIGIL_STATE_DIR": tmp, "SIGIL_SESSION_ID": "test"},
+            {"COMMAS_STATE_DIR": tmp, "COMMAS_SESSION_ID": "test"},
         ):
             for index in range(15):
                 record_turn(f"cmd-{index}", 0, "/repo")
@@ -2362,7 +2362,7 @@ def test_fresh_ask_prepends_recent_turns_context_to_zeta_prompt() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         with patch_dict(
             os.environ,
-            {"SIGIL_STATE_DIR": tmp, "SIGIL_SESSION_ID": "test"},
+            {"COMMAS_STATE_DIR": tmp, "COMMAS_SESSION_ID": "test"},
         ):
             record_turn("ls -la", 0, "/repo")
             record_turn("pytest tests/test_foo.py", 1, "/repo")
@@ -2373,7 +2373,7 @@ def test_fresh_ask_prepends_recent_turns_context_to_zeta_prompt() -> None:
                 captured["prompt"] = str(kwargs["prompt"])
                 return 0
 
-            with patch("sigil.workflows.ask.step", side_effect=fake_answer):
+            with patch("commas.workflows.ask.step", side_effect=fake_answer):
                 assert ask("what should I do next?") == 0
 
     prompt = captured["prompt"]
@@ -2387,7 +2387,7 @@ def test_ask_attaches_active_failure_context_for_unrelated_question() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         with patch_dict(
             os.environ,
-            {"SIGIL_STATE_DIR": tmp, "SIGIL_SESSION_ID": "test"},
+            {"COMMAS_STATE_DIR": tmp, "COMMAS_SESSION_ID": "test"},
         ):
             record_turn(
                 "pytest tests/test_foo.py",
@@ -2402,7 +2402,7 @@ def test_ask_attaches_active_failure_context_for_unrelated_question() -> None:
                 captured["prompt"] = str(kwargs["prompt"])
                 return 0
 
-            with patch("sigil.workflows.ask.step", side_effect=fake_answer):
+            with patch("commas.workflows.ask.step", side_effect=fake_answer):
                 assert ask("what does this repo do") == 0
 
     prompt = captured["prompt"]
@@ -2416,7 +2416,7 @@ def test_ask_omits_failure_context_after_successful_turn() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         with patch_dict(
             os.environ,
-            {"SIGIL_STATE_DIR": tmp, "SIGIL_SESSION_ID": "test"},
+            {"COMMAS_STATE_DIR": tmp, "COMMAS_SESSION_ID": "test"},
         ):
             record_turn(
                 "pytest tests/test_foo.py",
@@ -2432,7 +2432,7 @@ def test_ask_omits_failure_context_after_successful_turn() -> None:
                 captured["prompt"] = str(kwargs["prompt"])
                 return 0
 
-            with patch("sigil.workflows.ask.step", side_effect=fake_answer):
+            with patch("commas.workflows.ask.step", side_effect=fake_answer):
                 assert ask("why failed") == 0
 
     prompt = captured["prompt"]
@@ -2440,17 +2440,17 @@ def test_ask_omits_failure_context_after_successful_turn() -> None:
 
 
 def test_fresh_ask_only_includes_shell_activity_since_last_response() -> None:
-    from sigil import zeta_session_for_sigil
+    from commas import zeta_session_for_commas
 
     with tempfile.TemporaryDirectory() as tmp:
         with patch_dict(
             os.environ,
-            {"SIGIL_STATE_DIR": tmp, "SIGIL_SESSION_ID": "test"},
+            {"COMMAS_STATE_DIR": tmp, "COMMAS_SESSION_ID": "test"},
         ):
             record_turn("ls -la", 0, "/repo")
             record_durable_timeline_event(
                 {"type": "model", "content": "95 files."},
-                runtime_context=zeta_session_for_sigil(),
+                runtime_context=zeta_session_for_commas(),
             )
             record_turn("git status --short", 0, "/repo")
             captured: dict[str, str] = {}
@@ -2460,7 +2460,7 @@ def test_fresh_ask_only_includes_shell_activity_since_last_response() -> None:
                 captured["prompt"] = str(kwargs["prompt"])
                 return 0
 
-            with patch("sigil.workflows.ask.step", side_effect=fake_answer):
+            with patch("commas.workflows.ask.step", side_effect=fake_answer):
                 assert ask("and now?") == 0
 
     prompt = captured["prompt"]
@@ -2469,12 +2469,12 @@ def test_fresh_ask_only_includes_shell_activity_since_last_response() -> None:
 
 
 def test_fresh_ask_omits_failure_context_already_seen_by_the_model() -> None:
-    from sigil import zeta_session_for_sigil
+    from commas import zeta_session_for_commas
 
     with tempfile.TemporaryDirectory() as tmp:
         with patch_dict(
             os.environ,
-            {"SIGIL_STATE_DIR": tmp, "SIGIL_SESSION_ID": "test"},
+            {"COMMAS_STATE_DIR": tmp, "COMMAS_SESSION_ID": "test"},
         ):
             record_turn(
                 "pytest tests/test_foo.py",
@@ -2484,7 +2484,7 @@ def test_fresh_ask_omits_failure_context_already_seen_by_the_model() -> None:
             )
             record_durable_timeline_event(
                 {"type": "model", "content": "The fixture is wrong."},
-                runtime_context=zeta_session_for_sigil(),
+                runtime_context=zeta_session_for_commas(),
             )
             captured: dict[str, str] = {}
 
@@ -2493,7 +2493,7 @@ def test_fresh_ask_omits_failure_context_already_seen_by_the_model() -> None:
                 captured["prompt"] = str(kwargs["prompt"])
                 return 0
 
-            with patch("sigil.workflows.ask.step", side_effect=fake_answer):
+            with patch("commas.workflows.ask.step", side_effect=fake_answer):
                 assert ask("how do I fix it?") == 0
 
     prompt = captured["prompt"]
@@ -2506,7 +2506,7 @@ def test_fresh_ask_omits_recent_turns_section_when_none_recorded() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         with patch_dict(
             os.environ,
-            {"SIGIL_STATE_DIR": tmp, "SIGIL_SESSION_ID": "test"},
+            {"COMMAS_STATE_DIR": tmp, "COMMAS_SESSION_ID": "test"},
         ):
             captured: dict[str, str] = {}
 
@@ -2515,7 +2515,7 @@ def test_fresh_ask_omits_recent_turns_section_when_none_recorded() -> None:
                 captured["prompt"] = str(kwargs["prompt"])
                 return 0
 
-            with patch("sigil.workflows.ask.step", side_effect=fake_answer):
+            with patch("commas.workflows.ask.step", side_effect=fake_answer):
                 assert ask("hello") == 0
 
     prompt = captured["prompt"]
@@ -2527,7 +2527,7 @@ def test_recent_turns_skips_malformed_lines() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         with patch_dict(
             os.environ,
-            {"SIGIL_STATE_DIR": tmp, "SIGIL_SESSION_ID": "test"},
+            {"COMMAS_STATE_DIR": tmp, "COMMAS_SESSION_ID": "test"},
         ):
             record_turn("ls", 0, "/repo")
             path = Path(tmp) / "sessions" / "test" / "recent-turns.jsonl"
@@ -2589,16 +2589,16 @@ def test_events_raw_requires_json() -> None:
 
 
 def test_session_transcript_renders_conversation() -> None:
-    from sigil import zeta_session_for_sigil
+    from commas import zeta_session_for_commas
 
     with tempfile.TemporaryDirectory() as tmp:
         with patch_dict(
             os.environ,
-            {"SIGIL_STATE_DIR": tmp, "SIGIL_SESSION_ID": "test"},
+            {"COMMAS_STATE_DIR": tmp, "COMMAS_SESSION_ID": "test"},
         ):
-            runtime_context = zeta_session_for_sigil()
+            runtime_context = zeta_session_for_commas()
             record_durable_timeline_event(
-                {"type": "user_message", "content": "what is sigil?"},
+                {"type": "user_message", "content": "what is commas?"},
                 runtime_context=runtime_context,
             )
             record_durable_timeline_event(
@@ -2609,19 +2609,19 @@ def test_session_transcript_renders_conversation() -> None:
             result = CliRunner().invoke(cli, ["session", "transcript"])
 
     assert result.exit_code == 0
-    assert "what is sigil?" in result.output
+    assert "what is commas?" in result.output
     assert "A shell assistant." in result.output
 
 
 def test_session_transcript_limits_and_dumps_json() -> None:
-    from sigil import zeta_session_for_sigil
+    from commas import zeta_session_for_commas
 
     with tempfile.TemporaryDirectory() as tmp:
         with patch_dict(
             os.environ,
-            {"SIGIL_STATE_DIR": tmp, "SIGIL_SESSION_ID": "test"},
+            {"COMMAS_STATE_DIR": tmp, "COMMAS_SESSION_ID": "test"},
         ):
-            runtime_context = zeta_session_for_sigil()
+            runtime_context = zeta_session_for_commas()
             record_durable_timeline_event(
                 {"type": "user_message", "content": "first"},
                 runtime_context=runtime_context,
@@ -2644,7 +2644,7 @@ def test_session_transcript_reports_empty_session() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         with patch_dict(
             os.environ,
-            {"SIGIL_STATE_DIR": tmp, "SIGIL_SESSION_ID": "test"},
+            {"COMMAS_STATE_DIR": tmp, "COMMAS_SESSION_ID": "test"},
         ):
             result = CliRunner().invoke(cli, ["session", "transcript"])
 
@@ -2656,7 +2656,7 @@ def test_session_is_a_group_with_show_as_default() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         with patch_dict(
             os.environ,
-            {"SIGIL_STATE_DIR": tmp, "SIGIL_SESSION_ID": "test"},
+            {"COMMAS_STATE_DIR": tmp, "COMMAS_SESSION_ID": "test"},
         ):
             help_result = CliRunner().invoke(cli, ["session", "--help"])
             bare = CliRunner().invoke(cli, ["session"])
@@ -2676,7 +2676,7 @@ def test_run_cli_passes_trailing_flags_to_the_command() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         with patch_dict(
             os.environ,
-            {"SIGIL_STATE_DIR": tmp, "SIGIL_SESSION_ID": "test"},
+            {"COMMAS_STATE_DIR": tmp, "COMMAS_SESSION_ID": "test"},
         ):
             result = CliRunner().invoke(cli, ["run", "echo", "hello", "--shell"])
 
@@ -2689,7 +2689,7 @@ def test_run_cli_passes_trailing_flags_to_the_command() -> None:
 def test_session_dir_with_traversal_id_stays_inside_state_dir(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("SIGIL_SESSION_ID", "../../escape")
+    monkeypatch.setenv("COMMAS_SESSION_ID", "../../escape")
     sessions_root = (state_dir() / "sessions").resolve()
     assert session_dir().resolve().is_relative_to(sessions_root)
 
@@ -2702,22 +2702,22 @@ def test_session_dir_with_explicit_traversal_id_stays_inside_state_dir() -> None
 def test_session_dir_with_explicit_id_ignores_session_dir_override(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("SIGIL_SESSION_DIR", "/tmp/elsewhere")
+    monkeypatch.setenv("COMMAS_SESSION_DIR", "/tmp/elsewhere")
     assert session_dir("other") == state_dir() / "sessions" / "other"
 
 
 def test_plain_session_id_is_used_verbatim(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("SIGIL_SESSION_ID", "ttys003-1234")
+    monkeypatch.setenv("COMMAS_SESSION_ID", "ttys003-1234")
     assert session_id() == "ttys003-1234"
 
 
 def test_path_unsafe_session_id_maps_deterministically(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("SIGIL_SESSION_ID", "../../escape")
+    monkeypatch.setenv("COMMAS_SESSION_ID", "../../escape")
     first = session_id()
     second = session_id()
-    monkeypatch.setenv("SIGIL_SESSION_ID", "../../other")
+    monkeypatch.setenv("COMMAS_SESSION_ID", "../../other")
     other = session_id()
     assert first == second
     assert first != other

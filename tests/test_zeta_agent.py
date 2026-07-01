@@ -33,7 +33,7 @@ from click.testing import CliRunner
 import zeta.capabilities.execution as zeta_capability_execution
 import zeta.models.chat_completions as zeta_model
 import zeta.models.types as zeta_model_shapes
-from sigil.tools import ensure_builtin_tools_registered
+from commas.tools import ensure_builtin_tools_registered
 from zeta import models as zeta_models_api
 from zeta.agents import spec as zeta_agent_spec
 from zeta.agents.manifest import ManifestError
@@ -4771,7 +4771,7 @@ def test_zeta_local_runtime_builds_project_services(tmp_path: Path) -> None:
         assert runtime.project_root == tmp_path.resolve()
         assert runtime.state_dir == tmp_path.resolve() / ".zeta"
         assert runtime.events.path == event_store_path(runtime.state_dir)
-        assert runtime.tool_registry.get("sigil.read") is None
+        assert runtime.tool_registry.get("commas.read") is None
     finally:
         runtime.close()
 
@@ -4819,7 +4819,7 @@ def test_zeta_local_runtime_accepts_explicit_tool_registry(tmp_path: Path) -> No
 
     try:
         assert runtime.tool_registry is registry
-        assert runtime.tool_registry.get("sigil.read") is None
+        assert runtime.tool_registry.get("commas.read") is None
     finally:
         runtime.close()
 
@@ -4857,7 +4857,7 @@ def test_zeta_cli_run_registers_builtin_tools(
     )
 
     assert result.exit_code == 0
-    assert captured["tool_registry"].get("sigil.write") is not None
+    assert captured["tool_registry"].get("commas.write") is not None
 
 
 def test_zeta_local_runtime_run_once_executes_available_queue_item(
@@ -7195,8 +7195,8 @@ def test_zeta_agent_turn_runs_multiple_read_only_tools_in_order(monkeypatch) -> 
     )
 
     assert ran == [
-        ("sigil.read", {"path": "README.md"}),
-        ("sigil.ls", {"path": "src"}),
+        ("commas.read", {"path": "README.md"}),
+        ("commas.ls", {"path": "src"}),
     ]
     assert result.final_answer == "done"
     assert [

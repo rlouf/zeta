@@ -17,7 +17,7 @@ SHELL_TIMEOUT_SECONDS = 60.0
 
 
 def make_stub(tmp: Path) -> Path:
-    stub = tmp / "sigil-stub"
+    stub = tmp / "commas-stub"
     stub.write_text(
         textwrap.dedent(
             """\
@@ -53,11 +53,11 @@ def make_stub(tmp: Path) -> Path:
                 esac
               done
               if [ "$continue_step" = "1" ]; then
-                printf '%s\n' "step --continue argc=$argc workflow=$workflow" >> "$SIGIL_STUB_LOG"
+                printf '%s\n' "step --continue argc=$argc workflow=$workflow" >> "$COMMAS_STUB_LOG"
                 command="echo continued"
                 reason="Continue after shell handoff."
               else
-                printf '%s\n' "step" >> "$SIGIL_STUB_LOG"
+                printf '%s\n' "step" >> "$COMMAS_STUB_LOG"
                 case "$objective" in
                   *interrupt*) kill -INT $PPID; kill -INT $$ ;;
                 esac
@@ -90,7 +90,7 @@ def make_stub(tmp: Path) -> Path:
                 esac
               done
               rest="${rest# }"
-              printf '%s\n' "run $rest" >> "$SIGIL_STUB_LOG"
+              printf '%s\n' "run $rest" >> "$COMMAS_STUB_LOG"
               if [ -n "$resume_file" ]; then
                 case "$rest" in
                   *pytest*) printf '%s\n' "${rest#--shell }" > "$resume_file" ;;
@@ -99,7 +99,7 @@ def make_stub(tmp: Path) -> Path:
               printf '%s\n' "ran:$rest"
               exit 0
             fi
-            printf '%s\n' "$*" >> "$SIGIL_STUB_LOG"
+            printf '%s\n' "$*" >> "$COMMAS_STUB_LOG"
             case "$*" in
               "command draft executive summary") printf '%s\n' "stream command" ;;
               "ask hello") printf '%s\n' "answer" ;;
@@ -120,7 +120,7 @@ def shell_env(tmp: Path, stub: Path) -> dict[str, str]:
     """Deterministic environment for binding tests.
 
     Built from scratch rather than copied from os.environ, so developer
-    shell state (sigil variables, rc exports, terminal config) cannot
+    shell state (commas variables, rc exports, terminal config) cannot
     change the behavior under test. PATH is inherited to locate zsh,
     bash, and system tools.
     """
@@ -128,10 +128,10 @@ def shell_env(tmp: Path, stub: Path) -> dict[str, str]:
         "PATH": os.environ["PATH"],
         "HOME": str(tmp),
         "TMPDIR": str(tmp),
-        "SIGIL_BIN": str(stub),
-        "SIGIL_STUB_LOG": str(tmp / "calls.log"),
-        "SIGIL_SESSION_ID": "shell-test",
-        "SIGIL_STATE_DIR": str(tmp / "state"),
+        "COMMAS_BIN": str(stub),
+        "COMMAS_STUB_LOG": str(tmp / "calls.log"),
+        "COMMAS_SESSION_ID": "shell-test",
+        "COMMAS_STATE_DIR": str(tmp / "state"),
         "ZLE_LOG": str(tmp / "zle.log"),
     }
 
@@ -241,7 +241,7 @@ class InteractiveZsh:
     when sent so the echoed assignment never matches an expect() for it.
     """
 
-    PROMPT = "SIGIL_PTY_PROMPT> "
+    PROMPT = "COMMAS_PTY_PROMPT> "
 
     def __init__(
         self,
@@ -404,7 +404,7 @@ def test_zsh_wrappers_call_current_cli_contract() -> None:
         result = run_shell(
             "zsh",
             textwrap.dedent(
-                '                    source src/sigil/bindings/sigil.zsh\n                    sigil_command hello\n                    sigil_agent_step hello\n                    print -- "history=${history[$HISTCMD]}"\n                    '
+                '                    source src/commas/bindings/commas.zsh\n                    commas_command hello\n                    commas_agent_step hello\n                    print -- "history=${history[$HISTCMD]}"\n                    '
             ),
             tmp,
             stub,
@@ -428,7 +428,7 @@ def test_zsh_agent_step_uses_zeta_handoff_directly() -> None:
         result = run_shell(
             "zsh",
             textwrap.dedent(
-                '                    source src/sigil/bindings/sigil.zsh\n                    sigil_agent_step_auto repair\n                    print -- "history=${history[$HISTCMD]}"\n                    '
+                '                    source src/commas/bindings/commas.zsh\n                    commas_agent_step_auto repair\n                    print -- "history=${history[$HISTCMD]}"\n                    '
             ),
             tmp,
             stub,
@@ -451,9 +451,9 @@ def test_zsh_bare_agent_step_sends_no_continue_and_no_positional() -> None:
             "zsh",
             textwrap.dedent(
                 """\
-                source src/sigil/bindings/sigil.zsh
-                sigil_agent_step
-                sigil_agent_step_auto
+                source src/commas/bindings/commas.zsh
+                commas_agent_step
+                commas_agent_step_auto
                 """
             ),
             tmp,
@@ -471,7 +471,7 @@ def test_zsh_agent_wrappers_call_zeta_loop() -> None:
         result = run_shell(
             "zsh",
             textwrap.dedent(
-                "                    source src/sigil/bindings/sigil.zsh\n                    sigil_agent_step hello\n                    sigil_agent_step_auto hello\n                    "
+                "                    source src/commas/bindings/commas.zsh\n                    commas_agent_step hello\n                    commas_agent_step_auto hello\n                    "
             ),
             tmp,
             stub,
@@ -491,7 +491,7 @@ def test_zsh_wrappers_dispatch_piped_stdin_to_operator_runtime() -> None:
         result = run_shell(
             "zsh",
             textwrap.dedent(
-                "                    source src/sigil/bindings/sigil.zsh\n                    printf 'notes\\n' | sigil_command draft executive summary\n                    printf 'cmd\\n' | sigil_agent_step run it\n                    "
+                "                    source src/commas/bindings/commas.zsh\n                    printf 'notes\\n' | commas_command draft executive summary\n                    printf 'cmd\\n' | commas_agent_step run it\n                    "
             ),
             tmp,
             stub,
@@ -514,7 +514,7 @@ def test_zsh_glyph_functions_dispatch_piped_stdin() -> None:
         result = run_shell(
             "zsh",
             textwrap.dedent(
-                "                    source src/sigil/bindings/sigil.zsh\n                    eval \"printf 'notes\\\\n' | , draft executive summary\"\n                    eval \"printf 'cmd\\\\n' | ,, run it\"\n                    "
+                "                    source src/commas/bindings/commas.zsh\n                    eval \"printf 'notes\\\\n' | , draft executive summary\"\n                    eval \"printf 'cmd\\\\n' | ,, run it\"\n                    "
             ),
             tmp,
             stub,
@@ -527,14 +527,14 @@ def test_zsh_glyph_functions_dispatch_piped_stdin() -> None:
 
 
 @pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
-def test_zsh_does_not_record_sigil_commands() -> None:
+def test_zsh_does_not_record_commas_commands() -> None:
     with tempfile.TemporaryDirectory() as tmp_dir:
         tmp = Path(tmp_dir)
         stub = make_stub(tmp)
         result = run_shell(
             "zsh",
             textwrap.dedent(
-                "                    source src/sigil/bindings/sigil.zsh\n                    false\n                    wait\n                    "
+                "                    source src/commas/bindings/commas.zsh\n                    false\n                    wait\n                    "
             ),
             tmp,
             stub,
@@ -545,14 +545,14 @@ def test_zsh_does_not_record_sigil_commands() -> None:
 
 
 @pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
-def test_zsh_does_not_record_sigil_wrapper_commands() -> None:
+def test_zsh_does_not_record_commas_wrapper_commands() -> None:
     with tempfile.TemporaryDirectory() as tmp_dir:
         tmp = Path(tmp_dir)
         stub = make_stub(tmp)
         result = run_shell(
             "zsh",
             textwrap.dedent(
-                "                    source src/sigil/bindings/sigil.zsh\n                    sigil_command hello\n                    wait\n                    "
+                "                    source src/commas/bindings/commas.zsh\n                    commas_command hello\n                    wait\n                    "
             ),
             tmp,
             stub,
@@ -565,7 +565,7 @@ def test_zsh_does_not_record_sigil_wrapper_commands() -> None:
 @pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
 def test_zsh_plus_line_goes_through_capture_widget() -> None:
     # End to end through zle: the accept-line widget captures the raw line and
-    # hands it to `sigil run --shell` before zsh parses it.
+    # hands it to `commas run --shell` before zsh parses it.
     with tempfile.TemporaryDirectory() as tmp_dir:
         tmp = Path(tmp_dir)
         stub = make_stub(tmp)
@@ -573,7 +573,7 @@ def test_zsh_plus_line_goes_through_capture_widget() -> None:
             "zsh",
             textwrap.dedent(
                 """\
-                source src/sigil/bindings/sigil.zsh
+                source src/commas/bindings/commas.zsh
                 + echo captured
                 exit
                 """
@@ -596,7 +596,7 @@ def test_zsh_plus_glyph_is_widget_only() -> None:
         result = run_shell(
             "zsh",
             textwrap.dedent(
-                "                    source src/sigil/bindings/sigil.zsh\n                    + echo captured\n                    "
+                "                    source src/commas/bindings/commas.zsh\n                    + echo captured\n                    "
             ),
             tmp,
             stub,
@@ -606,9 +606,9 @@ def test_zsh_plus_glyph_is_widget_only() -> None:
 
 
 GLYPH_SPLIT_PROBE = """\
-source src/sigil/bindings/sigil.zsh
+source src/commas/bindings/commas.zsh
 probe() {
-  if __sigil_glyph_split "$1"; then
+  if __commas_glyph_split "$1"; then
     print -r -- "text=${reply[1]}:"
   else
     print -r -- "nomatch"
@@ -657,7 +657,7 @@ def test_zsh_glyph_split_parses_each_glyph_and_keeps_text_raw() -> None:
 
 @pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
 def test_zsh_glyph_split_keeps_plus_text_raw() -> None:
-    # + text is shell grammar for sigil run: quotes, redirects, and pipes
+    # + text is shell grammar for commas run: quotes, redirects, and pipes
     # all stay in the captured text, never interpreted by the splitter.
     with tempfile.TemporaryDirectory() as tmp_dir:
         tmp = Path(tmp_dir)
@@ -682,7 +682,7 @@ def test_zsh_glyph_split_keeps_plus_text_raw() -> None:
 
 
 @pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
-def test_zsh_dispatch_routes_plus_text_to_sigil_run_verbatim() -> None:
+def test_zsh_dispatch_routes_plus_text_to_commas_run_verbatim() -> None:
     with tempfile.TemporaryDirectory() as tmp_dir:
         tmp = Path(tmp_dir)
         stub = make_stub(tmp)
@@ -690,10 +690,10 @@ def test_zsh_dispatch_routes_plus_text_to_sigil_run_verbatim() -> None:
             "zsh",
             textwrap.dedent(
                 """\
-                source src/sigil/bindings/sigil.zsh
-                __sigil_dispatch_text="echo captured | cat"
-                __sigil_dispatch
-                sigil_command "what's (the) deal!"
+                source src/commas/bindings/commas.zsh
+                __commas_dispatch_text="echo captured | cat"
+                __commas_dispatch
+                commas_command "what's (the) deal!"
                 """
             ),
             tmp,
@@ -709,7 +709,7 @@ def test_zsh_dispatch_routes_plus_text_to_sigil_run_verbatim() -> None:
 @pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
 def test_zsh_glyph_split_handles_multiline_buffers() -> None:
     # A staged multiline command arrives in the buffer as one accept-line
-    # event; the whole buffer must reach sigil run instead of falling through
+    # event; the whole buffer must reach commas run instead of falling through
     # to zsh, which would execute the tail lines as plain commands.
     with tempfile.TemporaryDirectory() as tmp_dir:
         tmp = Path(tmp_dir)
@@ -718,11 +718,11 @@ def test_zsh_glyph_split_handles_multiline_buffers() -> None:
             "zsh",
             textwrap.dedent(
                 """\
-                source src/sigil/bindings/sigil.zsh
-                __sigil_glyph_split "+ echo one
+                source src/commas/bindings/commas.zsh
+                __commas_glyph_split "+ echo one
                 echo two" || exit 1
-                __sigil_dispatch_text="${reply[1]}"
-                __sigil_dispatch
+                __commas_dispatch_text="${reply[1]}"
+                __commas_dispatch
                 """
             ),
             tmp,
@@ -742,13 +742,13 @@ def test_zsh_installs_glyph_dispatch_accept_line_widget() -> None:
         result = run_shell_args(
             ["zsh", "-f", "-ic"],
             textwrap.dedent(
-                '                    source src/sigil/bindings/sigil.zsh\n                    print -- "widget=${widgets[accept-line]}"\n                    '
+                '                    source src/commas/bindings/commas.zsh\n                    print -- "widget=${widgets[accept-line]}"\n                    '
             ),
             tmp,
             stub,
         )
         assert_success(result)
-        assert "widget=user:__sigil_accept_line_with_glyph_dispatch" in result.stdout
+        assert "widget=user:__commas_accept_line_with_glyph_dispatch" in result.stdout
 
 
 @pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
@@ -764,9 +764,9 @@ def test_zsh_glyph_widget_rewrites_buffer_to_safe_dispatch_line() -> None:
             textwrap.dedent(
                 """\
                 function zle() { return 0; }
-                source src/sigil/bindings/sigil.zsh
+                source src/commas/bindings/commas.zsh
                 BUFFER="+ echo captured"
-                __sigil_accept_line_with_glyph_dispatch
+                __commas_accept_line_with_glyph_dispatch
                 print -- "buffer=$BUFFER"
                 print -- "pre=$PREDISPLAY"
                 print -- "rh=$region_highlight"
@@ -779,9 +779,9 @@ def test_zsh_glyph_widget_rewrites_buffer_to_safe_dispatch_line() -> None:
         )
         assert_success(result)
         assert result.stderr == ""
-        assert "buffer=__sigil_dispatch" in result.stdout
+        assert "buffer=__commas_dispatch" in result.stdout
         assert "pre=+ echo captured " in result.stdout
-        assert "rh=0 16 fg=8" in result.stdout
+        assert "rh=0 17 fg=8" in result.stdout
         assert "ran:--shell echo captured" in result.stdout
         assert "exit=0" in result.stdout
         assert read_log(tmp) == ["run --shell echo captured"]
@@ -795,7 +795,7 @@ def test_zsh_wraps_simple_zeta_handoff_with_run_capture() -> None:
         result = run_shell(
             "zsh",
             textwrap.dedent(
-                '                    source src/sigil/bindings/sigil.zsh\n                    sigil_agent_step hello >/dev/null\n                    print -- "history=${history[$HISTCMD]}"\n                    '
+                '                    source src/commas/bindings/commas.zsh\n                    commas_agent_step hello >/dev/null\n                    print -- "history=${history[$HISTCMD]}"\n                    '
             ),
             tmp,
             stub,
@@ -812,7 +812,7 @@ def test_zsh_wraps_shell_grammar_handoff_with_run_capture() -> None:
         result = run_shell(
             "zsh",
             textwrap.dedent(
-                '                    source src/sigil/bindings/sigil.zsh\n                    __sigil_history_insert "$(__sigil_zeta_prompt_command "echo zeta | cat")"\n                    print -- "history=${history[$HISTCMD]}"\n                    '
+                '                    source src/commas/bindings/commas.zsh\n                    __commas_history_insert "$(__commas_zeta_prompt_command "echo zeta | cat")"\n                    print -- "history=${history[$HISTCMD]}"\n                    '
             ),
             tmp,
             stub,
@@ -822,7 +822,7 @@ def test_zsh_wraps_shell_grammar_handoff_with_run_capture() -> None:
 
 
 @pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
-def test_zsh_status_glyph_dispatches_to_sigil_status() -> None:
+def test_zsh_status_glyph_dispatches_to_commas_status() -> None:
     with tempfile.TemporaryDirectory() as tmp_dir:
         tmp = Path(tmp_dir)
         stub = make_stub(tmp)
@@ -832,7 +832,7 @@ def test_zsh_status_glyph_dispatches_to_sigil_status() -> None:
                 # eval re-parses with the sourced aliases in scope, matching the
                 # line-at-a-time parsing of an interactive shell. A plain `?` in
                 # a fully pre-parsed `zsh -c` script never sees the alias.
-                "                    source src/sigil/bindings/sigil.zsh\n                    eval '?'\n                    "
+                "                    source src/commas/bindings/commas.zsh\n                    eval '?'\n                    "
             ),
             tmp,
             stub,
@@ -852,7 +852,7 @@ def test_zsh_binding_preserves_question_mark_globbing() -> None:
             "zsh",
             textwrap.dedent(
                 f"""\
-                source src/sigil/bindings/sigil.zsh
+                source src/commas/bindings/commas.zsh
                 cd {tmp}
                 print -- ?b
                 """
@@ -867,7 +867,7 @@ def test_zsh_binding_preserves_question_mark_globbing() -> None:
 @pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
 def test_zsh_interrupted_zeta_step_leaves_no_handoff_file() -> None:
     # Ctrl-C delivers SIGINT to the whole foreground process group, so zsh
-    # itself aborts __sigil_step_turn mid-flight. The stub models that by
+    # itself aborts __commas_step_turn mid-flight. The stub models that by
     # signalling its parent shell and itself. An interactive shell is required:
     # non-interactive zsh dies on SIGINT instead of unwinding to the prompt.
     with tempfile.TemporaryDirectory() as tmp_dir:
@@ -878,8 +878,8 @@ def test_zsh_interrupted_zeta_step_leaves_no_handoff_file() -> None:
             textwrap.dedent(
                 f"""\
                 export TMPDIR={tmp}
-                source src/sigil/bindings/sigil.zsh
-                sigil_agent_step interrupt
+                source src/commas/bindings/commas.zsh
+                commas_agent_step interrupt
                 print -- "survived=yes"
                 """
             ),
@@ -887,13 +887,13 @@ def test_zsh_interrupted_zeta_step_leaves_no_handoff_file() -> None:
             stub,
         )
         assert "survived=yes" in result.stdout
-        assert list(tmp.glob("sigil-handoff.*")) == []
+        assert list(tmp.glob("commas-handoff.*")) == []
 
 
 @pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
 def test_zsh_precmd_hook_runs_before_earlier_registered_hooks() -> None:
     # $? at precmd entry is only the user command's status for the first hook
-    # in precmd_functions; hooks registered by plugins sourced before sigil
+    # in precmd_functions; hooks registered by plugins sourced before commas
     # would otherwise clobber it.
     with tempfile.TemporaryDirectory() as tmp_dir:
         tmp = Path(tmp_dir)
@@ -905,8 +905,8 @@ def test_zsh_precmd_hook_runs_before_earlier_registered_hooks() -> None:
                 autoload -Uz add-zsh-hook
                 theme_precmd() { true }
                 add-zsh-hook precmd theme_precmd
-                source src/sigil/bindings/sigil.zsh
-                source src/sigil/bindings/sigil.zsh
+                source src/commas/bindings/commas.zsh
+                source src/commas/bindings/commas.zsh
                 print -- "hooks=$precmd_functions"
                 """
             ),
@@ -915,7 +915,7 @@ def test_zsh_precmd_hook_runs_before_earlier_registered_hooks() -> None:
         )
         assert_success(result)
         assert (
-            "hooks=__sigil_zeta_after_command_before_prompt theme_precmd"
+            "hooks=__commas_zeta_after_command_before_prompt theme_precmd"
             in result.stdout
         )
 
@@ -929,10 +929,10 @@ def test_zsh_records_shell_turns_without_a_handoff() -> None:
             "zsh",
             textwrap.dedent(
                 """\
-                source src/sigil/bindings/sigil.zsh
-                __sigil_zeta_before_command "echo recorded"
+                source src/commas/bindings/commas.zsh
+                __commas_zeta_before_command "echo recorded"
                 true
-                __sigil_zeta_after_command_before_prompt
+                __commas_zeta_after_command_before_prompt
                 wait
                 """
             ),
@@ -957,11 +957,11 @@ def test_zsh_records_every_command_with_no_turn_limit() -> None:
             "zsh",
             textwrap.dedent(
                 """\
-                source src/sigil/bindings/sigil.zsh
+                source src/commas/bindings/commas.zsh
                 for command in "echo one" "echo two" "echo three"; do
-                  __sigil_zeta_before_command "$command"
+                  __commas_zeta_before_command "$command"
                   true
-                  __sigil_zeta_after_command_before_prompt
+                  __commas_zeta_after_command_before_prompt
                 done
                 wait
                 """
@@ -989,13 +989,13 @@ def test_zsh_leading_space_skips_recording() -> None:
             "zsh",
             textwrap.dedent(
                 """\
-                source src/sigil/bindings/sigil.zsh
-                __sigil_zeta_before_command " echo secret"
+                source src/commas/bindings/commas.zsh
+                __commas_zeta_before_command " echo secret"
                 true
-                __sigil_zeta_after_command_before_prompt
-                __sigil_zeta_before_command "echo recorded"
+                __commas_zeta_after_command_before_prompt
+                __commas_zeta_before_command "echo recorded"
                 true
-                __sigil_zeta_after_command_before_prompt
+                __commas_zeta_after_command_before_prompt
                 wait
                 """
             ),
@@ -1009,7 +1009,7 @@ def test_zsh_leading_space_skips_recording() -> None:
 
 
 @pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
-def test_zsh_sigil_record_opt_out_disables_recording() -> None:
+def test_zsh_commas_record_opt_out_disables_recording() -> None:
     with tempfile.TemporaryDirectory() as tmp_dir:
         tmp = Path(tmp_dir)
         stub = make_stub(tmp)
@@ -1017,19 +1017,19 @@ def test_zsh_sigil_record_opt_out_disables_recording() -> None:
             "zsh",
             textwrap.dedent(
                 """\
-                source src/sigil/bindings/sigil.zsh
-                export SIGIL_RECORD=0
-                __sigil_zeta_before_command "echo zero"
+                source src/commas/bindings/commas.zsh
+                export COMMAS_RECORD=0
+                __commas_zeta_before_command "echo zero"
                 true
-                __sigil_zeta_after_command_before_prompt
-                export SIGIL_RECORD=false
-                __sigil_zeta_before_command "echo false"
+                __commas_zeta_after_command_before_prompt
+                export COMMAS_RECORD=false
+                __commas_zeta_before_command "echo false"
                 true
-                __sigil_zeta_after_command_before_prompt
-                export SIGIL_RECORD=1
-                __sigil_zeta_before_command "echo recorded"
+                __commas_zeta_after_command_before_prompt
+                export COMMAS_RECORD=1
+                __commas_zeta_before_command "echo recorded"
                 true
-                __sigil_zeta_after_command_before_prompt
+                __commas_zeta_after_command_before_prompt
                 wait
                 """
             ),
@@ -1053,7 +1053,7 @@ def test_zsh_records_interactive_commands_end_to_end() -> None:
             "zsh",
             textwrap.dedent(
                 """\
-                source src/sigil/bindings/sigil.zsh
+                source src/commas/bindings/commas.zsh
                 echo hi
                 exit
                 """
@@ -1068,7 +1068,7 @@ def test_zsh_records_interactive_commands_end_to_end() -> None:
 
 
 @pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
-def test_zsh_recordable_command_excludes_all_sigil_invocations() -> None:
+def test_zsh_recordable_command_excludes_all_commas_invocations() -> None:
     with tempfile.TemporaryDirectory() as tmp_dir:
         tmp = Path(tmp_dir)
         stub = make_stub(tmp)
@@ -1076,14 +1076,14 @@ def test_zsh_recordable_command_excludes_all_sigil_invocations() -> None:
             "zsh",
             textwrap.dedent(
                 """\
-                source src/sigil/bindings/sigil.zsh
-                __sigil_zeta_recordable_command "sigil"; print -- "bare=$?"
-                __sigil_zeta_recordable_command "sigil status"; print -- "args=$?"
-                __sigil_zeta_recordable_command "./sigil status"; print -- "relative=$?"
-                __sigil_zeta_recordable_command "/usr/local/bin/sigil status"; print -- "absolute=$?"
-                __sigil_zeta_recordable_command " echo hi"; print -- "space=$?"
-                __sigil_zeta_recordable_command "echo sigil"; print -- "mention=$?"
-                __sigil_zeta_recordable_command "…"; print -- "ellipsis=$?"\n                __sigil_zeta_recordable_command "echo hi"; print -- "plain=$?"
+                source src/commas/bindings/commas.zsh
+                __commas_zeta_recordable_command "commas"; print -- "bare=$?"
+                __commas_zeta_recordable_command "commas status"; print -- "args=$?"
+                __commas_zeta_recordable_command "./commas status"; print -- "relative=$?"
+                __commas_zeta_recordable_command "/usr/local/bin/commas status"; print -- "absolute=$?"
+                __commas_zeta_recordable_command " echo hi"; print -- "space=$?"
+                __commas_zeta_recordable_command "echo commas"; print -- "mention=$?"
+                __commas_zeta_recordable_command "…"; print -- "ellipsis=$?"\n                __commas_zeta_recordable_command "echo hi"; print -- "plain=$?"
                 """
             ),
             tmp,
@@ -1109,10 +1109,10 @@ def test_zsh_generates_session_id_without_uuidgen() -> None:
             "zsh",
             textwrap.dedent(
                 """\
-                unset SIGIL_SESSION_ID
+                unset COMMAS_SESSION_ID
                 function uuidgen() { return 127 }
-                source src/sigil/bindings/sigil.zsh
-                print -- "sid=$SIGIL_SESSION_ID"
+                source src/commas/bindings/commas.zsh
+                print -- "sid=$COMMAS_SESSION_ID"
                 """
             ),
             tmp,
@@ -1131,23 +1131,23 @@ def test_zsh_resolves_cli_from_commands_hash_without_forking() -> None:
         stub = make_stub(tmp)
         bin_dir = tmp / "bin"
         bin_dir.mkdir()
-        shutil.copy(stub, bin_dir / "sigil")
-        (bin_dir / "sigil").chmod(0o755)
+        shutil.copy(stub, bin_dir / "commas")
+        (bin_dir / "commas").chmod(0o755)
         result = run_shell(
             "zsh",
             textwrap.dedent(
                 f"""\
-                unset SIGIL_BIN
+                unset COMMAS_BIN
                 path=({bin_dir} $path)
-                source src/sigil/bindings/sigil.zsh
-                print -- "bin=$__sigil_bin"
+                source src/commas/bindings/commas.zsh
+                print -- "bin=$__commas_bin"
                 """
             ),
             tmp,
             stub,
         )
         assert_success(result)
-        assert f"bin={bin_dir}/sigil" in result.stdout
+        assert f"bin={bin_dir}/commas" in result.stdout
 
 
 @pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
@@ -1159,9 +1159,9 @@ def test_zsh_shell_turn_recording_does_not_spawn_python3() -> None:
             "zsh",
             textwrap.dedent(
                 """\
-                source src/sigil/bindings/sigil.zsh
+                source src/commas/bindings/commas.zsh
                 function python3() { print -- "python3 used" >> "$ZLE_LOG"; return 127 }
-                __sigil_zeta_record_shell_turn "echo hi" 3
+                __commas_zeta_record_shell_turn "echo hi" 3
                 """
             ),
             tmp,
@@ -1185,9 +1185,9 @@ def test_zsh_zeta_handoff_staging_does_not_spawn_python3() -> None:
             "zsh",
             textwrap.dedent(
                 """\
-                source src/sigil/bindings/sigil.zsh
+                source src/commas/bindings/commas.zsh
                 function python3() { print -- "python3 used" >> "$ZLE_LOG"; return 127 }
-                sigil_agent_step hello >/dev/null
+                commas_agent_step hello >/dev/null
                 print -- "history=${history[$HISTCMD]}"
                 """
             ),
@@ -1210,11 +1210,11 @@ def test_zsh_binding_functions_survive_hostile_user_options() -> None:
                 """\
                 setopt ksh_arrays sh_word_split
                 function zle() { return 0; }
-                source src/sigil/bindings/sigil.zsh
+                source src/commas/bindings/commas.zsh
                 BUFFER="+ echo captured | cat"
-                __sigil_accept_line_with_glyph_dispatch
+                __commas_accept_line_with_glyph_dispatch
                 eval "$BUFFER"
-                sigil_agent_step hello >/dev/null
+                commas_agent_step hello >/dev/null
                 print -- "history=${history[$HISTCMD]}"
                 """
             ),
@@ -1248,7 +1248,7 @@ def test_zsh_glyph_lines_recallable_in_session_but_not_saved() -> None:
                 HISTSIZE=100
                 SAVEHIST=100
                 setopt inc_append_history
-                source src/sigil/bindings/sigil.zsh
+                source src/commas/bindings/commas.zsh
                 , hello
                 true
                 history 1
@@ -1272,13 +1272,13 @@ def test_zsh_history_filter_is_additive_and_covers_glyphs() -> None:
         result = run_shell_args(
             ["zsh", "-f", "-ic"],
             textwrap.dedent(
-                '                    function zshaddhistory() { print -- "user:$1" >> "$ZLE_LOG"; return 0; }\n                    source src/sigil/bindings/sigil.zsh\n                    print -- "hooks=$zshaddhistory_functions"\n                    zshaddhistory "echo hello"\n                    __sigil_zshaddhistory ", hello"; print -- "comma=$?"\n                    __sigil_zshaddhistory "? hello"; print -- "question=$?"\n                    __sigil_zshaddhistory "\\? hello"; print -- "escaped_question=$?"\n                    __sigil_zshaddhistory "+ echo"; print -- "run=$?"\n                    __sigil_zshaddhistory "__sigil_dispatch"; print -- "dispatch=$?"\n                    __sigil_zshaddhistory "…"; print -- "ellipsis=$?"\n                    __sigil_zshaddhistory "@ hello"; print -- "at=$?"\n                    __sigil_zshaddhistory "echo hello"; print -- "echo=$?"\n                    '
+                '                    function zshaddhistory() { print -- "user:$1" >> "$ZLE_LOG"; return 0; }\n                    source src/commas/bindings/commas.zsh\n                    print -- "hooks=$zshaddhistory_functions"\n                    zshaddhistory "echo hello"\n                    __commas_zshaddhistory ", hello"; print -- "comma=$?"\n                    __commas_zshaddhistory "? hello"; print -- "question=$?"\n                    __commas_zshaddhistory "\\? hello"; print -- "escaped_question=$?"\n                    __commas_zshaddhistory "+ echo"; print -- "run=$?"\n                    __commas_zshaddhistory "__commas_dispatch"; print -- "dispatch=$?"\n                    __commas_zshaddhistory "…"; print -- "ellipsis=$?"\n                    __commas_zshaddhistory "@ hello"; print -- "at=$?"\n                    __commas_zshaddhistory "echo hello"; print -- "echo=$?"\n                    '
             ),
             tmp,
             stub,
         )
         assert_success(result)
-        assert "__sigil_zshaddhistory" in result.stdout
+        assert "__commas_zshaddhistory" in result.stdout
         # 2 keeps the line on the internal history list (up-arrow recall) while
         # keeping it out of the history file.
         assert "comma=2" in result.stdout
@@ -1316,7 +1316,7 @@ def test_interactive_plus_dispatches_pipeline_through_widget() -> None:
         stub = make_stub(tmp)
         shell = InteractiveZsh(tmp, stub)
         try:
-            shell.run("source src/sigil/bindings/sigil.zsh")
+            shell.run("source src/commas/bindings/commas.zsh")
             shell.sendline("+ echo captured | cat")
             shell.expect("ran:--shell echo captured | cat")
             shell.expect_prompt()
@@ -1335,7 +1335,7 @@ def test_interactive_comma_glyph_dispatches_to_ask() -> None:
         stub = make_stub(tmp)
         shell = InteractiveZsh(tmp, stub)
         try:
-            shell.run("source src/sigil/bindings/sigil.zsh")
+            shell.run("source src/commas/bindings/commas.zsh")
             shell.sendline(', "hello"')
             shell.expect("answer")
             shell.expect_prompt()
@@ -1352,7 +1352,7 @@ def test_interactive_status_glyph_dispatches_to_status() -> None:
         stub = make_stub(tmp)
         shell = InteractiveZsh(tmp, stub)
         try:
-            shell.run("source src/sigil/bindings/sigil.zsh")
+            shell.run("source src/commas/bindings/commas.zsh")
             shell.sendline("?")
             shell.expect("clean")
             shell.expect_prompt()
@@ -1371,7 +1371,7 @@ def test_interactive_glyph_line_recallable_with_up_arrow() -> None:
         stub = make_stub(tmp)
         shell = InteractiveZsh(tmp, stub)
         try:
-            shell.run("source src/sigil/bindings/sigil.zsh")
+            shell.run("source src/commas/bindings/commas.zsh")
             shell.sendline(', "hello"')
             shell.expect("answer")
             shell.expect_prompt()
@@ -1394,9 +1394,9 @@ def test_interactive_accepted_glyph_line_keeps_typed_text_with_dim_trailer() -> 
         stub = make_stub(tmp)
         shell = InteractiveZsh(tmp, stub, env={"TERM": "xterm-256color"})
         try:
-            shell.run("source src/sigil/bindings/sigil.zsh")
+            shell.run("source src/commas/bindings/commas.zsh")
             shell.sendline("+ echo captured | cat")
-            shell.expect("\x1b[90m__sigil_dispatch")
+            shell.expect("\x1b[90m__commas_dispatch")
             shell.expect("ran:--shell echo captured | cat")
             shell.expect_prompt()
             shell.exit()
@@ -1418,7 +1418,7 @@ def test_interactive_dispatch_word_is_an_ellipsis_under_utf8_locale() -> None:
             env={"TERM": "xterm-256color", "LANG": "en_US.UTF-8"},
         )
         try:
-            shell.run("source src/sigil/bindings/sigil.zsh")
+            shell.run("source src/commas/bindings/commas.zsh")
             shell.sendline("+ echo captured | cat")
             shell.expect("\x1b[90m…")
             shell.expect("ran:--shell echo captured | cat")
@@ -1426,7 +1426,7 @@ def test_interactive_dispatch_word_is_an_ellipsis_under_utf8_locale() -> None:
             shell.exit()
         finally:
             shell.kill()
-        assert "__sigil_dispatch" not in shell.output
+        assert "__commas_dispatch" not in shell.output
         assert read_log(tmp) == ["run --shell echo captured | cat"]
 
 
@@ -1440,18 +1440,18 @@ def test_zsh_dispatch_word_falls_back_without_utf8_locale() -> None:
             textwrap.dedent(
                 """\
                 unset LANG LC_ALL LC_CTYPE
-                source src/sigil/bindings/sigil.zsh
-                print -- "word=$__sigil_dispatch_word"
+                source src/commas/bindings/commas.zsh
+                print -- "word=$__commas_dispatch_word"
                 export LANG=en_US.UTF-8
-                source src/sigil/bindings/sigil.zsh
-                print -- "utf8word=$__sigil_dispatch_word"
+                source src/commas/bindings/commas.zsh
+                print -- "utf8word=$__commas_dispatch_word"
                 """
             ),
             tmp,
             stub,
         )
         assert_success(result)
-        assert "word=__sigil_dispatch" in result.stdout
+        assert "word=__commas_dispatch" in result.stdout
         assert "utf8word=…" in result.stdout
 
 
@@ -1464,7 +1464,7 @@ def test_interactive_unquoted_prompt_dispatches_as_argv() -> None:
         stub = make_stub(tmp)
         shell = InteractiveZsh(tmp, stub)
         try:
-            shell.run("source src/sigil/bindings/sigil.zsh")
+            shell.run("source src/commas/bindings/commas.zsh")
             shell.sendline(", summarize this repo")
             shell.expect("answer")
             shell.expect_prompt()
@@ -1483,7 +1483,7 @@ def test_interactive_double_quoted_prompt_expands_like_the_shell() -> None:
         stub = make_stub(tmp)
         shell = InteractiveZsh(tmp, stub)
         try:
-            shell.run("source src/sigil/bindings/sigil.zsh")
+            shell.run("source src/commas/bindings/commas.zsh")
             shell.run("box=staging-7")
             shell.sendline(', "explain the host $box: $(echo from-subst)"')
             shell.expect("answer")
@@ -1501,7 +1501,7 @@ def test_interactive_single_quoted_prompt_stays_literal() -> None:
         stub = make_stub(tmp)
         shell = InteractiveZsh(tmp, stub)
         try:
-            shell.run("source src/sigil/bindings/sigil.zsh")
+            shell.run("source src/commas/bindings/commas.zsh")
             shell.sendline(", 'explain $PATH literally'")
             shell.expect("answer")
             shell.expect_prompt()
@@ -1519,7 +1519,7 @@ def test_interactive_quoted_prompt_redirects_answer_to_file() -> None:
         out = tmp / "summary.txt"
         shell = InteractiveZsh(tmp, stub)
         try:
-            shell.run("source src/sigil/bindings/sigil.zsh")
+            shell.run("source src/commas/bindings/commas.zsh")
             shell.run(f', "summarize this" > {out}')
             shell.exit()
         finally:
@@ -1535,7 +1535,7 @@ def test_interactive_quoted_prompt_pipes_answer() -> None:
         stub = make_stub(tmp)
         shell = InteractiveZsh(tmp, stub)
         try:
-            shell.run("source src/sigil/bindings/sigil.zsh")
+            shell.run("source src/commas/bindings/commas.zsh")
             shell.sendline(', "hello" | tr a-z A-Z')
             shell.expect("ANSWER")
             shell.expect_prompt()
@@ -1556,7 +1556,7 @@ def test_interactive_piped_glyph_line_recallable_with_up_arrow() -> None:
         stub = make_stub(tmp)
         shell = InteractiveZsh(tmp, stub)
         try:
-            shell.run("source src/sigil/bindings/sigil.zsh")
+            shell.run("source src/commas/bindings/commas.zsh")
             shell.sendline(', "hello" | tr a-z A-Z')
             shell.expect("ANSWER")
             shell.expect_prompt()
@@ -1580,7 +1580,7 @@ def test_interactive_glyph_display_decoration_does_not_leak_to_next_line() -> No
         stub = make_stub(tmp)
         shell = InteractiveZsh(tmp, stub, env={"TERM": "xterm-256color"})
         try:
-            shell.run("source src/sigil/bindings/sigil.zsh")
+            shell.run("source src/commas/bindings/commas.zsh")
             shell.sendline(', "hello"')
             shell.expect("answer")
             shell.expect_prompt()
@@ -1601,7 +1601,7 @@ def test_interactive_commands_recorded_in_order_with_status() -> None:
         stub = make_stub(tmp)
         shell = InteractiveZsh(tmp, stub)
         try:
-            shell.run("source src/sigil/bindings/sigil.zsh")
+            shell.run("source src/commas/bindings/commas.zsh")
             shell.run("true")
             shell.run("false")
             shell.exit()
@@ -1618,8 +1618,8 @@ def test_interactive_commands_recorded_in_order_with_status() -> None:
 def interactive_session_vars(shell: InteractiveZsh) -> dict[str, str]:
     # The markers are split in the sent line so the input echo cannot match
     # the expects; only the printed output contains the joined forms.
-    shell.run("source src/sigil/bindings/sigil.zsh")
-    shell.sendline('print -- "si""d=${SIGIL_SESSION_ID}@tt""y=${SIGIL_SESSION_TTY}@"')
+    shell.run("source src/commas/bindings/commas.zsh")
+    shell.sendline('print -- "si""d=${COMMAS_SESSION_ID}@tt""y=${COMMAS_SESSION_TTY}@"')
     shell.expect("sid=")
     start = shell.scanned
     shell.expect("@tty=")
@@ -1642,8 +1642,8 @@ def test_interactive_session_id_regenerates_on_foreign_tty() -> None:
             tmp,
             stub,
             env={
-                "SIGIL_SESSION_ID": "stale-pane-id",
-                "SIGIL_SESSION_TTY": "/dev/ttyFAKE0",
+                "COMMAS_SESSION_ID": "stale-pane-id",
+                "COMMAS_SESSION_TTY": "/dev/ttyFAKE0",
             },
         )
         try:
@@ -1663,8 +1663,8 @@ def test_interactive_session_id_kept_on_same_tty() -> None:
         stub = make_stub(tmp)
         shell = InteractiveZsh(tmp, stub)
         try:
-            shell.run('export SIGIL_SESSION_TTY="$TTY"')
-            shell.run("export SIGIL_SESSION_ID=keep-me")
+            shell.run('export COMMAS_SESSION_TTY="$TTY"')
+            shell.run("export COMMAS_SESSION_ID=keep-me")
             values = interactive_session_vars(shell)
             shell.exit()
         finally:
@@ -1696,15 +1696,15 @@ def test_interactive_two_ptys_get_distinct_sessions() -> None:
     with tempfile.TemporaryDirectory() as tmp_dir:
         tmp = Path(tmp_dir)
         stub = make_stub(tmp)
-        first = InteractiveZsh(tmp, stub, env={"SIGIL_SESSION_ID": ""})
+        first = InteractiveZsh(tmp, stub, env={"COMMAS_SESSION_ID": ""})
         try:
             first_values = interactive_session_vars(first)
             second = InteractiveZsh(
                 tmp,
                 stub,
                 env={
-                    "SIGIL_SESSION_ID": first_values["sid"],
-                    "SIGIL_SESSION_TTY": first_values["tty"],
+                    "COMMAS_SESSION_ID": first_values["sid"],
+                    "COMMAS_SESSION_TTY": first_values["tty"],
                 },
             )
             try:
@@ -1730,7 +1730,7 @@ def test_interactive_comma_with_apostrophe_dispatches_without_quote_prompt() -> 
         stub = make_stub(tmp)
         shell = InteractiveZsh(tmp, stub)
         try:
-            shell.run("source src/sigil/bindings/sigil.zsh")
+            shell.run("source src/commas/bindings/commas.zsh")
             shell.sendline(', "what\'s the deal"')
             shell.expect("answer")
             shell.expect_prompt()
@@ -1751,7 +1751,7 @@ def test_interactive_comma_with_parens_and_bang_dispatches_verbatim() -> None:
         stub = make_stub(tmp)
         shell = InteractiveZsh(tmp, stub)
         try:
-            shell.run("source src/sigil/bindings/sigil.zsh")
+            shell.run("source src/commas/bindings/commas.zsh")
             shell.sendline(", 'why (really) fix it!'")
             shell.expect("answer")
             shell.expect_prompt()
@@ -1761,20 +1761,20 @@ def test_interactive_comma_with_parens_and_bang_dispatches_verbatim() -> None:
         assert read_log(tmp) == ["ask why (really) fix it!"]
 
 
-REAL_SIGIL = ROOT / ".venv" / "bin" / "sigil"
+REAL_COMMAS = ROOT / ".venv" / "bin" / "commas"
 
 
 @pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
-@pytest.mark.skipif(not REAL_SIGIL.exists(), reason="no venv sigil executable")
+@pytest.mark.skipif(not REAL_COMMAS.exists(), reason="no venv commas executable")
 def test_interactive_plus_runs_under_job_control() -> None:
     # The dispatch line runs through the normal command loop: Ctrl-Z must
     # suspend the + command, jobs must list it, fg must resume it.
     with tempfile.TemporaryDirectory() as tmp_dir:
         tmp = Path(tmp_dir)
         stub = make_stub(tmp)
-        shell = InteractiveZsh(tmp, stub, env={"SIGIL_BIN": str(REAL_SIGIL)})
+        shell = InteractiveZsh(tmp, stub, env={"COMMAS_BIN": str(REAL_COMMAS)})
         try:
-            shell.run("source src/sigil/bindings/sigil.zsh")
+            shell.run("source src/commas/bindings/commas.zsh")
             shell.sendline("+ sleep 30")
             shell.settle(1.0)
             shell.send_control("z")
@@ -1795,14 +1795,14 @@ def test_interactive_plus_runs_under_job_control() -> None:
 
 
 @pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
-@pytest.mark.skipif(not REAL_SIGIL.exists(), reason="no venv sigil executable")
+@pytest.mark.skipif(not REAL_COMMAS.exists(), reason="no venv commas executable")
 def test_interactive_plus_exit_status_reaches_the_prompt() -> None:
     with tempfile.TemporaryDirectory() as tmp_dir:
         tmp = Path(tmp_dir)
         stub = make_stub(tmp)
-        shell = InteractiveZsh(tmp, stub, env={"SIGIL_BIN": str(REAL_SIGIL)})
+        shell = InteractiveZsh(tmp, stub, env={"COMMAS_BIN": str(REAL_COMMAS)})
         try:
-            shell.run("source src/sigil/bindings/sigil.zsh")
+            shell.run("source src/commas/bindings/commas.zsh")
             shell.run("+ false", timeout_seconds=30.0)
             shell.sendline('print -- "s""t=$?"')
             shell.expect("st=1")
@@ -1823,7 +1823,7 @@ def test_zsh_plus_completion_registered_after_compinit() -> None:
                 """\
                 autoload -Uz compinit
                 compinit -u
-                source src/sigil/bindings/sigil.zsh
+                source src/commas/bindings/commas.zsh
                 print -- "comp=${_comps[+]}"
                 """
             ),
@@ -1831,7 +1831,7 @@ def test_zsh_plus_completion_registered_after_compinit() -> None:
             stub,
         )
         assert_success(result)
-        assert "comp=_sigil_plus" in result.stdout
+        assert "comp=_commas_plus" in result.stdout
 
 
 @pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
@@ -1845,7 +1845,7 @@ def test_zsh_glyph_functions_remain_defined_for_highlighters() -> None:
             "zsh",
             textwrap.dedent(
                 """\
-                source src/sigil/bindings/sigil.zsh
+                source src/commas/bindings/commas.zsh
                 print -- "comma=$+functions[,]"
                 print -- "comma2=$+functions[,,]"
                 print -- "comma3=$+functions[,,,]"
@@ -1872,7 +1872,7 @@ def test_interactive_plus_completes_like_the_underlying_command() -> None:
         shell = InteractiveZsh(tmp, stub)
         try:
             shell.run("autoload -Uz compinit; compinit -u")
-            shell.run("source src/sigil/bindings/sigil.zsh")
+            shell.run("source src/commas/bindings/commas.zsh")
             shell.send("+ cat READM\t")
             shell.expect("README.md")
             shell.send_control("c")
@@ -1908,9 +1908,9 @@ def test_interactive_dispatch_chains_with_accept_line_wrappers(
         try:
             if plugin_first:
                 shell.run(f"source {plugin}")
-                shell.run("source src/sigil/bindings/sigil.zsh")
+                shell.run("source src/commas/bindings/commas.zsh")
             else:
-                shell.run("source src/sigil/bindings/sigil.zsh")
+                shell.run("source src/commas/bindings/commas.zsh")
                 shell.run(f"source {plugin}")
             shell.sendline(', "hello"')
             shell.expect("answer")
@@ -1941,7 +1941,7 @@ def test_interactive_dispatch_survives_real_autosuggestions() -> None:
         shell = InteractiveZsh(tmp, stub)
         try:
             shell.run(f"source {AUTOSUGGESTIONS}")
-            shell.run("source src/sigil/bindings/sigil.zsh")
+            shell.run("source src/commas/bindings/commas.zsh")
             shell.sendline(', "what\'s the deal"')
             shell.expect("answer")
             shell.expect_prompt()
@@ -1962,7 +1962,7 @@ def test_interactive_dispatch_survives_real_syntax_highlighting() -> None:
         stub = make_stub(tmp)
         shell = InteractiveZsh(tmp, stub)
         try:
-            shell.run("source src/sigil/bindings/sigil.zsh")
+            shell.run("source src/commas/bindings/commas.zsh")
             shell.run(f"source {SYNTAX_HIGHLIGHTING}")
             shell.sendline(', "what\'s the deal"')
             shell.expect("answer")
@@ -1988,13 +1988,13 @@ def test_interactive_harness_times_out_on_missing_marker() -> None:
 
 @pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
 def test_shell_harness_does_not_inherit_developer_environment(monkeypatch) -> None:
-    monkeypatch.setenv("SIGIL_DEV_LEAK", "leaked")
+    monkeypatch.setenv("COMMAS_DEV_LEAK", "leaked")
     with tempfile.TemporaryDirectory() as tmp_dir:
         tmp = Path(tmp_dir)
         stub = make_stub(tmp)
         result = run_shell(
             "zsh",
-            'printf "%s" "${SIGIL_DEV_LEAK:-clean}"',
+            'printf "%s" "${COMMAS_DEV_LEAK:-clean}"',
             tmp,
             stub,
         )
@@ -2012,9 +2012,9 @@ def test_zsh_plus_staged_command_resumes_step() -> None:
             "zsh",
             textwrap.dedent(
                 """\
-                source src/sigil/bindings/sigil.zsh
-                sigil_agent_step "repair it"
-                __sigil_run_plus_capture_command "uv run pytest"
+                source src/commas/bindings/commas.zsh
+                commas_agent_step "repair it"
+                __commas_run_plus_capture_command "uv run pytest"
                 """
             ),
             tmp,
@@ -2036,9 +2036,9 @@ def test_zsh_plus_staged_command_resumes_originating_workflow() -> None:
             "zsh",
             textwrap.dedent(
                 """\
-                source src/sigil/bindings/sigil.zsh
-                sigil_agent_step_auto "repair it"
-                __sigil_run_plus_capture_command "uv run pytest"
+                source src/commas/bindings/commas.zsh
+                commas_agent_step_auto "repair it"
+                __commas_run_plus_capture_command "uv run pytest"
                 """
             ),
             tmp,
@@ -2062,9 +2062,9 @@ def test_zsh_plus_unrelated_command_does_not_resume() -> None:
             "zsh",
             textwrap.dedent(
                 """\
-                source src/sigil/bindings/sigil.zsh
-                sigil_agent_step "repair it"
-                __sigil_run_plus_capture_command "git status"
+                source src/commas/bindings/commas.zsh
+                commas_agent_step "repair it"
+                __commas_run_plus_capture_command "git status"
                 """
             ),
             tmp,
@@ -2082,10 +2082,10 @@ def test_zsh_plus_auto_continue_opt_out() -> None:
             "zsh",
             textwrap.dedent(
                 """\
-                source src/sigil/bindings/sigil.zsh
-                export SIGIL_AUTO_CONTINUE=0
-                sigil_agent_step "repair it"
-                __sigil_run_plus_capture_command "uv run pytest"
+                source src/commas/bindings/commas.zsh
+                export COMMAS_AUTO_CONTINUE=0
+                commas_agent_step "repair it"
+                __commas_run_plus_capture_command "uv run pytest"
                 """
             ),
             tmp,

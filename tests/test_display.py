@@ -13,11 +13,11 @@ from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
 
-import sigil.display.render as display_render
-import sigil.display.state as display_state
-import sigil.display.summarize as display_summarize
-from sigil.display.tty import IRIS, ITALIC, MUTED, RESET
-from sigil.protocols import (
+import commas.display.render as display_render
+import commas.display.state as display_state
+import commas.display.summarize as display_summarize
+from commas.display.tty import IRIS, ITALIC, MUTED, RESET
+from commas.protocols import (
     SHELL_HANDOFF_OUTCOME_CANCELLED,
     SHELL_HANDOFF_OUTCOME_EXECUTED,
 )
@@ -27,7 +27,7 @@ from zeta.records.stores.memory import InMemoryStore
 zeta_trace = SimpleNamespace(InMemoryStore=InMemoryStore, Object=Object)
 
 
-def test_sigil_display_summarizes_tool_results() -> None:
+def test_commas_display_summarizes_tool_results() -> None:
     assert display_summarize.tool_result_summary(
         "bash",
         {
@@ -88,42 +88,42 @@ def test_sigil_display_summarizes_tool_results() -> None:
     ) == ["10 matches · 3 files · truncated"]
 
 
-def test_sigil_display_classifies_progress_events() -> None:
+def test_commas_display_classifies_progress_events() -> None:
     event = display_state.progress_event_for_tool_result(
         "read",
-        {"ok": True, "metadata": {"path": "src/sigil/agent_io.py"}},
-        {"path": "src/sigil/agent_io.py"},
+        {"ok": True, "metadata": {"path": "src/commas/agent_io.py"}},
+        {"path": "src/commas/agent_io.py"},
     )
     assert event is not None
     assert event.kind == "read"
     assert event.phase == "Mapping repo"
-    assert event.line == "✓ read src/sigil/agent_io.py · ok"
+    assert event.line == "✓ read src/commas/agent_io.py · ok"
 
     event = display_state.progress_event_for_tool_result(
         "ls",
-        {"ok": True, "metadata": {"path": "src/sigil", "entries": 3}},
-        {"path": "src/sigil"},
+        {"ok": True, "metadata": {"path": "src/commas", "entries": 3}},
+        {"path": "src/commas"},
     )
     assert event is not None
     assert event.kind == "list"
     assert event.phase == "Mapping repo"
-    assert event.line == "✓ listed src/sigil · 3 entries"
+    assert event.line == "✓ listed src/commas · 3 entries"
 
     event = display_state.progress_event_for_tool_result(
         "ls",
         {
             "ok": True,
             "metadata": {
-                "path": "src/sigil",
+                "path": "src/commas",
                 "entries": 30,
                 "recursive": True,
                 "limit": 50,
             },
         },
-        {"path": "src/sigil", "recursive": True, "limit": 50},
+        {"path": "src/commas", "recursive": True, "limit": 50},
     )
     assert event is not None
-    assert event.line == "✓ listed src/sigil (recursive) · 30 entries"
+    assert event.line == "✓ listed src/commas (recursive) · 30 entries"
 
     event = display_state.progress_event_for_tool_result(
         "write",
@@ -146,7 +146,7 @@ def test_sigil_display_classifies_progress_events() -> None:
     assert event.line == "✗ uv run pytest · failed · exit 2"
 
 
-def test_sigil_display_terminal_digest_keeps_short_turns_compact() -> None:
+def test_commas_display_terminal_digest_keeps_short_turns_compact() -> None:
     output = StringIO()
     renderer = display_state.TerminalDigestRenderer(output, clock=lambda: 0.0)
 
@@ -160,7 +160,7 @@ def test_sigil_display_terminal_digest_keeps_short_turns_compact() -> None:
     assert renderer.status_detail() == "mapping repo · 1 events · last: README.md"
 
 
-def test_sigil_display_terminal_digest_quotes_web_search_query() -> None:
+def test_commas_display_terminal_digest_quotes_web_search_query() -> None:
     output = StringIO()
     renderer = display_state.TerminalDigestRenderer(output, clock=lambda: 0.0)
 
@@ -179,14 +179,14 @@ def test_sigil_display_terminal_digest_quotes_web_search_query() -> None:
     ]
 
 
-def test_sigil_display_terminal_digest_has_no_empty_status_detail() -> None:
+def test_commas_display_terminal_digest_has_no_empty_status_detail() -> None:
     output = StringIO()
     renderer = display_state.TerminalDigestRenderer(output)
 
     assert renderer.status_detail() == ""
 
 
-def test_sigil_display_terminal_digest_switches_to_chapters() -> None:
+def test_commas_display_terminal_digest_switches_to_chapters() -> None:
     output = StringIO()
     now = 0.0
     renderer = display_state.TerminalDigestRenderer(
@@ -215,7 +215,7 @@ def test_sigil_display_terminal_digest_switches_to_chapters() -> None:
     ]
 
 
-def test_sigil_display_terminal_digest_bounds_repeated_chapter_lines() -> None:
+def test_commas_display_terminal_digest_bounds_repeated_chapter_lines() -> None:
     output = StringIO()
     renderer = display_state.TerminalDigestRenderer(
         output,
@@ -238,7 +238,7 @@ def test_sigil_display_terminal_digest_bounds_repeated_chapter_lines() -> None:
     ]
 
 
-def test_sigil_display_terminal_digest_quiet_keeps_failures_and_final_digest() -> None:
+def test_commas_display_terminal_digest_quiet_keeps_failures_and_final_digest() -> None:
     output = StringIO()
     renderer = display_state.TerminalDigestRenderer(output, mode="quiet")
 
@@ -264,7 +264,7 @@ def test_sigil_display_terminal_digest_quiet_keeps_failures_and_final_digest() -
     ]
 
 
-def test_sigil_display_terminal_digest_final_receipt_summarizes_effects() -> None:
+def test_commas_display_terminal_digest_final_receipt_summarizes_effects() -> None:
     output = StringIO()
     renderer = display_state.TerminalDigestRenderer(output, mode="compact")
     renderer.observe_tool_call("bash", {"command": "uv run pytest"})
@@ -290,7 +290,7 @@ def test_sigil_display_terminal_digest_final_receipt_summarizes_effects() -> Non
     )
 
 
-def test_sigil_display_terminal_digest_uses_reasoning_for_phase() -> None:
+def test_commas_display_terminal_digest_uses_reasoning_for_phase() -> None:
     output = StringIO()
     renderer = display_state.TerminalDigestRenderer(
         output,
@@ -301,7 +301,7 @@ def test_sigil_display_terminal_digest_uses_reasoning_for_phase() -> None:
     renderer.observe_tool_call("read", {"path": "README.md"})
     renderer.observe_tool_result("read", {"ok": True})
     renderer.observe_reasoning_delta("Now I'll inspect prompt assembly before editing.")
-    renderer.observe_tool_call("read", {"path": "src/sigil/agent_io.py"})
+    renderer.observe_tool_call("read", {"path": "src/commas/agent_io.py"})
     renderer.observe_tool_result("read", {"ok": True})
 
     assert renderer.current_phase == "Inspect prompt assembly before editing"
@@ -309,7 +309,7 @@ def test_sigil_display_terminal_digest_uses_reasoning_for_phase() -> None:
     assert "[00:00] Inspect prompt assembly before editing" in output.getvalue()
 
 
-def test_sigil_display_terminal_digest_ignores_generic_reasoning_phase() -> None:
+def test_commas_display_terminal_digest_ignores_generic_reasoning_phase() -> None:
     output = StringIO()
     renderer = display_state.TerminalDigestRenderer(
         output,
@@ -320,7 +320,7 @@ def test_sigil_display_terminal_digest_ignores_generic_reasoning_phase() -> None
     renderer.observe_tool_call("read", {"path": "README.md"})
     renderer.observe_tool_result("read", {"ok": True})
     renderer.observe_reasoning_delta("Checking.")
-    renderer.observe_tool_call("read", {"path": "src/sigil/agent_io.py"})
+    renderer.observe_tool_call("read", {"path": "src/commas/agent_io.py"})
     renderer.observe_tool_result("read", {"ok": True})
 
     assert renderer.current_phase == "Mapping repo"
@@ -328,16 +328,16 @@ def test_sigil_display_terminal_digest_ignores_generic_reasoning_phase() -> None
     assert "[00:00] Checking" not in output.getvalue()
 
 
-def test_sigil_display_terminal_digest_keeps_specific_reasoning_phase() -> None:
+def test_commas_display_terminal_digest_keeps_specific_reasoning_phase() -> None:
     assert display_state.reasoning_phase("Checking model configuration.") == (
         "Checking model configuration"
     )
 
 
-def test_sigil_display_thinking_status_forwards_reasoning_to_progress(
+def test_commas_display_thinking_status_forwards_reasoning_to_progress(
     monkeypatch,
 ) -> None:
-    monkeypatch.setenv("SIGIL_THINKING_TRACE", "0")
+    monkeypatch.setenv("COMMAS_THINKING_TRACE", "0")
     seen: list[str] = []
 
     with display_state.ThinkingStatus(
@@ -350,7 +350,7 @@ def test_sigil_display_thinking_status_forwards_reasoning_to_progress(
     assert seen == ["I need to understand the workflow path."]
 
 
-def test_sigil_display_renders_tool_paths_relative_to_cwd(
+def test_commas_display_renders_tool_paths_relative_to_cwd(
     tmp_path, monkeypatch
 ) -> None:
     monkeypatch.chdir(tmp_path)
@@ -379,7 +379,7 @@ def test_sigil_display_renders_tool_paths_relative_to_cwd(
     ) == ["8 results"]
 
 
-def test_sigil_display_summarizes_current_context_estimate() -> None:
+def test_commas_display_summarizes_current_context_estimate() -> None:
     line = display_state.context_usage_line(
         {
             "usage": {
@@ -406,7 +406,7 @@ def test_sigil_display_summarizes_current_context_estimate() -> None:
     )
 
 
-def test_sigil_display_summarizes_context_from_total_tokens() -> None:
+def test_commas_display_summarizes_context_from_total_tokens() -> None:
     line = display_state.context_usage_line(
         {
             "usage": {"total_tokens": 18_823},
@@ -417,7 +417,7 @@ def test_sigil_display_summarizes_context_from_total_tokens() -> None:
     assert line == "context  [█░░░░░░░░░░░░░░░░░░░] 7%"
 
 
-def test_sigil_display_context_usage_footer_estimates_tool_result_tokens() -> None:
+def test_commas_display_context_usage_footer_estimates_tool_result_tokens() -> None:
     output = StringIO()
     footer = display_state.ContextUsageFooter(output)
     base_telemetry = {
@@ -448,7 +448,7 @@ def test_sigil_display_context_usage_footer_estimates_tool_result_tokens() -> No
     assert output.getvalue() == "context  [█████░░░░░░░░░░░░░░░] 26%\n"
 
 
-def test_sigil_display_tool_result_telemetry_replaces_stale_estimates() -> None:
+def test_commas_display_tool_result_telemetry_replaces_stale_estimates() -> None:
     footer = display_state.ContextUsageFooter(StringIO())
     stale_result = {"ok": True, "content": [{"type": "text", "text": "x" * 400}]}
     fresh_result = {"ok": True, "content": [{"type": "text", "text": "y" * 40}]}
@@ -487,7 +487,7 @@ def test_sigil_display_tool_result_telemetry_replaces_stale_estimates() -> None:
     )
 
 
-def test_sigil_display_context_usage_footer_is_ephemeral_for_tty(
+def test_commas_display_context_usage_footer_is_ephemeral_for_tty(
     monkeypatch,
 ) -> None:
     monkeypatch.setenv("NO_COLOR", "1")
@@ -508,7 +508,7 @@ def test_sigil_display_context_usage_footer_is_ephemeral_for_tty(
     assert output.getvalue().endswith("context  [█░░░░░░░░░░░░░░░░░░░] 7%\n")
 
 
-def test_sigil_display_context_usage_footer_prints_final_only_for_non_tty() -> None:
+def test_commas_display_context_usage_footer_prints_final_only_for_non_tty() -> None:
     telemetry = {
         "usage": {"prompt_tokens": 18_432, "completion_tokens": 391},
         "model_context_tokens": 262_144,
@@ -522,7 +522,7 @@ def test_sigil_display_context_usage_footer_prints_final_only_for_non_tty() -> N
     assert output.getvalue() == "context  [█░░░░░░░░░░░░░░░░░░░] 7%\n"
 
 
-def test_sigil_display_stream_renderer_factory_selects_output_mode() -> None:
+def test_commas_display_stream_renderer_factory_selects_output_mode() -> None:
     assert isinstance(
         display_state.create_stream_renderer(StringIO()),
         display_state.TerminalStreamRenderer,
@@ -533,7 +533,7 @@ def test_sigil_display_stream_renderer_factory_selects_output_mode() -> None:
     )
 
 
-def test_sigil_display_rich_stream_renderer_renders_markdown() -> None:
+def test_commas_display_rich_stream_renderer_renders_markdown() -> None:
     output = TtyBuffer()
     renderer = display_state.RichStreamRenderer(output, refresh_interval=0)
 
@@ -546,7 +546,7 @@ def test_sigil_display_rich_stream_renderer_renders_markdown() -> None:
     assert "**world**" not in text
 
 
-def test_sigil_display_rich_stream_renderer_wraps_with_left_padding() -> None:
+def test_commas_display_rich_stream_renderer_wraps_with_left_padding() -> None:
     output = TtyBuffer()
     renderer = display_state.RichStreamRenderer(
         output,
@@ -566,7 +566,7 @@ def test_sigil_display_rich_stream_renderer_wraps_with_left_padding() -> None:
     assert "  epsilon" in lines
 
 
-def test_sigil_display_rich_stream_renderer_finalizes_trace_boundaries() -> None:
+def test_commas_display_rich_stream_renderer_finalizes_trace_boundaries() -> None:
     output = TtyBuffer()
     renderer = display_state.RichStreamRenderer(output, refresh_interval=0)
 
@@ -585,7 +585,7 @@ def test_sigil_display_rich_stream_renderer_finalizes_trace_boundaries() -> None
     assert renderer.live is None
 
 
-def test_sigil_display_thinking_status_updates_and_clears(monkeypatch) -> None:
+def test_commas_display_thinking_status_updates_and_clears(monkeypatch) -> None:
     monkeypatch.setenv("NO_COLOR", "1")
     output = TtyBuffer()
     now = 0.0
@@ -603,7 +603,7 @@ def test_sigil_display_thinking_status_updates_and_clears(monkeypatch) -> None:
     assert text.endswith("\r\x1b[2K\x1b[1A\r\x1b[2K")
 
 
-def test_sigil_display_thinking_status_is_muted(monkeypatch) -> None:
+def test_commas_display_thinking_status_is_muted(monkeypatch) -> None:
     monkeypatch.delenv("NO_COLOR", raising=False)
     output = TtyBuffer()
 
@@ -613,7 +613,7 @@ def test_sigil_display_thinking_status_is_muted(monkeypatch) -> None:
     assert f"{MUTED}  waiting 0s{RESET}" in (output.getvalue())
 
 
-def test_sigil_display_thinking_status_includes_context_detail(
+def test_commas_display_thinking_status_includes_context_detail(
     monkeypatch,
 ) -> None:
     monkeypatch.setenv("NO_COLOR", "1")
@@ -633,7 +633,7 @@ def test_sigil_display_thinking_status_includes_context_detail(
     assert output.getvalue().endswith("\r\x1b[2K\x1b[1A\r\x1b[2K\x1b[1A\r\x1b[2K")
 
 
-def test_sigil_display_thinking_status_skips_non_tty() -> None:
+def test_commas_display_thinking_status_skips_non_tty() -> None:
     output = StringIO()
 
     with display_state.ThinkingStatus(output):
@@ -642,7 +642,7 @@ def test_sigil_display_thinking_status_skips_non_tty() -> None:
     assert output.getvalue() == ""
 
 
-def test_sigil_display_thinking_status_renders_reasoning_tail(monkeypatch) -> None:
+def test_commas_display_thinking_status_renders_reasoning_tail(monkeypatch) -> None:
     monkeypatch.setenv("NO_COLOR", "1")
     output = TtyBuffer()
 
@@ -656,7 +656,7 @@ def test_sigil_display_thinking_status_renders_reasoning_tail(monkeypatch) -> No
     assert "  so check the recent diff\n\n  thinking 0s" in text
 
 
-def test_sigil_display_thinking_status_shows_waiting_before_reasoning(
+def test_commas_display_thinking_status_shows_waiting_before_reasoning(
     monkeypatch,
 ) -> None:
     monkeypatch.setenv("NO_COLOR", "1")
@@ -672,7 +672,7 @@ def test_sigil_display_thinking_status_shows_waiting_before_reasoning(
     assert "  checking the request\n\n  thinking 0s" in text
 
 
-def test_sigil_display_thinking_status_tail_keeps_last_lines(monkeypatch) -> None:
+def test_commas_display_thinking_status_tail_keeps_last_lines(monkeypatch) -> None:
     monkeypatch.setenv("NO_COLOR", "1")
     output = TtyBuffer()
 
@@ -688,7 +688,7 @@ def test_sigil_display_thinking_status_tail_keeps_last_lines(monkeypatch) -> Non
     assert "  step-6\n  step-7\n  step-8\n\n  thinking 0s" in text
 
 
-def test_sigil_display_thinking_status_truncates_long_reasoning_lines(
+def test_commas_display_thinking_status_truncates_long_reasoning_lines(
     monkeypatch,
 ) -> None:
     monkeypatch.setenv("NO_COLOR", "1")
@@ -709,7 +709,7 @@ def test_sigil_display_thinking_status_truncates_long_reasoning_lines(
     assert all(len(line.replace("\r\x1b[2K", "")) < 20 for line in rendered)
 
 
-def test_sigil_display_thinking_tail_renders_iris_italic(monkeypatch) -> None:
+def test_commas_display_thinking_tail_renders_iris_italic(monkeypatch) -> None:
     monkeypatch.delenv("NO_COLOR", raising=False)
     output = TtyBuffer()
 
@@ -720,7 +720,7 @@ def test_sigil_display_thinking_tail_renders_iris_italic(monkeypatch) -> None:
     assert f"{ITALIC}{IRIS}  pondering{RESET}" in output.getvalue()
 
 
-def test_sigil_display_thinking_status_repaints_on_new_reasoning(monkeypatch) -> None:
+def test_commas_display_thinking_status_repaints_on_new_reasoning(monkeypatch) -> None:
     # New reasoning within the same second must repaint; the seconds
     # short-circuit alone would hold the tail frozen for the interval.
     monkeypatch.setenv("NO_COLOR", "1")
@@ -737,7 +737,7 @@ def test_sigil_display_thinking_status_repaints_on_new_reasoning(monkeypatch) ->
     assert "second thought" in text
 
 
-def test_sigil_display_thinking_status_erases_reasoning_without_summary(
+def test_commas_display_thinking_status_erases_reasoning_without_summary(
     monkeypatch,
 ) -> None:
     monkeypatch.setenv("NO_COLOR", "1")
@@ -755,7 +755,7 @@ def test_sigil_display_thinking_status_erases_reasoning_without_summary(
     assert text.endswith("\r\x1b[2K\x1b[1A\r\x1b[2K\x1b[1A\r\x1b[2K")
 
 
-def test_sigil_display_thinking_status_no_summary_without_reasoning(
+def test_commas_display_thinking_status_no_summary_without_reasoning(
     monkeypatch,
 ) -> None:
     monkeypatch.setenv("NO_COLOR", "1")
@@ -767,7 +767,7 @@ def test_sigil_display_thinking_status_no_summary_without_reasoning(
     assert "thought for" not in output.getvalue()
 
 
-def test_sigil_display_thinking_status_no_summary_on_error_exit(monkeypatch) -> None:
+def test_commas_display_thinking_status_no_summary_on_error_exit(monkeypatch) -> None:
     monkeypatch.setenv("NO_COLOR", "1")
     output = TtyBuffer()
 
@@ -781,9 +781,9 @@ def test_sigil_display_thinking_status_no_summary_on_error_exit(monkeypatch) -> 
     assert text.endswith("\x1b[2K")
 
 
-def test_sigil_display_thinking_trace_opt_out(monkeypatch) -> None:
+def test_commas_display_thinking_trace_opt_out(monkeypatch) -> None:
     monkeypatch.setenv("NO_COLOR", "1")
-    monkeypatch.setenv("SIGIL_THINKING_TRACE", "0")
+    monkeypatch.setenv("COMMAS_THINKING_TRACE", "0")
     output = TtyBuffer()
     now = 0.0
 
@@ -798,7 +798,7 @@ def test_sigil_display_thinking_trace_opt_out(monkeypatch) -> None:
     assert "thinking 5s" in text
 
 
-def test_sigil_display_summarizes_shell_results() -> None:
+def test_commas_display_summarizes_shell_results() -> None:
     assert display_summarize.shell_result_summary(
         {
             "type": "tool_result",
@@ -834,7 +834,7 @@ def transcript_console() -> tuple[StringIO, Console]:
 def test_transcript_renders_conversation_blocks() -> None:
     output, console = transcript_console()
     events = [
-        {"type": "user_message", "content": "what is sigil?"},
+        {"type": "user_message", "content": "what is commas?"},
         {
             "type": "model",
             "content": "It is a **shell assistant**.",
@@ -856,8 +856,8 @@ def test_transcript_renders_conversation_blocks() -> None:
     text = output.getvalue()
 
     assert "you" in text
-    assert "what is sigil?" in text
-    assert "sigil" in text
+    assert "what is commas?" in text
+    assert "commas" in text
     assert "abcdef12" in text
     assert "shell assistant" in text
     assert "**" not in text
@@ -1106,7 +1106,7 @@ def test_transcript_reasoning_renders_markdown_in_italic_magenta() -> None:
     assert not isinstance(reasoning, Panel)
     assert isinstance(reasoning, Markdown)
     # Named magenta lands on iris under a Rose Pine terminal, matching the
-    # live thinking tail: one color for sigil's thinking voice.
+    # live thinking tail: one color for commas's thinking voice.
     assert reasoning.style == "italic magenta"
 
 
@@ -1114,7 +1114,7 @@ def test_transcript_dims_user_scaffolding_sections() -> None:
     content = (
         "Recent shell activity:\n  git branch (exit 0)\n\n"
         "Question:\nwhatever\n\n"
-        "cwd:\n/Users/remilouf/projects/sigil"
+        "cwd:\n/Users/remilouf/projects/commas"
     )
 
     body = display_render.user_message_text(content)
@@ -1126,7 +1126,7 @@ def test_transcript_dims_user_scaffolding_sections() -> None:
     assert "Recent shell activity:" in dimmed
     assert "git branch (exit 0)" in dimmed
     assert "cwd:" in dimmed
-    assert "/Users/remilouf/projects/sigil" in dimmed
+    assert "/Users/remilouf/projects/commas" in dimmed
     assert "Question:" in dimmed
     assert "whatever" not in dimmed
 

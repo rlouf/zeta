@@ -9,7 +9,7 @@ from typing import Any, cast
 
 import click
 
-from sigil.tools import register_builtin_tools
+from commas.tools import register_builtin_tools
 from zeta.capabilities.registry import CapabilityRegistry
 from zeta.events import DraftEvent, Event
 from zeta.records.stores.event_store import Filter

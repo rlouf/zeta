@@ -1,0 +1,152 @@
+"""Global paths and durable events for Commas.
+
+Session-local continuity lives in `commas.sessions`; this module owns the shared
+state directory and the frontend event journal.
+"""
+
+from __future__ import annotations
+
+import os
+import time
+import uuid
+from pathlib import Path
+from typing import Any
+
+from zeta.records.events import (
+    EVENT_IDEMPOTENT_TYPES,
+    TURN_IDEMPOTENT_TYPES,
+    Event,
+    durable_event_idempotency_key,
+)
+from zeta.records.stores.event_store import Filter
+from zeta.records.stores.sqlite import EVENT_STORE_NAME, SqliteEventStore
+
+TIMELINE_DURABLE_TYPES = {
+    "user_message": "zeta.user_message",
+    "model_usage": "zeta.model_call.completed",
+}
+
+
+def state_dir() -> Path:
+    """Return the global Commas state directory."""
+    base = os.environ.get("COMMAS_STATE_DIR")
+    if base:
+        return Path(base)
+    return Path.home() / ".commas"
+
+
+def event_store_path() -> Path:
+    """Return Commas's frontend event journal path."""
+    return state_dir() / EVENT_STORE_NAME
+
+
+def read_events() -> list[Event]:
+    """Read Commas's frontend event journal."""
+    return SqliteEventStore(event_store_path()).list_events(Filter())
+
+
+def history_view(events: list[Event] | None = None) -> Any:
+    """Return a history view over Commas's durable events."""
+    from commas.history import HistoryView
+
+    if events is not None:
+        return HistoryView(events)
+    return HistoryView.from_store(event_store_path())
+
+
+def event_children(event_id: str, *, limit: int | None = None) -> list[Event]:
+    return SqliteEventStore(event_store_path()).children(event_id, limit=limit)
+
+
+def causal_chain(event_id: str) -> list[Event]:
+    return SqliteEventStore(event_store_path()).causal_chain(event_id)
+
+
+def events_for_turn(turn_id: str) -> list[Event]:
+    return SqliteEventStore(event_store_path()).events_for_turn(turn_id)
+
+
+def append_event(event: dict[str, Any]) -> Event:
+    """Append a global audit/debug event with session metadata."""
+    from commas.sessions import session_id
+
+    payload = {"source": "commas", **event}
+    return (
+        SqliteEventStore(event_store_path())
+        .append(durable_log_event(payload, session_id=session_id()))
+        .event
+    )
+
+
+def append_prompt_submitted_event(event: Event) -> Event:
+    return (
+        SqliteEventStore(event_store_path())
+        .append(
+            Event(
+                id=f"evt_{uuid.uuid4().hex}",
+                event_type="zeta.prompt.submitted",
+                source=event.source,
+                payload=event.payload,
+                idempotency_key=f"zeta.prompt.submitted:{event.turn_id}"
+                if event.turn_id is not None
+                else None,
+                caused_by=event.id,
+                session_id=event.session_id,
+                turn_id=event.turn_id,
+                timestamp_ms=int(time.time_ns() // 1_000_000),
+            )
+        )
+        .event
+    )
+
+
+def durable_log_event(event: dict[str, Any], *, session_id: str) -> Event:
+    payload = {"cwd": os.getcwd(), **event}
+    source = str(payload.get("source") or "zeta")
+    event_type = str(payload.get("type") or "event")
+    durable_type = TIMELINE_DURABLE_TYPES.get(event_type, event_type)
+    raw_event_id = payload.get("id")
+    event_id = (
+        raw_event_id
+        if isinstance(raw_event_id, str) and raw_event_id
+        else f"evt_{uuid.uuid4().hex}"
+    )
+    raw_turn_id = payload.get("turn_id")
+    turn_id = raw_turn_id if isinstance(raw_turn_id, str) and raw_turn_id else None
+    event_session_id = str(payload.get("session") or session_id)
+    raw_caused_by = payload.get("caused_by")
+    caused_by = (
+        raw_caused_by if isinstance(raw_caused_by, str) and raw_caused_by else None
+    )
+    domain_payload = {
+        key: value
+        for key, value in payload.items()
+        if key not in {"id", "type", "time", "session", "source", "caused_by"}
+    }
+    if event_type == "model_usage":
+        domain_payload["_timeline_type"] = "model_usage"
+    return Event(
+        id=event_id,
+        event_type=durable_type,
+        source="zeta" if is_zeta_durable_event(durable_type) else source,
+        payload=domain_payload,
+        idempotency_key=durable_event_idempotency_key(
+            durable_type,
+            event_id=event_id,
+            turn_id=turn_id,
+        ),
+        caused_by=caused_by,
+        session_id=event_session_id,
+        turn_id=turn_id,
+        timestamp_ms=timestamp_ms(payload.get("time")),
+    )
+
+
+def is_zeta_durable_event(event_type: str) -> bool:
+    return event_type in EVENT_IDEMPOTENT_TYPES or event_type in TURN_IDEMPOTENT_TYPES
+
+
+def timestamp_ms(value: Any) -> int:
+    if isinstance(value, int | float) and not isinstance(value, bool):
+        return int(float(value) * 1_000)
+    return time.time_ns() // 1_000_000

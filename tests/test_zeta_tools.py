@@ -11,11 +11,11 @@ from typing import Any
 
 import pytest
 
-from sigil.tools import bash as bash_tool
-from sigil.tools import ensure_builtin_tools_registered, register_builtin_tools
-from sigil.tools import grep as grep_tool
-from sigil.tools import read as read_tool
-from sigil.tools import web as web_tool
+from commas.tools import bash as bash_tool
+from commas.tools import ensure_builtin_tools_registered, register_builtin_tools
+from commas.tools import grep as grep_tool
+from commas.tools import read as read_tool
+from commas.tools import web as web_tool
 from zeta.capabilities.execution import (
     InProcessCapabilityExecutor,
 )
@@ -312,43 +312,43 @@ def test_zeta_capability_registry_starts_empty() -> None:
     assert registry.list_capability_ids() == []
 
 
-def test_sigil_registers_builtin_tools_explicitly() -> None:
+def test_commas_registers_builtin_tools_explicitly() -> None:
     registry = CapabilityRegistry()
 
     register_builtin_tools(registry)
 
     assert {
-        "sigil.ast_grep",
-        "sigil.read",
-        "sigil.grep",
-        "sigil.ls",
-        "sigil.bash",
-        "sigil.edit",
-        "sigil.write",
-        "sigil.query_log",
-        "sigil.web_search",
+        "commas.ast_grep",
+        "commas.read",
+        "commas.grep",
+        "commas.ls",
+        "commas.bash",
+        "commas.edit",
+        "commas.write",
+        "commas.query_log",
+        "commas.web_search",
     } <= set(registry.list_capability_ids())
-    assert "sigil.web_fetch" not in set(registry.list_capability_ids())
+    assert "commas.web_fetch" not in set(registry.list_capability_ids())
 
 
-def test_sigil_ensures_shared_zeta_registry_has_builtins() -> None:
+def test_commas_ensures_shared_zeta_registry_has_builtins() -> None:
     ensure_builtin_tools_registered()
 
     names = set(tool_registry.list_capability_ids())
     assert {
-        "sigil.read",
-        "sigil.grep",
-        "sigil.ast_grep",
-        "sigil.ls",
-        "sigil.bash",
-        "sigil.edit",
-        "sigil.write",
-        "sigil.web_search",
+        "commas.read",
+        "commas.grep",
+        "commas.ast_grep",
+        "commas.ls",
+        "commas.bash",
+        "commas.edit",
+        "commas.write",
+        "commas.web_search",
     } <= names
-    assert "sigil.web_fetch" not in names
+    assert "commas.web_fetch" not in names
 
 
-def test_zeta_capability_registry_does_not_import_sigil_tools() -> None:
+def test_zeta_capability_registry_does_not_import_commas_tools() -> None:
     source = Path("src/zeta/capabilities/registry.py").read_text(encoding="utf-8")
     tree = ast.parse(source)
     imports = []
@@ -358,7 +358,7 @@ def test_zeta_capability_registry_does_not_import_sigil_tools() -> None:
         if isinstance(node, ast.Import):
             imports.extend(alias.name for alias in node.names)
 
-    assert all(not module.startswith("sigil.tools") for module in imports)
+    assert all(not module.startswith("commas.tools") for module in imports)
 
 
 def test_zeta_grep_metadata_guides_model_tool_choice() -> None:
@@ -395,17 +395,17 @@ def test_zeta_ast_grep_metadata_guides_model_tool_choice() -> None:
     )
 
 
-def test_sigil_web_search_schema_matches_codex_contract() -> None:
+def test_commas_web_search_schema_matches_codex_contract() -> None:
     schema = web_tool.SEARCH_SPEC.input_schema
 
-    assert web_tool.SEARCH_SPEC.id.canonical() == "sigil.web_search"
+    assert web_tool.SEARCH_SPEC.id.canonical() == "commas.web_search"
     assert web_tool.SEARCH_SPEC.id.name == "web_search"
     assert schema["required"] == ["query"]
     assert schema["properties"]["query"]["type"] == "string"
     assert schema["properties"]["limit"]["minimum"] == 1
 
 
-def test_sigil_web_search_reports_missing_codex_credentials(monkeypatch) -> None:
+def test_commas_web_search_reports_missing_codex_credentials(monkeypatch) -> None:
     def missing_credentials() -> web_tool.CodexCredentials:
         raise RuntimeError("no Codex credentials at ~/.codex/auth.json")
 
@@ -422,10 +422,10 @@ def test_sigil_web_search_reports_missing_codex_credentials(monkeypatch) -> None
     }
 
 
-def test_sigil_web_search_posts_codex_payload(monkeypatch) -> None:
+def test_commas_web_search_posts_codex_payload(monkeypatch) -> None:
     calls: list[tuple[str, web_tool.WebConfig]] = []
 
-    monkeypatch.setenv("SIGIL_WEB_SEARCH_MODEL", "gpt-test")
+    monkeypatch.setenv("COMMAS_WEB_SEARCH_MODEL", "gpt-test")
     monkeypatch.setattr(
         web_tool,
         "load_codex_credentials",
@@ -480,7 +480,7 @@ def test_sigil_web_search_posts_codex_payload(monkeypatch) -> None:
     assert result["metadata"]["result_count"] == 1
 
 
-def test_sigil_read_fetches_public_url(monkeypatch) -> None:
+def test_commas_read_fetches_public_url(monkeypatch) -> None:
     class FakeResponse:
         headers = {"content-type": "text/html"}
 
@@ -1194,12 +1194,12 @@ def test_zeta_tool_edit_stage_records_staged_hashes(tmp_path: Path) -> None:
 
 
 def seed_query_log_history(monkeypatch) -> None:
-    from sigil.history import effect_record, publish_effect_record, turn_record
-    from sigil.protocols import turn_contract
-    from sigil.sessions import session_id
-    from sigil.state import append_event, event_store_path
+    from commas.history import effect_record, publish_effect_record, turn_record
+    from commas.protocols import turn_contract
+    from commas.sessions import session_id
+    from commas.state import append_event, event_store_path
 
-    monkeypatch.setenv("SIGIL_SESSION_ID", "query-log-here")
+    monkeypatch.setenv("COMMAS_SESSION_ID", "query-log-here")
     append_event(
         {
             **turn_record(
@@ -1246,7 +1246,7 @@ def seed_query_log_history(monkeypatch) -> None:
 
 def test_zeta_tool_query_log_lists_all_sessions_with_cited_ids(monkeypatch) -> None:
     seed_query_log_history(monkeypatch)
-    from sigil.tools import query_log as query_log_tool
+    from commas.tools import query_log as query_log_tool
 
     result = query_log_tool.run({})
 
@@ -1263,7 +1263,7 @@ def test_zeta_tool_query_log_lists_all_sessions_with_cited_ids(monkeypatch) -> N
 
 def test_zeta_tool_query_log_narrows_to_the_current_session(monkeypatch) -> None:
     seed_query_log_history(monkeypatch)
-    from sigil.tools import query_log as query_log_tool
+    from commas.tools import query_log as query_log_tool
 
     result = query_log_tool.run({"current_session": True})
 
@@ -1275,7 +1275,7 @@ def test_zeta_tool_query_log_narrows_to_the_current_session(monkeypatch) -> None
 
 def test_zeta_tool_query_log_filters_and_caps_limit(monkeypatch) -> None:
     seed_query_log_history(monkeypatch)
-    from sigil.tools import query_log as query_log_tool
+    from commas.tools import query_log as query_log_tool
 
     failed = query_log_tool.run({"failed": True})
     touched = query_log_tool.run({"touched": "/tmp/notes.txt"})
@@ -1289,7 +1289,7 @@ def test_zeta_tool_query_log_filters_and_caps_limit(monkeypatch) -> None:
 
 def test_zeta_tool_query_log_expands_one_turn_by_prefix(monkeypatch) -> None:
     seed_query_log_history(monkeypatch)
-    from sigil.tools import query_log as query_log_tool
+    from commas.tools import query_log as query_log_tool
 
     result = query_log_tool.run({"turn_id": "turn-do"})
 
@@ -1304,7 +1304,7 @@ def test_zeta_tool_query_log_expands_one_turn_by_prefix(monkeypatch) -> None:
 
 def test_zeta_tool_query_log_reports_bad_ids_and_bad_since(monkeypatch) -> None:
     seed_query_log_history(monkeypatch)
-    from sigil.tools import query_log as query_log_tool
+    from commas.tools import query_log as query_log_tool
 
     ambiguous = query_log_tool.run({"turn_id": "turn-"})
     unknown = query_log_tool.run({"turn_id": "nope"})
@@ -1320,7 +1320,7 @@ def test_zeta_tool_query_log_reports_bad_ids_and_bad_since(monkeypatch) -> None:
 
 
 def test_zeta_tool_query_log_reports_an_empty_history() -> None:
-    from sigil.tools import query_log as query_log_tool
+    from commas.tools import query_log as query_log_tool
 
     result = query_log_tool.run({})
 
@@ -1330,8 +1330,8 @@ def test_zeta_tool_query_log_reports_an_empty_history() -> None:
 
 
 def test_zeta_tool_query_log_is_a_readonly_ask_builtin() -> None:
-    from sigil.tools import query_log as query_log_tool
-    from sigil.workflows.ask import ASK_TOOLS
+    from commas.tools import query_log as query_log_tool
+    from commas.workflows.ask import ASK_TOOLS
 
     assert query_log_tool.SPEC.id.name == "query_log"
     assert tool_registry.get_by_name("query_log") is not None

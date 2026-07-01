@@ -21,7 +21,7 @@ from _zeta_helpers import (
 
 import zeta.models.chat_completions as zeta_model
 import zeta.models.types as zeta_models_api
-from sigil.tools import ensure_builtin_tools_registered
+from commas.tools import ensure_builtin_tools_registered
 from zeta.agents import skills as zeta_skills
 from zeta.capabilities.execution import (
     InProcessCapabilityExecutor,
@@ -1227,7 +1227,7 @@ def test_system_prompt_is_product_neutral_and_dynamic() -> None:
         allowed_capabilities=("read", "grep", "ls")
     )
 
-    assert "Sigil" not in prompt
+    assert "Commas" not in prompt
     assert "You are Zeta" not in prompt
     assert "Preserve user changes." not in prompt
     assert "shell" not in prompt.lower()

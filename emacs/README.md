@@ -12,7 +12,7 @@ supports two editor-native workflows:
 ? Who are you?
 
 Zeta:
-  I am Zeta, answering through the local Sigil/Zeta runtime.
+  I am Zeta, answering through the local Commas/Zeta runtime.
 ```
 
 In source buffers, comment blocks stay commented:

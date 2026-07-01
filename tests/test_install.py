@@ -12,9 +12,9 @@ from _patch import patch, patch_dict
 from _zeta_helpers import write_codex_auth_file
 from click.testing import CliRunner
 
-from sigil.cli import cli, main
-from sigil.cli._base import EXIT_ERROR, EXIT_OK
-from sigil.install import (
+from commas.cli import cli, main
+from commas.cli._base import EXIT_ERROR, EXIT_OK
+from commas.install import (
     DoctorCheck,
     check_codex_auth,
     check_endpoint,
@@ -31,14 +31,14 @@ def test_install_zsh_binding_copies_binding_and_updates_rc_idempotently() -> Non
         rc_path = root / ".zshrc"
         first = install_zsh_binding(install_dir=install_dir, rc_path=rc_path)
         second = install_zsh_binding(install_dir=install_dir, rc_path=rc_path)
-        binding_path = install_dir / "sigil.zsh"
+        binding_path = install_dir / "commas.zsh"
         assert binding_path.exists()
-        assert "Sigil zsh bindings" in binding_path.read_text()
-        assert 'SIGIL_BINDING_LOADED="zsh"' in binding_path.read_text()
+        assert "Commas zsh bindings" in binding_path.read_text()
+        assert 'COMMAS_BINDING_LOADED="zsh"' in binding_path.read_text()
         assert first.wrote_rc
         assert not second.wrote_rc
         assert rc_path.read_text().count("source ") == 1
-        assert "export SIGIL_ENABLE_GLYPHS=1" in rc_path.read_text()
+        assert "export COMMAS_ENABLE_GLYPHS=1" in rc_path.read_text()
 
 
 def test_install_zsh_binding_can_disable_glyph_aliases_in_rc_snippet() -> None:
@@ -51,21 +51,21 @@ def test_install_zsh_binding_can_disable_glyph_aliases_in_rc_snippet() -> None:
         )
         rc_text = (root / ".zshrc").read_text(encoding="utf-8")
         assert not result.glyphs_enabled
-        assert "export SIGIL_ENABLE_GLYPHS=0" in rc_text
+        assert "export COMMAS_ENABLE_GLYPHS=0" in rc_text
 
 
 def test_install_zsh_binding_bakes_resolved_runtime_bins_into_rc() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
-        bins = {"sigil": "/opt/sigil/bin/sigil"}
-        with patch("sigil.install.shutil.which", side_effect=bins.get):
+        bins = {"commas": "/opt/commas/bin/commas"}
+        with patch("commas.install.shutil.which", side_effect=bins.get):
             install_zsh_binding(
                 install_dir=root / "bindings",
                 rc_path=root / ".zshrc",
             )
 
         rc_text = (root / ".zshrc").read_text(encoding="utf-8")
-        assert "export SIGIL_BIN=/opt/sigil/bin/sigil" in rc_text
+        assert "export COMMAS_BIN=/opt/commas/bin/commas" in rc_text
         assert "ZETA_BIN" not in rc_text
 
 
@@ -94,31 +94,31 @@ def test_install_zsh_binding_cli_json_reports_paths() -> None:
 def test_doctor_reports_expected_checks() -> None:
     fake_env = {
         "SHELL": "/bin/zsh",
-        "SIGIL_SESSION_ID": "test-session",
+        "COMMAS_SESSION_ID": "test-session",
         "ZETA_MODEL_NAME": "model-test",
     }
     with tempfile.TemporaryDirectory() as tmp:
         with patch_dict(os.environ, fake_env, clear=True):
-            with patch("sigil.install.shutil.which", return_value="/bin/tool"):
+            with patch("commas.install.shutil.which", return_value="/bin/tool"):
                 with patch(
-                    "sigil.install.check_state_writable",
+                    "commas.install.check_state_writable",
                     return_value=DoctorCheck("state:writable", "ok", tmp),
                 ):
                     with patch(
-                        "sigil.install.check_endpoint",
+                        "commas.install.check_endpoint",
                         return_value=DoctorCheck(
                             "model:endpoint", "ok", "http://127.0.0.1:8080"
                         ),
                     ):
                         with patch(
-                            "sigil.install.check_shell_binding_installed",
+                            "commas.install.check_shell_binding_installed",
                             return_value=DoctorCheck(
-                                "shell:binding-installed", "ok", "/tmp/sigil.zsh"
+                                "shell:binding-installed", "ok", "/tmp/commas.zsh"
                             ),
                         ):
                             checks = doctor_checks()
     names = {check.name for check in checks}
-    assert "sigil:installed" in names
+    assert "commas:installed" in names
     assert "zeta:installed" not in names
     assert "model:endpoint" in names
     assert "state:writable" in names
@@ -132,10 +132,10 @@ def test_doctor_reports_expected_checks() -> None:
 
 def test_check_session_tty_warns_when_session_came_from_another_tty() -> None:
     env = {
-        "SIGIL_SESSION_ID": "pane-a-id",
-        "SIGIL_SESSION_TTY": "/dev/ttyFAKE0",
+        "COMMAS_SESSION_ID": "pane-a-id",
+        "COMMAS_SESSION_TTY": "/dev/ttyFAKE0",
     }
-    with patch("sigil.install.current_tty", return_value="/dev/ttys001"):
+    with patch("commas.install.current_tty", return_value="/dev/ttys001"):
         check = check_session_tty(env)
     assert check.status == "warn"
     assert "pane-a-id" in check.detail
@@ -145,25 +145,25 @@ def test_check_session_tty_warns_when_session_came_from_another_tty() -> None:
 
 def test_check_session_tty_ok_on_matching_tty() -> None:
     env = {
-        "SIGIL_SESSION_ID": "pane-a-id",
-        "SIGIL_SESSION_TTY": "/dev/ttys001",
+        "COMMAS_SESSION_ID": "pane-a-id",
+        "COMMAS_SESSION_TTY": "/dev/ttys001",
     }
-    with patch("sigil.install.current_tty", return_value="/dev/ttys001"):
+    with patch("commas.install.current_tty", return_value="/dev/ttys001"):
         check = check_session_tty(env)
     assert check.status == "ok"
 
 
 def test_check_session_tty_ok_without_recorded_tty() -> None:
-    check = check_session_tty({"SIGIL_SESSION_ID": "manual-id"})
+    check = check_session_tty({"COMMAS_SESSION_ID": "manual-id"})
     assert check.status == "ok"
 
 
 def test_check_session_tty_ok_without_controlling_terminal() -> None:
     env = {
-        "SIGIL_SESSION_ID": "pane-a-id",
-        "SIGIL_SESSION_TTY": "/dev/ttys001",
+        "COMMAS_SESSION_ID": "pane-a-id",
+        "COMMAS_SESSION_TTY": "/dev/ttys001",
     }
-    with patch("sigil.install.current_tty", return_value=None):
+    with patch("commas.install.current_tty", return_value=None):
         check = check_session_tty(env)
     assert check.status == "ok"
 
@@ -171,23 +171,23 @@ def test_check_session_tty_ok_without_controlling_terminal() -> None:
 def test_doctor_reports_disabled_glyphs() -> None:
     fake_env = {
         "SHELL": "/bin/zsh",
-        "SIGIL_SESSION_ID": "test-session",
-        "SIGIL_ENABLE_GLYPHS": "0",
+        "COMMAS_SESSION_ID": "test-session",
+        "COMMAS_ENABLE_GLYPHS": "0",
     }
     with tempfile.TemporaryDirectory() as tmp:
         with patch_dict(os.environ, fake_env, clear=True):
-            with patch("sigil.install.state_dir", return_value=Path(tmp)):
-                with patch("sigil.install.shutil.which", return_value="/bin/tool"):
+            with patch("commas.install.state_dir", return_value=Path(tmp)):
+                with patch("commas.install.shutil.which", return_value="/bin/tool"):
                     with patch(
-                        "sigil.install.check_endpoint",
+                        "commas.install.check_endpoint",
                         return_value=DoctorCheck(
                             "model:endpoint", "ok", "http://127.0.0.1:8080"
                         ),
                     ):
                         with patch(
-                            "sigil.install.check_shell_binding_installed",
+                            "commas.install.check_shell_binding_installed",
                             return_value=DoctorCheck(
-                                "shell:binding-installed", "ok", "/tmp/sigil.zsh"
+                                "shell:binding-installed", "ok", "/tmp/commas.zsh"
                             ),
                         ):
                             checks = doctor_checks()
@@ -198,19 +198,19 @@ def test_doctor_reports_disabled_glyphs() -> None:
 
 def test_doctor_cli_answers_setup_questions() -> None:
     checks = [
-        DoctorCheck("sigil:installed", "ok", "/bin/sigil"),
+        DoctorCheck("commas:installed", "ok", "/bin/commas"),
         DoctorCheck("model:endpoint", "warn", "not reachable"),
-        DoctorCheck("shell:binding-installed", "ok", "/tmp/sigil.zsh"),
+        DoctorCheck("shell:binding-installed", "ok", "/tmp/commas.zsh"),
         DoctorCheck("shell:binding-loaded", "ok", "session test"),
         DoctorCheck("shell:glyphs-enabled", "ok", "glyphs enabled"),
     ]
     stdout = StringIO()
-    with patch("sigil.cli.install.doctor_checks", return_value=checks):
+    with patch("commas.cli.install.doctor_checks", return_value=checks):
         with redirect_stdout(stdout):
             code = main(["doctor"])
     output = stdout.getvalue()
     assert code == EXIT_OK
-    assert "sigil installed?" in output
+    assert "commas installed?" in output
     assert "model endpoint reachable?" in output
     assert "shell binding installed?" in output
     assert "shell binding loaded in this shell?" in output
@@ -219,11 +219,11 @@ def test_doctor_cli_answers_setup_questions() -> None:
 
 def test_doctor_cli_json_returns_nonzero_for_failures() -> None:
     checks = [
-        DoctorCheck("sigil:installed", "ok", "/bin/sigil"),
+        DoctorCheck("commas:installed", "ok", "/bin/commas"),
         DoctorCheck("model:endpoint", "fail", "not reachable"),
     ]
     stdout = StringIO()
-    with patch("sigil.cli.install.doctor_checks", return_value=checks):
+    with patch("commas.cli.install.doctor_checks", return_value=checks):
         with redirect_stdout(stdout):
             code = main(["doctor", "--json"])
     assert code == EXIT_ERROR
@@ -356,7 +356,7 @@ def test_doctor_endpoint_defers_to_codex_auth_for_codex_default(tmp_path) -> Non
         'api = "codex-responses"\ndefault = true\n',
         encoding="utf-8",
     )
-    with patch_dict(os.environ, {"HOME": str(tmp_path), "SIGIL_SESSION_ID": "t"}):
+    with patch_dict(os.environ, {"HOME": str(tmp_path), "COMMAS_SESSION_ID": "t"}):
         check = check_endpoint()
 
     assert check.status == "ok"

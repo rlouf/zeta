@@ -19,8 +19,8 @@ from click.testing import CliRunner
 import zeta.models.chat_completions as zeta_model
 import zeta.models.profiles as zeta_models
 import zeta.models.types as zeta_models_api
-from sigil.cli import cli as sigil_cli
-from sigil.sessions import session_dir
+from commas.cli import cli as commas_cli
+from commas.sessions import session_dir
 from zeta.context.compaction.task_state import TASK_STATE_SCHEMA
 
 
@@ -784,7 +784,7 @@ model = "bad"
     assert "lowercase letters" in catalog.diagnostics[0].message
 
 
-def test_sigil_model_cli_switches_model_per_session(
+def test_commas_model_cli_switches_model_per_session(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -799,26 +799,26 @@ url = "http://127.0.0.1:8081/v1/chat/completions"
 """,
     )
     monkeypatch.setenv("HOME", str(home))
-    monkeypatch.setenv("SIGIL_STATE_DIR", str(tmp_path / "state"))
-    monkeypatch.setenv("SIGIL_SESSION_ID", "one")
+    monkeypatch.setenv("COMMAS_STATE_DIR", str(tmp_path / "state"))
+    monkeypatch.setenv("COMMAS_SESSION_ID", "one")
 
-    use = CliRunner().invoke(sigil_cli, ["model", "use", "fast"])
+    use = CliRunner().invoke(commas_cli, ["model", "use", "fast"])
 
     assert use.exit_code == 0, use.output
     assert "model: fast -> fast-model" in use.output
     assert zeta_models.active_model_profile(session_dir=session_dir()) == "fast"
 
-    show = CliRunner().invoke(sigil_cli, ["model", "show"])
+    show = CliRunner().invoke(commas_cli, ["model", "show"])
     assert show.exit_code == 0, show.output
     assert "model: fast -> fast-model" in show.output
 
-    monkeypatch.setenv("SIGIL_SESSION_ID", "two")
-    other_session = CliRunner().invoke(sigil_cli, ["model", "show"])
+    monkeypatch.setenv("COMMAS_SESSION_ID", "two")
+    other_session = CliRunner().invoke(commas_cli, ["model", "show"])
     assert other_session.exit_code == 0, other_session.output
     assert "model: default ->" in other_session.output
 
-    monkeypatch.setenv("SIGIL_SESSION_ID", "one")
-    clear = CliRunner().invoke(sigil_cli, ["model", "clear"])
+    monkeypatch.setenv("COMMAS_SESSION_ID", "one")
+    clear = CliRunner().invoke(commas_cli, ["model", "clear"])
     assert clear.exit_code == 0, clear.output
     assert zeta_models.active_model_profile(session_dir=session_dir()) is None
 
@@ -838,7 +838,7 @@ url = "http://127.0.0.1:8081/v1/chat/completions"
 """,
     )
     monkeypatch.setenv("HOME", str(home))
-    monkeypatch.setenv("SIGIL_SESSION_ID", "resolution-session")
+    monkeypatch.setenv("COMMAS_SESSION_ID", "resolution-session")
     zeta_models.set_active_model_profile("fast")
 
     resolution = zeta_models.resolve_active_model()
@@ -889,7 +889,7 @@ default = true
 """,
     )
     monkeypatch.setenv("HOME", str(home))
-    monkeypatch.setenv("SIGIL_SESSION_ID", "default-profile-session")
+    monkeypatch.setenv("COMMAS_SESSION_ID", "default-profile-session")
 
     resolution = zeta_models.resolve_active_model()
     selection = zeta_models.active_model_selection()
@@ -919,7 +919,7 @@ default = true
 """,
     )
     monkeypatch.setenv("HOME", str(home))
-    monkeypatch.setenv("SIGIL_SESSION_ID", "selection-beats-default")
+    monkeypatch.setenv("COMMAS_SESSION_ID", "selection-beats-default")
     zeta_models.set_active_model_profile("fast")
 
     resolution = zeta_models.resolve_active_model()
@@ -986,7 +986,7 @@ def test_zeta_models_resolve_active_model_survives_vanished_profile(
     home = tmp_path / "home"
     write_models_config(home, "")
     monkeypatch.setenv("HOME", str(home))
-    monkeypatch.setenv("SIGIL_SESSION_ID", "stale-session")
+    monkeypatch.setenv("COMMAS_SESSION_ID", "stale-session")
     zeta_models.set_active_model_profile("gone")
 
     resolution = zeta_models.resolve_active_model()
@@ -996,17 +996,17 @@ def test_zeta_models_resolve_active_model_survives_vanished_profile(
     assert resolution.stale_profile == "gone"
 
 
-def test_sigil_model_cli_rejects_unknown_profile(
+def test_commas_model_cli_rejects_unknown_profile(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
     home = tmp_path / "home"
     write_models_config(home, "")
     monkeypatch.setenv("HOME", str(home))
-    monkeypatch.setenv("SIGIL_STATE_DIR", str(tmp_path / "state"))
-    monkeypatch.setenv("SIGIL_SESSION_ID", "model-test")
+    monkeypatch.setenv("COMMAS_STATE_DIR", str(tmp_path / "state"))
+    monkeypatch.setenv("COMMAS_SESSION_ID", "model-test")
 
-    result = CliRunner().invoke(sigil_cli, ["model", "use", "missing"])
+    result = CliRunner().invoke(commas_cli, ["model", "use", "missing"])
 
     assert result.exit_code != 0
     assert "unknown model profile: missing" in result.output
@@ -1453,17 +1453,17 @@ url = "http://127.0.0.1:8081/v1/chat/completions"
 """,
     )
     monkeypatch.setenv("HOME", str(home))
-    monkeypatch.setenv("SIGIL_STATE_DIR", str(tmp_path / "state"))
-    monkeypatch.delenv("SIGIL_SESSION_ID", raising=False)
+    monkeypatch.setenv("COMMAS_STATE_DIR", str(tmp_path / "state"))
+    monkeypatch.delenv("COMMAS_SESSION_ID", raising=False)
 
-    result = CliRunner().invoke(sigil_cli, ["model", "use", "fast"])
+    result = CliRunner().invoke(commas_cli, ["model", "use", "fast"])
 
     assert result.exit_code == 0, result.output
     assert "model: fast -> fast-model" in result.stdout
     assert 'applies to session "default"' in result.stderr
 
-    monkeypatch.setenv("SIGIL_SESSION_ID", "bound")
-    bound = CliRunner().invoke(sigil_cli, ["model", "use", "fast"])
+    monkeypatch.setenv("COMMAS_SESSION_ID", "bound")
+    bound = CliRunner().invoke(commas_cli, ["model", "use", "fast"])
     assert bound.exit_code == 0, bound.output
     assert "default" not in bound.stderr
 
@@ -1714,7 +1714,7 @@ model = "fast-model"
     )
     monkeypatch.setenv("HOME", str(home))
 
-    result = CliRunner().invoke(sigil_cli, ["model", "list"])
+    result = CliRunner().invoke(commas_cli, ["model", "list"])
 
     assert result.exit_code == 0, result.output
     lines = result.output.splitlines()
@@ -1743,10 +1743,10 @@ model = "fast-model"
 """,
     )
     monkeypatch.setenv("HOME", str(home))
-    monkeypatch.setenv("SIGIL_SESSION_ID", "list-active-session")
+    monkeypatch.setenv("COMMAS_SESSION_ID", "list-active-session")
     zeta_models.set_active_model_profile("fast", session_dir=session_dir())
 
-    result = CliRunner().invoke(sigil_cli, ["model", "list"])
+    result = CliRunner().invoke(commas_cli, ["model", "list"])
 
     assert result.exit_code == 0, result.output
     lines = result.output.splitlines()
@@ -1771,9 +1771,9 @@ default = true
 """,
     )
     monkeypatch.setenv("HOME", str(home))
-    monkeypatch.setenv("SIGIL_SESSION_ID", "show-source-session")
+    monkeypatch.setenv("COMMAS_SESSION_ID", "show-source-session")
 
-    result = CliRunner().invoke(sigil_cli, ["model", "show"])
+    result = CliRunner().invoke(commas_cli, ["model", "show"])
 
     assert result.exit_code == 0, result.output
     assert (

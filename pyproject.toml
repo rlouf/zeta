@@ -3,7 +3,7 @@ requires = ["setuptools>=69", "setuptools-scm>=8"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "sigil-sh"
+name = "commas"
 dynamic = ["version"]
 description = "Verb-first LLM interaction for the shell, with optional punctuation shortcuts."
 readme = "README.md"
@@ -50,7 +50,7 @@ Repository = "https://github.com/rlouf/sigil"
 Issues = "https://github.com/rlouf/sigil/issues"
 
 [project.scripts]
-sigil = "sigil.cli:main"
+commas = "commas.cli:main"
 zeta = "zetad.cli:main"
 
 [project.entry-points."zeta.event_connectors"]
@@ -64,14 +64,14 @@ include-package-data = true
 where = ["src"]
 
 [tool.setuptools.package-data]
-sigil = [
-  "bindings/sigil.zsh",
+commas = [
+  "bindings/commas.zsh",
 ]
 
 [tool.setuptools_scm]
 fallback_version = "0.1.0"
 local_scheme = "no-local-version"
-version_file = "src/sigil/_version.py"
+version_file = "src/commas/_version.py"
 
 [dependency-groups]
 dev = [
@@ -102,5 +102,5 @@ paths = ["src", "tests"]
 min_confidence = 80
 
 [tool.deptry]
-known_first_party = ["connectors", "sigil", "zeta", "zetad"]
+known_first_party = ["connectors", "commas", "zeta", "zetad"]
 package_module_name_map = { PyYAML = "yaml" }

@@ -8,9 +8,9 @@ import pytest
 from _patch import patch
 from click.testing import CliRunner
 
-from sigil.cli import cli, main
-from sigil.cli._base import EXIT_ERROR, EXIT_MODEL_UNAVAILABLE, EXIT_OK, EXIT_USAGE
-from sigil.cli.step import CONTINUE_OBJECTIVE
+from commas.cli import cli, main
+from commas.cli._base import EXIT_ERROR, EXIT_MODEL_UNAVAILABLE, EXIT_OK, EXIT_USAGE
+from commas.cli.step import CONTINUE_OBJECTIVE
 
 
 def editor_command(tmp_path: Path, body: str) -> str:
@@ -29,7 +29,7 @@ def recorded_asks(monkeypatch: pytest.MonkeyPatch) -> Iterator[list[str]]:
         calls.append(prompt)
         return EXIT_OK
 
-    with patch("sigil.cli.step.ask", side_effect=fake_ask):
+    with patch("commas.cli.step.ask", side_effect=fake_ask):
         yield calls
 
 
@@ -47,7 +47,7 @@ def test_ask_verb_accepts_piped_input() -> None:
         ask_calls.append((args, kwargs))
         return EXIT_OK
 
-    with patch("sigil.cli.step.ask", side_effect=fake_ask):
+    with patch("commas.cli.step.ask", side_effect=fake_ask):
         ask_result = CliRunner().invoke(
             cli,
             ["ask", "review"],
@@ -173,7 +173,7 @@ def test_step_without_objective_composes_in_editor(
         calls.append(objective)
         return EXIT_OK
 
-    with patch(f"sigil.cli.step.{workflow}", side_effect=fake_step):
+    with patch(f"commas.cli.step.{workflow}", side_effect=fake_step):
         result = CliRunner().invoke(cli, ["step", "--workflow", workflow])
 
     assert result.exit_code == EXIT_OK, result.output
@@ -202,7 +202,7 @@ def test_step_editor_aborts_when_saved_text_is_empty(
         calls.append(objective)
         return EXIT_OK
 
-    with patch("sigil.cli.step.propose", side_effect=fake_propose):
+    with patch("commas.cli.step.propose", side_effect=fake_propose):
         result = CliRunner().invoke(cli, ["step", "--workflow", "propose"])
 
     assert result.exit_code == EXIT_ERROR
@@ -233,8 +233,8 @@ def test_step_continue_skips_editor(
         return EXIT_OK
 
     with (
-        patch("sigil.cli.step.propose", side_effect=fake_propose),
-        patch("sigil.handoff.append_shell_result", return_value={}),
+        patch("commas.cli.step.propose", side_effect=fake_propose),
+        patch("commas.handoff.append_shell_result", return_value={}),
     ):
         result = CliRunner().invoke(
             cli, ["step", "--workflow", "propose", "--continue"]
@@ -248,20 +248,20 @@ def test_step_continue_skips_editor(
 def test_main_reports_model_runtime_error(capsys, monkeypatch) -> None:
     monkeypatch.setattr("sys.stdin", StringIO(""))
     with patch(
-        "sigil.cli.step.ask",
+        "commas.cli.step.ask",
         side_effect=RuntimeError("model request failed: connection reset"),
     ):
         code = main(["ask", "why"])
 
     captured = capsys.readouterr()
     assert code == EXIT_MODEL_UNAVAILABLE
-    assert "sigil: model request failed: connection reset" in captured.err
-    assert "sigil doctor" in captured.err
+    assert "commas: model request failed: connection reset" in captured.err
+    assert "commas doctor" in captured.err
 
 
 def test_patch_side_effect_raises_exception_classes() -> None:
-    from sigil.cli import step as step_module
+    from commas.cli import step as step_module
 
-    with patch("sigil.cli.step.ask", side_effect=RuntimeError):
+    with patch("commas.cli.step.ask", side_effect=RuntimeError):
         with pytest.raises(RuntimeError):
             step_module.ask("boom")

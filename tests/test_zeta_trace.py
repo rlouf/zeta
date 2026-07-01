@@ -20,10 +20,10 @@ import zeta.capabilities.execution as zeta_capability_execution
 import zeta.context.components as zeta_context
 import zeta.models.chat_completions as zeta_model
 import zeta.models.profiles as zeta_models
-from sigil.agent_io import last_event_time
-from sigil.cli import cli as sigil_cli
-from sigil.display.summarize import assistant_trace_summary
-from sigil.trace.replay import latest_model_answer
+from commas.agent_io import last_event_time
+from commas.cli import cli as commas_cli
+from commas.display.summarize import assistant_trace_summary
+from commas.trace.replay import latest_model_answer
 from zeta import models as zeta_models_api
 from zeta.context.builder import PromptBuilder
 from zeta.context.components import chat_messages
@@ -329,7 +329,7 @@ def test_zeta_trace_sqlite_reports_incompatible_substrate_schema(
         zeta_trace.SqliteObjectStore(path, session_id="current")
 
 
-def test_sigil_trace_reinit_store_recreates_unified_database(
+def test_commas_trace_reinit_store_recreates_unified_database(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -350,7 +350,7 @@ def test_sigil_trace_reinit_store_recreates_unified_database(
     )
     connection.close()
 
-    result = CliRunner().invoke(sigil_cli, ["trace", "reinit-store", "--yes"])
+    result = CliRunner().invoke(commas_cli, ["trace", "reinit-store", "--yes"])
 
     assert result.exit_code == 0
     assert f"reinitialized {path}" in result.output
@@ -372,8 +372,8 @@ def seed_session_store(session_id: str, text: str) -> str:
     return seed_trace_store(zeta_trace.zeta_sqlite_path(), text, session_id=session_id)
 
 
-def seed_sigil_session_store(session_id: str, text: str) -> str:
-    """Write one prompt object into a named Sigil session's trace store."""
+def seed_commas_session_store(session_id: str, text: str) -> str:
+    """Write one prompt object into a named Commas session's trace store."""
     return seed_trace_store(zeta_trace.zeta_sqlite_path(), text, session_id=session_id)
 
 
@@ -413,7 +413,7 @@ def test_zeta_sqlite_store_read_only_rejects_writes(tmp_path: Path) -> None:
 
 
 def test_zeta_sqlite_store_opens_other_sessions_read_only(monkeypatch) -> None:
-    monkeypatch.setenv("SIGIL_SESSION_ID", "current")
+    monkeypatch.setenv("COMMAS_SESSION_ID", "current")
     prompt_id = seed_session_store("other", "from the other session")
 
     store = zeta_trace.SqliteObjectStore(
@@ -437,44 +437,44 @@ def test_zeta_sqlite_store_opens_other_sessions_read_only(monkeypatch) -> None:
 
 
 def test_zeta_available_session_ids_lists_stores_sorted(monkeypatch) -> None:
-    monkeypatch.setenv("SIGIL_SESSION_ID", "current")
+    monkeypatch.setenv("COMMAS_SESSION_ID", "current")
     seed_session_store("beta", "b")
     seed_session_store("alpha", "a")
 
     assert zeta_trace.available_session_ids() == ["alpha", "beta"]
 
 
-def test_sigil_zeta_trace_cli_session_scope_reads_other_store(monkeypatch) -> None:
-    monkeypatch.setenv("SIGIL_SESSION_ID", "current")
-    prompt_id = seed_sigil_session_store("other", "scoped read")
+def test_commas_zeta_trace_cli_session_scope_reads_other_store(monkeypatch) -> None:
+    monkeypatch.setenv("COMMAS_SESSION_ID", "current")
+    prompt_id = seed_commas_session_store("other", "scoped read")
 
     result = CliRunner().invoke(
-        sigil_cli, ["trace", "--session", "other", "show", "--json", prompt_id]
+        commas_cli, ["trace", "--session", "other", "show", "--json", prompt_id]
     )
 
     assert result.exit_code == 0
     assert json.loads(result.output)["id"] == prompt_id
 
 
-def test_sigil_zeta_trace_cli_unknown_session_lists_available(monkeypatch) -> None:
-    monkeypatch.setenv("SIGIL_SESSION_ID", "current")
-    seed_sigil_session_store("known", "seed")
+def test_commas_zeta_trace_cli_unknown_session_lists_available(monkeypatch) -> None:
+    monkeypatch.setenv("COMMAS_SESSION_ID", "current")
+    seed_commas_session_store("known", "seed")
 
-    result = CliRunner().invoke(sigil_cli, ["trace", "--session", "missing", "log"])
+    result = CliRunner().invoke(commas_cli, ["trace", "--session", "missing", "log"])
 
     assert result.exit_code != 0
     assert "missing" in result.output
     assert "known" in result.output
 
 
-def test_sigil_zeta_trace_cli_log_all_sessions_prefixes_session_ids(
+def test_commas_zeta_trace_cli_log_all_sessions_prefixes_session_ids(
     monkeypatch,
 ) -> None:
-    monkeypatch.setenv("SIGIL_SESSION_ID", "current")
-    seed_sigil_session_store("alpha", "alpha prompt")
-    seed_sigil_session_store("beta", "beta prompt")
+    monkeypatch.setenv("COMMAS_SESSION_ID", "current")
+    seed_commas_session_store("alpha", "alpha prompt")
+    seed_commas_session_store("beta", "beta prompt")
 
-    result = CliRunner().invoke(sigil_cli, ["trace", "log", "--all-sessions"])
+    result = CliRunner().invoke(commas_cli, ["trace", "log", "--all-sessions"])
 
     assert result.exit_code == 0
     lines = result.output.splitlines()
@@ -539,12 +539,12 @@ def test_zeta_trace_in_memory_search_matches_case_insensitively() -> None:
     assert [hit_id for hit_id, _ in hits] == [matching]
 
 
-def test_sigil_zeta_trace_cli_grep_lists_matches(monkeypatch) -> None:
-    monkeypatch.setenv("SIGIL_SESSION_ID", "current")
-    prompt_id = seed_sigil_session_store("current", "the missing deploy key")
-    seed_sigil_session_store("current", "unrelated")
+def test_commas_zeta_trace_cli_grep_lists_matches(monkeypatch) -> None:
+    monkeypatch.setenv("COMMAS_SESSION_ID", "current")
+    prompt_id = seed_commas_session_store("current", "the missing deploy key")
+    seed_commas_session_store("current", "unrelated")
 
-    result = CliRunner().invoke(sigil_cli, ["trace", "grep", "deploy key"])
+    result = CliRunner().invoke(commas_cli, ["trace", "grep", "deploy key"])
 
     assert result.exit_code == 0
     short_id = prompt_id.split(":", 1)[1][:8]
@@ -552,15 +552,15 @@ def test_sigil_zeta_trace_cli_grep_lists_matches(monkeypatch) -> None:
     assert len(result.output.strip().splitlines()) == 1
 
 
-def test_sigil_zeta_trace_cli_grep_all_sessions_names_the_session(
+def test_commas_zeta_trace_cli_grep_all_sessions_names_the_session(
     monkeypatch,
 ) -> None:
-    monkeypatch.setenv("SIGIL_SESSION_ID", "current")
-    seed_sigil_session_store("alpha", "asked about the rollback")
-    seed_sigil_session_store("beta", "something else")
+    monkeypatch.setenv("COMMAS_SESSION_ID", "current")
+    seed_commas_session_store("alpha", "asked about the rollback")
+    seed_commas_session_store("beta", "something else")
 
     result = CliRunner().invoke(
-        sigil_cli, ["trace", "grep", "rollback", "--all-sessions"]
+        commas_cli, ["trace", "grep", "rollback", "--all-sessions"]
     )
 
     assert result.exit_code == 0
@@ -568,17 +568,17 @@ def test_sigil_zeta_trace_cli_grep_all_sessions_names_the_session(
     assert lines and all(line.startswith("alpha") for line in lines)
 
 
-def test_sigil_zeta_trace_cli_grep_reports_no_matches(monkeypatch) -> None:
-    monkeypatch.setenv("SIGIL_SESSION_ID", "current")
-    seed_sigil_session_store("current", "recorded")
+def test_commas_zeta_trace_cli_grep_reports_no_matches(monkeypatch) -> None:
+    monkeypatch.setenv("COMMAS_SESSION_ID", "current")
+    seed_commas_session_store("current", "recorded")
 
-    result = CliRunner().invoke(sigil_cli, ["trace", "grep", "absent-token"])
+    result = CliRunner().invoke(commas_cli, ["trace", "grep", "absent-token"])
 
     assert result.exit_code == 0
     assert "no trace objects match" in result.output
 
 
-def test_sigil_zeta_trace_cli_smoke_with_in_memory_store(monkeypatch) -> None:
+def test_commas_zeta_trace_cli_smoke_with_in_memory_store(monkeypatch) -> None:
     store = zeta_trace.InMemoryStore()
     parent_id = store.put_object(
         zeta_trace.Object(kind="context", schema="v1", data={"text": "parent"})
@@ -599,13 +599,13 @@ def test_sigil_zeta_trace_cli_smoke_with_in_memory_store(monkeypatch) -> None:
         )
     )
     store.move_ref("prompt/current", None, prompt_id)
-    monkeypatch.setattr("sigil.cli.trace.current_store", lambda: store)
+    monkeypatch.setattr("commas.cli.trace.current_store", lambda: store)
 
     runner = CliRunner()
-    show = runner.invoke(sigil_cli, ["trace", "show", "--json", prompt_id])
-    closure = runner.invoke(sigil_cli, ["trace", "closure", prompt_id])
-    refs = runner.invoke(sigil_cli, ["trace", "refs"])
-    prompts = runner.invoke(sigil_cli, ["trace", "prompts"])
+    show = runner.invoke(commas_cli, ["trace", "show", "--json", prompt_id])
+    closure = runner.invoke(commas_cli, ["trace", "closure", prompt_id])
+    refs = runner.invoke(commas_cli, ["trace", "refs"])
+    prompts = runner.invoke(commas_cli, ["trace", "prompts"])
 
     assert show.exit_code == 0
     assert json.loads(show.output)["derivations"][0]["producer"] == "unit:test"
@@ -617,7 +617,7 @@ def test_sigil_zeta_trace_cli_smoke_with_in_memory_store(monkeypatch) -> None:
     assert json.loads(prompts.output)["prompts"][0]["id"] == prompt_id
 
 
-def test_sigil_zeta_trace_cli_smoke_with_sqlite_store(
+def test_commas_zeta_trace_cli_smoke_with_sqlite_store(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -628,9 +628,9 @@ def test_sigil_zeta_trace_cli_smoke_with_sqlite_store(
     store.record_derivation(
         zeta_trace.Derivation(producer="unit:test", output_id=prompt_id)
     )
-    monkeypatch.setattr("sigil.cli.trace.current_store", lambda: store)
+    monkeypatch.setattr("commas.cli.trace.current_store", lambda: store)
 
-    result = CliRunner().invoke(sigil_cli, ["trace", "prompts"])
+    result = CliRunner().invoke(commas_cli, ["trace", "prompts"])
 
     assert result.exit_code == 0
     data = json.loads(result.output)
@@ -685,7 +685,7 @@ def test_zeta_prompt_components_keep_only_the_timeline_tail() -> None:
 
 
 def test_zeta_timeline_record_and_project(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setenv("SIGIL_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("COMMAS_STATE_DIR", str(tmp_path))
     monkeypatch.setenv("ZETA_SESSION_ID", "zeta-test")
     runtime_context = zeta_runtime_context()
 
@@ -708,7 +708,7 @@ def test_zeta_timeline_tool_result_is_durable(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    monkeypatch.setenv("SIGIL_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("COMMAS_STATE_DIR", str(tmp_path))
     monkeypatch.setenv("ZETA_SESSION_ID", "zeta-test")
     runtime_context = zeta_runtime_context()
 
@@ -738,7 +738,7 @@ def test_zeta_timeline_tool_call_is_caused_by_assistant_event(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    monkeypatch.setenv("SIGIL_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("COMMAS_STATE_DIR", str(tmp_path))
     monkeypatch.setenv("ZETA_SESSION_ID", "zeta-test")
     runtime_context = zeta_runtime_context()
 
@@ -783,7 +783,7 @@ def test_zeta_model_called_keeps_trace_links_out_of_payload(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    monkeypatch.setenv("SIGIL_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("COMMAS_STATE_DIR", str(tmp_path))
     monkeypatch.setenv("ZETA_SESSION_ID", "zeta-test")
     runtime_context = zeta_runtime_context()
     store = runtime_context.trace_store
@@ -816,7 +816,7 @@ def test_zeta_tool_called_keeps_trace_links_out_of_payload(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    monkeypatch.setenv("SIGIL_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("COMMAS_STATE_DIR", str(tmp_path))
     monkeypatch.setenv("ZETA_SESSION_ID", "zeta-test")
 
     record_zeta_event(
@@ -901,7 +901,7 @@ def test_zeta_user_message_usage_and_abort_are_durable(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    monkeypatch.setenv("SIGIL_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("COMMAS_STATE_DIR", str(tmp_path))
     monkeypatch.setenv("ZETA_SESSION_ID", "zeta-test")
 
     record_zeta_event({"type": "user_message", "content": "hello"})
@@ -925,7 +925,7 @@ def test_zeta_current_timeline_uses_durable_log_without_trace_head(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    monkeypatch.setenv("SIGIL_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("COMMAS_STATE_DIR", str(tmp_path))
     monkeypatch.setenv("ZETA_SESSION_ID", "zeta-test")
     runtime_context = zeta_runtime_context()
 
@@ -943,7 +943,7 @@ def test_zeta_timeline_projects_fresh_session_from_durable_log(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    monkeypatch.setenv("SIGIL_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("COMMAS_STATE_DIR", str(tmp_path))
     monkeypatch.setenv("ZETA_SESSION_ID", "zeta-test")
     runtime_context = zeta_runtime_context()
 
@@ -1013,7 +1013,7 @@ def test_zeta_record_event_stores_prompt_link_not_components(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    monkeypatch.setenv("SIGIL_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("COMMAS_STATE_DIR", str(tmp_path))
     monkeypatch.setenv("ZETA_SESSION_ID", "zeta-test")
     runtime_context = zeta_runtime_context()
     store = runtime_context.trace_store
@@ -1055,7 +1055,7 @@ def test_zeta_timeline_rehydrates_assistant_content_from_the_graph(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    monkeypatch.setenv("SIGIL_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("COMMAS_STATE_DIR", str(tmp_path))
     monkeypatch.setenv("ZETA_SESSION_ID", "zeta-test")
     runtime_context = zeta_runtime_context()
     store = runtime_context.trace_store
@@ -1112,7 +1112,7 @@ def test_zeta_timeline_rehydrates_assistant_reasoning_from_the_graph(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    monkeypatch.setenv("SIGIL_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("COMMAS_STATE_DIR", str(tmp_path))
     monkeypatch.setenv("ZETA_SESSION_ID", "zeta-test")
     runtime_context = zeta_runtime_context()
     store = runtime_context.trace_store
@@ -1166,7 +1166,7 @@ def test_zeta_timeline_keeps_untraced_assistant_content_inline(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    monkeypatch.setenv("SIGIL_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("COMMAS_STATE_DIR", str(tmp_path))
     monkeypatch.setenv("ZETA_SESSION_ID", "zeta-test")
     runtime_context = zeta_runtime_context()
 
@@ -1184,7 +1184,7 @@ def test_zeta_timeline_last_event_time_tracks_the_newest_event(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    monkeypatch.setenv("SIGIL_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("COMMAS_STATE_DIR", str(tmp_path))
     monkeypatch.setenv("ZETA_SESSION_ID", "zeta-test")
     runtime_context = zeta_runtime_context()
 
@@ -1677,7 +1677,7 @@ def prompt_diff_store() -> tuple[zeta_trace.InMemoryStore, dict[str, str]]:
     return store, ids
 
 
-def test_sigil_trace_helpers_read_provider_neutral_model_output() -> None:
+def test_commas_trace_helpers_read_provider_neutral_model_output() -> None:
     store = zeta_trace.InMemoryStore()
     prompt_id = store.put_object(
         zeta_trace.Object(
@@ -1725,12 +1725,12 @@ def test_sigil_trace_helpers_read_provider_neutral_model_output() -> None:
     assert latest_model_answer(store, prompt_id) == (answer_id, "neutral answer")
 
 
-def test_sigil_zeta_trace_diff_reports_component_changes(monkeypatch) -> None:
+def test_commas_zeta_trace_diff_reports_component_changes(monkeypatch) -> None:
     store, ids = prompt_diff_store()
-    monkeypatch.setattr("sigil.cli.trace.current_store", lambda: store)
+    monkeypatch.setattr("commas.cli.trace.current_store", lambda: store)
 
     result = CliRunner().invoke(
-        sigil_cli, ["trace", "diff", ids["prompt_a"], ids["prompt_b"]]
+        commas_cli, ["trace", "diff", ids["prompt_a"], ids["prompt_b"]]
     )
 
     assert result.exit_code == 0
@@ -1750,12 +1750,12 @@ def test_sigil_zeta_trace_diff_reports_component_changes(monkeypatch) -> None:
     assert zeta_trace_short(ids["system"]) not in output
 
 
-def test_sigil_zeta_trace_diff_stat_keeps_one_line_per_change(monkeypatch) -> None:
+def test_commas_zeta_trace_diff_stat_keeps_one_line_per_change(monkeypatch) -> None:
     store, ids = prompt_diff_store()
-    monkeypatch.setattr("sigil.cli.trace.current_store", lambda: store)
+    monkeypatch.setattr("commas.cli.trace.current_store", lambda: store)
 
     result = CliRunner().invoke(
-        sigil_cli,
+        commas_cli,
         ["trace", "diff", "--stat", ids["prompt_a"], ids["prompt_b"]],
     )
 
@@ -1765,21 +1765,21 @@ def test_sigil_zeta_trace_diff_stat_keeps_one_line_per_change(monkeypatch) -> No
     assert "+new objective line" not in result.output
 
 
-def test_sigil_zeta_trace_diff_requires_prompt_objects(monkeypatch) -> None:
+def test_commas_zeta_trace_diff_requires_prompt_objects(monkeypatch) -> None:
     store, ids = prompt_diff_store()
-    monkeypatch.setattr("sigil.cli.trace.current_store", lambda: store)
+    monkeypatch.setattr("commas.cli.trace.current_store", lambda: store)
 
     result = CliRunner().invoke(
-        sigil_cli, ["trace", "diff", ids["prompt_a"], ids["system"]]
+        commas_cli, ["trace", "diff", ids["prompt_a"], ids["system"]]
     )
 
     assert result.exit_code != 0
     assert "not a prompt" in result.output
 
 
-def test_sigil_zeta_trace_replay_records_a_traced_answer(monkeypatch) -> None:
+def test_commas_zeta_trace_replay_records_a_traced_answer(monkeypatch) -> None:
     store, component_id, prompt_id, answer_id = narrative_log_store()
-    monkeypatch.setattr("sigil.cli.trace.current_store", lambda: store)
+    monkeypatch.setattr("commas.cli.trace.current_store", lambda: store)
     captured: dict[str, object] = {}
 
     def fake_chat(messages, **kwargs):
@@ -1787,9 +1787,9 @@ def test_sigil_zeta_trace_replay_records_a_traced_answer(monkeypatch) -> None:
         captured.update(kwargs)
         return {"role": "assistant", "content": "a fresh answer"}
 
-    monkeypatch.setattr("sigil.cli.trace.chat_completion_messages", fake_chat)
+    monkeypatch.setattr("commas.cli.trace.chat_completion_messages", fake_chat)
 
-    result = CliRunner().invoke(sigil_cli, ["trace", "replay", prompt_id])
+    result = CliRunner().invoke(commas_cli, ["trace", "replay", prompt_id])
 
     assert result.exit_code == 0
     assert "the test imports a stale fixture" in result.output
@@ -1811,26 +1811,26 @@ def test_sigil_zeta_trace_replay_records_a_traced_answer(monkeypatch) -> None:
     assert replays[0].output_id != answer_id
 
 
-def test_sigil_zeta_trace_replay_diffs_old_and_new(monkeypatch) -> None:
+def test_commas_zeta_trace_replay_diffs_old_and_new(monkeypatch) -> None:
     store, _, prompt_id, _ = narrative_log_store()
-    monkeypatch.setattr("sigil.cli.trace.current_store", lambda: store)
+    monkeypatch.setattr("commas.cli.trace.current_store", lambda: store)
     monkeypatch.setattr(
-        "sigil.cli.trace.chat_completion_messages",
+        "commas.cli.trace.chat_completion_messages",
         lambda messages, **kwargs: {"role": "assistant", "content": "a fresh answer"},
     )
 
-    result = CliRunner().invoke(sigil_cli, ["trace", "replay", "--diff", prompt_id])
+    result = CliRunner().invoke(commas_cli, ["trace", "replay", "--diff", prompt_id])
 
     assert result.exit_code == 0
     assert "-the test imports a stale fixture" in result.output
     assert "+a fresh answer" in result.output
 
 
-def test_sigil_zeta_trace_replay_renders_tool_call_answers(monkeypatch) -> None:
+def test_commas_zeta_trace_replay_renders_tool_call_answers(monkeypatch) -> None:
     store, _, prompt_id, _ = narrative_log_store()
-    monkeypatch.setattr("sigil.cli.trace.current_store", lambda: store)
+    monkeypatch.setattr("commas.cli.trace.current_store", lambda: store)
     monkeypatch.setattr(
-        "sigil.cli.trace.chat_completion_messages",
+        "commas.cli.trace.chat_completion_messages",
         lambda messages, **kwargs: {
             "role": "assistant",
             "content": "",
@@ -1844,24 +1844,24 @@ def test_sigil_zeta_trace_replay_renders_tool_call_answers(monkeypatch) -> None:
         },
     )
 
-    result = CliRunner().invoke(sigil_cli, ["trace", "replay", prompt_id])
+    result = CliRunner().invoke(commas_cli, ["trace", "replay", prompt_id])
 
     assert result.exit_code == 0
     assert "→ read" in result.output
 
 
-def test_sigil_zeta_trace_replay_honors_a_named_profile(monkeypatch) -> None:
+def test_commas_zeta_trace_replay_honors_a_named_profile(monkeypatch) -> None:
     store, _, prompt_id, _ = narrative_log_store()
-    monkeypatch.setattr("sigil.cli.trace.current_store", lambda: store)
+    monkeypatch.setattr("commas.cli.trace.current_store", lambda: store)
     captured: dict[str, object] = {}
 
     def fake_chat(messages, **kwargs):
         captured.update(kwargs)
         return {"role": "assistant", "content": "a fresh answer"}
 
-    monkeypatch.setattr("sigil.cli.trace.chat_completion_messages", fake_chat)
+    monkeypatch.setattr("commas.cli.trace.chat_completion_messages", fake_chat)
     monkeypatch.setattr(
-        "sigil.trace.replay.resolve_model_profile",
+        "commas.trace.replay.resolve_model_profile",
         lambda name: (
             zeta_models.ModelSelection(
                 profile=name,
@@ -1874,10 +1874,10 @@ def test_sigil_zeta_trace_replay_honors_a_named_profile(monkeypatch) -> None:
     )
 
     ok = CliRunner().invoke(
-        sigil_cli, ["trace", "replay", "--model", "fast", prompt_id]
+        commas_cli, ["trace", "replay", "--model", "fast", prompt_id]
     )
     unknown = CliRunner().invoke(
-        sigil_cli, ["trace", "replay", "--model", "nope", prompt_id]
+        commas_cli, ["trace", "replay", "--model", "nope", prompt_id]
     )
 
     assert ok.exit_code == 0
@@ -1887,11 +1887,11 @@ def test_sigil_zeta_trace_replay_honors_a_named_profile(monkeypatch) -> None:
     assert "unknown model profile" in unknown.output
 
 
-def test_sigil_zeta_trace_log_defaults_to_the_narrative_kinds(monkeypatch) -> None:
+def test_commas_zeta_trace_log_defaults_to_the_narrative_kinds(monkeypatch) -> None:
     store, component_id, prompt_id, answer_id = narrative_log_store()
-    monkeypatch.setattr("sigil.cli.trace.current_store", lambda: store)
+    monkeypatch.setattr("commas.cli.trace.current_store", lambda: store)
 
-    result = CliRunner().invoke(sigil_cli, ["trace", "log"])
+    result = CliRunner().invoke(commas_cli, ["trace", "log"])
 
     assert result.exit_code == 0
     lines = result.output.splitlines()
@@ -1904,16 +1904,16 @@ def test_sigil_zeta_trace_log_defaults_to_the_narrative_kinds(monkeypatch) -> No
     assert zeta_trace_short(component_id) not in result.output
 
 
-def test_sigil_zeta_trace_log_widens_with_kind_and_all(monkeypatch) -> None:
+def test_commas_zeta_trace_log_widens_with_kind_and_all(monkeypatch) -> None:
     store, component_id, _, answer_id = narrative_log_store()
-    monkeypatch.setattr("sigil.cli.trace.current_store", lambda: store)
+    monkeypatch.setattr("commas.cli.trace.current_store", lambda: store)
     runner = CliRunner()
 
     only_components = runner.invoke(
-        sigil_cli, ["trace", "log", "--kind", "user_message"]
+        commas_cli, ["trace", "log", "--kind", "user_message"]
     )
-    everything = runner.invoke(sigil_cli, ["trace", "log", "--all"])
-    limited = runner.invoke(sigil_cli, ["trace", "log", "--all", "--limit", "1"])
+    everything = runner.invoke(commas_cli, ["trace", "log", "--all"])
+    limited = runner.invoke(commas_cli, ["trace", "log", "--all", "--limit", "1"])
 
     assert only_components.exit_code == 0
     assert only_components.output.splitlines() == [
@@ -1928,7 +1928,7 @@ def test_sigil_zeta_trace_log_widens_with_kind_and_all(monkeypatch) -> None:
     assert limited.output.startswith(zeta_trace_short(answer_id))
 
 
-def test_sigil_zeta_trace_tools_json_joins_calls_and_results(monkeypatch) -> None:
+def test_commas_zeta_trace_tools_json_joins_calls_and_results(monkeypatch) -> None:
     store = zeta_trace.InMemoryStore()
     ok_call_id = store.put_object(
         zeta_trace.Object(
@@ -1979,9 +1979,9 @@ def test_sigil_zeta_trace_tools_json_joins_calls_and_results(monkeypatch) -> Non
             links=(failed_call_id,),
         )
     )
-    monkeypatch.setattr("sigil.cli.trace.current_store", lambda: store)
+    monkeypatch.setattr("commas.cli.trace.current_store", lambda: store)
 
-    result = CliRunner().invoke(sigil_cli, ["trace", "tools", "--json"])
+    result = CliRunner().invoke(commas_cli, ["trace", "tools", "--json"])
 
     assert result.exit_code == 0
     rows = json.loads(result.output)
@@ -1996,7 +1996,7 @@ def test_sigil_zeta_trace_tools_json_joins_calls_and_results(monkeypatch) -> Non
     assert rows[1]["input"] == {"path": "README.md"}
 
 
-def test_sigil_zeta_trace_tools_failed_filters_json(monkeypatch) -> None:
+def test_commas_zeta_trace_tools_failed_filters_json(monkeypatch) -> None:
     store = zeta_trace.InMemoryStore()
     store.put_object(
         zeta_trace.Object(
@@ -2034,9 +2034,9 @@ def test_sigil_zeta_trace_tools_failed_filters_json(monkeypatch) -> None:
             links=(failed_call_id,),
         )
     )
-    monkeypatch.setattr("sigil.cli.trace.current_store", lambda: store)
+    monkeypatch.setattr("commas.cli.trace.current_store", lambda: store)
 
-    result = CliRunner().invoke(sigil_cli, ["trace", "tools", "--failed", "--json"])
+    result = CliRunner().invoke(commas_cli, ["trace", "tools", "--failed", "--json"])
 
     assert result.exit_code == 0
     rows = json.loads(result.output)
@@ -2045,7 +2045,7 @@ def test_sigil_zeta_trace_tools_failed_filters_json(monkeypatch) -> None:
     assert rows[0]["ok"] is False
 
 
-def test_sigil_zeta_trace_tools_failed_json_recovers_content_error(
+def test_commas_zeta_trace_tools_failed_json_recovers_content_error(
     monkeypatch,
 ) -> None:
     store = zeta_trace.InMemoryStore()
@@ -2077,9 +2077,9 @@ def test_sigil_zeta_trace_tools_failed_json_recovers_content_error(
             links=(call_id,),
         )
     )
-    monkeypatch.setattr("sigil.cli.trace.current_store", lambda: store)
+    monkeypatch.setattr("commas.cli.trace.current_store", lambda: store)
 
-    result = CliRunner().invoke(sigil_cli, ["trace", "tools", "--failed", "--json"])
+    result = CliRunner().invoke(commas_cli, ["trace", "tools", "--failed", "--json"])
 
     assert result.exit_code == 0
     rows = json.loads(result.output)
@@ -2089,7 +2089,7 @@ def test_sigil_zeta_trace_tools_failed_json_recovers_content_error(
     )
 
 
-def test_sigil_zeta_trace_tools_failed_json_recovers_bash_error(
+def test_commas_zeta_trace_tools_failed_json_recovers_bash_error(
     monkeypatch,
 ) -> None:
     store = zeta_trace.InMemoryStore()
@@ -2121,9 +2121,9 @@ def test_sigil_zeta_trace_tools_failed_json_recovers_bash_error(
             links=(call_id,),
         )
     )
-    monkeypatch.setattr("sigil.cli.trace.current_store", lambda: store)
+    monkeypatch.setattr("commas.cli.trace.current_store", lambda: store)
 
-    result = CliRunner().invoke(sigil_cli, ["trace", "tools", "--failed", "--json"])
+    result = CliRunner().invoke(commas_cli, ["trace", "tools", "--failed", "--json"])
 
     assert result.exit_code == 0
     rows = json.loads(result.output)
@@ -2133,7 +2133,7 @@ def test_sigil_zeta_trace_tools_failed_json_recovers_bash_error(
     }
 
 
-def test_sigil_zeta_trace_tools_failed_plain_output_uses_uniform_error(
+def test_commas_zeta_trace_tools_failed_plain_output_uses_uniform_error(
     monkeypatch,
 ) -> None:
     store = zeta_trace.InMemoryStore()
@@ -2165,16 +2165,16 @@ def test_sigil_zeta_trace_tools_failed_plain_output_uses_uniform_error(
             links=(call_id,),
         )
     )
-    monkeypatch.setattr("sigil.cli.trace.current_store", lambda: store)
+    monkeypatch.setattr("commas.cli.trace.current_store", lambda: store)
 
-    result = CliRunner().invoke(sigil_cli, ["trace", "tools", "--failed"])
+    result = CliRunner().invoke(commas_cli, ["trace", "tools", "--failed"])
 
     assert result.exit_code == 0
     assert "failed · bash-failed: ValueError: bad input" in result.output
     assert "$ run something" not in result.output
 
 
-def test_sigil_zeta_trace_tools_successful_filters_json(monkeypatch) -> None:
+def test_commas_zeta_trace_tools_successful_filters_json(monkeypatch) -> None:
     store = zeta_trace.InMemoryStore()
     store.put_object(
         zeta_trace.Object(
@@ -2208,9 +2208,11 @@ def test_sigil_zeta_trace_tools_successful_filters_json(monkeypatch) -> None:
             },
         )
     )
-    monkeypatch.setattr("sigil.cli.trace.current_store", lambda: store)
+    monkeypatch.setattr("commas.cli.trace.current_store", lambda: store)
 
-    result = CliRunner().invoke(sigil_cli, ["trace", "tools", "--successful", "--json"])
+    result = CliRunner().invoke(
+        commas_cli, ["trace", "tools", "--successful", "--json"]
+    )
 
     assert result.exit_code == 0
     rows = json.loads(result.output)
@@ -2219,16 +2221,16 @@ def test_sigil_zeta_trace_tools_successful_filters_json(monkeypatch) -> None:
     assert rows[0]["ok"] is True
 
 
-def test_sigil_zeta_trace_tools_status_filters_conflict() -> None:
+def test_commas_zeta_trace_tools_status_filters_conflict() -> None:
     result = CliRunner().invoke(
-        sigil_cli, ["trace", "tools", "--failed", "--successful"]
+        commas_cli, ["trace", "tools", "--failed", "--successful"]
     )
 
     assert result.exit_code != 0
     assert "--failed conflicts with --successful" in result.output
 
 
-def test_sigil_zeta_trace_tools_all_sessions_sorts_by_trace_time(
+def test_commas_zeta_trace_tools_all_sessions_sorts_by_trace_time(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
@@ -2269,9 +2271,11 @@ def test_sigil_zeta_trace_tools_all_sessions_sorts_by_trace_time(
     seed_tool_result("old", "call-old", 10.0)
     seed_tool_result("new", "call-new", 20.0)
 
-    monkeypatch.setattr("sigil.cli.trace.available_session_ids", lambda: ["old", "new"])
     monkeypatch.setattr(
-        "sigil.cli.trace.open_session_store",
+        "commas.cli.trace.available_session_ids", lambda: ["old", "new"]
+    )
+    monkeypatch.setattr(
+        "commas.cli.trace.open_session_store",
         lambda session: zeta_trace.SqliteObjectStore(
             tmp_path / "zeta.sqlite3",
             session_id=session,
@@ -2280,7 +2284,7 @@ def test_sigil_zeta_trace_tools_all_sessions_sorts_by_trace_time(
     )
 
     result = CliRunner().invoke(
-        sigil_cli,
+        commas_cli,
         ["trace", "tools", "--all-sessions", "--json", "--limit", "2"],
     )
 
@@ -2293,11 +2297,11 @@ def zeta_trace_short(object_id: str) -> str:
     return object_id.split(":", 1)[-1][:8]
 
 
-def test_sigil_zeta_trace_tree_walks_producers_by_default(monkeypatch) -> None:
+def test_commas_zeta_trace_tree_walks_producers_by_default(monkeypatch) -> None:
     store, component_id, prompt_id, answer_id = narrative_log_store()
-    monkeypatch.setattr("sigil.cli.trace.current_store", lambda: store)
+    monkeypatch.setattr("commas.cli.trace.current_store", lambda: store)
 
-    result = CliRunner().invoke(sigil_cli, ["trace", "tree", answer_id])
+    result = CliRunner().invoke(commas_cli, ["trace", "tree", answer_id])
 
     assert result.exit_code == 0
     lines = result.output.splitlines()
@@ -2309,11 +2313,11 @@ def test_sigil_zeta_trace_tree_walks_producers_by_default(monkeypatch) -> None:
     assert "why did it fail?" in result.output
 
 
-def test_sigil_zeta_trace_tree_walks_consumers_with_down(monkeypatch) -> None:
+def test_commas_zeta_trace_tree_walks_consumers_with_down(monkeypatch) -> None:
     store, component_id, prompt_id, answer_id = narrative_log_store()
-    monkeypatch.setattr("sigil.cli.trace.current_store", lambda: store)
+    monkeypatch.setattr("commas.cli.trace.current_store", lambda: store)
 
-    result = CliRunner().invoke(sigil_cli, ["trace", "tree", "--down", component_id])
+    result = CliRunner().invoke(commas_cli, ["trace", "tree", "--down", component_id])
 
     assert result.exit_code == 0
     lines = result.output.splitlines()
@@ -2324,22 +2328,24 @@ def test_sigil_zeta_trace_tree_walks_consumers_with_down(monkeypatch) -> None:
     assert zeta_trace_short(answer_id) in result.output
 
 
-def test_sigil_zeta_trace_tree_respects_depth(monkeypatch) -> None:
+def test_commas_zeta_trace_tree_respects_depth(monkeypatch) -> None:
     store, component_id, prompt_id, answer_id = narrative_log_store()
-    monkeypatch.setattr("sigil.cli.trace.current_store", lambda: store)
+    monkeypatch.setattr("commas.cli.trace.current_store", lambda: store)
 
-    result = CliRunner().invoke(sigil_cli, ["trace", "tree", "--depth", "1", answer_id])
+    result = CliRunner().invoke(
+        commas_cli, ["trace", "tree", "--depth", "1", answer_id]
+    )
 
     assert result.exit_code == 0
     assert zeta_trace_short(prompt_id) in result.output
     assert zeta_trace_short(component_id) not in result.output
 
 
-def test_sigil_zeta_trace_show_renders_humans_first(monkeypatch) -> None:
+def test_commas_zeta_trace_show_renders_humans_first(monkeypatch) -> None:
     store, component_id, prompt_id, answer_id = narrative_log_store()
-    monkeypatch.setattr("sigil.cli.trace.current_store", lambda: store)
+    monkeypatch.setattr("commas.cli.trace.current_store", lambda: store)
 
-    result = CliRunner().invoke(sigil_cli, ["trace", "show", prompt_id])
+    result = CliRunner().invoke(commas_cli, ["trace", "show", prompt_id])
 
     assert result.exit_code == 0
     lines = result.output.splitlines()
@@ -2357,11 +2363,11 @@ def test_sigil_zeta_trace_show_renders_humans_first(monkeypatch) -> None:
     assert zeta_trace_short(answer_id) in result.output
 
 
-def test_sigil_zeta_trace_show_renders_message_bodies(monkeypatch) -> None:
+def test_commas_zeta_trace_show_renders_message_bodies(monkeypatch) -> None:
     store, _, _, answer_id = narrative_log_store()
-    monkeypatch.setattr("sigil.cli.trace.current_store", lambda: store)
+    monkeypatch.setattr("commas.cli.trace.current_store", lambda: store)
 
-    result = CliRunner().invoke(sigil_cli, ["trace", "show", answer_id])
+    result = CliRunner().invoke(commas_cli, ["trace", "show", answer_id])
 
     assert result.exit_code == 0
     assert "the test imports a stale fixture" in result.output
@@ -2369,19 +2375,19 @@ def test_sigil_zeta_trace_show_renders_message_bodies(monkeypatch) -> None:
     assert "consumed by" not in result.output
 
 
-def test_sigil_zeta_trace_cli_resolves_refs_and_prefixes(monkeypatch) -> None:
+def test_commas_zeta_trace_cli_resolves_refs_and_prefixes(monkeypatch) -> None:
     store = zeta_trace.InMemoryStore()
     prompt_id = store.put_object(
         zeta_trace.Object(kind="prompt", schema="zeta.prompt.v1", data={"n": 1})
     )
     store.move_ref("prompt/current", None, prompt_id)
     digest_prefix = prompt_id.removeprefix("sha256:")[:8]
-    monkeypatch.setattr("sigil.cli.trace.current_store", lambda: store)
+    monkeypatch.setattr("commas.cli.trace.current_store", lambda: store)
 
     runner = CliRunner()
-    by_ref = runner.invoke(sigil_cli, ["trace", "show", "--json", "prompt/current"])
-    by_prefix = runner.invoke(sigil_cli, ["trace", "show", "--json", digest_prefix])
-    closure = runner.invoke(sigil_cli, ["trace", "closure", digest_prefix])
+    by_ref = runner.invoke(commas_cli, ["trace", "show", "--json", "prompt/current"])
+    by_prefix = runner.invoke(commas_cli, ["trace", "show", "--json", digest_prefix])
+    closure = runner.invoke(commas_cli, ["trace", "closure", digest_prefix])
 
     assert by_ref.exit_code == 0
     assert json.loads(by_ref.output)["id"] == prompt_id
@@ -2390,18 +2396,18 @@ def test_sigil_zeta_trace_cli_resolves_refs_and_prefixes(monkeypatch) -> None:
     assert closure.exit_code == 0
 
 
-def test_sigil_zeta_trace_cli_reports_ambiguous_and_unknown_ids(
+def test_commas_zeta_trace_cli_reports_ambiguous_and_unknown_ids(
     monkeypatch,
 ) -> None:
     store = zeta_trace.InMemoryStore()
     obj = zeta_trace.Object(kind="prompt", schema="v1", data={"n": 1})
     store._objects["sha256:aaaa1111"] = obj
     store._objects["sha256:aaaa2222"] = obj
-    monkeypatch.setattr("sigil.cli.trace.current_store", lambda: store)
+    monkeypatch.setattr("commas.cli.trace.current_store", lambda: store)
 
     runner = CliRunner()
-    ambiguous = runner.invoke(sigil_cli, ["trace", "show", "aaaa"])
-    unknown = runner.invoke(sigil_cli, ["trace", "show", "ffff"])
+    ambiguous = runner.invoke(commas_cli, ["trace", "show", "aaaa"])
+    unknown = runner.invoke(commas_cli, ["trace", "show", "ffff"])
 
     assert ambiguous.exit_code != 0
     assert "sha256:aaaa1111" in ambiguous.output

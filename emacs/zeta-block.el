@@ -67,17 +67,25 @@ checkout."
 (defvar zeta-block--pending-runs (make-hash-table :test 'equal))
 (defvar zeta-block--completed-runs (make-hash-table :test 'equal))
 (defvar zeta-block--overlays nil)
+(defvar zeta-block--queue-buffers nil)
+(defvar zeta-block--active-task-buffer nil)
 (defvar zeta-block--active-buffer nil)
 (defvar zeta-block--active-agent-prompt nil)
 (defvar zeta-block--active-requests 0)
 (defvar zeta-block--status 'off)
 (defvar zeta-block--last-error nil)
 
+(defvar-local zeta-block--task-queue nil)
+(defvar-local zeta-block--current-task nil)
+(defvar-local zeta-block-pairing-paused nil)
+
 (defvar zeta-block-mode-map
   (let ((map (make-sparse-keymap)))
     (define-key map (kbd "C-c C-c") #'zeta-block-submit)
     (define-key map (kbd "C-c z ?") #'zeta-block-ask-region)
     (define-key map (kbd "C-c z !") #'zeta-block-act-on-region)
+    (define-key map (kbd "C-c z q") #'zeta-block-queue-status)
+    (define-key map (kbd "C-c z p") #'zeta-block-toggle-pairing)
     (define-key map (kbd "RET") #'zeta-block-return)
     map)
   "Keymap for `zeta-block-mode'.")
@@ -149,21 +157,20 @@ When the current block is not a Zeta question, dispatch to the binding that
            (line-range (zeta-block-previous-line-range))
            (comment-prefix (zeta-block-comment-prefix line-raw))
            (placeholder (zeta-block-insert-placeholder (point) comment-prefix))
-           (callback (lambda (result error)
-                       (zeta-block-replace-placeholder
-                        placeholder
-                        (zeta-block-response-text result error)
-                        comment-prefix
-                        instruction))))
-      (zeta-block-add-overlay (car line-range) (cdr line-range) 'human instruction)
-      (setq zeta-block--active-buffer (current-buffer))
-      (pcase kind
-        ('question
-         (zeta-block-ask-async
-          (zeta-block-inline-question-objective instruction line-number)
-          callback))
-        ('action
-         (zeta-block-inline-async instruction line-number callback))))))
+           (overlay (zeta-block-add-overlay
+                     (car line-range)
+                     (cdr line-range)
+                     'human
+                     instruction)))
+      (zeta-block-enqueue-task
+       (list
+        :kind kind
+        :source 'inline
+        :instruction instruction
+        :line-number line-number
+        :comment-prefix comment-prefix
+        :placeholder placeholder
+        :overlay overlay)))))
 
 ;;;###autoload
 (defun zeta-block-ask-region (begin end question)
@@ -193,21 +200,132 @@ When the current block is not a Zeta question, dispatch to the binding that
          (placeholder (zeta-block-insert-placeholder
                        (zeta-block-scope-value scope 'end)
                        nil))
-         (callback (lambda (result error)
-                     (zeta-block-replace-placeholder
-                      placeholder
-                      (zeta-block-response-text result error)
-                      nil
-                      instruction))))
-    (zeta-block-add-overlay begin end 'human instruction)
-    (setq zeta-block--active-buffer (current-buffer))
-    (pcase kind
-      ('question
+         (overlay (zeta-block-add-overlay begin end 'human instruction)))
+    (zeta-block-enqueue-task
+     (list
+      :kind kind
+      :source 'region
+      :instruction instruction
+      :scope scope
+      :comment-prefix nil
+      :placeholder placeholder
+      :overlay overlay))))
+
+(defun zeta-block-enqueue-task (task)
+  "Append TASK to this buffer's Zeta pairing queue."
+  (let ((queued (plist-put task :status 'queued)))
+    (setq zeta-block--task-queue
+          (append zeta-block--task-queue (list queued)))
+    (cl-pushnew (current-buffer) zeta-block--queue-buffers)
+    (zeta-block-set-task-status queued 'queued)
+    (zeta-block-pump-queues)
+    (force-mode-line-update t)))
+
+(defun zeta-block-pump-queues ()
+  "Start the next queued task in any live buffer when possible."
+  (setq zeta-block--queue-buffers
+        (cl-remove-if-not #'buffer-live-p zeta-block--queue-buffers))
+  (when (not (buffer-live-p zeta-block--active-task-buffer))
+    (catch 'started
+      (dolist (buffer zeta-block--queue-buffers)
+        (with-current-buffer buffer
+          (when (and (not zeta-block-pairing-paused)
+                     (not zeta-block--current-task)
+                     zeta-block--task-queue)
+            (setq zeta-block--current-task (pop zeta-block--task-queue)
+                  zeta-block--active-task-buffer buffer)
+            (zeta-block-start-task zeta-block--current-task)
+            (force-mode-line-update t)
+            (throw 'started t)))))))
+
+(defun zeta-block-pump-queue ()
+  "Compatibility wrapper that pumps all Zeta queues."
+  (zeta-block-pump-queues))
+
+(defun zeta-block-start-task (task)
+  "Start queued TASK."
+  (zeta-block-set-task-status task 'running)
+  (setq zeta-block--active-buffer (current-buffer))
+  (let ((callback (lambda (result error)
+                    (zeta-block-finish-task task result error))))
+    (pcase (list (plist-get task :source) (plist-get task :kind))
+      (`(inline question)
        (zeta-block-ask-async
-        (zeta-block-region-question-objective instruction scope)
+        (zeta-block-inline-question-objective
+         (plist-get task :instruction)
+         (plist-get task :line-number))
         callback))
-      ('action
-       (zeta-block-region-async instruction scope callback)))))
+      (`(inline action)
+       (zeta-block-inline-async
+        (plist-get task :instruction)
+        (plist-get task :line-number)
+        callback))
+      (`(region question)
+       (zeta-block-ask-async
+        (zeta-block-region-question-objective
+         (plist-get task :instruction)
+         (plist-get task :scope))
+        callback))
+      (`(region action)
+       (zeta-block-region-async
+        (plist-get task :instruction)
+        (plist-get task :scope)
+        callback))
+      (_
+       (zeta-block-finish-task task nil "Unknown Zeta task kind.")))))
+
+(defun zeta-block-finish-task (task result error)
+  "Finish TASK with RESULT or ERROR."
+  (let ((buffer zeta-block--active-task-buffer))
+    (when (buffer-live-p buffer)
+      (with-current-buffer buffer
+        (save-current-buffer
+          (zeta-block-replace-placeholder
+           (plist-get task :placeholder)
+           (zeta-block-response-text result error)
+           (plist-get task :comment-prefix)
+           (plist-get task :instruction)))
+        (zeta-block-set-task-status task (if error 'failed 'done))
+        (setq zeta-block--current-task nil
+              zeta-block--active-task-buffer nil)
+        (zeta-block-pump-queues)
+        (force-mode-line-update t)))))
+
+(defun zeta-block-set-task-status (task status)
+  "Set TASK overlay status to STATUS."
+  (plist-put task :status status)
+  (when-let ((overlay (plist-get task :overlay)))
+    (overlay-put overlay 'zeta-status status)
+    (overlay-put overlay 'help-echo
+                 (zeta-block-task-help task status))))
+
+(defun zeta-block-task-help (task status)
+  "Return tooltip text for TASK with STATUS."
+  (string-join
+   (list
+    (format "zeta status: %s" status)
+    (format "zeta kind: %s" (plist-get task :kind))
+    (format "prompt: %s" (plist-get task :instruction)))
+   "\n"))
+
+;;;###autoload
+(defun zeta-block-queue-status ()
+  "Show this buffer's Zeta pairing queue status."
+  (interactive)
+  (let ((state (if zeta-block--current-task "running" "idle"))
+        (paused (if zeta-block-pairing-paused " paused" ""))
+        (queued (length zeta-block--task-queue)))
+    (message "Zeta queue: %s%s · queued %d" state paused queued)))
+
+;;;###autoload
+(defun zeta-block-toggle-pairing ()
+  "Pause or resume this buffer's Zeta pairing queue."
+  (interactive)
+  (setq zeta-block-pairing-paused (not zeta-block-pairing-paused))
+  (unless zeta-block-pairing-paused
+    (zeta-block-pump-queues))
+  (force-mode-line-update t)
+  (message "Zeta pairing %s" (if zeta-block-pairing-paused "paused" "running")))
 
 (defun zeta-block-inline-instruction-before-point ()
   "Return the cleaned inline instruction before point, or nil.
@@ -732,7 +850,7 @@ When PROMPT is non-nil, tag the inserted response as agent-authored."
   "Show the current Zeta block subprocess status."
   (interactive)
   (message
-   "Zeta %s%s%s"
+   "Zeta %s%s%s%s"
    (pcase zeta-block--status
      ('off "off")
      ('idle "idle")
@@ -747,16 +865,24 @@ When PROMPT is non-nil, tag the inserted response as agent-authored."
      (format " · active requests %d" zeta-block--active-requests))
     (zeta-block--last-error
      (format " · %s" zeta-block--last-error))
-    (t ""))))
+    (t ""))
+   (format " · buffer queue %d%s"
+           (length zeta-block--task-queue)
+           (if zeta-block-pairing-paused " paused" ""))))
 
 (defun zeta-block-mode-line ()
   "Return the mode-line lighter for `zeta-block-mode'."
-  (pcase zeta-block--status
-    ('off " Zeta:off")
-    ('idle " Zeta:idle")
-    ('running " Zeta:run")
-    ('error " Zeta:err")
-    (_ " Zeta:?")))
+  (cond
+   (zeta-block-pairing-paused " Zeta:pause")
+   (zeta-block--current-task " Zeta:pair")
+   (zeta-block--task-queue " Zeta:queue")
+   (t
+    (pcase zeta-block--status
+      ('off " Zeta:off")
+      ('idle " Zeta:idle")
+      ('running " Zeta:run")
+      ('error " Zeta:err")
+      (_ " Zeta:?")))))
 
 (defun zeta-block-set-running ()
   "Mark one user-visible Zeta request as running."

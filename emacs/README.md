@@ -125,6 +125,15 @@ instruction, and you can keep working. For `zeta!`, if the buffer changes under
 the target line range before the agent edits it, the edit is rejected and the
 agent must read again instead of overwriting your new text.
 
+Inline prompts and region commands are queued per buffer. Zeta runs one queued
+task at a time, so you can keep adding `zeta?` and `zeta!` prompts while the
+current task is still running. Use:
+
+```text
+C-c z q   show this buffer's queue status
+C-c z p   pause or resume this buffer's pairing queue
+```
+
 For scoped region work, select text and use:
 
 ```text
@@ -146,6 +155,9 @@ The mode line shows the subprocess status:
 Zeta:off
 Zeta:idle
 Zeta:run
+Zeta:pair
+Zeta:queue
+Zeta:pause
 Zeta:err
 ```
 

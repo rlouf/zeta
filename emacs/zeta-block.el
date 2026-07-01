@@ -76,6 +76,8 @@ checkout."
 (defvar zeta-block-mode-map
   (let ((map (make-sparse-keymap)))
     (define-key map (kbd "C-c C-c") #'zeta-block-submit)
+    (define-key map (kbd "C-c z ?") #'zeta-block-ask-region)
+    (define-key map (kbd "C-c z !") #'zeta-block-act-on-region)
     (define-key map (kbd "RET") #'zeta-block-return)
     map)
   "Keymap for `zeta-block-mode'.")
@@ -163,6 +165,50 @@ When the current block is not a Zeta question, dispatch to the binding that
         ('action
          (zeta-block-inline-async instruction line-number callback))))))
 
+;;;###autoload
+(defun zeta-block-ask-region (begin end question)
+  "Ask a read-only Zeta QUESTION about the active region from BEGIN to END."
+  (interactive
+   (if (use-region-p)
+       (list (region-beginning)
+             (region-end)
+             (read-string "zeta? "))
+     (user-error "Select a region first")))
+  (zeta-block-submit-region begin end question 'question))
+
+;;;###autoload
+(defun zeta-block-act-on-region (begin end instruction)
+  "Run a Zeta edit/action INSTRUCTION scoped to active region BEGIN..END."
+  (interactive
+   (if (use-region-p)
+       (list (region-beginning)
+             (region-end)
+             (read-string "zeta! "))
+     (user-error "Select a region first")))
+  (zeta-block-submit-region begin end instruction 'action))
+
+(defun zeta-block-submit-region (begin end instruction kind)
+  "Submit region BEGIN..END with INSTRUCTION and request KIND."
+  (let* ((scope (zeta-block-region-scope begin end))
+         (placeholder (zeta-block-insert-placeholder
+                       (zeta-block-scope-value scope 'end)
+                       nil))
+         (callback (lambda (result error)
+                     (zeta-block-replace-placeholder
+                      placeholder
+                      (zeta-block-response-text result error)
+                      nil
+                      instruction))))
+    (zeta-block-add-overlay begin end 'human instruction)
+    (setq zeta-block--active-buffer (current-buffer))
+    (pcase kind
+      ('question
+       (zeta-block-ask-async
+        (zeta-block-region-question-objective instruction scope)
+        callback))
+      ('action
+       (zeta-block-region-async instruction scope callback)))))
+
 (defun zeta-block-inline-instruction-before-point ()
   "Return the cleaned inline instruction before point, or nil.
 This preserves the old helper API by dropping the request kind."
@@ -222,6 +268,40 @@ This preserves the old helper API by dropping the request kind."
   (save-excursion
     (forward-line -1)
     (cons (line-beginning-position) (line-end-position))))
+
+(defun zeta-block-region-scope (begin end)
+  "Return normalized whole-line scope metadata for region BEGIN..END."
+  (let* ((range (zeta-block-normalized-region-line-range begin end))
+         (start (car range))
+         (finish (cdr range))
+         (start-line (line-number-at-pos start))
+         (end-line (line-number-at-pos finish))
+         (text (buffer-substring-no-properties start finish))
+         (hash (secure-hash 'sha256 text)))
+    (list
+     (cons 'start start)
+     (cons 'end finish)
+     (cons 'start-line start-line)
+     (cons 'end-line end-line)
+     (cons 'text text)
+     (cons 'hash (concat "sha256:" hash)))))
+
+(defun zeta-block-normalized-region-line-range (begin end)
+  "Return whole-line cons range for region BEGIN..END."
+  (save-excursion
+    (let ((start (min begin end))
+          (finish (max begin end)))
+      (goto-char start)
+      (setq start (line-beginning-position))
+      (goto-char finish)
+      (when (and (> finish start)
+                 (= finish (line-beginning-position)))
+        (forward-line -1))
+      (cons start (line-end-position)))))
+
+(defun zeta-block-scope-value (scope key)
+  "Return KEY from SCOPE."
+  (cdr (assq key scope)))
 
 (defun zeta-block-current-block ()
   "Return the current paragraph as (BEGIN END RAW-TEXT)."
@@ -419,6 +499,25 @@ When PROMPT is non-nil, tag the inserted response as agent-authored."
    question
    line-number))
 
+(defun zeta-block-region-question-objective (question scope)
+  "Return the model objective for a region-scoped QUESTION."
+  (format
+   (string-join
+    '("Region-scoped editor question:"
+      "%s"
+      ""
+      "Selected region: lines %s..%s"
+      "Selected text hash: %s"
+      ""
+      "The selected region is the primary context."
+      "Use surrounding buffer context only if needed to answer accurately."
+      "Use emacs_read to inspect the live buffer.")
+    "\n")
+   question
+   (zeta-block-scope-value scope 'start-line)
+   (zeta-block-scope-value scope 'end-line)
+   (zeta-block-scope-value scope 'hash)))
+
 (defun zeta-block-inline-async (instruction line-number callback)
   "Run inline Zeta INSTRUCTION from LINE-NUMBER and call CALLBACK."
   (zeta-block-ensure-process)
@@ -430,6 +529,21 @@ When PROMPT is non-nil, tag the inserted response as agent-authored."
      ("objective" . ,(zeta-block-inline-objective instruction line-number))
      ("tools" . ,(vconcat zeta-block-inline-tools))
      ("system" . ,(zeta-block-inline-system-prompt)))
+   (lambda (result error)
+     (zeta-block-handle-session-start result error callback))
+   t))
+
+(defun zeta-block-region-async (instruction scope callback)
+  "Run region-scoped Zeta INSTRUCTION over SCOPE and call CALLBACK."
+  (zeta-block-ensure-process)
+  (setq zeta-block--active-agent-prompt instruction)
+  (zeta-block-register-tools (list (zeta-block-emacs-replace-tool)))
+  (zeta-block-send-request
+   "session.run"
+   `(("workflow" . "do")
+     ("objective" . ,(zeta-block-region-objective instruction scope))
+     ("tools" . ,(vconcat zeta-block-inline-tools))
+     ("system" . ,(zeta-block-region-system-prompt)))
    (lambda (result error)
      (zeta-block-handle-session-start result error callback))
    t))
@@ -452,6 +566,27 @@ When PROMPT is non-nil, tag the inserted response as agent-authored."
     "\n")
    instruction
    line-number))
+
+(defun zeta-block-region-objective (instruction scope)
+  "Return the model objective for region-scoped INSTRUCTION over SCOPE."
+  (format
+   (string-join
+    '("Region-scoped editor instruction:"
+      "%s"
+      ""
+      "Selected region: lines %s..%s"
+      "Selected text hash: %s"
+      ""
+      "Only edit the selected region unless the user explicitly asks otherwise."
+      "Use surrounding buffer context only to preserve meaning, style, and references."
+      "Read the live buffer with emacs_read before deciding what to change."
+      "Apply changes with emacs_replace to the selected line range."
+      "emacs_read includes line-number prefixes for reference; pass old/new text to emacs_replace without those prefixes.")
+    "\n")
+   instruction
+   (zeta-block-scope-value scope 'start-line)
+   (zeta-block-scope-value scope 'end-line)
+   (zeta-block-scope-value scope 'hash)))
 
 (defun zeta-block-handle-session-start (result error callback)
   "Track an async session RESULT or report ERROR to CALLBACK."
@@ -495,6 +630,19 @@ When PROMPT is non-nil, tag the inserted response as agent-authored."
      "Use emacs_replace for requested document changes."
      "When using emacs_replace, old must exactly match the current unnumbered text in the requested line range."
      "Keep edits scoped to the inline instruction."
+     "Do not use shell commands."
+     "When finished, return a brief summary of what changed.")
+   " "))
+
+(defun zeta-block-region-system-prompt ()
+  "Return the system prompt used by selected-region `zeta!' instructions."
+  (string-join
+   '("You are editing a selected region in the user's current Emacs buffer."
+     "The selected region is the edit scope."
+     "Use emacs_read to inspect the live buffer, including unsaved edits."
+     "Use emacs_replace for requested document changes."
+     "When using emacs_replace, old must exactly match the current unnumbered text in the requested line range."
+     "Do not edit outside the selected region unless the user explicitly asks."
      "Do not use shell commands."
      "When finished, return a brief summary of what changed.")
    " "))

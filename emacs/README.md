@@ -30,7 +30,39 @@ the read-only ask workflow. Inline `zeta!` instructions use the direct workflow
 with an `emacs_replace` tool that only replaces a line range when the current
 buffer text still matches what the agent read.
 
-## Doom Emacs Install
+## Install
+
+Prerequisites:
+
+- The Zeta checkout is available locally.
+- The `zeta` executable can run `zeta rpc --stdio`.
+
+If `zeta` is already on `PATH`, the default command is enough:
+
+```elisp
+(setq zeta-block-rpc-command '("zeta" "rpc" "--stdio"))
+```
+
+If you are developing against this checkout, point Emacs at the local package
+and executable.
+
+### Vanilla Emacs
+
+Add this to your Emacs config:
+
+```elisp
+(add-to-list 'load-path "/Users/remilouf/projects/zeta/emacs")
+(require 'zeta-block)
+
+(setq zeta-block-rpc-command
+      '("/Users/remilouf/projects/zeta/.venv/bin/zeta" "rpc" "--stdio"))
+
+(zeta-block-global-mode 1)
+```
+
+Then reload the config or evaluate the forms.
+
+### Doom Emacs
 
 Add the local package to `~/.doom.d/config.el`:
 
@@ -45,17 +77,13 @@ Add the local package to `~/.doom.d/config.el`:
   (zeta-block-global-mode 1))
 ```
 
-When `zeta` is already on PATH, the default is enough:
-
-```elisp
-(setq zeta-block-rpc-command '("zeta" "rpc" "--stdio"))
-```
-
 Then reload Doom or restart Emacs:
 
 ```elisp
 M-x doom/reload
 ```
+
+### Development Reload
 
 For a single-session reload while developing the package:
 
@@ -96,6 +124,17 @@ mode line switches to `Zeta:run`, a temporary response is inserted under the
 instruction, and you can keep working. For `zeta!`, if the buffer changes under
 the target line range before the agent edits it, the edit is rejected and the
 agent must read again instead of overwriting your new text.
+
+For scoped region work, select text and use:
+
+```text
+C-c z ?   ask about the selected region
+C-c z !   edit or act on the selected region
+```
+
+Both commands prompt in the minibuffer. Region questions are read-only. Region
+actions tell Zeta to edit only the selected line range, while still allowing
+surrounding context for style and meaning.
 
 Submitted prompts and Zeta-authored responses/edits are tagged with Emacs
 overlays carrying `zeta-origin` and `zeta-prompt` properties. Hovering shows the

@@ -25,7 +25,6 @@ from zeta.records.stores.sqlite import (
 from zeta.records.stores.sqlite import (
     event_store_path as zeta_event_store_path,
 )
-from zeta.run.context import zeta_state_dir
 
 TIMELINE_DURABLE_TYPES = {
     "user_message": "zeta.user_message",
@@ -36,7 +35,10 @@ TIMELINE_DURABLE_TYPES = {
 def state_dir() -> Path:
     """Return the Zeta state directory used for durable Commas data."""
 
-    return zeta_state_dir()
+    root = os.environ.get("ZETA_STATE_DIR")
+    if root:
+        return Path(root).expanduser()
+    return Path.cwd() / ".zeta"
 
 
 def event_store_path() -> Path:

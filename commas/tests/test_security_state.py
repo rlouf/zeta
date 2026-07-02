@@ -634,6 +634,28 @@ def test_event_store_path_uses_zeta_state_dir() -> None:
     assert path == Path(tmp) / "zeta.sqlite3"
 
 
+def test_commas_default_state_matches_zeta_events_project_root(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("ZETA_STATE_DIR", raising=False)
+    monkeypatch.setenv("COMMAS_SESSION_ID", "test")
+    monkeypatch.chdir(tmp_path)
+
+    record_turn("echo hi", 0, str(tmp_path))
+
+    result = CliRunner().invoke(zeta_cli, ["events", "--json"])
+
+    assert result.exit_code == 0
+    events = json.loads(result.output)
+    assert events
+    assert {event["type"] for event in events} >= {
+        "zeta.tool_call.completed",
+        "zeta.turn.completed",
+    }
+    assert state_dir() == tmp_path / ".zeta"
+
+
 def test_sqlite_event_store_deduplicates_idempotency_keys(tmp_path: Path) -> None:
     store = SqliteEventStore(tmp_path / "zeta.sqlite3")
     draft = DraftEvent(

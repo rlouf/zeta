@@ -117,14 +117,6 @@ def tool_result_event_from_message(message: dict[str, Any]) -> dict[str, Any]:
     return event
 
 
-def chat_messages(
-    timeline: list[dict[str, Any]],
-) -> list[dict[str, Any]]:
-    return complete_tool_exchange_messages(
-        [entry.message for entry in _chat_message_entries(timeline)]
-    )
-
-
 def _chat_message_entries(
     timeline: list[dict[str, Any]],
 ) -> list[ChatMessageEntry]:
@@ -249,7 +241,7 @@ def renderable_tool_call(call: Any) -> Any:
     return call
 
 
-def complete_tool_exchange_messages(
+def _answered_tool_exchange_messages(
     messages: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
     answered_call_ids = {
@@ -257,10 +249,23 @@ def complete_tool_exchange_messages(
         for message in messages
         if message.get("role") == "tool"
     }
+    kept_messages: list[dict[str, Any]] = []
+    kept_call_ids: set[str] = set()
+    for message in messages:
+        if has_unanswered_tool_call(message, answered_call_ids):
+            continue
+        kept_messages.append(message)
+        if message.get("role") == "assistant":
+            tool_calls = message.get("tool_calls")
+            if isinstance(tool_calls, list):
+                for call in tool_calls:
+                    if isinstance(call, dict) and call.get("id"):
+                        kept_call_ids.add(str(call["id"]))
     return [
         message
-        for message in messages
-        if not has_unanswered_tool_call(message, answered_call_ids)
+        for message in kept_messages
+        if message.get("role") != "tool"
+        or str(message.get("tool_call_id") or "") in kept_call_ids
     ]
 
 
@@ -425,6 +430,11 @@ def project_timeline_message_components(
     historical: bool,
 ) -> list[PromptComponent]:
     entries = _chat_message_entries(events)
+    kept_messages = _answered_tool_exchange_messages(
+        [entry.message for entry in entries]
+    )
+    kept_message_ids = {id(message) for message in kept_messages}
+    entries = [entry for entry in entries if id(entry.message) in kept_message_ids]
     components = []
     tool_call_names: dict[str, str] = {}
     for message_index, entry in enumerate(entries):

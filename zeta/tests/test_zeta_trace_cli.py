@@ -14,11 +14,7 @@ import zeta.models.chat_completions as zeta_model
 import zeta.models.profiles as zeta_models
 from click.testing import CliRunner
 from commas.agent_io import last_event_time
-from zetad.cli import cli as zeta_cli
-from zeta.trace.summarize import assistant_trace_summary
-from zeta.trace.replay import latest_model_answer
 from zeta.context.builder import PromptBuilder
-from zeta.context.components import chat_messages
 from zeta.events import DraftEvent
 from zeta.objects import Derivation, Object, ObjectId, Ref, RefUpdate
 from zeta.records.events import event_view
@@ -42,6 +38,9 @@ from zeta.run import runtime as zeta_agent
 from zeta.run.context import RuntimeContext, default_session
 from zeta.run.runtime import AgentRunResult
 from zeta.run.thread_run import current_timeline
+from zeta.trace.replay import latest_model_answer
+from zeta.trace.summarize import assistant_trace_summary
+from zetad.cli import cli as zeta_cli
 
 from test_support.zeta_helpers import (
     BatchSpyStore,
@@ -66,6 +65,12 @@ zeta_trace = SimpleNamespace(
     resolve_object_id=resolve_object_id,
     zeta_sqlite_path=zeta_sqlite_path,
 )
+
+
+def timeline_messages(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return zeta_context.component_messages(
+        zeta_context.project_timeline_message_components(events, historical=True)
+    )
 
 
 @pytest.fixture(autouse=True)
@@ -642,7 +647,7 @@ def test_zeta_trace_cli_smoke_with_sqlite_store(
     store.close()
 
 
-def test_zeta_chat_messages_keeps_full_history_and_current_events() -> None:
+def test_zeta_prompt_messages_keeps_full_history_and_current_events() -> None:
     transcript = [{"role": "user", "content": f"prior-{index}"} for index in range(25)]
     current_events = [
         {"type": "model", "content": f"current-{index}"} for index in range(25)
@@ -1160,7 +1165,7 @@ def test_zeta_timeline_rehydrates_assistant_reasoning_from_the_graph(
 
     assert_no_trace_timeline_chain(store)
 
-    messages = chat_messages(events)
+    messages = timeline_messages(events)
     assert "reasoning" not in messages[-1]
     assert "reasoning_content" not in messages[-1]
 
@@ -1251,7 +1256,7 @@ def test_zeta_orphan_tool_result_rendering_strips_trace_fields() -> None:
         "prompt_trace": {"prompt_object_id": "sha256:prompt"},
     }
 
-    messages = chat_messages([event])
+    messages = timeline_messages([event])
 
     assert len(messages) == 1
     assert messages[0]["role"] == "user"
@@ -1262,7 +1267,7 @@ def test_zeta_orphan_tool_result_rendering_strips_trace_fields() -> None:
     assert "prompt_trace" not in content
 
 
-def test_zeta_chat_messages_repairs_truncated_tool_call_arguments() -> None:
+def test_zeta_prompt_messages_repairs_truncated_tool_call_arguments() -> None:
     events = [
         {
             "type": "model",
@@ -1281,7 +1286,7 @@ def test_zeta_chat_messages_repairs_truncated_tool_call_arguments() -> None:
         {"type": "tool_result", "tool_call_id": "call-0", "result": {"ok": True}},
     ]
 
-    messages = chat_messages(events)
+    messages = timeline_messages(events)
 
     assert len(messages) == 2
     call = messages[0]["tool_calls"][0]
@@ -1291,7 +1296,7 @@ def test_zeta_chat_messages_repairs_truncated_tool_call_arguments() -> None:
     assert call["function"]["name"] == "write"
 
 
-def test_zeta_chat_messages_keeps_valid_tool_call_arguments() -> None:
+def test_zeta_prompt_messages_keeps_valid_tool_call_arguments() -> None:
     events = [
         {
             "type": "model",
@@ -1307,14 +1312,14 @@ def test_zeta_chat_messages_keeps_valid_tool_call_arguments() -> None:
         {"type": "tool_result", "tool_call_id": "call-0", "result": {"ok": True}},
     ]
 
-    messages = chat_messages(events)
+    messages = timeline_messages(events)
 
     assert messages[0]["tool_calls"][0]["function"]["arguments"] == (
         '{"path": "doc.md"}'
     )
 
 
-def test_zeta_chat_messages_trims_unanswered_tool_calls() -> None:
+def test_zeta_prompt_messages_trims_unanswered_tool_calls() -> None:
     events = [
         {"type": "user_message", "content": "hello"},
         {
@@ -1331,7 +1336,7 @@ def test_zeta_chat_messages_trims_unanswered_tool_calls() -> None:
         {"type": "turn_aborted", "content": "(turn aborted)"},
     ]
 
-    messages = chat_messages(events)
+    messages = timeline_messages(events)
 
     assert messages == [
         {"role": "user", "content": "hello"},

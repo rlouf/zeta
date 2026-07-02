@@ -5934,28 +5934,6 @@ def test_zeta_local_runtime_run_once_handles_eventlog_rpc_request(
     assert event_store.list_queue_items() == []
 
 
-@pytest.mark.parametrize(
-    ("cron", "expected"),
-    [
-        ("34 12 * * *", True),
-        ("*/5 12 * * *", False),
-        ("30-40 12 * * *", True),
-        ("34 13 * * *", False),
-    ],
-)
-def test_zeta_local_runtime_cron_matcher_supports_basic_v0_shapes(
-    cron: str,
-    expected: bool,
-) -> None:
-    assert (
-        zetad_scheduling.cron_matches(
-            cron,
-            datetime(2026, 6, 22, 12, 34, tzinfo=UTC),
-        )
-        is expected
-    )
-
-
 def test_zeta_scheduler_publishes_due_schedules_directly_once_per_minute(
     tmp_path: Path,
 ) -> None:

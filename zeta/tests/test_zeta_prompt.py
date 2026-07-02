@@ -38,6 +38,7 @@ from zeta.context.compaction.task_state import (
 from zeta.context.components import (
     PromptComponent,
     component_messages,
+    project_timeline_message_components,
     prompt_component_object,
     prompt_components,
     zeta_context_message,
@@ -177,7 +178,7 @@ def test_model_capability_descriptors_include_auto_enabled_tools() -> None:
     ]
 
 
-def test_zeta_prompt_builder_noop_transform_matches_chat_messages() -> None:
+def test_zeta_prompt_builder_noop_transform_matches_prompt_components() -> None:
     store = zeta_trace.InMemoryStore()
     tools = model_capability_descriptors(())
     transcript = [{"role": "user", "content": "prior"}]
@@ -305,6 +306,53 @@ def test_zeta_prompt_component_tool_result_boundary_round_trips() -> None:
         "representation": "full",
     }
     assert obj.links == ("tool-call-obj",)
+
+
+def test_zeta_prompt_timeline_components_drop_incomplete_tool_exchanges() -> None:
+    components = project_timeline_message_components(
+        [
+            {
+                "type": "model",
+                "content": "before",
+            },
+            {
+                "type": "model",
+                "tool_calls": tool_call_fixture("answered-call"),
+            },
+            {
+                "type": "tool_result",
+                "tool_call_id": "answered-call",
+                "result": {"ok": True},
+            },
+            {
+                "type": "model",
+                "tool_calls": tool_call_fixture("missing-result"),
+            },
+            {
+                "type": "tool_result",
+                "tool_call_id": "orphan-call",
+                "result": {"ok": False},
+            },
+        ],
+        historical=True,
+    )
+
+    messages = [component.message for component in components]
+    assistant_tool_call_ids = {
+        call["id"]
+        for message in messages
+        if message is not None and message.get("role") == "assistant"
+        for call in message.get("tool_calls", [])
+    }
+
+    assert "answered-call" in assistant_tool_call_ids
+    assert "missing-result" not in assistant_tool_call_ids
+    assert all(
+        message is None
+        or message.get("role") != "tool"
+        or message.get("tool_call_id") in assistant_tool_call_ids
+        for message in messages
+    )
 
 
 def test_zeta_prompt_builder_links_prompt_components() -> None:

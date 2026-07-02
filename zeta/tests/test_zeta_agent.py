@@ -1677,7 +1677,10 @@ def rpc_streams(
     input_text: str = "",
     output: RpcMemoryTransport | None = None,
 ) -> tuple[asyncio.StreamReader, asyncio.StreamWriter, RpcMemoryTransport]:
-    reader = asyncio.StreamReader(loop=_RPC_STREAM_LOOP)
+    reader = asyncio.StreamReader(
+        limit=zetad_jsonrpc.MAX_JSONRPC_LINE_BYTES,
+        loop=_RPC_STREAM_LOOP,
+    )
     if input_text:
         reader.feed_data(input_text.encode())
     reader.feed_eof()

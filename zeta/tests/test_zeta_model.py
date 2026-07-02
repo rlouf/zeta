@@ -1217,7 +1217,9 @@ def test_zeta_stream_json_sse_preserves_error_body(monkeypatch) -> None:
                 content=self._content,
                 request=request,
             )
-            raise httpx.HTTPStatusError("bad request", request=request, response=response)
+            raise httpx.HTTPStatusError(
+                "bad request", request=request, response=response
+            )
 
     class FakeClient:
         def __init__(self, **kwargs: object) -> None:

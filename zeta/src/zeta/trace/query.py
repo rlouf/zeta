@@ -3,6 +3,7 @@
 from typing import Any
 
 import click
+
 from zeta.records.objects import Object, ObjectId
 from zeta.records.stores.object_store import (
     AmbiguousIdError,
@@ -10,7 +11,6 @@ from zeta.records.stores.object_store import (
     UnknownIdError,
     resolve_object_id,
 )
-
 from zeta.trace.summarize import estimated_prompt_tokens
 
 

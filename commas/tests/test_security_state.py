@@ -1392,9 +1392,7 @@ def test_zeta_events_causality_subcommands(tmp_path: Path) -> None:
     descendants = CliRunner().invoke(
         zeta_cli, ["events", "descendants", *common, prompt.id, "--json"]
     )
-    turn = CliRunner().invoke(
-        zeta_cli, ["events", "turn", *common, "turn-1", "--json"]
-    )
+    turn = CliRunner().invoke(zeta_cli, ["events", "turn", *common, "turn-1", "--json"])
     raw = CliRunner().invoke(
         zeta_cli, ["events", "trace", *common, turn_event.id, "--json", "--raw"]
     )

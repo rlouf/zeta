@@ -506,6 +506,9 @@ def test_commas_log_show_renders_the_full_record(monkeypatch) -> None:
     assert "file_edit" in result.output
     assert "/tmp/notes.txt" in result.output
     assert "70da571d" in result.output
+    assert "events" in result.output
+    assert "zeta.turn.completed" in result.output
+    assert "zeta.tool_call.completed" in result.output
 
 
 def test_commas_log_show_reports_ambiguous_and_unknown_ids(monkeypatch) -> None:
@@ -531,6 +534,10 @@ def test_commas_log_show_json_emits_record_and_effects(monkeypatch) -> None:
     payload = json.loads(result.output)
     assert payload["turn"]["turn_id"] == "turn-do-1111"
     assert payload["effects"][0]["effect_id"] == "effect-edit"
+    assert [event["type"] for event in payload["events"]] == [
+        "zeta.turn.completed",
+        "zeta.tool_call.completed",
+    ]
 
 
 def test_commas_blame_lists_turns_touching_a_file(monkeypatch) -> None:

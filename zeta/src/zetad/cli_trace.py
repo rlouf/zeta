@@ -50,7 +50,7 @@ NARRATIVE_KINDS = ("prompt", "assistant_message")
     type=click.Path(file_okay=False, path_type=Path),
     default=Path("."),
     show_default=True,
-    help="Project root containing .zeta runtime state.",
+    help="Project root for agent specs and relative paths.",
 )
 @click.option(
     "--state-dir",
@@ -87,10 +87,12 @@ def trace_state_dir(project_root: Path, state_dir: Path | None) -> Path:
 
     if state_dir is not None:
         return state_dir.expanduser()
+    if project_root != Path("."):
+        return project_root.expanduser().resolve() / ".zeta"
     env_state_dir = os.environ.get("ZETA_STATE_DIR")
     if env_state_dir:
         return Path(env_state_dir).expanduser()
-    return project_root.expanduser().resolve() / ".zeta"
+    return Path.home() / ".zeta"
 
 
 def trace_context(ctx: click.Context) -> tuple[Path, str]:

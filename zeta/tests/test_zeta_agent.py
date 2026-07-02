@@ -1319,8 +1319,10 @@ def test_zeta_step_tools_does_not_commit_partial_batch_on_error(
 ) -> None:
     async def fake_run_capability_step(*args: object, **kwargs: object) -> object:
         tool_call = args[0]
-        if isinstance(tool_call, dict) and tool_call.get("id") == "call-2":
-            raise RuntimeError("tool batch interrupted")
+        if isinstance(tool_call, dict):
+            tool_call_payload = cast(dict[str, Any], tool_call)
+            if tool_call_payload.get("id") == "call-2":
+                raise RuntimeError("tool batch interrupted")
         return zeta_capability_execution.CapabilityCallResult(
             events=[
                 zeta_events.DraftEvent(
@@ -1548,7 +1550,9 @@ def test_zeta_run_capability_step_dispatches_to_injected_host() -> None:
     }
 
 
-def test_zeta_run_capability_step_records_unknown_tool_when_no_host_serves_call() -> None:
+def test_zeta_run_capability_step_records_unknown_tool_when_no_host_serves_call() -> (
+    None
+):
     state = zeta_agent.RunState()
     registry = CapabilityRegistry()
     capability = _test_capability("read")
@@ -1835,16 +1839,11 @@ def test_zeta_rpc_oversized_line_returns_parse_error_and_continues(
     async def run_case() -> list[dict[str, Any]]:
         reader = asyncio.StreamReader(limit=32)
         reader.feed_data(
-            (
-                '{"jsonrpc":"2.0","id":1,"method":"'
-                + ("x" * 128)
-                + '"}\n'
-            ).encode()
+            ('{"jsonrpc":"2.0","id":1,"method":"' + ("x" * 128) + '"}\n').encode()
         )
         reader.feed_data(
             (
-                json.dumps({"jsonrpc": "2.0", "id": 2, "method": "initialize"})
-                + "\n"
+                json.dumps({"jsonrpc": "2.0", "id": 2, "method": "initialize"}) + "\n"
             ).encode()
         )
         reader.feed_eof()
@@ -3620,11 +3619,14 @@ def test_zeta_event_dispatcher_records_failed_work(tmp_path: Path) -> None:
         f"attempt:{queue_item_id}:1:failed",
         f"queue_item:{outcome.event.id}:issue-triage:available:2",
     ]
-    assert zetad_queue.terminal_queue_item_result(
-        outcome.lifecycle_events,
-        event_id=outcome.event.id,
-        target_agent="issue-triage",
-    ) is None
+    assert (
+        zetad_queue.terminal_queue_item_result(
+            outcome.lifecycle_events,
+            event_id=outcome.event.id,
+            target_agent="issue-triage",
+        )
+        is None
+    )
     assert outcome.lifecycle_events[-1].payload == {
         **asdict(
             QueueItem(
@@ -3784,11 +3786,14 @@ def test_zeta_event_dispatcher_schedules_retry_with_backoff(
     assert second_retry.event_type == "runtime.queue_item.available"
     assert second_retry.payload["not_before"] == 22_000
     assert projected_row["available_at"] == 22_000
-    assert event_store.claim_next_queue_item(
-        "worker-a",
-        lease_ms=1_000,
-        now_ms=21_999,
-    ) is None
+    assert (
+        event_store.claim_next_queue_item(
+            "worker-a",
+            lease_ms=1_000,
+            now_ms=21_999,
+        )
+        is None
+    )
 
 
 def test_zeta_event_dispatcher_dead_letters_exhausted_retries(
@@ -3843,11 +3848,14 @@ def test_zeta_event_dispatcher_dead_letters_exhausted_retries(
         "last_attempt_id": f"att_{queue_item_id}_1",
         "dead_lettered_at": dead_letter.payload["dead_lettered_at"],
     }
-    assert event_store.claim_next_queue_item(
-        "worker-a",
-        lease_ms=1_000,
-        now_ms=dead_letter.timestamp_ms,
-    ) is None
+    assert (
+        event_store.claim_next_queue_item(
+            "worker-a",
+            lease_ms=1_000,
+            now_ms=dead_letter.timestamp_ms,
+        )
+        is None
+    )
 
 
 def test_zeta_event_dispatcher_dead_letters_permanent_failures(

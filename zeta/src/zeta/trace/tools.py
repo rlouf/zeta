@@ -6,7 +6,6 @@ from typing import Any, cast
 from zeta.records.objects import Object, ObjectId
 from zeta.records.stores.object_store import Store
 from zeta.records.stores.sqlite import SqliteObjectStore
-
 from zeta.trace.summarize import truncate
 
 

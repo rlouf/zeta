@@ -298,9 +298,7 @@ class EventDispatcher:
             routed_queue_item.target_agent
         )
         previous_attempt_number = max(next_attempt_number - 1, 1)
-        not_before = current_time_ms() + retry_policy.delay_ms(
-            previous_attempt_number
-        )
+        not_before = current_time_ms() + retry_policy.delay_ms(previous_attempt_number)
         return self._append_queue_item_event_for_target(
             triggering_event,
             routed_queue_item.queue_item_id,

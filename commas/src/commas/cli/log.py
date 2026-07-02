@@ -3,6 +3,7 @@
 from typing import Any
 
 import click
+from zeta.events import Event
 
 from commas.cli._base import cli, examples
 from commas.cli._shared import pretty_print_json
@@ -195,7 +196,7 @@ def cmd_log_show(turn_id: str, json_output: bool) -> int:
     `zeta trace show`. TURN_ID may be a full id or a unique prefix.
     """
     from commas.display.summarize import render_turn_record
-    from commas.state import history_view
+    from commas.state import events_for_turn, history_view
 
     history = history_view()
     resolved = resolve_cli_turn_id(history, turn_id)
@@ -203,12 +204,29 @@ def cmd_log_show(turn_id: str, json_output: bool) -> int:
     if turn is None:
         raise click.ClickException(f"turn not found: {turn_id}")
     effects = history.effects_for_turn(resolved)
+    events = [durable_event_record(event) for event in events_for_turn(resolved)]
     if json_output:
-        pretty_print_json({"turn": turn, "effects": effects})
+        pretty_print_json({"turn": turn, "effects": effects, "events": events})
         return 0
-    for line in render_turn_record(turn, effects):
+    for line in render_turn_record(turn, effects, events):
         click.echo(line)
     return 0
+
+
+def durable_event_record(event: Event) -> dict[str, object]:
+    return {
+        "id": event.id,
+        "type": event.event_type,
+        "source": event.source,
+        "payload": dict(event.payload),
+        "idempotency_key": event.idempotency_key,
+        "caused_by": event.caused_by,
+        "session_id": event.session_id,
+        "run_id": event.run_id,
+        "turn_id": event.turn_id,
+        "timestamp_ms": event.timestamp_ms,
+        "cursor": event.cursor,
+    }
 
 
 @cli.command(

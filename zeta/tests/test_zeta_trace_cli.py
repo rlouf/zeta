@@ -464,6 +464,28 @@ def test_zeta_trace_cli_session_scope_reads_other_store(monkeypatch) -> None:
     assert json.loads(result.output)["id"] == prompt_id
 
 
+def test_zeta_trace_cli_default_reads_home_state(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.delenv("ZETA_STATE_DIR", raising=False)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("ZETA_SESSION_ID", "home-session")
+    prompt_id = seed_trace_store(
+        home / ".zeta" / "zeta.sqlite3",
+        "home trace",
+        session_id="home-session",
+    )
+    monkeypatch.chdir(tmp_path / "home")
+
+    result = CliRunner().invoke(zeta_cli, ["trace", "show", "--json", prompt_id])
+
+    assert result.exit_code == 0
+    assert json.loads(result.output)["id"] == prompt_id
+
+
 def test_zeta_trace_cli_unknown_session_lists_available(monkeypatch) -> None:
     monkeypatch.setenv("ZETA_SESSION_ID", "current")
     seed_session_store("known", "seed")
@@ -607,7 +629,9 @@ def test_zeta_trace_cli_smoke_with_in_memory_store(monkeypatch) -> None:
         )
     )
     store.move_ref("prompt/current", None, prompt_id)
-    monkeypatch.setattr("zetad.cli_trace.scoped_store", lambda _ctx, read_only=True: store)
+    monkeypatch.setattr(
+        "zetad.cli_trace.scoped_store", lambda _ctx, read_only=True: store
+    )
 
     runner = CliRunner()
     show = runner.invoke(zeta_cli, ["trace", "show", "--json", prompt_id])
@@ -636,7 +660,9 @@ def test_zeta_trace_cli_smoke_with_sqlite_store(
     store.record_derivation(
         zeta_trace.Derivation(producer="unit:test", output_id=prompt_id)
     )
-    monkeypatch.setattr("zetad.cli_trace.scoped_store", lambda _ctx, read_only=True: store)
+    monkeypatch.setattr(
+        "zetad.cli_trace.scoped_store", lambda _ctx, read_only=True: store
+    )
 
     result = CliRunner().invoke(zeta_cli, ["trace", "prompts"])
 
@@ -1735,7 +1761,9 @@ def test_zeta_trace_helpers_read_provider_neutral_model_output() -> None:
 
 def test_zeta_trace_diff_reports_component_changes(monkeypatch) -> None:
     store, ids = prompt_diff_store()
-    monkeypatch.setattr("zetad.cli_trace.scoped_store", lambda _ctx, read_only=True: store)
+    monkeypatch.setattr(
+        "zetad.cli_trace.scoped_store", lambda _ctx, read_only=True: store
+    )
 
     result = CliRunner().invoke(
         zeta_cli, ["trace", "diff", ids["prompt_a"], ids["prompt_b"]]
@@ -1760,7 +1788,9 @@ def test_zeta_trace_diff_reports_component_changes(monkeypatch) -> None:
 
 def test_zeta_trace_diff_stat_keeps_one_line_per_change(monkeypatch) -> None:
     store, ids = prompt_diff_store()
-    monkeypatch.setattr("zetad.cli_trace.scoped_store", lambda _ctx, read_only=True: store)
+    monkeypatch.setattr(
+        "zetad.cli_trace.scoped_store", lambda _ctx, read_only=True: store
+    )
 
     result = CliRunner().invoke(
         zeta_cli,
@@ -1775,7 +1805,9 @@ def test_zeta_trace_diff_stat_keeps_one_line_per_change(monkeypatch) -> None:
 
 def test_zeta_trace_diff_requires_prompt_objects(monkeypatch) -> None:
     store, ids = prompt_diff_store()
-    monkeypatch.setattr("zetad.cli_trace.scoped_store", lambda _ctx, read_only=True: store)
+    monkeypatch.setattr(
+        "zetad.cli_trace.scoped_store", lambda _ctx, read_only=True: store
+    )
 
     result = CliRunner().invoke(
         zeta_cli, ["trace", "diff", ids["prompt_a"], ids["system"]]
@@ -1787,7 +1819,9 @@ def test_zeta_trace_diff_requires_prompt_objects(monkeypatch) -> None:
 
 def test_zeta_trace_replay_records_a_traced_answer(monkeypatch) -> None:
     store, component_id, prompt_id, answer_id = narrative_log_store()
-    monkeypatch.setattr("zetad.cli_trace.scoped_store", lambda _ctx, read_only=True: store)
+    monkeypatch.setattr(
+        "zetad.cli_trace.scoped_store", lambda _ctx, read_only=True: store
+    )
     captured: dict[str, object] = {}
 
     def fake_chat(messages, **kwargs):
@@ -1821,7 +1855,9 @@ def test_zeta_trace_replay_records_a_traced_answer(monkeypatch) -> None:
 
 def test_zeta_trace_replay_diffs_old_and_new(monkeypatch) -> None:
     store, _, prompt_id, _ = narrative_log_store()
-    monkeypatch.setattr("zetad.cli_trace.scoped_store", lambda _ctx, read_only=True: store)
+    monkeypatch.setattr(
+        "zetad.cli_trace.scoped_store", lambda _ctx, read_only=True: store
+    )
     monkeypatch.setattr(
         "zetad.cli_trace.chat_completion_messages",
         lambda messages, **kwargs: {"role": "assistant", "content": "a fresh answer"},
@@ -1836,7 +1872,9 @@ def test_zeta_trace_replay_diffs_old_and_new(monkeypatch) -> None:
 
 def test_zeta_trace_replay_renders_tool_call_answers(monkeypatch) -> None:
     store, _, prompt_id, _ = narrative_log_store()
-    monkeypatch.setattr("zetad.cli_trace.scoped_store", lambda _ctx, read_only=True: store)
+    monkeypatch.setattr(
+        "zetad.cli_trace.scoped_store", lambda _ctx, read_only=True: store
+    )
     monkeypatch.setattr(
         "zetad.cli_trace.chat_completion_messages",
         lambda messages, **kwargs: {
@@ -1860,7 +1898,9 @@ def test_zeta_trace_replay_renders_tool_call_answers(monkeypatch) -> None:
 
 def test_zeta_trace_replay_honors_a_named_profile(monkeypatch) -> None:
     store, _, prompt_id, _ = narrative_log_store()
-    monkeypatch.setattr("zetad.cli_trace.scoped_store", lambda _ctx, read_only=True: store)
+    monkeypatch.setattr(
+        "zetad.cli_trace.scoped_store", lambda _ctx, read_only=True: store
+    )
     captured: dict[str, object] = {}
 
     def fake_chat(messages, **kwargs):
@@ -1881,9 +1921,7 @@ def test_zeta_trace_replay_honors_a_named_profile(monkeypatch) -> None:
         ),
     )
 
-    ok = CliRunner().invoke(
-        zeta_cli, ["trace", "replay", "--model", "fast", prompt_id]
-    )
+    ok = CliRunner().invoke(zeta_cli, ["trace", "replay", "--model", "fast", prompt_id])
     unknown = CliRunner().invoke(
         zeta_cli, ["trace", "replay", "--model", "nope", prompt_id]
     )
@@ -1897,7 +1935,9 @@ def test_zeta_trace_replay_honors_a_named_profile(monkeypatch) -> None:
 
 def test_zeta_trace_log_defaults_to_the_narrative_kinds(monkeypatch) -> None:
     store, component_id, prompt_id, answer_id = narrative_log_store()
-    monkeypatch.setattr("zetad.cli_trace.scoped_store", lambda _ctx, read_only=True: store)
+    monkeypatch.setattr(
+        "zetad.cli_trace.scoped_store", lambda _ctx, read_only=True: store
+    )
 
     result = CliRunner().invoke(zeta_cli, ["trace", "log"])
 
@@ -1914,7 +1954,9 @@ def test_zeta_trace_log_defaults_to_the_narrative_kinds(monkeypatch) -> None:
 
 def test_zeta_trace_log_widens_with_kind_and_all(monkeypatch) -> None:
     store, component_id, _, answer_id = narrative_log_store()
-    monkeypatch.setattr("zetad.cli_trace.scoped_store", lambda _ctx, read_only=True: store)
+    monkeypatch.setattr(
+        "zetad.cli_trace.scoped_store", lambda _ctx, read_only=True: store
+    )
     runner = CliRunner()
 
     only_components = runner.invoke(
@@ -1987,7 +2029,9 @@ def test_zeta_trace_tools_json_joins_calls_and_results(monkeypatch) -> None:
             links=(failed_call_id,),
         )
     )
-    monkeypatch.setattr("zetad.cli_trace.scoped_store", lambda _ctx, read_only=True: store)
+    monkeypatch.setattr(
+        "zetad.cli_trace.scoped_store", lambda _ctx, read_only=True: store
+    )
 
     result = CliRunner().invoke(zeta_cli, ["trace", "tools", "--json"])
 
@@ -2042,7 +2086,9 @@ def test_zeta_trace_tools_failed_filters_json(monkeypatch) -> None:
             links=(failed_call_id,),
         )
     )
-    monkeypatch.setattr("zetad.cli_trace.scoped_store", lambda _ctx, read_only=True: store)
+    monkeypatch.setattr(
+        "zetad.cli_trace.scoped_store", lambda _ctx, read_only=True: store
+    )
 
     result = CliRunner().invoke(zeta_cli, ["trace", "tools", "--failed", "--json"])
 
@@ -2085,7 +2131,9 @@ def test_zeta_trace_tools_failed_json_recovers_content_error(
             links=(call_id,),
         )
     )
-    monkeypatch.setattr("zetad.cli_trace.scoped_store", lambda _ctx, read_only=True: store)
+    monkeypatch.setattr(
+        "zetad.cli_trace.scoped_store", lambda _ctx, read_only=True: store
+    )
 
     result = CliRunner().invoke(zeta_cli, ["trace", "tools", "--failed", "--json"])
 
@@ -2129,7 +2177,9 @@ def test_zeta_trace_tools_failed_json_recovers_bash_error(
             links=(call_id,),
         )
     )
-    monkeypatch.setattr("zetad.cli_trace.scoped_store", lambda _ctx, read_only=True: store)
+    monkeypatch.setattr(
+        "zetad.cli_trace.scoped_store", lambda _ctx, read_only=True: store
+    )
 
     result = CliRunner().invoke(zeta_cli, ["trace", "tools", "--failed", "--json"])
 
@@ -2173,7 +2223,9 @@ def test_zeta_trace_tools_failed_plain_output_uses_uniform_error(
             links=(call_id,),
         )
     )
-    monkeypatch.setattr("zetad.cli_trace.scoped_store", lambda _ctx, read_only=True: store)
+    monkeypatch.setattr(
+        "zetad.cli_trace.scoped_store", lambda _ctx, read_only=True: store
+    )
 
     result = CliRunner().invoke(zeta_cli, ["trace", "tools", "--failed"])
 
@@ -2216,11 +2268,11 @@ def test_zeta_trace_tools_successful_filters_json(monkeypatch) -> None:
             },
         )
     )
-    monkeypatch.setattr("zetad.cli_trace.scoped_store", lambda _ctx, read_only=True: store)
-
-    result = CliRunner().invoke(
-        zeta_cli, ["trace", "tools", "--successful", "--json"]
+    monkeypatch.setattr(
+        "zetad.cli_trace.scoped_store", lambda _ctx, read_only=True: store
     )
+
+    result = CliRunner().invoke(zeta_cli, ["trace", "tools", "--successful", "--json"])
 
     assert result.exit_code == 0
     rows = json.loads(result.output)
@@ -2307,7 +2359,9 @@ def zeta_trace_short(object_id: str) -> str:
 
 def test_zeta_trace_tree_walks_producers_by_default(monkeypatch) -> None:
     store, component_id, prompt_id, answer_id = narrative_log_store()
-    monkeypatch.setattr("zetad.cli_trace.scoped_store", lambda _ctx, read_only=True: store)
+    monkeypatch.setattr(
+        "zetad.cli_trace.scoped_store", lambda _ctx, read_only=True: store
+    )
 
     result = CliRunner().invoke(zeta_cli, ["trace", "tree", answer_id])
 
@@ -2323,7 +2377,9 @@ def test_zeta_trace_tree_walks_producers_by_default(monkeypatch) -> None:
 
 def test_zeta_trace_tree_walks_consumers_with_down(monkeypatch) -> None:
     store, component_id, prompt_id, answer_id = narrative_log_store()
-    monkeypatch.setattr("zetad.cli_trace.scoped_store", lambda _ctx, read_only=True: store)
+    monkeypatch.setattr(
+        "zetad.cli_trace.scoped_store", lambda _ctx, read_only=True: store
+    )
 
     result = CliRunner().invoke(zeta_cli, ["trace", "tree", "--down", component_id])
 
@@ -2338,11 +2394,11 @@ def test_zeta_trace_tree_walks_consumers_with_down(monkeypatch) -> None:
 
 def test_zeta_trace_tree_respects_depth(monkeypatch) -> None:
     store, component_id, prompt_id, answer_id = narrative_log_store()
-    monkeypatch.setattr("zetad.cli_trace.scoped_store", lambda _ctx, read_only=True: store)
-
-    result = CliRunner().invoke(
-        zeta_cli, ["trace", "tree", "--depth", "1", answer_id]
+    monkeypatch.setattr(
+        "zetad.cli_trace.scoped_store", lambda _ctx, read_only=True: store
     )
+
+    result = CliRunner().invoke(zeta_cli, ["trace", "tree", "--depth", "1", answer_id])
 
     assert result.exit_code == 0
     assert zeta_trace_short(prompt_id) in result.output
@@ -2351,7 +2407,9 @@ def test_zeta_trace_tree_respects_depth(monkeypatch) -> None:
 
 def test_zeta_trace_show_renders_humans_first(monkeypatch) -> None:
     store, component_id, prompt_id, answer_id = narrative_log_store()
-    monkeypatch.setattr("zetad.cli_trace.scoped_store", lambda _ctx, read_only=True: store)
+    monkeypatch.setattr(
+        "zetad.cli_trace.scoped_store", lambda _ctx, read_only=True: store
+    )
 
     result = CliRunner().invoke(zeta_cli, ["trace", "show", prompt_id])
 
@@ -2373,7 +2431,9 @@ def test_zeta_trace_show_renders_humans_first(monkeypatch) -> None:
 
 def test_zeta_trace_show_renders_message_bodies(monkeypatch) -> None:
     store, _, _, answer_id = narrative_log_store()
-    monkeypatch.setattr("zetad.cli_trace.scoped_store", lambda _ctx, read_only=True: store)
+    monkeypatch.setattr(
+        "zetad.cli_trace.scoped_store", lambda _ctx, read_only=True: store
+    )
 
     result = CliRunner().invoke(zeta_cli, ["trace", "show", answer_id])
 
@@ -2390,7 +2450,9 @@ def test_zeta_trace_cli_resolves_refs_and_prefixes(monkeypatch) -> None:
     )
     store.move_ref("prompt/current", None, prompt_id)
     digest_prefix = prompt_id.removeprefix("sha256:")[:8]
-    monkeypatch.setattr("zetad.cli_trace.scoped_store", lambda _ctx, read_only=True: store)
+    monkeypatch.setattr(
+        "zetad.cli_trace.scoped_store", lambda _ctx, read_only=True: store
+    )
 
     runner = CliRunner()
     by_ref = runner.invoke(zeta_cli, ["trace", "show", "--json", "prompt/current"])
@@ -2411,7 +2473,9 @@ def test_zeta_trace_cli_reports_ambiguous_and_unknown_ids(
     obj = zeta_trace.Object(kind="prompt", schema="v1", data={"n": 1})
     store._objects["sha256:aaaa1111"] = obj
     store._objects["sha256:aaaa2222"] = obj
-    monkeypatch.setattr("zetad.cli_trace.scoped_store", lambda _ctx, read_only=True: store)
+    monkeypatch.setattr(
+        "zetad.cli_trace.scoped_store", lambda _ctx, read_only=True: store
+    )
 
     runner = CliRunner()
     ambiguous = runner.invoke(zeta_cli, ["trace", "show", "aaaa"])

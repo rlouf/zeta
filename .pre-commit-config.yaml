@@ -17,7 +17,7 @@ repos:
         exclude: ^docs/demos/
       - id: ty-check
         name: ty check
-        entry: uv run ty check commas/src zeta/src tests
+        entry: uv run ty check commas/src zeta/src commas/tests zeta/tests
         language: system
         require_serial: true
         pass_filenames: false
@@ -29,7 +29,7 @@ repos:
         pass_filenames: false
       - id: complexipy
         name: complexipy
-        entry: uv run complexipy commas/src zeta/src tests --plain --failed --max-complexity-allowed 25
+        entry: uv run complexipy commas/src zeta/src commas/tests zeta/tests --plain --failed --max-complexity-allowed 25
         language: system
         require_serial: true
         pass_filenames: false

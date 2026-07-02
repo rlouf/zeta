@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from zeta.records.objects import Object, ObjectId
 from zeta.records.stores.object_store import Store
-
 from zeta.trace.summarize import short_trace_id, text_content, trace_object_summary
 
 BODY_LINE_LIMIT = 8

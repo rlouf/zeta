@@ -1,9 +1,11 @@
 """Trace replay helpers."""
 
 import difflib
+from pathlib import Path
 from typing import Any
 
 import click
+
 from zeta.models.profiles import (
     ModelSelection,
     resolve_active_model,
@@ -12,8 +14,6 @@ from zeta.models.profiles import (
 from zeta.models.types import ModelOutput
 from zeta.records.objects import Derivation, Object, ObjectId
 from zeta.records.stores.object_store import Store, warn_trace_failure_once
-from pathlib import Path
-
 from zeta.run.context import zeta_state_dir
 from zeta.trace.summarize import (
     assistant_trace_message,

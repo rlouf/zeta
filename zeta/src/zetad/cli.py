@@ -137,8 +137,10 @@ def print_event_item(
     empty_message: str,
 ) -> int:
     if json_output:
-        payload = None if event is None else (
-            event_record(event) if raw else event_summary_record(event)
+        payload = (
+            None
+            if event is None
+            else (event_record(event) if raw else event_summary_record(event))
         )
         click.echo(json.dumps(payload, ensure_ascii=False))
         return 0

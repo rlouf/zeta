@@ -1,10 +1,7 @@
 """Compact user-facing summaries for tool, handoff, and shell results."""
 
-import json
-import os
 import time
-from collections.abc import Callable
-from typing import Any, cast
+from typing import Any
 
 from commas.protocols import (
     SHELL_HANDOFF_OUTCOME_CANCELLED,
@@ -12,24 +9,16 @@ from commas.protocols import (
     SHELL_HANDOFF_OUTCOME_NO_PENDING,
 )
 from zeta.capabilities.execution import proposed_effect
-from zeta.records.objects import Object
 from zeta.trace.summarize import (
-    assistant_trace_message,
-    assistant_trace_summary,
     display_path,
-    estimated_prompt_tokens,
     first_line,
-    format_tool_error,
-    prompt_trace_summary,
-    quoted_summary,
     short_trace_id,
-    summarize,
+    summarize,  # noqa: F401 - re-exported for display modules
     text_content,
-    tool_result_trace_summary,
-    trace_object_summary,
+    trace_object_summary,  # noqa: F401 - re-exported for display modules
     truncate,
-    web_search_call_summary,
 )
+
 
 def tool_result_summary(name: str, result: dict[str, Any]) -> list[str]:
     """Return compact user-facing lines for a Zeta tool result."""
@@ -275,6 +264,7 @@ def turn_cost_suffix(cost: Any) -> str:
 def render_turn_record(
     turn: dict[str, Any],
     effects: list[dict[str, Any]],
+    events: list[dict[str, Any]] | None = None,
 ) -> list[str]:
     """Render one turn record as human-readable lines."""
     lines = [
@@ -310,7 +300,20 @@ def render_turn_record(
     if isinstance(prompt_ids, list) and prompt_ids:
         shorts = " ".join(short_trace_id(str(value)) for value in prompt_ids)
         lines.extend(["", "prompts", f"  {shorts}  (zeta trace show ID)"])
+    if events:
+        lines.extend(["", "events"])
+        lines.extend(f"  {format_turn_event_line(event)}" for event in events)
     return lines
+
+
+def format_turn_event_line(event: dict[str, Any]) -> str:
+    """Render one durable event for a turn."""
+    cursor = event.get("cursor")
+    cursor_text = str(cursor) if cursor is not None else "-"
+    event_type = str(event.get("type") or "?")
+    source = str(event.get("source") or "?")
+    event_id = str(event.get("id") or "?")
+    return f"{cursor_text:<4} {event_type:<28} {source:<8} {event_id}"
 
 
 def format_effect_line(effect: dict[str, Any]) -> str:

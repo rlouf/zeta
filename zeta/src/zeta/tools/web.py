@@ -139,9 +139,7 @@ def config_from_env(*, limit: int) -> WebConfig:
     return WebConfig(
         credentials=credentials,
         model=os.environ.get("ZETA_WEB_SEARCH_MODEL", DEFAULT_SEARCH_MODEL),
-        timeout_sec=float(
-            os.environ.get("ZETA_WEB_TIMEOUT_SEC", DEFAULT_TIMEOUT_SEC)
-        ),
+        timeout_sec=float(os.environ.get("ZETA_WEB_TIMEOUT_SEC", DEFAULT_TIMEOUT_SEC)),
         max_preview_bytes=int(
             os.environ.get("ZETA_WEB_MAX_PREVIEW_BYTES", DEFAULT_MAX_PREVIEW_BYTES)
         ),

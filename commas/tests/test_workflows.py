@@ -66,6 +66,7 @@ def timeline_messages(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
         zeta_context.project_timeline_message_components(events, historical=True)
     )
 
+
 zeta_trace = SimpleNamespace(Ref=Ref, resolve_object_id=resolve_object_id)
 
 

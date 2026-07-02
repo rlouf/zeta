@@ -1140,22 +1140,38 @@ When PROMPT is non-nil, tag the inserted response as agent-authored."
      (t
       (format "Run %s." (car (last (split-string event-type "\\."))))))))
 
+(defun zeta-block-tool-error-result (code message)
+  "Return a JSON-encodable client tool error result."
+  `(("ok" . :json-false)
+    ("error" . (("code" . ,code)
+                ("message" . ,message)))))
+
 (defun zeta-block-handle-tool-call (params)
   "Handle a server tool call with PARAMS."
   (let* ((id (and (hash-table-p params) (gethash "id" params)))
          (name (and (hash-table-p params) (gethash "name" params)))
          (arguments (and (hash-table-p params) (gethash "arguments" params)))
-         (result
-          (cond
-           ((string= name "emacs_read")
-            (zeta-block-emacs-read arguments))
-           ((string= name "emacs_replace")
-            (zeta-block-emacs-replace arguments))
-           (t
-            `(("ok" . :json-false)
-              ("error" . (("code" . "unknown-tool")
-                          ("message" . ,(format "unknown Emacs tool: %s" name)))))))))
-    (when id
+         (result nil))
+    (when (stringp id)
+      (setq result
+            (condition-case err
+                (cond
+                 ((not (stringp name))
+                  (zeta-block-tool-error-result
+                   "invalid-tool-call"
+                   "tool call did not include a valid name"))
+                 ((string= name "emacs_read")
+                  (zeta-block-emacs-read arguments))
+                 ((string= name "emacs_replace")
+                  (zeta-block-emacs-replace arguments))
+                 (t
+                  (zeta-block-tool-error-result
+                   "unknown-tool"
+                   (format "unknown Emacs tool: %s" name))))
+              (error
+               (zeta-block-tool-error-result
+                "emacs-tool-error"
+                (format "%s" err)))))
       (zeta-block-send-notification
        "tools.respond"
        `(("id" . ,id)
@@ -1348,27 +1364,33 @@ ARGUMENTS may contain start_line and end_line."
 (defun zeta-block--process-sentinel (process event)
   "Handle PROCESS lifecycle EVENT."
   (unless (process-live-p process)
-    (maphash
-     (lambda (_id entry)
-       (let ((callback (car-safe entry)))
+    (let ((callbacks nil)
+          (message (string-trim (format "Zeta process %s" event))))
+      (maphash
+       (lambda (_id entry)
+         (when-let ((callback (car-safe entry)))
+           (push callback callbacks)))
+       zeta-block--callbacks)
+      (maphash
+       (lambda (_run-id callback)
          (when callback
-           (funcall callback nil (string-trim (format "Zeta process %s" event))))))
-     zeta-block--callbacks)
-    (maphash
-     (lambda (_run-id callback)
-       (when callback
-         (funcall callback nil (string-trim (format "Zeta process %s" event)))))
-     zeta-block--pending-runs)
-    (clrhash zeta-block--callbacks)
-    (clrhash zeta-block--pending-runs)
-    (clrhash zeta-block--completed-runs)
-    (setq zeta-block--active-requests 0
-          zeta-block--status (if (string-match-p "finished" event) 'off 'error)
-          zeta-block--last-error (unless (eq zeta-block--status 'off)
-                                   (string-trim (format "Zeta process %s" event))))
-    (force-mode-line-update t)
-    (when (eq process zeta-block--process)
-      (setq zeta-block--process nil))))
+           (push callback callbacks)))
+       zeta-block--pending-runs)
+      (clrhash zeta-block--callbacks)
+      (clrhash zeta-block--pending-runs)
+      (clrhash zeta-block--completed-runs)
+      (setq zeta-block--active-requests 0
+            zeta-block--status (if (string-match-p "finished" event) 'off 'error)
+            zeta-block--last-error (unless (eq zeta-block--status 'off)
+                                     message))
+      (when (eq process zeta-block--process)
+        (setq zeta-block--process nil))
+      (dolist (callback callbacks)
+        (condition-case err
+            (funcall callback nil message)
+          (error
+           (message "zeta-block: process-exit callback failed: %s" err))))
+      (force-mode-line-update t))))
 
 (provide 'zeta-block)
 

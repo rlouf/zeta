@@ -15,6 +15,7 @@ from zeta.agents.spec import AgentSpec
 from zeta.records.events import DraftEvent, Event, draft_event_view, event_view
 from zeta.run.config import AgentConfig
 from zeta.run.outcomes import agent_run_result_payload
+from zetad.retry import RetryPolicy
 
 if TYPE_CHECKING:
     from zeta.agents.events import EventRegistry
@@ -62,6 +63,7 @@ class AgentDefinition:
     dispatch_mode: DispatchMode = "one_shot"
     returns: tuple[str, ...] = ()
     lock_keys: tuple[str, ...] = ()
+    retry_policy: RetryPolicy | None = None
 
     def accepts(self, event: Event) -> bool:
         return any(trigger.matches(event) for trigger in self.triggers)
@@ -188,6 +190,7 @@ def compile_agent_definitions(
                 dispatch_mode="session_scoped" if spec.resumable else "one_shot",
                 returns=tuple(spec.returns),
                 lock_keys=runtime_lock_keys(spec),
+                retry_policy=retry_policy_for_spec(spec),
             ),
             run=agent_runner(
                 spec,
@@ -367,6 +370,22 @@ def config_for_spec(spec: AgentSpec, config: AgentConfig | None) -> AgentConfig:
         or (spec.model.name if spec.model is not None else None),
         model_url=config.model_url
         or (spec.model.url if spec.model is not None else None),
+    )
+
+
+def retry_policy_for_spec(spec: AgentSpec) -> RetryPolicy | None:
+    if spec.retry is None:
+        return None
+    policy = RetryPolicy()
+    return RetryPolicy(
+        max_attempts=spec.retry.max_attempts
+        if spec.retry.max_attempts is not None
+        else policy.max_attempts,
+        backoff_base_seconds=spec.retry.backoff_seconds
+        if spec.retry.backoff_seconds is not None
+        else policy.backoff_base_seconds,
+        backoff_factor=policy.backoff_factor,
+        backoff_max_seconds=policy.backoff_max_seconds,
     )
 
 

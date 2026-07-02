@@ -52,6 +52,7 @@ from zetad.agents import (
 )
 from zetad.dispatch import EventDispatcher
 from zetad.ingress import run_push_ingress_forever
+from zetad.retry import RetryPolicy
 from zetad.session_turn import session_turn_agent
 from zetad.store import QueueClaim, RuntimeEventStore
 
@@ -74,6 +75,7 @@ class WorkerServices:
     model_selection: ModelSelection | None = None
     worker_name: str = LOCAL_WORKER_NAME
     max_concurrent: int = 1
+    retry_policy: RetryPolicy = field(default_factory=RetryPolicy)
 
     def close(self) -> None:
         self.events.close()
@@ -122,6 +124,7 @@ async def run_once(runtime: WorkerServices) -> str:
         worker_name=runtime.worker_name,
         heartbeat_interval_seconds=ATTEMPT_HEARTBEAT_INTERVAL_SECONDS,
         lease_ms=QUEUE_LEASE_MS,
+        retry_policy=runtime.retry_policy,
     )
 
 
@@ -434,6 +437,7 @@ async def run_available_queue_item(
     skipped_queue_items: set[str] | None = None,
     lease_ms: int = QUEUE_LEASE_MS,
     heartbeat_interval_seconds: float = ATTEMPT_HEARTBEAT_INTERVAL_SECONDS,
+    retry_policy: RetryPolicy | None = None,
 ) -> str:
     dispatcher = EventDispatcher(
         events,
@@ -441,6 +445,7 @@ async def run_available_queue_item(
         worker_name=worker_name,
         heartbeat_interval_seconds=heartbeat_interval_seconds,
         lease_ms=lease_ms,
+        retry_policy=retry_policy,
     )
     skipped = skipped_queue_items or set()
     while True:
@@ -556,6 +561,7 @@ async def run_eventlog_rpc_request(
         worker_name=runtime.worker_name,
         heartbeat_interval_seconds=ATTEMPT_HEARTBEAT_INTERVAL_SECONDS,
         lease_ms=QUEUE_LEASE_MS,
+        retry_policy=runtime.retry_policy,
     )
     client = RpcClient(
         connection=None,

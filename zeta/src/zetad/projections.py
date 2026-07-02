@@ -109,7 +109,10 @@ def _index_one_queue_item(connection: sqlite3.Connection, event: Event) -> None:
           event_id = excluded.event_id,
           target_agent = excluded.target_agent,
           status = excluded.status,
-          available_at = COALESCE(queue_items.available_at, excluded.available_at),
+          available_at = CASE
+            WHEN excluded.status = 'available' THEN excluded.available_at
+            ELSE queue_items.available_at
+          END,
           last_error = excluded.last_error,
           updated_at = excluded.updated_at
         """,
@@ -118,7 +121,9 @@ def _index_one_queue_item(connection: sqlite3.Connection, event: Event) -> None:
             queue_item.event_id,
             queue_item.target_agent,
             queue_item.status,
-            event.timestamp_ms if queue_item.status == "available" else None,
+            _queue_item_available_at(event)
+            if queue_item.status == "available"
+            else None,
             error,
             event.timestamp_ms,
         ),
@@ -286,6 +291,15 @@ def _usage_token(event: Event, *keys: str) -> int | None:
         if isinstance(value, int):
             return value
     return None
+
+
+def _queue_item_available_at(event: Event) -> int:
+    not_before = event.payload.get("not_before")
+    if isinstance(not_before, int) and not isinstance(not_before, bool):
+        return not_before
+    if isinstance(not_before, float):
+        return int(not_before)
+    return event.timestamp_ms
 
 
 def _runtime_status(event: Event) -> str:

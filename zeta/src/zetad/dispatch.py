@@ -43,6 +43,7 @@ from zetad.queue import (
     routed_queue_item_from_event,
     unhandled_queue_item_idempotency_key,
 )
+from zetad.retry import RetryPolicy, error_code_for_exception
 
 __all__ = [
     "AgentDefinition",
@@ -54,6 +55,7 @@ __all__ = [
     "EventPattern",
     "ReservedRuntimeEventError",
     "RouteOutcome",
+    "RetryPolicy",
     "TerminalQueueItemError",
 ]
 
@@ -154,6 +156,7 @@ class EventDispatcher:
         heartbeat_interval_seconds: float | None = None,
         lease_ms: int = 60_000,
         claim_token: str | None = None,
+        retry_policy: RetryPolicy | None = None,
     ) -> None:
         self.event_sink = event_sink
         self.executors = tuple(executors)
@@ -166,6 +169,7 @@ class EventDispatcher:
         self.heartbeat_interval_seconds = heartbeat_interval_seconds
         self.lease_ms = lease_ms
         self.claim_token = claim_token
+        self.retry_policy = retry_policy or RetryPolicy()
 
     async def publish_event(
         self,
@@ -261,16 +265,35 @@ class EventDispatcher:
             return self._missing_executor_events(triggering_event, routed_queue_item)
         return await self._run_agent(executor, triggering_event, routed_queue_item)
 
-    def schedule_retry(self, queue_item: RoutedQueueItem | str) -> Event:
+    def schedule_retry(
+        self,
+        queue_item: RoutedQueueItem | str,
+        *,
+        attempt_number: int | None = None,
+        policy: RetryPolicy | None = None,
+    ) -> Event:
         routed_queue_item = self._resolve_queue_item(queue_item)
         triggering_event = self._stored_event(routed_queue_item.event_id)
+        next_attempt_number = (
+            attempt_number
+            if attempt_number is not None
+            else self._next_attempt_number(routed_queue_item.queue_item_id)
+        )
+        retry_policy = policy or self._retry_policy_for_agent(
+            routed_queue_item.target_agent
+        )
+        previous_attempt_number = max(next_attempt_number - 1, 1)
+        not_before = current_time_ms() + retry_policy.delay_ms(
+            previous_attempt_number
+        )
         return self._append_queue_item_event_for_target(
             triggering_event,
             routed_queue_item.queue_item_id,
             routed_queue_item.target_agent,
             event_suffix="available",
             status="available",
-            attempt_number=self._next_attempt_number(routed_queue_item.queue_item_id),
+            attempt_number=next_attempt_number,
+            not_before=not_before,
         )
 
     def matching_routes(self, event: Event) -> list[AgentRoute]:
@@ -446,6 +469,12 @@ class EventDispatcher:
             if executor.agent_id == agent_id:
                 return executor
         return None
+
+    def _retry_policy_for_agent(self, agent_id: str) -> RetryPolicy:
+        executor = self._executor_for_id(agent_id)
+        if executor is None or executor.definition.retry_policy is None:
+            return self.retry_policy
+        return executor.definition.retry_policy
 
     def _resolve_queue_item(self, queue_item: RoutedQueueItem | str) -> RoutedQueueItem:
         if isinstance(queue_item, RoutedQueueItem):
@@ -689,32 +718,83 @@ class EventDispatcher:
         run_id: str | None,
     ) -> list[Event]:
         error = f"{type(exc).__name__}: {exc}"
+        error_code = error_code_for_exception(exc)
+        failed_attempt = self._append_attempt_event(
+            triggering_event,
+            agent,
+            queue_item_id,
+            attempt_id,
+            attempt_number,
+            event_suffix="failed",
+            status="failed",
+            started_at=started_at,
+            finished_at=event_timestamp(),
+            error=error,
+            error_code=error_code,
+            session_id=session_id,
+            run_id=run_id,
+        )
+        retry_policy = self._retry_policy_for_agent(agent.definition.agent_id)
+        failure_class = retry_policy.classify(error_code)
+        if failure_class == "permanent" or attempt_number >= retry_policy.max_attempts:
+            reason = "permanent" if failure_class == "permanent" else "exhausted"
+            return [
+                failed_attempt,
+                self._append_dead_lettered_queue_item_event(
+                    triggering_event,
+                    agent,
+                    queue_item_id,
+                    attempt_number,
+                    attempt_id,
+                    error_code=error_code,
+                    error=error,
+                    reason=reason,
+                    session_id=session_id,
+                    run_id=run_id,
+                ),
+            ]
         return [
-            self._append_attempt_event(
-                triggering_event,
-                agent,
-                queue_item_id,
-                attempt_id,
-                attempt_number,
-                event_suffix="failed",
-                status="failed",
-                started_at=started_at,
-                finished_at=event_timestamp(),
-                error=error,
-                session_id=session_id,
-                run_id=run_id,
-            ),
-            self._append_queue_item_event(
-                triggering_event,
-                agent.route,
-                queue_item_id,
-                event_suffix="failed",
-                status="failed",
-                error=error,
-                session_id=session_id,
-                run_id=run_id,
+            failed_attempt,
+            self.schedule_retry(
+                RoutedQueueItem(
+                    queue_item_id=queue_item_id,
+                    event_id=triggering_event.id,
+                    target_agent=agent.definition.agent_id,
+                ),
+                attempt_number=attempt_number + 1,
+                policy=retry_policy,
             ),
         ]
+
+    def _append_dead_lettered_queue_item_event(
+        self,
+        triggering_event: Event,
+        agent: ExecutableAgent,
+        queue_item_id: str,
+        attempt_count: int,
+        last_attempt_id: str,
+        *,
+        error_code: str,
+        error: str,
+        reason: str,
+        session_id: str | None,
+        run_id: str | None,
+    ) -> Event:
+        return self._append_queue_item_event(
+            triggering_event,
+            agent.route,
+            queue_item_id,
+            event_suffix="dead_lettered",
+            status="dead_lettered",
+            attempt_number=attempt_count,
+            reason=reason,
+            attempt_count=attempt_count,
+            last_error={"code": error_code, "message": error},
+            last_attempt_id=last_attempt_id,
+            dead_lettered_at=event_timestamp(),
+            session_id=session_id,
+            run_id=run_id,
+        )
 
     def _terminal_agent_events(
         self,

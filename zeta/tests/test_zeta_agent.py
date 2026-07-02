@@ -42,9 +42,11 @@ from zeta.run import runtime as zeta_agent
 from zeta.run import thread_run as zeta_requests
 from zeta.run.config import CompactionPolicy
 from zeta.run.runtime import AgentRunResult
+from zetad import agents as zetad_agents
 from zetad import cli as zetad_cli
 from zetad import dispatch as zetad_dispatch
 from zetad import queue as zetad_queue
+from zetad import retry as zetad_retry
 from zetad import scheduling as zetad_scheduling
 from zetad import session_turn as zetad_session_turn
 from zetad import worker as zetad_worker
@@ -3386,52 +3388,51 @@ def test_zeta_event_dispatcher_records_failed_work(tmp_path: Path) -> None:
         "runtime.queue_item.claimed",
         "runtime.attempt.started",
         "runtime.attempt.failed",
-        "runtime.queue_item.failed",
+        "runtime.queue_item.available",
     ]
-    assert outcome.lifecycle_events[-1].payload["status"] == "failed"
+    assert outcome.lifecycle_events[-1].payload["status"] == "available"
     queue_item_id = f"qi_{outcome.event.id}_issue-triage"
     assert [event.idempotency_key for event in outcome.lifecycle_events] == [
         f"queue_item:{outcome.event.id}:issue-triage:available",
         f"queue_item:{outcome.event.id}:issue-triage:claimed:1",
         f"attempt:{queue_item_id}:1:started",
         f"attempt:{queue_item_id}:1:failed",
-        f"queue_item:{outcome.event.id}:issue-triage:failed",
+        f"queue_item:{outcome.event.id}:issue-triage:available:2",
     ]
     assert zetad_queue.terminal_queue_item_result(
         outcome.lifecycle_events,
         event_id=outcome.event.id,
         target_agent="issue-triage",
-    ) == {
-        "outcome": "failed",
-        "error": "RuntimeError: boom",
-        "final_event_cursor": "6",
-    }
+    ) is None
     assert outcome.lifecycle_events[-1].payload == {
         **asdict(
             QueueItem(
                 queue_item_id=queue_item_id,
                 event_id=outcome.event.id,
                 target_agent="issue-triage",
-                status="failed",
+                status="available",
             )
         ),
-        "error": "RuntimeError: boom",
+        "not_before": outcome.lifecycle_events[-1].payload["not_before"],
     }
-    assert outcome.lifecycle_events[3].payload == asdict(
-        Attempt(
-            attempt_id=f"att_{queue_item_id}_1",
-            queue_item_id=queue_item_id,
-            event_id=outcome.event.id,
-            attempt_number=1,
-            target_agent="issue-triage",
-            status="failed",
-            started_at=outcome.lifecycle_events[2].payload["started_at"],
-            finished_at=outcome.lifecycle_events[3].payload["finished_at"],
-            error="RuntimeError: boom",
-            session_id=f"agent/issue-triage/{outcome.event.id}",
-            run_id=f"run_att_{queue_item_id}_1",
-        )
-    )
+    assert outcome.lifecycle_events[3].payload == {
+        **asdict(
+            Attempt(
+                attempt_id=f"att_{queue_item_id}_1",
+                queue_item_id=queue_item_id,
+                event_id=outcome.event.id,
+                attempt_number=1,
+                target_agent="issue-triage",
+                status="failed",
+                started_at=outcome.lifecycle_events[2].payload["started_at"],
+                finished_at=outcome.lifecycle_events[3].payload["finished_at"],
+                error="RuntimeError: boom",
+                session_id=f"agent/issue-triage/{outcome.event.id}",
+                run_id=f"run_att_{queue_item_id}_1",
+            )
+        ),
+        "error_code": "agent_execution_failed",
+    }
 
 
 def test_zeta_event_dispatcher_can_retry_failed_work(tmp_path: Path) -> None:
@@ -3486,6 +3487,186 @@ def test_zeta_event_dispatcher_can_retry_failed_work(tmp_path: Path) -> None:
     assert attempts_rows[0]["status"] == "failed"
     assert attempts_rows[1]["status"] == "completed"
     assert retry_events[1].payload["attempt_id"] == f"att_{queue_item_id}_2"
+
+
+def test_zeta_retry_policy_computes_backoff_and_classifies_errors() -> None:
+    policy = zetad_retry.RetryPolicy(
+        max_attempts=3,
+        backoff_base_seconds=2.0,
+        backoff_factor=3.0,
+        backoff_max_seconds=10.0,
+    )
+
+    assert [policy.delay_seconds(attempt) for attempt in (1, 2, 3)] == [
+        2.0,
+        6.0,
+        10.0,
+    ]
+    assert policy.deterministic_jitter_seconds("qi_1", spread_seconds=5.0) == (
+        policy.deterministic_jitter_seconds("qi_1", spread_seconds=5.0)
+    )
+    assert policy.classify("agent_spec_invalid") == "permanent"
+    assert policy.classify("provider_timeout") == "retryable"
+
+
+def test_zeta_event_dispatcher_schedules_retry_with_backoff(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    event_store = zeta_events.SqliteEventStore(tmp_path / "events.sqlite3")
+    attempts = 0
+
+    async def fail_agent(run: zetad_dispatch.AgentInvocation) -> dict[str, object]:
+        nonlocal attempts
+        attempts += 1
+        raise RuntimeError(f"boom {attempts}")
+
+    monkeypatch.setattr(zetad_dispatch, "current_time_ms", lambda: 10_000)
+    dispatcher = zetad_dispatch.EventDispatcher(
+        event_store,
+        retry_policy=zetad_retry.RetryPolicy(
+            max_attempts=3,
+            backoff_base_seconds=1.0,
+            backoff_factor=2.0,
+        ),
+        executors=[
+            zetad_dispatch.ExecutableAgent(
+                zetad_dispatch.AgentDefinition(
+                    "issue-triage",
+                    (zetad_dispatch.EventPattern("github.issue.opened"),),
+                ),
+                run=fail_agent,
+            )
+        ],
+    )
+    outcome = dispatch_event(
+        dispatcher,
+        zeta_events.DraftEvent("github.issue.opened", "github", {}),
+    )
+    queue_item_id = f"qi_{outcome.event.id}_issue-triage"
+    first_retry = outcome.lifecycle_events[-1]
+    queue_row = event_store.queue_item(queue_item_id)
+
+    monkeypatch.setattr(zetad_dispatch, "current_time_ms", lambda: 20_000)
+    second_events = asyncio.run(dispatcher.run_queue_item(queue_item_id))
+    second_retry = second_events[-1]
+    projected_row = event_store.list_queue_items()[0]
+
+    assert first_retry.event_type == "runtime.queue_item.available"
+    assert first_retry.payload["not_before"] == 11_000
+    assert queue_row == {
+        "queue_item_id": queue_item_id,
+        "event_id": outcome.event.id,
+        "target_agent": "issue-triage",
+        "status": "available",
+    }
+    assert second_retry.event_type == "runtime.queue_item.available"
+    assert second_retry.payload["not_before"] == 22_000
+    assert projected_row["available_at"] == 22_000
+    assert event_store.claim_next_queue_item(
+        "worker-a",
+        lease_ms=1_000,
+        now_ms=21_999,
+    ) is None
+
+
+def test_zeta_event_dispatcher_dead_letters_exhausted_retries(
+    tmp_path: Path,
+) -> None:
+    event_store = zeta_events.SqliteEventStore(tmp_path / "events.sqlite3")
+
+    async def fail_agent(run: zetad_dispatch.AgentInvocation) -> dict[str, object]:
+        del run
+        raise RuntimeError("boom")
+
+    dispatcher = zetad_dispatch.EventDispatcher(
+        event_store,
+        retry_policy=zetad_retry.RetryPolicy(max_attempts=1),
+        executors=[
+            zetad_dispatch.ExecutableAgent(
+                zetad_dispatch.AgentDefinition(
+                    "issue-triage",
+                    (zetad_dispatch.EventPattern("github.issue.opened"),),
+                ),
+                run=fail_agent,
+            )
+        ],
+    )
+
+    outcome = dispatch_event(
+        dispatcher,
+        zeta_events.DraftEvent("github.issue.opened", "github", {}),
+    )
+    queue_item_id = f"qi_{outcome.event.id}_issue-triage"
+    dead_letter = outcome.lifecycle_events[-1]
+
+    assert dead_letter.event_type == "runtime.queue_item.dead_lettered"
+    assert dead_letter.idempotency_key == (
+        f"queue_item:{outcome.event.id}:issue-triage:dead_lettered:1"
+    )
+    assert dead_letter.payload == {
+        **asdict(
+            QueueItem(
+                queue_item_id=queue_item_id,
+                event_id=outcome.event.id,
+                target_agent="issue-triage",
+                status="dead_lettered",
+            )
+        ),
+        "reason": "exhausted",
+        "attempt_count": 1,
+        "last_error": {
+            "code": "agent_execution_failed",
+            "message": "RuntimeError: boom",
+        },
+        "last_attempt_id": f"att_{queue_item_id}_1",
+        "dead_lettered_at": dead_letter.payload["dead_lettered_at"],
+    }
+    assert event_store.claim_next_queue_item(
+        "worker-a",
+        lease_ms=1_000,
+        now_ms=dead_letter.timestamp_ms,
+    ) is None
+
+
+def test_zeta_event_dispatcher_dead_letters_permanent_failures(
+    tmp_path: Path,
+) -> None:
+    event_store = zeta_events.SqliteEventStore(tmp_path / "events.sqlite3")
+
+    async def fail_agent(run: zetad_dispatch.AgentInvocation) -> dict[str, object]:
+        del run
+        raise zeta_agent_spec.SpecError("invalid spec")
+
+    dispatcher = zetad_dispatch.EventDispatcher(
+        event_store,
+        retry_policy=zetad_retry.RetryPolicy(max_attempts=3),
+        executors=[
+            zetad_dispatch.ExecutableAgent(
+                zetad_dispatch.AgentDefinition(
+                    "issue-triage",
+                    (zetad_dispatch.EventPattern("github.issue.opened"),),
+                ),
+                run=fail_agent,
+            )
+        ],
+    )
+
+    outcome = dispatch_event(
+        dispatcher,
+        zeta_events.DraftEvent("github.issue.opened", "github", {}),
+    )
+    attempt_failed = outcome.lifecycle_events[-2]
+    dead_letter = outcome.lifecycle_events[-1]
+
+    assert attempt_failed.event_type == "runtime.attempt.failed"
+    assert attempt_failed.payload["error_code"] == "agent_spec_invalid"
+    assert dead_letter.event_type == "runtime.queue_item.dead_lettered"
+    assert dead_letter.payload["reason"] == "permanent"
+    assert dead_letter.payload["last_error"] == {
+        "code": "agent_spec_invalid",
+        "message": "SpecError: invalid spec",
+    }
 
 
 def test_zeta_project_queue_items_projects_latest_lifecycle_state(
@@ -4698,6 +4879,58 @@ def test_zeta_cli_events_publish_rejects_non_object_payload(tmp_path: Path) -> N
 
     assert result.exit_code != 0
     assert "payload JSON must be an object" in result.output
+
+
+def test_zeta_agent_spec_parses_retry_policy(tmp_path: Path) -> None:
+    agents_dir = tmp_path / "agents"
+    agents_dir.mkdir()
+    (agents_dir / "triage.md").write_text(
+        """---
+name: Triage
+description: Triage issues.
+accepts:
+  - github.issue.opened
+retry:
+  max_attempts: 5
+  backoff_seconds: 1.5
+---
+Handle the issue.
+""",
+        encoding="utf-8",
+    )
+
+    specs = zeta_agent_spec.load_specs(agents_dir)
+    executors = zetad_agents.compile_agent_definitions(specs[0])
+
+    assert specs[0].retry == zeta_agent_spec.RetrySpec(
+        max_attempts=5,
+        backoff_seconds=1.5,
+    )
+    assert executors[0].definition.retry_policy == zetad_retry.RetryPolicy(
+        max_attempts=5,
+        backoff_base_seconds=1.5,
+    )
+
+
+def test_zeta_agent_spec_rejects_invalid_retry_policy(tmp_path: Path) -> None:
+    agents_dir = tmp_path / "agents"
+    agents_dir.mkdir()
+    (agents_dir / "triage.md").write_text(
+        """---
+name: Triage
+description: Triage issues.
+retry:
+  max_attempts: no
+---
+Handle the issue.
+""",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(zeta_agent_spec.SpecError) as exc_info:
+        zeta_agent_spec.load_specs(agents_dir)
+
+    assert "max_attempts must be a positive integer" in str(exc_info.value)
 
 
 def test_zeta_cli_schedule_status_json_lists_next_and_last_tick(

@@ -21,6 +21,7 @@ QueueItemStatus = Literal[
     "failed",
     "cancelled",
     "retry_scheduled",
+    "dead_lettered",
     "unhandled",
 ]
 
@@ -58,6 +59,7 @@ QUEUE_ITEM_STATUSES = frozenset(
         "failed",
         "cancelled",
         "retry_scheduled",
+        "dead_lettered",
         "unhandled",
     }
 )
@@ -66,6 +68,7 @@ TERMINAL_QUEUE_ITEM_EVENT_TYPES = {
     "runtime.queue_item.completed",
     "runtime.queue_item.failed",
     "runtime.queue_item.cancelled",
+    "runtime.queue_item.dead_lettered",
     "runtime.queue_item.unhandled",
 }
 

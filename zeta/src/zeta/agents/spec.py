@@ -22,6 +22,7 @@ BUILT_IN_FRONTMATTER_KEYS = frozenset(
         "skills",
         "tools",
         "schedules",
+        "retry",
     }
 )
 
@@ -43,6 +44,14 @@ class ModelSpec:
 
 
 @dataclass(frozen=True)
+class RetrySpec:
+    """Per-agent retry policy override from authored frontmatter."""
+
+    max_attempts: int | None = None
+    backoff_seconds: float | None = None
+
+
+@dataclass(frozen=True)
 class AgentSpec:
     """Parsed authored agent specification."""
 
@@ -60,6 +69,7 @@ class AgentSpec:
     skills: tuple[str, ...] = ()
     tools: tuple[str, ...] = ()
     schedules: tuple[ScheduleEntry, ...] = ()
+    retry: RetrySpec | None = None
     manifest: dict[str, Any] = field(default_factory=dict)
 
 
@@ -101,6 +111,7 @@ def load_spec(path: str | Path) -> AgentSpec:
             skills=string_tuple(frontmatter.get("skills", ()), "skills", path),
             tools=string_tuple(frontmatter.get("tools", ()), "tools", path),
             schedules=schedules,
+            retry=retry_spec(frontmatter.get("retry"), path),
             manifest={
                 key: value
                 for key, value in frontmatter.items()
@@ -180,6 +191,48 @@ def model_spec(value: Any, path: Path) -> ModelSpec | None:
         name=required_model_string(value, "name", path),
         url=required_model_string(value, "url", path),
     )
+
+
+def retry_spec(value: Any, path: Path) -> RetrySpec | None:
+    if value is None:
+        return None
+    if not isinstance(value, Mapping):
+        raise SpecError(f"invalid value for 'retry' in {path}: expected object")
+    unknown = sorted(set(value) - {"max_attempts", "backoff_seconds"})
+    if unknown:
+        raise SpecError(
+            f"invalid value for 'retry' in {path}: unsupported field {unknown[0]!r}"
+        )
+    return RetrySpec(
+        max_attempts=optional_positive_int(value.get("max_attempts"), "retry", path),
+        backoff_seconds=optional_nonnegative_number(
+            value.get("backoff_seconds"),
+            "retry",
+            path,
+        ),
+    )
+
+
+def optional_positive_int(value: Any, field: str, path: Path) -> int | None:
+    if value is None:
+        return None
+    if not isinstance(value, int) or isinstance(value, bool) or value < 1:
+        raise SpecError(
+            f"invalid value for {field!r} in {path}: max_attempts "
+            "must be a positive integer"
+        )
+    return value
+
+
+def optional_nonnegative_number(value: Any, field: str, path: Path) -> float | None:
+    if value is None:
+        return None
+    if not isinstance(value, int | float) or isinstance(value, bool) or value < 0:
+        raise SpecError(
+            f"invalid value for {field!r} in {path}: backoff_seconds "
+            "must be a non-negative number"
+        )
+    return float(value)
 
 
 def required_model_string(value: Mapping[str, Any], field: str, path: Path) -> str:

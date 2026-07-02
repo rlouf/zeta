@@ -26,6 +26,7 @@ QUEUE_STATUS_ORDER = (
     "failed",
     "cancelled",
     "retry_scheduled",
+    "dead_lettered",
     "unhandled",
 )
 

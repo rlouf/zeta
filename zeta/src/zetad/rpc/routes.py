@@ -69,10 +69,24 @@ class RpcClient:
     dispatcher: EventDispatcher
     pending_runs: dict[str, RunState]
     pending_tool_calls: dict[str, asyncio.Future[dict[str, Any]]]
+    background_tasks: set[asyncio.Task[Any]] = field(default_factory=set)
 
     async def notify(self, method: str, params: dict[str, Any]) -> None:
         if self.connection is not None:
             await self.connection.notify(method, params)
+
+    def create_background_task(self, awaitable: Any) -> asyncio.Task[Any]:
+        """Start background work and keep it alive until it completes."""
+
+        task = asyncio.create_task(awaitable)
+        self.background_tasks.add(task)
+        task.add_done_callback(self._discard_background_task)
+        return task
+
+    def _discard_background_task(self, task: asyncio.Task[Any]) -> None:
+        self.background_tasks.discard(task)
+        if not task.cancelled():
+            task.exception()
 
     async def call_tool(
         self,
@@ -338,7 +352,7 @@ async def events_publish(
         ) from exc
 
     if outcome.inserted and client.connection is not None:
-        asyncio.create_task(route_event(client, outcome.event))
+        client.create_background_task(route_event(client, outcome.event))
 
     return {
         "inserted": outcome.inserted,

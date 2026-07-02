@@ -634,11 +634,14 @@ def test_event_store_path_uses_zeta_state_dir() -> None:
     assert path == Path(tmp) / "zeta.sqlite3"
 
 
-def test_commas_default_state_matches_zeta_events_project_root(
+def test_commas_default_state_matches_zeta_events_default_state(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
     monkeypatch.delenv("ZETA_STATE_DIR", raising=False)
+    monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("COMMAS_SESSION_ID", "test")
     monkeypatch.chdir(tmp_path)
 
@@ -653,7 +656,7 @@ def test_commas_default_state_matches_zeta_events_project_root(
         "zeta.tool_call.completed",
         "zeta.turn.completed",
     }
-    assert state_dir() == tmp_path / ".zeta"
+    assert state_dir() == home / ".zeta"
 
 
 def test_sqlite_event_store_deduplicates_idempotency_keys(tmp_path: Path) -> None:

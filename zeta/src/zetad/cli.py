@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import os
 import sys
 import time
 from pathlib import Path
@@ -45,7 +46,12 @@ cli.add_command(model_group)
 def runtime_state_dir(project_root: Path, state_dir: Path | None) -> Path:
     if state_dir is not None:
         return state_dir.expanduser()
-    return project_root.expanduser().resolve() / ".zeta"
+    if project_root != Path("."):
+        return project_root.expanduser().resolve() / ".zeta"
+    env_state_dir = os.environ.get("ZETA_STATE_DIR")
+    if env_state_dir:
+        return Path(env_state_dir).expanduser()
+    return Path.home() / ".zeta"
 
 
 def runtime_event_store(
@@ -243,7 +249,7 @@ def run_summary_text(record: dict[str, object]) -> str:
     type=click.Path(file_okay=False, path_type=Path),
     default=Path("."),
     show_default=True,
-    help="Project root containing .zeta runtime state.",
+    help="Project root for agent specs and relative paths.",
 )
 @click.option(
     "--state-dir",
@@ -285,7 +291,7 @@ def queue(project_root: Path, state_dir: Path | None, json_output: bool) -> int:
     type=click.Path(file_okay=False, path_type=Path),
     default=Path("."),
     show_default=True,
-    help="Project root containing .zeta runtime state.",
+    help="Project root for agent specs and relative paths.",
 )
 @click.option(
     "--state-dir",
@@ -327,7 +333,7 @@ def attempts(project_root: Path, state_dir: Path | None, json_output: bool) -> i
     type=click.Path(file_okay=False, path_type=Path),
     default=Path("."),
     show_default=True,
-    help="Project root containing .zeta runtime state.",
+    help="Project root for agent specs and relative paths.",
 )
 @click.option(
     "--state-dir",
@@ -396,7 +402,7 @@ def events(
     type=click.Path(file_okay=False, path_type=Path),
     default=Path("."),
     show_default=True,
-    help="Project root containing .zeta runtime state.",
+    help="Project root for agent specs and relative paths.",
 )
 @click.option(
     "--state-dir",
@@ -470,7 +476,7 @@ def events_publish(
     type=click.Path(file_okay=False, path_type=Path),
     default=Path("."),
     show_default=True,
-    help="Project root containing .zeta runtime state.",
+    help="Project root for agent specs and relative paths.",
 )
 @click.option(
     "--state-dir",
@@ -509,7 +515,7 @@ def events_trace(
     type=click.Path(file_okay=False, path_type=Path),
     default=Path("."),
     show_default=True,
-    help="Project root containing .zeta runtime state.",
+    help="Project root for agent specs and relative paths.",
 )
 @click.option(
     "--state-dir",
@@ -548,7 +554,7 @@ def events_root(
     type=click.Path(file_okay=False, path_type=Path),
     default=Path("."),
     show_default=True,
-    help="Project root containing .zeta runtime state.",
+    help="Project root for agent specs and relative paths.",
 )
 @click.option(
     "--state-dir",
@@ -587,7 +593,7 @@ def events_descendants(
     type=click.Path(file_okay=False, path_type=Path),
     default=Path("."),
     show_default=True,
-    help="Project root containing .zeta runtime state.",
+    help="Project root for agent specs and relative paths.",
 )
 @click.option(
     "--state-dir",
@@ -635,7 +641,7 @@ def event_payload_from_json(payload_json: str) -> dict[str, object]:
     type=click.Path(file_okay=False, path_type=Path),
     default=Path("."),
     show_default=True,
-    help="Project root containing .zeta runtime state.",
+    help="Project root for agent specs and relative paths.",
 )
 @click.option(
     "--state-dir",
@@ -679,7 +685,7 @@ def runs(project_root: Path, state_dir: Path | None, json_output: bool) -> int:
     type=click.Path(file_okay=False, path_type=Path),
     default=Path("."),
     show_default=True,
-    help="Project root containing .zeta runtime state and agents/ specs.",
+    help="Project root containing agents/ specs.",
 )
 @click.option(
     "--state-dir",
@@ -754,7 +760,7 @@ def connector_names_from_option(value: str | None) -> tuple[str, ...] | None:
     type=click.Path(file_okay=False, path_type=Path),
     default=Path("."),
     show_default=True,
-    help="Project root containing .zeta runtime state.",
+    help="Project root for agent specs and relative paths.",
 )
 @click.option(
     "--state-dir",
@@ -804,7 +810,7 @@ def run_show(
     type=click.Path(file_okay=False, path_type=Path),
     default=Path("."),
     show_default=True,
-    help="Project root containing .zeta runtime state and agents/ specs.",
+    help="Project root containing agents/ specs.",
 )
 @click.option(
     "--state-dir",
@@ -845,7 +851,7 @@ def schedule(
     type=click.Path(file_okay=False, path_type=Path),
     default=Path("."),
     show_default=True,
-    help="Project root containing .zeta runtime state and agents/ specs.",
+    help="Project root containing agents/ specs.",
 )
 @click.option(
     "--state-dir",
@@ -900,7 +906,7 @@ def seconds_until_next_minute() -> float:
     type=click.Path(file_okay=False, path_type=Path),
     default=Path("."),
     show_default=True,
-    help="Project root containing .zeta runtime state.",
+    help="Project root for agent specs and relative paths.",
 )
 @click.option(
     "--state-dir",

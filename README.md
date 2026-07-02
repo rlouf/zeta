@@ -320,7 +320,7 @@ The bundled Slack connector uses:
 
 ## Running Agents
 
-Zeta stores project runtime state under `.zeta/` by default. Override it with
+Zeta stores runtime state under `~/.zeta/` by default. Override it with
 `--state-dir` when needed.
 
 Publish an event manually:
@@ -445,7 +445,7 @@ Runtime events use the following prefixes:
 ## Prompt And Tool Traces
 
 Runtime events answer "what happened?" Prompt traces answer "what exactly did
-the model see?" They are stored in `.zeta/zeta.sqlite3`, scoped by session id.
+the model see?" They are stored in `~/.zeta/zeta.sqlite3`, scoped by session id.
 
 ```sh
 # List recent prompts and assistant messages across agent sessions.
@@ -545,7 +545,7 @@ commas doctor [--json]
 Runtime state is inspected with `zeta`: use `zeta events`, `zeta trace`, and
 `zeta model list/show`.
 
-Commas and Zeta write shell/frontend and runtime state under `.zeta/` by default.
+Commas and Zeta write shell/frontend and runtime state under `~/.zeta/` by default.
 
 ## Development
 

@@ -23,7 +23,7 @@ SCHEMA: dict[str, Any] = {
 }
 
 SPEC = Capability(
-    CapabilityId("commas", "bash"),
+    CapabilityId("zeta", "bash"),
     "Execute or stage a shell command, depending on the active workflow.",
     SCHEMA,
 )

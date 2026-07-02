@@ -34,7 +34,7 @@ def cmd_session(ctx: click.Context, json_output: bool) -> None:
     pty, so terminal windows and tmux panes keep separate continuity while
     subshells share it. Bare `commas session` runs `session show`.
 
-    State lives under ~/.commas/; set COMMAS_STATE_DIR to move it.
+    State lives under ~/.zeta/; set ZETA_STATE_DIR to move it.
     """
     if ctx.invoked_subcommand is None:
         ctx.exit(print_session_snapshot(json_output))
@@ -68,7 +68,7 @@ def session_show(json_output: bool) -> int:
 def session_path(json_output: bool) -> int:
     """Print the current session state directory.
 
-    The directory lives under ~/.commas/ unless COMMAS_STATE_DIR moves it.
+    The directory lives under ~/.zeta/ unless ZETA_STATE_DIR moves it.
     """
     return print_session_path(json_output)
 

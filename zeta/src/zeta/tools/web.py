@@ -39,7 +39,7 @@ SEARCH_SCHEMA: dict[str, Any] = {
 }
 
 SEARCH_SPEC = Capability(
-    CapabilityId("commas", "web_search"),
+    CapabilityId("zeta", "web_search"),
     (
         "Search public web pages using Codex hosted web search. Provide one "
         "self-contained query; use read for URLs returned by the search."
@@ -138,18 +138,18 @@ def config_from_env(*, limit: int) -> WebConfig:
     credentials = load_codex_credentials()
     return WebConfig(
         credentials=credentials,
-        model=os.environ.get("COMMAS_WEB_SEARCH_MODEL", DEFAULT_SEARCH_MODEL),
+        model=os.environ.get("ZETA_WEB_SEARCH_MODEL", DEFAULT_SEARCH_MODEL),
         timeout_sec=float(
-            os.environ.get("COMMAS_WEB_TIMEOUT_SEC", DEFAULT_TIMEOUT_SEC)
+            os.environ.get("ZETA_WEB_TIMEOUT_SEC", DEFAULT_TIMEOUT_SEC)
         ),
         max_preview_bytes=int(
-            os.environ.get("COMMAS_WEB_MAX_PREVIEW_BYTES", DEFAULT_MAX_PREVIEW_BYTES)
+            os.environ.get("ZETA_WEB_MAX_PREVIEW_BYTES", DEFAULT_MAX_PREVIEW_BYTES)
         ),
         max_preview_lines=int(
-            os.environ.get("COMMAS_WEB_MAX_PREVIEW_LINES", DEFAULT_MAX_PREVIEW_LINES)
+            os.environ.get("ZETA_WEB_MAX_PREVIEW_LINES", DEFAULT_MAX_PREVIEW_LINES)
         ),
         limit=limit,
-        selected_url=os.environ.get("COMMAS_CODEX_BASE_URL"),
+        selected_url=os.environ.get("ZETA_CODEX_BASE_URL"),
     )
 
 

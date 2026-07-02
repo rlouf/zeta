@@ -38,7 +38,7 @@ SCHEMA: dict[str, Any] = {
 }
 
 SPEC = Capability(
-    CapabilityId("commas", "read"),
+    CapabilityId("zeta", "read"),
     "Read a UTF-8 text file or public HTTP(S) URL. Returns a [path#tag] snapshot header and numbered lines.",
     SCHEMA,
 )

@@ -55,9 +55,12 @@ def available_session_ids(root: Path | None = None) -> list[str]:
     connection.row_factory = sqlite3.Row
     try:
         sessions: set[str] = set()
-        rows = connection.execute(
-            "SELECT DISTINCT session_id FROM derivations WHERE session_id IS NOT NULL"
-        ).fetchall()
+        try:
+            rows = connection.execute(
+                "SELECT DISTINCT session_id FROM derivations WHERE session_id IS NOT NULL"
+            ).fetchall()
+        except sqlite3.OperationalError:
+            return []
         sessions.update(str(row["session_id"]) for row in rows)
         rows = connection.execute(
             """

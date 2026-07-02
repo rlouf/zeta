@@ -62,7 +62,7 @@ SCHEMA: dict[str, Any] = {
 }
 
 SPEC = Capability(
-    CapabilityId("commas", "query_log"),
+    CapabilityId("zeta", "query_log"),
     (
         "Query the user's turn history: what ran, in which workflow, "
         "what it touched, what it cost, and how it ended. Searches every "

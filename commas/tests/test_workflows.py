@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
+import zeta.context.components as zeta_context
 import zeta.models.chat_completions as zeta_model
 import zeta.models.profiles as zeta_models
 from click.testing import CliRunner
@@ -37,7 +38,7 @@ from commas.sessions import record_turn, session_dir
 from commas.state import history_view, read_events
 from commas.workflows import ask as ask_runner
 from commas.workflows import step as zeta_runner
-from zeta.context.components import PromptTrace, chat_messages
+from zeta.context.components import PromptTrace
 from zeta.records import events as zeta_event_model
 from zeta.records.events import DraftEvent, Event, event_view
 from zeta.records.objects import Ref
@@ -58,6 +59,12 @@ from test_support.zeta_helpers import (
     write_skill,
 )
 from zeta import models as zeta_models_api
+
+
+def timeline_messages(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return zeta_context.component_messages(
+        zeta_context.project_timeline_message_components(events, historical=True)
+    )
 
 zeta_trace = SimpleNamespace(Ref=Ref, resolve_object_id=resolve_object_id)
 
@@ -990,7 +997,7 @@ thinking = "low"
 """,
     )
     monkeypatch.setenv("HOME", str(home))
-    monkeypatch.setenv("COMMAS_STATE_DIR", str(tmp_path / "state"))
+    monkeypatch.setenv("ZETA_STATE_DIR", str(tmp_path / "state"))
     monkeypatch.setenv("COMMAS_SESSION_ID", "agent-model")
     zeta_models.set_active_model_profile("coder", session_dir=session_dir())
     captured: dict[str, Any] = {}
@@ -1083,7 +1090,7 @@ url = "http://127.0.0.1:8081/v1/chat/completions"
 """,
     )
     monkeypatch.setenv("HOME", str(home))
-    monkeypatch.setenv("COMMAS_STATE_DIR", str(tmp_path / "state"))
+    monkeypatch.setenv("ZETA_STATE_DIR", str(tmp_path / "state"))
     monkeypatch.setenv("COMMAS_SESSION_ID", "answer-model")
     zeta_models.set_active_model_profile("fast", session_dir=session_dir())
     captured: dict[str, Any] = {}
@@ -1130,7 +1137,7 @@ def test_append_shell_result_appends_tool_result(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    monkeypatch.setenv("COMMAS_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("ZETA_STATE_DIR", str(tmp_path))
     monkeypatch.setenv("COMMAS_SESSION_ID", "zeta-test")
     record_commas_event(
         {
@@ -1178,7 +1185,7 @@ def test_resolved_shell_handoff_context_keeps_tool_call_with_shell_result(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    monkeypatch.setenv("COMMAS_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("ZETA_STATE_DIR", str(tmp_path))
     monkeypatch.setenv("COMMAS_SESSION_ID", "zeta-test")
     record_commas_event(
         {
@@ -1223,7 +1230,7 @@ def test_resolved_shell_handoff_context_keeps_tool_call_with_shell_result(
     record_turn("uv run pytest", 1, "/repo", stderr_snippet="test failed")
 
     commas_handoff.append_shell_result()
-    messages = chat_messages(current_commas_timeline())
+    messages = timeline_messages(current_commas_timeline())
 
     assert messages[0]["role"] == "assistant"
     assert messages[0]["tool_calls"][0]["id"] == "call-1"
@@ -1239,7 +1246,7 @@ def test_commas_transcript_shell_result_reports_extended_handoff_as_edited(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    monkeypatch.setenv("COMMAS_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("ZETA_STATE_DIR", str(tmp_path))
     monkeypatch.setenv("COMMAS_SESSION_ID", "zeta-test")
     record_commas_event(
         {
@@ -1275,7 +1282,7 @@ def test_commas_transcript_shell_result_matches_despite_whitespace_edits(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    monkeypatch.setenv("COMMAS_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("ZETA_STATE_DIR", str(tmp_path))
     monkeypatch.setenv("COMMAS_SESSION_ID", "zeta-test")
     record_commas_event(
         {
@@ -1306,7 +1313,7 @@ def test_commas_transcript_shell_result_cancels_unrelated_command(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    monkeypatch.setenv("COMMAS_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("ZETA_STATE_DIR", str(tmp_path))
     monkeypatch.setenv("COMMAS_SESSION_ID", "zeta-test")
     record_commas_event(
         {
@@ -1352,7 +1359,7 @@ def test_commas_transcript_shell_result_includes_intervening_shell_turns(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    monkeypatch.setenv("COMMAS_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("ZETA_STATE_DIR", str(tmp_path))
     monkeypatch.setenv("COMMAS_SESSION_ID", "zeta-test")
     record_commas_event(
         {
@@ -1388,7 +1395,7 @@ def test_commas_transcript_shell_result_does_not_reuse_resolved_handoff(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    monkeypatch.setenv("COMMAS_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("ZETA_STATE_DIR", str(tmp_path))
     monkeypatch.setenv("COMMAS_SESSION_ID", "zeta-test")
     record_commas_event(
         {
@@ -1893,7 +1900,7 @@ def test_zeta_answer_model_failure_records_turn_abort(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    monkeypatch.setenv("COMMAS_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("ZETA_STATE_DIR", str(tmp_path))
     monkeypatch.setenv("COMMAS_SESSION_ID", "zeta-test")
     monkeypatch.setattr(agent_io, "ensure_server", lambda: True)
 
@@ -1909,7 +1916,7 @@ def test_zeta_answer_model_failure_records_turn_abort(
     assert timeline[-1]["type"] == "turn_aborted"
     assert "model stream failed" in timeline[-1]["error"]
     assert timeline[-2]["type"] == "user_message"
-    messages = chat_messages(timeline)
+    messages = timeline_messages(timeline)
     assert messages[-1]["role"] == "assistant"
     assert "turn aborted" in messages[-1]["content"]
 
@@ -1918,7 +1925,7 @@ def test_zeta_step_model_failure_records_turn_abort(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    monkeypatch.setenv("COMMAS_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("ZETA_STATE_DIR", str(tmp_path))
     monkeypatch.setenv("COMMAS_SESSION_ID", "zeta-test")
     monkeypatch.setattr(agent_io, "ensure_server", lambda: True)
 
@@ -1941,7 +1948,7 @@ def test_session_clear_removes_zeta_continuity(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    monkeypatch.setenv("COMMAS_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("ZETA_STATE_DIR", str(tmp_path))
     monkeypatch.setenv("COMMAS_SESSION_ID", "zeta-test")
     record_commas_event({"type": "user_message", "content": "hello"})
     record_turn("ls", 0, "/repo")
@@ -2079,7 +2086,7 @@ def history_turns() -> list[dict[str, Any]]:
     return [
         project_one_turn_record(event)
         for event in read_events()
-        if event.event_type.startswith("zeta.turn.")
+        if event.payload.get("schema") == "zeta.turn"
     ]
 
 
@@ -2723,7 +2730,7 @@ def test_matching_pending_handoff_returns_staged_handoff(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    monkeypatch.setenv("COMMAS_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("ZETA_STATE_DIR", str(tmp_path))
     monkeypatch.setenv("COMMAS_SESSION_ID", "resume-test")
     record_commas_event(staged_handoff_event("uv run pytest"))
 
@@ -2740,7 +2747,7 @@ def test_matching_pending_handoff_ignores_unrelated_command(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    monkeypatch.setenv("COMMAS_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("ZETA_STATE_DIR", str(tmp_path))
     monkeypatch.setenv("COMMAS_SESSION_ID", "resume-test")
     record_commas_event(staged_handoff_event("uv run pytest"))
 
@@ -2756,7 +2763,7 @@ def test_matching_pending_handoff_without_pending_handoff(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    monkeypatch.setenv("COMMAS_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("ZETA_STATE_DIR", str(tmp_path))
     monkeypatch.setenv("COMMAS_SESSION_ID", "resume-test")
 
     handoff = commas_handoff.matching_pending_handoff(
@@ -2771,7 +2778,7 @@ def test_commas_run_writes_resume_file_for_staged_command(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    monkeypatch.setenv("COMMAS_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("ZETA_STATE_DIR", str(tmp_path))
     monkeypatch.setenv("COMMAS_SESSION_ID", "resume-test")
     record_commas_event(staged_handoff_event("echo staged"))
     resume_file = tmp_path / "resume"
@@ -2789,7 +2796,7 @@ def test_commas_run_leaves_resume_file_untouched_for_unrelated_command(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    monkeypatch.setenv("COMMAS_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("ZETA_STATE_DIR", str(tmp_path))
     monkeypatch.setenv("COMMAS_SESSION_ID", "resume-test")
     record_commas_event(staged_handoff_event("echo staged"))
     resume_file = tmp_path / "resume"
@@ -2807,7 +2814,7 @@ def test_commas_run_skips_resume_for_interrupted_command(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    monkeypatch.setenv("COMMAS_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("ZETA_STATE_DIR", str(tmp_path))
     monkeypatch.setenv("COMMAS_SESSION_ID", "resume-test")
     record_commas_event(staged_handoff_event("exit 130"))
     resume_file = tmp_path / "resume"

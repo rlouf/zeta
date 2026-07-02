@@ -18,6 +18,7 @@ from commas.tools import web as web_tool
 from zeta.capabilities.execution import (
     InProcessCapabilityExecutor,
 )
+from zeta.capabilities.host import DuplicateHostCapabilityError, HostDirectory
 from zeta.capabilities.registry import (
     CapabilityRegistry,
     RegisteredCapability,
@@ -76,6 +77,33 @@ def test_zeta_capability_registry_registers_and_lists_capabilities() -> None:
     assert registry.get("test.unit") is capability
     assert registry.list_capability_ids() == ["test.unit"]
     assert capability.declaration.id.canonical() == "test.unit"
+
+
+def test_zeta_host_directory_rejects_duplicate_declarations() -> None:
+    capability = _test_capability("read")
+
+    class FakeHost:
+        declarations = (capability,)
+        closed = False
+
+        async def call(
+            self,
+            capability_id: str,
+            params: dict[str, Any],
+            mode: str,
+            ctx: object,
+        ) -> dict[str, Any]:
+            del capability_id, params, mode, ctx
+            return {"ok": True}
+
+    directory = HostDirectory()
+    directory.register_host(FakeHost())
+
+    with pytest.raises(DuplicateHostCapabilityError) as exc_info:
+        directory.register_host(FakeHost())
+
+    assert exc_info.value.capability_id == "test.read"
+    assert directory.list_capability_ids() == ["test.read"]
 
 
 def test_zeta_capability_registry_accepts_unchecked_capability_schema() -> None:
@@ -317,17 +345,17 @@ def test_commas_registers_builtin_tools_explicitly() -> None:
     register_builtin_tools(registry)
 
     assert {
-        "commas.ast_grep",
-        "commas.read",
-        "commas.grep",
-        "commas.ls",
-        "commas.bash",
-        "commas.edit",
-        "commas.write",
-        "commas.query_log",
-        "commas.web_search",
+        "zeta.ast_grep",
+        "zeta.read",
+        "zeta.grep",
+        "zeta.ls",
+        "zeta.bash",
+        "zeta.edit",
+        "zeta.write",
+        "zeta.query_log",
+        "zeta.web_search",
     } <= set(registry.list_capability_ids())
-    assert "commas.web_fetch" not in set(registry.list_capability_ids())
+    assert "zeta.web_fetch" not in set(registry.list_capability_ids())
 
 
 def test_commas_ensures_shared_zeta_registry_has_builtins() -> None:
@@ -335,16 +363,16 @@ def test_commas_ensures_shared_zeta_registry_has_builtins() -> None:
 
     names = set(tool_registry.list_capability_ids())
     assert {
-        "commas.read",
-        "commas.grep",
-        "commas.ast_grep",
-        "commas.ls",
-        "commas.bash",
-        "commas.edit",
-        "commas.write",
-        "commas.web_search",
+        "zeta.read",
+        "zeta.grep",
+        "zeta.ast_grep",
+        "zeta.ls",
+        "zeta.bash",
+        "zeta.edit",
+        "zeta.write",
+        "zeta.web_search",
     } <= names
-    assert "commas.web_fetch" not in names
+    assert "zeta.web_fetch" not in names
 
 
 def test_zeta_capability_registry_does_not_import_commas_tools() -> None:
@@ -397,7 +425,7 @@ def test_zeta_ast_grep_metadata_guides_model_tool_choice() -> None:
 def test_commas_web_search_schema_matches_codex_contract() -> None:
     schema = web_tool.SEARCH_SPEC.input_schema
 
-    assert web_tool.SEARCH_SPEC.id.canonical() == "commas.web_search"
+    assert web_tool.SEARCH_SPEC.id.canonical() == "zeta.web_search"
     assert web_tool.SEARCH_SPEC.id.name == "web_search"
     assert schema["required"] == ["query"]
     assert schema["properties"]["query"]["type"] == "string"
@@ -424,7 +452,7 @@ def test_commas_web_search_reports_missing_codex_credentials(monkeypatch) -> Non
 def test_commas_web_search_posts_codex_payload(monkeypatch) -> None:
     calls: list[tuple[str, web_tool.WebConfig]] = []
 
-    monkeypatch.setenv("COMMAS_WEB_SEARCH_MODEL", "gpt-test")
+    monkeypatch.setenv("ZETA_WEB_SEARCH_MODEL", "gpt-test")
     monkeypatch.setattr(
         web_tool,
         "load_codex_credentials",

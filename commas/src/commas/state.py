@@ -1,7 +1,7 @@
 """Global paths and durable events for Commas.
 
 Session-local continuity lives in `commas.sessions`; this module owns the shared
-state directory and the frontend event journal.
+Zeta state directory and the frontend event journal.
 """
 
 from __future__ import annotations
@@ -19,7 +19,13 @@ from zeta.records.events import (
     durable_event_idempotency_key,
 )
 from zeta.records.stores.event_store import Filter
-from zeta.records.stores.sqlite import EVENT_STORE_NAME, SqliteEventStore
+from zeta.records.stores.sqlite import (
+    SqliteEventStore,
+)
+from zeta.records.stores.sqlite import (
+    event_store_path as zeta_event_store_path,
+)
+from zeta.run.context import zeta_state_dir
 
 TIMELINE_DURABLE_TYPES = {
     "user_message": "zeta.user_message",
@@ -28,20 +34,19 @@ TIMELINE_DURABLE_TYPES = {
 
 
 def state_dir() -> Path:
-    """Return the global Commas state directory."""
-    base = os.environ.get("COMMAS_STATE_DIR")
-    if base:
-        return Path(base)
-    return Path.home() / ".commas"
+    """Return the Zeta state directory used for durable Commas data."""
+
+    return zeta_state_dir()
 
 
 def event_store_path() -> Path:
-    """Return Commas's frontend event journal path."""
-    return state_dir() / EVENT_STORE_NAME
+    """Return the Zeta event journal path."""
+
+    return zeta_event_store_path(state_dir())
 
 
 def read_events() -> list[Event]:
-    """Read Commas's frontend event journal."""
+    """Read the Zeta event journal."""
     return SqliteEventStore(event_store_path()).list_events(Filter())
 
 

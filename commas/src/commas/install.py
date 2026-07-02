@@ -154,7 +154,7 @@ def install_zsh_binding(
     rc.parent.mkdir(parents=True, exist_ok=True)
     rc.touch(exist_ok=True)
     rc_text = rc.read_text(encoding="utf-8")
-    references = {str(binding_path), f"$HOME/.commas/shell/zsh/{BINDING_NAME}"}
+    references = {str(binding_path), f"$HOME/.zeta/shell/zsh/{BINDING_NAME}"}
     rc_text, wrote_rc = replace_commas_source_block(rc_text, references, snippet)
     if wrote_rc:
         rc.write_text(rc_text, encoding="utf-8")
@@ -243,7 +243,7 @@ def check_state_writable() -> DoctorCheck:
             "state:writable",
             "fail",
             f"{root}: {error}",
-            "Check permissions or set COMMAS_STATE_DIR to a writable directory.",
+            "Check permissions or set ZETA_STATE_DIR to a writable directory.",
         )
 
 

@@ -118,7 +118,7 @@ __commas_zeta_record_shell_turn() {
   # stray control bytes in pasted commands become spaces.
   local command="${1//[$'\x1e\x1f']/ }"
   local exit_status="$2"
-  local dir="${COMMAS_SESSION_DIR:-${COMMAS_STATE_DIR:-$HOME/.commas}/sessions/${COMMAS_SESSION_ID:-default}}"
+  local dir="${COMMAS_SESSION_DIR:-${ZETA_STATE_DIR:-$HOME/.zeta}/sessions/${COMMAS_SESSION_ID:-default}}"
   [[ -d "$dir" ]] || command mkdir -p -- "$dir" 2>/dev/null || return 0
   print -rn -- \
     "${EPOCHREALTIME:-}"$'\x1f'"${command}"$'\x1f'"${exit_status}"$'\x1f'"${PWD//[$'\x1e\x1f']/ }"$'\x1e' \

@@ -24,7 +24,7 @@ SCHEMA: dict[str, Any] = {
 }
 
 SPEC = Capability(
-    CapabilityId("commas", "write"),
+    CapabilityId("zeta", "write"),
     "Write content directly or stage a proposed cp command.",
     SCHEMA,
 )

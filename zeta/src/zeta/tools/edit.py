@@ -34,7 +34,7 @@ SCHEMA: dict[str, Any] = {
 }
 
 SPEC = Capability(
-    CapabilityId("commas", "edit"),
+    CapabilityId("zeta", "edit"),
     "Edit a file. Prefer tagged input from read: [path#tag] plus SWAP, DEL, INS.PRE, or INS.POST line operations.",
     SCHEMA,
 )

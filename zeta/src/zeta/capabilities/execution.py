@@ -12,9 +12,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol, cast
 
+from zeta.capabilities.host import HostDirectory
 from zeta.capabilities.registry import (
     CapabilityRegistry,
     CapabilityToolSchema,
+    validated_capability_result_payload,
 )
 from zeta.capabilities.registry import registry as _default_tool_registry
 from zeta.capabilities.types import ExecutionMode
@@ -156,6 +158,7 @@ class CapabilityExecutionContext:
     event_sink: CapabilityEventSink | None
     trace_store: Store | None
     tool_registry: CapabilityRegistry
+    tool_hosts: HostDirectory | None = None
 
 
 @dataclass(frozen=True)
@@ -382,11 +385,11 @@ async def run_valid_tool_call(
         ctx=ctx,
     )
     try:
-        invoked = invoke_capability(
+        invoked = invoke_hosted_capability(
             capability_id,
             invocation.params,
             execution_mode=execution_mode,
-            tool_registry=ctx.tool_registry,
+            ctx=ctx,
         )
         result = await invoked if inspect.isawaitable(invoked) else invoked
     except Exception as exc:
@@ -427,6 +430,25 @@ async def invoke_capability(
         params,
         execution_mode=execution_mode,
     )
+
+
+async def invoke_hosted_capability(
+    capability_id: str,
+    params: dict[str, Any],
+    *,
+    execution_mode: ExecutionMode = "stage",
+    ctx: CapabilityExecutionContext,
+) -> dict[str, Any]:
+    tool_hosts = ctx.tool_hosts or HostDirectory.from_registry(ctx.tool_registry)
+    host = tool_hosts.host_for(capability_id)
+    if host is None:
+        return error_result(
+            "unknown-tool",
+            f"unknown tool: {capability_id}",
+            data={"capability_id": capability_id},
+        )
+    result = await host.call(capability_id, params, execution_mode, ctx)
+    return validated_capability_result_payload(capability_id, result)
 
 
 def parse_tool_arguments(arguments: Any) -> tuple[dict[str, Any], str]:

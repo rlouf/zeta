@@ -53,6 +53,7 @@ from zeta.events import Event
 from zeta.objects import Derivation, Object
 from zeta.records.provenance import project_prompt_trace_projection
 from zeta.records.stores.memory import InMemoryStore
+from zeta.run.context import zeta_state_dir
 
 from test_support.zeta_helpers import (
     BatchSpyStore,
@@ -1120,7 +1121,7 @@ def test_zeta_project_context_loads_global_to_local(
     monkeypatch,
 ) -> None:
     home = tmp_path / "home"
-    global_context = home / ".zeta"
+    global_context = zeta_state_dir()
     root = tmp_path / "repo"
     child = root / "pkg"
     global_context.mkdir(parents=True)
@@ -1852,7 +1853,7 @@ def test_zeta_project_context_total_cap_drops_broadest_first(
     monkeypatch,
 ) -> None:
     home = tmp_path / "home"
-    zeta_home = home / ".zeta"
+    zeta_home = zeta_state_dir()
     zeta_home.mkdir(parents=True)
     (zeta_home / "AGENTS.md").write_text(
         "global rules\n" + "g" * 20_000, encoding="utf-8"

@@ -30,7 +30,7 @@ SCHEMA: dict[str, Any] = {
 }
 
 SPEC = Capability(
-    CapabilityId("commas", "ls"),
+    CapabilityId("zeta", "ls"),
     "List files with type and byte sizes.",
     SCHEMA,
 )

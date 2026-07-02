@@ -693,7 +693,7 @@ def test_zeta_prompt_components_keep_only_the_timeline_tail() -> None:
 
 
 def test_zeta_timeline_record_and_project(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setenv("COMMAS_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("ZETA_STATE_DIR", str(tmp_path))
     monkeypatch.setenv("ZETA_SESSION_ID", "zeta-test")
     runtime_context = zeta_runtime_context()
 
@@ -716,7 +716,7 @@ def test_zeta_timeline_tool_result_is_durable(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    monkeypatch.setenv("COMMAS_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("ZETA_STATE_DIR", str(tmp_path))
     monkeypatch.setenv("ZETA_SESSION_ID", "zeta-test")
     runtime_context = zeta_runtime_context()
 
@@ -746,7 +746,7 @@ def test_zeta_timeline_tool_call_is_caused_by_assistant_event(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    monkeypatch.setenv("COMMAS_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("ZETA_STATE_DIR", str(tmp_path))
     monkeypatch.setenv("ZETA_SESSION_ID", "zeta-test")
     runtime_context = zeta_runtime_context()
 
@@ -791,7 +791,7 @@ def test_zeta_model_called_keeps_trace_links_out_of_payload(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    monkeypatch.setenv("COMMAS_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("ZETA_STATE_DIR", str(tmp_path))
     monkeypatch.setenv("ZETA_SESSION_ID", "zeta-test")
     runtime_context = zeta_runtime_context()
     store = runtime_context.trace_store
@@ -824,7 +824,7 @@ def test_zeta_tool_called_keeps_trace_links_out_of_payload(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    monkeypatch.setenv("COMMAS_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("ZETA_STATE_DIR", str(tmp_path))
     monkeypatch.setenv("ZETA_SESSION_ID", "zeta-test")
 
     record_zeta_event(
@@ -909,7 +909,7 @@ def test_zeta_user_message_usage_and_abort_are_durable(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    monkeypatch.setenv("COMMAS_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("ZETA_STATE_DIR", str(tmp_path))
     monkeypatch.setenv("ZETA_SESSION_ID", "zeta-test")
 
     record_zeta_event({"type": "user_message", "content": "hello"})
@@ -933,7 +933,7 @@ def test_zeta_current_timeline_uses_durable_log_without_trace_head(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    monkeypatch.setenv("COMMAS_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("ZETA_STATE_DIR", str(tmp_path))
     monkeypatch.setenv("ZETA_SESSION_ID", "zeta-test")
     runtime_context = zeta_runtime_context()
 
@@ -951,7 +951,7 @@ def test_zeta_timeline_projects_fresh_session_from_durable_log(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    monkeypatch.setenv("COMMAS_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("ZETA_STATE_DIR", str(tmp_path))
     monkeypatch.setenv("ZETA_SESSION_ID", "zeta-test")
     runtime_context = zeta_runtime_context()
 
@@ -1021,7 +1021,7 @@ def test_zeta_record_event_stores_prompt_link_not_components(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    monkeypatch.setenv("COMMAS_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("ZETA_STATE_DIR", str(tmp_path))
     monkeypatch.setenv("ZETA_SESSION_ID", "zeta-test")
     runtime_context = zeta_runtime_context()
     store = runtime_context.trace_store
@@ -1063,7 +1063,7 @@ def test_zeta_timeline_rehydrates_assistant_content_from_the_graph(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    monkeypatch.setenv("COMMAS_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("ZETA_STATE_DIR", str(tmp_path))
     monkeypatch.setenv("ZETA_SESSION_ID", "zeta-test")
     runtime_context = zeta_runtime_context()
     store = runtime_context.trace_store
@@ -1120,7 +1120,7 @@ def test_zeta_timeline_rehydrates_assistant_reasoning_from_the_graph(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    monkeypatch.setenv("COMMAS_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("ZETA_STATE_DIR", str(tmp_path))
     monkeypatch.setenv("ZETA_SESSION_ID", "zeta-test")
     runtime_context = zeta_runtime_context()
     store = runtime_context.trace_store
@@ -1174,7 +1174,7 @@ def test_zeta_timeline_keeps_untraced_assistant_content_inline(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    monkeypatch.setenv("COMMAS_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("ZETA_STATE_DIR", str(tmp_path))
     monkeypatch.setenv("ZETA_SESSION_ID", "zeta-test")
     runtime_context = zeta_runtime_context()
 
@@ -1192,7 +1192,7 @@ def test_zeta_timeline_last_event_time_tracks_the_newest_event(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    monkeypatch.setenv("COMMAS_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("ZETA_STATE_DIR", str(tmp_path))
     monkeypatch.setenv("ZETA_SESSION_ID", "zeta-test")
     runtime_context = zeta_runtime_context()
 

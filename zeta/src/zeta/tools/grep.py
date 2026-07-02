@@ -69,7 +69,7 @@ AST_GREP_SCHEMA: dict[str, Any] = {
 }
 
 SPEC = Capability(
-    CapabilityId("commas", "grep"),
+    CapabilityId("zeta", "grep"),
     (
         "Search file contents recursively. Use before read when looking for "
         "symbols, errors, strings, or definitions. Successful results include "
@@ -79,7 +79,7 @@ SPEC = Capability(
 )
 
 AST_GREP_SPEC = Capability(
-    CapabilityId("commas", "ast_grep"),
+    CapabilityId("zeta", "ast_grep"),
     (
         "Search code structurally with ast-grep. Use when looking for syntax "
         "patterns rather than plain text. Results include [path#tag] snapshot "

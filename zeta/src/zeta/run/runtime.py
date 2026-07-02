@@ -71,6 +71,16 @@ TimelineEvent = Event | dict[str, Any]
 DEFAULT_MAX_TURNS = 25
 tool_registry = _runtime_tool_registry
 time_monotonic = time.monotonic
+MODEL_TIMELINE_TYPES = frozenset(
+    {
+        "user_message",
+        "model",
+        "model_usage",
+        "tool_call",
+        "tool_result",
+        "turn_aborted",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -461,12 +471,17 @@ def current_timeline(*, runtime_context: RuntimeContext) -> list[Event]:
     try:
         if not isinstance(runtime_context.event_sink, EventReader):
             return []
-        return runtime_context.event_sink.list_events(
+        events = runtime_context.event_sink.list_events(
             Filter(
                 session_id=runtime_context.session_id,
                 event_type_prefix="zeta.",
             )
         )
+        return [
+            event
+            for event in events
+            if event_timeline_type(event) in MODEL_TIMELINE_TYPES
+        ]
     except Exception as exc:
         warn_trace_failure_once("current_timeline", exc)
         return []

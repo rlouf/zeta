@@ -49,8 +49,8 @@ __all__ = [
     "zeta_sqlite_path",
 ]
 
-EVENT_STORE_NAME = "events.sqlite3"
 ZETA_STORE_NAME = "zeta.sqlite3"
+EVENT_STORE_NAME = ZETA_STORE_NAME
 
 
 class EventProjection(Protocol):

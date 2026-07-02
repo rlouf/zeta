@@ -1,12 +1,10 @@
 """Turn/effect history append and query tests."""
 
 import json
-from pathlib import Path
 from typing import Any
 
 from click.testing import CliRunner
 from commas.cli import cli as commas_cli
-from zetad.cli import cli as zeta_cli
 from commas.protocols import (
     EFFECT_KIND_COMMAND,
     EFFECT_KIND_FILE_WRITE,
@@ -24,6 +22,7 @@ from commas.state import (
 )
 from zeta.records.events import DraftEvent
 from zeta.records.stores.sqlite import SqliteEventStore
+from zetad.cli import cli as zeta_cli
 
 from commas import history as commas_history
 from commas import state as commas_state
@@ -196,6 +195,7 @@ def test_history_history_uses_event_metadata() -> None:
             event_type="zeta.turn.completed",
             source="test",
             payload={
+                "schema": "zeta.turn",
                 "turn_id": "turn-meta",
                 "time": 1.0,
                 "session": "payload-session",
@@ -663,7 +663,7 @@ def test_bundle_export_skips_sessions_without_trace_stores(monkeypatch) -> None:
 def fresh_state_dir(monkeypatch, tmp_path) -> None:
     """Re-point commas state at an empty directory, as on another machine."""
 
-    monkeypatch.setenv("COMMAS_STATE_DIR", str(tmp_path / "imported-state"))
+    monkeypatch.setenv("ZETA_STATE_DIR", str(tmp_path / "imported-state"))
 
 
 def test_bundle_import_restores_history_and_trace_queries(
@@ -687,7 +687,7 @@ def test_bundle_import_restores_history_and_trace_queries(
         [
             "trace",
             "--state-dir",
-            str(Path.home() / ".zeta"),
+            str(state_dir()),
             "--session",
             "bundle-src",
             "show",
@@ -767,5 +767,5 @@ def test_history_survives_session_clear() -> None:
     clear_current_session()
 
     assert not root.exists()
-    assert (state_dir() / "events.sqlite3").exists()
+    assert (state_dir() / "zeta.sqlite3").exists()
     assert commas_state.history_view().turn("turn-1") is not None

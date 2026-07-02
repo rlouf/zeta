@@ -131,7 +131,7 @@ def shell_env(tmp: Path, stub: Path) -> dict[str, str]:
         "COMMAS_BIN": str(stub),
         "COMMAS_STUB_LOG": str(tmp / "calls.log"),
         "COMMAS_SESSION_ID": "shell-test",
-        "COMMAS_STATE_DIR": str(tmp / "state"),
+        "ZETA_STATE_DIR": str(tmp / "state"),
         "ZLE_LOG": str(tmp / "zle.log"),
     }
 

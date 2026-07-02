@@ -279,10 +279,16 @@ def clear_current_session() -> dict[str, list[str]]:
 def clear_zeta_event_continuity(event_sink: Any) -> list[str]:
     if not hasattr(event_sink, "clear_session_events"):
         return []
-    event_sink.clear_session_events(  # type: ignore[attr-defined]
-        session_id(),
-        event_type_prefix="zeta.",
-    )
+    for prefix in (
+        "zeta.user_message",
+        "zeta.model_call.",
+        "zeta.tool_call.",
+        "zeta.turn.failed",
+    ):
+        event_sink.clear_session_events(  # type: ignore[attr-defined]
+            session_id(),
+            event_type_prefix=prefix,
+        )
     path = getattr(event_sink, "path", None)
     return [str(path)] if path is not None else []
 

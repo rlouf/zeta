@@ -32,14 +32,14 @@ def register_builtin_tools(registry: CapabilityRegistry) -> None:
 
 def builtin_capabilities() -> dict[str, RegisteredCapability]:
     return {
-        "commas.bash": builtin_capability(bash.SPEC, bash.run, bash.stage),
-        "commas.ast_grep": builtin_capability(grep.AST_GREP_SPEC, grep.run_ast_grep),
-        "commas.edit": builtin_capability(edit.SPEC, edit.run, edit.stage),
-        "commas.grep": builtin_capability(grep.SPEC, grep.run),
-        "commas.ls": builtin_capability(ls.SPEC, ls.run),
-        "commas.read": builtin_capability(read.SPEC, read.run),
-        "commas.web_search": builtin_capability(web.SEARCH_SPEC, web.search),
-        "commas.write": builtin_capability(write.SPEC, write.run, write.stage),
+        "zeta.bash": builtin_capability(bash.SPEC, bash.run, bash.stage),
+        "zeta.ast_grep": builtin_capability(grep.AST_GREP_SPEC, grep.run_ast_grep),
+        "zeta.edit": builtin_capability(edit.SPEC, edit.run, edit.stage),
+        "zeta.grep": builtin_capability(grep.SPEC, grep.run),
+        "zeta.ls": builtin_capability(ls.SPEC, ls.run),
+        "zeta.read": builtin_capability(read.SPEC, read.run),
+        "zeta.web_search": builtin_capability(web.SEARCH_SPEC, web.search),
+        "zeta.write": builtin_capability(write.SPEC, write.run, write.stage),
     }
 
 

@@ -19,6 +19,7 @@ from zeta.records.events import (
     Event,
     draft_event_id,
     draft_event_view,
+    event_timeline_type,
     event_view,
     exact_event_time,
 )
@@ -47,6 +48,16 @@ from commas.display.tty import is_interactive
 from commas.turn import TurnRecorder
 
 RuntimePublishedEvent = Event | DraftEvent
+MODEL_VISIBLE_TIMELINE_TYPES = frozenset(
+    {
+        "user_message",
+        "model",
+        "model_usage",
+        "tool_call",
+        "tool_result",
+        "turn_aborted",
+    }
+)
 
 
 def record_trace_for_turn(runtime_context: RuntimeContext, turn_id: str | None) -> None:
@@ -74,7 +85,10 @@ def last_event_time(*, store: Store, run_id: str | None = None) -> float | None:
             return None
         events = SqliteEventStore(path).list_events(Filter(session_id=run_id))
         zeta_events = [
-            event for event in events if event.event_type.startswith("zeta.")
+            event
+            for event in events
+            if event.event_type.startswith("zeta.")
+            and event_timeline_type(event) in MODEL_VISIBLE_TIMELINE_TYPES
         ]
         if not zeta_events:
             return None

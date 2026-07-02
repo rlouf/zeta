@@ -821,7 +821,7 @@ url = "http://127.0.0.1:8081/v1/chat/completions"
 """,
     )
     monkeypatch.setenv("HOME", str(home))
-    monkeypatch.setenv("COMMAS_STATE_DIR", str(tmp_path / "state"))
+    monkeypatch.setenv("ZETA_STATE_DIR", str(tmp_path / "state"))
     monkeypatch.setenv("COMMAS_SESSION_ID", "one")
 
     use = CliRunner().invoke(commas_cli, ["model", "use", "fast"])
@@ -1019,7 +1019,7 @@ def test_commas_model_cli_rejects_unknown_profile(
     home = tmp_path / "home"
     write_models_config(home, "")
     monkeypatch.setenv("HOME", str(home))
-    monkeypatch.setenv("COMMAS_STATE_DIR", str(tmp_path / "state"))
+    monkeypatch.setenv("ZETA_STATE_DIR", str(tmp_path / "state"))
     monkeypatch.setenv("COMMAS_SESSION_ID", "model-test")
 
     result = CliRunner().invoke(commas_cli, ["model", "use", "missing"])
@@ -1526,7 +1526,7 @@ url = "http://127.0.0.1:8081/v1/chat/completions"
 """,
     )
     monkeypatch.setenv("HOME", str(home))
-    monkeypatch.setenv("COMMAS_STATE_DIR", str(tmp_path / "state"))
+    monkeypatch.setenv("ZETA_STATE_DIR", str(tmp_path / "state"))
     monkeypatch.delenv("COMMAS_SESSION_ID", raising=False)
 
     result = CliRunner().invoke(commas_cli, ["model", "use", "fast"])

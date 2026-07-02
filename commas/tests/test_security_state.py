@@ -66,12 +66,12 @@ from zetad.attempts import (
     attempt_event_payload,
     attempt_from_event_payload,
 )
+from zetad.cli import cli as zeta_cli
 from zetad.queue import (
     QueueItem,
     queue_item_event_payload,
     queue_item_from_event_payload,
 )
-from zetad.cli import cli as zeta_cli
 
 from test_support.patch import patch, patch_dict
 from test_support.zeta_helpers import record_durable_timeline_event
@@ -239,7 +239,7 @@ import sys
 from pathlib import Path
 from zeta.records.stores.sqlite import SqliteEventStore
 
-store = SqliteEventStore(Path(sys.argv[1]) / "events.sqlite3")
+store = SqliteEventStore(Path(sys.argv[1]) / "zeta.sqlite3")
 store.close()
 for module in ("zetad.queue", "zetad.attempts"):
     if module in sys.modules:
@@ -478,7 +478,7 @@ def test_cli_import_does_not_load_workflow_modules() -> None:
 
 def test_status_dispatch_does_not_load_workflow_modules() -> None:
     with tempfile.TemporaryDirectory() as tmp:
-        env = {**os.environ, "COMMAS_STATE_DIR": tmp, "COMMAS_SESSION_ID": "test"}
+        env = {**os.environ, "ZETA_STATE_DIR": tmp, "COMMAS_SESSION_ID": "test"}
         script = (
             "import sys; from commas.cli import main; "
             "code = main(['status']); "
@@ -500,7 +500,7 @@ def test_spool_ingestion_does_not_load_display_or_model() -> None:
     # Every CLI start ingests the spool; the ingestion path must stay light
     # or glyph latency regresses for all commands at once.
     with tempfile.TemporaryDirectory() as tmp:
-        env = {**os.environ, "COMMAS_STATE_DIR": tmp, "COMMAS_SESSION_ID": "test"}
+        env = {**os.environ, "ZETA_STATE_DIR": tmp, "COMMAS_SESSION_ID": "test"}
         spool = Path(tmp) / "sessions" / "test" / "shell-turns.spool"
         spool.parent.mkdir(parents=True)
         spool.write_text("1700000000.0\x1fecho hi\x1f0\x1f/repo\x1e", encoding="utf-8")
@@ -566,11 +566,11 @@ def test_main_rewrites_missing_executable_errors() -> None:
 
 def test_main_rewrites_permission_errors() -> None:
     stderr = StringIO()
-    denied = PermissionError(1, "Operation not permitted", "/nope/events.sqlite3")
+    denied = PermissionError(1, "Operation not permitted", "/nope/zeta.sqlite3")
     with patch("commas.cli.cli.main", side_effect=denied):
         with redirect_stderr(stderr):
             assert main(["ask", "hello"]) == EXIT_ERROR
-    assert "permission denied: /nope/events.sqlite3" in stderr.getvalue()
+    assert "permission denied: /nope/zeta.sqlite3" in stderr.getvalue()
 
 
 APPEND_LARGE_EVENTS_SCRIPT = """
@@ -590,7 +590,7 @@ for _ in range(25):
 
 def test_event_store_records_large_events_across_processes() -> None:
     with tempfile.TemporaryDirectory() as tmp:
-        env = {**os.environ, "COMMAS_STATE_DIR": tmp, "COMMAS_SESSION_ID": "test"}
+        env = {**os.environ, "ZETA_STATE_DIR": tmp, "COMMAS_SESSION_ID": "test"}
         start_gate = Path(tmp) / "start"
         ready_gates = [Path(tmp) / "ready-a", Path(tmp) / "ready-b"]
         procs = [
@@ -614,7 +614,7 @@ def test_event_store_records_large_events_across_processes() -> None:
         start_gate.touch()
         for proc in procs:
             assert proc.wait(timeout=60) == 0
-        store = SqliteEventStore(Path(tmp) / "events.sqlite3")
+        store = SqliteEventStore(Path(tmp) / "zeta.sqlite3")
         events = store.list_events(Filter(event_type="big"))
 
     assert len(events) == 50
@@ -635,7 +635,7 @@ def test_event_store_path_uses_zeta_state_dir() -> None:
 
 
 def test_sqlite_event_store_deduplicates_idempotency_keys(tmp_path: Path) -> None:
-    store = SqliteEventStore(tmp_path / "events.sqlite3")
+    store = SqliteEventStore(tmp_path / "zeta.sqlite3")
     draft = DraftEvent(
         event_type="zeta.turn.completed",
         source="test",
@@ -684,7 +684,7 @@ def test_event_stores_return_payload_snapshots(tmp_path: Path) -> None:
         payload={"turn_id": "turn-1"},
     )
     memory_event = MemoryEventStore().accept(draft).event
-    sqlite_event = SqliteEventStore(tmp_path / "events.sqlite3").accept(draft).event
+    sqlite_event = SqliteEventStore(tmp_path / "zeta.sqlite3").accept(draft).event
 
     assert memory_event.payload == {"turn_id": "turn-1"}
     assert sqlite_event.payload == {"turn_id": "turn-1"}
@@ -702,7 +702,7 @@ def test_event_stores_normalize_payloads_to_json_native(tmp_path: Path) -> None:
     )
 
     memory_event = MemoryEventStore().accept(draft).event
-    sqlite_store = SqliteEventStore(tmp_path / "events.sqlite3")
+    sqlite_store = SqliteEventStore(tmp_path / "zeta.sqlite3")
     sqlite_event = sqlite_store.accept(draft).event
     expected = {
         "turn_id": "turn-1",
@@ -750,7 +750,7 @@ def test_sqlite_event_store_rolls_back_event_when_projection_fails(
             raise RuntimeError("projection failed")
 
     store = SqliteEventStore(
-        tmp_path / "events.sqlite3",
+        tmp_path / "zeta.sqlite3",
         projections=(FailingProjection(),),
     )
     event = Event(
@@ -786,12 +786,12 @@ def test_event_stores_reject_non_json_payloads(tmp_path: Path) -> None:
     with pytest.raises(TypeError):
         MemoryEventStore().accept(draft)
     with pytest.raises(TypeError):
-        SqliteEventStore(tmp_path / "events.sqlite3").accept(draft)
+        SqliteEventStore(tmp_path / "zeta.sqlite3").accept(draft)
 
 
 def test_event_stores_share_the_event_store_protocol(tmp_path: Path) -> None:
     assert isinstance(MemoryEventStore(), EventStoreProtocol)
-    sqlite_store = SqliteEventStore(tmp_path / "events.sqlite3")
+    sqlite_store = SqliteEventStore(tmp_path / "zeta.sqlite3")
 
     assert isinstance(sqlite_store, EventStoreProtocol)
 
@@ -807,7 +807,7 @@ class RecordingEventSink:
 
 
 def test_publish_event_uses_configured_event_sink(tmp_path: Path) -> None:
-    sink = RecordingEventSink(tmp_path / "events.sqlite3")
+    sink = RecordingEventSink(tmp_path / "zeta.sqlite3")
     outcome = publish_event(
         DraftEvent(
             event_type="test.published",
@@ -835,7 +835,7 @@ def test_publish_event_requires_an_explicit_sink() -> None:
 
 
 def test_sqlite_event_store_filters_and_cursors(tmp_path: Path) -> None:
-    store = SqliteEventStore(tmp_path / "events.sqlite3")
+    store = SqliteEventStore(tmp_path / "zeta.sqlite3")
     first = store.accept(
         DraftEvent(
             event_type="zeta.model_call.completed",
@@ -922,7 +922,7 @@ def test_event_stores_share_ordering_idempotency_and_filter_semantics(
 ) -> None:
     event_store: MemoryEventStore | SqliteEventStore
     if store_name == "sqlite":
-        event_store = SqliteEventStore(tmp_path / "events.sqlite3")
+        event_store = SqliteEventStore(tmp_path / "zeta.sqlite3")
     else:
         event_store = MemoryEventStore()
     first = event_store.accept(
@@ -968,7 +968,7 @@ def test_event_stores_share_ordering_idempotency_and_filter_semantics(
 
 
 def test_sqlite_event_store_orders_by_append_sequence(tmp_path: Path) -> None:
-    store = SqliteEventStore(tmp_path / "events.sqlite3")
+    store = SqliteEventStore(tmp_path / "zeta.sqlite3")
     first = store.append(
         Event(
             id="z-event",
@@ -1009,7 +1009,7 @@ def test_sqlite_event_store_orders_by_append_sequence(tmp_path: Path) -> None:
 
 
 def test_sqlite_event_store_traverses_causality(tmp_path: Path) -> None:
-    store = SqliteEventStore(tmp_path / "events.sqlite3")
+    store = SqliteEventStore(tmp_path / "zeta.sqlite3")
     prompt = store.append(
         Event(
             id="prompt-event",
@@ -1079,7 +1079,7 @@ def test_sqlite_event_store_traverses_causality(tmp_path: Path) -> None:
 
 
 def test_sqlite_event_store_causal_chain_stops_on_cycles(tmp_path: Path) -> None:
-    store = SqliteEventStore(tmp_path / "events.sqlite3")
+    store = SqliteEventStore(tmp_path / "zeta.sqlite3")
     store.append(
         Event(
             id="event-a",
@@ -1117,7 +1117,7 @@ def test_commas_event_query_helpers_use_zeta_event_log() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         with patch_dict(
             os.environ,
-            {"COMMAS_STATE_DIR": tmp, "COMMAS_SESSION_ID": "test"},
+            {"ZETA_STATE_DIR": tmp, "COMMAS_SESSION_ID": "test"},
         ):
             prompt = append_event(
                 {"type": "zeta.prompt.submitted", "turn_id": "turn-1"}
@@ -1136,7 +1136,7 @@ def test_commas_event_query_helpers_use_zeta_event_log() -> None:
 
 
 def test_sqlite_event_store_events_for_turn_uses_turn_id_column(tmp_path: Path) -> None:
-    store = SqliteEventStore(tmp_path / "events.sqlite3")
+    store = SqliteEventStore(tmp_path / "zeta.sqlite3")
     column_match = store.accept(
         DraftEvent(
             event_type="zeta.model_call.completed",
@@ -1159,7 +1159,7 @@ def test_sqlite_event_store_events_for_turn_uses_turn_id_column(tmp_path: Path) 
 
 
 def test_sqlite_event_store_events_for_run_uses_run_id_column(tmp_path: Path) -> None:
-    store = SqliteEventStore(tmp_path / "events.sqlite3")
+    store = SqliteEventStore(tmp_path / "zeta.sqlite3")
     column_match = store.accept(
         DraftEvent(
             event_type="zeta.model_call.completed",
@@ -1182,7 +1182,7 @@ def test_sqlite_event_store_events_for_run_uses_run_id_column(tmp_path: Path) ->
 
 
 def test_sqlite_event_store_has_no_stream_projection_table(tmp_path: Path) -> None:
-    store = SqliteEventStore(tmp_path / "events.sqlite3")
+    store = SqliteEventStore(tmp_path / "zeta.sqlite3")
     table = store.connection.execute(
         "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?",
         ("event_streams",),
@@ -1256,7 +1256,7 @@ def test_durable_event_constructors_set_turn_id_and_idempotency_keys() -> None:
 def test_durable_event_constructor_idempotency_deduplicates_replays(
     tmp_path: Path,
 ) -> None:
-    store = SqliteEventStore(tmp_path / "events.sqlite3")
+    store = SqliteEventStore(tmp_path / "zeta.sqlite3")
     draft = zeta_turn_draft(
         "zeta.turn.completed",
         payload={"outcome": "answered"},
@@ -1295,7 +1295,7 @@ def zeta_turn_draft(
 def test_sqlite_event_store_accepts_events_without_idempotency_keys(
     tmp_path: Path,
 ) -> None:
-    store = SqliteEventStore(tmp_path / "events.sqlite3")
+    store = SqliteEventStore(tmp_path / "zeta.sqlite3")
     event = Event.from_draft(
         DraftEvent(
             event_type="commas.command.accepted",
@@ -1409,9 +1409,9 @@ def test_zeta_events_subcommands_raw_requires_json() -> None:
 
 def test_session_list_includes_last_event_context() -> None:
     with tempfile.TemporaryDirectory() as tmp:
-        old_state_dir = os.environ.get("COMMAS_STATE_DIR")
+        old_state_dir = os.environ.get("ZETA_STATE_DIR")
         old_session_id = os.environ.get("COMMAS_SESSION_ID")
-        os.environ["COMMAS_STATE_DIR"] = tmp
+        os.environ["ZETA_STATE_DIR"] = tmp
         os.environ["COMMAS_SESSION_ID"] = "alpha"
         alpha_root = Path(tmp) / "sessions" / "alpha"
         beta_root = Path(tmp) / "sessions" / "beta"
@@ -1428,9 +1428,9 @@ def test_session_list_includes_last_event_context() -> None:
             text = CliRunner().invoke(cli, ["session", "list"])
         finally:
             if old_state_dir is None:
-                os.environ.pop("COMMAS_STATE_DIR", None)
+                os.environ.pop("ZETA_STATE_DIR", None)
             else:
-                os.environ["COMMAS_STATE_DIR"] = old_state_dir
+                os.environ["ZETA_STATE_DIR"] = old_state_dir
             if old_session_id is None:
                 os.environ.pop("COMMAS_SESSION_ID", None)
             else:
@@ -1452,7 +1452,7 @@ def test_session_rename_adds_display_name_to_current_session(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("COMMAS_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("ZETA_STATE_DIR", str(tmp_path))
     monkeypatch.setenv("COMMAS_SESSION_ID", "alpha")
     append_event({"type": "session_event", "time": 1.0, "cwd": "/repo"})
 
@@ -1479,9 +1479,9 @@ def test_session_rename_rejects_blank_name() -> None:
 
 def test_question_workflows_record_glyph_and_local_tools() -> None:
     with tempfile.TemporaryDirectory() as tmp:
-        old_state_dir = os.environ.get("COMMAS_STATE_DIR")
+        old_state_dir = os.environ.get("ZETA_STATE_DIR")
         old_session_id = os.environ.get("COMMAS_SESSION_ID")
-        os.environ["COMMAS_STATE_DIR"] = tmp
+        os.environ["ZETA_STATE_DIR"] = tmp
         os.environ["COMMAS_SESSION_ID"] = "test"
         try:
             calls = []
@@ -1513,9 +1513,9 @@ def test_question_workflows_record_glyph_and_local_tools() -> None:
             assert calls[1][0] == ("what is commas?",)
         finally:
             if old_state_dir is None:
-                os.environ.pop("COMMAS_STATE_DIR", None)
+                os.environ.pop("ZETA_STATE_DIR", None)
             else:
-                os.environ["COMMAS_STATE_DIR"] = old_state_dir
+                os.environ["ZETA_STATE_DIR"] = old_state_dir
             if old_session_id is None:
                 os.environ.pop("COMMAS_SESSION_ID", None)
             else:
@@ -1526,7 +1526,7 @@ def test_question_workflow_requests_tool_calls_on_stdout() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         with patch_dict(
             os.environ,
-            {"COMMAS_STATE_DIR": tmp, "COMMAS_SESSION_ID": "test"},
+            {"ZETA_STATE_DIR": tmp, "COMMAS_SESSION_ID": "test"},
         ):
             captured_args: list[object] = []
 
@@ -1545,9 +1545,9 @@ def test_failure_context_prompt_uses_recorded_failure_without_inventing_output()
     None
 ):
     with tempfile.TemporaryDirectory() as tmp:
-        old_state_dir = os.environ.get("COMMAS_STATE_DIR")
+        old_state_dir = os.environ.get("ZETA_STATE_DIR")
         old_session_id = os.environ.get("COMMAS_SESSION_ID")
-        os.environ["COMMAS_STATE_DIR"] = tmp
+        os.environ["ZETA_STATE_DIR"] = tmp
         os.environ["COMMAS_SESSION_ID"] = "test"
         try:
             record_failure("bad command", 2, "/tmp")
@@ -1565,9 +1565,9 @@ def test_failure_context_prompt_uses_recorded_failure_without_inventing_output()
             assert "Do not invent missing stdout or stderr." in prompt
         finally:
             if old_state_dir is None:
-                os.environ.pop("COMMAS_STATE_DIR", None)
+                os.environ.pop("ZETA_STATE_DIR", None)
             else:
-                os.environ["COMMAS_STATE_DIR"] = old_state_dir
+                os.environ["ZETA_STATE_DIR"] = old_state_dir
             if old_session_id is None:
                 os.environ.pop("COMMAS_SESSION_ID", None)
             else:
@@ -1624,7 +1624,7 @@ def test_failure_context_prompt_covers_common_failure_fixtures(
     with tempfile.TemporaryDirectory() as tmp:
         with patch_dict(
             os.environ,
-            {"COMMAS_STATE_DIR": tmp, "COMMAS_SESSION_ID": "test"},
+            {"ZETA_STATE_DIR": tmp, "COMMAS_SESSION_ID": "test"},
         ):
             with patch("commas.failure.cwd_context", return_value={"cwd": "/repo"}):
                 record_failure(
@@ -1649,9 +1649,9 @@ def test_failure_context_prompt_covers_common_failure_fixtures(
 
 def test_failure_records_snippets_and_safe_context() -> None:
     with tempfile.TemporaryDirectory() as tmp:
-        old_state_dir = os.environ.get("COMMAS_STATE_DIR")
+        old_state_dir = os.environ.get("ZETA_STATE_DIR")
         old_session_id = os.environ.get("COMMAS_SESSION_ID")
-        os.environ["COMMAS_STATE_DIR"] = tmp
+        os.environ["ZETA_STATE_DIR"] = tmp
         os.environ["COMMAS_SESSION_ID"] = "test"
         try:
             with patch(
@@ -1680,9 +1680,9 @@ def test_failure_records_snippets_and_safe_context() -> None:
             assert failure["context"]["git_status"] == [" M file.py"]
         finally:
             if old_state_dir is None:
-                os.environ.pop("COMMAS_STATE_DIR", None)
+                os.environ.pop("ZETA_STATE_DIR", None)
             else:
-                os.environ["COMMAS_STATE_DIR"] = old_state_dir
+                os.environ["ZETA_STATE_DIR"] = old_state_dir
             if old_session_id is None:
                 os.environ.pop("COMMAS_SESSION_ID", None)
             else:
@@ -1713,7 +1713,7 @@ def test_record_turn_appends_command_with_glyph() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         with patch_dict(
             os.environ,
-            {"COMMAS_STATE_DIR": tmp, "COMMAS_SESSION_ID": "test"},
+            {"ZETA_STATE_DIR": tmp, "COMMAS_SESSION_ID": "test"},
         ):
             record_turn("ls -la", 0, "/repo")
 
@@ -1730,7 +1730,7 @@ def test_record_turn_trims_buffer_to_last_fifty_entries() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         with patch_dict(
             os.environ,
-            {"COMMAS_STATE_DIR": tmp, "COMMAS_SESSION_ID": "test"},
+            {"ZETA_STATE_DIR": tmp, "COMMAS_SESSION_ID": "test"},
         ):
             for index in range(60):
                 record_turn(f"cmd-{index}", 0, "/repo")
@@ -1745,7 +1745,7 @@ def test_record_turn_appends_in_place_under_the_buffer_limit() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         with patch_dict(
             os.environ,
-            {"COMMAS_STATE_DIR": tmp, "COMMAS_SESSION_ID": "test"},
+            {"ZETA_STATE_DIR": tmp, "COMMAS_SESSION_ID": "test"},
         ):
             record_turn("cmd-1", 0, "/repo")
             path = Path(tmp) / "sessions" / "test" / "recent-turns.jsonl"
@@ -1774,7 +1774,7 @@ for index in range(10):
 
 def test_record_turn_keeps_all_turns_across_concurrent_processes() -> None:
     with tempfile.TemporaryDirectory() as tmp:
-        env = {**os.environ, "COMMAS_STATE_DIR": tmp, "COMMAS_SESSION_ID": "test"}
+        env = {**os.environ, "ZETA_STATE_DIR": tmp, "COMMAS_SESSION_ID": "test"}
         start_gate = Path(tmp) / "start"
         ready_gates = [Path(tmp) / "ready-a", Path(tmp) / "ready-b"]
         procs = [
@@ -1807,7 +1807,7 @@ def test_record_turn_skips_empty_command() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         with patch_dict(
             os.environ,
-            {"COMMAS_STATE_DIR": tmp, "COMMAS_SESSION_ID": "test"},
+            {"ZETA_STATE_DIR": tmp, "COMMAS_SESSION_ID": "test"},
         ):
             record_turn("", 0, "/repo")
             record_turn("   ", 0, "/repo")
@@ -1818,7 +1818,7 @@ def test_record_turn_skips_leading_whitespace_command() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         with patch_dict(
             os.environ,
-            {"COMMAS_STATE_DIR": tmp, "COMMAS_SESSION_ID": "test"},
+            {"ZETA_STATE_DIR": tmp, "COMMAS_SESSION_ID": "test"},
         ):
             record_turn(" curl -H 'Authorization: Bearer secret' x", 0, "/repo")
             record_turn("\tprintenv SECRET", 0, "/repo")
@@ -1829,7 +1829,7 @@ def test_record_turn_skips_comma_and_commas_commands() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         with patch_dict(
             os.environ,
-            {"COMMAS_STATE_DIR": tmp, "COMMAS_SESSION_ID": "test"},
+            {"ZETA_STATE_DIR": tmp, "COMMAS_SESSION_ID": "test"},
         ):
             record_turn(", run tests", 0, "/repo")
             record_turn("? what is this", 0, "/repo")
@@ -1844,7 +1844,7 @@ def test_record_turn_records_unsupported_caret_text() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         with patch_dict(
             os.environ,
-            {"COMMAS_STATE_DIR": tmp, "COMMAS_SESSION_ID": "test"},
+            {"ZETA_STATE_DIR": tmp, "COMMAS_SESSION_ID": "test"},
         ):
             record_turn("^^", 0, "/repo")
         rows = read_recent_turns(tmp)
@@ -1856,7 +1856,7 @@ def test_record_turn_fans_out_to_record_failure_on_nonzero_status() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         with patch_dict(
             os.environ,
-            {"COMMAS_STATE_DIR": tmp, "COMMAS_SESSION_ID": "test"},
+            {"ZETA_STATE_DIR": tmp, "COMMAS_SESSION_ID": "test"},
         ):
             with patch("commas.failure.cwd_context", return_value={"cwd": "/repo"}):
                 record_turn(
@@ -1884,7 +1884,7 @@ def test_record_turn_persists_redacted_snippets_in_recent_turns() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         with patch_dict(
             os.environ,
-            {"COMMAS_STATE_DIR": tmp, "COMMAS_SESSION_ID": "test"},
+            {"ZETA_STATE_DIR": tmp, "COMMAS_SESSION_ID": "test"},
         ):
             record_turn(
                 "pytest tests",
@@ -1903,7 +1903,7 @@ def test_recent_turns_context_includes_compact_snippets() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         with patch_dict(
             os.environ,
-            {"COMMAS_STATE_DIR": tmp, "COMMAS_SESSION_ID": "test"},
+            {"ZETA_STATE_DIR": tmp, "COMMAS_SESSION_ID": "test"},
         ):
             record_turn(
                 "pytest tests",
@@ -1923,7 +1923,7 @@ def test_record_turn_does_not_record_failure_on_zero_status() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         with patch_dict(
             os.environ,
-            {"COMMAS_STATE_DIR": tmp, "COMMAS_SESSION_ID": "test"},
+            {"ZETA_STATE_DIR": tmp, "COMMAS_SESSION_ID": "test"},
         ):
             record_turn("ls", 0, "/repo")
 
@@ -1948,7 +1948,7 @@ def test_ingest_spooled_turns_records_commands_with_spool_time() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         with patch_dict(
             os.environ,
-            {"COMMAS_STATE_DIR": tmp, "COMMAS_SESSION_ID": "test"},
+            {"ZETA_STATE_DIR": tmp, "COMMAS_SESSION_ID": "test"},
         ):
             write_spool(
                 tmp,
@@ -1973,7 +1973,7 @@ def test_ingest_spooled_turns_removes_the_spool() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         with patch_dict(
             os.environ,
-            {"COMMAS_STATE_DIR": tmp, "COMMAS_SESSION_ID": "test"},
+            {"ZETA_STATE_DIR": tmp, "COMMAS_SESSION_ID": "test"},
         ):
             path = write_spool(tmp, [("1700000000.0", "echo hi", "0", "/repo")])
             ingest_spooled_turns()
@@ -1986,7 +1986,7 @@ def test_ingest_spooled_turns_skips_malformed_records() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         with patch_dict(
             os.environ,
-            {"COMMAS_STATE_DIR": tmp, "COMMAS_SESSION_ID": "test"},
+            {"ZETA_STATE_DIR": tmp, "COMMAS_SESSION_ID": "test"},
         ):
             write_spool(
                 tmp,
@@ -2006,7 +2006,7 @@ def test_ingest_spooled_turns_fans_out_failure_recording() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         with patch_dict(
             os.environ,
-            {"COMMAS_STATE_DIR": tmp, "COMMAS_SESSION_ID": "test"},
+            {"ZETA_STATE_DIR": tmp, "COMMAS_SESSION_ID": "test"},
         ):
             write_spool(tmp, [("1700000000.0", "make build", "2", "/repo")])
             ingest_spooled_turns()
@@ -2021,7 +2021,7 @@ def test_ingest_spooled_turns_without_spool_is_noop() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         with patch_dict(
             os.environ,
-            {"COMMAS_STATE_DIR": tmp, "COMMAS_SESSION_ID": "test"},
+            {"ZETA_STATE_DIR": tmp, "COMMAS_SESSION_ID": "test"},
         ):
             assert ingest_spooled_turns() == 0
         assert read_recent_turns(tmp) == []
@@ -2033,7 +2033,7 @@ def test_ingest_spooled_turns_recovers_orphaned_claims() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         with patch_dict(
             os.environ,
-            {"COMMAS_STATE_DIR": tmp, "COMMAS_SESSION_ID": "test"},
+            {"ZETA_STATE_DIR": tmp, "COMMAS_SESSION_ID": "test"},
         ):
             path = write_spool(tmp, [("1700000000.0", "echo orphan", "0", "/repo")])
             orphan = path.with_name("shell-turns.spool.999.ingesting")
@@ -2052,7 +2052,7 @@ def test_ingest_spooled_turns_leaves_fresh_claims_alone() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         with patch_dict(
             os.environ,
-            {"COMMAS_STATE_DIR": tmp, "COMMAS_SESSION_ID": "test"},
+            {"ZETA_STATE_DIR": tmp, "COMMAS_SESSION_ID": "test"},
         ):
             path = write_spool(tmp, [("1700000000.0", "echo live", "0", "/repo")])
             claim = path.with_name("shell-turns.spool.999.ingesting")
@@ -2065,7 +2065,7 @@ def test_cli_invocation_ingests_spooled_turns() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         with patch_dict(
             os.environ,
-            {"COMMAS_STATE_DIR": tmp, "COMMAS_SESSION_ID": "test"},
+            {"ZETA_STATE_DIR": tmp, "COMMAS_SESSION_ID": "test"},
         ):
             write_spool(tmp, [("1700000000.0", "echo spooled", "0", "/repo")])
             result = CliRunner().invoke(cli, ["status"])
@@ -2089,7 +2089,7 @@ def test_run_cli_streams_output_and_records_snippets() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         with patch_dict(
             os.environ,
-            {"COMMAS_STATE_DIR": tmp, "COMMAS_SESSION_ID": "test"},
+            {"ZETA_STATE_DIR": tmp, "COMMAS_SESSION_ID": "test"},
         ):
             result = CliRunner().invoke(
                 cli,
@@ -2131,7 +2131,7 @@ def test_run_cli_shell_mode_captures_raw_command_string() -> None:
             os.environ,
             {
                 "COMMAS_RUN_SHELL": "/bin/sh",
-                "COMMAS_STATE_DIR": tmp,
+                "ZETA_STATE_DIR": tmp,
                 "COMMAS_SESSION_ID": "test",
             },
         ):
@@ -2152,7 +2152,7 @@ def test_run_cli_maps_signal_death_to_shell_exit_code() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         with patch_dict(
             os.environ,
-            {"COMMAS_STATE_DIR": tmp, "COMMAS_SESSION_ID": "test"},
+            {"ZETA_STATE_DIR": tmp, "COMMAS_SESSION_ID": "test"},
         ):
             result = CliRunner().invoke(
                 cli,
@@ -2188,7 +2188,7 @@ def test_run_cli_records_turn_and_exits_130_on_ctrl_c() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         with patch_dict(
             os.environ,
-            {"COMMAS_STATE_DIR": tmp, "COMMAS_SESSION_ID": "test"},
+            {"ZETA_STATE_DIR": tmp, "COMMAS_SESSION_ID": "test"},
         ):
             with patch(
                 "commas.cli.run.start_process",
@@ -2213,7 +2213,7 @@ def test_run_cli_records_missing_executable() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         with patch_dict(
             os.environ,
-            {"COMMAS_STATE_DIR": tmp, "COMMAS_SESSION_ID": "test"},
+            {"ZETA_STATE_DIR": tmp, "COMMAS_SESSION_ID": "test"},
         ):
             result = CliRunner().invoke(cli, ["run", "definitely-not-a-command"])
 
@@ -2229,7 +2229,7 @@ def test_recent_turns_returns_empty_when_file_missing() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         with patch_dict(
             os.environ,
-            {"COMMAS_STATE_DIR": tmp, "COMMAS_SESSION_ID": "test"},
+            {"ZETA_STATE_DIR": tmp, "COMMAS_SESSION_ID": "test"},
         ):
             assert recent_turns() == []
 
@@ -2238,7 +2238,7 @@ def test_recent_turns_returns_last_n_entries_in_order() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         with patch_dict(
             os.environ,
-            {"COMMAS_STATE_DIR": tmp, "COMMAS_SESSION_ID": "test"},
+            {"ZETA_STATE_DIR": tmp, "COMMAS_SESSION_ID": "test"},
         ):
             for index in range(15):
                 record_turn(f"cmd-{index}", 0, "/repo")
@@ -2256,7 +2256,7 @@ def test_fresh_ask_prepends_recent_turns_context_to_zeta_prompt() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         with patch_dict(
             os.environ,
-            {"COMMAS_STATE_DIR": tmp, "COMMAS_SESSION_ID": "test"},
+            {"ZETA_STATE_DIR": tmp, "COMMAS_SESSION_ID": "test"},
         ):
             record_turn("ls -la", 0, "/repo")
             record_turn("pytest tests/test_foo.py", 1, "/repo")
@@ -2281,7 +2281,7 @@ def test_ask_attaches_active_failure_context_for_unrelated_question() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         with patch_dict(
             os.environ,
-            {"COMMAS_STATE_DIR": tmp, "COMMAS_SESSION_ID": "test"},
+            {"ZETA_STATE_DIR": tmp, "COMMAS_SESSION_ID": "test"},
         ):
             record_turn(
                 "pytest tests/test_foo.py",
@@ -2310,7 +2310,7 @@ def test_ask_omits_failure_context_after_successful_turn() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         with patch_dict(
             os.environ,
-            {"COMMAS_STATE_DIR": tmp, "COMMAS_SESSION_ID": "test"},
+            {"ZETA_STATE_DIR": tmp, "COMMAS_SESSION_ID": "test"},
         ):
             record_turn(
                 "pytest tests/test_foo.py",
@@ -2339,7 +2339,7 @@ def test_fresh_ask_only_includes_shell_activity_since_last_response() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         with patch_dict(
             os.environ,
-            {"COMMAS_STATE_DIR": tmp, "COMMAS_SESSION_ID": "test"},
+            {"ZETA_STATE_DIR": tmp, "COMMAS_SESSION_ID": "test"},
         ):
             record_turn("ls -la", 0, "/repo")
             record_durable_timeline_event(
@@ -2368,7 +2368,7 @@ def test_fresh_ask_omits_failure_context_already_seen_by_the_model() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         with patch_dict(
             os.environ,
-            {"COMMAS_STATE_DIR": tmp, "COMMAS_SESSION_ID": "test"},
+            {"ZETA_STATE_DIR": tmp, "COMMAS_SESSION_ID": "test"},
         ):
             record_turn(
                 "pytest tests/test_foo.py",
@@ -2400,7 +2400,7 @@ def test_fresh_ask_omits_recent_turns_section_when_none_recorded() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         with patch_dict(
             os.environ,
-            {"COMMAS_STATE_DIR": tmp, "COMMAS_SESSION_ID": "test"},
+            {"ZETA_STATE_DIR": tmp, "COMMAS_SESSION_ID": "test"},
         ):
             captured: dict[str, str] = {}
 
@@ -2421,7 +2421,7 @@ def test_recent_turns_skips_malformed_lines() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         with patch_dict(
             os.environ,
-            {"COMMAS_STATE_DIR": tmp, "COMMAS_SESSION_ID": "test"},
+            {"ZETA_STATE_DIR": tmp, "COMMAS_SESSION_ID": "test"},
         ):
             record_turn("ls", 0, "/repo")
             path = Path(tmp) / "sessions" / "test" / "recent-turns.jsonl"
@@ -2481,7 +2481,7 @@ def test_session_transcript_renders_conversation() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         with patch_dict(
             os.environ,
-            {"COMMAS_STATE_DIR": tmp, "COMMAS_SESSION_ID": "test"},
+            {"ZETA_STATE_DIR": tmp, "COMMAS_SESSION_ID": "test"},
         ):
             runtime_context = zeta_session_for_commas()
             record_durable_timeline_event(
@@ -2506,7 +2506,7 @@ def test_session_transcript_limits_and_dumps_json() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         with patch_dict(
             os.environ,
-            {"COMMAS_STATE_DIR": tmp, "COMMAS_SESSION_ID": "test"},
+            {"ZETA_STATE_DIR": tmp, "COMMAS_SESSION_ID": "test"},
         ):
             runtime_context = zeta_session_for_commas()
             record_durable_timeline_event(
@@ -2531,7 +2531,7 @@ def test_session_transcript_reports_empty_session() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         with patch_dict(
             os.environ,
-            {"COMMAS_STATE_DIR": tmp, "COMMAS_SESSION_ID": "test"},
+            {"ZETA_STATE_DIR": tmp, "COMMAS_SESSION_ID": "test"},
         ):
             result = CliRunner().invoke(cli, ["session", "transcript"])
 
@@ -2543,7 +2543,7 @@ def test_session_is_a_group_with_show_as_default() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         with patch_dict(
             os.environ,
-            {"COMMAS_STATE_DIR": tmp, "COMMAS_SESSION_ID": "test"},
+            {"ZETA_STATE_DIR": tmp, "COMMAS_SESSION_ID": "test"},
         ):
             help_result = CliRunner().invoke(cli, ["session", "--help"])
             bare = CliRunner().invoke(cli, ["session"])
@@ -2563,7 +2563,7 @@ def test_run_cli_passes_trailing_flags_to_the_command() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         with patch_dict(
             os.environ,
-            {"COMMAS_STATE_DIR": tmp, "COMMAS_SESSION_ID": "test"},
+            {"ZETA_STATE_DIR": tmp, "COMMAS_SESSION_ID": "test"},
         ):
             result = CliRunner().invoke(cli, ["run", "echo", "hello", "--shell"])
 

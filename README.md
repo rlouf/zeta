@@ -253,21 +253,21 @@ Connector egress handlers can then deliver those events to external systems.
 
 ## Tools And Skills
 
-The `zeta run` CLI registers the built-in Commas capabilities with the local
+The `zeta run` CLI registers the built-in Zeta capabilities with the local
 runtime. Agent `tools:` entries can use either the bare model name or the
 canonical capability id when it is unambiguous:
 
 | Tool | Capability id | Purpose |
 | --- | --- | --- |
-| `read` | `commas.read` | Read file contents. |
-| `ls` | `commas.ls` | List files. |
-| `grep` | `commas.grep` | Text search. |
-| `ast_grep` | `commas.ast_grep` | Structural code search. |
-| `web_search` | `commas.web_search` | Web search. |
-| `query_log` | `commas.query_log` | Query Commas history. |
-| `bash` | `commas.bash` | Run shell commands. |
-| `edit` | `commas.edit` | Edit files. |
-| `write` | `commas.write` | Write files. |
+| `read` | `zeta.read` | Read file contents. |
+| `ls` | `zeta.ls` | List files. |
+| `grep` | `zeta.grep` | Text search. |
+| `ast_grep` | `zeta.ast_grep` | Structural code search. |
+| `web_search` | `zeta.web_search` | Web search. |
+| `query_log` | `zeta.query_log` | Query Zeta history. |
+| `bash` | `zeta.bash` | Run shell commands. |
+| `edit` | `zeta.edit` | Edit files. |
+| `write` | `zeta.write` | Write files. |
 
 Capability execution goes through the registry and each capability's policy. In
 the local worker, mutating tools use the current staged execution contract unless
@@ -545,8 +545,7 @@ commas doctor [--json]
 Runtime state is inspected with `zeta`: use `zeta events`, `zeta trace`, and
 `zeta model list/show`.
 
-Commas writes shell frontend state under `~/.commas/` by default. Zeta authored
-agents write project runtime state under `.zeta/` by default.
+Commas and Zeta write shell/frontend and runtime state under `.zeta/` by default.
 
 ## Development
 

@@ -189,7 +189,7 @@ class HistoryView:
 def project_turn_records_by_id(events: list[Event]) -> dict[str, dict[str, Any]]:
     turns: dict[str, dict[str, Any]] = {}
     for event in events:
-        if not event.event_type.startswith("zeta.turn."):
+        if not is_turn_record(event.payload):
             continue
         record = project_one_turn_record(event)
         turn_id = str(record.get("turn_id") or "")
@@ -202,6 +202,17 @@ def project_effect_records_by_id(events: list[Event]) -> dict[str, dict[str, Any
     effects: dict[str, dict[str, Any]] = {}
     for event in events:
         if event.event_type != "zeta.tool_call.completed":
+            continue
+        if is_effect_record(event.payload):
+            record = project_one_effect_record(
+                dict(event.payload),
+                timestamp=event.timestamp_ms / 1_000,
+                session_id=event.session_id,
+                cwd=event.payload.get("cwd"),
+            )
+            effect_id = str(record.get("effect_id") or "")
+            if effect_id and effect_id not in effects:
+                effects[effect_id] = record
             continue
         raw_effects = event.payload.get("effects")
         if not isinstance(raw_effects, list):
@@ -216,7 +227,7 @@ def project_effect_records_by_id(events: list[Event]) -> dict[str, dict[str, Any
                 cwd=event.payload.get("cwd"),
             )
             effect_id = str(record.get("effect_id") or "")
-            if effect_id:
+            if effect_id and effect_id not in effects:
                 effects[effect_id] = record
     return effects
 

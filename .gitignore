@@ -4,6 +4,7 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 .complexipy_cache/
+.zeta/
 mutants/
 dist/
 .DS_Store

@@ -143,7 +143,7 @@ def main(argv: list[str] | None = None) -> int:
             target = error.filename or "requested path"
             click.echo(f"commas: permission denied: {target}", err=True)
             click.echo(
-                "Check the path permissions or set COMMAS_STATE_DIR to a writable directory.",
+                "Check the path permissions or set ZETA_STATE_DIR to a writable directory.",
                 err=True,
             )
             return EXIT_ERROR

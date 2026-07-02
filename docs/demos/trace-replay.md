@@ -90,7 +90,7 @@ $ zeta trace tree 13b60e1a --down --depth 1
 ├─ RunEvent
 │  └─ 5526e09a  run_event           tool_result
 ├─ TurnRecord
-│  └─ 1dfb27c6  turn                commas.turn
+│  └─ 1dfb27c6  turn                zeta.turn
 └─ ModelReplay
    └─ 02e5a395  assistant_message   → bash
 ```

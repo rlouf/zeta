@@ -52,7 +52,7 @@ def cmd_install_zsh_binding(
 ) -> int:
     """Install or update the Commas zsh binding.
 
-    Copies the bundled zsh binding to ~/.commas/shell/zsh/ and adds an
+    Copies the bundled zsh binding to ~/.zeta/shell/zsh/ and adds an
     idempotent source block to .zshrc. Running it again updates the
     binding without duplicating the rc block.
 

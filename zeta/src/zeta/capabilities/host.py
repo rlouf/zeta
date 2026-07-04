@@ -7,11 +7,10 @@ from dataclasses import dataclass
 from typing import Any, Protocol
 
 from zeta.capabilities.registry import (
+    CapabilityDirectory,
     CapabilityRegistry,
-    CapabilityToolSchema,
     RegisteredCapability,
     error_result,
-    model_descriptor,
 )
 from zeta.capabilities.types import ExecutionMode
 
@@ -61,7 +60,7 @@ class DuplicateHostCapabilityError(ValueError):
         )
 
 
-class HostDirectory:
+class HostDirectory(CapabilityDirectory):
     """Per-session view of host-owned capability declarations."""
 
     def __init__(self) -> None:
@@ -107,66 +106,6 @@ class HostDirectory:
         if host is None or host.closed:
             return None
         return host
-
-    def get(self, capability_id: str) -> RegisteredCapability | None:
-        """Get a hosted declaration by canonical id."""
-
-        return self._capabilities.get(capability_id)
-
-    def resolve(self, name: str) -> str | None:
-        """Resolve a model-facing name or canonical id to a hosted id."""
-
-        if name in self._capabilities:
-            return name
-        matches = self._names.get(name, [])
-        if len(matches) != 1:
-            return None
-        return matches[0]
-
-    def model_name(self, capability_id: str) -> str:
-        """Return the model-facing function name for a hosted capability."""
-
-        capability = self._capabilities[capability_id]
-        return capability.declaration.id.name
-
-    def list_capability_ids(self) -> list[str]:
-        """List canonical ids served by connected hosts."""
-
-        return sorted(self._capabilities)
-
-    def list_auto_enabled_capability_ids(self) -> list[str]:
-        """List host declarations available by default."""
-
-        return self.list_capability_ids()
-
-    def model_tool_schema(
-        self,
-        enabled_ids: tuple[str, ...],
-        *,
-        name_overrides: dict[str, str] | None = None,
-    ) -> CapabilityToolSchema:
-        """Build the per-run model-visible schema from hosted declarations."""
-
-        name_overrides = name_overrides or {}
-        name_to_id: dict[str, str] = {}
-        descriptors = []
-        for requested_id in enabled_ids:
-            capability_id = self.resolve(requested_id)
-            if capability_id is None:
-                continue
-            capability = self.get(capability_id)
-            if capability is None:
-                continue
-            name = name_overrides.get(capability_id, self.model_name(capability_id))
-            existing = name_to_id.get(name)
-            if existing is not None and existing != capability_id:
-                raise ValueError(
-                    f"ambiguous capability name {name!r}: "
-                    f"{existing!r} and {capability_id!r}"
-                )
-            name_to_id[name] = capability_id
-            descriptors.append(model_descriptor(name, capability))
-        return CapabilityToolSchema(name_to_id=name_to_id, descriptors=descriptors)
 
 
 @dataclass(frozen=True)

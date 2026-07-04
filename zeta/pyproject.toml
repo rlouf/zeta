@@ -54,6 +54,11 @@ slack = "connectors.slack:slack_event_connector"
 [tool.setuptools]
 package-dir = { "" = "src" }
 
+[tool.setuptools.package-data]
+zeta = ["py.typed"]
+zetad = ["py.typed"]
+connectors = ["py.typed"]
+
 [tool.setuptools.packages.find]
 where = ["src"]
 

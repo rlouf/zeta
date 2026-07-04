@@ -13,6 +13,7 @@ from zeta.capabilities.execution import (
     content_hash,
     error_result,
     proposed_command_effect,
+    short_tag,
     write_temp,
 )
 from zeta.capabilities.types import Capability, CapabilityId
@@ -188,7 +189,7 @@ class HashlineEdit:
 
 
 def parse_hashline_input(value: str) -> HashlineEdit | dict[str, Any]:
-    """Parse Commas's small OMP hashline-inspired tagged edit format."""
+    """Parse Zeta's small OMP hashline-inspired tagged edit format."""
     lines = value.splitlines()
     if not lines:
         return error_result("missing-section-header", "missing [path#tag] header")
@@ -280,6 +281,9 @@ def apply_line_operations(
         error = validate_operation(operation, len(lines))
         if error is not None:
             return error
+    overlap = overlapping_range_error(operations)
+    if overlap is not None:
+        return overlap
     updated = list(lines)
     for operation in sorted(operations, key=lambda op: op.start, reverse=True):
         start = operation.start - 1
@@ -293,6 +297,28 @@ def apply_line_operations(
         elif operation.kind == "INS.POST":
             updated[end:end] = list(operation.body)
     return "".join(updated)
+
+
+def overlapping_range_error(
+    operations: tuple[LineOperation, ...],
+) -> dict[str, Any] | None:
+    """Reject SWAP/DEL operations whose consumed line ranges overlap.
+
+    Operations are applied back-to-front assuming disjoint ranges; overlapping
+    ranges would silently corrupt the result rather than being rejected.
+    """
+    spans = sorted(
+        (operation.start, operation.end)
+        for operation in operations
+        if operation.kind in {"SWAP", "DEL"}
+    )
+    for (_, prev_end), (next_start, _) in zip(spans, spans[1:]):
+        if next_start <= prev_end:
+            return error_result(
+                "overlapping-operations",
+                "operations touch overlapping line ranges",
+            )
+    return None
 
 
 def validate_operation(
@@ -310,7 +336,7 @@ def validate_operation(
 
 
 def tag_for_text(text: str) -> str:
-    return content_hash(text).split(":", 1)[1][:8]
+    return short_tag(content_hash(text))
 
 
 def operation_metadata(operation: LineOperation) -> dict[str, Any]:

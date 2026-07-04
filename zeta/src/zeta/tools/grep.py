@@ -10,9 +10,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from zeta.capabilities.execution import content_hash, error_result
+from zeta.capabilities.execution import content_hash, error_result, short_tag
 from zeta.capabilities.types import Capability, CapabilityId
-from zeta.tools.read import snapshot_tag
 
 MAX_TOOL_RESULT_CHARS = 12_000
 
@@ -414,7 +413,7 @@ def tag_for_path(path: str) -> str | None:
         raw = Path(path).read_bytes()
     except OSError:
         return None
-    return snapshot_tag(content_hash(raw))
+    return short_tag(content_hash(raw))
 
 
 def truncate_content(text: str) -> tuple[str, bool]:

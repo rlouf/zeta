@@ -404,6 +404,19 @@ def http_error_detail(error: Any) -> str:
     return f"{error}: {detail}"
 
 
+def decode_stream_event(data: str) -> dict[str, Any] | None:
+    """Decode one SSE frame to a JSON object, or None for the [DONE] sentinel."""
+    if data == "[DONE]":
+        return None
+    try:
+        event = json.loads(data)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"model stream failed: invalid JSON event: {exc}") from exc
+    if not isinstance(event, dict):
+        raise RuntimeError("model stream failed: event was not a JSON object")
+    return event
+
+
 def read_streamed_chat_completion(
     events: Iterable[str],
     *,
@@ -413,17 +426,10 @@ def read_streamed_chat_completion(
     accumulator = ChatStreamAccumulator(stream_sink=stream_sink)
     done = False
     for data in events:
-        if data == "[DONE]":
+        chunk = decode_stream_event(data)
+        if chunk is None:
             done = True
             break
-        try:
-            chunk = json.loads(data)
-        except json.JSONDecodeError as exc:
-            raise RuntimeError(
-                f"model stream failed: invalid JSON event: {exc}"
-            ) from exc
-        if not isinstance(chunk, dict):
-            raise RuntimeError("model stream failed: event was not a JSON object")
         error = chunk.get("error")
         if error is not None:
             raise RuntimeError(f"model request failed: {format_stream_error(error)}")

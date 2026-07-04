@@ -10,6 +10,7 @@ from zeta.capabilities.execution import error_result, proposed_command_effect
 from zeta.capabilities.types import Capability, CapabilityId
 
 DEFAULT_TIMEOUT_SECONDS = 120.0
+MAX_TIMEOUT_SECONDS = 600.0
 MAX_OUTPUT_CHARS = 12_000
 
 SCHEMA: dict[str, Any] = {
@@ -19,6 +20,12 @@ SCHEMA: dict[str, Any] = {
     "properties": {
         "command": {"type": "string"},
         "reason": {"type": "string"},
+        "timeout": {
+            "type": "number",
+            "minimum": 1,
+            "maximum": MAX_TIMEOUT_SECONDS,
+            "description": "Seconds before the command is killed (default 120).",
+        },
     },
 }
 
@@ -43,6 +50,7 @@ def run(params: dict[str, Any]) -> dict[str, Any]:
     command = str(params.get("command") or "").strip()
     if not command:
         return error_result("missing-command", "missing command")
+    timeout_seconds = resolve_timeout(params.get("timeout"))
     started = time.monotonic()
     try:
         proc = subprocess.Popen(
@@ -56,7 +64,7 @@ def run(params: dict[str, Any]) -> dict[str, Any]:
         return error_result("bash-failed", str(exc))
     timed_out = False
     try:
-        stdout_bytes, stderr_bytes = proc.communicate(timeout=DEFAULT_TIMEOUT_SECONDS)
+        stdout_bytes, stderr_bytes = proc.communicate(timeout=timeout_seconds)
     except subprocess.TimeoutExpired:
         timed_out = True
         kill_process_group(proc)
@@ -65,7 +73,9 @@ def run(params: dict[str, Any]) -> dict[str, Any]:
     stdout, stdout_truncated = bounded_output(decode_output(stdout_bytes))
     stderr, stderr_truncated = bounded_output(decode_output(stderr_bytes))
     status = proc.returncode
-    text = direct_output_text(command, status, stdout, stderr, timed_out=timed_out)
+    text = direct_output_text(
+        command, status, stdout, stderr, timed_out=timed_out, timeout=timeout_seconds
+    )
     result: dict[str, Any] = {
         "ok": status == 0 and not timed_out,
         "content": [
@@ -88,7 +98,7 @@ def run(params: dict[str, Any]) -> dict[str, Any]:
         result["error"] = {
             "code": "bash-timeout",
             "message": (
-                f"command timed out after {DEFAULT_TIMEOUT_SECONDS:g}s and was killed"
+                f"command timed out after {timeout_seconds:g}s and was killed"
             ),
         }
     elif result["ok"] is False:
@@ -97,6 +107,13 @@ def run(params: dict[str, Any]) -> dict[str, Any]:
             "message": bash_failure_message(text, status),
         }
     return result
+
+
+def resolve_timeout(value: Any) -> float:
+    """Return the per-call timeout in seconds, clamped to the allowed range."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return DEFAULT_TIMEOUT_SECONDS
+    return max(1.0, min(float(value), MAX_TIMEOUT_SECONDS))
 
 
 def kill_process_group(proc: subprocess.Popen[bytes]) -> None:
@@ -126,13 +143,14 @@ def direct_output_text(
     stderr: str,
     *,
     timed_out: bool = False,
+    timeout: float = DEFAULT_TIMEOUT_SECONDS,
 ) -> str:
     sections = [
         f"$ {command}",
         f"exit {status}",
     ]
     if timed_out:
-        sections.append(f"timed out after {DEFAULT_TIMEOUT_SECONDS:g}s")
+        sections.append(f"timed out after {timeout:g}s")
     if stdout:
         sections.extend(["stdout:", stdout])
     if stderr:

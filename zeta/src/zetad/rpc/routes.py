@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import uuid
 from dataclasses import dataclass, field
 from typing import Any
@@ -25,6 +26,8 @@ from zeta.run.thread_run import (
 from zetad.dispatch import EventDispatcher, ReservedRuntimeEventError
 from zetad.rpc.jsonrpc import JsonRpcConnection, JsonRpcRouter, RpcError
 from zetad.session_turn import SESSION_TURN_AGENT_ID
+
+logger = logging.getLogger(__name__)
 
 RPC_REQUESTED = "rpc.requested"
 RPC_RESPONDED = "rpc.responded"
@@ -370,7 +373,7 @@ async def route_event(client: RpcClient, event: Event) -> None:
     except asyncio.CancelledError:
         raise
     except Exception:
-        return
+        logger.exception("Background event routing failed for event %s", event.id)
 
 
 async def events_list(params: dict[str, Any], client: RpcClient) -> dict[str, Any]:
@@ -460,6 +463,7 @@ async def route_run(client: RpcClient, state: RunState, event: Event) -> None:
         state.status = "cancelled"
         raise
     except Exception:
+        logger.exception("Session run %s failed while routing", state.run_id)
         state.status = "failed"
         return
     state.status = run_status_from_lifecycle(state, lifecycle_events)

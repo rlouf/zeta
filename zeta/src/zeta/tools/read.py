@@ -1,13 +1,16 @@
 """Read tool implementation."""
 
+import ipaddress
 import re
+import socket
 import urllib.error
 import urllib.request
 from html import unescape
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
-from zeta.capabilities.execution import content_hash, error_result
+from zeta.capabilities.execution import content_hash, error_result, short_tag
 from zeta.capabilities.types import Capability, CapabilityId
 
 DEFAULT_READ_LIMIT = 2_000
@@ -61,7 +64,7 @@ def run(params: dict[str, Any]) -> dict[str, Any]:
             "file looks binary; read supports UTF-8 text only",
         )
     file_hash = content_hash(raw)
-    tag = snapshot_tag(file_hash)
+    tag = short_tag(file_hash)
     text = raw.decode("utf-8", errors="replace")
     lines = text.splitlines(keepends=True)
     selected = lines[offset : offset + limit]
@@ -86,12 +89,36 @@ def run(params: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def blocked_url_reason(url: str) -> str | None:
+    """Return why a URL is unsafe to fetch, or None when it targets a public host.
+
+    Guards against SSRF by resolving the host and rejecting loopback, private,
+    link-local (including the cloud metadata endpoint), and other non-public
+    addresses before any request is made.
+    """
+    host = urlsplit(url).hostname
+    if not host:
+        return "URL has no host"
+    try:
+        addresses = socket.getaddrinfo(host, None)
+    except socket.gaierror as exc:
+        return f"could not resolve host: {exc}"
+    for entry in addresses:
+        ip = ipaddress.ip_address(str(entry[4][0]).split("%", 1)[0])
+        if not ip.is_global:
+            return f"URL host resolves to non-public address {ip}"
+    return None
+
+
 def read_url(url: str, *, offset: int, limit: int) -> dict[str, Any]:
+    blocked = blocked_url_reason(url)
+    if blocked is not None:
+        return error_result("web-read-blocked", blocked)
     try:
         request = urllib.request.Request(
             url,
             headers={
-                "User-Agent": "commas/read-url",
+                "User-Agent": "zeta/read-url",
                 "Accept": "text/html,text/plain,*/*",
             },
         )
@@ -106,7 +133,7 @@ def read_url(url: str, *, offset: int, limit: int) -> dict[str, Any]:
             "URL looks binary; read supports UTF-8 text and simple HTML only",
         )
     file_hash = content_hash(raw)
-    tag = snapshot_tag(file_hash)
+    tag = short_tag(file_hash)
     text = raw.decode("utf-8", errors="replace")
     if "html" in content_type.lower() or looks_like_html(text):
         text = html_to_text(text)
@@ -154,10 +181,6 @@ def html_to_text(text: str) -> str:
     body = re.sub(r"(?is)<[^>]+>", "", body)
     lines = [" ".join(unescape(line).split()) for line in body.splitlines()]
     return "\n".join(line for line in lines if line).strip() + "\n"
-
-
-def snapshot_tag(file_hash: str) -> str:
-    return file_hash.split(":", 1)[1][:8]
 
 
 def format_tagged_lines(

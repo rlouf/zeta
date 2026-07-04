@@ -215,6 +215,91 @@ def test_zeta_trace_move_ref_expected_none_creates_only_when_absent(
     )
 
 
+def test_zeta_trace_move_ref_reports_false_when_row_changed_after_read(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`updated` must reflect the actual write, not the pre-write read.
+
+    Simulates a concurrent writer advancing the ref between our read and our
+    conditional update: the read-check passes on a stale value while the row
+    already holds something else, so the guarded UPDATE matches zero rows and
+    the move must be reported as failed rather than a false success.
+    """
+    trace_store = zeta_trace.SqliteObjectStore(tmp_path / "trace.sqlite3")
+    trace_store.move_ref("run/test/head", None, "sha256:actual")
+
+    monkeypatch.setattr(trace_store, "_ref_object_id", lambda name: "sha256:stale")
+    result = trace_store.move_ref("run/test/head", "sha256:stale", "sha256:new")
+    monkeypatch.undo()
+
+    assert result.updated is False
+    assert trace_store.get_ref("run/test/head") == zeta_trace.Ref(
+        name="run/test/head", object_id="sha256:actual"
+    )
+
+
+@pytest.mark.parametrize(
+    "make_store",
+    [
+        pytest.param(
+            lambda tmp_path: zeta_trace.InMemoryStore(session_id="s"), id="memory"
+        ),
+        pytest.param(
+            lambda tmp_path: zeta_trace.SqliteObjectStore(
+                tmp_path / "trace.sqlite3", session_id="s"
+            ),
+            id="sqlite",
+        ),
+    ],
+)
+def test_zeta_trace_session_scope_excludes_objects_without_derivations(
+    tmp_path: Path,
+    make_store: Any,
+) -> None:
+    store = make_store(tmp_path)
+    linked = store.put_object(
+        zeta_trace.Object(kind="prompt", schema="v1", data={"n": 1})
+    )
+    orphan = store.put_object(
+        zeta_trace.Object(kind="note", schema="v1", data={"n": 2})
+    )
+    store.record_derivation(
+        zeta_trace.Derivation(producer="p", output_id=linked, input_ids=())
+    )
+
+    ids = [object_id for object_id, _ in store.objects()]
+    assert linked in ids
+    assert orphan not in ids
+
+
+@pytest.mark.parametrize(
+    "make_store",
+    [
+        pytest.param(lambda tmp_path: zeta_trace.InMemoryStore(), id="memory"),
+        pytest.param(
+            lambda tmp_path: zeta_trace.SqliteObjectStore(tmp_path / "trace.sqlite3"),
+            id="sqlite",
+        ),
+    ],
+)
+def test_zeta_trace_global_scope_includes_objects_without_derivations(
+    tmp_path: Path,
+    make_store: Any,
+) -> None:
+    store = make_store(tmp_path)
+    first = store.put_object(
+        zeta_trace.Object(kind="prompt", schema="v1", data={"n": 1})
+    )
+    orphan = store.put_object(
+        zeta_trace.Object(kind="note", schema="v1", data={"n": 2})
+    )
+
+    ids = [object_id for object_id, _ in store.objects()]
+    assert first in ids
+    assert orphan in ids
+
+
 def test_zeta_trace_object_ids_ignore_dict_key_order() -> None:
     first = zeta_trace.Object(
         kind="example",

@@ -354,7 +354,12 @@ def egress_idempotency_key(
 
 
 def render_template(template: str, event: DraftEvent | Event) -> str:
-    return template.format(event=event, **dict(event.payload))
+    try:
+        return template.format(event=event, **dict(event.payload))
+    except (KeyError, IndexError) as exc:
+        raise RuntimeError(
+            f"idempotency-key template {template!r} references a missing field: {exc}"
+        ) from exc
 
 
 def project_agent_run_turn(runtime: WorkerServices):

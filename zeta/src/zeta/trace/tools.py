@@ -31,11 +31,6 @@ def tool_failure_detail(row: dict[str, Any]) -> str:
     return ""
 
 
-def first_text_content(content: object) -> str:
-    text = raw_text_content(content)
-    return " ".join(text.strip().split()) if text else ""
-
-
 def raw_text_content(content: object) -> str:
     if not isinstance(content, list):
         return ""

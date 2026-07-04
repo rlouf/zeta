@@ -1797,6 +1797,28 @@ def run_rpc_messages(
     return client
 
 
+def test_zeta_rpc_route_event_logs_dispatch_failure(
+    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = rpc_client_without_connection()
+
+    async def failing_route(event: Event) -> Any:
+        raise RuntimeError("dispatch boom")
+
+    monkeypatch.setattr(client.dispatcher, "route", failing_route)
+    event = rpc_event("hi", cursor=1)
+
+    with caplog.at_level(logging.ERROR, logger="zetad.rpc.routes"):
+        asyncio.run(zetad_rpc_routes.route_event(client, event))
+
+    assert any(
+        "Background event routing failed" in record.getMessage()
+        for record in caplog.records
+    )
+    assert any(record.exc_info for record in caplog.records)
+
+
 def test_zeta_rpc_initialize_returns_server_metadata() -> None:
     input_text = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "initialize"}) + "\n"
     output = RpcMemoryTransport()
@@ -2017,6 +2039,14 @@ def test_zeta_rpc_events_publish_returns_before_routing_finishes(
         await asyncio.sleep(0)
 
     asyncio.run(run())
+
+
+def test_zeta_ingress_render_template_reports_missing_field() -> None:
+    draft = DraftEvent(event_type="x", source="s", payload={"channel": "C1"})
+
+    assert zetad_worker.render_template("{channel}", draft) == "C1"
+    with pytest.raises(RuntimeError, match="missing field"):
+        zetad_worker.render_template("{absent}", draft)
 
 
 def test_zeta_rpc_events_publish_rejects_lifecycle_event_ingress(
@@ -8402,7 +8432,9 @@ def test_zeta_agent_turn_converts_tool_crash_to_error_result(monkeypatch) -> Non
     assert tool_result["status"] == "failed"
 
 
-def test_zeta_agent_turn_runs_tool_call_without_schema_validation(monkeypatch) -> None:
+def test_zeta_agent_turn_rejects_tool_call_that_violates_input_schema(
+    monkeypatch,
+) -> None:
     ran_with: list[dict[str, Any]] = []
 
     def fake_invoke(
@@ -8439,14 +8471,15 @@ def test_zeta_agent_turn_runs_tool_call_without_schema_validation(monkeypatch) -
         zeta_agent.AgentConfig(allowed_capabilities=("read",), max_turns=1),
     )
 
-    assert ran_with == [{"path": "README.md", "unexpected": True}]
+    assert ran_with == []
     tool_result = next(
         event
         for event in timeline_events(result.events)
         if event.get("type") == "tool_result"
     )
-    assert tool_result["result"]["ok"] is True
-    assert tool_result["status"] == "completed"
+    assert tool_result["result"]["ok"] is False
+    assert tool_result["result"]["error"]["code"] == "invalid-tool-args"
+    assert tool_result["status"] == "failed"
 
 
 def test_zeta_agent_turn_rejects_disallowed_tool_before_running(monkeypatch) -> None:

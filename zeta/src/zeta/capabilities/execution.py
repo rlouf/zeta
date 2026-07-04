@@ -12,10 +12,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol, cast
 
+from jsonschema import Draft202012Validator
+from jsonschema.exceptions import SchemaError
+
 from zeta.capabilities.host import HostDirectory
 from zeta.capabilities.registry import (
     CapabilityRegistry,
     CapabilityToolSchema,
+    error_result,
     validated_capability_result_payload,
 )
 from zeta.capabilities.registry import registry as _default_tool_registry
@@ -72,18 +76,6 @@ def diagnostic(
     return {"code": code, "message": message, "severity": severity}
 
 
-def error_result(
-    code: str,
-    message: str,
-    *,
-    data: dict[str, Any] | None = None,
-) -> dict[str, Any]:
-    error: dict[str, Any] = {"code": code, "message": message}
-    if data is not None:
-        error["data"] = data
-    return {"ok": False, "error": error}
-
-
 def proposed_command_effect(
     command: str, reason: str, *, artifact: str | None = None
 ) -> dict[str, Any]:
@@ -122,6 +114,11 @@ def content_hash(data: bytes | str) -> str:
     if isinstance(data, str):
         data = data.encode("utf-8")
     return "sha256:" + hashlib.sha256(data).hexdigest()
+
+
+def short_tag(content_address: str) -> str:
+    """Return the short 8-char snapshot tag from a content address."""
+    return content_address.split(":", 1)[1][:8]
 
 
 def file_content_hash(path: str | Path) -> str | None:
@@ -345,7 +342,38 @@ def validate_tool_call(
                 f"tool is not allowed in this workflow: {invocation.name}",
             )
         )
+    capability = tool_registry.get(capability_id)
+    if capability is not None:
+        schema_error = tool_args_schema_error(
+            invocation.params, capability.declaration.input_schema
+        )
+        if schema_error is not None:
+            return ToolCallValidation(error=("invalid-tool-args", schema_error))
     return ToolCallValidation(capability_id=capability_id)
+
+
+def tool_args_schema_error(
+    params: dict[str, Any], schema: dict[str, Any]
+) -> str | None:
+    """Return the first schema violation in a tool call's arguments, or None.
+
+    A missing or empty schema imposes no constraints, and a schema that is
+    itself malformed is skipped rather than rejecting every call.
+    """
+    if not schema:
+        return None
+    try:
+        validator = Draft202012Validator(schema)
+        errors = sorted(
+            validator.iter_errors(params), key=lambda error: list(error.path)
+        )
+    except SchemaError:
+        return None
+    if not errors:
+        return None
+    first = errors[0]
+    location = "/".join(str(part) for part in first.path)
+    return f"{location}: {first.message}" if location else first.message
 
 
 def reject_tool_call(

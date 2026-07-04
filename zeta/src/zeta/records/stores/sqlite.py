@@ -16,7 +16,6 @@ from typing import Any, Protocol
 
 from zeta.records.events import AppendOutcome, DraftEvent, Event, json_native_payload
 from zeta.records.stores._object_sqlite import (
-    DEFAULT_SQLITE_NAME,
     ZETA_SQLITE_NAME,
     SqliteObjectStore,
     available_session_ids,
@@ -29,9 +28,9 @@ from zeta.records.stores._object_sqlite import (
     zeta_sqlite_path,
 )
 from zeta.records.stores.event_store import Filter
+from zeta.records.stores.object_store import escape_like
 
 __all__ = [
-    "DEFAULT_SQLITE_NAME",
     "EVENT_STORE_NAME",
     "EventProjection",
     "ZETA_SQLITE_NAME",
@@ -397,8 +396,7 @@ def _optional_str(value: object) -> str | None:
 
 
 def _like_prefix(prefix: str) -> str:
-    escaped = prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-    return f"{escaped}%"
+    return f"{escape_like(prefix)}%"
 
 
 def _execute_with_retry(connection: sqlite3.Connection, sql: str) -> None:

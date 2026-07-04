@@ -527,6 +527,11 @@ def test_commas_read_fetches_public_url(monkeypatch) -> None:
         return FakeResponse()
 
     monkeypatch.setattr(read_tool.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(
+        read_tool.socket,
+        "getaddrinfo",
+        lambda *args, **kwargs: [(2, 1, 6, "", ("93.184.216.34", 0))],
+    )
 
     result = read_tool.run({"path": "https://example.com", "limit": 5})
 
@@ -539,6 +544,20 @@ def test_commas_read_fetches_public_url(monkeypatch) -> None:
     assert "3:World" in text
     assert result["metadata"]["source"] == "web"
     assert result["metadata"]["url"] == "https://example.com"
+
+
+def test_commas_read_blocks_loopback_url() -> None:
+    result = read_tool.run({"path": "http://127.0.0.1/secret"})
+
+    assert result["ok"] is False
+    assert result["error"]["code"] == "web-read-blocked"
+
+
+def test_commas_read_blocks_cloud_metadata_url() -> None:
+    result = read_tool.run({"path": "http://169.254.169.254/latest/meta-data/"})
+
+    assert result["ok"] is False
+    assert result["error"]["code"] == "web-read-blocked"
 
 
 def test_zeta_tool_read_schema_and_run(tmp_path: Path) -> None:
@@ -989,6 +1008,35 @@ def test_zeta_tool_edit_direct_applies_hashline_insert_and_delete(
     assert data["ok"] is True
     assert target.read_text(encoding="utf-8") == "one\ntwo\ninserted\nremove\n"
     assert data["metadata"]["mode"] == "hashline"
+
+
+def test_zeta_tool_bash_honors_per_call_timeout() -> None:
+    data = tool_registry.invoke(
+        "bash",
+        {"command": "sleep 5", "timeout": 1},
+        execution_mode="direct",
+    )
+
+    assert data["ok"] is False
+    assert data["error"]["code"] == "bash-timeout"
+    assert data["metadata"]["timed_out"] is True
+    assert "1s" in data["error"]["message"]
+
+
+def test_zeta_tool_edit_rejects_overlapping_operations(tmp_path: Path) -> None:
+    target = tmp_path / "a.txt"
+    target.write_text("one\ntwo\nthree\nfour\n", encoding="utf-8")
+    tag = tool_registry.invoke("read", {"path": str(target)})["metadata"]["tag"]
+
+    data = tool_registry.invoke(
+        "edit",
+        {"input": f"[{target}#{tag}]\nSWAP 1..2:\n+x\nDEL 2..3\n"},
+        execution_mode="direct",
+    )
+
+    assert data["ok"] is False
+    assert data["error"]["code"] == "overlapping-operations"
+    assert target.read_text(encoding="utf-8") == "one\ntwo\nthree\nfour\n"
 
 
 def test_zeta_tool_edit_rejects_stale_hashline_tag(tmp_path: Path) -> None:

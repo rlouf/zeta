@@ -22,15 +22,8 @@ StepName = Literal[
 
 
 @dataclass(frozen=True)
-class StepEffect:
-    kind: str
-    payload: dict[str, Any] = field(default_factory=dict)
-
-
-@dataclass(frozen=True)
 class StepResult:
     step: StepName
-    effects: tuple[StepEffect, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -115,5 +108,5 @@ class RunState:
         if prompt_trace is not None:
             self.prompt_traces.append(prompt_trace)
 
-    def note_step(self, step: StepName, *effects: StepEffect) -> None:
-        self.steps.append(StepResult(step, effects))
+    def note_step(self, step: StepName) -> None:
+        self.steps.append(StepResult(step))

@@ -16,10 +16,18 @@ class InMemoryStore(StoreBase):
     traces where durability is not required.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, session_id: str | None = None) -> None:
         self._objects: dict[ObjectId, Object] = {}
         self._refs: dict[str, ObjectId] = {}
         self.derivations: dict[str, Derivation] = {}
+        self.session_id = session_id
+
+    def _session_object_ids(self) -> set[ObjectId]:
+        reachable: set[ObjectId] = set()
+        for derivation in self.derivations.values():
+            reachable.add(derivation.output_id)
+            reachable.update(derivation.input_ids)
+        return reachable
 
     def put_object(self, obj: Object) -> ObjectId:
         object_id_value = obj.content_address()
@@ -41,10 +49,12 @@ class InMemoryStore(StoreBase):
         self, kind: str | tuple[str, ...] | None = None, limit: int | None = None
     ) -> list[tuple[ObjectId, Object]]:
         kinds = (kind,) if isinstance(kind, str) else kind
+        reachable = self._session_object_ids() if self.session_id is not None else None
         listed = [
             (object_id_value, obj)
             for object_id_value, obj in reversed(self._objects.items())
-            if kinds is None or obj.kind in kinds
+            if (kinds is None or obj.kind in kinds)
+            and (reachable is None or object_id_value in reachable)
         ]
         return listed if limit is None else listed[:limit]
 

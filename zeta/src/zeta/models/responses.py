@@ -19,6 +19,7 @@ from zeta.models.chat_completions import (
     DEFAULT_MAX_COMPLETION_TOKENS,
     ChatCompletionStreamSink,
     ModelTelemetrySink,
+    decode_stream_event,
     emit_model_telemetry,
     model_first_output_timeout,
     model_idle_timeout,
@@ -28,7 +29,7 @@ from zeta.models.chat_completions import (
 )
 from zeta.models.codex_auth import CodexCredentials, load_codex_credentials
 from zeta.models.profiles import DEFAULT_CODEX_BASE_URL
-from zeta.models.types import ModelInput, ModelOutput
+from zeta.models.types import ModelInput
 
 CODEX_ORIGINATOR = "zeta"
 CODEX_CONTEXT_TOKENS = {"gpt-5.3-codex-spark": 128_000}
@@ -293,25 +294,13 @@ def codex_completion_messages(
         context_tokens=codex_context_tokens(model),
         telemetry_sink=telemetry_sink,
     )
-    output = model_output_from_responses_payload(payload)
+    output = model_output_from_chat_completion(payload)
     if output.finish_reason == "length" and output.message.get("tool_calls"):
         raise RuntimeError(
             "model request failed: the response hit max_tokens in the middle "
             "of a tool call, leaving its arguments incomplete"
         )
     return output.message
-
-
-def model_output_from_responses_payload(payload: dict[str, Any]) -> ModelOutput:
-    choices = payload.get("choices")
-    if not isinstance(choices, list) or not choices:
-        raise RuntimeError("model request failed: response choices were invalid")
-    first_choice = choices[0]
-    if not isinstance(first_choice, dict):
-        raise RuntimeError("model request failed: response choice was invalid")
-    if not isinstance(first_choice.get("message"), dict):
-        raise RuntimeError("model request failed: assistant message was invalid")
-    return model_output_from_chat_completion(payload)
 
 
 def codex_structured_output(
@@ -360,16 +349,9 @@ def read_streamed_responses(
     """Read Responses SSE frames into one chat-completions-shaped payload."""
     accumulator = ResponsesStreamAccumulator(stream_sink=stream_sink)
     for data in events:
-        if data == "[DONE]":
+        event = decode_stream_event(data)
+        if event is None:
             break
-        try:
-            event = json.loads(data)
-        except json.JSONDecodeError as exc:
-            raise RuntimeError(
-                f"model stream failed: invalid JSON event: {exc}"
-            ) from exc
-        if not isinstance(event, dict):
-            raise RuntimeError("model stream failed: event was not a JSON object")
         accumulator.add_event(event)
     return accumulator.response()
 

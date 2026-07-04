@@ -73,6 +73,30 @@ def test_codex_auth_refreshes_expired_token_and_writes_back(
     assert "last_refresh" in saved
 
 
+def test_codex_auth_write_preserves_unknown_keys_and_restricts_perms(
+    tmp_path: Path, monkeypatch
+) -> None:
+    auth_path = tmp_path / "auth.json"
+    write_auth_file(auth_path, expires_in=-60.0)
+    original = json.loads(auth_path.read_text(encoding="utf-8"))
+    original["OPENAI_API_KEY"] = "sk-preserve-me"
+    auth_path.write_text(json.dumps(original), encoding="utf-8")
+    new_access = fake_jwt({"exp": int(time.time() + 3600)})
+
+    monkeypatch.setattr(
+        codex_auth,
+        "request_token_refresh",
+        lambda refresh_token: {"access_token": new_access},
+    )
+
+    codex_auth.load_codex_credentials(auth_path)
+
+    saved = json.loads(auth_path.read_text(encoding="utf-8"))
+    assert saved["OPENAI_API_KEY"] == "sk-preserve-me"
+    assert saved["tokens"]["access_token"] == new_access
+    assert auth_path.stat().st_mode & 0o777 == 0o600
+
+
 def test_codex_auth_missing_file_says_how_to_login(tmp_path: Path) -> None:
     with pytest.raises(RuntimeError, match="codex login"):
         codex_auth.load_codex_credentials(tmp_path / "absent.json")

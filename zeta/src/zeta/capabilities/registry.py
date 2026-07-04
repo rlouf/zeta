@@ -12,6 +12,7 @@ from zeta.capabilities.types import Capability, ExecutionMode
 
 __all__ = [
     "ExecutionMode",
+    "CapabilityDirectory",
     "CapabilityError",
     "CapabilityToolSchema",
     "CapabilityRegistry",
@@ -92,23 +93,20 @@ class RegisteredCapability:
     executor: Any
 
 
-class CapabilityRegistry:
-    """Registry for Zeta capabilities."""
+class CapabilityDirectory:
+    """Name resolution and model-facing schema over a capability index.
 
-    def __init__(self) -> None:
-        self._capabilities: dict[str, RegisteredCapability] = {}
-        self._names: dict[str, list[str]] = {}
+    Shared read surface for any store of `RegisteredCapability` declarations
+    keyed by canonical id, whether registered in-process (`CapabilityRegistry`)
+    or served by connected hosts (`HostDirectory`). Subclasses own how
+    `_capabilities` and `_names` are populated.
+    """
 
-    def register(self, capability: RegisteredCapability) -> None:
-        """Register a capability implementation under its canonical id."""
-        capability_id = capability.declaration.id.canonical()
-        if capability_id in self._capabilities:
-            raise ValueError(f"capability {capability_id!r} is already registered")
-        self._capabilities[capability_id] = capability
-        self._names.setdefault(capability.declaration.id.name, []).append(capability_id)
+    _capabilities: dict[str, RegisteredCapability]
+    _names: dict[str, list[str]]
 
     def get(self, capability_id: str) -> RegisteredCapability | None:
-        """Get a registered capability implementation by canonical id."""
+        """Get a capability declaration by canonical id."""
         return self._capabilities.get(capability_id)
 
     def get_by_name(self, name: str) -> RegisteredCapability | None:
@@ -118,6 +116,7 @@ class CapabilityRegistry:
         return self.get(capability_id)
 
     def resolve(self, name: str) -> str | None:
+        """Resolve a model-facing name or canonical id to a canonical id."""
         if name in self._capabilities:
             return name
         matches = self._names.get(name, [])
@@ -130,7 +129,7 @@ class CapabilityRegistry:
         return capability.declaration.id.name
 
     def list_capability_ids(self) -> list[str]:
-        """List registered canonical capability ids."""
+        """List known canonical capability ids."""
         return sorted(self._capabilities)
 
     def list_auto_enabled_capability_ids(self) -> list[str]:
@@ -163,6 +162,22 @@ class CapabilityRegistry:
             name_to_id[name] = capability_id
             descriptors.append(model_descriptor(name, capability))
         return CapabilityToolSchema(name_to_id=name_to_id, descriptors=descriptors)
+
+
+class CapabilityRegistry(CapabilityDirectory):
+    """In-process registry for Zeta capabilities."""
+
+    def __init__(self) -> None:
+        self._capabilities: dict[str, RegisteredCapability] = {}
+        self._names: dict[str, list[str]] = {}
+
+    def register(self, capability: RegisteredCapability) -> None:
+        """Register a capability implementation under its canonical id."""
+        capability_id = capability.declaration.id.canonical()
+        if capability_id in self._capabilities:
+            raise ValueError(f"capability {capability_id!r} is already registered")
+        self._capabilities[capability_id] = capability
+        self._names.setdefault(capability.declaration.id.name, []).append(capability_id)
 
     def invoke(
         self,

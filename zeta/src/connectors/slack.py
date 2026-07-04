@@ -6,6 +6,7 @@ import hashlib
 import hmac
 import json
 import os
+import time
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
@@ -134,14 +135,24 @@ async def handle_slack_push_ingress(
     return InboundResponse(status_code=202, body=b"accepted"), drafts
 
 
+SLACK_SIGNATURE_MAX_AGE_SECONDS = 60 * 5
+
+
 def valid_slack_signature(
     request: InboundRequest,
     *,
     signing_secret: str | None,
+    now: float | None = None,
 ) -> bool:
     timestamp = request.headers.get("x-slack-request-timestamp")
     signature = request.headers.get("x-slack-signature")
     if not signing_secret or not timestamp or not signature:
+        return False
+    try:
+        request_age = abs((time.time() if now is None else now) - int(timestamp))
+    except ValueError:
+        return False
+    if request_age > SLACK_SIGNATURE_MAX_AGE_SECONDS:
         return False
     expected = hmac.new(
         signing_secret.encode("utf-8"),

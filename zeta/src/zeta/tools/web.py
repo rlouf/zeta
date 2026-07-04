@@ -188,7 +188,7 @@ def codex_search(query: str, config: WebConfig) -> CodexSearch:
         stream_json_sse(
             codex_responses_url(config.selected_url),
             body,
-            headers=codex_request_headers(config.credentials, "commas-web-search"),
+            headers=codex_request_headers(config.credentials, "zeta-web-search"),
             first_output_timeout=config.timeout_sec,
             idle_timeout=config.timeout_sec,
         )

@@ -1,1 +1,1 @@
-"""Trace inspection helpers for the Commas CLI."""
+"""Trace inspection helpers for the Zeta CLI."""

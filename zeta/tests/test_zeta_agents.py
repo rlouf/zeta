@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import hmac
 import json
+import time
 import tomllib
 from collections.abc import Callable
 from pathlib import Path
@@ -1084,9 +1085,10 @@ def signed_slack_request(
     *,
     secret: str = "secret",
     signature: str | None = None,
+    timestamp: str | None = None,
 ) -> InboundRequest:
     body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
-    timestamp = "1712345678"
+    timestamp = timestamp or str(int(time.time()))
     digest = hmac.new(
         secret.encode("utf-8"),
         f"v0:{timestamp}:".encode() + body,
@@ -1138,6 +1140,27 @@ def test_zeta_slack_push_ingress_rejects_invalid_signature() -> None:
             signed_slack_request(
                 {"type": "event_callback"},
                 signature="v0=bad",
+            )
+        )
+    )
+
+    assert response.status_code == 401
+    assert response.body == b"invalid signature"
+    assert tuple(drafts) == ()
+
+
+def test_zeta_slack_push_ingress_rejects_stale_timestamp() -> None:
+    connector = zeta_agents.slack_event_connector(
+        FakeSlackClient(),
+        signing_secret="secret",
+    )
+    stale = str(int(time.time()) - 60 * 60)
+
+    response, drafts = asyncio.run(
+        connector.push_ingress(
+            signed_slack_request(
+                {"type": "event_callback"},
+                timestamp=stale,
             )
         )
     )

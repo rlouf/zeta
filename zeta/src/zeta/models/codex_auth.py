@@ -72,12 +72,23 @@ def read_auth_tokens(path: Path) -> dict[str, Any]:
 
 
 def write_auth_tokens(path: Path, tokens: dict[str, Any]) -> None:
+    existing: dict[str, Any] = {}
+    if path.exists():
+        try:
+            loaded = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            loaded = None
+        if isinstance(loaded, dict):
+            existing = loaded
     payload = {
+        **existing,
         "tokens": tokens,
         "last_refresh": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
     }
     temp_path = path.with_name(f"{path.name}.tmp")
-    temp_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    descriptor = os.open(temp_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+        handle.write(json.dumps(payload, indent=2))
     os.replace(temp_path, path)
 
 

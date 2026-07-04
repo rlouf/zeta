@@ -321,7 +321,7 @@ def test_zeta_model_output_from_responses_payload_preserves_replay_items() -> No
         )
     )
 
-    output = zeta_responses.model_output_from_responses_payload(payload)
+    output = zeta_responses.model_output_from_chat_completion(payload)
 
     assert output.message["content"] == "done"
     assert output.finish_reason == "stop"
@@ -369,7 +369,7 @@ def test_zeta_responses_codex_completion_returns_adapter_message(monkeypatch) ->
     monkeypatch.setattr(zeta_responses, "request_codex_response", fake_request)
     monkeypatch.setattr(
         zeta_responses,
-        "model_output_from_responses_payload",
+        "model_output_from_chat_completion",
         fake_model_output,
     )
 

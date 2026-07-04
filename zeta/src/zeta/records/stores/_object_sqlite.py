@@ -27,7 +27,6 @@ from zeta.records.stores.object_store import (
     escape_like,
 )
 
-DEFAULT_SQLITE_NAME = "zeta-trace.sqlite3"
 ZETA_SQLITE_NAME = "zeta.sqlite3"
 
 
@@ -185,6 +184,17 @@ def import_trace_graph(
     return count
 
 
+def _dump_canonical(value: Any) -> str:
+    """Serialize a value to the store's canonical, content-stable JSON form."""
+    return json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    )
+
+
 def _object_from_row(row: sqlite3.Row) -> Object:
     return Object(
         kind=str(row["kind"]),
@@ -254,6 +264,14 @@ class SqliteObjectStore(StoreBase):
     def _commit(self) -> None:
         if self._batch_depth == 0:
             self.connection.commit()
+
+    def _fetchone(self, sql: str, params: Sequence[Any] = ()) -> sqlite3.Row | None:
+        with self._write_lock:
+            return self.connection.execute(sql, params).fetchone()
+
+    def _fetchall(self, sql: str, params: Sequence[Any] = ()) -> list[sqlite3.Row]:
+        with self._write_lock:
+            return self.connection.execute(sql, params).fetchall()
 
     def _ensure_writable(self) -> None:
         if self.read_only:
@@ -388,39 +406,27 @@ class SqliteObjectStore(StoreBase):
                     object_id_value,
                     obj.kind,
                     obj.schema,
-                    json.dumps(
-                        obj.data,
-                        ensure_ascii=False,
-                        sort_keys=True,
-                        separators=(",", ":"),
-                        allow_nan=False,
-                    ),
-                    json.dumps(
-                        list(obj.links),
-                        ensure_ascii=False,
-                        sort_keys=True,
-                        separators=(",", ":"),
-                        allow_nan=False,
-                    ),
+                    _dump_canonical(obj.data),
+                    _dump_canonical(list(obj.links)),
                 ),
             )
             self._commit()
         return object_id_value
 
     def get_object(self, object_id: ObjectId) -> Object | None:
-        row = self.connection.execute(
+        row = self._fetchone(
             "SELECT kind, schema, data_json, links_json FROM objects WHERE id = ?",
             (object_id,),
-        ).fetchone()
+        )
         if row is None:
             return None
         return _object_from_row(row)
 
     def object_ids_with_prefix(self, prefix: str, limit: int = 16) -> list[ObjectId]:
-        rows = self.connection.execute(
+        rows = self._fetchall(
             r"SELECT id FROM objects WHERE id LIKE ? ESCAPE '\' ORDER BY id LIMIT ?",
             (f"{escape_like(prefix)}%", limit),
-        ).fetchall()
+        )
         return [str(row["id"]) for row in rows]
 
     def move_ref(
@@ -431,44 +437,50 @@ class SqliteObjectStore(StoreBase):
     ) -> RefUpdate:
         self._ensure_writable()
         with self._write_lock:
-            old_object_id = self._ref_object_id(name)
-            if old_object_id != expected:
-                return RefUpdate(
-                    name=name,
-                    old_object_id=old_object_id,
-                    new_object_id=new,
-                    updated=False,
-                )
-            if expected is None:
-                self.connection.execute(
-                    """
-                    INSERT INTO refs (scope, name, object_id) VALUES (?, ?, ?)
-                    ON CONFLICT(scope, name) DO NOTHING
-                    """,
-                    (self.scope, name, new),
-                )
-            else:
-                self.connection.execute(
-                    """
-                    UPDATE refs
-                    SET object_id = ?
-                    WHERE scope = ? AND name = ? AND object_id = ?
-                    """,
-                    (new, self.scope, name, expected),
-                )
-            self._commit()
+            standalone = self._batch_depth == 0
+            if standalone:
+                self.connection.execute("BEGIN IMMEDIATE")
+            try:
+                old_object_id = self._ref_object_id(name)
+                if old_object_id != expected:
+                    updated = False
+                elif expected is None:
+                    cursor = self.connection.execute(
+                        """
+                        INSERT INTO refs (scope, name, object_id) VALUES (?, ?, ?)
+                        ON CONFLICT(scope, name) DO NOTHING
+                        """,
+                        (self.scope, name, new),
+                    )
+                    updated = cursor.rowcount == 1
+                else:
+                    cursor = self.connection.execute(
+                        """
+                        UPDATE refs
+                        SET object_id = ?
+                        WHERE scope = ? AND name = ? AND object_id = ?
+                        """,
+                        (new, self.scope, name, expected),
+                    )
+                    updated = cursor.rowcount == 1
+            except Exception:
+                if standalone:
+                    self.connection.rollback()
+                raise
+            if standalone:
+                self.connection.commit()
             return RefUpdate(
                 name=name,
                 old_object_id=old_object_id,
                 new_object_id=new,
-                updated=True,
+                updated=updated,
             )
 
     def _ref_object_id(self, name: str) -> ObjectId | None:
-        row = self.connection.execute(
+        row = self._fetchone(
             "SELECT object_id FROM refs WHERE scope = ? AND name = ?",
             (self.scope, name),
-        ).fetchone()
+        )
         if row is None:
             return None
         return str(row["object_id"])
@@ -495,20 +507,8 @@ class SqliteObjectStore(StoreBase):
                     self.session_id,
                     derivation.producer,
                     derivation.output_id,
-                    json.dumps(
-                        list(derivation.input_ids),
-                        ensure_ascii=False,
-                        sort_keys=True,
-                        separators=(",", ":"),
-                        allow_nan=False,
-                    ),
-                    json.dumps(
-                        derivation.params,
-                        ensure_ascii=False,
-                        sort_keys=True,
-                        separators=(",", ":"),
-                        allow_nan=False,
-                    ),
+                    _dump_canonical(list(derivation.input_ids)),
+                    _dump_canonical(derivation.params),
                     time.time(),
                 ),
             )
@@ -520,7 +520,7 @@ class SqliteObjectStore(StoreBase):
 
     def derivations_for_output(self, output_id: ObjectId) -> list[Derivation]:
         session_filter, params = self._session_filter("output_id = ?", output_id)
-        rows = self.connection.execute(
+        rows = self._fetchall(
             f"""
             SELECT producer, output_id, input_ids_json, params_json
             FROM derivations
@@ -528,7 +528,7 @@ class SqliteObjectStore(StoreBase):
             ORDER BY created_at, id
             """,
             params,
-        ).fetchall()
+        )
         return [_derivation_from_row(row) for row in rows]
 
     def derivation_records_for_output(
@@ -540,7 +540,7 @@ class SqliteObjectStore(StoreBase):
         the Derivation dataclass deliberately carries neither.
         """
         session_filter, params = self._session_filter("output_id = ?", output_id)
-        rows = self.connection.execute(
+        rows = self._fetchall(
             f"""
             SELECT id, producer, output_id, input_ids_json, params_json, created_at
             FROM derivations
@@ -548,7 +548,7 @@ class SqliteObjectStore(StoreBase):
             ORDER BY created_at, id
             """,
             params,
-        ).fetchall()
+        )
         return [
             {
                 "id": str(row["id"]),
@@ -580,20 +580,8 @@ class SqliteObjectStore(StoreBase):
                     object_id_value,
                     obj.kind,
                     obj.schema,
-                    json.dumps(
-                        obj.data,
-                        ensure_ascii=False,
-                        sort_keys=True,
-                        separators=(",", ":"),
-                        allow_nan=False,
-                    ),
-                    json.dumps(
-                        list(obj.links),
-                        ensure_ascii=False,
-                        sort_keys=True,
-                        separators=(",", ":"),
-                        allow_nan=False,
-                    ),
+                    _dump_canonical(obj.data),
+                    _dump_canonical(list(obj.links)),
                 ),
             )
             self._commit()
@@ -622,20 +610,8 @@ class SqliteObjectStore(StoreBase):
                     self.session_id,
                     derivation.producer,
                     derivation.output_id,
-                    json.dumps(
-                        list(derivation.input_ids),
-                        ensure_ascii=False,
-                        sort_keys=True,
-                        separators=(",", ":"),
-                        allow_nan=False,
-                    ),
-                    json.dumps(
-                        derivation.params,
-                        ensure_ascii=False,
-                        sort_keys=True,
-                        separators=(",", ":"),
-                        allow_nan=False,
-                    ),
+                    _dump_canonical(list(derivation.input_ids)),
+                    _dump_canonical(derivation.params),
                     created_at,
                 ),
             )
@@ -654,7 +630,7 @@ class SqliteObjectStore(StoreBase):
                 "derivations.session_id = ? AND derivation_inputs.input_id = ?"
             )
             params = (self.session_id, input_id)
-        rows = self.connection.execute(
+        rows = self._fetchall(
             f"""
             SELECT derivations.producer, derivations.output_id,
                    derivations.input_ids_json, derivations.params_json
@@ -667,14 +643,14 @@ class SqliteObjectStore(StoreBase):
             ORDER BY derivations.created_at, derivations.id
             """,
             params,
-        ).fetchall()
+        )
         return [_derivation_from_row(row) for row in rows]
 
     def refs(self) -> list[Ref]:
-        rows = self.connection.execute(
+        rows = self._fetchall(
             "SELECT name, object_id FROM refs WHERE scope = ? ORDER BY name",
             (self.scope,),
-        ).fetchall()
+        )
         return [
             Ref(name=str(row["name"]), object_id=str(row["object_id"])) for row in rows
         ]
@@ -735,7 +711,7 @@ class SqliteObjectStore(StoreBase):
         params = [*join_params, *where_params]
         if limit is not None:
             params.append(limit)
-        rows = self.connection.execute(
+        rows = self._fetchall(
             f"""
             SELECT objects.id, objects.kind, objects.schema,
                    objects.data_json, objects.links_json
@@ -747,7 +723,7 @@ class SqliteObjectStore(StoreBase):
             {limit_clause}
             """,
             params,
-        ).fetchall()
+        )
         return [(str(row["id"]), _object_from_row(row)) for row in rows]
 
     def _session_filter(self, clause: str, *params: Any) -> tuple[str, tuple[Any, ...]]:
@@ -777,14 +753,16 @@ class SqliteObjectStore(StoreBase):
             self._commit()
 
     def stats(self) -> TraceStats:
-        row = self.connection.execute(
+        row = self._fetchone(
             """
             SELECT COUNT(*) AS object_count,
                    COALESCE(SUM(LENGTH(data_json) + LENGTH(links_json)), 0)
                      AS total_bytes
             FROM objects
             """
-        ).fetchone()
+        )
+        if row is None:
+            return TraceStats(object_count=0, total_bytes=0)
         return TraceStats(
             object_count=int(row["object_count"]),
             total_bytes=int(row["total_bytes"]),

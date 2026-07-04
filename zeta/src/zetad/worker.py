@@ -50,7 +50,7 @@ from zetad.agents import (
     agent_session_id,
     compile_agent_definitions,
 )
-from zetad.dispatch import EventDispatcher
+from zetad.dispatch import QueueingDispatcher
 from zetad.ingress import run_push_ingress_forever
 from zetad.retry import RetryPolicy
 from zetad.session_turn import session_turn_agent
@@ -444,7 +444,8 @@ async def run_available_queue_item(
     heartbeat_interval_seconds: float = ATTEMPT_HEARTBEAT_INTERVAL_SECONDS,
     retry_policy: RetryPolicy | None = None,
 ) -> str:
-    dispatcher = EventDispatcher(
+    dispatcher = QueueingDispatcher(
+        events,
         events,
         executors=executors,
         worker_name=worker_name,
@@ -546,7 +547,8 @@ async def run_eventlog_rpc_request(
         state = pending_runs.get(run_id)
         return state.cancellation_event if state is not None else None
 
-    dispatcher = EventDispatcher(
+    dispatcher = QueueingDispatcher(
+        runtime.events,
         runtime.events,
         executors=(
             session_turn_agent(

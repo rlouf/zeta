@@ -6,7 +6,7 @@ from collections.abc import Awaitable, Callable, Iterable, Mapping
 from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, Protocol
 
 from zeta.records.events import DraftEvent, Event
 from zeta.records.stores.event_store import (
@@ -53,26 +53,36 @@ __all__ = [
     "ExecutableAgent",
     "DispatchOutcome",
     "EventPattern",
+    "QueueingDispatcher",
     "ReservedRuntimeEventError",
     "RouteOutcome",
     "RetryPolicy",
+    "RuntimeQueueStore",
     "TerminalQueueItemError",
 ]
 
 RESERVED_RUNTIME_EVENT_PREFIXES = ("runtime.queue_item.", "runtime.attempt.")
 
 
-@runtime_checkable
-class QueueItemRecordReader(Protocol):
-    """Operational queue index used by daemon-style workers."""
+class RuntimeQueueStore(Protocol):
+    """Operational queue/attempt/lock index a daemon dispatcher requires.
+
+    Backed by the runtime event store's SQLite projections. Unlike the bare
+    event log, it supports claim fencing, attempt heartbeats, and lock renewal
+    for durable, at-least-once queue execution; `QueueingDispatcher` requires
+    one so those guarantees are explicit rather than feature-detected.
+    """
 
     def queue_item(self, queue_item_id: str) -> Mapping[str, Any] | None:
         """Return one queue item row by id."""
 
-
-@runtime_checkable
-class AttemptHeartbeatStore(Protocol):
-    """Operational attempt index used to keep worker leases alive."""
+    def queue_claim_is_current(
+        self,
+        queue_item_id: str,
+        worker_name: str,
+        claim_token: str,
+    ) -> bool:
+        """Return whether the queue claim token still owns the item."""
 
     def heartbeat_attempt(
         self,
@@ -86,11 +96,6 @@ class AttemptHeartbeatStore(Protocol):
     ) -> bool:
         """Refresh a running attempt heartbeat and its queue lease."""
 
-
-@runtime_checkable
-class LockRenewalStore(Protocol):
-    """Operational lock index used to keep mutual-exclusion leases alive."""
-
     def renew_locks(
         self,
         keys: Iterable[str],
@@ -100,19 +105,6 @@ class LockRenewalStore(Protocol):
         now_ms: int,
     ) -> bool:
         """Refresh held mutual-exclusion locks for a running queue item."""
-
-
-@runtime_checkable
-class QueueClaimOwnershipStore(Protocol):
-    """Operational queue index used to fence lifecycle writes."""
-
-    def queue_claim_is_current(
-        self,
-        queue_item_id: str,
-        worker_name: str,
-        claim_token: str,
-    ) -> bool:
-        """Return whether the queue claim token still owns the item."""
 
 
 @dataclass(frozen=True)
@@ -158,7 +150,13 @@ class TerminalQueueItemError(RuntimeError):
 
 
 class EventDispatcher:
-    """Async event dispatcher that routes matching agents in a task group."""
+    """Route matching agents and run them immediately, in one process.
+
+    The base dispatcher owns event publication, routing, immediate queue-item
+    execution, and retry/dead-letter authoring. It has no durable queue claims,
+    so its fencing and heartbeat hooks are no-ops; `QueueingDispatcher` layers
+    those on for daemon-style, at-least-once execution.
+    """
 
     def __init__(
         self,
@@ -167,10 +165,6 @@ class EventDispatcher:
         routes: Iterable[AgentRoute] = (),
         executors: Iterable[ExecutableAgent] = (),
         publish_event: Callable[[Event], None] | None = None,
-        worker_name: str | None = None,
-        heartbeat_interval_seconds: float | None = None,
-        lease_ms: int = 60_000,
-        claim_token: str | None = None,
         retry_policy: RetryPolicy | None = None,
     ) -> None:
         self.event_sink = event_sink
@@ -180,10 +174,7 @@ class EventDispatcher:
             route_by_agent[executor.agent_id] = executor.route
         self.routes = tuple(route_by_agent.values())
         self.publish_callback = publish_event
-        self.worker_name = worker_name
-        self.heartbeat_interval_seconds = heartbeat_interval_seconds
-        self.lease_ms = lease_ms
-        self.claim_token = claim_token
+        self.worker_name: str | None = None
         self.retry_policy = retry_policy or RetryPolicy()
 
     async def publish_event(
@@ -423,15 +414,8 @@ class EventDispatcher:
         return events
 
     def _queue_claim_is_current(self, queue_item_id: str) -> bool:
-        if self.worker_name is None or self.claim_token is None:
-            return True
-        if not isinstance(self.event_sink, QueueClaimOwnershipStore):
-            return True
-        return self.event_sink.queue_claim_is_current(
-            queue_item_id,
-            self.worker_name,
-            self.claim_token,
-        )
+        """Whether this dispatcher still owns the claim; always true in-process."""
+        return True
 
     def _start_attempt_heartbeat(
         self,
@@ -439,22 +423,8 @@ class EventDispatcher:
         queue_item_id: str,
         lock_keys: Iterable[str] = (),
     ) -> asyncio.Task[None] | None:
-        if (
-            self.worker_name is None
-            or self.claim_token is None
-            or self.heartbeat_interval_seconds is None
-            or self.heartbeat_interval_seconds <= 0
-            or not isinstance(self.event_sink, AttemptHeartbeatStore)
-        ):
-            return None
-        return asyncio.create_task(
-            self._heartbeat_attempt(
-                self.event_sink,
-                attempt_id,
-                queue_item_id,
-                tuple(lock_keys),
-            )
-        )
+        """No durable lease to keep alive in-process."""
+        return None
 
     async def _stop_attempt_heartbeat(
         self,
@@ -465,36 +435,6 @@ class EventDispatcher:
         heartbeat_task.cancel()
         with suppress(asyncio.CancelledError):
             await heartbeat_task
-
-    async def _heartbeat_attempt(
-        self,
-        store: AttemptHeartbeatStore,
-        attempt_id: str,
-        queue_item_id: str,
-        lock_keys: tuple[str, ...],
-    ) -> None:
-        if self.worker_name is None or self.heartbeat_interval_seconds is None:
-            return
-        if self.claim_token is None:
-            return
-        while True:
-            await asyncio.sleep(self.heartbeat_interval_seconds)
-            now_ms = current_time_ms()
-            heartbeat_current = store.heartbeat_attempt(
-                attempt_id,
-                queue_item_id,
-                self.worker_name,
-                claim_token=self.claim_token,
-                lease_ms=self.lease_ms,
-                now_ms=now_ms,
-            )
-            if heartbeat_current and lock_keys and isinstance(store, LockRenewalStore):
-                store.renew_locks(
-                    lock_keys,
-                    self.claim_token,
-                    lease_ms=self.lease_ms,
-                    now_ms=now_ms,
-                )
 
     def _executor_for_id(self, agent_id: str) -> ExecutableAgent | None:
         for executor in self.executors:
@@ -514,10 +454,6 @@ class EventDispatcher:
         return self._stored_queue_item(queue_item)
 
     def _stored_queue_item(self, queue_item_id: str) -> RoutedQueueItem:
-        if isinstance(self.event_sink, QueueItemRecordReader):
-            record = self.event_sink.queue_item(queue_item_id)
-            if record is not None:
-                return queue_item_from_record(record)
         reader = self._event_reader()
         for event in reversed(
             reader.list_events(Filter(event_type="runtime.queue_item.available"))
@@ -958,6 +894,105 @@ class EventDispatcher:
             return outcome.event
 
         return publish
+
+
+class QueueingDispatcher(EventDispatcher):
+    """Daemon dispatcher with durable claim fencing and attempt heartbeats.
+
+    Requires a `RuntimeQueueStore` (the runtime event store's SQLite
+    projections) so claim fencing and lease renewal are guaranteed by the type
+    rather than silently skipped when a capability is absent.
+    """
+
+    def __init__(
+        self,
+        event_sink: EventWriter,
+        queue_store: RuntimeQueueStore,
+        *,
+        routes: Iterable[AgentRoute] = (),
+        executors: Iterable[ExecutableAgent] = (),
+        publish_event: Callable[[Event], None] | None = None,
+        retry_policy: RetryPolicy | None = None,
+        worker_name: str | None = None,
+        heartbeat_interval_seconds: float | None = None,
+        lease_ms: int = 60_000,
+        claim_token: str | None = None,
+    ) -> None:
+        super().__init__(
+            event_sink,
+            routes=routes,
+            executors=executors,
+            publish_event=publish_event,
+            retry_policy=retry_policy,
+        )
+        self.queue_store = queue_store
+        self.worker_name = worker_name
+        self.heartbeat_interval_seconds = heartbeat_interval_seconds
+        self.lease_ms = lease_ms
+        self.claim_token = claim_token
+
+    def _stored_queue_item(self, queue_item_id: str) -> RoutedQueueItem:
+        record = self.queue_store.queue_item(queue_item_id)
+        if record is not None:
+            return queue_item_from_record(record)
+        return super()._stored_queue_item(queue_item_id)
+
+    def _queue_claim_is_current(self, queue_item_id: str) -> bool:
+        if self.worker_name is None or self.claim_token is None:
+            return True
+        return self.queue_store.queue_claim_is_current(
+            queue_item_id,
+            self.worker_name,
+            self.claim_token,
+        )
+
+    def _start_attempt_heartbeat(
+        self,
+        attempt_id: str,
+        queue_item_id: str,
+        lock_keys: Iterable[str] = (),
+    ) -> asyncio.Task[None] | None:
+        if (
+            self.worker_name is None
+            or self.claim_token is None
+            or self.heartbeat_interval_seconds is None
+            or self.heartbeat_interval_seconds <= 0
+        ):
+            return None
+        return asyncio.create_task(
+            self._heartbeat_attempt(attempt_id, queue_item_id, tuple(lock_keys))
+        )
+
+    async def _heartbeat_attempt(
+        self,
+        attempt_id: str,
+        queue_item_id: str,
+        lock_keys: tuple[str, ...],
+    ) -> None:
+        if (
+            self.worker_name is None
+            or self.claim_token is None
+            or self.heartbeat_interval_seconds is None
+        ):
+            return
+        while True:
+            await asyncio.sleep(self.heartbeat_interval_seconds)
+            now_ms = current_time_ms()
+            heartbeat_current = self.queue_store.heartbeat_attempt(
+                attempt_id,
+                queue_item_id,
+                self.worker_name,
+                claim_token=self.claim_token,
+                lease_ms=self.lease_ms,
+                now_ms=now_ms,
+            )
+            if heartbeat_current and lock_keys:
+                self.queue_store.renew_locks(
+                    lock_keys,
+                    self.claim_token,
+                    lease_ms=self.lease_ms,
+                    now_ms=now_ms,
+                )
 
 
 def invocation_session_id(definition: AgentDefinition, event: Event) -> str | None:

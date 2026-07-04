@@ -3251,7 +3251,7 @@ def test_zeta_event_dispatcher_rejects_unhandled_queue_item_execution(
     tmp_path: Path,
 ) -> None:
     event_store = zeta_events.SqliteEventStore(tmp_path / "events.sqlite3")
-    dispatcher = zetad_dispatch.EventDispatcher(event_store)
+    dispatcher = zetad_dispatch.QueueingDispatcher(event_store, event_store)
 
     outcome = dispatch_event(
         dispatcher,
@@ -3269,6 +3269,21 @@ def test_zeta_event_dispatcher_rejects_unhandled_queue_item_execution(
 
     assert exc_info.value.queue_item_id == queue_item_id
     assert exc_info.value.event_type == "runtime.queue_item.unhandled"
+
+
+def test_zeta_dispatcher_fencing_is_explicit_by_mode(tmp_path: Path) -> None:
+    events = RuntimeEventStore.open(tmp_path / "events.sqlite3")
+
+    base = zetad_dispatch.EventDispatcher(events)
+    assert base._queue_claim_is_current("qi_anything") is True
+
+    daemon = zetad_dispatch.QueueingDispatcher(
+        events,
+        events,
+        worker_name="worker",
+        claim_token="token",
+    )
+    assert daemon._queue_claim_is_current("qi_anything") is False
 
 
 def test_zeta_event_dispatcher_rejects_external_lifecycle_events(

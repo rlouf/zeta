@@ -15,6 +15,7 @@
 (require 'cl-lib)
 (require 'json)
 (require 'project)
+(require 'seq)
 (require 'subr-x)
 
 (defgroup zeta-block nil
@@ -101,6 +102,7 @@ Question answers are inserted below the prompt instead of editing the buffer."
     (define-key map (kbd "C-c z !") #'zeta-block-act-on-region)
     (define-key map (kbd "C-c z q") #'zeta-block-queue-status)
     (define-key map (kbd "C-c z p") #'zeta-block-toggle-pairing)
+    (define-key map (kbd "C-c z .") #'zeta-block-describe-at-point)
     (define-key map (kbd "RET") #'zeta-block-return)
     map)
   "Keymap for `zeta-block-mode'.")
@@ -345,8 +347,23 @@ When the current block is not a Zeta question, dispatch to the binding that
   (interactive)
   (let ((state (if zeta-block--current-task "running" "idle"))
         (paused (if zeta-block-pairing-paused " paused" ""))
-        (queued (length zeta-block--task-queue)))
-    (message "Zeta queue: %s%s · queued %d" state paused queued)))
+        (queued (length zeta-block--task-queue))
+        (provenance (zeta-block-provenance-at-point)))
+    (message "Zeta queue: %s%s · queued %d%s"
+             state
+             paused
+             queued
+             (if provenance
+                 (concat " · " (zeta-block-provenance-summary provenance))
+               ""))))
+
+;;;###autoload
+(defun zeta-block-describe-at-point ()
+  "Describe Zeta provenance metadata at point."
+  (interactive)
+  (if-let ((provenance (zeta-block-provenance-at-point)))
+      (message "%s" (zeta-block-provenance-description provenance))
+    (message "No Zeta provenance at point.")))
 
 ;;;###autoload
 (defun zeta-block-toggle-pairing ()
@@ -599,6 +616,20 @@ ORIGIN is the symbol `human' or `agent'."
       (push overlay zeta-block--overlays)
       overlay)))
 
+(defun zeta-block-add-provenance-overlay (start end origin prompt &optional run-id)
+  "Tag START..END with invisible Zeta provenance metadata."
+  (when (< start end)
+    (let ((overlay (make-overlay start end nil t nil)))
+      (overlay-put overlay 'zeta-origin origin)
+      (overlay-put overlay 'zeta-prompt prompt)
+      (overlay-put overlay 'zeta-provenance t)
+      (when run-id
+        (overlay-put overlay 'zeta-run-id run-id))
+      (overlay-put overlay 'help-echo
+                   (zeta-block-overlay-help origin prompt run-id))
+      (push overlay zeta-block--overlays)
+      overlay)))
+
 (defun zeta-block-overlay-help (origin prompt run-id)
   "Return tooltip text for an overlay with ORIGIN, PROMPT, and RUN-ID."
   (string-join
@@ -615,6 +646,25 @@ ORIGIN is the symbol `human' or `agent'."
   (interactive)
   (mapc #'delete-overlay zeta-block--overlays)
   (setq zeta-block--overlays nil))
+
+(defun zeta-block-provenance-at-point ()
+  "Return the first Zeta provenance overlay at point, if any."
+  (seq-find
+   (lambda (overlay)
+     (overlay-get overlay 'zeta-provenance))
+   (overlays-at (point))))
+
+(defun zeta-block-provenance-summary (overlay)
+  "Return a one-line provenance summary for OVERLAY."
+  (format "origin %s"
+          (or (overlay-get overlay 'zeta-origin) "unknown")))
+
+(defun zeta-block-provenance-description (overlay)
+  "Return a detailed provenance description for OVERLAY."
+  (zeta-block-overlay-help
+   (overlay-get overlay 'zeta-origin)
+   (overlay-get overlay 'zeta-prompt)
+   (overlay-get overlay 'zeta-run-id)))
 
 (defun zeta-block-insert-placeholder (position comment-prefix &optional leave-point-after)
   "Insert a thinking placeholder after POSITION and return replacement markers.
@@ -656,7 +706,13 @@ PROMPT is accepted for compatibility with older callers."
                 (save-excursion
                   (goto-char (marker-position start))
                   (delete-region start end)
-                  (insert (zeta-block-format-response text comment-prefix)))
+                  (let ((insert-start (point)))
+                    (insert (zeta-block-format-response text comment-prefix))
+                    (zeta-block-add-provenance-overlay
+                     insert-start
+                     (point)
+                     'agent
+                     prompt)))
               (goto-char (min buffer-point (point-max)))
               (dolist (window windows)
                 (when (window-live-p window)
@@ -1305,7 +1361,13 @@ ARGUMENTS may contain start_line and end_line."
         (save-excursion
           (goto-char start)
           (delete-region start end)
-          (insert new))
+          (let ((insert-start (point)))
+            (insert new)
+            (zeta-block-add-provenance-overlay
+             insert-start
+             (point)
+             'agent
+             zeta-block--active-agent-prompt)))
         (let ((after-hash (secure-hash 'sha256 (buffer-substring-no-properties
                                                 (point-min)
                                                 (point-max)))))

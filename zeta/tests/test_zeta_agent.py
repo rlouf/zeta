@@ -3750,6 +3750,50 @@ def test_zeta_event_dispatcher_can_retry_failed_work(tmp_path: Path) -> None:
     assert retry_events[1].payload["attempt_id"] == f"att_{queue_item_id}_2"
 
 
+def test_zeta_queueing_dispatcher_numbers_attempts_from_projection(
+    tmp_path: Path,
+) -> None:
+    event_store = RuntimeEventStore.open(tmp_path / "events.sqlite3")
+    attempts = 0
+
+    async def flaky_agent(run: zetad_dispatch.AgentInvocation) -> dict[str, object]:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise RuntimeError("boom")
+        return {"outcome": "handled", "attempt_id": run.attempt_id}
+
+    dispatcher = zetad_dispatch.QueueingDispatcher(
+        event_store,
+        event_store,
+        executors=[
+            zetad_dispatch.ExecutableAgent(
+                zetad_dispatch.AgentDefinition(
+                    "issue-triage",
+                    (zetad_dispatch.EventPattern("github.issue.opened"),),
+                ),
+                run=flaky_agent,
+            )
+        ],
+    )
+    outcome = dispatch_event(
+        dispatcher,
+        zeta_events.DraftEvent(
+            "github.issue.opened",
+            "github",
+            {"title": "Bug"},
+            session_id="repo",
+        ),
+    )
+    queue_item_id = f"qi_{outcome.event.id}_issue-triage"
+
+    dispatcher.schedule_retry(queue_item_id)
+    asyncio.run(dispatcher.run_queue_item(queue_item_id))
+
+    attempts_rows = event_store.list_attempts()
+    assert [row["attempt_number"] for row in attempts_rows] == [1, 2]
+
+
 def test_zeta_retry_policy_computes_backoff_and_classifies_errors() -> None:
     policy = zetad_retry.RetryPolicy(
         max_attempts=3,

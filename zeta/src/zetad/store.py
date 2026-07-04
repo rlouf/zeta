@@ -128,6 +128,14 @@ class RuntimeEventStore:
             ).fetchone()
         return dict(row) if row is not None else None
 
+    def queue_item_attempt_count(self, queue_item_id: str) -> int:
+        with self.events.write_lock:
+            row = self.connection.execute(
+                "SELECT attempt_count FROM queue_items WHERE queue_item_id = ?",
+                (queue_item_id,),
+            ).fetchone()
+        return int(row["attempt_count"]) if row is not None else 0
+
     def list_queue_items(self) -> list[dict[str, Any]]:
         with self.events.write_lock:
             rows = self.connection.execute(

@@ -76,6 +76,9 @@ class RuntimeQueueStore(Protocol):
     def queue_item(self, queue_item_id: str) -> Mapping[str, Any] | None:
         """Return one queue item row by id."""
 
+    def queue_item_attempt_count(self, queue_item_id: str) -> int:
+        """Return the highest attempt number recorded for a queue item."""
+
     def queue_claim_is_current(
         self,
         queue_item_id: str,
@@ -936,6 +939,9 @@ class QueueingDispatcher(EventDispatcher):
         if record is not None:
             return queue_item_from_record(record)
         return super()._stored_queue_item(queue_item_id)
+
+    def _next_attempt_number(self, queue_item_id: str) -> int:
+        return self.queue_store.queue_item_attempt_count(queue_item_id) + 1
 
     def _queue_claim_is_current(self, queue_item_id: str) -> bool:
         if self.worker_name is None or self.claim_token is None:

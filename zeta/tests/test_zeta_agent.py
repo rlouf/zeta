@@ -45,6 +45,7 @@ from zeta.run.config import CompactionPolicy
 from zeta.run.runtime import AgentRunResult
 from zetad import agents as zetad_agents
 from zetad import cli as zetad_cli
+from zetad import connector_bridge as zetad_connector_bridge
 from zetad import dispatch as zetad_dispatch
 from zetad import queue as zetad_queue
 from zetad import retry as zetad_retry
@@ -2037,9 +2038,9 @@ def test_zeta_rpc_events_publish_returns_before_routing_finishes(
 def test_zeta_ingress_render_template_reports_missing_field() -> None:
     draft = DraftEvent(event_type="x", source="s", payload={"channel": "C1"})
 
-    assert zetad_worker.render_template("{channel}", draft) == "C1"
+    assert zetad_connector_bridge.render_template("{channel}", draft) == "C1"
     with pytest.raises(RuntimeError, match="missing field"):
-        zetad_worker.render_template("{absent}", draft)
+        zetad_connector_bridge.render_template("{absent}", draft)
 
 
 def test_zeta_rpc_events_publish_rejects_lifecycle_event_ingress(

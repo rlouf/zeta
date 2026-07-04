@@ -66,6 +66,7 @@ from zeta.events import DraftEvent, Event
 from zeta.records.stores.event_store import Filter
 from zeta.run.config import AgentConfig
 from zeta.run.runtime import AgentRunResult
+from zetad import connector_bridge as zetad_connector_bridge
 from zetad import dispatch as zetad_dispatch
 from zetad import queue as zetad_queue
 from zetad import scheduling as zetad_scheduling
@@ -1569,7 +1570,7 @@ Reply.
     )
 
     try:
-        inserted = asyncio.run(zetad_worker.run_ingress_once(runtime))
+        inserted = asyncio.run(zetad_connector_bridge.run_ingress_once(runtime))
         events = runtime.events.list_events(
             zeta_events.Filter(event_type="slack.message.received")
         )

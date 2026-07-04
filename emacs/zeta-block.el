@@ -174,10 +174,11 @@ When the current block is not a Zeta question, dispatch to the binding that
            (line-number (zeta-block-previous-line-number))
            (line-range (zeta-block-previous-line-range))
            (comment-prefix (zeta-block-comment-prefix line-raw))
-           (placeholder (zeta-block-insert-placeholder
-                         (point)
-                         comment-prefix
-                         t))
+           (placeholder (and (eq kind 'question)
+                             (zeta-block-insert-placeholder
+                              (point)
+                              comment-prefix
+                              t)))
            (trigger-overlay (zeta-block-add-inline-trigger-overlay
                              (car line-range)
                              (cdr line-range)
@@ -223,9 +224,10 @@ When the current block is not a Zeta question, dispatch to the binding that
 (defun zeta-block-submit-region (begin end instruction kind)
   "Submit region BEGIN..END with INSTRUCTION and request KIND."
   (let* ((scope (zeta-block-region-scope begin end))
-         (placeholder (zeta-block-insert-placeholder
-                       (zeta-block-scope-value scope 'end)
-                       nil))
+         (placeholder (and (eq kind 'question)
+                           (zeta-block-insert-placeholder
+                            (zeta-block-scope-value scope 'end)
+                            nil)))
          (overlay (zeta-block-add-overlay begin end 'human instruction)))
     (zeta-block-enqueue-task
      (list
@@ -305,12 +307,15 @@ When the current block is not a Zeta question, dispatch to the binding that
   (let ((buffer zeta-block--active-task-buffer))
     (when (buffer-live-p buffer)
       (with-current-buffer buffer
-        (save-current-buffer
-          (zeta-block-replace-placeholder
-           (plist-get task :placeholder)
-           (zeta-block-response-text result error)
-           (plist-get task :comment-prefix)
-           (plist-get task :instruction)))
+        (if-let ((placeholder (plist-get task :placeholder)))
+            (save-current-buffer
+              (zeta-block-replace-placeholder
+               placeholder
+               (zeta-block-response-text result error)
+               (plist-get task :comment-prefix)
+               (plist-get task :instruction)))
+          (when error
+            (message "zeta-block: %s" (zeta-block-response-text result error))))
         (zeta-block-set-task-status task (if error 'failed 'done))
         (setq zeta-block--current-task nil
               zeta-block--active-task-buffer nil)
@@ -631,7 +636,8 @@ When LEAVE-POINT-AFTER is non-nil, leave point after the inserted response."
 
 (defun zeta-block-replace-placeholder (markers text comment-prefix &optional prompt)
   "Replace MARKERS with TEXT formatted using COMMENT-PREFIX.
-When PROMPT is non-nil, tag the inserted response as agent-authored."
+PROMPT is accepted for compatibility with older callers."
+  (ignore prompt)
   (let ((start (car markers))
         (end (cdr markers)))
     (when (and (markerp start)
@@ -650,9 +656,7 @@ When PROMPT is non-nil, tag the inserted response as agent-authored."
                 (save-excursion
                   (goto-char (marker-position start))
                   (delete-region start end)
-                  (let ((insert-start (point)))
-                    (insert (zeta-block-format-response text comment-prefix))
-                    (zeta-block-add-overlay insert-start (point) 'agent prompt)))
+                  (insert (zeta-block-format-response text comment-prefix)))
               (goto-char (min buffer-point (point-max)))
               (dolist (window windows)
                 (when (window-live-p window)
@@ -1301,12 +1305,7 @@ ARGUMENTS may contain start_line and end_line."
         (save-excursion
           (goto-char start)
           (delete-region start end)
-          (insert new)
-          (zeta-block-add-overlay
-           start
-           (point)
-           'agent
-           zeta-block--active-agent-prompt))
+          (insert new))
         (let ((after-hash (secure-hash 'sha256 (buffer-substring-no-properties
                                                 (point-min)
                                                 (point-max)))))

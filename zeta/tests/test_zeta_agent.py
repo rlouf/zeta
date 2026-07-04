@@ -1745,14 +1745,7 @@ def rpc_client(
         pending_runs={},
         pending_tool_calls={},
     )
-    router = zetad_jsonrpc.JsonRpcRouter(client)
-    router.route("initialize", zetad_rpc_routes.initialize)
-    router.route("events.publish", zetad_rpc_routes.events_publish)
-    router.route("events.list", zetad_rpc_routes.events_list)
-    router.route("session.run", zetad_rpc_routes.session_run)
-    router.route("session.cancel", zetad_rpc_routes.session_cancel)
-    router.route("tools.register", zetad_rpc_routes.tools_register)
-    router.route("tools.respond", zetad_rpc_routes.tools_respond)
+    router = zetad_rpc_routes.build_rpc_router(client)
     return connection, client, router
 
 

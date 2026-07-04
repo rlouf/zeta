@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import secrets
 import sqlite3
-import time
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
@@ -83,7 +82,7 @@ class RuntimeEventStore:
 
     def ensure_pending_queue_item(self, event: Event) -> str:
         queue_item_id = _pending_queue_item_id(event)
-        with self.events._write_lock:
+        with self.events.write_lock:
             self.connection.execute(
                 """
                 INSERT INTO queue_items
@@ -105,7 +104,7 @@ class RuntimeEventStore:
         return queue_item_id
 
     def event_has_queue_item(self, event_id: str) -> bool:
-        with self.events._write_lock:
+        with self.events.write_lock:
             row = self.connection.execute(
                 """
                 SELECT 1
@@ -118,7 +117,7 @@ class RuntimeEventStore:
         return row is not None
 
     def queue_item(self, queue_item_id: str) -> dict[str, Any] | None:
-        with self.events._write_lock:
+        with self.events.write_lock:
             row = self.connection.execute(
                 """
                 SELECT queue_item_id, event_id, target_agent, status
@@ -130,7 +129,7 @@ class RuntimeEventStore:
         return dict(row) if row is not None else None
 
     def list_queue_items(self) -> list[dict[str, Any]]:
-        with self.events._write_lock:
+        with self.events.write_lock:
             rows = self.connection.execute(
                 """
                 SELECT queue_item_id, event_id, target_agent, status, available_at,
@@ -142,7 +141,7 @@ class RuntimeEventStore:
         return [dict(row) for row in rows]
 
     def list_attempts(self) -> list[dict[str, Any]]:
-        with self.events._write_lock:
+        with self.events.write_lock:
             rows = self.connection.execute(
                 """
                 SELECT a.attempt_id, a.queue_item_id, a.event_id, a.attempt_number,
@@ -160,7 +159,7 @@ class RuntimeEventStore:
         return [_row_to_attempt(row) for row in rows]
 
     def list_locks(self) -> list[dict[str, Any]]:
-        with self.events._write_lock:
+        with self.events.write_lock:
             rows = self.connection.execute(
                 """
                 SELECT key, owner, acquired_at, expires_at
@@ -182,8 +181,8 @@ class RuntimeEventStore:
         if not requested:
             return True
         placeholders = _sql_placeholders(requested)
-        with self.events._write_lock:
-            _execute_with_retry(self.connection, "BEGIN IMMEDIATE")
+        with self.events.write_lock:
+            self.events.begin_immediate()
             try:
                 self.connection.execute(
                     "DELETE FROM locks WHERE expires_at < ?",
@@ -229,7 +228,7 @@ class RuntimeEventStore:
         if not requested:
             return 0
         placeholders = _sql_placeholders(requested)
-        with self.events._write_lock:
+        with self.events.write_lock:
             cursor = self.connection.execute(
                 f"""
                 DELETE FROM locks
@@ -253,8 +252,8 @@ class RuntimeEventStore:
         if not requested:
             return True
         placeholders = _sql_placeholders(requested)
-        with self.events._write_lock:
-            _execute_with_retry(self.connection, "BEGIN IMMEDIATE")
+        with self.events.write_lock:
+            self.events.begin_immediate()
             try:
                 cursor = self.connection.execute(
                     f"""
@@ -276,7 +275,7 @@ class RuntimeEventStore:
                 raise
 
     def reconcile_expired_locks(self, *, now_ms: int) -> int:
-        with self.events._write_lock:
+        with self.events.write_lock:
             cursor = self.connection.execute(
                 """
                 DELETE FROM locks
@@ -297,8 +296,8 @@ class RuntimeEventStore:
         lease_ms: int,
         now_ms: int,
     ) -> bool:
-        with self.events._write_lock:
-            _execute_with_retry(self.connection, "BEGIN IMMEDIATE")
+        with self.events.write_lock:
+            self.events.begin_immediate()
             try:
                 cursor = self.connection.execute(
                     """
@@ -372,8 +371,8 @@ class RuntimeEventStore:
                 f"AND queue_item_id NOT IN ({_sql_placeholders(excluded)})"
             )
             excluded_params = excluded
-        with self.events._write_lock:
-            _execute_with_retry(self.connection, "BEGIN IMMEDIATE")
+        with self.events.write_lock:
+            self.events.begin_immediate()
             try:
                 row = self.connection.execute(
                     f"""
@@ -429,7 +428,7 @@ class RuntimeEventStore:
         claim_token: str,
         now_ms: int,
     ) -> bool:
-        with self.events._write_lock:
+        with self.events.write_lock:
             cursor = self.connection.execute(
                 """
                 UPDATE queue_items
@@ -457,7 +456,7 @@ class RuntimeEventStore:
         worker_name: str,
         claim_token: str,
     ) -> bool:
-        with self.events._write_lock:
+        with self.events.write_lock:
             row = self.connection.execute(
                 """
                 SELECT 1
@@ -473,7 +472,7 @@ class RuntimeEventStore:
         return row is not None
 
     def reconcile_expired_queue_claims(self, *, now_ms: int) -> int:
-        with self.events._write_lock:
+        with self.events.write_lock:
             cursor = self.connection.execute(
                 """
                 UPDATE queue_items
@@ -552,15 +551,3 @@ def _json_column(value: object) -> Any | None:
 
 def _sql_placeholders(values: tuple[object, ...]) -> str:
     return ", ".join("?" for _ in values)
-
-
-def _execute_with_retry(connection: sqlite3.Connection, sql: str) -> None:
-    deadline = time.monotonic() + 5
-    while True:
-        try:
-            connection.execute(sql)
-            return
-        except sqlite3.OperationalError as exc:
-            if "locked" not in str(exc).lower() or time.monotonic() >= deadline:
-                raise
-            time.sleep(0.01)

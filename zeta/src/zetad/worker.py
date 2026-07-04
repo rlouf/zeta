@@ -520,18 +520,11 @@ async def run_eventlog_rpc_request(
     runtime: WorkerServices,
     request: Event,
 ) -> Event | None:
-    from zetad.rpc.jsonrpc import JsonRpcRouter
     from zetad.rpc.routes import (
         RpcClient,
         RunState,
-        events_list,
-        events_publish,
-        initialize,
+        build_rpc_router,
         run_eventlog_rpc_once,
-        session_cancel,
-        session_run,
-        tools_register,
-        tools_respond,
     )
 
     session_id = request.session_id or "default"
@@ -575,14 +568,7 @@ async def run_eventlog_rpc_request(
         pending_runs=pending_runs,
         pending_tool_calls={},
     )
-    router = JsonRpcRouter(client)
-    router.route("initialize", initialize)
-    router.route("events.publish", events_publish)
-    router.route("events.list", events_list)
-    router.route("session.run", session_run)
-    router.route("session.cancel", session_cancel)
-    router.route("tools.register", tools_register)
-    router.route("tools.respond", tools_respond)
+    router = build_rpc_router(client)
     try:
         return await run_eventlog_rpc_once(router)
     finally:

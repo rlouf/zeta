@@ -312,7 +312,7 @@ def overlapping_range_error(
         for operation in operations
         if operation.kind in {"SWAP", "DEL"}
     )
-    for (_, prev_end), (next_start, _) in zip(spans, spans[1:]):
+    for (_, prev_end), (next_start, _) in zip(spans, spans[1:], strict=False):
         if next_start <= prev_end:
             return error_result(
                 "overlapping-operations",

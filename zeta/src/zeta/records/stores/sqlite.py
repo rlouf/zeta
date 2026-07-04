@@ -11,6 +11,7 @@ import sqlite3
 import threading
 import time
 from collections.abc import Iterable
+from contextlib import AbstractContextManager
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -100,6 +101,20 @@ class SqliteEventStore:
             self.close()
         except Exception:
             pass
+
+    @property
+    def write_lock(self) -> AbstractContextManager[bool]:
+        """Serialize writes; hold across a read-modify-write on this store.
+
+        The public handle onto the store's write serialization so orchestration
+        state co-located in this database can share the lock without depending
+        on the store's internal concurrency implementation.
+        """
+        return self._write_lock
+
+    def begin_immediate(self) -> None:
+        """Open an immediate write transaction, retrying transient locks."""
+        _execute_with_retry(self.connection, "BEGIN IMMEDIATE")
 
     def _init_schema(self) -> None:
         with self._write_lock:

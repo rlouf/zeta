@@ -13,19 +13,12 @@ from zetad.dispatch import EventDispatcher
 from zetad.rpc.jsonrpc import (
     MAX_JSONRPC_LINE_BYTES,
     JsonRpcConnection,
-    JsonRpcRouter,
 )
 from zetad.rpc.routes import (
     RpcClient,
     RunState,
+    build_rpc_router,
     event_to_wire,
-    events_list,
-    events_publish,
-    initialize,
-    session_cancel,
-    session_run,
-    tools_register,
-    tools_respond,
 )
 from zetad.session_turn import session_turn_agent
 
@@ -81,14 +74,7 @@ async def run_stdio_async(input: TextIO, output: TextIO) -> None:
         pending_runs=pending_runs,
         pending_tool_calls=pending_tool_calls,
     )
-    router = JsonRpcRouter(client)
-    router.route("initialize", initialize)
-    router.route("events.publish", events_publish)
-    router.route("events.list", events_list)
-    router.route("session.run", session_run)
-    router.route("session.cancel", session_cancel)
-    router.route("tools.register", tools_register)
-    router.route("tools.respond", tools_respond)
+    router = build_rpc_router(client)
     await connection.serve(router)
 
 

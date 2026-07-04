@@ -608,3 +608,16 @@ async def tools_respond(params: dict[str, Any], client: RpcClient) -> None:
     future.set_result(response.result)
 
     return None
+
+
+def build_rpc_router(client: RpcClient) -> JsonRpcRouter:
+    """Wire the standard Zeta JSON-RPC method handlers onto a router."""
+    router = JsonRpcRouter(client)
+    router.route("initialize", initialize)
+    router.route("events.publish", events_publish)
+    router.route("events.list", events_list)
+    router.route("session.run", session_run)
+    router.route("session.cancel", session_cancel)
+    router.route("tools.register", tools_register)
+    router.route("tools.respond", tools_respond)
+    return router

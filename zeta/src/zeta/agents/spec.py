@@ -23,6 +23,7 @@ BUILT_IN_FRONTMATTER_KEYS = frozenset(
         "tools",
         "schedules",
         "retry",
+        "base_dir",
     }
 )
 
@@ -70,6 +71,7 @@ class AgentSpec:
     tools: tuple[str, ...] = ()
     schedules: tuple[ScheduleEntry, ...] = ()
     retry: RetrySpec | None = None
+    base_dir: Path | None = None
     manifest: dict[str, Any] = field(default_factory=dict)
 
 
@@ -112,6 +114,7 @@ def load_spec(path: str | Path) -> AgentSpec:
             tools=string_tuple(frontmatter.get("tools", ()), "tools", path),
             schedules=schedules,
             retry=retry_spec(frontmatter.get("retry"), path),
+            base_dir=base_dir_field(frontmatter.get("base_dir"), path),
             manifest={
                 key: value
                 for key, value in frontmatter.items()
@@ -191,6 +194,22 @@ def model_spec(value: Any, path: Path) -> ModelSpec | None:
         name=required_model_string(value, "name", path),
         url=required_model_string(value, "url", path),
     )
+
+
+def base_dir_field(value: Any, path: Path) -> Path | None:
+    if value is None:
+        return None
+    if not isinstance(value, str) or value.strip() == "":
+        raise SpecError(
+            f"invalid value for 'base_dir' in {path}: expected a path string"
+        )
+    expanded = Path(value).expanduser()
+    if not expanded.is_absolute():
+        raise SpecError(
+            f"invalid value for 'base_dir' in {path}: "
+            f"{value!r} must resolve to an absolute path"
+        )
+    return expanded
 
 
 def retry_spec(value: Any, path: Path) -> RetrySpec | None:

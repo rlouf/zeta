@@ -7,6 +7,7 @@ import time
 from typing import Any
 
 from zeta.capabilities.execution import error_result, proposed_command_effect
+from zeta.capabilities.paths import resolve_path
 from zeta.capabilities.types import Capability, CapabilityId
 
 DEFAULT_TIMEOUT_SECONDS = 120.0
@@ -56,6 +57,7 @@ def run(params: dict[str, Any]) -> dict[str, Any]:
         proc = subprocess.Popen(
             command,
             shell=True,
+            cwd=str(resolve_path(".")),
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             start_new_session=True,
@@ -97,9 +99,7 @@ def run(params: dict[str, Any]) -> dict[str, Any]:
     if timed_out:
         result["error"] = {
             "code": "bash-timeout",
-            "message": (
-                f"command timed out after {timeout_seconds:g}s and was killed"
-            ),
+            "message": (f"command timed out after {timeout_seconds:g}s and was killed"),
         }
     elif result["ok"] is False:
         result["error"] = {

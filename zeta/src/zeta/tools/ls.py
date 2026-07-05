@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any
 
 from zeta.capabilities.execution import error_result
+from zeta.capabilities.paths import resolve_path
 from zeta.capabilities.types import Capability, CapabilityId
 
 SCHEMA: dict[str, Any] = {
@@ -37,7 +38,7 @@ SPEC = Capability(
 
 
 def run(params: dict[str, Any]) -> dict[str, Any]:
-    path = Path(str(params.get("path") or "."))
+    path = resolve_path(str(params.get("path") or "."))
     limit = int(params.get("limit") or 200)
     recursive = bool(params.get("recursive") or False)
     min_size_bytes = params.get("min_size_bytes")

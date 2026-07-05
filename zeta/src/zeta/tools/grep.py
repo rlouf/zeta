@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from zeta.capabilities.execution import content_hash, error_result, short_tag
+from zeta.capabilities.paths import resolve_path
 from zeta.capabilities.types import Capability, CapabilityId
 
 MAX_TOOL_RESULT_CHARS = 12_000
@@ -90,7 +91,7 @@ AST_GREP_SPEC = Capability(
 
 def run(params: dict[str, Any]) -> dict[str, Any]:
     pattern = str(params.get("pattern") or "")
-    path = str(params.get("path") or ".")
+    path = str(resolve_path(str(params.get("path") or ".")))
     limit = int(params.get("limit") or 100)
     if not pattern:
         return error_result("missing-pattern", "missing pattern")
@@ -147,7 +148,7 @@ class AstGrepMatch:
 def run_ast_grep(params: dict[str, Any]) -> dict[str, Any]:
     pattern = str(params.get("pattern") or "")
     lang = str(params.get("lang") or "")
-    path = str(params.get("path") or ".")
+    path = str(resolve_path(str(params.get("path") or ".")))
     limit = int(params.get("limit") or 100)
     if not pattern:
         return error_result("missing-pattern", "missing pattern")

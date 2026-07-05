@@ -84,3 +84,36 @@ def test_in_process_host_activates_base_dir_from_context():
     assert result["resolved"] == str(Path("/vault/note.md"))
     # base did not leak out of the call
     assert resolve_path("note.md") == Path("note.md")
+
+
+def test_file_tools_resolve_relative_paths_under_base(tmp_path):
+    from zeta.tools import bash, edit, grep, ls, read, write
+
+    (tmp_path / "note.md").write_text("hello Acme\n", encoding="utf-8")
+    token = set_base_dir(tmp_path)
+    try:
+        read_result = read.run({"path": "note.md"})
+        assert read_result["ok"] is True
+        assert "hello Acme" in read_result["content"][0]["text"]
+
+        ls_result = ls.run({"path": "."})
+        assert ls_result["ok"] is True
+        assert "note.md" in ls_result["content"][0]["text"]
+
+        grep_result = grep.run({"pattern": "Acme", "path": "."})
+        assert grep_result["ok"] is True
+        assert "note.md" in grep_result["content"][0]["text"]
+
+        write_result = write.run({"path": "out.md", "content": "written"})
+        assert write_result["ok"] is True
+        assert (tmp_path / "out.md").read_text(encoding="utf-8") == "written"
+
+        edit_result = edit.run({"location": "note.md", "old": "Acme", "new": "Beta"})
+        assert edit_result["ok"] is True
+        assert (tmp_path / "note.md").read_text(encoding="utf-8") == "hello Beta\n"
+
+        bash_result = bash.run({"command": "ls"})
+        assert bash_result["ok"] is True
+        assert "out.md" in bash_result["content"][0]["text"]
+    finally:
+        reset_base_dir(token)

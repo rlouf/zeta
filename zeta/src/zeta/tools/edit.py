@@ -16,6 +16,7 @@ from zeta.capabilities.execution import (
     short_tag,
     write_temp,
 )
+from zeta.capabilities.paths import resolve_path
 from zeta.capabilities.types import Capability, CapabilityId
 
 SCHEMA: dict[str, Any] = {
@@ -113,6 +114,7 @@ def prepare_exact_replacement(
     location = str(params.get("location") or "")
     if not location:
         return error_result("missing-location", "missing location")
+    location = str(resolve_path(location))
     old = str(params.get("old") or "")
     if not old:
         return error_result("missing-old", "missing old")
@@ -147,7 +149,8 @@ def prepare_hashline_edit(params: dict[str, Any]) -> PreparedEdit | dict[str, An
     parsed = parse_hashline_input(str(params.get("input") or ""))
     if not isinstance(parsed, HashlineEdit):
         return parsed
-    path = Path(parsed.location)
+    location = str(resolve_path(parsed.location))
+    path = Path(location)
     try:
         text = path.read_text(encoding="utf-8")
     except UnicodeDecodeError:
@@ -166,11 +169,11 @@ def prepare_hashline_edit(params: dict[str, Any]) -> PreparedEdit | dict[str, An
     updated = apply_line_operations(text, parsed.operations)
     if not isinstance(updated, str):
         return updated
-    patch = replacement_patch(parsed.location, text, updated)
+    patch = replacement_patch(location, text, updated)
     if not patch:
         return error_result("empty-edit", "replacement did not change the file")
     return PreparedEdit(
-        location=parsed.location,
+        location=location,
         updated=updated,
         patch=patch,
         metadata={

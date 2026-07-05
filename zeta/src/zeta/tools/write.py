@@ -10,6 +10,7 @@ from zeta.capabilities.execution import (
     proposed_command_effect,
     write_temp,
 )
+from zeta.capabilities.paths import resolve_path
 from zeta.capabilities.types import Capability, CapabilityId
 
 SCHEMA: dict[str, Any] = {
@@ -34,6 +35,7 @@ def stage(params: dict[str, Any]) -> dict[str, Any]:
     dest = str(params.get("path") or "")
     if not dest:
         return error_result("missing-path", "missing path")
+    dest = str(resolve_path(dest))
     content = str(params.get("content") or "")
     path = write_temp("zeta-write-", ".tmp", content)
     result = proposed_command_effect(
@@ -49,6 +51,7 @@ def run(params: dict[str, Any]) -> dict[str, Any]:
     dest = str(params.get("path") or "")
     if not dest:
         return error_result("missing-path", "missing path")
+    dest = str(resolve_path(dest))
     content = str(params.get("content") or "")
     hashes = change_hashes(dest, content)
     try:

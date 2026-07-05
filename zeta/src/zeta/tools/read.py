@@ -6,11 +6,11 @@ import socket
 import urllib.error
 import urllib.request
 from html import unescape
-from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
 from zeta.capabilities.execution import content_hash, error_result, short_tag
+from zeta.capabilities.paths import resolve_path
 from zeta.capabilities.types import Capability, CapabilityId
 
 DEFAULT_READ_LIMIT = 2_000
@@ -53,7 +53,7 @@ def run(params: dict[str, Any]) -> dict[str, Any]:
     limit = int(params.get("limit") or DEFAULT_READ_LIMIT)
     if is_url(path_value):
         return read_url(path_value, offset=offset, limit=limit)
-    path = Path(path_value)
+    path = resolve_path(path_value)
     try:
         raw = path.read_bytes()
     except OSError as exc:

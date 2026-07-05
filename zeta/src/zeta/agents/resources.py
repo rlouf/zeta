@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib.util
 import json
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
@@ -113,15 +114,12 @@ def load_connector_registry(
     connector_names: Iterable[str] | None = None,
     entry_points: Iterable[Any] | None = None,
 ) -> EventConnectorRegistry:
-    enabled = enabled_event_connector_ids(agents_dir)
-    if connector_names is not None:
-        allowed = set(connector_names)
-        enabled = tuple(
-            connector_id for connector_id in enabled if connector_id in allowed
-        )
+    allowed = set(connector_names) if connector_names is not None else None
     registry = EventConnectorRegistry()
-    if not enabled:
-        return registry
+
+    enabled = enabled_event_connector_ids(agents_dir)
+    if allowed is not None:
+        enabled = tuple(name for name in enabled if name in allowed)
     for entry_point in event_connector_entry_points(entry_points):
         if entry_point.name not in enabled:
             continue
@@ -131,11 +129,76 @@ def load_connector_registry(
                 f"event connector entry point {entry_point.name!r} returned "
                 f"connector id {connector.id!r}"
             )
-        try:
-            registry.register(connector)
-        except ValueError as exc:
-            raise ResourceError(str(exc)) from exc
+        register_event_connector(registry, connector)
+
+    for connector in load_directory_event_connectors(agents_dir):
+        if allowed is not None and connector.id not in allowed:
+            continue
+        register_event_connector(registry, connector)
+
     return registry
+
+
+def register_event_connector(
+    registry: EventConnectorRegistry, connector: EventConnector
+) -> None:
+    try:
+        registry.register(connector)
+    except ValueError as exc:
+        raise ResourceError(str(exc)) from exc
+
+
+def load_directory_event_connectors(agents_dir: Path) -> tuple[EventConnector, ...]:
+    """Discover connectors dropped as ``agents/connectors/*.py`` (auto-enabled)."""
+    connectors_dir = agents_dir / "connectors"
+    if not connectors_dir.exists():
+        return ()
+    connectors: list[EventConnector] = []
+    for path in sorted(connectors_dir.glob("*.py")):
+        if path.name.startswith("_"):
+            continue
+        connectors.append(load_file_event_connector(path))
+    return tuple(connectors)
+
+
+def load_file_event_connector(path: Path) -> EventConnector:
+    module_spec = importlib.util.spec_from_file_location(
+        f"zeta_connector_{path.stem}", path
+    )
+    if module_spec is None or module_spec.loader is None:
+        raise ResourceError(f"cannot load connector module {path}")
+    module = importlib.util.module_from_spec(module_spec)
+    try:
+        module_spec.loader.exec_module(module)
+    except Exception as exc:
+        raise ResourceError(f"error importing connector {path}: {exc}") from exc
+    return resolve_module_event_connector(module, path)
+
+
+def resolve_module_event_connector(module: Any, path: Path) -> EventConnector:
+    instances = [
+        value for value in vars(module).values() if isinstance(value, EventConnector)
+    ]
+    if len(instances) == 1:
+        return instances[0]
+    if len(instances) > 1:
+        raise ResourceError(
+            f"connector module {path} defines multiple EventConnector instances"
+        )
+    factory_names = ("connector", f"{path.stem.replace('-', '_')}_event_connector")
+    for factory_name in factory_names:
+        factory = getattr(module, factory_name, None)
+        if callable(factory):
+            connector = factory()
+            if isinstance(connector, EventConnector):
+                return connector
+            raise ResourceError(
+                f"connector factory {factory_name!r} in {path} "
+                "did not return an EventConnector"
+            )
+    raise ResourceError(
+        f"connector module {path} exposes no EventConnector instance or factory"
+    )
 
 
 def enabled_event_connector_ids(agents_dir: Path) -> tuple[str, ...]:

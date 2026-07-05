@@ -2388,3 +2388,93 @@ Triage the issue.
     compiled = zeta_agents.compile_agent_definition(spec)
 
     assert compiled.definition.lock_keys == ("context:repo", "branch:main")
+
+
+_CONNECTOR_FACTORY_MODULE = """\
+from connectors import EventConnector
+
+
+def myfs_event_connector():
+    return EventConnector(
+        id="myfs",
+        events={"myfs.file": {"type": "object", "additionalProperties": True}},
+    )
+"""
+
+_CONNECTOR_INSTANCE_MODULE = """\
+from connectors import EventConnector
+
+connector = EventConnector(
+    id="myinst",
+    events={"myinst.file": {"type": "object", "additionalProperties": True}},
+)
+"""
+
+_CONNECTOR_BAD_MODULE = "x = 1\n"
+
+
+class _FakeEntryPoint:
+    def __init__(self, name: str, connector: EventConnector) -> None:
+        self.name = name
+        self.group = "zeta.event_connectors"
+        self._connector = connector
+
+    def load(self) -> Callable[[], EventConnector]:
+        return lambda: self._connector
+
+
+def _write_connector_module(agents_dir: Path, filename: str, body: str) -> None:
+    connectors_dir = agents_dir / "connectors"
+    connectors_dir.mkdir(parents=True, exist_ok=True)
+    (connectors_dir / filename).write_text(body, encoding="utf-8")
+
+
+def test_zeta_directory_connector_factory_is_discovered(tmp_path: Path) -> None:
+    agents = tmp_path / "agents"
+    agents.mkdir()
+    _write_connector_module(agents, "myfs.py", _CONNECTOR_FACTORY_MODULE)
+
+    registry = load_connector_registry(agents)
+
+    assert registry.resolve("myfs") is not None
+
+
+def test_zeta_directory_connector_instance_is_discovered(tmp_path: Path) -> None:
+    agents = tmp_path / "agents"
+    agents.mkdir()
+    _write_connector_module(agents, "inst.py", _CONNECTOR_INSTANCE_MODULE)
+
+    registry = load_connector_registry(agents)
+
+    assert registry.resolve("myinst") is not None
+
+
+def test_zeta_directory_connector_without_connector_errors(tmp_path: Path) -> None:
+    agents = tmp_path / "agents"
+    agents.mkdir()
+    _write_connector_module(agents, "bad.py", _CONNECTOR_BAD_MODULE)
+
+    with pytest.raises(ResourceError, match="bad.py"):
+        load_connector_registry(agents)
+
+
+def test_zeta_entry_point_and_directory_connectors_load_together(
+    tmp_path: Path,
+) -> None:
+    agents = tmp_path / "agents"
+    agents.mkdir()
+    (agents / "connectors.yaml").write_text(
+        "event_connectors:\n  - ep\n", encoding="utf-8"
+    )
+    _write_connector_module(agents, "myfs.py", _CONNECTOR_FACTORY_MODULE)
+    ep_connector = EventConnector(
+        id="ep",
+        events={"ep.file": {"type": "object", "additionalProperties": True}},
+    )
+
+    registry = load_connector_registry(
+        agents, entry_points=[_FakeEntryPoint("ep", ep_connector)]
+    )
+
+    assert registry.resolve("ep") is not None
+    assert registry.resolve("myfs") is not None

@@ -250,16 +250,25 @@ class SqliteObjectStore(StoreBase):
 
     @contextmanager
     def batch(self) -> Any:
-        """Group writes into one transaction committed at batch exit."""
+        """Group writes into one transaction resolved at the outermost exit.
+
+        The outermost batch commits on success and rolls back if the body
+        raised, so a failed batch never leaves partial writes committed.
+        """
         self._ensure_writable()
         with self._write_lock:
             self._batch_depth += 1
             try:
                 yield
+            except BaseException:
+                if self._batch_depth == 1:
+                    self.connection.rollback()
+                raise
+            else:
+                if self._batch_depth == 1:
+                    self.connection.commit()
             finally:
                 self._batch_depth -= 1
-                if self._batch_depth == 0:
-                    self.connection.commit()
 
     def _commit(self) -> None:
         if self._batch_depth == 0:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import sys
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from importlib import metadata as importlib_metadata
@@ -168,9 +169,13 @@ def load_file_event_connector(path: Path) -> EventConnector:
     if module_spec is None or module_spec.loader is None:
         raise ResourceError(f"cannot load connector module {path}")
     module = importlib.util.module_from_spec(module_spec)
+    # Register before exec so module-level dataclasses (which look their module up
+    # in sys.modules) and similar introspection work inside the connector file.
+    sys.modules[module_spec.name] = module
     try:
         module_spec.loader.exec_module(module)
     except Exception as exc:
+        sys.modules.pop(module_spec.name, None)
         raise ResourceError(f"error importing connector {path}: {exc}") from exc
     return resolve_module_event_connector(module, path)
 

@@ -2479,3 +2479,33 @@ def test_zeta_entry_point_and_directory_connectors_load_together(
 
     assert registry.resolve("ep") is not None
     assert registry.resolve("myfs") is not None
+
+
+_CONNECTOR_DATACLASS_MODULE = """\
+from dataclasses import dataclass
+
+from connectors import EventConnector
+
+
+@dataclass
+class _Config:
+    value: int = 1
+
+
+def dc_event_connector():
+    _Config()
+    return EventConnector(
+        id="dc",
+        events={"dc.file": {"type": "object", "additionalProperties": True}},
+    )
+"""
+
+
+def test_zeta_directory_connector_with_dataclass_is_discovered(tmp_path: Path) -> None:
+    agents = tmp_path / "agents"
+    agents.mkdir()
+    _write_connector_module(agents, "dc.py", _CONNECTOR_DATACLASS_MODULE)
+
+    registry = load_connector_registry(agents)
+
+    assert registry.resolve("dc") is not None

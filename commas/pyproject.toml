@@ -40,9 +40,9 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/rlouf/sigil"
-Repository = "https://github.com/rlouf/sigil"
-Issues = "https://github.com/rlouf/sigil/issues"
+Homepage = "https://github.com/rlouf/zeta"
+Repository = "https://github.com/rlouf/zeta"
+Issues = "https://github.com/rlouf/zeta/issues"
 
 [project.scripts]
 commas = "commas.cli:main"

@@ -1,6 +1,6 @@
 # Zeta
 
-[![CI](https://github.com/rlouf/sigil/actions/workflows/ci.yml/badge.svg)](https://github.com/rlouf/sigil/actions/workflows/ci.yml)
+[![CI](https://github.com/rlouf/zeta/actions/workflows/ci.yml/badge.svg)](https://github.com/rlouf/zeta/actions/workflows/ci.yml)
 [![Zeta PyPI](https://img.shields.io/pypi/v/zeta-os.svg)](https://pypi.org/project/zeta-os/)
 [![PyPI](https://img.shields.io/pypi/v/commas.svg)](https://pypi.org/project/commas/)
 [![Python](https://img.shields.io/pypi/pyversions/commas.svg)](https://pypi.org/project/commas/)

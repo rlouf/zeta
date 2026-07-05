@@ -17,6 +17,7 @@ from commas.tools import read as read_tool
 from commas.tools import web as web_tool
 from zeta.capabilities.execution import (
     InProcessCapabilityExecutor,
+    tool_args_schema_error,
 )
 from zeta.capabilities.host import DuplicateHostCapabilityError, HostDirectory
 from zeta.capabilities.registry import (
@@ -522,11 +523,11 @@ def test_commas_read_fetches_public_url(monkeypatch) -> None:
 
     requests: list[Any] = []
 
-    def fake_urlopen(request: Any, timeout: float) -> FakeResponse:
+    def fake_open(request: Any, timeout: float) -> FakeResponse:
         requests.append((request, timeout))
         return FakeResponse()
 
-    monkeypatch.setattr(read_tool.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(read_tool._URL_OPENER, "open", fake_open)
     monkeypatch.setattr(
         read_tool.socket,
         "getaddrinfo",
@@ -558,6 +559,27 @@ def test_commas_read_blocks_cloud_metadata_url() -> None:
 
     assert result["ok"] is False
     assert result["error"]["code"] == "web-read-blocked"
+
+
+def test_zeta_tool_args_schema_error_skips_malformed_schema() -> None:
+    # A schema with an invalid "type" must be skipped, not crash dispatch.
+    assert tool_args_schema_error({"x": 1}, {"type": "not_a_type"}) is None
+    # A valid schema still reports violations.
+    assert tool_args_schema_error({}, {"required": ["path"]}) is not None
+
+
+def test_commas_read_blocks_redirect_to_private_host() -> None:
+    handler = read_tool._BlockPrivateRedirects()
+
+    with pytest.raises(read_tool.urllib.error.HTTPError):
+        handler.redirect_request(
+            None,
+            None,
+            302,
+            "Found",
+            {},
+            "http://169.254.169.254/latest/meta-data/",
+        )
 
 
 def test_zeta_tool_read_schema_and_run(tmp_path: Path) -> None:

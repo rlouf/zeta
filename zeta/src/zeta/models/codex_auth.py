@@ -86,7 +86,9 @@ def write_auth_tokens(path: Path, tokens: dict[str, Any]) -> None:
         "last_refresh": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
     }
     temp_path = path.with_name(f"{path.name}.tmp")
-    descriptor = os.open(temp_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    temp_path.unlink(missing_ok=True)
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
+    descriptor = os.open(temp_path, flags, 0o600)
     with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
         handle.write(json.dumps(payload, indent=2))
     os.replace(temp_path, path)

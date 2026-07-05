@@ -110,6 +110,22 @@ def blocked_url_reason(url: str) -> str | None:
     return None
 
 
+class _BlockPrivateRedirects(urllib.request.HTTPRedirectHandler):
+    """Re-validate redirect targets so a public URL cannot redirect into an
+    internal one; the initial guard only sees the first URL."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # type: ignore[no-untyped-def]
+        reason = blocked_url_reason(newurl)
+        if reason is not None:
+            raise urllib.error.HTTPError(
+                newurl, code, f"blocked redirect: {reason}", headers, fp
+            )
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+_URL_OPENER = urllib.request.build_opener(_BlockPrivateRedirects)
+
+
 def read_url(url: str, *, offset: int, limit: int) -> dict[str, Any]:
     blocked = blocked_url_reason(url)
     if blocked is not None:
@@ -122,7 +138,7 @@ def read_url(url: str, *, offset: int, limit: int) -> dict[str, Any]:
                 "Accept": "text/html,text/plain,*/*",
             },
         )
-        with urllib.request.urlopen(request, timeout=WEB_READ_TIMEOUT_SEC) as response:
+        with _URL_OPENER.open(request, timeout=WEB_READ_TIMEOUT_SEC) as response:
             raw = response.read()
             content_type = str(response.headers.get("content-type") or "")
     except (OSError, urllib.error.URLError, TimeoutError) as exc:

@@ -363,6 +363,7 @@ def tool_args_schema_error(
     if not schema:
         return None
     try:
+        Draft202012Validator.check_schema(schema)
         validator = Draft202012Validator(schema)
         errors = sorted(
             validator.iter_errors(params), key=lambda error: list(error.path)

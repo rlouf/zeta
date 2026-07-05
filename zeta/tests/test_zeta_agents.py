@@ -1010,9 +1010,10 @@ def test_zeta_load_connector_registry_honors_process_allowlist(
 def test_zeta_slack_connector_is_discoverable_as_entry_point() -> None:
     metadata = tomllib.loads(Path("zeta/pyproject.toml").read_text(encoding="utf-8"))
 
-    assert metadata["project"]["entry-points"]["zeta.event_connectors"] == (
-        {"slack": "connectors.slack:slack_event_connector"}
-    )
+    assert metadata["project"]["entry-points"]["zeta.event_connectors"] == {
+        "slack": "connectors.slack:slack_event_connector",
+        "filesystem": "connectors.filesystem:filesystem_event_connector",
+    }
 
 
 def test_zeta_slack_connector_maps_events_api_payload_to_received_events() -> None:

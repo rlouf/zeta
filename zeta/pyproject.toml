@@ -50,6 +50,7 @@ zeta = "zetad.cli:main"
 
 [project.entry-points."zeta.event_connectors"]
 slack = "connectors.slack:slack_event_connector"
+filesystem = "connectors.filesystem:filesystem_event_connector"
 
 [tool.setuptools]
 package-dir = { "" = "src" }

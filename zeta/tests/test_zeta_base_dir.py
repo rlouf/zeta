@@ -46,3 +46,41 @@ def test_base_dir_is_task_local():
     results = asyncio.run(main())
     assert Path("/a/n.md") in results
     assert Path("/b/n.md") in results
+
+
+def test_in_process_host_activates_base_dir_from_context():
+    from zeta.capabilities.execution import (
+        CapabilityExecutionContext,
+        InProcessCapabilityExecutor,
+    )
+    from zeta.capabilities.host import TransitionalInProcessHost
+    from zeta.capabilities.registry import CapabilityRegistry, RegisteredCapability
+    from zeta.capabilities.types import Capability, CapabilityId
+
+    def probe(params: dict) -> dict:
+        return {"ok": True, "resolved": str(resolve_path("note.md"))}
+
+    registry = CapabilityRegistry()
+    registry.register(
+        RegisteredCapability(
+            Capability(
+                CapabilityId("test", "probe"),
+                "resolve a relative path against the active base",
+                {"type": "object", "additionalProperties": True},
+            ),
+            InProcessCapabilityExecutor(probe, None),
+        )
+    )
+    host = TransitionalInProcessHost(registry)
+    ctx = CapabilityExecutionContext(
+        event_sink=None,
+        trace_store=None,
+        tool_registry=registry,
+        base_dir=Path("/vault"),
+    )
+
+    result = asyncio.run(host.call("test.probe", {}, "direct", ctx))
+
+    assert result["resolved"] == str(Path("/vault/note.md"))
+    # base did not leak out of the call
+    assert resolve_path("note.md") == Path("note.md")

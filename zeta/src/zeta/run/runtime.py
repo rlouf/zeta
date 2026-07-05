@@ -790,6 +790,7 @@ async def run_capability_step(
         trace_store=ctx.builder.store(),
         tool_registry=ctx.tool_registry,
         tool_hosts=ctx.tool_hosts or HostDirectory.from_registry(ctx.tool_registry),
+        base_dir=config.base_dir,
     )
     handled = handle_tool_call(
         tool_call,

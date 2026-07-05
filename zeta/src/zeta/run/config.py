@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
+from pathlib import Path
 from types import TracebackType
 from typing import Literal, Protocol
 
@@ -52,3 +53,4 @@ class AgentConfig:
     max_wall_seconds: float | None = None
     compaction_policy: CompactionPolicy | None = None
     model_status_factory: Callable[[], ModelStatus] | None = None
+    base_dir: Path | None = None

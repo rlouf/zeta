@@ -6,6 +6,7 @@ import inspect
 from dataclasses import dataclass
 from typing import Any, Protocol
 
+from zeta.capabilities.paths import reset_base_dir, set_base_dir
 from zeta.capabilities.registry import (
     CapabilityDirectory,
     CapabilityRegistry,
@@ -134,15 +135,18 @@ class TransitionalInProcessHost:
         mode: ExecutionMode,
         ctx: Any,
     ) -> dict[str, Any]:
-        del ctx
         from zeta.capabilities import execution as capability_execution
 
-        result = capability_execution.invoke_capability(
-            capability_id,
-            params,
-            execution_mode=mode,
-            tool_registry=self.registry,
-        )
-        if inspect.isawaitable(result):
-            result = await result
-        return result
+        token = set_base_dir(getattr(ctx, "base_dir", None))
+        try:
+            result = capability_execution.invoke_capability(
+                capability_id,
+                params,
+                execution_mode=mode,
+                tool_registry=self.registry,
+            )
+            if inspect.isawaitable(result):
+                result = await result
+            return result
+        finally:
+            reset_base_dir(token)

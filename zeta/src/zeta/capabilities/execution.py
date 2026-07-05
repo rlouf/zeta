@@ -156,6 +156,7 @@ class CapabilityExecutionContext:
     trace_store: Store | None
     tool_registry: CapabilityRegistry
     tool_hosts: HostDirectory | None = None
+    base_dir: Path | None = None
 
 
 @dataclass(frozen=True)

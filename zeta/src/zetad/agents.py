@@ -362,6 +362,7 @@ def config_for_spec(spec: AgentSpec, config: AgentConfig | None) -> AgentConfig:
             execution_mode="direct",
             model_name=spec.model.name if spec.model is not None else None,
             model_url=spec.model.url if spec.model is not None else None,
+            base_dir=spec.base_dir,
         )
     return replace(
         config,
@@ -371,6 +372,7 @@ def config_for_spec(spec: AgentSpec, config: AgentConfig | None) -> AgentConfig:
         or (spec.model.name if spec.model is not None else None),
         model_url=config.model_url
         or (spec.model.url if spec.model is not None else None),
+        base_dir=config.base_dir or spec.base_dir,
     )
 
 

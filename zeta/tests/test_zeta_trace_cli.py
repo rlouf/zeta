@@ -305,9 +305,7 @@ def test_zeta_trace_batch_rolls_back_on_exception(tmp_path: Path) -> None:
 
     with pytest.raises(RuntimeError, match="boom"):
         with store.batch():
-            store.put_object(
-                zeta_trace.Object(kind="note", schema="v1", data={"n": 1})
-            )
+            store.put_object(zeta_trace.Object(kind="note", schema="v1", data={"n": 1}))
             raise RuntimeError("boom")
 
     assert store.objects() == []

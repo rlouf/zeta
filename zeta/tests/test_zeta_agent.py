@@ -5114,23 +5114,23 @@ def test_zeta_cli_status_counts_runtime_queue(tmp_path: Path) -> None:
     assert result.output == "unhandled: 1\n"
 
 
-def test_zeta_cli_run_once_routes_unhandled_event(tmp_path: Path) -> None:
+def test_zeta_cli_run_routes_unhandled_event(tmp_path: Path) -> None:
     state_dir = tmp_path / ".zeta"
     event_store = zeta_events.SqliteEventStore(event_store_path(state_dir))
-    event = event_store.accept(
+    event_store.accept(
         zeta_events.DraftEvent("github.issue.opened", "github", {}, session_id="repo")
-    ).event
+    )
 
     result = CliRunner().invoke(
         zetad_cli.cli,
-        ["run", "--project-root", str(tmp_path), "--once"],
+        ["run", "--project-root", str(tmp_path)],
     )
     items = zetad_queue.project_queue_items(
         event_store.list_events(zeta_events.Filter())
     )
 
     assert result.exit_code == 0
-    assert result.output == f"routed {event.id}\n"
+    assert result.output == "processed 1\n"
     assert [item.status for item in items] == ["unhandled"]
 
 
@@ -5434,7 +5434,7 @@ def test_zeta_cli_run_registers_builtin_tools(
 
     result = CliRunner().invoke(
         zetad_cli.cli,
-        ["run", "--project-root", str(tmp_path), "--once"],
+        ["run", "--project-root", str(tmp_path)],
     )
 
     assert result.exit_code == 0
@@ -6984,7 +6984,7 @@ def test_zeta_local_runtime_run_forever_reaps_done_tasks_before_refilling(
     assert started == 4
 
 
-def test_zeta_cli_run_forever_invokes_runtime_loop(
+def test_zeta_cli_serve_invokes_runtime_loop(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -7006,7 +7006,7 @@ def test_zeta_cli_run_forever_invokes_runtime_loop(
 
     result = CliRunner().invoke(
         zetad_cli.cli,
-        ["run", "--project-root", str(tmp_path)],
+        ["serve", "--project-root", str(tmp_path)],
     )
 
     assert result.exit_code == 0
@@ -7018,15 +7018,15 @@ def test_zeta_cli_run_forever_invokes_runtime_loop(
     }
 
 
-def test_zeta_cli_run_once_executes_one_available_queue_item(
+def test_zeta_cli_run_drains_available_queue_item(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     state_dir = tmp_path / ".zeta"
     event_store = zeta_events.SqliteEventStore(event_store_path(state_dir))
-    event = event_store.accept(
+    event_store.accept(
         zeta_events.DraftEvent("github.issue.opened", "github", {}, session_id="repo")
-    ).event
+    )
     calls: list[zetad_dispatch.AgentInvocation] = []
 
     async def run_agent(run: zetad_dispatch.AgentInvocation) -> dict[str, object]:
@@ -7066,14 +7066,14 @@ Triage {{ event.payload.title }}
 
     result = CliRunner().invoke(
         zetad_cli.cli,
-        ["run", "--project-root", str(tmp_path), "--once"],
+        ["run", "--project-root", str(tmp_path)],
     )
     items = zetad_queue.project_queue_items(
         event_store.list_events(zeta_events.Filter())
     )
 
     assert result.exit_code == 0
-    assert result.output == f"ran qi_{event.id}\n"
+    assert result.output == "processed 1\n"
     assert len(calls) == 1
     assert [item.status for item in items] == ["completed"]
 

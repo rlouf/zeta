@@ -16,6 +16,7 @@ from zeta.records.stores.sqlite import (
     SqliteObjectStore,
     available_session_ids,
     open_existing_trace_store,
+    resolve_state_dir,
     zeta_sqlite_path,
 )
 from zeta.trace.diff import render_prompt_diff
@@ -85,14 +86,7 @@ def trace_group(
 def trace_state_dir(project_root: Path, state_dir: Path | None) -> Path:
     """Resolve the runtime state directory for zeta trace commands."""
 
-    if state_dir is not None:
-        return state_dir.expanduser()
-    if project_root != Path("."):
-        return project_root.expanduser().resolve() / ".zeta"
-    env_state_dir = os.environ.get("ZETA_STATE_DIR")
-    if env_state_dir:
-        return Path(env_state_dir).expanduser()
-    return Path.home() / ".zeta"
+    return resolve_state_dir(project_root, state_dir)
 
 
 def trace_context(ctx: click.Context) -> tuple[Path, str]:

@@ -379,6 +379,23 @@ class SqliteEventStore:
         return _row_to_event(row)
 
 
+def resolve_state_dir(project_root: Path, state_dir: Path | None) -> Path:
+    """Resolve the runtime state directory shared by workers and CLI readers.
+
+    An explicit ``state_dir`` always wins. A non-default ``project_root`` keeps
+    state under ``<project_root>/.zeta``. Otherwise fall back to ``ZETA_STATE_DIR``
+    or ``~/.zeta`` so the worker and the inspection commands agree by default.
+    """
+    if state_dir is not None:
+        return state_dir.expanduser()
+    if project_root != Path("."):
+        return project_root.expanduser().resolve() / ".zeta"
+    env_state_dir = os.environ.get("ZETA_STATE_DIR")
+    if env_state_dir:
+        return Path(env_state_dir).expanduser()
+    return Path.home() / ".zeta"
+
+
 def event_store_path(root: Path | None = None) -> Path:
     if root is not None:
         return root / ZETA_STORE_NAME

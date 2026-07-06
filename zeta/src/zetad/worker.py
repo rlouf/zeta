@@ -25,6 +25,7 @@ from zeta.records.stores.event_store import Filter
 from zeta.records.stores.sqlite import (
     SqliteObjectStore,
     event_store_path,
+    resolve_state_dir,
     zeta_sqlite_path,
 )
 from zeta.run.config import AgentConfig
@@ -45,6 +46,7 @@ from zetad.connector_bridge import (
 from zetad.dispatch import QueueingDispatcher
 from zetad.ingress import run_push_ingress_forever
 from zetad.retry import RetryPolicy
+from zetad.scheduling import request_due_schedules
 from zetad.session_turn import session_turn_agent
 from zetad.store import QueueClaim, RuntimeEventStore
 
@@ -82,11 +84,7 @@ def build_worker_services(
     connector_names: Iterable[str] | None = None,
 ) -> WorkerServices:
     resolved_project_root = project_root.expanduser().resolve()
-    resolved_state_dir = (
-        state_dir.expanduser().resolve()
-        if state_dir is not None
-        else resolved_project_root / ".zeta"
-    )
+    resolved_state_dir = resolve_state_dir(project_root, state_dir)
     resolved_registry = registry or load_connector_registry(
         resolved_project_root / "agents",
         connector_names=connector_names,
@@ -108,6 +106,7 @@ async def run_once(runtime: WorkerServices) -> str:
     if rpc_request is not None:
         await run_eventlog_rpc_request(runtime, rpc_request)
         return f"rpc {rpc_request.id}"
+    publish_due_schedules(runtime)
     enqueue_pending_events(runtime.events)
     executors = project_executors(runtime)
     return await run_available_queue_item(
@@ -118,6 +117,22 @@ async def run_once(runtime: WorkerServices) -> str:
         lease_ms=QUEUE_LEASE_MS,
         retry_policy=runtime.retry_policy,
     )
+
+
+async def run_until_idle(runtime: WorkerServices) -> str:
+    processed = 0
+    while await run_once(runtime) != "queue empty":
+        processed += 1
+    return f"processed {processed}"
+
+
+def publish_due_schedules(runtime: WorkerServices) -> list[Event]:
+    project = load_agent_project(
+        runtime.project_root / "agents",
+        registry=runtime.registry,
+    )
+    validate_agent_project(project)
+    return request_due_schedules(runtime.events, project.specs)
 
 
 def project_executors(runtime: WorkerServices) -> tuple[ExecutableAgent, ...]:

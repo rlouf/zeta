@@ -18,7 +18,7 @@ from zeta.agents.resources import (
 from zeta.agents.spec import AgentSpec, ScheduleEntry, scheduled_event_type
 from zeta.events import DraftEvent, Event
 from zeta.records.stores.event_store import EventReader, EventWriter, Filter
-from zeta.records.stores.sqlite import event_store_path
+from zeta.records.stores.sqlite import event_store_path, resolve_state_dir
 
 from zetad.store import RuntimeEventStore
 
@@ -68,11 +68,7 @@ def build_scheduler_services(
     connector_names: Iterable[str] | None = None,
 ) -> SchedulerServices:
     resolved_project_root = project_root.expanduser().resolve()
-    resolved_state_dir = (
-        state_dir.expanduser().resolve()
-        if state_dir is not None
-        else resolved_project_root / ".zeta"
-    )
+    resolved_state_dir = resolve_state_dir(project_root, state_dir)
     resolved_registry = registry or load_connector_registry(
         resolved_project_root / "agents",
         connector_names=connector_names,

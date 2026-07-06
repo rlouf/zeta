@@ -9,7 +9,7 @@ import tomllib
 from collections.abc import Callable
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from connectors import (
@@ -2126,6 +2126,107 @@ Send a scheduled update.
         runtime.close()
 
     assert [event.event_type for event in events] == ["agent.scheduled.scheduled"]
+
+
+def test_zeta_worker_publishes_due_schedules(tmp_path: Path) -> None:
+    agents_dir = tmp_path / "agents"
+    agents_dir.mkdir()
+    _write_spec(
+        agents_dir / "digest.md",
+        """---
+name: Digest
+description: Emits a scheduled digest.
+schedules:
+  - cron: "* * * * *"
+---
+Summarize.
+""",
+    )
+    runtime = zetad_worker.WorkerServices(
+        project_root=tmp_path,
+        state_dir=tmp_path / ".zeta",
+        events=zeta_events.SqliteEventStore(tmp_path / "events.sqlite3"),
+    )
+
+    try:
+        published = zetad_worker.publish_due_schedules(runtime)
+        stored = runtime.events.list_events(
+            zeta_events.Filter(event_type="agent.digest.scheduled")
+        )
+    finally:
+        runtime.close()
+
+    assert [event.event_type for event in published] == ["agent.digest.scheduled"]
+    assert len(stored) == 1
+
+
+def test_zeta_run_once_fires_due_schedule(tmp_path: Path, monkeypatch) -> None:
+    agents_dir = tmp_path / "agents"
+    agents_dir.mkdir()
+    _write_spec(
+        agents_dir / "digest.md",
+        """---
+name: Digest
+description: Emits a scheduled digest.
+schedules:
+  - cron: "* * * * *"
+---
+Summarize.
+""",
+    )
+    runtime = zetad_worker.WorkerServices(
+        project_root=tmp_path,
+        state_dir=tmp_path / ".zeta",
+        events=zeta_events.SqliteEventStore(tmp_path / "events.sqlite3"),
+    )
+
+    async def _no_work(*_args: object, **_kwargs: object) -> str:
+        return "queue empty"
+
+    monkeypatch.setattr(zetad_worker, "run_available_queue_item", _no_work)
+
+    try:
+        asyncio.run(zetad_worker.run_once(runtime))
+        scheduled = runtime.events.list_events(
+            zeta_events.Filter(event_type="agent.digest.scheduled")
+        )
+        enqueued = runtime.events.event_has_queue_item(scheduled[0].id)
+    finally:
+        runtime.close()
+
+    assert len(scheduled) == 1
+    assert enqueued is True
+
+
+def test_zeta_resolve_state_dir_defaults_and_overrides(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    from zeta.records.stores.sqlite import resolve_state_dir
+
+    assert resolve_state_dir(Path("."), tmp_path / "explicit") == tmp_path / "explicit"
+    assert resolve_state_dir(tmp_path, None) == tmp_path.resolve() / ".zeta"
+
+    monkeypatch.setenv("ZETA_STATE_DIR", str(tmp_path / "env"))
+    assert resolve_state_dir(Path("."), None) == tmp_path / "env"
+
+    monkeypatch.delenv("ZETA_STATE_DIR", raising=False)
+    monkeypatch.setattr(Path, "home", classmethod(lambda _cls: tmp_path / "home"))
+    assert resolve_state_dir(Path("."), None) == tmp_path / "home" / ".zeta"
+
+
+def test_zeta_run_until_idle_drains_queue(monkeypatch) -> None:
+    messages = iter(["ran qi_1", "ran qi_2", "queue empty"])
+
+    async def _next(_runtime: object) -> str:
+        return next(messages)
+
+    monkeypatch.setattr(zetad_worker, "run_once", _next)
+
+    runtime = cast(zetad_worker.WorkerServices, object())
+    result = asyncio.run(zetad_worker.run_until_idle(runtime))
+
+    assert result == "processed 2"
 
 
 def test_zeta_agent_manifest_allows_unvalidated_runtime_vocabularies(

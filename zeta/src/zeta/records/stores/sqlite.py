@@ -210,11 +210,17 @@ def import_trace_graph(
 class EventProjection(Protocol):
     """Maintains derived SQLite state for one class of durable events."""
 
+    name: str
+    version: int
+
     def init_schema(self, connection: sqlite3.Connection) -> None:
         """Create the projection schema without mutating existing columns."""
 
     def clear(self, connection: sqlite3.Connection) -> None:
         """Clear projected rows before rebuilding from durable events."""
+
+    def reset_schema(self, connection: sqlite3.Connection) -> None:
+        """Drop projection-owned schema before an incompatible upgrade."""
 
     def index(self, connection: sqlite3.Connection, event: Event) -> None:
         """Project one durable event into derived tables."""
@@ -297,6 +303,11 @@ class SqliteEventStore:
                   updated_at INTEGER NOT NULL
                 ) STRICT;
 
+                CREATE TABLE IF NOT EXISTS event_projection_versions (
+                  name TEXT PRIMARY KEY,
+                  version INTEGER NOT NULL
+                ) STRICT;
+
                 """
             )
             self.connection.executescript(
@@ -329,8 +340,34 @@ class SqliteEventStore:
                   WHERE turn_id IS NOT NULL;
                 """
             )
+            rebuild: list[EventProjection] = []
             for projection in self._projections:
-                projection.init_schema(self.connection)
+                row = self.connection.execute(
+                    "SELECT version FROM event_projection_versions WHERE name = ?",
+                    (projection.name,),
+                ).fetchone()
+                current_version = int(row["version"]) if row is not None else None
+                if current_version != projection.version:
+                    projection.reset_schema(self.connection)
+                    projection.init_schema(self.connection)
+                    self.connection.execute(
+                        """
+                        INSERT INTO event_projection_versions (name, version)
+                        VALUES (?, ?)
+                        ON CONFLICT(name) DO UPDATE SET version = excluded.version
+                        """,
+                        (projection.name, projection.version),
+                    )
+                    rebuild.append(projection)
+                else:
+                    projection.init_schema(self.connection)
+            if rebuild:
+                events = self.list_events(Filter())
+                for event in events:
+                    for projection in rebuild:
+                        projection.index(self.connection, event)
+                for projection in rebuild:
+                    projection.recover(self.connection)
             self.connection.commit()
 
     def accept(self, draft: DraftEvent) -> AppendOutcome:

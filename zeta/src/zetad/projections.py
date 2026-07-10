@@ -14,6 +14,9 @@ from zetad.queue import project_one_queue_item
 class RuntimeEventProjection:
     """Projects runtime queue and attempt events into queryable tables."""
 
+    name = "zetad.runtime"
+    version = 1
+
     def init_schema(self, connection: sqlite3.Connection) -> None:
         connection.executescript(
             """
@@ -79,6 +82,16 @@ class RuntimeEventProjection:
             DELETE FROM attempt_results;
             DELETE FROM attempts;
             DELETE FROM queue_items;
+            """
+        )
+
+    def reset_schema(self, connection: sqlite3.Connection) -> None:
+        connection.executescript(
+            """
+            DROP TABLE IF EXISTS locks;
+            DROP TABLE IF EXISTS attempt_results;
+            DROP TABLE IF EXISTS attempts;
+            DROP TABLE IF EXISTS queue_items;
             """
         )
 

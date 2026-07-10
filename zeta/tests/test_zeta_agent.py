@@ -4154,7 +4154,7 @@ def test_zeta_sqlite_event_store_projects_runtime_lifecycle_tables(
     assert dict(session_mapping_row) == {"session_id": session_id, "run_id": "run-1"}
 
 
-def test_zeta_sqlite_event_store_does_not_patch_existing_projection_schema(
+def test_zeta_sqlite_event_store_rebuilds_outdated_projection_schema(
     tmp_path: Path,
 ) -> None:
     database = tmp_path / "events.sqlite3"
@@ -4204,9 +4204,18 @@ def test_zeta_sqlite_event_store_does_not_patch_existing_projection_schema(
         row["name"]
         for row in event_store.connection.execute("PRAGMA table_info(attempts)")
     }
-    assert "claimed_token" not in queue_columns
-    assert "claim_token" not in attempt_columns
-    assert "summary" not in attempt_columns
+    projection_version = event_store.connection.execute(
+        """
+        SELECT version
+        FROM event_projection_versions
+        WHERE name = 'zetad.runtime'
+        """
+    ).fetchone()
+
+    assert "claimed_token" in queue_columns
+    assert "claim_token" in attempt_columns
+    assert "summary" in attempt_columns
+    assert projection_version["version"] == 1
 
 
 def test_zeta_sqlite_event_store_serializes_threaded_appends(

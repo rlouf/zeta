@@ -26,22 +26,16 @@ from zetad.agents import (
     agent_session_id,
 )
 from zetad.attempts import (
-    Attempt,
     AttemptStatus,
-    attempt_event_payload,
-    attempt_idempotency_key,
 )
+from zetad.lifecycle import LifecycleRecorder
 from zetad.queue import (
     TERMINAL_QUEUE_ITEM_EVENT_TYPES,
-    QueueItem,
     QueueItemStatus,
     RoutedQueueItem,
-    queue_item_event_payload,
     queue_item_from_record,
     queue_item_id_for_event,
-    queue_item_idempotency_key,
     routed_queue_item_from_event,
-    unhandled_queue_item_idempotency_key,
 )
 from zetad.retry import RetryPolicy, error_code_for_exception
 
@@ -183,6 +177,10 @@ class EventDispatcher:
         self.publish_callback = publish_event
         self.worker_name: str | None = None
         self.retry_policy = retry_policy or RetryPolicy()
+        self.lifecycle = LifecycleRecorder(
+            event_sink,
+            publish_event=publish_event,
+        )
 
     async def publish_event(
         self,
@@ -622,15 +620,10 @@ class EventDispatcher:
         run_id: str | None = None,
         **payload_extra: Any,
     ) -> Event:
-        if route.project_generation is not None:
-            payload_extra = {
-                "project_generation": route.project_generation,
-                **payload_extra,
-            }
-        return self._append_queue_item_event_for_target(
+        return self.lifecycle.queue_item(
             triggering_event,
+            route,
             queue_item_id,
-            route.agent_id,
             event_suffix=event_suffix,
             status=status,
             attempt_number=attempt_number,
@@ -652,24 +645,16 @@ class EventDispatcher:
         run_id: str | None = None,
         **payload_extra: Any,
     ) -> Event:
-        queue_item = QueueItem(
-            queue_item_id=queue_item_id,
-            event_id=triggering_event.id,
-            target_agent=target_agent,
-            status=status,
-        )
-        return self._append_lifecycle_event(
-            f"runtime.queue_item.{event_suffix}",
+        return self.lifecycle.queue_item_for_target(
             triggering_event,
-            queue_item_event_payload(queue_item, **payload_extra),
-            idempotency_key=queue_item_idempotency_key(
-                triggering_event,
-                target_agent,
-                event_suffix,
-                attempt_number=attempt_number,
-            ),
+            queue_item_id,
+            target_agent,
+            event_suffix=event_suffix,
+            status=status,
+            attempt_number=attempt_number,
             session_id=session_id,
             run_id=run_id,
+            **payload_extra,
         )
 
     def _append_attempt_event(
@@ -689,46 +674,20 @@ class EventDispatcher:
         run_id: str | None = None,
         **payload_extra: Any,
     ) -> Event:
-        attempt = Attempt(
-            attempt_id=attempt_id,
-            queue_item_id=queue_item_id,
-            event_id=triggering_event.id,
-            attempt_number=attempt_number,
-            target_agent=agent.definition.agent_id,
+        return self.lifecycle.attempt(
+            triggering_event,
+            agent,
+            queue_item_id,
+            attempt_id,
+            attempt_number,
+            event_suffix=event_suffix,
             status=status,
             started_at=started_at,
             finished_at=finished_at,
             error=error,
-            session_id=session_id
-            if session_id is not None
-            else triggering_event.session_id,
-            run_id=run_id if run_id is not None else triggering_event.run_id,
-        )
-        if self.worker_name is not None:
-            payload_extra = {"worker_name": self.worker_name, **payload_extra}
-        if agent.definition.project_generation is not None:
-            payload_extra = {
-                "project_generation": agent.definition.project_generation,
-                **payload_extra,
-            }
-        if agent.definition.execution_manifest is not None:
-            manifest = dict(agent.definition.execution_manifest)
-            payload_extra = {
-                "execution_manifest_id": manifest.get("id"),
-                "execution_manifest": manifest,
-                **payload_extra,
-            }
-        return self._append_lifecycle_event(
-            f"runtime.attempt.{event_suffix}",
-            triggering_event,
-            attempt_event_payload(attempt, **payload_extra),
-            idempotency_key=attempt_idempotency_key(
-                queue_item_id,
-                attempt_number,
-                event_suffix,
-            ),
             session_id=session_id,
             run_id=run_id,
+            **payload_extra,
         )
 
     def _failed_agent_events(
@@ -888,40 +847,20 @@ class EventDispatcher:
         session_id: str | None = None,
         run_id: str | None = None,
     ) -> Event:
-        draft = DraftEvent(
+        return self.lifecycle.append(
             event_type,
-            "zeta",
+            triggering_event,
             payload,
             idempotency_key=idempotency_key,
-            caused_by=triggering_event.id,
-            session_id=(
-                session_id if session_id is not None else triggering_event.session_id
-            ),
-            run_id=run_id if run_id is not None else triggering_event.run_id,
-            turn_id=triggering_event.turn_id,
+            session_id=session_id,
+            run_id=run_id,
         )
-        event = self.event_sink.accept(draft).event
-        self._publish(event)
-        return event
 
     def _append_unhandled_queue_item_event(self, triggering_event: Event) -> Event:
-        queue_item_id = f"qi_{triggering_event.id}_unhandled"
-        queue_item = QueueItem(
-            queue_item_id=queue_item_id,
-            event_id=triggering_event.id,
-            target_agent="",
-            status="unhandled",
-        )
-        return self._append_lifecycle_event(
-            "runtime.queue_item.unhandled",
-            triggering_event,
-            queue_item_event_payload(queue_item),
-            idempotency_key=unhandled_queue_item_idempotency_key(triggering_event),
-        )
+        return self.lifecycle.unhandled(triggering_event)
 
     def _publish(self, event: Event) -> None:
-        if self.publish_callback is not None:
-            self.publish_callback(event)
+        self.lifecycle.publish(event)
 
     def _agent_event_publisher(
         self,
@@ -989,6 +928,7 @@ class QueueingDispatcher(EventDispatcher):
         )
         self.queue_store = queue_store
         self.worker_name = worker_name
+        self.lifecycle.worker_name = worker_name
         self.heartbeat_interval_seconds = heartbeat_interval_seconds
         self.lease_ms = lease_ms
         self.claim_token = claim_token

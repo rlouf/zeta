@@ -38,6 +38,7 @@ from zetad.queue import (
     routed_queue_item_from_event,
 )
 from zetad.retry import RetryPolicy, error_code_for_exception
+from zetad.router import EventRouter
 
 __all__ = [
     "AgentDefinition",
@@ -174,6 +175,7 @@ class EventDispatcher:
         for executor in self.executors:
             route_by_agent[executor.agent_id] = executor.route
         self.routes = tuple(route_by_agent.values())
+        self.router = EventRouter(self.routes)
         self.publish_callback = publish_event
         self.worker_name: str | None = None
         self.retry_policy = retry_policy or RetryPolicy()
@@ -207,15 +209,16 @@ class EventDispatcher:
     async def route(self, event: Event) -> RouteOutcome:
         lifecycle_events: list[Event] = []
         queue_items: list[RoutedQueueItem] = []
-        matching_routes = self.matching_routes(event)
-        if not matching_routes:
+        plan = self.router.plan(event)
+        if not plan.handled:
             return RouteOutcome(
                 event,
                 [self._append_unhandled_queue_item_event(event)],
                 [],
             )
-        for route in matching_routes:
-            queue_item_id = queue_item_id_for_event(route, event)
+        for decision in plan.decisions:
+            route = decision.route
+            queue_item_id = decision.queue_item.queue_item_id
             lifecycle_events.append(
                 self._append_queue_item_event(
                     event,
@@ -225,14 +228,7 @@ class EventDispatcher:
                     status="available",
                 )
             )
-            queue_items.append(
-                RoutedQueueItem(
-                    queue_item_id=queue_item_id,
-                    event_id=event.id,
-                    target_agent=route.agent_id,
-                    project_generation=route.project_generation,
-                )
-            )
+            queue_items.append(decision.queue_item)
         return RouteOutcome(event, lifecycle_events, queue_items)
 
     async def run_queue_items(
@@ -317,7 +313,7 @@ class EventDispatcher:
         )
 
     def matching_routes(self, event: Event) -> list[AgentRoute]:
-        return [route for route in self.routes if route.matches(event)]
+        return list(self.router.matching_routes(event))
 
     async def _run_queue_item_into(
         self,

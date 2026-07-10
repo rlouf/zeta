@@ -15,7 +15,7 @@ class RuntimeEventProjection:
     """Projects runtime queue and attempt events into queryable tables."""
 
     name = "zetad.runtime"
-    version = 1
+    version = 2
 
     def init_schema(self, connection: sqlite3.Connection) -> None:
         connection.executescript(
@@ -24,6 +24,7 @@ class RuntimeEventProjection:
               queue_item_id TEXT PRIMARY KEY,
               event_id TEXT NOT NULL,
               target_agent TEXT NOT NULL,
+              project_generation TEXT,
               status TEXT NOT NULL,
               available_at INTEGER,
               claimed_by TEXT,
@@ -49,6 +50,9 @@ class RuntimeEventProjection:
               error TEXT,
               session_id TEXT,
               run_id TEXT,
+              project_generation TEXT,
+              execution_manifest_id TEXT,
+              execution_manifest_json TEXT,
               summary TEXT,
               input_tokens INTEGER,
               output_tokens INTEGER,
@@ -132,12 +136,16 @@ def _index_one_queue_item(connection: sqlite3.Connection, event: Event) -> None:
     connection.execute(
         """
         INSERT INTO queue_items
-          (queue_item_id, event_id, target_agent, status, available_at,
+          (queue_item_id, event_id, target_agent, project_generation, status, available_at,
            last_error, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(queue_item_id) DO UPDATE SET
           event_id = excluded.event_id,
           target_agent = excluded.target_agent,
+          project_generation = COALESCE(
+            excluded.project_generation,
+            queue_items.project_generation
+          ),
           status = excluded.status,
           available_at = CASE
             WHEN excluded.status = 'available' THEN excluded.available_at
@@ -150,6 +158,7 @@ def _index_one_queue_item(connection: sqlite3.Connection, event: Event) -> None:
             queue_item.queue_item_id,
             queue_item.event_id,
             queue_item.target_agent,
+            _optional_str(event.payload.get("project_generation")),
             queue_item.status,
             _queue_item_available_at(event)
             if queue_item.status == "available"
@@ -190,14 +199,21 @@ def _index_one_attempt(connection: sqlite3.Connection, event: Event) -> None:
         if raw_tool_calls is not None
         else None
     )
+    execution_manifest = event.payload.get("execution_manifest")
+    execution_manifest_json = (
+        json.dumps(execution_manifest, ensure_ascii=False, separators=(",", ":"))
+        if execution_manifest is not None
+        else None
+    )
     connection.execute(
         """
         INSERT INTO attempts
           (attempt_id, queue_item_id, event_id, attempt_number, target_agent,
            worker_name, claim_token, status, started_at, heartbeat_at,
            finished_at, error, session_id, run_id, summary, input_tokens, output_tokens,
+           project_generation, execution_manifest_id, execution_manifest_json,
            tool_calls_json)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(attempt_id) DO UPDATE SET
           claim_token = COALESCE(attempts.claim_token, excluded.claim_token),
           status = excluded.status,
@@ -206,6 +222,18 @@ def _index_one_attempt(connection: sqlite3.Connection, event: Event) -> None:
           error = excluded.error,
           session_id = excluded.session_id,
           run_id = excluded.run_id,
+          project_generation = COALESCE(
+            excluded.project_generation,
+            attempts.project_generation
+          ),
+          execution_manifest_id = COALESCE(
+            excluded.execution_manifest_id,
+            attempts.execution_manifest_id
+          ),
+          execution_manifest_json = COALESCE(
+            excluded.execution_manifest_json,
+            attempts.execution_manifest_json
+          ),
           summary = excluded.summary,
           input_tokens = excluded.input_tokens,
           output_tokens = excluded.output_tokens,
@@ -229,6 +257,9 @@ def _index_one_attempt(connection: sqlite3.Connection, event: Event) -> None:
             summary,
             _usage_token(event, "input_tokens", "prompt_tokens"),
             _usage_token(event, "output_tokens", "completion_tokens"),
+            _optional_str(event.payload.get("project_generation")),
+            _optional_str(event.payload.get("execution_manifest_id")),
+            execution_manifest_json,
             tool_calls_json,
         ),
     )

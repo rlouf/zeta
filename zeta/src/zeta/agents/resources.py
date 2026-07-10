@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import json
 import sys
@@ -32,6 +33,7 @@ class SkillResource:
     name: str
     path: Path
     body: str
+    sha256: str
 
 
 @dataclass(frozen=True)
@@ -282,7 +284,12 @@ def load_skill_registry(agents_dir: Path) -> SkillRegistry:
             body = path.read_text(encoding="utf-8")
         except OSError as exc:
             raise ResourceError(f"I/O error reading {path}: {exc}") from exc
-        skills[name] = SkillResource(name, path, body)
+        skills[name] = SkillResource(
+            name,
+            path,
+            body,
+            hashlib.sha256(body.encode()).hexdigest(),
+        )
     return SkillRegistry(skills)
 
 

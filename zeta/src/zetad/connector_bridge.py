@@ -11,15 +11,13 @@ from __future__ import annotations
 import asyncio
 import inspect
 import logging
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from typing import TYPE_CHECKING, Any, cast
 
 from jsonschema import Draft202012Validator
 from zeta.agents.manifest import egress_bindings, ingress_bindings
 from zeta.agents.resources import (
     AgentProject,
-    load_agent_project,
-    validate_agent_project,
 )
 from zeta.events import DraftEvent, Event
 
@@ -44,6 +42,9 @@ logger = logging.getLogger(__name__)
 
 def project_egress_executors(
     project: AgentProject,
+    *,
+    project_generation: str | None = None,
+    execution_manifests: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> tuple[ExecutableAgent, ...]:
     executors: list[ExecutableAgent] = []
     for spec in project.specs:
@@ -61,6 +62,8 @@ def project_egress_executors(
                         agent_id,
                         (EventPattern(binding.event),),
                         dispatch_mode="one_shot",
+                        project_generation=project_generation,
+                        execution_manifest=(execution_manifests or {}).get(spec.slug),
                     ),
                     run=egress_runner(binding, handler, connector.id),
                 )
@@ -140,11 +143,7 @@ def egress_runner(binding: EgressBinding, handler, connector_id: str):
 
 
 async def run_ingress_once(runtime: WorkerServices) -> int:
-    project = load_agent_project(
-        runtime.project_root / "agents",
-        registry=runtime.registry,
-    )
-    validate_agent_project(project)
+    project = runtime.project_snapshot.project
     inserted = 0
     for spec in project.specs:
         for binding in ingress_bindings(spec):
@@ -199,11 +198,7 @@ async def handle_push_ingress_request(
     connector_id: str,
     request: InboundRequest,
 ) -> InboundResponse:
-    project = load_agent_project(
-        runtime.project_root / "agents",
-        registry=runtime.registry,
-    )
-    validate_agent_project(project)
+    project = runtime.project_snapshot.project
     connector = project.connectors.resolve(connector_id)
     if connector is None:
         return InboundResponse(status_code=404, body=b"unknown connector")

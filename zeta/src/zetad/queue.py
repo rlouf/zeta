@@ -48,6 +48,7 @@ class RoutedQueueItem:
     queue_item_id: str
     event_id: str
     target_agent: str
+    project_generation: str | None = None
 
 
 QUEUE_ITEM_STATUSES = frozenset(
@@ -162,6 +163,7 @@ def routed_queue_item_from_event(event: Event) -> RoutedQueueItem:
         queue_item_id=queue_item_id,
         event_id=event_id,
         target_agent=target_agent,
+        project_generation=_optional_string(event.payload.get("project_generation")),
     )
 
 
@@ -170,6 +172,7 @@ def queue_item_from_record(record: Mapping[str, Any]) -> RoutedQueueItem:
         queue_item_id=str(record["queue_item_id"]),
         event_id=str(record["event_id"]),
         target_agent=str(record["target_agent"]),
+        project_generation=_optional_string(record.get("project_generation")),
     )
 
 
@@ -243,3 +246,7 @@ def result_with_final_cursor(result: dict[str, Any], event: Event) -> dict[str, 
     if event.cursor is None:
         return dict(result)
     return {**result, "final_event_cursor": str(event.cursor)}
+
+
+def _optional_string(value: object) -> str | None:
+    return value if isinstance(value, str) else None

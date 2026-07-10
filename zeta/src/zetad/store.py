@@ -120,13 +120,16 @@ class RuntimeEventStore:
         with self.events.write_lock:
             row = self.connection.execute(
                 """
-                SELECT queue_item_id, event_id, target_agent, status
+                SELECT queue_item_id, event_id, target_agent, project_generation,
+                       status
                 FROM queue_items
                 WHERE queue_item_id = ?
                 """,
                 (queue_item_id,),
             ).fetchone()
-        return dict(row) if row is not None else None
+        if row is None:
+            return None
+        return _without_none_snapshot_fields(dict(row))
 
     def queue_item_attempt_count(self, queue_item_id: str) -> int:
         with self.events.write_lock:
@@ -140,13 +143,14 @@ class RuntimeEventStore:
         with self.events.write_lock:
             rows = self.connection.execute(
                 """
-                SELECT queue_item_id, event_id, target_agent, status, available_at,
+                SELECT queue_item_id, event_id, target_agent, project_generation,
+                       status, available_at,
                        claimed_by, claimed_until, attempt_count, last_error, updated_at
                 FROM queue_items
                 ORDER BY updated_at ASC, queue_item_id ASC
                 """
             ).fetchall()
-        return [dict(row) for row in rows]
+        return [_without_none_snapshot_fields(dict(row)) for row in rows]
 
     def list_attempts(self) -> list[dict[str, Any]]:
         with self.events.write_lock:
@@ -155,6 +159,8 @@ class RuntimeEventStore:
                 SELECT a.attempt_id, a.queue_item_id, a.event_id, a.attempt_number,
                        a.target_agent, a.worker_name, a.status, a.started_at,
                        a.heartbeat_at, a.finished_at, a.error, a.session_id, a.run_id,
+                       a.project_generation, a.execution_manifest_id,
+                       a.execution_manifest_json,
                        COALESCE(a.summary, r.summary) AS summary,
                        a.input_tokens, a.output_tokens,
                        COALESCE(a.tool_calls_json, r.tool_calls_json) AS tool_calls_json,
@@ -503,7 +509,7 @@ class RuntimeEventStore:
 
 def _row_to_attempt(row: sqlite3.Row) -> dict[str, Any]:
     usage = _json_column(row["usage_json"])
-    return {
+    return _without_none_snapshot_fields({
         "attempt_id": str(row["attempt_id"]),
         "queue_item_id": str(row["queue_item_id"]),
         "event_id": str(row["event_id"]),
@@ -517,6 +523,9 @@ def _row_to_attempt(row: sqlite3.Row) -> dict[str, Any]:
         "error": _optional_str(row["error"]),
         "session_id": _optional_str(row["session_id"]),
         "run_id": _optional_str(row["run_id"]),
+        "project_generation": _optional_str(row["project_generation"]),
+        "execution_manifest_id": _optional_str(row["execution_manifest_id"]),
+        "execution_manifest": _json_column(row["execution_manifest_json"]),
         "input_tokens": _row_token_count(row["input_tokens"], usage, "input_tokens"),
         "output_tokens": _row_token_count(row["output_tokens"], usage, "output_tokens"),
         "final_status": _optional_str(row["final_status"]),
@@ -525,7 +534,18 @@ def _row_to_attempt(row: sqlite3.Row) -> dict[str, Any]:
         "events": _json_column(row["events_json"]),
         "tool_calls": _json_column(row["tool_calls_json"]),
         "usage": usage,
-    }
+    })
+
+
+def _without_none_snapshot_fields(record: dict[str, Any]) -> dict[str, Any]:
+    for key in (
+        "project_generation",
+        "execution_manifest_id",
+        "execution_manifest",
+    ):
+        if record.get(key) is None:
+            record.pop(key, None)
+    return record
 
 
 def _row_token_count(

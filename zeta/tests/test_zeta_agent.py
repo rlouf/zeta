@@ -4215,7 +4215,7 @@ def test_zeta_sqlite_event_store_rebuilds_outdated_projection_schema(
     assert "claimed_token" in queue_columns
     assert "claim_token" in attempt_columns
     assert "summary" in attempt_columns
-    assert projection_version["version"] == 1
+    assert projection_version["version"] == 2
 
 
 def test_zeta_sqlite_event_store_serializes_threaded_appends(

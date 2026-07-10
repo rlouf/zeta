@@ -47,3 +47,9 @@ class EventRegistry:
     def schema(self, event_type: str) -> dict[str, Any] | None:
         schema = self._schemas.get(event_type)
         return dict(schema) if schema is not None else None
+
+    def items(self) -> tuple[tuple[str, dict[str, Any] | None], ...]:
+        return tuple(
+            (event_type, dict(schema) if schema is not None else None)
+            for event_type, schema in sorted(self._schemas.items())
+        )

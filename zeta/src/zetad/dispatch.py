@@ -61,7 +61,11 @@ __all__ = [
     "TerminalQueueItemError",
 ]
 
-RESERVED_RUNTIME_EVENT_PREFIXES = ("runtime.queue_item.", "runtime.attempt.")
+RESERVED_RUNTIME_EVENT_PREFIXES = (
+    "runtime.queue_item.",
+    "runtime.attempt.",
+    "runtime.project_snapshot.",
+)
 
 
 class RuntimeQueueStore(Protocol):
@@ -228,6 +232,7 @@ class EventDispatcher:
                     queue_item_id=queue_item_id,
                     event_id=event.id,
                     target_agent=route.agent_id,
+                    project_generation=route.project_generation,
                 )
             )
         return RouteOutcome(event, lifecycle_events, queue_items)
@@ -293,6 +298,11 @@ class EventDispatcher:
         )
         previous_attempt_number = max(next_attempt_number - 1, 1)
         not_before = current_time_ms() + retry_policy.delay_ms(previous_attempt_number)
+        generation_payload = (
+            {"project_generation": routed_queue_item.project_generation}
+            if routed_queue_item.project_generation is not None
+            else {}
+        )
         return self._append_queue_item_event_for_target(
             triggering_event,
             routed_queue_item.queue_item_id,
@@ -301,6 +311,7 @@ class EventDispatcher:
             status="available",
             attempt_number=next_attempt_number,
             not_before=not_before,
+            **generation_payload,
         )
 
     def matching_routes(self, event: Event) -> list[AgentRoute]:
@@ -487,6 +498,7 @@ class EventDispatcher:
                 queue_item_id=queue_item.queue_item_id,
                 event_id=queue_item.event_id,
                 target_agent=route.agent_id,
+                project_generation=route.project_generation,
             )
             executor = self._executor_for_id(route.agent_id)
             if executor is None:
@@ -584,6 +596,11 @@ class EventDispatcher:
         run_id: str | None = None,
         **payload_extra: Any,
     ) -> Event:
+        if route.project_generation is not None:
+            payload_extra = {
+                "project_generation": route.project_generation,
+                **payload_extra,
+            }
         return self._append_queue_item_event_for_target(
             triggering_event,
             queue_item_id,
@@ -663,6 +680,18 @@ class EventDispatcher:
         )
         if self.worker_name is not None:
             payload_extra = {"worker_name": self.worker_name, **payload_extra}
+        if agent.definition.project_generation is not None:
+            payload_extra = {
+                "project_generation": agent.definition.project_generation,
+                **payload_extra,
+            }
+        if agent.definition.execution_manifest is not None:
+            manifest = dict(agent.definition.execution_manifest)
+            payload_extra = {
+                "execution_manifest_id": manifest.get("id"),
+                "execution_manifest": manifest,
+                **payload_extra,
+            }
         return self._append_lifecycle_event(
             f"runtime.attempt.{event_suffix}",
             triggering_event,
@@ -731,6 +760,7 @@ class EventDispatcher:
                     queue_item_id=queue_item_id,
                     event_id=triggering_event.id,
                     target_agent=agent.definition.agent_id,
+                    project_generation=agent.definition.project_generation,
                 ),
                 attempt_number=attempt_number + 1,
                 policy=retry_policy,

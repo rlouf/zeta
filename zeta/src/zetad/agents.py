@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from fnmatch import fnmatchcase
 from typing import TYPE_CHECKING, Any, Literal, cast
@@ -65,6 +65,8 @@ class AgentDefinition:
     returns: tuple[str, ...] = ()
     lock_keys: tuple[str, ...] = ()
     retry_policy: RetryPolicy | None = None
+    project_generation: str | None = None
+    execution_manifest: Mapping[str, Any] | None = None
 
     def accepts(self, event: Event) -> bool:
         return any(trigger.matches(event) for trigger in self.triggers)
@@ -99,6 +101,7 @@ class AgentRoute:
     agent_id: str
     accepts: tuple[EventPattern, ...]
     lock_keys: tuple[str, ...] = ()
+    project_generation: str | None = None
 
     @classmethod
     def from_definition(cls, definition: AgentDefinition) -> AgentRoute:
@@ -106,6 +109,7 @@ class AgentRoute:
             agent_id=definition.agent_id,
             accepts=definition.triggers,
             lock_keys=definition.lock_keys,
+            project_generation=definition.project_generation,
         )
 
     def matches(self, event: Event) -> bool:
@@ -148,6 +152,8 @@ def compile_agent_definition(
     run_turn: AgentRunRunner | None = None,
     event_registry: EventRegistry | None = None,
     structured_output: StructuredOutputRunner | None = None,
+    project_generation: str | None = None,
+    execution_manifest: Mapping[str, Any] | None = None,
 ) -> ExecutableAgent:
     """Compile a single-accept spec into an in-process runtime agent."""
     if not spec.enabled:
@@ -162,6 +168,8 @@ def compile_agent_definition(
         run_turn=run_turn,
         event_registry=event_registry,
         structured_output=structured_output,
+        project_generation=project_generation,
+        execution_manifest=execution_manifest,
     )[0]
 
 
@@ -174,6 +182,8 @@ def compile_agent_definitions(
     run_turn: AgentRunRunner | None = None,
     event_registry: EventRegistry | None = None,
     structured_output: StructuredOutputRunner | None = None,
+    project_generation: str | None = None,
+    execution_manifest: Mapping[str, Any] | None = None,
 ) -> list[ExecutableAgent]:
     """Compile one authored spec into runtime definitions for each accepted event."""
     if not spec.enabled or not spec.accepts:
@@ -192,6 +202,8 @@ def compile_agent_definitions(
                 returns=tuple(spec.returns),
                 lock_keys=runtime_lock_keys(spec),
                 retry_policy=retry_policy_for_spec(spec),
+                project_generation=project_generation,
+                execution_manifest=execution_manifest,
             ),
             run=agent_runner(
                 spec,

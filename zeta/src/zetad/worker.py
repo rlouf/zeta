@@ -7,14 +7,14 @@ import logging
 import time
 from collections.abc import Iterable
 from dataclasses import dataclass, field, replace
+from functools import cached_property
 from pathlib import Path
 from typing import Any
 
-from zeta.agents.resources import (
-    load_agent_project,
-    load_connector_registry,
-    validate_agent_project,
+from connectors import (
+    EventConnectorRegistry,
 )
+from zeta.agents.resources import load_connector_registry
 from zeta.capabilities.registry import CapabilityRegistry
 from zeta.events import Event
 from zeta.models.profiles import ModelSelection, active_model_selection
@@ -29,9 +29,6 @@ from zeta.run.context import RuntimeContext
 from zeta.run.runtime import AgentRunRequest, run_agent
 from zeta.substrate import SqliteObjectStore
 
-from connectors import (
-    EventConnectorRegistry,
-)
 from zetad.agents import (
     AgentInvocation,
     ExecutableAgent,
@@ -45,6 +42,11 @@ from zetad.connector_bridge import (
 )
 from zetad.dispatch import QueueingDispatcher
 from zetad.ingress import run_push_ingress_forever
+from zetad.project import (
+    ProjectSnapshot,
+    load_project_snapshot,
+    record_project_snapshot,
+)
 from zetad.retry import RetryPolicy
 from zetad.scheduling import request_due_schedules
 from zetad.session_turn import session_turn_agent
@@ -70,6 +72,15 @@ class WorkerServices:
     worker_name: str = LOCAL_WORKER_NAME
     max_concurrent: int = 1
     retry_policy: RetryPolicy = field(default_factory=RetryPolicy)
+
+    @cached_property
+    def project_snapshot(self) -> ProjectSnapshot:
+        return load_project_snapshot(
+            self.project_root / "agents",
+            registry=self.registry,
+            tool_registry=self.tool_registry,
+            model_selection=self.model_selection,
+        )
 
     def close(self) -> None:
         self.events.close()
@@ -106,6 +117,7 @@ async def run_once(runtime: WorkerServices) -> str:
     if rpc_request is not None:
         await run_eventlog_rpc_request(runtime, rpc_request)
         return f"rpc {rpc_request.id}"
+    record_project_snapshot(runtime.events, runtime.project_snapshot)
     publish_due_schedules(runtime)
     enqueue_pending_events(runtime.events)
     executors = project_executors(runtime)
@@ -127,20 +139,15 @@ async def run_until_idle(runtime: WorkerServices) -> str:
 
 
 def publish_due_schedules(runtime: WorkerServices) -> list[Event]:
-    project = load_agent_project(
-        runtime.project_root / "agents",
-        registry=runtime.registry,
-    )
-    validate_agent_project(project)
-    return request_due_schedules(runtime.events, project.specs)
+    return request_due_schedules(runtime.events, runtime.project_snapshot.project.specs)
 
 
 def project_executors(runtime: WorkerServices) -> tuple[ExecutableAgent, ...]:
-    project = load_agent_project(
-        runtime.project_root / "agents",
-        registry=runtime.registry,
-    )
-    validate_agent_project(project)
+    snapshot = runtime.project_snapshot
+    project = snapshot.project
+    execution_manifests = {
+        spec.slug: snapshot.execution_manifest(spec) for spec in project.specs
+    }
     return tuple(
         [
             *(
@@ -150,9 +157,15 @@ def project_executors(runtime: WorkerServices) -> tuple[ExecutableAgent, ...]:
                     spec,
                     event_registry=project.events,
                     run_turn=project_agent_run_turn(runtime),
+                    project_generation=snapshot.generation_id,
+                    execution_manifest=execution_manifests[spec.slug],
                 )
             ),
-            *project_egress_executors(project),
+            *project_egress_executors(
+                project,
+                project_generation=snapshot.generation_id,
+                execution_manifests=execution_manifests,
+            ),
         ]
     )
 
@@ -299,7 +312,12 @@ def enqueue_pending_events(events: RuntimeEventStore) -> int:
 
 def is_runtime_event(event: Event) -> bool:
     return event.event_type.startswith(
-        ("runtime.queue_item.", "runtime.attempt.", "runtime.egress.")
+        (
+            "runtime.queue_item.",
+            "runtime.attempt.",
+            "runtime.egress.",
+            "runtime.project_snapshot.",
+        )
     )
 
 

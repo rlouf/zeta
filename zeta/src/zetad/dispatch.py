@@ -5,7 +5,6 @@ import time
 from collections.abc import Awaitable, Callable, Iterable, Mapping
 from contextlib import suppress
 from dataclasses import dataclass
-from datetime import UTC, datetime
 from typing import Any, Protocol
 
 from zeta.records.events import DraftEvent, Event
@@ -22,12 +21,8 @@ from zetad.agents import (
     AgentRoute,
     EventPattern,
     ExecutableAgent,
-    agent_run_id,
-    agent_session_id,
 )
-from zetad.attempts import (
-    AttemptStatus,
-)
+from zetad.coordinator import AttemptCoordinator
 from zetad.lifecycle import LifecycleRecorder
 from zetad.queue import (
     TERMINAL_QUEUE_ITEM_EVENT_TYPES,
@@ -37,7 +32,7 @@ from zetad.queue import (
     queue_item_id_for_event,
     routed_queue_item_from_event,
 )
-from zetad.retry import RetryPolicy, error_code_for_exception
+from zetad.retry import RetryPolicy
 from zetad.router import EventRouter
 
 __all__ = [
@@ -182,6 +177,16 @@ class EventDispatcher:
         self.lifecycle = LifecycleRecorder(
             event_sink,
             publish_event=publish_event,
+        )
+        self.attempt_coordinator = AttemptCoordinator(
+            self.lifecycle,
+            claim_is_current=self._queue_claim_is_current,
+            next_attempt_number=self._next_attempt_number,
+            start_heartbeat=self._start_attempt_heartbeat,
+            stop_heartbeat=self._stop_attempt_heartbeat,
+            event_publisher=self._agent_event_publisher,
+            retry_scheduler=self.schedule_retry,
+            retry_policy=self.retry_policy,
         )
 
     async def publish_event(
@@ -329,101 +334,7 @@ class EventDispatcher:
         triggering_event: Event,
         queue_item: RoutedQueueItem,
     ) -> list[Event]:
-        queue_item_id = queue_item.queue_item_id
-        events: list[Event] = []
-        attempt_number = self._next_attempt_number(queue_item_id)
-        attempt_id = f"att_{queue_item_id}_{attempt_number}"
-        run_id = triggering_event.run_id or agent_run_id(attempt_id)
-        session_id = invocation_session_id(agent.definition, triggering_event)
-        if not self._queue_claim_is_current(queue_item_id):
-            return events
-        events.append(
-            self._append_queue_item_event(
-                triggering_event,
-                agent.route,
-                queue_item_id,
-                event_suffix="claimed",
-                status="claimed",
-                attempt_number=attempt_number,
-                session_id=session_id,
-                run_id=run_id,
-            )
-        )
-        started_at = event_timestamp()
-        events.append(
-            self._append_attempt_event(
-                triggering_event,
-                agent,
-                queue_item_id,
-                attempt_id,
-                attempt_number,
-                event_suffix="started",
-                status="running",
-                started_at=started_at,
-                session_id=session_id,
-                run_id=run_id,
-            )
-        )
-        heartbeat_task = self._start_attempt_heartbeat(
-            attempt_id,
-            queue_item_id,
-            agent.definition.lock_keys,
-        )
-        try:
-            try:
-                result = await agent.run(
-                    AgentInvocation(
-                        agent.definition,
-                        triggering_event,
-                        publish_event=self._agent_event_publisher(
-                            agent,
-                            triggering_event,
-                            queue_item_id,
-                            attempt_id,
-                            session_id,
-                            run_id,
-                        ),
-                        queue_item_id=queue_item_id,
-                        attempt_id=attempt_id,
-                        run_id=run_id,
-                    )
-                )
-            except Exception as exc:
-                if not self._queue_claim_is_current(queue_item_id):
-                    return events
-                events.extend(
-                    self._failed_agent_events(
-                        exc,
-                        triggering_event,
-                        agent,
-                        queue_item_id,
-                        attempt_id,
-                        attempt_number,
-                        started_at,
-                        session_id,
-                        run_id,
-                    )
-                )
-                return events
-        finally:
-            await self._stop_attempt_heartbeat(heartbeat_task)
-
-        if not self._queue_claim_is_current(queue_item_id):
-            return events
-        events.extend(
-            self._terminal_agent_events(
-                result,
-                triggering_event,
-                agent,
-                queue_item_id,
-                attempt_id,
-                attempt_number,
-                started_at,
-                session_id,
-                run_id,
-            )
-        )
-        return events
+        return await self.attempt_coordinator.run(agent, triggering_event, queue_item)
 
     def _queue_claim_is_current(self, queue_item_id: str) -> bool:
         """Whether this dispatcher still owns the claim; always true in-process."""
@@ -653,205 +564,6 @@ class EventDispatcher:
             **payload_extra,
         )
 
-    def _append_attempt_event(
-        self,
-        triggering_event: Event,
-        agent: ExecutableAgent,
-        queue_item_id: str,
-        attempt_id: str,
-        attempt_number: int,
-        *,
-        event_suffix: str,
-        status: AttemptStatus,
-        started_at: str,
-        finished_at: str | None = None,
-        error: str | None = None,
-        session_id: str | None = None,
-        run_id: str | None = None,
-        **payload_extra: Any,
-    ) -> Event:
-        return self.lifecycle.attempt(
-            triggering_event,
-            agent,
-            queue_item_id,
-            attempt_id,
-            attempt_number,
-            event_suffix=event_suffix,
-            status=status,
-            started_at=started_at,
-            finished_at=finished_at,
-            error=error,
-            session_id=session_id,
-            run_id=run_id,
-            **payload_extra,
-        )
-
-    def _failed_agent_events(
-        self,
-        exc: Exception,
-        triggering_event: Event,
-        agent: ExecutableAgent,
-        queue_item_id: str,
-        attempt_id: str,
-        attempt_number: int,
-        started_at: str,
-        session_id: str | None,
-        run_id: str | None,
-    ) -> list[Event]:
-        error = f"{type(exc).__name__}: {exc}"
-        error_code = error_code_for_exception(exc)
-        failed_attempt = self._append_attempt_event(
-            triggering_event,
-            agent,
-            queue_item_id,
-            attempt_id,
-            attempt_number,
-            event_suffix="failed",
-            status="failed",
-            started_at=started_at,
-            finished_at=event_timestamp(),
-            error=error,
-            error_code=error_code,
-            session_id=session_id,
-            run_id=run_id,
-        )
-        retry_policy = self._retry_policy_for_agent(
-            agent.definition.agent_id,
-            project_generation=agent.definition.project_generation,
-        )
-        failure_class = retry_policy.classify(error_code)
-        if failure_class == "permanent" or attempt_number >= retry_policy.max_attempts:
-            reason = "permanent" if failure_class == "permanent" else "exhausted"
-            return [
-                failed_attempt,
-                self._append_dead_lettered_queue_item_event(
-                    triggering_event,
-                    agent,
-                    queue_item_id,
-                    attempt_number,
-                    attempt_id,
-                    error_code=error_code,
-                    error=error,
-                    reason=reason,
-                    session_id=session_id,
-                    run_id=run_id,
-                ),
-            ]
-        return [
-            failed_attempt,
-            self.schedule_retry(
-                RoutedQueueItem(
-                    queue_item_id=queue_item_id,
-                    event_id=triggering_event.id,
-                    target_agent=agent.definition.agent_id,
-                    project_generation=agent.definition.project_generation,
-                ),
-                attempt_number=attempt_number + 1,
-                policy=retry_policy,
-            ),
-        ]
-
-    def _append_dead_lettered_queue_item_event(
-        self,
-        triggering_event: Event,
-        agent: ExecutableAgent,
-        queue_item_id: str,
-        attempt_count: int,
-        last_attempt_id: str,
-        *,
-        error_code: str,
-        error: str,
-        reason: str,
-        session_id: str | None,
-        run_id: str | None,
-    ) -> Event:
-        return self._append_queue_item_event(
-            triggering_event,
-            agent.route,
-            queue_item_id,
-            event_suffix="dead_lettered",
-            status="dead_lettered",
-            attempt_number=attempt_count,
-            reason=reason,
-            attempt_count=attempt_count,
-            last_error={"code": error_code, "message": error},
-            last_attempt_id=last_attempt_id,
-            dead_lettered_at=event_timestamp(),
-            session_id=session_id,
-            run_id=run_id,
-        )
-
-    def _terminal_agent_events(
-        self,
-        result: dict[str, Any],
-        triggering_event: Event,
-        agent: ExecutableAgent,
-        queue_item_id: str,
-        attempt_id: str,
-        attempt_number: int,
-        started_at: str,
-        session_id: str | None,
-        run_id: str | None,
-    ) -> list[Event]:
-        cancelled = result.get("outcome") in {"aborted", "cancelled"}
-        attempt_status: AttemptStatus = "cancelled" if cancelled else "completed"
-        queue_status: QueueItemStatus = "cancelled" if cancelled else "completed"
-        attempt_payload_extra: dict[str, Any] = {"result": result}
-        summary = result.get("summary")
-        if not isinstance(summary, str):
-            summary = result.get("final_answer")
-        if isinstance(summary, str):
-            attempt_payload_extra["summary"] = summary
-        for key in ("events", "tool_calls", "usage"):
-            value = result.get(key)
-            if value is not None:
-                attempt_payload_extra[key] = value
-        return [
-            self._append_attempt_event(
-                triggering_event,
-                agent,
-                queue_item_id,
-                attempt_id,
-                attempt_number,
-                event_suffix=attempt_status,
-                status=attempt_status,
-                started_at=started_at,
-                finished_at=event_timestamp(),
-                session_id=session_id,
-                run_id=run_id,
-                **attempt_payload_extra,
-            ),
-            self._append_queue_item_event(
-                triggering_event,
-                agent.route,
-                queue_item_id,
-                event_suffix=queue_status,
-                status=queue_status,
-                result=result,
-                session_id=session_id,
-                run_id=run_id,
-            ),
-        ]
-
-    def _append_lifecycle_event(
-        self,
-        event_type: str,
-        triggering_event: Event,
-        payload: dict[str, Any],
-        *,
-        idempotency_key: str,
-        session_id: str | None = None,
-        run_id: str | None = None,
-    ) -> Event:
-        return self.lifecycle.append(
-            event_type,
-            triggering_event,
-            payload,
-            idempotency_key=idempotency_key,
-            session_id=session_id,
-            run_id=run_id,
-        )
-
     def _append_unhandled_queue_item_event(self, triggering_event: Event) -> Event:
         return self.lifecycle.unhandled(triggering_event)
 
@@ -996,19 +708,9 @@ class QueueingDispatcher(EventDispatcher):
                 )
 
 
-def invocation_session_id(definition: AgentDefinition, event: Event) -> str | None:
-    if event.event_type == "session.turn.requested" and event.session_id is not None:
-        return event.session_id
-    return agent_session_id(definition, event)
-
-
 def reject_reserved_runtime_event(draft: DraftEvent) -> None:
     if draft.event_type.startswith(RESERVED_RUNTIME_EVENT_PREFIXES):
         raise ReservedRuntimeEventError(draft.event_type)
-
-
-def event_timestamp() -> str:
-    return datetime.now(UTC).isoformat().replace("+00:00", "Z")
 
 
 def current_time_ms() -> int:

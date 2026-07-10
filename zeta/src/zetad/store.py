@@ -493,8 +493,7 @@ class RuntimeEventStore:
                     claimed_until = NULL,
                     updated_at = ?
                 WHERE status = 'claimed'
-                  AND claimed_until IS NOT NULL
-                  AND claimed_until < ?
+                  AND (claimed_until IS NULL OR claimed_until < ?)
                 """,
                 (now_ms, now_ms),
             )

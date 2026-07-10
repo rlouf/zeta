@@ -4343,6 +4343,89 @@ def test_zeta_sqlite_event_store_rebuilds_projection_tables(
     ] == expected_session_mappings
 
 
+def test_zeta_sqlite_event_store_rebuild_discards_coordination_state(
+    tmp_path: Path,
+) -> None:
+    event_store = zeta_events.SqliteEventStore(tmp_path / "events.sqlite3")
+    dispatcher = zetad_dispatch.EventDispatcher(
+        event_store,
+        routes=[
+            zetad_dispatch.AgentRoute(
+                "issue-triage",
+                (zetad_dispatch.EventPattern("github.issue.opened"),),
+            )
+        ],
+    )
+    accepted = asyncio.run(
+        dispatcher.publish_event(
+            zeta_events.DraftEvent("github.issue.opened", "github", {})
+        )
+    ).event
+    asyncio.run(dispatcher.route(accepted))
+    queue_item_id = f"qi_{accepted.id}_issue-triage"
+    claim = event_store.claim_next_queue_item(
+        "worker-a",
+        lease_ms=60_000,
+        now_ms=accepted.timestamp_ms + 1,
+    )
+    assert claim is not None
+    event_store.append(
+        zeta_events.Event(
+            id="queue-claimed",
+            event_type="runtime.queue_item.claimed",
+            source="zeta",
+            payload={
+                "queue_item_id": queue_item_id,
+                "event_id": accepted.id,
+                "target_agent": "issue-triage",
+                "status": "claimed",
+            },
+            idempotency_key=None,
+            caused_by=accepted.id,
+            session_id=None,
+            timestamp_ms=accepted.timestamp_ms + 2,
+        )
+    )
+    assert event_store.acquire_locks(
+        ["context:repo"],
+        claim.token,
+        lease_ms=60_000,
+        now_ms=accepted.timestamp_ms + 2,
+    )
+
+    event_store.rebuild_projections()
+
+    item = event_store.list_queue_items()[0]
+    assert item["status"] == "available"
+    assert item["claimed_by"] is None
+    assert item["claimed_until"] is None
+    assert event_store.list_locks() == []
+
+
+def test_zeta_sqlite_event_store_reconciles_claim_without_lease(
+    tmp_path: Path,
+) -> None:
+    event_store = zeta_events.SqliteEventStore(tmp_path / "events.sqlite3")
+    accepted = event_store.accept(
+        zeta_events.DraftEvent("github.issue.opened", "github", {})
+    ).event
+    event_store.ensure_pending_queue_item(accepted)
+    event_store.connection.execute(
+        """
+        UPDATE queue_items
+        SET status = 'claimed', claimed_by = 'old-worker', claimed_until = NULL
+        """
+    )
+    event_store.connection.commit()
+
+    reconciled = event_store.reconcile_expired_queue_claims(
+        now_ms=accepted.timestamp_ms + 1
+    )
+
+    assert reconciled == 1
+    assert event_store.list_queue_items()[0]["status"] == "pending"
+
+
 def test_zeta_sqlite_event_store_projects_attempt_result_details(
     tmp_path: Path,
 ) -> None:

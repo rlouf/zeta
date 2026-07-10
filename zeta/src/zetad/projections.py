@@ -75,9 +75,26 @@ class RuntimeEventProjection:
     def clear(self, connection: sqlite3.Connection) -> None:
         connection.executescript(
             """
+            DELETE FROM locks;
             DELETE FROM attempt_results;
             DELETE FROM attempts;
             DELETE FROM queue_items;
+            """
+        )
+
+    def recover(self, connection: sqlite3.Connection) -> None:
+        """Discard replayed ownership and make incomplete claims runnable."""
+        connection.execute(
+            """
+            UPDATE queue_items
+            SET status = CASE
+                  WHEN target_agent = '' THEN 'pending'
+                  ELSE 'available'
+                END,
+                claimed_by = NULL,
+                claimed_token = NULL,
+                claimed_until = NULL
+            WHERE status = 'claimed'
             """
         )
 

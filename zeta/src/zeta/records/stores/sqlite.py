@@ -219,6 +219,9 @@ class EventProjection(Protocol):
     def index(self, connection: sqlite3.Connection, event: Event) -> None:
         """Project one durable event into derived tables."""
 
+    def recover(self, connection: sqlite3.Connection) -> None:
+        """Normalize ephemeral coordination state after journal replay."""
+
 
 class SqliteEventStore:
     """Durable event store backed by a single SQLite database."""
@@ -408,6 +411,10 @@ class SqliteEventStore:
                 for event in events:
                     self._index_one_session_mapping(event)
                     self._index_one_runtime_event(event)
+                for projection in self._projections:
+                    recover = getattr(projection, "recover", None)
+                    if recover is not None:
+                        recover(self.connection)
                 self.connection.commit()
                 return len(events)
             except Exception:

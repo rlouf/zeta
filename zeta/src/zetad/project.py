@@ -10,23 +10,31 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from connectors import EventConnector
+from connectors import EventConnector, EventConnectorRegistry
 from zeta._version import __version__
+from zeta.agents.events import EventRegistry
 from zeta.agents.resources import (
     AgentProject,
+    SkillRegistry,
+    SkillResource,
     load_agent_project,
     validate_agent_project,
 )
-from zeta.agents.spec import AgentSpec
+from zeta.agents.spec import AgentSpec, ModelSpec, RetrySpec, ScheduleEntry
 from zeta.capabilities.registry import CapabilityRegistry
 from zeta.models.profiles import ModelSelection
 from zeta.records.events import DraftEvent, Event
+from zeta.records.stores.event_store import Filter
 
 from zetad.store import RuntimeEventStore
 
 PROJECT_SNAPSHOT_RECORDED = "runtime.project_snapshot.recorded"
 PROJECT_SNAPSHOT_SCHEMA = "zeta.project_snapshot"
 EXECUTION_MANIFEST_SCHEMA = "zeta.execution_manifest"
+
+
+class ProjectSnapshotUnavailable(RuntimeError):
+    """Raised when a recorded project generation cannot be executed safely."""
 
 
 @dataclass(frozen=True)
@@ -105,6 +113,31 @@ def record_project_snapshot(
     ).event
 
 
+def load_recorded_project_snapshot(
+    events: RuntimeEventStore,
+    generation_id: str,
+    *,
+    registry: EventConnectorRegistry | None,
+) -> ProjectSnapshot:
+    for event in events.list_events(Filter(event_type=PROJECT_SNAPSHOT_RECORDED)):
+        if event.payload.get("generation_id") != generation_id:
+            continue
+        manifest = event.payload.get("manifest")
+        if not isinstance(manifest, Mapping):
+            break
+        parsed_manifest = dict(manifest)
+        if content_id("project", parsed_manifest) != generation_id:
+            raise ProjectSnapshotUnavailable(
+                f"recorded project snapshot {generation_id!r} failed verification"
+            )
+        project = project_from_manifest(parsed_manifest, registry=registry)
+        validate_agent_project(project)
+        return ProjectSnapshot(generation_id, project, parsed_manifest)
+    raise ProjectSnapshotUnavailable(
+        f"recorded project snapshot {generation_id!r} was not found"
+    )
+
+
 def project_manifest(
     project: AgentProject,
     *,
@@ -136,6 +169,117 @@ def project_manifest(
         "model": model_manifest(model_selection),
         "runtime_version": __version__,
     }
+
+
+def project_from_manifest(
+    manifest: Mapping[str, Any],
+    *,
+    registry: EventConnectorRegistry | None,
+) -> AgentProject:
+    connectors = registry or EventConnectorRegistry()
+    recorded_connectors = manifest.get("connectors")
+    current_connectors = [
+        connector_manifest(connector)
+        for connector in sorted(
+            connectors.event_connectors(), key=lambda item: item.id
+        )
+    ]
+    if recorded_connectors != current_connectors:
+        raise ProjectSnapshotUnavailable(
+            "recorded project snapshot connector code is not available"
+        )
+    raw_events = manifest.get("events")
+    if not isinstance(raw_events, Mapping):
+        raise ProjectSnapshotUnavailable("project snapshot has invalid events")
+    events = EventRegistry(
+        {
+            str(event_type): schema if isinstance(schema, Mapping) else None
+            for event_type, schema in raw_events.items()
+        }
+    )
+    raw_skills = manifest.get("skills")
+    if not isinstance(raw_skills, Mapping):
+        raise ProjectSnapshotUnavailable("project snapshot has invalid skills")
+    skills = SkillRegistry(
+        {
+            str(name): skill_from_manifest(str(name), value)
+            for name, value in raw_skills.items()
+        }
+    )
+    raw_agents = manifest.get("agents")
+    if not isinstance(raw_agents, list):
+        raise ProjectSnapshotUnavailable("project snapshot has invalid agents")
+    return AgentProject(
+        specs=tuple(agent_from_manifest(value) for value in raw_agents),
+        events=events,
+        skills=skills,
+        connectors=connectors,
+    )
+
+
+def agent_from_manifest(value: Any) -> AgentSpec:
+    if not isinstance(value, Mapping):
+        raise ProjectSnapshotUnavailable("project snapshot has invalid agent")
+    raw_model = value.get("model")
+    model = (
+        ModelSpec(name=str(raw_model["name"]), url=str(raw_model["url"]))
+        if isinstance(raw_model, Mapping)
+        else None
+    )
+    raw_retry = value.get("retry")
+    retry = (
+        RetrySpec(
+            max_attempts=_optional_int(raw_retry.get("max_attempts")),
+            backoff_seconds=_optional_float(raw_retry.get("backoff_seconds")),
+        )
+        if isinstance(raw_retry, Mapping)
+        else None
+    )
+    raw_schedules = value.get("schedules")
+    schedules = (
+        tuple(
+            ScheduleEntry(
+                cron=str(schedule["cron"]),
+                timezone=_optional_str(schedule.get("timezone")),
+            )
+            for schedule in raw_schedules
+            if isinstance(schedule, Mapping)
+        )
+        if isinstance(raw_schedules, list)
+        else ()
+    )
+    raw_manifest = value.get("manifest")
+    return AgentSpec(
+        slug=str(value["slug"]),
+        name=str(value["name"]),
+        description=str(value["description"]),
+        instructions=str(value["instructions"]),
+        path=Path(str(value["path"])),
+        sha256=str(value["sha256"]),
+        enabled=bool(value.get("enabled", True)),
+        resumable=bool(value.get("resumable", False)),
+        model=model,
+        accepts=_string_tuple(value.get("accepts")),
+        returns=_string_tuple(value.get("returns")),
+        skills=_string_tuple(value.get("skills")),
+        tools=_string_tuple(value.get("tools")),
+        schedules=schedules,
+        retry=retry,
+        base_dir=(
+            Path(str(value["base_dir"])) if value.get("base_dir") is not None else None
+        ),
+        manifest=dict(raw_manifest) if isinstance(raw_manifest, Mapping) else {},
+    )
+
+
+def skill_from_manifest(name: str, value: Any) -> SkillResource:
+    if not isinstance(value, Mapping):
+        raise ProjectSnapshotUnavailable("project snapshot has invalid skill")
+    body = str(value["body"])
+    sha256 = str(value["sha256"])
+    if hashlib.sha256(body.encode()).hexdigest() != sha256:
+        raise ProjectSnapshotUnavailable(f"recorded skill {name!r} failed verification")
+    return SkillResource(name, Path(str(value["path"])), body, sha256)
 
 
 def agent_manifest(spec: AgentSpec) -> dict[str, Any]:
@@ -252,3 +396,21 @@ def file_sha256(path: Path) -> str | None:
         return hashlib.sha256(path.read_bytes()).hexdigest()
     except OSError:
         return None
+
+
+def _string_tuple(value: Any) -> tuple[str, ...]:
+    if not isinstance(value, list):
+        return ()
+    return tuple(str(item) for item in value)
+
+
+def _optional_str(value: Any) -> str | None:
+    return value if isinstance(value, str) else None
+
+
+def _optional_int(value: Any) -> int | None:
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+
+def _optional_float(value: Any) -> float | None:
+    return float(value) if isinstance(value, int | float) else None

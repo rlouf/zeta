@@ -274,7 +274,10 @@ class EventDispatcher:
                 triggering_event,
                 routed_queue_item,
             )
-        executor = self._executor_for_id(routed_queue_item.target_agent)
+        executor = self._executor_for_id(
+            routed_queue_item.target_agent,
+            project_generation=routed_queue_item.project_generation,
+        )
         if executor is None:
             return self._missing_executor_events(triggering_event, routed_queue_item)
         return await self._run_agent(executor, triggering_event, routed_queue_item)
@@ -294,7 +297,8 @@ class EventDispatcher:
             else self._next_attempt_number(routed_queue_item.queue_item_id)
         )
         retry_policy = policy or self._retry_policy_for_agent(
-            routed_queue_item.target_agent
+            routed_queue_item.target_agent,
+            project_generation=routed_queue_item.project_generation,
         )
         previous_attempt_number = max(next_attempt_number - 1, 1)
         not_before = current_time_ms() + retry_policy.delay_ms(previous_attempt_number)
@@ -450,14 +454,33 @@ class EventDispatcher:
         with suppress(asyncio.CancelledError):
             await heartbeat_task
 
-    def _executor_for_id(self, agent_id: str) -> ExecutableAgent | None:
+    def _executor_for_id(
+        self,
+        agent_id: str,
+        *,
+        project_generation: str | None = None,
+    ) -> ExecutableAgent | None:
         for executor in self.executors:
-            if executor.agent_id == agent_id:
-                return executor
+            if executor.agent_id != agent_id:
+                continue
+            if (
+                project_generation is not None
+                and executor.definition.project_generation != project_generation
+            ):
+                continue
+            return executor
         return None
 
-    def _retry_policy_for_agent(self, agent_id: str) -> RetryPolicy:
-        executor = self._executor_for_id(agent_id)
+    def _retry_policy_for_agent(
+        self,
+        agent_id: str,
+        *,
+        project_generation: str | None = None,
+    ) -> RetryPolicy:
+        executor = self._executor_for_id(
+            agent_id,
+            project_generation=project_generation,
+        )
         if executor is None or executor.definition.retry_policy is None:
             return self.retry_policy
         return executor.definition.retry_policy
@@ -500,7 +523,10 @@ class EventDispatcher:
                 target_agent=route.agent_id,
                 project_generation=route.project_generation,
             )
-            executor = self._executor_for_id(route.agent_id)
+            executor = self._executor_for_id(
+                route.agent_id,
+                project_generation=route.project_generation,
+            )
             if executor is None:
                 return self._missing_executor_events(triggering_event, bound_item)
             return await self._run_agent(executor, triggering_event, bound_item)
@@ -734,7 +760,10 @@ class EventDispatcher:
             session_id=session_id,
             run_id=run_id,
         )
-        retry_policy = self._retry_policy_for_agent(agent.definition.agent_id)
+        retry_policy = self._retry_policy_for_agent(
+            agent.definition.agent_id,
+            project_generation=agent.definition.project_generation,
+        )
         failure_class = retry_policy.classify(error_code)
         if failure_class == "permanent" or attempt_number >= retry_policy.max_attempts:
             reason = "permanent" if failure_class == "permanent" else "exhausted"

@@ -8,9 +8,18 @@ from zeta.models.profiles import ModelSelection
 from zeta.records.events import DraftEvent
 from zeta.records.stores.event_store import Filter
 from zeta.run.outcomes import AgentRunResult
-from zetad.agents import compile_agent_definition
+from zetad.agents import (
+    AgentDefinition,
+    EventPattern,
+    ExecutableAgent,
+    compile_agent_definition,
+)
 from zetad.dispatch import EventDispatcher
-from zetad.project import load_project_snapshot, record_project_snapshot
+from zetad.project import (
+    load_project_snapshot,
+    load_recorded_project_snapshot,
+    record_project_snapshot,
+)
 from zetad.store import RuntimeEventStore
 
 
@@ -78,6 +87,14 @@ def test_project_snapshot_is_recorded_once_per_generation(tmp_path: Path) -> Non
     assert first.payload["generation_id"] == snapshot.generation_id
     assert len(store.list_events(Filter(event_type=first.event_type))) == 1
 
+    restored = load_recorded_project_snapshot(
+        store,
+        snapshot.generation_id,
+        registry=EventConnectorRegistry(),
+    )
+    assert restored.generation_id == snapshot.generation_id
+    assert restored.project.specs == snapshot.project.specs
+
 
 def test_attempt_records_project_and_execution_manifests(tmp_path: Path) -> None:
     snapshot = load_snapshot(write_snapshot_project(tmp_path))
@@ -110,3 +127,45 @@ def test_attempt_records_project_and_execution_manifests(tmp_path: Path) -> None
     assert attempt["execution_manifest_id"] == execution_manifest["id"]
     assert attempt["execution_manifest"] == execution_manifest
     assert started.payload["execution_manifest"] == execution_manifest
+
+
+def test_dispatcher_selects_executor_for_routed_generation(tmp_path: Path) -> None:
+    calls: list[str] = []
+
+    async def run_old(_invocation) -> dict[str, str]:
+        calls.append("old")
+        return {"version": "old"}
+
+    async def run_current(_invocation) -> dict[str, str]:
+        calls.append("current")
+        return {"version": "current"}
+
+    old = ExecutableAgent(
+        AgentDefinition(
+            "worker",
+            (EventPattern("work.requested"),),
+            project_generation="project:old",
+        ),
+        run_old,
+    )
+    current = ExecutableAgent(
+        AgentDefinition(
+            "worker",
+            (EventPattern("work.requested"),),
+            project_generation="project:current",
+        ),
+        run_current,
+    )
+    store = RuntimeEventStore.open(tmp_path / "zeta.sqlite3")
+    router = EventDispatcher(store, executors=[old])
+    triggering = asyncio.run(
+        router.publish_event(DraftEvent("work.requested", "test", {}))
+    ).event
+    routed = asyncio.run(router.route(triggering)).queue_items[0]
+
+    lifecycle = asyncio.run(
+        EventDispatcher(store, executors=[current, old]).run_queue_item(routed.queue_item_id)
+    )
+
+    assert calls == ["old"]
+    assert lifecycle[-1].payload["result"] == {"version": "old"}

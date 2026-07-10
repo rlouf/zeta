@@ -44,7 +44,9 @@ from zetad.dispatch import QueueingDispatcher
 from zetad.ingress import run_push_ingress_forever
 from zetad.project import (
     ProjectSnapshot,
+    ProjectSnapshotUnavailable,
     load_project_snapshot,
+    load_recorded_project_snapshot,
     record_project_snapshot,
 )
 from zetad.retry import RetryPolicy
@@ -143,7 +145,44 @@ def publish_due_schedules(runtime: WorkerServices) -> list[Event]:
 
 
 def project_executors(runtime: WorkerServices) -> tuple[ExecutableAgent, ...]:
-    snapshot = runtime.project_snapshot
+    current = runtime.project_snapshot
+    snapshots: list[ProjectSnapshot] = []
+    historical_generations = sorted(
+        {
+            generation
+            for item in runtime.events.list_queue_items()
+            if item["status"]
+            not in {"completed", "cancelled", "dead_lettered", "unhandled"}
+            if isinstance(
+                generation := item.get("project_generation"),
+                str,
+            )
+            and generation != current.generation_id
+        }
+    )
+    for generation in historical_generations:
+        try:
+            snapshots.append(
+                load_recorded_project_snapshot(
+                    runtime.events,
+                    generation,
+                    registry=runtime.registry,
+                )
+            )
+        except ProjectSnapshotUnavailable:
+            logger.exception("project snapshot %s is unavailable", generation)
+    snapshots.append(current)
+    return tuple(
+        executor
+        for snapshot in snapshots
+        for executor in compile_snapshot_executors(runtime, snapshot)
+    )
+
+
+def compile_snapshot_executors(
+    runtime: WorkerServices,
+    snapshot: ProjectSnapshot,
+) -> tuple[ExecutableAgent, ...]:
     project = snapshot.project
     execution_manifests = {
         spec.slug: snapshot.execution_manifest(spec) for spec in project.specs

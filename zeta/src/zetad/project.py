@@ -241,6 +241,7 @@ def agent_from_manifest(value: Any) -> AgentSpec:
             ScheduleEntry(
                 cron=str(schedule["cron"]),
                 timezone=_optional_str(schedule.get("timezone")),
+                catchup=_optional_str(schedule.get("catchup")),
             )
             for schedule in raw_schedules
             if isinstance(schedule, Mapping)
@@ -302,7 +303,11 @@ def agent_manifest(spec: AgentSpec) -> dict[str, Any]:
         "skills": list(spec.skills),
         "tools": list(spec.tools),
         "schedules": [
-            {"cron": schedule.cron, "timezone": schedule.timezone}
+            {
+                "cron": schedule.cron,
+                "timezone": schedule.timezone,
+                "catchup": schedule.catchup,
+            }
             for schedule in spec.schedules
         ],
         "retry": (

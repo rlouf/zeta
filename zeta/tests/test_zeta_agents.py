@@ -422,6 +422,7 @@ User asked: {{ event.payload.text }}
         zeta_agents.ScheduleEntry(
             cron="* * * * *",
             timezone=None,
+            catchup=None,
         ),
     )
     assert spec.manifest == {"writes": {"paths": ["docs/**.md"]}}
@@ -672,9 +673,36 @@ Summarize the repo.
         zeta_agents.ScheduleEntry(
             cron="* * * * *",
             timezone=None,
+            catchup=None,
         ),
     )
     assert zeta_agents.scheduled_event_type("scheduled") == "agent.scheduled.scheduled"
+
+
+def test_zeta_agent_spec_parses_latest_schedule_catchup(tmp_path: Path) -> None:
+    spec = zeta_agents.load_spec(
+        _write_spec(
+            tmp_path / "scheduled.md",
+            """---
+name: Scheduled
+description: Runs on a schedule.
+schedules:
+  - cron: "0 18 * * 0"
+    timezone: Europe/Paris
+    catchup: latest
+---
+Summarize the repo.
+""",
+        )
+    )
+
+    assert spec.schedules == (
+        zeta_agents.ScheduleEntry(
+            cron="0 18 * * 0",
+            timezone="Europe/Paris",
+            catchup="latest",
+        ),
+    )
 
 
 @pytest.mark.parametrize("field", ["event", "payload"])
@@ -735,6 +763,11 @@ Summarize the repo.
             "  - runtime.schedule.triggered\nschedules:\n"
             "  - cron: '* * * * *'\n    timezone: 1\n",
             "timezone",
+        ),
+        (
+            "name: Worker\ndescription: Worker\nschedules:\n"
+            "  - cron: '* * * * *'\n    catchup: all\n",
+            "catchup",
         ),
     ],
 )

@@ -141,6 +141,7 @@ description: Summarizes the pull requests merged this week.
 schedules:
   - cron: "0 9 * * 1"
     timezone: Europe/Paris
+    catchup: latest
 returns:
   - release.summary.ready
 tools:
@@ -185,6 +186,11 @@ zeta run
 # fires the schedule -> release-digest runs -> publishes release.summary.ready
 #                    -> announcer runs on that event -> queue empty, exit
 ```
+
+By default, missed schedules are backfilled only on the same calendar day.
+`catchup: latest` keeps the latest occurrence eligible across days and publishes
+it once after the scheduler resumes. Occurrences before the schedule was first
+observed are not backfilled.
 
 The hand-off is an ordinary durable event — inspect it with
 `zeta events --type-prefix release.`.

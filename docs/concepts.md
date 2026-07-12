@@ -136,6 +136,7 @@ skills:
 schedules:
   - cron: "0 9 * * 1"
     timezone: Europe/Paris
+    catchup: latest
 resumable: true
 ---
 Reply to the Slack message:
@@ -165,6 +166,12 @@ Core frontmatter fields:
 Schedules automatically add `agent.<slug>.scheduled` to `accepts`. For example,
 `agents/release-manager.md` with a schedule accepts
 `agent.release-manager.scheduled`.
+
+By default, Zeta backfills a missed schedule only later on the same calendar
+day. Set `catchup: latest` to keep the latest occurrence eligible across days.
+Zeta records when that schedule is first observed, so it never catches up an
+occurrence from before activation, and its idempotency key ensures the missed
+occurrence is published only once.
 
 When `resumable: true`, every event for the agent uses session
 `agent/<slug>`. Otherwise each event uses `agent/<slug>/<event_id>` so unrelated

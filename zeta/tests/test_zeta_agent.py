@@ -6833,6 +6833,99 @@ Summarize the repo.
     assert decisions[1].payload["observed_at"] == "2026-06-23T07:00:00+00:00"
 
 
+def test_zeta_scheduler_catches_up_latest_weekly_schedule_across_days(
+    tmp_path: Path,
+) -> None:
+    agents_dir = tmp_path / "agents"
+    agents_dir.mkdir()
+    (agents_dir / "scheduled.md").write_text(
+        """---
+name: Scheduled
+description: Runs on a schedule.
+schedules:
+  - cron: "0 18 * * 0"
+    catchup: latest
+---
+Summarize the repo.
+""",
+        encoding="utf-8",
+    )
+    event_store = zeta_events.MemoryEventStore()
+    specs = zeta_agent_spec.load_specs(tmp_path / "agents")
+
+    try:
+        before_due = zetad_scheduling.request_due_schedules(
+            event_store,
+            specs,
+            now=datetime(2026, 6, 19, 12, 0, tzinfo=UTC),
+        )
+        after_wake = zetad_scheduling.request_due_schedules(
+            event_store,
+            specs,
+            now=datetime(2026, 6, 22, 9, 0, tzinfo=UTC),
+        )
+        repeated = zetad_scheduling.request_due_schedules(
+            event_store,
+            specs,
+            now=datetime(2026, 6, 22, 10, 0, tzinfo=UTC),
+        )
+        decisions = event_store.list_events(
+            zeta_events.Filter(event_type_prefix="scheduler.tick.")
+        )
+    finally:
+        event_store.close()
+
+    assert before_due == []
+    assert [event.event_type for event in after_wake] == [
+        "agent.scheduled.scheduled"
+    ]
+    assert repeated == []
+    assert after_wake[0].idempotency_key == (
+        "schedule:scheduled:0 18 * * 0:2026-06-21T18:00:00+00:00"
+    )
+    assert [decision.event_type for decision in decisions] == [
+        "scheduler.tick.activated",
+        "scheduler.tick.missed",
+        "scheduler.tick.published",
+        "scheduler.tick.skipped",
+    ]
+    assert decisions[2].payload["reason"] == "latest catch-up"
+    assert decisions[2].payload["scheduled_at"] == "2026-06-21T18:00:00+00:00"
+    assert decisions[2].payload["observed_at"] == "2026-06-22T09:00:00+00:00"
+
+
+def test_zeta_scheduler_does_not_catch_up_before_schedule_activation(
+    tmp_path: Path,
+) -> None:
+    agents_dir = tmp_path / "agents"
+    agents_dir.mkdir()
+    (agents_dir / "scheduled.md").write_text(
+        """---
+name: Scheduled
+description: Runs on a schedule.
+schedules:
+  - cron: "0 18 * * 0"
+    catchup: latest
+---
+Summarize the repo.
+""",
+        encoding="utf-8",
+    )
+    event_store = zeta_events.MemoryEventStore()
+    specs = zeta_agent_spec.load_specs(tmp_path / "agents")
+
+    try:
+        events = zetad_scheduling.request_due_schedules(
+            event_store,
+            specs,
+            now=datetime(2026, 6, 22, 9, 0, tzinfo=UTC),
+        )
+    finally:
+        event_store.close()
+
+    assert events == []
+
+
 def test_zeta_scheduler_backfill_uses_schedule_timezone(
     tmp_path: Path,
 ) -> None:

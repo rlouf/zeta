@@ -123,7 +123,18 @@ def request_due_schedules(
         if not spec.enabled:
             continue
         for schedule_index, schedule in enumerate(spec.schedules):
-            scheduled_time = due_schedule_time(schedule, current)
+            activated_at = activate_schedule(
+                event_sink,
+                spec,
+                schedule_index,
+                schedule,
+                current,
+            )
+            scheduled_time = due_schedule_time(
+                schedule,
+                current,
+                activated_at=activated_at,
+            )
             if scheduled_time is None:
                 record_missed_schedules(
                     event_sink,
@@ -159,6 +170,41 @@ def request_due_schedules(
             if outcome.inserted:
                 requested.append(outcome.event)
     return requested
+
+
+def activate_schedule(
+    event_sink: EventWriter,
+    spec: AgentSpec,
+    schedule_index: int,
+    schedule: ScheduleEntry,
+    current: datetime,
+) -> datetime | None:
+    if schedule.catchup != "latest":
+        return None
+    observed_at = schedule_current_time(schedule, current)
+    outcome = event_sink.accept(
+        DraftEvent(
+            f"{SCHEDULER_TICK_PREFIX}activated",
+            "zeta:scheduler",
+            {
+                "agent": spec.slug,
+                "schedule_index": schedule_index,
+                "event_type": scheduled_event_type(spec.slug),
+                "cron": schedule.cron,
+                "timezone": schedule.timezone,
+                "catchup": schedule.catchup,
+                "observed_at": observed_at.isoformat(),
+                "status": "activated",
+                "reason": "schedule first observed",
+            },
+            idempotency_key=schedule_activation_idempotency_key(
+                spec.slug,
+                schedule_index,
+                schedule,
+            ),
+        )
+    )
+    return datetime.fromisoformat(str(outcome.event.payload["observed_at"]))
 
 
 def record_missed_schedules(
@@ -257,9 +303,20 @@ def schedule_current_time(schedule: ScheduleEntry, now: datetime) -> datetime:
     return now.astimezone(ZoneInfo(schedule.timezone))
 
 
-def due_schedule_time(schedule: ScheduleEntry, now: datetime) -> datetime | None:
+def due_schedule_time(
+    schedule: ScheduleEntry,
+    now: datetime,
+    *,
+    activated_at: datetime | None = None,
+) -> datetime | None:
     candidate = previous_schedule_time(schedule, now)
     if same_schedule_date(schedule, candidate, now):
+        return candidate
+    if (
+        schedule.catchup == "latest"
+        and activated_at is not None
+        and candidate >= activated_at
+    ):
         return candidate
     return None
 
@@ -300,7 +357,21 @@ def schedule_tick_reason(scheduled_time: datetime, observed_time: datetime) -> s
     observed_minute = observed_time.replace(second=0, microsecond=0)
     if scheduled_minute == observed_minute:
         return "due now"
+    if scheduled_time.date() != observed_time.date():
+        return "latest catch-up"
     return "same-day backfill"
+
+
+def schedule_activation_idempotency_key(
+    agent_slug: str,
+    schedule_index: int,
+    schedule: ScheduleEntry,
+) -> str:
+    timezone = schedule.timezone or ""
+    return (
+        f"scheduler:activated:{agent_slug}:{schedule_index}:"
+        f"{schedule.cron}:{timezone}:{schedule.catchup}"
+    )
 
 
 def schedule_tick_idempotency_key(

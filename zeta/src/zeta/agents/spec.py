@@ -36,6 +36,7 @@ class ScheduleEntry:
 
     cron: str
     timezone: str | None = None
+    catchup: str | None = None
 
 
 @dataclass(frozen=True)
@@ -458,9 +459,11 @@ def schedule_entry(value: Any, path: Path) -> ScheduleEntry:
         )
     cron = required_schedule_string(value, "cron", path)
     timezone = schedule_timezone_name(value.get("timezone"), path)
+    catchup = schedule_catchup(value.get("catchup"), path)
     return ScheduleEntry(
         cron=cron,
         timezone=timezone,
+        catchup=catchup,
     )
 
 
@@ -477,6 +480,16 @@ def schedule_timezone_name(value: Any, path: Path) -> str | None:
     if not isinstance(value, str) or value == "":
         raise SpecError(
             f"invalid value for 'schedules' in {path}: timezone must be a string"
+        )
+    return value
+
+
+def schedule_catchup(value: Any, path: Path) -> str | None:
+    if value is None:
+        return None
+    if value != "latest":
+        raise SpecError(
+            f"invalid value for 'schedules' in {path}: catchup must be 'latest'"
         )
     return value
 

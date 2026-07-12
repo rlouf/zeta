@@ -2,21 +2,19 @@
 
 from __future__ import annotations
 
-import json
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from fnmatch import fnmatchcase
 from typing import TYPE_CHECKING, Any, Literal, cast
 
-from jsonschema import Draft202012Validator
 from zeta.agents.prompts import render_prompt
-from zeta.agents.returns import derive_returns_schema
 from zeta.agents.spec import AgentSpec
-from zeta.records.events import DraftEvent, Event, draft_event_view, event_view
+from zeta.records.events import DraftEvent, Event
 from zeta.run.config import AgentConfig
 from zeta.run.outcomes import agent_run_result_payload
 
 from zetad.retry import RetryPolicy
+from zetad.returned_events import ReturnedEventPublisher, StructuredOutputRunner
 
 if TYPE_CHECKING:
     from zeta.agents.events import EventRegistry
@@ -26,10 +24,8 @@ DispatchMode = Literal["one_shot", "session_scoped"]
 AgentEventPublisher = Callable[[DraftEvent], Awaitable[Event]]
 AgentRunner = Callable[["AgentInvocation"], Awaitable[dict[str, Any]]]
 AgentRunRunner = Callable[..., Awaitable["AgentRunResult"]]
-StructuredOutputRunner = Callable[..., dict[str, Any] | Awaitable[dict[str, Any]]]
 TimelineFactory = Callable[["AgentInvocation"], list[dict[str, Any]]]
 ContextFactory = Callable[["AgentInvocation"], str]
-AGENT_RETURN_RESPONSE_NAME = "zeta_agent_return"
 
 
 @dataclass(frozen=True)
@@ -241,6 +237,12 @@ def agent_runner(
     event_registry: EventRegistry | None,
     structured_output: StructuredOutputRunner,
 ) -> Callable[[AgentInvocation], Awaitable[dict[str, Any]]]:
+    returned_event_publisher = (
+        ReturnedEventPublisher(event_registry, structured_output)
+        if event_registry is not None
+        else None
+    )
+
     async def run(agent_run: AgentInvocation) -> dict[str, Any]:
         effective_config = config_for_spec(spec, config)
         event = agent_run.triggering_event
@@ -264,106 +266,17 @@ def agent_runner(
             caused_by=event.id,
             agent_invocation=agent_run,
         )
-        if spec.returns and event_registry is not None:
-            return await finalized_agent_run_result(
+        if spec.returns and returned_event_publisher is not None:
+            return await returned_event_publisher.publish(
                 spec,
-                event_registry,
                 result,
                 agent_run,
                 objective=objective,
                 config=effective_config,
-                structured_output=structured_output,
             )
         return agent_run_result_mapping(result)
 
     return run
-
-
-async def finalized_agent_run_result(
-    spec: AgentSpec,
-    event_registry: EventRegistry,
-    result: AgentRunResult,
-    agent_run: AgentInvocation,
-    *,
-    objective: str,
-    config: AgentConfig,
-    structured_output: StructuredOutputRunner,
-) -> dict[str, Any]:
-    schema = derive_returns_schema(spec, event_registry)
-    if schema is None:
-        return agent_run_result_mapping(result)
-    returned = structured_output(
-        structured_return_messages(
-            spec,
-            result,
-            agent_run.triggering_event,
-            objective=objective,
-        ),
-        schema=schema,
-        response_name=AGENT_RETURN_RESPONSE_NAME,
-        selected_model=config.model_name,
-        selected_url=config.model_url,
-        session_id=config.model_session_id,
-        api=config.model_api,
-    )
-    data = cast(
-        dict[str, Any], await returned if isinstance(returned, Awaitable) else returned
-    )
-    Draft202012Validator(schema).validate(data)
-    event_type = data.get("type")
-    payload = data.get("payload")
-    if not isinstance(event_type, str) or not isinstance(payload, dict):
-        raise RuntimeError("structured agent return must include type and payload")
-    published = await agent_run.publish(
-        DraftEvent(
-            event_type,
-            f"agent:{spec.slug}",
-            payload,
-            idempotency_key=agent_return_idempotency_key(
-                agent_run.triggering_event,
-                spec,
-            ),
-            caused_by=agent_run.triggering_event.id,
-        )
-    )
-    base = agent_run_result_mapping(result)
-    return {
-        **base,
-        "returned_events": [event_view(published)],
-    }
-
-
-def structured_return_messages(
-    spec: AgentSpec,
-    result: AgentRunResult,
-    triggering_event: Event,
-    *,
-    objective: str,
-) -> list[dict[str, Any]]:
-    payload = {
-        "allowed_return_types": list(spec.returns),
-        "triggering_event": event_view(triggering_event),
-        "objective": objective,
-        "agent_final_answer": result.final_answer,
-        "agent_events": [draft_event_view(event) for event in result.events],
-    }
-    return [
-        {
-            "role": "system",
-            "content": (
-                "Convert the agent result into exactly one returned event. "
-                "Return only JSON matching the provided schema. Do not call tools."
-            ),
-        },
-        {
-            "role": "user",
-            "content": json.dumps(payload, sort_keys=True),
-        },
-    ]
-
-
-def agent_return_idempotency_key(event: Event, spec: AgentSpec) -> str:
-    return f"agent.return:{event.id}:{spec.slug}"
 
 
 def config_for_spec(spec: AgentSpec, config: AgentConfig | None) -> AgentConfig:

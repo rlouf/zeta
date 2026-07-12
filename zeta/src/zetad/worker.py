@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from collections.abc import Iterable
 from dataclasses import dataclass, field, replace
 from functools import cached_property
@@ -238,6 +239,7 @@ def project_agent_run_turn(runtime: WorkerServices):
             if invocation.attempt_id is not None
             else f"run_{invocation.triggering_event.id}"
         )
+        started = time.perf_counter()
         try:
             return await run_agent(
                 AgentRunRequest(
@@ -261,7 +263,20 @@ def project_agent_run_turn(runtime: WorkerServices):
                 cancellation_event=None,
             )
         finally:
-            trace_store.close()
+            runtime.events.observe_runtime_metric(
+                "runtime.agent_execution_ms",
+                (time.perf_counter() - started) * 1000,
+                agent=invocation.agent.agent_id,
+            )
+            trace_started = time.perf_counter()
+            try:
+                trace_store.close()
+            finally:
+                runtime.events.observe_runtime_metric(
+                    "sqlite.trace_close_ms",
+                    (time.perf_counter() - trace_started) * 1000,
+                    agent=invocation.agent.agent_id,
+                )
 
     return run_turn
 
@@ -488,7 +503,7 @@ async def run_worker_loop(
         if should_refill:
             refill_worker_tasks(runtime, running)
         if not running:
-            await asyncio.sleep(poll_interval_seconds)
+            await sleep_with_runtime_metrics(runtime, poll_interval_seconds)
             should_refill = True
             continue
         done, running_tasks = await asyncio.wait(
@@ -501,8 +516,20 @@ async def run_worker_loop(
         saw_empty_queue = task_results_saw_empty_queue(done)
         should_refill = not saw_empty_queue
         if saw_empty_queue and not running:
-            await asyncio.sleep(poll_interval_seconds)
+            await sleep_with_runtime_metrics(runtime, poll_interval_seconds)
             should_refill = True
+
+
+async def sleep_with_runtime_metrics(
+    runtime: WorkerServices,
+    interval_seconds: float,
+) -> None:
+    expected_at = time.monotonic() + interval_seconds
+    await asyncio.sleep(interval_seconds)
+    runtime.events.observe_runtime_metric(
+        "runtime.event_loop_delay_ms",
+        max(0.0, (time.monotonic() - expected_at) * 1000),
+    )
 
 
 def refill_worker_tasks(

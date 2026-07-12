@@ -24,6 +24,7 @@ from zetad.agents import (
 )
 from zetad.coordinator import AttemptCoordinator
 from zetad.lifecycle import LifecycleRecorder
+from zetad.metrics import MetricAttribute
 from zetad.queue import (
     TERMINAL_QUEUE_ITEM_EVENT_TYPES,
     QueueItemStatus,
@@ -104,6 +105,14 @@ class RuntimeQueueStore(Protocol):
         now_ms: int,
     ) -> bool:
         """Refresh held mutual-exclusion locks for a running queue item."""
+
+    def observe_runtime_metric(
+        self,
+        name: str,
+        value: float,
+        **attributes: MetricAttribute,
+    ) -> None:
+        """Record one runtime health measurement."""
 
 
 @dataclass(frozen=True)
@@ -313,7 +322,7 @@ class EventDispatcher:
             if routed_queue_item.project_generation is not None
             else {}
         )
-        return self._append_queue_item_event_for_target(
+        available = self._append_queue_item_event_for_target(
             triggering_event,
             routed_queue_item.queue_item_id,
             routed_queue_item.target_agent,
@@ -323,6 +332,20 @@ class EventDispatcher:
             not_before=not_before,
             **generation_payload,
         )
+        self._observe_runtime_metric(
+            "runtime.retries_scheduled",
+            1,
+            target_agent=routed_queue_item.target_agent,
+        )
+        return available
+
+    def _observe_runtime_metric(
+        self,
+        name: str,
+        value: float,
+        **attributes: MetricAttribute,
+    ) -> None:
+        del name, value, attributes
 
     def matching_routes(self, event: Event) -> list[AgentRoute]:
         return list(self.router.matching_routes(event))
@@ -671,6 +694,14 @@ class QueueingDispatcher(EventDispatcher):
         self.lease_ms = lease_ms
         self.claim_token = claim_token
 
+    def _observe_runtime_metric(
+        self,
+        name: str,
+        value: float,
+        **attributes: MetricAttribute,
+    ) -> None:
+        self.queue_store.observe_runtime_metric(name, value, **attributes)
+
     def _stored_queue_item(self, queue_item_id: str) -> RoutedQueueItem:
         record = self.queue_store.queue_item(queue_item_id)
         if record is not None:
@@ -719,7 +750,13 @@ class QueueingDispatcher(EventDispatcher):
         ):
             return
         while True:
+            expected_at = time.monotonic() + self.heartbeat_interval_seconds
             await asyncio.sleep(self.heartbeat_interval_seconds)
+            self.queue_store.observe_runtime_metric(
+                "runtime.heartbeat_delay_ms",
+                max(0.0, (time.monotonic() - expected_at) * 1000),
+                queue_item_id=queue_item_id,
+            )
             now_ms = current_time_ms()
             heartbeat_current = self.queue_store.heartbeat_attempt(
                 attempt_id,

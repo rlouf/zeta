@@ -122,3 +122,19 @@ queue item without invoking the agent again.
 Zeta does not claim exactly-once external delivery. The journal proves what the
 runtime planned and observed; the declared semantics state what a provider can
 guarantee.
+
+## Runtime Health Measurements
+
+`RuntimeEventStore` accepts a backend-neutral metrics sink and uses a no-op sink
+by default. The coordinated runtime records:
+
+- `sqlite.event_append_ms`, `sqlite.queue_claim_ms`,
+  `sqlite.lock_acquire_ms`, `sqlite.heartbeat_write_ms`, and
+  `sqlite.trace_close_ms` for synchronous storage work;
+- `runtime.queue_lag_ms`, `runtime.heartbeat_delay_ms`, and
+  `runtime.event_loop_delay_ms` for scheduling health;
+- `runtime.agent_execution_ms`, `runtime.retries_scheduled`, and
+  `runtime.lock_conflicts` for execution pressure.
+
+Metrics delivery is best effort. A failing sink cannot fail or roll back a
+runtime transition.

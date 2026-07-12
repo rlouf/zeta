@@ -5,8 +5,9 @@ from __future__ import annotations
 import json
 import secrets
 import sqlite3
+import time
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
@@ -15,6 +16,7 @@ from zeta.records.events import AppendOutcome, DraftEvent
 from zeta.records.stores.event_store import Filter
 from zeta.records.stores.sqlite import SqliteEventStore
 
+from zetad.metrics import MetricAttribute, NullRuntimeMetrics, RuntimeMetrics
 from zetad.projections import runtime_event_projection
 
 
@@ -80,10 +82,19 @@ class RuntimeEventStore:
     """Event log plus orchestration-owned runtime indexes."""
 
     events: SqliteEventStore
+    metrics: RuntimeMetrics = field(default_factory=NullRuntimeMetrics)
 
     @classmethod
-    def open(cls, path: Path | str) -> RuntimeEventStore:
-        return cls(SqliteEventStore(path, projections=(runtime_event_projection(),)))
+    def open(
+        cls,
+        path: Path | str,
+        *,
+        metrics: RuntimeMetrics | None = None,
+    ) -> RuntimeEventStore:
+        return cls(
+            SqliteEventStore(path, projections=(runtime_event_projection(),)),
+            metrics or NullRuntimeMetrics(),
+        )
 
     @property
     def path(self) -> Path:
@@ -105,10 +116,38 @@ class RuntimeEventStore:
         self.events.close()
 
     def accept(self, draft: DraftEvent) -> AppendOutcome:
-        return self.events.accept(draft)
+        started = time.perf_counter()
+        try:
+            return self.events.accept(draft)
+        finally:
+            self.observe_runtime_metric(
+                "sqlite.event_append_ms",
+                _elapsed_ms(started),
+                event_type=draft.event_type,
+            )
 
     def append(self, event: Event) -> AppendOutcome:
-        return self.events.append(event)
+        started = time.perf_counter()
+        try:
+            return self.events.append(event)
+        finally:
+            self.observe_runtime_metric(
+                "sqlite.event_append_ms",
+                _elapsed_ms(started),
+                event_type=event.event_type,
+            )
+
+    def observe_runtime_metric(
+        self,
+        name: str,
+        value: float,
+        **attributes: MetricAttribute,
+    ) -> None:
+        try:
+            self.metrics.observe(name, value, attributes=attributes)
+        except Exception:
+            # Metrics must never change runtime state transitions.
+            return
 
     def rebuild_projections(self) -> int:
         return self.events.rebuild_projections()
@@ -248,6 +287,7 @@ class RuntimeEventStore:
         lease_ms: int,
         now_ms: int,
     ) -> bool:
+        started = time.perf_counter()
         requested = tuple(dict.fromkeys(keys))
         if not requested:
             return True
@@ -272,6 +312,12 @@ class RuntimeEventStore:
                 ).fetchone()
                 if conflict is not None:
                     self.connection.rollback()
+                    self.observe_runtime_metric("runtime.lock_conflicts", 1)
+                    self.observe_runtime_metric(
+                        "sqlite.lock_acquire_ms",
+                        _elapsed_ms(started),
+                        lock_count=len(requested),
+                    )
                     return False
                 for key in requested:
                     self.connection.execute(
@@ -289,9 +335,19 @@ class RuntimeEventStore:
                         (key, owner, now_ms, now_ms + lease_ms, now_ms),
                     )
                 self.connection.commit()
+                self.observe_runtime_metric(
+                    "sqlite.lock_acquire_ms",
+                    _elapsed_ms(started),
+                    lock_count=len(requested),
+                )
                 return True
             except Exception:
                 self.connection.rollback()
+                self.observe_runtime_metric(
+                    "sqlite.lock_acquire_ms",
+                    _elapsed_ms(started),
+                    lock_count=len(requested),
+                )
                 raise
 
     def release_locks(self, keys: Iterable[str], owner: str) -> int:
@@ -367,6 +423,7 @@ class RuntimeEventStore:
         lease_ms: int,
         now_ms: int,
     ) -> bool:
+        started = time.perf_counter()
         with self.events.write_lock:
             self.events.begin_immediate()
             try:
@@ -401,6 +458,10 @@ class RuntimeEventStore:
                 )
                 if cursor.rowcount != 1:
                     self.connection.rollback()
+                    self.observe_runtime_metric(
+                        "sqlite.heartbeat_write_ms",
+                        _elapsed_ms(started),
+                    )
                     return False
                 self.connection.execute(
                     """
@@ -421,9 +482,17 @@ class RuntimeEventStore:
                     ),
                 )
                 self.connection.commit()
+                self.observe_runtime_metric(
+                    "sqlite.heartbeat_write_ms",
+                    _elapsed_ms(started),
+                )
                 return True
             except Exception:
                 self.connection.rollback()
+                self.observe_runtime_metric(
+                    "sqlite.heartbeat_write_ms",
+                    _elapsed_ms(started),
+                )
                 raise
 
     def claim_next_queue_item(
@@ -434,6 +503,7 @@ class RuntimeEventStore:
         now_ms: int,
         exclude_queue_item_ids: Iterable[str] = (),
     ) -> QueueClaim | None:
+        started = time.perf_counter()
         excluded = tuple(dict.fromkeys(exclude_queue_item_ids))
         excluded_clause = ""
         excluded_params: tuple[str, ...] = ()
@@ -447,7 +517,7 @@ class RuntimeEventStore:
             try:
                 row = self.connection.execute(
                     f"""
-                    SELECT queue_item_id
+                    SELECT queue_item_id, available_at, updated_at
                     FROM queue_items
                     WHERE status IN ('pending', 'available')
                       AND (available_at IS NULL OR available_at <= ?)
@@ -459,6 +529,11 @@ class RuntimeEventStore:
                 ).fetchone()
                 if row is None:
                     self.connection.commit()
+                    self.observe_runtime_metric(
+                        "sqlite.queue_claim_ms",
+                        _elapsed_ms(started),
+                        claimed=False,
+                    )
                     return None
                 queue_item_id = str(row["queue_item_id"])
                 claim_token = secrets.token_urlsafe(24)
@@ -485,10 +560,36 @@ class RuntimeEventStore:
                 )
                 self.connection.commit()
                 if cursor.rowcount != 1:
+                    self.observe_runtime_metric(
+                        "sqlite.queue_claim_ms",
+                        _elapsed_ms(started),
+                        claimed=False,
+                    )
                     return None
+                available_at = row["available_at"]
+                enqueued_at = (
+                    int(available_at)
+                    if isinstance(available_at, int)
+                    else int(row["updated_at"])
+                )
+                self.observe_runtime_metric(
+                    "runtime.queue_lag_ms",
+                    max(0, now_ms - enqueued_at),
+                    queue_item_id=queue_item_id,
+                )
+                self.observe_runtime_metric(
+                    "sqlite.queue_claim_ms",
+                    _elapsed_ms(started),
+                    claimed=True,
+                )
                 return QueueClaim(queue_item_id, claim_token)
             except Exception:
                 self.connection.rollback()
+                self.observe_runtime_metric(
+                    "sqlite.queue_claim_ms",
+                    _elapsed_ms(started),
+                    claimed=False,
+                )
                 raise
 
     def release_queue_claim(
@@ -625,6 +726,10 @@ def _pending_queue_item_id(event: Event) -> str:
 
 def _optional_str(value: object) -> str | None:
     return value if isinstance(value, str) else None
+
+
+def _elapsed_ms(started: float) -> float:
+    return (time.perf_counter() - started) * 1000
 
 
 def _json_column(value: object) -> Any | None:

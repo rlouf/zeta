@@ -54,3 +54,4 @@ class AgentConfig:
     compaction_policy: CompactionPolicy | None = None
     model_status_factory: Callable[[], ModelStatus] | None = None
     base_dir: Path | None = None
+    effect_scope: str | None = None

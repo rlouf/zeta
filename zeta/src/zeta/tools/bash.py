@@ -34,6 +34,7 @@ SPEC = Capability(
     CapabilityId("zeta", "bash"),
     "Execute or stage a shell command, depending on the active workflow.",
     SCHEMA,
+    delivery_semantics="unsafe_to_retry",
 )
 
 

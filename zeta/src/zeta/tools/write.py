@@ -28,6 +28,7 @@ SPEC = Capability(
     CapabilityId("zeta", "write"),
     "Write content directly or stage a proposed cp command.",
     SCHEMA,
+    delivery_semantics="idempotent_with_key",
 )
 
 

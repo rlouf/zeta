@@ -8,7 +8,7 @@ import json
 import os
 import tempfile
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Protocol, cast
 
@@ -24,6 +24,7 @@ from zeta.capabilities.registry import (
 )
 from zeta.capabilities.registry import registry as _default_tool_registry
 from zeta.capabilities.types import ExecutionMode
+from zeta.effects import DeliverySemantics, effect_key
 from zeta.models.chat_completions import tool_call_id
 from zeta.records.events import (
     DraftEvent,
@@ -42,6 +43,7 @@ class CapabilityExecutor(Protocol):
         params: dict[str, Any],
         *,
         mode: ExecutionMode,
+        effect_key: str | None = None,
     ) -> dict[str, Any] | Awaitable[dict[str, Any]]: ...
 
 
@@ -60,7 +62,9 @@ class InProcessCapabilityExecutor:
         params: dict[str, Any],
         *,
         mode: ExecutionMode,
+        effect_key: str | None = None,
     ) -> dict[str, Any]:
+        del effect_key
         if mode == "stage" and self.stage is not None:
             result = self.stage(params)
         else:
@@ -157,6 +161,8 @@ class CapabilityExecutionContext:
     tool_registry: CapabilityRegistry
     tool_hosts: HostDirectory | None = None
     base_dir: Path | None = None
+    effect_scope: str | None = None
+    effect_key: str | None = None
 
 
 @dataclass(frozen=True)
@@ -414,12 +420,41 @@ async def run_valid_tool_call(
         call_event,
         ctx=ctx,
     )
+    semantics = capability_delivery_semantics(capability_id, ctx=ctx)
+    operation_key = None
+    invocation_ctx = ctx
+    if execution_mode == "direct" and semantics is not None:
+        scope = ctx.effect_scope or invocation.call_id
+        operation_key = effect_key(scope, capability_id, invocation.params)
+        invocation_ctx = replace(ctx, effect_key=operation_key)
+        emit_capability_effect_event(
+            events,
+            "planned",
+            capability_id=capability_id,
+            params=invocation.params,
+            effect_key=operation_key,
+            semantics=semantics,
+            scope=scope,
+            caused_by=invocation.call_id,
+            ctx=ctx,
+        )
+        emit_capability_effect_event(
+            events,
+            "started",
+            capability_id=capability_id,
+            params=invocation.params,
+            effect_key=operation_key,
+            semantics=semantics,
+            scope=scope,
+            caused_by=invocation.call_id,
+            ctx=ctx,
+        )
     try:
         invoked = invoke_hosted_capability(
             capability_id,
             invocation.params,
             execution_mode=execution_mode,
-            ctx=ctx,
+            ctx=invocation_ctx,
         )
         result = await invoked if inspect.isawaitable(invoked) else invoked
     except Exception as exc:
@@ -440,10 +475,78 @@ async def run_valid_tool_call(
     if isinstance(call_event.get("caused_by"), str):
         result_event["caused_by"] = call_event["caused_by"]
     emit_capability_tool_event(events, result_event, ctx=ctx)
+    if operation_key is not None and semantics is not None:
+        if result.get("ok") is True:
+            effect_status = "completed"
+        elif semantics == "unsafe_to_retry":
+            effect_status = "ambiguous"
+        else:
+            effect_status = "failed"
+        emit_capability_effect_event(
+            events,
+            effect_status,
+            capability_id=capability_id,
+            params=invocation.params,
+            effect_key=operation_key,
+            semantics=semantics,
+            scope=ctx.effect_scope or invocation.call_id,
+            caused_by=invocation.call_id,
+            result=result,
+            ctx=ctx,
+        )
     return CapabilityCallResult(
         events=events,
         staged_effect=staged_effect,
         stop=stop,
+    )
+
+
+def capability_delivery_semantics(
+    capability_id: str,
+    *,
+    ctx: CapabilityExecutionContext,
+) -> DeliverySemantics | None:
+    directory = ctx.tool_hosts or ctx.tool_registry
+    capability = directory.get(capability_id)
+    if capability is None:
+        return None
+    return capability.declaration.delivery_semantics
+
+
+def emit_capability_effect_event(
+    events: list[DraftEvent],
+    status: str,
+    *,
+    capability_id: str,
+    params: dict[str, Any],
+    effect_key: str,
+    semantics: DeliverySemantics,
+    scope: str,
+    caused_by: str,
+    ctx: CapabilityExecutionContext,
+    result: dict[str, Any] | None = None,
+) -> None:
+    payload: dict[str, Any] = {
+        "effect_key": effect_key,
+        "operation": capability_id,
+        "semantics": semantics,
+        "scope": scope,
+        "queue_item_id": scope if scope.startswith("qi_") else None,
+        "params": params,
+        "status": status,
+    }
+    if result is not None:
+        payload["result"] = result
+    emit_capability_event_draft(
+        events,
+        DraftEvent(
+            f"runtime.effect.{status}",
+            f"capability:{capability_id}",
+            payload,
+            idempotency_key=f"runtime.effect.{status}:{effect_key}",
+            caused_by=caused_by,
+        ),
+        ctx,
     )
 
 
@@ -453,12 +556,14 @@ async def invoke_capability(
     *,
     execution_mode: ExecutionMode = "stage",
     tool_registry: CapabilityRegistry | None = None,
+    effect_key: str | None = None,
 ) -> dict[str, Any]:
     active_tool_registry = tool_registry or _default_tool_registry
     return await active_tool_registry.invoke_async(
         capability_id,
         params,
         execution_mode=execution_mode,
+        effect_key=effect_key,
     )
 
 

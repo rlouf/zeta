@@ -144,6 +144,7 @@ class TransitionalInProcessHost:
                 params,
                 execution_mode=mode,
                 tool_registry=self.registry,
+                effect_key=getattr(ctx, "effect_key", None),
             )
             if inspect.isawaitable(result):
                 result = await result

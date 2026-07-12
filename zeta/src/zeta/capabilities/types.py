@@ -3,6 +3,8 @@
 from dataclasses import dataclass
 from typing import Any, Literal
 
+from zeta.effects import DELIVERY_SEMANTICS, DeliverySemantics
+
 ExecutionMode = Literal["stage", "direct"]
 
 
@@ -33,3 +35,13 @@ class Capability:
     id: CapabilityId
     description: str
     input_schema: dict[str, Any]
+    delivery_semantics: DeliverySemantics | None = None
+
+    def __post_init__(self) -> None:
+        if (
+            self.delivery_semantics is not None
+            and self.delivery_semantics not in DELIVERY_SEMANTICS
+        ):
+            raise ValueError(
+                f"invalid delivery semantics {self.delivery_semantics!r}"
+            )

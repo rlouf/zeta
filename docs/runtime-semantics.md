@@ -82,3 +82,27 @@ commit terminal Zeta state.
 Claim fencing does not undo an external side effect that already happened.
 Connector and capability effect semantics define whether such an operation can
 be retried, deduplicated, or must stop for manual resolution.
+
+## External Effects
+
+Side-effecting connector and capability operations are journaled as:
+
+```text
+planned -> started -> completed
+                   -> failed
+                   -> ambiguous
+```
+
+An effect key identifies the logical operation independently of the numbered
+attempt. Connector effects use the connector/event idempotency key. Capability
+effects hash the queue-item scope, capability id, and canonical arguments.
+
+`idempotent_with_key`, `connector_deduplicated`, and `at_least_once` operations
+may enter the normal retry policy. `at_least_once` explicitly permits duplicate
+delivery. `unsafe_to_retry` does not: if its last durable state is `started` or
+`ambiguous`, a later attempt records a permanent failure and dead-letters the
+queue item without invoking the agent again.
+
+Zeta does not claim exactly-once external delivery. The journal proves what the
+runtime planned and observed; the declared semantics state what a provider can
+guarantee.

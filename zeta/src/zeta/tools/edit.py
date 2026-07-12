@@ -39,6 +39,7 @@ SPEC = Capability(
     CapabilityId("zeta", "edit"),
     "Edit a file. Prefer tagged input from read: [path#tag] plus SWAP, DEL, INS.PRE, or INS.POST line operations.",
     SCHEMA,
+    delivery_semantics="idempotent_with_key",
 )
 
 HEADER_RE = re.compile(r"^\[(?P<path>.+)\]$")

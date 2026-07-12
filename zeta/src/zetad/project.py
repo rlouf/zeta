@@ -365,6 +365,7 @@ def capability_manifests(registry: CapabilityRegistry) -> dict[str, Any]:
             "name": declaration.id.name,
             "description": declaration.description,
             "input_schema": declaration.input_schema,
+            "delivery_semantics": declaration.delivery_semantics,
             "executor": callable_manifest(registered.executor),
         }
     return manifests

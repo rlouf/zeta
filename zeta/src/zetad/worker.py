@@ -246,9 +246,12 @@ def project_agent_run_turn(runtime: WorkerServices):
                     runtime="zeta-agent",
                     tools=tuple(config.allowed_capabilities or ()),
                     context=kwargs.get("context", ""),
-                    config=config_with_model_selection(
-                        config,
-                        runtime.model_selection,
+                    config=replace(
+                        config_with_model_selection(
+                            config,
+                            runtime.model_selection,
+                        ),
+                        effect_scope=invocation.queue_item_id,
                     ),
                 ),
                 run_id=run_id,

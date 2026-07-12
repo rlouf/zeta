@@ -54,6 +54,8 @@ __all__ = [
 RESERVED_RUNTIME_EVENT_PREFIXES = (
     "runtime.queue_item.",
     "runtime.attempt.",
+    "runtime.egress.",
+    "runtime.effect.",
     "runtime.project_snapshot.",
 )
 
@@ -187,6 +189,7 @@ class EventDispatcher:
             event_publisher=self._agent_event_publisher,
             retry_scheduler=self.schedule_retry,
             retry_policy=self.retry_policy,
+            blocking_unsafe_effect=self._blocking_unsafe_effect,
         )
 
     async def publish_event(
@@ -194,6 +197,9 @@ class EventDispatcher:
         draft: DraftEvent,
     ) -> DispatchOutcome:
         reject_reserved_runtime_event(draft)
+        return await self._accept_event(draft)
+
+    async def _accept_event(self, draft: DraftEvent) -> DispatchOutcome:
         outcome = self.event_sink.accept(draft)
         if not outcome.inserted:
             return DispatchOutcome(outcome.event, False, [])
@@ -339,6 +345,24 @@ class EventDispatcher:
     def _queue_claim_is_current(self, queue_item_id: str) -> bool:
         """Whether this dispatcher still owns the claim; always true in-process."""
         return True
+
+    def _blocking_unsafe_effect(self, queue_item_id: str) -> str | None:
+        statuses: dict[str, str] = {}
+        for event in self._event_reader().list_events(
+            Filter(event_type_prefix="runtime.effect.")
+        ):
+            if event.payload.get("queue_item_id") != queue_item_id:
+                continue
+            if event.payload.get("semantics") != "unsafe_to_retry":
+                continue
+            effect_key = event.payload.get("effect_key")
+            if not isinstance(effect_key, str):
+                continue
+            statuses[effect_key] = event.event_type.rsplit(".", 1)[-1]
+        for effect_key, status in statuses.items():
+            if status in {"started", "ambiguous"}:
+                return effect_key
+        return None
 
     def _start_attempt_heartbeat(
         self,
@@ -597,7 +621,7 @@ class EventDispatcher:
                 turn_id=draft.turn_id or triggering_event.turn_id,
             )
             if tagged.event_type.startswith(("runtime.egress.", "runtime.effect.")):
-                outcome = await self.publish_event(tagged)
+                outcome = await self._accept_event(tagged)
             else:
                 outcome = await self.publish_and_run(tagged)
             return outcome.event

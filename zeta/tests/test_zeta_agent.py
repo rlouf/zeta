@@ -29,6 +29,7 @@ from zeta.capabilities.types import (
     Capability,
     CapabilityId,
 )
+from zeta.effects import DeliverySemantics
 from zeta.events import DraftEvent, Event
 from zeta.models.profiles import ModelSelection
 from zeta.records.stores.event_store import Filter
@@ -225,12 +226,14 @@ def _test_capability(
     schema: dict[str, Any] | None = None,
     run_result: dict[str, Any] | None = None,
     with_stage_executor: bool = False,
+    delivery_semantics: DeliverySemantics | None = None,
 ) -> RegisteredCapability:
     return RegisteredCapability(
         Capability(
             CapabilityId(provider, name),
             f"{name} test capability.",
             schema or {"type": "object"},
+            delivery_semantics=delivery_semantics,
         ),
         InProcessCapabilityExecutor(
             lambda params: (
@@ -713,6 +716,130 @@ def test_zeta_handle_tool_call_emits_drafts() -> None:
     assert [draft.session_id for draft in drafts] == [None, None]
     assert [draft.turn_id for draft in drafts] == [None, None]
     assert [draft.caused_by for draft in drafts] == ["model-1", "model-1"]
+
+
+def test_zeta_direct_capability_records_and_propagates_effect_identity() -> None:
+    drafts: list[DraftEvent] = []
+    received_effect_keys: list[str | None] = []
+
+    async def execute(
+        _params: dict[str, Any],
+        *,
+        mode: str,
+        effect_key: str | None = None,
+    ) -> dict[str, Any]:
+        assert mode == "direct"
+        received_effect_keys.append(effect_key)
+        return {"ok": True}
+
+    registry = CapabilityRegistry()
+    registry.register(
+        RegisteredCapability(
+            Capability(
+                CapabilityId("test", "write"),
+                "Writes data.",
+                {"type": "object"},
+                delivery_semantics="idempotent_with_key",
+            ),
+            execute,
+        )
+    )
+    ctx = zeta_capability_execution.CapabilityExecutionContext(
+        event_sink=drafts.append,
+        trace_store=None,
+        tool_registry=registry,
+        effect_scope="qi_work_1",
+    )
+    tool_call = {
+        "id": "call-1",
+        "type": "function",
+        "function": {"name": "write", "arguments": '{"path":"a.txt"}'},
+    }
+
+    asyncio.run(
+        zeta_agent.handle_tool_call(
+            tool_call,
+            allowed_capabilities=("test.write",),
+            tool_schema=registry.model_tool_schema(("test.write",)),
+            index=0,
+            execution_mode="direct",
+            ctx=ctx,
+        )
+    )
+    tool_call["id"] = "call-from-retry"
+    asyncio.run(
+        zeta_agent.handle_tool_call(
+            tool_call,
+            allowed_capabilities=("test.write",),
+            tool_schema=registry.model_tool_schema(("test.write",)),
+            index=0,
+            execution_mode="direct",
+            ctx=ctx,
+        )
+    )
+
+    effect_drafts = [
+        draft for draft in drafts if draft.event_type.startswith("runtime.effect.")
+    ]
+    assert received_effect_keys[0] is not None
+    assert received_effect_keys == [received_effect_keys[0], received_effect_keys[0]]
+    assert [draft.event_type for draft in effect_drafts] == [
+        "runtime.effect.planned",
+        "runtime.effect.started",
+        "runtime.effect.completed",
+        "runtime.effect.planned",
+        "runtime.effect.started",
+        "runtime.effect.completed",
+    ]
+    assert {draft.payload["queue_item_id"] for draft in effect_drafts} == {
+        "qi_work_1"
+    }
+    assert {draft.payload["effect_key"] for draft in effect_drafts} == {
+        received_effect_keys[0]
+    }
+
+
+def test_zeta_unsafe_capability_failure_is_recorded_as_ambiguous() -> None:
+    drafts: list[DraftEvent] = []
+    registry = CapabilityRegistry()
+    registry.register(
+        _test_capability(
+            "bash",
+            run_result={"ok": False, "error": {"code": "failed", "message": "boom"}},
+            delivery_semantics="unsafe_to_retry",
+        )
+    )
+    ctx = zeta_capability_execution.CapabilityExecutionContext(
+        event_sink=drafts.append,
+        trace_store=None,
+        tool_registry=registry,
+        effect_scope="qi_work_1",
+    )
+
+    asyncio.run(
+        zeta_agent.handle_tool_call(
+            {
+                "id": "call-1",
+                "type": "function",
+                "function": {"name": "bash", "arguments": '{"command":"post"}'},
+            },
+            allowed_capabilities=("test.bash",),
+            tool_schema=registry.model_tool_schema(("test.bash",)),
+            index=0,
+            execution_mode="direct",
+            ctx=ctx,
+        )
+    )
+
+    assert [
+        draft.event_type
+        for draft in drafts
+        if draft.event_type.startswith("runtime.effect.")
+    ] == [
+        "runtime.effect.planned",
+        "runtime.effect.started",
+        "runtime.effect.ambiguous",
+    ]
 
 
 def test_zeta_assistant_message_round_trips_content_to_model_event() -> None:
@@ -2398,6 +2525,7 @@ def test_zeta_rpc_tools_register_uses_documented_tool_shape() -> None:
                         "description": "Pick a file.",
                         "schema": {"type": "object"},
                         "timeout_sec": 2,
+                        "delivery_semantics": "connector_deduplicated",
                     },
                     {
                         "name": "open_panel",
@@ -2419,6 +2547,7 @@ def test_zeta_rpc_tools_register_uses_documented_tool_shape() -> None:
                 "description": "Pick a file.",
                 "schema": {"type": "object"},
                 "timeout_sec": 2,
+                "delivery_semantics": "connector_deduplicated",
             },
             {
                 "id": "rpc.open_panel",
@@ -2431,6 +2560,10 @@ def test_zeta_rpc_tools_register_uses_documented_tool_shape() -> None:
         ]
     }
     assert registry.get("rpc.pick_file") is not None
+    assert (
+        registry.get("rpc.pick_file").declaration.delivery_semantics
+        == "connector_deduplicated"
+    )
     assert registry.get("rpc.open_panel") is not None
 
 

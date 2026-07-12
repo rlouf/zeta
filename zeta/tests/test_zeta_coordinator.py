@@ -26,7 +26,12 @@ async def stop_heartbeat(_task) -> None:
     return None
 
 
-def coordinator(*, claim_is_current, retry_policy: RetryPolicy | None = None):
+def coordinator(
+    *,
+    claim_is_current,
+    retry_policy: RetryPolicy | None = None,
+    blocking_unsafe_effect=None,
+):
     store = MemoryEventStore()
     recorder = LifecycleRecorder(store)
 
@@ -49,6 +54,7 @@ def coordinator(*, claim_is_current, retry_policy: RetryPolicy | None = None):
             event_publisher=publisher,
             retry_scheduler=unexpected_retry,
             retry_policy=retry_policy or RetryPolicy(),
+            blocking_unsafe_effect=blocking_unsafe_effect,
         ),
         store,
     )
@@ -133,3 +139,36 @@ def test_attempt_coordinator_does_not_commit_after_claim_loss() -> None:
         "runtime.queue_item.claimed",
         "runtime.attempt.started",
     ]
+
+
+def test_attempt_coordinator_dead_letters_ambiguous_unsafe_effect() -> None:
+    executed = False
+
+    async def run(_invocation):
+        nonlocal executed
+        executed = True
+        return {"final_answer": "should not run"}
+
+    runtime, _store = coordinator(
+        claim_is_current=lambda _queue_item_id: True,
+        blocking_unsafe_effect=lambda _queue_item_id: "effect:unsafe",
+    )
+    events = asyncio.run(
+        runtime.run(
+            ExecutableAgent(
+                AgentDefinition("worker", (EventPattern("work.requested"),)),
+                run,
+            ),
+            triggering_event(),
+            queue_item(),
+        )
+    )
+
+    assert executed is False
+    assert [event.event_type for event in events] == [
+        "runtime.queue_item.claimed",
+        "runtime.attempt.started",
+        "runtime.attempt.failed",
+        "runtime.queue_item.dead_lettered",
+    ]
+    assert events[-1].payload["reason"] == "permanent"

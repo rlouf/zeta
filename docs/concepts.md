@@ -273,6 +273,20 @@ Capability execution goes through the registry and each capability's policy. In
 the local worker, mutating tools use the current staged execution contract unless
 the host supplies a different runtime configuration.
 
+Side-effecting capabilities declare one delivery contract:
+
+- `idempotent_with_key`: repeating the logical operation with the same effect
+  key is safe.
+- `connector_deduplicated`: the provider deduplicates the propagated key.
+- `at_least_once`: retries are allowed and duplicate delivery is possible.
+- `unsafe_to_retry`: an ambiguous started effect prevents automatic retry.
+
+Direct side-effecting calls write `runtime.effect.*` records around execution.
+The effect key is derived from the queue item, capability id, and canonical
+arguments, so a retry receives the same identity even when the model tool-call
+id changes. Built-in `write` and `edit` are content-idempotent; `bash` is unsafe
+to retry automatically. Read-only capabilities do not create effect records.
+
 Shared agent skills are Markdown files under `agents/skills/`. The filename stem
 is the skill name, and agents opt in with `skills:`.
 
@@ -310,6 +324,12 @@ schema. Connector ingress bindings require `idempotency_key` so connectors can
 avoid duplicate ingests. `returns[*].with` is validated against the connector's
 egress options schema. Egress defaults to a connector/event idempotency key when
 one is not supplied.
+
+Each connector egress handler also declares delivery semantics in its connector
+definition. Zeta records planned, started, completed, failed, or ambiguous
+effect facts using the stable egress idempotency key. Retry-safe delivery
+failures enter the normal queue retry policy. An unsafe ambiguous delivery is
+dead-lettered for inspection instead of being sent again automatically.
 
 The bundled Slack connector uses:
 

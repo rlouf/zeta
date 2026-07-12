@@ -13,6 +13,7 @@ from jsonschema.exceptions import SchemaError
 from zeta.capabilities.execution import error_result
 from zeta.capabilities.registry import RegisteredCapability
 from zeta.capabilities.types import Capability, CapabilityId
+from zeta.effects import DELIVERY_SEMANTICS, DeliverySemantics
 from zeta.records.events import DraftEvent, Event, event_to_wire
 from zeta.records.stores.event_store import EventReader, EventStoreProtocol, Filter
 from zeta.run.context import RuntimeContext
@@ -53,6 +54,7 @@ class CapabilityRegistration:
     description: str = ""
     schema: dict[str, Any] = field(default_factory=dict)
     timeout_sec: int | float | None = None
+    delivery_semantics: DeliverySemantics | None = None
 
 
 @dataclass(frozen=True)
@@ -135,7 +137,14 @@ def invalid_params(code: str, message: str, **extra: Any) -> RpcError:
 def parse_capability_registration(value: dict[str, Any]) -> CapabilityRegistration:
     """Validate and normalize one client-hosted RPC tool declaration."""
 
-    supported = {"name", "provider", "description", "schema", "timeout_sec"}
+    supported = {
+        "name",
+        "provider",
+        "description",
+        "schema",
+        "timeout_sec",
+        "delivery_semantics",
+    }
     unknown = sorted(set(value) - supported)
     if unknown:
         raise invalid_params(
@@ -190,12 +199,20 @@ def parse_capability_registration(value: dict[str, Any]) -> CapabilityRegistrati
                 "timeout_sec must be positive",
             )
 
+    delivery_semantics = value.get("delivery_semantics")
+    if delivery_semantics is not None and delivery_semantics not in DELIVERY_SEMANTICS:
+        raise invalid_params(
+            "invalid_delivery_semantics",
+            "delivery_semantics must be a supported effect contract",
+        )
+
     return CapabilityRegistration(
         name=name,
         provider=provider,
         description=description,
         schema=schema,
         timeout_sec=timeout_sec,
+        delivery_semantics=delivery_semantics,
     )
 
 
@@ -310,7 +327,7 @@ def capability_to_wire(
 ) -> dict[str, Any]:
     """Convert a registered capability to the RPC tool declaration response."""
 
-    return {
+    payload = {
         "id": capability.declaration.id.canonical(),
         "provider": capability.declaration.id.provider,
         "name": capability.declaration.id.name,
@@ -318,6 +335,9 @@ def capability_to_wire(
         "schema": capability.declaration.input_schema,
         "timeout_sec": timeout_sec,
     }
+    if capability.declaration.delivery_semantics is not None:
+        payload["delivery_semantics"] = capability.declaration.delivery_semantics
+    return payload
 
 
 async def initialize(_params: dict[str, Any], _client: RpcClient) -> dict[str, Any]:
@@ -551,6 +571,7 @@ async def tools_register(params: dict[str, Any], client: RpcClient) -> dict[str,
                 CapabilityId(registration.provider, registration.name),
                 registration.description,
                 registration.schema,
+                delivery_semantics=registration.delivery_semantics,
             ),
             execute_client_tool,
         )

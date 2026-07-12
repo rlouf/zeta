@@ -7,6 +7,7 @@ from collections.abc import Awaitable, Callable, Iterable
 from datetime import UTC, datetime
 from typing import Any
 
+from zeta.effects import EffectDeliveryError
 from zeta.records.events import DraftEvent, Event
 
 from zetad.agents import (
@@ -54,6 +55,7 @@ class AttemptCoordinator:
         event_publisher: AgentEventPublisherFactory,
         retry_scheduler: RetryScheduler,
         retry_policy: RetryPolicy,
+        blocking_unsafe_effect: Callable[[str], str | None] | None = None,
         executor: AgentExecutor | None = None,
     ) -> None:
         self.lifecycle = lifecycle
@@ -64,6 +66,7 @@ class AttemptCoordinator:
         self.event_publisher = event_publisher
         self.retry_scheduler = retry_scheduler
         self.retry_policy = retry_policy
+        self.blocking_unsafe_effect = blocking_unsafe_effect or (lambda _item: None)
         self.executor = executor or AgentExecutor()
 
     async def run(
@@ -107,6 +110,26 @@ class AttemptCoordinator:
                 run_id=run_id,
             )
         )
+        blocked_effect_key = self.blocking_unsafe_effect(queue_item_id)
+        if blocked_effect_key is not None:
+            events.extend(
+                self.failed_events(
+                    EffectDeliveryError(
+                        blocked_effect_key,
+                        "unsafe_to_retry",
+                        f"unsafe effect {blocked_effect_key} may already have occurred",
+                    ),
+                    triggering_event,
+                    agent,
+                    queue_item_id,
+                    attempt_id,
+                    attempt_number,
+                    started_at,
+                    session_id,
+                    run_id,
+                )
+            )
+            return events
         heartbeat_task = self.start_heartbeat(
             attempt_id,
             queue_item_id,

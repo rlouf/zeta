@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Literal
+from typing import Any, Literal
 
 DeliverySemantics = Literal[
     "idempotent_with_key",
@@ -38,3 +41,18 @@ class EffectDeliveryError(RuntimeError):
 
     def __post_init__(self) -> None:
         super().__init__(self.message)
+
+
+def effect_key(
+    scope: str,
+    operation: str,
+    params: Mapping[str, Any],
+) -> str:
+    """Return an attempt-independent identity for one logical effect."""
+    encoded = json.dumps(
+        {"scope": scope, "operation": operation, "params": dict(params)},
+        sort_keys=True,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ).encode()
+    return f"effect:sha256:{hashlib.sha256(encoded).hexdigest()}"

@@ -185,6 +185,7 @@ class CapabilityRegistry(CapabilityDirectory):
         params: dict[str, Any],
         *,
         execution_mode: ExecutionMode = "stage",
+        effect_key: str | None = None,
     ) -> dict[str, Any]:
         """Invoke one capability under the staging contract its policy declares.
 
@@ -203,6 +204,7 @@ class CapabilityRegistry(CapabilityDirectory):
             capability,
             params,
             execution_mode,
+            effect_key=effect_key,
         )
 
     async def invoke_async(
@@ -211,6 +213,7 @@ class CapabilityRegistry(CapabilityDirectory):
         params: dict[str, Any],
         *,
         execution_mode: ExecutionMode = "stage",
+        effect_key: str | None = None,
     ) -> dict[str, Any]:
         capability_id = self.resolve(capability_id) or capability_id
         capability = self.get(capability_id)
@@ -223,6 +226,7 @@ class CapabilityRegistry(CapabilityDirectory):
             capability,
             params,
             execution_mode,
+            effect_key=effect_key,
         )
 
 
@@ -234,9 +238,14 @@ def invoke_executor(
     capability: RegisteredCapability,
     params: dict[str, Any],
     mode: ExecutionMode,
+    *,
+    effect_key: str | None = None,
 ) -> dict[str, Any]:
     try:
-        result = capability.executor(params, mode=mode)
+        result = capability.executor(
+            params,
+            **executor_kwargs(capability.executor, mode, effect_key),
+        )
         if inspect.isawaitable(result):
             result = asyncio.run(cast(Coroutine[Any, Any, dict[str, Any]], result))
     except Exception as exc:
@@ -253,15 +262,18 @@ async def invoke_executor_async(
     capability: RegisteredCapability,
     params: dict[str, Any],
     mode: ExecutionMode,
+    *,
+    effect_key: str | None = None,
 ) -> dict[str, Any]:
     try:
+        kwargs = executor_kwargs(capability.executor, mode, effect_key)
         if inspect.iscoroutinefunction(capability.executor):
-            result = await capability.executor(params, mode=mode)
+            result = await capability.executor(params, **kwargs)
         else:
             result = await asyncio.to_thread(
                 capability.executor,
                 params,
-                mode=mode,
+                **kwargs,
             )
     except Exception as exc:
         return error_result(
@@ -273,6 +285,27 @@ async def invoke_executor_async(
         result = await result
     result = cast(dict[str, Any], result)
     return validated_capability_result_payload(capability_id, result)
+
+
+def executor_kwargs(
+    executor: Any,
+    mode: ExecutionMode,
+    effect_key: str | None,
+) -> dict[str, Any]:
+    kwargs: dict[str, Any] = {"mode": mode}
+    if effect_key is None:
+        return kwargs
+    try:
+        parameters = inspect.signature(executor).parameters.values()
+    except (TypeError, ValueError):
+        return kwargs
+    if any(
+        parameter.name == "effect_key"
+        or parameter.kind is inspect.Parameter.VAR_KEYWORD
+        for parameter in parameters
+    ):
+        kwargs["effect_key"] = effect_key
+    return kwargs
 
 
 def invalid_capability_result_error(capability_id: str) -> dict[str, Any]:

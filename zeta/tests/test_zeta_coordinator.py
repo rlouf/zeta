@@ -141,6 +141,56 @@ def test_attempt_coordinator_does_not_commit_after_claim_loss() -> None:
     ]
 
 
+def test_attempt_coordinator_does_not_execute_without_current_claim() -> None:
+    executed = False
+
+    async def run(_invocation):
+        nonlocal executed
+        executed = True
+        return {"final_answer": "stale"}
+
+    runtime, _store = coordinator(claim_is_current=lambda _queue_item_id: False)
+    events = asyncio.run(
+        runtime.run(
+            ExecutableAgent(
+                AgentDefinition("worker", (EventPattern("work.requested"),)),
+                run,
+            ),
+            triggering_event(),
+            queue_item(),
+        )
+    )
+
+    assert events == []
+    assert executed is False
+
+
+def test_attempt_coordinator_does_not_record_failure_after_claim_loss() -> None:
+    ownership_checks = iter((True, False))
+
+    async def fail(_invocation):
+        raise RuntimeError("stale failure")
+
+    runtime, _store = coordinator(
+        claim_is_current=lambda _queue_item_id: next(ownership_checks)
+    )
+    events = asyncio.run(
+        runtime.run(
+            ExecutableAgent(
+                AgentDefinition("worker", (EventPattern("work.requested"),)),
+                fail,
+            ),
+            triggering_event(),
+            queue_item(),
+        )
+    )
+
+    assert [event.event_type for event in events] == [
+        "runtime.queue_item.claimed",
+        "runtime.attempt.started",
+    ]
+
+
 def test_attempt_coordinator_dead_letters_ambiguous_unsafe_effect() -> None:
     executed = False
 

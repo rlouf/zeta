@@ -19,6 +19,7 @@ from zeta.agents.manifest import egress_bindings, ingress_bindings
 from zeta.agents.resources import (
     AgentProject,
 )
+from zeta.effects import DeliverySemantics, EffectDeliveryError
 from zeta.events import DraftEvent, Event
 
 from connectors import (
@@ -55,6 +56,7 @@ def project_egress_executors(
             handler = connector.egress.get(binding.event)
             if handler is None:
                 continue
+            semantics = connector.egress_semantics[binding.event]
             agent_id = f"egress:{spec.slug}:{index}:{connector.id}:{binding.event}"
             executors.append(
                 ExecutableAgent(
@@ -65,16 +67,41 @@ def project_egress_executors(
                         project_generation=project_generation,
                         execution_manifest=(execution_manifests or {}).get(spec.slug),
                     ),
-                    run=egress_runner(binding, handler, connector.id),
+                    run=egress_runner(binding, handler, connector.id, semantics),
                 )
             )
     return tuple(executors)
 
 
-def egress_runner(binding: EgressBinding, handler, connector_id: str):
+def egress_runner(
+    binding: EgressBinding,
+    handler,
+    connector_id: str,
+    semantics: DeliverySemantics,
+):
     async def run(invocation: AgentInvocation) -> dict[str, Any]:
         event = invocation.triggering_event
         idempotency_key = egress_idempotency_key(binding, event, connector_id)
+        await invocation.publish(
+            effect_event_draft(
+                "planned",
+                event,
+                connector_id=connector_id,
+                effect_key=idempotency_key,
+                semantics=semantics,
+                invocation=invocation,
+            )
+        )
+        await invocation.publish(
+            effect_event_draft(
+                "started",
+                event,
+                connector_id=connector_id,
+                effect_key=idempotency_key,
+                semantics=semantics,
+                invocation=invocation,
+            )
+        )
         await invocation.publish(
             DraftEvent(
                 "runtime.egress.started",
@@ -108,15 +135,24 @@ def egress_runner(binding: EgressBinding, handler, connector_id: str):
                     idempotency_key=f"runtime.egress.failed:{idempotency_key}",
                 )
             )
+            effect_status = "ambiguous" if semantics == "unsafe_to_retry" else "failed"
+            await invocation.publish(
+                effect_event_draft(
+                    effect_status,
+                    event,
+                    connector_id=connector_id,
+                    effect_key=idempotency_key,
+                    semantics=semantics,
+                    invocation=invocation,
+                    error=str(exc),
+                )
+            )
             logger.exception("egress connector %r failed", connector_id)
-            return {
-                "egress": {
-                    "connector": connector_id,
-                    "event_id": event.id,
-                    "failed": True,
-                    "error": str(exc),
-                }
-            }
+            raise EffectDeliveryError(
+                idempotency_key,
+                semantics,
+                f"{connector_id} delivery failed: {exc}",
+            ) from exc
         await invocation.publish(
             DraftEvent(
                 "runtime.egress.completed",
@@ -131,6 +167,17 @@ def egress_runner(binding: EgressBinding, handler, connector_id: str):
                 idempotency_key=f"runtime.egress.completed:{idempotency_key}",
             )
         )
+        await invocation.publish(
+            effect_event_draft(
+                "completed",
+                event,
+                connector_id=connector_id,
+                effect_key=idempotency_key,
+                semantics=semantics,
+                invocation=invocation,
+                result=result_payload,
+            )
+        )
         return {
             "egress": {
                 "connector": connector_id,
@@ -140,6 +187,40 @@ def egress_runner(binding: EgressBinding, handler, connector_id: str):
         }
 
     return run
+
+
+def effect_event_draft(
+    status: str,
+    event: Event,
+    *,
+    connector_id: str,
+    effect_key: str,
+    semantics: DeliverySemantics,
+    invocation: AgentInvocation,
+    error: str | None = None,
+    result: dict[str, Any] | None = None,
+) -> DraftEvent:
+    payload: dict[str, Any] = {
+        "effect_key": effect_key,
+        "operation": f"connector:{connector_id}:{event.event_type}",
+        "semantics": semantics,
+        "connector": connector_id,
+        "event_id": event.id,
+        "queue_item_id": invocation.queue_item_id,
+        "attempt_id": invocation.attempt_id,
+        "status": status,
+    }
+    if error is not None:
+        payload["error"] = error
+    if result is not None:
+        payload["result"] = result
+    return DraftEvent(
+        f"runtime.effect.{status}",
+        f"egress:{connector_id}",
+        payload,
+        idempotency_key=f"runtime.effect.{status}:{effect_key}",
+        caused_by=event.id,
+    )
 
 
 async def run_ingress_once(runtime: WorkerServices) -> int:

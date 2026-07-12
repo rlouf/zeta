@@ -4370,12 +4370,13 @@ def test_zeta_sqlite_event_store_rebuild_discards_coordination_state(
             zeta_events.DraftEvent("github.issue.opened", "github", {})
         )
     ).event
-    asyncio.run(dispatcher.route(accepted))
+    route = asyncio.run(dispatcher.route(accepted))
     queue_item_id = f"qi_{accepted.id}_issue-triage"
+    now_ms = max(event.timestamp_ms for event in route.lifecycle_events) + 1
     claim = event_store.claim_next_queue_item(
         "worker-a",
         lease_ms=60_000,
-        now_ms=accepted.timestamp_ms + 1,
+        now_ms=now_ms,
     )
     assert claim is not None
     event_store.append(
@@ -4399,7 +4400,7 @@ def test_zeta_sqlite_event_store_rebuild_discards_coordination_state(
         ["context:repo"],
         claim.token,
         lease_ms=60_000,
-        now_ms=accepted.timestamp_ms + 2,
+        now_ms=now_ms + 1,
     )
 
     event_store.rebuild_projections()

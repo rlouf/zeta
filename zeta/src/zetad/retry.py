@@ -22,6 +22,8 @@ DispatchErrorCode = Literal[
     "network_error",
     "tool_failed",
     "agent_execution_failed",
+    "effect_delivery_failed",
+    "unsafe_effect_ambiguous",
 ]
 
 FailureClass = Literal["retryable", "permanent"]
@@ -30,6 +32,7 @@ PERMANENT_ERROR_CODES: frozenset[str] = frozenset(
     {
         "agent_spec_invalid",
         "malformed_event_payload",
+        "unsafe_effect_ambiguous",
     }
 )
 
@@ -113,4 +116,7 @@ def error_code_for_exception(exc: Exception) -> DispatchErrorCode:
         return "agent_spec_invalid"
     if isinstance(exc, TimeoutError):
         return "provider_timeout"
+    error_code = getattr(exc, "dispatch_error_code", None)
+    if error_code in {"effect_delivery_failed", "unsafe_effect_ambiguous"}:
+        return error_code
     return "agent_execution_failed"

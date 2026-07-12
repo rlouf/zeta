@@ -54,6 +54,7 @@ from zeta.capabilities.types import (
     Capability,
     CapabilityId,
 )
+from zeta.effects import DeliverySemantics
 from zeta.events import DraftEvent, Event
 from zeta.records.stores.event_store import Filter
 from zeta.run.config import AgentConfig
@@ -66,6 +67,7 @@ from zetad.agents import (
     compile_agent_definitions,
     config_for_spec,
 )
+from zetad.retry import RetryPolicy
 from zetad.store import RuntimeEventStore
 
 from connectors import (
@@ -154,6 +156,7 @@ def _slack_connector(
     ingress_poller: Callable[..., Any] | None = None,
     push_ingress: Callable[..., Any] | None = None,
     egress_handler: Callable[..., Any] | None = None,
+    egress_semantics: DeliverySemantics = "connector_deduplicated",
 ) -> EventConnector:
     ingress = {"slack.message.received": ingress_poller} if ingress_poller else {}
     egress = {"slack.message.post": egress_handler} if egress_handler else {}
@@ -205,6 +208,9 @@ def _slack_connector(
         ingress=ingress,
         push_ingress=push_ingress,
         egress=egress,
+        egress_semantics=(
+            {"slack.message.post": egress_semantics} if egress else {}
+        ),
     )
 
 
@@ -971,6 +977,15 @@ def test_zeta_event_connector_registry_rejects_duplicate_ids() -> None:
 
     with pytest.raises(ValueError, match="duplicate"):
         registry.register(_slack_connector())
+
+
+def test_zeta_event_connector_requires_egress_delivery_semantics() -> None:
+    with pytest.raises(ValueError, match="missing delivery semantics"):
+        zeta_agents.EventConnector(
+            id="unsafe",
+            events={"message.post": None},
+            egress={"message.post": lambda _event, _binding, _key: None},
+        )
 
 
 def test_zeta_event_connector_registry_lists_push_ingress_connectors() -> None:
@@ -2001,6 +2016,9 @@ Send.
         egress_events = runtime.events.list_events(
             zeta_events.Filter(event_type_prefix="runtime.egress.")
         )
+        effect_events = runtime.events.list_events(
+            zeta_events.Filter(event_type_prefix="runtime.effect.")
+        )
         queue_items = zetad_queue.project_queue_items(
             runtime.events.list_events(zeta_events.Filter())
         )
@@ -2013,12 +2031,30 @@ Send.
         "runtime.egress.started",
         "runtime.egress.completed",
     ]
+    assert [event.event_type for event in effect_events] == [
+        "runtime.effect.planned",
+        "runtime.effect.started",
+        "runtime.effect.completed",
+    ]
+    assert {event.payload["effect_key"] for event in effect_events} == {
+        f"slack:{egress_events[0].caused_by}"
+    }
     assert egress_events[1].payload["result"] == {"provider_message_id": "m1"}
     assert [item.status for item in queue_items] == ["completed"]
 
 
-def test_zeta_egress_binding_records_failure_without_failing_queue_item(
+@pytest.mark.parametrize(
+    ("semantics", "effect_status", "queue_status"),
+    [
+        ("connector_deduplicated", "failed", "available"),
+        ("unsafe_to_retry", "ambiguous", "dead_lettered"),
+    ],
+)
+def test_zeta_egress_failure_follows_declared_delivery_semantics(
     tmp_path: Path,
+    semantics: DeliverySemantics,
+    effect_status: str,
+    queue_status: str,
 ) -> None:
     agents_dir = tmp_path / "agents"
     agents_dir.mkdir()
@@ -2047,7 +2083,12 @@ Send.
         project_root=tmp_path,
         state_dir=tmp_path / ".zeta",
         events=zeta_events.SqliteEventStore(tmp_path / "events.sqlite3"),
-        registry=connector_registry(_slack_connector(egress_handler=send_slack)),
+        registry=connector_registry(
+            _slack_connector(
+                egress_handler=send_slack,
+                egress_semantics=semantics,
+            )
+        ),
     )
     runtime.events.accept(
         zeta_events.DraftEvent(
@@ -2062,18 +2103,94 @@ Send.
         egress_events = runtime.events.list_events(
             zeta_events.Filter(event_type_prefix="runtime.egress.")
         )
+        effect_events = runtime.events.list_events(
+            zeta_events.Filter(event_type_prefix="runtime.effect.")
+        )
         queue_items = zetad_queue.project_queue_items(
             runtime.events.list_events(zeta_events.Filter())
         )
     finally:
         runtime.close()
 
-    assert message.startswith("ran qi_")
+    if queue_status == "available":
+        assert message.startswith("routed evt_")
+    else:
+        assert message.startswith("ran qi_")
     assert [event.event_type for event in egress_events] == [
         "runtime.egress.started",
         "runtime.egress.failed",
     ]
     assert egress_events[1].payload["error"] == "slack unavailable"
+    assert [event.event_type for event in effect_events] == [
+        "runtime.effect.planned",
+        "runtime.effect.started",
+        f"runtime.effect.{effect_status}",
+    ]
+    assert [item.status for item in queue_items] == [queue_status]
+
+
+def test_zeta_retry_safe_egress_reuses_effect_key(tmp_path: Path) -> None:
+    agents_dir = tmp_path / "agents"
+    agents_dir.mkdir()
+    _write_spec(
+        agents_dir / "support.md",
+        """---
+name: Support
+description: Sends Slack support messages.
+returns:
+  - slack.message.post
+egress:
+  - event: slack.message.post
+---
+Send.
+""",
+    )
+    calls: list[str] = []
+
+    async def send_slack(
+        _event: Event,
+        _binding: EgressBinding,
+        idempotency_key: str,
+    ) -> dict[str, str]:
+        calls.append(idempotency_key)
+        if len(calls) == 1:
+            raise RuntimeError("temporary failure")
+        return {"provider_message_id": "m1"}
+
+    runtime = zetad_worker.WorkerServices(
+        project_root=tmp_path,
+        state_dir=tmp_path / ".zeta",
+        events=zeta_events.SqliteEventStore(tmp_path / "events.sqlite3"),
+        registry=connector_registry(_slack_connector(egress_handler=send_slack)),
+        retry_policy=RetryPolicy(backoff_base_seconds=0),
+    )
+    triggering = runtime.events.accept(
+        zeta_events.DraftEvent(
+            "slack.message.post",
+            "agent:support",
+            {"channel_id": "C123", "text": "hello"},
+        )
+    ).event
+
+    try:
+        asyncio.run(zetad_worker.run_once(runtime))
+        asyncio.run(zetad_worker.run_once(runtime))
+        effects = runtime.events.list_events(
+            zeta_events.Filter(event_type_prefix="runtime.effect.")
+        )
+        queue_items = zetad_queue.project_queue_items(
+            runtime.events.list_events(zeta_events.Filter())
+        )
+    finally:
+        runtime.close()
+
+    assert calls == [f"slack:{triggering.id}", f"slack:{triggering.id}"]
+    assert [event.event_type for event in effects] == [
+        "runtime.effect.planned",
+        "runtime.effect.started",
+        "runtime.effect.failed",
+        "runtime.effect.completed",
+    ]
     assert [item.status for item in queue_items] == ["completed"]
 
 

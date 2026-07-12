@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Any
 
+from zeta.effects import DELIVERY_SEMANTICS, DeliverySemantics
 from zeta.events import DraftEvent, Event
 
 
@@ -69,7 +70,26 @@ class EventConnector:
     ingress: Mapping[str, IngressHandler] = field(default_factory=dict)
     push_ingress: PushIngressHandler | None = None
     egress: Mapping[str, EgressHandler] = field(default_factory=dict)
+    egress_semantics: Mapping[str, DeliverySemantics] = field(default_factory=dict)
     filters: Mapping[str, Mapping[str, Any] | None] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        missing = sorted(set(self.egress) - set(self.egress_semantics))
+        if missing:
+            raise ValueError(
+                f"egress event {missing[0]!r} is missing delivery semantics"
+            )
+        unknown = sorted(set(self.egress_semantics) - set(self.egress))
+        if unknown:
+            raise ValueError(
+                f"delivery semantics references unknown egress event {unknown[0]!r}"
+            )
+        for event_type, semantics in self.egress_semantics.items():
+            if semantics not in DELIVERY_SEMANTICS:
+                raise ValueError(
+                    f"egress event {event_type!r} has invalid delivery semantics "
+                    f"{semantics!r}"
+                )
 
 
 class EventConnectorRegistry:

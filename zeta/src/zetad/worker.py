@@ -355,6 +355,7 @@ def is_runtime_event(event: Event) -> bool:
             "runtime.queue_item.",
             "runtime.attempt.",
             "runtime.egress.",
+            "runtime.effect.",
             "runtime.project_snapshot.",
         )
     )

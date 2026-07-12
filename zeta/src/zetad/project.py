@@ -330,6 +330,7 @@ def connector_manifest(connector: EventConnector) -> dict[str, Any]:
         "events": {name: schema for name, schema in sorted(connector.events.items())},
         "ingress": sorted(connector.ingress),
         "egress": sorted(connector.egress),
+        "egress_semantics": dict(sorted(connector.egress_semantics.items())),
         "filters": {name: schema for name, schema in sorted(connector.filters.items())},
     }
 

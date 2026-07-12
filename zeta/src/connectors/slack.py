@@ -90,6 +90,7 @@ def slack_event_connector(
                 key,
             ),
         },
+        egress_semantics={SLACK_MESSAGE_POST: "connector_deduplicated"},
         filters={
             SLACK_MESSAGE_RECEIVED: slack_ingress_filter_schema(),
             SLACK_MESSAGE_POST: slack_egress_filter_schema(),

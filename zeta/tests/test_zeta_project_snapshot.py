@@ -64,9 +64,9 @@ def test_project_snapshot_generation_is_content_addressed(tmp_path: Path) -> Non
     first = load_snapshot(agents)
     second = load_snapshot(agents)
     (agents / "worker.md").write_text(
-        (agents / "worker.md").read_text(encoding="utf-8").replace(
-            "Handles work.", "Handles changed work."
-        ),
+        (agents / "worker.md")
+        .read_text(encoding="utf-8")
+        .replace("Handles work.", "Handles changed work."),
         encoding="utf-8",
     )
     changed = load_snapshot(agents)
@@ -164,7 +164,9 @@ def test_dispatcher_selects_executor_for_routed_generation(tmp_path: Path) -> No
     routed = asyncio.run(router.route(triggering)).queue_items[0]
 
     lifecycle = asyncio.run(
-        EventDispatcher(store, executors=[current, old]).run_queue_item(routed.queue_item_id)
+        EventDispatcher(store, executors=[current, old]).run_queue_item(
+            routed.queue_item_id
+        )
     )
 
     assert calls == ["old"]

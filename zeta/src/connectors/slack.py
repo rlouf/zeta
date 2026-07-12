@@ -11,6 +11,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
+from zeta.effects import DeliverySemantics
 from zeta.events import DraftEvent, Event
 
 from connectors import (
@@ -24,6 +25,10 @@ from connectors import (
 
 SLACK_MESSAGE_RECEIVED = "slack.message.received"
 SLACK_MESSAGE_POST = "slack.message.post"
+SLACK_MESSAGE_POST_SEMANTICS: DeliverySemantics = "connector_deduplicated"
+SLACK_EGRESS_SEMANTICS: Mapping[str, DeliverySemantics] = {
+    SLACK_MESSAGE_POST: SLACK_MESSAGE_POST_SEMANTICS
+}
 
 
 @dataclass(frozen=True)
@@ -90,7 +95,7 @@ def slack_event_connector(
                 key,
             ),
         },
-        egress_semantics={SLACK_MESSAGE_POST: "connector_deduplicated"},
+        egress_semantics=SLACK_EGRESS_SEMANTICS,
         filters={
             SLACK_MESSAGE_RECEIVED: slack_ingress_filter_schema(),
             SLACK_MESSAGE_POST: slack_egress_filter_schema(),

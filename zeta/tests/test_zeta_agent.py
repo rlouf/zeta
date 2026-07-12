@@ -791,9 +791,7 @@ def test_zeta_direct_capability_records_and_propagates_effect_identity() -> None
         "runtime.effect.started",
         "runtime.effect.completed",
     ]
-    assert {draft.payload["queue_item_id"] for draft in effect_drafts} == {
-        "qi_work_1"
-    }
+    assert {draft.payload["queue_item_id"] for draft in effect_drafts} == {"qi_work_1"}
     assert {draft.payload["effect_key"] for draft in effect_drafts} == {
         received_effect_keys[0]
     }
@@ -2559,11 +2557,9 @@ def test_zeta_rpc_tools_register_uses_documented_tool_shape() -> None:
             },
         ]
     }
-    assert registry.get("rpc.pick_file") is not None
-    assert (
-        registry.get("rpc.pick_file").declaration.delivery_semantics
-        == "connector_deduplicated"
-    )
+    pick_file = registry.get("rpc.pick_file")
+    assert pick_file is not None
+    assert pick_file.declaration.delivery_semantics == "connector_deduplicated"
     assert registry.get("rpc.open_panel") is not None
 
 
@@ -3577,9 +3573,7 @@ def test_zeta_queueing_dispatcher_defers_agent_published_work(
             zeta_events.DraftEvent("parent.requested", "test", {})
         )
     )
-    child_event = store.list_events(
-        zeta_events.Filter(event_type="child.requested")
-    )[0]
+    child_event = store.list_events(zeta_events.Filter(event_type="child.requested"))[0]
     child_item = store.queue_item(f"qi_{child_event.id}")
 
     assert child_calls == 0
@@ -6876,9 +6870,7 @@ Summarize the repo.
         event_store.close()
 
     assert before_due == []
-    assert [event.event_type for event in after_wake] == [
-        "agent.scheduled.scheduled"
-    ]
+    assert [event.event_type for event in after_wake] == ["agent.scheduled.scheduled"]
     assert repeated == []
     assert after_wake[0].idempotency_key == (
         "schedule:scheduled:0 18 * * 0:2026-06-21T18:00:00+00:00"

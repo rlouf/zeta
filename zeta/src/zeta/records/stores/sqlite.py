@@ -331,47 +331,57 @@ class SqliteEventStore:
                   WHERE turn_id IS NOT NULL;
                 """
             )
-            rebuild: list[EventProjection] = []
-            for projection in self._projections:
-                name = getattr(projection, "name", None)
-                version = getattr(projection, "version", None)
-                reset_schema = getattr(projection, "reset_schema", None)
-                if (
-                    not isinstance(name, str)
-                    or not isinstance(version, int)
-                    or reset_schema is None
-                ):
-                    projection.init_schema(self.connection)
-                    continue
-                row = self.connection.execute(
-                    "SELECT version FROM event_projection_versions WHERE name = ?",
-                    (name,),
-                ).fetchone()
-                current_version = int(row["version"]) if row is not None else None
-                if current_version != version:
-                    reset_schema(self.connection)
-                    projection.init_schema(self.connection)
-                    self.connection.execute(
-                        """
-                        INSERT INTO event_projection_versions (name, version)
-                        VALUES (?, ?)
-                        ON CONFLICT(name) DO UPDATE SET version = excluded.version
-                        """,
-                        (name, version),
-                    )
-                    rebuild.append(projection)
-                else:
-                    projection.init_schema(self.connection)
-            if rebuild:
-                events = self.list_events(Filter())
-                for event in events:
-                    for projection in rebuild:
-                        projection.index(self.connection, event)
-                for projection in rebuild:
-                    recover = getattr(projection, "recover", None)
-                    if recover is not None:
-                        recover(self.connection)
+            rebuild = self._initialize_projection_schemas()
+            self._rebuild_upgraded_projections(rebuild)
             self.connection.commit()
+
+    def _initialize_projection_schemas(self) -> list[EventProjection]:
+        rebuild: list[EventProjection] = []
+        for projection in self._projections:
+            name = getattr(projection, "name", None)
+            version = getattr(projection, "version", None)
+            reset_schema = getattr(projection, "reset_schema", None)
+            if (
+                not isinstance(name, str)
+                or not isinstance(version, int)
+                or reset_schema is None
+            ):
+                projection.init_schema(self.connection)
+                continue
+            row = self.connection.execute(
+                "SELECT version FROM event_projection_versions WHERE name = ?",
+                (name,),
+            ).fetchone()
+            current_version = int(row["version"]) if row is not None else None
+            if current_version == version:
+                projection.init_schema(self.connection)
+                continue
+            reset_schema(self.connection)
+            projection.init_schema(self.connection)
+            self.connection.execute(
+                """
+                INSERT INTO event_projection_versions (name, version)
+                VALUES (?, ?)
+                ON CONFLICT(name) DO UPDATE SET version = excluded.version
+                """,
+                (name, version),
+            )
+            rebuild.append(projection)
+        return rebuild
+
+    def _rebuild_upgraded_projections(
+        self,
+        projections: list[EventProjection],
+    ) -> None:
+        if not projections:
+            return
+        for event in self.list_events(Filter()):
+            for projection in projections:
+                projection.index(self.connection, event)
+        for projection in projections:
+            recover = getattr(projection, "recover", None)
+            if recover is not None:
+                recover(self.connection)
 
     def accept(self, draft: DraftEvent) -> AppendOutcome:
         return self.append(Event.from_draft(draft))

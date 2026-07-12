@@ -42,6 +42,4 @@ class Capability:
             self.delivery_semantics is not None
             and self.delivery_semantics not in DELIVERY_SEMANTICS
         ):
-            raise ValueError(
-                f"invalid delivery semantics {self.delivery_semantics!r}"
-            )
+            raise ValueError(f"invalid delivery semantics {self.delivery_semantics!r}")

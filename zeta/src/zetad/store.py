@@ -68,6 +68,13 @@ class CoordinationStore(Protocol):
         now_ms: int,
     ) -> bool: ...
 
+    def observe_runtime_metric(
+        self,
+        name: str,
+        value: float,
+        **attributes: MetricAttribute,
+    ) -> None: ...
+
 
 @dataclass(frozen=True)
 class QueueClaim:
@@ -667,32 +674,38 @@ class RuntimeEventStore:
 
 def _row_to_attempt(row: sqlite3.Row) -> dict[str, Any]:
     usage = _json_column(row["usage_json"])
-    return _without_none_snapshot_fields({
-        "attempt_id": str(row["attempt_id"]),
-        "queue_item_id": str(row["queue_item_id"]),
-        "event_id": str(row["event_id"]),
-        "attempt_number": int(row["attempt_number"]),
-        "target_agent": str(row["target_agent"]),
-        "worker_name": _optional_str(row["worker_name"]),
-        "status": str(row["status"]),
-        "started_at": str(row["started_at"]),
-        "heartbeat_at": row["heartbeat_at"],
-        "finished_at": _optional_str(row["finished_at"]),
-        "error": _optional_str(row["error"]),
-        "session_id": _optional_str(row["session_id"]),
-        "run_id": _optional_str(row["run_id"]),
-        "project_generation": _optional_str(row["project_generation"]),
-        "execution_manifest_id": _optional_str(row["execution_manifest_id"]),
-        "execution_manifest": _json_column(row["execution_manifest_json"]),
-        "input_tokens": _row_token_count(row["input_tokens"], usage, "input_tokens"),
-        "output_tokens": _row_token_count(row["output_tokens"], usage, "output_tokens"),
-        "final_status": _optional_str(row["final_status"]),
-        "summary": _optional_str(row["summary"]),
-        "result": _json_column(row["result_json"]),
-        "events": _json_column(row["events_json"]),
-        "tool_calls": _json_column(row["tool_calls_json"]),
-        "usage": usage,
-    })
+    return _without_none_snapshot_fields(
+        {
+            "attempt_id": str(row["attempt_id"]),
+            "queue_item_id": str(row["queue_item_id"]),
+            "event_id": str(row["event_id"]),
+            "attempt_number": int(row["attempt_number"]),
+            "target_agent": str(row["target_agent"]),
+            "worker_name": _optional_str(row["worker_name"]),
+            "status": str(row["status"]),
+            "started_at": str(row["started_at"]),
+            "heartbeat_at": row["heartbeat_at"],
+            "finished_at": _optional_str(row["finished_at"]),
+            "error": _optional_str(row["error"]),
+            "session_id": _optional_str(row["session_id"]),
+            "run_id": _optional_str(row["run_id"]),
+            "project_generation": _optional_str(row["project_generation"]),
+            "execution_manifest_id": _optional_str(row["execution_manifest_id"]),
+            "execution_manifest": _json_column(row["execution_manifest_json"]),
+            "input_tokens": _row_token_count(
+                row["input_tokens"], usage, "input_tokens"
+            ),
+            "output_tokens": _row_token_count(
+                row["output_tokens"], usage, "output_tokens"
+            ),
+            "final_status": _optional_str(row["final_status"]),
+            "summary": _optional_str(row["summary"]),
+            "result": _json_column(row["result_json"]),
+            "events": _json_column(row["events_json"]),
+            "tool_calls": _json_column(row["tool_calls_json"]),
+            "usage": usage,
+        }
+    )
 
 
 def _without_none_snapshot_fields(record: dict[str, Any]) -> dict[str, Any]:

@@ -148,9 +148,7 @@ def project_manifest(
         "schema": PROJECT_SNAPSHOT_SCHEMA,
         "version": 1,
         "agents": [agent_manifest(spec) for spec in project.specs],
-        "events": {
-            event_type: schema for event_type, schema in project.events.items()
-        },
+        "events": {event_type: schema for event_type, schema in project.events.items()},
         "skills": {
             name: {
                 "sha256": skill.sha256,
@@ -180,9 +178,7 @@ def project_from_manifest(
     recorded_connectors = manifest.get("connectors")
     current_connectors = [
         connector_manifest(connector)
-        for connector in sorted(
-            connectors.event_connectors(), key=lambda item: item.id
-        )
+        for connector in sorted(connectors.event_connectors(), key=lambda item: item.id)
     ]
     if recorded_connectors != current_connectors:
         raise ProjectSnapshotUnavailable(

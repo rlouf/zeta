@@ -63,7 +63,8 @@ class ReturnedEventPublisher:
             api=config.model_api,
         )
         data = cast(
-            dict[str, Any], await returned if inspect.isawaitable(returned) else returned
+            dict[str, Any],
+            await returned if inspect.isawaitable(returned) else returned,
         )
         Draft202012Validator(schema).validate(data)
         event_type = data.get("type")

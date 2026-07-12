@@ -208,9 +208,7 @@ def _slack_connector(
         ingress=ingress,
         push_ingress=push_ingress,
         egress=egress,
-        egress_semantics=(
-            {"slack.message.post": egress_semantics} if egress else {}
-        ),
+        egress_semantics=({"slack.message.post": egress_semantics} if egress else {}),
     )
 
 

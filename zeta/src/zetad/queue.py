@@ -73,6 +73,18 @@ TERMINAL_QUEUE_ITEM_EVENT_TYPES = {
     "runtime.queue_item.unhandled",
 }
 
+NON_QUEUEABLE_EVENT_PREFIXES = (
+    "runtime.",
+    "zeta.",
+    "rpc.",
+    "scheduler.tick.",
+)
+
+
+def is_queueable_event(event: Event) -> bool:
+    """Return whether a durable event should enter authored-agent routing."""
+    return not event.event_type.startswith(NON_QUEUEABLE_EVENT_PREFIXES)
+
 
 def project_queue_items(events: Iterable[Event]) -> list[QueueItem]:
     items: dict[str, QueueItem] = {}

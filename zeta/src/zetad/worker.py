@@ -121,7 +121,6 @@ async def run_once(runtime: WorkerServices) -> str:
         return f"rpc {rpc_request.id}"
     record_project_snapshot(runtime.events, runtime.project_snapshot)
     publish_due_schedules(runtime)
-    enqueue_pending_events(runtime.events)
     executors = project_executors(runtime)
     return await run_available_queue_item(
         runtime.events,
@@ -295,8 +294,8 @@ async def run_available_queue_item(
     retry_policy: RetryPolicy | None = None,
 ) -> str:
     dispatcher = QueueingDispatcher(
-        events,
-        events,
+        events.journal,
+        events.coordination,
         executors=executors,
         worker_name=worker_name,
         heartbeat_interval_seconds=heartbeat_interval_seconds,
@@ -339,29 +338,9 @@ async def run_available_queue_item(
 
 
 def enqueue_pending_events(events: RuntimeEventStore) -> int:
-    queued = 0
-    for event in events.list_events(Filter()):
-        if is_runtime_event(event) or event.event_type.startswith(
-            ("zeta.", "rpc.", "scheduler.tick.")
-        ):
-            continue
-        if events.event_has_queue_item(event.id):
-            continue
-        events.ensure_pending_queue_item(event)
-        queued += 1
-    return queued
-
-
-def is_runtime_event(event: Event) -> bool:
-    return event.event_type.startswith(
-        (
-            "runtime.queue_item.",
-            "runtime.attempt.",
-            "runtime.egress.",
-            "runtime.effect.",
-            "runtime.project_snapshot.",
-        )
-    )
+    """Compatibility no-op; pending work is projected during event append."""
+    del events
+    return 0
 
 
 def pending_rpc_request(runtime: WorkerServices) -> Event | None:

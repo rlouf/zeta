@@ -4348,7 +4348,7 @@ def test_zeta_sqlite_event_store_rebuilds_outdated_projection_schema(
     assert "claimed_token" in queue_columns
     assert "claim_token" in attempt_columns
     assert "summary" in attempt_columns
-    assert projection_version["version"] == 2
+    assert projection_version["version"] == 3
 
 
 def test_zeta_sqlite_event_store_serializes_threaded_appends(
@@ -4713,6 +4713,47 @@ def test_zeta_sqlite_event_store_claims_pending_queue_items(
     assert reclaimed is not None
     assert reclaimed.queue_item_id == queue_item_id
     assert [row["queue_item_id"] for row in rows] == [queue_item_id]
+
+
+def test_zeta_sqlite_event_append_projects_pending_work_transactionally(
+    tmp_path: Path,
+) -> None:
+    event_store = zeta_events.SqliteEventStore(tmp_path / "events.sqlite3")
+
+    accepted = event_store.accept(
+        zeta_events.DraftEvent("github.issue.opened", "github", {})
+    ).event
+
+    assert event_store.list_queue_items() == [
+        {
+            "queue_item_id": f"qi_{accepted.id}",
+            "event_id": accepted.id,
+            "target_agent": "",
+            "status": "pending",
+            "available_at": accepted.timestamp_ms,
+            "claimed_by": None,
+            "claimed_until": None,
+            "attempt_count": 0,
+            "last_error": None,
+            "updated_at": accepted.timestamp_ms,
+        }
+    ]
+
+
+def test_zeta_projection_rebuild_restores_unrouted_pending_work(
+    tmp_path: Path,
+) -> None:
+    event_store = zeta_events.SqliteEventStore(tmp_path / "events.sqlite3")
+    accepted = event_store.accept(
+        zeta_events.DraftEvent("github.issue.opened", "github", {})
+    ).event
+    event_store.connection.execute("DELETE FROM queue_items")
+    event_store.connection.commit()
+
+    event_store.rebuild_projections()
+
+    assert event_store.list_queue_items()[0]["queue_item_id"] == f"qi_{accepted.id}"
+    assert event_store.list_queue_items()[0]["status"] == "pending"
 
 
 def test_zeta_sqlite_event_store_rejects_stale_queue_claim_tokens(

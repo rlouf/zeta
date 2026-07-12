@@ -8,14 +8,18 @@ import sqlite3
 from zeta.events import Event
 
 from zetad.attempts import attempt_from_event_payload
-from zetad.queue import project_one_queue_item
+from zetad.queue import (
+    is_queueable_event,
+    pending_queue_item_id,
+    project_one_queue_item,
+)
 
 
 class RuntimeEventProjection:
     """Projects runtime queue and attempt events into queryable tables."""
 
     name = "zetad.runtime"
-    version = 2
+    version = 3
 
     def init_schema(self, connection: sqlite3.Connection) -> None:
         connection.executescript(
@@ -116,6 +120,9 @@ class RuntimeEventProjection:
         )
 
     def index(self, connection: sqlite3.Connection, event: Event) -> None:
+        if is_queueable_event(event):
+            _index_pending_queue_item(connection, event)
+            return
         if event.event_type.startswith("runtime.queue_item."):
             _index_one_queue_item(connection, event)
             return
@@ -127,10 +134,36 @@ def runtime_event_projection() -> RuntimeEventProjection:
     return RuntimeEventProjection()
 
 
+def _index_pending_queue_item(connection: sqlite3.Connection, event: Event) -> None:
+    connection.execute(
+        """
+        INSERT INTO queue_items
+          (queue_item_id, event_id, target_agent, status, available_at, updated_at)
+        VALUES (?, ?, '', 'pending', ?, ?)
+        ON CONFLICT(queue_item_id) DO NOTHING
+        """,
+        (
+            pending_queue_item_id(event),
+            event.id,
+            event.timestamp_ms,
+            event.timestamp_ms,
+        ),
+    )
+
+
 def _index_one_queue_item(connection: sqlite3.Connection, event: Event) -> None:
     queue_item = project_one_queue_item(event)
     if queue_item is None:
         return
+    pending_id = f"qi_{queue_item.event_id}"
+    if queue_item.queue_item_id != pending_id:
+        connection.execute(
+            """
+            DELETE FROM queue_items
+            WHERE queue_item_id = ? AND target_agent = ''
+            """,
+            (pending_id,),
+        )
     raw_error = event.payload.get("error")
     error = raw_error if isinstance(raw_error, str) else None
     connection.execute(

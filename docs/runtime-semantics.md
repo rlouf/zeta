@@ -3,6 +3,11 @@
 Zeta separates durable historical facts from live coordination state even
 though both are stored in one SQLite database.
 
+The runtime store exposes these as separate `journal` and `coordination`
+interfaces. They intentionally share a connection and write lock today; the
+separation defines ownership and recovery semantics rather than requiring a
+second database.
+
 ## Runtime Journal
 
 The `events` table is the durable journal. Ingress, returned events, queue

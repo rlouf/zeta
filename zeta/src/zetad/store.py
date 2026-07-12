@@ -8,7 +8,7 @@ import sqlite3
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol, runtime_checkable
 
 from zeta.events import Event
 from zeta.records.events import AppendOutcome, DraftEvent
@@ -16,6 +16,55 @@ from zeta.records.stores.event_store import Filter
 from zeta.records.stores.sqlite import SqliteEventStore
 
 from zetad.projections import runtime_event_projection
+
+
+@runtime_checkable
+class RuntimeJournal(Protocol):
+    """Append-only historical truth used by orchestration components."""
+
+    def accept(self, draft: DraftEvent) -> AppendOutcome: ...
+
+    def append(self, event: Event) -> AppendOutcome: ...
+
+    def get(self, event_id: str) -> Event | None: ...
+
+    def list_events(self, filter: Filter) -> list[Event]: ...
+
+
+@runtime_checkable
+class CoordinationStore(Protocol):
+    """Ephemeral queue ownership, leases, heartbeats, and mutual exclusion."""
+
+    def queue_item(self, queue_item_id: str) -> dict[str, Any] | None: ...
+
+    def queue_item_attempt_count(self, queue_item_id: str) -> int: ...
+
+    def queue_claim_is_current(
+        self,
+        queue_item_id: str,
+        worker_name: str,
+        claim_token: str,
+    ) -> bool: ...
+
+    def heartbeat_attempt(
+        self,
+        attempt_id: str,
+        queue_item_id: str,
+        worker_name: str,
+        *,
+        claim_token: str,
+        lease_ms: int,
+        now_ms: int,
+    ) -> bool: ...
+
+    def renew_locks(
+        self,
+        keys: Iterable[str],
+        owner: str,
+        *,
+        lease_ms: int,
+        now_ms: int,
+    ) -> bool: ...
 
 
 @dataclass(frozen=True)
@@ -39,6 +88,14 @@ class RuntimeEventStore:
     @property
     def path(self) -> Path:
         return self.events.path
+
+    @property
+    def journal(self) -> RuntimeJournal:
+        return self
+
+    @property
+    def coordination(self) -> CoordinationStore:
+        return self
 
     @property
     def connection(self) -> sqlite3.Connection:

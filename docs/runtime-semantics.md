@@ -8,6 +8,11 @@ interfaces. They intentionally share a connection and write lock today; the
 separation defines ownership and recovery semantics rather than requiring a
 second database.
 
+`RuntimeCoordinator` is the production execution path for both `zeta run` and
+`zeta serve`. It claims work, acquires locks, and delegates attempts to the same
+`AttemptCoordinator`. Tests and embedded callers can use the identical path
+with `RuntimeEventStore.open(":memory:")`.
+
 ## Runtime Journal
 
 The `events` table is the durable journal. Ingress, returned events, queue
@@ -76,6 +81,12 @@ running -> completed
 ```
 
 Retries create a new attempt; they never restart or mutate a terminal attempt.
+
+An agent-published event is appended and projected as pending work during the
+current attempt. The current attempt reaches a terminal state before the
+coordinator claims that downstream event. `EventDispatcher.publish_and_run`
+retains immediate recursive behavior only as a compatibility API for embedded
+callers; daemon execution does not use it.
 
 ## Claim Fencing
 

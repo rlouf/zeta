@@ -3529,6 +3529,74 @@ def test_zeta_event_dispatcher_routes_agent_published_events(tmp_path: Path) -> 
     asyncio.run(run())
 
 
+def test_zeta_queueing_dispatcher_defers_agent_published_work(
+    tmp_path: Path,
+) -> None:
+    child_calls = 0
+
+    async def run_parent(
+        invocation: zetad_dispatch.AgentInvocation,
+    ) -> dict[str, object]:
+        await invocation.publish(
+            zeta_events.DraftEvent("child.requested", "agent:parent", {})
+        )
+        return {"outcome": "parent-complete"}
+
+    async def run_child(
+        _invocation: zetad_dispatch.AgentInvocation,
+    ) -> dict[str, object]:
+        nonlocal child_calls
+        child_calls += 1
+        return {"outcome": "child-complete"}
+
+    executors = (
+        zetad_dispatch.ExecutableAgent(
+            zetad_dispatch.AgentDefinition(
+                "parent",
+                (zetad_dispatch.EventPattern("parent.requested"),),
+            ),
+            run=run_parent,
+        ),
+        zetad_dispatch.ExecutableAgent(
+            zetad_dispatch.AgentDefinition(
+                "child",
+                (zetad_dispatch.EventPattern("child.requested"),),
+            ),
+            run=run_child,
+        ),
+    )
+    store = zeta_events.SqliteEventStore(tmp_path / "events.sqlite3")
+    dispatcher = zetad_dispatch.QueueingDispatcher(
+        store,
+        store,
+        executors=executors,
+    )
+
+    outcome = asyncio.run(
+        dispatcher.publish_and_run(
+            zeta_events.DraftEvent("parent.requested", "test", {})
+        )
+    )
+    child_event = store.list_events(
+        zeta_events.Filter(event_type="child.requested")
+    )[0]
+    child_item = store.queue_item(f"qi_{child_event.id}")
+
+    assert child_calls == 0
+    assert outcome.lifecycle_events[-1].event_type == "runtime.queue_item.completed"
+    assert child_item is not None
+    assert child_item["status"] == "pending"
+
+    asyncio.run(
+        zetad_worker.run_available_queue_item(
+            store,
+            executors,
+            worker_name="test-worker",
+        )
+    )
+    assert child_calls == 1
+
+
 def test_zeta_event_dispatcher_runs_matching_agents_in_task_group() -> None:
     async def run() -> None:
         event_store = zeta_events.MemoryEventStore()

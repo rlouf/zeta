@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import time
 from collections.abc import Iterable
 from dataclasses import dataclass, field, replace
 from functools import cached_property
@@ -50,9 +49,11 @@ from zetad.project import (
     record_project_snapshot,
 )
 from zetad.retry import RetryPolicy
+from zetad.runtime_coordinator import RuntimeCoordinator
+from zetad.runtime_coordinator import runtime_time_ms as _runtime_time_ms
 from zetad.scheduling import request_due_schedules
 from zetad.session_turn import session_turn_agent
-from zetad.store import QueueClaim, RuntimeEventStore
+from zetad.store import RuntimeEventStore
 
 logger = logging.getLogger(__name__)
 
@@ -293,54 +294,29 @@ async def run_available_queue_item(
     heartbeat_interval_seconds: float = ATTEMPT_HEARTBEAT_INTERVAL_SECONDS,
     retry_policy: RetryPolicy | None = None,
 ) -> str:
-    dispatcher = QueueingDispatcher(
-        events.journal,
-        events.coordination,
-        executors=executors,
+    coordinator = RuntimeCoordinator(
+        events,
+        executors,
         worker_name=worker_name,
-        heartbeat_interval_seconds=heartbeat_interval_seconds,
         lease_ms=lease_ms,
+        heartbeat_interval_seconds=heartbeat_interval_seconds,
         retry_policy=retry_policy,
     )
-    skipped = skipped_queue_items or set()
-    while True:
-        claimed = claim_available_queue_item(
-            events,
-            worker_name=worker_name,
-            skipped_queue_items=skipped,
-            lease_ms=lease_ms,
-        )
-        if claimed is None:
-            return "queue empty"
-        lock_keys = queue_item_lock_keys(events, executors, claimed.queue_item_id)
-        lock_owner = queue_item_lock_owner(claimed)
-        now_ms = runtime_time_ms()
-        if not events.acquire_locks(
-            lock_keys,
-            lock_owner,
-            lease_ms=lease_ms,
-            now_ms=now_ms,
-        ):
-            events.release_queue_claim(
-                claimed.queue_item_id,
-                worker_name,
-                claim_token=claimed.token,
-                now_ms=now_ms,
-            )
-            skipped.add(claimed.queue_item_id)
-            continue
-        dispatcher.claim_token = claimed.token
-        try:
-            lifecycle_events = await dispatcher.run_queue_item(claimed.queue_item_id)
-            return run_once_message(claimed.queue_item_id, lifecycle_events)
-        finally:
-            events.release_locks(lock_keys, lock_owner)
+    outcome = await coordinator.run_next(skipped_queue_items=skipped_queue_items)
+    if outcome is None:
+        return "queue empty"
+    return run_once_message(outcome.queue_item_id, outcome.lifecycle_events)
 
 
 def enqueue_pending_events(events: RuntimeEventStore) -> int:
     """Compatibility no-op; pending work is projected during event append."""
     del events
     return 0
+
+
+def runtime_time_ms() -> int:
+    """Compatibility export for callers that sampled the worker clock."""
+    return _runtime_time_ms()
 
 
 def pending_rpc_request(runtime: WorkerServices) -> Event | None:
@@ -421,64 +397,6 @@ def run_once_message(queue_item_id: str, lifecycle_events: list[Event]) -> str:
         ):
             return f"routed {event.payload['event_id']}"
     return f"ran {queue_item_id}"
-
-
-def claim_available_queue_item(
-    events: RuntimeEventStore,
-    *,
-    worker_name: str,
-    skipped_queue_items: set[str] | None = None,
-    lease_ms: int = QUEUE_LEASE_MS,
-) -> QueueClaim | None:
-    now_ms = runtime_time_ms()
-    events.reconcile_expired_queue_claims(now_ms=now_ms)
-    events.reconcile_expired_locks(now_ms=now_ms)
-    return events.claim_next_queue_item(
-        worker_name,
-        lease_ms=lease_ms,
-        now_ms=now_ms,
-        exclude_queue_item_ids=skipped_queue_items or (),
-    )
-
-
-def queue_item_lock_keys(
-    events: RuntimeEventStore,
-    executors: tuple[ExecutableAgent, ...],
-    queue_item_id: str,
-) -> tuple[str, ...]:
-    row = events.queue_item(queue_item_id)
-    if row is None:
-        return ()
-    target_agent = str(row["target_agent"])
-    if target_agent:
-        return agent_lock_keys(executors, target_agent)
-    event = events.get(str(row["event_id"]))
-    if event is None:
-        return ()
-    matching_executors = [
-        agent for agent in executors if agent.definition.accepts(event)
-    ]
-    if len(matching_executors) != 1:
-        return ()
-    return matching_executors[0].definition.lock_keys
-
-
-def agent_lock_keys(
-    executors: tuple[ExecutableAgent, ...],
-    agent_id: str,
-) -> tuple[str, ...]:
-    for agent in executors:
-        if agent.definition.agent_id == agent_id:
-            return agent.definition.lock_keys
-    return ()
-
-
-def queue_item_lock_owner(claim: QueueClaim) -> str:
-    return claim.token
-
-
-def runtime_time_ms() -> int:
-    return time.time_ns() // 1_000_000
 
 
 async def run_forever(

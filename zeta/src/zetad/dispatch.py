@@ -149,12 +149,11 @@ class TerminalQueueItemError(RuntimeError):
 
 
 class EventDispatcher:
-    """Route matching agents and run them immediately, in one process.
+    """Compatibility facade that routes and runs work immediately in-process.
 
-    The base dispatcher owns event publication, routing, immediate queue-item
-    execution, and retry/dead-letter authoring. It has no durable queue claims,
-    so its fencing and heartbeat hooks are no-ops; `QueueingDispatcher` layers
-    those on for daemon-style, at-least-once execution.
+    Production workers use `RuntimeCoordinator` and `QueueingDispatcher`. This
+    facade retains recursive `publish_and_run` behavior for embedded callers
+    and tests, without durable claim fencing or heartbeat renewal.
     """
 
     def __init__(
@@ -165,6 +164,7 @@ class EventDispatcher:
         executors: Iterable[ExecutableAgent] = (),
         publish_event: Callable[[Event], None] | None = None,
         retry_policy: RetryPolicy | None = None,
+        recursive_publication: bool = True,
     ) -> None:
         self.event_sink = event_sink
         self.executors = tuple(executors)
@@ -176,6 +176,7 @@ class EventDispatcher:
         self.publish_callback = publish_event
         self.worker_name: str | None = None
         self.retry_policy = retry_policy or RetryPolicy()
+        self.recursive_publication = recursive_publication
         self.lifecycle = LifecycleRecorder(
             event_sink,
             publish_event=publish_event,
@@ -623,7 +624,11 @@ class EventDispatcher:
             if tagged.event_type.startswith(("runtime.egress.", "runtime.effect.")):
                 outcome = await self._accept_event(tagged)
             else:
-                outcome = await self.publish_and_run(tagged)
+                outcome = (
+                    await self.publish_and_run(tagged)
+                    if self.recursive_publication
+                    else await self.publish_event(tagged)
+                )
             return outcome.event
 
         return publish
@@ -657,6 +662,7 @@ class QueueingDispatcher(EventDispatcher):
             executors=executors,
             publish_event=publish_event,
             retry_policy=retry_policy,
+            recursive_publication=False,
         )
         self.queue_store = queue_store
         self.worker_name = worker_name

@@ -8,7 +8,17 @@ execution path, immutable project generations, explicit external-effect
 guarantees, and a documented boundary between historical truth and live
 coordination.
 
-## Current State
+## Implementation Status
+
+Implemented on `main` in incremental commits. Milestones 1 through 5 are
+complete. Milestone 6 includes runtime health instrumentation and expanded
+transition, fencing, recovery, and effect-identity tests.
+
+The authored-agent frontmatter changes originally listed in Milestone 6 were
+not pursued. `locks` remains an internal extension, and custom metadata rules
+are unchanged. Package renaming and database-backend changes remain deferred.
+
+## Baseline At Plan Creation
 
 - Connector egress already carries idempotency keys, and the Slack connector
   forwards them as `client_msg_id`. Delivery semantics and retry enforcement
@@ -95,9 +105,9 @@ guarantees.
    delay, trace writes, retries, and event-loop stalls.
 2. Add property tests for transition legality, projection rebuild equivalence,
    duplicate claims, and effect crash points.
-3. Make `locks` a typed authored-agent field.
-4. Reserve `x-*` for custom frontmatter and reject other unknown unnamespaced
-   fields.
+3. Not pursued: make `locks` a typed authored-agent field.
+4. Not pursued: reserve `x-*` for custom frontmatter and reject other unknown
+   unnamespaced fields.
 
 ## Deferred
 

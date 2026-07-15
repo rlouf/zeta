@@ -54,8 +54,6 @@ name: Note Reader
 description: Summarizes files dropped into the inbox.
 resumable: true
 accepts:
-  - file.created
-ingress:
   - event: file.created
     filter:
       dir: ~/zeta-inbox

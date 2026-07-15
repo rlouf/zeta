@@ -4,15 +4,15 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Protocol, runtime_checkable
 
+from jsonschema import Draft202012Validator
+from jsonschema.exceptions import SchemaError, ValidationError
+
 from connectors import (
     EgressBinding,
     EventConnector,
     EventConnectorRegistry,
     IngressBinding,
 )
-from jsonschema import Draft202012Validator
-from jsonschema.exceptions import SchemaError, ValidationError
-
 from zeta.agents.events import EventRegistry
 from zeta.agents.prompts import validate_prompt
 from zeta.agents.spec import AgentSpec
@@ -106,8 +106,6 @@ def validate_connector_bindings(
 
 def validate_manifest_sections(spec: AgentSpec) -> None:
     for key in spec.manifest:
-        if key in {"ingress", "egress"}:
-            continue
         raise ManifestError(
             f"agent {spec.slug!r} uses unknown manifest section {key!r}"
         )
@@ -131,10 +129,11 @@ def validate_ingress_binding(
         raise ManifestError(
             f"agent {spec.slug!r} ingress event {binding.event!r} requires idempotency_key"
         )
-    validate_binding_filter(
+    validate_binding_config(
         binding.filter,
         connector.filters.get(binding.event),
         f"agent {spec.slug!r} has invalid ingress filter for {binding.event!r}",
+        "filter",
     )
 
 
@@ -152,10 +151,11 @@ def validate_egress_binding(
         raise ManifestError(
             f"agent {spec.slug!r} egress event {binding.event!r} is not listed in returns"
         )
-    validate_binding_filter(
-        binding.filter,
+    validate_binding_config(
+        binding.options,
         connector.filters.get(binding.event),
-        f"agent {spec.slug!r} has invalid egress filter for {binding.event!r}",
+        f"agent {spec.slug!r} has invalid egress options for {binding.event!r}",
+        "options",
     )
 
 
@@ -168,121 +168,31 @@ def connector_for_event(
     return connectors.connector_for_event(event_type)
 
 
-def validate_binding_filter(
+def validate_binding_config(
     value: Mapping[str, Any],
     schema: Mapping[str, Any] | None,
     message: str,
+    noun: str,
 ) -> None:
     if schema is None:
         if value:
-            raise ManifestError(f"{message}: filter is not supported")
+            verb = "is" if noun == "filter" else "are"
+            raise ManifestError(f"{message}: {noun} {verb} not supported")
         return
     try:
         Draft202012Validator.check_schema(schema)
         Draft202012Validator(schema).validate(dict(value))
     except SchemaError as exc:
         raise ManifestError(
-            f"{message}: connector filter schema is invalid: {exc.message}"
+            f"{message}: connector {noun} schema is invalid: {exc.message}"
         ) from exc
     except ValidationError as exc:
         raise ManifestError(f"{message}: {exc.message}") from exc
 
 
 def ingress_bindings(spec: AgentSpec) -> tuple[IngressBinding, ...]:
-    section = spec.manifest.get("ingress", ())
-    return tuple(
-        IngressBinding(
-            event=required_binding_string(item, "ingress", "event", spec),
-            filter=binding_filter(item.get("filter", {}), "ingress", spec),
-            idempotency_key=optional_binding_string(
-                item.get("idempotency_key"),
-                "ingress",
-                "idempotency_key",
-                spec,
-            ),
-        )
-        for item in binding_items(section, "ingress", spec)
-    )
+    return spec.ingress
 
 
 def egress_bindings(spec: AgentSpec) -> tuple[EgressBinding, ...]:
-    section = spec.manifest.get("egress", ())
-    return tuple(
-        EgressBinding(
-            event=required_binding_string(item, "egress", "event", spec),
-            filter=binding_filter(item.get("filter", {}), "egress", spec),
-            idempotency_key=optional_binding_string(
-                item.get("idempotency_key"),
-                "egress",
-                "idempotency_key",
-                spec,
-            ),
-        )
-        for item in binding_items(section, "egress", spec)
-    )
-
-
-def binding_items(
-    section: Any,
-    key: str,
-    spec: AgentSpec,
-) -> tuple[Mapping[str, Any], ...]:
-    if section is None or section == ():
-        return ()
-    if not isinstance(section, list | tuple):
-        raise ManifestError(
-            f"agent {spec.slug!r} has invalid {key!r} section: expected list"
-        )
-    return tuple(binding_item(item, key, spec) for item in section)
-
-
-def binding_item(value: Any, key: str, spec: AgentSpec) -> Mapping[str, Any]:
-    if not isinstance(value, Mapping):
-        raise ManifestError(
-            f"agent {spec.slug!r} has invalid {key!r} section: expected object"
-        )
-    supported = {"event", "filter", "idempotency_key"}
-    unknown = sorted(set(value) - supported)
-    if unknown:
-        raise ManifestError(
-            f"agent {spec.slug!r} has invalid {key!r} section: "
-            f"unsupported field {unknown[0]!r}"
-        )
-    return value
-
-
-def required_binding_string(
-    value: Mapping[str, Any],
-    key: str,
-    name: str,
-    spec: AgentSpec,
-) -> str:
-    item = value.get(name)
-    if not isinstance(item, str) or item == "":
-        raise ManifestError(
-            f"agent {spec.slug!r} has invalid {key!r} section: {name} is required"
-        )
-    return item
-
-
-def optional_binding_string(
-    value: Any,
-    key: str,
-    name: str,
-    spec: AgentSpec,
-) -> str | None:
-    if value is None:
-        return None
-    if not isinstance(value, str) or value == "":
-        raise ManifestError(
-            f"agent {spec.slug!r} has invalid {key!r} section: {name} must be a string"
-        )
-    return value
-
-
-def binding_filter(value: Any, key: str, spec: AgentSpec) -> Mapping[str, Any]:
-    if not isinstance(value, Mapping):
-        raise ManifestError(
-            f"agent {spec.slug!r} has invalid {key!r} section: filter must be an object"
-        )
-    return dict(value)
+    return spec.egress

@@ -120,9 +120,14 @@ model:
   name: qwen3-coder
   url: http://127.0.0.1:8080/v1/chat/completions
 accepts:
-  - slack.message.received
+  - event: slack.message.received
+    filter:
+      channel_ids: ["C123"]
+    idempotency_key: "slack:message:{team_id}:{channel_id}:{message_ts}"
 returns:
-  - slack.message.post
+  - event: slack.message.post
+    with:
+      channel_ids: ["C123"]
 tools:
   - read
   - grep
@@ -131,15 +136,6 @@ skills:
 schedules:
   - cron: "0 9 * * 1"
     timezone: Europe/Paris
-ingress:
-  - event: slack.message.received
-    filter:
-      channel_ids: ["C123"]
-    idempotency_key: "slack:message:{team_id}:{channel_id}:{message_ts}"
-egress:
-  - event: slack.message.post
-    filter:
-      channel_ids: ["C123"]
 resumable: true
 ---
 Reply to the Slack message:
@@ -161,8 +157,10 @@ Core frontmatter fields:
 | `tools` | no | Capability names granted to the model. |
 | `skills` | no | Shared Markdown skills from `agents/skills/`. |
 | `schedules` | no | Cron triggers that publish synthetic events. |
-| `ingress` | no | Connector bindings that ingest external events. |
-| `egress` | no | Connector bindings that deliver returned events. |
+| `accepts[*].filter` | no | Connector-owned inbound event selection. |
+| `accepts[*].idempotency_key` | no | Required for connector ingress bindings. |
+| `returns[*].with` | no | Connector-owned delivery options for returned events. |
+| `returns[*].idempotency_key` | no | Optional egress idempotency template. |
 
 Schedules automatically add `agent.<slug>.scheduled` to `accepts`. For example,
 `agents/release-manager.md` with a schedule accepts
@@ -293,27 +291,25 @@ event_connectors:
 Connector-provided event schemas are merged with `agents/events/`. Duplicate
 schemas must be identical.
 
-Ingress and egress sections bind an agent to connector-owned events:
+Connector options live on the event entries they configure:
 
 ```yaml
 accepts:
-  - slack.message.received
-returns:
-  - slack.message.post
-ingress:
   - event: slack.message.received
     filter:
       channel_ids: ["C123"]
     idempotency_key: "slack:message:{team_id}:{channel_id}:{message_ts}"
-egress:
+returns:
   - event: slack.message.post
-    filter:
+    with:
       channel_ids: ["C123"]
 ```
 
-`filter` is validated against the connector's filter schema. Ingress bindings
-require `idempotency_key` so connectors can avoid duplicate ingests. Egress
-defaults to a connector/event idempotency key when one is not supplied.
+`accepts[*].filter` is validated against the connector's ingress selection
+schema. Connector ingress bindings require `idempotency_key` so connectors can
+avoid duplicate ingests. `returns[*].with` is validated against the connector's
+egress options schema. Egress defaults to a connector/event idempotency key when
+one is not supplied.
 
 The bundled Slack connector uses:
 

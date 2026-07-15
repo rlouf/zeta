@@ -19,10 +19,10 @@ class IngressBinding:
 
 @dataclass(frozen=True)
 class EgressBinding:
-    """External event binding parsed from an egress manifest section."""
+    """External event binding parsed from a returned event declaration."""
 
     event: str
-    filter: Mapping[str, Any] = field(default_factory=dict)
+    options: Mapping[str, Any] = field(default_factory=dict)
     idempotency_key: str | None = None
 
 

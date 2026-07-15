@@ -12,14 +12,6 @@ from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
-from connectors import (
-    EgressBinding,
-    EventConnector,
-    EventConnectorRegistry,
-    InboundRequest,
-    InboundResponse,
-    IngressBinding,
-)
 from connectors.slack import (
     SLACK_MESSAGE_POST,
     SLACK_MESSAGE_RECEIVED,
@@ -66,11 +58,6 @@ from zeta.events import DraftEvent, Event
 from zeta.records.stores.event_store import Filter
 from zeta.run.config import AgentConfig
 from zeta.run.runtime import AgentRunResult
-from zetad import connector_bridge as zetad_connector_bridge
-from zetad import dispatch as zetad_dispatch
-from zetad import queue as zetad_queue
-from zetad import scheduling as zetad_scheduling
-from zetad import worker as zetad_worker
 from zetad.agents import (
     AgentDefinition,
     EventPattern,
@@ -80,6 +67,20 @@ from zetad.agents import (
     config_for_spec,
 )
 from zetad.store import RuntimeEventStore
+
+from connectors import (
+    EgressBinding,
+    EventConnector,
+    EventConnectorRegistry,
+    InboundRequest,
+    InboundResponse,
+    IngressBinding,
+)
+from zetad import connector_bridge as zetad_connector_bridge
+from zetad import dispatch as zetad_dispatch
+from zetad import queue as zetad_queue
+from zetad import scheduling as zetad_scheduling
+from zetad import worker as zetad_worker
 
 
 def runtime_sqlite_event_store(path: Path) -> RuntimeEventStore:
@@ -503,7 +504,7 @@ Run.
     assert config.allowed_capabilities == ("bash",)
 
 
-def test_zeta_agent_spec_keeps_ingress_and_egress_as_event_sections(
+def test_zeta_agent_spec_loads_inline_connector_bindings(
     tmp_path: Path,
 ) -> None:
     spec = zeta_agents.load_spec(
@@ -513,17 +514,13 @@ def test_zeta_agent_spec_keeps_ingress_and_egress_as_event_sections(
 name: Support
 description: Replies to Slack support messages.
 accepts:
-  - slack.message.received
-returns:
-  - slack.message.post
-ingress:
   - event: slack.message.received
     filter:
       channel_ids: ["C123"]
     idempotency_key: "slack:message:{team_id}:{channel_id}:{message_ts}"
-egress:
+returns:
   - event: slack.message.post
-    filter:
+    with:
       channel_ids: ["C123"]
 ---
 Reply.
@@ -531,21 +528,9 @@ Reply.
         )
     )
 
-    assert spec.manifest == {
-        "ingress": [
-            {
-                "event": "slack.message.received",
-                "filter": {"channel_ids": ["C123"]},
-                "idempotency_key": "slack:message:{team_id}:{channel_id}:{message_ts}",
-            }
-        ],
-        "egress": [
-            {
-                "event": "slack.message.post",
-                "filter": {"channel_ids": ["C123"]},
-            }
-        ],
-    }
+    assert spec.manifest == {}
+    assert spec.accepts == ("slack.message.received",)
+    assert spec.returns == ("slack.message.post",)
     assert zeta_agents.ingress_bindings(spec) == (
         zeta_agents.IngressBinding(
             event="slack.message.received",
@@ -556,10 +541,56 @@ Reply.
     assert zeta_agents.egress_bindings(spec) == (
         zeta_agents.EgressBinding(
             event="slack.message.post",
-            filter={"channel_ids": ["C123"]},
+            options={"channel_ids": ["C123"]},
             idempotency_key=None,
         ),
     )
+
+
+@pytest.mark.parametrize(
+    ("frontmatter", "message"),
+    [
+        (
+            """accepts:
+  - filter:
+      channel_ids: ["C123"]
+""",
+            "event is required",
+        ),
+        (
+            """returns:
+  - with:
+      channel_ids: ["C123"]
+""",
+            "event is required",
+        ),
+        (
+            """returns:
+  - event: slack.message.post
+    filter:
+      channel_ids: ["C123"]
+""",
+            "use 'with' for returned event options",
+        ),
+    ],
+)
+def test_zeta_agent_spec_rejects_invalid_event_entries(
+    tmp_path: Path,
+    frontmatter: str,
+    message: str,
+) -> None:
+    with pytest.raises(zeta_agents.SpecError, match=message):
+        zeta_agents.load_spec(
+            _write_spec(
+                tmp_path / "support.md",
+                f"""---
+name: Support
+description: Replies to Slack support messages.
+{frontmatter}---
+Reply.
+""",
+            )
+        )
 
 
 def test_zeta_agent_spec_loads_skills_as_core_metadata(tmp_path: Path) -> None:
@@ -1070,7 +1101,7 @@ def test_zeta_slack_connector_posts_message_events() -> None:
         Event.from_draft(event),
         zeta_agents.EgressBinding(
             event=zeta_agents.SLACK_MESSAGE_POST,
-            filter={"channel_ids": ["C123"]},
+            options={"channel_ids": ["C123"]},
         ),
         "idem-1",
     )
@@ -1129,7 +1160,7 @@ def test_zeta_slack_connector_filters_channels() -> None:
                 ),
                 zeta_agents.EgressBinding(
                     event=zeta_agents.SLACK_MESSAGE_POST,
-                    filter={"channel_ids": ["C123"]},
+                    options={"channel_ids": ["C123"]},
                 ),
                 "idem-1",
             ),
@@ -1299,8 +1330,6 @@ def test_zeta_agent_project_uses_enabled_event_connector_entry_points(
 name: Support
 description: Replies to Slack support messages.
 accepts:
-  - slack.message.received
-ingress:
   - event: slack.message.received
     filter:
       channel_ids: ["C123"]
@@ -1334,17 +1363,13 @@ def test_zeta_agent_project_merges_connector_event_schemas(
 name: Support
 description: Replies to Slack support messages.
 accepts:
-  - slack.message.received
-returns:
-  - slack.message.post
-ingress:
   - event: slack.message.received
     filter:
       channel_ids: ["C123"]
     idempotency_key: "slack:message:{team_id}:{channel_id}:{message_ts}"
-egress:
+returns:
   - event: slack.message.post
-    filter:
+    with:
       channel_ids: ["C123"]
 ---
 Reply.
@@ -1379,8 +1404,6 @@ def test_zeta_agent_project_rejects_conflicting_connector_event_schema(
 name: Support
 description: Replies to Slack support messages.
 accepts:
-  - slack.message.received
-ingress:
   - event: slack.message.received
     filter:
       channel_ids: ["C123"]
@@ -1419,8 +1442,6 @@ def test_zeta_agent_project_accepts_identical_local_connector_event_schema(
 name: Support
 description: Replies to Slack support messages.
 accepts:
-  - slack.message.received
-ingress:
   - event: slack.message.received
     filter:
       channel_ids: ["C123"]
@@ -1468,8 +1489,6 @@ Run.
     [
         (
             """accepts:
-  - slack.message.received
-ingress:
   - event: missing.event
     idempotency_key: "k"
 """,
@@ -1477,8 +1496,6 @@ ingress:
         ),
         (
             """accepts:
-  - slack.message.received
-ingress:
   - event: slack.channel.joined
     idempotency_key: "k"
 """,
@@ -1486,25 +1503,14 @@ ingress:
         ),
         (
             """accepts:
-  - other.event
-ingress:
   - event: slack.message.received
-    idempotency_key: "k"
-""",
-            "not listed in accepts",
-        ),
-        (
-            """accepts:
-  - slack.message.received
-ingress:
-  - event: slack.message.received
+    filter:
+      channel_ids: ["C123"]
 """,
             "requires idempotency_key",
         ),
         (
             """accepts:
-  - slack.message.received
-ingress:
   - event: slack.message.received
     filter:
       channel_ids: [1]
@@ -1514,27 +1520,23 @@ ingress:
         ),
         (
             """returns:
-  - slack.message.post
-egress:
   - event: missing.event
 """,
             "unknown egress event 'missing.event'",
         ),
         (
             """returns:
-  - slack.message.post
-egress:
   - event: slack.message.delete
 """,
             "unknown egress event 'slack.message.delete'",
         ),
         (
             """returns:
-  - other.event
-egress:
   - event: slack.message.post
+    with:
+      channel_ids: [1]
 """,
-            "not listed in returns",
+            "invalid egress options",
         ),
     ],
 )
@@ -1563,6 +1565,46 @@ Reply.
         zeta_agents.validate_agent_project(project)
 
 
+@pytest.mark.parametrize(
+    "frontmatter",
+    [
+        """accepts:
+  - slack.message.received
+ingress:
+  - event: slack.message.received
+    idempotency_key: "k"
+""",
+        """returns:
+  - slack.message.post
+egress:
+  - event: slack.message.post
+""",
+    ],
+)
+def test_zeta_agent_project_rejects_legacy_connector_sections(
+    tmp_path: Path,
+    frontmatter: str,
+) -> None:
+    agents_dir = tmp_path / "agents"
+    agents_dir.mkdir()
+    _write_spec(
+        agents_dir / "support.md",
+        f"""---
+name: Support
+description: Replies to Slack support messages.
+{frontmatter}---
+Reply.
+""",
+    )
+    project = zeta_agents.load_agent_project(
+        agents_dir,
+        registry=connector_registry(_slack_connector()),
+    )
+
+    with pytest.raises(zeta_agents.ManifestError, match="unknown manifest section"):
+        zeta_agents.validate_agent_project(project)
+
+
 def test_zeta_ingress_once_appends_connector_events(
     tmp_path: Path,
 ) -> None:
@@ -1574,8 +1616,6 @@ def test_zeta_ingress_once_appends_connector_events(
 name: Support
 description: Replies to Slack support messages.
 accepts:
-  - slack.message.received
-ingress:
   - event: slack.message.received
     filter:
       channel_ids: ["C123"]
@@ -1650,8 +1690,6 @@ def test_zeta_ingress_forever_continues_after_connector_failure(
 name: Support
 description: Replies to Slack support messages.
 accepts:
-  - slack.message.received
-ingress:
   - event: slack.message.received
     filter:
       channel_ids: ["C123"]
@@ -1927,10 +1965,8 @@ def test_zeta_egress_binding_handles_returned_event(
 name: Support
 description: Sends Slack support messages.
 returns:
-  - slack.message.post
-egress:
   - event: slack.message.post
-    filter:
+    with:
       channel_ids: ["C123"]
 ---
 Send.
@@ -1942,7 +1978,7 @@ Send.
         binding: EgressBinding,
         idempotency_key: str,
     ) -> dict[str, str]:
-        assert binding.filter == {"channel_ids": ["C123"]}
+        assert binding.options == {"channel_ids": ["C123"]}
         calls.append((event.payload["text"], idempotency_key))
         return {"provider_message_id": "m1"}
 
@@ -1992,10 +2028,8 @@ def test_zeta_egress_binding_records_failure_without_failing_queue_item(
 name: Support
 description: Sends Slack support messages.
 returns:
-  - slack.message.post
-egress:
   - event: slack.message.post
-    filter:
+    with:
       channel_ids: ["C123"]
 ---
 Send.
@@ -2054,10 +2088,8 @@ def test_zeta_slack_connector_failures_are_recorded_by_egress(
 name: Support
 description: Sends Slack support messages.
 returns:
-  - slack.message.post
-egress:
   - event: slack.message.post
-    filter:
+    with:
       channel_ids: ["C123"]
 ---
 Send.
@@ -2104,13 +2136,11 @@ def test_zeta_scheduler_loads_project_with_connector_bindings(tmp_path: Path) ->
 name: Scheduled
 description: Sends scheduled Slack updates.
 returns:
-  - slack.message.post
+  - event: slack.message.post
+    with:
+      channel_ids: ["C123"]
 schedules:
   - cron: "* * * * *"
-egress:
-  - event: slack.message.post
-    filter:
-      channel_ids: ["C123"]
 ---
 Send a scheduled update.
 """,

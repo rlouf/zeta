@@ -231,7 +231,7 @@ async def post_slack_message(
 ) -> Mapping[str, Any]:
     channel_id = required_payload_string(event.payload, "channel_id")
     text = required_payload_string(event.payload, "text")
-    channels = slack_channel_ids(binding.filter)
+    channels = slack_channel_ids(binding.options)
     if channels and channel_id not in channels:
         raise ValueError(
             f"Slack channel {channel_id!r} is not allowed by binding filter"

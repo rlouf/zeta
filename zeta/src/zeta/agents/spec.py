@@ -9,6 +9,8 @@ from typing import Any
 
 import yaml
 
+from connectors import EgressBinding, IngressBinding
+
 SLUG_PATTERN = re.compile(r"^[a-z0-9_-]+$")
 BUILT_IN_FRONTMATTER_KEYS = frozenset(
     {
@@ -72,6 +74,8 @@ class AgentSpec:
     schedules: tuple[ScheduleEntry, ...] = ()
     retry: RetrySpec | None = None
     base_dir: Path | None = None
+    ingress: tuple[IngressBinding, ...] = ()
+    egress: tuple[EgressBinding, ...] = ()
     manifest: dict[str, Any] = field(default_factory=dict)
 
 
@@ -93,9 +97,13 @@ def load_spec(path: str | Path) -> AgentSpec:
     frontmatter, instructions = split_frontmatter(content, path)
     slug = derive_slug(path)
     try:
-        authored_accepts = string_tuple(frontmatter.get("accepts", ()), "accepts", path)
+        authored_accepts, ingress = accepts_entries(
+            frontmatter.get("accepts", ()),
+            path,
+        )
         schedules = schedule_tuple(frontmatter.get("schedules", ()), path)
         accepts = accepts_with_schedules(authored_accepts, schedules, slug)
+        returns, egress = returns_entries(frontmatter.get("returns", ()), path)
         return AgentSpec(
             slug=slug,
             name=required_string(frontmatter, "name", path),
@@ -109,12 +117,14 @@ def load_spec(path: str | Path) -> AgentSpec:
             ),
             model=model_spec(frontmatter.get("model"), path),
             accepts=accepts,
-            returns=string_tuple(frontmatter.get("returns", ()), "returns", path),
+            returns=returns,
             skills=string_tuple(frontmatter.get("skills", ()), "skills", path),
             tools=string_tuple(frontmatter.get("tools", ()), "tools", path),
             schedules=schedules,
             retry=retry_spec(frontmatter.get("retry"), path),
             base_dir=base_dir_field(frontmatter.get("base_dir"), path),
+            ingress=ingress,
+            egress=egress,
             manifest={
                 key: value
                 for key, value in frontmatter.items()
@@ -283,6 +293,148 @@ def string_tuple(value: Any, field: str, path: Path) -> tuple[str, ...]:
             )
         items.append(item)
     return tuple(items)
+
+
+def accepts_entries(
+    value: Any, path: Path
+) -> tuple[tuple[str, ...], tuple[IngressBinding, ...]]:
+    if value is None or value == ():
+        return (), ()
+    if not isinstance(value, list | tuple):
+        raise SpecError(f"invalid value for 'accepts' in {path}: expected list")
+    events: list[str] = []
+    bindings: list[IngressBinding] = []
+    for index, item in enumerate(value):
+        if isinstance(item, str) and item:
+            events.append(item)
+            continue
+        entry = event_entry(item, "accepts", index, path)
+        event = required_event(entry, "accepts", index, path)
+        events.append(event)
+        bindings.append(
+            IngressBinding(
+                event=event,
+                filter=mapping_field(
+                    entry.get("filter", {}),
+                    "accepts",
+                    "filter",
+                    index,
+                    path,
+                ),
+                idempotency_key=optional_string_field(
+                    entry.get("idempotency_key"),
+                    "accepts",
+                    "idempotency_key",
+                    index,
+                    path,
+                ),
+            )
+        )
+    return tuple(events), tuple(bindings)
+
+
+def returns_entries(
+    value: Any, path: Path
+) -> tuple[tuple[str, ...], tuple[EgressBinding, ...]]:
+    if value is None or value == ():
+        return (), ()
+    if not isinstance(value, list | tuple):
+        raise SpecError(f"invalid value for 'returns' in {path}: expected list")
+    events: list[str] = []
+    bindings: list[EgressBinding] = []
+    for index, item in enumerate(value):
+        if isinstance(item, str) and item:
+            events.append(item)
+            continue
+        entry = event_entry(item, "returns", index, path)
+        event = required_event(entry, "returns", index, path)
+        events.append(event)
+        bindings.append(
+            EgressBinding(
+                event=event,
+                options=mapping_field(
+                    entry.get("with", {}),
+                    "returns",
+                    "with",
+                    index,
+                    path,
+                ),
+                idempotency_key=optional_string_field(
+                    entry.get("idempotency_key"),
+                    "returns",
+                    "idempotency_key",
+                    index,
+                    path,
+                ),
+            )
+        )
+    return tuple(events), tuple(bindings)
+
+
+def event_entry(value: Any, field: str, index: int, path: Path) -> Mapping[str, Any]:
+    if not isinstance(value, Mapping):
+        raise SpecError(
+            f"invalid value for {field!r} in {path}: item {index} "
+            "must be a non-empty string or object"
+        )
+    supported = (
+        {"event", "filter", "idempotency_key"}
+        if field == "accepts"
+        else {"event", "with", "idempotency_key"}
+    )
+    if field == "returns" and "filter" in value:
+        raise SpecError(
+            f"invalid value for 'returns' in {path}: item {index} must use "
+            "'with' for returned event options"
+        )
+    unknown = sorted(set(value) - supported)
+    if unknown:
+        raise SpecError(
+            f"invalid value for {field!r} in {path}: item {index} has "
+            f"unsupported field {unknown[0]!r}"
+        )
+    return value
+
+
+def required_event(value: Mapping[str, Any], field: str, index: int, path: Path) -> str:
+    event = value.get("event")
+    if not isinstance(event, str) or event == "":
+        raise SpecError(
+            f"invalid value for {field!r} in {path}: item {index} event is required"
+        )
+    return event
+
+
+def optional_string_field(
+    value: Any,
+    field: str,
+    name: str,
+    index: int,
+    path: Path,
+) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str) or value == "":
+        raise SpecError(
+            f"invalid value for {field!r} in {path}: item {index} "
+            f"{name} must be a string"
+        )
+    return value
+
+
+def mapping_field(
+    value: Any,
+    field: str,
+    name: str,
+    index: int,
+    path: Path,
+) -> Mapping[str, Any]:
+    if not isinstance(value, Mapping):
+        raise SpecError(
+            f"invalid value for {field!r} in {path}: item {index} "
+            f"{name} must be an object"
+        )
+    return dict(value)
 
 
 def schedule_tuple(value: Any, path: Path) -> tuple[ScheduleEntry, ...]:

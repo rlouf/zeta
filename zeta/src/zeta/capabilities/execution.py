@@ -33,7 +33,7 @@ from zeta.records.events import (
     tool_result_status,
 )
 from zeta.records.provenance import project_prompt_trace_projection
-from zeta.records.stores.object_store import Store
+from zeta.substrate import Store
 
 
 class CapabilityExecutor(Protocol):

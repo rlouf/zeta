@@ -8,7 +8,6 @@ from datetime import UTC, datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from connectors import EventConnectorRegistry
 from croniter import croniter
 from zeta.agents.resources import (
     load_agent_project,
@@ -20,6 +19,7 @@ from zeta.events import DraftEvent, Event
 from zeta.records.stores.event_store import EventReader, EventWriter, Filter
 from zeta.records.stores.sqlite import event_store_path, resolve_state_dir
 
+from connectors import EventConnectorRegistry
 from zetad.store import RuntimeEventStore
 
 SCHEDULER_TICK_PREFIX = "scheduler.tick."

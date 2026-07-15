@@ -8,7 +8,7 @@ from collections.abc import Callable
 from typing import Any, cast
 
 from zeta.context.budget import estimated_tokens_for_text
-from zeta.records.objects import Object
+from zeta.substrate import Object
 
 SUMMARY_FIELDS_BY_TOOL = {
     "read": ("path", "file_path"),

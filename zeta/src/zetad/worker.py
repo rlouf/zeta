@@ -10,9 +10,6 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
-from connectors import (
-    EventConnectorRegistry,
-)
 from zeta.agents.resources import (
     load_agent_project,
     load_connector_registry,
@@ -23,7 +20,6 @@ from zeta.events import Event
 from zeta.models.profiles import ModelSelection, active_model_selection
 from zeta.records.stores.event_store import Filter
 from zeta.records.stores.sqlite import (
-    SqliteObjectStore,
     event_store_path,
     resolve_state_dir,
     zeta_sqlite_path,
@@ -31,7 +27,11 @@ from zeta.records.stores.sqlite import (
 from zeta.run.config import AgentConfig
 from zeta.run.context import RuntimeContext
 from zeta.run.runtime import AgentRunRequest, run_agent
+from zeta.substrate import SqliteObjectStore
 
+from connectors import (
+    EventConnectorRegistry,
+)
 from zetad.agents import (
     AgentInvocation,
     ExecutableAgent,

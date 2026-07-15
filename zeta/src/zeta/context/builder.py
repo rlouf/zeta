@@ -23,8 +23,8 @@ from zeta.models.chat_completions import (
     chat_completion_request_body,
 )
 from zeta.models.types import ModelInput
-from zeta.objects import Derivation, Object, ObjectId
-from zeta.records.stores.object_store import Store, warn_trace_failure_once
+from zeta.substrate import Derivation, Object, ObjectId, Store
+from zeta.trace import warn_trace_failure_once
 
 
 @dataclass(frozen=True)

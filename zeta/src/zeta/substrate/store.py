@@ -6,15 +6,11 @@ outputs back to immutable inputs for replay, graph traversal, and cache
 reasoning.
 """
 
-import logging
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from typing import Protocol, cast
 
-from zeta.records.objects import Derivation, Object, ObjectId, Ref, RefUpdate
-
-LOGGER = logging.getLogger("zeta.substrate")
-_WARNED_FAILURES: set[str] = set()
+from zeta.substrate.objects import Derivation, Object, ObjectId, Ref, RefUpdate
 
 
 class UnknownIdError(LookupError):
@@ -34,24 +30,15 @@ class AmbiguousIdError(LookupError):
         self.candidates = candidates
 
 
-class UnknownSessionError(LookupError):
-    """A session id named no recorded trace store."""
-
-    def __init__(self, session_id: str, available: list[str]) -> None:
-        super().__init__(session_id)
-        self.session_id = session_id
-        self.available = available
-
-
 class IncompatibleSchemaError(Exception):
-    """The local trace store schema is incompatible with the runtime."""
+    """The local substrate schema is incompatible with the runtime."""
 
     pass
 
 
 @dataclass(frozen=True)
-class TraceStats:
-    """Basic trace store size statistics."""
+class StoreStats:
+    """Basic substrate store size statistics."""
 
     object_count: int
     total_bytes: int
@@ -98,8 +85,7 @@ class Store(Protocol):
         kind: str | tuple[str, ...] | None = None,
         limit: int | None = None,
     ) -> list[tuple[ObjectId, Object]]: ...
-    def prompt_object_ids(self) -> list[ObjectId]: ...
-    def stats(self) -> TraceStats: ...
+    def stats(self) -> StoreStats: ...
 
 
 def resolve_object_id(store: Store, token: str) -> ObjectId:
@@ -125,24 +111,12 @@ def resolve_object_id(store: Store, token: str) -> ObjectId:
     raise UnknownIdError(token)
 
 
-def warn_trace_failure_once(operation: str, exc: BaseException) -> None:
-    """Log one warning per operation before fail-open degradation."""
-    if operation in _WARNED_FAILURES:
-        return
-    _WARNED_FAILURES.add(operation)
-    LOGGER.warning("trace disabled for %s after failure: %s", operation, exc)
-
-
 class StoreBase:
     """Shared graph helpers for concrete stores.
 
     Graph traversal follows structural object links. It does not infer
     execution order or freshness; those concepts live in derivations and refs.
     """
-
-    def prompt_object_ids(self) -> list[ObjectId]:
-        store = cast(Store, self)
-        return [object_id_value for object_id_value, _ in store.objects(kind="prompt")]
 
     def graph_closure(self, roots: list[ObjectId]) -> dict[ObjectId, Object]:
         store = cast(Store, self)

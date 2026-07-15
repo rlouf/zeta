@@ -16,8 +16,7 @@ from commas.protocols import (
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
-from zeta.records.objects import Object
-from zeta.records.stores.memory import InMemoryStore
+from zeta.substrate import InMemoryStore, Object
 
 from test_support.zeta_helpers import (
     TtyBuffer,

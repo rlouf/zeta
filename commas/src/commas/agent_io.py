@@ -25,7 +25,6 @@ from zeta.records.events import (
 )
 from zeta.records.provenance import project_prompt_trace_projection
 from zeta.records.stores.event_store import EventReader, Filter
-from zeta.records.stores.object_store import Store, warn_trace_failure_once
 from zeta.records.stores.sqlite import SqliteEventStore
 from zeta.run.context import RuntimeContext
 from zeta.run.runtime import (
@@ -33,6 +32,8 @@ from zeta.run.runtime import (
     current_timeline,  # noqa: F401 — re-exported for commas importers
     is_runtime_ui_event,
 )
+from zeta.substrate import Store
+from zeta.trace import warn_trace_failure_once
 
 from commas.display.render import render_tool_start
 from commas.display.state import (

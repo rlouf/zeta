@@ -4,8 +4,8 @@ import json
 from collections.abc import Iterator
 from contextlib import contextmanager
 
-from zeta.records.objects import Derivation, Object, ObjectId, Ref, RefUpdate
-from zeta.records.stores.object_store import StoreBase, TraceStats
+from zeta.substrate.objects import Derivation, Object, ObjectId, Ref, RefUpdate
+from zeta.substrate.store import StoreBase, StoreStats
 
 
 class InMemoryStore(StoreBase):
@@ -131,8 +131,8 @@ class InMemoryStore(StoreBase):
             for name, object_id_value in sorted(self._refs.items())
         ]
 
-    def stats(self) -> TraceStats:
-        return TraceStats(
+    def stats(self) -> StoreStats:
+        return StoreStats(
             object_count=len(self._objects),
             total_bytes=sum(
                 len(

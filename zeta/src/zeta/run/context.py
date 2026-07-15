@@ -9,15 +9,15 @@ from typing import TYPE_CHECKING
 
 from zeta.records.stores.sqlite import (
     SqliteEventStore,
-    SqliteObjectStore,
     event_store_path,
     zeta_sqlite_path,
 )
+from zeta.substrate import SqliteObjectStore
 
 if TYPE_CHECKING:
     from zeta.capabilities.registry import CapabilityRegistry
     from zeta.records.stores.event_store import EventStoreProtocol
-    from zeta.records.stores.object_store import Store
+    from zeta.substrate import Store
 
 
 @dataclass(frozen=True)

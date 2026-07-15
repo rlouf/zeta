@@ -11,7 +11,7 @@ from zeta.context.system import (
     enabled_capability_ids,
     system_prompt,
 )
-from zeta.objects import Object, ObjectId
+from zeta.substrate import Object, ObjectId
 
 Representation = Literal["full", "summary", "stub"]
 

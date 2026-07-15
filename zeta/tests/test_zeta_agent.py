@@ -19,7 +19,6 @@ import zeta.models.chat_completions as zeta_model
 import zeta.models.types as zeta_model_shapes
 from click.testing import CliRunner
 from commas.tools import ensure_builtin_tools_registered
-from zeta.agents import spec as zeta_agent_spec
 from zeta.agents.manifest import ManifestError
 from zeta.capabilities.execution import (
     InProcessCapabilityExecutor,
@@ -30,32 +29,16 @@ from zeta.capabilities.types import (
     Capability,
     CapabilityId,
 )
-from zeta.context import builder as zeta_context
 from zeta.events import DraftEvent, Event
 from zeta.models.profiles import ModelSelection
-from zeta.records import events as zeta_event_model
 from zeta.records.stores.event_store import Filter
-from zeta.records.stores.memory import InMemoryStore, MemoryEventStore
+from zeta.records.stores.memory import MemoryEventStore
 from zeta.records.stores.sqlite import event_store_path
-from zeta.run import context as zeta_runtime_context
-from zeta.run import outcomes as zeta_outcomes
-from zeta.run import runtime as zeta_agent
-from zeta.run import thread_run as zeta_requests
 from zeta.run.config import CompactionPolicy
 from zeta.run.runtime import AgentRunResult
-from zetad import agents as zetad_agents
-from zetad import cli as zetad_cli
-from zetad import connector_bridge as zetad_connector_bridge
-from zetad import dispatch as zetad_dispatch
-from zetad import queue as zetad_queue
-from zetad import retry as zetad_retry
-from zetad import scheduling as zetad_scheduling
-from zetad import session_turn as zetad_session_turn
-from zetad import worker as zetad_worker
+from zeta.substrate import InMemoryStore
 from zetad.attempts import Attempt
 from zetad.queue import QueueItem
-from zetad.rpc import jsonrpc as zetad_jsonrpc
-from zetad.rpc import routes as zetad_rpc_routes
 from zetad.store import RuntimeEventStore
 
 from test_support.zeta_helpers import (
@@ -73,6 +56,24 @@ from test_support.zeta_helpers import (
     tool_call_fixture,
 )
 from zeta import models as zeta_models_api
+from zeta.agents import spec as zeta_agent_spec
+from zeta.context import builder as zeta_context
+from zeta.records import events as zeta_event_model
+from zeta.run import context as zeta_runtime_context
+from zeta.run import outcomes as zeta_outcomes
+from zeta.run import runtime as zeta_agent
+from zeta.run import thread_run as zeta_requests
+from zetad import agents as zetad_agents
+from zetad import cli as zetad_cli
+from zetad import connector_bridge as zetad_connector_bridge
+from zetad import dispatch as zetad_dispatch
+from zetad import queue as zetad_queue
+from zetad import retry as zetad_retry
+from zetad import scheduling as zetad_scheduling
+from zetad import session_turn as zetad_session_turn
+from zetad import worker as zetad_worker
+from zetad.rpc import jsonrpc as zetad_jsonrpc
+from zetad.rpc import routes as zetad_rpc_routes
 
 zeta_trace = SimpleNamespace(InMemoryStore=InMemoryStore)
 

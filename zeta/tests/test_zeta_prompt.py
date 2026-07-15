@@ -9,7 +9,6 @@ import pytest
 import zeta.models.chat_completions as zeta_model
 import zeta.models.types as zeta_models_api
 from commas.tools import ensure_builtin_tools_registered
-from zeta.agents import skills as zeta_skills
 from zeta.capabilities.execution import (
     InProcessCapabilityExecutor,
 )
@@ -18,9 +17,6 @@ from zeta.capabilities.types import (
     Capability,
     CapabilityId,
 )
-from zeta.context import builder as context_builder
-from zeta.context import prompt_transform_from_env
-from zeta.context import transforms as context_transforms
 from zeta.context.budget import estimated_tokens, measure, render_stub
 from zeta.context.builder import (
     PreparedPrompt,
@@ -50,10 +46,9 @@ from zeta.context.instructions import (
 )
 from zeta.context.system import model_capability_descriptors, system_prompt
 from zeta.events import Event
-from zeta.objects import Derivation, Object
 from zeta.records.provenance import project_prompt_trace_projection
-from zeta.records.stores.memory import InMemoryStore
 from zeta.run.context import zeta_state_dir
+from zeta.substrate import Derivation, InMemoryStore, Object
 
 from test_support.zeta_helpers import (
     BatchSpyStore,
@@ -67,6 +62,10 @@ from test_support.zeta_helpers import (
     tool_result_transcript,
     write_skill,
 )
+from zeta.agents import skills as zeta_skills
+from zeta.context import builder as context_builder
+from zeta.context import prompt_transform_from_env
+from zeta.context import transforms as context_transforms
 
 ensure_builtin_tools_registered()
 

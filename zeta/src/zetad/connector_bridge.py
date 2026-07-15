@@ -14,12 +14,6 @@ import logging
 from collections.abc import Iterable
 from typing import TYPE_CHECKING, Any, cast
 
-from connectors import (
-    EgressBinding,
-    InboundRequest,
-    InboundResponse,
-    IngressBinding,
-)
 from jsonschema import Draft202012Validator
 from zeta.agents.manifest import egress_bindings, ingress_bindings
 from zeta.agents.resources import (
@@ -29,6 +23,12 @@ from zeta.agents.resources import (
 )
 from zeta.events import DraftEvent, Event
 
+from connectors import (
+    EgressBinding,
+    InboundRequest,
+    InboundResponse,
+    IngressBinding,
+)
 from zetad.agents import (
     AgentDefinition,
     AgentInvocation,

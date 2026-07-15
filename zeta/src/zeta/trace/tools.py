@@ -3,9 +3,7 @@
 from collections.abc import Mapping
 from typing import Any, cast
 
-from zeta.records.objects import Object, ObjectId
-from zeta.records.stores.object_store import Store
-from zeta.records.stores.sqlite import SqliteObjectStore
+from zeta.substrate import Object, ObjectId, SqliteObjectStore, Store
 from zeta.trace.summarize import truncate
 
 

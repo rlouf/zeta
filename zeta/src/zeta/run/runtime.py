@@ -46,7 +46,6 @@ from zeta.records.provenance import (
     project_prompt_trace_projection,
 )
 from zeta.records.stores.event_store import EventReader, Filter
-from zeta.records.stores.object_store import Store, warn_trace_failure_once
 from zeta.run.cancellation import (
     AbortReason,
     AgentRunAborted,
@@ -63,6 +62,8 @@ from zeta.run.outcomes import (
 )
 from zeta.run.projection import draft_views_for_prompt, is_runtime_ui_event
 from zeta.run.streaming import ModelTurnStreamSink, StatusAwareModelStream
+from zeta.substrate import Store
+from zeta.trace import warn_trace_failure_once
 
 AgentEventSink = Callable[[DraftEvent], None]
 TimelineEvent = Event | dict[str, Any]

@@ -4,8 +4,8 @@ from typing import Any
 
 import click
 
-from zeta.records.objects import Object, ObjectId
-from zeta.records.stores.object_store import (
+from zeta.substrate import Object, ObjectId
+from zeta.substrate.store import (
     AmbiguousIdError,
     Store,
     UnknownIdError,
@@ -80,7 +80,7 @@ def list_trace_refs(*, store: Store) -> dict[str, ObjectId]:
 
 def list_trace_prompts(*, store: Store) -> list[dict[str, Any]]:
     prompts = []
-    for prompt_id in store.prompt_object_ids():
+    for prompt_id, _ in store.objects(kind="prompt"):
         obj = store.get_object(prompt_id)
         if obj is None:
             continue

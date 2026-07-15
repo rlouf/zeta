@@ -3,12 +3,13 @@
 import os
 from pathlib import Path
 
-from connectors import IngressBinding
 from connectors.filesystem import (
     FILE_CREATED,
     collect_file_created,
     filesystem_event_connector,
 )
+
+from connectors import IngressBinding
 
 
 def make_file(directory: Path, name: str, *, mtime: float, data: bytes = b"x") -> Path:

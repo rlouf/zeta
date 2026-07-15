@@ -565,8 +565,8 @@ def test_commas_blame_reports_untouched_files(monkeypatch) -> None:
 
 def seed_bundle_state(monkeypatch) -> dict[str, str]:
     """Record one turn with an effect, bridged into its session trace store."""
-    from zeta.records.objects import Derivation, Object
     from zeta.records.stores.sqlite import SqliteObjectStore, zeta_sqlite_path
+    from zeta.substrate import Derivation, Object
 
     monkeypatch.setenv("COMMAS_SESSION_ID", "bundle-src")
     append_event(

@@ -2,8 +2,7 @@
 
 import difflib
 
-from zeta.records.objects import Object, ObjectId
-from zeta.records.stores.object_store import Store
+from zeta.substrate import Object, ObjectId, Store
 from zeta.trace.summarize import short_trace_id, trace_object_summary
 
 

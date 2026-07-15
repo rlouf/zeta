@@ -16,28 +16,31 @@ from click.testing import CliRunner
 from commas.agent_io import last_event_time
 from zeta.context.builder import PromptBuilder
 from zeta.events import DraftEvent
-from zeta.objects import Derivation, Object, ObjectId, Ref, RefUpdate
 from zeta.records.events import event_view
 from zeta.records.stores.event_store import Filter
-from zeta.records.stores.memory import InMemoryStore
-from zeta.records.stores.object_store import (
-    AmbiguousIdError,
-    IncompatibleSchemaError,
-    Store,
-    UnknownIdError,
-    resolve_object_id,
-)
 from zeta.records.stores.sqlite import (
     SqliteEventStore,
-    SqliteObjectStore,
     available_session_ids,
     event_store_path,
     zeta_sqlite_path,
 )
-from zeta.run import runtime as zeta_agent
 from zeta.run.context import RuntimeContext, default_session
 from zeta.run.runtime import AgentRunResult
 from zeta.run.thread_run import current_timeline
+from zeta.substrate import (
+    AmbiguousIdError,
+    Derivation,
+    IncompatibleSchemaError,
+    InMemoryStore,
+    Object,
+    ObjectId,
+    Ref,
+    RefUpdate,
+    SqliteObjectStore,
+    Store,
+    UnknownIdError,
+    resolve_object_id,
+)
 from zeta.trace.replay import latest_model_answer
 from zeta.trace.summarize import assistant_trace_summary
 from zetad.cli import cli as zeta_cli
@@ -49,6 +52,7 @@ from test_support.zeta_helpers import (
     record_durable_timeline_event,
 )
 from zeta import models as zeta_models_api
+from zeta.run import runtime as zeta_agent
 
 zeta_trace = SimpleNamespace(
     AmbiguousIdError=AmbiguousIdError,
@@ -1667,7 +1671,6 @@ def test_zeta_trace_lists_objects_by_derivation_recency(tmp_path: Path) -> None:
     assert listed == [new, old, underived]
     assert [object_id for object_id, _ in store.objects(kind="prompt")] == [new, old]
     assert [object_id for object_id, _ in store.objects(limit=1)] == [new]
-    assert store.prompt_object_ids() == [new, old]
     store.close()
 
 
@@ -1687,7 +1690,6 @@ def test_zeta_inmemory_store_lists_objects_newest_first() -> None:
     assert [object_id for object_id, _ in store.objects(kind="prompt", limit=1)] == [
         third
     ]
-    assert store.prompt_object_ids() == [third, first]
 
 
 def test_zeta_trace_sqlite_objects_filter_by_multiple_kinds(tmp_path: Path) -> None:

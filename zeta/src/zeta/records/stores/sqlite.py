@@ -10,26 +10,16 @@ import os
 import sqlite3
 import threading
 import time
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from contextlib import AbstractContextManager
 from pathlib import Path
 from typing import Any, Protocol
 
 from zeta.records.events import AppendOutcome, DraftEvent, Event, json_native_payload
-from zeta.records.stores._object_sqlite import (
-    ZETA_SQLITE_NAME,
-    SqliteObjectStore,
-    available_session_ids,
-    default_sqlite_path,
-    export_trace_refs,
-    import_trace_graph,
-    open_existing_trace_store,
-    open_trace_store,
-    trace_state_dir,
-    zeta_sqlite_path,
-)
 from zeta.records.stores.event_store import Filter
-from zeta.records.stores.object_store import escape_like
+from zeta.substrate.objects import Derivation, Object
+from zeta.substrate.sqlite import SqliteObjectStore
+from zeta.substrate.store import escape_like
 
 __all__ = [
     "EVENT_STORE_NAME",
@@ -51,6 +41,170 @@ __all__ = [
 
 ZETA_STORE_NAME = "zeta.sqlite3"
 EVENT_STORE_NAME = ZETA_STORE_NAME
+ZETA_SQLITE_NAME = ZETA_STORE_NAME
+
+
+class UnknownSessionError(LookupError):
+    """A session id named no recorded trace store."""
+
+    def __init__(self, session_id: str, available: list[str]) -> None:
+        super().__init__(session_id)
+        self.session_id = session_id
+        self.available = available
+
+
+def trace_state_dir() -> Path:
+    root = os.environ.get("ZETA_STATE_DIR")
+    return Path(root).expanduser() if root else Path.home() / ".zeta"
+
+
+def zeta_sqlite_path(root: Path | None = None) -> Path:
+    """Return the unified Zeta SQLite store path."""
+    return (root or trace_state_dir()) / ZETA_SQLITE_NAME
+
+
+def default_sqlite_path() -> Path:
+    """Return the default unified Zeta SQLite path."""
+    return zeta_sqlite_path()
+
+
+def available_session_ids(root: Path | None = None) -> list[str]:
+    """Return the session ids recorded in the unified Zeta store, sorted."""
+    path = zeta_sqlite_path(root)
+    if not path.exists():
+        return []
+    connection = sqlite3.connect(f"{path.as_uri()}?mode=ro&immutable=1", uri=True)
+    connection.row_factory = sqlite3.Row
+    try:
+        sessions: set[str] = set()
+        try:
+            rows = connection.execute(
+                "SELECT DISTINCT session_id FROM derivations WHERE session_id IS NOT NULL"
+            ).fetchall()
+        except sqlite3.OperationalError:
+            return []
+        sessions.update(str(row["session_id"]) for row in rows)
+        rows = connection.execute(
+            """
+            SELECT DISTINCT substr(scope, 9) AS session_id
+            FROM refs
+            WHERE scope LIKE 'session/%'
+            """
+        ).fetchall()
+        sessions.update(str(row["session_id"]) for row in rows)
+        return sorted(session for session in sessions if session)
+    finally:
+        connection.close()
+
+
+def open_trace_store(
+    session_id: str,
+    *,
+    read_only: bool = False,
+    root: Path | None = None,
+) -> SqliteObjectStore:
+    """Open the unified Zeta trace store for one session."""
+    return SqliteObjectStore(
+        zeta_sqlite_path(root), session_id=session_id, read_only=read_only
+    )
+
+
+def open_existing_trace_store(
+    session_id: str,
+    *,
+    read_only: bool = True,
+    root: Path | None = None,
+) -> SqliteObjectStore:
+    """Open a recorded session trace store or raise with known sessions."""
+    available = available_session_ids(root)
+    if session_id not in available:
+        raise UnknownSessionError(session_id, available)
+    return open_trace_store(session_id, read_only=read_only, root=root)
+
+
+def export_trace_refs(
+    session_id: str,
+    refs: Sequence[str],
+    *,
+    root: Path | None = None,
+) -> dict[str, Any] | None:
+    """Export the trace closure for refs in one session, or None."""
+    try:
+        store = open_existing_trace_store(session_id, read_only=True, root=root)
+    except UnknownSessionError:
+        return None
+    try:
+        resolved_refs: dict[str, str] = {}
+        for name in refs:
+            target = store.get_ref(name)
+            if target is not None:
+                resolved_refs[name] = target.object_id
+        if not resolved_refs:
+            return None
+        closure = store.graph_closure(list(resolved_refs.values()))
+        objects = [
+            {
+                "id": object_id_value,
+                "kind": obj.kind,
+                "schema": obj.schema,
+                "data": obj.data,
+                "links": list(obj.links),
+            }
+            for object_id_value, obj in closure.items()
+        ]
+        derivations: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for object_id_value in closure:
+            for row in store.derivation_records_for_output(object_id_value):
+                if row["id"] in seen:
+                    continue
+                seen.add(row["id"])
+                derivations.append(row)
+        return {"objects": objects, "derivations": derivations, "refs": resolved_refs}
+    finally:
+        store.close()
+
+
+def import_trace_graph(
+    session_id: str,
+    graph: dict[str, Any],
+    *,
+    root: Path | None = None,
+) -> int:
+    """Import exported trace objects, derivations, and refs into a session."""
+    store = open_trace_store(session_id, root=root)
+    count = 0
+    try:
+        with store.batch():
+            for entry in graph.get("objects") or []:
+                store.import_object(
+                    str(entry["id"]),
+                    Object(
+                        kind=str(entry["kind"]),
+                        schema=str(entry["schema"]),
+                        data=entry["data"],
+                        links=tuple(entry["links"]),
+                    ),
+                )
+                count += 1
+            for row in graph.get("derivations") or []:
+                store.import_derivation(
+                    str(row["id"]),
+                    Derivation(
+                        producer=str(row["producer"]),
+                        output_id=str(row["output_id"]),
+                        input_ids=tuple(row["input_ids"]),
+                        params=row["params"],
+                    ),
+                    float(row["created_at"]),
+                )
+            for name, object_id_value in (graph.get("refs") or {}).items():
+                current = store.get_ref(str(name))
+                expected = current.object_id if current is not None else None
+                store.move_ref(str(name), expected, str(object_id_value))
+    finally:
+        store.close()
+    return count
 
 
 class EventProjection(Protocol):

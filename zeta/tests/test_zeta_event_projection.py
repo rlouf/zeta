@@ -5,7 +5,6 @@ from typing import Any
 import pytest
 from commas.history import effect_record, event_from_record, turn_record
 from zeta.events import DraftEvent, Event
-from zeta.objects import Derivation, Object
 from zeta.records.events import (
     draft_from_runtime_event,
     durable_model_event_payload,
@@ -17,7 +16,7 @@ from zeta.records.events import (
     tool_call_draft,
 )
 from zeta.records.provenance import project_prompt_trace_projection
-from zeta.records.stores.memory import InMemoryStore
+from zeta.substrate import Derivation, InMemoryStore, Object
 
 SESSION_ID = "session-1"
 TURN_ID = "turn-1"

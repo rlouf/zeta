@@ -29,13 +29,11 @@ from zeta.records.events import (
     draft_from_boundary_event,
     event_view,
 )
-from zeta.records.objects import Object, ObjectId
 from zeta.records.provenance import project_prompt_trace_projection
 from zeta.records.stores.event_store import Filter
-from zeta.records.stores.memory import InMemoryStore
-from zeta.records.stores.object_store import Store
 from zeta.run.context import RuntimeContext
 from zeta.run.runtime import AgentRunResult
+from zeta.substrate import InMemoryStore, Object, ObjectId, Store
 
 zeta_context = SimpleNamespace(
     PreparedPrompt=PreparedPrompt,

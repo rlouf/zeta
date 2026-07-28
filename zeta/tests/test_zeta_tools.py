@@ -30,6 +30,7 @@ from zeta.capabilities.types import (
     Capability,
     CapabilityId,
 )
+from zeta.run.runtime import registered_capabilities
 
 ensure_builtin_tools_registered()
 
@@ -1433,3 +1434,23 @@ def test_zeta_tool_query_log_is_a_readonly_ask_builtin() -> None:
     assert query_log_tool.SPEC.id.name == "query_log"
     assert tool_registry.get_by_name("query_log") is not None
     assert "query_log" in ASK_TOOLS
+
+
+
+def test_registered_capabilities_expands_only_scoped_mcp_wildcards() -> None:
+    registry = CapabilityRegistry()
+    registry.register(_test_capability("linear.search_issues", provider="mcp"))
+    registry.register(_test_capability("linear.get_issue", provider="mcp"))
+    registry.register(
+        _test_capability("google_calendar.list_events", provider="mcp")
+    )
+
+    assert registered_capabilities(
+        ("mcp.linear.*", "mcp.google_calendar.list_events"),
+        tool_registry=registry,
+    ) == (
+        "mcp.linear.get_issue",
+        "mcp.linear.search_issues",
+        "mcp.google_calendar.list_events",
+    )
+    assert registered_capabilities(("mcp.*",), tool_registry=registry) == ()

@@ -3148,6 +3148,60 @@ def test_zeta_event_dispatcher_creates_work_for_matching_agent(
     ]
 
 
+def test_zeta_event_dispatcher_preserves_multiple_routes_for_same_agent(
+    tmp_path: Path,
+) -> None:
+    event_store = zeta_events.SqliteEventStore(tmp_path / "events.sqlite3")
+    seen: list[tuple[str, str]] = []
+
+    def runner(label: str):
+        async def run_agent(
+            invocation: zetad_dispatch.AgentInvocation,
+        ) -> dict[str, object]:
+            seen.append((label, invocation.triggering_event.event_type))
+            return {"outcome": "handled"}
+
+        return run_agent
+
+    dispatcher = zetad_dispatch.EventDispatcher(
+        event_store,
+        executors=[
+            zetad_dispatch.ExecutableAgent(
+                zetad_dispatch.AgentDefinition(
+                    "chief-of-staff",
+                    (
+                        zetad_dispatch.EventPattern(
+                            "conversation.message.received"
+                        ),
+                    ),
+                ),
+                run=runner("conversation"),
+            ),
+            zetad_dispatch.ExecutableAgent(
+                zetad_dispatch.AgentDefinition(
+                    "chief-of-staff",
+                    (zetad_dispatch.EventPattern("voice-note.transcribed"),),
+                ),
+                run=runner("voice"),
+            ),
+        ],
+    )
+
+    dispatch_event(
+        dispatcher,
+        zeta_events.DraftEvent("conversation.message.received", "cli", {}),
+    )
+    dispatch_event(
+        dispatcher,
+        zeta_events.DraftEvent("voice-note.transcribed", "voice-memos", {}),
+    )
+
+    assert seen == [
+        ("conversation", "conversation.message.received"),
+        ("voice", "voice-note.transcribed"),
+    ]
+
+
 def test_zeta_event_dispatcher_attempt_uses_resumable_agent_session_id(
     tmp_path: Path,
 ) -> None:
@@ -6121,6 +6175,122 @@ Ping.
     assert config.thinking == "high"
 
 
+def test_zeta_worker_returned_events_use_runtime_model_selection(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, Any] = {}
+    published: list[DraftEvent] = []
+
+    async def fake_run_agent(
+        request: Any,
+        **kwargs: Any,
+    ) -> AgentRunResult:
+        captured["request"] = request
+        captured.update(kwargs)
+        return AgentRunResult(final_answer="two observations")
+
+    def fake_structured_output(
+        messages: list[dict[str, Any]],
+        **options: Any,
+    ) -> dict[str, Any]:
+        captured["structured_messages"] = messages
+        captured["structured_options"] = options
+        return {
+            "events": [
+                {"type": "agent.ponged", "payload": {"value": "one"}},
+                {"type": "agent.ponged", "payload": {"value": "two"}},
+            ]
+        }
+
+    async def publish_event(draft: DraftEvent) -> Event:
+        published.append(draft)
+        return Event.from_draft(draft)
+
+    agents_dir = tmp_path / "agents"
+    agents_dir.mkdir()
+    write_project_event_schema(tmp_path, "agent.ping")
+    write_project_event_schema(
+        tmp_path,
+        "agent.ponged",
+        {
+            "type": "object",
+            "required": ["value"],
+            "properties": {"value": {"type": "string"}},
+            "additionalProperties": False,
+        },
+    )
+    (agents_dir / "ping.md").write_text(
+        """---
+name: Ping
+description: Reacts to pings.
+accepts:
+  - agent.ping
+returns:
+  - agent.ponged
+---
+Return every pong.
+""",
+        encoding="utf-8",
+    )
+    selection = ModelSelection(
+        profile="codex",
+        model="gpt-test",
+        url="https://chatgpt.com/backend-api",
+        thinking="high",
+        api="codex-responses",
+    )
+    monkeypatch.setattr(zetad_worker, "run_agent", fake_run_agent)
+    monkeypatch.setattr(
+        zeta_models_api,
+        "chat_structured_output",
+        fake_structured_output,
+    )
+    runtime = zetad_worker.build_worker_services(project_root=tmp_path)
+    runtime = replace(runtime, model_selection=selection)
+
+    try:
+        agent = zetad_worker.project_executors(runtime)[0]
+        event = zeta_events.Event(
+            id="evt_ping",
+            event_type="agent.ping",
+            source="manual",
+            payload={},
+            idempotency_key=None,
+            caused_by=None,
+            session_id=None,
+            run_id=None,
+            turn_id=None,
+            timestamp_ms=1,
+            cursor=1,
+        )
+        result = asyncio.run(
+            cast(
+                Coroutine[Any, Any, dict[str, Any]],
+                agent.run(
+                    zetad_dispatch.AgentInvocation(
+                        agent.definition,
+                        event,
+                        publish_event=publish_event,
+                        attempt_id="att_qi_evt_ping_1",
+                    )
+                ),
+            )
+        )
+    finally:
+        runtime.close()
+
+    options = captured["structured_options"]
+    assert options["api"] == "codex-responses"
+    assert options["selected_model"] == "gpt-test"
+    assert options["selected_url"] == "https://chatgpt.com/backend-api"
+    assert [draft.payload for draft in published] == [
+        {"value": "one"},
+        {"value": "two"},
+    ]
+    assert len(result["returned_events"]) == 2
+
+
 def test_zeta_worker_agent_runner_uses_agent_model_config(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -7553,12 +7723,20 @@ def test_zeta_agent_turn_uses_explicit_tool_registry(monkeypatch) -> None:
             {"content": "done"},
         ]
     )
+    captured_messages: list[list[dict[str, Any]]] = []
+
+    def fake_chat_completion_messages(
+        messages: list[dict[str, Any]],
+        **kwargs: object,
+    ) -> dict[str, Any]:
+        captured_messages.append(messages)
+        return next(responses)
 
     monkeypatch.setattr(zeta_model, "model_endpoint_open", lambda: True)
     monkeypatch.setattr(
         zeta_models_api,
         "chat_completion_messages",
-        lambda *args, **kwargs: next(responses),
+        fake_chat_completion_messages,
     )
 
     result = run_agent_turn(
@@ -7570,6 +7748,8 @@ def test_zeta_agent_turn_uses_explicit_tool_registry(monkeypatch) -> None:
 
     assert zeta_agent.tool_registry.get("ctx_echo") is None
     assert result.final_answer == "done"
+    assert "- ctx_echo(text)" in captured_messages[0][0]["content"]
+    assert "Available tools:\n(none)" not in captured_messages[0][0]["content"]
     assert [
         event.get("name") for event in timeline_events(result.events) if "name" in event
     ] == [

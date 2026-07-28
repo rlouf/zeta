@@ -178,6 +178,46 @@ def test_model_capability_descriptors_include_auto_enabled_tools() -> None:
     ]
 
 
+def test_prompt_components_render_tools_from_supplied_descriptors() -> None:
+    registry = CapabilityRegistry()
+    registry.register(
+        RegisteredCapability(
+            Capability(
+                CapabilityId("host", "vault_write"),
+                "Append to a vault file.",
+                {
+                    "type": "object",
+                    "properties": {"path": {"type": "string"}},
+                    "required": ["path"],
+                },
+            ),
+            InProcessCapabilityExecutor(lambda params: {"ok": True}),
+        )
+    )
+    tools = model_capability_descriptors(
+        ("host.vault_write",),
+        tool_registry=registry,
+    )
+
+    components = zeta_context.prompt_components(
+        "file this note",
+        [],
+        allowed_capabilities=("host.vault_write",),
+        tools=tools,
+    )
+
+    system_component, tool_component = components[:2]
+    assert system_component.kind == "system_prompt"
+    assert system_component.data["allowed_tools"] == ["host.vault_write"]
+    assert "- vault_write(path): Append to a vault file." in str(
+        system_component.data["content"]
+    )
+    assert "Available tools:\n(none)" not in str(system_component.data["content"])
+    assert tool_component.kind == "tool_descriptor_set"
+    assert tool_component.data["allowed_tools"] == ["host.vault_write"]
+    assert tool_component.data["tools"] == tools
+
+
 def test_zeta_prompt_builder_noop_transform_matches_prompt_components() -> None:
     store = zeta_trace.InMemoryStore()
     tools = model_capability_descriptors(())

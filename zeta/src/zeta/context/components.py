@@ -371,10 +371,15 @@ def prompt_components(
     Public ordering contract: system_prompt, tool descriptors, project context,
     then volatile timeline/objective/current-turn components.
     """
-    enabled_capabilities = enabled_capability_ids(allowed_capabilities)
+    enabled_capabilities = (
+        tuple(allowed_capabilities or ())
+        if tools is not None
+        else enabled_capability_ids(allowed_capabilities)
+    )
     system_content = system_prompt(
         system,
         allowed_capabilities=enabled_capabilities,
+        tool_descriptors=tools,
     )
     components = [
         PromptComponent(

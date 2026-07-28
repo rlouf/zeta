@@ -177,10 +177,10 @@ class EventDispatcher:
     ) -> None:
         self.event_sink = event_sink
         self.executors = tuple(executors)
-        route_by_agent = {route.agent_id: route for route in routes}
+        route_by_identity = {route: route for route in routes}
         for executor in self.executors:
-            route_by_agent[executor.agent_id] = executor.route
-        self.routes = tuple(route_by_agent.values())
+            route_by_identity[executor.route] = executor.route
+        self.routes = tuple(route_by_identity.values())
         self.router = EventRouter(self.routes)
         self.publish_callback = publish_event
         self.worker_name: str | None = None
@@ -292,6 +292,7 @@ class EventDispatcher:
         executor = self._executor_for_id(
             routed_queue_item.target_agent,
             project_generation=routed_queue_item.project_generation,
+            triggering_event=triggering_event,
         )
         if executor is None:
             return self._missing_executor_events(triggering_event, routed_queue_item)
@@ -412,6 +413,7 @@ class EventDispatcher:
         agent_id: str,
         *,
         project_generation: str | None = None,
+        triggering_event: Event | None = None,
     ) -> ExecutableAgent | None:
         for executor in self.executors:
             if executor.agent_id != agent_id:
@@ -419,6 +421,11 @@ class EventDispatcher:
             if (
                 project_generation is not None
                 and executor.definition.project_generation != project_generation
+            ):
+                continue
+            if (
+                triggering_event is not None
+                and not executor.definition.accepts(triggering_event)
             ):
                 continue
             return executor
@@ -479,6 +486,7 @@ class EventDispatcher:
             executor = self._executor_for_id(
                 route.agent_id,
                 project_generation=route.project_generation,
+                triggering_event=triggering_event,
             )
             if executor is None:
                 return self._missing_executor_events(triggering_event, bound_item)

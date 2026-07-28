@@ -890,11 +890,26 @@ def registered_capabilities(
     active_tool_registry = tool_registry or _runtime_tool_registry
     if allowed_capabilities is None:
         return tuple(active_tool_registry.list_auto_enabled_capability_ids())
-    enabled = []
+    enabled: list[str] = []
+    seen: set[str] = set()
     for name in allowed_capabilities:
-        capability_id = active_tool_registry.resolve(name)
-        if capability_id is not None:
-            enabled.append(capability_id)
+        if (
+            name.startswith("mcp.")
+            and name.endswith(".*")
+            and name.count(".") == 2
+        ):
+            capability_ids = (
+                capability_id
+                for capability_id in active_tool_registry.list_capability_ids()
+                if capability_id.startswith(name[:-1])
+            )
+        else:
+            capability_id = active_tool_registry.resolve(name)
+            capability_ids = () if capability_id is None else (capability_id,)
+        for capability_id in capability_ids:
+            if capability_id not in seen:
+                enabled.append(capability_id)
+                seen.add(capability_id)
     return tuple(enabled)
 
 

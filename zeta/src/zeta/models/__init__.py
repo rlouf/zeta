@@ -82,6 +82,7 @@ def chat_structured_output(
 ) -> dict[str, Any]:
     """Request one schema-validated JSON object from the selected client."""
     if api is None or api == _profiles.CHAT_COMPLETIONS_API:
+        options.pop("session_id", None)
         chat_completions = importlib.import_module("zeta.models.chat_completions")
         return chat_completions.chat_structured_output(messages, **options)
     if api == _profiles.CODEX_RESPONSES_API:

@@ -334,8 +334,12 @@ def _recording_structured_return(
     ) -> dict[str, Any]:
         calls.append({"messages": messages, "kwargs": kwargs})
         return {
-            "type": "message.delivery.requested",
-            "payload": {"channel_id": "C1", "text": "hello"},
+            "events": [
+                {
+                    "type": "message.delivery.requested",
+                    "payload": {"channel_id": "C1", "text": "hello"},
+                }
+            ]
         }
 
     return structured_output
@@ -841,24 +845,92 @@ User asked: {{ event.payload.text }}
     assert rendered == "User asked: why is this slow?"
     assert returns_schema == {
         "type": "object",
-        "anyOf": [
-            {
-                "type": "object",
-                "required": ["type", "payload"],
-                "properties": {
-                    "type": {"const": "message.delivery.requested"},
-                    "payload": {
-                        "type": "object",
-                        "required": ["channel_id", "text"],
-                        "properties": {
-                            "channel_id": {"type": "string"},
-                            "text": {"type": "string"},
+        "required": ["events"],
+        "properties": {
+            "events": {
+                "type": "array",
+                "items": {
+                    "anyOf": [
+                        {
+                            "type": "object",
+                            "required": ["type", "payload"],
+                            "properties": {
+                                "type": {
+                                    "type": "string",
+                                    "const": "message.delivery.requested"
+                                },
+                                "payload": {
+                                    "type": "object",
+                                    "required": ["channel_id", "text"],
+                                    "properties": {
+                                        "channel_id": {"type": "string"},
+                                        "text": {"type": "string"},
+                                    },
+                                },
+                            },
+                            "additionalProperties": False,
                         },
-                    },
+                    ]
+                },
+                "maxItems": 100,
+            }
+        },
+        "additionalProperties": False,
+    }
+
+
+def test_zeta_agent_return_schema_hoists_payload_local_definitions(
+    tmp_path: Path,
+) -> None:
+    spec = zeta_agents.load_spec(
+        _write_spec(
+            tmp_path / "reply.md",
+            """---
+name: Reply
+description: Replies with citations.
+accepts:
+  - message.received
+returns:
+  - message.replied
+---
+Reply.
+""",
+        )
+    )
+    events = zeta_agents.EventRegistry(
+        {
+            "message.replied": {
+                "type": "object",
+                "required": ["evidence"],
+                "properties": {
+                    "evidence": {
+                        "type": "array",
+                        "items": {"$ref": "#/$defs/citation"},
+                    }
+                },
+                "$defs": {
+                    "citation": {
+                        "type": "object",
+                        "required": ["ref"],
+                        "properties": {"ref": {"type": "string"}},
+                        "additionalProperties": False,
+                    }
                 },
                 "additionalProperties": False,
             }
-        ],
+        }
+    )
+
+    schema = zeta_agents.derive_returns_schema(spec, events)
+
+    assert schema is not None
+    assert schema["properties"]["events"]["items"]["anyOf"][0]["properties"][
+        "payload"
+    ]["properties"]["evidence"]["items"] == {
+        "$ref": "#/$defs/event_0_citation"
+    }
+    assert schema["$defs"]["event_0_citation"]["properties"] == {
+        "ref": {"type": "string"}
     }
 
 
@@ -2562,6 +2634,102 @@ def test_zeta_agent_with_returns_publishes_structured_return_event(
     _assert_structured_return_called(structured_calls, spec, events)
     _assert_message_delivery_event(returned)
     _assert_terminal_return_event(terminal)
+
+
+def test_zeta_agent_with_returns_publishes_multiple_ordered_events(
+    tmp_path: Path,
+) -> None:
+    spec = _slack_return_agent_spec(tmp_path)
+    events = _slack_return_event_registry()
+
+    def structured_output(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
+        return {
+            "events": [
+                {
+                    "type": "message.delivery.requested",
+                    "payload": {"channel_id": "C1", "text": "first"},
+                },
+                {
+                    "type": "message.delivery.requested",
+                    "payload": {"channel_id": "C2", "text": "second"},
+                },
+            ]
+        }
+
+    compiled = zeta_agents.compile_agent_definition(
+        spec,
+        event_registry=events,
+        run_turn=_recording_return_run([]),
+        structured_output=structured_output,
+    )
+    store = zeta_events.SqliteEventStore(tmp_path / "events.sqlite3")
+    dispatcher = zetad_dispatch.EventDispatcher(store, executors=[compiled])
+
+    outcome = asyncio.run(
+        dispatcher.publish_and_run(
+            zeta_events.DraftEvent(
+                "slack.message.received",
+                "test",
+                {"text": "hello"},
+            )
+        )
+    )
+    returned = store.list_events(
+        zeta_events.Filter(event_type="message.delivery.requested")
+    )
+    terminal = zetad_queue.terminal_queue_item_result(
+        outcome.lifecycle_events,
+        event_id=outcome.event.id,
+        target_agent="slack-qa",
+    )
+
+    assert [event.payload["text"] for event in returned] == ["first", "second"]
+    assert returned[0].idempotency_key == (
+        f"agent.return:{outcome.event.id}:slack-qa"
+    )
+    assert returned[1].idempotency_key == (
+        f"agent.return:{outcome.event.id}:slack-qa:1"
+    )
+    assert terminal is not None
+    assert [event["text"] for event in terminal["returned_events"]] == [
+        "first",
+        "second",
+    ]
+
+
+def test_zeta_agent_with_returns_may_publish_no_events(tmp_path: Path) -> None:
+    spec = _slack_return_agent_spec(tmp_path)
+    events = _slack_return_event_registry()
+
+    compiled = zeta_agents.compile_agent_definition(
+        spec,
+        event_registry=events,
+        run_turn=_recording_return_run([]),
+        structured_output=lambda *_args, **_kwargs: {"events": []},
+    )
+    store = zeta_events.SqliteEventStore(tmp_path / "events.sqlite3")
+    dispatcher = zetad_dispatch.EventDispatcher(store, executors=[compiled])
+
+    outcome = asyncio.run(
+        dispatcher.publish_and_run(
+            zeta_events.DraftEvent(
+                "slack.message.received",
+                "test",
+                {"text": "hello"},
+            )
+        )
+    )
+    terminal = zetad_queue.terminal_queue_item_result(
+        outcome.lifecycle_events,
+        event_id=outcome.event.id,
+        target_agent="slack-qa",
+    )
+
+    assert store.list_events(
+        zeta_events.Filter(event_type="message.delivery.requested")
+    ) == []
+    assert terminal is not None
+    assert terminal["returned_events"] == []
 
 
 def test_zeta_resumable_agent_uses_stable_session_id() -> None:

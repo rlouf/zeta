@@ -248,15 +248,28 @@ tools available. The schema is derived from the declared return event schemas:
 
 ```json
 {
-  "type": "release.summary.ready",
-  "payload": {
-    "summary": "Release notes are ready."
-  }
+  "events": [
+    {
+      "type": "release.summary.ready",
+      "payload": {
+        "summary": "Runtime release notes are ready."
+      }
+    },
+    {
+      "type": "release.summary.ready",
+      "payload": {
+        "summary": "SDK release notes are ready."
+      }
+    }
+  ]
 }
 ```
 
-The validated result is published as a durable event from `agent:<slug>`.
-Connector egress handlers can then deliver those events to external systems.
+The `events` array may be empty and is capped at 100 items. Each item is
+validated independently against its event schema, then published in order as a
+durable event from `agent:<slug>`. Each position has a stable idempotency key,
+so retries do not duplicate events that were already published. Connector
+egress handlers can then deliver those events to external systems.
 
 ## Tools And Skills
 

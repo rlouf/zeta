@@ -131,8 +131,9 @@ a command.
 Events are the seam between agents: one agent's `returns` is another agent's
 `accepts`. That is how you build a pipeline instead of one monolithic prompt.
 
-Here a scheduled agent produces a weekly digest and hands it to a second agent
-that posts it. `agents/release-digest.md` runs on a cron and returns an event:
+Here a scheduled agent produces weekly digest sections and hands them to a
+second agent that posts them. `agents/release-digest.md` runs on a cron and may
+return one event per independently useful section:
 
 ```markdown
 ---
@@ -206,7 +207,7 @@ the system. Project event schemas live under `agents/events/`.
 That event may come from a connector, a `schedules:` cron trigger, or another
 agent's `returns` — which is how agents compose. If the agent declares
 `returns`, Zeta performs one final structured generation and publishes the
-validated result as a new durable event.
+ordered zero-to-many validated results as durable events.
 
 **Tools and skills** extend an agent. Tools (`read`, `grep`, `bash`, `edit`,
 `write`, …) are capabilities granted to the model; skills are shared Markdown

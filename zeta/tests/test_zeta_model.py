@@ -1653,6 +1653,37 @@ def test_zeta_models_package_routes_codex_api_to_responses(monkeypatch) -> None:
     assert captured["structured"][1]["response_name"] == "state"
 
 
+def test_zeta_models_package_omits_session_id_for_chat_structured_output(
+    monkeypatch,
+) -> None:
+    from zeta import models as models_pkg
+
+    captured: dict[str, Any] = {}
+
+    def fake_structured(
+        messages: list[dict[str, Any]],
+        **options: Any,
+    ) -> dict[str, Any]:
+        captured["messages"] = messages
+        captured["options"] = options
+        return {"state": "done"}
+
+    monkeypatch.setattr(zeta_model, "chat_structured_output", fake_structured)
+
+    data = models_pkg.chat_structured_output(
+        [{"role": "user", "content": "hi"}],
+        schema={"type": "object"},
+        response_name="state",
+        session_id="agent/session",
+    )
+
+    assert data == {"state": "done"}
+    assert captured["options"] == {
+        "schema": {"type": "object"},
+        "response_name": "state",
+    }
+
+
 def test_zeta_default_model_gateway_omits_session_id_for_chat_completions(
     monkeypatch,
 ) -> None:

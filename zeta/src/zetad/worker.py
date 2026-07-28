@@ -34,6 +34,7 @@ from zetad.agents import (
     ExecutableAgent,
     agent_session_id,
     compile_agent_definitions,
+    config_for_spec,
 )
 from zetad.connector_bridge import (
     handle_push_ingress_request,
@@ -195,6 +196,10 @@ def compile_snapshot_executors(
                 for spec in project.specs
                 for agent in compile_agent_definitions(
                     spec,
+                    config=config_with_model_selection(
+                        config_for_spec(spec, None),
+                        runtime.model_selection,
+                    ),
                     event_registry=project.events,
                     run_turn=project_agent_run_turn(runtime),
                     project_generation=snapshot.generation_id,

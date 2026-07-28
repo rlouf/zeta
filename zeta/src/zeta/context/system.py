@@ -56,6 +56,7 @@ def system_prompt(
     base_prompt: str | None = None,
     *,
     allowed_capabilities: Iterable[str] | None = None,
+    tool_descriptors: Iterable[dict[str, Any]] | None = None,
 ) -> str:
     """Assemble the system prompt around the caller's base prompt.
 
@@ -63,10 +64,18 @@ def system_prompt(
     module only adds the runtime scaffolding: date line, tool protocol,
     and tool descriptors.
     """
-    active_capabilities = enabled_capability_ids(allowed_capabilities)
+    active_descriptors = (
+        list(tool_descriptors) if tool_descriptors is not None else None
+    )
+    active_capabilities = (
+        tuple(allowed_capabilities or ())
+        if active_descriptors is not None
+        else enabled_capability_ids(allowed_capabilities)
+    )
     return render_system_prompt(
         base_prompt,
         allowed_capabilities=active_capabilities,
+        tool_descriptors=active_descriptors,
     )
 
 
@@ -74,10 +83,16 @@ def render_system_prompt(
     base_prompt: str | None = None,
     *,
     allowed_capabilities: Iterable[str] | None = None,
+    tool_descriptors: Iterable[dict[str, Any]] | None = None,
 ) -> str:
     """Render the system prompt from already-resolved prompt inputs."""
     active_capabilities = (
         tuple(allowed_capabilities) if allowed_capabilities is not None else None
+    )
+    active_descriptors = (
+        list(tool_descriptors)
+        if tool_descriptors is not None
+        else model_capability_descriptors(active_capabilities)
     )
     return render_prompt_template(
         SYSTEM_PROMPT_TEMPLATE,
@@ -85,9 +100,9 @@ def render_system_prompt(
         date_line=current_date_line(),
         tool_protocol=TOOL_PROTOCOL_PROMPT.strip(),
         grep_tool_policy=GREP_TOOL_POLICY
-        if capability_available("grep", active_capabilities)
+        if capability_available("grep", tool_descriptors=active_descriptors)
         else "",
-        tools_prompt=tools_prompt(active_capabilities),
+        tools_prompt=tools_prompt(tool_descriptors=active_descriptors),
     )
 
 
@@ -101,30 +116,49 @@ def current_date_line() -> str:
 
 
 def capability_available(
-    name: str, allowed_capabilities: Iterable[str] | None = None
+    name: str,
+    allowed_capabilities: Iterable[str] | None = None,
+    *,
+    tool_descriptors: Iterable[dict[str, Any]] | None = None,
 ) -> bool:
-    for descriptor in model_capability_descriptors(allowed_capabilities):
+    descriptors = (
+        tool_descriptors
+        if tool_descriptors is not None
+        else model_capability_descriptors(allowed_capabilities)
+    )
+    for descriptor in descriptors:
         function = descriptor.get("function")
         if isinstance(function, dict) and function.get("name") == name:
             return True
     return False
 
 
-def tools_prompt(allowed_capabilities: Iterable[str] | None = None) -> str:
+def tools_prompt(
+    allowed_capabilities: Iterable[str] | None = None,
+    *,
+    tool_descriptors: Iterable[dict[str, Any]] | None = None,
+) -> str:
     """Render active capabilities from the registry into the system prompt."""
     return render_prompt_template(
         TOOLS_PROMPT_TEMPLATE,
-        tools=tool_prompt_items(allowed_capabilities),
+        tools=tool_prompt_items(
+            allowed_capabilities,
+            tool_descriptors=tool_descriptors,
+        ),
     )
 
 
 def tool_prompt_items(
     allowed_capabilities: Iterable[str] | None = None,
+    *,
+    tool_descriptors: Iterable[dict[str, Any]] | None = None,
 ) -> list[dict[str, str]]:
-    return [
-        tool_prompt_item(descriptor)
-        for descriptor in model_capability_descriptors(allowed_capabilities)
-    ]
+    descriptors = (
+        tool_descriptors
+        if tool_descriptors is not None
+        else model_capability_descriptors(allowed_capabilities)
+    )
+    return [tool_prompt_item(descriptor) for descriptor in descriptors]
 
 
 def tool_prompt_item(descriptor: dict[str, Any]) -> dict[str, str]:

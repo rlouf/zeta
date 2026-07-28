@@ -67,25 +67,37 @@ class ReturnedEventPublisher:
             await returned if inspect.isawaitable(returned) else returned,
         )
         Draft202012Validator(schema).validate(data)
-        event_type = data.get("type")
-        payload = data.get("payload")
-        if not isinstance(event_type, str) or not isinstance(payload, dict):
-            raise RuntimeError("structured agent return must include type and payload")
-        published = await invocation.publish(
-            DraftEvent(
-                event_type,
-                f"agent:{spec.slug}",
-                payload,
-                idempotency_key=agent_return_idempotency_key(
-                    invocation.triggering_event,
-                    spec,
-                ),
-                caused_by=invocation.triggering_event.id,
+        returned_events = data.get("events")
+        if not isinstance(returned_events, list):
+            raise RuntimeError("structured agent return must include an events array")
+        published_events: list[Event] = []
+        for index, returned_event in enumerate(returned_events):
+            if not isinstance(returned_event, dict):
+                raise RuntimeError("each structured agent return must be an object")
+            event_type = returned_event.get("type")
+            payload = returned_event.get("payload")
+            if not isinstance(event_type, str) or not isinstance(payload, dict):
+                raise RuntimeError(
+                    "each structured agent return must include type and payload"
+                )
+            published_events.append(
+                await invocation.publish(
+                    DraftEvent(
+                        event_type,
+                        f"agent:{spec.slug}",
+                        payload,
+                        idempotency_key=agent_return_idempotency_key(
+                            invocation.triggering_event,
+                            spec,
+                            index=index,
+                        ),
+                        caused_by=invocation.triggering_event.id,
+                    )
+                )
             )
-        )
         return {
             **agent_run_result_payload(result),
-            "returned_events": [event_view(published)],
+            "returned_events": [event_view(event) for event in published_events],
         }
 
 
@@ -107,8 +119,11 @@ def structured_return_messages(
         {
             "role": "system",
             "content": (
-                "Convert the agent result into exactly one returned event. "
-                "Return only JSON matching the provided schema. Do not call tools."
+                "Convert the agent result into an ordered list of zero or more "
+                "returned events. Preserve every independently useful event that "
+                "matches an allowed return type. Use an empty events list when "
+                "nothing should be emitted. Return only JSON matching the "
+                "provided schema. Do not call tools."
             ),
         },
         {
@@ -118,5 +133,11 @@ def structured_return_messages(
     ]
 
 
-def agent_return_idempotency_key(event: Event, spec: AgentSpec) -> str:
-    return f"agent.return:{event.id}:{spec.slug}"
+def agent_return_idempotency_key(
+    event: Event,
+    spec: AgentSpec,
+    *,
+    index: int = 0,
+) -> str:
+    base = f"agent.return:{event.id}:{spec.slug}"
+    return base if index == 0 else f"{base}:{index}"

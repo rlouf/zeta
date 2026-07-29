@@ -11,9 +11,10 @@ from typing import Any, Protocol
 from zeta.capabilities.execution import (
     CapabilityCallResult,
     CapabilityExecutionContext,
+    InProcessToolExecutor,
+    ToolExecutor,
     handle_tool_call,
 )
-from zeta.capabilities.host import HostDirectory
 from zeta.capabilities.registry import (
     CapabilityRegistry,
     CapabilityToolSchema,
@@ -121,7 +122,7 @@ class RunDependencies:
     tool_registry: CapabilityRegistry
     builder: PromptBuilder
     abort_reason: AbortReason
-    tool_hosts: HostDirectory | None = None
+    tool_executor: ToolExecutor | None = None
     model_gateway: ModelGateway = field(default_factory=DefaultModelGateway)
 
 
@@ -346,7 +347,7 @@ async def run_agent(
     runtime_context: RuntimeContext,
     cancellation_event: CancellationToken | None,
     model_gateway: ModelGateway | None = None,
-    tool_hosts: HostDirectory | None = None,
+    tool_executor: ToolExecutor | None = None,
 ) -> AgentRunResult:
     """Run one durable agent turn inside a runtime session."""
     enabled_capabilities = registered_capabilities(
@@ -396,7 +397,7 @@ async def run_agent(
         event_sink=sink,
         trace_store=runtime_context.trace_store,
         tool_registry=runtime_context.tool_registry,
-        tool_hosts=tool_hosts,
+        tool_executor=tool_executor,
         model_gateway=model_gateway,
         caused_by=caused_by,
         cancellation_event=cancellation_event,
@@ -423,7 +424,7 @@ async def run_agent_loop(
     prompt_builder: PromptBuilder | None = None,
     trace_store: Store | None = None,
     tool_registry: CapabilityRegistry | None = None,
-    tool_hosts: HostDirectory | None = None,
+    tool_executor: ToolExecutor | None = None,
     model_gateway: ModelGateway | None = None,
     caused_by: str | None = None,
     cancellation_event: CancellationToken | None = None,
@@ -449,7 +450,7 @@ async def run_agent_loop(
         event_sink=event_sink,
         trace_store=trace_store,
         tool_registry=active_tool_registry,
-        tool_hosts=tool_hosts or HostDirectory.from_registry(active_tool_registry),
+        tool_executor=tool_executor or InProcessToolExecutor(active_tool_registry),
         builder=builder,
         model_gateway=gateway,
         abort_reason=run_abort_reason(cancellation_event, deadline, clock=clock),
@@ -793,7 +794,7 @@ async def run_capability_step(
         event_sink=ctx.event_sink,
         trace_store=ctx.builder.store(),
         tool_registry=ctx.tool_registry,
-        tool_hosts=ctx.tool_hosts or HostDirectory.from_registry(ctx.tool_registry),
+        tool_executor=ctx.tool_executor,
         base_dir=config.base_dir,
         effect_scope=config.effect_scope,
     )

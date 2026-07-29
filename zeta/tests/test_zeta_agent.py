@@ -21,8 +21,8 @@ from zeta.agents import spec as zeta_agent_spec
 from zeta.agents.manifest import ManifestError
 from zeta.capabilities.execution import (
     InProcessCapabilityExecutor,
+    ToolExecutor,
 )
-from zeta.capabilities.host import HostDirectory
 from zeta.capabilities.registry import CapabilityRegistry, RegisteredCapability
 from zeta.capabilities.types import (
     Capability,
@@ -1622,7 +1622,7 @@ def test_zeta_run_capability_step_records_call_execution_and_result(
     ]
 
 
-def test_zeta_run_capability_step_dispatches_to_injected_host() -> None:
+def test_zeta_run_capability_step_dispatches_to_injected_executor() -> None:
     state = zeta_agent.RunState()
     calls: list[tuple[str, dict[str, Any], str]] = []
     registry = CapabilityRegistry()
@@ -1640,29 +1640,26 @@ def test_zeta_run_capability_step_dispatches_to_injected_host() -> None:
     )
     registry.register(capability)
 
-    class FakeHost:
-        declarations = (capability,)
-        closed = False
-
+    class FakeExecutor:
         async def call(
             self,
             capability_id: str,
             params: dict[str, Any],
             mode: str,
-            ctx: object,
+            *,
+            base_dir: Path | None,
+            effect_key: str | None,
         ) -> dict[str, Any]:
-            del ctx
+            del base_dir, effect_key
             calls.append((capability_id, params, mode))
             return {"ok": True, "content": [{"type": "text", "text": "host"}]}
 
-    hosts = HostDirectory()
-    hosts.register_host(FakeHost())
     allowed_capabilities = ("test.read",)
     ctx = zeta_agent.RunDependencies(
         event_sink=None,
         trace_store=None,
         tool_registry=registry,
-        tool_hosts=hosts,
+        tool_executor=FakeExecutor(),
         builder=zeta_context.PromptBuilder(),
         abort_reason=never_abort,
     )
@@ -1693,7 +1690,7 @@ def test_zeta_run_capability_step_dispatches_to_injected_host() -> None:
     }
 
 
-def test_zeta_run_capability_step_records_unknown_tool_when_no_host_serves_call() -> (
+def test_zeta_run_capability_step_records_executor_refusal() -> (
     None
 ):
     state = zeta_agent.RunState()
@@ -1701,11 +1698,31 @@ def test_zeta_run_capability_step_records_unknown_tool_when_no_host_serves_call(
     capability = _test_capability("read")
     registry.register(capability)
     allowed_capabilities = ("test.read",)
+    class RefusingExecutor:
+        async def call(
+            self,
+            capability_id: str,
+            params: dict[str, Any],
+            mode: str,
+            *,
+            base_dir: Path | None,
+            effect_key: str | None,
+        ) -> dict[str, Any]:
+            del params, mode, base_dir, effect_key
+            return {
+                "ok": False,
+                "error": {
+                    "code": "unknown-tool",
+                    "message": f"unknown tool: {capability_id}",
+                    "data": {"capability_id": capability_id},
+                },
+            }
+
     ctx = zeta_agent.RunDependencies(
         event_sink=None,
         trace_store=None,
         tool_registry=registry,
-        tool_hosts=HostDirectory(),
+        tool_executor=RefusingExecutor(),
         builder=zeta_context.PromptBuilder(),
         abort_reason=never_abort,
     )
@@ -4155,19 +4172,30 @@ Triage the issue.
         encoding="utf-8",
     )
 
-    class RecordingResolver:
-        def __init__(self) -> None:
-            self.agents: list[str] = []
-
-        async def setup(
+    class RecordingExecutor:
+        async def call(
             self,
-            agent_id: str,
-            registry: CapabilityRegistry,
-        ) -> HostDirectory:
-            self.agents.append(agent_id)
-            return HostDirectory.from_registry(registry)
+            capability_id: str,
+            params: dict[str, Any],
+            mode: str,
+            *,
+            base_dir: Path | None,
+            effect_key: str | None,
+        ) -> dict[str, Any]:
+            del capability_id, params, mode, base_dir, effect_key
+            return {"ok": True}
 
-    resolver = RecordingResolver()
+    executor = RecordingExecutor()
+    executor_agents: list[str] = []
+
+    async def tool_executor_for_agent(
+        agent_id: str,
+        registry: CapabilityRegistry,
+    ) -> ToolExecutor:
+        del registry
+        executor_agents.append(agent_id)
+        return executor
+
     calls: list[dict[str, Any]] = []
 
     async def fake_run_agent(*args: Any, **kwargs: Any) -> AgentRunResult:
@@ -4177,7 +4205,7 @@ Triage the issue.
     monkeypatch.setattr(zetad_worker, "run_agent", fake_run_agent)
     runtime = zetad_worker.build_worker_services(
         project_root=tmp_path,
-        tool_executor=resolver,
+        tool_executor_for_agent=tool_executor_for_agent,
     )
     try:
         event = runtime.events.accept(
@@ -4188,9 +4216,9 @@ Triage the issue.
         runtime.close()
 
     assert message == f"ran qi_{event.id}"
-    assert resolver.agents == ["triage"]
+    assert executor_agents == ["triage"]
     assert len(calls) == 1
-    assert calls[0]["kwargs"]["tool_hosts"] is not None
+    assert calls[0]["kwargs"]["tool_executor"] is executor
 
 
 def test_zeta_cli_run_registers_builtin_tools(

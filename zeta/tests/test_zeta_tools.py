@@ -14,7 +14,6 @@ from zeta.capabilities.execution import (
     InProcessCapabilityExecutor,
     tool_args_schema_error,
 )
-from zeta.capabilities.host import DuplicateHostCapabilityError, HostDirectory
 from zeta.capabilities.registry import (
     CapabilityRegistry,
     RegisteredCapability,
@@ -79,33 +78,6 @@ def test_zeta_capability_registry_registers_and_lists_capabilities() -> None:
     assert registry.get("test.unit") is capability
     assert registry.list_capability_ids() == ["test.unit"]
     assert capability.declaration.id.canonical() == "test.unit"
-
-
-def test_zeta_host_directory_rejects_duplicate_declarations() -> None:
-    capability = _test_capability("read")
-
-    class FakeHost:
-        declarations = (capability,)
-        closed = False
-
-        async def call(
-            self,
-            capability_id: str,
-            params: dict[str, Any],
-            mode: str,
-            ctx: object,
-        ) -> dict[str, Any]:
-            del capability_id, params, mode, ctx
-            return {"ok": True}
-
-    directory = HostDirectory()
-    directory.register_host(FakeHost())
-
-    with pytest.raises(DuplicateHostCapabilityError) as exc_info:
-        directory.register_host(FakeHost())
-
-    assert exc_info.value.capability_id == "test.read"
-    assert directory.list_capability_ids() == ["test.read"]
 
 
 def test_zeta_capability_registry_accepts_unchecked_capability_schema() -> None:

@@ -97,9 +97,8 @@ class CapabilityDirectory:
     """Name resolution and model-facing schema over a capability index.
 
     Shared read surface for any store of `RegisteredCapability` declarations
-    keyed by canonical id, whether registered in-process (`CapabilityRegistry`)
-    or served by connected hosts (`HostDirectory`). Subclasses own how
-    `_capabilities` and `_names` are populated.
+    keyed by canonical id. Subclasses own how `_capabilities` and `_names` are
+    populated.
     """
 
     _capabilities: dict[str, RegisteredCapability]

@@ -11,12 +11,12 @@ from typing import Any
 from zeta.capabilities.execution import (
     change_hashes,
     content_hash,
-    error_result,
     proposed_command_effect,
     short_tag,
     write_temp,
 )
 from zeta.capabilities.paths import resolve_path
+from zeta.capabilities.registry import error_result
 from zeta.capabilities.types import Capability, CapabilityId
 
 SCHEMA: dict[str, Any] = {

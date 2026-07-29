@@ -10,8 +10,7 @@ from typing import Any
 
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import SchemaError
-from zeta.capabilities.execution import error_result
-from zeta.capabilities.registry import RegisteredCapability
+from zeta.capabilities.registry import RegisteredCapability, error_result
 from zeta.capabilities.types import Capability, CapabilityId
 from zeta.effects import DELIVERY_SEMANTICS, DeliverySemantics
 from zeta.records.events import DraftEvent, Event, event_to_wire

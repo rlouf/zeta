@@ -15,11 +15,10 @@ from typing import Any, Protocol, cast
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import SchemaError
 
-from zeta.capabilities.host import HostDirectory
+from zeta.capabilities.paths import reset_base_dir, set_base_dir
 from zeta.capabilities.registry import (
     CapabilityRegistry,
     CapabilityToolSchema,
-    error_result,
     validated_capability_result_payload,
 )
 from zeta.capabilities.registry import registry as _default_tool_registry
@@ -50,6 +49,65 @@ class CapabilityExecutor(Protocol):
 CapabilityFunction = Callable[
     [dict[str, Any]], dict[str, Any] | Awaitable[dict[str, Any]]
 ]
+
+
+class ToolExecutor(Protocol):
+    """Execute one validated capability call in an agent's tool environment."""
+
+    async def call(
+        self,
+        capability_id: str,
+        params: dict[str, Any],
+        mode: ExecutionMode,
+        *,
+        base_dir: Path | None,
+        effect_key: str | None,
+    ) -> dict[str, Any]:
+        """Return the normalized result for one capability call."""
+
+
+ToolExecutorFactory = Callable[[str, CapabilityRegistry], Awaitable[ToolExecutor]]
+
+
+@dataclass(frozen=True)
+class InProcessToolExecutor:
+    """Execute capabilities through the local registry."""
+
+    registry: CapabilityRegistry
+
+    async def call(
+        self,
+        capability_id: str,
+        params: dict[str, Any],
+        mode: ExecutionMode,
+        *,
+        base_dir: Path | None,
+        effect_key: str | None,
+    ) -> dict[str, Any]:
+        token = set_base_dir(base_dir)
+        try:
+            result = invoke_capability(
+                capability_id,
+                params,
+                execution_mode=mode,
+                tool_registry=self.registry,
+                effect_key=effect_key,
+            )
+            if inspect.isawaitable(result):
+                result = await result
+            return result
+        finally:
+            reset_base_dir(token)
+
+
+async def in_process_tool_executor_for_agent(
+    agent_id: str,
+    registry: CapabilityRegistry,
+) -> ToolExecutor:
+    """Create the local tool executor for one agent run."""
+
+    del agent_id
+    return InProcessToolExecutor(registry)
 
 
 @dataclass(frozen=True)
@@ -159,7 +217,7 @@ class CapabilityExecutionContext:
     event_sink: CapabilityEventSink | None
     trace_store: Store | None
     tool_registry: CapabilityRegistry
-    tool_hosts: HostDirectory | None = None
+    tool_executor: ToolExecutor | None = None
     base_dir: Path | None = None
     effect_scope: str | None = None
     effect_key: str | None = None
@@ -450,7 +508,7 @@ async def run_valid_tool_call(
             ctx=ctx,
         )
     try:
-        invoked = invoke_hosted_capability(
+        invoked = invoke_tool_executor(
             capability_id,
             invocation.params,
             execution_mode=execution_mode,
@@ -506,8 +564,7 @@ def capability_delivery_semantics(
     *,
     ctx: CapabilityExecutionContext,
 ) -> DeliverySemantics | None:
-    directory = ctx.tool_hosts or ctx.tool_registry
-    capability = directory.get(capability_id)
+    capability = ctx.tool_registry.get(capability_id)
     if capability is None:
         return None
     return capability.declaration.delivery_semantics
@@ -567,22 +624,21 @@ async def invoke_capability(
     )
 
 
-async def invoke_hosted_capability(
+async def invoke_tool_executor(
     capability_id: str,
     params: dict[str, Any],
     *,
     execution_mode: ExecutionMode = "stage",
     ctx: CapabilityExecutionContext,
 ) -> dict[str, Any]:
-    tool_hosts = ctx.tool_hosts or HostDirectory.from_registry(ctx.tool_registry)
-    host = tool_hosts.host_for(capability_id)
-    if host is None:
-        return error_result(
-            "unknown-tool",
-            f"unknown tool: {capability_id}",
-            data={"capability_id": capability_id},
-        )
-    result = await host.call(capability_id, params, execution_mode, ctx)
+    executor = ctx.tool_executor or InProcessToolExecutor(ctx.tool_registry)
+    result = await executor.call(
+        capability_id,
+        params,
+        execution_mode,
+        base_dir=ctx.base_dir,
+        effect_key=ctx.effect_key,
+    )
     return validated_capability_result_payload(capability_id, result)
 
 

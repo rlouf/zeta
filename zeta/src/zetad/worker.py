@@ -15,9 +15,9 @@ from connectors import (
     EventConnectorRegistry,
 )
 from zeta.agents.resources import load_connector_registry
-from zeta.capabilities.host import (
-    InProcessToolExecutor,
-    ToolExecutor,
+from zeta.capabilities.execution import (
+    ToolExecutorFactory,
+    in_process_tool_executor_for_agent,
 )
 from zeta.capabilities.registry import CapabilityRegistry
 from zeta.events import Event
@@ -79,7 +79,7 @@ class WorkerServices:
     worker_name: str = LOCAL_WORKER_NAME
     max_concurrent: int = 1
     retry_policy: RetryPolicy = field(default_factory=RetryPolicy)
-    tool_executor: ToolExecutor = field(default_factory=InProcessToolExecutor)
+    tool_executor_for_agent: ToolExecutorFactory = in_process_tool_executor_for_agent
 
     @cached_property
     def project_snapshot(self) -> ProjectSnapshot:
@@ -101,7 +101,7 @@ def build_worker_services(
     tool_registry: CapabilityRegistry | None = None,
     registry: EventConnectorRegistry | None = None,
     connector_names: Iterable[str] | None = None,
-    tool_executor: ToolExecutor | None = None,
+    tool_executor_for_agent: ToolExecutorFactory | None = None,
 ) -> WorkerServices:
     resolved_project_root = project_root.expanduser().resolve()
     resolved_state_dir = resolve_state_dir(project_root, state_dir)
@@ -118,7 +118,9 @@ def build_worker_services(
         model_selection=active_model_selection(
             session_dir=resolved_state_dir / "sessions" / "default"
         ),
-        tool_executor=tool_executor or InProcessToolExecutor(),
+        tool_executor_for_agent=(
+            tool_executor_for_agent or in_process_tool_executor_for_agent
+        ),
     )
 
 
@@ -248,10 +250,18 @@ class RuntimeAgentLoop:
             tool_registry=self.runtime.tool_registry,
             state_dir=self.runtime.state_dir,
             session_dir=self.runtime.state_dir / "sessions" / session_id,
-            tool_executor=self.runtime.tool_executor,
+            tool_executor_for_agent=self.runtime.tool_executor_for_agent,
         )
         started = time.perf_counter()
         try:
+            executor_factory = (
+                runtime_context.tool_executor_for_agent
+                or in_process_tool_executor_for_agent
+            )
+            tool_executor = await executor_factory(
+                invocation.agent.agent_id,
+                runtime_context.tool_registry,
+            )
             return await run_agent(
                 AgentRunRequest(
                     objective=objective,
@@ -272,14 +282,7 @@ class RuntimeAgentLoop:
                 publish_event=lambda _event: None,
                 runtime_context=runtime_context,
                 cancellation_event=None,
-                tool_hosts=(
-                    await runtime_context.tool_executor.setup(
-                        invocation.agent.agent_id,
-                        runtime_context.tool_registry,
-                    )
-                    if runtime_context.tool_executor is not None
-                    else None
-                ),
+                tool_executor=tool_executor,
             )
         finally:
             self.runtime.events.observe_runtime_metric(

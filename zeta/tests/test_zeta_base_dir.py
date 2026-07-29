@@ -48,12 +48,12 @@ def test_base_dir_is_task_local():
     assert Path("/b/n.md") in results
 
 
-def test_in_process_host_activates_base_dir_from_context():
+def test_in_process_tool_executor_activates_base_dir_from_context():
     from zeta.capabilities.execution import (
         CapabilityExecutionContext,
         InProcessCapabilityExecutor,
+        InProcessToolExecutor,
     )
-    from zeta.capabilities.host import InProcessToolHost
     from zeta.capabilities.registry import CapabilityRegistry, RegisteredCapability
     from zeta.capabilities.types import Capability, CapabilityId
 
@@ -71,7 +71,7 @@ def test_in_process_host_activates_base_dir_from_context():
             InProcessCapabilityExecutor(probe, None),
         )
     )
-    host = InProcessToolHost(registry)
+    executor = InProcessToolExecutor(registry)
     ctx = CapabilityExecutionContext(
         event_sink=None,
         trace_store=None,
@@ -79,7 +79,15 @@ def test_in_process_host_activates_base_dir_from_context():
         base_dir=Path("/vault"),
     )
 
-    result = asyncio.run(host.call("test.probe", {}, "direct", ctx))
+    result = asyncio.run(
+        executor.call(
+            "test.probe",
+            {},
+            "direct",
+            base_dir=ctx.base_dir,
+            effect_key=None,
+        )
+    )
 
     assert result["resolved"] == str(Path("/vault/note.md"))
     # base did not leak out of the call

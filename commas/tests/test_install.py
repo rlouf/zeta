@@ -20,8 +20,8 @@ from commas.install import (
     install_zsh_binding,
 )
 
-from test_support.patch import patch, patch_dict
-from test_support.zeta_helpers import write_codex_auth_file
+from commas_test_patch import patch, patch_dict
+from commas_test_support import write_codex_auth_file
 
 
 def test_install_zsh_binding_copies_binding_and_updates_rc_idempotently() -> None:

@@ -54,7 +54,7 @@ from zeta.records.provenance import project_prompt_trace_projection
 from zeta.run.context import zeta_state_dir
 from zeta.substrate import Derivation, InMemoryStore, Object
 
-from test_support.zeta_helpers import (
+from zeta_test_support import (
     BatchSpyStore,
     assert_task_state_graph,
     big_transcript_components,

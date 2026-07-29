@@ -18,7 +18,7 @@ from rich.markdown import Markdown
 from rich.panel import Panel
 from zeta.substrate import InMemoryStore, Object
 
-from test_support.zeta_helpers import (
+from commas_test_support import (
     TtyBuffer,
     visible_terminal_text,
 )

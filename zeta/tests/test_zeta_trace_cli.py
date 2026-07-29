@@ -46,7 +46,7 @@ from zeta.trace.replay import latest_model_answer
 from zeta.trace.summarize import assistant_trace_summary
 from zetad.cli import cli as zeta_cli
 
-from test_support.zeta_helpers import (
+from zeta_test_support import (
     BatchSpyStore,
     read_tool_call_response,
     read_tool_payload,

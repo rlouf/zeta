@@ -50,7 +50,7 @@ from zeta.substrate import Ref, resolve_object_id
 import commas
 from commas import agent_io
 from commas import handoff as commas_handoff
-from test_support.zeta_helpers import (
+from commas_test_support import (
     TtyBuffer,
     record_durable_timeline_event,
     visible_terminal_text,

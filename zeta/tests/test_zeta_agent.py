@@ -60,7 +60,7 @@ from zetad.rpc import jsonrpc as zetad_jsonrpc
 from zetad.rpc import routes as zetad_rpc_routes
 from zetad.store import RuntimeEventStore
 
-from test_support.zeta_helpers import (
+from zeta_test_support import (
     assert_prompt_trace_replay_graph,
     assert_tool_call_derivation,
     assert_tool_result_derivation,

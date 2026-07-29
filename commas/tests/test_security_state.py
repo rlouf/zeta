@@ -73,8 +73,8 @@ from zetad.queue import (
     queue_item_from_event_payload,
 )
 
-from test_support.patch import patch, patch_dict
-from test_support.zeta_helpers import record_durable_timeline_event
+from commas_test_patch import patch, patch_dict
+from commas_test_support import record_durable_timeline_event
 
 
 class TtyStringIO(StringIO):

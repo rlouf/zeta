@@ -17,7 +17,7 @@ from commas.sessions import session_dir
 from zeta.context.compaction.task_state import TASK_STATE_SCHEMA
 from zetad.cli import cli as zeta_cli
 
-from test_support.zeta_helpers import (
+from zeta_test_support import (
     DeltaSink,
     sse_lines,
     task_state_fixture,

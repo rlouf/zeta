@@ -53,7 +53,11 @@ CapabilityFunction = Callable[
 
 
 class ToolExecutor(Protocol):
-    """Execute one validated capability call in an agent's tool environment."""
+    """Execute calls in one persistent agent tool environment.
+
+    A worker may call an executor concurrently and closes it after all agent
+    invocations have finished.
+    """
 
     async def call(
         self,
@@ -66,9 +70,11 @@ class ToolExecutor(Protocol):
     ) -> dict[str, Any]:
         """Return the normalized result for one capability call."""
 
+    async def aclose(self) -> None:
+        """Release resources owned by this executor."""
 
-ToolExecutorFactory = Callable[[str, CapabilityRegistry], Awaitable[ToolExecutor]]
-ToolExecutorProviderFactory = Callable[
+
+ToolExecutorSetup = Callable[
     [str, CapabilityRegistry, Mapping[str, Any]], Awaitable[ToolExecutor]
 ]
 
@@ -77,18 +83,10 @@ TOOL_EXECUTOR_ENTRY_POINT_GROUP = "zeta.tool_executors"
 
 @dataclass(frozen=True)
 class ToolExecutorProvider:
-    """Construct one kind of tool executor for an agent run."""
+    """Transfer a persistent executor's lifecycle to the worker."""
 
     id: str
-    factory: ToolExecutorProviderFactory
-
-    async def create(
-        self,
-        agent_id: str,
-        registry: CapabilityRegistry,
-        config: Mapping[str, Any],
-    ) -> ToolExecutor:
-        return await self.factory(agent_id, registry, config)
+    setup: ToolExecutorSetup
 
 
 @dataclass
@@ -138,15 +136,8 @@ class InProcessToolExecutor:
         finally:
             reset_base_dir(token)
 
-
-async def in_process_tool_executor_for_agent(
-    agent_id: str,
-    registry: CapabilityRegistry,
-) -> ToolExecutor:
-    """Create the local tool executor for one agent run."""
-
-    del agent_id
-    return InProcessToolExecutor(registry)
+    async def aclose(self) -> None:
+        return None
 
 
 async def local_tool_executor_provider(
@@ -154,10 +145,11 @@ async def local_tool_executor_provider(
     registry: CapabilityRegistry,
     config: Mapping[str, Any],
 ) -> ToolExecutor:
-    """Create the built-in executor that invokes local capabilities."""
+    """Set up the built-in executor that invokes local capabilities."""
+    del agent_id
     if config:
         raise ValueError("local tool executor does not accept configuration")
-    return await in_process_tool_executor_for_agent(agent_id, registry)
+    return InProcessToolExecutor(registry)
 
 
 def load_tool_executor_provider_registry(

@@ -26,6 +26,7 @@ from zeta.agents.spec import (
     ModelSpec,
     RetrySpec,
     ScheduleEntry,
+    executor_config,
 )
 from zeta.capabilities.execution import (
     ToolExecutorProviderRegistry,
@@ -260,6 +261,12 @@ def agent_from_manifest(value: Any) -> AgentSpec:
         or not isinstance(config, Mapping)
     ):
         raise ProjectSnapshotUnavailable("project snapshot has invalid tool executor")
+    try:
+        normalized_config = executor_config(config)
+    except ValueError as exc:
+        raise ProjectSnapshotUnavailable(
+            "project snapshot has invalid tool executor config"
+        ) from exc
     raw_schedules = value.get("schedules")
     schedules = (
         tuple(
@@ -285,7 +292,7 @@ def agent_from_manifest(value: Any) -> AgentSpec:
         enabled=bool(value.get("enabled", True)),
         resumable=bool(value.get("resumable", False)),
         model=model,
-        executor=ExecutorSpec(provider=provider, config=dict(config)),
+        executor=ExecutorSpec(provider=provider, config=normalized_config),
         accepts=_string_tuple(value.get("accepts")),
         returns=_string_tuple(value.get("returns")),
         skills=_string_tuple(value.get("skills")),
@@ -326,7 +333,7 @@ def agent_manifest(spec: AgentSpec) -> dict[str, Any]:
         ),
         "executor": {
             "provider": spec.executor.provider,
-            "config": spec.executor.config,
+            "config": executor_config(spec.executor.config),
         },
         "accepts": list(spec.accepts),
         "returns": list(spec.returns),

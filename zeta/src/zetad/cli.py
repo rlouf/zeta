@@ -707,11 +707,14 @@ def run(
         tool_registry=cli_tool_registry(),
         connector_names=connector_names_from_option(connectors),
     )
-    try:
-        message = asyncio.run(worker.run_until_idle(runtime))
-        click.echo(message)
-    finally:
-        runtime.close()
+
+    async def drain() -> str:
+        try:
+            return await worker.run_until_idle(runtime)
+        finally:
+            await runtime.aclose()
+
+    click.echo(asyncio.run(drain()))
     return 0
 
 
@@ -757,17 +760,19 @@ def serve(
         tool_registry=cli_tool_registry(),
         connector_names=connector_names_from_option(connectors),
     )
-    try:
-        asyncio.run(
-            worker.run_forever(
+
+    async def run_runtime() -> None:
+        try:
+            await worker.run_forever(
                 runtime,
                 push_host=host,
                 push_port=port,
                 push_route_prefix=route_prefix,
             )
-        )
-    finally:
-        runtime.close()
+        finally:
+            await runtime.aclose()
+
+    asyncio.run(run_runtime())
     return 0
 
 

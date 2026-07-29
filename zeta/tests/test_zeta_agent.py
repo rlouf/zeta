@@ -1656,6 +1656,9 @@ def test_zeta_run_capability_step_dispatches_to_injected_executor() -> None:
             calls.append((capability_id, params, mode))
             return {"ok": True, "content": [{"type": "text", "text": "host"}]}
 
+        async def aclose(self) -> None:
+            return None
+
     allowed_capabilities = ("test.read",)
     ctx = zeta_agent.RunDependencies(
         event_sink=None,
@@ -1700,6 +1703,7 @@ def test_zeta_run_capability_step_records_executor_refusal() -> (
     capability = _test_capability("read")
     registry.register(capability)
     allowed_capabilities = ("test.read",)
+
     class RefusingExecutor:
         async def call(
             self,
@@ -1719,6 +1723,9 @@ def test_zeta_run_capability_step_records_executor_refusal() -> (
                     "data": {"capability_id": capability_id},
                 },
             }
+
+        async def aclose(self) -> None:
+            return None
 
     ctx = zeta_agent.RunDependencies(
         event_sink=None,
@@ -4104,7 +4111,7 @@ def test_zeta_local_runtime_builds_project_services(tmp_path: Path) -> None:
         assert runtime.events.path == event_store_path(runtime.state_dir)
         assert runtime.tool_registry.get("zeta.read") is None
     finally:
-        runtime.close()
+        asyncio.run(runtime.aclose())
 
 
 def test_zeta_local_runtime_resolves_default_model_selection(
@@ -4138,7 +4145,7 @@ def test_zeta_local_runtime_resolves_default_model_selection(
             == tmp_path.resolve() / ".zeta" / "sessions" / "default"
         )
     finally:
-        runtime.close()
+        asyncio.run(runtime.aclose())
 
 
 def test_zeta_local_runtime_accepts_explicit_tool_registry(tmp_path: Path) -> None:
@@ -4152,75 +4159,7 @@ def test_zeta_local_runtime_accepts_explicit_tool_registry(tmp_path: Path) -> No
         assert runtime.tool_registry is registry
         assert runtime.tool_registry.get("zeta.read") is None
     finally:
-        runtime.close()
-
-
-def test_zeta_local_runtime_sets_up_tool_executor_for_agent(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    agents_dir = tmp_path / "agents"
-    agents_dir.mkdir()
-    write_project_event_schema(tmp_path, "github.issue.opened")
-    (agents_dir / "triage.md").write_text(
-        """---
-name: Triage
-description: Triage issues.
-accepts:
-  - github.issue.opened
----
-Triage the issue.
-""",
-        encoding="utf-8",
-    )
-
-    class RecordingExecutor:
-        async def call(
-            self,
-            capability_id: str,
-            params: dict[str, Any],
-            mode: str,
-            *,
-            base_dir: Path | None,
-            effect_key: str | None,
-        ) -> dict[str, Any]:
-            del capability_id, params, mode, base_dir, effect_key
-            return {"ok": True}
-
-    executor = RecordingExecutor()
-    executor_agents: list[str] = []
-
-    async def tool_executor_for_agent(
-        agent_id: str,
-        registry: CapabilityRegistry,
-    ) -> ToolExecutor:
-        del registry
-        executor_agents.append(agent_id)
-        return executor
-
-    calls: list[dict[str, Any]] = []
-
-    async def fake_run_agent(*args: Any, **kwargs: Any) -> AgentRunResult:
-        calls.append({"args": args, "kwargs": kwargs})
-        return AgentRunResult(final_answer="triaged")
-
-    monkeypatch.setattr(zetad_worker, "run_agent", fake_run_agent)
-    runtime = zetad_worker.build_worker_services(
-        project_root=tmp_path,
-        tool_executor_for_agent=tool_executor_for_agent,
-    )
-    try:
-        event = runtime.events.accept(
-            zeta_events.DraftEvent("github.issue.opened", "github", {"number": 1})
-        ).event
-        message = asyncio.run(zetad_worker.run_once(runtime))
-    finally:
-        runtime.close()
-
-    assert message == f"ran qi_{event.id}"
-    assert executor_agents == ["triage"]
-    assert len(calls) == 1
-    assert calls[0]["kwargs"]["tool_executor"] is executor
+        asyncio.run(runtime.aclose())
 
 
 def test_zeta_local_runtime_selects_tool_executor_provider_from_agent_yaml(
@@ -4246,6 +4185,8 @@ Triage the issue.
         encoding="utf-8",
     )
 
+    executor_closed: list[bool] = []
+
     class RecordingExecutor:
         async def call(
             self,
@@ -4259,19 +4200,22 @@ Triage the issue.
             del capability_id, params, mode, base_dir, effect_key
             return {"ok": True}
 
-    executor = RecordingExecutor()
-    factory_calls: list[tuple[str, CapabilityRegistry, Mapping[str, Any]]] = []
+        async def aclose(self) -> None:
+            executor_closed.append(True)
 
-    async def create_executor(
+    executor = RecordingExecutor()
+    setup_calls: list[tuple[str, CapabilityRegistry, Mapping[str, Any]]] = []
+
+    async def setup(
         agent_id: str,
         registry: CapabilityRegistry,
         config: Mapping[str, Any],
     ) -> ToolExecutor:
-        factory_calls.append((agent_id, registry, config))
+        setup_calls.append((agent_id, registry, config))
         return executor
 
     providers = ToolExecutorProviderRegistry()
-    providers.register(ToolExecutorProvider("remote", create_executor))
+    providers.register(ToolExecutorProvider("remote", setup))
     calls: list[dict[str, Any]] = []
 
     async def fake_run_agent(*args: Any, **kwargs: Any) -> AgentRunResult:
@@ -4283,17 +4227,312 @@ Triage the issue.
         project_root=tmp_path,
         tool_executors=providers,
     )
-    try:
-        event = runtime.events.accept(
+
+    async def exercise() -> tuple[str, str, Event, Event]:
+        first_event = runtime.events.accept(
             zeta_events.DraftEvent("github.issue.opened", "github", {"number": 1})
         ).event
-        message = asyncio.run(zetad_worker.run_once(runtime))
-    finally:
-        runtime.close()
+        second_event = runtime.events.accept(
+            zeta_events.DraftEvent("github.issue.opened", "github", {"number": 2})
+        ).event
+        try:
+            first_message = await zetad_worker.run_once(runtime)
+            second_message = await zetad_worker.run_once(runtime)
+            return first_message, second_message, first_event, second_event
+        finally:
+            await runtime.aclose()
 
-    assert message == f"ran qi_{event.id}"
-    assert factory_calls == [("triage", runtime.tool_registry, {"app": "zeta-tools"})]
-    assert calls[0]["kwargs"]["tool_executor"] is executor
+    first_message, second_message, first_event, second_event = asyncio.run(exercise())
+
+    assert {first_message, second_message} == {
+        f"ran qi_{first_event.id}",
+        f"ran qi_{second_event.id}",
+    }
+    assert setup_calls == [("triage", runtime.tool_registry, {"app": "zeta-tools"})]
+    assert executor_closed == [True]
+    assert [call["kwargs"]["tool_executor"] for call in calls] == [executor, executor]
+
+
+def test_zeta_worker_caches_executor_by_agent_and_config(tmp_path: Path) -> None:
+    setup_calls: list[tuple[str, Mapping[str, Any]]] = []
+    setups_started: set[str] = set()
+    distinct_setups_started = asyncio.Event()
+    closed: list[str] = []
+
+    class RecordingExecutor:
+        def __init__(self, name: str) -> None:
+            self.name = name
+
+        async def call(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
+            del args, kwargs
+            return {"ok": True}
+
+        async def aclose(self) -> None:
+            closed.append(self.name)
+
+    async def setup(
+        agent_id: str,
+        registry: CapabilityRegistry,
+        config: Mapping[str, Any],
+    ) -> ToolExecutor:
+        del registry
+        app = str(config["app"])
+        setups_started.add(app)
+        if len(setups_started) == 2:
+            distinct_setups_started.set()
+        await asyncio.wait_for(distinct_setups_started.wait(), timeout=1)
+        setup_calls.append((agent_id, config))
+        return RecordingExecutor(app)
+
+    providers = ToolExecutorProviderRegistry()
+    providers.register(ToolExecutorProvider("remote", setup))
+    runtime = zetad_worker.build_worker_services(
+        project_root=tmp_path,
+        tool_executors=providers,
+    )
+    agent = zetad_agents.AgentDefinition(
+        "triage",
+        (),
+        tool_executor=zeta_agent_spec.ExecutorSpec(
+            "remote",
+            {
+                "app": "one",
+                "options": {"region": "eu-west", "retries": 2},
+            },
+        ),
+    )
+    equivalent = replace(
+        agent,
+        tool_executor=zeta_agent_spec.ExecutorSpec(
+            "remote",
+            {
+                "options": {"retries": 2, "region": "eu-west"},
+                "app": "one",
+            },
+        ),
+    )
+    changed = replace(
+        agent,
+        tool_executor=zeta_agent_spec.ExecutorSpec("remote", {"app": "two"}),
+    )
+
+    async def exercise() -> tuple[ToolExecutor, ToolExecutor, ToolExecutor]:
+        first, second, third = await asyncio.gather(
+            runtime.tool_executor_for(agent),
+            runtime.tool_executor_for(equivalent),
+            runtime.tool_executor_for(changed),
+        )
+        await runtime.aclose()
+        return first, second, third
+
+    first, second, third = asyncio.run(exercise())
+
+    assert first is second
+    assert third is not first
+    assert sorted(setup_calls, key=lambda item: str(item[1]["app"])) == [
+        (
+            "triage",
+            {
+                "app": "one",
+                "options": {"region": "eu-west", "retries": 2},
+            },
+        ),
+        ("triage", {"app": "two"}),
+    ]
+    assert sorted(closed) == ["one", "two"]
+
+
+def test_zeta_worker_rejects_non_json_programmatic_executor_config(
+    tmp_path: Path,
+) -> None:
+    runtime = zetad_worker.build_worker_services(project_root=tmp_path)
+    agent = zetad_agents.AgentDefinition(
+        "triage",
+        (),
+        tool_executor=zeta_agent_spec.ExecutorSpec(
+            "local",
+            cast(dict[str, Any], {1: "value"}),
+        ),
+    )
+
+    async def exercise() -> None:
+        try:
+            with pytest.raises(ValueError, match="keys must be strings"):
+                await runtime.tool_executor_for(agent)
+        finally:
+            await runtime.aclose()
+
+    asyncio.run(exercise())
+
+
+def test_zeta_worker_closes_every_executor_when_one_close_fails(
+    tmp_path: Path,
+) -> None:
+    closed: list[str] = []
+
+    class RecordingExecutor:
+        def __init__(self, name: str) -> None:
+            self.name = name
+
+        async def call(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
+            del args, kwargs
+            return {"ok": True}
+
+        async def aclose(self) -> None:
+            closed.append(self.name)
+            if self.name == "broken":
+                raise RuntimeError("close failed")
+
+    async def setup(
+        agent_id: str,
+        registry: CapabilityRegistry,
+        config: Mapping[str, Any],
+    ) -> ToolExecutor:
+        del agent_id, registry
+        return RecordingExecutor(str(config["app"]))
+
+    providers = ToolExecutorProviderRegistry()
+    providers.register(ToolExecutorProvider("remote", setup))
+    runtime = zetad_worker.build_worker_services(
+        project_root=tmp_path,
+        tool_executors=providers,
+    )
+    broken = zetad_agents.AgentDefinition(
+        "broken",
+        (),
+        tool_executor=zeta_agent_spec.ExecutorSpec("remote", {"app": "broken"}),
+    )
+    healthy = zetad_agents.AgentDefinition(
+        "healthy",
+        (),
+        tool_executor=zeta_agent_spec.ExecutorSpec("remote", {"app": "healthy"}),
+    )
+
+    async def exercise() -> None:
+        await runtime.tool_executor_for(broken)
+        await runtime.tool_executor_for(healthy)
+        with pytest.raises(ExceptionGroup, match="shutdown failed") as exc_info:
+            await runtime.aclose()
+        assert [str(error) for error in exc_info.value.exceptions] == ["close failed"]
+
+    asyncio.run(exercise())
+
+    assert closed == ["broken", "healthy"]
+
+
+def test_zeta_worker_shutdown_is_shared_and_cancellation_safe(
+    tmp_path: Path,
+) -> None:
+    close_started = asyncio.Event()
+    release_close = asyncio.Event()
+    closed: list[bool] = []
+
+    class RecordingExecutor:
+        async def call(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
+            del args, kwargs
+            return {"ok": True}
+
+        async def aclose(self) -> None:
+            close_started.set()
+            await release_close.wait()
+            closed.append(True)
+
+    async def setup(
+        agent_id: str,
+        registry: CapabilityRegistry,
+        config: Mapping[str, Any],
+    ) -> ToolExecutor:
+        del agent_id, registry, config
+        return RecordingExecutor()
+
+    providers = ToolExecutorProviderRegistry()
+    providers.register(ToolExecutorProvider("remote", setup))
+    runtime = zetad_worker.build_worker_services(
+        project_root=tmp_path,
+        tool_executors=providers,
+    )
+    agent = zetad_agents.AgentDefinition(
+        "triage",
+        (),
+        tool_executor=zeta_agent_spec.ExecutorSpec("remote"),
+    )
+
+    async def exercise() -> None:
+        await runtime.tool_executor_for(agent)
+        first_close = asyncio.create_task(runtime.aclose())
+        await close_started.wait()
+        second_close = asyncio.create_task(runtime.aclose())
+        await asyncio.sleep(0)
+        assert not second_close.done()
+
+        first_close.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await first_close
+
+        release_close.set()
+        await second_close
+
+    asyncio.run(exercise())
+
+    assert closed == [True]
+
+
+def test_zeta_worker_shutdown_owns_executor_finishing_setup(
+    tmp_path: Path,
+) -> None:
+    setup_started = asyncio.Event()
+    release_setup = asyncio.Event()
+    closed: list[bool] = []
+
+    class RecordingExecutor:
+        async def call(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
+            del args, kwargs
+            return {"ok": True}
+
+        async def aclose(self) -> None:
+            closed.append(True)
+            raise RuntimeError("late close failed")
+
+    async def setup(
+        agent_id: str,
+        registry: CapabilityRegistry,
+        config: Mapping[str, Any],
+    ) -> ToolExecutor:
+        del agent_id, registry, config
+        setup_started.set()
+        await release_setup.wait()
+        return RecordingExecutor()
+
+    providers = ToolExecutorProviderRegistry()
+    providers.register(ToolExecutorProvider("remote", setup))
+    runtime = zetad_worker.build_worker_services(
+        project_root=tmp_path,
+        tool_executors=providers,
+    )
+    agent = zetad_agents.AgentDefinition(
+        "triage",
+        (),
+        tool_executor=zeta_agent_spec.ExecutorSpec("remote"),
+    )
+
+    async def exercise() -> None:
+        setup_task = asyncio.create_task(runtime.tool_executor_for(agent))
+        await setup_started.wait()
+        close_task = asyncio.create_task(runtime.aclose())
+        await asyncio.sleep(0)
+        release_setup.set()
+
+        with pytest.raises(RuntimeError, match="worker services are closed"):
+            await setup_task
+        with pytest.raises(ExceptionGroup, match="shutdown failed") as exc_info:
+            await close_task
+        assert [str(error) for error in exc_info.value.exceptions] == [
+            "late close failed"
+        ]
+
+    asyncio.run(exercise())
+
+    assert closed == [True]
 
 
 def test_zeta_cli_run_registers_builtin_tools(
@@ -4301,10 +4540,13 @@ def test_zeta_cli_run_registers_builtin_tools(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     captured: dict[str, CapabilityRegistry] = {}
+    closed: list[bool] = []
+    loops: dict[str, asyncio.AbstractEventLoop] = {}
 
     class Runtime:
-        def close(self) -> None:
-            pass
+        async def aclose(self) -> None:
+            loops["close"] = asyncio.get_running_loop()
+            closed.append(True)
 
     def build_worker_services(
         *,
@@ -4318,6 +4560,7 @@ def test_zeta_cli_run_registers_builtin_tools(
         return Runtime()
 
     async def run_once(_runtime: Runtime) -> str:
+        loops["run"] = asyncio.get_running_loop()
         return "queue empty"
 
     monkeypatch.setattr(zetad_worker, "build_worker_services", build_worker_services)
@@ -4330,6 +4573,8 @@ def test_zeta_cli_run_registers_builtin_tools(
 
     assert result.exit_code == 0
     assert captured["tool_registry"].get("zeta.write") is not None
+    assert closed == [True]
+    assert loops["run"] is loops["close"]
 
 
 def test_zeta_local_runtime_run_once_executes_available_queue_item(
@@ -4381,14 +4626,18 @@ Triage the issue.
         tool_registry=registry,
     )
 
-    try:
-        message = asyncio.run(zetad_worker.run_once(runtime))
-        items = zetad_queue.project_queue_items(
-            event_store.list_events(zeta_events.Filter())
-        )
-        attempt_rows = event_store.list_attempts()
-    finally:
-        runtime.close()
+    with asyncio.Runner() as runner:
+        try:
+            message = runner.run(zetad_worker.run_once(runtime))
+            items = zetad_queue.project_queue_items(
+                event_store.list_events(zeta_events.Filter())
+            )
+            attempt_rows = event_store.list_attempts()
+        finally:
+            try:
+                runner.run(runtime.aclose())
+            finally:
+                event_store.close()
 
     assert message == f"ran qi_{event.id}"
     assert attempt_rows[0]["worker_name"] == "local-runtime"
@@ -4424,7 +4673,7 @@ Triage the issue.
         with pytest.raises(ManifestError, match="unknown event 'github.issue.opened'"):
             zetad_worker.project_executors(runtime)
     finally:
-        runtime.close()
+        asyncio.run(runtime.aclose())
 
 
 def test_zeta_worker_passes_project_event_registry_to_compiler(
@@ -4461,7 +4710,7 @@ Triage the issue.
     try:
         assert zetad_worker.project_executors(runtime) == ()
     finally:
-        runtime.close()
+        asyncio.run(runtime.aclose())
 
     assert captured["spec"].slug == "triage"
     assert captured["event_registry"].knows("github.issue.opened")
@@ -4503,35 +4752,36 @@ Triage the issue.
         tool_registry=registry,
     )
 
-    try:
-        agent = zetad_worker.project_executors(runtime)[0]
-        event = zeta_events.Event(
-            id="evt_issue",
-            event_type="github.issue.opened",
-            source="github",
-            payload={},
-            idempotency_key=None,
-            caused_by=None,
-            session_id=None,
-            run_id=None,
-            turn_id=None,
-            timestamp_ms=1,
-            cursor=1,
-        )
-        result = asyncio.run(
-            cast(
-                Coroutine[Any, Any, dict[str, Any]],
-                agent.run(
-                    zetad_dispatch.AgentInvocation(
-                        agent.definition,
-                        event,
-                        attempt_id="att_qi_evt_issue_triage_1",
-                    )
+    with asyncio.Runner() as runner:
+        try:
+            agent = zetad_worker.project_executors(runtime)[0]
+            event = zeta_events.Event(
+                id="evt_issue",
+                event_type="github.issue.opened",
+                source="github",
+                payload={},
+                idempotency_key=None,
+                caused_by=None,
+                session_id=None,
+                run_id=None,
+                turn_id=None,
+                timestamp_ms=1,
+                cursor=1,
+            )
+            result = runner.run(
+                cast(
+                    Coroutine[Any, Any, dict[str, Any]],
+                    agent.run(
+                        zetad_dispatch.AgentInvocation(
+                            agent.definition,
+                            event,
+                            attempt_id="att_qi_evt_issue_triage_1",
+                        )
+                    ),
                 ),
-            ),
-        )
-    finally:
-        runtime.close()
+            )
+        finally:
+            runner.run(runtime.aclose())
 
     assert result["final_answer"] == "done"
     assert captured["runtime_context"].session_id == "agent/triage"
@@ -4571,35 +4821,36 @@ Triage the issue.
     monkeypatch.setattr(zetad_worker, "run_agent", fake_run_agent)
     runtime = zetad_worker.build_worker_services(project_root=tmp_path)
 
-    try:
-        agent = zetad_worker.project_executors(runtime)[0]
-        event = zeta_events.Event(
-            id="evt_issue",
-            event_type="github.issue.opened",
-            source="github",
-            payload={},
-            idempotency_key=None,
-            caused_by=None,
-            session_id=None,
-            run_id=None,
-            turn_id=None,
-            timestamp_ms=1,
-            cursor=1,
-        )
-        result = asyncio.run(
-            cast(
-                Coroutine[Any, Any, dict[str, Any]],
-                agent.run(
-                    zetad_dispatch.AgentInvocation(
-                        agent.definition,
-                        event,
-                        attempt_id="att_qi_evt_issue_triage_1",
-                    )
+    with asyncio.Runner() as runner:
+        try:
+            agent = zetad_worker.project_executors(runtime)[0]
+            event = zeta_events.Event(
+                id="evt_issue",
+                event_type="github.issue.opened",
+                source="github",
+                payload={},
+                idempotency_key=None,
+                caused_by=None,
+                session_id=None,
+                run_id=None,
+                turn_id=None,
+                timestamp_ms=1,
+                cursor=1,
+            )
+            result = runner.run(
+                cast(
+                    Coroutine[Any, Any, dict[str, Any]],
+                    agent.run(
+                        zetad_dispatch.AgentInvocation(
+                            agent.definition,
+                            event,
+                            attempt_id="att_qi_evt_issue_triage_1",
+                        )
+                    ),
                 ),
-            ),
-        )
-    finally:
-        runtime.close()
+            )
+        finally:
+            runner.run(runtime.aclose())
 
     assert result["final_answer"] == "done"
     assert captured["runtime_context"].session_id == "agent/triage/evt_issue"
@@ -4643,37 +4894,38 @@ Ping.
     )
     monkeypatch.setattr(zetad_worker, "run_agent", fake_run_agent)
     runtime = zetad_worker.build_worker_services(project_root=tmp_path)
-    runtime = replace(runtime, model_selection=selection)
+    runtime.model_selection = selection
 
-    try:
-        agent = zetad_worker.project_executors(runtime)[0]
-        event = zeta_events.Event(
-            id="evt_ping",
-            event_type="agent.ping",
-            source="manual",
-            payload={},
-            idempotency_key=None,
-            caused_by=None,
-            session_id=None,
-            run_id=None,
-            turn_id=None,
-            timestamp_ms=1,
-            cursor=1,
-        )
-        asyncio.run(
-            cast(
-                Coroutine[Any, Any, dict[str, Any]],
-                agent.run(
-                    zetad_dispatch.AgentInvocation(
-                        agent.definition,
-                        event,
-                        attempt_id="att_qi_evt_ping_1",
-                    )
-                ),
+    with asyncio.Runner() as runner:
+        try:
+            agent = zetad_worker.project_executors(runtime)[0]
+            event = zeta_events.Event(
+                id="evt_ping",
+                event_type="agent.ping",
+                source="manual",
+                payload={},
+                idempotency_key=None,
+                caused_by=None,
+                session_id=None,
+                run_id=None,
+                turn_id=None,
+                timestamp_ms=1,
+                cursor=1,
             )
-        )
-    finally:
-        runtime.close()
+            runner.run(
+                cast(
+                    Coroutine[Any, Any, dict[str, Any]],
+                    agent.run(
+                        zetad_dispatch.AgentInvocation(
+                            agent.definition,
+                            event,
+                            attempt_id="att_qi_evt_ping_1",
+                        )
+                    ),
+                )
+            )
+        finally:
+            runner.run(runtime.aclose())
 
     config = captured["request"].config
     assert config.model_profile == "qwen"
@@ -4754,38 +5006,39 @@ Return every pong.
         fake_structured_output,
     )
     runtime = zetad_worker.build_worker_services(project_root=tmp_path)
-    runtime = replace(runtime, model_selection=selection)
+    runtime.model_selection = selection
 
-    try:
-        agent = zetad_worker.project_executors(runtime)[0]
-        event = zeta_events.Event(
-            id="evt_ping",
-            event_type="agent.ping",
-            source="manual",
-            payload={},
-            idempotency_key=None,
-            caused_by=None,
-            session_id=None,
-            run_id=None,
-            turn_id=None,
-            timestamp_ms=1,
-            cursor=1,
-        )
-        result = asyncio.run(
-            cast(
-                Coroutine[Any, Any, dict[str, Any]],
-                agent.run(
-                    zetad_dispatch.AgentInvocation(
-                        agent.definition,
-                        event,
-                        publish_event=publish_event,
-                        attempt_id="att_qi_evt_ping_1",
-                    )
-                ),
+    with asyncio.Runner() as runner:
+        try:
+            agent = zetad_worker.project_executors(runtime)[0]
+            event = zeta_events.Event(
+                id="evt_ping",
+                event_type="agent.ping",
+                source="manual",
+                payload={},
+                idempotency_key=None,
+                caused_by=None,
+                session_id=None,
+                run_id=None,
+                turn_id=None,
+                timestamp_ms=1,
+                cursor=1,
             )
-        )
-    finally:
-        runtime.close()
+            result = runner.run(
+                cast(
+                    Coroutine[Any, Any, dict[str, Any]],
+                    agent.run(
+                        zetad_dispatch.AgentInvocation(
+                            agent.definition,
+                            event,
+                            publish_event=publish_event,
+                            attempt_id="att_qi_evt_ping_1",
+                        )
+                    ),
+                )
+            )
+        finally:
+            runner.run(runtime.aclose())
 
     options = captured["structured_options"]
     assert options["api"] == "codex-responses"
@@ -4837,37 +5090,38 @@ Ping.
     )
     monkeypatch.setattr(zetad_worker, "run_agent", fake_run_agent)
     runtime = zetad_worker.build_worker_services(project_root=tmp_path)
-    runtime = replace(runtime, model_selection=runtime_selection)
+    runtime.model_selection = runtime_selection
 
-    try:
-        agent = zetad_worker.project_executors(runtime)[0]
-        event = zeta_events.Event(
-            id="evt_ping",
-            event_type="agent.ping",
-            source="manual",
-            payload={},
-            idempotency_key=None,
-            caused_by=None,
-            session_id=None,
-            run_id=None,
-            turn_id=None,
-            timestamp_ms=1,
-            cursor=1,
-        )
-        asyncio.run(
-            cast(
-                Coroutine[Any, Any, dict[str, Any]],
-                agent.run(
-                    zetad_dispatch.AgentInvocation(
-                        agent.definition,
-                        event,
-                        attempt_id="att_qi_evt_ping_1",
-                    )
-                ),
+    with asyncio.Runner() as runner:
+        try:
+            agent = zetad_worker.project_executors(runtime)[0]
+            event = zeta_events.Event(
+                id="evt_ping",
+                event_type="agent.ping",
+                source="manual",
+                payload={},
+                idempotency_key=None,
+                caused_by=None,
+                session_id=None,
+                run_id=None,
+                turn_id=None,
+                timestamp_ms=1,
+                cursor=1,
             )
-        )
-    finally:
-        runtime.close()
+            runner.run(
+                cast(
+                    Coroutine[Any, Any, dict[str, Any]],
+                    agent.run(
+                        zetad_dispatch.AgentInvocation(
+                            agent.definition,
+                            event,
+                            attempt_id="att_qi_evt_ping_1",
+                        )
+                    ),
+                )
+            )
+        finally:
+            runner.run(runtime.aclose())
 
     config = captured["request"].config
     assert config.model_profile is None
@@ -4920,11 +5174,16 @@ def test_zeta_local_runtime_heartbeats_running_locks(
     monkeypatch.setattr(zetad_worker, "ATTEMPT_HEARTBEAT_INTERVAL_SECONDS", 0.01)
     monkeypatch.setattr(zetad_worker, "QUEUE_LEASE_MS", 1_000)
 
-    message = asyncio.run(zetad_worker.run_once(runtime))
+    with asyncio.Runner() as runner:
+        try:
+            message = runner.run(zetad_worker.run_once(runtime))
+            locks = event_store.list_locks()
+        finally:
+            runner.run(runtime.aclose())
 
     assert message == f"ran qi_{accepted.id}"
     assert renewed_locks
-    assert event_store.list_locks() == []
+    assert locks == []
 
 
 def test_zeta_local_runtime_does_not_complete_stale_queue_claim(
@@ -4963,12 +5222,17 @@ def test_zeta_local_runtime_does_not_complete_stale_queue_claim(
     )
     monkeypatch.setattr(zetad_worker, "QUEUE_LEASE_MS", 1_000)
 
-    message = asyncio.run(zetad_worker.run_once(runtime))
-    event_types = [
-        event.event_type for event in event_store.list_events(zeta_events.Filter())
-    ]
-    queue_item = event_store.list_queue_items()[0]
-    attempt = event_store.list_attempts()[0]
+    with asyncio.Runner() as runner:
+        try:
+            message = runner.run(zetad_worker.run_once(runtime))
+            event_types = [
+                event.event_type
+                for event in event_store.list_events(zeta_events.Filter())
+            ]
+            queue_item = event_store.list_queue_items()[0]
+            attempt = event_store.list_attempts()[0]
+        finally:
+            runner.run(runtime.aclose())
 
     assert message == f"ran qi_{accepted.id}"
     assert "runtime.attempt.completed" not in event_types
@@ -5021,10 +5285,14 @@ def test_zeta_local_runtime_run_once_fans_out_pending_queue_item(
         events=event_store,
     )
 
-    message = asyncio.run(zetad_worker.run_once(runtime))
-    items = zetad_queue.project_queue_items(
-        event_store.list_events(zeta_events.Filter())
-    )
+    with asyncio.Runner() as runner:
+        try:
+            message = runner.run(zetad_worker.run_once(runtime))
+            items = zetad_queue.project_queue_items(
+                event_store.list_events(zeta_events.Filter())
+            )
+        finally:
+            runner.run(runtime.aclose())
 
     assert message == f"routed {accepted.id}"
     assert calls == []
@@ -5083,15 +5351,20 @@ def test_zeta_local_runtime_run_once_handles_eventlog_rpc_request(
         tool_registry=registry,
     )
 
-    message = asyncio.run(zetad_worker.run_once(runtime))
-    response = event_store.children(request.id)[0]
+    with asyncio.Runner() as runner:
+        try:
+            message = runner.run(zetad_worker.run_once(runtime))
+            response = event_store.children(request.id)[0]
+            queue_items = event_store.list_queue_items()
+        finally:
+            runner.run(runtime.aclose())
 
     assert message == f"rpc {request.id}"
     assert response.event_type == "rpc.responded"
     assert response.payload["request_id"] == "req_runtime"
     assert response.payload["result"]["events"][0]["id"] == stored.id
     assert captured["tool_registry"] is registry
-    assert event_store.list_queue_items() == []
+    assert queue_items == []
 
 
 def test_zeta_scheduler_publishes_due_schedules_directly_once_per_minute(
@@ -5570,13 +5843,14 @@ Summarize the repo.
         events=event_store,
     )
 
-    try:
-        message = asyncio.run(zetad_worker.run_once(runtime))
-        items = zetad_queue.project_queue_items(
-            runtime.events.list_events(zeta_events.Filter())
-        )
-    finally:
-        runtime.close()
+    with asyncio.Runner() as runner:
+        try:
+            message = runner.run(zetad_worker.run_once(runtime))
+            items = zetad_queue.project_queue_items(
+                runtime.events.list_events(zeta_events.Filter())
+            )
+        finally:
+            runner.run(runtime.aclose())
 
     assert [event.payload for event in scheduled_events] == [{}]
     assert message == f"ran qi_{scheduled_events[0].id}"
@@ -5648,12 +5922,15 @@ Triage the issue.
                 stop_event=stop_event,
             )
         finally:
-            runtime.close()
+            await runtime.aclose()
 
     asyncio.run(exercise())
-    items = zetad_queue.project_queue_items(
-        event_store.list_events(zeta_events.Filter())
-    )
+    try:
+        items = zetad_queue.project_queue_items(
+            event_store.list_events(zeta_events.Filter())
+        )
+    finally:
+        event_store.close()
 
     assert [call.triggering_event.id for call in calls] == [event.id]
     assert [item.status for item in items] == ["completed"]
@@ -5676,7 +5953,7 @@ def test_zeta_local_runtime_run_forever_respects_max_concurrent(
     ]
     started: list[str] = []
 
-    async def exercise() -> None:
+    async def exercise() -> list[QueueItem]:
         stop_event = asyncio.Event()
         both_started = asyncio.Event()
         release = asyncio.Event()
@@ -5707,20 +5984,23 @@ def test_zeta_local_runtime_run_forever_respects_max_concurrent(
             max_concurrent=2,
         )
 
-        worker = asyncio.create_task(
-            zetad_worker.run_forever(
-                runtime,
-                poll_interval_seconds=0,
-                stop_event=stop_event,
+        try:
+            worker = asyncio.create_task(
+                zetad_worker.run_forever(
+                    runtime,
+                    poll_interval_seconds=0,
+                    stop_event=stop_event,
+                )
             )
-        )
-        await asyncio.wait_for(release.wait(), timeout=1)
-        await worker
+            await asyncio.wait_for(release.wait(), timeout=1)
+            await worker
+            return zetad_queue.project_queue_items(
+                event_store.list_events(zeta_events.Filter())
+            )
+        finally:
+            await runtime.aclose()
 
-    asyncio.run(exercise())
-    items = zetad_queue.project_queue_items(
-        event_store.list_events(zeta_events.Filter())
-    )
+    items = asyncio.run(exercise())
 
     assert sorted(started) == sorted(event.id for event in events)
     assert [item.status for item in items] == ["completed", "completed"]
@@ -5749,12 +6029,15 @@ def test_zeta_local_runtime_run_forever_logs_and_continues_after_run_once_failur
         return "queue empty"
 
     async def exercise() -> None:
-        with caplog.at_level(logging.ERROR, logger=zetad_worker.__name__):
-            await zetad_worker.run_forever(
-                runtime,
-                poll_interval_seconds=0,
-                stop_event=stop_event,
-            )
+        try:
+            with caplog.at_level(logging.ERROR, logger=zetad_worker.__name__):
+                await zetad_worker.run_forever(
+                    runtime,
+                    poll_interval_seconds=0,
+                    stop_event=stop_event,
+                )
+        finally:
+            await runtime.aclose()
 
     stop_event = asyncio.Event()
     monkeypatch.setattr(zetad_worker, "run_once", run_once)
@@ -5793,18 +6076,21 @@ def test_zeta_local_runtime_run_forever_reaps_done_tasks_before_refilling(
         return "queue empty"
 
     async def exercise() -> None:
-        worker = asyncio.create_task(
-            zetad_worker.run_forever(
-                runtime,
-                poll_interval_seconds=0,
-                stop_event=stop_event,
+        try:
+            worker = asyncio.create_task(
+                zetad_worker.run_forever(
+                    runtime,
+                    poll_interval_seconds=0,
+                    stop_event=stop_event,
+                )
             )
-        )
-        while started < 2:
-            await asyncio.sleep(0)
-        release_first_batch.set()
-        await asyncio.wait_for(first_batch_done.wait(), timeout=1)
-        await asyncio.wait_for(worker, timeout=1)
+            while started < 2:
+                await asyncio.sleep(0)
+            release_first_batch.set()
+            await asyncio.wait_for(first_batch_done.wait(), timeout=1)
+            await asyncio.wait_for(worker, timeout=1)
+        finally:
+            await runtime.aclose()
 
     stop_event = asyncio.Event()
     monkeypatch.setattr(zetad_worker, "run_once", run_once)
@@ -5819,6 +6105,8 @@ def test_zeta_cli_serve_invokes_runtime_loop(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     captured: dict[str, object] = {}
+    loops: dict[str, asyncio.AbstractEventLoop] = {}
+    original_aclose = zetad_worker.WorkerServices.aclose
 
     async def run_forever(
         runtime: zetad_worker.WorkerServices,
@@ -5827,12 +6115,18 @@ def test_zeta_cli_serve_invokes_runtime_loop(
         push_port: int,
         push_route_prefix: str,
     ) -> None:
+        loops["run"] = asyncio.get_running_loop()
         captured["project_root"] = runtime.project_root
         captured["push_host"] = push_host
         captured["push_port"] = push_port
         captured["push_route_prefix"] = push_route_prefix
 
+    async def aclose(runtime: zetad_worker.WorkerServices) -> None:
+        loops["close"] = asyncio.get_running_loop()
+        await original_aclose(runtime)
+
     monkeypatch.setattr(zetad_worker, "run_forever", run_forever)
+    monkeypatch.setattr(zetad_worker.WorkerServices, "aclose", aclose)
 
     result = CliRunner().invoke(
         zetad_cli.cli,
@@ -5840,6 +6134,7 @@ def test_zeta_cli_serve_invokes_runtime_loop(
     )
 
     assert result.exit_code == 0
+    assert loops["run"] is loops["close"]
     assert captured == {
         "project_root": tmp_path.resolve(),
         "push_host": "127.0.0.1",

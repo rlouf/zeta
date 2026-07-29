@@ -1,6 +1,7 @@
 """Authored agent spec data structures and frontmatter parsing."""
 
 import hashlib
+import math
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
@@ -237,7 +238,56 @@ def executor_spec(value: Any, path: Path) -> ExecutorSpec:
         raise SpecError(
             f"invalid value for 'executor' in {path}: config must be an object"
         )
-    return ExecutorSpec(provider=provider, config=dict(config))
+    try:
+        normalized_config = executor_config(config)
+    except ValueError as exc:
+        raise SpecError(
+            f"invalid value for 'executor' in {path}: config must contain only "
+            "JSON values with string object keys"
+        ) from exc
+    return ExecutorSpec(provider=provider, config=normalized_config)
+
+
+def executor_config(value: Any) -> dict[str, Any]:
+    """Normalize config for stable snapshots and executor cache keys."""
+    if not isinstance(value, Mapping):
+        raise ValueError("executor config must be an object")
+    normalized = _executor_config_value(value, set())
+    if not isinstance(normalized, dict):
+        raise ValueError("executor config must be an object")
+    return normalized
+
+
+def _executor_config_value(value: Any, active: set[int]) -> Any:
+    if value is None or isinstance(value, str | bool | int):
+        return value
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            raise ValueError("executor config numbers must be finite")
+        return value
+    if isinstance(value, Mapping):
+        identity = id(value)
+        if identity in active:
+            raise ValueError("executor config must not contain cycles")
+        if not all(isinstance(key, str) for key in value):
+            raise ValueError("executor config object keys must be strings")
+        active.add(identity)
+        try:
+            return {
+                key: _executor_config_value(item, active) for key, item in value.items()
+            }
+        finally:
+            active.remove(identity)
+    if isinstance(value, list):
+        identity = id(value)
+        if identity in active:
+            raise ValueError("executor config must not contain cycles")
+        active.add(identity)
+        try:
+            return [_executor_config_value(item, active) for item in value]
+        finally:
+            active.remove(identity)
+    raise ValueError("executor config contains a non-JSON value")
 
 
 def base_dir_field(value: Any, path: Path) -> Path | None:

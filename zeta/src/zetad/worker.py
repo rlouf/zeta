@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import time
 from collections.abc import Iterable
@@ -15,8 +16,9 @@ from connectors import (
     EventConnectorRegistry,
 )
 from zeta.agents.resources import load_connector_registry
+from zeta.agents.spec import executor_config
 from zeta.capabilities.execution import (
-    ToolExecutorFactory,
+    ToolExecutor,
     ToolExecutorProviderRegistry,
     load_tool_executor_provider_registry,
 )
@@ -36,6 +38,7 @@ from zeta.run.runtime import AgentRunRequest, run_agent
 from zeta.substrate import SqliteObjectStore
 
 from zetad.agents import (
+    AgentDefinition,
     AgentInvocation,
     ExecutableAgent,
     compile_agent_definitions,
@@ -67,7 +70,10 @@ QUEUE_LEASE_MS = 60_000
 ATTEMPT_HEARTBEAT_INTERVAL_SECONDS = 15.0
 
 
-@dataclass(frozen=True)
+ToolExecutorCacheKey = tuple[str, str, str]
+
+
+@dataclass
 class WorkerServices:
     """Project-local resources consumed by the queue worker."""
 
@@ -80,9 +86,32 @@ class WorkerServices:
     worker_name: str = LOCAL_WORKER_NAME
     max_concurrent: int = 1
     retry_policy: RetryPolicy = field(default_factory=RetryPolicy)
-    tool_executor_for_agent: ToolExecutorFactory | None = None
     tool_executors: ToolExecutorProviderRegistry = field(
         default_factory=load_tool_executor_provider_registry
+    )
+    executor_cache: dict[ToolExecutorCacheKey, ToolExecutor] = field(
+        default_factory=dict,
+        init=False,
+        repr=False,
+        compare=False,
+    )
+    executor_locks: dict[ToolExecutorCacheKey, asyncio.Lock] = field(
+        default_factory=dict,
+        init=False,
+        repr=False,
+        compare=False,
+    )
+    executor_loop: asyncio.AbstractEventLoop | None = field(
+        default=None,
+        init=False,
+        repr=False,
+        compare=False,
+    )
+    shutdown_task: asyncio.Task[None] | None = field(
+        default=None,
+        init=False,
+        repr=False,
+        compare=False,
     )
 
     @cached_property
@@ -95,8 +124,97 @@ class WorkerServices:
             tool_executors=self.tool_executors,
         )
 
-    def close(self) -> None:
-        self.events.close()
+    async def aclose(self) -> None:
+        loop = asyncio.get_running_loop()
+        task = self.shutdown_task
+        if task is not None and task.done():
+            task.result()
+            return
+        if task is not None:
+            if task.get_loop() is not loop:
+                raise RuntimeError(
+                    "tool executors must close on their worker event loop"
+                )
+            await asyncio.shield(task)
+            return
+        if self.executor_loop is not None and self.executor_loop is not loop:
+            raise RuntimeError("tool executors must close on their worker event loop")
+        self.executor_loop = loop
+        task = loop.create_task(self._shutdown())
+        self.shutdown_task = task
+        await asyncio.shield(task)
+
+    async def _shutdown(self) -> None:
+        errors: list[BaseException] = []
+        try:
+            for lock in tuple(self.executor_locks.values()):
+                async with lock:
+                    pass
+            executors = tuple(
+                {id(item): item for item in self.executor_cache.values()}.values()
+            )
+            self.executor_cache.clear()
+            self.executor_locks.clear()
+            results = await asyncio.gather(
+                *(executor.aclose() for executor in executors),
+                return_exceptions=True,
+            )
+            errors.extend(
+                result for result in results if isinstance(result, BaseException)
+            )
+        finally:
+            try:
+                self.events.close()
+            except Exception as error:
+                errors.append(error)
+        if errors:
+            raise BaseExceptionGroup("tool executor shutdown failed", errors)
+
+    async def tool_executor_for(self, agent: AgentDefinition) -> ToolExecutor:
+        if self.shutdown_task is not None:
+            raise RuntimeError("worker services are closed")
+        config = executor_config(agent.tool_executor.config)
+        key = (
+            agent.tool_executor.provider,
+            agent.agent_id,
+            json.dumps(
+                config,
+                sort_keys=True,
+                ensure_ascii=False,
+                allow_nan=False,
+                separators=(",", ":"),
+            ),
+        )
+        loop = asyncio.get_running_loop()
+        if self.executor_loop is None:
+            self.executor_loop = loop
+        elif self.executor_loop is not loop:
+            raise RuntimeError("tool executors must stay on one worker event loop")
+        executor = self.executor_cache.get(key)
+        if executor is not None:
+            return executor
+        lock = self.executor_locks.setdefault(key, asyncio.Lock())
+        async with lock:
+            if self.shutdown_task is not None:
+                raise RuntimeError("worker services are closed")
+            executor = self.executor_cache.get(key)
+            if executor is not None:
+                return executor
+            provider_id = agent.tool_executor.provider
+            provider = self.tool_executors.resolve(provider_id)
+            if provider is None:
+                raise RuntimeError(
+                    f"tool executor provider {provider_id!r} is not available"
+                )
+            executor = await provider.setup(
+                agent.agent_id,
+                self.tool_registry,
+                config,
+            )
+            self.executor_cache[key] = executor
+            if self.shutdown_task is not None:
+                raise RuntimeError("worker services are closed")
+            return executor
 
 
 def build_worker_services(
@@ -106,7 +224,6 @@ def build_worker_services(
     tool_registry: CapabilityRegistry | None = None,
     registry: EventConnectorRegistry | None = None,
     connector_names: Iterable[str] | None = None,
-    tool_executor_for_agent: ToolExecutorFactory | None = None,
     tool_executors: ToolExecutorProviderRegistry | None = None,
 ) -> WorkerServices:
     resolved_project_root = project_root.expanduser().resolve()
@@ -124,7 +241,6 @@ def build_worker_services(
         model_selection=active_model_selection(
             session_dir=resolved_state_dir / "sessions" / "default"
         ),
-        tool_executor_for_agent=tool_executor_for_agent,
         tool_executors=tool_executors or load_tool_executor_provider_registry(),
     )
 
@@ -256,27 +372,10 @@ class RuntimeAgentLoop:
             tool_registry=self.runtime.tool_registry,
             state_dir=self.runtime.state_dir,
             session_dir=self.runtime.state_dir / "sessions" / session_id,
-            tool_executor_for_agent=self.runtime.tool_executor_for_agent,
         )
         started = time.perf_counter()
         try:
-            if runtime_context.tool_executor_for_agent is not None:
-                tool_executor = await runtime_context.tool_executor_for_agent(
-                    invocation.agent.agent_id,
-                    runtime_context.tool_registry,
-                )
-            else:
-                provider_id = invocation.agent.tool_executor.provider
-                provider = self.runtime.tool_executors.resolve(provider_id)
-                if provider is None:
-                    raise RuntimeError(
-                        f"tool executor provider {provider_id!r} is not available"
-                    )
-                tool_executor = await provider.create(
-                    invocation.agent.agent_id,
-                    runtime_context.tool_registry,
-                    invocation.agent.tool_executor.config,
-                )
+            tool_executor = await self.runtime.tool_executor_for(invocation.agent)
             return await run_agent(
                 AgentRunRequest(
                     objective=objective,

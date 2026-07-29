@@ -15,7 +15,6 @@ from zeta.records.stores.sqlite import (
 from zeta.substrate import SqliteObjectStore
 
 if TYPE_CHECKING:
-    from zeta.capabilities.execution import ToolExecutorFactory
     from zeta.capabilities.registry import CapabilityRegistry
     from zeta.records.stores.event_store import EventStoreProtocol
     from zeta.substrate import Store
@@ -31,7 +30,6 @@ class RuntimeContext:
     tool_registry: CapabilityRegistry
     state_dir: Path
     session_dir: Path
-    tool_executor_for_agent: ToolExecutorFactory | None = None
 
 
 def zeta_state_dir() -> Path:

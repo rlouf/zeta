@@ -84,15 +84,15 @@ def test_zeta_capability_registry_registers_and_lists_capabilities() -> None:
 
 
 def test_zeta_tool_executor_provider_registry_loads_builtin_and_entry_point() -> None:
-    async def create_executor(
+    async def setup(
         agent_id: str,
         registry: CapabilityRegistry,
         config: Mapping[str, Any],
     ) -> Any:
         del agent_id, registry, config
-        raise AssertionError("factory should not be called while loading")
+        raise AssertionError("setup should not be called while loading")
 
-    provider = ToolExecutorProvider("remote", create_executor)
+    provider = ToolExecutorProvider("remote", setup)
 
     class EntryPoint:
         name = "remote"

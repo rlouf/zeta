@@ -1,8 +1,11 @@
 import asyncio
 import json
+from dataclasses import replace
 from pathlib import Path
 
+import pytest
 from connectors import EventConnectorRegistry
+from zeta.agents.spec import ExecutorSpec
 from zeta.capabilities.registry import CapabilityRegistry
 from zeta.models.profiles import ModelSelection
 from zeta.records.events import DraftEvent
@@ -16,6 +19,9 @@ from zetad.agents import (
 )
 from zetad.dispatch import QueueingDispatcher
 from zetad.project import (
+    ProjectSnapshotUnavailable,
+    agent_from_manifest,
+    agent_manifest,
     load_project_snapshot,
     load_recorded_project_snapshot,
     record_project_snapshot,
@@ -74,6 +80,43 @@ def test_project_snapshot_generation_is_content_addressed(tmp_path: Path) -> Non
     assert first.generation_id == second.generation_id
     assert first.manifest == second.manifest
     assert changed.generation_id != first.generation_id
+
+
+def test_project_snapshot_preserves_executor_config(tmp_path: Path) -> None:
+    spec = load_snapshot(write_snapshot_project(tmp_path)).project.specs[0]
+    config = {
+        "app": "zeta-tools",
+        "options": {
+            "regions": ["eu-west", "us-east"],
+            "retries": 3,
+            "enabled": True,
+            "timeout": 1.5,
+            "fallback": None,
+        },
+    }
+    manifest = agent_manifest(replace(spec, executor=ExecutorSpec("remote", config)))
+
+    restored = agent_from_manifest(manifest)
+
+    assert restored.executor == ExecutorSpec("remote", config)
+    assert restored.executor.config is not config
+    assert restored.executor.config["options"] is not config["options"]
+    assert (
+        restored.executor.config["options"]["regions"]
+        is not config["options"]["regions"]
+    )
+
+
+def test_project_snapshot_rejects_non_json_executor_config(tmp_path: Path) -> None:
+    spec = load_snapshot(write_snapshot_project(tmp_path)).project.specs[0]
+    manifest = agent_manifest(spec)
+    manifest["executor"]["config"] = {"threshold": float("nan")}
+
+    with pytest.raises(
+        ProjectSnapshotUnavailable,
+        match="invalid tool executor config",
+    ):
+        agent_from_manifest(manifest)
 
 
 def test_project_snapshot_is_recorded_once_per_generation(tmp_path: Path) -> None:

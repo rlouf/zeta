@@ -462,6 +462,14 @@ executor:
   provider: modal
   config:
     app: zeta-tools
+    options:
+      retries: 3
+      timeout: 1.5
+      enabled: true
+      regions:
+        - eu-west
+        - us-east
+      fallback: null
 accepts:
   - github.issue.opened
 ---
@@ -472,7 +480,16 @@ Triage the issue.
 
     assert spec.executor == ExecutorSpec(
         provider="modal",
-        config={"app": "zeta-tools"},
+        config={
+            "app": "zeta-tools",
+            "options": {
+                "retries": 3,
+                "timeout": 1.5,
+                "enabled": True,
+                "regions": ["eu-west", "us-east"],
+                "fallback": None,
+            },
+        },
     )
     assert "executor" not in spec.manifest
 
@@ -830,6 +847,27 @@ Summarize the repo.
         (
             "name: Worker\ndescription: Worker\nexecutor:\n"
             "  provider: local\n  config: not-a-mapping\n",
+            "config",
+        ),
+        (
+            "name: Worker\ndescription: Worker\nexecutor:\n"
+            "  provider: remote\n  config:\n    1: value\n",
+            "config",
+        ),
+        (
+            "name: Worker\ndescription: Worker\nexecutor:\n"
+            "  provider: remote\n  config:\n    created: 2026-07-29\n",
+            "config",
+        ),
+        (
+            "name: Worker\ndescription: Worker\nexecutor:\n"
+            "  provider: remote\n  config:\n    threshold: .nan\n",
+            "config",
+        ),
+        (
+            "name: Worker\ndescription: Worker\nexecutor:\n"
+            "  provider: remote\n  config: &config\n"
+            "    nested: *config\n",
             "config",
         ),
         ("name: Worker\ndescription: Worker\nschedules: hourly\n", "schedules"),
@@ -1864,13 +1902,14 @@ Reply.
         registry=connector_registry(connector),
     )
 
-    try:
-        inserted = asyncio.run(zetad_connector_bridge.run_ingress_once(runtime))
-        events = runtime.events.list_events(
-            zeta_events.Filter(event_type="slack.message.received")
-        )
-    finally:
-        runtime.close()
+    with asyncio.Runner() as runner:
+        try:
+            inserted = runner.run(zetad_connector_bridge.run_ingress_once(runtime))
+            events = runtime.events.list_events(
+                zeta_events.Filter(event_type="slack.message.received")
+            )
+        finally:
+            runner.run(runtime.aclose())
 
     assert inserted == 1
     assert len(events) == 1
@@ -1944,19 +1983,20 @@ Reply.
         registry=connector_registry(connector),
     )
 
-    try:
-        asyncio.run(
-            zetad_worker.run_ingress_forever(
-                runtime,
-                poll_interval_seconds=0,
-                stop_event=stop_event,
+    with asyncio.Runner() as runner:
+        try:
+            runner.run(
+                zetad_worker.run_ingress_forever(
+                    runtime,
+                    poll_interval_seconds=0,
+                    stop_event=stop_event,
+                )
             )
-        )
-        events = runtime.events.list_events(
-            zeta_events.Filter(event_type="slack.message.received")
-        )
-    finally:
-        runtime.close()
+            events = runtime.events.list_events(
+                zeta_events.Filter(event_type="slack.message.received")
+            )
+        finally:
+            runner.run(runtime.aclose())
 
     assert calls == 2
     assert [event.payload["text"] for event in events] == ["hello"]
@@ -1972,17 +2012,18 @@ def test_zeta_push_ingress_returns_404_for_unknown_connector(tmp_path: Path) -> 
         registry=connector_registry(),
     )
 
-    try:
-        response = asyncio.run(
-            zetad_worker.handle_push_ingress_request(
-                runtime,
-                "missing",
-                InboundRequest("POST", "/connectors/missing", {}, {}, b"{}"),
+    with asyncio.Runner() as runner:
+        try:
+            response = runner.run(
+                zetad_worker.handle_push_ingress_request(
+                    runtime,
+                    "missing",
+                    InboundRequest("POST", "/connectors/missing", {}, {}, b"{}"),
+                )
             )
-        )
-        events = runtime.events.list_events(zeta_events.Filter())
-    finally:
-        runtime.close()
+            events = runtime.events.list_events(zeta_events.Filter())
+        finally:
+            runner.run(runtime.aclose())
 
     assert response.status_code == 404
     assert events == []
@@ -2000,17 +2041,18 @@ def test_zeta_push_ingress_returns_405_for_connector_without_push(
         registry=connector_registry(_slack_connector()),
     )
 
-    try:
-        response = asyncio.run(
-            zetad_worker.handle_push_ingress_request(
-                runtime,
-                "slack",
-                InboundRequest("POST", "/connectors/slack", {}, {}, b"{}"),
+    with asyncio.Runner() as runner:
+        try:
+            response = runner.run(
+                zetad_worker.handle_push_ingress_request(
+                    runtime,
+                    "slack",
+                    InboundRequest("POST", "/connectors/slack", {}, {}, b"{}"),
+                )
             )
-        )
-        events = runtime.events.list_events(zeta_events.Filter())
-    finally:
-        runtime.close()
+            events = runtime.events.list_events(zeta_events.Filter())
+        finally:
+            runner.run(runtime.aclose())
 
     assert response.status_code == 405
     assert events == []
@@ -2042,19 +2084,20 @@ def test_zeta_push_ingress_appends_returned_events(tmp_path: Path) -> None:
         registry=connector_registry(_slack_connector(push_ingress=push)),
     )
 
-    try:
-        response = asyncio.run(
-            zetad_worker.handle_push_ingress_request(
-                runtime,
-                "slack",
-                InboundRequest("POST", "/connectors/slack", {}, {}, b"{}"),
+    with asyncio.Runner() as runner:
+        try:
+            response = runner.run(
+                zetad_worker.handle_push_ingress_request(
+                    runtime,
+                    "slack",
+                    InboundRequest("POST", "/connectors/slack", {}, {}, b"{}"),
+                )
             )
-        )
-        events = runtime.events.list_events(
-            zeta_events.Filter(event_type="slack.message.received")
-        )
-    finally:
-        runtime.close()
+            events = runtime.events.list_events(
+                zeta_events.Filter(event_type="slack.message.received")
+            )
+        finally:
+            runner.run(runtime.aclose())
 
     assert response.status_code == 202
     assert response.body == b"accepted"
@@ -2090,19 +2133,20 @@ def test_zeta_push_ingress_is_idempotent_for_duplicate_events(
         registry=connector_registry(_slack_connector(push_ingress=push)),
     )
 
-    try:
-        request = InboundRequest("POST", "/connectors/slack", {}, {}, b"{}")
-        first = asyncio.run(
-            zetad_worker.handle_push_ingress_request(runtime, "slack", request)
-        )
-        second = asyncio.run(
-            zetad_worker.handle_push_ingress_request(runtime, "slack", request)
-        )
-        events = runtime.events.list_events(
-            zeta_events.Filter(event_type="slack.message.received")
-        )
-    finally:
-        runtime.close()
+    with asyncio.Runner() as runner:
+        try:
+            request = InboundRequest("POST", "/connectors/slack", {}, {}, b"{}")
+            first = runner.run(
+                zetad_worker.handle_push_ingress_request(runtime, "slack", request)
+            )
+            second = runner.run(
+                zetad_worker.handle_push_ingress_request(runtime, "slack", request)
+            )
+            events = runtime.events.list_events(
+                zeta_events.Filter(event_type="slack.message.received")
+            )
+        finally:
+            runner.run(runtime.aclose())
 
     assert first.status_code == 202
     assert second.status_code == 202
@@ -2137,18 +2181,19 @@ def test_zeta_push_ingress_validates_returned_event_payload(
         registry=connector_registry(_slack_connector(push_ingress=push)),
     )
 
-    try:
-        with pytest.raises(Exception, match="required"):
-            asyncio.run(
-                zetad_worker.handle_push_ingress_request(
-                    runtime,
-                    "slack",
-                    InboundRequest("POST", "/connectors/slack", {}, {}, b"{}"),
+    with asyncio.Runner() as runner:
+        try:
+            with pytest.raises(Exception, match="required"):
+                runner.run(
+                    zetad_worker.handle_push_ingress_request(
+                        runtime,
+                        "slack",
+                        InboundRequest("POST", "/connectors/slack", {}, {}, b"{}"),
+                    )
                 )
-            )
-        events = runtime.events.list_events(zeta_events.Filter())
-    finally:
-        runtime.close()
+            events = runtime.events.list_events(zeta_events.Filter())
+        finally:
+            runner.run(runtime.aclose())
 
     assert events == []
 
@@ -2217,7 +2262,7 @@ Summarize.
             zeta_events.Filter(event_type="agent.digest.scheduled")
         )
     finally:
-        runtime.close()
+        asyncio.run(runtime.aclose())
 
     assert [event.event_type for event in published] == ["agent.digest.scheduled"]
     assert len(stored) == 1
@@ -2248,14 +2293,15 @@ Summarize.
 
     monkeypatch.setattr(zetad_worker, "run_available_queue_item", _no_work)
 
-    try:
-        asyncio.run(zetad_worker.run_once(runtime))
-        scheduled = runtime.events.list_events(
-            zeta_events.Filter(event_type="agent.digest.scheduled")
-        )
-        enqueued = runtime.events.event_has_queue_item(scheduled[0].id)
-    finally:
-        runtime.close()
+    with asyncio.Runner() as runner:
+        try:
+            runner.run(zetad_worker.run_once(runtime))
+            scheduled = runtime.events.list_events(
+                zeta_events.Filter(event_type="agent.digest.scheduled")
+            )
+            enqueued = runtime.events.event_has_queue_item(scheduled[0].id)
+        finally:
+            runner.run(runtime.aclose())
 
     assert len(scheduled) == 1
     assert enqueued is True

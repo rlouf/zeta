@@ -3868,6 +3868,40 @@ def test_zeta_cli_events_filters_default_listing(tmp_path: Path) -> None:
     )
 
 
+def test_zeta_cli_events_chain_replaces_trace_causal_walk(tmp_path: Path) -> None:
+    state_dir = tmp_path / ".zeta"
+    event_store = zeta_events.SqliteEventStore(event_store_path(state_dir))
+    root = event_store.accept(
+        zeta_events.DraftEvent("issue.opened", "github", {})
+    ).event
+    child = event_store.accept(
+        zeta_events.DraftEvent(
+            "issue.triaged",
+            "agent:triage",
+            {},
+            caused_by=root.id,
+        )
+    ).event
+    event_store.close()
+
+    chain = CliRunner().invoke(
+        zetad_cli.cli,
+        ["events", "chain", child.id, "--project-root", str(tmp_path)],
+    )
+    removed_command = CliRunner().invoke(
+        zetad_cli.cli,
+        ["events", "trace", child.id, "--project-root", str(tmp_path)],
+    )
+
+    assert chain.exit_code == 0
+    assert chain.output == (
+        f"{root.cursor}\tissue.opened\tgithub\t{root.id}\n"
+        f"{child.cursor}\tissue.triaged\tagent:triage\t{child.id}\n"
+    )
+    assert removed_command.exit_code == 2
+    assert "No such command 'trace'" in removed_command.output
+
+
 def test_zeta_cli_status_counts_runtime_queue(tmp_path: Path) -> None:
     state_dir = tmp_path / ".zeta"
     event_store = zeta_events.SqliteEventStore(event_store_path(state_dir))

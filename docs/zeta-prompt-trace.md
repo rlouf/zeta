@@ -369,21 +369,21 @@ components and verified by its stored hash.
 The graph is inspectable and exercisable from the CLI:
 
 ```text
-zeta trace log
-zeta trace show OBJECT_ID
-zeta trace tree OBJECT_ID [--down]
-zeta trace closure OBJECT_ID
-zeta trace diff OLD_PROMPT NEW_PROMPT [--stat]
-zeta trace replay PROMPT_ID [--model PROFILE] [--diff]
-zeta trace refs
-zeta trace prompts
+zeta traces log
+zeta traces show OBJECT_ID
+zeta traces tree OBJECT_ID [--down]
+zeta traces closure OBJECT_ID
+zeta traces diff OLD_PROMPT NEW_PROMPT [--stat]
+zeta traces replay PROMPT_ID [--model PROFILE] [--diff]
+zeta traces refs
+zeta traces prompts
 ```
 
-`trace diff` is the component-level comparison this design makes cheap:
+`traces diff` is the component-level comparison this design makes cheap:
 identical component ids are unchanged by construction, so only changed
-components need a text diff. `trace replay` is prompt replay plus model
+components need a text diff. `traces replay` is prompt replay plus model
 replay: it rebuilds the payload from the linked components, verifies the
 stored hash, resends through the model boundary, and records the new
 answer with a `ModelReplay` derivation — so a replay is itself a
-traced object, visible from `trace tree PROMPT_ID --down` next to the
+traced object, visible from `traces tree PROMPT_ID --down` next to the
 original answer.

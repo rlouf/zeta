@@ -16,7 +16,7 @@ from zeta.tools import register_builtin_tools
 
 from zetad import scheduling, worker
 from zetad.cli_model import model_group
-from zetad.cli_trace import trace_group
+from zetad.cli_trace import traces_group
 from zetad.rpc.stdio import run_stdio
 from zetad.store import RuntimeEventStore
 
@@ -38,7 +38,7 @@ def cli() -> None:
     """Zeta runtime commands."""
 
 
-cli.add_command(trace_group)
+cli.add_command(traces_group)
 cli.add_command(model_group)
 
 
@@ -463,7 +463,7 @@ def events_publish(
     return 0
 
 
-@events.command("trace")
+@events.command("chain")
 @click.argument("event_id")
 @click.option(
     "--project-root",
@@ -479,7 +479,7 @@ def events_publish(
 )
 @click.option("--json", "json_output", is_flag=True, help="Emit JSON.")
 @click.option("--raw", is_flag=True, help="With --json, return raw event payloads.")
-def events_trace(
+def events_chain(
     event_id: str,
     project_root: Path,
     state_dir: Path | None,

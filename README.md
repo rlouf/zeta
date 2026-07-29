@@ -77,7 +77,7 @@ runs, and its whole timeline — every prompt and tool call — is on disk under
 session `agent/note-reader`:
 
 ```sh
-zeta trace --session agent/note-reader log
+zeta traces --session agent/note-reader log
 ```
 
 ```text
@@ -104,21 +104,21 @@ without re-running anything upstream — no file, no connector, no queue.
 Say `note-reader` returned a lazy summary. Pull up the exact prompt behind it:
 
 ```sh
-zeta trace --session agent/note-reader show 9c0d1e2f
+zeta traces --session agent/note-reader show 9c0d1e2f
 ```
 
 Resend that same prompt — byte for byte — to a stronger model and diff the two
 answers, without touching the inbox or replaying the pipeline:
 
 ```sh
-zeta trace --session agent/note-reader replay 9c0d1e2f --model deep --diff
+zeta traces --session agent/note-reader replay 9c0d1e2f --model deep --diff
 ```
 
 Changed a skill or the prompt and want to know exactly what moved? Diff the two
 prompt versions, component by component:
 
 ```sh
-zeta trace --session agent/note-reader diff 9c0d1e2f 3a4b5c6d --stat
+zeta traces --session agent/note-reader diff 9c0d1e2f 3a4b5c6d --stat
 ```
 
 `replay` verifies the rebuilt prompt against the recorded hash before sending, so

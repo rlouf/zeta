@@ -45,7 +45,7 @@ from zeta.trace.tools import tool_call_rows, tool_failure_detail
 NARRATIVE_KINDS = ("prompt", "assistant_message")
 
 
-@click.group("trace")
+@click.group("traces")
 @click.option(
     "--project-root",
     type=click.Path(file_okay=False, path_type=Path),
@@ -65,7 +65,7 @@ NARRATIVE_KINDS = ("prompt", "assistant_message")
     help="Read this session's trace store.",
 )
 @click.pass_context
-def trace_group(
+def traces_group(
     ctx: click.Context,
     project_root: Path,
     state_dir: Path | None,
@@ -84,7 +84,7 @@ def trace_group(
 
 
 def trace_state_dir(project_root: Path, state_dir: Path | None) -> Path:
-    """Resolve the runtime state directory for zeta trace commands."""
+    """Resolve the runtime state directory for the `zeta traces` group."""
 
     return resolve_state_dir(project_root, state_dir)
 
@@ -136,7 +136,7 @@ def pretty_print_json(value: object) -> None:
     click.echo(json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True))
 
 
-@trace_group.command("log")
+@traces_group.command("log")
 @click.option(
     "--kind",
     "kinds",
@@ -181,7 +181,7 @@ def trace_log(
     return 0
 
 
-@trace_group.command("reinit-store")
+@traces_group.command("reinit-store")
 @click.option(
     "--yes",
     is_flag=True,
@@ -207,7 +207,7 @@ def trace_reinit_store(ctx: click.Context, yes: bool) -> int:
     return 0
 
 
-@trace_group.command("tools")
+@traces_group.command("tools")
 @click.option("--json", "json_output", is_flag=True, help="Emit rows as JSON.")
 @click.option("--failed", is_flag=True, help="Only include failed tool calls.")
 @click.option("--successful", is_flag=True, help="Only include successful tool calls.")
@@ -263,7 +263,7 @@ def trace_tools(
     return 0
 
 
-@trace_group.command("grep")
+@traces_group.command("grep")
 @click.argument("pattern")
 @click.option(
     "--kind",
@@ -366,7 +366,7 @@ def scope_listing_lines(
     return lines
 
 
-@trace_group.command("show")
+@traces_group.command("show")
 @click.argument("object_id")
 @click.option("--json", "json_output", is_flag=True, help="Emit the raw object JSON.")
 @click.pass_context
@@ -389,7 +389,7 @@ def trace_show(ctx: click.Context, object_id: str, json_output: bool) -> int:
     return 0
 
 
-@trace_group.command("closure")
+@traces_group.command("closure")
 @click.argument("object_id")
 @click.pass_context
 def trace_closure(ctx: click.Context, object_id: str) -> int:
@@ -401,7 +401,7 @@ def trace_closure(ctx: click.Context, object_id: str) -> int:
     return 0
 
 
-@trace_group.command("tree")
+@traces_group.command("tree")
 @click.argument("object_id")
 @click.option("--down", is_flag=True, help="Follow consumers instead of producers.")
 @click.option(
@@ -422,7 +422,7 @@ def trace_tree(ctx: click.Context, object_id: str, down: bool, depth: int) -> in
     return 0
 
 
-@trace_group.command("diff")
+@traces_group.command("diff")
 @click.argument("old_id")
 @click.argument("new_id")
 @click.option(
@@ -443,7 +443,7 @@ def trace_diff(ctx: click.Context, old_id: str, new_id: str, stat_only: bool) ->
     return 0
 
 
-@trace_group.command("replay")
+@traces_group.command("replay")
 @click.argument("object_id")
 @click.option(
     "--model",
@@ -503,7 +503,7 @@ def trace_replay(
     return 0
 
 
-@trace_group.command("refs")
+@traces_group.command("refs")
 @click.pass_context
 def trace_refs(ctx: click.Context) -> int:
     """List the mutable refs and the objects they point at."""
@@ -512,7 +512,7 @@ def trace_refs(ctx: click.Context) -> int:
     return 0
 
 
-@trace_group.command("prompts")
+@traces_group.command("prompts")
 @click.pass_context
 def trace_prompts(ctx: click.Context) -> int:
     """List recorded prompts with store size statistics."""
@@ -531,4 +531,4 @@ def trace_prompts(ctx: click.Context) -> int:
     return 0
 
 
-__all__ = ["trace_group", "trace_state_dir"]
+__all__ = ["trace_state_dir", "traces_group"]

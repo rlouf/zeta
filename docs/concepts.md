@@ -413,6 +413,7 @@ zeta attempts [--json]
 zeta ps [--json]
 zeta run show RUN_ID [--json]
 zeta events [--type-prefix PREFIX] [--session ID] [--limit N] [--json]
+zeta events chain EVENT_ID [--json]
 zeta events publish EVENT_TYPE [--payload-json JSON] [--idempotency-key KEY]
 zeta schedule status [--json]
 ```
@@ -480,26 +481,26 @@ the model see?" They are stored in `~/.zeta/zeta.sqlite3`, scoped by session id.
 
 ```sh
 # List recent prompts and assistant messages across agent sessions.
-zeta trace log --all-sessions
+zeta traces log --all-sessions
 
 # List failed or successful tool calls.
-zeta trace tools --failed --all-sessions
-zeta trace tools --successful --json --all-sessions
+zeta traces tools --failed --all-sessions
+zeta traces tools --successful --json --all-sessions
 
 # Inspect one agent session.
-zeta trace --session agent/issue-triage log
-zeta trace --session agent/issue-triage show 4f9d01c2
-zeta trace --session agent/issue-triage tree 4f9d01c2 --down
+zeta traces --session agent/issue-triage log
+zeta traces --session agent/issue-triage show 4f9d01c2
+zeta traces --session agent/issue-triage tree 4f9d01c2 --down
 
 # Compare two prompts component by component.
-zeta trace --session agent/issue-triage diff A B --stat
+zeta traces --session agent/issue-triage diff A B --stat
 
 # Rebuild and resend a stored prompt.
-zeta trace --session agent/issue-triage replay PROMPT_ID --model fast --diff
+zeta traces --session agent/issue-triage replay PROMPT_ID --model fast --diff
 ```
 
 Every trace id argument accepts a full id, a unique prefix, or a ref such as
-`turn/<turn_id>`. `trace replay` verifies the rebuilt prompt payload against the
+`turn/<turn_id>`. `traces replay` verifies the rebuilt prompt payload against the
 recorded hash before sending it to the selected model.
 
 A worked walkthrough lives in

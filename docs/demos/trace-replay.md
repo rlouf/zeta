@@ -4,18 +4,18 @@ Every model request Zeta makes is stored as a content-addressed object
 graph: a `prompt` object links the exact components — system prompt,
 objective, timeline messages, tool descriptors — that produced it, and
 records the hash of the final payload. This demo walks the two commands
-that cash that design in: `trace diff` and `trace replay`.
+that cash that design in: `traces diff` and `traces replay`.
 
 All output below is real, captured against a recorded session. To run it
 yourself, point `ZETA_SESSION_ID` at any session with agent turns
-(for example, from `zeta trace log --all-sessions`) and have your model endpoint up.
+(for example, from `zeta traces log --all-sessions`) and have your model endpoint up.
 
 ## 1. Find a prompt
 
-`trace log` is the front door; `--kind prompt` narrows it to requests:
+`traces log` is the front door; `--kind prompt` narrows it to requests:
 
 ```text
-$ zeta trace log --kind prompt --limit 3
+$ zeta traces log --kind prompt --limit 3
 e4976fc1  prompt              10 components · ~8772 tok
 2fc6c722  prompt              8 components · ~8331 tok
 0c56ad85  prompt              6 components · ~8204 tok
@@ -30,7 +30,7 @@ the diff only has to look inside components that actually changed.
 `--stat` gives the shape of the change, one line per component:
 
 ```text
-$ zeta trace diff 0c56ad85 2fc6c722 --stat
+$ zeta traces diff 0c56ad85 2fc6c722 --stat
 prompts 0c56ad85 → 2fc6c722
 ~ user_message        e77d66bd → 40d33f4e
 ~ assistant_message   b8e10d8a → 041d8af4
@@ -52,12 +52,12 @@ objective produced different prompts under different context policies.
 
 ## 3. Replay the prompt through the model boundary
 
-`trace replay` rebuilds the request from the linked components — not
+`traces replay` rebuilds the request from the linked components — not
 from a transcript, from the graph — verifies it against the recorded
 payload hash, and resends it:
 
 ```text
-$ zeta trace replay 13b60e1a
+$ zeta traces replay 13b60e1a
 prompt   13b60e1a  payload verified
 model    default -> local-model @ http://127.0.0.1:8080/v1/chat/completions
 
@@ -81,7 +81,7 @@ forward walk from the prompt shows the original answer and every replay
 side by side:
 
 ```text
-$ zeta trace tree 13b60e1a --down --depth 1
+$ zeta traces tree 13b60e1a --down --depth 1
 13b60e1a  prompt              4 components · ~7761 tok
 ├─ ModelResponse
 │  └─ db5d29fd  assistant_message   → bash

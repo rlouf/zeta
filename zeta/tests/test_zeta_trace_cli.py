@@ -441,6 +441,16 @@ def test_zeta_trace_sqlite_reports_incompatible_substrate_schema(
         zeta_trace.SqliteObjectStore(path, session_id="current")
 
 
+def test_zeta_cli_traces_replaces_trace_namespace() -> None:
+    traces = CliRunner().invoke(zeta_cli, ["traces", "--help"])
+    removed_namespace = CliRunner().invoke(zeta_cli, ["trace", "--help"])
+
+    assert traces.exit_code == 0
+    assert "Inspect runtime prompt and tool traces." in traces.output
+    assert removed_namespace.exit_code == 2
+    assert "No such command 'trace'" in removed_namespace.output
+
+
 def test_zeta_trace_reinit_store_recreates_unified_database(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -462,7 +472,7 @@ def test_zeta_trace_reinit_store_recreates_unified_database(
     )
     connection.close()
 
-    result = CliRunner().invoke(zeta_cli, ["trace", "reinit-store", "--yes"])
+    result = CliRunner().invoke(zeta_cli, ["traces", "reinit-store", "--yes"])
 
     assert result.exit_code == 0
     assert f"reinitialized {path}" in result.output
@@ -556,7 +566,7 @@ def test_zeta_trace_cli_session_scope_reads_other_store(monkeypatch) -> None:
     prompt_id = seed_session_store("other", "scoped read")
 
     result = CliRunner().invoke(
-        zeta_cli, ["trace", "--session", "other", "show", "--json", prompt_id]
+        zeta_cli, ["traces", "--session", "other", "show", "--json", prompt_id]
     )
 
     assert result.exit_code == 0
@@ -579,7 +589,7 @@ def test_zeta_trace_cli_default_reads_home_state(
     )
     monkeypatch.chdir(tmp_path / "home")
 
-    result = CliRunner().invoke(zeta_cli, ["trace", "show", "--json", prompt_id])
+    result = CliRunner().invoke(zeta_cli, ["traces", "show", "--json", prompt_id])
 
     assert result.exit_code == 0
     assert json.loads(result.output)["id"] == prompt_id
@@ -589,7 +599,7 @@ def test_zeta_trace_cli_unknown_session_lists_available(monkeypatch) -> None:
     monkeypatch.setenv("ZETA_SESSION_ID", "current")
     seed_session_store("known", "seed")
 
-    result = CliRunner().invoke(zeta_cli, ["trace", "--session", "missing", "log"])
+    result = CliRunner().invoke(zeta_cli, ["traces", "--session", "missing", "log"])
 
     assert result.exit_code != 0
     assert "missing" in result.output
@@ -603,7 +613,7 @@ def test_zeta_trace_cli_log_all_sessions_prefixes_session_ids(
     seed_session_store("alpha", "alpha prompt")
     seed_session_store("beta", "beta prompt")
 
-    result = CliRunner().invoke(zeta_cli, ["trace", "log", "--all-sessions"])
+    result = CliRunner().invoke(zeta_cli, ["traces", "log", "--all-sessions"])
 
     assert result.exit_code == 0
     lines = result.output.splitlines()
@@ -673,7 +683,7 @@ def test_zeta_trace_cli_grep_lists_matches(monkeypatch) -> None:
     prompt_id = seed_session_store("current", "the missing deploy key")
     seed_session_store("current", "unrelated")
 
-    result = CliRunner().invoke(zeta_cli, ["trace", "grep", "deploy key"])
+    result = CliRunner().invoke(zeta_cli, ["traces", "grep", "deploy key"])
 
     assert result.exit_code == 0
     short_id = prompt_id.split(":", 1)[1][:8]
@@ -689,7 +699,7 @@ def test_zeta_trace_cli_grep_all_sessions_names_the_session(
     seed_session_store("beta", "something else")
 
     result = CliRunner().invoke(
-        zeta_cli, ["trace", "grep", "rollback", "--all-sessions"]
+        zeta_cli, ["traces", "grep", "rollback", "--all-sessions"]
     )
 
     assert result.exit_code == 0
@@ -701,7 +711,7 @@ def test_zeta_trace_cli_grep_reports_no_matches(monkeypatch) -> None:
     monkeypatch.setenv("ZETA_SESSION_ID", "current")
     seed_session_store("current", "recorded")
 
-    result = CliRunner().invoke(zeta_cli, ["trace", "grep", "absent-token"])
+    result = CliRunner().invoke(zeta_cli, ["traces", "grep", "absent-token"])
 
     assert result.exit_code == 0
     assert "no trace objects match" in result.output
@@ -733,10 +743,10 @@ def test_zeta_trace_cli_smoke_with_in_memory_store(monkeypatch) -> None:
     )
 
     runner = CliRunner()
-    show = runner.invoke(zeta_cli, ["trace", "show", "--json", prompt_id])
-    closure = runner.invoke(zeta_cli, ["trace", "closure", prompt_id])
-    refs = runner.invoke(zeta_cli, ["trace", "refs"])
-    prompts = runner.invoke(zeta_cli, ["trace", "prompts"])
+    show = runner.invoke(zeta_cli, ["traces", "show", "--json", prompt_id])
+    closure = runner.invoke(zeta_cli, ["traces", "closure", prompt_id])
+    refs = runner.invoke(zeta_cli, ["traces", "refs"])
+    prompts = runner.invoke(zeta_cli, ["traces", "prompts"])
 
     assert show.exit_code == 0
     assert json.loads(show.output)["derivations"][0]["producer"] == "unit:test"
@@ -763,7 +773,7 @@ def test_zeta_trace_cli_smoke_with_sqlite_store(
         "zetad.cli_trace.scoped_store", lambda _ctx, read_only=True: store
     )
 
-    result = CliRunner().invoke(zeta_cli, ["trace", "prompts"])
+    result = CliRunner().invoke(zeta_cli, ["traces", "prompts"])
 
     assert result.exit_code == 0
     data = json.loads(result.output)
@@ -1822,7 +1832,7 @@ def test_zeta_trace_diff_reports_component_changes(monkeypatch) -> None:
     )
 
     result = CliRunner().invoke(
-        zeta_cli, ["trace", "diff", ids["prompt_a"], ids["prompt_b"]]
+        zeta_cli, ["traces", "diff", ids["prompt_a"], ids["prompt_b"]]
     )
 
     assert result.exit_code == 0
@@ -1850,7 +1860,7 @@ def test_zeta_trace_diff_stat_keeps_one_line_per_change(monkeypatch) -> None:
 
     result = CliRunner().invoke(
         zeta_cli,
-        ["trace", "diff", "--stat", ids["prompt_a"], ids["prompt_b"]],
+        ["traces", "diff", "--stat", ids["prompt_a"], ids["prompt_b"]],
     )
 
     assert result.exit_code == 0
@@ -1866,7 +1876,7 @@ def test_zeta_trace_diff_requires_prompt_objects(monkeypatch) -> None:
     )
 
     result = CliRunner().invoke(
-        zeta_cli, ["trace", "diff", ids["prompt_a"], ids["system"]]
+        zeta_cli, ["traces", "diff", ids["prompt_a"], ids["system"]]
     )
 
     assert result.exit_code != 0
@@ -1887,7 +1897,7 @@ def test_zeta_trace_replay_records_a_traced_answer(monkeypatch) -> None:
 
     monkeypatch.setattr("zetad.cli_trace.chat_completion_messages", fake_chat)
 
-    result = CliRunner().invoke(zeta_cli, ["trace", "replay", prompt_id])
+    result = CliRunner().invoke(zeta_cli, ["traces", "replay", prompt_id])
 
     assert result.exit_code == 0
     assert "the test imports a stale fixture" in result.output
@@ -1919,7 +1929,7 @@ def test_zeta_trace_replay_diffs_old_and_new(monkeypatch) -> None:
         lambda messages, **kwargs: {"role": "assistant", "content": "a fresh answer"},
     )
 
-    result = CliRunner().invoke(zeta_cli, ["trace", "replay", "--diff", prompt_id])
+    result = CliRunner().invoke(zeta_cli, ["traces", "replay", "--diff", prompt_id])
 
     assert result.exit_code == 0
     assert "-the test imports a stale fixture" in result.output
@@ -1946,7 +1956,7 @@ def test_zeta_trace_replay_renders_tool_call_answers(monkeypatch) -> None:
         },
     )
 
-    result = CliRunner().invoke(zeta_cli, ["trace", "replay", prompt_id])
+    result = CliRunner().invoke(zeta_cli, ["traces", "replay", prompt_id])
 
     assert result.exit_code == 0
     assert "→ read" in result.output
@@ -1977,9 +1987,11 @@ def test_zeta_trace_replay_honors_a_named_profile(monkeypatch) -> None:
         ),
     )
 
-    ok = CliRunner().invoke(zeta_cli, ["trace", "replay", "--model", "fast", prompt_id])
+    ok = CliRunner().invoke(
+        zeta_cli, ["traces", "replay", "--model", "fast", prompt_id]
+    )
     unknown = CliRunner().invoke(
-        zeta_cli, ["trace", "replay", "--model", "nope", prompt_id]
+        zeta_cli, ["traces", "replay", "--model", "nope", prompt_id]
     )
 
     assert ok.exit_code == 0
@@ -1995,7 +2007,7 @@ def test_zeta_trace_log_defaults_to_the_narrative_kinds(monkeypatch) -> None:
         "zetad.cli_trace.scoped_store", lambda _ctx, read_only=True: store
     )
 
-    result = CliRunner().invoke(zeta_cli, ["trace", "log"])
+    result = CliRunner().invoke(zeta_cli, ["traces", "log"])
 
     assert result.exit_code == 0
     lines = result.output.splitlines()
@@ -2016,10 +2028,10 @@ def test_zeta_trace_log_widens_with_kind_and_all(monkeypatch) -> None:
     runner = CliRunner()
 
     only_components = runner.invoke(
-        zeta_cli, ["trace", "log", "--kind", "user_message"]
+        zeta_cli, ["traces", "log", "--kind", "user_message"]
     )
-    everything = runner.invoke(zeta_cli, ["trace", "log", "--all"])
-    limited = runner.invoke(zeta_cli, ["trace", "log", "--all", "--limit", "1"])
+    everything = runner.invoke(zeta_cli, ["traces", "log", "--all"])
+    limited = runner.invoke(zeta_cli, ["traces", "log", "--all", "--limit", "1"])
 
     assert only_components.exit_code == 0
     assert only_components.output.splitlines() == [
@@ -2089,7 +2101,7 @@ def test_zeta_trace_tools_json_joins_calls_and_results(monkeypatch) -> None:
         "zetad.cli_trace.scoped_store", lambda _ctx, read_only=True: store
     )
 
-    result = CliRunner().invoke(zeta_cli, ["trace", "tools", "--json"])
+    result = CliRunner().invoke(zeta_cli, ["traces", "tools", "--json"])
 
     assert result.exit_code == 0
     rows = json.loads(result.output)
@@ -2146,7 +2158,7 @@ def test_zeta_trace_tools_failed_filters_json(monkeypatch) -> None:
         "zetad.cli_trace.scoped_store", lambda _ctx, read_only=True: store
     )
 
-    result = CliRunner().invoke(zeta_cli, ["trace", "tools", "--failed", "--json"])
+    result = CliRunner().invoke(zeta_cli, ["traces", "tools", "--failed", "--json"])
 
     assert result.exit_code == 0
     rows = json.loads(result.output)
@@ -2191,7 +2203,7 @@ def test_zeta_trace_tools_failed_json_recovers_content_error(
         "zetad.cli_trace.scoped_store", lambda _ctx, read_only=True: store
     )
 
-    result = CliRunner().invoke(zeta_cli, ["trace", "tools", "--failed", "--json"])
+    result = CliRunner().invoke(zeta_cli, ["traces", "tools", "--failed", "--json"])
 
     assert result.exit_code == 0
     rows = json.loads(result.output)
@@ -2237,7 +2249,7 @@ def test_zeta_trace_tools_failed_json_recovers_bash_error(
         "zetad.cli_trace.scoped_store", lambda _ctx, read_only=True: store
     )
 
-    result = CliRunner().invoke(zeta_cli, ["trace", "tools", "--failed", "--json"])
+    result = CliRunner().invoke(zeta_cli, ["traces", "tools", "--failed", "--json"])
 
     assert result.exit_code == 0
     rows = json.loads(result.output)
@@ -2283,7 +2295,7 @@ def test_zeta_trace_tools_failed_plain_output_uses_uniform_error(
         "zetad.cli_trace.scoped_store", lambda _ctx, read_only=True: store
     )
 
-    result = CliRunner().invoke(zeta_cli, ["trace", "tools", "--failed"])
+    result = CliRunner().invoke(zeta_cli, ["traces", "tools", "--failed"])
 
     assert result.exit_code == 0
     assert "failed · bash-failed: ValueError: bad input" in result.output
@@ -2328,7 +2340,7 @@ def test_zeta_trace_tools_successful_filters_json(monkeypatch) -> None:
         "zetad.cli_trace.scoped_store", lambda _ctx, read_only=True: store
     )
 
-    result = CliRunner().invoke(zeta_cli, ["trace", "tools", "--successful", "--json"])
+    result = CliRunner().invoke(zeta_cli, ["traces", "tools", "--successful", "--json"])
 
     assert result.exit_code == 0
     rows = json.loads(result.output)
@@ -2339,7 +2351,7 @@ def test_zeta_trace_tools_successful_filters_json(monkeypatch) -> None:
 
 def test_zeta_trace_tools_status_filters_conflict() -> None:
     result = CliRunner().invoke(
-        zeta_cli, ["trace", "tools", "--failed", "--successful"]
+        zeta_cli, ["traces", "tools", "--failed", "--successful"]
     )
 
     assert result.exit_code != 0
@@ -2401,7 +2413,7 @@ def test_zeta_trace_tools_all_sessions_sorts_by_trace_time(
 
     result = CliRunner().invoke(
         zeta_cli,
-        ["trace", "tools", "--all-sessions", "--json", "--limit", "2"],
+        ["traces", "tools", "--all-sessions", "--json", "--limit", "2"],
     )
 
     assert result.exit_code == 0
@@ -2419,7 +2431,7 @@ def test_zeta_trace_tree_walks_producers_by_default(monkeypatch) -> None:
         "zetad.cli_trace.scoped_store", lambda _ctx, read_only=True: store
     )
 
-    result = CliRunner().invoke(zeta_cli, ["trace", "tree", answer_id])
+    result = CliRunner().invoke(zeta_cli, ["traces", "tree", answer_id])
 
     assert result.exit_code == 0
     lines = result.output.splitlines()
@@ -2437,7 +2449,7 @@ def test_zeta_trace_tree_walks_consumers_with_down(monkeypatch) -> None:
         "zetad.cli_trace.scoped_store", lambda _ctx, read_only=True: store
     )
 
-    result = CliRunner().invoke(zeta_cli, ["trace", "tree", "--down", component_id])
+    result = CliRunner().invoke(zeta_cli, ["traces", "tree", "--down", component_id])
 
     assert result.exit_code == 0
     lines = result.output.splitlines()
@@ -2454,7 +2466,7 @@ def test_zeta_trace_tree_respects_depth(monkeypatch) -> None:
         "zetad.cli_trace.scoped_store", lambda _ctx, read_only=True: store
     )
 
-    result = CliRunner().invoke(zeta_cli, ["trace", "tree", "--depth", "1", answer_id])
+    result = CliRunner().invoke(zeta_cli, ["traces", "tree", "--depth", "1", answer_id])
 
     assert result.exit_code == 0
     assert zeta_trace_short(prompt_id) in result.output
@@ -2467,7 +2479,7 @@ def test_zeta_trace_show_renders_humans_first(monkeypatch) -> None:
         "zetad.cli_trace.scoped_store", lambda _ctx, read_only=True: store
     )
 
-    result = CliRunner().invoke(zeta_cli, ["trace", "show", prompt_id])
+    result = CliRunner().invoke(zeta_cli, ["traces", "show", prompt_id])
 
     assert result.exit_code == 0
     lines = result.output.splitlines()
@@ -2491,7 +2503,7 @@ def test_zeta_trace_show_renders_message_bodies(monkeypatch) -> None:
         "zetad.cli_trace.scoped_store", lambda _ctx, read_only=True: store
     )
 
-    result = CliRunner().invoke(zeta_cli, ["trace", "show", answer_id])
+    result = CliRunner().invoke(zeta_cli, ["traces", "show", answer_id])
 
     assert result.exit_code == 0
     assert "the test imports a stale fixture" in result.output
@@ -2511,9 +2523,9 @@ def test_zeta_trace_cli_resolves_refs_and_prefixes(monkeypatch) -> None:
     )
 
     runner = CliRunner()
-    by_ref = runner.invoke(zeta_cli, ["trace", "show", "--json", "prompt/current"])
-    by_prefix = runner.invoke(zeta_cli, ["trace", "show", "--json", digest_prefix])
-    closure = runner.invoke(zeta_cli, ["trace", "closure", digest_prefix])
+    by_ref = runner.invoke(zeta_cli, ["traces", "show", "--json", "prompt/current"])
+    by_prefix = runner.invoke(zeta_cli, ["traces", "show", "--json", digest_prefix])
+    closure = runner.invoke(zeta_cli, ["traces", "closure", digest_prefix])
 
     assert by_ref.exit_code == 0
     assert json.loads(by_ref.output)["id"] == prompt_id
@@ -2534,8 +2546,8 @@ def test_zeta_trace_cli_reports_ambiguous_and_unknown_ids(
     )
 
     runner = CliRunner()
-    ambiguous = runner.invoke(zeta_cli, ["trace", "show", "aaaa"])
-    unknown = runner.invoke(zeta_cli, ["trace", "show", "ffff"])
+    ambiguous = runner.invoke(zeta_cli, ["traces", "show", "aaaa"])
+    unknown = runner.invoke(zeta_cli, ["traces", "show", "ffff"])
 
     assert ambiguous.exit_code != 0
     assert "sha256:aaaa1111" in ambiguous.output

@@ -44,6 +44,8 @@ from commas.workflows.ask import (
     ASK_SYSTEM_PROMPT,
     ask,
 )
+from zeta.records import events as zeta_events
+from zeta.records import events as zeta_kernel_events
 from zeta.records.events import (
     AppendOutcome,
     DraftEvent,
@@ -57,6 +59,8 @@ from zeta.records.stores.sqlite import (
     SqliteEventStore,
     event_store_path,
 )
+from zeta.run import runs as zeta_kernel_runs
+from zetad import dispatch as zetad_dispatch
 from zetad.attempts import (
     Attempt,
     attempt_event_payload,
@@ -71,10 +75,6 @@ from zetad.queue import (
 
 from test_support.patch import patch, patch_dict
 from test_support.zeta_helpers import record_durable_timeline_event
-from zeta.records import events as zeta_events
-from zeta.records import events as zeta_kernel_events
-from zeta.run import runs as zeta_kernel_runs
-from zetad import dispatch as zetad_dispatch
 
 
 class TtyStringIO(StringIO):

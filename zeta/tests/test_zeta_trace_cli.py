@@ -24,6 +24,7 @@ from zeta.records.stores.sqlite import (
     event_store_path,
     zeta_sqlite_path,
 )
+from zeta.run import runtime as zeta_agent
 from zeta.run.context import RuntimeContext, default_session
 from zeta.run.runtime import AgentRunResult
 from zeta.run.thread_run import current_timeline
@@ -52,7 +53,6 @@ from test_support.zeta_helpers import (
     record_durable_timeline_event,
 )
 from zeta import models as zeta_models_api
-from zeta.run import runtime as zeta_agent
 
 zeta_trace = SimpleNamespace(
     AmbiguousIdError=AmbiguousIdError,

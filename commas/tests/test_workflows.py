@@ -39,9 +39,11 @@ from commas.state import history_view, read_events
 from commas.workflows import ask as ask_runner
 from commas.workflows import step as zeta_runner
 from zeta.context.components import PromptTrace
+from zeta.records import events as zeta_event_model
 from zeta.records.events import DraftEvent, Event, event_view
 from zeta.records.stores.event_store import Filter
 from zeta.records.stores.sqlite import SqliteEventStore, event_store_path
+from zeta.run import runtime as zeta_agent
 from zeta.run.runtime import AgentRunResult
 from zeta.substrate import Ref, resolve_object_id
 
@@ -56,8 +58,6 @@ from test_support.zeta_helpers import (
     write_skill,
 )
 from zeta import models as zeta_models_api
-from zeta.records import events as zeta_event_model
-from zeta.run import runtime as zeta_agent
 
 
 def timeline_messages(events: list[dict[str, Any]]) -> list[dict[str, Any]]:

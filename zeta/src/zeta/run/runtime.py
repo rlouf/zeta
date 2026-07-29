@@ -893,11 +893,7 @@ def registered_capabilities(
     enabled: list[str] = []
     seen: set[str] = set()
     for name in allowed_capabilities:
-        if (
-            name.startswith("mcp.")
-            and name.endswith(".*")
-            and name.count(".") == 2
-        ):
+        if name.startswith("mcp.") and name.endswith(".*") and name.count(".") == 2:
             capability_ids = (
                 capability_id
                 for capability_id in active_tool_registry.list_capability_ids()

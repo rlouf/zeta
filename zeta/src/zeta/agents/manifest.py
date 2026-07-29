@@ -4,15 +4,15 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Protocol, runtime_checkable
 
-from jsonschema import Draft202012Validator
-from jsonschema.exceptions import SchemaError, ValidationError
-
 from connectors import (
     EgressBinding,
     EventConnector,
     EventConnectorRegistry,
     IngressBinding,
 )
+from jsonschema import Draft202012Validator
+from jsonschema.exceptions import SchemaError, ValidationError
+
 from zeta.agents.events import EventRegistry
 from zeta.agents.prompts import validate_prompt
 from zeta.agents.spec import AgentSpec

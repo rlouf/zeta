@@ -74,8 +74,9 @@ class ReturnedEventPublisher:
         for index, returned_event in enumerate(returned_events):
             if not isinstance(returned_event, dict):
                 raise RuntimeError("each structured agent return must be an object")
-            event_type = returned_event.get("type")
-            payload = returned_event.get("payload")
+            returned_event_data = cast(dict[str, Any], returned_event)
+            event_type = returned_event_data.get("type")
+            payload = returned_event_data.get("payload")
             if not isinstance(event_type, str) or not isinstance(payload, dict):
                 raise RuntimeError(
                     "each structured agent return must include type and payload"

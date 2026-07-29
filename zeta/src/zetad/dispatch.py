@@ -423,9 +423,8 @@ class EventDispatcher:
                 and executor.definition.project_generation != project_generation
             ):
                 continue
-            if (
-                triggering_event is not None
-                and not executor.definition.accepts(triggering_event)
+            if triggering_event is not None and not executor.definition.accepts(
+                triggering_event
             ):
                 continue
             return executor

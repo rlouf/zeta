@@ -1436,14 +1436,11 @@ def test_zeta_tool_query_log_is_a_readonly_ask_builtin() -> None:
     assert "query_log" in ASK_TOOLS
 
 
-
 def test_registered_capabilities_expands_only_scoped_mcp_wildcards() -> None:
     registry = CapabilityRegistry()
     registry.register(_test_capability("linear.search_issues", provider="mcp"))
     registry.register(_test_capability("linear.get_issue", provider="mcp"))
-    registry.register(
-        _test_capability("google_calendar.list_events", provider="mcp")
-    )
+    registry.register(_test_capability("google_calendar.list_events", provider="mcp"))
 
     assert registered_capabilities(
         ("mcp.linear.*", "mcp.google_calendar.list_events"),

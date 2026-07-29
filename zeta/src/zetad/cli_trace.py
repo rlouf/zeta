@@ -10,6 +10,7 @@ from typing import Any
 
 import click
 from zeta.context.builder import reconstructed_prompt_request
+from zeta.models import chat_completion_messages
 from zeta.records.stores.sqlite import (
     UnknownSessionError,
     available_session_ids,
@@ -40,8 +41,6 @@ from zeta.trace.replay import (
     replay_model_selection,
 )
 from zeta.trace.tools import tool_call_rows, tool_failure_detail
-
-from zeta.models import chat_completion_messages
 
 NARRATIVE_KINDS = ("prompt", "assistant_message")
 

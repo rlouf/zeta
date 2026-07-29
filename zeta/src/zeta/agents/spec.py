@@ -8,7 +8,6 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-
 from connectors import EgressBinding, IngressBinding
 
 SLUG_PATTERN = re.compile(r"^[a-z0-9_-]+$")

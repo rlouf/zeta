@@ -12,6 +12,14 @@ from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
+from connectors import (
+    EgressBinding,
+    EventConnector,
+    EventConnectorRegistry,
+    InboundRequest,
+    InboundResponse,
+    IngressBinding,
+)
 from connectors.slack import (
     SLACK_MESSAGE_POST,
     SLACK_MESSAGE_RECEIVED,
@@ -59,6 +67,11 @@ from zeta.events import DraftEvent, Event
 from zeta.records.stores.event_store import Filter
 from zeta.run.config import AgentConfig
 from zeta.run.runtime import AgentRunResult
+from zetad import connector_bridge as zetad_connector_bridge
+from zetad import dispatch as zetad_dispatch
+from zetad import queue as zetad_queue
+from zetad import scheduling as zetad_scheduling
+from zetad import worker as zetad_worker
 from zetad.agents import (
     AgentDefinition,
     EventPattern,
@@ -69,20 +82,6 @@ from zetad.agents import (
 )
 from zetad.retry import RetryPolicy
 from zetad.store import RuntimeEventStore
-
-from connectors import (
-    EgressBinding,
-    EventConnector,
-    EventConnectorRegistry,
-    InboundRequest,
-    InboundResponse,
-    IngressBinding,
-)
-from zetad import connector_bridge as zetad_connector_bridge
-from zetad import dispatch as zetad_dispatch
-from zetad import queue as zetad_queue
-from zetad import scheduling as zetad_scheduling
-from zetad import worker as zetad_worker
 
 
 def runtime_sqlite_event_store(path: Path) -> RuntimeEventStore:
@@ -857,7 +856,7 @@ User asked: {{ event.payload.text }}
                             "properties": {
                                 "type": {
                                     "type": "string",
-                                    "const": "message.delivery.requested"
+                                    "const": "message.delivery.requested",
                                 },
                                 "payload": {
                                     "type": "object",
@@ -924,11 +923,9 @@ Reply.
     schema = zeta_agents.derive_returns_schema(spec, events)
 
     assert schema is not None
-    assert schema["properties"]["events"]["items"]["anyOf"][0]["properties"][
-        "payload"
-    ]["properties"]["evidence"]["items"] == {
-        "$ref": "#/$defs/event_0_citation"
-    }
+    assert schema["properties"]["events"]["items"]["anyOf"][0]["properties"]["payload"][
+        "properties"
+    ]["evidence"]["items"] == {"$ref": "#/$defs/event_0_citation"}
     assert schema["$defs"]["event_0_citation"]["properties"] == {
         "ref": {"type": "string"}
     }
@@ -2241,9 +2238,9 @@ def test_zeta_retry_safe_egress_reuses_effect_key(tmp_path: Path) -> None:
 name: Support
 description: Sends Slack support messages.
 returns:
-  - slack.message.post
-egress:
   - event: slack.message.post
+    with:
+      channel_ids: ["C123"]
 ---
 Send.
 """,
@@ -2684,9 +2681,7 @@ def test_zeta_agent_with_returns_publishes_multiple_ordered_events(
     )
 
     assert [event.payload["text"] for event in returned] == ["first", "second"]
-    assert returned[0].idempotency_key == (
-        f"agent.return:{outcome.event.id}:slack-qa"
-    )
+    assert returned[0].idempotency_key == (f"agent.return:{outcome.event.id}:slack-qa")
     assert returned[1].idempotency_key == (
         f"agent.return:{outcome.event.id}:slack-qa:1"
     )
@@ -2725,9 +2720,10 @@ def test_zeta_agent_with_returns_may_publish_no_events(tmp_path: Path) -> None:
         target_agent="slack-qa",
     )
 
-    assert store.list_events(
-        zeta_events.Filter(event_type="message.delivery.requested")
-    ) == []
+    assert (
+        store.list_events(zeta_events.Filter(event_type="message.delivery.requested"))
+        == []
+    )
     assert terminal is not None
     assert terminal["returned_events"] == []
 

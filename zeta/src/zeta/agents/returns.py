@@ -20,9 +20,7 @@ def _hoist_local_definitions(
     if not isinstance(local_definitions, dict):
         return payload, {}
 
-    renamed = {
-        name: f"event_{branch_index}_{name}" for name in local_definitions
-    }
+    renamed = {name: f"event_{branch_index}_{name}" for name in local_definitions}
 
     def rewrite(value: Any) -> Any:
         if isinstance(value, dict):

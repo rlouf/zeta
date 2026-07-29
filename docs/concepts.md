@@ -410,7 +410,7 @@ The `zeta` CLI reads the project runtime journal and queue:
 zeta status
 zeta queue [--json]
 zeta attempts [--json]
-zeta runs [--json]
+zeta ps [--json]
 zeta run show RUN_ID [--json]
 zeta events [--type-prefix PREFIX] [--session ID] [--limit N] [--json]
 zeta events publish EVENT_TYPE [--payload-json JSON] [--idempotency-key KEY]
@@ -428,7 +428,7 @@ zeta queue
 zeta queue --json
 
 # List run summaries newest in storage order.
-zeta runs
+zeta ps
 
 # Inspect one run, including trigger event, queue item, attempt result,
 # returned events, tool calls, and usage.

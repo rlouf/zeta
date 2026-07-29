@@ -629,7 +629,7 @@ def event_payload_from_json(payload_json: str) -> dict[str, object]:
     return dict(payload)
 
 
-@cli.command("runs")
+@cli.command("ps")
 @click.option(
     "--project-root",
     type=click.Path(file_okay=False, path_type=Path),
@@ -643,7 +643,7 @@ def event_payload_from_json(payload_json: str) -> dict[str, object]:
     help="Override the runtime state directory.",
 )
 @click.option("--json", "json_output", is_flag=True, help="Emit JSON.")
-def runs(project_root: Path, state_dir: Path | None, json_output: bool) -> int:
+def ps(project_root: Path, state_dir: Path | None, json_output: bool) -> int:
     """List durable runtime runs."""
 
     event_store = runtime_event_store(project_root, state_dir)

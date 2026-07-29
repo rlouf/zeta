@@ -3776,6 +3776,22 @@ def test_zeta_sqlite_event_store_renews_locks(tmp_path: Path) -> None:
 
 
 
+def test_zeta_cli_ps_replaces_runs_listing(tmp_path: Path) -> None:
+    listing = CliRunner().invoke(
+        zetad_cli.cli,
+        ["ps", "--project-root", str(tmp_path)],
+    )
+    removed_alias = CliRunner().invoke(
+        zetad_cli.cli,
+        ["runs", "--project-root", str(tmp_path)],
+    )
+
+    assert listing.exit_code == 0
+    assert listing.output == "runs empty\n"
+    assert removed_alias.exit_code == 2
+    assert "No such command 'runs'" in removed_alias.output
+
+
 def test_zeta_cli_run_show_reports_unknown_run(tmp_path: Path) -> None:
     result = CliRunner().invoke(
         zetad_cli.cli,

@@ -4136,7 +4136,10 @@ def test_zeta_local_runtime_accepts_explicit_tool_registry(tmp_path: Path) -> No
         runtime.close()
 
 
-def test_zeta_local_runtime_uses_configured_agent_executor(tmp_path: Path) -> None:
+def test_zeta_local_runtime_sets_up_tool_executor_for_agent(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     agents_dir = tmp_path / "agents"
     agents_dir.mkdir()
     write_project_event_schema(tmp_path, "github.issue.opened")
@@ -4152,18 +4155,29 @@ Triage the issue.
         encoding="utf-8",
     )
 
-    class RecordingExecutor:
+    class RecordingResolver:
         def __init__(self) -> None:
-            self.requests: list[Any] = []
+            self.agents: list[str] = []
 
-        async def execute(self, request: Any) -> AgentRunResult:
-            self.requests.append(request)
-            return AgentRunResult(final_answer="triaged")
+        async def setup(
+            self,
+            agent_id: str,
+            registry: CapabilityRegistry,
+        ) -> HostDirectory:
+            self.agents.append(agent_id)
+            return HostDirectory.from_registry(registry)
 
-    executor = RecordingExecutor()
+    resolver = RecordingResolver()
+    calls: list[dict[str, Any]] = []
+
+    async def fake_run_agent(*args: Any, **kwargs: Any) -> AgentRunResult:
+        calls.append({"args": args, "kwargs": kwargs})
+        return AgentRunResult(final_answer="triaged")
+
+    monkeypatch.setattr(zetad_worker, "run_agent", fake_run_agent)
     runtime = zetad_worker.build_worker_services(
         project_root=tmp_path,
-        agent_executor=executor,
+        tool_executor=resolver,
     )
     try:
         event = runtime.events.accept(
@@ -4174,12 +4188,9 @@ Triage the issue.
         runtime.close()
 
     assert message == f"ran qi_{event.id}"
-    assert len(executor.requests) == 1
-    request = executor.requests[0]
-    assert request.agent.agent_id == "triage"
-    assert request.triggering_event == event
-    assert request.queue_item_id == f"qi_{event.id}"
-    assert request.attempt_id == f"att_qi_{event.id}_1"
+    assert resolver.agents == ["triage"]
+    assert len(calls) == 1
+    assert calls[0]["kwargs"]["tool_hosts"] is not None
 
 
 def test_zeta_cli_run_registers_builtin_tools(

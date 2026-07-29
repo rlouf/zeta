@@ -9,11 +9,16 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field, replace
 from functools import cached_property
 from pathlib import Path
+from typing import Any
 
 from connectors import (
     EventConnectorRegistry,
 )
 from zeta.agents.resources import load_connector_registry
+from zeta.capabilities.host import (
+    InProcessToolExecutor,
+    ToolExecutor,
+)
 from zeta.capabilities.registry import CapabilityRegistry
 from zeta.events import Event
 from zeta.models.profiles import ModelSelection, active_model_selection
@@ -30,8 +35,7 @@ from zeta.run.runtime import AgentRunRequest, run_agent
 from zeta.substrate import SqliteObjectStore
 
 from zetad.agents import (
-    AgentExecutionRequest,
-    AgentExecutor,
+    AgentInvocation,
     ExecutableAgent,
     compile_agent_definitions,
     config_for_spec,
@@ -75,7 +79,7 @@ class WorkerServices:
     worker_name: str = LOCAL_WORKER_NAME
     max_concurrent: int = 1
     retry_policy: RetryPolicy = field(default_factory=RetryPolicy)
-    agent_executor: AgentExecutor | None = None
+    tool_executor: ToolExecutor = field(default_factory=InProcessToolExecutor)
 
     @cached_property
     def project_snapshot(self) -> ProjectSnapshot:
@@ -97,7 +101,7 @@ def build_worker_services(
     tool_registry: CapabilityRegistry | None = None,
     registry: EventConnectorRegistry | None = None,
     connector_names: Iterable[str] | None = None,
-    agent_executor: AgentExecutor | None = None,
+    tool_executor: ToolExecutor | None = None,
 ) -> WorkerServices:
     resolved_project_root = project_root.expanduser().resolve()
     resolved_state_dir = resolve_state_dir(project_root, state_dir)
@@ -114,7 +118,7 @@ def build_worker_services(
         model_selection=active_model_selection(
             session_dir=resolved_state_dir / "sessions" / "default"
         ),
-        agent_executor=agent_executor,
+        tool_executor=tool_executor or InProcessToolExecutor(),
     )
 
 
@@ -187,7 +191,7 @@ def compile_snapshot_executors(
     snapshot: ProjectSnapshot,
 ) -> tuple[ExecutableAgent, ...]:
     project = snapshot.project
-    agent_executor = runtime.agent_executor or RuntimeAgentExecutor(runtime)
+    agent_loop = RuntimeAgentLoop(runtime)
     execution_manifests = {
         spec.slug: snapshot.execution_manifest(spec) for spec in project.specs
     }
@@ -203,7 +207,7 @@ def compile_snapshot_executors(
                         runtime.model_selection,
                     ),
                     event_registry=project.events,
-                    executor=agent_executor,
+                    agent_loop=agent_loop.run,
                     project_generation=snapshot.generation_id,
                     execution_manifest=execution_manifests[spec.slug],
                 )
@@ -217,53 +221,71 @@ def compile_snapshot_executors(
     )
 
 
-class RuntimeAgentExecutor:
-    """Execute local agent loops without exposing harness state to executors."""
+class RuntimeAgentLoop:
+    """Run an agent's model loop inside the local runtime harness."""
 
     def __init__(self, runtime: WorkerServices) -> None:
         self.runtime = runtime
 
-    async def execute(self, request: AgentExecutionRequest) -> AgentRunResult:
+    async def run(
+        self,
+        invocation: AgentInvocation,
+        objective: str,
+        timeline: list[dict[str, Any]],
+        context: str,
+        config: AgentConfig,
+        session_id: str,
+        run_id: str,
+    ) -> AgentRunResult:
         trace_store = SqliteObjectStore(
             zeta_sqlite_path(self.runtime.state_dir),
-            session_id=request.session_id,
+            session_id=session_id,
         )
         runtime_context = RuntimeContext(
-            session_id=request.session_id,
+            session_id=session_id,
             event_sink=self.runtime.events,
             trace_store=trace_store,
             tool_registry=self.runtime.tool_registry,
             state_dir=self.runtime.state_dir,
-            session_dir=self.runtime.state_dir / "sessions" / request.session_id,
+            session_dir=self.runtime.state_dir / "sessions" / session_id,
+            tool_executor=self.runtime.tool_executor,
         )
         started = time.perf_counter()
         try:
             return await run_agent(
                 AgentRunRequest(
-                    objective=request.objective,
+                    objective=objective,
                     workflow="agent",
                     runtime="zeta-agent",
-                    tools=tuple(request.config.allowed_capabilities or ()),
-                    context=request.context,
+                    tools=tuple(config.allowed_capabilities or ()),
+                    context=context,
                     config=replace(
                         config_with_model_selection(
-                            request.config,
+                            config,
                             self.runtime.model_selection,
                         ),
-                        effect_scope=request.queue_item_id,
+                        effect_scope=invocation.queue_item_id,
                     ),
                 ),
-                run_id=request.run_id,
-                caused_by=request.triggering_event.id,
+                run_id=run_id,
+                caused_by=invocation.triggering_event.id,
                 publish_event=lambda _event: None,
                 runtime_context=runtime_context,
                 cancellation_event=None,
+                tool_hosts=(
+                    await runtime_context.tool_executor.setup(
+                        invocation.agent.agent_id,
+                        runtime_context.tool_registry,
+                    )
+                    if runtime_context.tool_executor is not None
+                    else None
+                ),
             )
         finally:
             self.runtime.events.observe_runtime_metric(
                 "runtime.agent_execution_ms",
                 (time.perf_counter() - started) * 1000,
-                agent=request.agent.agent_id,
+                agent=invocation.agent.agent_id,
             )
             trace_started = time.perf_counter()
             try:
@@ -272,7 +294,7 @@ class RuntimeAgentExecutor:
                 self.runtime.events.observe_runtime_metric(
                     "sqlite.trace_close_ms",
                     (time.perf_counter() - trace_started) * 1000,
-                    agent=request.agent.agent_id,
+                    agent=invocation.agent.agent_id,
                 )
 
 

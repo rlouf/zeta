@@ -53,7 +53,7 @@ def test_in_process_host_activates_base_dir_from_context():
         CapabilityExecutionContext,
         InProcessCapabilityExecutor,
     )
-    from zeta.capabilities.host import TransitionalInProcessHost
+    from zeta.capabilities.host import InProcessToolHost
     from zeta.capabilities.registry import CapabilityRegistry, RegisteredCapability
     from zeta.capabilities.types import Capability, CapabilityId
 
@@ -71,7 +71,7 @@ def test_in_process_host_activates_base_dir_from_context():
             InProcessCapabilityExecutor(probe, None),
         )
     )
-    host = TransitionalInProcessHost(registry)
+    host = InProcessToolHost(registry)
     ctx = CapabilityExecutionContext(
         event_sink=None,
         trace_store=None,

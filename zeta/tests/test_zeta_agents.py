@@ -73,7 +73,6 @@ from zetad import scheduling as zetad_scheduling
 from zetad import worker as zetad_worker
 from zetad.agents import (
     AgentDefinition,
-    AgentExecutionRequest,
     EventPattern,
     agent_session_id,
     compile_agent_definition,
@@ -316,12 +315,29 @@ def _slack_return_event_registry() -> EventRegistry:
 def _recording_return_run(
     calls: list[dict[str, Any]],
 ) -> Any:
-    class RecordingExecutor:
-        async def execute(self, request: AgentExecutionRequest) -> AgentRunResult:
-            calls.append({"request": request})
-            return AgentRunResult(final_answer="Send a reply to C1.")
+    async def agent_loop(
+        invocation: Any,
+        objective: str,
+        timeline: list[dict[str, Any]],
+        context: str,
+        config: Any,
+        session_id: str,
+        run_id: str,
+    ) -> AgentRunResult:
+        calls.append(
+            {
+                "invocation": invocation,
+                "objective": objective,
+                "timeline": timeline,
+                "context": context,
+                "config": config,
+                "session_id": session_id,
+                "run_id": run_id,
+            }
+        )
+        return AgentRunResult(final_answer="Send a reply to C1.")
 
-    return RecordingExecutor()
+    return agent_loop
 
 
 def _recording_structured_return(
@@ -346,7 +362,7 @@ def _recording_structured_return(
 
 def _assert_return_run_called(calls: list[dict[str, Any]]) -> None:
     assert len(calls) == 1
-    assert calls[0]["request"].objective == "User asked: hello"
+    assert calls[0]["objective"] == "User asked: hello"
 
 
 def _assert_structured_return_called(
@@ -2268,20 +2284,21 @@ def test_zeta_agent_with_returns_publishes_structured_return_event(
     compiled = zeta_agents.compile_agent_definition(
         spec,
         event_registry=events,
-        executor=_recording_return_run(run_calls),
+        agent_loop=_recording_return_run(run_calls),
         structured_output=_recording_structured_return(structured_calls),
     )
     store = zeta_events.SqliteEventStore(tmp_path / "events.sqlite3")
     dispatcher = zetad_dispatch.QueueingDispatcher(store, executors=[compiled])
 
     outcome = asyncio.run(
-        dispatch_and_drain(dispatcher, 
+        dispatch_and_drain(
+            dispatcher,
             zeta_events.DraftEvent(
                 "slack.message.received",
                 "test",
                 {"text": "hello"},
                 session_id="s1",
-            )
+            ),
         )
     )
     returned = store.list_events(
@@ -2322,19 +2339,20 @@ def test_zeta_agent_with_returns_publishes_multiple_ordered_events(
     compiled = zeta_agents.compile_agent_definition(
         spec,
         event_registry=events,
-        executor=_recording_return_run([]),
+        agent_loop=_recording_return_run([]),
         structured_output=structured_output,
     )
     store = zeta_events.SqliteEventStore(tmp_path / "events.sqlite3")
     dispatcher = zetad_dispatch.QueueingDispatcher(store, executors=[compiled])
 
     outcome = asyncio.run(
-        dispatch_and_drain(dispatcher, 
+        dispatch_and_drain(
+            dispatcher,
             zeta_events.DraftEvent(
                 "slack.message.received",
                 "test",
                 {"text": "hello"},
-            )
+            ),
         )
     )
     returned = store.list_events(
@@ -2365,19 +2383,20 @@ def test_zeta_agent_with_returns_may_publish_no_events(tmp_path: Path) -> None:
     compiled = zeta_agents.compile_agent_definition(
         spec,
         event_registry=events,
-        executor=_recording_return_run([]),
+        agent_loop=_recording_return_run([]),
         structured_output=lambda *_args, **_kwargs: {"events": []},
     )
     store = zeta_events.SqliteEventStore(tmp_path / "events.sqlite3")
     dispatcher = zetad_dispatch.QueueingDispatcher(store, executors=[compiled])
 
     outcome = asyncio.run(
-        dispatch_and_drain(dispatcher, 
+        dispatch_and_drain(
+            dispatcher,
             zeta_events.DraftEvent(
                 "slack.message.received",
                 "test",
                 {"text": "hello"},
-            )
+            ),
         )
     )
     terminal = zetad_queue.terminal_queue_item_result(

@@ -18,8 +18,9 @@ from zeta.capabilities.types import ExecutionMode
 __all__ = [
     "DuplicateHostCapabilityError",
     "HostDirectory",
+    "InProcessToolExecutor",
     "ToolHost",
-    "TransitionalInProcessHost",
+    "ToolExecutor",
 ]
 
 
@@ -42,6 +43,30 @@ class ToolHost(Protocol):
         ctx: Any,
     ) -> dict[str, Any]:
         """Execute a hosted capability call and return its result payload."""
+
+
+class ToolExecutor(Protocol):
+    """Prepare the environment that executes one agent's capability calls."""
+
+    async def setup(
+        self,
+        agent_id: str,
+        registry: CapabilityRegistry,
+    ) -> HostDirectory:
+        """Return the configured hosts for this agent turn."""
+
+
+@dataclass(frozen=True)
+class InProcessToolExecutor:
+    """Run every agent's capabilities through the local registry."""
+
+    async def setup(
+        self,
+        agent_id: str,
+        registry: CapabilityRegistry,
+    ) -> HostDirectory:
+        del agent_id
+        return HostDirectory.from_registry(registry)
 
 
 @dataclass(frozen=True)
@@ -72,10 +97,10 @@ class HostDirectory(CapabilityDirectory):
 
     @classmethod
     def from_registry(cls, registry: CapabilityRegistry) -> HostDirectory:
-        """Build the Phase 1 compatibility directory for a registry."""
+        """Build a directory backed by the local registry."""
 
         directory = cls()
-        directory.register_host(TransitionalInProcessHost(registry))
+        directory.register_host(InProcessToolHost(registry))
         return directory
 
     def register_host(self, host: ToolHost) -> None:
@@ -110,8 +135,8 @@ class HostDirectory(CapabilityDirectory):
 
 
 @dataclass(frozen=True)
-class TransitionalInProcessHost:
-    """Phase 1 scaffolding that adapts the legacy registry to the host seam."""
+class InProcessToolHost:
+    """Execute local capabilities through the host boundary."""
 
     registry: CapabilityRegistry
 

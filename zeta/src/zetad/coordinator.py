@@ -30,17 +30,6 @@ AgentEventPublisherFactory = Callable[
 RetryScheduler = Callable[..., Event]
 
 
-class AgentExecutor:
-    """Invoke executable agent code behind a narrow runtime boundary."""
-
-    async def execute(
-        self,
-        agent: ExecutableAgent,
-        invocation: AgentInvocation,
-    ) -> dict[str, Any]:
-        return await agent.run(invocation)
-
-
 class AttemptCoordinator:
     """Own one attempt's legal start, execute, and terminal transitions."""
 
@@ -56,7 +45,6 @@ class AttemptCoordinator:
         retry_scheduler: RetryScheduler,
         retry_policy: RetryPolicy,
         blocking_unsafe_effect: Callable[[str], str | None] | None = None,
-        executor: AgentExecutor | None = None,
     ) -> None:
         self.lifecycle = lifecycle
         self.claim_is_current = claim_is_current
@@ -67,7 +55,6 @@ class AttemptCoordinator:
         self.retry_scheduler = retry_scheduler
         self.retry_policy = retry_policy
         self.blocking_unsafe_effect = blocking_unsafe_effect or (lambda _item: None)
-        self.executor = executor or AgentExecutor()
 
     async def run(
         self,
@@ -137,8 +124,7 @@ class AttemptCoordinator:
         )
         try:
             try:
-                result = await self.executor.execute(
-                    agent,
+                result = await agent.run(
                     AgentInvocation(
                         agent.definition,
                         triggering_event,
@@ -153,7 +139,7 @@ class AttemptCoordinator:
                         queue_item_id=queue_item_id,
                         attempt_id=attempt_id,
                         run_id=run_id,
-                    ),
+                    )
                 )
             except Exception as exc:
                 if not self.claim_is_current(queue_item_id):

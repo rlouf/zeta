@@ -10,7 +10,6 @@ from zeta.records.stores.event_store import Filter
 from zeta.run.outcomes import AgentRunResult
 from zetad.agents import (
     AgentDefinition,
-    AgentExecutionRequest,
     EventPattern,
     ExecutableAgent,
     compile_agent_definition,
@@ -102,14 +101,12 @@ def test_attempt_records_project_and_execution_manifests(tmp_path: Path) -> None
     spec = snapshot.project.specs[0]
     execution_manifest = snapshot.execution_manifest(spec)
 
-    class SuccessfulExecutor:
-        async def execute(self, request: AgentExecutionRequest) -> AgentRunResult:
-            del request
-            return AgentRunResult(final_answer="done")
+    async def successful_agent_loop(*_args: object) -> AgentRunResult:
+        return AgentRunResult(final_answer="done")
 
     executor = compile_agent_definition(
         spec,
-        executor=SuccessfulExecutor(),
+        agent_loop=successful_agent_loop,
         project_generation=snapshot.generation_id,
         execution_manifest=execution_manifest,
     )

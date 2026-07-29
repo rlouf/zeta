@@ -346,6 +346,7 @@ async def run_agent(
     runtime_context: RuntimeContext,
     cancellation_event: CancellationToken | None,
     model_gateway: ModelGateway | None = None,
+    tool_hosts: HostDirectory | None = None,
 ) -> AgentRunResult:
     """Run one durable agent turn inside a runtime session."""
     enabled_capabilities = registered_capabilities(
@@ -395,6 +396,7 @@ async def run_agent(
         event_sink=sink,
         trace_store=runtime_context.trace_store,
         tool_registry=runtime_context.tool_registry,
+        tool_hosts=tool_hosts,
         model_gateway=model_gateway,
         caused_by=caused_by,
         cancellation_event=cancellation_event,
@@ -421,6 +423,7 @@ async def run_agent_loop(
     prompt_builder: PromptBuilder | None = None,
     trace_store: Store | None = None,
     tool_registry: CapabilityRegistry | None = None,
+    tool_hosts: HostDirectory | None = None,
     model_gateway: ModelGateway | None = None,
     caused_by: str | None = None,
     cancellation_event: CancellationToken | None = None,
@@ -446,7 +449,7 @@ async def run_agent_loop(
         event_sink=event_sink,
         trace_store=trace_store,
         tool_registry=active_tool_registry,
-        tool_hosts=HostDirectory.from_registry(active_tool_registry),
+        tool_hosts=tool_hosts or HostDirectory.from_registry(active_tool_registry),
         builder=builder,
         model_gateway=gateway,
         abort_reason=run_abort_reason(cancellation_event, deadline, clock=clock),

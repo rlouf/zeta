@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from fnmatch import fnmatchcase
-from typing import TYPE_CHECKING, Any, Literal, Protocol, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 from zeta.agents.prompts import render_prompt
 from zeta.agents.spec import AgentSpec
@@ -25,6 +25,10 @@ AgentEventPublisher = Callable[[DraftEvent], Awaitable[Event]]
 AgentRunner = Callable[["AgentInvocation"], Awaitable[dict[str, Any]]]
 TimelineFactory = Callable[["AgentInvocation"], list[dict[str, Any]]]
 ContextFactory = Callable[["AgentInvocation"], str]
+AgentLoop = Callable[
+    ["AgentInvocation", str, list[dict[str, Any]], str, AgentConfig, str, str],
+    Awaitable["AgentRunResult"],
+]
 
 
 @dataclass(frozen=True)
@@ -89,42 +93,27 @@ class AgentInvocation:
         return await self.publish_event(draft)
 
 
-@dataclass(frozen=True)
-class AgentExecutionRequest:
-    """One immutable agent-loop invocation owned by the runtime harness."""
+async def in_process_agent_loop(
+    invocation: AgentInvocation,
+    objective: str,
+    timeline: list[dict[str, Any]],
+    context: str,
+    config: AgentConfig,
+    session_id: str,
+    run_id: str,
+) -> AgentRunResult:
+    """Run the model loop locally when no runtime service is present."""
 
-    agent: AgentDefinition
-    triggering_event: Event
-    objective: str
-    timeline: list[dict[str, Any]]
-    context: str
-    config: AgentConfig
-    session_id: str
-    run_id: str
-    queue_item_id: str | None
-    attempt_id: str | None
+    del session_id, run_id
+    from zeta.run.runtime import run_agent_loop
 
-
-class AgentExecutor(Protocol):
-    """Run one agent loop without owning queue or event-store state."""
-
-    async def execute(self, request: AgentExecutionRequest) -> AgentRunResult:
-        """Return the agent-loop result for one immutable invocation."""
-
-
-class InProcessAgentExecutor:
-    """Run the agent loop in the harness process for local development."""
-
-    async def execute(self, request: AgentExecutionRequest) -> AgentRunResult:
-        from zeta.run.runtime import run_agent_loop
-
-        return await run_agent_loop(
-            request.objective,
-            request.timeline,
-            request.config,
-            context=request.context,
-            caused_by=request.triggering_event.id,
-        )
+    return await run_agent_loop(
+        objective,
+        timeline,
+        config,
+        context=context,
+        caused_by=invocation.triggering_event.id,
+    )
 
 
 @dataclass(frozen=True)
@@ -182,7 +171,7 @@ def compile_agent_definition(
     config: AgentConfig | None = None,
     context: str | ContextFactory = "",
     timeline: Sequence[dict[str, Any]] | TimelineFactory = (),
-    executor: AgentExecutor | None = None,
+    agent_loop: AgentLoop | None = None,
     event_registry: EventRegistry | None = None,
     structured_output: StructuredOutputRunner | None = None,
     project_generation: str | None = None,
@@ -198,7 +187,7 @@ def compile_agent_definition(
         config=config,
         context=context,
         timeline=timeline,
-        executor=executor,
+        agent_loop=agent_loop,
         event_registry=event_registry,
         structured_output=structured_output,
         project_generation=project_generation,
@@ -212,7 +201,7 @@ def compile_agent_definitions(
     config: AgentConfig | None = None,
     context: str | ContextFactory = "",
     timeline: Sequence[dict[str, Any]] | TimelineFactory = (),
-    executor: AgentExecutor | None = None,
+    agent_loop: AgentLoop | None = None,
     event_registry: EventRegistry | None = None,
     structured_output: StructuredOutputRunner | None = None,
     project_generation: str | None = None,
@@ -243,7 +232,7 @@ def compile_agent_definitions(
                 config,
                 context,
                 timeline,
-                executor or InProcessAgentExecutor(),
+                agent_loop or in_process_agent_loop,
                 event_registry,
                 structured_output or default_structured_output_runner(),
             ),
@@ -270,7 +259,7 @@ def agent_runner(
     config: AgentConfig | None,
     context: str | ContextFactory,
     timeline: Sequence[dict[str, Any]] | TimelineFactory,
-    executor: AgentExecutor,
+    agent_loop: AgentLoop,
     event_registry: EventRegistry | None,
     structured_output: StructuredOutputRunner,
 ) -> Callable[[AgentInvocation], Awaitable[dict[str, Any]]]:
@@ -299,19 +288,14 @@ def agent_runner(
         run_id = agent_run.run_id or agent_run_id(
             agent_run.attempt_id or agent_run.triggering_event.id
         )
-        result = await executor.execute(
-            AgentExecutionRequest(
-                agent=agent_run.agent,
-                triggering_event=event,
-                objective=objective,
-                timeline=run_timeline,
-                context=run_context,
-                config=effective_config,
-                session_id=session_id,
-                run_id=run_id,
-                queue_item_id=agent_run.queue_item_id,
-                attempt_id=agent_run.attempt_id,
-            )
+        result = await agent_loop(
+            agent_run,
+            objective,
+            run_timeline,
+            run_context,
+            effective_config,
+            session_id,
+            run_id,
         )
         if spec.returns and returned_event_publisher is not None:
             return await returned_event_publisher.publish(

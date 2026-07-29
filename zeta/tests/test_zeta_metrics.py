@@ -16,6 +16,14 @@ from zetad.retry import RetryPolicy
 from zetad.store import RuntimeEventStore
 
 
+async def dispatch_and_drain(
+    dispatcher: QueueingDispatcher,
+    draft: DraftEvent,
+) -> list[Event]:
+    await dispatcher.publish_event(draft)
+    return await dispatcher.drain()
+
+
 def test_runtime_store_records_coordination_health(tmp_path: Path) -> None:
     metrics = InMemoryRuntimeMetrics()
     store = RuntimeEventStore.open(tmp_path / "runtime.sqlite3", metrics=metrics)
@@ -103,7 +111,7 @@ def test_queueing_dispatcher_records_retry_scheduling(tmp_path: Path) -> None:
     )
 
     asyncio.run(
-        dispatcher.publish_and_run(
+        dispatch_and_drain(dispatcher, 
             DraftEvent("github.issue.opened", "github", {"title": "Retry"})
         )
     )

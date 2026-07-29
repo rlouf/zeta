@@ -21,9 +21,7 @@ from zetad.agents import (
     EventPattern,
     ExecutableAgent,
 )
-from zetad.dispatch import (
-    EventDispatcher,
-)
+from zetad.dispatch import QueueingDispatcher
 from zetad.queue import terminal_queue_item_result
 
 RuntimePublishedEvent = Event
@@ -72,7 +70,7 @@ async def submit_session_turn(
     *,
     run_id: str | None = None,
     runtime_context: RuntimeContext,
-    event_dispatcher: EventDispatcher,
+    event_dispatcher: QueueingDispatcher,
 ) -> dict[str, Any]:
     run_id = run_id or session_run_id()
     draft = session_turn_requested_draft(
@@ -80,9 +78,10 @@ async def submit_session_turn(
         run_id=run_id,
         runtime_context=runtime_context,
     )
-    outcome = await event_dispatcher.publish_and_run(draft)
+    outcome = await event_dispatcher.publish_event(draft)
+    lifecycle_events = await event_dispatcher.drain()
     result = terminal_queue_item_result(
-        outcome.lifecycle_events,
+        lifecycle_events,
         event_id=outcome.event.id,
         target_agent=SESSION_TURN_AGENT_ID,
     )

@@ -24,7 +24,7 @@ from zeta.run.thread_run import (
     session_turn_requested_draft,
 )
 
-from zetad.dispatch import EventDispatcher, ReservedRuntimeEventError
+from zetad.dispatch import QueueingDispatcher, ReservedRuntimeEventError
 from zetad.rpc.jsonrpc import JsonRpcConnection, JsonRpcRouter, RpcError
 from zetad.session_turn import SESSION_TURN_AGENT_ID
 
@@ -71,7 +71,7 @@ class RpcClient:
 
     connection: JsonRpcConnection | None
     session: RuntimeContext
-    dispatcher: EventDispatcher
+    dispatcher: QueueingDispatcher
     pending_runs: dict[str, RunState]
     pending_tool_calls: dict[str, asyncio.Future[dict[str, Any]]]
     background_tasks: set[asyncio.Task[Any]] = field(default_factory=set)
@@ -385,15 +385,16 @@ async def events_publish(
 
 
 async def route_event(client: RpcClient, event: Event) -> None:
-    """Let RPC ingress return before agent routing work runs."""
+    """Let RPC ingress return before the durable queue is drained."""
+
+    event_id = event.id
 
     try:
-        route_outcome = await client.dispatcher.route(event)
-        await client.dispatcher.run_queue_items(route_outcome.queue_items)
+        await client.dispatcher.drain()
     except asyncio.CancelledError:
         raise
     except Exception:
-        logger.exception("Background event routing failed for event %s", event.id)
+        logger.exception("Background event routing failed for event %s", event_id)
 
 
 async def events_list(params: dict[str, Any], client: RpcClient) -> dict[str, Any]:
@@ -471,14 +472,12 @@ async def session_run(params: dict[str, Any], client: RpcClient) -> dict[str, An
 
 
 async def route_run(client: RpcClient, state: RunState, event: Event) -> None:
-    """Route the requested-turn event in the background after `session.run` returns."""
+    """Drain the requested turn from the durable queue in the background."""
+
+    del event
 
     try:
-        route_outcome = await client.dispatcher.route(event)
-        lifecycle_events = [
-            *route_outcome.lifecycle_events,
-            *await client.dispatcher.run_queue_items(route_outcome.queue_items),
-        ]
+        lifecycle_events = await client.dispatcher.drain()
     except asyncio.CancelledError:
         state.status = "cancelled"
         raise

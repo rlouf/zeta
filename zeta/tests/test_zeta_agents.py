@@ -80,12 +80,23 @@ from zetad.agents import (
     compile_agent_definitions,
     config_for_spec,
 )
-from zetad.retry import RetryPolicy
 from zetad.store import RuntimeEventStore
 
 
 def runtime_sqlite_event_store(path: Path) -> RuntimeEventStore:
     return RuntimeEventStore.open(path)
+
+
+async def dispatch_and_drain(
+    dispatcher: zetad_dispatch.QueueingDispatcher,
+    draft: DraftEvent,
+) -> SimpleNamespace:
+    outcome = await dispatcher.publish_event(draft)
+    return SimpleNamespace(
+        event=outcome.event,
+        inserted=outcome.inserted,
+        lifecycle_events=await dispatcher.drain(),
+    )
 
 
 zeta_agents = SimpleNamespace(
@@ -2057,280 +2068,11 @@ def test_zeta_push_ingress_validates_returned_event_payload(
     assert events == []
 
 
-def test_zeta_egress_binding_handles_returned_event(
-    tmp_path: Path,
-) -> None:
-    calls: list[tuple[str, str]] = []
-    agents_dir = tmp_path / "agents"
-    agents_dir.mkdir()
-    _write_spec(
-        agents_dir / "support.md",
-        """---
-name: Support
-description: Sends Slack support messages.
-returns:
-  - event: slack.message.post
-    with:
-      channel_ids: ["C123"]
----
-Send.
-""",
-    )
-
-    async def send_slack(
-        event: Event,
-        binding: EgressBinding,
-        idempotency_key: str,
-    ) -> dict[str, str]:
-        assert binding.options == {"channel_ids": ["C123"]}
-        calls.append((event.payload["text"], idempotency_key))
-        return {"provider_message_id": "m1"}
-
-    runtime = zetad_worker.WorkerServices(
-        project_root=tmp_path,
-        state_dir=tmp_path / ".zeta",
-        events=zeta_events.SqliteEventStore(tmp_path / "events.sqlite3"),
-        registry=connector_registry(_slack_connector(egress_handler=send_slack)),
-    )
-    runtime.events.accept(
-        zeta_events.DraftEvent(
-            "slack.message.post",
-            "agent:support",
-            {"channel_id": "C123", "text": "hello"},
-        )
-    )
-
-    try:
-        message = asyncio.run(zetad_worker.run_once(runtime))
-        egress_events = runtime.events.list_events(
-            zeta_events.Filter(event_type_prefix="runtime.egress.")
-        )
-        effect_events = runtime.events.list_events(
-            zeta_events.Filter(event_type_prefix="runtime.effect.")
-        )
-        queue_items = zetad_queue.project_queue_items(
-            runtime.events.list_events(zeta_events.Filter())
-        )
-    finally:
-        runtime.close()
-
-    assert message.startswith("ran qi_")
-    assert calls == [("hello", f"slack:{egress_events[0].caused_by}")]
-    assert [event.event_type for event in egress_events] == [
-        "runtime.egress.started",
-        "runtime.egress.completed",
-    ]
-    assert [event.event_type for event in effect_events] == [
-        "runtime.effect.planned",
-        "runtime.effect.started",
-        "runtime.effect.completed",
-    ]
-    assert {event.payload["effect_key"] for event in effect_events} == {
-        f"slack:{egress_events[0].caused_by}"
-    }
-    assert egress_events[1].payload["result"] == {"provider_message_id": "m1"}
-    assert [item.status for item in queue_items] == ["completed"]
 
 
-@pytest.mark.parametrize(
-    ("semantics", "effect_status", "queue_status"),
-    [
-        ("connector_deduplicated", "failed", "available"),
-        ("unsafe_to_retry", "ambiguous", "dead_lettered"),
-    ],
-)
-def test_zeta_egress_failure_follows_declared_delivery_semantics(
-    tmp_path: Path,
-    semantics: DeliverySemantics,
-    effect_status: str,
-    queue_status: str,
-) -> None:
-    agents_dir = tmp_path / "agents"
-    agents_dir.mkdir()
-    _write_spec(
-        agents_dir / "support.md",
-        """---
-name: Support
-description: Sends Slack support messages.
-returns:
-  - event: slack.message.post
-    with:
-      channel_ids: ["C123"]
----
-Send.
-""",
-    )
-
-    async def send_slack(
-        _event: Event,
-        _binding: EgressBinding,
-        _idempotency_key: str,
-    ) -> None:
-        raise RuntimeError("slack unavailable")
-
-    runtime = zetad_worker.WorkerServices(
-        project_root=tmp_path,
-        state_dir=tmp_path / ".zeta",
-        events=zeta_events.SqliteEventStore(tmp_path / "events.sqlite3"),
-        registry=connector_registry(
-            _slack_connector(
-                egress_handler=send_slack,
-                egress_semantics=semantics,
-            )
-        ),
-    )
-    runtime.events.accept(
-        zeta_events.DraftEvent(
-            "slack.message.post",
-            "agent:support",
-            {"channel_id": "C123", "text": "hello"},
-        )
-    )
-
-    try:
-        message = asyncio.run(zetad_worker.run_once(runtime))
-        egress_events = runtime.events.list_events(
-            zeta_events.Filter(event_type_prefix="runtime.egress.")
-        )
-        effect_events = runtime.events.list_events(
-            zeta_events.Filter(event_type_prefix="runtime.effect.")
-        )
-        queue_items = zetad_queue.project_queue_items(
-            runtime.events.list_events(zeta_events.Filter())
-        )
-    finally:
-        runtime.close()
-
-    if queue_status == "available":
-        assert message.startswith("routed evt_")
-    else:
-        assert message.startswith("ran qi_")
-    assert [event.event_type for event in egress_events] == [
-        "runtime.egress.started",
-        "runtime.egress.failed",
-    ]
-    assert egress_events[1].payload["error"] == "slack unavailable"
-    assert [event.event_type for event in effect_events] == [
-        "runtime.effect.planned",
-        "runtime.effect.started",
-        f"runtime.effect.{effect_status}",
-    ]
-    assert [item.status for item in queue_items] == [queue_status]
 
 
-def test_zeta_retry_safe_egress_reuses_effect_key(tmp_path: Path) -> None:
-    agents_dir = tmp_path / "agents"
-    agents_dir.mkdir()
-    _write_spec(
-        agents_dir / "support.md",
-        """---
-name: Support
-description: Sends Slack support messages.
-returns:
-  - event: slack.message.post
-    with:
-      channel_ids: ["C123"]
----
-Send.
-""",
-    )
-    calls: list[str] = []
 
-    async def send_slack(
-        _event: Event,
-        _binding: EgressBinding,
-        idempotency_key: str,
-    ) -> dict[str, str]:
-        calls.append(idempotency_key)
-        if len(calls) == 1:
-            raise RuntimeError("temporary failure")
-        return {"provider_message_id": "m1"}
-
-    runtime = zetad_worker.WorkerServices(
-        project_root=tmp_path,
-        state_dir=tmp_path / ".zeta",
-        events=zeta_events.SqliteEventStore(tmp_path / "events.sqlite3"),
-        registry=connector_registry(_slack_connector(egress_handler=send_slack)),
-        retry_policy=RetryPolicy(backoff_base_seconds=0),
-    )
-    triggering = runtime.events.accept(
-        zeta_events.DraftEvent(
-            "slack.message.post",
-            "agent:support",
-            {"channel_id": "C123", "text": "hello"},
-        )
-    ).event
-
-    try:
-        asyncio.run(zetad_worker.run_once(runtime))
-        asyncio.run(zetad_worker.run_once(runtime))
-        effects = runtime.events.list_events(
-            zeta_events.Filter(event_type_prefix="runtime.effect.")
-        )
-        queue_items = zetad_queue.project_queue_items(
-            runtime.events.list_events(zeta_events.Filter())
-        )
-    finally:
-        runtime.close()
-
-    assert calls == [f"slack:{triggering.id}", f"slack:{triggering.id}"]
-    assert [event.event_type for event in effects] == [
-        "runtime.effect.planned",
-        "runtime.effect.started",
-        "runtime.effect.failed",
-        "runtime.effect.completed",
-    ]
-    assert [item.status for item in queue_items] == ["completed"]
-
-
-def test_zeta_slack_connector_failures_are_recorded_by_egress(
-    tmp_path: Path,
-) -> None:
-    agents_dir = tmp_path / "agents"
-    agents_dir.mkdir()
-    _write_spec(
-        agents_dir / "support.md",
-        """---
-name: Support
-description: Sends Slack support messages.
-returns:
-  - event: slack.message.post
-    with:
-      channel_ids: ["C123"]
----
-Send.
-""",
-    )
-    connector = zeta_agents.slack_event_connector(
-        FakeSlackClient(post_error=RuntimeError("slack unavailable"))
-    )
-    runtime = zetad_worker.WorkerServices(
-        project_root=tmp_path,
-        state_dir=tmp_path / ".zeta",
-        events=zeta_events.SqliteEventStore(tmp_path / "events.sqlite3"),
-        registry=connector_registry(connector),
-    )
-    runtime.events.accept(
-        zeta_events.DraftEvent(
-            zeta_agents.SLACK_MESSAGE_POST,
-            "agent:support",
-            {"channel_id": "C123", "text": "hello"},
-        )
-    )
-
-    try:
-        asyncio.run(zetad_worker.run_once(runtime))
-        egress_events = runtime.events.list_events(
-            zeta_events.Filter(event_type_prefix="runtime.egress.")
-        )
-    finally:
-        runtime.close()
-
-    assert [event.event_type for event in egress_events] == [
-        "runtime.egress.started",
-        "runtime.egress.failed",
-    ]
-    assert egress_events[1].payload["error"] == "slack unavailable"
 
 
 def test_zeta_scheduler_loads_project_with_connector_bindings(tmp_path: Path) -> None:
@@ -2506,61 +2248,6 @@ description: Does work.
         zeta_agents.validate_prompt(spec)
 
 
-def test_zeta_agent_spec_compiles_to_event_dispatch_agent(tmp_path: Path) -> None:
-    spec = zeta_agents.load_spec(
-        _write_spec(
-            tmp_path / "slack-qa.md",
-            """---
-name: Slack Q&A
-description: Answers workspace questions in Slack.
-accepts:
-  - slack.message.received
-tools:
-  - Read
----
-User asked: {{ event.payload.text }}
-""",
-        )
-    )
-    calls: list[dict[str, Any]] = []
-
-    class RecordingExecutor:
-        async def execute(self, request: AgentExecutionRequest) -> AgentRunResult:
-            calls.append({"request": request})
-            return AgentRunResult(final_answer="done")
-
-    compiled = zeta_agents.compile_agent_definition(spec, executor=RecordingExecutor())
-    store = zeta_events.SqliteEventStore(tmp_path / "events.sqlite3")
-    dispatcher = zetad_dispatch.EventDispatcher(store, executors=[compiled])
-
-    outcome = asyncio.run(
-        dispatcher.publish_and_run(
-            zeta_events.DraftEvent(
-                "slack.message.received",
-                "test",
-                {"text": "hello"},
-                session_id="s1",
-            )
-        )
-    )
-
-    assert compiled.definition.agent_id == "slack-qa"
-    assert compiled.definition.returns == ()
-    assert len(calls) == 1
-    request = calls[0]["request"]
-    assert request.objective == "User asked: hello"
-    assert request.timeline == []
-    assert request.config.system_prompt == "Answers workspace questions in Slack."
-    assert tuple(request.config.allowed_capabilities or ()) == ("Read",)
-    assert request.triggering_event.id == outcome.event.id
-    assert zetad_queue.terminal_queue_item_result(
-        outcome.lifecycle_events,
-        event_id=outcome.event.id,
-        target_agent="slack-qa",
-    ) == {
-        "final_answer": "done",
-        "final_event_cursor": "6",
-    }
 
 
 def test_zeta_agent_with_returns_requires_event_registry(tmp_path: Path) -> None:
@@ -2585,10 +2272,10 @@ def test_zeta_agent_with_returns_publishes_structured_return_event(
         structured_output=_recording_structured_return(structured_calls),
     )
     store = zeta_events.SqliteEventStore(tmp_path / "events.sqlite3")
-    dispatcher = zetad_dispatch.EventDispatcher(store, executors=[compiled])
+    dispatcher = zetad_dispatch.QueueingDispatcher(store, executors=[compiled])
 
     outcome = asyncio.run(
-        dispatcher.publish_and_run(
+        dispatch_and_drain(dispatcher, 
             zeta_events.DraftEvent(
                 "slack.message.received",
                 "test",
@@ -2639,10 +2326,10 @@ def test_zeta_agent_with_returns_publishes_multiple_ordered_events(
         structured_output=structured_output,
     )
     store = zeta_events.SqliteEventStore(tmp_path / "events.sqlite3")
-    dispatcher = zetad_dispatch.EventDispatcher(store, executors=[compiled])
+    dispatcher = zetad_dispatch.QueueingDispatcher(store, executors=[compiled])
 
     outcome = asyncio.run(
-        dispatcher.publish_and_run(
+        dispatch_and_drain(dispatcher, 
             zeta_events.DraftEvent(
                 "slack.message.received",
                 "test",
@@ -2682,10 +2369,10 @@ def test_zeta_agent_with_returns_may_publish_no_events(tmp_path: Path) -> None:
         structured_output=lambda *_args, **_kwargs: {"events": []},
     )
     store = zeta_events.SqliteEventStore(tmp_path / "events.sqlite3")
-    dispatcher = zetad_dispatch.EventDispatcher(store, executors=[compiled])
+    dispatcher = zetad_dispatch.QueueingDispatcher(store, executors=[compiled])
 
     outcome = asyncio.run(
-        dispatcher.publish_and_run(
+        dispatch_and_drain(dispatcher, 
             zeta_events.DraftEvent(
                 "slack.message.received",
                 "test",

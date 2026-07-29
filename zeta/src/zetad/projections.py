@@ -19,7 +19,7 @@ class RuntimeEventProjection:
     """Projects runtime queue and attempt events into queryable tables."""
 
     name = "zetad.runtime"
-    version = 3
+    version = 4
 
     def init_schema(self, connection: sqlite3.Connection) -> None:
         connection.executescript(
@@ -183,6 +183,18 @@ def _index_one_queue_item(connection: sqlite3.Connection, event: Event) -> None:
           available_at = CASE
             WHEN excluded.status = 'available' THEN excluded.available_at
             ELSE queue_items.available_at
+          END,
+          claimed_by = CASE
+            WHEN excluded.status = 'claimed' THEN queue_items.claimed_by
+            ELSE NULL
+          END,
+          claimed_token = CASE
+            WHEN excluded.status = 'claimed' THEN queue_items.claimed_token
+            ELSE NULL
+          END,
+          claimed_until = CASE
+            WHEN excluded.status = 'claimed' THEN queue_items.claimed_until
+            ELSE NULL
           END,
           last_error = excluded.last_error,
           updated_at = excluded.updated_at

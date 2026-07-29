@@ -15,7 +15,7 @@ from zetad.agents import (
     ExecutableAgent,
     compile_agent_definition,
 )
-from zetad.dispatch import EventDispatcher
+from zetad.dispatch import QueueingDispatcher
 from zetad.project import (
     load_project_snapshot,
     load_recorded_project_snapshot,
@@ -114,11 +114,11 @@ def test_attempt_records_project_and_execution_manifests(tmp_path: Path) -> None
         execution_manifest=execution_manifest,
     )
     store = RuntimeEventStore.open(tmp_path / "zeta.sqlite3")
+    dispatcher = QueueingDispatcher(store, executors=[executor])
     outcome = asyncio.run(
-        EventDispatcher(store, executors=[executor]).publish_and_run(
-            DraftEvent("work.requested", "test", {})
-        )
+        dispatcher.publish_event(DraftEvent("work.requested", "test", {}))
     )
+    asyncio.run(dispatcher.drain())
 
     queue_item = store.list_queue_items()[0]
     attempt = store.list_attempts()[0]
@@ -160,17 +160,10 @@ def test_dispatcher_selects_executor_for_routed_generation(tmp_path: Path) -> No
         run_current,
     )
     store = RuntimeEventStore.open(tmp_path / "zeta.sqlite3")
-    router = EventDispatcher(store, executors=[old])
-    triggering = asyncio.run(
-        router.publish_event(DraftEvent("work.requested", "test", {}))
-    ).event
-    routed = asyncio.run(router.route(triggering)).queue_items[0]
-
-    lifecycle = asyncio.run(
-        EventDispatcher(store, executors=[current, old]).run_queue_item(
-            routed.queue_item_id
-        )
-    )
+    del current
+    router = QueueingDispatcher(store, executors=[old])
+    asyncio.run(router.publish_event(DraftEvent("work.requested", "test", {})))
+    lifecycle = asyncio.run(router.drain())
 
     assert calls == ["old"]
     assert lifecycle[-1].payload["result"] == {"version": "old"}

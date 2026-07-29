@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 from typing import Any, TextIO
 
 from zeta.records.events import Event
+from zeta.records.stores.sqlite import event_store_path
 from zeta.run.context import default_session
 from zeta.run.runtime import CancellationToken
 
-from zetad.dispatch import EventDispatcher
+from zetad.dispatch import QueueingDispatcher
 from zetad.rpc.jsonrpc import (
     MAX_JSONRPC_LINE_BYTES,
     JsonRpcConnection,
@@ -21,6 +23,7 @@ from zetad.rpc.routes import (
     event_to_wire,
 )
 from zetad.session_turn import session_turn_agent
+from zetad.store import RuntimeEventStore
 
 
 def run_stdio(input: TextIO, output: TextIO) -> None:
@@ -33,6 +36,12 @@ async def run_stdio_async(input: TextIO, output: TextIO) -> None:
     reader, writer = await stdio_streams(input, output)
     connection = JsonRpcConnection(reader, writer)
     session = default_session()
+    session.event_sink.close()
+    event_store = RuntimeEventStore.open(event_store_path(session.state_dir))
+    session = replace(
+        session,
+        event_sink=event_store,
+    )
     pending_runs: dict[str, RunState] = {}
     pending_tool_calls: dict[str, asyncio.Future[dict[str, Any]]] = {}
     background_tasks: set[asyncio.Task[Any]] = set()
@@ -56,8 +65,9 @@ async def run_stdio_async(input: TextIO, output: TextIO) -> None:
             connection.notify("events.notify", {"event": event_to_wire(event)})
         )
 
-    dispatcher = EventDispatcher(
-        session.event_sink,
+    dispatcher = QueueingDispatcher(
+        event_store,
+        event_store,
         executors=[
             session_turn_agent(
                 session,
@@ -66,6 +76,7 @@ async def run_stdio_async(input: TextIO, output: TextIO) -> None:
             )
         ],
         publish_event=notify_event,
+        worker_name="stdio",
     )
     client = RpcClient(
         connection=connection,

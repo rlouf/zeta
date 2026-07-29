@@ -5,9 +5,9 @@ import time
 from collections.abc import Awaitable, Callable, Iterable, Mapping
 from contextlib import suppress
 from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import Any, Protocol, cast
 
-from zeta.records.events import DraftEvent, Event
+from zeta.records.events import AppendOutcome, DraftEvent, Event
 from zeta.records.stores.event_store import (
     EventReader,
     EventStoreProtocol,
@@ -40,13 +40,10 @@ __all__ = [
     "AgentDefinition",
     "AgentInvocation",
     "AgentRoute",
-    "EventDispatcher",
     "ExecutableAgent",
-    "DispatchOutcome",
     "EventPattern",
     "QueueingDispatcher",
     "ReservedRuntimeEventError",
-    "RouteOutcome",
     "RetryPolicy",
     "RuntimeQueueStore",
     "TerminalQueueItemError",
@@ -72,6 +69,9 @@ class RuntimeQueueStore(Protocol):
 
     def queue_item(self, queue_item_id: str) -> Mapping[str, Any] | None:
         """Return one queue item row by id."""
+
+    def ensure_pending_queue_item(self, event: Event) -> str:
+        """Make an accepted event available to the durable harness."""
 
     def queue_item_attempt_count(self, queue_item_id: str) -> int:
         """Return the highest attempt number recorded for a queue item."""
@@ -155,24 +155,6 @@ class RuntimeQueueStore(Protocol):
 
 
 @dataclass(frozen=True)
-class DispatchOutcome:
-    """Result of accepting and routing one incoming event."""
-
-    event: Event
-    inserted: bool
-    lifecycle_events: list[Event]
-
-
-@dataclass(frozen=True)
-class RouteOutcome:
-    """Result of routing one durable event to available queue items."""
-
-    event: Event
-    lifecycle_events: list[Event]
-    queue_items: list[RoutedQueueItem]
-
-
-@dataclass(frozen=True)
 class ReservedRuntimeEventError(ValueError):
     """Raised when external ingress tries to write runtime-owned lifecycle."""
 
@@ -196,13 +178,11 @@ class TerminalQueueItemError(RuntimeError):
         )
 
 
-class EventDispatcher:
-    """Compatibility facade that routes and runs work immediately in-process.
+class _QueueingDispatcher:
+    """Shared execution mechanics for the durable runtime harness."""
 
-    Production workers use `RuntimeCoordinator` and `QueueingDispatcher`. This
-    facade retains recursive `publish_and_run` behavior for embedded callers
-    and tests, without durable claim fencing or heartbeat renewal.
-    """
+    queue_store: RuntimeQueueStore
+    worker_name: str
 
     def __init__(
         self,
@@ -212,7 +192,6 @@ class EventDispatcher:
         executors: Iterable[ExecutableAgent] = (),
         publish_event: Callable[[Event], None] | None = None,
         retry_policy: RetryPolicy | None = None,
-        recursive_publication: bool = True,
     ) -> None:
         self.event_sink = event_sink
         self.executors = tuple(executors)
@@ -222,9 +201,8 @@ class EventDispatcher:
         self.routes = tuple(route_by_identity.values())
         self.router = EventRouter(self.routes)
         self.publish_callback = publish_event
-        self.worker_name: str | None = None
+        self.worker_name = ""
         self.retry_policy = retry_policy or RetryPolicy()
-        self.recursive_publication = recursive_publication
         self.lifecycle = LifecycleRecorder(
             event_sink,
             publish_event=publish_event,
@@ -244,70 +222,19 @@ class EventDispatcher:
     async def publish_event(
         self,
         draft: DraftEvent,
-    ) -> DispatchOutcome:
+    ) -> AppendOutcome:
         reject_reserved_runtime_event(draft)
-        return await self._accept_event(draft)
-
-    async def _accept_event(self, draft: DraftEvent) -> DispatchOutcome:
         outcome = self.event_sink.accept(draft)
-        if not outcome.inserted:
-            return DispatchOutcome(outcome.event, False, [])
-        self._publish(outcome.event)
-        return DispatchOutcome(outcome.event, True, [])
-
-    async def publish_and_run(self, draft: DraftEvent) -> DispatchOutcome:
-        outcome = await self.publish_event(draft)
-        if not outcome.inserted:
-            return outcome
-        route_outcome = await self.route(outcome.event)
-        lifecycle_events = [
-            *route_outcome.lifecycle_events,
-            *await self.run_queue_items(route_outcome.queue_items),
-        ]
-        return DispatchOutcome(outcome.event, True, lifecycle_events)
-
-    async def route(self, event: Event) -> RouteOutcome:
-        lifecycle_events: list[Event] = []
-        queue_items: list[RoutedQueueItem] = []
-        plan = self.router.plan(event)
-        if not plan.handled:
-            return RouteOutcome(
-                event,
-                [self._append_unhandled_queue_item_event(event)],
-                [],
+        if outcome.inserted:
+            ensure_pending = getattr(
+                self.queue_store,
+                "ensure_pending_queue_item",
+                None,
             )
-        for decision in plan.decisions:
-            route = decision.route
-            queue_item_id = decision.queue_item.queue_item_id
-            lifecycle_events.append(
-                self._append_queue_item_event(
-                    event,
-                    route,
-                    queue_item_id,
-                    event_suffix="available",
-                    status="available",
-                )
-            )
-            queue_items.append(decision.queue_item)
-        return RouteOutcome(event, lifecycle_events, queue_items)
-
-    async def run_queue_items(
-        self,
-        queue_items: Iterable[RoutedQueueItem],
-    ) -> list[Event]:
-        lifecycle_events: list[Event] = []
-        runnable_items = list(queue_items)
-        task_results: list[list[Event] | None] = [None] * len(runnable_items)
-        async with asyncio.TaskGroup() as task_group:
-            for index, queue_item in enumerate(runnable_items):
-                task_group.create_task(
-                    self._run_queue_item_into(task_results, index, queue_item)
-                )
-        for task_result in task_results:
-            if task_result is None:
-                continue
-            lifecycle_events.extend(task_result)
-        return lifecycle_events
+            if ensure_pending is not None:
+                ensure_pending(outcome.event)
+            self._publish(outcome.event)
+        return outcome
 
     async def run_queue_item(
         self,
@@ -389,14 +316,6 @@ class EventDispatcher:
 
     def matching_routes(self, event: Event) -> list[AgentRoute]:
         return list(self.router.matching_routes(event))
-
-    async def _run_queue_item_into(
-        self,
-        results: list[list[Event] | None],
-        index: int,
-        queue_item: RoutedQueueItem,
-    ) -> None:
-        results[index] = await self.run_queue_item(queue_item)
 
     async def _run_agent(
         self,
@@ -529,7 +448,6 @@ class EventDispatcher:
             if executor is None:
                 return self._missing_executor_events(triggering_event, bound_item)
             return await self._run_agent(executor, triggering_event, bound_item)
-
         lifecycle_events = [
             self._append_queue_item_event_for_target(
                 triggering_event,
@@ -658,9 +576,6 @@ class EventDispatcher:
             **payload_extra,
         )
 
-    def _append_unhandled_queue_item_event(self, triggering_event: Event) -> Event:
-        return self.lifecycle.unhandled(triggering_event)
-
     def _publish(self, event: Event) -> None:
         self.lifecycle.publish(event)
 
@@ -690,20 +605,13 @@ class EventDispatcher:
                 run_id=draft.run_id or run_id,
                 turn_id=draft.turn_id or triggering_event.turn_id,
             )
-            if tagged.event_type.startswith(("runtime.egress.", "runtime.effect.")):
-                outcome = await self._accept_event(tagged)
-            else:
-                outcome = (
-                    await self.publish_and_run(tagged)
-                    if self.recursive_publication
-                    else await self.publish_event(tagged)
-                )
+            outcome = await self.publish_event(tagged)
             return outcome.event
 
         return publish
 
 
-class QueueingDispatcher(EventDispatcher):
+class QueueingDispatcher(_QueueingDispatcher):
     """Daemon dispatcher with durable claim fencing and attempt heartbeats.
 
     Requires a `RuntimeQueueStore` (the runtime event store's SQLite
@@ -714,13 +622,13 @@ class QueueingDispatcher(EventDispatcher):
     def __init__(
         self,
         event_sink: EventWriter,
-        queue_store: RuntimeQueueStore,
+        queue_store: RuntimeQueueStore | None = None,
         *,
         routes: Iterable[AgentRoute] = (),
         executors: Iterable[ExecutableAgent] = (),
         publish_event: Callable[[Event], None] | None = None,
         retry_policy: RetryPolicy | None = None,
-        worker_name: str | None = None,
+        worker_name: str = "local",
         heartbeat_interval_seconds: float | None = None,
         lease_ms: int = 60_000,
         claim_token: str | None = None,
@@ -731,14 +639,22 @@ class QueueingDispatcher(EventDispatcher):
             executors=executors,
             publish_event=publish_event,
             retry_policy=retry_policy,
-            recursive_publication=False,
         )
-        self.queue_store = queue_store
+        self.queue_store = queue_store or cast(RuntimeQueueStore, event_sink)
         self.worker_name = worker_name
         self.lifecycle.worker_name = worker_name
         self.heartbeat_interval_seconds = heartbeat_interval_seconds
         self.lease_ms = lease_ms
         self.claim_token = claim_token
+
+    async def drain(self) -> list[Event]:
+        """Run available work until the durable queue has no claimable items."""
+
+        lifecycle_events: list[Event] = []
+        while next_item := await self.run_next():
+            _, item_events = next_item
+            lifecycle_events.extend(item_events)
+        return lifecycle_events
 
     async def run_next(
         self,
@@ -746,8 +662,6 @@ class QueueingDispatcher(EventDispatcher):
         skipped_queue_items: set[str] | None = None,
     ) -> tuple[str, list[Event]] | None:
         """Claim, lock, and execute one queue item through the durable harness."""
-        if self.worker_name is None:
-            raise RuntimeError("queueing dispatch requires a worker name")
         skipped = skipped_queue_items or set()
         while True:
             now_ms = current_time_ms()

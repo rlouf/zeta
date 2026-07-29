@@ -8,7 +8,6 @@ from typing import Any
 import pytest
 import zeta.models.chat_completions as zeta_model
 import zeta.models.types as zeta_models_api
-from commas.tools import ensure_builtin_tools_registered
 from zeta.agents import skills as zeta_skills
 from zeta.capabilities.execution import (
     InProcessCapabilityExecutor,
@@ -53,7 +52,7 @@ from zeta.events import Event
 from zeta.records.provenance import project_prompt_trace_projection
 from zeta.run.context import zeta_state_dir
 from zeta.substrate import Derivation, InMemoryStore, Object
-
+from zeta.tools import ensure_builtin_tools_registered
 from zeta_test_support import (
     BatchSpyStore,
     assert_task_state_graph,

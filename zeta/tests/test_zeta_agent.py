@@ -18,7 +18,6 @@ import zeta.capabilities.execution as zeta_capability_execution
 import zeta.models.chat_completions as zeta_model
 import zeta.models.types as zeta_model_shapes
 from click.testing import CliRunner
-from commas.tools import ensure_builtin_tools_registered
 from zeta.agents import spec as zeta_agent_spec
 from zeta.agents.manifest import ManifestError
 from zeta.capabilities.execution import (
@@ -45,6 +44,21 @@ from zeta.run import thread_run as zeta_requests
 from zeta.run.config import CompactionPolicy
 from zeta.run.runtime import AgentRunResult
 from zeta.substrate import InMemoryStore
+from zeta.tools import ensure_builtin_tools_registered
+from zeta_test_support import (
+    assert_prompt_trace_replay_graph,
+    assert_tool_call_derivation,
+    assert_tool_result_derivation,
+    assert_tool_result_derivation_graph,
+    event_by_type,
+    projected_tool_call_object_id,
+    projected_tool_result_object_id,
+    read_tool_call_response,
+    read_tool_payload,
+    required_stream_sink,
+    timeline_events,
+    tool_call_fixture,
+)
 from zetad import agents as zetad_agents
 from zetad import cli as zetad_cli
 from zetad import connector_bridge as zetad_connector_bridge
@@ -60,20 +74,6 @@ from zetad.rpc import jsonrpc as zetad_jsonrpc
 from zetad.rpc import routes as zetad_rpc_routes
 from zetad.store import RuntimeEventStore
 
-from zeta_test_support import (
-    assert_prompt_trace_replay_graph,
-    assert_tool_call_derivation,
-    assert_tool_result_derivation,
-    assert_tool_result_derivation_graph,
-    event_by_type,
-    projected_tool_call_object_id,
-    projected_tool_result_object_id,
-    read_tool_call_response,
-    read_tool_payload,
-    required_stream_sink,
-    timeline_events,
-    tool_call_fixture,
-)
 from zeta import models as zeta_models_api
 
 zeta_trace = SimpleNamespace(InMemoryStore=InMemoryStore)

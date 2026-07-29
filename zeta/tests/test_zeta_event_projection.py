@@ -1,9 +1,7 @@
-import json
 from dataclasses import asdict, replace
 from typing import Any
 
 import pytest
-from commas.history import effect_record, event_from_record, turn_record
 from zeta.events import DraftEvent, Event
 from zeta.records.events import (
     draft_from_runtime_event,
@@ -737,109 +735,3 @@ def test_zeta_pure_runtime_events_project_to_trace_graph() -> None:
             params={"tool_call_id": "call-1", "name": "read"},
         )
     ]
-
-
-def test_commas_history_record_projection_contract() -> None:
-    turn = turn_record(
-        TURN_ID,
-        workflow="do",
-        objective="inspect README",
-        contract={"workflow": "do", "allowed_tools": ["read"], "staged": False},
-        outcome="executed",
-        agent={"model": "test-model", "url": "http://127.0.0.1:8080/v1"},
-        cost={"input_tokens": 10, "output_tokens": 2, "model_calls": 1},
-        prompt_object_ids=["sha256:prompt"],
-        effect_ids=["effect-1"],
-    )
-    effect = effect_record(
-        "effect-1",
-        turn_id=TURN_ID,
-        kind="file_read",
-        staged=False,
-        path="README.md",
-        tool_call_id="call-1",
-        resolved_outcome="completed",
-    )
-    turn_round_trip = event_from_record(
-        {
-            **turn,
-            "id": "turn-event-1",
-            "time": EVENT_TIME,
-            "session": SESSION_ID,
-            "caused_by": "model-1",
-            "cwd": "/repo",
-        }
-    )
-    effect_round_trip = event_from_record(
-        {
-            **effect,
-            "id": "effect-event-1",
-            "time": EVENT_TIME,
-            "session": SESSION_ID,
-            "caused_by": "call-1",
-            "cwd": "/repo",
-        }
-    )
-
-    assert json.dumps(turn, sort_keys=True, separators=(",", ":")) == (
-        '{"agent":{"model":"test-model","url":"http://127.0.0.1:8080/v1"},'
-        '"contract":{"allowed_tools":["read"],"staged":false,"workflow":"do"},'
-        '"cost":{"input_tokens":10,"model_calls":1,"output_tokens":2},'
-        '"effect_ids":["effect-1"],"objective":"inspect README",'
-        '"outcome":"executed","prompt_object_ids":["sha256:prompt"],'
-        '"schema":"zeta.turn","turn_id":"turn-1",'
-        '"type":"zeta.turn.completed","workflow":"do"}'
-    )
-    assert json.dumps(effect, sort_keys=True, separators=(",", ":")) == (
-        '{"effect_id":"effect-1","kind":"file_read","path":"README.md",'
-        '"resolved_outcome":"completed","schema":"zeta.effect","staged":false,'
-        '"tool_call_id":"call-1","turn_id":"turn-1","type":"zeta.effect"}'
-    )
-    assert turn_round_trip == Event(
-        id="turn-event-1",
-        event_type="zeta.turn.completed",
-        source="zeta",
-        payload={
-            "schema": "zeta.turn",
-            "turn_id": TURN_ID,
-            "workflow": "do",
-            "objective": "inspect README",
-            "contract": {
-                "workflow": "do",
-                "allowed_tools": ["read"],
-                "staged": False,
-            },
-            "outcome": "executed",
-            "prompt_object_ids": ["sha256:prompt"],
-            "effect_ids": ["effect-1"],
-            "agent": {"model": "test-model", "url": "http://127.0.0.1:8080/v1"},
-            "cost": {"input_tokens": 10, "output_tokens": 2, "model_calls": 1},
-            "cwd": "/repo",
-        },
-        idempotency_key=None,
-        caused_by="model-1",
-        session_id=SESSION_ID,
-        turn_id=TURN_ID,
-        timestamp_ms=TIMESTAMP_MS,
-    )
-    assert effect_round_trip == Event(
-        id="effect-event-1",
-        event_type="zeta.effect",
-        source="zeta",
-        payload={
-            "schema": "zeta.effect",
-            "effect_id": "effect-1",
-            "turn_id": TURN_ID,
-            "kind": "file_read",
-            "staged": False,
-            "path": "README.md",
-            "tool_call_id": "call-1",
-            "resolved_outcome": "completed",
-            "cwd": "/repo",
-        },
-        idempotency_key=None,
-        caused_by="call-1",
-        session_id=SESSION_ID,
-        turn_id=TURN_ID,
-        timestamp_ms=TIMESTAMP_MS,
-    )

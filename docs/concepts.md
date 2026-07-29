@@ -5,12 +5,10 @@ This is the full reference for Zeta. For the pitch and a quick start, see the
 
 ## Install
 
-The Python packages are published as `zeta-os` and `commas`. `zeta-os` installs
-the `zeta` command; `commas` installs the shell frontend:
+The `zeta-os` package installs the `zeta` command:
 
 ```sh
 uv tool install zeta-os
-uv tool install commas
 zeta --help
 ```
 
@@ -19,7 +17,6 @@ For local development:
 ```sh
 uv sync --group dev
 uv run zeta --help
-uv run commas --help
 ```
 
 Zeta needs Python 3.11+ and a model endpoint. By default, local runs use an
@@ -70,17 +67,6 @@ The `zeta run` worker resolves its model from the project runtime session
 stored under `.zeta/sessions/default`. For agents, the usual choices
 are to set a `default = true` profile in `models.toml` or to set a per-agent
 `model:` override in the agent frontmatter.
-
-The Commas shell frontend also uses these profiles, but its `commas model use`
-command selects a profile for the current shell session, not for a project
-worker:
-
-```sh
-zeta model list
-commas model use fast
-zeta model show
-commas model clear
-```
 
 ## Project Layout
 
@@ -546,48 +532,3 @@ Server notifications:
 
 Protocol `0.1` is additive. Clients should ignore unknown result fields and
 unknown notification params.
-
-## Commas Shell Frontend
-
-Commas is the shell frontend that ships in this repository. It targets zsh and
-wraps Zeta session turns in punctuation shortcuts:
-
-```sh
-commas install
-commas doctor
-```
-
-| Glyph | Workflow | Behavior |
-| --- | --- | --- |
-| `,` | ask | Answer from local context. |
-| `,,` | propose | Run until reviewed shell work is staged or an answer is returned. |
-| `,,,` | do | Run the tool loop directly. |
-| `+` | run | Execute one explicit command and capture bounded output. |
-| `?` | status | Show the current shell session status. |
-
-Examples:
-
-```sh
-, "what changed in this repo?"
-,, "run the relevant tests"
-,,, "update docs and run checks"
-+ uv run pytest
-?
-```
-
-The regular CLI remains available without glyphs:
-
-```text
-commas ask [QUESTION]
-commas status [--json]
-commas log [--touched PATH] [--workflow W] [--since T] [--failed] [--session ID] [--cost] [--json]
-commas session [show|path|list|clear|transcript] [--json]
-commas model [use|clear]
-commas install [--install-dir DIR] [--rc FILE] [--glyphs|--no-glyphs]
-commas doctor [--json]
-```
-
-Runtime state is inspected with `zeta`: use `zeta events`, `zeta trace`, and
-`zeta model list/show`.
-
-Commas and Zeta write shell/frontend and runtime state under `~/.zeta/` by default.

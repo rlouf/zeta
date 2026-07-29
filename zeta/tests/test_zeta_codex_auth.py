@@ -7,7 +7,6 @@ from typing import Any
 
 import pytest
 import zeta.models.codex_auth as codex_auth
-
 from zeta_test_support import fake_jwt
 from zeta_test_support import write_codex_auth_file as write_auth_file
 

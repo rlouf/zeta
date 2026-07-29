@@ -10,11 +10,6 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from commas.tools import bash as bash_tool
-from commas.tools import ensure_builtin_tools_registered, register_builtin_tools
-from commas.tools import grep as grep_tool
-from commas.tools import read as read_tool
-from commas.tools import web as web_tool
 from zeta.capabilities.execution import (
     InProcessCapabilityExecutor,
     tool_args_schema_error,
@@ -31,6 +26,11 @@ from zeta.capabilities.types import (
     CapabilityId,
 )
 from zeta.run.runtime import registered_capabilities
+from zeta.tools import bash as bash_tool
+from zeta.tools import ensure_builtin_tools_registered, register_builtin_tools
+from zeta.tools import grep as grep_tool
+from zeta.tools import read as read_tool
+from zeta.tools import web as web_tool
 
 ensure_builtin_tools_registered()
 
@@ -341,7 +341,7 @@ def test_zeta_capability_registry_starts_empty() -> None:
     assert registry.list_capability_ids() == []
 
 
-def test_commas_registers_builtin_tools_explicitly() -> None:
+def test_zeta_registers_builtin_tools_explicitly() -> None:
     registry = CapabilityRegistry()
 
     register_builtin_tools(registry)
@@ -354,13 +354,12 @@ def test_commas_registers_builtin_tools_explicitly() -> None:
         "zeta.bash",
         "zeta.edit",
         "zeta.write",
-        "zeta.query_log",
         "zeta.web_search",
     } <= set(registry.list_capability_ids())
     assert "zeta.web_fetch" not in set(registry.list_capability_ids())
 
 
-def test_commas_ensures_shared_zeta_registry_has_builtins() -> None:
+def test_zeta_ensures_shared_registry_has_builtins() -> None:
     ensure_builtin_tools_registered()
 
     names = set(tool_registry.list_capability_ids())
@@ -424,7 +423,7 @@ def test_zeta_ast_grep_metadata_guides_model_tool_choice() -> None:
     )
 
 
-def test_commas_web_search_schema_matches_codex_contract() -> None:
+def test_zeta_web_search_schema_matches_codex_contract() -> None:
     schema = web_tool.SEARCH_SPEC.input_schema
 
     assert web_tool.SEARCH_SPEC.id.canonical() == "zeta.web_search"
@@ -434,7 +433,7 @@ def test_commas_web_search_schema_matches_codex_contract() -> None:
     assert schema["properties"]["limit"]["minimum"] == 1
 
 
-def test_commas_web_search_reports_missing_codex_credentials(monkeypatch) -> None:
+def test_zeta_web_search_reports_missing_codex_credentials(monkeypatch) -> None:
     def missing_credentials() -> web_tool.CodexCredentials:
         raise RuntimeError("no Codex credentials at ~/.codex/auth.json")
 
@@ -451,7 +450,7 @@ def test_commas_web_search_reports_missing_codex_credentials(monkeypatch) -> Non
     }
 
 
-def test_commas_web_search_posts_codex_payload(monkeypatch) -> None:
+def test_zeta_web_search_posts_codex_payload(monkeypatch) -> None:
     calls: list[tuple[str, web_tool.WebConfig]] = []
 
     monkeypatch.setenv("ZETA_WEB_SEARCH_MODEL", "gpt-test")
@@ -509,7 +508,7 @@ def test_commas_web_search_posts_codex_payload(monkeypatch) -> None:
     assert result["metadata"]["result_count"] == 1
 
 
-def test_commas_read_fetches_public_url(monkeypatch) -> None:
+def test_zeta_read_fetches_public_url(monkeypatch) -> None:
     class FakeResponse:
         headers = {"content-type": "text/html"}
 
@@ -548,14 +547,14 @@ def test_commas_read_fetches_public_url(monkeypatch) -> None:
     assert result["metadata"]["url"] == "https://example.com"
 
 
-def test_commas_read_blocks_loopback_url() -> None:
+def test_zeta_read_blocks_loopback_url() -> None:
     result = read_tool.run({"path": "http://127.0.0.1/secret"})
 
     assert result["ok"] is False
     assert result["error"]["code"] == "web-read-blocked"
 
 
-def test_commas_read_blocks_cloud_metadata_url() -> None:
+def test_zeta_read_blocks_cloud_metadata_url() -> None:
     result = read_tool.run({"path": "http://169.254.169.254/latest/meta-data/"})
 
     assert result["ok"] is False
@@ -569,7 +568,7 @@ def test_zeta_tool_args_schema_error_skips_malformed_schema() -> None:
     assert tool_args_schema_error({}, {"required": ["path"]}) is not None
 
 
-def test_commas_read_blocks_redirect_to_private_host() -> None:
+def test_zeta_read_blocks_redirect_to_private_host() -> None:
     handler = read_tool._BlockPrivateRedirects()
 
     with pytest.raises(read_tool.urllib.error.HTTPError):
@@ -1289,151 +1288,6 @@ def test_zeta_tool_edit_stage_records_staged_hashes(tmp_path: Path) -> None:
     assert metadata["before_hash"] == before
     assert metadata["after_hash"] == after
     assert target.read_text(encoding="utf-8") == "hello\nold\nbye\n"
-
-
-def seed_query_log_history(monkeypatch) -> None:
-    from commas.history import effect_record, publish_effect_record, turn_record
-    from commas.protocols import turn_contract
-    from commas.sessions import session_id
-    from commas.state import append_event, event_store_path
-
-    monkeypatch.setenv("COMMAS_SESSION_ID", "query-log-here")
-    append_event(
-        {
-            **turn_record(
-                "turn-do-1111",
-                workflow="do",
-                objective="refactor the staging path",
-                contract=turn_contract("do", ("read", "edit"), staged=False),
-                outcome="executed",
-                cost={
-                    "input_tokens": 1000,
-                    "output_tokens": 200,
-                    "model_calls": 3,
-                },
-                prompt_object_ids=["sha256:" + "70da571d" + "0" * 56],
-            ),
-            "time": 100.0,
-        }
-    )
-    append_event(
-        {
-            **turn_record(
-                "turn-ask-2222",
-                workflow="ask",
-                objective="why did the test fail?",
-                contract=turn_contract("ask", (), staged=False),
-                outcome="failed",
-            ),
-            "time": 200.0,
-            "session": "query-log-there",
-        }
-    )
-    publish_effect_record(
-        effect_record(
-            "effect-edit",
-            turn_id="turn-do-1111",
-            kind="file_edit",
-            staged=False,
-            path="/tmp/notes.txt",
-        ),
-        path=event_store_path(),
-        session_id=session_id(),
-    )
-
-
-def test_zeta_tool_query_log_lists_all_sessions_with_cited_ids(monkeypatch) -> None:
-    seed_query_log_history(monkeypatch)
-    from commas.tools import query_log as query_log_tool
-
-    result = query_log_tool.run({})
-
-    assert result["ok"] is True
-    text = result["content"][0]["text"]
-    lines = text.splitlines()
-    assert len(lines) == 2
-    assert lines[0].startswith("turn-ask")
-    assert lines[1].startswith("turn-do-")
-    assert "1200 tok" in lines[1]
-    assert result["metadata"]["turns"] == 2
-    assert result["metadata"]["scope"] == "all-sessions"
-
-
-def test_zeta_tool_query_log_narrows_to_the_current_session(monkeypatch) -> None:
-    seed_query_log_history(monkeypatch)
-    from commas.tools import query_log as query_log_tool
-
-    result = query_log_tool.run({"current_session": True})
-
-    text = result["content"][0]["text"]
-    assert "turn-do-" in text
-    assert "turn-ask" not in text
-    assert result["metadata"]["scope"] == "query-log-here"
-
-
-def test_zeta_tool_query_log_filters_and_caps_limit(monkeypatch) -> None:
-    seed_query_log_history(monkeypatch)
-    from commas.tools import query_log as query_log_tool
-
-    failed = query_log_tool.run({"failed": True})
-    touched = query_log_tool.run({"touched": "/tmp/notes.txt"})
-    capped = query_log_tool.run({"limit": 500})
-
-    assert "turn-ask" in failed["content"][0]["text"]
-    assert "turn-do-" not in failed["content"][0]["text"]
-    assert "turn-do-" in touched["content"][0]["text"]
-    assert capped["metadata"]["limit"] == 50
-
-
-def test_zeta_tool_query_log_expands_one_turn_by_prefix(monkeypatch) -> None:
-    seed_query_log_history(monkeypatch)
-    from commas.tools import query_log as query_log_tool
-
-    result = query_log_tool.run({"turn_id": "turn-do"})
-
-    assert result["ok"] is True
-    text = result["content"][0]["text"]
-    assert "turn     turn-do-1111" in text
-    assert "tools: read, edit" in text
-    assert "file_edit" in text
-    assert "70da571d" in text
-    assert result["metadata"]["turn_id"] == "turn-do-1111"
-
-
-def test_zeta_tool_query_log_reports_bad_ids_and_bad_since(monkeypatch) -> None:
-    seed_query_log_history(monkeypatch)
-    from commas.tools import query_log as query_log_tool
-
-    ambiguous = query_log_tool.run({"turn_id": "turn-"})
-    unknown = query_log_tool.run({"turn_id": "nope"})
-    bad_since = query_log_tool.run({"since": "yesterday-ish"})
-
-    assert ambiguous["ok"] is False
-    assert ambiguous["error"]["code"] == "ambiguous-turn-id"
-    assert "turn-do-1111" in ambiguous["error"]["message"]
-    assert unknown["ok"] is False
-    assert unknown["error"]["code"] == "unknown-turn-id"
-    assert bad_since["ok"] is False
-    assert bad_since["error"]["code"] == "invalid-since"
-
-
-def test_zeta_tool_query_log_reports_an_empty_history() -> None:
-    from commas.tools import query_log as query_log_tool
-
-    result = query_log_tool.run({})
-
-    assert result["ok"] is True
-    assert "no turns recorded" in result["content"][0]["text"]
-    assert result["metadata"]["turns"] == 0
-
-
-def test_zeta_tool_query_log_is_a_readonly_ask_builtin() -> None:
-    from commas.tools import query_log as query_log_tool
-    from commas.workflows.ask import ASK_TOOLS
-
-    assert query_log_tool.SPEC.id.name == "query_log"
-    assert tool_registry.get_by_name("query_log") is not None
-    assert "query_log" in ASK_TOOLS
 
 
 def test_registered_capabilities_expands_only_scoped_mcp_wildcards() -> None:

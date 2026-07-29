@@ -3,7 +3,6 @@ name = "zeta-monorepo"
 version = "0.0.0"
 requires-python = ">=3.11"
 dependencies = [
-  "commas",
   "zeta-os",
 ]
 
@@ -11,12 +10,10 @@ dependencies = [
 package = false
 
 [tool.uv.sources]
-commas = { workspace = true }
 zeta-os = { workspace = true }
 
 [tool.uv.workspace]
 members = [
-  "commas",
   "zeta",
 ]
 
@@ -32,7 +29,7 @@ dev = [
 ]
 
 [tool.pytest.ini_options]
-testpaths = ["commas/tests", "zeta/tests"]
+testpaths = ["zeta/tests"]
 filterwarnings = [
   "error",
   "ignore:This process.*is multi-threaded, use of forkpty:DeprecationWarning",
@@ -45,9 +42,9 @@ extend-exclude = ["docs/demos"]
 extend-select = ["B", "I", "UP"]
 
 [tool.vulture]
-paths = ["commas/src", "commas/tests", "zeta/src", "zeta/tests"]
+paths = ["zeta/src", "zeta/tests"]
 min_confidence = 80
 
 [tool.deptry]
-known_first_party = ["connectors", "commas", "zeta", "zetad"]
+known_first_party = ["connectors", "zeta", "zetad"]
 package_module_name_map = { PyYAML = "yaml" }

@@ -13,7 +13,6 @@ import zeta.context.components as zeta_context
 import zeta.models.chat_completions as zeta_model
 import zeta.models.profiles as zeta_models
 from click.testing import CliRunner
-from commas.agent_io import last_event_time
 from zeta.context.builder import PromptBuilder
 from zeta.events import DraftEvent
 from zeta.records.events import event_view
@@ -44,14 +43,14 @@ from zeta.substrate import (
 )
 from zeta.trace.replay import latest_model_answer
 from zeta.trace.summarize import assistant_trace_summary
-from zetad.cli import cli as zeta_cli
-
 from zeta_test_support import (
     BatchSpyStore,
     read_tool_call_response,
     read_tool_payload,
     record_durable_timeline_event,
 )
+from zetad.cli import cli as zeta_cli
+
 from zeta import models as zeta_models_api
 
 zeta_trace = SimpleNamespace(
@@ -1312,47 +1311,6 @@ def test_zeta_timeline_keeps_untraced_assistant_content_inline(
     store = runtime_context.trace_store
     assert_no_trace_timeline_chain(store)
     assert timeline_views(runtime_context)[-1]["content"] == "fallback"
-
-
-def test_zeta_timeline_last_event_time_tracks_the_newest_event(
-    tmp_path: Path,
-    monkeypatch,
-) -> None:
-    monkeypatch.setenv("ZETA_STATE_DIR", str(tmp_path))
-    monkeypatch.setenv("ZETA_SESSION_ID", "zeta-test")
-    runtime_context = zeta_runtime_context()
-
-    assert (
-        last_event_time(
-            store=runtime_context.trace_store,
-            run_id=runtime_context.session_id,
-        )
-        is None
-    )
-
-    first = record_zeta_event(
-        {"type": "user_message", "content": "hi"},
-        runtime_context=runtime_context,
-    )
-    assert (
-        last_event_time(
-            store=runtime_context.trace_store,
-            run_id=runtime_context.session_id,
-        )
-        == first["time"]
-    )
-
-    second = record_zeta_event(
-        {"type": "model", "content": "yo"},
-        runtime_context=runtime_context,
-    )
-    assert (
-        last_event_time(
-            store=runtime_context.trace_store,
-            run_id=runtime_context.session_id,
-        )
-        == second["time"]
-    )
 
 
 def test_zeta_inmemory_store_dedupes_repeated_derivations() -> None:

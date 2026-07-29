@@ -12,17 +12,14 @@ import zeta.models.chat_completions as zeta_model
 import zeta.models.profiles as zeta_models
 import zeta.models.types as zeta_models_api
 from click.testing import CliRunner
-from commas.cli import cli as commas_cli
-from commas.sessions import session_dir
 from zeta.context.compaction.task_state import TASK_STATE_SCHEMA
-from zetad.cli import cli as zeta_cli
-
 from zeta_test_support import (
     DeltaSink,
     sse_lines,
     task_state_fixture,
     write_models_config,
 )
+from zetad.cli import cli as zeta_cli
 
 
 def test_zeta_model_config_ignores_model_env_vars(monkeypatch) -> None:
@@ -806,39 +803,6 @@ name = "missing-model"
     assert "model" in catalog.diagnostics[0].message
 
 
-def test_commas_model_cli_switches_model_per_session(
-    tmp_path: Path,
-    monkeypatch,
-) -> None:
-    home = tmp_path / "home"
-    write_models_config(
-        home,
-        """
-[[models]]
-name = "fast"
-model = "fast-model"
-url = "http://127.0.0.1:8081/v1/chat/completions"
-""",
-    )
-    monkeypatch.setenv("HOME", str(home))
-    monkeypatch.setenv("ZETA_STATE_DIR", str(tmp_path / "state"))
-    monkeypatch.setenv("COMMAS_SESSION_ID", "one")
-
-    use = CliRunner().invoke(commas_cli, ["model", "use", "fast"])
-
-    assert use.exit_code == 0, use.output
-    assert "model: fast -> fast-model" in use.output
-    assert zeta_models.active_model_profile(session_dir=session_dir()) == "fast"
-
-    monkeypatch.setenv("COMMAS_SESSION_ID", "two")
-    assert zeta_models.active_model_profile(session_dir=session_dir()) is None
-
-    monkeypatch.setenv("COMMAS_SESSION_ID", "one")
-    clear = CliRunner().invoke(commas_cli, ["model", "clear"])
-    assert clear.exit_code == 0, clear.output
-    assert zeta_models.active_model_profile(session_dir=session_dir()) is None
-
-
 def test_zeta_models_resolve_active_model_reports_session_source(
     tmp_path: Path,
     monkeypatch,
@@ -1010,23 +974,6 @@ def test_zeta_models_resolve_active_model_survives_vanished_profile(
     assert resolution.source == "builtin"
     assert resolution.selection.profile == "default"
     assert resolution.stale_profile == "gone"
-
-
-def test_commas_model_cli_rejects_unknown_profile(
-    tmp_path: Path,
-    monkeypatch,
-) -> None:
-    home = tmp_path / "home"
-    write_models_config(home, "")
-    monkeypatch.setenv("HOME", str(home))
-    monkeypatch.setenv("ZETA_STATE_DIR", str(tmp_path / "state"))
-    monkeypatch.setenv("COMMAS_SESSION_ID", "model-test")
-
-    result = CliRunner().invoke(commas_cli, ["model", "use", "missing"])
-
-    assert result.exit_code != 0
-    assert "unknown model profile: missing" in result.output
-    assert zeta_models.active_model_profile(session_dir=session_dir()) is None
 
 
 def test_zeta_model_context_tokens_prefers_props(monkeypatch) -> None:
@@ -1511,36 +1458,6 @@ def test_zeta_ensure_server_banner_respects_non_tty(monkeypatch, capsys) -> None
     err = capsys.readouterr().err
     assert "no OpenAI-compatible endpoint reachable" in err
     assert "\x1b[" not in err
-
-
-def test_zeta_model_use_without_shell_session_notes_default_scope(
-    tmp_path: Path,
-    monkeypatch,
-) -> None:
-    home = tmp_path / "home"
-    write_models_config(
-        home,
-        """
-[[models]]
-name = "fast"
-model = "fast-model"
-url = "http://127.0.0.1:8081/v1/chat/completions"
-""",
-    )
-    monkeypatch.setenv("HOME", str(home))
-    monkeypatch.setenv("ZETA_STATE_DIR", str(tmp_path / "state"))
-    monkeypatch.delenv("COMMAS_SESSION_ID", raising=False)
-
-    result = CliRunner().invoke(commas_cli, ["model", "use", "fast"])
-
-    assert result.exit_code == 0, result.output
-    assert "model: fast -> fast-model" in result.stdout
-    assert 'applies to session "default"' in result.stderr
-
-    monkeypatch.setenv("COMMAS_SESSION_ID", "bound")
-    bound = CliRunner().invoke(commas_cli, ["model", "use", "fast"])
-    assert bound.exit_code == 0, bound.output
-    assert "default" not in bound.stderr
 
 
 def test_zeta_model_profiles_read_api(tmp_path: Path, monkeypatch) -> None:

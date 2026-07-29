@@ -17,7 +17,8 @@ from connectors import (
 from zeta.agents.resources import load_connector_registry
 from zeta.capabilities.execution import (
     ToolExecutorFactory,
-    in_process_tool_executor_for_agent,
+    ToolExecutorProviderRegistry,
+    load_tool_executor_provider_registry,
 )
 from zeta.capabilities.registry import CapabilityRegistry
 from zeta.events import Event
@@ -79,7 +80,10 @@ class WorkerServices:
     worker_name: str = LOCAL_WORKER_NAME
     max_concurrent: int = 1
     retry_policy: RetryPolicy = field(default_factory=RetryPolicy)
-    tool_executor_for_agent: ToolExecutorFactory = in_process_tool_executor_for_agent
+    tool_executor_for_agent: ToolExecutorFactory | None = None
+    tool_executors: ToolExecutorProviderRegistry = field(
+        default_factory=load_tool_executor_provider_registry
+    )
 
     @cached_property
     def project_snapshot(self) -> ProjectSnapshot:
@@ -88,6 +92,7 @@ class WorkerServices:
             registry=self.registry,
             tool_registry=self.tool_registry,
             model_selection=self.model_selection,
+            tool_executors=self.tool_executors,
         )
 
     def close(self) -> None:
@@ -102,6 +107,7 @@ def build_worker_services(
     registry: EventConnectorRegistry | None = None,
     connector_names: Iterable[str] | None = None,
     tool_executor_for_agent: ToolExecutorFactory | None = None,
+    tool_executors: ToolExecutorProviderRegistry | None = None,
 ) -> WorkerServices:
     resolved_project_root = project_root.expanduser().resolve()
     resolved_state_dir = resolve_state_dir(project_root, state_dir)
@@ -118,9 +124,8 @@ def build_worker_services(
         model_selection=active_model_selection(
             session_dir=resolved_state_dir / "sessions" / "default"
         ),
-        tool_executor_for_agent=(
-            tool_executor_for_agent or in_process_tool_executor_for_agent
-        ),
+        tool_executor_for_agent=tool_executor_for_agent,
+        tool_executors=tool_executors or load_tool_executor_provider_registry(),
     )
 
 
@@ -176,6 +181,7 @@ def project_executors(runtime: WorkerServices) -> tuple[ExecutableAgent, ...]:
                     runtime.events,
                     generation,
                     registry=runtime.registry,
+                    tool_executors=runtime.tool_executors,
                 )
             )
         except ProjectSnapshotUnavailable:
@@ -254,14 +260,23 @@ class RuntimeAgentLoop:
         )
         started = time.perf_counter()
         try:
-            executor_factory = (
-                runtime_context.tool_executor_for_agent
-                or in_process_tool_executor_for_agent
-            )
-            tool_executor = await executor_factory(
-                invocation.agent.agent_id,
-                runtime_context.tool_registry,
-            )
+            if runtime_context.tool_executor_for_agent is not None:
+                tool_executor = await runtime_context.tool_executor_for_agent(
+                    invocation.agent.agent_id,
+                    runtime_context.tool_registry,
+                )
+            else:
+                provider_id = invocation.agent.tool_executor.provider
+                provider = self.runtime.tool_executors.resolve(provider_id)
+                if provider is None:
+                    raise RuntimeError(
+                        f"tool executor provider {provider_id!r} is not available"
+                    )
+                tool_executor = await provider.create(
+                    invocation.agent.agent_id,
+                    runtime_context.tool_registry,
+                    invocation.agent.tool_executor.config,
+                )
             return await run_agent(
                 AgentRunRequest(
                     objective=objective,

@@ -16,6 +16,7 @@ from jsonschema.exceptions import SchemaError, ValidationError
 from zeta.agents.events import EventRegistry
 from zeta.agents.prompts import validate_prompt
 from zeta.agents.spec import AgentSpec
+from zeta.capabilities.execution import ToolExecutorProviderRegistry
 
 RESERVED_TOOL_NAMES = frozenset({"__return"})
 
@@ -46,11 +47,13 @@ class Manifest:
     skills: SkillResolver | Mapping[str, Any] | None = None
     events: EventRegistry | None = None
     connectors: EventConnectorRegistry | None = None
+    tool_executors: ToolExecutorProviderRegistry | None = None
 
     def validate(self, spec: AgentSpec) -> None:
         validate_prompt(spec)
         validate_tools(spec, self.tools)
         validate_skills(spec, self.skills)
+        validate_tool_executor(spec, self.tool_executors)
         validate_manifest_sections(spec)
         validate_connector_bindings(spec, self.connectors)
         validate_events(spec, self.events)
@@ -77,6 +80,19 @@ def validate_skills(
             known = registry.knows(name)
         if not known:
             raise ManifestError(f"agent {spec.slug!r} lists unknown skill {name!r}")
+
+
+def validate_tool_executor(
+    spec: AgentSpec,
+    registry: ToolExecutorProviderRegistry | None,
+) -> None:
+    if registry is None:
+        return
+    if registry.resolve(spec.executor.provider) is None:
+        raise ManifestError(
+            f"agent {spec.slug!r} selects unknown tool executor "
+            f"{spec.executor.provider!r}"
+        )
 
 
 def validate_events(spec: AgentSpec, registry: EventRegistry | None) -> None:

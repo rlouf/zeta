@@ -6,12 +6,15 @@ import ast
 import asyncio
 import hashlib
 import shutil
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
 import pytest
 from zeta.capabilities.execution import (
     InProcessCapabilityExecutor,
+    ToolExecutorProvider,
+    load_tool_executor_provider_registry,
     tool_args_schema_error,
 )
 from zeta.capabilities.registry import (
@@ -78,6 +81,32 @@ def test_zeta_capability_registry_registers_and_lists_capabilities() -> None:
     assert registry.get("test.unit") is capability
     assert registry.list_capability_ids() == ["test.unit"]
     assert capability.declaration.id.canonical() == "test.unit"
+
+
+def test_zeta_tool_executor_provider_registry_loads_builtin_and_entry_point() -> None:
+    async def create_executor(
+        agent_id: str,
+        registry: CapabilityRegistry,
+        config: Mapping[str, Any],
+    ) -> Any:
+        del agent_id, registry, config
+        raise AssertionError("factory should not be called while loading")
+
+    provider = ToolExecutorProvider("remote", create_executor)
+
+    class EntryPoint:
+        name = "remote"
+        group = "zeta.tool_executors"
+
+        def load(self) -> ToolExecutorProvider:
+            return provider
+
+    registry = load_tool_executor_provider_registry([EntryPoint()])
+
+    assert registry.resolve("local") is not None
+    assert registry.resolve("remote") == provider
+    with pytest.raises(ValueError, match="already registered"):
+        registry.register(provider)
 
 
 def test_zeta_capability_registry_accepts_unchecked_capability_schema() -> None:

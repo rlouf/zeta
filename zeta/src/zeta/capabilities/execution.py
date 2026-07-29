@@ -7,8 +7,9 @@ import inspect
 import json
 import os
 import tempfile
-from collections.abc import Awaitable, Callable
-from dataclasses import dataclass, replace
+from collections.abc import Awaitable, Callable, Iterable, Mapping
+from dataclasses import dataclass, field, replace
+from importlib import metadata as importlib_metadata
 from pathlib import Path
 from typing import Any, Protocol, cast
 
@@ -67,6 +68,44 @@ class ToolExecutor(Protocol):
 
 
 ToolExecutorFactory = Callable[[str, CapabilityRegistry], Awaitable[ToolExecutor]]
+ToolExecutorProviderFactory = Callable[
+    [str, CapabilityRegistry, Mapping[str, Any]], Awaitable[ToolExecutor]
+]
+
+TOOL_EXECUTOR_ENTRY_POINT_GROUP = "zeta.tool_executors"
+
+
+@dataclass(frozen=True)
+class ToolExecutorProvider:
+    """Construct one kind of tool executor for an agent run."""
+
+    id: str
+    factory: ToolExecutorProviderFactory
+
+    async def create(
+        self,
+        agent_id: str,
+        registry: CapabilityRegistry,
+        config: Mapping[str, Any],
+    ) -> ToolExecutor:
+        return await self.factory(agent_id, registry, config)
+
+
+@dataclass
+class ToolExecutorProviderRegistry:
+    """Named tool executor providers available to a runtime."""
+
+    providers: dict[str, ToolExecutorProvider] = field(default_factory=dict)
+
+    def register(self, provider: ToolExecutorProvider) -> None:
+        if provider.id in self.providers:
+            raise ValueError(
+                f"tool executor provider {provider.id!r} is already registered"
+            )
+        self.providers[provider.id] = provider
+
+    def resolve(self, provider_id: str) -> ToolExecutorProvider | None:
+        return self.providers.get(provider_id)
 
 
 @dataclass(frozen=True)
@@ -108,6 +147,65 @@ async def in_process_tool_executor_for_agent(
 
     del agent_id
     return InProcessToolExecutor(registry)
+
+
+async def local_tool_executor_provider(
+    agent_id: str,
+    registry: CapabilityRegistry,
+    config: Mapping[str, Any],
+) -> ToolExecutor:
+    """Create the built-in executor that invokes local capabilities."""
+    if config:
+        raise ValueError("local tool executor does not accept configuration")
+    return await in_process_tool_executor_for_agent(agent_id, registry)
+
+
+def load_tool_executor_provider_registry(
+    entry_points: Iterable[Any] | None = None,
+) -> ToolExecutorProviderRegistry:
+    """Load built-in and installed tool executor providers."""
+    registry = ToolExecutorProviderRegistry()
+    registry.register(ToolExecutorProvider("local", local_tool_executor_provider))
+    for entry_point in tool_executor_entry_points(entry_points):
+        provider = load_entry_point_tool_executor_provider(entry_point)
+        if provider.id != entry_point.name:
+            raise ValueError(
+                f"tool executor entry point {entry_point.name!r} returned "
+                f"provider id {provider.id!r}"
+            )
+        registry.register(provider)
+    return registry
+
+
+def tool_executor_entry_points(
+    entry_points: Iterable[Any] | None = None,
+) -> tuple[Any, ...]:
+    discovered = (
+        importlib_metadata.entry_points() if entry_points is None else entry_points
+    )
+    select = getattr(discovered, "select", None)
+    if callable(select):
+        return tuple(select(group=TOOL_EXECUTOR_ENTRY_POINT_GROUP))
+    if isinstance(discovered, Mapping):
+        grouped = cast(Mapping[str, Iterable[Any]], discovered)
+        return tuple(grouped.get(TOOL_EXECUTOR_ENTRY_POINT_GROUP, ()))
+    return tuple(
+        entry_point
+        for entry_point in discovered
+        if getattr(entry_point, "group", None) == TOOL_EXECUTOR_ENTRY_POINT_GROUP
+    )
+
+
+def load_entry_point_tool_executor_provider(entry_point: Any) -> ToolExecutorProvider:
+    provider = entry_point.load()
+    if callable(provider):
+        provider = provider()
+    if not isinstance(provider, ToolExecutorProvider):
+        raise ValueError(
+            f"tool executor entry point {entry_point.name!r} did not return "
+            "a ToolExecutorProvider"
+        )
+    return provider
 
 
 @dataclass(frozen=True)

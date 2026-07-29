@@ -5,7 +5,7 @@ import json
 import logging
 import threading
 import tomllib
-from collections.abc import Callable, Coroutine, Iterable
+from collections.abc import Callable, Coroutine, Iterable, Mapping
 from dataclasses import asdict, fields, replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -22,6 +22,8 @@ from zeta.agents.manifest import ManifestError
 from zeta.capabilities.execution import (
     InProcessCapabilityExecutor,
     ToolExecutor,
+    ToolExecutorProvider,
+    ToolExecutorProviderRegistry,
 )
 from zeta.capabilities.registry import CapabilityRegistry, RegisteredCapability
 from zeta.capabilities.types import (
@@ -4218,6 +4220,79 @@ Triage the issue.
     assert message == f"ran qi_{event.id}"
     assert executor_agents == ["triage"]
     assert len(calls) == 1
+    assert calls[0]["kwargs"]["tool_executor"] is executor
+
+
+def test_zeta_local_runtime_selects_tool_executor_provider_from_agent_yaml(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    agents_dir = tmp_path / "agents"
+    agents_dir.mkdir()
+    write_project_event_schema(tmp_path, "github.issue.opened")
+    (agents_dir / "triage.md").write_text(
+        """---
+name: Triage
+description: Triage issues.
+executor:
+  provider: remote
+  config:
+    app: zeta-tools
+accepts:
+  - github.issue.opened
+---
+Triage the issue.
+""",
+        encoding="utf-8",
+    )
+
+    class RecordingExecutor:
+        async def call(
+            self,
+            capability_id: str,
+            params: dict[str, Any],
+            mode: str,
+            *,
+            base_dir: Path | None,
+            effect_key: str | None,
+        ) -> dict[str, Any]:
+            del capability_id, params, mode, base_dir, effect_key
+            return {"ok": True}
+
+    executor = RecordingExecutor()
+    factory_calls: list[tuple[str, CapabilityRegistry, Mapping[str, Any]]] = []
+
+    async def create_executor(
+        agent_id: str,
+        registry: CapabilityRegistry,
+        config: Mapping[str, Any],
+    ) -> ToolExecutor:
+        factory_calls.append((agent_id, registry, config))
+        return executor
+
+    providers = ToolExecutorProviderRegistry()
+    providers.register(ToolExecutorProvider("remote", create_executor))
+    calls: list[dict[str, Any]] = []
+
+    async def fake_run_agent(*args: Any, **kwargs: Any) -> AgentRunResult:
+        calls.append({"args": args, "kwargs": kwargs})
+        return AgentRunResult(final_answer="triaged")
+
+    monkeypatch.setattr(zetad_worker, "run_agent", fake_run_agent)
+    runtime = zetad_worker.build_worker_services(
+        project_root=tmp_path,
+        tool_executors=providers,
+    )
+    try:
+        event = runtime.events.accept(
+            zeta_events.DraftEvent("github.issue.opened", "github", {"number": 1})
+        ).event
+        message = asyncio.run(zetad_worker.run_once(runtime))
+    finally:
+        runtime.close()
+
+    assert message == f"ran qi_{event.id}"
+    assert factory_calls == [("triage", runtime.tool_registry, {"app": "zeta-tools"})]
     assert calls[0]["kwargs"]["tool_executor"] is executor
 
 

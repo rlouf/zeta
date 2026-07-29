@@ -18,6 +18,7 @@ BUILT_IN_FRONTMATTER_KEYS = frozenset(
         "enabled",
         "resumable",
         "model",
+        "executor",
         "accepts",
         "returns",
         "skills",
@@ -55,6 +56,14 @@ class RetrySpec:
 
 
 @dataclass(frozen=True)
+class ExecutorSpec:
+    """Tool executor selection for one authored agent."""
+
+    provider: str = "local"
+    config: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
 class AgentSpec:
     """Parsed authored agent specification."""
 
@@ -67,6 +76,7 @@ class AgentSpec:
     enabled: bool = True
     resumable: bool = False
     model: ModelSpec | None = None
+    executor: ExecutorSpec = field(default_factory=ExecutorSpec)
     accepts: tuple[str, ...] = ()
     returns: tuple[str, ...] = ()
     skills: tuple[str, ...] = ()
@@ -116,6 +126,7 @@ def load_spec(path: str | Path) -> AgentSpec:
                 frontmatter.get("resumable", False), "resumable", path
             ),
             model=model_spec(frontmatter.get("model"), path),
+            executor=executor_spec(frontmatter.get("executor"), path),
             accepts=accepts,
             returns=returns,
             skills=string_tuple(frontmatter.get("skills", ()), "skills", path),
@@ -204,6 +215,29 @@ def model_spec(value: Any, path: Path) -> ModelSpec | None:
         name=required_model_string(value, "name", path),
         url=required_model_string(value, "url", path),
     )
+
+
+def executor_spec(value: Any, path: Path) -> ExecutorSpec:
+    if value is None:
+        return ExecutorSpec()
+    if not isinstance(value, Mapping):
+        raise SpecError(f"invalid value for 'executor' in {path}: expected object")
+    unknown = sorted(set(value) - {"provider", "config"})
+    if unknown:
+        raise SpecError(
+            f"invalid value for 'executor' in {path}: unsupported field {unknown[0]!r}"
+        )
+    provider = value.get("provider")
+    if not isinstance(provider, str) or provider == "":
+        raise SpecError(
+            f"invalid value for 'executor' in {path}: provider must be a non-empty string"
+        )
+    config = value.get("config", {})
+    if not isinstance(config, Mapping):
+        raise SpecError(
+            f"invalid value for 'executor' in {path}: config must be an object"
+        )
+    return ExecutorSpec(provider=provider, config=dict(config))
 
 
 def base_dir_field(value: Any, path: Path) -> Path | None:

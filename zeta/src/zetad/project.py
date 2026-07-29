@@ -20,7 +20,17 @@ from zeta.agents.resources import (
     load_agent_project,
     validate_agent_project,
 )
-from zeta.agents.spec import AgentSpec, ModelSpec, RetrySpec, ScheduleEntry
+from zeta.agents.spec import (
+    AgentSpec,
+    ExecutorSpec,
+    ModelSpec,
+    RetrySpec,
+    ScheduleEntry,
+)
+from zeta.capabilities.execution import (
+    ToolExecutorProviderRegistry,
+    load_tool_executor_provider_registry,
+)
 from zeta.capabilities.registry import CapabilityRegistry
 from zeta.models.profiles import ModelSelection
 from zeta.records.events import DraftEvent, Event
@@ -81,9 +91,13 @@ def load_project_snapshot(
     registry,
     tool_registry: CapabilityRegistry,
     model_selection: ModelSelection | None,
+    tool_executors: ToolExecutorProviderRegistry | None = None,
 ) -> ProjectSnapshot:
     project = load_agent_project(agents_dir, registry=registry)
-    validate_agent_project(project)
+    validate_agent_project(
+        project,
+        tool_executors=tool_executors or load_tool_executor_provider_registry(),
+    )
     manifest = project_manifest(
         project,
         tool_registry=tool_registry,
@@ -118,6 +132,7 @@ def load_recorded_project_snapshot(
     generation_id: str,
     *,
     registry: EventConnectorRegistry | None,
+    tool_executors: ToolExecutorProviderRegistry | None = None,
 ) -> ProjectSnapshot:
     for event in events.list_events(Filter(event_type=PROJECT_SNAPSHOT_RECORDED)):
         if event.payload.get("generation_id") != generation_id:
@@ -131,7 +146,10 @@ def load_recorded_project_snapshot(
                 f"recorded project snapshot {generation_id!r} failed verification"
             )
         project = project_from_manifest(parsed_manifest, registry=registry)
-        validate_agent_project(project)
+        validate_agent_project(
+            project,
+            tool_executors=tool_executors or load_tool_executor_provider_registry(),
+        )
         return ProjectSnapshot(generation_id, project, parsed_manifest)
     raise ProjectSnapshotUnavailable(
         f"recorded project snapshot {generation_id!r} was not found"
@@ -231,6 +249,17 @@ def agent_from_manifest(value: Any) -> AgentSpec:
         if isinstance(raw_retry, Mapping)
         else None
     )
+    raw_executor = value.get("executor")
+    if not isinstance(raw_executor, Mapping):
+        raise ProjectSnapshotUnavailable("project snapshot has invalid tool executor")
+    provider = raw_executor.get("provider")
+    config = raw_executor.get("config")
+    if (
+        not isinstance(provider, str)
+        or provider == ""
+        or not isinstance(config, Mapping)
+    ):
+        raise ProjectSnapshotUnavailable("project snapshot has invalid tool executor")
     raw_schedules = value.get("schedules")
     schedules = (
         tuple(
@@ -256,6 +285,7 @@ def agent_from_manifest(value: Any) -> AgentSpec:
         enabled=bool(value.get("enabled", True)),
         resumable=bool(value.get("resumable", False)),
         model=model,
+        executor=ExecutorSpec(provider=provider, config=dict(config)),
         accepts=_string_tuple(value.get("accepts")),
         returns=_string_tuple(value.get("returns")),
         skills=_string_tuple(value.get("skills")),
@@ -294,6 +324,10 @@ def agent_manifest(spec: AgentSpec) -> dict[str, Any]:
             if spec.model is not None
             else None
         ),
+        "executor": {
+            "provider": spec.executor.provider,
+            "config": spec.executor.config,
+        },
         "accepts": list(spec.accepts),
         "returns": list(spec.returns),
         "skills": list(spec.skills),

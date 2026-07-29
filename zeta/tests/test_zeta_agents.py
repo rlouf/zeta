@@ -46,6 +46,7 @@ from zeta.agents.resources import (
 from zeta.agents.returns import derive_returns_schema
 from zeta.agents.spec import (
     AgentSpec,
+    ExecutorSpec,
     ModelSpec,
     ScheduleEntry,
     SpecError,
@@ -56,6 +57,7 @@ from zeta.agents.spec import (
 )
 from zeta.capabilities.execution import (
     InProcessCapabilityExecutor,
+    ToolExecutorProviderRegistry,
 )
 from zeta.capabilities.registry import CapabilityRegistry, RegisteredCapability
 from zeta.capabilities.types import (
@@ -447,6 +449,67 @@ User asked: {{ event.payload.text }}
     assert len(spec.sha256) == 64
 
 
+def test_zeta_agent_spec_selects_tool_executor_from_frontmatter(
+    tmp_path: Path,
+) -> None:
+    spec = load_spec(
+        _write_spec(
+            tmp_path / "triage.md",
+            """---
+name: Triage
+description: Triage issues.
+executor:
+  provider: modal
+  config:
+    app: zeta-tools
+accepts:
+  - github.issue.opened
+---
+Triage the issue.
+""",
+        )
+    )
+
+    assert spec.executor == ExecutorSpec(
+        provider="modal",
+        config={"app": "zeta-tools"},
+    )
+    assert "executor" not in spec.manifest
+
+
+def test_zeta_agent_project_rejects_unknown_tool_executor_provider(
+    tmp_path: Path,
+) -> None:
+    agents_dir = tmp_path / "agents"
+    events_dir = agents_dir / "events"
+    events_dir.mkdir(parents=True)
+    (events_dir / "github.issue.opened.json").write_text(
+        '{"type": "object"}',
+        encoding="utf-8",
+    )
+    _write_spec(
+        agents_dir / "triage.md",
+        """---
+name: Triage
+description: Triage issues.
+executor:
+  provider: remote
+accepts:
+  - github.issue.opened
+---
+Triage the issue.
+""",
+    )
+
+    project = load_agent_project(agents_dir)
+
+    with pytest.raises(ManifestError, match="unknown tool executor 'remote'"):
+        validate_agent_project(
+            project,
+            tool_executors=ToolExecutorProviderRegistry(),
+        )
+
+
 def test_zeta_agent_spec_parses_base_dir_as_absolute_path(tmp_path: Path) -> None:
     spec = load_spec(
         _write_spec(
@@ -763,6 +826,12 @@ Summarize the repo.
         ("name: Worker\ndescription: Worker\nreturns:\n  - 1\n", "returns"),
         ("name: Worker\ndescription: Worker\ntools:\n  - read\n  - 2\n", "tools"),
         ("name: Worker\ndescription: Worker\nskills:\n  - review\n  - 2\n", "skills"),
+        ("name: Worker\ndescription: Worker\nexecutor: local\n", "executor"),
+        (
+            "name: Worker\ndescription: Worker\nexecutor:\n"
+            "  provider: local\n  config: not-a-mapping\n",
+            "config",
+        ),
         ("name: Worker\ndescription: Worker\nschedules: hourly\n", "schedules"),
         (
             "name: Worker\ndescription: Worker\naccepts:\n"

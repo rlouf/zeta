@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable, Mapping, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from fnmatch import fnmatchcase
 from typing import TYPE_CHECKING, Any, Literal, cast
 
 from zeta.agents.prompts import render_prompt
-from zeta.agents.spec import AgentSpec
+from zeta.agents.spec import AgentSpec, ExecutorSpec
 from zeta.records.events import DraftEvent, Event
 from zeta.run.config import AgentConfig
 from zeta.run.outcomes import agent_run_result_payload
@@ -66,6 +66,7 @@ class AgentDefinition:
     retry_policy: RetryPolicy | None = None
     project_generation: str | None = None
     execution_manifest: Mapping[str, Any] | None = None
+    tool_executor: ExecutorSpec = field(default_factory=ExecutorSpec)
 
     def accepts(self, event: Event) -> bool:
         return any(trigger.matches(event) for trigger in self.triggers)
@@ -226,6 +227,7 @@ def compile_agent_definitions(
                 retry_policy=retry_policy_for_spec(spec),
                 project_generation=project_generation,
                 execution_manifest=execution_manifest,
+                tool_executor=spec.executor,
             ),
             run=agent_runner(
                 spec,

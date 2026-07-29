@@ -18,6 +18,7 @@ from connectors import EventConnector, EventConnectorRegistry
 from zeta.agents.events import EventRegistry, EventRegistryError
 from zeta.agents.manifest import Manifest
 from zeta.agents.spec import AgentSpec, load_specs, scheduled_event_type
+from zeta.capabilities.execution import ToolExecutorProviderRegistry
 
 
 class ResourceError(ValueError):
@@ -84,11 +85,16 @@ def load_agent_project(
     )
 
 
-def validate_agent_project(project: AgentProject) -> None:
+def validate_agent_project(
+    project: AgentProject,
+    *,
+    tool_executors: ToolExecutorProviderRegistry | None = None,
+) -> None:
     manifest = Manifest(
         events=project.events,
         skills=project.skills,
         connectors=project.connectors,
+        tool_executors=tool_executors,
     )
     for spec in project.specs:
         manifest.validate(spec)

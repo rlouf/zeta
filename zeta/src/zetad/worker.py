@@ -227,7 +227,10 @@ def build_worker_services(
     tool_executors: ToolExecutorProviderRegistry | None = None,
 ) -> WorkerServices:
     resolved_project_root = project_root.expanduser().resolve()
-    resolved_state_dir = resolve_state_dir(project_root, state_dir)
+    resolved_state_dir = resolve_state_dir(
+        state_dir,
+        start=resolved_project_root,
+    )
     resolved_registry = registry or load_connector_registry(
         resolved_project_root / "agents",
         connector_names=connector_names,

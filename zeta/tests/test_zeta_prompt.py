@@ -1159,6 +1159,7 @@ def test_zeta_project_context_loads_global_to_local(
     monkeypatch,
 ) -> None:
     home = tmp_path / "home"
+    monkeypatch.setenv("HOME", str(home))
     global_context = zeta_state_dir()
     root = tmp_path / "repo"
     child = root / "pkg"
@@ -1168,7 +1169,6 @@ def test_zeta_project_context_loads_global_to_local(
     (root / "AGENTS.md").write_text("root instructions\n", encoding="utf-8")
     (child / "AGENTS.md").write_text("child instructions\n", encoding="utf-8")
     (child / "CLAUDE.md").write_text("ignored instructions\n", encoding="utf-8")
-    monkeypatch.setenv("HOME", str(home))
     monkeypatch.chdir(child)
 
     context = load_project_instructions()
@@ -1178,6 +1178,34 @@ def test_zeta_project_context_loads_global_to_local(
     assert "AGENTS.md" in context
     assert "CLAUDE.md" not in context
     assert "ignored instructions" not in context
+
+
+def test_zeta_project_context_keeps_global_instructions_outside_runtime_state(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    home = tmp_path / "home"
+    runtime_state = tmp_path / "runtime-state"
+    project = tmp_path / "repo"
+    (home / ".zeta").mkdir(parents=True)
+    runtime_state.mkdir()
+    project.mkdir()
+    (home / ".zeta" / "AGENTS.md").write_text(
+        "home instructions\n",
+        encoding="utf-8",
+    )
+    (runtime_state / "AGENTS.md").write_text(
+        "runtime instructions\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("ZETA_STATE_DIR", str(runtime_state))
+    monkeypatch.chdir(project)
+
+    context = load_project_instructions()
+
+    assert "home instructions" in context
+    assert "runtime instructions" not in context
 
 
 def test_zeta_project_context_requires_exact_agents_filename(
@@ -1891,6 +1919,7 @@ def test_zeta_project_context_total_cap_drops_broadest_first(
     monkeypatch,
 ) -> None:
     home = tmp_path / "home"
+    monkeypatch.setenv("HOME", str(home))
     zeta_home = zeta_state_dir()
     zeta_home.mkdir(parents=True)
     (zeta_home / "AGENTS.md").write_text(
@@ -1901,7 +1930,6 @@ def test_zeta_project_context_total_cap_drops_broadest_first(
     project.mkdir(parents=True)
     (parent / "AGENTS.md").write_text("parent rules\n" + "p" * 20_000, encoding="utf-8")
     (project / "AGENTS.md").write_text("local rules\n" + "l" * 20_000, encoding="utf-8")
-    monkeypatch.setenv("HOME", str(home))
     monkeypatch.chdir(project)
 
     context = load_project_instructions()

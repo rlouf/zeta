@@ -66,9 +66,13 @@ def build_scheduler_services(
     state_dir: Path | None = None,
     registry: EventConnectorRegistry | None = None,
     connector_names: Iterable[str] | None = None,
+    read_only: bool = False,
 ) -> SchedulerServices:
     resolved_project_root = project_root.expanduser().resolve()
-    resolved_state_dir = resolve_state_dir(project_root, state_dir)
+    resolved_state_dir = resolve_state_dir(
+        state_dir,
+        start=resolved_project_root,
+    )
     resolved_registry = registry or load_connector_registry(
         resolved_project_root / "agents",
         connector_names=connector_names,
@@ -76,7 +80,10 @@ def build_scheduler_services(
     return SchedulerServices(
         project_root=resolved_project_root,
         state_dir=resolved_state_dir,
-        events=RuntimeEventStore.open(event_store_path(resolved_state_dir)),
+        events=RuntimeEventStore.open(
+            event_store_path(resolved_state_dir),
+            read_only=read_only,
+        ),
         registry=resolved_registry,
     )
 

@@ -18,7 +18,8 @@ from zeta.records.stores.sqlite import (
     resolve_state_dir,
     zeta_sqlite_path,
 )
-from zeta.substrate import SqliteObjectStore, Store
+from zeta.substrate import InMemoryStore, SqliteObjectStore, Store
+from zeta.substrate.sqlite import sqlite_table_names
 from zeta.trace.diff import render_prompt_diff
 from zeta.trace.query import (
     get_trace_object,
@@ -45,19 +46,44 @@ from zeta.trace.tools import tool_call_rows, tool_failure_detail
 NARRATIVE_KINDS = ("prompt", "assistant_message")
 
 
+def capture_nested_state_dir(
+    ctx: click.Context,
+    param: click.Parameter,
+    value: Path | None,
+) -> None:
+    """Keep grouped state selection independent of option placement."""
+
+    if value is None:
+        return
+    obj = ctx.ensure_object(dict)
+    existing = obj.get("state_dir")
+    if isinstance(existing, Path):
+        if existing.expanduser().resolve() != value.expanduser().resolve():
+            raise click.BadParameter(
+                "conflicting --state-dir values",
+                ctx=ctx,
+                param=param,
+            )
+        return
+    obj["state_dir"] = value
+
+
+def nested_state_dir_option(
+    function: Callable[..., Any],
+) -> Callable[..., Any]:
+    """Expose the shared override at every grouped command parse level."""
+
+    return click.option(
+        "--state-dir",
+        type=click.Path(file_okay=False, path_type=Path),
+        callback=capture_nested_state_dir,
+        expose_value=False,
+        help="Override the runtime state directory.",
+    )(function)
+
+
 @click.group("traces")
-@click.option(
-    "--project-root",
-    type=click.Path(file_okay=False, path_type=Path),
-    default=Path("."),
-    show_default=True,
-    help="Project root for agent specs and relative paths.",
-)
-@click.option(
-    "--state-dir",
-    type=click.Path(file_okay=False, path_type=Path),
-    help="Override the runtime state directory.",
-)
+@nested_state_dir_option
 @click.option(
     "--session",
     "session_scope",
@@ -67,8 +93,6 @@ NARRATIVE_KINDS = ("prompt", "assistant_message")
 @click.pass_context
 def traces_group(
     ctx: click.Context,
-    project_root: Path,
-    state_dir: Path | None,
     session_scope: str,
 ) -> None:
     """Inspect runtime prompt and tool traces.
@@ -76,24 +100,18 @@ def traces_group(
     Every ID argument accepts a ref name, a full id, or a unique prefix.
     """
 
-    ctx.obj = {
-        "state_dir": trace_state_dir(project_root, state_dir),
-        "session": session_scope or os.environ.get("ZETA_SESSION_ID") or "default",
-        "session_explicit": session_scope is not None,
-    }
-
-
-def trace_state_dir(project_root: Path, state_dir: Path | None) -> Path:
-    """Resolve the runtime state directory for the `zeta traces` group."""
-
-    return resolve_state_dir(project_root, state_dir)
+    obj = ctx.ensure_object(dict)
+    obj["session"] = session_scope or os.environ.get("ZETA_SESSION_ID") or "default"
+    obj["session_explicit"] = session_scope is not None
 
 
 def trace_context(ctx: click.Context) -> tuple[Path, str]:
     obj = ctx.obj if isinstance(ctx.obj, dict) else {}
     raw_state_dir = obj.get("state_dir")
     raw_session = obj.get("session")
-    state_dir = raw_state_dir if isinstance(raw_state_dir, Path) else Path(".zeta")
+    state_dir = resolve_state_dir(
+        raw_state_dir if isinstance(raw_state_dir, Path) else None
+    )
     session = raw_session if isinstance(raw_session, str) and raw_session else "default"
     return state_dir, session
 
@@ -111,11 +129,19 @@ def scoped_store(ctx: click.Context, *, read_only: bool = True) -> Store:
         store = open_session_store(state_dir, session_id)
         ctx.call_on_close(store.close)
         return store
+    path = zeta_sqlite_path(state_dir)
+    if not path.exists():
+        if read_only:
+            return InMemoryStore(session_id=session_id)
+        raise click.ClickException(f"no trace store at {path}")
     store = SqliteObjectStore(
-        zeta_sqlite_path(state_dir),
+        path,
         session_id=session_id,
         read_only=read_only,
     )
+    if read_only and "objects" not in sqlite_table_names(store.connection):
+        store.close()
+        return InMemoryStore(session_id=session_id)
     ctx.call_on_close(store.close)
     return store
 
@@ -137,6 +163,7 @@ def pretty_print_json(value: object) -> None:
 
 
 @traces_group.command("log")
+@nested_state_dir_option
 @click.option(
     "--kind",
     "kinds",
@@ -182,6 +209,7 @@ def trace_log(
 
 
 @traces_group.command("reinit-store")
+@nested_state_dir_option
 @click.option(
     "--yes",
     is_flag=True,
@@ -189,7 +217,7 @@ def trace_log(
 )
 @click.pass_context
 def trace_reinit_store(ctx: click.Context, yes: bool) -> int:
-    """Recreate the selected Zeta trace database."""
+    """Delete all trace and runtime records in the selected Zeta database."""
 
     state_dir, _session_id = trace_context(ctx)
     path = zeta_sqlite_path(state_dir)
@@ -208,6 +236,7 @@ def trace_reinit_store(ctx: click.Context, yes: bool) -> int:
 
 
 @traces_group.command("tools")
+@nested_state_dir_option
 @click.option("--json", "json_output", is_flag=True, help="Emit rows as JSON.")
 @click.option("--failed", is_flag=True, help="Only include failed tool calls.")
 @click.option("--successful", is_flag=True, help="Only include successful tool calls.")
@@ -264,6 +293,7 @@ def trace_tools(
 
 
 @traces_group.command("grep")
+@nested_state_dir_option
 @click.argument("pattern")
 @click.option(
     "--kind",
@@ -367,6 +397,7 @@ def scope_listing_lines(
 
 
 @traces_group.command("show")
+@nested_state_dir_option
 @click.argument("object_id")
 @click.option("--json", "json_output", is_flag=True, help="Emit the raw object JSON.")
 @click.pass_context
@@ -390,18 +421,20 @@ def trace_show(ctx: click.Context, object_id: str, json_output: bool) -> int:
 
 
 @traces_group.command("closure")
+@nested_state_dir_option
 @click.argument("object_id")
 @click.pass_context
 def trace_closure(ctx: click.Context, object_id: str) -> int:
     """List every object reachable from a trace object."""
 
-    store = scoped_store(ctx, read_only=False)
+    store = scoped_store(ctx)
     resolved = resolve_cli_object_id(object_id, store=store)
     pretty_print_json({"objects": list_trace_closure(resolved, store=store)})
     return 0
 
 
 @traces_group.command("tree")
+@nested_state_dir_option
 @click.argument("object_id")
 @click.option("--down", is_flag=True, help="Follow consumers instead of producers.")
 @click.option(
@@ -423,6 +456,7 @@ def trace_tree(ctx: click.Context, object_id: str, down: bool, depth: int) -> in
 
 
 @traces_group.command("diff")
+@nested_state_dir_option
 @click.argument("old_id")
 @click.argument("new_id")
 @click.option(
@@ -444,6 +478,7 @@ def trace_diff(ctx: click.Context, old_id: str, new_id: str, stat_only: bool) ->
 
 
 @traces_group.command("replay")
+@nested_state_dir_option
 @click.argument("object_id")
 @click.option(
     "--model",
@@ -466,7 +501,7 @@ def trace_replay(
 ) -> int:
     """Resend a stored prompt through the model boundary."""
 
-    store = scoped_store(ctx)
+    store = scoped_store(ctx, read_only=False)
     state_dir, session_id = trace_context(ctx)
     prompt_id, _ = resolve_cli_prompt(store, object_id)
     reconstructed = reconstructed_prompt_request(store, prompt_id)
@@ -504,6 +539,7 @@ def trace_replay(
 
 
 @traces_group.command("refs")
+@nested_state_dir_option
 @click.pass_context
 def trace_refs(ctx: click.Context) -> int:
     """List the mutable refs and the objects they point at."""
@@ -513,6 +549,7 @@ def trace_refs(ctx: click.Context) -> int:
 
 
 @traces_group.command("prompts")
+@nested_state_dir_option
 @click.pass_context
 def trace_prompts(ctx: click.Context) -> int:
     """List recorded prompts with store size statistics."""
@@ -531,4 +568,4 @@ def trace_prompts(ctx: click.Context) -> int:
     return 0
 
 
-__all__ = ["trace_state_dir", "traces_group"]
+__all__ = ["traces_group"]

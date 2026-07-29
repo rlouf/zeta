@@ -55,6 +55,22 @@ def _derivation_from_row(row: sqlite3.Row) -> Derivation:
     )
 
 
+def sqlite_read_only_uri(path: Path) -> str:
+    """Preserve live WAL visibility without creating sidecars for closed stores."""
+
+    immutable = "" if Path(f"{path}-wal").exists() else "&immutable=1"
+    return f"{path.resolve().as_uri()}?mode=ro{immutable}"
+
+
+def sqlite_table_names(connection: sqlite3.Connection) -> set[str]:
+    """Let read-only clients detect an absent subsystem without migrating it."""
+
+    rows = connection.execute(
+        "SELECT name FROM sqlite_master WHERE type = 'table'"
+    ).fetchall()
+    return {str(row[0]) for row in rows}
+
+
 class SqliteObjectStore(StoreBase):
     """Synchronous SQLite implementation of the substrate store protocol."""
 
@@ -70,7 +86,7 @@ class SqliteObjectStore(StoreBase):
         self.read_only = read_only
         if read_only:
             self.connection = sqlite3.connect(
-                f"{path.as_uri()}?mode=ro&immutable=1",
+                sqlite_read_only_uri(path),
                 uri=True,
                 check_same_thread=False,
             )

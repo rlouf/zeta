@@ -12,10 +12,10 @@ def isolate_zeta_state(
 ) -> Iterator[None]:
     """Point Zeta state at a temp dir for every test.
 
-    Without this, the Zeta trace store reads the developer's real `~/.zeta`
-    state, so tests pass only on machines with no recorded history.
-    The same applies to `HOME`: project context, skills, tool plugins, and
-    model profiles are discovered under `~/.zeta` and `~/.agents`.
+    Without the runtime override, tests could discover state from the working
+    tree and read or change project records. The same isolation applies to
+    `HOME`: global instructions, skills, tool plugins, and model profiles are
+    discovered under `~/.zeta` and `~/.agents`.
     """
     monkeypatch.setenv("HOME", str(tmp_path_factory.mktemp("home")))
     monkeypatch.setenv("ZETA_STATE_DIR", str(tmp_path / "state"))

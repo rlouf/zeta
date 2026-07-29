@@ -12,7 +12,7 @@ from zeta.models.profiles import (
     resolve_model_profile,
 )
 from zeta.models.types import ModelOutput
-from zeta.run.context import zeta_state_dir
+from zeta.records.stores.sqlite import resolve_state_dir
 from zeta.substrate import Derivation, Object, ObjectId, Store
 from zeta.trace import warn_trace_failure_once
 from zeta.trace.summarize import (
@@ -30,7 +30,7 @@ def replay_model_selection(
     """Return the model a replay should use, honoring --model."""
     if model_profile is None:
         return resolve_active_model(
-            session_dir=session_dir or zeta_state_dir() / "sessions" / "default"
+            session_dir=session_dir or resolve_state_dir() / "sessions" / "default"
         ).selection
     selection = resolve_model_profile(model_profile)
     if selection is None:

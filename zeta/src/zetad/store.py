@@ -15,6 +15,7 @@ from zeta.events import Event
 from zeta.records.events import AppendOutcome, DraftEvent
 from zeta.records.stores.event_store import Filter
 from zeta.records.stores.sqlite import SqliteEventStore
+from zeta.substrate.sqlite import sqlite_table_names
 
 from zetad.metrics import MetricAttribute, NullRuntimeMetrics, RuntimeMetrics
 from zetad.projections import runtime_event_projection
@@ -84,6 +85,70 @@ class QueueClaim:
     token: str
 
 
+RUNTIME_PROJECTION_TABLES = frozenset(
+    {"queue_items", "attempts", "attempt_results", "locks"}
+)
+
+
+def _in_memory_read_only_event_store(
+    source: SqliteEventStore | None = None,
+) -> SqliteEventStore:
+    """Keep absent or incomplete on-disk projections out of inspection writes."""
+
+    projection = runtime_event_projection()
+    store = SqliteEventStore(
+        ":memory:",
+        projections=(projection,),
+    )
+    if source is not None:
+        source.connection.backup(store.connection)
+        projection.reset_schema(store.connection)
+        projection.init_schema(store.connection)
+        for event in store.list_events(Filter()):
+            projection.index(store.connection, event)
+    projection.recover(store.connection)
+    store.connection.commit()
+    store.connection.execute("PRAGMA query_only=ON")
+    store.read_only = True
+    return store
+
+
+def _read_only_event_store(path: Path) -> SqliteEventStore:
+    """Rebuild incomplete runtime indexes transiently instead of migrating state."""
+
+    if not path.exists():
+        return _in_memory_read_only_event_store()
+
+    projection = runtime_event_projection()
+    store = SqliteEventStore(
+        path,
+        projections=(projection,),
+        read_only=True,
+    )
+    table_names = sqlite_table_names(store.connection)
+    if "events" not in table_names:
+        store.close()
+        return _in_memory_read_only_event_store()
+
+    projection_version = None
+    if "event_projection_versions" in table_names:
+        row = store.connection.execute(
+            "SELECT version FROM event_projection_versions WHERE name = ?",
+            (projection.name,),
+        ).fetchone()
+        projection_version = int(row["version"]) if row is not None else None
+    if (
+        RUNTIME_PROJECTION_TABLES.issubset(table_names)
+        and projection_version == projection.version
+    ):
+        return store
+
+    try:
+        return _in_memory_read_only_event_store(store)
+    finally:
+        store.close()
+
+
 @dataclass(frozen=True)
 class RuntimeEventStore:
     """Event log plus orchestration-owned runtime indexes."""
@@ -97,9 +162,20 @@ class RuntimeEventStore:
         path: Path | str,
         *,
         metrics: RuntimeMetrics | None = None,
+        read_only: bool = False,
     ) -> RuntimeEventStore:
+        """Keep first-time inspections from establishing runtime state."""
+
+        store_path = Path(path)
+        if read_only:
+            event_store = _read_only_event_store(store_path)
+        else:
+            event_store = SqliteEventStore(
+                store_path,
+                projections=(runtime_event_projection(),),
+            )
         return cls(
-            SqliteEventStore(path, projections=(runtime_event_projection(),)),
+            event_store,
             metrics or NullRuntimeMetrics(),
         )
 

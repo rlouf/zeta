@@ -2198,13 +2198,6 @@ def test_zeta_push_ingress_validates_returned_event_payload(
     assert events == []
 
 
-
-
-
-
-
-
-
 def test_zeta_scheduler_loads_project_with_connector_bindings(tmp_path: Path) -> None:
     agents_dir = tmp_path / "agents"
     agents_dir.mkdir()
@@ -2307,21 +2300,156 @@ Summarize.
     assert enqueued is True
 
 
-def test_zeta_resolve_state_dir_defaults_and_overrides(
+def test_zeta_resolve_state_dir_explicit_and_environment_precedence(
     tmp_path: Path,
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from zeta.records.stores.sqlite import resolve_state_dir
 
-    assert resolve_state_dir(Path("."), tmp_path / "explicit") == tmp_path / "explicit"
-    assert resolve_state_dir(tmp_path, None) == tmp_path.resolve() / ".zeta"
+    working_dir = tmp_path / "working"
+    working_dir.mkdir()
+    monkeypatch.chdir(working_dir)
+    monkeypatch.setenv("ZETA_STATE_DIR", "environment")
 
-    monkeypatch.setenv("ZETA_STATE_DIR", str(tmp_path / "env"))
-    assert resolve_state_dir(Path("."), None) == tmp_path / "env"
+    assert resolve_state_dir(Path("explicit")) == working_dir / "explicit"
+    assert resolve_state_dir() == working_dir / "environment"
 
+    monkeypatch.setenv("ZETA_STATE_DIR", "")
+    assert resolve_state_dir() == working_dir / ".zeta"
+
+
+def test_zeta_resolve_state_dir_finds_nearest_marker(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from zeta.records.stores.sqlite import resolve_state_dir
+
+    project = tmp_path / "project"
+    child = project / "src" / "package"
+    marker = project / ".zeta"
+    child.mkdir(parents=True)
+    marker.mkdir()
     monkeypatch.delenv("ZETA_STATE_DIR", raising=False)
-    monkeypatch.setattr(Path, "home", classmethod(lambda _cls: tmp_path / "home"))
-    assert resolve_state_dir(Path("."), None) == tmp_path / "home" / ".zeta"
+
+    assert resolve_state_dir(start=child) == marker
+
+
+def test_zeta_resolve_state_dir_fallback_does_not_create_marker(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from zeta.records.stores.sqlite import resolve_state_dir
+
+    project = tmp_path / "project"
+    project.mkdir()
+    monkeypatch.delenv("ZETA_STATE_DIR", raising=False)
+
+    assert resolve_state_dir(start=project) == project / ".zeta"
+    assert not (project / ".zeta").exists()
+
+
+def test_zeta_resolve_state_dir_excludes_home_marker_for_descendants(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from zeta.records.stores.sqlite import resolve_state_dir
+
+    home = tmp_path / "home"
+    project = home / "projects" / "zeta"
+    project.mkdir(parents=True)
+    (home / ".zeta").mkdir()
+    monkeypatch.delenv("ZETA_STATE_DIR", raising=False)
+    monkeypatch.setattr(Path, "home", classmethod(lambda _cls: home))
+
+    assert resolve_state_dir(start=project) == project / ".zeta"
+    assert resolve_state_dir(start=home) == home / ".zeta"
+
+
+def test_zeta_resolve_state_dir_accepts_directory_symlink_marker(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from zeta.records.stores.sqlite import resolve_state_dir
+
+    project = tmp_path / "project"
+    state = tmp_path / "state"
+    project.mkdir()
+    state.mkdir()
+    (project / ".zeta").symlink_to(state, target_is_directory=True)
+    monkeypatch.delenv("ZETA_STATE_DIR", raising=False)
+
+    assert resolve_state_dir(start=project) == project / ".zeta"
+
+
+@pytest.mark.parametrize("broken_symlink", [False, True])
+def test_zeta_resolve_state_dir_rejects_invalid_marker(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    broken_symlink: bool,
+) -> None:
+    from zeta.records.stores.sqlite import resolve_state_dir
+
+    project = tmp_path / "project"
+    project.mkdir()
+    marker = project / ".zeta"
+    if broken_symlink:
+        marker.symlink_to(tmp_path / "missing", target_is_directory=True)
+    else:
+        marker.write_text("not a directory", encoding="utf-8")
+    monkeypatch.delenv("ZETA_STATE_DIR", raising=False)
+
+    with pytest.raises(NotADirectoryError, match=r"\.zeta"):
+        resolve_state_dir(start=project)
+
+
+def test_zeta_resolve_state_dir_treats_current_directory_spellings_equally(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from zeta.records.stores.sqlite import resolve_state_dir
+
+    project = tmp_path / "project"
+    project.mkdir()
+    monkeypatch.chdir(project)
+    monkeypatch.delenv("ZETA_STATE_DIR", raising=False)
+
+    expected = project / ".zeta"
+    assert resolve_state_dir() == expected
+    assert resolve_state_dir(start=Path(".")) == expected
+    assert resolve_state_dir(start=Path("./")) == expected
+    assert resolve_state_dir(start=project.resolve()) == expected
+
+
+def test_zeta_implicit_store_and_session_paths_use_cwd_discovery(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from zeta.models.profiles import profile_session_dir, user_models_config_path
+    from zeta.records.stores.sqlite import event_store_path, zeta_sqlite_path
+    from zeta.run.context import default_session
+    from zeta.substrate import SqliteObjectStore
+
+    home = tmp_path / "home"
+    project = home / "projects" / "zeta"
+    project.mkdir(parents=True)
+    monkeypatch.chdir(project)
+    monkeypatch.delenv("ZETA_STATE_DIR", raising=False)
+    monkeypatch.setattr(Path, "home", classmethod(lambda _cls: home))
+
+    state_dir = project / ".zeta"
+    assert event_store_path() == state_dir / "zeta.sqlite3"
+    assert zeta_sqlite_path() == state_dir / "zeta.sqlite3"
+    assert profile_session_dir() == state_dir / "sessions" / "default"
+    assert user_models_config_path() == home / ".zeta" / "models.toml"
+
+    session = default_session()
+    trace_store = cast(SqliteObjectStore, session.trace_store)
+    try:
+        assert session.state_dir == state_dir
+        assert session.session_dir == state_dir / "sessions" / "default"
+    finally:
+        trace_store.close()
+        session.event_sink.close()
 
 
 def test_zeta_run_until_idle_drains_queue(monkeypatch) -> None:
@@ -2377,8 +2505,6 @@ description: Does work.
 
     with pytest.raises(zeta_agents.TemplateError, match="unknown variable 'payload'"):
         zeta_agents.validate_prompt(spec)
-
-
 
 
 def test_zeta_agent_with_returns_requires_event_registry(tmp_path: Path) -> None:

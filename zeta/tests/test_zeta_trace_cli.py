@@ -451,6 +451,135 @@ def test_zeta_cli_traces_replaces_trace_namespace() -> None:
     assert "No such command 'trace'" in removed_namespace.output
 
 
+def test_zeta_cli_fresh_trace_inspection_does_not_create_state(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = tmp_path / "fresh"
+    project.mkdir()
+    monkeypatch.delenv("ZETA_STATE_DIR", raising=False)
+    monkeypatch.chdir(project)
+
+    result = CliRunner().invoke(zeta_cli, ["traces", "log"])
+
+    assert result.exit_code == 0
+    assert result.output == "no trace objects recorded\n"
+    assert not (project / ".zeta").exists()
+    assert not (Path.home() / ".zeta").exists()
+
+
+def test_zeta_cli_trace_inspection_treats_event_only_database_as_empty(
+    tmp_path: Path,
+) -> None:
+    state_dir = tmp_path / ".zeta"
+    event_store = SqliteEventStore(event_store_path(state_dir))
+    event_store.accept(DraftEvent("project.ready", "test", {}))
+    event_store.close()
+
+    result = CliRunner().invoke(
+        zeta_cli,
+        ["traces", "--state-dir", str(state_dir), "log"],
+    )
+
+    assert result.exit_code == 0
+    assert result.output == "no trace objects recorded\n"
+
+
+def test_zeta_cli_event_inspection_treats_trace_only_database_as_empty(
+    tmp_path: Path,
+) -> None:
+    state_dir = tmp_path / ".zeta"
+    trace_store = SqliteObjectStore(zeta_sqlite_path(state_dir))
+    trace_store.put_object(Object(kind="prompt", schema="zeta.prompt.v1", data={}))
+    trace_store.close()
+
+    result = CliRunner().invoke(
+        zeta_cli,
+        ["events", "--state-dir", str(state_dir), "--json"],
+    )
+
+    assert result.exit_code == 0
+    assert json.loads(result.output) == []
+
+
+@pytest.mark.parametrize(
+    ("command", "expected_prefix"),
+    [
+        (["queue"], "pending\tqi_"),
+        (["attempts"], "attempts empty\n"),
+        (["ps"], "runs empty\n"),
+        (["status"], "pending: 1\n"),
+    ],
+)
+def test_zeta_cli_projection_inspection_reads_plain_event_database(
+    tmp_path: Path,
+    command: list[str],
+    expected_prefix: str,
+) -> None:
+    state_dir = tmp_path / ".zeta"
+    event_store = SqliteEventStore(event_store_path(state_dir))
+    event_store.accept(DraftEvent("project.ready", "test", {}))
+    event_store.close()
+
+    result = CliRunner().invoke(
+        zeta_cli,
+        [*command, "--state-dir", str(state_dir)],
+    )
+
+    assert result.exit_code == 0
+    assert result.output.startswith(expected_prefix)
+
+
+def test_zeta_cli_transient_projection_preserves_event_cursors(
+    tmp_path: Path,
+) -> None:
+    state_dir = tmp_path / ".zeta"
+    event_store = SqliteEventStore(event_store_path(state_dir))
+    event_store.accept(DraftEvent("temporary.event", "test", {}, session_id="discard"))
+    retained = event_store.accept(
+        DraftEvent("project.ready", "test", {}, session_id="keep")
+    ).event
+    event_store.clear_session_events("discard", event_type_prefix="temporary.")
+    event_store.close()
+
+    result = CliRunner().invoke(
+        zeta_cli,
+        ["events", "--state-dir", str(state_dir), "--json"],
+    )
+
+    assert result.exit_code == 0
+    assert [row["cursor"] for row in json.loads(result.output)] == [retained.cursor]
+
+
+def test_zeta_trace_read_only_inspection_sees_live_wal(tmp_path: Path) -> None:
+    state_dir = tmp_path / ".zeta"
+    trace_store = SqliteObjectStore(
+        zeta_sqlite_path(state_dir),
+        session_id="default",
+    )
+    prompt_id = trace_store.put_object(
+        Object(
+            kind="prompt",
+            schema="zeta.prompt.v1",
+            data={"payload": {"text": "live"}},
+        )
+    )
+    trace_store.record_derivation(Derivation(producer="unit:test", output_id=prompt_id))
+
+    try:
+        result = CliRunner().invoke(
+            zeta_cli,
+            ["traces", "--state-dir", str(state_dir), "log"],
+        )
+        sessions = available_session_ids(state_dir)
+    finally:
+        trace_store.close()
+
+    assert result.exit_code == 0
+    assert prompt_id.removeprefix("sha256:")[:8] in result.output
+    assert sessions == ["default"]
+
+
 def test_zeta_trace_reinit_store_recreates_unified_database(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

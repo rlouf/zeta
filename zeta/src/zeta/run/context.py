@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING
 from zeta.records.stores.sqlite import (
     SqliteEventStore,
     event_store_path,
+    resolve_state_dir,
     zeta_sqlite_path,
 )
 from zeta.substrate import SqliteObjectStore
@@ -33,14 +34,15 @@ class RuntimeContext:
 
 
 def zeta_state_dir() -> Path:
-    root = os.environ.get("ZETA_STATE_DIR")
-    return Path(root).expanduser() if root else Path.home() / ".zeta"
+    """Return the user-level configuration directory."""
+
+    return Path.home() / ".zeta"
 
 
 def default_session() -> RuntimeContext:
     """Return the default process session for pure Zeta runtime calls."""
 
-    state_dir = zeta_state_dir()
+    state_dir = resolve_state_dir()
     session_id = os.environ.get("ZETA_SESSION_ID") or "default"
     return session_for_id(
         session_id=session_id,

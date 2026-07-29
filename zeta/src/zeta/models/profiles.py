@@ -9,6 +9,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal, cast
 
+from zeta.records.stores.sqlite import resolve_state_dir
+
 ACTIVE_MODEL_STATE = "active-model.json"
 MODEL_NAME_PATTERN = re.compile(r"^[a-z0-9-]+$")
 DEFAULT_MODEL_URL = "http://127.0.0.1:8080/v1/chat/completions"
@@ -27,10 +29,8 @@ MODEL_APIS = (CHAT_COMPLETIONS_API, CODEX_RESPONSES_API)
 def profile_session_dir(session_dir: Path | None = None) -> Path:
     if session_dir is not None:
         return session_dir
-    root = os.environ.get("ZETA_STATE_DIR")
     session = os.environ.get("ZETA_SESSION_ID") or "default"
-    base = Path(root).expanduser() if root else Path.home() / ".zeta"
-    return base / "sessions" / session
+    return resolve_state_dir() / "sessions" / session
 
 
 def active_model_state_path(session_dir: Path | None = None) -> Path:

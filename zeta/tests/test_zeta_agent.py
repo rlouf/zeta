@@ -1695,9 +1695,7 @@ def test_zeta_run_capability_step_dispatches_to_injected_executor() -> None:
     }
 
 
-def test_zeta_run_capability_step_records_executor_refusal() -> (
-    None
-):
+def test_zeta_run_capability_step_records_executor_refusal() -> None:
     state = zeta_agent.RunState()
     registry = CapabilityRegistry()
     capability = _test_capability("read")
@@ -3047,22 +3045,6 @@ def test_zeta_event_trigger_rule_matches_exact_and_prefix() -> None:
     )
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 def test_zeta_dispatcher_fencing_is_explicit_by_mode(tmp_path: Path) -> None:
     events = RuntimeEventStore.open(tmp_path / "events.sqlite3")
 
@@ -3076,10 +3058,6 @@ def test_zeta_dispatcher_fencing_is_explicit_by_mode(tmp_path: Path) -> None:
         claim_token="token",
     )
     assert daemon._queue_claim_is_current("qi_anything") is False
-
-
-
-
 
 
 def test_zeta_queueing_dispatcher_defers_agent_published_work(
@@ -3126,9 +3104,7 @@ def test_zeta_queueing_dispatcher_defers_agent_published_work(
     )
 
     asyncio.run(
-        dispatcher.publish_event(
-            zeta_events.DraftEvent("parent.requested", "test", {})
-        )
+        dispatcher.publish_event(zeta_events.DraftEvent("parent.requested", "test", {}))
     )
     first = asyncio.run(dispatcher.run_next())
     assert first is not None
@@ -3151,20 +3127,6 @@ def test_zeta_queueing_dispatcher_defers_agent_published_work(
     assert child_calls == 1
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 def test_zeta_retry_policy_computes_backoff_and_classifies_errors() -> None:
     policy = zetad_retry.RetryPolicy(
         max_attempts=3,
@@ -3183,18 +3145,6 @@ def test_zeta_retry_policy_computes_backoff_and_classifies_errors() -> None:
     )
     assert policy.classify("agent_spec_invalid") == "permanent"
     assert policy.classify("provider_timeout") == "retryable"
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 def test_zeta_sqlite_event_store_serializes_threaded_appends(
@@ -3412,8 +3362,6 @@ def test_zeta_sqlite_event_store_reconciles_claim_without_lease(
 
     assert reconciled == 1
     assert event_store.list_queue_items()[0]["status"] == "pending"
-
-
 
 
 def test_zeta_sqlite_event_store_claims_and_reconciles_queue_leases(
@@ -3764,27 +3712,12 @@ def test_zeta_sqlite_event_store_renews_locks(tmp_path: Path) -> None:
     )
 
 
-
-
-
-
-
-
-
-
-
-
-
-
 def test_zeta_cli_ps_replaces_runs_listing(tmp_path: Path) -> None:
     listing = CliRunner().invoke(
         zetad_cli.cli,
-        ["ps", "--project-root", str(tmp_path)],
+        ["ps", "--state-dir", str(tmp_path / ".zeta")],
     )
-    removed_alias = CliRunner().invoke(
-        zetad_cli.cli,
-        ["runs", "--project-root", str(tmp_path)],
-    )
+    removed_alias = CliRunner().invoke(zetad_cli.cli, ["runs"])
 
     assert listing.exit_code == 0
     assert listing.output == "runs empty\n"
@@ -3795,7 +3728,13 @@ def test_zeta_cli_ps_replaces_runs_listing(tmp_path: Path) -> None:
 def test_zeta_cli_run_show_reports_unknown_run(tmp_path: Path) -> None:
     result = CliRunner().invoke(
         zetad_cli.cli,
-        ["run", "show", "run_missing", "--project-root", str(tmp_path)],
+        [
+            "run",
+            "--state-dir",
+            str(tmp_path / ".zeta"),
+            "show",
+            "run_missing",
+        ],
     )
 
     assert result.exit_code == 1
@@ -3818,7 +3757,7 @@ def test_zeta_cli_events_json_lists_durable_events(tmp_path: Path) -> None:
 
     result = CliRunner().invoke(
         zetad_cli.cli,
-        ["events", "--project-root", str(tmp_path), "--json"],
+        ["events", "--state-dir", str(state_dir), "--json"],
     )
 
     assert result.exit_code == 0
@@ -3853,8 +3792,8 @@ def test_zeta_cli_events_filters_default_listing(tmp_path: Path) -> None:
         zetad_cli.cli,
         [
             "events",
-            "--project-root",
-            str(tmp_path),
+            "--state-dir",
+            str(state_dir),
             "--type-prefix",
             "runtime.",
             "--limit",
@@ -3866,6 +3805,287 @@ def test_zeta_cli_events_filters_default_listing(tmp_path: Path) -> None:
     assert result.output == (
         f"{selected.cursor}\truntime.queue_item.available\tzeta\t{selected.id}\n"
     )
+
+
+def test_zeta_cli_events_discovers_parent_state(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = tmp_path / "project"
+    nested = project / "src" / "package"
+    nested.mkdir(parents=True)
+    event_store = zeta_events.SqliteEventStore(event_store_path(project / ".zeta"))
+    event = event_store.accept(
+        zeta_events.DraftEvent("project.discovered", "test", {})
+    ).event
+    event_store.close()
+    monkeypatch.delenv("ZETA_STATE_DIR", raising=False)
+    monkeypatch.chdir(nested)
+
+    result = CliRunner().invoke(zetad_cli.cli, ["events", "--json"])
+
+    assert result.exit_code == 0
+    assert [row["id"] for row in json.loads(result.output)] == [event.id]
+
+
+def test_zeta_cli_events_parent_state_dir_overrides_environment(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    explicit_state = tmp_path / "explicit"
+    explicit_store = zeta_events.SqliteEventStore(event_store_path(explicit_state))
+    root = explicit_store.accept(
+        zeta_events.DraftEvent("issue.opened", "github", {})
+    ).event
+    child = explicit_store.accept(
+        zeta_events.DraftEvent("issue.closed", "github", {}, caused_by=root.id)
+    ).event
+    explicit_store.close()
+    monkeypatch.setenv("ZETA_STATE_DIR", str(tmp_path / "environment"))
+
+    result = CliRunner().invoke(
+        zetad_cli.cli,
+        ["events", "--state-dir", str(explicit_state), "chain", child.id],
+    )
+
+    assert result.exit_code == 0
+    assert root.id in result.output
+    assert child.id in result.output
+
+
+@pytest.mark.parametrize(
+    ("command", "expected_exit_code", "expected_output"),
+    [
+        (["events", "chain", "missing"], 0, "event not found: missing"),
+        (["run", "show", "missing"], 1, "run not found: missing"),
+        (["traces", "log"], 0, "no trace objects recorded"),
+        (
+            ["schedule", "status"],
+            0,
+            "schedules empty",
+        ),
+    ],
+)
+def test_zeta_cli_nested_state_dir_works_after_subcommand(
+    command: list[str],
+    expected_exit_code: int,
+    expected_output: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = tmp_path / "project"
+    (project / "agents").mkdir(parents=True)
+    environment_state = tmp_path / "environment-state"
+    environment_state.write_text("not a directory", encoding="utf-8")
+    explicit_state = tmp_path / "explicit-state"
+    monkeypatch.setenv("ZETA_STATE_DIR", str(environment_state))
+
+    if command[:2] == ["schedule", "status"]:
+        command = [*command, "--project-root", str(project)]
+    result = CliRunner().invoke(
+        zetad_cli.cli,
+        [*command, "--state-dir", str(explicit_state)],
+    )
+
+    assert result.exit_code == expected_exit_code
+    assert expected_output in result.output
+    assert not explicit_state.exists()
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        ["events", "publish", "--help"],
+        ["events", "chain", "--help"],
+        ["events", "root", "--help"],
+        ["events", "descendants", "--help"],
+        ["events", "turn", "--help"],
+        ["run", "show", "--help"],
+        ["schedule", "status", "--help"],
+        ["traces", "log", "--help"],
+        ["traces", "reinit-store", "--help"],
+        ["traces", "tools", "--help"],
+        ["traces", "grep", "--help"],
+        ["traces", "show", "--help"],
+        ["traces", "closure", "--help"],
+        ["traces", "tree", "--help"],
+        ["traces", "diff", "--help"],
+        ["traces", "replay", "--help"],
+        ["traces", "refs", "--help"],
+        ["traces", "prompts", "--help"],
+    ],
+)
+def test_zeta_cli_nested_commands_accept_state_dir_after_subcommand(
+    command: list[str],
+) -> None:
+    result = CliRunner().invoke(zetad_cli.cli, command)
+
+    assert result.exit_code == 0
+    assert "--state-dir" in result.output
+
+
+def test_zeta_cli_rejects_conflicting_nested_state_dirs(tmp_path: Path) -> None:
+    result = CliRunner().invoke(
+        zetad_cli.cli,
+        [
+            "events",
+            "--state-dir",
+            str(tmp_path / "parent"),
+            "chain",
+            "missing",
+            "--state-dir",
+            str(tmp_path / "child"),
+        ],
+    )
+
+    assert result.exit_code == 2
+    assert "conflicting --state-dir values" in result.output
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        ["queue", "--help"],
+        ["attempts", "--help"],
+        ["events", "--help"],
+        ["events", "chain", "--help"],
+        ["ps", "--help"],
+        ["run", "show", "--help"],
+        ["status", "--help"],
+        ["traces", "--help"],
+    ],
+)
+def test_zeta_cli_inspection_help_omits_project_root(command: list[str]) -> None:
+    result = CliRunner().invoke(zetad_cli.cli, command)
+
+    assert result.exit_code == 0
+    assert "--project-root" not in result.output
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        ["queue"],
+        ["attempts"],
+        ["events"],
+        ["events", "chain", "missing"],
+        ["ps"],
+        ["status"],
+        ["traces"],
+    ],
+)
+def test_zeta_cli_inspections_reject_project_root(
+    command: list[str],
+    tmp_path: Path,
+) -> None:
+    result = CliRunner().invoke(
+        zetad_cli.cli,
+        [*command, "--project-root", str(tmp_path)],
+    )
+
+    assert result.exit_code == 2
+    assert "No such option '--project-root'" in result.output
+
+
+def test_zeta_cli_run_show_rejects_parent_and_child_project_root(
+    tmp_path: Path,
+) -> None:
+    before_subcommand = CliRunner().invoke(
+        zetad_cli.cli,
+        ["run", "--project-root", str(tmp_path), "show", "missing"],
+    )
+    after_subcommand = CliRunner().invoke(
+        zetad_cli.cli,
+        ["run", "show", "missing", "--project-root", str(tmp_path)],
+    )
+
+    assert before_subcommand.exit_code == 2
+    assert after_subcommand.exit_code == 2
+
+
+def test_zeta_cli_fresh_inspection_does_not_create_state(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = tmp_path / "fresh"
+    project.mkdir()
+    monkeypatch.delenv("ZETA_STATE_DIR", raising=False)
+    monkeypatch.chdir(project)
+
+    result = CliRunner().invoke(zetad_cli.cli, ["ps"])
+
+    assert result.exit_code == 0
+    assert result.output == "runs empty\n"
+    assert not (project / ".zeta").exists()
+    assert not (Path.home() / ".zeta").exists()
+
+
+def test_zeta_cli_main_reports_invalid_state_marker(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    (tmp_path / ".zeta").write_text("not a directory", encoding="utf-8")
+    monkeypatch.delenv("ZETA_STATE_DIR", raising=False)
+    monkeypatch.chdir(tmp_path)
+
+    exit_code = zetad_cli.main(["ps"])
+    captured = capsys.readouterr()
+
+    assert exit_code == 1
+    assert "runtime state marker is not a directory" in captured.err
+    assert "Traceback" not in captured.err
+
+
+def test_zeta_cli_inspection_does_not_mutate_existing_state(tmp_path: Path) -> None:
+    state_dir = tmp_path / ".zeta"
+    event_store = zeta_events.SqliteEventStore(event_store_path(state_dir))
+    event_store.accept(zeta_events.DraftEvent("project.ready", "test", {}))
+    event_store.close()
+    before = {
+        path.name: path.read_bytes() for path in state_dir.iterdir() if path.is_file()
+    }
+
+    result = CliRunner().invoke(
+        zetad_cli.cli,
+        ["events", "--state-dir", str(state_dir), "--json"],
+    )
+    after = {
+        path.name: path.read_bytes() for path in state_dir.iterdir() if path.is_file()
+    }
+
+    assert result.exit_code == 0
+    assert before == after
+
+
+def test_zeta_cli_schedule_help_keeps_project_root() -> None:
+    schedule = CliRunner().invoke(zetad_cli.cli, ["schedule", "--help"])
+    status = CliRunner().invoke(zetad_cli.cli, ["schedule", "status", "--help"])
+
+    assert schedule.exit_code == 0
+    assert status.exit_code == 0
+    assert "--project-root" in schedule.output
+    assert "--project-root" in status.output
+    assert "--state-dir" in schedule.output
+    assert "--state-dir" in status.output
+
+
+def test_zeta_cli_schedule_status_does_not_create_state(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = tmp_path / "project"
+    (project / "agents").mkdir(parents=True)
+    monkeypatch.delenv("ZETA_STATE_DIR", raising=False)
+
+    result = CliRunner().invoke(
+        zetad_cli.cli,
+        ["schedule", "status", "--project-root", str(project)],
+    )
+
+    assert result.exit_code == 0
+    assert result.output == "schedules empty\n"
+    assert not (project / ".zeta").exists()
 
 
 def test_zeta_cli_events_chain_replaces_trace_causal_walk(tmp_path: Path) -> None:
@@ -3886,11 +4106,11 @@ def test_zeta_cli_events_chain_replaces_trace_causal_walk(tmp_path: Path) -> Non
 
     chain = CliRunner().invoke(
         zetad_cli.cli,
-        ["events", "chain", child.id, "--project-root", str(tmp_path)],
+        ["events", "--state-dir", str(state_dir), "chain", child.id],
     )
     removed_command = CliRunner().invoke(
         zetad_cli.cli,
-        ["events", "trace", child.id, "--project-root", str(tmp_path)],
+        ["events", "--state-dir", str(state_dir), "trace", child.id],
     )
 
     assert chain.exit_code == 0
@@ -3914,7 +4134,7 @@ def test_zeta_cli_status_counts_runtime_queue(tmp_path: Path) -> None:
 
     result = CliRunner().invoke(
         zetad_cli.cli,
-        ["status", "--project-root", str(tmp_path)],
+        ["status", "--state-dir", str(state_dir)],
     )
 
     assert result.exit_code == 0
@@ -3930,7 +4150,13 @@ def test_zeta_cli_run_routes_unhandled_event(tmp_path: Path) -> None:
 
     result = CliRunner().invoke(
         zetad_cli.cli,
-        ["run", "--project-root", str(tmp_path)],
+        [
+            "run",
+            "--project-root",
+            str(tmp_path),
+            "--state-dir",
+            str(tmp_path / ".zeta"),
+        ],
     )
     items = zetad_queue.project_queue_items(
         event_store.list_events(zeta_events.Filter())
@@ -3958,7 +4184,14 @@ Summarize the repo.
 
     result = CliRunner().invoke(
         zetad_cli.cli,
-        ["schedule", "--project-root", str(tmp_path), "--once"],
+        [
+            "schedule",
+            "--project-root",
+            str(tmp_path),
+            "--state-dir",
+            str(tmp_path / ".zeta"),
+            "--once",
+        ],
     )
     event_store = zeta_events.SqliteEventStore(event_store_path(tmp_path / ".zeta"))
     try:
@@ -3978,10 +4211,10 @@ def test_zeta_cli_events_publish_records_manual_event(tmp_path: Path) -> None:
         zetad_cli.cli,
         [
             "events",
+            "--state-dir",
+            str(tmp_path / ".zeta"),
             "publish",
             "laptop.resumed",
-            "--project-root",
-            str(tmp_path),
             "--source",
             "manual",
             "--payload-json",
@@ -4023,10 +4256,10 @@ def test_zeta_cli_events_publish_rejects_non_object_payload(tmp_path: Path) -> N
         zetad_cli.cli,
         [
             "events",
+            "--state-dir",
+            str(tmp_path / ".zeta"),
             "publish",
             "laptop.resumed",
-            "--project-root",
-            str(tmp_path),
             "--payload-json",
             "[]",
         ],
@@ -4123,7 +4356,15 @@ Summarize the repo.
 
     result = CliRunner().invoke(
         zetad_cli.cli,
-        ["schedule", "status", "--project-root", str(tmp_path), "--json"],
+        [
+            "schedule",
+            "--project-root",
+            str(tmp_path),
+            "--state-dir",
+            str(tmp_path / ".zeta"),
+            "status",
+            "--json",
+        ],
     )
 
     assert result.exit_code == 0
@@ -4141,23 +4382,39 @@ Summarize the repo.
     ]
 
 
-def test_zeta_scheduler_builds_project_services(tmp_path: Path) -> None:
-    runtime = zetad_scheduling.build_scheduler_services(project_root=tmp_path)
+def test_zeta_scheduler_builds_project_services(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project_root = tmp_path / "project"
+    state_dir = tmp_path / ".zeta"
+    project_root.mkdir()
+    state_dir.mkdir()
+    monkeypatch.delenv("ZETA_STATE_DIR", raising=False)
+    runtime = zetad_scheduling.build_scheduler_services(project_root=project_root)
 
     try:
-        assert runtime.project_root == tmp_path.resolve()
-        assert runtime.state_dir == tmp_path.resolve() / ".zeta"
+        assert runtime.project_root == project_root.resolve()
+        assert runtime.state_dir == state_dir
         assert runtime.events.path == event_store_path(runtime.state_dir)
     finally:
         runtime.close()
 
 
-def test_zeta_local_runtime_builds_project_services(tmp_path: Path) -> None:
-    runtime = zetad_worker.build_worker_services(project_root=tmp_path)
+def test_zeta_local_runtime_builds_project_services(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project_root = tmp_path / "project"
+    state_dir = tmp_path / ".zeta"
+    project_root.mkdir()
+    state_dir.mkdir()
+    monkeypatch.delenv("ZETA_STATE_DIR", raising=False)
+    runtime = zetad_worker.build_worker_services(project_root=project_root)
 
     try:
-        assert runtime.project_root == tmp_path.resolve()
-        assert runtime.state_dir == tmp_path.resolve() / ".zeta"
+        assert runtime.project_root == project_root.resolve()
+        assert runtime.state_dir == state_dir
         assert runtime.events.path == event_store_path(runtime.state_dir)
         assert runtime.tool_registry.get("zeta.read") is None
     finally:
@@ -4186,7 +4443,10 @@ def test_zeta_local_runtime_resolves_default_model_selection(
         "active_model_selection",
         active_model_selection,
     )
-    runtime = zetad_worker.build_worker_services(project_root=tmp_path)
+    runtime = zetad_worker.build_worker_services(
+        project_root=tmp_path,
+        state_dir=tmp_path / ".zeta",
+    )
 
     try:
         assert runtime.model_selection == selected
@@ -4618,7 +4878,13 @@ def test_zeta_cli_run_registers_builtin_tools(
 
     result = CliRunner().invoke(
         zetad_cli.cli,
-        ["run", "--project-root", str(tmp_path)],
+        [
+            "run",
+            "--project-root",
+            str(tmp_path),
+            "--state-dir",
+            str(tmp_path / ".zeta"),
+        ],
     )
 
     assert result.exit_code == 0
@@ -4673,6 +4939,7 @@ Triage the issue.
     registry = CapabilityRegistry()
     runtime = zetad_worker.build_worker_services(
         project_root=tmp_path,
+        state_dir=state_dir,
         tool_registry=registry,
     )
 
@@ -5180,8 +5447,6 @@ Ping.
     assert config.model_api is None
 
 
-
-
 def test_zeta_local_runtime_heartbeats_running_locks(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -5290,12 +5555,6 @@ def test_zeta_local_runtime_does_not_complete_stale_queue_claim(
     assert queue_item["status"] == "claimed"
     assert queue_item["claimed_by"] == "local-runtime"
     assert attempt["status"] == "running"
-
-
-
-
-
-
 
 
 def test_zeta_local_runtime_run_once_fans_out_pending_queue_item(
@@ -5964,7 +6223,10 @@ Triage the issue.
             "compile_agent_definitions",
             compile_agents,
         )
-        runtime = zetad_worker.build_worker_services(project_root=tmp_path)
+        runtime = zetad_worker.build_worker_services(
+            project_root=tmp_path,
+            state_dir=state_dir,
+        )
         try:
             await zetad_worker.run_forever(
                 runtime,
@@ -6241,7 +6503,13 @@ Triage {{ event.payload.title }}
 
     result = CliRunner().invoke(
         zetad_cli.cli,
-        ["run", "--project-root", str(tmp_path)],
+        [
+            "run",
+            "--project-root",
+            str(tmp_path),
+            "--state-dir",
+            str(state_dir),
+        ],
     )
     items = zetad_queue.project_queue_items(
         event_store.list_events(zeta_events.Filter())

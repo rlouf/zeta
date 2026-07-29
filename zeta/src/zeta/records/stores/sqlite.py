@@ -18,7 +18,7 @@ from typing import Any, Protocol
 from zeta.records.events import AppendOutcome, DraftEvent, Event, json_native_payload
 from zeta.records.stores.event_store import Filter
 from zeta.substrate.objects import Derivation, Object
-from zeta.substrate.sqlite import SqliteObjectStore
+from zeta.substrate.sqlite import SqliteObjectStore, sqlite_read_only_uri
 from zeta.substrate.store import escape_like
 
 __all__ = [
@@ -35,7 +35,7 @@ __all__ = [
     "import_trace_graph",
     "open_existing_trace_store",
     "open_trace_store",
-    "trace_state_dir",
+    "resolve_state_dir",
     "zeta_sqlite_path",
 ]
 
@@ -53,14 +53,9 @@ class UnknownSessionError(LookupError):
         self.available = available
 
 
-def trace_state_dir() -> Path:
-    root = os.environ.get("ZETA_STATE_DIR")
-    return Path(root).expanduser() if root else Path.home() / ".zeta"
-
-
 def zeta_sqlite_path(root: Path | None = None) -> Path:
     """Return the unified Zeta SQLite store path."""
-    return (root or trace_state_dir()) / ZETA_SQLITE_NAME
+    return (root if root is not None else resolve_state_dir()) / ZETA_SQLITE_NAME
 
 
 def default_sqlite_path() -> Path:
@@ -73,7 +68,7 @@ def available_session_ids(root: Path | None = None) -> list[str]:
     path = zeta_sqlite_path(root)
     if not path.exists():
         return []
-    connection = sqlite3.connect(f"{path.as_uri()}?mode=ro&immutable=1", uri=True)
+    connection = sqlite3.connect(sqlite_read_only_uri(path), uri=True)
     connection.row_factory = sqlite3.Row
     try:
         sessions: set[str] = set()
@@ -228,24 +223,39 @@ class SqliteEventStore:
         path: Path | str,
         *,
         projections: Iterable[EventProjection] = (),
+        read_only: bool = False,
     ) -> None:
         self.path = Path(path)
         self._projections = tuple(projections)
-        if self.path != Path(":memory:"):
+        self.read_only = read_only
+        if read_only and self.path == Path(":memory:"):
+            raise ValueError("an in-memory event store cannot be read-only")
+        if not read_only and self.path != Path(":memory:"):
             self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.connection = sqlite3.connect(
-            str(self.path),
-            timeout=5.0,
-            check_same_thread=False,
-        )
+        if read_only:
+            self.connection = sqlite3.connect(
+                sqlite_read_only_uri(self.path),
+                uri=True,
+                timeout=5.0,
+                check_same_thread=False,
+            )
+        else:
+            self.connection = sqlite3.connect(
+                str(self.path),
+                timeout=5.0,
+                check_same_thread=False,
+            )
         self.connection.row_factory = sqlite3.Row
         _execute_with_retry(self.connection, "PRAGMA busy_timeout=5000")
         _execute_with_retry(self.connection, "PRAGMA case_sensitive_like=ON")
-        if self.path != Path(":memory:"):
+        if read_only:
+            _execute_with_retry(self.connection, "PRAGMA query_only=ON")
+        elif self.path != Path(":memory:"):
             _execute_with_retry(self.connection, "PRAGMA journal_mode=WAL")
             _execute_with_retry(self.connection, "PRAGMA synchronous=NORMAL")
         self._write_lock = threading.RLock()
-        self._init_schema()
+        if not read_only:
+            self._init_schema()
 
     def close(self) -> None:
         self.connection.close()
@@ -590,29 +600,40 @@ class SqliteEventStore:
         return _row_to_event(row)
 
 
-def resolve_state_dir(project_root: Path, state_dir: Path | None) -> Path:
-    """Resolve the runtime state directory shared by workers and CLI readers.
+def resolve_state_dir(
+    state_dir: Path | None = None,
+    *,
+    start: Path | None = None,
+) -> Path:
+    """Discover project runtime state without creating it.
 
-    An explicit ``state_dir`` always wins. A non-default ``project_root`` keeps
-    state under ``<project_root>/.zeta``. Otherwise fall back to ``ZETA_STATE_DIR``
-    or ``~/.zeta`` so the worker and the inspection commands agree by default.
+    The home marker is ignored while discovering from one of its descendants
+    because ``~/.zeta`` also owns user-level configuration.
     """
     if state_dir is not None:
-        return state_dir.expanduser()
-    if project_root != Path("."):
-        return project_root.expanduser().resolve() / ".zeta"
+        return state_dir.expanduser().resolve()
     env_state_dir = os.environ.get("ZETA_STATE_DIR")
     if env_state_dir:
-        return Path(env_state_dir).expanduser()
-    return Path.home() / ".zeta"
+        return Path(env_state_dir).expanduser().resolve()
+
+    discovery_start = (start or Path.cwd()).expanduser().resolve()
+    home = Path.home().expanduser().resolve()
+    search_roots = (discovery_start, *discovery_start.parents)
+    if discovery_start != home and discovery_start.is_relative_to(home):
+        search_roots = search_roots[: search_roots.index(home)]
+    for root in search_roots:
+        marker = root / ".zeta"
+        if marker.is_dir():
+            return marker
+        if marker.exists() or marker.is_symlink():
+            raise NotADirectoryError(
+                f"runtime state marker is not a directory: {marker}"
+            )
+    return discovery_start / ".zeta"
 
 
 def event_store_path(root: Path | None = None) -> Path:
-    if root is not None:
-        return root / ZETA_STORE_NAME
-    state_dir = os.environ.get("ZETA_STATE_DIR")
-    base = Path(state_dir).expanduser() if state_dir else Path.home() / ".zeta"
-    return base / ZETA_STORE_NAME
+    return (root if root is not None else resolve_state_dir()) / ZETA_STORE_NAME
 
 
 def _row_to_event(row: sqlite3.Row) -> Event:

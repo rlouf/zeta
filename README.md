@@ -87,6 +87,13 @@ e5f6a7b8  assistant_message   → read
 9c0d1e2f  prompt              4 components · ~486 tok
 ```
 
+Runtime records live in the nearest project `.zeta/` directory, discovered by
+walking up from the current directory much like Git discovers `.git/`.
+Inspection commands such as `zeta traces log`, `zeta events`, and `zeta ps`
+are read-only and do not create `.zeta/` when no runtime state exists. See
+[Runtime State](docs/concepts.md#runtime-state) for discovery and override
+details.
+
 Stop the worker with `kill %1` when you are done. Those `prompt` lines are the
 interesting part — the next section is what you do with them.
 

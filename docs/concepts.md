@@ -345,10 +345,42 @@ The bundled Slack connector uses:
 The bundled filesystem connector (`id: filesystem`) polls a directory and emits
 `file.created` events with a `{path, name, dir}` payload.
 
-## Running Agents
+## Runtime State
 
-Zeta stores runtime state under `~/.zeta/` by default. Override it with
-`--state-dir` when needed.
+Zeta keeps project runtime state in `.zeta/`. This includes the SQLite database
+for events, queue items, attempts, runs, and prompt traces, plus runtime session
+state.
+
+The runtime state directory is selected in this order:
+
+1. an explicit `--state-dir`;
+2. a non-empty `ZETA_STATE_DIR`;
+3. the nearest existing `.zeta/` found by walking up from the command's starting
+   directory;
+4. `<start>/.zeta` if no marker exists.
+
+Relative paths supplied by `--state-dir` or `ZETA_STATE_DIR` are resolved from
+the directory where Zeta was invoked. Selecting the fallback does not create
+it. A command that writes runtime state creates it only when needed; inspection
+commands remain read-only and leave a project with no `.zeta/` unchanged.
+For grouped commands, `--state-dir` works before or after the subcommand;
+different values in both positions are rejected.
+
+Commands that only inspect runtime records start discovery from the current
+directory. Commands that load agent definitions, including `schedule status`,
+start from their resolved project root instead. `--project-root` therefore
+belongs only to `run`, `serve`, `schedule`, `schedule status`, and `agent new`;
+use `--state-dir` when a runtime-only inspection command must read a different
+store.
+
+Zeta does not treat `~/.zeta` as a project marker when walking up from a
+directory below the home directory. That directory remains the user-level
+configuration root, including `models.toml`, global skills, and the global
+`AGENTS.md`. Project runtime discovery and user configuration are separate
+concepts. If discovery starts at the home directory itself, the fallback is
+naturally `~/.zeta`.
+
+## Running Agents
 
 Publish an event manually:
 
@@ -404,7 +436,9 @@ synthetic events such as `agent.release-manager.scheduled`.
 
 ## Observability And Debugging
 
-The `zeta` CLI reads the project runtime journal and queue:
+The `zeta` CLI reads the discovered project runtime journal and queue. Listing
+and inspection commands do not create or migrate runtime state. `events
+publish` is the explicitly mutating command in this group:
 
 ```text
 zeta status
@@ -477,7 +511,10 @@ Runtime events use the following prefixes:
 ## Prompt And Tool Traces
 
 Runtime events answer "what happened?" Prompt traces answer "what exactly did
-the model see?" They are stored in `~/.zeta/zeta.sqlite3`, scoped by session id.
+the model see?" They are stored in the discovered project runtime database,
+scoped by session id. Listing and inspecting traces are read-only; `traces
+replay` records its replay. `traces reinit-store` is the destructive exception:
+it deletes every trace and runtime record in the selected unified database.
 
 ```sh
 # List recent prompts and assistant messages across agent sessions.

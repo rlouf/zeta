@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from fnmatch import fnmatchcase
-from typing import TYPE_CHECKING, Any, Literal, cast
+from typing import TYPE_CHECKING, Any, Literal, Protocol, cast
 
 from zeta.agents.prompts import render_prompt
 from zeta.agents.spec import AgentSpec
@@ -23,7 +23,6 @@ if TYPE_CHECKING:
 DispatchMode = Literal["one_shot", "session_scoped"]
 AgentEventPublisher = Callable[[DraftEvent], Awaitable[Event]]
 AgentRunner = Callable[["AgentInvocation"], Awaitable[dict[str, Any]]]
-AgentRunRunner = Callable[..., Awaitable["AgentRunResult"]]
 TimelineFactory = Callable[["AgentInvocation"], list[dict[str, Any]]]
 ContextFactory = Callable[["AgentInvocation"], str]
 
@@ -91,6 +90,44 @@ class AgentInvocation:
 
 
 @dataclass(frozen=True)
+class AgentExecutionRequest:
+    """One immutable agent-loop invocation owned by the runtime harness."""
+
+    agent: AgentDefinition
+    triggering_event: Event
+    objective: str
+    timeline: list[dict[str, Any]]
+    context: str
+    config: AgentConfig
+    session_id: str
+    run_id: str
+    queue_item_id: str | None
+    attempt_id: str | None
+
+
+class AgentExecutor(Protocol):
+    """Run one agent loop without owning queue or event-store state."""
+
+    async def execute(self, request: AgentExecutionRequest) -> AgentRunResult:
+        """Return the agent-loop result for one immutable invocation."""
+
+
+class InProcessAgentExecutor:
+    """Run the agent loop in the harness process for local development."""
+
+    async def execute(self, request: AgentExecutionRequest) -> AgentRunResult:
+        from zeta.run.runtime import run_agent_loop
+
+        return await run_agent_loop(
+            request.objective,
+            request.timeline,
+            request.config,
+            context=request.context,
+            caused_by=request.triggering_event.id,
+        )
+
+
+@dataclass(frozen=True)
 class AgentRoute:
     """Deterministic event route for one agent."""
 
@@ -145,7 +182,7 @@ def compile_agent_definition(
     config: AgentConfig | None = None,
     context: str | ContextFactory = "",
     timeline: Sequence[dict[str, Any]] | TimelineFactory = (),
-    run_turn: AgentRunRunner | None = None,
+    executor: AgentExecutor | None = None,
     event_registry: EventRegistry | None = None,
     structured_output: StructuredOutputRunner | None = None,
     project_generation: str | None = None,
@@ -161,7 +198,7 @@ def compile_agent_definition(
         config=config,
         context=context,
         timeline=timeline,
-        run_turn=run_turn,
+        executor=executor,
         event_registry=event_registry,
         structured_output=structured_output,
         project_generation=project_generation,
@@ -175,7 +212,7 @@ def compile_agent_definitions(
     config: AgentConfig | None = None,
     context: str | ContextFactory = "",
     timeline: Sequence[dict[str, Any]] | TimelineFactory = (),
-    run_turn: AgentRunRunner | None = None,
+    executor: AgentExecutor | None = None,
     event_registry: EventRegistry | None = None,
     structured_output: StructuredOutputRunner | None = None,
     project_generation: str | None = None,
@@ -206,7 +243,7 @@ def compile_agent_definitions(
                 config,
                 context,
                 timeline,
-                run_turn or default_agent_run_runner(),
+                executor or InProcessAgentExecutor(),
                 event_registry,
                 structured_output or default_structured_output_runner(),
             ),
@@ -233,7 +270,7 @@ def agent_runner(
     config: AgentConfig | None,
     context: str | ContextFactory,
     timeline: Sequence[dict[str, Any]] | TimelineFactory,
-    run_turn: AgentRunRunner,
+    executor: AgentExecutor,
     event_registry: EventRegistry | None,
     structured_output: StructuredOutputRunner,
 ) -> Callable[[AgentInvocation], Awaitable[dict[str, Any]]]:
@@ -258,13 +295,23 @@ def agent_runner(
             run_context = cast(ContextFactory, context)(agent_run)
         else:
             run_context = context
-        result = await run_turn(
-            objective,
-            run_timeline,
-            effective_config,
-            context=run_context,
-            caused_by=event.id,
-            agent_invocation=agent_run,
+        session_id = agent_session_id(agent_run.agent, event)
+        run_id = agent_run.run_id or agent_run_id(
+            agent_run.attempt_id or agent_run.triggering_event.id
+        )
+        result = await executor.execute(
+            AgentExecutionRequest(
+                agent=agent_run.agent,
+                triggering_event=event,
+                objective=objective,
+                timeline=run_timeline,
+                context=run_context,
+                config=effective_config,
+                session_id=session_id,
+                run_id=run_id,
+                queue_item_id=agent_run.queue_item_id,
+                attempt_id=agent_run.attempt_id,
+            )
         )
         if spec.returns and returned_event_publisher is not None:
             return await returned_event_publisher.publish(
@@ -319,12 +366,6 @@ def retry_policy_for_spec(spec: AgentSpec) -> RetryPolicy | None:
 
 def agent_run_result_mapping(result: AgentRunResult) -> dict[str, Any]:
     return agent_run_result_payload(result)
-
-
-def default_agent_run_runner() -> AgentRunRunner:
-    from zeta.run.runtime import run_agent_loop
-
-    return run_agent_loop
 
 
 def default_structured_output_runner() -> StructuredOutputRunner:

@@ -9,7 +9,6 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field, replace
 from functools import cached_property
 from pathlib import Path
-from typing import Any
 
 from connectors import (
     EventConnectorRegistry,
@@ -26,13 +25,14 @@ from zeta.records.stores.sqlite import (
 )
 from zeta.run.config import AgentConfig
 from zeta.run.context import RuntimeContext
+from zeta.run.outcomes import AgentRunResult
 from zeta.run.runtime import AgentRunRequest, run_agent
 from zeta.substrate import SqliteObjectStore
 
 from zetad.agents import (
-    AgentInvocation,
+    AgentExecutionRequest,
+    AgentExecutor,
     ExecutableAgent,
-    agent_session_id,
     compile_agent_definitions,
     config_for_spec,
 )
@@ -51,8 +51,6 @@ from zetad.project import (
     record_project_snapshot,
 )
 from zetad.retry import RetryPolicy
-from zetad.runtime_coordinator import RuntimeCoordinator
-from zetad.runtime_coordinator import runtime_time_ms as _runtime_time_ms
 from zetad.scheduling import request_due_schedules
 from zetad.session_turn import session_turn_agent
 from zetad.store import RuntimeEventStore
@@ -77,6 +75,7 @@ class WorkerServices:
     worker_name: str = LOCAL_WORKER_NAME
     max_concurrent: int = 1
     retry_policy: RetryPolicy = field(default_factory=RetryPolicy)
+    agent_executor: AgentExecutor | None = None
 
     @cached_property
     def project_snapshot(self) -> ProjectSnapshot:
@@ -98,6 +97,7 @@ def build_worker_services(
     tool_registry: CapabilityRegistry | None = None,
     registry: EventConnectorRegistry | None = None,
     connector_names: Iterable[str] | None = None,
+    agent_executor: AgentExecutor | None = None,
 ) -> WorkerServices:
     resolved_project_root = project_root.expanduser().resolve()
     resolved_state_dir = resolve_state_dir(project_root, state_dir)
@@ -114,6 +114,7 @@ def build_worker_services(
         model_selection=active_model_selection(
             session_dir=resolved_state_dir / "sessions" / "default"
         ),
+        agent_executor=agent_executor,
     )
 
 
@@ -186,6 +187,7 @@ def compile_snapshot_executors(
     snapshot: ProjectSnapshot,
 ) -> tuple[ExecutableAgent, ...]:
     project = snapshot.project
+    agent_executor = runtime.agent_executor or RuntimeAgentExecutor(runtime)
     execution_manifests = {
         spec.slug: snapshot.execution_manifest(spec) for spec in project.specs
     }
@@ -201,7 +203,7 @@ def compile_snapshot_executors(
                         runtime.model_selection,
                     ),
                     event_registry=project.events,
-                    run_turn=project_agent_run_turn(runtime),
+                    executor=agent_executor,
                     project_generation=snapshot.generation_id,
                     execution_manifest=execution_manifests[spec.slug],
                 )
@@ -215,75 +217,63 @@ def compile_snapshot_executors(
     )
 
 
-def project_agent_run_turn(runtime: WorkerServices):
-    async def run_turn(
-        objective: str,
-        timeline: list[dict[str, object]],
-        config: AgentConfig,
-        **kwargs: Any,
-    ) -> Any:
-        del timeline
-        invocation = kwargs.get("agent_invocation")
-        if not isinstance(invocation, AgentInvocation):
-            raise RuntimeError("authored agent run requires an invocation")
-        session_id = agent_session_id(invocation.agent, invocation.triggering_event)
+class RuntimeAgentExecutor:
+    """Execute local agent loops without exposing harness state to executors."""
+
+    def __init__(self, runtime: WorkerServices) -> None:
+        self.runtime = runtime
+
+    async def execute(self, request: AgentExecutionRequest) -> AgentRunResult:
         trace_store = SqliteObjectStore(
-            zeta_sqlite_path(runtime.state_dir),
-            session_id=session_id,
+            zeta_sqlite_path(self.runtime.state_dir),
+            session_id=request.session_id,
         )
         runtime_context = RuntimeContext(
-            session_id=session_id,
-            event_sink=runtime.events,
+            session_id=request.session_id,
+            event_sink=self.runtime.events,
             trace_store=trace_store,
-            tool_registry=runtime.tool_registry,
-            state_dir=runtime.state_dir,
-            session_dir=runtime.state_dir / "sessions" / session_id,
-        )
-        run_id = invocation.run_id or (
-            f"run_{invocation.attempt_id}"
-            if invocation.attempt_id is not None
-            else f"run_{invocation.triggering_event.id}"
+            tool_registry=self.runtime.tool_registry,
+            state_dir=self.runtime.state_dir,
+            session_dir=self.runtime.state_dir / "sessions" / request.session_id,
         )
         started = time.perf_counter()
         try:
             return await run_agent(
                 AgentRunRequest(
-                    objective=objective,
+                    objective=request.objective,
                     workflow="agent",
                     runtime="zeta-agent",
-                    tools=tuple(config.allowed_capabilities or ()),
-                    context=kwargs.get("context", ""),
+                    tools=tuple(request.config.allowed_capabilities or ()),
+                    context=request.context,
                     config=replace(
                         config_with_model_selection(
-                            config,
-                            runtime.model_selection,
+                            request.config,
+                            self.runtime.model_selection,
                         ),
-                        effect_scope=invocation.queue_item_id,
+                        effect_scope=request.queue_item_id,
                     ),
                 ),
-                run_id=run_id,
-                caused_by=kwargs.get("caused_by") or invocation.triggering_event.id,
+                run_id=request.run_id,
+                caused_by=request.triggering_event.id,
                 publish_event=lambda _event: None,
                 runtime_context=runtime_context,
                 cancellation_event=None,
             )
         finally:
-            runtime.events.observe_runtime_metric(
+            self.runtime.events.observe_runtime_metric(
                 "runtime.agent_execution_ms",
                 (time.perf_counter() - started) * 1000,
-                agent=invocation.agent.agent_id,
+                agent=request.agent.agent_id,
             )
             trace_started = time.perf_counter()
             try:
                 trace_store.close()
             finally:
-                runtime.events.observe_runtime_metric(
+                self.runtime.events.observe_runtime_metric(
                     "sqlite.trace_close_ms",
                     (time.perf_counter() - trace_started) * 1000,
-                    agent=invocation.agent.agent_id,
+                    agent=request.agent.agent_id,
                 )
-
-    return run_turn
 
 
 def config_with_model_selection(
@@ -314,29 +304,20 @@ async def run_available_queue_item(
     heartbeat_interval_seconds: float = ATTEMPT_HEARTBEAT_INTERVAL_SECONDS,
     retry_policy: RetryPolicy | None = None,
 ) -> str:
-    coordinator = RuntimeCoordinator(
+    dispatcher = QueueingDispatcher(
+        events.journal,
         events,
-        executors,
+        executors=executors,
         worker_name=worker_name,
         lease_ms=lease_ms,
         heartbeat_interval_seconds=heartbeat_interval_seconds,
         retry_policy=retry_policy,
     )
-    outcome = await coordinator.run_next(skipped_queue_items=skipped_queue_items)
+    outcome = await dispatcher.run_next(skipped_queue_items=skipped_queue_items)
     if outcome is None:
         return "queue empty"
-    return run_once_message(outcome.queue_item_id, outcome.lifecycle_events)
-
-
-def enqueue_pending_events(events: RuntimeEventStore) -> int:
-    """Compatibility no-op; pending work is projected during event append."""
-    del events
-    return 0
-
-
-def runtime_time_ms() -> int:
-    """Compatibility export for callers that sampled the worker clock."""
-    return _runtime_time_ms()
+    queue_item_id, lifecycle_events = outcome
+    return run_once_message(queue_item_id, lifecycle_events)
 
 
 def pending_rpc_request(runtime: WorkerServices) -> Event | None:

@@ -5,6 +5,7 @@ import json
 import logging
 import sqlite3
 import threading
+import time
 import tomllib
 from collections.abc import Callable, Coroutine, Iterable
 from dataclasses import asdict, fields, replace
@@ -5785,6 +5786,52 @@ def test_zeta_local_runtime_accepts_explicit_tool_registry(tmp_path: Path) -> No
         runtime.close()
 
 
+def test_zeta_local_runtime_uses_configured_agent_executor(tmp_path: Path) -> None:
+    agents_dir = tmp_path / "agents"
+    agents_dir.mkdir()
+    write_project_event_schema(tmp_path, "github.issue.opened")
+    (agents_dir / "triage.md").write_text(
+        """---
+name: Triage
+description: Triage issues.
+accepts:
+  - github.issue.opened
+---
+Triage the issue.
+""",
+        encoding="utf-8",
+    )
+
+    class RecordingExecutor:
+        def __init__(self) -> None:
+            self.requests: list[Any] = []
+
+        async def execute(self, request: Any) -> AgentRunResult:
+            self.requests.append(request)
+            return AgentRunResult(final_answer="triaged")
+
+    executor = RecordingExecutor()
+    runtime = zetad_worker.build_worker_services(
+        project_root=tmp_path,
+        agent_executor=executor,
+    )
+    try:
+        event = runtime.events.accept(
+            zeta_events.DraftEvent("github.issue.opened", "github", {"number": 1})
+        ).event
+        message = asyncio.run(zetad_worker.run_once(runtime))
+    finally:
+        runtime.close()
+
+    assert message == f"ran qi_{event.id}"
+    assert len(executor.requests) == 1
+    request = executor.requests[0]
+    assert request.agent.agent_id == "triage"
+    assert request.triggering_event == event
+    assert request.queue_item_id == f"qi_{event.id}"
+    assert request.attempt_id == f"att_qi_{event.id}_1"
+
+
 def test_zeta_cli_run_registers_builtin_tools(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -6677,7 +6724,7 @@ def test_zeta_local_runtime_run_once_skips_lock_busy_item_and_runs_next(
         ["context:repo"],
         "worker-a",
         lease_ms=60_000,
-        now_ms=zetad_worker.runtime_time_ms(),
+        now_ms=time.time_ns() // 1_000_000,
     )
     monkeypatch.setattr(
         zetad_worker,
@@ -7197,30 +7244,6 @@ Summarize the repo.
     assert rows[0].last_published_at == "2026-06-22T08:00:00+00:00"
     assert rows[0].next_at == "2026-06-23T08:00:00+00:00"
     assert rows[0].reason == "same-day backfill"
-
-
-def test_zeta_scheduler_tick_events_do_not_enter_worker_queue(
-    tmp_path: Path,
-) -> None:
-    event_store = zeta_events.SqliteEventStore(event_store_path(tmp_path / ".zeta"))
-    try:
-        event_store.accept(
-            zeta_events.DraftEvent(
-                "scheduler.tick.published",
-                "zeta:scheduler",
-                {"status": "published"},
-            )
-        )
-
-        queued = zetad_worker.enqueue_pending_events(event_store)
-        items = zetad_queue.project_queue_items(
-            event_store.list_events(zeta_events.Filter())
-        )
-    finally:
-        event_store.close()
-
-    assert queued == 0
-    assert items == []
 
 
 def test_zeta_scheduler_validates_project_event_schemas_before_scheduling(

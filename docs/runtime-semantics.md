@@ -8,10 +8,25 @@ interfaces. They intentionally share a connection and write lock today; the
 separation defines ownership and recovery semantics rather than requiring a
 second database.
 
-`RuntimeCoordinator` is the production execution path for both `zeta run` and
+`QueueingDispatcher` is the production execution path for both `zeta run` and
 `zeta serve`. It claims work, acquires locks, and delegates attempts to the same
 `AttemptCoordinator`. Tests and embedded callers can use the identical path
 with `RuntimeEventStore.open(":memory:")`.
+
+## Harness And Executors
+
+The harness owns event ingress, scheduling, queue claims, locks, retries,
+lifecycle records, and external effects. An executor owns only one agent-loop
+invocation. The worker passes it an immutable `AgentExecutionRequest` with the
+agent definition, triggering event, invocation identity, rendered objective,
+timeline, context, and model configuration; it returns an `AgentRunResult`.
+
+An executor receives no runtime database, queue state, or retry authority.
+This lets an embedded caller supply `agent_executor` to `build_worker_services`
+and run the loop in another environment while the local harness remains the
+source of truth. The bundled `RuntimeAgentExecutor` is the in-process default.
+Remote transport, tool brokering, and trace streaming build on this boundary;
+they are not separate runtimes.
 
 ## Runtime Journal
 

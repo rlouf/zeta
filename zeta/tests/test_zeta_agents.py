@@ -65,7 +65,6 @@ from zeta.capabilities.types import (
 from zeta.effects import DeliverySemantics
 from zeta.events import DraftEvent, Event
 from zeta.records.stores.event_store import Filter
-from zeta.run.config import AgentConfig
 from zeta.run.runtime import AgentRunResult
 from zetad import connector_bridge as zetad_connector_bridge
 from zetad import dispatch as zetad_dispatch
@@ -74,6 +73,7 @@ from zetad import scheduling as zetad_scheduling
 from zetad import worker as zetad_worker
 from zetad.agents import (
     AgentDefinition,
+    AgentExecutionRequest,
     EventPattern,
     agent_session_id,
     compile_agent_definition,
@@ -304,24 +304,13 @@ def _slack_return_event_registry() -> EventRegistry:
 
 def _recording_return_run(
     calls: list[dict[str, Any]],
-) -> Callable[..., Any]:
-    async def run_turn(
-        objective: str,
-        timeline: list[dict[str, Any]],
-        config: AgentConfig,
-        **kwargs: Any,
-    ) -> AgentRunResult:
-        calls.append(
-            {
-                "objective": objective,
-                "timeline": timeline,
-                "config": config,
-                "kwargs": kwargs,
-            }
-        )
-        return AgentRunResult(final_answer="Send a reply to C1.")
+) -> Any:
+    class RecordingExecutor:
+        async def execute(self, request: AgentExecutionRequest) -> AgentRunResult:
+            calls.append({"request": request})
+            return AgentRunResult(final_answer="Send a reply to C1.")
 
-    return run_turn
+    return RecordingExecutor()
 
 
 def _recording_structured_return(
@@ -346,7 +335,7 @@ def _recording_structured_return(
 
 def _assert_return_run_called(calls: list[dict[str, Any]]) -> None:
     assert len(calls) == 1
-    assert calls[0]["objective"] == "User asked: hello"
+    assert calls[0]["request"].objective == "User asked: hello"
 
 
 def _assert_structured_return_called(
@@ -2535,23 +2524,12 @@ User asked: {{ event.payload.text }}
     )
     calls: list[dict[str, Any]] = []
 
-    async def run_turn(
-        objective: str,
-        timeline: list[dict[str, Any]],
-        config: AgentConfig,
-        **kwargs: Any,
-    ) -> AgentRunResult:
-        calls.append(
-            {
-                "objective": objective,
-                "timeline": timeline,
-                "config": config,
-                "kwargs": kwargs,
-            }
-        )
-        return AgentRunResult(final_answer="done")
+    class RecordingExecutor:
+        async def execute(self, request: AgentExecutionRequest) -> AgentRunResult:
+            calls.append({"request": request})
+            return AgentRunResult(final_answer="done")
 
-    compiled = zeta_agents.compile_agent_definition(spec, run_turn=run_turn)
+    compiled = zeta_agents.compile_agent_definition(spec, executor=RecordingExecutor())
     store = zeta_events.SqliteEventStore(tmp_path / "events.sqlite3")
     dispatcher = zetad_dispatch.EventDispatcher(store, executors=[compiled])
 
@@ -2569,11 +2547,12 @@ User asked: {{ event.payload.text }}
     assert compiled.definition.agent_id == "slack-qa"
     assert compiled.definition.returns == ()
     assert len(calls) == 1
-    assert calls[0]["objective"] == "User asked: hello"
-    assert calls[0]["timeline"] == []
-    assert calls[0]["config"].system_prompt == "Answers workspace questions in Slack."
-    assert tuple(calls[0]["config"].allowed_capabilities or ()) == ("Read",)
-    assert calls[0]["kwargs"]["caused_by"] == outcome.event.id
+    request = calls[0]["request"]
+    assert request.objective == "User asked: hello"
+    assert request.timeline == []
+    assert request.config.system_prompt == "Answers workspace questions in Slack."
+    assert tuple(request.config.allowed_capabilities or ()) == ("Read",)
+    assert request.triggering_event.id == outcome.event.id
     assert zetad_queue.terminal_queue_item_result(
         outcome.lifecycle_events,
         event_id=outcome.event.id,
@@ -2602,7 +2581,7 @@ def test_zeta_agent_with_returns_publishes_structured_return_event(
     compiled = zeta_agents.compile_agent_definition(
         spec,
         event_registry=events,
-        run_turn=_recording_return_run(run_calls),
+        executor=_recording_return_run(run_calls),
         structured_output=_recording_structured_return(structured_calls),
     )
     store = zeta_events.SqliteEventStore(tmp_path / "events.sqlite3")
@@ -2656,7 +2635,7 @@ def test_zeta_agent_with_returns_publishes_multiple_ordered_events(
     compiled = zeta_agents.compile_agent_definition(
         spec,
         event_registry=events,
-        run_turn=_recording_return_run([]),
+        executor=_recording_return_run([]),
         structured_output=structured_output,
     )
     store = zeta_events.SqliteEventStore(tmp_path / "events.sqlite3")
@@ -2699,7 +2678,7 @@ def test_zeta_agent_with_returns_may_publish_no_events(tmp_path: Path) -> None:
     compiled = zeta_agents.compile_agent_definition(
         spec,
         event_registry=events,
-        run_turn=_recording_return_run([]),
+        executor=_recording_return_run([]),
         structured_output=lambda *_args, **_kwargs: {"events": []},
     )
     store = zeta_events.SqliteEventStore(tmp_path / "events.sqlite3")

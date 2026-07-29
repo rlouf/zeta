@@ -114,6 +114,45 @@ class RuntimeQueueStore(Protocol):
     ) -> None:
         """Record one runtime health measurement."""
 
+    def reconcile_expired_queue_claims(self, *, now_ms: int) -> int:
+        """Release expired queue claims before claiming more work."""
+
+    def reconcile_expired_locks(self, *, now_ms: int) -> int:
+        """Release expired execution locks before claiming more work."""
+
+    def claim_next_queue_item(
+        self,
+        worker_name: str,
+        *,
+        lease_ms: int,
+        now_ms: int,
+        exclude_queue_item_ids: set[str],
+    ) -> Any:
+        """Claim the next available queue item."""
+
+    def acquire_locks(
+        self,
+        keys: Iterable[str],
+        owner: str,
+        *,
+        lease_ms: int,
+        now_ms: int,
+    ) -> bool:
+        """Acquire the locks needed for one attempt."""
+
+    def release_locks(self, keys: Iterable[str], owner: str) -> int:
+        """Release locks after one attempt."""
+
+    def release_queue_claim(
+        self,
+        queue_item_id: str,
+        worker_name: str,
+        *,
+        claim_token: str,
+        now_ms: int,
+    ) -> bool:
+        """Release a queue claim that could not acquire its locks."""
+
 
 @dataclass(frozen=True)
 class DispatchOutcome:
@@ -700,6 +739,72 @@ class QueueingDispatcher(EventDispatcher):
         self.heartbeat_interval_seconds = heartbeat_interval_seconds
         self.lease_ms = lease_ms
         self.claim_token = claim_token
+
+    async def run_next(
+        self,
+        *,
+        skipped_queue_items: set[str] | None = None,
+    ) -> tuple[str, list[Event]] | None:
+        """Claim, lock, and execute one queue item through the durable harness."""
+        if self.worker_name is None:
+            raise RuntimeError("queueing dispatch requires a worker name")
+        skipped = skipped_queue_items or set()
+        while True:
+            now_ms = current_time_ms()
+            self.queue_store.reconcile_expired_queue_claims(now_ms=now_ms)
+            self.queue_store.reconcile_expired_locks(now_ms=now_ms)
+            claim = self.queue_store.claim_next_queue_item(
+                self.worker_name,
+                lease_ms=self.lease_ms,
+                now_ms=now_ms,
+                exclude_queue_item_ids=skipped,
+            )
+            if claim is None:
+                return None
+            lock_keys = self._lock_keys_for_queue_item(claim.queue_item_id)
+            if not self.queue_store.acquire_locks(
+                lock_keys,
+                claim.token,
+                lease_ms=self.lease_ms,
+                now_ms=current_time_ms(),
+            ):
+                self.queue_store.release_queue_claim(
+                    claim.queue_item_id,
+                    self.worker_name,
+                    claim_token=claim.token,
+                    now_ms=current_time_ms(),
+                )
+                skipped.add(claim.queue_item_id)
+                continue
+            self.claim_token = claim.token
+            try:
+                return claim.queue_item_id, await self.run_queue_item(
+                    claim.queue_item_id
+                )
+            finally:
+                self.claim_token = None
+                self.queue_store.release_locks(lock_keys, claim.token)
+
+    def _lock_keys_for_queue_item(self, queue_item_id: str) -> tuple[str, ...]:
+        queue_item = self.queue_store.queue_item(queue_item_id)
+        if queue_item is None:
+            return ()
+        target_agent = queue_item.get("target_agent")
+        if isinstance(target_agent, str) and target_agent:
+            executor = self._executor_for_id(target_agent)
+            return () if executor is None else executor.definition.lock_keys
+        event_id = queue_item.get("event_id")
+        if not isinstance(event_id, str):
+            return ()
+        event = self._stored_event(event_id)
+        matching = [
+            executor
+            for executor in self.executors
+            if executor.definition.accepts(event)
+        ]
+        if len(matching) != 1:
+            return ()
+        return matching[0].definition.lock_keys
 
     def _observe_runtime_metric(
         self,

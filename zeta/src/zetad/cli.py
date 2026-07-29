@@ -3,12 +3,10 @@
 import asyncio
 import json
 import sys
-import time
 from pathlib import Path
 from typing import Any, cast
 
 import click
-from click.core import ParameterSource
 from zeta.capabilities.registry import CapabilityRegistry
 from zeta.events import DraftEvent, Event
 from zeta.records.stores.event_store import Filter
@@ -16,7 +14,7 @@ from zeta.records.stores.sqlite import event_store_path, resolve_state_dir
 from zeta.tools import register_builtin_tools
 
 from zetad import scheduling, worker
-from zetad.cli_model import model_group
+from zetad.cli_model import models_group
 from zetad.cli_trace import traces_group
 from zetad.rpc.stdio import run_stdio
 from zetad.store import RuntimeEventStore
@@ -40,39 +38,15 @@ def cli() -> None:
 
 
 cli.add_command(traces_group)
-cli.add_command(model_group)
+cli.add_command(models_group)
 
 
-def capture_nested_state_dir(
-    ctx: click.Context,
-    param: click.Parameter,
-    value: Path | None,
-) -> None:
-    """Keep grouped state selection independent of option placement."""
-
-    if value is None:
-        return
-    obj = ctx.ensure_object(dict)
-    existing = obj.get("state_dir")
-    if isinstance(existing, Path):
-        if existing.expanduser().resolve() != value.expanduser().resolve():
-            raise click.BadParameter(
-                "conflicting --state-dir values",
-                ctx=ctx,
-                param=param,
-            )
-        return
-    obj["state_dir"] = value
-
-
-def nested_state_dir_option(function: Any) -> Any:
-    """Expose the shared override at every grouped command parse level."""
+def state_dir_option(function: Any) -> Any:
+    """Keep state selection on the leaf command that consumes it."""
 
     return click.option(
         "--state-dir",
         type=click.Path(file_okay=False, path_type=Path),
-        callback=capture_nested_state_dir,
-        expose_value=False,
         help="Override the runtime state directory.",
     )(function)
 
@@ -84,24 +58,6 @@ def runtime_event_store(
 ) -> RuntimeEventStore:
     path = event_store_path(resolve_state_dir(state_dir))
     return RuntimeEventStore.open(path, read_only=read_only)
-
-
-def group_state_dir(ctx: click.Context) -> Path | None:
-    """Keep one state override effective across a Click command group."""
-
-    obj = ctx.ensure_object(dict)
-    value = obj.get("state_dir")
-    return value if isinstance(value, Path) else None
-
-
-def group_project_root(ctx: click.Context) -> Path:
-    """Share authored-project selection with subcommands that still need it."""
-
-    obj = ctx.ensure_object(dict)
-    value = obj.get("project_root")
-    if not isinstance(value, Path):
-        raise click.ClickException("project root was not configured")
-    return value
 
 
 def cli_tool_registry() -> CapabilityRegistry:
@@ -286,14 +242,15 @@ def run_summary_text(record: dict[str, object]) -> str:
     return "-"
 
 
-@cli.command("queue")
-@click.option(
-    "--state-dir",
-    type=click.Path(file_okay=False, path_type=Path),
-    help="Override the runtime state directory.",
-)
+@cli.group("queue")
+def queue() -> None:
+    """Inspect durable runtime queue items."""
+
+
+@queue.command("list")
+@state_dir_option
 @click.option("--json", "json_output", is_flag=True, help="Emit JSON.")
-def queue(state_dir: Path | None, json_output: bool) -> int:
+def queue_list(state_dir: Path | None, json_output: bool) -> int:
     """List durable runtime queue items."""
 
     event_store = runtime_event_store(state_dir)
@@ -321,14 +278,39 @@ def queue(state_dir: Path | None, json_output: bool) -> int:
     return 0
 
 
-@cli.command("attempts")
-@click.option(
-    "--state-dir",
-    type=click.Path(file_okay=False, path_type=Path),
-    help="Override the runtime state directory.",
-)
+@queue.command("status")
+@state_dir_option
+def queue_status(state_dir: Path | None) -> int:
+    """Show durable runtime queue counts."""
+
+    event_store = runtime_event_store(state_dir)
+    try:
+        rows = event_store.list_queue_items()
+    finally:
+        event_store.close()
+    counts: dict[str, int] = {}
+    for row in rows:
+        status_name = str(row["status"])
+        counts[status_name] = counts.get(status_name, 0) + 1
+    if not counts:
+        click.echo("queue empty")
+        return 0
+    for status_name in QUEUE_STATUS_ORDER:
+        count = counts.get(status_name)
+        if count is not None:
+            click.echo(f"{status_name}: {count}")
+    return 0
+
+
+@cli.group("attempts")
+def attempts() -> None:
+    """Inspect durable runtime attempts."""
+
+
+@attempts.command("list")
+@state_dir_option
 @click.option("--json", "json_output", is_flag=True, help="Emit JSON.")
-def attempts(state_dir: Path | None, json_output: bool) -> int:
+def attempts_list(state_dir: Path | None, json_output: bool) -> int:
     """List durable runtime attempts."""
 
     event_store = runtime_event_store(state_dir)
@@ -356,8 +338,13 @@ def attempts(state_dir: Path | None, json_output: bool) -> int:
     return 0
 
 
-@cli.group("events", invoke_without_command=True)
-@nested_state_dir_option
+@cli.group("events")
+def events() -> None:
+    """Inspect and publish durable runtime events."""
+
+
+@events.command("list")
+@state_dir_option
 @click.option("--type-prefix", help="Only show events with this type prefix.")
 @click.option("--session", "session_id", help="Only show events for one session.")
 @click.option(
@@ -368,20 +355,16 @@ def attempts(state_dir: Path | None, json_output: bool) -> int:
     help="Maximum number of events to show.",
 )
 @click.option("--json", "json_output", is_flag=True, help="Emit JSON.")
-@click.pass_context
-def events(
-    ctx: click.Context,
+def events_list(
+    state_dir: Path | None,
     type_prefix: str | None,
     session_id: str | None,
     limit: int,
     json_output: bool,
 ) -> int:
     """List durable runtime events."""
-    ctx.ensure_object(dict)
-    if ctx.invoked_subcommand is not None:
-        return 0
 
-    event_store = runtime_event_store(group_state_dir(ctx))
+    event_store = runtime_event_store(state_dir)
     try:
         durable_events = event_store.list_events(
             Filter(
@@ -413,7 +396,7 @@ def events(
 
 
 @events.command("publish")
-@nested_state_dir_option
+@state_dir_option
 @click.argument("event_type")
 @click.option("--source", default="manual", show_default=True, help="Event source.")
 @click.option(
@@ -428,9 +411,8 @@ def events(
 @click.option("--run-id", help="Optional runtime run id.")
 @click.option("--turn-id", help="Optional runtime turn id.")
 @click.option("--json", "json_output", is_flag=True, help="Emit JSON.")
-@click.pass_context
 def events_publish(
-    ctx: click.Context,
+    state_dir: Path | None,
     event_type: str,
     source: str,
     payload_json: str,
@@ -445,7 +427,7 @@ def events_publish(
     if not event_type:
         raise click.ClickException("event_type must be non-empty")
     payload = event_payload_from_json(payload_json)
-    event_store = runtime_event_store(group_state_dir(ctx), read_only=False)
+    event_store = runtime_event_store(state_dir, read_only=False)
     try:
         outcome = event_store.accept(
             DraftEvent(
@@ -476,13 +458,12 @@ def events_publish(
 
 
 @events.command("chain")
-@nested_state_dir_option
+@state_dir_option
 @click.argument("event_id")
 @click.option("--json", "json_output", is_flag=True, help="Emit JSON.")
 @click.option("--raw", is_flag=True, help="With --json, return raw event payloads.")
-@click.pass_context
 def events_chain(
-    ctx: click.Context,
+    state_dir: Path | None,
     event_id: str,
     json_output: bool,
     raw: bool,
@@ -490,7 +471,7 @@ def events_chain(
     """Show the causal chain from root to EVENT_ID."""
     if raw and not json_output:
         raise click.UsageError("--raw requires --json")
-    event_store = runtime_event_store(group_state_dir(ctx))
+    event_store = runtime_event_store(state_dir)
     try:
         chain = event_store.causal_chain(event_id)
     finally:
@@ -504,13 +485,12 @@ def events_chain(
 
 
 @events.command("root")
-@nested_state_dir_option
+@state_dir_option
 @click.argument("event_id")
 @click.option("--json", "json_output", is_flag=True, help="Emit JSON.")
 @click.option("--raw", is_flag=True, help="With --json, return raw event payload.")
-@click.pass_context
 def events_root(
-    ctx: click.Context,
+    state_dir: Path | None,
     event_id: str,
     json_output: bool,
     raw: bool,
@@ -518,7 +498,7 @@ def events_root(
     """Show the root cause for EVENT_ID."""
     if raw and not json_output:
         raise click.UsageError("--raw requires --json")
-    event_store = runtime_event_store(group_state_dir(ctx))
+    event_store = runtime_event_store(state_dir)
     try:
         chain = event_store.causal_chain(event_id)
     finally:
@@ -532,13 +512,12 @@ def events_root(
 
 
 @events.command("descendants")
-@nested_state_dir_option
+@state_dir_option
 @click.argument("event_id")
 @click.option("--json", "json_output", is_flag=True, help="Emit JSON.")
 @click.option("--raw", is_flag=True, help="With --json, return raw event payloads.")
-@click.pass_context
 def events_descendants(
-    ctx: click.Context,
+    state_dir: Path | None,
     event_id: str,
     json_output: bool,
     raw: bool,
@@ -546,7 +525,7 @@ def events_descendants(
     """Show events caused by EVENT_ID, recursively."""
     if raw and not json_output:
         raise click.UsageError("--raw requires --json")
-    event_store = runtime_event_store(group_state_dir(ctx))
+    event_store = runtime_event_store(state_dir)
     try:
         descendants = descendant_events(event_store, event_id)
     finally:
@@ -560,13 +539,12 @@ def events_descendants(
 
 
 @events.command("turn")
-@nested_state_dir_option
+@state_dir_option
 @click.argument("turn_id")
 @click.option("--json", "json_output", is_flag=True, help="Emit JSON.")
 @click.option("--raw", is_flag=True, help="With --json, return raw event payloads.")
-@click.pass_context
 def events_turn(
-    ctx: click.Context,
+    state_dir: Path | None,
     turn_id: str,
     json_output: bool,
     raw: bool,
@@ -574,7 +552,7 @@ def events_turn(
     """Show events associated with TURN_ID."""
     if raw and not json_output:
         raise click.UsageError("--raw requires --json")
-    event_store = runtime_event_store(group_state_dir(ctx))
+    event_store = runtime_event_store(state_dir)
     try:
         turn_events = event_store.events_for_turn(turn_id)
     finally:
@@ -598,17 +576,20 @@ def event_payload_from_json(payload_json: str) -> dict[str, object]:
 
 
 @cli.command("ps")
-@click.option(
-    "--state-dir",
-    type=click.Path(file_okay=False, path_type=Path),
-    help="Override the runtime state directory.",
-)
+@click.argument("run_id", required=False)
+@state_dir_option
 @click.option("--json", "json_output", is_flag=True, help="Emit JSON.")
-def ps(state_dir: Path | None, json_output: bool) -> int:
-    """List durable runtime runs."""
+def ps(run_id: str | None, state_dir: Path | None, json_output: bool) -> int:
+    """List durable runtime runs, or show one RUN_ID."""
 
     event_store = runtime_event_store(state_dir)
     try:
+        if run_id is not None:
+            return print_run_detail(
+                run_detail_record(event_store, run_id),
+                run_id=run_id,
+                json_output=json_output,
+            )
         rows = run_summary_records(event_store)
     finally:
         event_store.close()
@@ -634,7 +615,36 @@ def ps(state_dir: Path | None, json_output: bool) -> int:
     return 0
 
 
-@cli.group("run", invoke_without_command=True)
+def print_run_detail(
+    record: dict[str, object] | None,
+    *,
+    run_id: str,
+    json_output: bool,
+) -> int:
+    if record is None:
+        raise click.ClickException(f"run not found: {run_id}")
+    if json_output:
+        click.echo(json.dumps(record, ensure_ascii=False))
+        return 0
+    raw_run_record = record["run"]
+    if not isinstance(raw_run_record, dict):
+        raise click.ClickException(f"run record was invalid: {run_id}")
+    run_record = cast("dict[str, object]", raw_run_record)
+    click.echo(f"run: {run_display_id(run_record)}")
+    click.echo(f"status: {run_record['status']}")
+    click.echo(f"agent: {run_record['target_agent']}")
+    click.echo(f"trigger: {run_record['trigger_event_type']} {run_record['event_id']}")
+    click.echo(f"session: {run_record['session_id'] or '-'}")
+    click.echo(f"started: {run_record['started_at']}")
+    click.echo(f"finished: {run_record['finished_at'] or '-'}")
+    summary = run_summary_text(run_record)
+    if summary != "-":
+        click.echo()
+        click.echo(summary)
+    return 0
+
+
+@cli.command("run")
 @click.option(
     "--project-root",
     type=click.Path(file_okay=False, path_type=Path),
@@ -642,27 +652,21 @@ def ps(state_dir: Path | None, json_output: bool) -> int:
     show_default=True,
     help="Project root containing agents/ specs.",
 )
-@nested_state_dir_option
+@state_dir_option
 @click.option(
     "--connectors",
     help="Comma-separated connector allowlist for this runtime process.",
 )
-@click.pass_context
 def run(
-    ctx: click.Context,
     project_root: Path,
+    state_dir: Path | None,
     connectors: str | None,
 ) -> int:
     """Fire due schedules, then drain queued work until the queue is empty."""
-    ctx.ensure_object(dict)
-    if ctx.invoked_subcommand is not None:
-        if ctx.get_parameter_source("project_root") is ParameterSource.COMMANDLINE:
-            raise click.UsageError("--project-root is not valid with 'run show'")
-        return 0
 
     runtime = worker.build_worker_services(
         project_root=project_root,
-        state_dir=group_state_dir(ctx),
+        state_dir=state_dir,
         tool_registry=cli_tool_registry(),
         connector_names=connector_names_from_option(connectors),
     )
@@ -742,47 +746,12 @@ def connector_names_from_option(value: str | None) -> tuple[str, ...] | None:
     return names
 
 
-@run.command("show")
-@nested_state_dir_option
-@click.argument("run_id")
-@click.option("--json", "json_output", is_flag=True, help="Emit JSON.")
-@click.pass_context
-def run_show(
-    ctx: click.Context,
-    run_id: str,
-    json_output: bool,
-) -> int:
-    """Show one durable runtime run."""
-
-    event_store = runtime_event_store(group_state_dir(ctx))
-    try:
-        record = run_detail_record(event_store, run_id)
-    finally:
-        event_store.close()
-    if record is None:
-        raise click.ClickException(f"run not found: {run_id}")
-    if json_output:
-        click.echo(json.dumps(record, ensure_ascii=False))
-        return 0
-    raw_run_record = record["run"]
-    if not isinstance(raw_run_record, dict):
-        raise click.ClickException(f"run record was invalid: {run_id}")
-    run_record = cast("dict[str, object]", raw_run_record)
-    click.echo(f"run: {run_display_id(run_record)}")
-    click.echo(f"status: {run_record['status']}")
-    click.echo(f"agent: {run_record['target_agent']}")
-    click.echo(f"trigger: {run_record['trigger_event_type']} {run_record['event_id']}")
-    click.echo(f"session: {run_record['session_id'] or '-'}")
-    click.echo(f"started: {run_record['started_at']}")
-    click.echo(f"finished: {run_record['finished_at'] or '-'}")
-    summary = run_summary_text(run_record)
-    if summary != "-":
-        click.echo()
-        click.echo(summary)
-    return 0
+@cli.group("schedules")
+def schedules() -> None:
+    """Inspect authored-agent schedules."""
 
 
-@cli.group("schedule", invoke_without_command=True)
+@schedules.command("status")
 @click.option(
     "--project-root",
     type=click.Path(file_okay=False, path_type=Path),
@@ -790,57 +759,18 @@ def run_show(
     show_default=True,
     help="Project root containing agents/ specs.",
 )
-@nested_state_dir_option
-@click.option("--once", is_flag=True, help="Request due schedules, then exit.")
-@click.pass_context
-def schedule(
-    ctx: click.Context,
-    project_root: Path,
-    once: bool,
-) -> int:
-    """Run the local scheduler service."""
-    obj = ctx.ensure_object(dict)
-    obj["project_root"] = project_root
-    if ctx.invoked_subcommand is not None:
-        return 0
-
-    runtime = scheduling.build_scheduler_services(
-        project_root=project_root,
-        state_dir=group_state_dir(ctx),
-    )
-    try:
-        while True:
-            requested = scheduling.request_due_project_schedules(runtime)
-            for request in requested:
-                click.echo(f"requested {request.event_type} {request.id}")
-            if once:
-                return 0
-            time.sleep(seconds_until_next_minute())
-    finally:
-        runtime.close()
-
-
-@schedule.command("status")
-@nested_state_dir_option
-@click.option(
-    "--project-root",
-    type=click.Path(file_okay=False, path_type=Path),
-    default=None,
-    help="Project root containing agents/ specs.",
-)
+@state_dir_option
 @click.option("--json", "json_output", is_flag=True, help="Emit JSON.")
-@click.pass_context
-def schedule_status(
-    ctx: click.Context,
-    project_root: Path | None,
+def schedules_status(
+    project_root: Path,
+    state_dir: Path | None,
     json_output: bool,
 ) -> int:
     """Show authored-agent schedule status."""
 
     runtime = scheduling.build_scheduler_services(
-        project_root=project_root or group_project_root(ctx),
-        state_dir=group_state_dir(ctx),
-        read_only=True,
+        project_root=project_root,
+        state_dir=state_dir,
     )
     try:
         rows = scheduling.project_schedule_status(runtime)
@@ -868,16 +798,12 @@ def schedule_status(
     return 0
 
 
-def seconds_until_next_minute() -> float:
-    return 60 - (time.time() % 60)
-
-
-@cli.group("agent")
-def agent() -> None:
+@cli.group("agents")
+def agents() -> None:
     """Manage authored agents."""
 
 
-@agent.command("new")
+@agents.command("new")
 @click.argument("slug")
 @click.option("--name", default=None, help="Human-readable name.")
 @click.option(
@@ -902,7 +828,7 @@ def agent() -> None:
     help="Project root containing agents/.",
 )
 @click.option("--force", is_flag=True, help="Overwrite an existing agent file.")
-def agent_new(
+def agents_new(
     slug: str,
     name: str | None,
     description: str | None,
@@ -933,40 +859,15 @@ def agent_new(
     click.echo(f"created {path}")
 
 
-@cli.command("status")
-@click.option(
-    "--state-dir",
-    type=click.Path(file_okay=False, path_type=Path),
-    help="Override the runtime state directory.",
-)
-def status(state_dir: Path | None) -> int:
-    """Show durable runtime queue counts."""
-
-    event_store = runtime_event_store(state_dir)
-    try:
-        rows = event_store.list_queue_items()
-    finally:
-        event_store.close()
-    counts: dict[str, int] = {}
-    for row in rows:
-        status_name = str(row["status"])
-        counts[status_name] = counts.get(status_name, 0) + 1
-    if not counts:
-        click.echo("queue empty")
-        return 0
-    for status_name in QUEUE_STATUS_ORDER:
-        count = counts.get(status_name)
-        if count is not None:
-            click.echo(f"{status_name}: {count}")
-    return 0
-
-
-@cli.command("rpc")
-@click.option("--stdio", is_flag=True, help="Serve newline-delimited JSON-RPC.")
-def rpc(stdio: bool) -> int:
+@cli.group("rpc")
+def rpc() -> None:
     """Serve the Zeta JSON-RPC protocol."""
-    if not stdio:
-        raise click.UsageError("only --stdio is supported")
+
+
+@rpc.command("stdio")
+def rpc_stdio() -> int:
+    """Serve newline-delimited JSON-RPC over standard I/O."""
+
     run_stdio(sys.stdin, sys.stdout)
     return 0
 

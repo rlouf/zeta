@@ -15,14 +15,14 @@ from zeta.models.profiles import (
 )
 
 
-@click.group("model")
-def model_group() -> None:
+@click.group("models")
+def models_group() -> None:
     """Inspect configured Zeta model profiles."""
 
 
-@model_group.command("list")
+@models_group.command("list")
 @click.option("--json", "json_output", is_flag=True, help="Emit JSON.")
-def model_list(json_output: bool) -> int:
+def models_list(json_output: bool) -> int:
     """List configured model profiles."""
 
     catalog = load_model_profiles()
@@ -54,9 +54,9 @@ def model_list(json_output: bool) -> int:
     return 1 if catalog.diagnostics else 0
 
 
-@model_group.command("show")
+@models_group.command("show")
 @click.option("--json", "json_output", is_flag=True, help="Emit JSON.")
-def model_show(json_output: bool) -> int:
+def models_show(json_output: bool) -> int:
     """Show the model the next runtime request will use."""
 
     resolution = resolve_active_model()
@@ -121,4 +121,4 @@ def endpoint_label(url: str) -> str:
     return parsed.netloc or url
 
 
-__all__ = ["model_group"]
+__all__ = ["models_group"]

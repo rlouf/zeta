@@ -77,7 +77,7 @@ runs, and its whole timeline — every prompt and tool call — is on disk under
 session `agent/note-reader`:
 
 ```sh
-zeta traces --session agent/note-reader log
+zeta traces log --session agent/note-reader
 ```
 
 ```text
@@ -89,7 +89,7 @@ e5f6a7b8  assistant_message   → read
 
 Runtime records live in the nearest project `.zeta/` directory, discovered by
 walking up from the current directory much like Git discovers `.git/`.
-Inspection commands such as `zeta traces log`, `zeta events`, and `zeta ps`
+Inspection commands such as `zeta traces log`, `zeta events list`, and `zeta ps`
 are read-only and do not create `.zeta/` when no runtime state exists. See
 [Runtime State](docs/concepts.md#runtime-state) for discovery and override
 details.
@@ -97,7 +97,7 @@ details.
 Stop the worker with `kill %1` when you are done. Those `prompt` lines are the
 interesting part — the next section is what you do with them.
 
-> `zeta agent new <slug>` scaffolds a starting skeleton if you would rather not
+> `zeta agents new <slug>` scaffolds a starting skeleton if you would rather not
 > write the file by hand. `zeta run` drives agents once and exits; `zeta serve`
 > runs continuously and is what polls connectors like the filesystem watcher.
 
@@ -111,21 +111,21 @@ without re-running anything upstream — no file, no connector, no queue.
 Say `note-reader` returned a lazy summary. Pull up the exact prompt behind it:
 
 ```sh
-zeta traces --session agent/note-reader show 9c0d1e2f
+zeta traces show 9c0d1e2f --session agent/note-reader
 ```
 
 Resend that same prompt — byte for byte — to a stronger model and diff the two
 answers, without touching the inbox or replaying the pipeline:
 
 ```sh
-zeta traces --session agent/note-reader replay 9c0d1e2f --model deep --diff
+zeta traces replay 9c0d1e2f --session agent/note-reader --model deep --diff
 ```
 
 Changed a skill or the prompt and want to know exactly what moved? Diff the two
 prompt versions, component by component:
 
 ```sh
-zeta traces --session agent/note-reader diff 9c0d1e2f 3a4b5c6d --stat
+zeta traces diff 9c0d1e2f 3a4b5c6d --session agent/note-reader --stat
 ```
 
 `replay` verifies the rebuilt prompt against the recorded hash before sending, so
@@ -197,11 +197,11 @@ zeta run
 
 By default, missed schedules are backfilled only on the same calendar day.
 `catchup: latest` keeps the latest occurrence eligible across days and publishes
-it once after the scheduler resumes. Occurrences before the schedule was first
+it once after a worker resumes. Occurrences before the schedule was first
 observed are not backfilled.
 
 The hand-off is an ordinary durable event — inspect it with
-`zeta events --type-prefix release.`.
+`zeta events list --type-prefix release.`.
 
 ## How it works
 
@@ -230,8 +230,8 @@ any stored prompt can be resent (see [Replay any decision](#replay-any-decision)
 
 Each of these has a full reference in **[docs/concepts.md](docs/concepts.md)**:
 the frontmatter fields, event and returned-event mechanics, the tool table,
-connector ingress/egress, running the worker and scheduler, observability, and
-the JSON-RPC interface.
+connector ingress/egress, running workers, schedule inspection, observability,
+and the JSON-RPC interface.
 
 ## Development
 

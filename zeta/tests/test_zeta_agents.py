@@ -71,7 +71,6 @@ from zeta.run.runtime import AgentRunResult
 from zetad import connector_bridge as zetad_connector_bridge
 from zetad import dispatch as zetad_dispatch
 from zetad import queue as zetad_queue
-from zetad import scheduling as zetad_scheduling
 from zetad import worker as zetad_worker
 from zetad.agents import (
     AgentDefinition,
@@ -2196,37 +2195,6 @@ def test_zeta_push_ingress_validates_returned_event_payload(
             runner.run(runtime.aclose())
 
     assert events == []
-
-
-def test_zeta_scheduler_loads_project_with_connector_bindings(tmp_path: Path) -> None:
-    agents_dir = tmp_path / "agents"
-    agents_dir.mkdir()
-    _write_spec(
-        agents_dir / "scheduled.md",
-        """---
-name: Scheduled
-description: Sends scheduled Slack updates.
-returns:
-  - event: slack.message.post
-    with:
-      channel_ids: ["C123"]
-schedules:
-  - cron: "* * * * *"
----
-Send a scheduled update.
-""",
-    )
-    runtime = zetad_scheduling.build_scheduler_services(
-        project_root=tmp_path,
-        registry=connector_registry(_slack_connector()),
-    )
-
-    try:
-        events = zetad_scheduling.request_due_project_schedules(runtime)
-    finally:
-        runtime.close()
-
-    assert [event.event_type for event in events] == ["agent.scheduled.scheduled"]
 
 
 def test_zeta_worker_publishes_due_schedules(tmp_path: Path) -> None:

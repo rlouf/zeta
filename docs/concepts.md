@@ -68,6 +68,13 @@ stored under `.zeta/sessions/default`. For agents, the usual choices
 are to set a `default = true` profile in `models.toml` or to set a per-agent
 `model:` override in the agent frontmatter.
 
+Inspect the configured profiles and the active selection:
+
+```sh
+zeta models list
+zeta models show
+```
+
 ## Project Layout
 
 Zeta reads agent definitions from a flat `agents/` directory in the project root:
@@ -165,11 +172,11 @@ events do not share timeline.
 
 ### Scaffolding
 
-`zeta agent new <slug>` writes `agents/<slug>.md` from a template, validating it
+`zeta agents new <slug>` writes `agents/<slug>.md` from a template, validating it
 before it is written. Options mirror the core fields:
 
 ```sh
-zeta agent new note-filer \
+zeta agents new note-filer \
   --name "Note Filer" \
   --description "Files new notes." \
   --accepts file.created \
@@ -363,13 +370,14 @@ Relative paths supplied by `--state-dir` or `ZETA_STATE_DIR` are resolved from
 the directory where Zeta was invoked. Selecting the fallback does not create
 it. A command that writes runtime state creates it only when needed; inspection
 commands remain read-only and leave a project with no `.zeta/` unchanged.
-For grouped commands, `--state-dir` works before or after the subcommand;
-different values in both positions are rejected.
+Options belong to the leaf command that consumes them. For grouped resources,
+put `--state-dir` after the operation, as in
+`zeta events list --state-dir /path/to/state`.
 
 Commands that only inspect runtime records start discovery from the current
-directory. Commands that load agent definitions, including `schedule status`,
+directory. Commands that load agent definitions, including `schedules status`,
 start from their resolved project root instead. `--project-root` therefore
-belongs only to `run`, `serve`, `schedule`, `schedule status`, and `agent new`;
+belongs only to `run`, `serve`, `schedules status`, and `agents new`;
 use `--state-dir` when a runtime-only inspection command must read a different
 store.
 
@@ -401,10 +409,9 @@ Run the worker continuously instead:
 zeta serve
 ```
 
-Both `zeta run` and `zeta serve` fire due schedules before processing work, so
-the worker alone is enough to drive scheduled agents. The standalone
-`zeta schedule` service below is only needed when you want to run the scheduler
-in a separate process.
+Both `zeta run` and `zeta serve` fire due schedules before processing work.
+Schedule publication belongs to workers; no separate scheduler process is
+required.
 
 `zeta serve` also serves push ingress. If enabled connectors expose it, the
 worker listens for HTTP requests at:
@@ -419,20 +426,11 @@ Change the host, port, route prefix, or connector allowlist:
 zeta serve --host 0.0.0.0 --port 8090 --route-prefix /webhooks --connectors slack
 ```
 
-Run the scheduler once:
+Inspect schedule backfill and next-fire state without publishing anything:
 
 ```sh
-zeta schedule --once
+zeta schedules status
 ```
-
-Run the scheduler continuously:
-
-```sh
-zeta schedule
-```
-
-In continuous mode, the scheduler checks once per minute and publishes due
-synthetic events such as `agent.release-manager.scheduled`.
 
 ## Observability And Debugging
 
@@ -441,38 +439,37 @@ and inspection commands do not create or migrate runtime state. `events
 publish` is the explicitly mutating command in this group:
 
 ```text
-zeta status
-zeta queue [--json]
-zeta attempts [--json]
-zeta ps [--json]
-zeta run show RUN_ID [--json]
-zeta events [--type-prefix PREFIX] [--session ID] [--limit N] [--json]
-zeta events chain EVENT_ID [--json]
-zeta events publish EVENT_TYPE [--payload-json JSON] [--idempotency-key KEY]
-zeta schedule status [--json]
+zeta queue status [--state-dir DIR]
+zeta queue list [--state-dir DIR] [--json]
+zeta attempts list [--state-dir DIR] [--json]
+zeta ps [RUN_ID] [--state-dir DIR] [--json]
+zeta events list [--state-dir DIR] [--type-prefix PREFIX] [--session ID] [--limit N] [--json]
+zeta events chain EVENT_ID [--state-dir DIR] [--json]
+zeta events publish EVENT_TYPE [--state-dir DIR] [--payload-json JSON] [--idempotency-key KEY]
+zeta schedules status [--project-root DIR] [--state-dir DIR] [--json]
 ```
 
 Common flows:
 
 ```sh
 # Is there work waiting, claimed, failed, or unhandled?
-zeta status
+zeta queue status
 
 # Inspect queued items.
-zeta queue
-zeta queue --json
+zeta queue list
+zeta queue list --json
 
 # List run summaries newest in storage order.
 zeta ps
 
 # Inspect one run, including trigger event, queue item, attempt result,
 # returned events, tool calls, and usage.
-zeta run show run_att_qi_evt_123_issue-triage_1 --json
+zeta ps run_att_qi_evt_123_issue-triage_1 --json
 
 # Read raw durable events.
-zeta events --limit 100
-zeta events --type-prefix runtime.
-zeta events --session agent/issue-triage
+zeta events list --limit 100
+zeta events list --type-prefix runtime.
+zeta events list --session agent/issue-triage
 
 # Publish a test event idempotently.
 zeta events publish laptop.resumed \
@@ -480,7 +477,7 @@ zeta events publish laptop.resumed \
   --idempotency-key resume-1
 
 # Check schedule backfill and next fire time.
-zeta schedule status
+zeta schedules status
 ```
 
 Plain output is tab-separated for easy shell use. JSON output exposes the
@@ -525,27 +522,30 @@ zeta traces tools --failed --all-sessions
 zeta traces tools --successful --json --all-sessions
 
 # Inspect one agent session.
-zeta traces --session agent/issue-triage log
-zeta traces --session agent/issue-triage show 4f9d01c2
-zeta traces --session agent/issue-triage tree 4f9d01c2 --down
+zeta traces log --session agent/issue-triage
+zeta traces show 4f9d01c2 --session agent/issue-triage
+zeta traces tree 4f9d01c2 --session agent/issue-triage --down
 
 # Compare two prompts component by component.
-zeta traces --session agent/issue-triage diff A B --stat
+zeta traces diff A B --session agent/issue-triage --stat
 
 # Rebuild and resend a stored prompt.
-zeta traces --session agent/issue-triage replay PROMPT_ID --model fast --diff
+zeta traces replay PROMPT_ID --session agent/issue-triage --model fast --diff
 ```
 
 Every trace id argument accepts a full id, a unique prefix, or a ref such as
 `turn/<turn_id>`. `traces replay` verifies the rebuilt prompt payload against the
-recorded hash before sending it to the selected model.
+recorded hash before sending it to the selected model. Trace scope options
+belong to each leaf: put `--state-dir` and `--session` after `log`, `show`,
+`replay`, or another operation. `traces reinit-store` is database-wide and
+accepts only `--state-dir`.
 
 A worked walkthrough lives in
 [demos/trace-replay.md](demos/trace-replay.md).
 
 ## JSON-RPC
 
-`zeta rpc --stdio` serves newline-delimited JSON-RPC 2.0. Each line is one JSON
+`zeta rpc stdio` serves newline-delimited JSON-RPC 2.0. Each line is one JSON
 object. Requests include `jsonrpc: "2.0"`, an `id`, a `method`, and optional
 object `params`; notifications omit `id`.
 

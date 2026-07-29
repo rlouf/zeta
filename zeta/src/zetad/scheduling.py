@@ -27,7 +27,7 @@ SCHEDULER_TICK_PREFIX = "scheduler.tick."
 
 @dataclass(frozen=True)
 class SchedulerServices:
-    """Project-local resources consumed by the scheduler service."""
+    """Project resources for inspection; workers own schedule publication."""
 
     project_root: Path
     state_dir: Path
@@ -66,7 +66,6 @@ def build_scheduler_services(
     state_dir: Path | None = None,
     registry: EventConnectorRegistry | None = None,
     connector_names: Iterable[str] | None = None,
-    read_only: bool = False,
 ) -> SchedulerServices:
     resolved_project_root = project_root.expanduser().resolve()
     resolved_state_dir = resolve_state_dir(
@@ -82,7 +81,7 @@ def build_scheduler_services(
         state_dir=resolved_state_dir,
         events=RuntimeEventStore.open(
             event_store_path(resolved_state_dir),
-            read_only=read_only,
+            read_only=True,
         ),
         registry=resolved_registry,
     )
@@ -90,19 +89,6 @@ def build_scheduler_services(
 
 def utc_now() -> datetime:
     return datetime.now(UTC)
-
-
-def request_due_project_schedules(
-    runtime: SchedulerServices,
-    *,
-    now: datetime | None = None,
-) -> list[Event]:
-    project = load_agent_project(
-        runtime.project_root / "agents",
-        registry=runtime.registry,
-    )
-    validate_agent_project(project)
-    return request_due_schedules(runtime.events, project.specs, now=now)
 
 
 def project_schedule_status(

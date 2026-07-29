@@ -46,90 +46,58 @@ from zeta.trace.tools import tool_call_rows, tool_failure_detail
 NARRATIVE_KINDS = ("prompt", "assistant_message")
 
 
-def capture_nested_state_dir(
-    ctx: click.Context,
-    param: click.Parameter,
-    value: Path | None,
-) -> None:
-    """Keep grouped state selection independent of option placement."""
-
-    if value is None:
-        return
-    obj = ctx.ensure_object(dict)
-    existing = obj.get("state_dir")
-    if isinstance(existing, Path):
-        if existing.expanduser().resolve() != value.expanduser().resolve():
-            raise click.BadParameter(
-                "conflicting --state-dir values",
-                ctx=ctx,
-                param=param,
-            )
-        return
-    obj["state_dir"] = value
-
-
-def nested_state_dir_option(
+def trace_scope_options(
     function: Callable[..., Any],
 ) -> Callable[..., Any]:
-    """Expose the shared override at every grouped command parse level."""
+    """Give each trace operation direct ownership of its runtime scope."""
 
-    return click.option(
+    with_state_dir = click.option(
         "--state-dir",
         type=click.Path(file_okay=False, path_type=Path),
-        callback=capture_nested_state_dir,
-        expose_value=False,
         help="Override the runtime state directory.",
     )(function)
+    return click.option(
+        "--session",
+        default=None,
+        help="Read this session's trace store.",
+    )(with_state_dir)
 
 
 @click.group("traces")
-@nested_state_dir_option
-@click.option(
-    "--session",
-    "session_scope",
-    default=None,
-    help="Read this session's trace store.",
-)
-@click.pass_context
-def traces_group(
-    ctx: click.Context,
-    session_scope: str,
-) -> None:
+def traces_group() -> None:
     """Inspect runtime prompt and tool traces.
 
     Every ID argument accepts a ref name, a full id, or a unique prefix.
     """
 
-    obj = ctx.ensure_object(dict)
-    obj["session"] = session_scope or os.environ.get("ZETA_SESSION_ID") or "default"
-    obj["session_explicit"] = session_scope is not None
 
+def trace_context(
+    state_dir: Path | None,
+    session: str | None,
+) -> tuple[Path, str]:
+    """Resolve the runtime state and environment-backed session for one command."""
 
-def trace_context(ctx: click.Context) -> tuple[Path, str]:
-    obj = ctx.obj if isinstance(ctx.obj, dict) else {}
-    raw_state_dir = obj.get("state_dir")
-    raw_session = obj.get("session")
-    state_dir = resolve_state_dir(
-        raw_state_dir if isinstance(raw_state_dir, Path) else None
+    return (
+        resolve_state_dir(state_dir),
+        session or os.environ.get("ZETA_SESSION_ID") or "default",
     )
-    session = raw_session if isinstance(raw_session, str) and raw_session else "default"
-    return state_dir, session
 
 
-def trace_session_is_explicit(ctx: click.Context) -> bool:
-    obj = ctx.obj if isinstance(ctx.obj, dict) else {}
-    return obj.get("session_explicit") is True
+def scoped_store(
+    ctx: click.Context,
+    state_dir: Path | None,
+    session: str | None,
+    *,
+    read_only: bool = True,
+) -> Store:
+    """Return the trace store selected by one trace operation."""
 
-
-def scoped_store(ctx: click.Context, *, read_only: bool = True) -> Store:
-    """Return the trace store selected by the trace group options."""
-
-    state_dir, session_id = trace_context(ctx)
-    if read_only and trace_session_is_explicit(ctx):
-        store = open_session_store(state_dir, session_id)
+    resolved_state_dir, session_id = trace_context(state_dir, session)
+    if read_only and session is not None:
+        store = open_session_store(resolved_state_dir, session_id)
         ctx.call_on_close(store.close)
         return store
-    path = zeta_sqlite_path(state_dir)
+    path = zeta_sqlite_path(resolved_state_dir)
     if not path.exists():
         if read_only:
             return InMemoryStore(session_id=session_id)
@@ -163,7 +131,7 @@ def pretty_print_json(value: object) -> None:
 
 
 @traces_group.command("log")
-@nested_state_dir_option
+@trace_scope_options
 @click.option(
     "--kind",
     "kinds",
@@ -187,6 +155,8 @@ def pretty_print_json(value: object) -> None:
 @click.pass_context
 def trace_log(
     ctx: click.Context,
+    state_dir: Path | None,
+    session: str | None,
     kinds: tuple[str, ...],
     all_kinds: bool,
     limit: int,
@@ -197,6 +167,8 @@ def trace_log(
     selected = None if all_kinds else (tuple(kinds) or NARRATIVE_KINDS)
     lines = scope_listing_lines(
         ctx,
+        state_dir,
+        session,
         all_sessions,
         lambda store: object_listing_lines(store, store.objects(selected, limit)),
     )
@@ -209,18 +181,20 @@ def trace_log(
 
 
 @traces_group.command("reinit-store")
-@nested_state_dir_option
+@click.option(
+    "--state-dir",
+    type=click.Path(file_okay=False, path_type=Path),
+    help="Override the runtime state directory.",
+)
 @click.option(
     "--yes",
     is_flag=True,
     help="Recreate the unified Zeta SQLite database without prompting.",
 )
-@click.pass_context
-def trace_reinit_store(ctx: click.Context, yes: bool) -> int:
+def trace_reinit_store(state_dir: Path | None, yes: bool) -> int:
     """Delete all trace and runtime records in the selected Zeta database."""
 
-    state_dir, _session_id = trace_context(ctx)
-    path = zeta_sqlite_path(state_dir)
+    path = zeta_sqlite_path(resolve_state_dir(state_dir))
     if not yes:
         click.confirm(
             f"Delete and recreate {path}?",
@@ -236,7 +210,7 @@ def trace_reinit_store(ctx: click.Context, yes: bool) -> int:
 
 
 @traces_group.command("tools")
-@nested_state_dir_option
+@trace_scope_options
 @click.option("--json", "json_output", is_flag=True, help="Emit rows as JSON.")
 @click.option("--failed", is_flag=True, help="Only include failed tool calls.")
 @click.option("--successful", is_flag=True, help="Only include successful tool calls.")
@@ -256,6 +230,8 @@ def trace_reinit_store(ctx: click.Context, yes: bool) -> int:
 @click.pass_context
 def trace_tools(
     ctx: click.Context,
+    state_dir: Path | None,
+    session: str | None,
     json_output: bool,
     failed: bool,
     successful: bool,
@@ -268,6 +244,8 @@ def trace_tools(
         raise click.ClickException("--failed conflicts with --successful")
     rows = scope_tool_rows(
         ctx,
+        state_dir,
+        session,
         all_sessions,
         failed=failed,
         successful=successful,
@@ -293,7 +271,7 @@ def trace_tools(
 
 
 @traces_group.command("grep")
-@nested_state_dir_option
+@trace_scope_options
 @click.argument("pattern")
 @click.option(
     "--kind",
@@ -317,6 +295,8 @@ def trace_tools(
 @click.pass_context
 def trace_grep(
     ctx: click.Context,
+    state_dir: Path | None,
+    session: str | None,
     pattern: str,
     kinds: tuple[str, ...],
     limit: int,
@@ -327,6 +307,8 @@ def trace_grep(
     selected = tuple(kinds) or None
     lines = scope_listing_lines(
         ctx,
+        state_dir,
+        session,
         all_sessions,
         lambda store: object_listing_lines(
             store, store.search_objects(pattern, kind=selected, limit=limit)
@@ -342,24 +324,26 @@ def trace_grep(
 
 def scope_tool_rows(
     ctx: click.Context,
+    state_dir: Path | None,
+    session: str | None,
     all_sessions: bool,
     *,
     failed: bool,
     successful: bool,
     limit: int,
 ) -> list[dict[str, Any]]:
-    state_dir, session_id = trace_context(ctx)
+    resolved_state_dir, session_id = trace_context(state_dir, session)
     if not all_sessions:
         return tool_call_rows(
-            scoped_store(ctx),
+            scoped_store(ctx, state_dir, session),
             session=session_id,
             failed=failed,
             successful=successful,
             limit=limit,
         )
     rows: list[dict[str, Any]] = []
-    for session_id_value in available_session_ids(state_dir):
-        store = open_session_store(state_dir, session_id_value)
+    for session_id_value in available_session_ids(resolved_state_dir):
+        store = open_session_store(resolved_state_dir, session_id_value)
         try:
             rows.extend(
                 tool_call_rows(
@@ -378,17 +362,19 @@ def scope_tool_rows(
 
 def scope_listing_lines(
     ctx: click.Context,
+    state_dir: Path | None,
+    session: str | None,
     all_sessions: bool,
     render: Callable[[Store], list[str]],
 ) -> list[str]:
     """Render lines for the scoped store, or every recorded session."""
 
-    state_dir, _session_id = trace_context(ctx)
     if not all_sessions:
-        return render(scoped_store(ctx))
+        return render(scoped_store(ctx, state_dir, session))
+    resolved_state_dir, _session_id = trace_context(state_dir, session)
     lines = []
-    for session_id_value in available_session_ids(state_dir):
-        store = open_session_store(state_dir, session_id_value)
+    for session_id_value in available_session_ids(resolved_state_dir):
+        store = open_session_store(resolved_state_dir, session_id_value)
         try:
             lines.extend(f"{session_id_value}  {line}" for line in render(store))
         finally:
@@ -397,14 +383,20 @@ def scope_listing_lines(
 
 
 @traces_group.command("show")
-@nested_state_dir_option
+@trace_scope_options
 @click.argument("object_id")
 @click.option("--json", "json_output", is_flag=True, help="Emit the raw object JSON.")
 @click.pass_context
-def trace_show(ctx: click.Context, object_id: str, json_output: bool) -> int:
+def trace_show(
+    ctx: click.Context,
+    state_dir: Path | None,
+    session: str | None,
+    object_id: str,
+    json_output: bool,
+) -> int:
     """Show one trace object, its body, and both derivation directions."""
 
-    store = scoped_store(ctx)
+    store = scoped_store(ctx, state_dir, session)
     resolved = resolve_cli_object_id(object_id, store=store)
     if json_output:
         data = get_trace_object(resolved, store=store)
@@ -421,20 +413,25 @@ def trace_show(ctx: click.Context, object_id: str, json_output: bool) -> int:
 
 
 @traces_group.command("closure")
-@nested_state_dir_option
+@trace_scope_options
 @click.argument("object_id")
 @click.pass_context
-def trace_closure(ctx: click.Context, object_id: str) -> int:
+def trace_closure(
+    ctx: click.Context,
+    state_dir: Path | None,
+    session: str | None,
+    object_id: str,
+) -> int:
     """List every object reachable from a trace object."""
 
-    store = scoped_store(ctx)
+    store = scoped_store(ctx, state_dir, session)
     resolved = resolve_cli_object_id(object_id, store=store)
     pretty_print_json({"objects": list_trace_closure(resolved, store=store)})
     return 0
 
 
 @traces_group.command("tree")
-@nested_state_dir_option
+@trace_scope_options
 @click.argument("object_id")
 @click.option("--down", is_flag=True, help="Follow consumers instead of producers.")
 @click.option(
@@ -445,10 +442,17 @@ def trace_closure(ctx: click.Context, object_id: str) -> int:
     help="Maximum object depth below the root.",
 )
 @click.pass_context
-def trace_tree(ctx: click.Context, object_id: str, down: bool, depth: int) -> int:
+def trace_tree(
+    ctx: click.Context,
+    state_dir: Path | None,
+    session: str | None,
+    object_id: str,
+    down: bool,
+    depth: int,
+) -> int:
     """Render the derivation tree around one trace object."""
 
-    store = scoped_store(ctx)
+    store = scoped_store(ctx, state_dir, session)
     resolved = resolve_cli_object_id(object_id, store=store)
     for line in render_trace_tree(resolved, down=down, depth=depth, store=store):
         click.echo(line)
@@ -456,7 +460,7 @@ def trace_tree(ctx: click.Context, object_id: str, down: bool, depth: int) -> in
 
 
 @traces_group.command("diff")
-@nested_state_dir_option
+@trace_scope_options
 @click.argument("old_id")
 @click.argument("new_id")
 @click.option(
@@ -466,10 +470,17 @@ def trace_tree(ctx: click.Context, object_id: str, down: bool, depth: int) -> in
     help="One line per component change, without text diffs.",
 )
 @click.pass_context
-def trace_diff(ctx: click.Context, old_id: str, new_id: str, stat_only: bool) -> int:
+def trace_diff(
+    ctx: click.Context,
+    state_dir: Path | None,
+    session: str | None,
+    old_id: str,
+    new_id: str,
+    stat_only: bool,
+) -> int:
     """Compare two prompts component by component."""
 
-    store = scoped_store(ctx)
+    store = scoped_store(ctx, state_dir, session)
     old = resolve_cli_prompt(store, old_id)
     new = resolve_cli_prompt(store, new_id)
     for line in render_prompt_diff(store, old, new, stat_only=stat_only):
@@ -478,7 +489,7 @@ def trace_diff(ctx: click.Context, old_id: str, new_id: str, stat_only: bool) ->
 
 
 @traces_group.command("replay")
-@nested_state_dir_option
+@trace_scope_options
 @click.argument("object_id")
 @click.option(
     "--model",
@@ -495,21 +506,23 @@ def trace_diff(ctx: click.Context, old_id: str, new_id: str, stat_only: bool) ->
 @click.pass_context
 def trace_replay(
     ctx: click.Context,
+    state_dir: Path | None,
+    session: str | None,
     object_id: str,
     model_profile: str | None,
     diff_output: bool,
 ) -> int:
     """Resend a stored prompt through the model boundary."""
 
-    store = scoped_store(ctx, read_only=False)
-    state_dir, session_id = trace_context(ctx)
+    store = scoped_store(ctx, state_dir, session, read_only=False)
+    resolved_state_dir, session_id = trace_context(state_dir, session)
     prompt_id, _ = resolve_cli_prompt(store, object_id)
     reconstructed = reconstructed_prompt_request(store, prompt_id)
     if reconstructed is None:
         raise click.ClickException(f"not a prompt: {object_id}")
     selection = replay_model_selection(
         model_profile,
-        session_dir=state_dir / "sessions" / session_id,
+        session_dir=resolved_state_dir / "sessions" / session_id,
     )
     original = latest_model_answer(store, prompt_id)
 
@@ -539,22 +552,31 @@ def trace_replay(
 
 
 @traces_group.command("refs")
-@nested_state_dir_option
+@trace_scope_options
 @click.pass_context
-def trace_refs(ctx: click.Context) -> int:
+def trace_refs(
+    ctx: click.Context,
+    state_dir: Path | None,
+    session: str | None,
+) -> int:
     """List the mutable refs and the objects they point at."""
 
-    pretty_print_json({"refs": list_trace_refs(store=scoped_store(ctx))})
+    store = scoped_store(ctx, state_dir, session)
+    pretty_print_json({"refs": list_trace_refs(store=store)})
     return 0
 
 
 @traces_group.command("prompts")
-@nested_state_dir_option
+@trace_scope_options
 @click.pass_context
-def trace_prompts(ctx: click.Context) -> int:
+def trace_prompts(
+    ctx: click.Context,
+    state_dir: Path | None,
+    session: str | None,
+) -> int:
     """List recorded prompts with store size statistics."""
 
-    store = scoped_store(ctx)
+    store = scoped_store(ctx, state_dir, session)
     stats = store.stats()
     pretty_print_json(
         {

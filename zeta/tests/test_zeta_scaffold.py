@@ -63,7 +63,7 @@ def test_zeta_scaffold_rejects_invalid_slug(tmp_path: Path) -> None:
 def test_zeta_agent_new_cli_creates_agent_file(tmp_path: Path) -> None:
     result = CliRunner().invoke(
         cli,
-        ["agent", "new", "filer", "--name", "Filer", "--project-root", str(tmp_path)],
+        ["agents", "new", "filer", "--name", "Filer", "--project-root", str(tmp_path)],
     )
 
     assert result.exit_code == 0, result.output

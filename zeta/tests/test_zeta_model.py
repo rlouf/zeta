@@ -1738,7 +1738,7 @@ model = "fast-model"
     )
     monkeypatch.setenv("HOME", str(home))
 
-    result = CliRunner().invoke(zeta_cli, ["model", "list"])
+    result = CliRunner().invoke(zeta_cli, ["models", "list"])
 
     assert result.exit_code == 0, result.output
     lines = result.output.splitlines()
@@ -1771,7 +1771,7 @@ model = "fast-model"
     monkeypatch.setenv("ZETA_SESSION_ID", "list-active-session")
     zeta_models.set_active_model_profile("fast")
 
-    result = CliRunner().invoke(zeta_cli, ["model", "list"])
+    result = CliRunner().invoke(zeta_cli, ["models", "list"])
 
     assert result.exit_code == 0, result.output
     lines = result.output.splitlines()
@@ -1798,7 +1798,7 @@ default = true
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("COMMAS_SESSION_ID", "show-source-session")
 
-    result = CliRunner().invoke(zeta_cli, ["model", "show"])
+    result = CliRunner().invoke(zeta_cli, ["models", "show"])
 
     assert result.exit_code == 0, result.output
     assert (

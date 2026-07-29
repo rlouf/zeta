@@ -111,8 +111,8 @@ def test_queueing_dispatcher_records_retry_scheduling(tmp_path: Path) -> None:
     )
 
     asyncio.run(
-        dispatch_and_drain(dispatcher, 
-            DraftEvent("github.issue.opened", "github", {"title": "Retry"})
+        dispatch_and_drain(
+            dispatcher, DraftEvent("github.issue.opened", "github", {"title": "Retry"})
         )
     )
 

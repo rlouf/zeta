@@ -4,10 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from zeta.capabilities.execution import (
-    CapabilityFunction,
-    InProcessCapabilityExecutor,
-)
+from zeta.capabilities.executors import CapabilityFunction, InProcessCapabilityExecutor
 from zeta.capabilities.registry import RegisteredCapability
 from zeta.capabilities.types import Capability
 from zeta.tools import bash, edit, grep, ls, read, web, write

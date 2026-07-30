@@ -9,9 +9,7 @@ import pytest
 import zeta.models.chat_completions as zeta_model
 import zeta.models.types as zeta_models_api
 from zeta.authoring import skills as zeta_skills
-from zeta.capabilities.execution import (
-    InProcessCapabilityExecutor,
-)
+from zeta.capabilities.executors import InProcessCapabilityExecutor
 from zeta.capabilities.registry import CapabilityRegistry, RegisteredCapability
 from zeta.capabilities.types import (
     Capability,

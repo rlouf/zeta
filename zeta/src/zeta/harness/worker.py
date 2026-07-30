@@ -18,7 +18,7 @@ from connectors import (
 
 from zeta.authoring.resources import load_connector_registry
 from zeta.authoring.spec import executor_config
-from zeta.capabilities.execution import (
+from zeta.capabilities.executors import (
     ToolExecutor,
     ToolExecutorProviderRegistry,
     load_tool_executor_provider_registry,

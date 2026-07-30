@@ -18,7 +18,7 @@ from connectors import EventConnector, EventConnectorRegistry
 from zeta.authoring.manifest import Manifest
 from zeta.authoring.schemas import EventRegistry, EventRegistryError
 from zeta.authoring.spec import AgentSpec, load_specs, scheduled_event_type
-from zeta.capabilities.execution import ToolExecutorProviderRegistry
+from zeta.capabilities.executors import ToolExecutorProviderRegistry
 
 
 class ResourceError(ValueError):

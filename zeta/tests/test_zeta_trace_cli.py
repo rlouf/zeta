@@ -8,7 +8,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
-import zeta.capabilities.execution as zeta_capability_execution
+import zeta.capabilities.executors as zeta_capability_executors
 import zeta.context.components as zeta_context
 import zeta.models.endpoint as zeta_model_endpoint
 import zeta.models.profiles as zeta_models
@@ -1126,7 +1126,7 @@ def test_zeta_agent_durable_events_project_trace_objects(
         lambda *args, **kwargs: next(responses),
     )
     monkeypatch.setattr(
-        zeta_capability_execution,
+        zeta_capability_executors,
         "invoke_capability",
         lambda name, params, **kwargs: read_tool_payload(target),
     )

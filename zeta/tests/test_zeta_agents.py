@@ -55,7 +55,7 @@ from zeta.authoring.spec import (
     matches,
     scheduled_event_type,
 )
-from zeta.capabilities.execution import (
+from zeta.capabilities.executors import (
     InProcessCapabilityExecutor,
     ToolExecutorProviderRegistry,
 )

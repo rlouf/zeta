@@ -6,7 +6,7 @@ import subprocess
 import time
 from typing import Any
 
-from zeta.capabilities.execution import proposed_command_effect
+from zeta.capabilities.delivery import proposed_command_effect
 from zeta.capabilities.paths import resolve_path
 from zeta.capabilities.registry import error_result
 from zeta.capabilities.types import Capability, CapabilityId

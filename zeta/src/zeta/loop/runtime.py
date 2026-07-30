@@ -11,10 +11,9 @@ from typing import Any, Protocol
 from zeta.capabilities.execution import (
     CapabilityCallResult,
     CapabilityExecutionContext,
-    InProcessToolExecutor,
-    ToolExecutor,
     handle_tool_call,
 )
+from zeta.capabilities.executors import InProcessToolExecutor, ToolExecutor
 from zeta.capabilities.registry import (
     CapabilityRegistry,
     CapabilityToolSchema,

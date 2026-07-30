@@ -9,7 +9,7 @@ from html import unescape
 from typing import Any
 from urllib.parse import urlsplit
 
-from zeta.capabilities.execution import content_hash, short_tag
+from zeta.capabilities.delivery import content_hash, short_tag
 from zeta.capabilities.paths import resolve_path
 from zeta.capabilities.registry import error_result
 from zeta.capabilities.types import Capability, CapabilityId

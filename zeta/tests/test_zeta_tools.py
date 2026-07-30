@@ -11,11 +11,11 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from zeta.capabilities.execution import (
+from zeta.capabilities.execution import tool_args_schema_error
+from zeta.capabilities.executors import (
     InProcessCapabilityExecutor,
     ToolExecutorProvider,
     load_tool_executor_provider_registry,
-    tool_args_schema_error,
 )
 from zeta.capabilities.registry import (
     CapabilityRegistry,

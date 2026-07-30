@@ -29,7 +29,7 @@ from zeta.authoring.spec import (
     ScheduleEntry,
     executor_config,
 )
-from zeta.capabilities.execution import (
+from zeta.capabilities.executors import (
     ToolExecutorProviderRegistry,
     load_tool_executor_provider_registry,
 )

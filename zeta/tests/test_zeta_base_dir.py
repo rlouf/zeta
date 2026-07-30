@@ -49,8 +49,8 @@ def test_base_dir_is_task_local():
 
 
 def test_in_process_tool_executor_activates_base_dir_from_context():
-    from zeta.capabilities.execution import (
-        CapabilityExecutionContext,
+    from zeta.capabilities.execution import CapabilityExecutionContext
+    from zeta.capabilities.executors import (
         InProcessCapabilityExecutor,
         InProcessToolExecutor,
     )

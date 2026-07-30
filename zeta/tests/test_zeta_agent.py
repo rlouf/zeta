@@ -14,6 +14,7 @@ from typing import Any, cast
 
 import pytest
 import zeta.capabilities.execution as zeta_capability_execution
+import zeta.capabilities.executors as zeta_capability_executors
 import zeta.models.chat_completions as zeta_model
 import zeta.models.endpoint as zeta_model_endpoint
 import zeta.models.sse as zeta_model_sse
@@ -21,7 +22,7 @@ import zeta.models.types as zeta_model_shapes
 from click.testing import CliRunner
 from zeta.authoring import spec as zeta_agent_spec
 from zeta.authoring.manifest import ManifestError
-from zeta.capabilities.execution import (
+from zeta.capabilities.executors import (
     InProcessCapabilityExecutor,
     ToolExecutor,
     ToolExecutorProvider,
@@ -6847,7 +6848,7 @@ def test_zeta_agent_turn_resolves_model_name_through_projection(monkeypatch) -> 
         "chat_completion_messages",
         lambda *args, **kwargs: next(responses),
     )
-    monkeypatch.setattr(zeta_capability_execution, "invoke_capability", fake_invoke)
+    monkeypatch.setattr(zeta_capability_executors, "invoke_capability", fake_invoke)
 
     result = run_agent_turn(
         "read",
@@ -7188,7 +7189,7 @@ def test_zeta_agent_turn_records_one_prompt_trace_per_model_request(
         lambda messages, **kwargs: next(responses),
     )
     monkeypatch.setattr(
-        zeta_capability_execution,
+        zeta_capability_executors,
         "invoke_capability",
         lambda name, params: read_tool_payload(target),
     )
@@ -7236,7 +7237,7 @@ def test_zeta_agent_turn_records_tool_result_derivation(
         lambda messages, **kwargs: next(responses),
     )
     monkeypatch.setattr(
-        zeta_capability_execution,
+        zeta_capability_executors,
         "invoke_capability",
         lambda name, params: read_tool_payload(target),
     )
@@ -7352,7 +7353,7 @@ def test_zeta_agent_runtime_ui_events_do_not_feed_next_prompt(monkeypatch) -> No
         fake_chat_completion_messages,
     )
     monkeypatch.setattr(
-        zeta_capability_execution,
+        zeta_capability_executors,
         "invoke_capability",
         lambda name, params: {"ok": True, "content": [{"type": "text", "text": name}]},
     )
@@ -7448,7 +7449,7 @@ def test_zeta_agent_turn_runs_multiple_read_only_tools_in_order(monkeypatch) -> 
         ran.append((name, params))
         return {"ok": True, "content": [{"type": "text", "text": name}]}
 
-    monkeypatch.setattr(zeta_capability_execution, "invoke_capability", fake_invoke)
+    monkeypatch.setattr(zeta_capability_executors, "invoke_capability", fake_invoke)
 
     result = run_agent_turn(
         "inspect",
@@ -7523,7 +7524,7 @@ def test_zeta_agent_turn_streams_text_between_tool_turns(monkeypatch) -> None:
         fake_chat_completion_messages,
     )
     monkeypatch.setattr(
-        zeta_capability_execution,
+        zeta_capability_executors,
         "invoke_capability",
         lambda name, params: {
             "ok": True,
@@ -7627,7 +7628,7 @@ def test_zeta_agent_turn_orders_prior_timeline_before_current_events(
         fake_chat_completion_messages,
     )
     monkeypatch.setattr(
-        zeta_capability_execution,
+        zeta_capability_executors,
         "invoke_capability",
         lambda name, params: {
             "ok": True,
@@ -7693,7 +7694,7 @@ def test_zeta_agent_turn_streams_tool_call_before_running_tool(monkeypatch) -> N
         ]
         return {"ok": True, "content": [{"type": "text", "text": "README"}]}
 
-    monkeypatch.setattr(zeta_capability_execution, "invoke_capability", fake_invoke)
+    monkeypatch.setattr(zeta_capability_executors, "invoke_capability", fake_invoke)
 
     result = run_agent_turn(
         "inspect",
@@ -7748,7 +7749,7 @@ def test_zeta_agent_turn_stops_after_staged_tool(monkeypatch) -> None:
         zeta_models_api, "chat_completion_messages", fake_chat_completion_messages
     )
     monkeypatch.setattr(
-        zeta_capability_execution,
+        zeta_capability_executors,
         "invoke_capability",
         lambda name, params, **kwargs: {
             "ok": True,
@@ -7964,7 +7965,7 @@ def test_zeta_agent_turn_stops_after_default_max_turns(monkeypatch) -> None:
         zeta_models_api, "chat_completion_messages", fake_chat_completion_messages
     )
     monkeypatch.setattr(
-        zeta_capability_execution,
+        zeta_capability_executors,
         "invoke_capability",
         lambda name, params, **kwargs: {"ok": True},
     )
@@ -8040,7 +8041,7 @@ def test_zeta_agent_turn_aborts_on_deadline_between_model_turns(
         lambda *args, **kwargs: next(responses),
     )
     monkeypatch.setattr(
-        zeta_capability_execution,
+        zeta_capability_executors,
         "invoke_capability",
         lambda name, params, **kwargs: read_tool_payload(target),
     )
@@ -8120,7 +8121,7 @@ def test_zeta_agent_turn_converts_tool_crash_to_error_result(monkeypatch) -> Non
     monkeypatch.setattr(
         zeta_models_api, "chat_completion_messages", fake_chat_completion_messages
     )
-    monkeypatch.setattr(zeta_capability_execution, "invoke_capability", crash_invoke)
+    monkeypatch.setattr(zeta_capability_executors, "invoke_capability", crash_invoke)
 
     result = run_agent_turn(
         "test",
@@ -8171,7 +8172,7 @@ def test_zeta_agent_turn_rejects_tool_call_that_violates_input_schema(
             ]
         },
     )
-    monkeypatch.setattr(zeta_capability_execution, "invoke_capability", fake_invoke)
+    monkeypatch.setattr(zeta_capability_executors, "invoke_capability", fake_invoke)
 
     result = run_agent_turn(
         "inspect",
@@ -8215,7 +8216,7 @@ def test_zeta_agent_turn_rejects_disallowed_tool_before_running(monkeypatch) -> 
             ]
         },
     )
-    monkeypatch.setattr(zeta_capability_execution, "invoke_capability", fail_invoke)
+    monkeypatch.setattr(zeta_capability_executors, "invoke_capability", fail_invoke)
 
     result = run_agent_turn(
         "inspect",

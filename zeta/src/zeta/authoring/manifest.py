@@ -16,7 +16,7 @@ from jsonschema.exceptions import SchemaError, ValidationError
 from zeta.authoring.prompts import validate_prompt
 from zeta.authoring.schemas import EventRegistry
 from zeta.authoring.spec import AgentSpec
-from zeta.capabilities.execution import ToolExecutorProviderRegistry
+from zeta.capabilities.executors import ToolExecutorProviderRegistry
 
 RESERVED_TOOL_NAMES = frozenset({"__return"})
 

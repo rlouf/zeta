@@ -2,27 +2,23 @@
 
 from __future__ import annotations
 
-import hashlib
 import inspect
 import json
-import os
-import tempfile
-from collections.abc import Awaitable, Callable, Iterable, Mapping
-from dataclasses import dataclass, field, replace
-from importlib import metadata as importlib_metadata
+from collections.abc import Callable
+from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any, Protocol, cast
+from typing import Any, cast
 
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import SchemaError
 
-from zeta.capabilities.paths import reset_base_dir, set_base_dir
+from zeta.capabilities.delivery import proposed_effect
+from zeta.capabilities.executors import InProcessToolExecutor, ToolExecutor
 from zeta.capabilities.registry import (
     CapabilityRegistry,
     CapabilityToolSchema,
     validated_capability_result_payload,
 )
-from zeta.capabilities.registry import registry as _default_tool_registry
 from zeta.capabilities.types import ExecutionMode
 from zeta.effects import DeliverySemantics, effect_key
 from zeta.events import DraftEvent
@@ -33,266 +29,10 @@ from zeta.substrate import Store
 from zeta.trace.provenance import project_prompt_trace_projection
 
 
-class CapabilityExecutor(Protocol):
-    def __call__(
-        self,
-        params: dict[str, Any],
-        *,
-        mode: ExecutionMode,
-        effect_key: str | None = None,
-    ) -> dict[str, Any] | Awaitable[dict[str, Any]]: ...
-
-
-CapabilityFunction = Callable[
-    [dict[str, Any]], dict[str, Any] | Awaitable[dict[str, Any]]
-]
-
-
-class ToolExecutor(Protocol):
-    """Execute calls in one persistent agent tool environment.
-
-    A worker may call an executor concurrently and closes it after all agent
-    invocations have finished.
-    """
-
-    async def call(
-        self,
-        capability_id: str,
-        params: dict[str, Any],
-        mode: ExecutionMode,
-        *,
-        base_dir: Path | None,
-        effect_key: str | None,
-    ) -> dict[str, Any]:
-        """Return the normalized result for one capability call."""
-
-    async def aclose(self) -> None:
-        """Release resources owned by this executor."""
-
-
-ToolExecutorSetup = Callable[
-    [str, CapabilityRegistry, Mapping[str, Any]], Awaitable[ToolExecutor]
-]
-
-TOOL_EXECUTOR_ENTRY_POINT_GROUP = "zeta.tool_executors"
-
-
-@dataclass(frozen=True)
-class ToolExecutorProvider:
-    """Transfer a persistent executor's lifecycle to the worker."""
-
-    id: str
-    setup: ToolExecutorSetup
-
-
-@dataclass
-class ToolExecutorProviderRegistry:
-    """Named tool executor providers available to a runtime."""
-
-    providers: dict[str, ToolExecutorProvider] = field(default_factory=dict)
-
-    def register(self, provider: ToolExecutorProvider) -> None:
-        if provider.id in self.providers:
-            raise ValueError(
-                f"tool executor provider {provider.id!r} is already registered"
-            )
-        self.providers[provider.id] = provider
-
-    def resolve(self, provider_id: str) -> ToolExecutorProvider | None:
-        return self.providers.get(provider_id)
-
-
-@dataclass(frozen=True)
-class InProcessToolExecutor:
-    """Execute capabilities through the local registry."""
-
-    registry: CapabilityRegistry
-
-    async def call(
-        self,
-        capability_id: str,
-        params: dict[str, Any],
-        mode: ExecutionMode,
-        *,
-        base_dir: Path | None,
-        effect_key: str | None,
-    ) -> dict[str, Any]:
-        token = set_base_dir(base_dir)
-        try:
-            result = invoke_capability(
-                capability_id,
-                params,
-                execution_mode=mode,
-                tool_registry=self.registry,
-                effect_key=effect_key,
-            )
-            if inspect.isawaitable(result):
-                result = await result
-            return result
-        finally:
-            reset_base_dir(token)
-
-    async def aclose(self) -> None:
-        return None
-
-
-async def local_tool_executor_provider(
-    agent_id: str,
-    registry: CapabilityRegistry,
-    config: Mapping[str, Any],
-) -> ToolExecutor:
-    """Set up the built-in executor that invokes local capabilities."""
-    del agent_id
-    if config:
-        raise ValueError("local tool executor does not accept configuration")
-    return InProcessToolExecutor(registry)
-
-
-def load_tool_executor_provider_registry(
-    entry_points: Iterable[Any] | None = None,
-) -> ToolExecutorProviderRegistry:
-    """Load built-in and installed tool executor providers."""
-    registry = ToolExecutorProviderRegistry()
-    registry.register(ToolExecutorProvider("local", local_tool_executor_provider))
-    for entry_point in tool_executor_entry_points(entry_points):
-        provider = load_entry_point_tool_executor_provider(entry_point)
-        if provider.id != entry_point.name:
-            raise ValueError(
-                f"tool executor entry point {entry_point.name!r} returned "
-                f"provider id {provider.id!r}"
-            )
-        registry.register(provider)
-    return registry
-
-
-def tool_executor_entry_points(
-    entry_points: Iterable[Any] | None = None,
-) -> tuple[Any, ...]:
-    discovered = (
-        importlib_metadata.entry_points() if entry_points is None else entry_points
-    )
-    select = getattr(discovered, "select", None)
-    if callable(select):
-        return tuple(select(group=TOOL_EXECUTOR_ENTRY_POINT_GROUP))
-    if isinstance(discovered, Mapping):
-        grouped = cast(Mapping[str, Iterable[Any]], discovered)
-        return tuple(grouped.get(TOOL_EXECUTOR_ENTRY_POINT_GROUP, ()))
-    return tuple(
-        entry_point
-        for entry_point in discovered
-        if getattr(entry_point, "group", None) == TOOL_EXECUTOR_ENTRY_POINT_GROUP
-    )
-
-
-def load_entry_point_tool_executor_provider(entry_point: Any) -> ToolExecutorProvider:
-    provider = entry_point.load()
-    if callable(provider):
-        provider = provider()
-    if not isinstance(provider, ToolExecutorProvider):
-        raise ValueError(
-            f"tool executor entry point {entry_point.name!r} did not return "
-            "a ToolExecutorProvider"
-        )
-    return provider
-
-
-@dataclass(frozen=True)
-class InProcessCapabilityExecutor:
-    run: CapabilityFunction
-    stage: CapabilityFunction | None = None
-
-    async def __call__(
-        self,
-        params: dict[str, Any],
-        *,
-        mode: ExecutionMode,
-        effect_key: str | None = None,
-    ) -> dict[str, Any]:
-        del effect_key
-        if mode == "stage" and self.stage is not None:
-            result = self.stage(params)
-        else:
-            result = self.run(params)
-        if inspect.isawaitable(result):
-            result = await result
-        return dict(cast(dict[str, Any], result))
-
-
 def diagnostic(
     code: str, message: str, *, severity: str = "unsupported"
 ) -> dict[str, str]:
     return {"code": code, "message": message, "severity": severity}
-
-
-def proposed_command_effect(
-    command: str, reason: str, *, artifact: str | None = None
-) -> dict[str, Any]:
-    effect = {
-        "kind": "command",
-        "status": "proposed",
-        "command": command,
-        "reason": reason,
-    }
-    if artifact is not None:
-        effect["artifact"] = artifact
-    return {"ok": True, "effect": effect}
-
-
-def proposed_effect(result: dict[str, Any]) -> dict[str, Any] | None:
-    if result.get("ok") is not True:
-        return None
-    effect = result.get("effect")
-    if not isinstance(effect, dict) or effect.get("status") != "proposed":
-        return None
-    return effect
-
-
-def effect_resolution(result: dict[str, Any]) -> dict[str, Any] | None:
-    effect = result.get("effect")
-    if not isinstance(effect, dict):
-        return None
-    status = effect.get("status")
-    if status not in {"resolved", "cancelled"}:
-        return None
-    return effect
-
-
-def content_hash(data: bytes | str) -> str:
-    """Return the sha256 content address of file bytes or UTF-8 text."""
-    if isinstance(data, str):
-        data = data.encode("utf-8")
-    return "sha256:" + hashlib.sha256(data).hexdigest()
-
-
-def short_tag(content_address: str) -> str:
-    """Return the short 8-char snapshot tag from a content address."""
-    return content_address.split(":", 1)[1][:8]
-
-
-def file_content_hash(path: str | Path) -> str | None:
-    """Return the content address of a file, or None if it cannot be read."""
-    try:
-        data = Path(path).read_bytes()
-    except OSError:
-        return None
-    return content_hash(data)
-
-
-def change_hashes(path: str, content: str) -> dict[str, str]:
-    """Hash the file as it stands (when readable) and the content replacing it."""
-    hashes = {"after_hash": content_hash(content)}
-    before_hash = file_content_hash(path)
-    if before_hash is not None:
-        hashes["before_hash"] = before_hash
-    return hashes
-
-
-def write_temp(prefix: str, suffix: str, content: str) -> Path:
-    fd, raw_path = tempfile.mkstemp(prefix=prefix, suffix=suffix)
-    path = Path(raw_path)
-    with os.fdopen(fd, "w", encoding="utf-8") as handle:
-        handle.write(content)
-    return path
 
 
 CapabilityEventSink = Callable[[DraftEvent], None]
@@ -645,17 +385,6 @@ async def run_valid_tool_call(
     )
 
 
-def capability_delivery_semantics(
-    capability_id: str,
-    *,
-    ctx: CapabilityExecutionContext,
-) -> DeliverySemantics | None:
-    capability = ctx.tool_registry.get(capability_id)
-    if capability is None:
-        return None
-    return capability.declaration.delivery_semantics
-
-
 def emit_capability_effect_event(
     events: list[DraftEvent],
     status: str,
@@ -691,41 +420,6 @@ def emit_capability_effect_event(
         ),
         ctx,
     )
-
-
-async def invoke_capability(
-    capability_id: str,
-    params: dict[str, Any],
-    *,
-    execution_mode: ExecutionMode = "stage",
-    tool_registry: CapabilityRegistry | None = None,
-    effect_key: str | None = None,
-) -> dict[str, Any]:
-    active_tool_registry = tool_registry or _default_tool_registry
-    return await active_tool_registry.invoke_async(
-        capability_id,
-        params,
-        execution_mode=execution_mode,
-        effect_key=effect_key,
-    )
-
-
-async def invoke_tool_executor(
-    capability_id: str,
-    params: dict[str, Any],
-    *,
-    execution_mode: ExecutionMode = "stage",
-    ctx: CapabilityExecutionContext,
-) -> dict[str, Any]:
-    executor = ctx.tool_executor or InProcessToolExecutor(ctx.tool_registry)
-    result = await executor.call(
-        capability_id,
-        params,
-        execution_mode,
-        base_dir=ctx.base_dir,
-        effect_key=ctx.effect_key,
-    )
-    return validated_capability_result_payload(capability_id, result)
 
 
 def parse_tool_arguments(arguments: Any) -> tuple[dict[str, Any], str]:
@@ -834,3 +528,32 @@ def emit_capability_event_draft(
 
 def tool_error(code: str, message: str) -> dict[str, Any]:
     return {"ok": False, "error": {"code": code, "message": message}}
+
+
+async def invoke_tool_executor(
+    capability_id: str,
+    params: dict[str, Any],
+    *,
+    execution_mode: ExecutionMode = "stage",
+    ctx: CapabilityExecutionContext,
+) -> dict[str, Any]:
+    executor = ctx.tool_executor or InProcessToolExecutor(ctx.tool_registry)
+    result = await executor.call(
+        capability_id,
+        params,
+        execution_mode,
+        base_dir=ctx.base_dir,
+        effect_key=ctx.effect_key,
+    )
+    return validated_capability_result_payload(capability_id, result)
+
+
+def capability_delivery_semantics(
+    capability_id: str,
+    *,
+    ctx: CapabilityExecutionContext,
+) -> DeliverySemantics | None:
+    capability = ctx.tool_registry.get(capability_id)
+    if capability is None:
+        return None
+    return capability.declaration.delivery_semantics

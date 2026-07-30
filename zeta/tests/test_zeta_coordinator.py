@@ -1,6 +1,6 @@
 import asyncio
 
-from zeta.records.events import Event
+from zeta.events import Event
 from zeta.records.stores.memory import MemoryEventStore
 from zetad.agents import AgentDefinition, EventPattern, ExecutableAgent
 from zetad.coordinator import AttemptCoordinator

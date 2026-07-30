@@ -15,8 +15,8 @@ from typing import Any, cast
 import yaml
 from connectors import EventConnector, EventConnectorRegistry
 
-from zeta.agents.events import EventRegistry, EventRegistryError
 from zeta.agents.manifest import Manifest
+from zeta.agents.schemas import EventRegistry, EventRegistryError
 from zeta.agents.spec import AgentSpec, load_specs, scheduled_event_type
 from zeta.capabilities.execution import ToolExecutorProviderRegistry
 

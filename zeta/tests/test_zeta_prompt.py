@@ -50,7 +50,7 @@ from zeta.context.instructions import (
 from zeta.context.system import model_capability_descriptors, system_prompt
 from zeta.events import Event
 from zeta.records.provenance import project_prompt_trace_projection
-from zeta.run.context import zeta_state_dir
+from zeta.run.runtime_context import zeta_state_dir
 from zeta.substrate import Derivation, InMemoryStore, Object
 from zeta.tools import ensure_builtin_tools_registered
 from zeta_test_support import (

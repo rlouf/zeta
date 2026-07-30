@@ -34,13 +34,15 @@ from zeta.context import builder as zeta_context
 from zeta.effects import DeliverySemantics
 from zeta.events import DraftEvent, Event
 from zeta.models.profiles import ModelSelection
-from zeta.records import events as zeta_event_model
+from zeta.records import drafts as zeta_event_drafts
+from zeta.records import views as zeta_event_views
+from zeta.records import wire as zeta_event_wire
 from zeta.records.stores.event_store import Filter
 from zeta.records.stores.memory import MemoryEventStore
 from zeta.records.stores.sqlite import event_store_path
-from zeta.run import context as zeta_runtime_context
 from zeta.run import outcomes as zeta_outcomes
 from zeta.run import runtime as zeta_agent
+from zeta.run import runtime_context as zeta_runtime_context
 from zeta.run import thread_run as zeta_requests
 from zeta.run.config import CompactionPolicy
 from zeta.run.runtime import AgentRunResult
@@ -153,9 +155,9 @@ def rpc_event(
 
 def published_event_views(events: list[Event | DraftEvent]) -> list[dict[str, Any]]:
     return [
-        zeta_event_model.event_view(event)
+        zeta_event_views.event_view(event)
         if isinstance(event, Event)
-        else zeta_event_model.draft_event_view(event)
+        else zeta_event_views.draft_event_view(event)
         for event in events
     ]
 
@@ -472,7 +474,7 @@ def test_zeta_model_event_payload_has_boundary_dict_shape() -> None:
 
 
 def test_zeta_model_called_draft_sets_durable_metadata() -> None:
-    draft = zeta_event_model.model_call_draft(
+    draft = zeta_event_drafts.model_call_draft(
         payload={"content": "done"},
         turn_id="turn-1",
         session_id="session-1",
@@ -490,7 +492,7 @@ def test_zeta_model_called_draft_sets_durable_metadata() -> None:
 
 
 def test_zeta_durable_model_event_payload_keeps_domain_fields() -> None:
-    payload = zeta_event_model.durable_model_event_payload(
+    payload = zeta_event_drafts.durable_model_event_payload(
         {
             "type": "model",
             "id": "model-1",
@@ -537,7 +539,7 @@ def test_zeta_tool_call_event_has_boundary_dict_shape() -> None:
 
 
 def test_zeta_tool_called_draft_sets_durable_metadata() -> None:
-    draft = zeta_event_model.tool_call_draft(
+    draft = zeta_event_drafts.tool_call_draft(
         payload={"_timeline_type": "tool_call", "name": "read"},
         turn_id="turn-1",
         session_id="session-1",
@@ -555,7 +557,7 @@ def test_zeta_tool_called_draft_sets_durable_metadata() -> None:
 
 
 def test_zeta_durable_tool_result_event_payload_keeps_domain_fields() -> None:
-    payload = zeta_event_model.durable_tool_event_payload(
+    payload = zeta_event_drafts.durable_tool_event_payload(
         {
             "type": "tool_result",
             "id": "result-1",
@@ -574,7 +576,7 @@ def test_zeta_durable_tool_result_event_payload_keeps_domain_fields() -> None:
 
 
 def test_zeta_durable_tool_call_event_payload_keeps_domain_fields() -> None:
-    payload = zeta_event_model.durable_tool_event_payload(
+    payload = zeta_event_drafts.durable_tool_event_payload(
         {
             "type": "tool_call",
             "id": "call-1",
@@ -1566,12 +1568,12 @@ def test_zeta_run_capability_step_records_call_execution_and_result(
         assert kwargs["index"] == 0
         return zeta_agent.CapabilityCallResult(
             events=[
-                zeta_event_model.draft_from_runtime_event(
+                zeta_event_drafts.draft_from_runtime_event(
                     {"type": "tool_call", "id": "call-1", "tool_call_id": "call-1"},
                     session_id=None,
                     turn_id=None,
                 ),
-                zeta_event_model.draft_from_runtime_event(
+                zeta_event_drafts.draft_from_runtime_event(
                     {
                         "type": "tool_result",
                         "id": "result-1",
@@ -1763,7 +1765,7 @@ def test_zeta_run_capability_step_reconciles_existing_terminal_result(
 ) -> None:
     state = zeta_agent.RunState(
         events=[
-            zeta_event_model.draft_from_runtime_event(
+            zeta_event_drafts.draft_from_runtime_event(
                 {
                     "type": "tool_result",
                     "id": "result-1",
@@ -1896,7 +1898,7 @@ def rpc_client(
     def notify_event(event: Event) -> None:
         asyncio.create_task(
             connection.notify(
-                "events.notify", {"event": zeta_event_model.event_to_wire(event)}
+                "events.notify", {"event": zeta_event_wire.event_to_wire(event)}
             )
         )
 

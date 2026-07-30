@@ -13,8 +13,8 @@ from connectors import (
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import SchemaError, ValidationError
 
-from zeta.agents.events import EventRegistry
 from zeta.agents.prompts import validate_prompt
+from zeta.agents.schemas import EventRegistry
 from zeta.agents.spec import AgentSpec
 from zeta.capabilities.execution import ToolExecutorProviderRegistry
 

@@ -41,7 +41,7 @@ from zeta.trace.replay import (
     render_replay,
     replay_model_selection,
 )
-from zeta.trace.tools import tool_call_rows, tool_failure_detail
+from zeta.trace.tool_calls import tool_call_rows, tool_failure_detail
 
 NARRATIVE_KINDS = ("prompt", "assistant_message")
 

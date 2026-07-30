@@ -15,8 +15,9 @@ from contextlib import AbstractContextManager
 from pathlib import Path
 from typing import Any, Protocol
 
-from zeta.records.events import AppendOutcome, DraftEvent, Event, json_native_payload
+from zeta.events import DraftEvent, Event, json_native_payload
 from zeta.records.stores.event_store import Filter
+from zeta.records.types import AppendOutcome
 from zeta.substrate.objects import Derivation, Object
 from zeta.substrate.sqlite import SqliteObjectStore, sqlite_read_only_uri
 from zeta.substrate.store import escape_like

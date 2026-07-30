@@ -12,7 +12,6 @@ from typing import Any
 
 from connectors import EventConnector, EventConnectorRegistry
 from zeta._version import __version__
-from zeta.agents.events import EventRegistry
 from zeta.agents.resources import (
     AgentProject,
     SkillRegistry,
@@ -20,6 +19,7 @@ from zeta.agents.resources import (
     load_agent_project,
     validate_agent_project,
 )
+from zeta.agents.schemas import EventRegistry
 from zeta.agents.spec import (
     AgentSpec,
     ExecutorSpec,
@@ -33,8 +33,8 @@ from zeta.capabilities.execution import (
     load_tool_executor_provider_registry,
 )
 from zeta.capabilities.registry import CapabilityRegistry
+from zeta.events import DraftEvent, Event
 from zeta.models.profiles import ModelSelection
-from zeta.records.events import DraftEvent, Event
 from zeta.records.stores.event_store import Filter
 
 from zetad.store import RuntimeEventStore

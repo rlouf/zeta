@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from zeta.records.events import DraftEvent, status_update_draft, stream_chunk_draft
+from zeta.events import DraftEvent
+from zeta.records.drafts import status_update_draft, stream_chunk_draft
 from zeta.run.config import ModelStatus
 
 AgentEventSink = Callable[[DraftEvent], None]

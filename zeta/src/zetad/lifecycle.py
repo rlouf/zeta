@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
-from zeta.records.events import DraftEvent, Event
+from zeta.events import DraftEvent, Event
 from zeta.records.stores.event_store import EventWriter
 
 from zetad.agents import AgentRoute, ExecutableAgent

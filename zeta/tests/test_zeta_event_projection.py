@@ -3,17 +3,16 @@ from typing import Any
 
 import pytest
 from zeta.events import DraftEvent, Event
-from zeta.records.events import (
+from zeta.records.drafts import (
     draft_from_runtime_event,
     durable_model_event_payload,
     durable_tool_event_payload,
-    event_from_wire,
-    event_to_wire,
-    event_view,
     model_call_draft,
     tool_call_draft,
 )
 from zeta.records.provenance import project_prompt_trace_projection
+from zeta.records.views import event_view
+from zeta.records.wire import event_from_wire, event_to_wire
 from zeta.substrate import Derivation, InMemoryStore, Object
 
 SESSION_ID = "session-1"

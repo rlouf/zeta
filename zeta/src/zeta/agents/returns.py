@@ -3,7 +3,7 @@
 from copy import deepcopy
 from typing import Any
 
-from zeta.agents.events import EventRegistry
+from zeta.agents.schemas import EventRegistry
 from zeta.agents.spec import AgentSpec
 
 MAX_RETURNED_EVENTS = 100

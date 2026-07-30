@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from zeta.records.events import Event
+from zeta.events import Event
 
 from zetad.agents import AgentRoute
 from zetad.queue import RoutedQueueItem, queue_item_id_for_event

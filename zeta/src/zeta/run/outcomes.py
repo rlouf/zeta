@@ -6,7 +6,7 @@ from dataclasses import asdict, dataclass, field
 from typing import Any, Literal
 
 from zeta.context.components import PromptTrace
-from zeta.records.events import DraftEvent
+from zeta.events import DraftEvent
 
 StepName = Literal[
     "check_budget",

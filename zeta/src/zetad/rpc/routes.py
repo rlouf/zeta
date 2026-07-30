@@ -13,10 +13,11 @@ from jsonschema.exceptions import SchemaError
 from zeta.capabilities.registry import RegisteredCapability, error_result
 from zeta.capabilities.types import Capability, CapabilityId
 from zeta.effects import DELIVERY_SEMANTICS, DeliverySemantics
-from zeta.records.events import DraftEvent, Event, event_to_wire
+from zeta.events import DraftEvent, Event
 from zeta.records.stores.event_store import EventReader, EventStoreProtocol, Filter
-from zeta.run.context import RuntimeContext
+from zeta.records.wire import event_to_wire
 from zeta.run.runs import RunStatus
+from zeta.run.runtime_context import RuntimeContext
 from zeta.run.thread_run import (
     SessionRequestError,
     session_run_id,

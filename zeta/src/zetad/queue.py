@@ -6,7 +6,7 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal, cast
 
-from zeta.records.events import Event
+from zeta.events import Event
 
 if TYPE_CHECKING:
     from zetad.agents import AgentRoute

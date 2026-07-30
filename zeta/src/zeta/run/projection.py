@@ -11,11 +11,12 @@ from __future__ import annotations
 from typing import Any
 
 from zeta.context.builder import PromptBuilder
-from zeta.records.events import DraftEvent, draft_event_id, draft_event_view
+from zeta.events import DraftEvent
 from zeta.records.provenance import (
     PromptTraceProjection,
     project_prompt_trace_projection,
 )
+from zeta.records.views import draft_event_id, draft_event_view
 
 
 def is_runtime_ui_event(draft: DraftEvent) -> bool:

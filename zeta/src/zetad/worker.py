@@ -32,9 +32,9 @@ from zeta.records.stores.sqlite import (
     zeta_sqlite_path,
 )
 from zeta.run.config import AgentConfig
-from zeta.run.context import RuntimeContext
 from zeta.run.outcomes import AgentRunResult
 from zeta.run.runtime import AgentRunRequest, run_agent
+from zeta.run.runtime_context import RuntimeContext
 from zeta.substrate import SqliteObjectStore
 
 from zetad.agents import (

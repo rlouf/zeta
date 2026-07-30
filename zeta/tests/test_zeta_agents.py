@@ -25,7 +25,6 @@ from connectors.slack import (
     SLACK_MESSAGE_RECEIVED,
     slack_event_connector,
 )
-from zeta.agents.events import EventRegistry
 from zeta.agents.manifest import (
     Manifest,
     ManifestError,
@@ -44,6 +43,7 @@ from zeta.agents.resources import (
     validate_agent_project,
 )
 from zeta.agents.returns import derive_returns_schema
+from zeta.agents.schemas import EventRegistry
 from zeta.agents.spec import (
     AgentSpec,
     ExecutorSpec,
@@ -2394,7 +2394,7 @@ def test_zeta_implicit_store_and_session_paths_use_cwd_discovery(
 ) -> None:
     from zeta.models.profiles import profile_session_dir, user_models_config_path
     from zeta.records.stores.sqlite import event_store_path, zeta_sqlite_path
-    from zeta.run.context import default_session
+    from zeta.run.runtime_context import default_session
     from zeta.substrate import SqliteObjectStore
 
     home = tmp_path / "home"

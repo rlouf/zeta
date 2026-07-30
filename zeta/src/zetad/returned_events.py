@@ -8,10 +8,11 @@ from collections.abc import Awaitable, Callable
 from typing import Any, Protocol, cast
 
 from jsonschema import Draft202012Validator
-from zeta.agents.events import EventRegistry
 from zeta.agents.returns import derive_returns_schema
+from zeta.agents.schemas import EventRegistry
 from zeta.agents.spec import AgentSpec
-from zeta.records.events import DraftEvent, Event, draft_event_view, event_view
+from zeta.events import DraftEvent, Event
+from zeta.records.views import draft_event_view, event_view
 from zeta.run.config import AgentConfig
 from zeta.run.outcomes import AgentRunResult, agent_run_result_payload
 

@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from zeta.events import DraftEvent, Event
-from zeta.records.events import draft_event_id, event_timeline_type
+from zeta.records.views import draft_event_id, event_timeline_type
 from zeta.substrate import Derivation, Object, ObjectId, Store
 
 

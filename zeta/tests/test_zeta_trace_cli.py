@@ -15,7 +15,6 @@ import zeta.models.profiles as zeta_models
 from click.testing import CliRunner
 from zeta.context.builder import PromptBuilder
 from zeta.events import DraftEvent
-from zeta.records.events import event_view
 from zeta.records.stores.event_store import Filter
 from zeta.records.stores.sqlite import (
     SqliteEventStore,
@@ -23,9 +22,10 @@ from zeta.records.stores.sqlite import (
     event_store_path,
     zeta_sqlite_path,
 )
+from zeta.records.views import event_view
 from zeta.run import runtime as zeta_agent
-from zeta.run.context import RuntimeContext, default_session
 from zeta.run.runtime import AgentRunResult
+from zeta.run.runtime_context import RuntimeContext, default_session
 from zeta.run.thread_run import current_timeline
 from zeta.substrate import (
     AmbiguousIdError,

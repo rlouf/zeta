@@ -7,13 +7,14 @@ from contextlib import suppress
 from dataclasses import dataclass
 from typing import Any, Protocol, cast
 
-from zeta.records.events import AppendOutcome, DraftEvent, Event
+from zeta.events import DraftEvent, Event
 from zeta.records.stores.event_store import (
     EventReader,
     EventStoreProtocol,
     EventWriter,
     Filter,
 )
+from zeta.records.types import AppendOutcome
 
 from zetad.agents import (
     AgentDefinition,

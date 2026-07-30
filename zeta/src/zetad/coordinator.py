@@ -8,7 +8,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from zeta.effects import EffectDeliveryError
-from zeta.records.events import DraftEvent, Event
+from zeta.events import DraftEvent, Event
 
 from zetad.agents import (
     AgentInvocation,

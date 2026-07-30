@@ -5,10 +5,10 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
-from zeta.records.events import Event
+from zeta.events import Event
 from zeta.run.cancellation import CancellationToken
-from zeta.run.context import RuntimeContext
 from zeta.run.runtime import empty_session_trace_result
+from zeta.run.runtime_context import RuntimeContext
 from zeta.run.thread_run import (
     run_session_request,
     session_run_id,

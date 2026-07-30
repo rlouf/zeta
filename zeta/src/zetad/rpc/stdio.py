@@ -6,10 +6,10 @@ import asyncio
 from dataclasses import replace
 from typing import Any, TextIO
 
-from zeta.records.events import Event
+from zeta.events import Event
 from zeta.records.stores.sqlite import event_store_path
-from zeta.run.context import default_session
 from zeta.run.runtime import CancellationToken
+from zeta.run.runtime_context import default_session
 
 from zetad.dispatch import QueueingDispatcher
 from zetad.rpc.jsonrpc import (

@@ -3,7 +3,8 @@
 from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
-from zeta.records.events import AppendOutcome, DraftEvent, Event
+from zeta.events import DraftEvent, Event
+from zeta.records.types import AppendOutcome
 
 
 @dataclass(frozen=True)

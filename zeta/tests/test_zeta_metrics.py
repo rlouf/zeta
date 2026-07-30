@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
-from zeta.records.events import DraftEvent, Event
+from zeta.events import DraftEvent, Event
 from zetad.agents import (
     AgentDefinition,
     AgentInvocation,

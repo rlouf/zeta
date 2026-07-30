@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Any, Literal, cast
 
 from zeta.agents.prompts import render_prompt
 from zeta.agents.spec import AgentSpec, ExecutorSpec
-from zeta.records.events import DraftEvent, Event
+from zeta.events import DraftEvent, Event
 from zeta.run.config import AgentConfig
 from zeta.run.outcomes import agent_run_result_payload
 
@@ -17,7 +17,7 @@ from zetad.retry import RetryPolicy
 from zetad.returned_events import ReturnedEventPublisher, StructuredOutputRunner
 
 if TYPE_CHECKING:
-    from zeta.agents.events import EventRegistry
+    from zeta.agents.schemas import EventRegistry
     from zeta.run.outcomes import AgentRunResult
 
 DispatchMode = Literal["one_shot", "session_scoped"]

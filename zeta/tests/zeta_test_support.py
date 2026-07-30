@@ -22,17 +22,13 @@ from zeta.context.builder import (
     reconstructed_prompt_request,
 )
 from zeta.context.components import PromptComponent, prompt_components
-from zeta.records.events import (
-    DraftEvent,
-    Event,
-    draft_event_view,
-    draft_from_boundary_event,
-    event_view,
-)
+from zeta.events import DraftEvent, Event
+from zeta.records.drafts import draft_from_boundary_event
 from zeta.records.provenance import project_prompt_trace_projection
 from zeta.records.stores.event_store import Filter
-from zeta.run.context import RuntimeContext
+from zeta.records.views import draft_event_view, event_view
 from zeta.run.runtime import AgentRunResult
+from zeta.run.runtime_context import RuntimeContext
 from zeta.substrate import InMemoryStore, Object, ObjectId, Store
 
 zeta_context = SimpleNamespace(

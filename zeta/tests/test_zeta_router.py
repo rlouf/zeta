@@ -1,4 +1,4 @@
-from zeta.records.events import Event
+from zeta.events import Event
 from zetad.agents import AgentRoute, EventPattern
 from zetad.router import EventRouter
 

@@ -11,10 +11,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
-from zeta.events import Event
-from zeta.records.events import AppendOutcome, DraftEvent
+from zeta.events import DraftEvent, Event
 from zeta.records.stores.event_store import Filter
 from zeta.records.stores.sqlite import SqliteEventStore
+from zeta.records.types import AppendOutcome
 from zeta.substrate.sqlite import sqlite_table_names
 
 from zetad.metrics import MetricAttribute, NullRuntimeMetrics, RuntimeMetrics

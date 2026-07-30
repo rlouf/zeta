@@ -7,8 +7,8 @@ import pytest
 from connectors import EventConnectorRegistry
 from zeta.agents.spec import ExecutorSpec
 from zeta.capabilities.registry import CapabilityRegistry
+from zeta.events import DraftEvent
 from zeta.models.profiles import ModelSelection
-from zeta.records.events import DraftEvent
 from zeta.records.stores.event_store import Filter
 from zeta.run.outcomes import AgentRunResult
 from zetad.agents import (

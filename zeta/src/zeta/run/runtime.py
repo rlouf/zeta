@@ -28,18 +28,13 @@ from zeta.context.builder import (
     render_model_input,
 )
 from zeta.context.components import PromptTrace
+from zeta.events import DraftEvent, Event
 from zeta.models import DefaultModelGateway
 from zeta.models.chat_completions import tool_call_id
 from zeta.models.types import ModelInput, ModelOutput
-from zeta.records.events import (
-    DraftEvent,
-    Event,
-    draft_event_id,
+from zeta.records.drafts import (
     draft_from_runtime_event,
-    draft_timeline_type,
     ensure_runtime_event_id,
-    event_timeline_type,
-    event_view,
     turn_aborted_draft,
     user_message_draft,
 )
@@ -47,6 +42,12 @@ from zeta.records.provenance import (
     project_prompt_trace_projection,
 )
 from zeta.records.stores.event_store import EventReader, Filter
+from zeta.records.views import (
+    draft_event_id,
+    draft_timeline_type,
+    event_timeline_type,
+    event_view,
+)
 from zeta.run.cancellation import (
     AbortReason,
     AgentRunAborted,
@@ -55,13 +56,13 @@ from zeta.run.cancellation import (
     run_abort_reason,
 )
 from zeta.run.config import AgentConfig
-from zeta.run.context import RuntimeContext
 from zeta.run.outcomes import (
     AgentRunResult,
     RunInfo,
     RunState,
 )
 from zeta.run.projection import draft_views_for_prompt, is_runtime_ui_event
+from zeta.run.runtime_context import RuntimeContext
 from zeta.run.streaming import ModelTurnStreamSink, StatusAwareModelStream
 from zeta.substrate import Store
 from zeta.trace import warn_trace_failure_once

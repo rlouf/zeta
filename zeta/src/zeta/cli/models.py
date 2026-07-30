@@ -37,8 +37,8 @@ def models_list(json_output: bool) -> int:
         else:
             click.echo(format_model_list_rows(rows))
             click.echo(
-                "no profiles configured; using the builtin local default. "
-                "Add profiles in ~/.zeta/models.toml.",
+                "no profiles configured; using built-in Codex. "
+                "Run `codex login` before the first request.",
                 err=True,
             )
         return 1 if catalog.diagnostics else 0

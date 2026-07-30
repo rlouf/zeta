@@ -8,6 +8,7 @@ import click
 from zeta.cli.commands.agents import agents
 from zeta.cli.commands.attempts import attempts
 from zeta.cli.commands.events import events
+from zeta.cli.commands.new import new
 from zeta.cli.commands.ps import ps
 from zeta.cli.commands.queue import queue
 from zeta.cli.commands.rpc import rpc
@@ -26,6 +27,7 @@ def cli() -> None:
 cli.add_command(queue)
 cli.add_command(attempts)
 cli.add_command(events)
+cli.add_command(new)
 cli.add_command(ps)
 cli.add_command(run)
 cli.add_command(serve)

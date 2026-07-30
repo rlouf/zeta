@@ -16,6 +16,8 @@ MODEL_NAME_PATTERN = re.compile(r"^[a-z0-9-]+$")
 DEFAULT_MODEL_URL = "http://127.0.0.1:8080/v1/chat/completions"
 DEFAULT_MODEL_NAME = "local-model"
 DEFAULT_CODEX_BASE_URL = "https://chatgpt.com/backend-api"
+DEFAULT_CODEX_MODEL_NAME = "gpt-5.5"
+DEFAULT_CODEX_PROFILE_NAME = "codex"
 
 ModelSource = Literal["session", "config", "builtin"]
 
@@ -178,14 +180,14 @@ def active_model_selection(
     *,
     session_dir: Path | None = None,
 ) -> ModelSelection | None:
-    """Return the session's model, falling back to the configured default."""
+    """Return the session's model, configured default, or built-in Codex."""
     catalog = load_model_profiles()
     profile = active_model_profile(session_dir=session_dir)
     if profile is not None:
         selection = resolve_model_profile(profile, catalog=catalog)
         if selection is not None:
             return selection
-    return configured_default_selection(catalog)
+    return configured_default_selection(catalog) or default_model_selection()
 
 
 def configured_default_selection(
@@ -245,15 +247,20 @@ def remove_json(path: Path) -> bool:
 
 
 def default_model_selection() -> ModelSelection:
-    """Return a display-friendly selection for the default environment model."""
-    return ModelSelection(profile="default", model=model_name(), url=model_url())
+    """Return the built-in Codex model selection."""
+    return ModelSelection(
+        profile=DEFAULT_CODEX_PROFILE_NAME,
+        model=DEFAULT_CODEX_MODEL_NAME,
+        url=DEFAULT_CODEX_BASE_URL,
+        api=CODEX_RESPONSES_API,
+    )
 
 
 def resolve_active_model(*, session_dir: Path | None = None) -> ModelResolution:
     """Resolve the model the next request will use, and where it came from.
 
     Session selection wins, then the profile marked ``default = true``,
-    then the builtin local endpoint. A session selection naming a profile
+    then the built-in Codex profile. A session selection naming a profile
     that no longer resolves falls through but carries the stale name, so
     status surfaces can say the selection went stale instead of
     pretending none was made.

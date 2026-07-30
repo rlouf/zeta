@@ -848,10 +848,23 @@ def test_zeta_models_resolve_active_model_falls_back_to_builtin(
     assert resolution.source == "builtin"
     assert resolution.stale_profile is None
     assert resolution.selection == zeta_models.ModelSelection(
-        profile="default",
-        model=zeta_models.DEFAULT_MODEL_NAME,
-        url=zeta_models.DEFAULT_MODEL_URL,
+        profile=zeta_models.DEFAULT_CODEX_PROFILE_NAME,
+        model=zeta_models.DEFAULT_CODEX_MODEL_NAME,
+        url=zeta_models.DEFAULT_CODEX_BASE_URL,
+        api="codex-responses",
     )
+    assert zeta_models.active_model_selection() == resolution.selection
+
+
+def test_zeta_model_cli_lists_builtin_codex(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("ZETA_STATE_DIR", str(tmp_path / "state"))
+
+    result = CliRunner().invoke(zeta_cli, ["models", "list"])
+
+    assert result.exit_code == 0, result.output
+    assert "codex  gpt-5.5  chatgpt.com  (active)" in result.output
+    assert "no profiles configured; using built-in Codex" in result.output
 
 
 def test_zeta_models_default_profile_resolves_without_selection(
@@ -977,7 +990,7 @@ def test_zeta_models_resolve_active_model_survives_vanished_profile(
     resolution = zeta_models.resolve_active_model()
 
     assert resolution.source == "builtin"
-    assert resolution.selection.profile == "default"
+    assert resolution.selection.profile == zeta_models.DEFAULT_CODEX_PROFILE_NAME
     assert resolution.stale_profile == "gone"
 
 

@@ -59,7 +59,7 @@ payload hash, and resends it:
 ```text
 $ zeta traces replay 13b60e1a
 prompt   13b60e1a  payload verified
-model    default -> local-model @ http://127.0.0.1:8080/v1/chat/completions
+model    codex -> gpt-5.5 @ https://chatgpt.com/backend-api
 
 original db5d29fd
 → bash

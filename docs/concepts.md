@@ -138,8 +138,10 @@ uv sync --group dev
 uv run zeta --help
 ```
 
-Zeta needs Python 3.11+ and a model endpoint. By default, local runs use an
-OpenAI-compatible chat completions endpoint at:
+Zeta needs Python 3.11+ and Codex credentials. Run `codex login` once before
+your first request. Zeta uses the Codex Responses backend by default.
+
+You can instead configure an OpenAI-compatible Chat Completions endpoint:
 
 ```text
 http://127.0.0.1:8080/v1/chat/completions
@@ -164,12 +166,11 @@ url = "http://127.0.0.1:8081/v1/chat/completions"
 thinking = "high"
 ```
 
-At most one profile may set `default = true`. If no default exists, Zeta falls
-back to `local-model` at the default local URL. `thinking` may be `"none"`,
+At most one profile may set `default = true`. If no default exists, Zeta uses
+the built-in Codex profile: `codex` with `gpt-5.5`. `thinking` may be `"none"`,
 `"minimal"`, `"low"`, `"medium"`, or `"high"`.
 
-A profile can also use the Codex Responses backend through local Codex CLI
-credentials:
+You can also make the Codex Responses backend an explicit profile:
 
 ```toml
 [[models]]
@@ -312,6 +313,16 @@ A template that names a field the event lacks raises. It never falls back,
 because a silent fallback would merge every conversation into one timeline.
 
 ### Scaffolding
+
+`zeta new <path>` creates an empty project with the default Inbox Summarizer.
+It creates the agent, its inbox, its summary folder, the filesystem connector,
+and a `.gitignore` file for runtime state:
+
+```sh
+zeta new ~/zeta-demo
+cd ~/zeta-demo
+zeta serve
+```
 
 `zeta agents new <slug>` writes `agents/<slug>.md` from a template, validating it
 before it is written. Options mirror the core fields:

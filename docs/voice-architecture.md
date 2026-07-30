@@ -146,8 +146,7 @@ started.
 ### Provider selection and streaming
 
 `active_model_selection()` resolves a session-selected profile, then the
-default from `~/.zeta/models.toml`, then the built-in local
-OpenAI-compatible Chat Completions endpoint. A profile uses either
+default from `~/.zeta/models.toml`, then the built-in Codex profile. A profile uses either
 `chat-completions` or `codex-responses`; `DefaultModelGateway` normalizes both
 to Zeta's `ModelOutput` ([profiles.py](../zeta/src/zeta/models/profiles.py),
 [models `__init__.py`](../zeta/src/zeta/models/__init__.py)). This is genuine

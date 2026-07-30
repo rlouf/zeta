@@ -6,6 +6,7 @@ import pytest
 from click.testing import CliRunner
 from zeta.authoring.scaffold import ScaffoldError, scaffold_agent
 from zeta.authoring.spec import load_spec
+from zeta.authoring.starter import StarterError, scaffold_inbox_summarizer_project
 from zeta.cli.main import cli
 
 
@@ -68,3 +69,46 @@ def test_zeta_agent_new_cli_creates_agent_file(tmp_path: Path) -> None:
 
     assert result.exit_code == 0, result.output
     assert (tmp_path / "agents" / "filer.md").exists()
+
+
+def test_zeta_new_scaffolds_inbox_summarizer_project(tmp_path: Path) -> None:
+    root = scaffold_inbox_summarizer_project(tmp_path / "inbox-agent")
+
+    spec = load_spec(root / "agents" / "inbox-summarizer.md")
+
+    assert root == (tmp_path / "inbox-agent").resolve()
+    assert spec.name == "Inbox Summarizer"
+    assert spec.session == "shared"
+    assert spec.base_dir == root
+    assert spec.accepts == ("file.created",)
+    assert spec.tools == ("read", "write")
+    assert (root / "agents" / "connectors.yaml").read_text() == (
+        "event_connectors:\n  - filesystem\n"
+    )
+    assert (root / "inbox").is_dir()
+    assert (root / "summaries").is_dir()
+    assert (root / ".gitignore").read_text() == ".zeta/\n"
+
+
+def test_zeta_new_refuses_nonempty_project_root(tmp_path: Path) -> None:
+    root = tmp_path / "inbox-agent"
+    root.mkdir()
+    (root / "notes.md").write_text("keep me", encoding="utf-8")
+
+    with pytest.raises(StarterError, match="project path is not empty"):
+        scaffold_inbox_summarizer_project(root)
+
+
+def test_zeta_new_cli_creates_inbox_summarizer_project(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    root = tmp_path / "inbox-agent"
+
+    result = CliRunner().invoke(cli, ["new", str(root)])
+
+    assert result.exit_code == 0, result.output
+    assert (root / "agents" / "inbox-summarizer.md").exists()
+    assert "before you start, run: codex login" in result.output
+    assert "zeta serve" in result.output

@@ -25,7 +25,7 @@ once. When a file arrives, it writes a summary where you can use it.
 
 ## Give an agent its first responsibility
 
-Zeta needs Python 3.11+ and a model profile.
+Zeta needs Python 3.11+ and Codex. Run `codex login` once before you start.
 
 Install Zeta:
 
@@ -33,58 +33,17 @@ Install Zeta:
 uv tool install zeta-os
 ```
 
-If you use Codex, run `codex login`. Then create `~/.zeta/models.toml`:
-
-```toml
-[[models]]
-name = "codex"
-model = "gpt-5.5"
-api = "codex-responses"
-thinking = "high"
-default = true
-```
-
-Zeta also supports OpenAI-compatible Chat Completions endpoints. See
-[Model Profiles](docs/concepts.md#model-profiles).
-
-Create an inbox project:
+Create the default inbox-summarizer project:
 
 ```sh
-mkdir -p ~/zeta-demo/agents ~/zeta-demo/inbox ~/zeta-demo/summaries
+zeta new ~/zeta-demo
 cd ~/zeta-demo
 ```
 
-Enable the filesystem connector in `agents/connectors.yaml`:
+`zeta new` creates the agent, its inbox, its summary folder, and its filesystem
+connector. It also excludes runtime state from Git.
 
-```yaml
-event_connectors:
-  - filesystem
-```
-
-Create `agents/inbox-summarizer.md`:
-
-```md
----
-name: Inbox Summarizer
-description: Summarizes each new inbox file.
-session: shared
-base_dir: ~/zeta-demo
-accepts:
-  - event: file.created
-    filter:
-      dir: ~/zeta-demo/inbox
-    idempotency_key: "file:{path}"
-tools:
-  - read
-  - write
----
-A new file is available at {{ event.payload.path }}.
-
-Use the read tool. Write a one-sentence summary to
-`summaries/{{ event.payload.name }}.md` with the write tool.
-
-Then reply with the summary path.
-```
+To use a different model, see [Model Profiles](docs/concepts.md#model-profiles).
 
 Start Zeta in one terminal:
 

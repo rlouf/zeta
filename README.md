@@ -5,147 +5,135 @@
 [![Python](https://img.shields.io/pypi/pyversions/zeta-os.svg)](https://pypi.org/project/zeta-os/)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
-Zeta is a local-first substrate for durable agents — the one where you can
-replay the exact prompt behind any action. **An agent is a Markdown file.** Every
-event it receives, every prompt the model saw, and every tool call it made is
-stored in project-local SQLite, so when an agent does something you did not
-expect, you replay what actually happened instead of guessing.
+## Ambient Agents Runtime
 
-## An agent is a Markdown file
+Zeta runs agents that stay with your work.
 
-A single `agents/<slug>.md` file declares everything an agent is:
+Define each agent in Markdown. Zeta wakes it when relevant events occur.
+Agents can use tools, pass work to other agents, and retain a durable record
+of each action.
 
-- the durable **events** it accepts and may return,
-- the **tools** it can use and the shared **skills** it opts into,
-- and the **prompt** that runs when a matching event arrives.
+Use Zeta to give an agent an ongoing responsibility:
 
-The runtime does the rest. It stores events, queue state, run attempts, tool
-calls, model calls, and prompt traces locally, so nothing about a run is
-hidden — you can list it, diff it, and replay the exact prompt the model saw.
+- Read and sort each new file in an inbox.
+- Prepare a weekly report on a schedule.
+- Respond to a Slack message.
+- Hand a completed task to another agent.
 
-## Quick start
+Your first agent can stay on top of an inbox. You give it the responsibility
+once. When a file arrives, it writes a summary where you can use it.
 
-First, point Zeta at a model — it drives every agent. Any OpenAI-compatible
-chat completions endpoint works; Zeta looks for one at
-`http://127.0.0.1:8080/v1/chat/completions` by default. See
-[docs/concepts.md](docs/concepts.md#model-profiles) for model profiles and the
-Codex backend.
+## Give an agent its first responsibility
 
-Install Zeta (Python 3.11+) and make a folder for it to watch:
+Zeta needs Python 3.11+ and a model profile.
+
+Install Zeta:
 
 ```sh
 uv tool install zeta-os
-mkdir -p ~/zeta-inbox
 ```
 
-Enable the bundled filesystem connector, so a new file becomes a durable event.
-`agents/connectors.yaml`:
+If you use Codex, run `codex login`. Then create `~/.zeta/models.toml`:
+
+```toml
+[[models]]
+name = "codex"
+model = "gpt-5.5"
+api = "codex-responses"
+thinking = "high"
+default = true
+```
+
+Zeta also supports OpenAI-compatible Chat Completions endpoints. See
+[Model Profiles](docs/concepts.md#model-profiles).
+
+Create an inbox project:
+
+```sh
+mkdir -p ~/zeta-demo/agents ~/zeta-demo/inbox ~/zeta-demo/summaries
+cd ~/zeta-demo
+```
+
+Enable the filesystem connector in `agents/connectors.yaml`:
 
 ```yaml
 event_connectors:
   - filesystem
 ```
 
-Now write the agent. It is one Markdown file, `agents/note-reader.md`:
+Create `agents/inbox-summarizer.md`:
 
-```markdown
+```md
 ---
-name: Note Reader
-description: Summarizes files dropped into the inbox.
-resumable: true
+name: Inbox Summarizer
+description: Summarizes each new inbox file.
+session: shared
+base_dir: ~/zeta-demo
 accepts:
   - event: file.created
     filter:
-      dir: ~/zeta-inbox
+      dir: ~/zeta-demo/inbox
     idempotency_key: "file:{path}"
 tools:
   - read
+  - write
 ---
-A file was just created: {{ event.payload.path }}.
-Read it and reply with a one-sentence summary of what it contains.
+A new file is available at {{ event.payload.path }}.
+
+Use the read tool. Write a one-sentence summary to
+`summaries/{{ event.payload.name }}.md` with the write tool.
+
+Then reply with the summary path.
 ```
 
-Start the worker and drop a file into the folder:
+Start Zeta in one terminal:
 
 ```sh
-zeta serve &                                                   # polls the inbox
-echo "Buy milk. Email the accountant about Q3." > ~/zeta-inbox/todo.txt
+zeta serve
 ```
 
-Within a couple of seconds the connector emits `file.created`, `note-reader`
-runs, and its whole timeline — every prompt and tool call — is on disk under the
-session `agent/note-reader`:
+Create a file in a second terminal:
 
 ```sh
-zeta traces log --session agent/note-reader
+echo "Buy milk. Send the release notes before Friday." \
+  > ~/zeta-demo/inbox/todo.txt
 ```
+
+Create the file after Zeta starts. The filesystem connector ignores files that
+exist before its first poll.
+
+Open the result:
+
+```sh
+cat ~/zeta-demo/summaries/todo.txt.md
+```
+
+For this file, the summary can be:
 
 ```text
-a1b2c3d4  assistant_message   The note is a short to-do list: buy milk and email the accountant about Q3.
-7f8e9d0c  prompt              6 components · ~712 tok
-e5f6a7b8  assistant_message   → read
-9c0d1e2f  prompt              4 components · ~486 tok
+The file lists two tasks: buy milk and send release notes before Friday.
 ```
 
-Runtime records live in the nearest project `.zeta/` directory, discovered by
-walking up from the current directory much like Git discovers `.git/`.
-Inspection commands such as `zeta traces log`, `zeta events list`, and `zeta ps`
-are read-only and do not create `.zeta/` when no runtime state exists. See
-[Runtime State](docs/concepts.md#runtime-state) for discovery and override
-details.
+Zeta detects the file, starts the agent, and writes the summary. You did not
+need to ask it again.
 
-Stop the worker with `kill %1` when you are done. Those `prompt` lines are the
-interesting part — the next section is what you do with them.
-
-> `zeta agents new <slug>` scaffolds a starting skeleton if you would rather not
-> write the file by hand. `zeta run` drives agents once and exits; `zeta serve`
-> runs continuously and is what polls connectors like the filesystem watcher.
-
-## Replay any decision
-
-Agents fail in ways you cannot reproduce, because the input that caused the
-failure is gone by the time you see the output. In Zeta it is not gone: every
-prompt is a stored, hash-verified object you can inspect, resend, and diff
-without re-running anything upstream — no file, no connector, no queue.
-
-Say `note-reader` returned a lazy summary. Pull up the exact prompt behind it:
+Want to inspect the work behind the result?
 
 ```sh
-zeta traces show 9c0d1e2f --session agent/note-reader
+zeta traces log --session agent/inbox-summarizer
 ```
 
-Resend that same prompt — byte for byte — to a stronger model and diff the two
-answers, without touching the inbox or replaying the pipeline:
+## What an agent is
 
-```sh
-zeta traces replay 9c0d1e2f --session agent/note-reader --model deep --diff
-```
+An agent is one Markdown file in `agents/`.
 
-Changed a skill or the prompt and want to know exactly what moved? Diff the two
-prompt versions, component by component:
+Its frontmatter declares the events it accepts, the tools it may use, and the
+events it may return. Its body gives the agent instructions.
 
-```sh
-zeta traces diff 9c0d1e2f 3a4b5c6d --session agent/note-reader --stat
-```
-
-`replay` verifies the rebuilt prompt against the recorded hash before sending, so
-you are always comparing against what actually ran — not an approximation of it.
-This is what Zeta is built to do: turn *"why did it do that?"* from a guess into
-a command.
-
-## Composing agents
-
-Events are the seam between agents: one agent's `returns` is another agent's
-`accepts`. That is how you build a pipeline instead of one monolithic prompt.
-
-Here a scheduled agent produces weekly digest sections and hands them to a
-second agent that posts them. `agents/release-digest.md` runs on a cron and may
-return one event per independently useful section:
-
-```markdown
+```md
 ---
 name: Release Digest
-description: Summarizes the pull requests merged this week.
+description: Prepares the weekly release digest.
 schedules:
   - cron: "0 9 * * 1"
     timezone: Europe/Paris
@@ -155,83 +143,124 @@ returns:
 tools:
   - bash
 ---
-Summarize the pull requests merged in the last week as release notes.
+Summarize pull requests merged during the last week.
+
+Write release notes for the team. Return them as `release.summary.ready`.
 ```
 
-`agents/announcer.md` waits for that event and acts on it:
+A schedule creates an event for the agent. A returned event can start another
+agent.
 
-```markdown
----
-name: Announcer
-description: Posts release notes for the team.
-accepts:
-  - release.summary.ready
-tools:
-  - write
----
-Post these release notes:
+## Build an agent system
 
-{{ event.payload.summary }}
+Events connect agents.
+
+One agent can prepare release notes. Another agent can publish them. Each
+handoff has a named event and a validated payload.
+
+```text
+schedule
+  -> release-digest
+  -> release.summary.ready
+  -> announcer
+  -> Slack
 ```
 
-The shared event needs a schema, `agents/events/release.summary.ready.json`:
+Put project event schemas in `agents/events/`.
 
-```json
-{
-  "type": "object",
-  "required": ["summary"],
-  "properties": { "summary": { "type": "string" } },
-  "additionalProperties": false
-}
+```text
+agents/
+  connectors.yaml
+  release-digest.md
+  announcer.md
+  events/
+    release.summary.ready.json
+  skills/
+    release-notes.md
 ```
 
-A `schedules:` block turns cron into a trigger event,
-`agent.release-digest.scheduled`. Because `zeta run` fires due schedules and then
-drains the queue, one command drives the whole chain:
+Use `zeta run` to process pending work and exit.
 
 ```sh
 zeta run
-# fires the schedule -> release-digest runs -> publishes release.summary.ready
-#                    -> announcer runs on that event -> queue empty, exit
 ```
 
-By default, missed schedules are backfilled only on the same calendar day.
-`catchup: latest` keeps the latest occurrence eligible across days and publishes
-it once after a worker resumes. Occurrences before the schedule was first
-observed are not backfilled.
+Use `zeta serve` for continuous work, schedules, and connector ingress.
 
-The hand-off is an ordinary durable event — inspect it with
-`zeta events list --type-prefix release.`.
+```sh
+zeta serve
+```
 
-## How it works
+## Give agents the right tools
 
-**Events** are durable records — a `type`, a `source`, an object `payload`, and
-optional idempotency and causality metadata. They are the only way work enters
-the system. Project event schemas live under `agents/events/`.
+Zeta includes file and shell tools:
 
-**Agents** are the Markdown files in `agents/`. When an event matches an agent's
-`accepts`, the runtime runs the assistant/tool loop against the rendered prompt.
-That event may come from a connector, a `schedules:` cron trigger, or another
-agent's `returns` — which is how agents compose. If the agent declares
-`returns`, Zeta performs one final structured generation and publishes the
-ordered zero-to-many validated results as durable events.
+- `read`
+- `grep`
+- `edit`
+- `write`
+- `bash`
 
-**Tools and skills** extend an agent. Tools (`read`, `grep`, `bash`, `edit`,
-`write`, …) are capabilities granted to the model; skills are shared Markdown
-procedures under `agents/skills/` that agents opt into.
+Agents only receive tools that their Markdown declaration lists.
 
-**Connectors** bind agents to the outside world. They contribute event schemas
-and handle ingress (external events in) and egress (returned events out) for
-services such as Slack or the local filesystem.
+Shared skills live in `agents/skills/`. A skill is a Markdown procedure that
+multiple agents can use.
 
-**Durability and replay** is the point of the whole thing. Runtime events answer
-*"what happened?"*; prompt traces answer *"what exactly did the model see?"* — and
-any stored prompt can be resent (see [Replay any decision](#replay-any-decision)).
+```md
+---
+name: Support Triage
+description: Sorts support requests.
+skills:
+  - support-policy
+tools:
+  - read
+  - write
+---
+Apply the support policy to this request:
 
-Each of these has a full reference in **[docs/concepts.md](docs/concepts.md)**:
-the frontmatter fields, event and returned-event mechanics, the tool table,
-connector ingress/egress, running workers, schedule inspection, observability,
-and the JSON-RPC interface.
+{{ event.payload.message }}
+```
+
+## Inspect work when it matters
+
+Zeta stores events, queue state, model requests, tool calls, and agent results.
+Runtime state lives in the project `.zeta/` directory.
+
+Use the CLI to inspect work:
+
+```sh
+zeta ps
+zeta events list
+zeta queue list
+zeta attempts list
+zeta traces log --all-sessions
+```
+
+Inspect the exact prompt for an agent response:
+
+```sh
+zeta traces show PROMPT_ID --session agent/inbox-summarizer
+```
+
+Replay that prompt with another model profile:
+
+```sh
+zeta traces replay PROMPT_ID \
+  --session agent/inbox-summarizer \
+  --model codex \
+  --diff
+```
+
+Replay is not the reason to use Zeta. It is how you can trust an ambient agent
+after it acts.
+
+## Learn more
+
+[Concepts](docs/concepts.md) covers agent files, events, schemas, connectors,
+model profiles, schedules, runtime state, and the CLI.
+
+[Trace replay demo](docs/demos/trace-replay.md) shows prompt inspection and
+model comparison.
 
 ## Development
 

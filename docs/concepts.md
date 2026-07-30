@@ -3,6 +3,86 @@
 This is the full reference for Zeta. For the pitch and a quick start, see the
 [README](../README.md).
 
+## The Zeta Object Model
+
+Zeta has four layers of concepts. Each layer answers a different question, and
+each keeps its own identity rules.
+
+| Layer | Question | Core types |
+| --- | --- | --- |
+| Authoring | What is an agent? | `AgentSpec`, event schema, skill, connector |
+| Routing | What work exists? | `AgentDefinition`, `AgentRoute`, `EventPattern` |
+| Runtime | What happened? | `Event`, `QueueItem`, `Attempt`, `Run`, session |
+| Trace | What did the model see? | `Object`, `Derivation`, `Ref` |
+
+The authoring layer is pure declaration. It knows nothing about queues, runs,
+or SQLite. The runtime layer never reads the prompt. The trace layer never
+decides what runs next. You can read any one layer without the other three.
+
+### From File To Runtime Types
+
+The runtime compiles one authored file into two separate shapes:
+
+```text
+agents/<slug>.md
+  └─ AgentSpec ──compile──> AgentDefinition
+                              ├─> AgentRoute      (does this event match?)
+                              └─> ExecutableAgent (run the matched event)
+```
+
+The split is deliberate. `AgentRoute` decides whether an event belongs to an
+agent. `ExecutableAgent` carries the code that runs it. Routing never needs the
+runner, and the runner never needs the route table.
+
+### The Runtime Chain
+
+One inbound event becomes a chain of durable records:
+
+```text
+Event ──routing──> QueueItem ──claim──> Attempt ──> Run
+(a fact)           (assignment)         (one try)   (handle)
+```
+
+- An **event** is a durable fact. It never changes.
+- A **queue item** assigns one event to one agent. It holds routing state, not
+  execution state.
+- An **attempt** is one numbered try for a queue item. A retry adds an attempt.
+  It never edits a terminal attempt.
+- A **run** is the handle used to cancel work and report status.
+- A **session** is the timeline scope. A resumable agent keeps one session
+  across events, so its timeline accumulates.
+
+Each arrow is one-to-many. One event can fan out to several queue items, and
+one queue item can hold several attempts.
+
+The `events` table is the only source of truth. `queue_items`, `attempts`,
+`attempt_results`, and `session_mappings` are projections. You can delete them
+and rebuild them from the journal. Claims, leases, and locks are neither facts
+nor projections. They are live coordination state, and a rebuild discards them.
+See [Runtime Semantics](runtime-semantics.md) for the state machines, the
+derived id scheme, and the recovery rules.
+
+### Effects Are Separate From Tool Calls
+
+A tool call is a record of what the model asked for. An **effect** is the
+separate concept for work that reaches outside Zeta, such as a file write or a
+Slack message. An effect key identifies the logical operation independently of
+the attempt number, so a retry recognises its own earlier work. Four delivery
+contracts decide what a retry may do. See [Tools And Skills](#tools-and-skills).
+
+### Traces Answer A Different Question
+
+Runtime events say that a model call happened. The trace substrate says exactly
+what the model saw. Every prompt component becomes an immutable `Object`,
+addressed by its content hash. A `prompt` object links to its components and
+stores only the hash of the request payload. A `Derivation` records which
+producer built an object from which inputs.
+
+This is why replay is sound. `zeta traces replay` rebuilds the prompt from the
+stored components, then verifies it against the recorded hash before it sends
+anything. See [Prompt And Tool Traces](#prompt-and-tool-traces) and
+[the trace design note](zeta-prompt-trace.md).
+
 ## Install
 
 The `zeta-os` package installs the `zeta` command:
@@ -277,7 +357,6 @@ canonical capability id when it is unambiguous:
 | `grep` | `zeta.grep` | Text search. |
 | `ast_grep` | `zeta.ast_grep` | Structural code search. |
 | `web_search` | `zeta.web_search` | Web search. |
-| `query_log` | `zeta.query_log` | Query Zeta history. |
 | `bash` | `zeta.bash` | Run shell commands. |
 | `edit` | `zeta.edit` | Edit files. |
 | `write` | `zeta.write` | Write files. |
@@ -445,9 +524,17 @@ zeta attempts list [--state-dir DIR] [--json]
 zeta ps [RUN_ID] [--state-dir DIR] [--json]
 zeta events list [--state-dir DIR] [--type-prefix PREFIX] [--session ID] [--limit N] [--json]
 zeta events chain EVENT_ID [--state-dir DIR] [--json]
+zeta events root EVENT_ID [--state-dir DIR] [--json] [--raw]
+zeta events descendants EVENT_ID [--state-dir DIR] [--json] [--raw]
+zeta events turn TURN_ID [--state-dir DIR] [--json] [--raw]
 zeta events publish EVENT_TYPE [--state-dir DIR] [--payload-json JSON] [--idempotency-key KEY]
 zeta schedules status [--project-root DIR] [--state-dir DIR] [--json]
 ```
+
+The causality commands walk the `caused_by` graph in both directions. `events
+root` finds the original cause of an event, and `events descendants` finds
+everything that event caused, recursively. `events turn` groups every event that
+shares one `turn_id`. `--raw` needs `--json`.
 
 Common flows:
 
@@ -470,6 +557,11 @@ zeta ps run_att_qi_evt_123_issue-triage_1 --json
 zeta events list --limit 100
 zeta events list --type-prefix runtime.
 zeta events list --session agent/issue-triage
+
+# Follow causality from one event.
+zeta events root evt_123
+zeta events descendants evt_123
+zeta events turn turn_456
 
 # Publish a test event idempotently.
 zeta events publish laptop.resumed \
@@ -526,12 +618,27 @@ zeta traces log --session agent/issue-triage
 zeta traces show 4f9d01c2 --session agent/issue-triage
 zeta traces tree 4f9d01c2 --session agent/issue-triage --down
 
+# Search stored object payloads, optionally by kind.
+zeta traces grep "release notes" --kind prompt --limit 20
+zeta traces grep TODO --all-sessions
+
+# Inspect the object graph and the store itself.
+zeta traces closure 4f9d01c2 --session agent/issue-triage
+zeta traces refs --session agent/issue-triage
+zeta traces prompts --session agent/issue-triage
+
 # Compare two prompts component by component.
 zeta traces diff A B --session agent/issue-triage --stat
 
 # Rebuild and resend a stored prompt.
 zeta traces replay PROMPT_ID --session agent/issue-triage --model fast --diff
 ```
+
+`traces grep` searches stored object payloads and accepts a repeatable `--kind`
+filter. `traces closure` lists every object reachable from one object, which
+shows the full component set behind a prompt. `traces refs` lists the mutable
+refs and their targets, such as `prompt/current`. `traces prompts` lists
+recorded prompts with store size statistics.
 
 Every trace id argument accepts a full id, a unique prefix, or a ref such as
 `turn/<turn_id>`. `traces replay` verifies the rebuilt prompt payload against the

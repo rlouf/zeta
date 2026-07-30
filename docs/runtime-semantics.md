@@ -13,20 +13,31 @@ second database.
 `AttemptCoordinator`. Tests and embedded callers can use the identical path
 with `RuntimeEventStore.open(":memory:")`.
 
-## Harness And Executors
+## Harness And Agent Loop
 
 The harness owns event ingress, scheduling, queue claims, locks, retries,
-lifecycle records, and external effects. An executor owns only one agent-loop
-invocation. The worker passes it an immutable `AgentExecutionRequest` with the
-agent definition, triggering event, invocation identity, rendered objective,
-timeline, context, and model configuration; it returns an `AgentRunResult`.
+lifecycle records, and external effects. An agent loop owns only one
+invocation. `AgentLoop` is the callable that marks this boundary:
 
-An executor receives no runtime database, queue state, or retry authority.
-This lets an embedded caller supply `agent_executor` to `build_worker_services`
-and run the loop in another environment while the local harness remains the
-source of truth. The bundled `RuntimeAgentExecutor` is the in-process default.
-Remote transport, tool brokering, and trace streaming build on this boundary;
-they are not separate runtimes.
+```python
+AgentLoop = Callable[
+    [AgentInvocation, str, list[dict[str, Any]], str, AgentConfig, str, str],
+    Awaitable[AgentRunResult],
+]
+```
+
+The harness supplies the invocation, the rendered objective, the timeline, the
+project context, the model configuration, the session id, and the run id. The
+loop returns an `AgentRunResult`. `AgentInvocation` carries the matched
+definition, the triggering event, and the queue, attempt, and run ids.
+
+An agent loop receives no runtime database, no queue state, and no retry
+authority. `compile_agent_definition` accepts an `agent_loop` argument, so an
+embedded caller can run the loop in another environment. The local harness
+stays the source of truth. The bundled `RuntimeAgentLoop` is the in-process
+default; the worker builds it and passes its `run` method. Remote transport,
+tool brokering, and trace streaming build on this boundary. They are not
+separate runtimes.
 
 ## Runtime Journal
 
@@ -44,6 +55,32 @@ rebuilt:
 - `session_mappings`
 
 Rebuilding them must produce the same terminal queue and attempt history.
+
+## Derived Identity
+
+Only an event gets a random id. Every id below an event is a pure function of
+it:
+
+```text
+event_id       = evt_<uuid>
+queue_item_id  = qi_<event_id>_<agent_id>
+attempt_id     = att_<queue_item_id>_<attempt_number>
+run_id         = run_<attempt_id>
+```
+
+This is what makes the chain idempotent. A router that sees the same event
+twice computes the same `queue_item_id`, so the second routing attempt
+collides with the first instead of creating parallel work. A unique index on
+`events.idempotency_key` enforces the same rule at ingress.
+
+Lifecycle events carry derived idempotency keys for the same reason. An
+attempt lifecycle key is `attempt:<queue_item_id>:<attempt_number>:<status>`,
+so a retried append of a status that was already recorded is a duplicate, not
+a new fact.
+
+Session ids follow the agent's dispatch mode. A `session_scoped` agent uses
+`agent/<agent_id>`, and a `one_shot` agent uses `agent/<agent_id>/<event_id>`.
+Attempt numbers, not session ids, distinguish retries.
 
 ## Coordination State
 
@@ -99,9 +136,8 @@ Retries create a new attempt; they never restart or mutate a terminal attempt.
 
 An agent-published event is appended and projected as pending work during the
 current attempt. The current attempt reaches a terminal state before the
-coordinator claims that downstream event. `EventDispatcher.publish_and_run`
-retains immediate recursive behavior only as a compatibility API for embedded
-callers; daemon execution does not use it.
+coordinator claims that downstream event. No recursive dispatch path remains:
+an agent never runs a downstream event inside its own attempt.
 
 ## Claim Fencing
 

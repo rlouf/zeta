@@ -10,10 +10,10 @@ from zeta.records.drafts import (
     model_call_draft,
     tool_call_draft,
 )
-from zeta.records.provenance import project_prompt_trace_projection
 from zeta.records.views import event_view
 from zeta.records.wire import event_from_wire, event_to_wire
 from zeta.substrate import Derivation, InMemoryStore, Object
+from zeta.trace.provenance import project_prompt_trace_projection
 
 SESSION_ID = "session-1"
 TURN_ID = "turn-1"

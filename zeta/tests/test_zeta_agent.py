@@ -15,6 +15,7 @@ from typing import Any, cast
 import pytest
 import zeta.capabilities.execution as zeta_capability_execution
 import zeta.capabilities.executors as zeta_capability_executors
+import zeta.cli.commands.rpc as cli_rpc
 import zeta.loop.cancellation as zeta_loop_cancellation
 import zeta.loop.gateway as zeta_loop_gateway
 import zeta.loop.steps as zeta_loop_steps
@@ -4174,7 +4175,7 @@ def test_zeta_cli_removed_spellings_fail(
         nonlocal stdio_calls
         stdio_calls += 1
 
-    monkeypatch.setattr(cli_main, "run_stdio", run_stdio)
+    monkeypatch.setattr(cli_rpc, "run_stdio", run_stdio)
 
     result = CliRunner().invoke(cli_main.cli, command)
 
@@ -4190,7 +4191,7 @@ def test_zeta_cli_rpc_stdio_runs_the_stdio_transport(
     def run_stdio(input_stream: object, output_stream: object) -> None:
         captured.append((input_stream, output_stream))
 
-    monkeypatch.setattr(cli_main, "run_stdio", run_stdio)
+    monkeypatch.setattr(cli_rpc, "run_stdio", run_stdio)
 
     result = CliRunner().invoke(cli_main.cli, ["rpc", "stdio"])
 

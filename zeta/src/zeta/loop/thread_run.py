@@ -51,6 +51,7 @@ class SessionRunParams:
     workflow: SessionWorkflow = "ask"
     runtime: str | None = None
     run_id: str | None = None
+    idempotency_key: str | None = None
     tools: list[str] | None = None
     context: str = ""
     system: str | None = None
@@ -112,6 +113,14 @@ def session_run_params(params: dict[str, Any]) -> SessionRunParams:
                 "message": "workflow must be ask, propose, or do",
                 "workflow": request.workflow,
             },
+        )
+    if request.idempotency_key is not None and (
+        not isinstance(request.idempotency_key, str) or not request.idempotency_key
+    ):
+        raise SessionRequestError(
+            "invalid_idempotency_key",
+            "idempotency_key must be a non-empty string",
+            {"message": "idempotency_key must be a non-empty string"},
         )
     if request.tools is not None:
         for tool in request.tools:
@@ -229,12 +238,19 @@ def session_turn_requested_draft(
     run_id: str,
     runtime_context: RuntimeContext,
 ) -> DraftEvent:
-    payload = session_run_params(params).run_payload(run_id)
+    request = session_run_params(params)
+    payload = request.run_payload(run_id)
+    idempotency_key = f"session.turn.requested:{run_id}"
+    if request.idempotency_key is not None:
+        idempotency_key = (
+            f"session.turn.requested:{runtime_context.session_id}:"
+            f"{request.idempotency_key}"
+        )
     return DraftEvent(
         "session.turn.requested",
         "zeta",
         payload,
-        idempotency_key=f"session.turn.requested:{run_id}",
+        idempotency_key=idempotency_key,
         session_id=runtime_context.session_id,
         run_id=run_id,
     )

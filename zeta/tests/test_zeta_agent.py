@@ -2456,6 +2456,148 @@ def test_zeta_rpc_session_run_returns_started_event_from_shared_draft(
     assert client.pending_runs["run_test"].task is not None
 
 
+def test_zeta_rpc_session_run_reuses_inflight_client_idempotency_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def run() -> None:
+        client = rpc_client_without_connection()
+        route_started = asyncio.Event()
+        route_continue = asyncio.Event()
+        routed_run_ids: list[str] = []
+        generated_run_ids = iter(("run_original", "run_retry"))
+
+        async def hold_route(
+            _client: rpc_routes.RpcClient,
+            state: rpc_routes.RunState,
+            _event: Event,
+        ) -> None:
+            routed_run_ids.append(state.run_id)
+            route_started.set()
+            await route_continue.wait()
+
+        monkeypatch.setattr(rpc_routes, "route_run", hold_route)
+        monkeypatch.setattr(
+            rpc_routes,
+            "session_run_id",
+            lambda: next(generated_run_ids),
+        )
+
+        params = {
+            "objective": "answer",
+            "tools": [],
+            "idempotency_key": "logical-request-1",
+        }
+        first = await rpc_routes.session_run(params, client)
+        await route_started.wait()
+        second = await rpc_routes.session_run(params, client)
+
+        assert first["run_id"] == "run_original"
+        assert second["run_id"] == "run_original"
+        assert second["status"] == "started"
+        assert routed_run_ids == ["run_original"]
+        assert set(client.pending_runs) == {"run_original"}
+        assert (
+            client.session.event_sink.list_events(
+                Filter(event_type="session.turn.requested")
+            )[0].idempotency_key
+            == "session.turn.requested:ctx-session:logical-request-1"
+        )
+
+        route_continue.set()
+        task = client.pending_runs["run_original"].task
+        assert task is not None
+        await task
+
+    asyncio.run(run())
+
+
+def test_zeta_session_turn_retry_recovers_completed_result(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    async def fake_run_session_request(
+        _params: dict[str, Any],
+        *,
+        run_id: str,
+        **_kwargs: Any,
+    ) -> dict[str, Any]:
+        run_ids.append(run_id)
+        return {
+            "run_id": run_id,
+            "outcome": "completed",
+            "final_answer": "done once",
+            "trace": {},
+        }
+
+    event_store = RuntimeEventStore.open(tmp_path / "zeta.sqlite3")
+    context = zeta_runtime_context.RuntimeContext(
+        session_id="ctx-session",
+        event_sink=event_store,
+        trace_store=zeta_trace.InMemoryStore(),
+        tool_registry=CapabilityRegistry(),
+        state_dir=tmp_path,
+        session_dir=tmp_path / "sessions" / "ctx-session",
+    )
+    run_ids: list[str] = []
+    monkeypatch.setattr(
+        harness_session_turn,
+        "run_session_request",
+        fake_run_session_request,
+    )
+    dispatcher = harness_dispatch.QueueingDispatcher(
+        event_store,
+        executors=[
+            harness_session_turn.session_turn_agent(
+                context,
+                publish_event=lambda _event: None,
+            )
+        ],
+    )
+    params = {
+        "objective": "answer",
+        "tools": [],
+        "idempotency_key": "logical-request-1",
+    }
+
+    try:
+        first = asyncio.run(
+            harness_session_turn.submit_session_turn(
+                params,
+                runtime_context=context,
+                event_dispatcher=dispatcher,
+            )
+        )
+        second = asyncio.run(
+            harness_session_turn.submit_session_turn(
+                params,
+                runtime_context=context,
+                event_dispatcher=dispatcher,
+            )
+        )
+        client = rpc_client_without_connection(session=context)
+        recovered = asyncio.run(rpc_routes.session_run(params, client))
+        assert len(run_ids) == 1
+        assert second == first
+        assert first["final_answer"] == "done once"
+        assert (
+            len(event_store.list_events(Filter(event_type="session.turn.requested")))
+            == 1
+        )
+        assert recovered["run_id"] == first["run_id"]
+        assert recovered["session_id"] == "ctx-session"
+        assert recovered["status"] == "completed"
+        assert recovered["result"] == first
+        assert recovered["event"]["event_type"] == "session.turn.requested"
+        assert recovered["event"]["run_id"] == first["run_id"]
+        assert (
+            recovered["event"]["idempotency_key"]
+            == "session.turn.requested:ctx-session:logical-request-1"
+        )
+        assert client.pending_runs == {}
+    finally:
+        event_store.close()
+
+
 def test_zeta_session_agent_request_uses_active_model_selection(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -3034,6 +3176,14 @@ def test_zeta_session_run_params_preserve_boundary_values() -> None:
     assert params.context is None
     assert params.system == 34
     assert params.max_wall_seconds == "1"
+
+
+def test_zeta_session_run_params_reject_empty_idempotency_key() -> None:
+    with pytest.raises(
+        zeta_requests.SessionRequestError,
+        match="idempotency_key must be a non-empty string",
+    ):
+        zeta_requests.session_run_params({"objective": "answer", "idempotency_key": ""})
 
 
 def test_zeta_event_trigger_rule_matches_exact_and_prefix() -> None:

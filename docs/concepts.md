@@ -707,6 +707,12 @@ Supported methods:
 | `tools.register` | Register client-hosted capabilities. |
 | `tools.respond` | Respond to a `tools.call` notification. |
 
+`session.run` accepts an optional non-empty `idempotency_key`. Reuse that key
+only when retrying the same logical request. Zeta scopes the key to the
+session, so a retry never starts a second run or repeats its effects. While the
+original run is still active, the retry returns its existing started event;
+after it finishes, the retry returns the original terminal result.
+
 Server notifications:
 
 | Notification | Purpose |

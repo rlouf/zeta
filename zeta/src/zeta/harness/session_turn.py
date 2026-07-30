@@ -14,6 +14,7 @@ from zeta.harness.routing import (
     EventPattern,
     ExecutableAgent,
 )
+from zeta.journal.store import EventReader, Filter
 from zeta.loop.cancellation import CancellationToken
 from zeta.loop.runtime import empty_session_trace_result
 from zeta.loop.runtime_context import RuntimeContext
@@ -84,6 +85,11 @@ async def submit_session_turn(
         event_id=outcome.event.id,
         target_agent=SESSION_TURN_AGENT_ID,
     )
+    if result is None:
+        result = terminal_session_turn_result(
+            outcome.event,
+            runtime_context=runtime_context,
+        )
     if result is not None:
         return result
     return {
@@ -92,6 +98,24 @@ async def submit_session_turn(
         "final_answer": "",
         "trace": empty_session_trace_result(),
     }
+
+
+def terminal_session_turn_result(
+    requested_event: Event,
+    *,
+    runtime_context: RuntimeContext,
+) -> dict[str, Any] | None:
+    """Return a previously recorded terminal result for one requested session turn."""
+
+    if not isinstance(runtime_context.event_sink, EventReader):
+        return None
+    return terminal_queue_item_result(
+        runtime_context.event_sink.list_events(
+            Filter(event_type_prefix="runtime.queue_item.")
+        ),
+        event_id=requested_event.id,
+        target_agent=SESSION_TURN_AGENT_ID,
+    )
 
 
 def optional_string(value: object) -> str | None:

@@ -17,7 +17,10 @@ from zeta.effects import DELIVERY_SEMANTICS, DeliverySemantics
 from zeta.events import DraftEvent, Event
 from zeta.harness.dispatch import QueueingDispatcher, ReservedRuntimeEventError
 from zeta.harness.runs import RunStatus
-from zeta.harness.session_turn import SESSION_TURN_AGENT_ID
+from zeta.harness.session_turn import (
+    SESSION_TURN_AGENT_ID,
+    terminal_session_turn_result,
+)
 from zeta.journal.store import EventReader, EventStoreProtocol, Filter
 from zeta.journal.wire import event_to_wire
 from zeta.loop.runtime_context import RuntimeContext
@@ -456,19 +459,48 @@ async def session_run(params: dict[str, Any], client: RpcClient) -> dict[str, An
             **{key: value for key, value in exc.data.items() if key != "message"},
         ) from exc
 
-    cancellation_event = asyncio.Event()
-    state = RunState(run_id=run_id, cancellation_event=cancellation_event)
-
-    client.pending_runs[run_id] = state
     outcome = await client.dispatcher.publish_event(draft)
-    state.task = asyncio.create_task(route_run(client, state, outcome.event))
+    requested_event = outcome.event
+    requested_run_id = requested_event.run_id or run_id
+    result = terminal_session_turn_result(
+        requested_event,
+        runtime_context=client.session,
+    )
+    if result is not None:
+        return {
+            "run_id": requested_run_id,
+            "session_id": client.session.session_id,
+            "status": session_result_status(result),
+            "event": event_to_wire(requested_event),
+            "result": result,
+        }
+
+    if outcome.inserted:
+        cancellation_event = asyncio.Event()
+        state = RunState(
+            run_id=requested_run_id,
+            cancellation_event=cancellation_event,
+        )
+        client.pending_runs[requested_run_id] = state
+        state.task = asyncio.create_task(route_run(client, state, requested_event))
 
     return {
-        "run_id": run_id,
+        "run_id": requested_run_id,
         "session_id": client.session.session_id,
         "status": "started",
-        "event": event_to_wire(outcome.event),
+        "event": event_to_wire(requested_event),
     }
+
+
+def session_result_status(result: dict[str, Any]) -> RunStatus:
+    """Map a durable session result back to the RPC-visible run status."""
+
+    outcome = result.get("outcome")
+    if outcome in {"aborted", "cancelled"}:
+        return "cancelled"
+    if outcome in {"failed", "dead_lettered", "unhandled"}:
+        return "failed"
+    return "completed"
 
 
 async def route_run(client: RpcClient, state: RunState, event: Event) -> None:

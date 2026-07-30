@@ -9,81 +9,17 @@ import time
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Protocol, runtime_checkable
+from typing import Any
 
 from zeta import ids
 from zeta.events import DraftEvent, Event
 from zeta.harness.metrics import MetricAttribute, NullRuntimeMetrics, RuntimeMetrics
 from zeta.harness.projections import runtime_event_projection
+from zeta.harness.protocols import CoordinationStore, QueueClaim, RuntimeJournal
 from zeta.journal.sqlite import SqliteEventStore
 from zeta.journal.store import Filter
 from zeta.journal.types import AppendOutcome
 from zeta.substrate.sqlite import sqlite_table_names
-
-
-@runtime_checkable
-class RuntimeJournal(Protocol):
-    """Append-only historical truth used by orchestration components."""
-
-    def accept(self, draft: DraftEvent) -> AppendOutcome: ...
-
-    def append(self, event: Event) -> AppendOutcome: ...
-
-    def get(self, event_id: str) -> Event | None: ...
-
-    def list_events(self, filter: Filter) -> list[Event]: ...
-
-
-@runtime_checkable
-class CoordinationStore(Protocol):
-    """Ephemeral queue ownership, leases, heartbeats, and mutual exclusion."""
-
-    def queue_item(self, queue_item_id: str) -> dict[str, Any] | None: ...
-
-    def queue_item_attempt_count(self, queue_item_id: str) -> int: ...
-
-    def queue_claim_is_current(
-        self,
-        queue_item_id: str,
-        worker_name: str,
-        claim_token: str,
-    ) -> bool: ...
-
-    def heartbeat_attempt(
-        self,
-        attempt_id: str,
-        queue_item_id: str,
-        worker_name: str,
-        *,
-        claim_token: str,
-        lease_ms: int,
-        now_ms: int,
-    ) -> bool: ...
-
-    def renew_locks(
-        self,
-        keys: Iterable[str],
-        owner: str,
-        *,
-        lease_ms: int,
-        now_ms: int,
-    ) -> bool: ...
-
-    def observe_runtime_metric(
-        self,
-        name: str,
-        value: float,
-        **attributes: MetricAttribute,
-    ) -> None: ...
-
-
-@dataclass(frozen=True)
-class QueueClaim:
-    """Opaque ownership token for one active queue claim."""
-
-    queue_item_id: str
-    token: str
-
 
 RUNTIME_PROJECTION_TABLES = frozenset(
     {"queue_items", "attempts", "attempt_results", "locks"}

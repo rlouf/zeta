@@ -1,4 +1,9 @@
-"""Import boundary tests for package ownership."""
+"""Import boundary tests for package ownership.
+
+The tree states the ontology. These tests keep it stated. Each layer may
+depend downward only, so a later change cannot quietly reintroduce the
+deployment-shaped coupling the packages were renamed to remove.
+"""
 
 from __future__ import annotations
 
@@ -6,41 +11,101 @@ import ast
 import sys
 from pathlib import Path
 
+SRC = Path(__file__).resolve().parents[1] / "src"
+
+# A layer may not import these layers. The lists are deliberately explicit:
+# an unlisted layer is allowed, so a new package does not silently pass.
+FORBIDDEN_DEPENDENCIES = {
+    "journal": {
+        "authoring",
+        "capabilities",
+        "cli",
+        "context",
+        "harness",
+        "loop",
+        "models",
+        "rpc",
+        "tools",
+        "trace",
+    },
+    "authoring": {"cli", "harness", "loop", "rpc"},
+    "loop": {"authoring", "cli", "harness", "rpc"},
+    "trace": {"authoring", "capabilities", "cli", "harness", "loop", "rpc"},
+    "tools": {"authoring", "cli", "harness", "loop", "rpc"},
+}
+
+# connectors is the third-party extension surface. It sees the event
+# vocabulary and nothing else, so an installed connector cannot reach into
+# the runtime.
+CONNECTOR_ALLOWED = {"zeta.effects", "zeta.events"}
+
+
+def imported_modules(path: Path) -> list[tuple[str, int]]:
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    found: list[tuple[str, int]] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            found.extend((alias.name, node.lineno) for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module is not None:
+            found.append((node.module, node.lineno))
+    return found
+
+
+def python_files(*parts: str) -> list[Path]:
+    return sorted(SRC.joinpath(*parts).rglob("*.py"))
+
 
 def test_zeta_source_does_not_import_commas() -> None:
-    root = Path(__file__).resolve().parents[1] / "src"
     offenders: list[str] = []
-    for path in sorted(root.rglob("*.py")):
-        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Import):
-                for alias in node.names:
-                    if alias.name == "commas" or alias.name.startswith("commas."):
-                        offenders.append(f"{path}:{node.lineno}")
-            elif isinstance(node, ast.ImportFrom):
-                module = node.module or ""
-                if module == "commas" or module.startswith("commas."):
-                    offenders.append(f"{path}:{node.lineno}")
+    for path in python_files():
+        for module, lineno in imported_modules(path):
+            if module == "commas" or module.startswith("commas."):
+                offenders.append(f"{path}:{lineno}")
     assert offenders == []
 
 
 def test_substrate_source_does_not_import_higher_layers() -> None:
-    root = Path(__file__).resolve().parents[1] / "src" / "zeta" / "substrate"
-    offenders: list[str] = []
     stdlib = sys.stdlib_module_names | {"__future__"}
-    for path in sorted(root.rglob("*.py")):
-        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-        for node in ast.walk(tree):
-            modules: list[str] = []
-            if isinstance(node, ast.Import):
-                modules.extend(alias.name for alias in node.names)
-            elif isinstance(node, ast.ImportFrom) and node.module is not None:
-                modules.append(node.module)
-            for module in modules:
-                root_module = module.split(".", 1)[0]
-                location = getattr(node, "lineno", 0)
-                if root_module == "zeta" and not module.startswith("zeta.substrate"):
-                    offenders.append(f"{path}:{location}")
-                elif root_module not in stdlib and root_module != "zeta":
-                    offenders.append(f"{path}:{location}")
+    offenders: list[str] = []
+    for path in python_files("zeta", "substrate"):
+        for module, lineno in imported_modules(path):
+            root_module = module.split(".", 1)[0]
+            if root_module == "zeta" and not module.startswith("zeta.substrate"):
+                offenders.append(f"{path}:{lineno} imports {module}")
+            elif root_module not in stdlib and root_module != "zeta":
+                offenders.append(f"{path}:{lineno} imports {module}")
+    assert offenders == []
+
+
+def test_layers_depend_downward_only() -> None:
+    offenders: list[str] = []
+    for layer, forbidden in FORBIDDEN_DEPENDENCIES.items():
+        for path in python_files("zeta", layer):
+            for module, lineno in imported_modules(path):
+                parts = module.split(".")
+                if len(parts) < 2 or parts[0] != "zeta":
+                    continue
+                if parts[1] in forbidden:
+                    offenders.append(f"{layer}: {path.name}:{lineno} imports {module}")
+    assert offenders == []
+
+
+def test_connectors_see_only_the_event_vocabulary() -> None:
+    offenders: list[str] = []
+    for path in python_files("connectors"):
+        for module, lineno in imported_modules(path):
+            if not module.startswith("zeta"):
+                continue
+            if module not in CONNECTOR_ALLOWED:
+                offenders.append(f"{path.name}:{lineno} imports {module}")
+    assert offenders == []
+
+
+def test_ids_module_is_a_leaf() -> None:
+    """`zeta.ids` derives identity strings, so every layer may use it."""
+    stdlib = sys.stdlib_module_names | {"__future__"}
+    offenders: list[str] = []
+    for module, lineno in imported_modules(SRC / "zeta" / "ids.py"):
+        if module.split(".", 1)[0] not in stdlib:
+            offenders.append(f"ids.py:{lineno} imports {module}")
     assert offenders == []

@@ -401,7 +401,7 @@ def test_zeta_agent_spec_loads_frontmatter_body_and_manifest(tmp_path: Path) -> 
 name: Slack Q&A
 description: Answers workspace questions in Slack.
 enabled: true
-resumable: true
+session: shared
 model:
   name: qwen3.6-27b-q8-local
   url: http://127.0.0.1:8080/v1/chat/completions
@@ -427,7 +427,7 @@ User asked: {{ event.payload.text }}
     assert spec.name == "Slack Q&A"
     assert spec.description == "Answers workspace questions in Slack."
     assert spec.enabled is True
-    assert spec.resumable is True
+    assert spec.session == "shared"
     assert spec.model == zeta_agents.ModelSpec(
         name="qwen3.6-27b-q8-local",
         url="http://127.0.0.1:8080/v1/chat/completions",
@@ -834,7 +834,7 @@ Summarize the repo.
         ("name: 1\ndescription: Worker\n", "name"),
         ("name: Worker\ndescription: 1\n", "description"),
         ("name: Worker\ndescription: Worker\nenabled: maybe\n", "enabled"),
-        ("name: Worker\ndescription: Worker\nresumable: later\n", "resumable"),
+        ("name: Worker\ndescription: Worker\nsession: later\n", "session"),
         (
             "name: Worker\ndescription: Worker\naccepts: github.issue.opened\n",
             "accepts",
@@ -2622,11 +2622,11 @@ def test_zeta_agent_with_returns_may_publish_no_events(tmp_path: Path) -> None:
     assert terminal["returned_events"] == []
 
 
-def test_zeta_resumable_agent_uses_stable_session_id() -> None:
+def test_zeta_shared_session_agent_uses_stable_session_id() -> None:
     definition = AgentDefinition(
         "slack-qa",
         (EventPattern("slack.message.received"),),
-        dispatch_mode="session_scoped",
+        session="shared",
     )
     first = Event(
         id="evt_first",
@@ -2663,7 +2663,7 @@ def test_zeta_one_shot_agent_uses_trigger_event_session_id() -> None:
     definition = AgentDefinition(
         "slack-qa",
         (EventPattern("slack.message.received"),),
-        dispatch_mode="one_shot",
+        session="per-event",
     )
     event = Event(
         id="evt_first",
@@ -2680,6 +2680,97 @@ def test_zeta_one_shot_agent_uses_trigger_event_session_id() -> None:
     )
 
     assert agent_session_id(definition, event) == "agent/slack-qa/evt_first"
+
+
+def test_zeta_agent_spec_session_defaults_to_per_event(tmp_path: Path) -> None:
+    spec = zeta_agents.load_spec(
+        _write_spec(
+            tmp_path / "worker.md",
+            """---
+name: Worker
+description: Worker agent.
+accepts:
+  - slack.message.received
+---
+Do the work.
+""",
+        )
+    )
+
+    assert spec.session == "per-event"
+
+
+def test_zeta_agent_spec_accepts_a_session_template(tmp_path: Path) -> None:
+    spec = zeta_agents.load_spec(
+        _write_spec(
+            tmp_path / "chat.md",
+            """---
+name: Chat
+description: Chat agent.
+session: "{chat_id}"
+accepts:
+  - telegram.message.received
+---
+Reply.
+""",
+        )
+    )
+
+    assert spec.session == "{chat_id}"
+
+
+def _session_event(event_id: str, payload: dict[str, object]) -> Event:
+    return Event(
+        id=event_id,
+        event_type="telegram.message.received",
+        source="test",
+        payload=payload,
+        idempotency_key=None,
+        caused_by=None,
+        session_id=None,
+        run_id=None,
+        turn_id=None,
+        timestamp_ms=1,
+        cursor=1,
+    )
+
+
+def test_zeta_templated_session_scopes_the_timeline_per_payload_value() -> None:
+    definition = AgentDefinition(
+        "telegram-assistant",
+        (EventPattern("telegram.message.received"),),
+        session="{chat_id}",
+    )
+    alice = _session_event("evt_one", {"chat_id": 111})
+    alice_again = _session_event("evt_two", {"chat_id": 111})
+    bob = _session_event("evt_three", {"chat_id": 222})
+
+    assert agent_session_id(definition, alice) == "agent/telegram-assistant/111"
+    assert agent_session_id(definition, alice_again) == "agent/telegram-assistant/111"
+    assert agent_session_id(definition, bob) == "agent/telegram-assistant/222"
+
+
+def test_zeta_templated_session_may_combine_payload_fields() -> None:
+    definition = AgentDefinition(
+        "slack-qa",
+        (EventPattern("telegram.message.received"),),
+        session="{channel_id}:{thread_ts}",
+    )
+    event = _session_event("evt_one", {"channel_id": "C1", "thread_ts": "99.7"})
+
+    assert agent_session_id(definition, event) == "agent/slack-qa/C1:99.7"
+
+
+def test_zeta_templated_session_raises_when_the_field_is_absent() -> None:
+    definition = AgentDefinition(
+        "telegram-assistant",
+        (EventPattern("telegram.message.received"),),
+        session="{chat_id}",
+    )
+    event = _session_event("evt_one", {"text": "hello"})
+
+    with pytest.raises(RuntimeError, match="session template"):
+        agent_session_id(definition, event)
 
 
 def test_zeta_disabled_agent_spec_does_not_compile_for_runtime(

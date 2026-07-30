@@ -49,8 +49,8 @@ Event ──routing──> QueueItem ──claim──> Attempt ──> Run
 - An **attempt** is one numbered try for a queue item. A retry adds an attempt.
   It never edits a terminal attempt.
 - A **run** is the handle used to cancel work and report status.
-- A **session** is the timeline scope. A resumable agent keeps one session
-  across events, so its timeline accumulates.
+- A **session** is the timeline scope. The agent declares what identifies it:
+  itself, the triggering event, or a value the event carries.
 
 Each arrow is one-to-many. One event can fan out to several queue items, and
 one queue item can hold several attempts.
@@ -249,7 +249,7 @@ schedules:
   - cron: "0 9 * * 1"
     timezone: Europe/Paris
     catchup: latest
-resumable: true
+session: shared
 ---
 Reply to the Slack message:
 
@@ -263,7 +263,7 @@ Core frontmatter fields:
 | `name` | yes | Human-readable name. |
 | `description` | yes | Used as the agent system prompt. |
 | `enabled` | no | Defaults to `true`; disabled agents are ignored. |
-| `resumable` | no | Reuse `agent/<slug>` session state across events. |
+| `session` | no | What identifies a session. `shared`, `per-event` (default), or a template. |
 | `model` | no | Per-agent `{name, url}` override. |
 | `accepts` | no | Event types that can trigger the agent. |
 | `returns` | no | Event types the agent may publish after it finishes. |
@@ -285,9 +285,31 @@ Zeta records when that schedule is first observed, so it never catches up an
 occurrence from before activation, and its idempotency key ensures the missed
 occurrence is published only once.
 
-When `resumable: true`, every event for the agent uses session
-`agent/<slug>`. Otherwise each event uses `agent/<slug>/<event_id>` so unrelated
-events do not share timeline.
+### Session Scope
+
+A session is the timeline scope, so it decides what an agent remembers. One
+question decides it: what identifies a session? The `session` field answers it.
+
+| `session` | Session id | Use it when |
+| --- | --- | --- |
+| `shared` | `agent/<slug>` | one timeline, across every event |
+| `per-event` | `agent/<slug>/<event_id>` | unrelated events must not share timeline |
+| a template | `agent/<slug>/<rendered>` | one timeline per conversation, customer, or repository |
+
+`per-event` is the default.
+
+A template names a field the event carries. It renders like an idempotency key,
+so payload fields appear as top-level names and the event is available as
+`event`:
+
+```yaml
+session: "{chat_id}"                  # one timeline per Telegram chat
+session: "{channel_id}:{thread_ts}"   # one timeline per Slack thread
+session: "{event.id}"                 # the same as per-event
+```
+
+A template that names a field the event lacks raises. It never falls back,
+because a silent fallback would merge every conversation into one timeline.
 
 ### Scaffolding
 

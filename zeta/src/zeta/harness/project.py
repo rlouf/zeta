@@ -290,7 +290,7 @@ def agent_from_manifest(value: Any) -> AgentSpec:
         path=Path(str(value["path"])),
         sha256=str(value["sha256"]),
         enabled=bool(value.get("enabled", True)),
-        resumable=bool(value.get("resumable", False)),
+        session=str(value.get("session", "per-event")),
         model=model,
         executor=ExecutorSpec(provider=provider, config=normalized_config),
         accepts=_string_tuple(value.get("accepts")),
@@ -325,7 +325,7 @@ def agent_manifest(spec: AgentSpec) -> dict[str, Any]:
         "path": str(spec.path),
         "sha256": spec.sha256,
         "enabled": spec.enabled,
-        "resumable": spec.resumable,
+        "session": spec.session,
         "model": (
             {"name": spec.model.name, "url": spec.model.url}
             if spec.model is not None

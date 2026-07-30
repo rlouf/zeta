@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from fnmatch import fnmatchcase
-from typing import TYPE_CHECKING, Any, Literal, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from zeta import ids
 from zeta.authoring.prompts import render_prompt
@@ -13,6 +13,7 @@ from zeta.authoring.spec import AgentSpec, ExecutorSpec
 from zeta.events import DraftEvent, Event
 from zeta.harness.retry import RetryPolicy
 from zeta.harness.returned_events import ReturnedEventPublisher, StructuredOutputRunner
+from zeta.harness.templates import agent_session_id
 from zeta.loop.config import AgentConfig
 from zeta.loop.outcomes import agent_run_result_payload
 
@@ -20,7 +21,6 @@ if TYPE_CHECKING:
     from zeta.authoring.schemas import EventRegistry
     from zeta.loop.outcomes import AgentRunResult
 
-DispatchMode = Literal["one_shot", "session_scoped"]
 AgentEventPublisher = Callable[[DraftEvent], Awaitable[Event]]
 AgentRunner = Callable[["AgentInvocation"], Awaitable[dict[str, Any]]]
 TimelineFactory = Callable[["AgentInvocation"], list[dict[str, Any]]]
@@ -60,7 +60,7 @@ class AgentDefinition:
     allowed_capabilities: tuple[str, ...] = ()
     system_prompt: str | None = None
     max_turns: int | None = None
-    dispatch_mode: DispatchMode = "one_shot"
+    session: str = "per-event"
     returns: tuple[str, ...] = ()
     lock_keys: tuple[str, ...] = ()
     retry_policy: RetryPolicy | None = None
@@ -210,7 +210,7 @@ def compile_agent_definitions(
                 allowed_capabilities=spec.tools,
                 system_prompt=spec.description,
                 max_turns=config.max_turns if config is not None else None,
-                dispatch_mode="session_scoped" if spec.resumable else "one_shot",
+                session=spec.session,
                 returns=tuple(spec.returns),
                 lock_keys=runtime_lock_keys(spec),
                 retry_policy=retry_policy_for_spec(spec),
@@ -275,10 +275,10 @@ def agent_runner(
             run_context = cast(ContextFactory, context)(agent_run)
         else:
             run_context = context
-        session_id = ids.agent_session_id(
+        session_id = agent_session_id(
             agent_run.agent.agent_id,
-            event.id,
-            session_scoped=agent_run.agent.dispatch_mode == "session_scoped",
+            agent_run.agent.session,
+            event,
         )
         run_id = ids.run_id_for_attempt(
             agent_run.run_id,

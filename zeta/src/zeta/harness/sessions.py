@@ -1,11 +1,12 @@
 """Session scope for one agent invocation.
 
-A session is the timeline scope. A session-scoped agent keeps one session
-across events, so its timeline accumulates. A one-shot agent gets a session per
-event, so unrelated events do not share timeline.
+A session is the timeline scope, so it decides what an agent remembers. One
+rule answers what identifies a session: the agent, the triggering event, or a
+value the event carries. The agent declares which.
 
-The string derivations live in `zeta.ids`. This module names which rule applies
-to a given invocation.
+The string derivations live in `zeta.ids`, and the rendering in
+`zeta.harness.templates`. This module names which rule applies to an
+invocation.
 """
 
 from __future__ import annotations
@@ -13,15 +14,12 @@ from __future__ import annotations
 from zeta import ids
 from zeta.events import Event
 from zeta.harness.routing import AgentDefinition, ExecutableAgent
+from zeta.harness.templates import agent_session_id as session_id_for
 
 
 def agent_session_id(definition: AgentDefinition, event: Event) -> str:
     """Return the durable runtime session id for an authored agent invocation."""
-    return ids.agent_session_id(
-        definition.agent_id,
-        event.id,
-        session_scoped=definition.dispatch_mode == "session_scoped",
-    )
+    return session_id_for(definition.agent_id, definition.session, event)
 
 
 def agent_run_id(attempt_id: str) -> str:

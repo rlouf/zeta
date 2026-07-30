@@ -84,15 +84,19 @@ def run_id_for_attempt(claimed: str | None, attempt_id_value: str) -> str:
     return claimed or derived_run_id(attempt_id_value)
 
 
-def agent_session_id(agent_id: str, event_id: str, *, session_scoped: bool) -> str:
+def agent_session_id(agent_id: str, suffix: str | None) -> str:
     """Return the durable session id for one authored agent invocation.
 
-    A session-scoped agent keeps one timeline across events. A one-shot agent
-    gets a session per event, so unrelated events do not share timeline.
+    The suffix says what identifies the session. `None` means the agent itself
+    identifies it, so one timeline accumulates across every event. Any other
+    value scopes the timeline to that value, such as an event id or a
+    conversation id.
+
+    The caller renders the suffix. This module derives strings only.
     """
-    if session_scoped:
+    if suffix is None:
         return f"agent/{agent_id}"
-    return f"agent/{agent_id}/{event_id}"
+    return f"agent/{agent_id}/{suffix}"
 
 
 def queue_item_idempotency_key(

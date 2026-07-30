@@ -5422,7 +5422,7 @@ Triage the issue.
     assert captured["event_registry"].knows("github.issue.opened")
 
 
-def test_zeta_worker_agent_runner_uses_resumable_runtime_session(
+def test_zeta_worker_agent_runner_uses_shared_runtime_session(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -5443,7 +5443,7 @@ def test_zeta_worker_agent_runner_uses_resumable_runtime_session(
         """---
 name: Triage
 description: Triage issues.
-resumable: true
+session: shared
 accepts:
   - github.issue.opened
 ---

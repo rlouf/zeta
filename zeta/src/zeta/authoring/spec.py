@@ -17,7 +17,7 @@ BUILT_IN_FRONTMATTER_KEYS = frozenset(
         "name",
         "description",
         "enabled",
-        "resumable",
+        "session",
         "model",
         "executor",
         "accepts",
@@ -75,7 +75,7 @@ class AgentSpec:
     path: Path
     sha256: str
     enabled: bool = True
-    resumable: bool = False
+    session: str = "per-event"
     model: ModelSpec | None = None
     executor: ExecutorSpec = field(default_factory=ExecutorSpec)
     accepts: tuple[str, ...] = ()
@@ -123,9 +123,7 @@ def load_spec(path: str | Path) -> AgentSpec:
             path=relative_to_cwd(path),
             sha256=hashlib.sha256(raw_bytes).hexdigest(),
             enabled=bool_field(frontmatter.get("enabled", True), "enabled", path),
-            resumable=bool_field(
-                frontmatter.get("resumable", False), "resumable", path
-            ),
+            session=session_field(frontmatter.get("session"), path),
             model=model_spec(frontmatter.get("model"), path),
             executor=executor_spec(frontmatter.get("executor"), path),
             accepts=accepts,
@@ -601,3 +599,22 @@ def relative_to_cwd(path: Path) -> Path:
         return path.resolve()
     except OSError:
         return path
+
+
+def session_field(value: Any, path: Path) -> str:
+    """Return the validated session rule for one authored agent.
+
+    `shared` means the agent identifies the session. `per-event` means the
+    triggering event does. Any template identifies it by a value the event
+    carries, such as `{chat_id}`.
+    """
+    if value is None:
+        return "per-event"
+    if not isinstance(value, str) or not value:
+        raise SpecError(f"invalid value for 'session' in {path}: expected a string")
+    if value in {"shared", "per-event"} or "{" in value:
+        return value
+    raise SpecError(
+        f"invalid value for 'session' in {path}: {value!r} is not 'shared', "
+        "'per-event', or a template such as '{chat_id}'"
+    )

@@ -34,6 +34,7 @@ from zeta.harness.routing import (
     EventPattern,
     ExecutableAgent,
 )
+from zeta.harness.templates import render_template
 
 if TYPE_CHECKING:
     from zeta.harness.worker import WorkerServices
@@ -63,7 +64,7 @@ def project_egress_executors(
                     AgentDefinition(
                         agent_id,
                         (EventPattern(binding.event),),
-                        dispatch_mode="one_shot",
+                        session="per-event",
                         project_generation=project_generation,
                         execution_manifest=(execution_manifests or {}).get(spec.slug),
                     ),
@@ -308,7 +309,9 @@ def validate_event_payload(events, draft: DraftEvent) -> None:
 def ingress_idempotency_key(binding: IngressBinding, draft: DraftEvent) -> str:
     if binding.idempotency_key is None:
         raise RuntimeError(f"ingress event {binding.event!r} requires idempotency_key")
-    return render_template(binding.idempotency_key, draft)
+    return render_template(
+        binding.idempotency_key, draft, what="idempotency-key template"
+    )
 
 
 def egress_idempotency_key(
@@ -318,13 +321,6 @@ def egress_idempotency_key(
 ) -> str:
     if binding.idempotency_key is None:
         return f"{connector_id}:{event.id}"
-    return render_template(binding.idempotency_key, event)
-
-
-def render_template(template: str, event: DraftEvent | Event) -> str:
-    try:
-        return template.format(event=event, **dict(event.payload))
-    except (KeyError, IndexError) as exc:
-        raise RuntimeError(
-            f"idempotency-key template {template!r} references a missing field: {exc}"
-        ) from exc
+    return render_template(
+        binding.idempotency_key, event, what="idempotency-key template"
+    )

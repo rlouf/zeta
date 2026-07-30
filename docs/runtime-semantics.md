@@ -1,7 +1,9 @@
 # Runtime Semantics
 
 Zeta separates durable historical facts from live coordination state even
-though both are stored in one SQLite database.
+though both are stored in one SQLite database. The harness owns this document's
+subject. For where each layer lives in the source tree, see
+[Where Things Live](concepts.md#where-things-live).
 
 The runtime store exposes these as separate `journal` and `coordination`
 interfaces. They intentionally share a connection and write lock today; the

@@ -83,6 +83,45 @@ stored components, then verifies it against the recorded hash before it sends
 anything. See [Prompt And Tool Traces](#prompt-and-tool-traces) and
 [the trace design note](zeta-prompt-trace.md).
 
+### Where Things Live
+
+The source tree states the ontology. Each package is one layer, and each layer
+depends downward only.
+
+```text
+src/zeta/
+  events.py       Event and DraftEvent, the core vocabulary
+  effects.py      delivery contracts for external work
+  ids.py          the derived id rules: queue item, attempt, run, session
+  paths.py        the user configuration root
+
+  substrate/      content-addressed trace objects, derivations, and refs
+  journal/        the durable event log, its stores, and its record shapes
+  trace/          query, render, diff, and replay over the substrate
+
+  authoring/      AgentSpec, the manifest, skills, and event schemas
+  context/        prompt assembly, budgeting, and compaction
+  models/         model clients, profiles, endpoints, and streaming
+  capabilities/   the tool registry, executors, and effect identity
+  tools/          the built-in capability implementations
+
+  loop/           one invocation: gateway, request, steps, orchestration
+  harness/        routing, queue, attempts, runs, sessions, dispatch, worker
+  cli/  rpc/      the interfaces
+
+src/connectors/   ingress and egress, the third-party extension surface
+```
+
+Two rules hold the shape, and `test_import_boundaries.py` asserts both:
+
+- `substrate`, `ids`, and `paths` are leaves. They import nothing from Zeta, so
+  any layer may use them.
+- `connectors` sees `zeta.events` and `zeta.effects` and nothing else, so an
+  installed connector cannot reach into the runtime.
+
+The harness and the loop meet at one seam. See
+[Runtime Semantics](runtime-semantics.md#harness-and-agent-loop).
+
 ## Install
 
 The `zeta-os` package installs the `zeta` command:

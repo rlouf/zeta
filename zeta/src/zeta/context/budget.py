@@ -5,6 +5,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 
 from zeta.context.components import PromptComponent
+from zeta.models.tokens import estimated_tokens_for_text
 
 
 @dataclass(frozen=True)
@@ -24,11 +25,6 @@ class ContextUsage:
 
     total_tokens: int
     components: tuple[ComponentUsage, ...]
-
-
-def estimated_tokens_for_text(text: str) -> int:
-    """Return a cheap, deterministic token estimate for a text payload."""
-    return max(1, (len(text) + 3) // 4) if text else 0
 
 
 def estimated_tokens(component: PromptComponent) -> int:

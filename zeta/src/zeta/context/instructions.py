@@ -3,7 +3,7 @@
 import os
 from pathlib import Path
 
-from zeta.loop.runtime_context import zeta_state_dir
+from zeta.paths import zeta_state_dir
 
 MAX_INSTRUCTION_FILE_CHARS = 24_000
 MAX_INSTRUCTION_TOTAL_CHARS = 48_000

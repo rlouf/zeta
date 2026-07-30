@@ -6,11 +6,10 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from pathlib import Path
 from types import TracebackType
-from typing import Literal, Protocol
+from typing import Protocol
 
 from zeta.capabilities.types import ExecutionMode
-
-CompactionStrategy = Literal["structural_trim", "drop_oldest"]
+from zeta.context.compaction import CompactionPolicy
 
 
 class ModelStatus(Protocol):
@@ -25,14 +24,6 @@ class ModelStatus(Protocol):
     ) -> bool: ...
 
     def reasoning_delta(self, text: str) -> None: ...
-
-
-@dataclass(frozen=True)
-class CompactionPolicy:
-    """Select how model-facing working memory is bounded for one turn."""
-
-    strategy: CompactionStrategy = "structural_trim"
-    max_context_tokens: int | None = None
 
 
 @dataclass(frozen=True)

@@ -33,12 +33,6 @@ class RuntimeContext:
     session_dir: Path
 
 
-def zeta_state_dir() -> Path:
-    """Return the user-level configuration directory."""
-
-    return Path.home() / ".zeta"
-
-
 def default_session() -> RuntimeContext:
     """Return the default process session for pure Zeta runtime calls."""
 

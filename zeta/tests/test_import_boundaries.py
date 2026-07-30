@@ -30,9 +30,22 @@ FORBIDDEN_DEPENDENCIES = {
     },
     "authoring": {"cli", "harness", "loop", "rpc"},
     "loop": {"authoring", "cli", "harness", "rpc"},
-    "trace": {"authoring", "capabilities", "cli", "harness", "loop", "rpc"},
+    "context": {"authoring", "cli", "harness", "loop", "rpc"},
+    "trace": {
+        "authoring",
+        "capabilities",
+        "cli",
+        "context",
+        "harness",
+        "loop",
+        "rpc",
+    },
     "tools": {"authoring", "cli", "harness", "loop", "rpc"},
 }
+
+# Leaf modules derive values and hold no state. They import nothing from Zeta,
+# so any layer may use them without creating a cycle.
+LEAF_MODULES = ("ids.py", "paths.py")
 
 # connectors is the third-party extension surface. It sees the event
 # vocabulary and nothing else, so an installed connector cannot reach into
@@ -101,11 +114,12 @@ def test_connectors_see_only_the_event_vocabulary() -> None:
     assert offenders == []
 
 
-def test_ids_module_is_a_leaf() -> None:
-    """`zeta.ids` derives identity strings, so every layer may use it."""
+def test_leaf_modules_import_nothing_from_zeta() -> None:
+    """`zeta.ids` and `zeta.paths` derive values, so every layer may use them."""
     stdlib = sys.stdlib_module_names | {"__future__"}
     offenders: list[str] = []
-    for module, lineno in imported_modules(SRC / "zeta" / "ids.py"):
-        if module.split(".", 1)[0] not in stdlib:
-            offenders.append(f"ids.py:{lineno} imports {module}")
+    for name in LEAF_MODULES:
+        for module, lineno in imported_modules(SRC / "zeta" / name):
+            if module.split(".", 1)[0] not in stdlib:
+                offenders.append(f"{name}:{lineno} imports {module}")
     assert offenders == []

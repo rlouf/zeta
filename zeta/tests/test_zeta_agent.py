@@ -35,6 +35,7 @@ from zeta.capabilities.types import (
 )
 from zeta.cli import main as cli_main
 from zeta.context import builder as zeta_context
+from zeta.context.compaction import CompactionPolicy
 from zeta.effects import DeliverySemantics
 from zeta.events import DraftEvent, Event
 from zeta.harness import connector_bridge as harness_connector_bridge
@@ -57,7 +58,6 @@ from zeta.loop import outcomes as zeta_outcomes
 from zeta.loop import runtime as zeta_agent
 from zeta.loop import runtime_context as zeta_runtime_context
 from zeta.loop import thread_run as zeta_requests
-from zeta.loop.config import CompactionPolicy
 from zeta.loop.runtime import AgentRunResult
 from zeta.models.profiles import ModelSelection
 from zeta.rpc import jsonrpc as rpc_jsonrpc

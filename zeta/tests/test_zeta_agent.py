@@ -18,6 +18,9 @@ import zeta.capabilities.executors as zeta_capability_executors
 import zeta.cli.commands.rpc as cli_rpc
 import zeta.loop.cancellation as zeta_loop_cancellation
 import zeta.loop.gateway as zeta_loop_gateway
+import zeta.loop.stages.capability as loop_capability
+import zeta.loop.stages.model as loop_model
+import zeta.loop.stages.prompt as loop_prompt
 import zeta.loop.steps as zeta_loop_steps
 import zeta.loop.types as zeta_loop_types
 import zeta.models.chat_completions as zeta_model
@@ -455,7 +458,7 @@ def test_zeta_model_tool_call_preserves_invalid_json_error() -> None:
 
 
 def test_zeta_model_event_payload_has_boundary_dict_shape() -> None:
-    assert zeta_loop_steps.model_event_payload(
+    assert loop_model.model_event_payload(
         {
             "content": "done",
             "reasoning_content": "thinking",
@@ -635,7 +638,7 @@ def test_zeta_record_model_event_sends_same_draft_to_sink() -> None:
         abort_reason=never_abort,
     )
 
-    event_id, tool_calls = zeta_loop_steps.record_model_event(
+    event_id, tool_calls = loop_model.record_model_event(
         {"content": "done"},
         events,
         prompt_trace=None,
@@ -663,7 +666,7 @@ def test_zeta_record_model_event_records_draft() -> None:
         abort_reason=never_abort,
     )
 
-    event_id, tool_calls = zeta_loop_steps.record_model_event(
+    event_id, tool_calls = loop_model.record_model_event(
         {"content": "done"},
         events,
         prompt_trace=None,
@@ -704,7 +707,7 @@ def test_zeta_handle_tool_call_emits_drafts() -> None:
     )
 
     result = asyncio.run(
-        zeta_loop_steps.handle_tool_call(
+        loop_capability.handle_tool_call(
             {
                 "id": "call-1",
                 "type": "function",
@@ -785,7 +788,7 @@ def test_zeta_direct_capability_records_and_propagates_effect_identity() -> None
     }
 
     asyncio.run(
-        zeta_loop_steps.handle_tool_call(
+        loop_capability.handle_tool_call(
             tool_call,
             allowed_capabilities=("test.write",),
             tool_schema=registry.model_tool_schema(("test.write",)),
@@ -796,7 +799,7 @@ def test_zeta_direct_capability_records_and_propagates_effect_identity() -> None
     )
     tool_call["id"] = "call-from-retry"
     asyncio.run(
-        zeta_loop_steps.handle_tool_call(
+        loop_capability.handle_tool_call(
             tool_call,
             allowed_capabilities=("test.write",),
             tool_schema=registry.model_tool_schema(("test.write",)),
@@ -843,7 +846,7 @@ def test_zeta_unsafe_capability_failure_is_recorded_as_ambiguous() -> None:
     )
 
     asyncio.run(
-        zeta_loop_steps.handle_tool_call(
+        loop_capability.handle_tool_call(
             {
                 "id": "call-1",
                 "type": "function",
@@ -869,13 +872,13 @@ def test_zeta_unsafe_capability_failure_is_recorded_as_ambiguous() -> None:
 
 
 def test_zeta_assistant_message_round_trips_content_to_model_event() -> None:
-    assistant = zeta_loop_steps.AssistantMessage.from_provider({"content": "done"})
+    assistant = loop_model.AssistantMessage.from_provider({"content": "done"})
 
     assert assistant.content == "done"
     assert assistant.reasoning_content == ""
     assert assistant.tool_calls == ()
     assert assistant.to_provider() == {"content": "done"}
-    assert zeta_loop_steps.model_event_payload(assistant.to_provider()) == {
+    assert loop_model.model_event_payload(assistant.to_provider()) == {
         "type": "model",
         "content": "done",
     }
@@ -894,7 +897,7 @@ def test_zeta_assistant_message_round_trips_tool_calls() -> None:
         ],
     }
 
-    assistant = zeta_loop_steps.AssistantMessage.from_provider(provider_payload)
+    assistant = loop_model.AssistantMessage.from_provider(provider_payload)
 
     assert assistant.tool_calls == (
         {
@@ -903,7 +906,7 @@ def test_zeta_assistant_message_round_trips_tool_calls() -> None:
             "function": {"name": "read", "arguments": "{}"},
         },
     )
-    assert zeta_loop_steps.assistant_tool_calls(assistant.to_provider()) == [
+    assert loop_model.assistant_tool_calls(assistant.to_provider()) == [
         {
             "id": "call-1",
             "type": "function",
@@ -913,12 +916,12 @@ def test_zeta_assistant_message_round_trips_tool_calls() -> None:
 
 
 def test_zeta_assistant_message_preserves_reasoning_content() -> None:
-    assistant = zeta_loop_steps.AssistantMessage.from_provider(
+    assistant = loop_model.AssistantMessage.from_provider(
         {"content": "done", "reasoning_content": "thinking"}
     )
 
     assert assistant.reasoning_content == "thinking"
-    assert zeta_loop_steps.model_event_payload(assistant.to_provider()) == {
+    assert loop_model.model_event_payload(assistant.to_provider()) == {
         "type": "model",
         "reasoning": "thinking",
         "content": "done",
@@ -926,8 +929,8 @@ def test_zeta_assistant_message_preserves_reasoning_content() -> None:
 
 
 def test_zeta_model_turn_carries_typed_assistant_message() -> None:
-    assistant = zeta_loop_steps.AssistantMessage.from_provider({"content": "done"})
-    turn = zeta_loop_steps.ModelTurn(
+    assistant = loop_model.AssistantMessage.from_provider({"content": "done"})
+    turn = loop_model.ModelTurn(
         assistant=assistant,
         streamed_content=True,
         model_telemetry={"input_tokens": 1},
@@ -956,7 +959,7 @@ def test_zeta_request_assistant_message_returns_model_output(monkeypatch) -> Non
     )
 
     output, streamed_content, telemetry = asyncio.run(
-        zeta_loop_steps.request_assistant_message(
+        loop_model.request_assistant_message(
             zeta_model_shapes.ModelInput(
                 messages=[{"role": "user", "content": "hi"}],
                 tools=[],
@@ -1039,7 +1042,7 @@ def test_zeta_request_model_turn_builds_assistant_from_model_output(
         )
 
     monkeypatch.setattr(
-        zeta_loop_steps,
+        loop_model,
         "request_assistant_message",
         fake_request_assistant_message,
     )
@@ -1054,7 +1057,7 @@ def test_zeta_request_model_turn_builds_assistant_from_model_output(
     )
 
     turn = asyncio.run(
-        zeta_loop_steps.request_model_turn(
+        loop_model.request_model_turn(
             "answer",
             [],
             config=zeta_agent.AgentConfig(),
@@ -1083,7 +1086,7 @@ def test_zeta_build_prompt_step_returns_committed_model_input() -> None:
     store = zeta_trace.InMemoryStore()
     state = zeta_agent.RunState()
 
-    prepared_prompt, model_input = zeta_loop_steps.build_prompt_step(
+    prepared_prompt, model_input = loop_prompt.build_prompt_step(
         "answer",
         [{"role": "user", "content": "prior"}],
         config=zeta_agent.AgentConfig(model_name="unit-model"),
@@ -1129,7 +1132,7 @@ def test_zeta_call_model_step_returns_output_and_telemetry() -> None:
     state = zeta_agent.RunState()
 
     model_output, streamed_content, model_telemetry = asyncio.run(
-        zeta_loop_steps.call_model_step(
+        loop_model.call_model_step(
             zeta_model_shapes.ModelInput(
                 messages=[{"role": "user", "content": "answer"}],
                 tools=[],
@@ -1191,7 +1194,7 @@ def test_zeta_call_model_step_updates_model_status_during_request() -> None:
     state = zeta_agent.RunState()
 
     asyncio.run(
-        zeta_loop_steps.call_model_step(
+        loop_model.call_model_step(
             zeta_model_shapes.ModelInput(
                 messages=[{"role": "user", "content": "answer"}],
                 tools=[],
@@ -1525,7 +1528,7 @@ def test_zeta_record_assistant_step_links_output_to_prompt() -> None:
     store = zeta_trace.InMemoryStore()
     state = zeta_agent.RunState()
     builder = zeta_context.PromptBuilder(store=store)
-    prepared_prompt, _ = zeta_loop_steps.build_prompt_step(
+    prepared_prompt, _ = loop_prompt.build_prompt_step(
         "answer",
         [],
         config=zeta_agent.AgentConfig(),
@@ -1537,7 +1540,7 @@ def test_zeta_record_assistant_step_links_output_to_prompt() -> None:
         builder=builder,
     )
 
-    assistant, prompt_trace = zeta_loop_steps.record_assistant_step(
+    assistant, prompt_trace = loop_model.record_assistant_step(
         prepared_prompt,
         zeta_model_shapes.ModelOutput(message={"content": "done"}),
         {"usage": {"prompt_tokens": 1}},
@@ -1573,10 +1576,10 @@ def test_zeta_run_capability_step_records_call_execution_and_result(
     def fake_handle_tool_call(
         received: dict[str, Any],
         **kwargs: object,
-    ) -> zeta_loop_steps.CapabilityCallResult:
+    ) -> loop_capability.CapabilityCallResult:
         assert received == tool_call
         assert kwargs["index"] == 0
-        return zeta_loop_steps.CapabilityCallResult(
+        return loop_capability.CapabilityCallResult(
             events=[
                 zeta_event_drafts.draft_from_runtime_event(
                     {"type": "tool_call", "id": "call-1", "tool_call_id": "call-1"},
@@ -1596,10 +1599,10 @@ def test_zeta_run_capability_step_records_call_execution_and_result(
             ]
         )
 
-    monkeypatch.setattr(zeta_loop_steps, "handle_tool_call", fake_handle_tool_call)
+    monkeypatch.setattr(loop_capability, "handle_tool_call", fake_handle_tool_call)
 
     result = asyncio.run(
-        zeta_loop_steps.run_capability_step(
+        loop_capability.run_capability_step(
             tool_call,
             index=0,
             config=zeta_agent.AgentConfig(),
@@ -1682,7 +1685,7 @@ def test_zeta_run_capability_step_dispatches_to_injected_executor() -> None:
     )
 
     result = asyncio.run(
-        zeta_loop_steps.run_capability_step(
+        loop_capability.run_capability_step(
             {
                 "id": "call-1",
                 "function": {"name": "read", "arguments": '{"path": "README.md"}'},
@@ -1747,7 +1750,7 @@ def test_zeta_run_capability_step_records_executor_refusal() -> None:
     )
 
     result = asyncio.run(
-        zeta_loop_steps.run_capability_step(
+        loop_capability.run_capability_step(
             {"id": "call-1", "function": {"name": "read", "arguments": "{}"}},
             index=0,
             config=zeta_agent.AgentConfig(execution_mode="direct"),
@@ -1801,15 +1804,15 @@ def test_zeta_run_capability_step_reconciles_existing_terminal_result(
 
     def fail_handle_tool_call(
         *args: object, **kwargs: object
-    ) -> zeta_loop_steps.CapabilityCallResult:
+    ) -> loop_capability.CapabilityCallResult:
         nonlocal invoked
         invoked = True
-        return zeta_loop_steps.CapabilityCallResult(events=[])
+        return loop_capability.CapabilityCallResult(events=[])
 
-    monkeypatch.setattr(zeta_loop_steps, "handle_tool_call", fail_handle_tool_call)
+    monkeypatch.setattr(loop_capability, "handle_tool_call", fail_handle_tool_call)
 
     result = asyncio.run(
-        zeta_loop_steps.run_capability_step(
+        loop_capability.run_capability_step(
             {"id": "call-1", "function": {"name": "read", "arguments": "{}"}},
             index=0,
             config=zeta_agent.AgentConfig(),
@@ -6910,9 +6913,7 @@ def test_zeta_agent_turn_passes_thinking_to_the_model(monkeypatch) -> None:
 
 
 def test_zeta_agent_event_omits_empty_reasoning() -> None:
-    event = zeta_loop_steps.model_event_payload(
-        {"content": "done", "reasoning_content": ""}
-    )
+    event = loop_model.model_event_payload({"content": "done", "reasoning_content": ""})
 
     assert "reasoning" not in event
 

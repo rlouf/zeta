@@ -37,11 +37,8 @@ from zeta.loop.outcomes import (
 from zeta.loop.projection import is_runtime_ui_event
 from zeta.loop.request import AgentRunRequest, RunDependencies
 from zeta.loop.runtime_context import RuntimeContext
-from zeta.loop.steps import (
-    AgentRun,
-    agent_allowed_capabilities,
-    registered_capabilities,
-)
+from zeta.loop.stages.prompt import agent_allowed_capabilities, registered_capabilities
+from zeta.loop.steps import AgentRun
 from zeta.loop.types import (
     MODEL_TIMELINE_TYPES,
     AgentEventSink,

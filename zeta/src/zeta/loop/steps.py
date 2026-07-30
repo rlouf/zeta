@@ -1,101 +1,54 @@
 """One turn of the assistant and tool loop.
 
-Each step builds a prompt, calls the model, records the assistant message, or
-runs a capability. A step returns information; it never decides what runs next.
+This module dispatches a turn across the stages. A step returns information; it
+never decides what runs next.
 """
 
 from __future__ import annotations
 
-import inspect
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from typing import Any
 
-from zeta.capabilities.execution import (
-    CapabilityCallResult,
-    CapabilityExecutionContext,
-    handle_tool_call,
-)
 from zeta.capabilities.registry import (
-    CapabilityRegistry,
     CapabilityToolSchema,
 )
-from zeta.capabilities.registry import registry as _runtime_tool_registry
-from zeta.context.builder import (
-    PreparedPrompt,
-    PromptBuilder,
-    prepared_prompt_from,
-    render_model_input,
-)
-from zeta.context.components import PromptTrace
-from zeta.events import DraftEvent, Event
-from zeta.journal.drafts import (
-    draft_from_runtime_event,
-    ensure_runtime_event_id,
-    turn_aborted_draft,
-)
-from zeta.journal.views import (
-    draft_event_id,
-    draft_timeline_type,
-    event_view,
-)
-from zeta.loop.cancellation import (
-    AgentRunAborted,
-)
+from zeta.events import DraftEvent
 from zeta.loop.config import AgentConfig
-from zeta.loop.gateway import ModelGateway, request_assistant_message
 from zeta.loop.outcomes import (
     AgentRunResult,
     RunInfo,
     RunState,
 )
-from zeta.loop.projection import draft_views_for_prompt
 from zeta.loop.request import RunDependencies, silent_run_dependencies
+from zeta.loop.stages.abort import check_run_abort
+from zeta.loop.stages.capability import run_capability_step
+from zeta.loop.stages.model import (
+    next_model_parent,
+    record_model_event,
+    request_model_turn,
+    update_prompt_trace_from_events,
+)
 from zeta.loop.types import (
     DEFAULT_MAX_TURNS,
-    AgentEventSink,
     TimelineEvent,
 )
-from zeta.models import DefaultModelGateway
-from zeta.models.types import ModelInput, ModelOutput, tool_call_id
 from zeta.trace.provenance import (
     project_prompt_trace_projection,
 )
 
 
-async def step(
-    state: RunState,
-    *,
-    objective: str,
-    timeline: Sequence[TimelineEvent],
-    config: AgentConfig,
-    allowed_capabilities: tuple[str, ...],
-    context: str,
-    tool_schema: CapabilityToolSchema,
-    tools: list[dict[str, Any]],
-    ctx: RunDependencies,
-) -> tuple[RunState, RunInfo]:
-    """Advance the run by one model call or one pending tool batch."""
-    if state.stop is not None:
-        return state, RunInfo(kind="stopped")
-    if state.pending_tool_calls:
-        return await step_tools(
-            state,
-            config=config,
-            allowed_capabilities=allowed_capabilities,
-            tool_schema=tool_schema,
-            ctx=ctx,
-        )
-    return await step_model(
-        state,
-        objective=objective,
-        timeline=timeline,
-        config=config,
-        allowed_capabilities=allowed_capabilities,
-        context=context,
-        tools=tools,
-        ctx=ctx,
-    )
+def publish_step_info(info: RunInfo, *, ctx: RunDependencies) -> None:
+    if ctx.event_sink is None or info.kind == "tools":
+        return
+    for draft in info.appended_events:
+        ctx.event_sink(draft)
+
+
+def turn_indices(max_turns: int | None) -> Iterable[int]:
+    if max_turns is None:
+        max_turns = DEFAULT_MAX_TURNS
+    return range(max(max_turns, 0))
 
 
 async def step_model(
@@ -221,393 +174,38 @@ async def step_tools(
     )
 
 
-def publish_step_info(info: RunInfo, *, ctx: RunDependencies) -> None:
-    if ctx.event_sink is None or info.kind == "tools":
-        return
-    for draft in info.appended_events:
-        ctx.event_sink(draft)
-
-
-def build_prompt_step(
+async def step(
+    state: RunState,
+    *,
     objective: str,
     timeline: Sequence[TimelineEvent],
-    *,
     config: AgentConfig,
     allowed_capabilities: tuple[str, ...],
     context: str,
-    current_events: Iterable[dict[str, Any]],
-    tools: list[dict[str, Any]],
-    state: RunState,
-    builder: PromptBuilder,
-) -> tuple[PreparedPrompt, ModelInput]:
-    state.note_step("build_prompt")
-    prompt_plan = builder.plan_prompt(
-        objective,
-        [
-            event_view(event) if isinstance(event, Event) else dict(event)
-            for event in timeline
-        ],
-        system=config.system_prompt,
-        allowed_capabilities=allowed_capabilities,
-        context=context,
-        current_events=current_events,
-        tools=tools,
-        tool_choice="auto",
-        selected_model=config.model_name,
-        thinking=config.thinking,
-    )
-    stored_prompt = builder.commit_prompt_plan(prompt_plan)
-    model_input = render_model_input(stored_prompt)
-    prepared_prompt = prepared_prompt_from(stored_prompt, model_input=model_input)
-    return prepared_prompt, model_input
-
-
-async def call_model_step(
-    model_input: ModelInput,
-    *,
-    config: AgentConfig,
-    state: RunState,
-    model_gateway: ModelGateway | None = None,
-    event_sink: AgentEventSink | None,
-) -> tuple[ModelOutput, bool, dict[str, Any]]:
-    state.note_step("call_model")
-    requested = request_assistant_message(
-        model_input,
-        config=config,
-        model_gateway=model_gateway or DefaultModelGateway(),
-        events=state.events,
-        event_sink=event_sink,
-    )
-    model_output, streamed_content, model_telemetry = (
-        await requested if inspect.isawaitable(requested) else requested
-    )
-    return model_output, streamed_content, model_telemetry
-
-
-def record_assistant_step(
-    prepared_prompt: PreparedPrompt,
-    model_output: ModelOutput,
-    model_telemetry: dict[str, Any],
-    *,
-    state: RunState,
-    builder: PromptBuilder,
-) -> tuple[AssistantMessage, PromptTrace | None]:
-    assistant = AssistantMessage.from_provider(model_output.message)
-    state.note_step("record_assistant")
-    prompt_trace = (
-        PromptTrace(prompt_object_id=prepared_prompt.prompt_object_id)
-        if prepared_prompt.prompt_object_id is not None
-        else None
-    )
-    state.note_prompt_trace(prompt_trace)
-    state.note_model_telemetry(model_telemetry)
-    return assistant, prompt_trace
-
-
-async def run_capability_step(
-    tool_call: dict[str, Any],
-    *,
-    index: int,
-    config: AgentConfig,
-    allowed_capabilities: tuple[str, ...],
     tool_schema: CapabilityToolSchema,
-    model_telemetry: dict[str, Any] | None,
-    assistant_event_id: str | None,
-    state: RunState,
+    tools: list[dict[str, Any]],
     ctx: RunDependencies,
-) -> CapabilityCallResult:
-    state.note_step("check_budget")
-    check_run_abort(
-        state,
-        ctx=ctx,
-    )
-    if (
-        terminal_capability_result_event(
-            state.events,
-            tool_call_id(tool_call, index=index),
-        )
-        is not None
-    ):
-        state.note_step("record_capability_result")
-        return CapabilityCallResult(events=[])
-    state.note_step("record_capability_call")
-    state.note_step("execute_capability")
-    capability_ctx = CapabilityExecutionContext(
-        event_sink=ctx.event_sink,
-        trace_store=ctx.builder.store(),
-        tool_registry=ctx.tool_registry,
-        tool_executor=ctx.tool_executor,
-        base_dir=config.base_dir,
-        effect_scope=config.effect_scope,
-    )
-    handled = handle_tool_call(
-        tool_call,
-        allowed_capabilities=allowed_capabilities,
-        tool_schema=tool_schema,
-        index=index,
-        execution_mode=config.execution_mode,
-        model_telemetry=model_telemetry,
-        caused_by=assistant_event_id,
-        ctx=capability_ctx,
-    )
-    result = await handled if inspect.isawaitable(handled) else handled
-    state.note_step("record_capability_result")
-    return result
-
-
-TERMINAL_TOOL_STATUSES = {"completed", "failed", "refused", "cancelled", "timed_out"}
-
-
-def terminal_capability_result_event(
-    events: list[DraftEvent],
-    call_id: str,
-) -> DraftEvent | None:
-    for draft in reversed(events):
-        if draft_timeline_type(draft) != "tool_result":
-            continue
-        if draft.payload.get("tool_call_id") != call_id:
-            continue
-        if draft.payload.get("status") in TERMINAL_TOOL_STATUSES:
-            return draft
-    return None
-
-
-def check_run_abort(
-    state: RunState,
-    *,
-    ctx: RunDependencies,
-    check_deadline: bool = True,
-) -> None:
-    raise_if_agent_run_aborted(
-        state,
-        ctx=ctx,
-        check_deadline=check_deadline,
-    )
-
-
-def raise_if_agent_run_aborted(
-    state: RunState,
-    *,
-    ctx: RunDependencies,
-    check_deadline: bool,
-) -> None:
-    reason = ctx.abort_reason(check_deadline=check_deadline)
-    if reason is None:
-        return
-    state.note_step("abort_run")
-    record_runtime_event(
-        state.events,
-        turn_aborted_draft(
-            reason=reason,
-            session_id=None,
-            turn_id=None,
-            caused_by=state.next_model_caused_by,
-        ),
-        ctx=ctx,
-    )
-    raise AgentRunAborted(
-        reason,
-        result=state.result(),
-        event_recorded=True,
-    )
-
-
-def turn_indices(max_turns: int | None) -> Iterable[int]:
-    if max_turns is None:
-        max_turns = DEFAULT_MAX_TURNS
-    return range(max(max_turns, 0))
-
-
-def agent_allowed_capabilities(
-    config: AgentConfig,
-    *,
-    tool_registry: CapabilityRegistry | None = None,
-) -> tuple[str, ...]:
-    return registered_capabilities(
-        config.allowed_capabilities,
-        tool_registry=tool_registry,
-    )
-
-
-def registered_capabilities(
-    allowed_capabilities: Iterable[str] | None,
-    *,
-    tool_registry: CapabilityRegistry | None = None,
-) -> tuple[str, ...]:
-    """Filter to registered capabilities, preserving the caller's order."""
-    active_tool_registry = tool_registry or _runtime_tool_registry
-    if allowed_capabilities is None:
-        return tuple(active_tool_registry.list_auto_enabled_capability_ids())
-    enabled: list[str] = []
-    seen: set[str] = set()
-    for name in allowed_capabilities:
-        if name.startswith("mcp.") and name.endswith(".*") and name.count(".") == 2:
-            capability_ids = (
-                capability_id
-                for capability_id in active_tool_registry.list_capability_ids()
-                if capability_id.startswith(name[:-1])
-            )
-        else:
-            capability_id = active_tool_registry.resolve(name)
-            capability_ids = () if capability_id is None else (capability_id,)
-        for capability_id in capability_ids:
-            if capability_id not in seen:
-                enabled.append(capability_id)
-                seen.add(capability_id)
-    return tuple(enabled)
-
-
-def record_runtime_event(
-    events: list[DraftEvent],
-    draft: DraftEvent,
-    *,
-    ctx: RunDependencies,
-) -> DraftEvent:
-    events.append(draft)
-    if ctx.event_sink is not None:
-        ctx.event_sink(draft)
-    if ctx.event_sink is None:
-        project_prompt_trace_projection(events, ctx.builder.store())
-    return draft
-
-
-def model_event_payload(assistant: dict[str, Any]) -> dict[str, Any]:
-    content = assistant.get("content")
-    reasoning = assistant.get("reasoning_content")
-    event: dict[str, Any] = {"type": "model"}
-    if isinstance(reasoning, str) and reasoning:
-        event["reasoning"] = reasoning
-    if isinstance(content, str) and content:
-        event["content"] = content
-    tool_calls = assistant_tool_calls(assistant)
-    if tool_calls:
-        event["tool_calls"] = tool_calls
-    return event
-
-
-def assistant_tool_calls(assistant: dict[str, Any]) -> list[dict[str, Any]]:
-    raw_tool_calls = assistant.get("tool_calls")
-    if not isinstance(raw_tool_calls, list):
-        return []
-    return [call for call in raw_tool_calls if isinstance(call, dict)]
-
-
-def record_model_event(
-    assistant: dict[str, Any],
-    events: list[DraftEvent],
-    *,
-    prompt_trace: PromptTrace | None,
-    caused_by: str | None = None,
-    ctx: RunDependencies,
-) -> tuple[str | None, list[dict[str, Any]]]:
-    event = model_event_payload(assistant)
-    if caused_by is not None:
-        event["caused_by"] = caused_by
-    if prompt_trace is not None:
-        event["prompt_object_id"] = prompt_trace.prompt_object_id
-    event_id = ensure_runtime_event_id(event) if event else None
-    tool_calls = assistant_tool_calls(assistant)
-    if event:
-        record_runtime_event(
-            events,
-            draft_from_runtime_event(event, session_id=None, turn_id=None),
+) -> tuple[RunState, RunInfo]:
+    """Advance the run by one model call or one pending tool batch."""
+    if state.stop is not None:
+        return state, RunInfo(kind="stopped")
+    if state.pending_tool_calls:
+        return await step_tools(
+            state,
+            config=config,
+            allowed_capabilities=allowed_capabilities,
+            tool_schema=tool_schema,
             ctx=ctx,
         )
-    return event_id, tool_calls
-
-
-def update_prompt_trace_from_events(
-    assistant_event_id: str | None,
-    *,
-    state: RunState,
-    ctx: RunDependencies,
-) -> None:
-    if assistant_event_id is None or not state.prompt_traces:
-        return
-    projection = project_prompt_trace_projection(state.events, ctx.builder.store())
-    assistant_id = projection.assistant_message_ids.get(assistant_event_id)
-    if assistant_id is None:
-        return
-    trace = state.prompt_traces[-1]
-    state.prompt_traces[-1] = PromptTrace(
-        prompt_object_id=trace.prompt_object_id,
-        assistant_message_object_id=assistant_id,
-    )
-
-
-def next_model_parent(events: list[DraftEvent]) -> str | None:
-    for draft in reversed(events):
-        if draft_timeline_type(draft) != "tool_result":
-            continue
-        event_id = draft_event_id(draft)
-        if isinstance(event_id, str) and event_id:
-            return event_id
-    return None
-
-
-@dataclass(frozen=True)
-class AssistantMessage:
-    content: str
-    reasoning_content: str
-    tool_calls: tuple[dict[str, Any], ...]
-    provider_payload: dict[str, Any]
-
-    @classmethod
-    def from_provider(cls, assistant: dict[str, Any]) -> AssistantMessage:
-        content = assistant.get("content")
-        reasoning = assistant.get("reasoning_content")
-        return cls(
-            content=content if isinstance(content, str) else "",
-            reasoning_content=reasoning if isinstance(reasoning, str) else "",
-            tool_calls=tuple(assistant_tool_calls(assistant)),
-            provider_payload=dict(assistant),
-        )
-
-    def to_provider(self) -> dict[str, Any]:
-        return dict(self.provider_payload)
-
-
-async def request_model_turn(
-    objective: str,
-    timeline: Sequence[TimelineEvent],
-    *,
-    config: AgentConfig,
-    allowed_capabilities: tuple[str, ...],
-    context: str,
-    tools: list[dict[str, Any]],
-    state: RunState,
-    ctx: RunDependencies,
-) -> ModelTurn:
-    prepared_prompt, model_input = build_prompt_step(
-        objective,
-        timeline,
+    return await step_model(
+        state,
+        objective=objective,
+        timeline=timeline,
         config=config,
         allowed_capabilities=allowed_capabilities,
         context=context,
-        current_events=draft_views_for_prompt(state.events, ctx.builder),
         tools=tools,
-        state=state,
-        builder=ctx.builder,
-    )
-    model_output, streamed_content, model_telemetry = await call_model_step(
-        model_input,
-        config=config,
-        state=state,
-        model_gateway=ctx.model_gateway,
-        event_sink=ctx.event_sink,
-    )
-    assistant, prompt_trace = record_assistant_step(
-        prepared_prompt,
-        model_output,
-        model_telemetry,
-        state=state,
-        builder=ctx.builder,
-    )
-    return ModelTurn(
-        assistant=assistant,
-        streamed_content=streamed_content,
-        model_telemetry=model_telemetry,
-        prompt_trace=prompt_trace,
+        ctx=ctx,
     )
 
 
@@ -652,11 +250,3 @@ class AgentRun:
         self.state.stop = "max_turns"
         self.state.note_step("finish_run")
         return self.state.result()
-
-
-@dataclass(frozen=True)
-class ModelTurn:
-    assistant: AssistantMessage
-    streamed_content: bool
-    model_telemetry: dict[str, Any]
-    prompt_trace: PromptTrace | None

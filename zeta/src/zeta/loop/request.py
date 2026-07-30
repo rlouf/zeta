@@ -15,6 +15,7 @@ from zeta.capabilities.registry import (
 from zeta.context.builder import (
     PromptBuilder,
 )
+from zeta.events import DraftEvent
 from zeta.loop.cancellation import (
     AbortReason,
 )
@@ -23,6 +24,7 @@ from zeta.loop.gateway import ModelGateway
 from zeta.loop.types import AgentEventSink
 from zeta.models import DefaultModelGateway
 from zeta.substrate import Store
+from zeta.trace.provenance import project_prompt_trace_projection
 
 
 @dataclass(frozen=True)
@@ -51,3 +53,17 @@ class RunDependencies:
 
 def silent_run_dependencies(ctx: RunDependencies) -> RunDependencies:
     return replace(ctx, event_sink=None)
+
+
+def record_runtime_event(
+    events: list[DraftEvent],
+    draft: DraftEvent,
+    *,
+    ctx: RunDependencies,
+) -> DraftEvent:
+    events.append(draft)
+    if ctx.event_sink is not None:
+        ctx.event_sink(draft)
+    if ctx.event_sink is None:
+        project_prompt_trace_projection(events, ctx.builder.store())
+    return draft

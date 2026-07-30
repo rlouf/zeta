@@ -8,6 +8,13 @@ from dataclasses import dataclass
 from typing import Any, Protocol, cast
 
 from zeta.events import DraftEvent, Event
+from zeta.harness.queue import (
+    TERMINAL_QUEUE_ITEM_EVENT_TYPES,
+    QueueItemStatus,
+    RoutedQueueItem,
+    queue_item_from_record,
+    routed_queue_item_from_event,
+)
 from zeta.records.stores.event_store import (
     EventReader,
     EventStoreProtocol,
@@ -16,6 +23,7 @@ from zeta.records.stores.event_store import (
 )
 from zeta.records.types import AppendOutcome
 
+from zeta import ids
 from zetad.agents import (
     AgentDefinition,
     AgentInvocation,
@@ -26,14 +34,6 @@ from zetad.agents import (
 from zetad.coordinator import AttemptCoordinator
 from zetad.lifecycle import LifecycleRecorder
 from zetad.metrics import MetricAttribute
-from zetad.queue import (
-    TERMINAL_QUEUE_ITEM_EVENT_TYPES,
-    QueueItemStatus,
-    RoutedQueueItem,
-    queue_item_from_record,
-    queue_item_id_for_event,
-    routed_queue_item_from_event,
-)
 from zetad.retry import RetryPolicy
 from zetad.router import EventRouter
 
@@ -459,7 +459,7 @@ class _QueueingDispatcher:
             )
         ]
         for route in matching_routes:
-            queue_item_id = queue_item_id_for_event(route, triggering_event)
+            queue_item_id = ids.queue_item_id(triggering_event.id, route.agent_id)
             lifecycle_events.append(
                 self._append_queue_item_event(
                     triggering_event,

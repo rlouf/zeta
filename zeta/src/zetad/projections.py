@@ -6,14 +6,14 @@ import json
 import sqlite3
 
 from zeta.events import Event
-
-from zeta import ids
-from zetad.attempts import attempt_from_event_payload
-from zetad.queue import (
+from zeta.harness.attempts import attempt_from_event_payload
+from zeta.harness.queue import (
     is_queueable_event,
     pending_queue_item_id,
     project_one_queue_item,
 )
+
+from zeta import ids
 
 
 class RuntimeEventProjection:

@@ -9,6 +9,8 @@ from typing import Any
 
 from zeta.effects import EffectDeliveryError
 from zeta.events import DraftEvent, Event
+from zeta.harness.attempts import AttemptStatus
+from zeta.harness.queue import QueueItemStatus, RoutedQueueItem
 
 from zeta import ids
 from zetad.agents import (
@@ -16,9 +18,7 @@ from zetad.agents import (
     ExecutableAgent,
     agent_session_id,
 )
-from zetad.attempts import AttemptStatus
 from zetad.lifecycle import LifecycleRecorder
-from zetad.queue import QueueItemStatus, RoutedQueueItem
 from zetad.retry import RetryPolicy, error_code_for_exception
 
 HeartbeatTask = asyncio.Task[None] | None

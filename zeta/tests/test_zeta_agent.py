@@ -33,6 +33,8 @@ from zeta.capabilities.types import (
 from zeta.context import builder as zeta_context
 from zeta.effects import DeliverySemantics
 from zeta.events import DraftEvent, Event
+from zeta.harness import queue as harness_queue
+from zeta.harness.queue import QueueItem
 from zeta.models.profiles import ModelSelection
 from zeta.records import drafts as zeta_event_drafts
 from zeta.records import views as zeta_event_views
@@ -66,12 +68,10 @@ from zetad import agents as zetad_agents
 from zetad import cli as zetad_cli
 from zetad import connector_bridge as zetad_connector_bridge
 from zetad import dispatch as zetad_dispatch
-from zetad import queue as zetad_queue
 from zetad import retry as zetad_retry
 from zetad import scheduling as zetad_scheduling
 from zetad import session_turn as zetad_session_turn
 from zetad import worker as zetad_worker
-from zetad.queue import QueueItem
 from zetad.rpc import jsonrpc as zetad_jsonrpc
 from zetad.rpc import routes as zetad_rpc_routes
 from zetad.store import RuntimeEventStore
@@ -2825,7 +2825,7 @@ def test_zeta_dispatch_terminal_queue_item_result_comes_from_lifecycle_event() -
         cursor=9,
     )
 
-    assert zetad_queue.terminal_queue_item_result(
+    assert harness_queue.terminal_queue_item_result(
         [event],
         event_id="evt_request",
         target_agent="zeta.session.turn",
@@ -4386,7 +4386,7 @@ def test_zeta_cli_run_routes_unhandled_event(tmp_path: Path) -> None:
             str(tmp_path / ".zeta"),
         ],
     )
-    items = zetad_queue.project_queue_items(
+    items = harness_queue.project_queue_items(
         event_store.list_events(zeta_events.Filter())
     )
 
@@ -5170,7 +5170,7 @@ Triage the issue.
     with asyncio.Runner() as runner:
         try:
             message = runner.run(zetad_worker.run_once(runtime))
-            items = zetad_queue.project_queue_items(
+            items = harness_queue.project_queue_items(
                 event_store.list_events(zeta_events.Filter())
             )
             attempt_rows = event_store.list_attempts()
@@ -5821,7 +5821,7 @@ def test_zeta_local_runtime_run_once_fans_out_pending_queue_item(
     with asyncio.Runner() as runner:
         try:
             message = runner.run(zetad_worker.run_once(runtime))
-            items = zetad_queue.project_queue_items(
+            items = harness_queue.project_queue_items(
                 event_store.list_events(zeta_events.Filter())
             )
         finally:
@@ -6349,7 +6349,7 @@ Summarize the repo.
     with asyncio.Runner() as runner:
         try:
             message = runner.run(zetad_worker.run_once(runtime))
-            items = zetad_queue.project_queue_items(
+            items = harness_queue.project_queue_items(
                 runtime.events.list_events(zeta_events.Filter())
             )
         finally:
@@ -6432,7 +6432,7 @@ Triage the issue.
 
     asyncio.run(exercise())
     try:
-        items = zetad_queue.project_queue_items(
+        items = harness_queue.project_queue_items(
             event_store.list_events(zeta_events.Filter())
         )
     finally:
@@ -6500,7 +6500,7 @@ def test_zeta_local_runtime_run_forever_respects_max_concurrent(
             )
             await asyncio.wait_for(release.wait(), timeout=1)
             await worker
-            return zetad_queue.project_queue_items(
+            return harness_queue.project_queue_items(
                 event_store.list_events(zeta_events.Filter())
             )
         finally:
@@ -6705,7 +6705,7 @@ Triage {{ event.payload.title }}
             str(state_dir),
         ],
     )
-    items = zetad_queue.project_queue_items(
+    items = harness_queue.project_queue_items(
         event_store.list_events(zeta_events.Filter())
     )
 

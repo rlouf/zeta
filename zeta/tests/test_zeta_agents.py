@@ -66,11 +66,11 @@ from zeta.capabilities.types import (
 )
 from zeta.effects import DeliverySemantics
 from zeta.events import DraftEvent, Event
+from zeta.harness import queue as harness_queue
 from zeta.records.stores.event_store import Filter
 from zeta.run.runtime import AgentRunResult
 from zetad import connector_bridge as zetad_connector_bridge
 from zetad import dispatch as zetad_dispatch
-from zetad import queue as zetad_queue
 from zetad import worker as zetad_worker
 from zetad.agents import (
     AgentDefinition,
@@ -2513,7 +2513,7 @@ def test_zeta_agent_with_returns_publishes_structured_return_event(
     returned = store.list_events(
         zeta_events.Filter(event_type="message.delivery.requested")
     )
-    terminal = zetad_queue.terminal_queue_item_result(
+    terminal = harness_queue.terminal_queue_item_result(
         outcome.lifecycle_events,
         event_id=outcome.event.id,
         target_agent="slack-qa",
@@ -2567,7 +2567,7 @@ def test_zeta_agent_with_returns_publishes_multiple_ordered_events(
     returned = store.list_events(
         zeta_events.Filter(event_type="message.delivery.requested")
     )
-    terminal = zetad_queue.terminal_queue_item_result(
+    terminal = harness_queue.terminal_queue_item_result(
         outcome.lifecycle_events,
         event_id=outcome.event.id,
         target_agent="slack-qa",
@@ -2608,7 +2608,7 @@ def test_zeta_agent_with_returns_may_publish_no_events(tmp_path: Path) -> None:
             ),
         )
     )
-    terminal = zetad_queue.terminal_queue_item_result(
+    terminal = harness_queue.terminal_queue_item_result(
         outcome.lifecycle_events,
         event_id=outcome.event.id,
         target_agent="slack-qa",

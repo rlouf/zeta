@@ -5,9 +5,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from zeta.events import Event
+from zeta.harness.queue import RoutedQueueItem
 
+from zeta import ids
 from zetad.agents import AgentRoute
-from zetad.queue import RoutedQueueItem, queue_item_id_for_event
 
 
 @dataclass(frozen=True)
@@ -42,7 +43,7 @@ class EventRouter:
                 RouteDecision(
                     route,
                     RoutedQueueItem(
-                        queue_item_id=queue_item_id_for_event(route, event),
+                        queue_item_id=ids.queue_item_id(event.id, route.agent_id),
                         event_id=event.id,
                         target_agent=route.agent_id,
                         project_generation=route.project_generation,

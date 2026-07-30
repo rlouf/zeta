@@ -6,23 +6,23 @@ from collections.abc import Callable
 from typing import Any
 
 from zeta.events import DraftEvent, Event
-from zeta.records.stores.event_store import EventWriter
-
-from zeta import ids
-from zetad.agents import AgentRoute, ExecutableAgent
-from zetad.attempts import (
+from zeta.harness.attempts import (
     Attempt,
     AttemptStatus,
     attempt_event_payload,
     attempt_idempotency_key,
 )
-from zetad.queue import (
+from zeta.harness.queue import (
     QueueItem,
     QueueItemStatus,
     queue_item_event_payload,
     queue_item_idempotency_key,
     unhandled_queue_item_idempotency_key,
 )
+from zeta.records.stores.event_store import EventWriter
+
+from zeta import ids
+from zetad.agents import AgentRoute, ExecutableAgent
 
 
 class LifecycleRecorder:

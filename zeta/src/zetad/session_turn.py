@@ -6,6 +6,7 @@ from collections.abc import Callable
 from typing import Any
 
 from zeta.events import Event
+from zeta.harness.queue import terminal_queue_item_result
 from zeta.run.cancellation import CancellationToken
 from zeta.run.runtime import empty_session_trace_result
 from zeta.run.runtime_context import RuntimeContext
@@ -22,7 +23,6 @@ from zetad.agents import (
     ExecutableAgent,
 )
 from zetad.dispatch import QueueingDispatcher
-from zetad.queue import terminal_queue_item_result
 
 RuntimePublishedEvent = Event
 CancellationEventForRun = Callable[[str], CancellationToken | None]

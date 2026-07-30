@@ -4,14 +4,10 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Literal, cast
-
-from zeta.events import Event
+from typing import Any, Literal, cast
 
 from zeta import ids
-
-if TYPE_CHECKING:
-    from zetad.agents import AgentRoute
+from zeta.events import Event
 
 QueueItemId = str
 
@@ -188,10 +184,6 @@ def queue_item_from_record(record: Mapping[str, Any]) -> RoutedQueueItem:
         target_agent=str(record["target_agent"]),
         project_generation=_optional_string(record.get("project_generation")),
     )
-
-
-def queue_item_id_for_event(route: AgentRoute, event: Event) -> str:
-    return ids.queue_item_id(event.id, route.agent_id)
 
 
 def pending_queue_item_id(event: Event) -> str:

@@ -14,9 +14,9 @@ from zeta.capabilities.registry import RegisteredCapability, error_result
 from zeta.capabilities.types import Capability, CapabilityId
 from zeta.effects import DELIVERY_SEMANTICS, DeliverySemantics
 from zeta.events import DraftEvent, Event
+from zeta.harness.runs import RunStatus
 from zeta.records.stores.event_store import EventReader, EventStoreProtocol, Filter
 from zeta.records.wire import event_to_wire
-from zeta.run.runs import RunStatus
 from zeta.run.runtime_context import RuntimeContext
 from zeta.run.thread_run import (
     SessionRequestError,

@@ -1,11 +1,11 @@
 import asyncio
 
 from zeta.events import Event
+from zeta.harness.queue import RoutedQueueItem
 from zeta.records.stores.memory import MemoryEventStore
 from zetad.agents import AgentDefinition, EventPattern, ExecutableAgent
 from zetad.coordinator import AttemptCoordinator
 from zetad.lifecycle import LifecycleRecorder
-from zetad.queue import RoutedQueueItem
 from zetad.retry import RetryPolicy
 
 

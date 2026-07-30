@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from zetad.attempts import AttemptStatus
-from zetad.queue import QueueItemStatus
+from zeta.harness.attempts import AttemptStatus
+from zeta.harness.queue import QueueItemStatus
 
 
 @dataclass(frozen=True)

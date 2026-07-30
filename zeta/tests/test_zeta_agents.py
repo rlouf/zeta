@@ -1281,6 +1281,7 @@ def test_zeta_slack_connector_is_discoverable_as_entry_point() -> None:
     assert metadata["project"]["entry-points"]["zeta.event_connectors"] == {
         "slack": "connectors.slack:slack_event_connector",
         "filesystem": "connectors.filesystem:filesystem_event_connector",
+        "telegram": "connectors.telegram:telegram_event_connector",
     }
 
 

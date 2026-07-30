@@ -15,6 +15,8 @@ from typing import Any, cast
 import pytest
 import zeta.capabilities.execution as zeta_capability_execution
 import zeta.models.chat_completions as zeta_model
+import zeta.models.endpoint as zeta_model_endpoint
+import zeta.models.sse as zeta_model_sse
 import zeta.models.types as zeta_model_shapes
 from click.testing import CliRunner
 from zeta.authoring import spec as zeta_agent_spec
@@ -279,7 +281,7 @@ def test_zeta_agent_turn_carries_reasoning_into_event(monkeypatch) -> None:
     ) -> dict[str, Any]:
         return {"content": "done", "reasoning_content": "weighing the options"}
 
-    monkeypatch.setattr(zeta_model, "model_endpoint_open", lambda: True)
+    monkeypatch.setattr(zeta_model_endpoint, "model_endpoint_open", lambda: True)
     monkeypatch.setattr(
         zeta_models_api, "chat_completion_messages", fake_chat_completion_messages
     )
@@ -297,7 +299,7 @@ def test_zeta_agent_turn_carries_reasoning_into_event(monkeypatch) -> None:
 def test_zeta_agent_turn_emits_model_draft(monkeypatch) -> None:
     drafts: list[DraftEvent] = []
 
-    monkeypatch.setattr(zeta_model, "model_endpoint_open", lambda: True)
+    monkeypatch.setattr(zeta_model_endpoint, "model_endpoint_open", lambda: True)
     monkeypatch.setattr(
         zeta_models_api,
         "chat_completion_messages",
@@ -6782,7 +6784,7 @@ def test_zeta_agent_turn_uses_explicit_tool_registry(monkeypatch) -> None:
         captured_messages.append(messages)
         return next(responses)
 
-    monkeypatch.setattr(zeta_model, "model_endpoint_open", lambda: True)
+    monkeypatch.setattr(zeta_model_endpoint, "model_endpoint_open", lambda: True)
     monkeypatch.setattr(
         zeta_models_api,
         "chat_completion_messages",
@@ -6839,7 +6841,7 @@ def test_zeta_agent_turn_resolves_model_name_through_projection(monkeypatch) -> 
         invoked.append((capability_id, params))
         return {"ok": True, "content": [{"type": "text", "text": "ok"}]}
 
-    monkeypatch.setattr(zeta_model, "model_endpoint_open", lambda: True)
+    monkeypatch.setattr(zeta_model_endpoint, "model_endpoint_open", lambda: True)
     monkeypatch.setattr(
         zeta_models_api,
         "chat_completion_messages",
@@ -6882,7 +6884,7 @@ def test_zeta_agent_turn_passes_thinking_to_the_model(monkeypatch) -> None:
         captured["kwargs"] = kwargs
         return {"content": "done"}
 
-    monkeypatch.setattr(zeta_model, "model_endpoint_open", lambda: True)
+    monkeypatch.setattr(zeta_model_endpoint, "model_endpoint_open", lambda: True)
     monkeypatch.setattr(
         zeta_models_api, "chat_completion_messages", fake_chat_completion_messages
     )
@@ -6931,7 +6933,7 @@ def test_zeta_agent_tool_call_is_caused_by_assistant_event(
             ],
         }
 
-    monkeypatch.setattr(zeta_model, "model_endpoint_open", lambda: True)
+    monkeypatch.setattr(zeta_model_endpoint, "model_endpoint_open", lambda: True)
     monkeypatch.setattr(
         zeta_models_api, "chat_completion_messages", fake_chat_completion_messages
     )
@@ -6966,7 +6968,7 @@ def test_zeta_agent_turn_finalizes_text(monkeypatch) -> None:
         captured["kwargs"] = kwargs
         return {"content": "done"}
 
-    monkeypatch.setattr(zeta_model, "model_endpoint_open", lambda: True)
+    monkeypatch.setattr(zeta_model_endpoint, "model_endpoint_open", lambda: True)
     monkeypatch.setattr(
         zeta_models_api, "chat_completion_messages", fake_chat_completion_messages
     )
@@ -7006,7 +7008,7 @@ def test_zeta_agent_turn_stores_prompt_and_assistant_trace(monkeypatch) -> None:
         captured["kwargs"] = kwargs
         return {"content": "done"}
 
-    monkeypatch.setattr(zeta_model, "model_endpoint_open", lambda: True)
+    monkeypatch.setattr(zeta_model_endpoint, "model_endpoint_open", lambda: True)
     monkeypatch.setattr(
         zeta_models_api, "chat_completion_messages", fake_chat_completion_messages
     )
@@ -7069,7 +7071,7 @@ def test_zeta_agent_turn_captures_model_telemetry(monkeypatch) -> None:
         )
         return {"content": "done"}
 
-    monkeypatch.setattr(zeta_model, "model_endpoint_open", lambda: True)
+    monkeypatch.setattr(zeta_model_endpoint, "model_endpoint_open", lambda: True)
     monkeypatch.setattr(
         zeta_models_api, "chat_completion_messages", fake_chat_completion_messages
     )
@@ -7149,7 +7151,7 @@ def test_zeta_agent_turn_attaches_model_telemetry_to_first_tool_result(
         telemetry_sink(telemetry)
         return response
 
-    monkeypatch.setattr(zeta_model, "model_endpoint_open", lambda: True)
+    monkeypatch.setattr(zeta_model_endpoint, "model_endpoint_open", lambda: True)
     monkeypatch.setattr(
         zeta_models_api, "chat_completion_messages", fake_chat_completion_messages
     )
@@ -7179,7 +7181,7 @@ def test_zeta_agent_turn_records_one_prompt_trace_per_model_request(
     store = zeta_trace.InMemoryStore()
     responses = iter([read_tool_call_response(target), {"content": "done"}])
 
-    monkeypatch.setattr(zeta_model, "model_endpoint_open", lambda: True)
+    monkeypatch.setattr(zeta_model_endpoint, "model_endpoint_open", lambda: True)
     monkeypatch.setattr(
         zeta_models_api,
         "chat_completion_messages",
@@ -7227,7 +7229,7 @@ def test_zeta_agent_turn_records_tool_result_derivation(
     store = zeta_trace.InMemoryStore()
     responses = iter([read_tool_call_response(target), {"content": "done"}])
 
-    monkeypatch.setattr(zeta_model, "model_endpoint_open", lambda: True)
+    monkeypatch.setattr(zeta_model_endpoint, "model_endpoint_open", lambda: True)
     monkeypatch.setattr(
         zeta_models_api,
         "chat_completion_messages",
@@ -7269,7 +7271,7 @@ def test_zeta_agent_turn_emits_stream_chunks_and_marks_final(monkeypatch) -> Non
         stream_sink.content_delta("lo")
         return {"content": "hello"}
 
-    monkeypatch.setattr(zeta_model, "model_endpoint_open", lambda: True)
+    monkeypatch.setattr(zeta_model_endpoint, "model_endpoint_open", lambda: True)
     monkeypatch.setattr(
         zeta_models_api,
         "chat_completion_messages",
@@ -7304,7 +7306,7 @@ def test_zeta_agent_reasoning_deltas_emit_status_updates(monkeypatch) -> None:
         stream_sink.content_delta("done")
         return {"content": "done"}
 
-    monkeypatch.setattr(zeta_model, "model_endpoint_open", lambda: True)
+    monkeypatch.setattr(zeta_model_endpoint, "model_endpoint_open", lambda: True)
     monkeypatch.setattr(
         zeta_models_api,
         "chat_completion_messages",
@@ -7343,7 +7345,7 @@ def test_zeta_agent_runtime_ui_events_do_not_feed_next_prompt(monkeypatch) -> No
         stream_sink.content_delta("streaming answer")
         return next(responses)
 
-    monkeypatch.setattr(zeta_model, "model_endpoint_open", lambda: True)
+    monkeypatch.setattr(zeta_model_endpoint, "model_endpoint_open", lambda: True)
     monkeypatch.setattr(
         zeta_models_api,
         "chat_completion_messages",
@@ -7380,7 +7382,9 @@ def test_zeta_agent_turn_uses_request_model(monkeypatch) -> None:
         captured["kwargs"] = kwargs
         return {"content": "done"}
 
-    monkeypatch.setattr(zeta_model, "model_endpoint_open", fake_model_endpoint_open)
+    monkeypatch.setattr(
+        zeta_model_endpoint, "model_endpoint_open", fake_model_endpoint_open
+    )
     monkeypatch.setattr(
         zeta_models_api, "chat_completion_messages", fake_chat_completion_messages
     )
@@ -7431,7 +7435,7 @@ def test_zeta_agent_turn_runs_multiple_read_only_tools_in_order(monkeypatch) -> 
     )
     ran: list[tuple[str, dict[str, Any]]] = []
 
-    monkeypatch.setattr(zeta_model, "model_endpoint_open", lambda: True)
+    monkeypatch.setattr(zeta_model_endpoint, "model_endpoint_open", lambda: True)
     monkeypatch.setattr(
         zeta_models_api,
         "chat_completion_messages",
@@ -7508,11 +7512,11 @@ def test_zeta_agent_turn_streams_text_between_tool_turns(monkeypatch) -> None:
         response = next(responses)
         stream_sink = kwargs.get("stream_sink")
         if response.get("content") and stream_sink is not None:
-            stream_sink = cast(zeta_model.ChatCompletionStreamSink, stream_sink)
+            stream_sink = cast(zeta_model_sse.ChatCompletionStreamSink, stream_sink)
             stream_sink.content_delta(str(response["content"]))
         return response
 
-    monkeypatch.setattr(zeta_model, "model_endpoint_open", lambda: True)
+    monkeypatch.setattr(zeta_model_endpoint, "model_endpoint_open", lambda: True)
     monkeypatch.setattr(
         zeta_models_api,
         "chat_completion_messages",
@@ -7562,7 +7566,7 @@ def test_zeta_agent_turn_does_not_duplicate_current_objective(monkeypatch) -> No
         captured["messages"] = messages
         return {"content": "done"}
 
-    monkeypatch.setattr(zeta_model, "model_endpoint_open", lambda: True)
+    monkeypatch.setattr(zeta_model_endpoint, "model_endpoint_open", lambda: True)
     monkeypatch.setattr(
         zeta_models_api,
         "chat_completion_messages",
@@ -7616,7 +7620,7 @@ def test_zeta_agent_turn_orders_prior_timeline_before_current_events(
         captured.append(messages)
         return next(responses)
 
-    monkeypatch.setattr(zeta_model, "model_endpoint_open", lambda: True)
+    monkeypatch.setattr(zeta_model_endpoint, "model_endpoint_open", lambda: True)
     monkeypatch.setattr(
         zeta_models_api,
         "chat_completion_messages",
@@ -7661,7 +7665,7 @@ def test_zeta_agent_turn_orders_prior_timeline_before_current_events(
 def test_zeta_agent_turn_streams_tool_call_before_running_tool(monkeypatch) -> None:
     streamed: list[DraftEvent] = []
 
-    monkeypatch.setattr(zeta_model, "model_endpoint_open", lambda: True)
+    monkeypatch.setattr(zeta_model_endpoint, "model_endpoint_open", lambda: True)
     monkeypatch.setattr(
         zeta_models_api,
         "chat_completion_messages",
@@ -7739,7 +7743,7 @@ def test_zeta_agent_turn_stops_after_staged_tool(monkeypatch) -> None:
             ]
         }
 
-    monkeypatch.setattr(zeta_model, "model_endpoint_open", lambda: True)
+    monkeypatch.setattr(zeta_model_endpoint, "model_endpoint_open", lambda: True)
     monkeypatch.setattr(
         zeta_models_api, "chat_completion_messages", fake_chat_completion_messages
     )
@@ -7813,7 +7817,7 @@ def test_zeta_agent_turn_stops_after_staged_effect(
             ]
         }
 
-    monkeypatch.setattr(zeta_model, "model_endpoint_open", lambda: True)
+    monkeypatch.setattr(zeta_model_endpoint, "model_endpoint_open", lambda: True)
     monkeypatch.setattr(
         zeta_models_api,
         "chat_completion_messages",
@@ -7859,7 +7863,7 @@ def test_zeta_agent_turn_reports_max_turns_exhaustion(monkeypatch) -> None:
             ]
         }
 
-    monkeypatch.setattr(zeta_model, "model_endpoint_open", lambda: True)
+    monkeypatch.setattr(zeta_model_endpoint, "model_endpoint_open", lambda: True)
     monkeypatch.setattr(
         zeta_models_api,
         "chat_completion_messages",
@@ -7912,7 +7916,7 @@ def test_zeta_agent_direct_mode_continues_after_bash(monkeypatch) -> None:
         requests += 1
         return next(responses)
 
-    monkeypatch.setattr(zeta_model, "model_endpoint_open", lambda: True)
+    monkeypatch.setattr(zeta_model_endpoint, "model_endpoint_open", lambda: True)
     monkeypatch.setattr(
         zeta_models_api, "chat_completion_messages", fake_chat_completion_messages
     )
@@ -7955,7 +7959,7 @@ def test_zeta_agent_turn_stops_after_default_max_turns(monkeypatch) -> None:
             ]
         }
 
-    monkeypatch.setattr(zeta_model, "model_endpoint_open", lambda: True)
+    monkeypatch.setattr(zeta_model_endpoint, "model_endpoint_open", lambda: True)
     monkeypatch.setattr(
         zeta_models_api, "chat_completion_messages", fake_chat_completion_messages
     )
@@ -7983,7 +7987,7 @@ def test_zeta_agent_turn_aborts_before_model_when_cancelled(monkeypatch) -> None
     def fail_chat_completion_messages(*args: object, **kwargs: object) -> dict:
         raise AssertionError("cancelled turn must not request the model")
 
-    monkeypatch.setattr(zeta_model, "model_endpoint_open", lambda: True)
+    monkeypatch.setattr(zeta_model_endpoint, "model_endpoint_open", lambda: True)
     monkeypatch.setattr(
         zeta_models_api, "chat_completion_messages", fail_chat_completion_messages
     )
@@ -8029,7 +8033,7 @@ def test_zeta_agent_turn_aborts_on_deadline_between_model_turns(
     monotonic = iter([0.0, 0.0, 0.0, 2.0])
 
     monkeypatch.setattr(zeta_agent, "time_monotonic", lambda: next(monotonic))
-    monkeypatch.setattr(zeta_model, "model_endpoint_open", lambda: True)
+    monkeypatch.setattr(zeta_model_endpoint, "model_endpoint_open", lambda: True)
     monkeypatch.setattr(
         zeta_models_api,
         "chat_completion_messages",
@@ -8112,7 +8116,7 @@ def test_zeta_agent_turn_converts_tool_crash_to_error_result(monkeypatch) -> Non
         del args, kwargs
         return next(responses)
 
-    monkeypatch.setattr(zeta_model, "model_endpoint_open", lambda: True)
+    monkeypatch.setattr(zeta_model_endpoint, "model_endpoint_open", lambda: True)
     monkeypatch.setattr(
         zeta_models_api, "chat_completion_messages", fake_chat_completion_messages
     )
@@ -8150,7 +8154,7 @@ def test_zeta_agent_turn_rejects_tool_call_that_violates_input_schema(
         ran_with.append(params)
         return {"ok": True}
 
-    monkeypatch.setattr(zeta_model, "model_endpoint_open", lambda: True)
+    monkeypatch.setattr(zeta_model_endpoint, "model_endpoint_open", lambda: True)
     monkeypatch.setattr(
         zeta_models_api,
         "chat_completion_messages",
@@ -8194,7 +8198,7 @@ def test_zeta_agent_turn_rejects_disallowed_tool_before_running(monkeypatch) -> 
         ran = True
         return {"ok": True}
 
-    monkeypatch.setattr(zeta_model, "model_endpoint_open", lambda: True)
+    monkeypatch.setattr(zeta_model_endpoint, "model_endpoint_open", lambda: True)
     monkeypatch.setattr(
         zeta_models_api,
         "chat_completion_messages",
@@ -8270,7 +8274,7 @@ def test_zeta_agent_direct_mode_continues_after_edit(
         requests += 1
         return next(responses)
 
-    monkeypatch.setattr(zeta_model, "model_endpoint_open", lambda: True)
+    monkeypatch.setattr(zeta_model_endpoint, "model_endpoint_open", lambda: True)
     monkeypatch.setattr(
         zeta_models_api,
         "chat_completion_messages",
@@ -8296,7 +8300,7 @@ def test_zeta_agent_codex_api_skips_endpoint_probe(monkeypatch) -> None:
     def fail_probe(url: str | None = None) -> bool:
         raise AssertionError("codex profiles must not probe a local endpoint")
 
-    monkeypatch.setattr(zeta_model, "model_endpoint_open", fail_probe)
+    monkeypatch.setattr(zeta_model_endpoint, "model_endpoint_open", fail_probe)
 
     config = zeta_agent.AgentConfig(model_api="codex-responses")
 
@@ -8313,7 +8317,7 @@ def test_zeta_agent_turn_passes_api_to_the_model(monkeypatch) -> None:
         captured.update(kwargs)
         return {"content": "done"}
 
-    monkeypatch.setattr(zeta_model, "model_endpoint_open", lambda: True)
+    monkeypatch.setattr(zeta_model_endpoint, "model_endpoint_open", lambda: True)
     monkeypatch.setattr(
         zeta_models_api, "chat_completion_messages", fake_chat_completion_messages
     )

@@ -15,7 +15,7 @@ class DefaultModelGateway:
     def available(self, config: Any) -> bool:
         if getattr(config, "model_api", None) == _profiles.CODEX_RESPONSES_API:
             return True
-        from zeta.models.chat_completions import model_endpoint_open
+        from zeta.models.endpoint import model_endpoint_open
 
         model_url = getattr(config, "model_url", None)
         if model_url is None:

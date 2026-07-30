@@ -51,3 +51,22 @@ class ModelOutput:
     usage: ModelUsage | None = None
     provider_metadata: dict[str, Any] = field(default_factory=dict)
     provider_replay_items: tuple[dict[str, Any], ...] = ()
+
+
+USAGE_TOKEN_FIELDS = ("prompt_tokens", "completion_tokens", "total_tokens")
+
+
+def tool_call_id(tool_call: dict[str, Any], *, index: int) -> str:
+    return str(tool_call.get("id") or f"call-{index}")
+
+
+def normalized_usage(value: Any) -> dict[str, int] | None:
+    if not isinstance(value, dict):
+        return None
+    usage = {
+        key: token_count
+        for key in USAGE_TOKEN_FIELDS
+        if isinstance((token_count := value.get(key)), int)
+        and not isinstance(token_count, bool)
+    }
+    return usage or None

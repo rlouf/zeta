@@ -17,18 +17,19 @@ from jsonschema.exceptions import ValidationError
 
 from zeta.models.chat_completions import (
     DEFAULT_MAX_COMPLETION_TOKENS,
-    ChatCompletionStreamSink,
     ModelTelemetrySink,
-    decode_stream_event,
     emit_model_telemetry,
-    model_first_output_timeout,
-    model_idle_timeout,
     model_output_from_chat_completion,
     parse_structured_message_content,
-    stream_json_sse,
 )
 from zeta.models.codex_auth import CodexCredentials, load_codex_credentials
+from zeta.models.limits import model_first_output_timeout, model_idle_timeout
 from zeta.models.profiles import DEFAULT_CODEX_BASE_URL
+from zeta.models.sse import (
+    ChatCompletionStreamSink,
+    decode_stream_event,
+    stream_json_sse,
+)
 from zeta.models.types import ModelInput
 
 CODEX_ORIGINATOR = "zeta"

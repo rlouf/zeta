@@ -9,9 +9,9 @@ from typing import Any
 
 from zeta.capabilities.registry import error_result
 from zeta.capabilities.types import Capability, CapabilityId
-from zeta.models.chat_completions import stream_json_sse
 from zeta.models.codex_auth import CodexCredentials, load_codex_credentials
 from zeta.models.responses import codex_request_headers, codex_responses_url
+from zeta.models.sse import stream_json_sse
 
 DEFAULT_TIMEOUT_SEC = 30.0
 DEFAULT_MAX_PREVIEW_BYTES = 8 * 1024

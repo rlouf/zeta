@@ -10,7 +10,7 @@ from typing import Any
 import pytest
 import zeta.capabilities.execution as zeta_capability_execution
 import zeta.context.components as zeta_context
-import zeta.models.chat_completions as zeta_model
+import zeta.models.endpoint as zeta_model_endpoint
 import zeta.models.profiles as zeta_models
 from click.testing import CliRunner
 from zeta.cli.main import cli as zeta_cli
@@ -1119,7 +1119,7 @@ def test_zeta_agent_durable_events_project_trace_objects(
     target.write_text("README\n", encoding="utf-8")
     responses = iter([read_tool_call_response(target), {"content": "done"}])
 
-    monkeypatch.setattr(zeta_model, "model_endpoint_open", lambda: True)
+    monkeypatch.setattr(zeta_model_endpoint, "model_endpoint_open", lambda: True)
     monkeypatch.setattr(
         zeta_models_api,
         "chat_completion_messages",

@@ -8,8 +8,12 @@ from typing import Any, cast
 
 import httpx
 import pytest
+import zeta.cli.banner as cli_banner
 import zeta.models.chat_completions as zeta_model
+import zeta.models.endpoint as zeta_model_endpoint
+import zeta.models.limits as zeta_model_limits
 import zeta.models.profiles as zeta_models
+import zeta.models.sse as zeta_model_sse
 import zeta.models.types as zeta_models_api
 from click.testing import CliRunner
 from zeta.cli.main import cli as zeta_cli
@@ -30,31 +34,32 @@ def test_zeta_model_config_ignores_model_env_vars(monkeypatch) -> None:
     assert zeta_model.model_url() == zeta_models.DEFAULT_MODEL_URL
     assert zeta_model.model_name() == zeta_models.DEFAULT_MODEL_NAME
     assert (
-        zeta_model.model_idle_timeout() == zeta_model.DEFAULT_MODEL_IDLE_TIMEOUT_SECONDS
+        zeta_model_limits.model_idle_timeout()
+        == zeta_model_limits.DEFAULT_MODEL_IDLE_TIMEOUT_SECONDS
     )
-    assert zeta_model.DEFAULT_MODEL_IDLE_TIMEOUT_SECONDS == 120.0
+    assert zeta_model_limits.DEFAULT_MODEL_IDLE_TIMEOUT_SECONDS == 120.0
 
     monkeypatch.setenv("ZETA_MODEL_IDLE_TIMEOUT_SECONDS", "2.5")
-    assert zeta_model.model_idle_timeout() == 2.5
+    assert zeta_model_limits.model_idle_timeout() == 2.5
 
     monkeypatch.setenv("ZETA_MODEL_IDLE_TIMEOUT_SECONDS", "0")
-    assert zeta_model.model_idle_timeout() is None
+    assert zeta_model_limits.model_idle_timeout() is None
 
 
 def test_zeta_model_first_output_timeout_uses_zeta_env(monkeypatch) -> None:
     monkeypatch.delenv("ZETA_MODEL_FIRST_OUTPUT_TIMEOUT_SECONDS", raising=False)
 
     assert (
-        zeta_model.model_first_output_timeout()
-        == zeta_model.DEFAULT_MODEL_FIRST_OUTPUT_TIMEOUT_SECONDS
+        zeta_model_limits.model_first_output_timeout()
+        == zeta_model_limits.DEFAULT_MODEL_FIRST_OUTPUT_TIMEOUT_SECONDS
     )
-    assert zeta_model.DEFAULT_MODEL_FIRST_OUTPUT_TIMEOUT_SECONDS == 600.0
+    assert zeta_model_limits.DEFAULT_MODEL_FIRST_OUTPUT_TIMEOUT_SECONDS == 600.0
 
     monkeypatch.setenv("ZETA_MODEL_FIRST_OUTPUT_TIMEOUT_SECONDS", "45")
-    assert zeta_model.model_first_output_timeout() == 45.0
+    assert zeta_model_limits.model_first_output_timeout() == 45.0
 
     monkeypatch.setenv("ZETA_MODEL_FIRST_OUTPUT_TIMEOUT_SECONDS", "0")
-    assert zeta_model.model_first_output_timeout() is None
+    assert zeta_model_limits.model_first_output_timeout() is None
 
 
 def test_zeta_model_input_renders_existing_chat_completion_request() -> None:
@@ -143,7 +148,7 @@ def test_zeta_model_output_from_chat_completion_preserves_message_usage_metadata
 
 
 def test_zeta_chat_completion_model_output_from_stream_payload() -> None:
-    payload = zeta_model.read_streamed_chat_completion(
+    payload = zeta_model_sse.read_streamed_chat_completion(
         sse_lines(
             {
                 "id": "chatcmpl-test",
@@ -238,7 +243,7 @@ def test_zeta_request_chat_completion_streams_final_message(monkeypatch) -> None
 
 
 def test_zeta_model_stream_timeout_uses_first_output_and_idle_timeouts() -> None:
-    timeout = zeta_model.model_stream_timeout(
+    timeout = zeta_model_limits.model_stream_timeout(
         first_output_timeout=10.0,
         idle_timeout=2.5,
     )
@@ -250,7 +255,7 @@ def test_zeta_model_stream_timeout_uses_first_output_and_idle_timeouts() -> None
 
 
 def test_zeta_model_stream_timeout_can_disable_all_bounds() -> None:
-    timeout = zeta_model.model_stream_timeout(
+    timeout = zeta_model_limits.model_stream_timeout(
         first_output_timeout=None,
         idle_timeout=None,
     )
@@ -264,7 +269,7 @@ def test_zeta_model_stream_timeout_can_disable_all_bounds() -> None:
 def test_zeta_stream_forwards_reasoning_deltas_to_sink() -> None:
     sink = DeltaSink()
 
-    payload = zeta_model.read_streamed_chat_completion(
+    payload = zeta_model_sse.read_streamed_chat_completion(
         sse_lines(
             {
                 "choices": [
@@ -298,7 +303,7 @@ def test_zeta_stream_forwards_reasoning_deltas_to_sink() -> None:
 def test_zeta_stream_emits_content_deltas_in_order() -> None:
     sink = DeltaSink()
 
-    payload = zeta_model.read_streamed_chat_completion(
+    payload = zeta_model_sse.read_streamed_chat_completion(
         sse_lines(
             {
                 "choices": [
@@ -328,7 +333,7 @@ def test_zeta_stream_emits_content_deltas_in_order() -> None:
 
 
 def test_zeta_stream_preserves_usage_chunk() -> None:
-    payload = zeta_model.read_streamed_chat_completion(
+    payload = zeta_model_sse.read_streamed_chat_completion(
         sse_lines(
             {
                 "choices": [
@@ -373,8 +378,8 @@ def test_zeta_stream_sink_does_not_change_reconstructed_message() -> None:
     )
     sink = DeltaSink()
 
-    without_sink = zeta_model.read_streamed_chat_completion(frames)
-    with_sink = zeta_model.read_streamed_chat_completion(frames, stream_sink=sink)
+    without_sink = zeta_model_sse.read_streamed_chat_completion(frames)
+    with_sink = zeta_model_sse.read_streamed_chat_completion(frames, stream_sink=sink)
 
     assert with_sink == without_sink
     assert sink.deltas == ["done"]
@@ -383,7 +388,7 @@ def test_zeta_stream_sink_does_not_change_reconstructed_message() -> None:
 def test_zeta_stream_does_not_render_tool_call_fragments() -> None:
     sink = DeltaSink()
 
-    payload = zeta_model.read_streamed_chat_completion(
+    payload = zeta_model_sse.read_streamed_chat_completion(
         sse_lines(
             {
                 "choices": [
@@ -438,7 +443,7 @@ def test_zeta_stream_does_not_render_tool_call_fragments() -> None:
 def test_zeta_stream_mixed_content_and_tool_call_exposes_completed_call() -> None:
     sink = DeltaSink()
 
-    payload = zeta_model.read_streamed_chat_completion(
+    payload = zeta_model_sse.read_streamed_chat_completion(
         sse_lines(
             {
                 "choices": [
@@ -485,7 +490,7 @@ def test_zeta_stream_mixed_content_and_tool_call_exposes_completed_call() -> Non
 
 
 def test_zeta_stream_reconstructs_split_tool_calls() -> None:
-    payload = zeta_model.read_streamed_chat_completion(
+    payload = zeta_model_sse.read_streamed_chat_completion(
         sse_lines(
             {
                 "choices": [
@@ -544,7 +549,7 @@ def test_zeta_stream_reconstructs_split_tool_calls() -> None:
 
 
 def test_zeta_stream_orders_multiple_tool_calls_by_index() -> None:
-    payload = zeta_model.read_streamed_chat_completion(
+    payload = zeta_model_sse.read_streamed_chat_completion(
         sse_lines(
             {
                 "choices": [
@@ -610,7 +615,7 @@ def test_zeta_request_chat_completion_closes_stream_on_error(monkeypatch) -> Non
 
 def test_zeta_stream_rejects_malformed_events() -> None:
     with pytest.raises(RuntimeError, match="invalid JSON event"):
-        zeta_model.read_streamed_chat_completion(["nope"])
+        zeta_model_sse.read_streamed_chat_completion(["nope"])
 
 
 def test_zeta_http_error_detail_surfaces_json_error_body() -> None:
@@ -621,7 +626,7 @@ def test_zeta_http_error_detail_surfaces_json_error_body() -> None:
     response = httpx.Response(500, content=body, request=request)
     error = httpx.HTTPStatusError("boom", request=request, response=response)
 
-    message = zeta_model.http_error_detail(error)
+    message = zeta_model_sse.http_error_detail(error)
     assert "boom" in message
     assert "Failed to parse tool call arguments" in message
 
@@ -631,7 +636,7 @@ def test_zeta_http_error_detail_surfaces_plain_error_body() -> None:
     response = httpx.Response(502, content=b"upstream exploded", request=request)
     error = httpx.HTTPStatusError("boom", request=request, response=response)
 
-    message = zeta_model.http_error_detail(error)
+    message = zeta_model_sse.http_error_detail(error)
     assert "boom" in message
     assert "upstream exploded" in message
 
@@ -977,7 +982,7 @@ def test_zeta_models_resolve_active_model_survives_vanished_profile(
 
 
 def test_zeta_model_context_tokens_prefers_props(monkeypatch) -> None:
-    zeta_model._MODEL_CONTEXT_TOKENS_CACHE.clear()
+    zeta_model_limits._MODEL_CONTEXT_TOKENS_CACHE.clear()
     calls: list[str] = []
 
     def fake_metadata(
@@ -989,9 +994,9 @@ def test_zeta_model_context_tokens_prefers_props(monkeypatch) -> None:
         calls.append(path)
         return {"default_generation_settings": {"n_ctx": 262_144}}
 
-    monkeypatch.setattr(zeta_model, "request_model_metadata", fake_metadata)
+    monkeypatch.setattr(zeta_model_limits, "request_model_metadata", fake_metadata)
 
-    tokens = zeta_model.model_context_tokens(
+    tokens = zeta_model_limits.model_context_tokens(
         "http://127.0.0.1:8080/v1/chat/completions",
         "local-model",
     )
@@ -1003,7 +1008,7 @@ def test_zeta_model_context_tokens_prefers_props(monkeypatch) -> None:
 def test_zeta_model_context_tokens_falls_back_to_selected_model(
     monkeypatch,
 ) -> None:
-    zeta_model._MODEL_CONTEXT_TOKENS_CACHE.clear()
+    zeta_model_limits._MODEL_CONTEXT_TOKENS_CACHE.clear()
 
     def fake_metadata(
         path: str,
@@ -1024,9 +1029,9 @@ def test_zeta_model_context_tokens_falls_back_to_selected_model(
             ]
         }
 
-    monkeypatch.setattr(zeta_model, "request_model_metadata", fake_metadata)
+    monkeypatch.setattr(zeta_model_limits, "request_model_metadata", fake_metadata)
 
-    tokens = zeta_model.model_context_tokens(
+    tokens = zeta_model_limits.model_context_tokens(
         "http://127.0.0.1:8080/v1/chat/completions",
         "fast",
     )
@@ -1037,7 +1042,7 @@ def test_zeta_model_context_tokens_falls_back_to_selected_model(
 def test_zeta_model_context_tokens_reads_model_context_length(
     monkeypatch,
 ) -> None:
-    zeta_model._MODEL_CONTEXT_TOKENS_CACHE.clear()
+    zeta_model_limits._MODEL_CONTEXT_TOKENS_CACHE.clear()
 
     def fake_metadata(
         path: str,
@@ -1057,9 +1062,9 @@ def test_zeta_model_context_tokens_reads_model_context_length(
             ]
         }
 
-    monkeypatch.setattr(zeta_model, "request_model_metadata", fake_metadata)
+    monkeypatch.setattr(zeta_model_limits, "request_model_metadata", fake_metadata)
 
-    tokens = zeta_model.model_context_tokens(
+    tokens = zeta_model_limits.model_context_tokens(
         "http://127.0.0.1:8000/v1/chat/completions",
         "deepseek-v4-flash",
     )
@@ -1070,14 +1075,14 @@ def test_zeta_model_context_tokens_reads_model_context_length(
 def test_zeta_model_context_tokens_returns_none_when_unavailable(
     monkeypatch,
 ) -> None:
-    zeta_model._MODEL_CONTEXT_TOKENS_CACHE.clear()
+    zeta_model_limits._MODEL_CONTEXT_TOKENS_CACHE.clear()
     monkeypatch.setattr(
-        zeta_model,
+        zeta_model_limits,
         "request_model_metadata",
         lambda *args, **kwargs: {},
     )
 
-    tokens = zeta_model.model_context_tokens(
+    tokens = zeta_model_limits.model_context_tokens(
         "http://127.0.0.1:8080/v1/chat/completions",
         "local-model",
     )
@@ -1121,7 +1126,7 @@ def test_zeta_stream_json_sse_accepts_missing_content_type(monkeypatch) -> None:
     monkeypatch.setattr(httpx, "Client", FakeClient)
 
     events = list(
-        zeta_model.stream_json_sse(
+        zeta_model_sse.stream_json_sse(
             "https://chatgpt.com/backend-api/codex/responses",
             {"model": "gpt-5.5"},
             headers={"Accept": "text/event-stream"},
@@ -1185,7 +1190,7 @@ def test_zeta_stream_json_sse_preserves_error_body(monkeypatch) -> None:
 
     with pytest.raises(RuntimeError, match="tool schema was rejected"):
         list(
-            zeta_model.stream_json_sse(
+            zeta_model_sse.stream_json_sse(
                 "https://example.test/v1/chat",
                 {"model": "test"},
                 headers={},
@@ -1450,10 +1455,10 @@ def test_zeta_chat_completion_messages_reports_model_telemetry(
 
 def test_zeta_ensure_server_banner_respects_non_tty(monkeypatch, capsys) -> None:
     monkeypatch.setattr(
-        zeta_model, "model_endpoint_open", lambda selected_url=None: False
+        zeta_model_endpoint, "model_endpoint_open", lambda selected_url=None: False
     )
 
-    assert zeta_model.ensure_server() is False
+    assert cli_banner.ensure_server() is False
 
     err = capsys.readouterr().err
     assert "no OpenAI-compatible endpoint reachable" in err

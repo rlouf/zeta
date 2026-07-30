@@ -15,7 +15,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
 
-import zeta.models.chat_completions as zeta_model
+import zeta.models.sse as zeta_model_sse
 from zeta.context.builder import (
     PreparedPrompt,
     ReconstructedPrompt,
@@ -85,10 +85,10 @@ class DeltaSink:
 
 def required_stream_sink(
     kwargs: dict[str, object],
-) -> zeta_model.ChatCompletionStreamSink:
+) -> zeta_model_sse.ChatCompletionStreamSink:
     stream_sink = kwargs.get("stream_sink")
     assert stream_sink is not None
-    return cast(zeta_model.ChatCompletionStreamSink, stream_sink)
+    return cast(zeta_model_sse.ChatCompletionStreamSink, stream_sink)
 
 
 def sse_lines(*payloads: dict[str, Any] | str) -> list[str]:

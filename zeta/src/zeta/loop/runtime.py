@@ -59,8 +59,7 @@ from zeta.loop.projection import draft_views_for_prompt, is_runtime_ui_event
 from zeta.loop.runtime_context import RuntimeContext
 from zeta.loop.streaming import ModelTurnStreamSink, StatusAwareModelStream
 from zeta.models import DefaultModelGateway
-from zeta.models.chat_completions import tool_call_id
-from zeta.models.types import ModelInput, ModelOutput
+from zeta.models.types import ModelInput, ModelOutput, tool_call_id
 from zeta.substrate import Store
 from zeta.trace import warn_trace_failure_once
 from zeta.trace.provenance import (

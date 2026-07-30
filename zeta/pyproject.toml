@@ -46,7 +46,7 @@ Repository = "https://github.com/rlouf/zeta"
 Issues = "https://github.com/rlouf/zeta/issues"
 
 [project.scripts]
-zeta = "zetad.cli:main"
+zeta = "zeta.cli.main:main"
 
 [project.entry-points."zeta.event_connectors"]
 slack = "connectors.slack:slack_event_connector"
@@ -57,7 +57,6 @@ package-dir = { "" = "src" }
 
 [tool.setuptools.package-data]
 zeta = ["py.typed"]
-zetad = ["py.typed"]
 connectors = ["py.typed"]
 
 [tool.setuptools.packages.find]

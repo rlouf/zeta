@@ -1,0 +1,366 @@
+"""Authored-agent resource loading hooks."""
+
+from __future__ import annotations
+
+import hashlib
+import importlib.util
+import json
+import sys
+from collections.abc import Iterable, Mapping
+from dataclasses import dataclass, field
+from importlib import metadata as importlib_metadata
+from pathlib import Path
+from typing import Any, cast
+
+import yaml
+from connectors import EventConnector, EventConnectorRegistry
+
+from zeta.authoring.manifest import Manifest
+from zeta.authoring.schemas import EventRegistry, EventRegistryError
+from zeta.authoring.spec import AgentSpec, load_specs, scheduled_event_type
+from zeta.capabilities.execution import ToolExecutorProviderRegistry
+
+
+class ResourceError(ValueError):
+    """Raised when a flat authored-agent resource is invalid."""
+
+
+EVENT_CONNECTOR_ENTRY_POINT_GROUP = "zeta.event_connectors"
+EVENT_CONNECTOR_CONFIG_FILE = "connectors.yaml"
+
+
+@dataclass(frozen=True)
+class SkillResource:
+    name: str
+    path: Path
+    body: str
+    sha256: str
+
+
+@dataclass(frozen=True)
+class SkillRegistry:
+    skills: dict[str, SkillResource] = field(default_factory=dict)
+
+    def knows(self, name: str) -> bool:
+        return name in self.skills
+
+
+@dataclass(frozen=True)
+class AgentProject:
+    specs: tuple[AgentSpec, ...]
+    events: EventRegistry
+    skills: SkillRegistry
+    connectors: EventConnectorRegistry = field(default_factory=EventConnectorRegistry)
+
+
+def resource_extensions(spec: AgentSpec) -> dict[str, object]:
+    """Return non-core frontmatter extensions for resource-aware hosts."""
+    return dict(spec.manifest)
+
+
+def load_agent_project(
+    agents_dir: Path,
+    *,
+    registry: EventConnectorRegistry | None = None,
+    entry_points: Iterable[Any] | None = None,
+    connector_names: Iterable[str] | None = None,
+) -> AgentProject:
+    """Load flat authored agents and their shared validation resources."""
+    specs = load_specs(agents_dir)
+    connectors = registry or load_connector_registry(
+        agents_dir,
+        entry_points=entry_points,
+        connector_names=connector_names,
+    )
+    events = load_event_registry(
+        agents_dir,
+        connectors=connectors.event_connectors(),
+    )
+    register_scheduled_events(events, specs)
+    return AgentProject(
+        specs=specs,
+        events=events,
+        skills=load_skill_registry(agents_dir),
+        connectors=connectors,
+    )
+
+
+def validate_agent_project(
+    project: AgentProject,
+    *,
+    tool_executors: ToolExecutorProviderRegistry | None = None,
+) -> None:
+    manifest = Manifest(
+        events=project.events,
+        skills=project.skills,
+        connectors=project.connectors,
+        tool_executors=tool_executors,
+    )
+    for spec in project.specs:
+        manifest.validate(spec)
+
+
+def register_scheduled_events(
+    events: EventRegistry,
+    specs: tuple[AgentSpec, ...],
+) -> None:
+    for spec in specs:
+        if not spec.schedules:
+            continue
+        event_type = scheduled_event_type(spec.slug)
+        if events.knows(event_type):
+            continue
+        events.register(event_type, empty_payload_schema())
+
+
+def empty_payload_schema() -> dict[str, object]:
+    return {"type": "object", "additionalProperties": False}
+
+
+def load_connector_registry(
+    agents_dir: Path,
+    *,
+    connector_names: Iterable[str] | None = None,
+    entry_points: Iterable[Any] | None = None,
+) -> EventConnectorRegistry:
+    allowed = set(connector_names) if connector_names is not None else None
+    registry = EventConnectorRegistry()
+
+    enabled = enabled_event_connector_ids(agents_dir)
+    if allowed is not None:
+        enabled = tuple(name for name in enabled if name in allowed)
+    for entry_point in event_connector_entry_points(entry_points):
+        if entry_point.name not in enabled:
+            continue
+        connector = load_entry_point_event_connector(entry_point)
+        if connector.id != entry_point.name:
+            raise ResourceError(
+                f"event connector entry point {entry_point.name!r} returned "
+                f"connector id {connector.id!r}"
+            )
+        register_event_connector(registry, connector)
+
+    for connector in load_directory_event_connectors(agents_dir):
+        if allowed is not None and connector.id not in allowed:
+            continue
+        register_event_connector(registry, connector)
+
+    return registry
+
+
+def register_event_connector(
+    registry: EventConnectorRegistry, connector: EventConnector
+) -> None:
+    try:
+        registry.register(connector)
+    except ValueError as exc:
+        raise ResourceError(str(exc)) from exc
+
+
+def load_directory_event_connectors(agents_dir: Path) -> tuple[EventConnector, ...]:
+    """Discover connectors dropped as ``agents/connectors/*.py`` (auto-enabled)."""
+    connectors_dir = agents_dir / "connectors"
+    if not connectors_dir.exists():
+        return ()
+    connectors: list[EventConnector] = []
+    for path in sorted(connectors_dir.glob("*.py")):
+        if path.name.startswith("_"):
+            continue
+        connectors.append(load_file_event_connector(path))
+    return tuple(connectors)
+
+
+def load_file_event_connector(path: Path) -> EventConnector:
+    module_spec = importlib.util.spec_from_file_location(
+        f"zeta_connector_{path.stem}", path
+    )
+    if module_spec is None or module_spec.loader is None:
+        raise ResourceError(f"cannot load connector module {path}")
+    module = importlib.util.module_from_spec(module_spec)
+    # Register before exec so module-level dataclasses (which look their module up
+    # in sys.modules) and similar introspection work inside the connector file.
+    sys.modules[module_spec.name] = module
+    try:
+        module_spec.loader.exec_module(module)
+    except Exception as exc:
+        sys.modules.pop(module_spec.name, None)
+        raise ResourceError(f"error importing connector {path}: {exc}") from exc
+    return resolve_module_event_connector(module, path)
+
+
+def resolve_module_event_connector(module: Any, path: Path) -> EventConnector:
+    instances = [
+        value for value in vars(module).values() if isinstance(value, EventConnector)
+    ]
+    if len(instances) == 1:
+        return instances[0]
+    if len(instances) > 1:
+        raise ResourceError(
+            f"connector module {path} defines multiple EventConnector instances"
+        )
+    factory_names = ("connector", f"{path.stem.replace('-', '_')}_event_connector")
+    for factory_name in factory_names:
+        factory = getattr(module, factory_name, None)
+        if callable(factory):
+            connector = factory()
+            if isinstance(connector, EventConnector):
+                return connector
+            raise ResourceError(
+                f"connector factory {factory_name!r} in {path} "
+                "did not return an EventConnector"
+            )
+    raise ResourceError(
+        f"connector module {path} exposes no EventConnector instance or factory"
+    )
+
+
+def enabled_event_connector_ids(agents_dir: Path) -> tuple[str, ...]:
+    path = agents_dir / EVENT_CONNECTOR_CONFIG_FILE
+    if not path.exists():
+        return ()
+    try:
+        raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except yaml.YAMLError as exc:
+        raise ResourceError(f"invalid event connector config {path}: {exc}") from exc
+    except OSError as exc:
+        raise ResourceError(f"I/O error reading {path}: {exc}") from exc
+    if not isinstance(raw, Mapping):
+        raise ResourceError(f"invalid event connector config {path}: expected object")
+    unknown = sorted(set(raw) - {"event_connectors"})
+    if unknown:
+        raise ResourceError(
+            f"invalid event connector config {path}: unsupported field {unknown[0]!r}"
+        )
+    connectors = raw.get("event_connectors")
+    if connectors is None:
+        raise ResourceError(
+            f"invalid event connector config {path}: event_connectors is required"
+        )
+    if not isinstance(connectors, list | tuple) or not all(
+        isinstance(connector, str) and connector for connector in connectors
+    ):
+        raise ResourceError(
+            f"invalid event connector config {path}: event_connectors must be a list of strings"
+        )
+    return tuple(connectors)
+
+
+def event_connector_entry_points(
+    entry_points: Iterable[Any] | None = None,
+) -> tuple[Any, ...]:
+    discovered = (
+        importlib_metadata.entry_points() if entry_points is None else entry_points
+    )
+    select = getattr(discovered, "select", None)
+    if callable(select):
+        return tuple(select(group=EVENT_CONNECTOR_ENTRY_POINT_GROUP))
+    if isinstance(discovered, Mapping):
+        grouped = cast(Mapping[str, Iterable[Any]], discovered)
+        return tuple(grouped.get(EVENT_CONNECTOR_ENTRY_POINT_GROUP, ()))
+    return tuple(
+        entry_point
+        for entry_point in discovered
+        if getattr(entry_point, "group", None) == EVENT_CONNECTOR_ENTRY_POINT_GROUP
+    )
+
+
+def load_entry_point_event_connector(entry_point: Any) -> EventConnector:
+    loaded = entry_point.load()
+    connector = loaded() if callable(loaded) else loaded
+    if not isinstance(connector, EventConnector):
+        raise ResourceError(
+            f"event connector entry point {entry_point.name!r} did not return EventConnector"
+        )
+    return connector
+
+
+def load_skill_registry(agents_dir: Path) -> SkillRegistry:
+    """Load flat Markdown skills from ``agents/skills``."""
+    skills_dir = agents_dir / "skills"
+    if not skills_dir.exists():
+        return SkillRegistry()
+    skills: dict[str, SkillResource] = {}
+    for path in sorted(skills_dir.iterdir()):
+        if path.suffix != ".md" or not path.is_file() or path.is_symlink():
+            continue
+        name = path.stem
+        if name in skills:
+            raise ResourceError(f"duplicate skill {name!r}")
+        try:
+            body = path.read_text(encoding="utf-8")
+        except OSError as exc:
+            raise ResourceError(f"I/O error reading {path}: {exc}") from exc
+        skills[name] = SkillResource(
+            name,
+            path,
+            body,
+            hashlib.sha256(body.encode()).hexdigest(),
+        )
+    return SkillRegistry(skills)
+
+
+def load_event_registry(
+    agents_dir: Path,
+    *,
+    connectors: Iterable[EventConnector] = (),
+) -> EventRegistry:
+    """Load flat event payload JSON Schemas from ``agents/events``."""
+    events_dir = agents_dir / "events"
+    registry = EventRegistry()
+    for connector in connectors:
+        for event_type, schema in connector.events.items():
+            register_event_schema(
+                registry,
+                event_type,
+                schema,
+                source=f"connector {connector.id!r}",
+            )
+    if not events_dir.exists():
+        return registry
+    for path in sorted(events_dir.iterdir()):
+        if path.suffix != ".json":
+            continue
+        if not path.is_file() or path.is_symlink():
+            continue
+        event_type = path.stem
+        schema = load_event_schema(path)
+        register_event_schema(registry, event_type, schema, source=str(path))
+    return registry
+
+
+def register_event_schema(
+    registry: EventRegistry,
+    event_type: str,
+    schema: Mapping[str, Any] | None,
+    *,
+    source: str,
+) -> None:
+    if registry.knows(event_type):
+        if registry.schema(event_type) == (
+            dict(schema) if schema is not None else None
+        ):
+            return
+        raise ResourceError(f"event resource {source} conflicts for {event_type!r}")
+    try:
+        registry.register(event_type, schema)
+    except EventRegistryError as exc:
+        raise ResourceError(f"invalid event resource {source}: {exc}") from exc
+
+
+def load_event_schema(path: Path) -> Mapping[str, Any] | None:
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ResourceError(f"invalid JSON in {path}: {exc}") from exc
+    except OSError as exc:
+        raise ResourceError(f"I/O error reading {path}: {exc}") from exc
+    if raw is None:
+        return None
+    if not isinstance(raw, Mapping):
+        raise ResourceError(f"invalid event resource {path}: expected object")
+    schema = raw.get("schema")
+    if schema is None:
+        return raw
+    if not isinstance(schema, Mapping):
+        raise ResourceError(f"invalid event resource {path}: schema must be an object")
+    return schema

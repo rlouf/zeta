@@ -25,14 +25,14 @@ from connectors.slack import (
     SLACK_MESSAGE_RECEIVED,
     slack_event_connector,
 )
-from zeta.agents.manifest import (
+from zeta.authoring.manifest import (
     Manifest,
     ManifestError,
     egress_bindings,
     ingress_bindings,
 )
-from zeta.agents.prompts import TemplateError, render_prompt, validate_prompt
-from zeta.agents.resources import (
+from zeta.authoring.prompts import TemplateError, render_prompt, validate_prompt
+from zeta.authoring.resources import (
     ResourceError,
     enabled_event_connector_ids,
     event_connector_entry_points,
@@ -42,9 +42,9 @@ from zeta.agents.resources import (
     load_skill_registry,
     validate_agent_project,
 )
-from zeta.agents.returns import derive_returns_schema
-from zeta.agents.schemas import EventRegistry
-from zeta.agents.spec import (
+from zeta.authoring.returns import derive_returns_schema
+from zeta.authoring.schemas import EventRegistry
+from zeta.authoring.spec import (
     AgentSpec,
     ExecutorSpec,
     ModelSpec,
@@ -66,13 +66,11 @@ from zeta.capabilities.types import (
 )
 from zeta.effects import DeliverySemantics
 from zeta.events import DraftEvent, Event
+from zeta.harness import connector_bridge as harness_connector_bridge
+from zeta.harness import dispatch as harness_dispatch
 from zeta.harness import queue as harness_queue
-from zeta.records.stores.event_store import Filter
-from zeta.run.runtime import AgentRunResult
-from zetad import connector_bridge as zetad_connector_bridge
-from zetad import dispatch as zetad_dispatch
-from zetad import worker as zetad_worker
-from zetad.agents import (
+from zeta.harness import worker as harness_worker
+from zeta.harness.routing import (
     AgentDefinition,
     EventPattern,
     agent_session_id,
@@ -80,7 +78,9 @@ from zetad.agents import (
     compile_agent_definitions,
     config_for_spec,
 )
-from zetad.store import RuntimeEventStore
+from zeta.harness.store import RuntimeEventStore
+from zeta.journal.store import Filter
+from zeta.loop.runtime import AgentRunResult
 
 
 def runtime_sqlite_event_store(path: Path) -> RuntimeEventStore:
@@ -88,7 +88,7 @@ def runtime_sqlite_event_store(path: Path) -> RuntimeEventStore:
 
 
 async def dispatch_and_drain(
-    dispatcher: zetad_dispatch.QueueingDispatcher,
+    dispatcher: harness_dispatch.QueueingDispatcher,
     draft: DraftEvent,
 ) -> SimpleNamespace:
     outcome = await dispatcher.publish_event(draft)
@@ -1894,7 +1894,7 @@ Reply.
         },
         ingress_poller=poll_slack,
     )
-    runtime = zetad_worker.WorkerServices(
+    runtime = harness_worker.WorkerServices(
         project_root=tmp_path,
         state_dir=tmp_path / ".zeta",
         events=zeta_events.SqliteEventStore(tmp_path / "events.sqlite3"),
@@ -1903,7 +1903,7 @@ Reply.
 
     with asyncio.Runner() as runner:
         try:
-            inserted = runner.run(zetad_connector_bridge.run_ingress_once(runtime))
+            inserted = runner.run(harness_connector_bridge.run_ingress_once(runtime))
             events = runtime.events.list_events(
                 zeta_events.Filter(event_type="slack.message.received")
             )
@@ -1975,7 +1975,7 @@ Reply.
         },
         ingress_poller=poll_slack,
     )
-    runtime = zetad_worker.WorkerServices(
+    runtime = harness_worker.WorkerServices(
         project_root=tmp_path,
         state_dir=tmp_path / ".zeta",
         events=zeta_events.SqliteEventStore(tmp_path / "events.sqlite3"),
@@ -1985,7 +1985,7 @@ Reply.
     with asyncio.Runner() as runner:
         try:
             runner.run(
-                zetad_worker.run_ingress_forever(
+                harness_worker.run_ingress_forever(
                     runtime,
                     poll_interval_seconds=0,
                     stop_event=stop_event,
@@ -2004,7 +2004,7 @@ Reply.
 def test_zeta_push_ingress_returns_404_for_unknown_connector(tmp_path: Path) -> None:
     agents_dir = tmp_path / "agents"
     agents_dir.mkdir()
-    runtime = zetad_worker.WorkerServices(
+    runtime = harness_worker.WorkerServices(
         project_root=tmp_path,
         state_dir=tmp_path / ".zeta",
         events=zeta_events.SqliteEventStore(tmp_path / "events.sqlite3"),
@@ -2014,7 +2014,7 @@ def test_zeta_push_ingress_returns_404_for_unknown_connector(tmp_path: Path) -> 
     with asyncio.Runner() as runner:
         try:
             response = runner.run(
-                zetad_worker.handle_push_ingress_request(
+                harness_worker.handle_push_ingress_request(
                     runtime,
                     "missing",
                     InboundRequest("POST", "/connectors/missing", {}, {}, b"{}"),
@@ -2033,7 +2033,7 @@ def test_zeta_push_ingress_returns_405_for_connector_without_push(
 ) -> None:
     agents_dir = tmp_path / "agents"
     agents_dir.mkdir()
-    runtime = zetad_worker.WorkerServices(
+    runtime = harness_worker.WorkerServices(
         project_root=tmp_path,
         state_dir=tmp_path / ".zeta",
         events=zeta_events.SqliteEventStore(tmp_path / "events.sqlite3"),
@@ -2043,7 +2043,7 @@ def test_zeta_push_ingress_returns_405_for_connector_without_push(
     with asyncio.Runner() as runner:
         try:
             response = runner.run(
-                zetad_worker.handle_push_ingress_request(
+                harness_worker.handle_push_ingress_request(
                     runtime,
                     "slack",
                     InboundRequest("POST", "/connectors/slack", {}, {}, b"{}"),
@@ -2076,7 +2076,7 @@ def test_zeta_push_ingress_appends_returned_events(tmp_path: Path) -> None:
             ),
         )
 
-    runtime = zetad_worker.WorkerServices(
+    runtime = harness_worker.WorkerServices(
         project_root=tmp_path,
         state_dir=tmp_path / ".zeta",
         events=zeta_events.SqliteEventStore(tmp_path / "events.sqlite3"),
@@ -2086,7 +2086,7 @@ def test_zeta_push_ingress_appends_returned_events(tmp_path: Path) -> None:
     with asyncio.Runner() as runner:
         try:
             response = runner.run(
-                zetad_worker.handle_push_ingress_request(
+                harness_worker.handle_push_ingress_request(
                     runtime,
                     "slack",
                     InboundRequest("POST", "/connectors/slack", {}, {}, b"{}"),
@@ -2125,7 +2125,7 @@ def test_zeta_push_ingress_is_idempotent_for_duplicate_events(
             ),
         )
 
-    runtime = zetad_worker.WorkerServices(
+    runtime = harness_worker.WorkerServices(
         project_root=tmp_path,
         state_dir=tmp_path / ".zeta",
         events=zeta_events.SqliteEventStore(tmp_path / "events.sqlite3"),
@@ -2136,10 +2136,10 @@ def test_zeta_push_ingress_is_idempotent_for_duplicate_events(
         try:
             request = InboundRequest("POST", "/connectors/slack", {}, {}, b"{}")
             first = runner.run(
-                zetad_worker.handle_push_ingress_request(runtime, "slack", request)
+                harness_worker.handle_push_ingress_request(runtime, "slack", request)
             )
             second = runner.run(
-                zetad_worker.handle_push_ingress_request(runtime, "slack", request)
+                harness_worker.handle_push_ingress_request(runtime, "slack", request)
             )
             events = runtime.events.list_events(
                 zeta_events.Filter(event_type="slack.message.received")
@@ -2173,7 +2173,7 @@ def test_zeta_push_ingress_validates_returned_event_payload(
             ),
         )
 
-    runtime = zetad_worker.WorkerServices(
+    runtime = harness_worker.WorkerServices(
         project_root=tmp_path,
         state_dir=tmp_path / ".zeta",
         events=zeta_events.SqliteEventStore(tmp_path / "events.sqlite3"),
@@ -2184,7 +2184,7 @@ def test_zeta_push_ingress_validates_returned_event_payload(
         try:
             with pytest.raises(Exception, match="required"):
                 runner.run(
-                    zetad_worker.handle_push_ingress_request(
+                    harness_worker.handle_push_ingress_request(
                         runtime,
                         "slack",
                         InboundRequest("POST", "/connectors/slack", {}, {}, b"{}"),
@@ -2211,14 +2211,14 @@ schedules:
 Summarize.
 """,
     )
-    runtime = zetad_worker.WorkerServices(
+    runtime = harness_worker.WorkerServices(
         project_root=tmp_path,
         state_dir=tmp_path / ".zeta",
         events=zeta_events.SqliteEventStore(tmp_path / "events.sqlite3"),
     )
 
     try:
-        published = zetad_worker.publish_due_schedules(runtime)
+        published = harness_worker.publish_due_schedules(runtime)
         stored = runtime.events.list_events(
             zeta_events.Filter(event_type="agent.digest.scheduled")
         )
@@ -2243,7 +2243,7 @@ schedules:
 Summarize.
 """,
     )
-    runtime = zetad_worker.WorkerServices(
+    runtime = harness_worker.WorkerServices(
         project_root=tmp_path,
         state_dir=tmp_path / ".zeta",
         events=zeta_events.SqliteEventStore(tmp_path / "events.sqlite3"),
@@ -2252,11 +2252,11 @@ Summarize.
     async def _no_work(*_args: object, **_kwargs: object) -> str:
         return "queue empty"
 
-    monkeypatch.setattr(zetad_worker, "run_available_queue_item", _no_work)
+    monkeypatch.setattr(harness_worker, "run_available_queue_item", _no_work)
 
     with asyncio.Runner() as runner:
         try:
-            runner.run(zetad_worker.run_once(runtime))
+            runner.run(harness_worker.run_once(runtime))
             scheduled = runtime.events.list_events(
                 zeta_events.Filter(event_type="agent.digest.scheduled")
             )
@@ -2272,7 +2272,7 @@ def test_zeta_resolve_state_dir_explicit_and_environment_precedence(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from zeta.records.stores.sqlite import resolve_state_dir
+    from zeta.journal.sqlite import resolve_state_dir
 
     working_dir = tmp_path / "working"
     working_dir.mkdir()
@@ -2290,7 +2290,7 @@ def test_zeta_resolve_state_dir_finds_nearest_marker(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from zeta.records.stores.sqlite import resolve_state_dir
+    from zeta.journal.sqlite import resolve_state_dir
 
     project = tmp_path / "project"
     child = project / "src" / "package"
@@ -2306,7 +2306,7 @@ def test_zeta_resolve_state_dir_fallback_does_not_create_marker(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from zeta.records.stores.sqlite import resolve_state_dir
+    from zeta.journal.sqlite import resolve_state_dir
 
     project = tmp_path / "project"
     project.mkdir()
@@ -2320,7 +2320,7 @@ def test_zeta_resolve_state_dir_excludes_home_marker_for_descendants(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from zeta.records.stores.sqlite import resolve_state_dir
+    from zeta.journal.sqlite import resolve_state_dir
 
     home = tmp_path / "home"
     project = home / "projects" / "zeta"
@@ -2337,7 +2337,7 @@ def test_zeta_resolve_state_dir_accepts_directory_symlink_marker(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from zeta.records.stores.sqlite import resolve_state_dir
+    from zeta.journal.sqlite import resolve_state_dir
 
     project = tmp_path / "project"
     state = tmp_path / "state"
@@ -2355,7 +2355,7 @@ def test_zeta_resolve_state_dir_rejects_invalid_marker(
     monkeypatch: pytest.MonkeyPatch,
     broken_symlink: bool,
 ) -> None:
-    from zeta.records.stores.sqlite import resolve_state_dir
+    from zeta.journal.sqlite import resolve_state_dir
 
     project = tmp_path / "project"
     project.mkdir()
@@ -2374,7 +2374,7 @@ def test_zeta_resolve_state_dir_treats_current_directory_spellings_equally(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from zeta.records.stores.sqlite import resolve_state_dir
+    from zeta.journal.sqlite import resolve_state_dir
 
     project = tmp_path / "project"
     project.mkdir()
@@ -2392,9 +2392,9 @@ def test_zeta_implicit_store_and_session_paths_use_cwd_discovery(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    from zeta.journal.sqlite import event_store_path, zeta_sqlite_path
+    from zeta.loop.runtime_context import default_session
     from zeta.models.profiles import profile_session_dir, user_models_config_path
-    from zeta.records.stores.sqlite import event_store_path, zeta_sqlite_path
-    from zeta.run.runtime_context import default_session
     from zeta.substrate import SqliteObjectStore
 
     home = tmp_path / "home"
@@ -2426,10 +2426,10 @@ def test_zeta_run_until_idle_drains_queue(monkeypatch) -> None:
     async def _next(_runtime: object) -> str:
         return next(messages)
 
-    monkeypatch.setattr(zetad_worker, "run_once", _next)
+    monkeypatch.setattr(harness_worker, "run_once", _next)
 
-    runtime = cast(zetad_worker.WorkerServices, object())
-    result = asyncio.run(zetad_worker.run_until_idle(runtime))
+    runtime = cast(harness_worker.WorkerServices, object())
+    result = asyncio.run(harness_worker.run_until_idle(runtime))
 
     assert result == "processed 2"
 
@@ -2497,7 +2497,7 @@ def test_zeta_agent_with_returns_publishes_structured_return_event(
         structured_output=_recording_structured_return(structured_calls),
     )
     store = zeta_events.SqliteEventStore(tmp_path / "events.sqlite3")
-    dispatcher = zetad_dispatch.QueueingDispatcher(store, executors=[compiled])
+    dispatcher = harness_dispatch.QueueingDispatcher(store, executors=[compiled])
 
     outcome = asyncio.run(
         dispatch_and_drain(
@@ -2552,7 +2552,7 @@ def test_zeta_agent_with_returns_publishes_multiple_ordered_events(
         structured_output=structured_output,
     )
     store = zeta_events.SqliteEventStore(tmp_path / "events.sqlite3")
-    dispatcher = zetad_dispatch.QueueingDispatcher(store, executors=[compiled])
+    dispatcher = harness_dispatch.QueueingDispatcher(store, executors=[compiled])
 
     outcome = asyncio.run(
         dispatch_and_drain(
@@ -2596,7 +2596,7 @@ def test_zeta_agent_with_returns_may_publish_no_events(tmp_path: Path) -> None:
         structured_output=lambda *_args, **_kwargs: {"events": []},
     )
     store = zeta_events.SqliteEventStore(tmp_path / "events.sqlite3")
-    dispatcher = zetad_dispatch.QueueingDispatcher(store, executors=[compiled])
+    dispatcher = harness_dispatch.QueueingDispatcher(store, executors=[compiled])
 
     outcome = asyncio.run(
         dispatch_and_drain(

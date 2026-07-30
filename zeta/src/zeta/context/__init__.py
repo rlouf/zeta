@@ -12,7 +12,7 @@ from zeta.context.transforms import (
     NoOpPromptTransform,
     PromptTransform,
 )
-from zeta.run.config import CompactionPolicy
+from zeta.loop.config import CompactionPolicy
 
 DEFAULT_TRIM_THRESHOLD_TOKENS = 100_000
 LOGGER = logging.getLogger("zeta.context")

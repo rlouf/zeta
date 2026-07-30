@@ -27,7 +27,7 @@ from zeta.capabilities.types import (
     Capability,
     CapabilityId,
 )
-from zeta.run.runtime import registered_capabilities
+from zeta.loop.runtime import registered_capabilities
 from zeta.tools import bash as bash_tool
 from zeta.tools import ensure_builtin_tools_registered, register_builtin_tools
 from zeta.tools import grep as grep_tool

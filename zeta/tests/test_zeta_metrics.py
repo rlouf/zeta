@@ -4,16 +4,16 @@ import asyncio
 from pathlib import Path
 
 from zeta.events import DraftEvent, Event
-from zetad.agents import (
+from zeta.harness.dispatch import QueueingDispatcher
+from zeta.harness.metrics import InMemoryRuntimeMetrics
+from zeta.harness.retry import RetryPolicy
+from zeta.harness.routing import (
     AgentDefinition,
     AgentInvocation,
     EventPattern,
     ExecutableAgent,
 )
-from zetad.dispatch import QueueingDispatcher
-from zetad.metrics import InMemoryRuntimeMetrics
-from zetad.retry import RetryPolicy
-from zetad.store import RuntimeEventStore
+from zeta.harness.store import RuntimeEventStore
 
 
 async def dispatch_and_drain(

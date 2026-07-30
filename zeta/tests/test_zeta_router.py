@@ -1,6 +1,6 @@
 from zeta.events import Event
-from zetad.agents import AgentRoute, EventPattern
-from zetad.router import EventRouter
+from zeta.harness.router import EventRouter
+from zeta.harness.routing import AgentRoute, EventPattern
 
 
 def test_event_router_builds_deterministic_route_plan() -> None:

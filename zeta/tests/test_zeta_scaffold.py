@@ -4,9 +4,9 @@ from pathlib import Path
 
 import pytest
 from click.testing import CliRunner
-from zeta.agents.scaffold import ScaffoldError, scaffold_agent
-from zeta.agents.spec import load_spec
-from zetad.cli import cli
+from zeta.authoring.scaffold import ScaffoldError, scaffold_agent
+from zeta.authoring.spec import load_spec
+from zeta.cli.main import cli
 
 
 def test_zeta_scaffold_creates_loadable_agent(tmp_path: Path) -> None:

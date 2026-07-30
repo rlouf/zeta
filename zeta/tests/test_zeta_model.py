@@ -12,6 +12,7 @@ import zeta.models.chat_completions as zeta_model
 import zeta.models.profiles as zeta_models
 import zeta.models.types as zeta_models_api
 from click.testing import CliRunner
+from zeta.cli.main import cli as zeta_cli
 from zeta.context.compaction.task_state import TASK_STATE_SCHEMA
 from zeta_test_support import (
     DeltaSink,
@@ -19,7 +20,6 @@ from zeta_test_support import (
     task_state_fixture,
     write_models_config,
 )
-from zetad.cli import cli as zeta_cli
 
 
 def test_zeta_model_config_ignores_model_env_vars(monkeypatch) -> None:

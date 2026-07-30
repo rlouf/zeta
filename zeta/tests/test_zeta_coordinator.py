@@ -1,12 +1,12 @@
 import asyncio
 
 from zeta.events import Event
+from zeta.harness.coordinator import AttemptCoordinator
+from zeta.harness.lifecycle import LifecycleRecorder
 from zeta.harness.queue import RoutedQueueItem
-from zeta.records.stores.memory import MemoryEventStore
-from zetad.agents import AgentDefinition, EventPattern, ExecutableAgent
-from zetad.coordinator import AttemptCoordinator
-from zetad.lifecycle import LifecycleRecorder
-from zetad.retry import RetryPolicy
+from zeta.harness.retry import RetryPolicy
+from zeta.harness.routing import AgentDefinition, EventPattern, ExecutableAgent
+from zeta.journal.memory import MemoryEventStore
 
 
 def triggering_event() -> Event:

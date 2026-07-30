@@ -23,11 +23,11 @@ from zeta.context.builder import (
 )
 from zeta.context.components import PromptComponent, prompt_components
 from zeta.events import DraftEvent, Event
-from zeta.records.drafts import draft_from_boundary_event
-from zeta.records.stores.event_store import Filter
-from zeta.records.views import draft_event_view, event_view
-from zeta.run.runtime import AgentRunResult
-from zeta.run.runtime_context import RuntimeContext
+from zeta.journal.drafts import draft_from_boundary_event
+from zeta.journal.store import Filter
+from zeta.journal.views import draft_event_view, event_view
+from zeta.loop.runtime import AgentRunResult
+from zeta.loop.runtime_context import RuntimeContext
 from zeta.substrate import InMemoryStore, Object, ObjectId, Store
 from zeta.trace.provenance import project_prompt_trace_projection
 

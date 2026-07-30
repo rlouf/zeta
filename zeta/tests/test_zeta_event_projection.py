@@ -3,15 +3,15 @@ from typing import Any
 
 import pytest
 from zeta.events import DraftEvent, Event
-from zeta.records.drafts import (
+from zeta.journal.drafts import (
     draft_from_runtime_event,
     durable_model_event_payload,
     durable_tool_event_payload,
     model_call_draft,
     tool_call_draft,
 )
-from zeta.records.views import event_view
-from zeta.records.wire import event_from_wire, event_to_wire
+from zeta.journal.views import event_view
+from zeta.journal.wire import event_from_wire, event_to_wire
 from zeta.substrate import Derivation, InMemoryStore, Object
 from zeta.trace.provenance import project_prompt_trace_projection
 

@@ -1,5 +1,5 @@
 import pytest
-from zetad.state import (
+from zeta.harness.state import (
     ATTEMPT_TRANSITIONS,
     QUEUE_TRANSITIONS,
     InvalidRuntimeTransition,

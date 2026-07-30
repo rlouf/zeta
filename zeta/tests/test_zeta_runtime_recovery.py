@@ -1,7 +1,7 @@
 from pathlib import Path
 
 from zeta.events import DraftEvent, Event
-from zetad.store import RuntimeEventStore
+from zeta.harness.store import RuntimeEventStore
 
 
 def test_projection_rebuild_preserves_unfinished_attempt_and_releases_claim(

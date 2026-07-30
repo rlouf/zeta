@@ -46,5 +46,5 @@ paths = ["zeta/src", "zeta/tests"]
 min_confidence = 80
 
 [tool.deptry]
-known_first_party = ["connectors", "zeta", "zetad"]
+known_first_party = ["connectors", "zeta"]
 package_module_name_map = { PyYAML = "yaml" }

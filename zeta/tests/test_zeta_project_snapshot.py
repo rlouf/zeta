@@ -5,20 +5,11 @@ from pathlib import Path
 
 import pytest
 from connectors import EventConnectorRegistry
-from zeta.agents.spec import ExecutorSpec
+from zeta.authoring.spec import ExecutorSpec
 from zeta.capabilities.registry import CapabilityRegistry
 from zeta.events import DraftEvent
-from zeta.models.profiles import ModelSelection
-from zeta.records.stores.event_store import Filter
-from zeta.run.outcomes import AgentRunResult
-from zetad.agents import (
-    AgentDefinition,
-    EventPattern,
-    ExecutableAgent,
-    compile_agent_definition,
-)
-from zetad.dispatch import QueueingDispatcher
-from zetad.project import (
+from zeta.harness.dispatch import QueueingDispatcher
+from zeta.harness.project import (
     ProjectSnapshotUnavailable,
     agent_from_manifest,
     agent_manifest,
@@ -26,7 +17,16 @@ from zetad.project import (
     load_recorded_project_snapshot,
     record_project_snapshot,
 )
-from zetad.store import RuntimeEventStore
+from zeta.harness.routing import (
+    AgentDefinition,
+    EventPattern,
+    ExecutableAgent,
+    compile_agent_definition,
+)
+from zeta.harness.store import RuntimeEventStore
+from zeta.journal.store import Filter
+from zeta.loop.outcomes import AgentRunResult
+from zeta.models.profiles import ModelSelection
 
 
 def write_snapshot_project(root: Path, *, description: str = "Handles work.") -> Path:

@@ -7,6 +7,7 @@ import sqlite3
 
 from zeta.events import Event
 
+from zeta import ids
 from zetad.attempts import attempt_from_event_payload
 from zetad.queue import (
     is_queueable_event,
@@ -155,7 +156,7 @@ def _index_one_queue_item(connection: sqlite3.Connection, event: Event) -> None:
     queue_item = project_one_queue_item(event)
     if queue_item is None:
         return
-    pending_id = f"qi_{queue_item.event_id}"
+    pending_id = ids.pending_queue_item_id(queue_item.event_id)
     if queue_item.queue_item_id != pending_id:
         connection.execute(
             """

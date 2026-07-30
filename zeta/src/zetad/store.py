@@ -17,6 +17,7 @@ from zeta.records.stores.sqlite import SqliteEventStore
 from zeta.records.types import AppendOutcome
 from zeta.substrate.sqlite import sqlite_table_names
 
+from zeta import ids
 from zetad.metrics import MetricAttribute, NullRuntimeMetrics, RuntimeMetrics
 from zetad.projections import runtime_event_projection
 
@@ -810,7 +811,7 @@ def _row_token_count(
 
 
 def _pending_queue_item_id(event: Event) -> str:
-    return f"qi_{event.id}"
+    return ids.pending_queue_item_id(event.id)
 
 
 def _optional_str(value: object) -> str | None:

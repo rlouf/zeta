@@ -8,6 +8,8 @@ from typing import TYPE_CHECKING, Any, Literal, cast
 
 from zeta.events import Event
 
+from zeta import ids
+
 if TYPE_CHECKING:
     from zetad.agents import AgentRoute
 
@@ -189,12 +191,11 @@ def queue_item_from_record(record: Mapping[str, Any]) -> RoutedQueueItem:
 
 
 def queue_item_id_for_event(route: AgentRoute, event: Event) -> str:
-    agent_id = route.agent_id.replace(":", "_").replace(".", "_")
-    return f"qi_{event.id}_{agent_id}"
+    return ids.queue_item_id(event.id, route.agent_id)
 
 
 def pending_queue_item_id(event: Event) -> str:
-    return f"qi_{event.id}"
+    return ids.pending_queue_item_id(event.id)
 
 
 def queue_item_idempotency_key(
@@ -204,14 +205,16 @@ def queue_item_idempotency_key(
     *,
     attempt_number: int | None = None,
 ) -> str:
-    key = f"queue_item:{event.id}:{target_agent}:{status}"
-    if attempt_number is None:
-        return key
-    return f"{key}:{attempt_number}"
+    return ids.queue_item_idempotency_key(
+        event.id,
+        target_agent,
+        status,
+        attempt_number=attempt_number,
+    )
 
 
 def unhandled_queue_item_idempotency_key(event: Event) -> str:
-    return f"queue_item:{event.id}:unhandled"
+    return ids.unhandled_queue_item_idempotency_key(event.id)
 
 
 def terminal_queue_item_result(

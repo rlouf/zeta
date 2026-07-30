@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
+from zeta import ids
 from zeta.capabilities.types import ExecutionMode
 from zeta.events import DraftEvent, Event
 from zeta.models.profiles import active_model_selection
@@ -277,4 +277,4 @@ def _session_outcome(
 
 
 def session_run_id() -> str:
-    return f"run_{uuid.uuid4().hex}"
+    return ids.claimed_run_id()

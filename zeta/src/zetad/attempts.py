@@ -4,6 +4,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Literal, cast
 
+from zeta import ids
+
 AttemptId = str
 
 AttemptStatus = Literal[
@@ -41,7 +43,7 @@ def attempt_idempotency_key(
     attempt_number: int,
     status: str,
 ) -> str:
-    return f"attempt:{queue_item_id}:{attempt_number}:{status}"
+    return ids.attempt_idempotency_key(queue_item_id, attempt_number, status)
 
 
 def attempt_event_payload(

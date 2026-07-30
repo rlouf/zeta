@@ -13,6 +13,7 @@ from zeta.events import DraftEvent, Event
 from zeta.run.config import AgentConfig
 from zeta.run.outcomes import agent_run_result_payload
 
+from zeta import ids
 from zetad.retry import RetryPolicy
 from zetad.returned_events import ReturnedEventPublisher, StructuredOutputRunner
 
@@ -157,13 +158,15 @@ class ExecutableAgent:
 
 def agent_session_id(definition: AgentDefinition, event: Event) -> str:
     """Return the durable runtime session id for an authored agent invocation."""
-    if definition.dispatch_mode == "session_scoped":
-        return f"agent/{definition.agent_id}"
-    return f"agent/{definition.agent_id}/{event.id}"
+    return ids.agent_session_id(
+        definition.agent_id,
+        event.id,
+        session_scoped=definition.dispatch_mode == "session_scoped",
+    )
 
 
 def agent_run_id(attempt_id: str) -> str:
-    return f"run_{attempt_id}"
+    return ids.derived_run_id(attempt_id)
 
 
 def compile_agent_definition(

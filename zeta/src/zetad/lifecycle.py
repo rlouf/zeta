@@ -8,6 +8,7 @@ from typing import Any
 from zeta.events import DraftEvent, Event
 from zeta.records.stores.event_store import EventWriter
 
+from zeta import ids
 from zetad.agents import AgentRoute, ExecutableAgent
 from zetad.attempts import (
     Attempt,
@@ -161,7 +162,7 @@ class LifecycleRecorder:
         )
 
     def unhandled(self, triggering_event: Event) -> Event:
-        queue_item_id = f"qi_{triggering_event.id}_unhandled"
+        queue_item_id = ids.unhandled_queue_item_id(triggering_event.id)
         queue_item = QueueItem(
             queue_item_id=queue_item_id,
             event_id=triggering_event.id,

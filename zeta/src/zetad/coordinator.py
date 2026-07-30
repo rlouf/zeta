@@ -10,10 +10,10 @@ from typing import Any
 from zeta.effects import EffectDeliveryError
 from zeta.events import DraftEvent, Event
 
+from zeta import ids
 from zetad.agents import (
     AgentInvocation,
     ExecutableAgent,
-    agent_run_id,
     agent_session_id,
 )
 from zetad.attempts import AttemptStatus
@@ -65,8 +65,8 @@ class AttemptCoordinator:
         queue_item_id = queue_item.queue_item_id
         events: list[Event] = []
         attempt_number = self.next_attempt_number(queue_item_id)
-        attempt_id = f"att_{queue_item_id}_{attempt_number}"
-        run_id = triggering_event.run_id or agent_run_id(attempt_id)
+        attempt_id = ids.attempt_id(queue_item_id, attempt_number)
+        run_id = ids.run_id_for_attempt(triggering_event.run_id, attempt_id)
         session_id = invocation_session_id(agent, triggering_event)
         if not self.claim_is_current(queue_item_id):
             return events

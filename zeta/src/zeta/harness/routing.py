@@ -155,19 +155,6 @@ class ExecutableAgent:
         return AgentRoute.from_definition(self.definition)
 
 
-def agent_session_id(definition: AgentDefinition, event: Event) -> str:
-    """Return the durable runtime session id for an authored agent invocation."""
-    return ids.agent_session_id(
-        definition.agent_id,
-        event.id,
-        session_scoped=definition.dispatch_mode == "session_scoped",
-    )
-
-
-def agent_run_id(attempt_id: str) -> str:
-    return ids.derived_run_id(attempt_id)
-
-
 def compile_agent_definition(
     spec: AgentSpec,
     *,
@@ -288,9 +275,14 @@ def agent_runner(
             run_context = cast(ContextFactory, context)(agent_run)
         else:
             run_context = context
-        session_id = agent_session_id(agent_run.agent, event)
-        run_id = agent_run.run_id or agent_run_id(
-            agent_run.attempt_id or agent_run.triggering_event.id
+        session_id = ids.agent_session_id(
+            agent_run.agent.agent_id,
+            event.id,
+            session_scoped=agent_run.agent.dispatch_mode == "session_scoped",
+        )
+        run_id = ids.run_id_for_attempt(
+            agent_run.run_id,
+            agent_run.attempt_id or agent_run.triggering_event.id,
         )
         result = await agent_loop(
             agent_run,

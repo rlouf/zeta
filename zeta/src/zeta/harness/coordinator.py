@@ -17,8 +17,8 @@ from zeta.harness.retry import RetryPolicy, error_code_for_exception
 from zeta.harness.routing import (
     AgentInvocation,
     ExecutableAgent,
-    agent_session_id,
 )
+from zeta.harness.sessions import invocation_session_id
 
 HeartbeatTask = asyncio.Task[None] | None
 AgentEventPublisher = Callable[[DraftEvent], Awaitable[Event]]
@@ -320,12 +320,6 @@ class AttemptCoordinator:
                 run_id=run_id,
             ),
         ]
-
-
-def invocation_session_id(agent: ExecutableAgent, event: Event) -> str | None:
-    if event.event_type == "session.turn.requested" and event.session_id is not None:
-        return event.session_id
-    return agent_session_id(agent.definition, event)
 
 
 def event_timestamp() -> str:

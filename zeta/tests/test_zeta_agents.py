@@ -73,11 +73,11 @@ from zeta.harness import worker as harness_worker
 from zeta.harness.routing import (
     AgentDefinition,
     EventPattern,
-    agent_session_id,
     compile_agent_definition,
     compile_agent_definitions,
     config_for_spec,
 )
+from zeta.harness.sessions import agent_session_id
 from zeta.harness.store import RuntimeEventStore
 from zeta.journal.store import Filter
 from zeta.loop.runtime import AgentRunResult

@@ -433,9 +433,8 @@ canonical capability id when it is unambiguous:
 | `edit` | `zeta.edit` | Edit files. |
 | `write` | `zeta.write` | Write files. |
 
-Capability execution goes through the registry. Each declaration marks whether
-the tool mutates state. Zeta executes an allowed tool when the model calls it.
-Zeta does not defer a tool call for later execution.
+Capability execution goes through the registry. Zeta executes an allowed tool
+when the model calls it. Zeta does not defer a tool call for later execution.
 
 Side-effecting capabilities declare one delivery contract:
 

@@ -23,7 +23,6 @@ SPEC = Capability(
     "Write content to a file.",
     SCHEMA,
     delivery_semantics="idempotent_with_key",
-    mutates=True,
 )
 
 

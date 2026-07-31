@@ -34,7 +34,6 @@ class Capability:
     description: str
     input_schema: dict[str, Any]
     delivery_semantics: DeliverySemantics | None = None
-    mutates: bool = False
 
     def __post_init__(self) -> None:
         if (

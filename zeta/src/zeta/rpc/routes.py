@@ -58,7 +58,6 @@ class CapabilityRegistration:
     schema: dict[str, Any] = field(default_factory=dict)
     timeout_sec: int | float | None = None
     delivery_semantics: DeliverySemantics | None = None
-    mutates: bool = False
 
 
 @dataclass(frozen=True)
@@ -148,7 +147,6 @@ def parse_capability_registration(value: dict[str, Any]) -> CapabilityRegistrati
         "schema",
         "timeout_sec",
         "delivery_semantics",
-        "mutates",
     }
     unknown = sorted(set(value) - supported)
     if unknown:
@@ -211,12 +209,6 @@ def parse_capability_registration(value: dict[str, Any]) -> CapabilityRegistrati
             "delivery_semantics must be a supported effect contract",
         )
 
-    if "mutates" not in value:
-        raise invalid_params("missing_tool_mutates", "mutates is required")
-    mutates = value["mutates"]
-    if not isinstance(mutates, bool):
-        raise invalid_params("invalid_tool_mutates", "mutates must be a boolean")
-
     return CapabilityRegistration(
         name=name,
         provider=provider,
@@ -224,7 +216,6 @@ def parse_capability_registration(value: dict[str, Any]) -> CapabilityRegistrati
         schema=schema,
         timeout_sec=timeout_sec,
         delivery_semantics=delivery_semantics,
-        mutates=mutates,
     )
 
 
@@ -349,7 +340,6 @@ def capability_to_wire(
     }
     if capability.declaration.delivery_semantics is not None:
         payload["delivery_semantics"] = capability.declaration.delivery_semantics
-    payload["mutates"] = capability.declaration.mutates
     return payload
 
 
@@ -613,7 +603,6 @@ async def tools_register(params: dict[str, Any], client: RpcClient) -> dict[str,
                 registration.description,
                 registration.schema,
                 delivery_semantics=registration.delivery_semantics,
-                mutates=registration.mutates,
             ),
             execute_client_tool,
         )

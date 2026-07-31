@@ -76,6 +76,7 @@ def test_in_process_tool_executor_activates_base_dir_from_context():
         event_sink=None,
         trace_store=None,
         tool_registry=registry,
+        tool_executor=executor,
         base_dir=Path("/vault"),
     )
 

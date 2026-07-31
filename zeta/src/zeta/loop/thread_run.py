@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from zeta import ids
+from zeta.capabilities.executors import local_tool_executor
 from zeta.events import DraftEvent, Event
 from zeta.loop.cancellation import AgentRunAborted, CancellationToken
 from zeta.loop.config import AgentConfig
@@ -190,6 +191,7 @@ async def run_session_request(
             publish_event=publish_event,
             runtime_context=runtime_context,
             cancellation_event=cancellation_event,
+            tool_executor=local_tool_executor(runtime_context.tool_registry),
         )
     except AgentRunAborted:
         return _session_result(

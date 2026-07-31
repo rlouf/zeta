@@ -106,6 +106,7 @@ async def in_process_agent_loop(
     """Run the model loop locally when no runtime service is present."""
 
     del session_id, run_id
+    from zeta.capabilities.executors import local_tool_executor
     from zeta.loop.runtime import run_agent_loop
 
     return await run_agent_loop(
@@ -114,6 +115,7 @@ async def in_process_agent_loop(
         config,
         context=context,
         caused_by=invocation.triggering_event.id,
+        tool_executor=local_tool_executor(),
     )
 
 

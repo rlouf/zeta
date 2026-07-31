@@ -172,6 +172,10 @@ def published_event_views(events: list[Event | DraftEvent]) -> list[dict[str, An
 
 
 def run_agent_turn(*args: Any, **kwargs: Any) -> AgentRunResult:
+    if "tool_executor" not in kwargs:
+        kwargs["tool_executor"] = zeta_capability_executors.local_tool_executor(
+            kwargs.get("tool_registry")
+        )
     return asyncio.run(zeta_agent.run_agent_loop(*args, **kwargs))
 
 
@@ -187,6 +191,11 @@ def test_zeta_run_dependencies_keep_abort_signal_as_boundary() -> None:
     assert "clock" not in dependency_fields
     assert "deadline" not in dependency_fields
     assert "cancellation_event" not in dependency_fields
+
+
+def test_zeta_agent_loop_requires_an_executor() -> None:
+    with pytest.raises(TypeError, match="tool_executor"):
+        zeta_agent.run_agent_loop("answer", [], zeta_agent.AgentConfig())
 
 
 def run_rpc_session(*args: Any, **kwargs: Any) -> dict[str, Any]:
@@ -624,10 +633,12 @@ def test_zeta_tool_result_event_payload_has_boundary_dict_shape() -> None:
 def test_zeta_record_model_event_sends_same_draft_to_sink() -> None:
     events: list[DraftEvent] = []
     sink_events: list[DraftEvent] = []
+    registry = CapabilityRegistry()
     ctx = zeta_agent.RunDependencies(
         event_sink=sink_events.append,
         trace_store=None,
-        tool_registry=CapabilityRegistry(),
+        tool_registry=registry,
+        tool_executor=zeta_capability_executors.local_tool_executor(registry),
         builder=cast(Any, None),
         abort_reason=never_abort,
     )
@@ -651,11 +662,13 @@ def test_zeta_record_model_event_sends_same_draft_to_sink() -> None:
 def test_zeta_record_model_event_records_draft() -> None:
     events: list[DraftEvent] = []
     drafts: list[DraftEvent] = []
+    registry = CapabilityRegistry()
 
     ctx = zeta_agent.RunDependencies(
         event_sink=drafts.append,
         trace_store=None,
-        tool_registry=CapabilityRegistry(),
+        tool_registry=registry,
+        tool_executor=zeta_capability_executors.local_tool_executor(registry),
         builder=cast(Any, None),
         abort_reason=never_abort,
     )
@@ -698,6 +711,7 @@ def test_zeta_handle_tool_call_emits_drafts() -> None:
         event_sink=drafts.append,
         trace_store=None,
         tool_registry=registry,
+        tool_executor=zeta_capability_executors.local_tool_executor(registry),
     )
 
     result = asyncio.run(
@@ -770,6 +784,7 @@ def test_zeta_capability_records_and_propagates_effect_identity() -> None:
         event_sink=drafts.append,
         trace_store=None,
         tool_registry=registry,
+        tool_executor=zeta_capability_executors.local_tool_executor(registry),
         effect_scope="qi_work_1",
     )
     tool_call = {
@@ -831,6 +846,7 @@ def test_zeta_unsafe_capability_failure_is_recorded_as_ambiguous() -> None:
         event_sink=drafts.append,
         trace_store=None,
         tool_registry=registry,
+        tool_executor=zeta_capability_executors.local_tool_executor(registry),
         effect_scope="qi_work_1",
     )
 
@@ -1036,10 +1052,12 @@ def test_zeta_request_model_turn_builds_assistant_from_model_output(
     )
     state = zeta_agent.RunState()
     builder = PlanOnlyPromptBuilder()
+    registry = CapabilityRegistry()
     ctx = zeta_agent.RunDependencies(
         event_sink=None,
         trace_store=None,
-        tool_registry=CapabilityRegistry(),
+        tool_registry=registry,
+        tool_executor=zeta_capability_executors.local_tool_executor(registry),
         builder=builder,
         abort_reason=never_abort,
     )
@@ -1282,12 +1300,14 @@ def test_zeta_async_agent_turn_runs_turns_concurrently() -> None:
                     [],
                     zeta_agent.AgentConfig(max_turns=1),
                     model_gateway=gateway,
+                    tool_executor=zeta_capability_executors.local_tool_executor(),
                 ),
                 zeta_agent.run_agent_loop(
                     "second",
                     [],
                     zeta_agent.AgentConfig(max_turns=1),
                     model_gateway=gateway,
+                    tool_executor=zeta_capability_executors.local_tool_executor(),
                 ),
             ),
             timeout=3,
@@ -1324,6 +1344,7 @@ def test_zeta_step_model_without_tool_calls_returns_info_and_stops() -> None:
         event_sink=None,
         trace_store=None,
         tool_registry=registry,
+        tool_executor=zeta_capability_executors.local_tool_executor(registry),
         builder=zeta_context.PromptBuilder(),
         abort_reason=never_abort,
         model_gateway=FakeGateway(),
@@ -1381,6 +1402,7 @@ def test_zeta_step_model_with_tool_calls_records_pending_tools() -> None:
         event_sink=None,
         trace_store=None,
         tool_registry=registry,
+        tool_executor=zeta_capability_executors.local_tool_executor(registry),
         builder=zeta_context.PromptBuilder(),
         abort_reason=never_abort,
         model_gateway=FakeGateway(),
@@ -1429,6 +1451,7 @@ def test_zeta_step_pending_tools_returns_info_and_clears_pending_tools() -> None
         event_sink=None,
         trace_store=None,
         tool_registry=registry,
+        tool_executor=zeta_capability_executors.local_tool_executor(registry),
         builder=zeta_context.PromptBuilder(),
         abort_reason=never_abort,
     )
@@ -1494,6 +1517,7 @@ def test_zeta_step_tools_does_not_commit_partial_batch_on_error(
         event_sink=None,
         trace_store=None,
         tool_registry=registry,
+        tool_executor=zeta_capability_executors.local_tool_executor(registry),
         builder=zeta_context.PromptBuilder(store=zeta_trace.InMemoryStore()),
         abort_reason=never_abort,
     )
@@ -1557,6 +1581,7 @@ def test_zeta_run_capability_step_records_call_execution_and_result(
         event_sink=None,
         trace_store=None,
         tool_registry=registry,
+        tool_executor=zeta_capability_executors.local_tool_executor(registry),
         builder=zeta_context.PromptBuilder(),
         abort_reason=never_abort,
     )
@@ -1784,6 +1809,7 @@ def test_zeta_run_capability_step_reconciles_existing_terminal_result(
         event_sink=None,
         trace_store=None,
         tool_registry=registry,
+        tool_executor=zeta_capability_executors.local_tool_executor(registry),
         builder=zeta_context.PromptBuilder(),
         abort_reason=never_abort,
     )
@@ -2707,13 +2733,11 @@ def test_zeta_rpc_tools_register_uses_documented_tool_shape() -> None:
                         "schema": {"type": "object"},
                         "timeout_sec": 2,
                         "delivery_semantics": "connector_deduplicated",
-                        "mutates": True,
                     },
                     {
                         "name": "open_panel",
                         "description": "Open a panel.",
                         "schema": {"type": "object"},
-                        "mutates": False,
                     },
                 ]
             },
@@ -2731,7 +2755,6 @@ def test_zeta_rpc_tools_register_uses_documented_tool_shape() -> None:
                 "schema": {"type": "object"},
                 "timeout_sec": 2,
                 "delivery_semantics": "connector_deduplicated",
-                "mutates": True,
             },
             {
                 "id": "rpc.open_panel",
@@ -2740,14 +2763,12 @@ def test_zeta_rpc_tools_register_uses_documented_tool_shape() -> None:
                 "description": "Open a panel.",
                 "schema": {"type": "object"},
                 "timeout_sec": None,
-                "mutates": False,
             },
         ]
     }
     pick_file = registry.get("rpc.pick_file")
     assert pick_file is not None
     assert pick_file.declaration.delivery_semantics == "connector_deduplicated"
-    assert pick_file.declaration.mutates is True
     assert registry.get("rpc.open_panel") is not None
 
 
@@ -2905,7 +2926,6 @@ def test_zeta_rpc_registered_tool_invokes_peer_call_tool() -> None:
                         "description": "Pick a file.",
                         "schema": {"type": "object"},
                         "timeout_sec": 2,
-                        "mutates": False,
                     }
                 ]
             },
@@ -3113,6 +3133,9 @@ def test_zeta_run_agent_records_user_message_and_returns_result(
             publish_event=published.append,
             runtime_context=context,
             cancellation_event=None,
+            tool_executor=zeta_capability_executors.local_tool_executor(
+                context.tool_registry
+            ),
         )
     )
 

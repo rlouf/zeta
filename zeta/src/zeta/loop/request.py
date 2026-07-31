@@ -44,9 +44,9 @@ class RunDependencies:
     event_sink: AgentEventSink | None
     trace_store: Store | None
     tool_registry: CapabilityRegistry
+    tool_executor: ToolExecutor
     builder: PromptBuilder
     abort_reason: AbortReason
-    tool_executor: ToolExecutor | None = None
     model_gateway: ModelGateway = field(default_factory=DefaultModelGateway)
 
 

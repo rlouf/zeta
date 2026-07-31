@@ -34,7 +34,6 @@ SPEC = Capability(
     "Execute a shell command.",
     SCHEMA,
     delivery_semantics="unsafe_to_retry",
-    mutates=True,
 )
 
 

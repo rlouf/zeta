@@ -6,7 +6,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import replace
 from typing import Any
 
-from zeta.capabilities.executors import InProcessToolExecutor, ToolExecutor
+from zeta.capabilities.executors import ToolExecutor
 from zeta.capabilities.registry import (
     CapabilityRegistry,
 )
@@ -62,7 +62,7 @@ async def run_agent(
     runtime_context: RuntimeContext,
     cancellation_event: CancellationToken | None,
     model_gateway: ModelGateway | None = None,
-    tool_executor: ToolExecutor | None = None,
+    tool_executor: ToolExecutor,
 ) -> AgentRunResult:
     """Run one durable agent turn inside a runtime session."""
     enabled_capabilities = registered_capabilities(
@@ -128,7 +128,7 @@ async def run_agent_loop(
     prompt_builder: PromptBuilder | None = None,
     trace_store: Store | None = None,
     tool_registry: CapabilityRegistry | None = None,
-    tool_executor: ToolExecutor | None = None,
+    tool_executor: ToolExecutor,
     model_gateway: ModelGateway | None = None,
     caused_by: str | None = None,
     cancellation_event: CancellationToken | None = None,
@@ -154,7 +154,7 @@ async def run_agent_loop(
         event_sink=event_sink,
         trace_store=trace_store,
         tool_registry=active_tool_registry,
-        tool_executor=tool_executor or InProcessToolExecutor(active_tool_registry),
+        tool_executor=tool_executor,
         builder=builder,
         model_gateway=gateway,
         abort_reason=run_abort_reason(cancellation_event, deadline, clock=clock),

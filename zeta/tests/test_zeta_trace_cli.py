@@ -85,6 +85,10 @@ def isolate_zeta_state_dir(
 
 
 def run_agent_turn(*args: Any, **kwargs: Any) -> AgentRunResult:
+    if "tool_executor" not in kwargs:
+        kwargs["tool_executor"] = zeta_capability_executors.local_tool_executor(
+            kwargs.get("tool_registry")
+        )
     return asyncio.run(zeta_agent.run_agent_loop(*args, **kwargs))
 
 

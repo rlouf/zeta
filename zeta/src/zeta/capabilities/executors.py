@@ -128,6 +128,14 @@ async def local_tool_executor_provider(
     del agent_id
     if config:
         raise ValueError("local tool executor does not accept configuration")
+    return local_tool_executor(registry)
+
+
+def local_tool_executor(
+    tool_registry: CapabilityRegistry | None = None,
+) -> InProcessToolExecutor:
+    """Create the built-in executor during run setup."""
+    registry = _default_tool_registry if tool_registry is None else tool_registry
     return InProcessToolExecutor(registry)
 
 

@@ -12,7 +12,7 @@ from typing import Any, cast
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import SchemaError
 
-from zeta.capabilities.executors import InProcessToolExecutor, ToolExecutor
+from zeta.capabilities.executors import ToolExecutor
 from zeta.capabilities.registry import (
     CapabilityRegistry,
     CapabilityToolSchema,
@@ -41,7 +41,7 @@ class CapabilityExecutionContext:
     event_sink: CapabilityEventSink | None
     trace_store: Store | None
     tool_registry: CapabilityRegistry
-    tool_executor: ToolExecutor | None = None
+    tool_executor: ToolExecutor
     base_dir: Path | None = None
     effect_scope: str | None = None
     effect_key: str | None = None
@@ -523,8 +523,7 @@ async def invoke_tool_executor(
     *,
     ctx: CapabilityExecutionContext,
 ) -> dict[str, Any]:
-    executor = ctx.tool_executor or InProcessToolExecutor(ctx.tool_registry)
-    result = await executor.call(
+    result = await ctx.tool_executor.call(
         capability_id,
         params,
         base_dir=ctx.base_dir,

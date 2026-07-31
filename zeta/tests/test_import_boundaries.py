@@ -31,6 +31,7 @@ FORBIDDEN_DEPENDENCIES = {
     "authoring": {"cli", "harness", "loop", "rpc"},
     "loop": {"authoring", "cli", "harness", "rpc"},
     "context": {"authoring", "cli", "harness", "loop", "rpc"},
+    "models": {"authoring", "cli", "harness", "journal", "loop", "rpc"},
     "trace": {
         "authoring",
         "capabilities",

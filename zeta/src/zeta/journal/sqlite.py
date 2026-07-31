@@ -6,7 +6,6 @@ table so readers can replay stable slices without decoding payloads.
 """
 
 import json
-import os
 import sqlite3
 import threading
 import time
@@ -18,6 +17,7 @@ from typing import Any, Protocol
 from zeta.events import DraftEvent, Event, json_native_payload
 from zeta.journal.store import Filter
 from zeta.journal.types import AppendOutcome
+from zeta.paths import resolve_state_dir
 from zeta.substrate.objects import Derivation, Object
 from zeta.substrate.sqlite import SqliteObjectStore, sqlite_read_only_uri
 from zeta.substrate.store import escape_like
@@ -601,36 +601,6 @@ class SqliteEventStore:
         return _row_to_event(row)
 
 
-def resolve_state_dir(
-    state_dir: Path | None = None,
-    *,
-    start: Path | None = None,
-) -> Path:
-    """Discover project runtime state without creating it.
-
-    The home marker is ignored while discovering from one of its descendants
-    because ``~/.zeta`` also owns user-level configuration.
-    """
-    if state_dir is not None:
-        return state_dir.expanduser().resolve()
-    env_state_dir = os.environ.get("ZETA_STATE_DIR")
-    if env_state_dir:
-        return Path(env_state_dir).expanduser().resolve()
-
-    discovery_start = (start or Path.cwd()).expanduser().resolve()
-    home = Path.home().expanduser().resolve()
-    search_roots = (discovery_start, *discovery_start.parents)
-    if discovery_start != home and discovery_start.is_relative_to(home):
-        search_roots = search_roots[: search_roots.index(home)]
-    for root in search_roots:
-        marker = root / ".zeta"
-        if marker.is_dir():
-            return marker
-        if marker.exists() or marker.is_symlink():
-            raise NotADirectoryError(
-                f"runtime state marker is not a directory: {marker}"
-            )
-    return discovery_start / ".zeta"
 
 
 def event_store_path(root: Path | None = None) -> Path:

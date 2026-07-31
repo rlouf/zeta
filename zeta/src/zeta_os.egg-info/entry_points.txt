@@ -1,0 +1,7 @@
+[console_scripts]
+zeta = zeta.cli.main:main
+
+[zeta.event_connectors]
+filesystem = connectors.filesystem:filesystem_event_connector
+slack = connectors.slack:slack_event_connector
+telegram = connectors.telegram:telegram_event_connector

@@ -6,13 +6,13 @@ from typing import Any
 
 import click
 
-from zeta.journal.sqlite import resolve_state_dir
 from zeta.models.profiles import (
     ModelSelection,
     resolve_active_model,
     resolve_model_profile,
 )
 from zeta.models.types import ModelOutput
+from zeta.paths import resolve_state_dir
 from zeta.substrate import Derivation, Object, ObjectId, Store
 from zeta.trace import warn_trace_failure_once
 from zeta.trace.summarize import (

@@ -19,8 +19,9 @@ from zeta.authoring.resources import (
 from zeta.authoring.spec import AgentSpec, ScheduleEntry, scheduled_event_type
 from zeta.events import DraftEvent, Event
 from zeta.harness.store import RuntimeEventStore
-from zeta.journal.sqlite import event_store_path, resolve_state_dir
+from zeta.journal.sqlite import event_store_path
 from zeta.journal.store import EventReader, EventWriter, Filter
+from zeta.paths import resolve_state_dir
 
 SCHEDULER_TICK_PREFIX = "scheduler.tick."
 

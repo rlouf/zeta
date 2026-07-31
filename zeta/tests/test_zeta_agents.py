@@ -2272,7 +2272,7 @@ def test_zeta_resolve_state_dir_explicit_and_environment_precedence(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from zeta.journal.sqlite import resolve_state_dir
+    from zeta.paths import resolve_state_dir
 
     working_dir = tmp_path / "working"
     working_dir.mkdir()
@@ -2290,7 +2290,7 @@ def test_zeta_resolve_state_dir_finds_nearest_marker(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from zeta.journal.sqlite import resolve_state_dir
+    from zeta.paths import resolve_state_dir
 
     project = tmp_path / "project"
     child = project / "src" / "package"
@@ -2306,7 +2306,7 @@ def test_zeta_resolve_state_dir_fallback_does_not_create_marker(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from zeta.journal.sqlite import resolve_state_dir
+    from zeta.paths import resolve_state_dir
 
     project = tmp_path / "project"
     project.mkdir()
@@ -2320,7 +2320,7 @@ def test_zeta_resolve_state_dir_excludes_home_marker_for_descendants(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from zeta.journal.sqlite import resolve_state_dir
+    from zeta.paths import resolve_state_dir
 
     home = tmp_path / "home"
     project = home / "projects" / "zeta"
@@ -2337,7 +2337,7 @@ def test_zeta_resolve_state_dir_accepts_directory_symlink_marker(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from zeta.journal.sqlite import resolve_state_dir
+    from zeta.paths import resolve_state_dir
 
     project = tmp_path / "project"
     state = tmp_path / "state"
@@ -2355,7 +2355,7 @@ def test_zeta_resolve_state_dir_rejects_invalid_marker(
     monkeypatch: pytest.MonkeyPatch,
     broken_symlink: bool,
 ) -> None:
-    from zeta.journal.sqlite import resolve_state_dir
+    from zeta.paths import resolve_state_dir
 
     project = tmp_path / "project"
     project.mkdir()
@@ -2374,7 +2374,7 @@ def test_zeta_resolve_state_dir_treats_current_directory_spellings_equally(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from zeta.journal.sqlite import resolve_state_dir
+    from zeta.paths import resolve_state_dir
 
     project = tmp_path / "project"
     project.mkdir()

@@ -1,0 +1,58 @@
+Metadata-Version: 2.4
+Name: zeta-os
+Version: 0.9.1.dev19
+Summary: Operating substrate for agents.
+Author: Rémi Louf
+License-Expression: Apache-2.0
+Project-URL: Homepage, https://github.com/rlouf/zeta
+Project-URL: Repository, https://github.com/rlouf/zeta
+Project-URL: Issues, https://github.com/rlouf/zeta/issues
+Keywords: agents,ai,cli,llm,runtime
+Classifier: Development Status :: 3 - Alpha
+Classifier: Environment :: Console
+Classifier: Intended Audience :: Developers
+Classifier: Operating System :: MacOS
+Classifier: Operating System :: POSIX
+Classifier: Programming Language :: Python :: 3
+Classifier: Programming Language :: Python :: 3.11
+Classifier: Programming Language :: Python :: 3.12
+Classifier: Programming Language :: Python :: 3.13
+Classifier: Topic :: Software Development
+Requires-Python: >=3.11
+Description-Content-Type: text/markdown
+Requires-Dist: click>=8.1
+Requires-Dist: croniter
+Requires-Dist: httpx
+Requires-Dist: jinja2>=3.1
+Requires-Dist: jsonschema>=4.0
+Requires-Dist: PyYAML
+
+# Zeta
+
+Zeta is an operating substrate for agents. It provides the
+`zeta` CLI, agent manifests, event stores, model adapters, prompt construction,
+capability execution, and runtime services.
+
+## Tool executors
+
+The runtime loop stays in Zeta. An agent can select where its tool calls run
+through frontmatter:
+
+```yaml
+executor:
+  provider: local
+  config: {}
+```
+
+`local` runs registered capabilities in the current process. Additional
+providers are installed through the `zeta.tool_executors` entry-point group.
+Zeta sets up one executor per provider, agent, and configuration, then reuses
+it across invocations while keeping the model loop local.
+Provider setup is asynchronous. Returned executors must support concurrent
+calls; Zeta awaits their `aclose()` method during worker shutdown.
+
+Executor configuration is persisted in project snapshots and execution
+manifests. Store only secret references, profile names, or environment-variable
+names there—never credentials or secret values. Providers resolve references
+during setup. Config must contain JSON-compatible values with string object
+keys.

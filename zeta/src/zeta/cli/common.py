@@ -6,7 +6,8 @@ from typing import Any
 import click
 from zeta.capabilities.registry import CapabilityRegistry
 from zeta.harness.store import RuntimeEventStore
-from zeta.journal.sqlite import event_store_path, resolve_state_dir
+from zeta.journal.sqlite import event_store_path
+from zeta.paths import resolve_state_dir
 from zeta.tools import register_builtin_tools
 
 

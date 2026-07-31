@@ -204,8 +204,10 @@ def test_zeta_run_dependencies_keep_abort_signal_as_boundary() -> None:
 
 
 def test_zeta_agent_loop_requires_an_executor() -> None:
+    """The loop refuses to run without an executor, at call time."""
+    incomplete_call = cast(Any, zeta_agent.run_agent_loop)
     with pytest.raises(TypeError, match="tool_executor"):
-        zeta_agent.run_agent_loop("answer", [], zeta_agent.AgentConfig())
+        incomplete_call("answer", [], zeta_agent.AgentConfig())
 
 
 def run_rpc_session(*args: Any, **kwargs: Any) -> dict[str, Any]:
@@ -1672,7 +1674,7 @@ def test_zeta_run_capability_step_records_call_execution_and_result(
 
 def test_zeta_run_capability_step_dispatches_to_injected_executor() -> None:
     state = zeta_agent.RunState()
-    calls: list[tuple[str, dict[str, Any], str]] = []
+    calls: list[tuple[str, dict[str, Any]]] = []
     registry = CapabilityRegistry()
 
     def fail_in_process(_params: dict[str, Any]) -> dict[str, Any]:

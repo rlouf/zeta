@@ -27,6 +27,7 @@ import zeta.models.chat_completions as zeta_model
 import zeta.models.endpoint as zeta_model_endpoint
 import zeta.models.sse as zeta_model_sse
 import zeta.models.types as zeta_model_shapes
+import zeta.rpc.eventlog as rpc_eventlog
 from click.testing import CliRunner
 from zeta.authoring import spec as zeta_agent_spec
 from zeta.authoring.manifest import ManifestError
@@ -5283,8 +5284,9 @@ def test_zeta_cli_run_registers_builtin_tools(
         state_dir: Path | None,
         tool_registry: CapabilityRegistry,
         connector_names: tuple[str, ...] | None,
+        rpc_step: object = None,
     ) -> Runtime:
-        del project_root, state_dir, connector_names
+        del project_root, state_dir, connector_names, rpc_step
         captured["tool_registry"] = tool_registry
         return Runtime()
 
@@ -6059,7 +6061,7 @@ def test_zeta_local_runtime_run_once_handles_eventlog_rpc_request(
     ).event
     registry = CapabilityRegistry()
     captured: dict[str, object] = {}
-    original_session_turn_agent = harness_worker.session_turn_agent
+    original_session_turn_agent = rpc_eventlog.session_turn_agent
 
     def capture_session_turn_agent(
         session: zeta_runtime_context.RuntimeContext,
@@ -6076,14 +6078,14 @@ def test_zeta_local_runtime_run_once_handles_eventlog_rpc_request(
             cancellation_event_for_run=cancellation_event_for_run,
         )
 
-    monkeypatch.setattr(
-        harness_worker, "session_turn_agent", capture_session_turn_agent
-    )
+    monkeypatch.setattr(rpc_eventlog, "session_turn_agent", capture_session_turn_agent)
     runtime = harness_worker.WorkerServices(
         project_root=tmp_path,
         state_dir=tmp_path,
         events=event_store,
         tool_registry=registry,
+        # the harness serves a transport only when one is supplied
+        rpc_step=rpc_eventlog.eventlog_rpc_step,
     )
 
     with asyncio.Runner() as runner:

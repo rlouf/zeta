@@ -6,7 +6,7 @@ import asyncio
 import json
 import logging
 import time
-from collections.abc import Iterable
+from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass, field, replace
 from functools import cached_property
 from pathlib import Path
@@ -48,14 +48,12 @@ from zeta.harness.routing import (
     config_for_spec,
 )
 from zeta.harness.scheduling import request_due_schedules
-from zeta.harness.session_turn import session_turn_agent
 from zeta.harness.store import RuntimeEventStore
 from zeta.journal.sqlite import (
     event_store_path,
     resolve_state_dir,
     zeta_sqlite_path,
 )
-from zeta.journal.store import Filter
 from zeta.loop.config import AgentConfig
 from zeta.loop.outcomes import AgentRunResult
 from zeta.loop.runtime import AgentRunRequest, run_agent
@@ -71,6 +69,10 @@ ATTEMPT_HEARTBEAT_INTERVAL_SECONDS = 15.0
 
 
 ToolExecutorCacheKey = tuple[str, str, str]
+
+
+RpcStep = Callable[["WorkerServices"], Awaitable[str | None]]
+"""Serve one pending transport request, or return None when there is none."""
 
 
 @dataclass
@@ -89,6 +91,9 @@ class WorkerServices:
     tool_executors: ToolExecutorProviderRegistry = field(
         default_factory=load_tool_executor_provider_registry
     )
+    # Filled by whoever composes the worker, so the harness never names a
+    # transport. `zeta.rpc.eventlog.eventlog_rpc_step` is the bundled filler.
+    rpc_step: RpcStep | None = None
     executor_cache: dict[ToolExecutorCacheKey, ToolExecutor] = field(
         default_factory=dict,
         init=False,
@@ -225,6 +230,7 @@ def build_worker_services(
     registry: EventConnectorRegistry | None = None,
     connector_names: Iterable[str] | None = None,
     tool_executors: ToolExecutorProviderRegistry | None = None,
+    rpc_step: RpcStep | None = None,
 ) -> WorkerServices:
     resolved_project_root = project_root.expanduser().resolve()
     resolved_state_dir = resolve_state_dir(
@@ -245,14 +251,15 @@ def build_worker_services(
             session_dir=resolved_state_dir / "sessions" / "default"
         ),
         tool_executors=tool_executors or load_tool_executor_provider_registry(),
+        rpc_step=rpc_step,
     )
 
 
 async def run_once(runtime: WorkerServices) -> str:
-    rpc_request = pending_rpc_request(runtime)
-    if rpc_request is not None:
-        await run_eventlog_rpc_request(runtime, rpc_request)
-        return f"rpc {rpc_request.id}"
+    if runtime.rpc_step is not None:
+        serviced = await runtime.rpc_step(runtime)
+        if serviced is not None:
+            return serviced
     record_project_snapshot(runtime.events, runtime.project_snapshot)
     publish_due_schedules(runtime)
     executors = project_executors(runtime)
@@ -459,75 +466,6 @@ async def run_available_queue_item(
         return "queue empty"
     queue_item_id, lifecycle_events = outcome
     return run_once_message(queue_item_id, lifecycle_events)
-
-
-def pending_rpc_request(runtime: WorkerServices) -> Event | None:
-    from zeta.rpc.routes import RPC_REQUESTED, rpc_request_has_terminal_response
-
-    for event in runtime.events.list_events(Filter(event_type=RPC_REQUESTED)):
-        if not rpc_request_has_terminal_response(runtime.events, event):
-            return event
-    return None
-
-
-async def run_eventlog_rpc_request(
-    runtime: WorkerServices,
-    request: Event,
-) -> Event | None:
-    from zeta.rpc.routes import (
-        RpcClient,
-        RunState,
-        build_rpc_router,
-        run_eventlog_rpc_once,
-    )
-
-    session_id = request.session_id or "default"
-    trace_store = SqliteObjectStore(
-        zeta_sqlite_path(runtime.state_dir),
-        session_id=session_id,
-    )
-    session = RuntimeContext(
-        session_id=session_id,
-        event_sink=runtime.events,
-        trace_store=trace_store,
-        tool_registry=runtime.tool_registry,
-        state_dir=runtime.state_dir,
-        session_dir=runtime.state_dir / "sessions" / session_id,
-    )
-    pending_runs: dict[str, RunState] = {}
-
-    def cancellation_event_for_run(run_id: str) -> asyncio.Event | None:
-        state = pending_runs.get(run_id)
-        return state.cancellation_event if state is not None else None
-
-    dispatcher = QueueingDispatcher(
-        runtime.events,
-        runtime.events,
-        executors=(
-            session_turn_agent(
-                session,
-                publish_event=lambda _event: None,
-                cancellation_event_for_run=cancellation_event_for_run,
-            ),
-            *project_executors(runtime),
-        ),
-        worker_name=runtime.worker_name,
-        heartbeat_interval_seconds=ATTEMPT_HEARTBEAT_INTERVAL_SECONDS,
-        lease_ms=QUEUE_LEASE_MS,
-        retry_policy=runtime.retry_policy,
-    )
-    client = RpcClient(
-        connection=None,
-        session=session,
-        dispatcher=dispatcher,
-        pending_runs=pending_runs,
-        pending_tool_calls={},
-    )
-    router = build_rpc_router(client)
-    try:
-        return await run_eventlog_rpc_once(router)
-    finally:
-        trace_store.close()
 
 
 def run_once_message(queue_item_id: str, lifecycle_events: list[Event]) -> str:

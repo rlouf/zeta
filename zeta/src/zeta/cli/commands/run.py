@@ -10,6 +10,7 @@ from zeta.cli.common import (
     state_dir_option,
 )
 from zeta.harness import worker
+from zeta.rpc.eventlog import eventlog_rpc_step
 
 
 @click.command("run")
@@ -37,6 +38,7 @@ def run(
         state_dir=state_dir,
         tool_registry=cli_tool_registry(),
         connector_names=connector_names_from_option(connectors),
+        rpc_step=eventlog_rpc_step,
     )
 
     async def drain() -> str:

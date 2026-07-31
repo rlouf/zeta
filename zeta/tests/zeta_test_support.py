@@ -8,8 +8,9 @@ import os
 import re
 import time
 import uuid
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
+from dataclasses import dataclass, field
 from io import StringIO
 from pathlib import Path
 from types import SimpleNamespace
@@ -583,3 +584,81 @@ def write_codex_auth_file(
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps({"tokens": tokens}), encoding="utf-8")
     return access_token
+
+
+@dataclass
+class ModelStub:
+    """Stand in for the model, recording what it was asked.
+
+    One stub replaces the three shapes tests kept rewriting: return a fixed
+    message, return a sequence of messages, or capture the call. The last
+    response repeats once the sequence runs out, so a test that calls twice
+    but supplies one message still works.
+    """
+
+    responses: list[dict[str, Any]]
+    messages: list[list[dict[str, Any]]] = field(default_factory=list)
+    requests: list[Any] = field(default_factory=list)
+    options: list[dict[str, Any]] = field(default_factory=list)
+
+    async def __call__(
+        self,
+        messages: list[dict[str, Any]],
+        request: Any = None,
+        **options: Any,
+    ) -> dict[str, Any]:
+        self.messages.append(messages)
+        self.requests.append(request)
+        self.options.append(options)
+        index = min(len(self.messages) - 1, len(self.responses) - 1)
+        return self.responses[index]
+
+    @property
+    def calls(self) -> int:
+        return len(self.messages)
+
+    @property
+    def last_request(self) -> Any:
+        return self.requests[-1]
+
+    @property
+    def last_options(self) -> dict[str, Any]:
+        return self.options[-1]
+
+
+def stub_model(*responses: dict[str, Any]) -> ModelStub:
+    """Return a stub for `chat_completion_messages` and friends."""
+    return ModelStub(list(responses) or [{"content": "done"}])
+
+
+def stub_sse(frames: Iterable[str]) -> Any:
+    """Return a stub for `stream_json_sse`, which is an async generator."""
+    captured: list[str] = list(frames)
+
+    async def stream(*_args: Any, **_kwargs: Any) -> Any:
+        for frame in captured:
+            yield frame
+
+    return stream
+
+
+@dataclass
+class CapabilityStub:
+    """Stand in for a capability, recording every invocation."""
+
+    result: dict[str, Any] = field(
+        default_factory=lambda: {
+            "ok": True,
+            "content": [{"type": "text", "text": "ok"}],
+        }
+    )
+    calls: list[tuple[str, dict[str, Any]]] = field(default_factory=list)
+
+    async def __call__(
+        self,
+        capability_id: str,
+        params: dict[str, Any],
+        **_kwargs: Any,
+    ) -> dict[str, Any]:
+        self.calls.append((capability_id, params))
+        return self.result

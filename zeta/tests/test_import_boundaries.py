@@ -49,9 +49,11 @@ FORBIDDEN_DEPENDENCIES = {
 LEAF_MODULES = ("ids.py", "paths.py")
 
 # connectors is the third-party extension surface. It sees the event
-# vocabulary and nothing else, so an installed connector cannot reach into
-# the runtime.
-CONNECTOR_ALLOWED = {"zeta.effects", "zeta.events"}
+# vocabulary and the path leaves, so an installed connector can write a
+# downloaded file where the project keeps state, and nothing else. None of
+# these reach runtime state, so a connector still cannot touch the journal,
+# the queue, or a running agent.
+CONNECTOR_ALLOWED = {"zeta.effects", "zeta.events", "zeta.paths"}
 
 
 def imported_modules(path: Path) -> list[tuple[str, int]]:

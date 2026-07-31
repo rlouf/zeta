@@ -501,9 +501,11 @@ The bundled Slack connector uses:
 
 The bundled Telegram connector uses:
 
-- `TELEGRAM_BOT_TOKEN` for `sendMessage`
+- `TELEGRAM_BOT_TOKEN` for `sendMessage` and media download
 - `TELEGRAM_WEBHOOK_SECRET` for webhook request verification
 - `TELEGRAM_ALLOWED_SENDERS` for a comma-separated user allowlist
+- `TELEGRAM_MEDIA_DIR` for an optional private media cache path
+- `TELEGRAM_MEDIA_MAX_BYTES` for an optional media size limit
 
 Set the Telegram webhook to Zeta's `/connectors/telegram` endpoint. Include
 `message` and `message_reaction` in the webhook `allowed_updates` list.
@@ -515,8 +517,10 @@ event carries the reacted `message_id`, the user ID, and both reaction sets.
 Match the message ID to the confirmation message before the agent acts.
 
 Telegram also accepts voice, photo, document, and audio messages. Each received
-message event can contain an `attachments` list with Telegram file metadata.
-Zeta preserves the file ID and caption. It does not download or inspect media.
+message event contains an `attachments` list with local file paths and Telegram
+metadata. Zeta stores each attachment under `.zeta/media/telegram` by default.
+It preserves the file ID, caption, and MIME type. The default size limit is 20 MiB.
+Zeta returns a retryable failure when a media download fails.
 
 The bundled filesystem connector (`id: filesystem`) polls a directory and emits
 `file.created` events with a `{path, name, dir}` payload.

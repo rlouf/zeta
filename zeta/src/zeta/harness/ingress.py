@@ -102,6 +102,7 @@ def http_response_bytes(response: InboundResponse) -> bytes:
         401: "Unauthorized",
         404: "Not Found",
         405: "Method Not Allowed",
+        500: "Internal Server Error",
     }.get(response.status_code, "OK")
     headers = {
         "Content-Length": str(len(response.body)),

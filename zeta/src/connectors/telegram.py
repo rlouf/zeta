@@ -15,12 +15,16 @@ from __future__ import annotations
 import hmac
 import json
 import os
+import tempfile
 from collections.abc import Mapping
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 from zeta.effects import DeliverySemantics
 from zeta.events import DraftEvent, Event
+from zeta.paths import resolve_state_dir
 
 from connectors import (
     EgressBinding,
@@ -40,6 +44,15 @@ TELEGRAM_EGRESS_SEMANTICS: Mapping[str, DeliverySemantics] = {
 # Telegram rejects a message longer than this, so long replies are split.
 MAX_MESSAGE_CHARS = 4096
 SECRET_TOKEN_HEADER = "x-telegram-bot-api-secret-token"
+DEFAULT_MEDIA_MAX_BYTES = 20 * 1024 * 1024
+
+
+class TelegramMediaDownloadError(RuntimeError):
+    """Raised when Telegram media cannot become a local attachment."""
+
+
+class TelegramMediaTooLargeError(TelegramMediaDownloadError):
+    """Raised when Telegram media exceeds the configured size limit."""
 
 
 @dataclass(frozen=True)
@@ -82,17 +95,128 @@ class HttpTelegramClient:
             payload["parse_mode"] = parse_mode
         return await self.call("sendMessage", payload)
 
+    async def download_file(
+        self,
+        file_id: str,
+        destination: Path,
+        *,
+        max_bytes: int,
+    ) -> Path:
+        """Download one Telegram file atomically to a private local path."""
+        import httpx
+
+        if max_bytes <= 0:
+            raise ValueError("Telegram media size limit must be positive")
+        file_path = _remote_file_path(await self.call("getFile", {"file_id": file_id}))
+        _prepare_media_directory(destination)
+        if destination.is_file():
+            return destination
+
+        url = (
+            f"{self.base_url.rstrip('/')}/file/bot{self.token}/"
+            f"{quote(file_path, safe='/')}"
+        )
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
+                async with client.stream("GET", url) as response:
+                    response.raise_for_status()
+                    _guard_declared_size(response.headers, max_bytes)
+                    await _write_stream_atomically(response, destination, max_bytes)
+        except TelegramMediaDownloadError:
+            raise
+        except (OSError, httpx.HTTPError) as exc:
+            raise TelegramMediaDownloadError(
+                f"Telegram file download failed: {exc}"
+            ) from exc
+        return destination
+
+
+def _remote_file_path(data: Mapping[str, Any]) -> str:
+    """Return the path Telegram reports for a file, or fail loudly."""
+    result = data.get("result")
+    file_path = result.get("file_path") if isinstance(result, Mapping) else None
+    if not isinstance(file_path, str) or not file_path:
+        raise TelegramMediaDownloadError("Telegram getFile returned no file path")
+    return file_path
+
+
+def _prepare_media_directory(destination: Path) -> None:
+    """Create the media directory privately, tolerating an existing mode."""
+    destination.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    try:
+        os.chmod(destination.parent, 0o700)
+    except OSError:
+        pass
+
+
+def _guard_declared_size(headers: Mapping[str, str], max_bytes: int) -> None:
+    """Reject a file the server already says is too large."""
+    content_length = headers.get("content-length")
+    if content_length is None:
+        return
+    try:
+        declared_size = int(content_length)
+    except ValueError as exc:
+        raise TelegramMediaDownloadError(
+            "Telegram file response has an invalid content length"
+        ) from exc
+    if declared_size > max_bytes:
+        raise TelegramMediaTooLargeError(
+            f"Telegram file exceeds the {max_bytes}-byte limit"
+        )
+
+
+async def _write_stream_atomically(
+    response: Any,
+    destination: Path,
+    max_bytes: int,
+) -> None:
+    """Write a stream to a private temporary file, then move it into place.
+
+    The size is checked while writing, because a server may under-report or
+    omit its content length.
+    """
+    descriptor, raw_temporary_path = tempfile.mkstemp(
+        prefix=f".{destination.name}.",
+        dir=destination.parent,
+    )
+    temporary_path: Path | None = Path(raw_temporary_path)
+    try:
+        os.chmod(raw_temporary_path, 0o600)
+        with os.fdopen(descriptor, "wb") as handle:
+            received = 0
+            async for chunk in response.aiter_bytes():
+                received += len(chunk)
+                if received > max_bytes:
+                    raise TelegramMediaTooLargeError(
+                        f"Telegram file exceeds the {max_bytes}-byte limit"
+                    )
+                handle.write(chunk)
+        os.replace(raw_temporary_path, destination)
+        temporary_path = None
+    finally:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
+
 
 def telegram_event_connector(
     client: Any | None = None,
     *,
     webhook_secret: str | None = None,
     allowed_senders: frozenset[int] | None = None,
+    media_dir: Path | None = None,
+    media_max_bytes: int | None = None,
 ) -> EventConnector:
     client = client if client is not None else telegram_client_from_env()
     webhook_secret = webhook_secret or os.environ.get("TELEGRAM_WEBHOOK_SECRET")
     senders = (
         allowed_senders if allowed_senders is not None else allowed_senders_from_env()
+    )
+    stored_media_dir = media_dir or telegram_media_dir_from_env()
+    max_media_bytes = (
+        media_max_bytes
+        if media_max_bytes is not None
+        else telegram_media_max_bytes_from_env()
     )
     return EventConnector(
         id="telegram",
@@ -105,6 +229,9 @@ def telegram_event_connector(
             request,
             webhook_secret=webhook_secret,
             allowed_senders=senders,
+            client=client,
+            media_dir=stored_media_dir,
+            media_max_bytes=max_media_bytes,
         ),
         egress={
             TELEGRAM_MESSAGE_SEND: lambda event, binding, key: send_telegram_message(
@@ -124,6 +251,9 @@ async def handle_telegram_push_ingress(
     *,
     webhook_secret: str | None,
     allowed_senders: frozenset[int],
+    client: Any | None = None,
+    media_dir: Path | None = None,
+    media_max_bytes: int = DEFAULT_MEDIA_MAX_BYTES,
 ) -> tuple[InboundResponse, tuple[DraftEvent, ...]]:
     """Verify one webhook request and turn it into at most one draft.
 
@@ -144,7 +274,104 @@ async def handle_telegram_push_ingress(
     draft = telegram_draft_from_update(update, allowed_senders=allowed_senders)
     if draft is None:
         return InboundResponse(status_code=200, body=b"ignored"), ()
+    if client is not None and media_dir is not None:
+        try:
+            draft = await materialize_telegram_draft(
+                draft,
+                client,
+                media_dir=media_dir,
+                max_bytes=media_max_bytes,
+            )
+        except TelegramMediaTooLargeError as exc:
+            return InboundResponse(status_code=200, body=str(exc).encode("utf-8")), ()
+        except TelegramMediaDownloadError:
+            return InboundResponse(status_code=500, body=b"media download failed"), ()
     return InboundResponse(status_code=200, body=b"accepted"), (draft,)
+
+
+async def materialize_telegram_draft(
+    draft: DraftEvent,
+    client: Any,
+    *,
+    media_dir: Path,
+    max_bytes: int,
+) -> DraftEvent:
+    """Copy Telegram attachments to local storage before event acceptance."""
+    raw_attachments = draft.payload.get("attachments")
+    if not isinstance(raw_attachments, list):
+        return draft
+    update_id = draft.payload.get("update_id")
+    if not isinstance(update_id, int):
+        raise TelegramMediaDownloadError("Telegram message has no update id")
+
+    attachments: list[dict[str, Any]] = []
+    for index, raw_attachment in enumerate(raw_attachments):
+        if not isinstance(raw_attachment, Mapping):
+            raise TelegramMediaDownloadError("Telegram attachment is invalid")
+        attachment = dict(raw_attachment)
+        file_id = attachment.get("file_id")
+        if not isinstance(file_id, str) or not file_id:
+            raise TelegramMediaDownloadError("Telegram attachment has no file id")
+        declared_size = attachment.get("file_size")
+        if isinstance(declared_size, int) and declared_size > max_bytes:
+            raise TelegramMediaTooLargeError(
+                f"Telegram attachment exceeds the {max_bytes}-byte limit"
+            )
+        destination = telegram_attachment_path(
+            media_dir,
+            update_id=update_id,
+            index=index,
+            attachment=attachment,
+        )
+        if not destination.is_file():
+            await client.download_file(file_id, destination, max_bytes=max_bytes)
+        attachment["path"] = str(destination)
+        attachments.append(attachment)
+
+    return DraftEvent(
+        draft.event_type,
+        draft.source,
+        {**draft.payload, "attachments": attachments},
+        idempotency_key=draft.idempotency_key,
+        caused_by=draft.caused_by,
+        session_id=draft.session_id,
+        run_id=draft.run_id,
+        turn_id=draft.turn_id,
+    )
+
+
+def telegram_attachment_path(
+    media_dir: Path,
+    *,
+    update_id: int,
+    index: int,
+    attachment: Mapping[str, Any],
+) -> Path:
+    """Return the stable private path for one Telegram attachment."""
+    kind = attachment.get("type")
+    if not isinstance(kind, str) or not kind:
+        raise TelegramMediaDownloadError("Telegram attachment has no type")
+    return (
+        media_dir.expanduser().resolve()
+        / str(update_id)
+        / (f"{index}-{kind}{telegram_attachment_suffix(attachment)}")
+    )
+
+
+def telegram_attachment_suffix(attachment: Mapping[str, Any]) -> str:
+    """Return a safe useful suffix for a materialized Telegram attachment."""
+    file_name = attachment.get("file_name")
+    if isinstance(file_name, str):
+        suffix = Path(file_name).suffix.lower()
+        if suffix and suffix[1:].isalnum() and len(suffix) <= 10:
+            return suffix
+    kind = attachment.get("type")
+    if not isinstance(kind, str):
+        return ".bin"
+    return {"voice": ".ogg", "photo": ".jpg", "audio": ".audio"}.get(
+        kind,
+        ".bin",
+    )
 
 
 def valid_secret_token(
@@ -472,6 +699,28 @@ def allowed_senders_from_env() -> frozenset[int]:
     return frozenset(senders)
 
 
+def telegram_media_dir_from_env() -> Path:
+    """Return the private Telegram media cache directory."""
+    raw = os.environ.get("TELEGRAM_MEDIA_DIR")
+    if raw:
+        return Path(raw).expanduser().resolve()
+    return resolve_state_dir() / "media" / "telegram"
+
+
+def telegram_media_max_bytes_from_env() -> int:
+    """Return the Telegram media size limit from configuration."""
+    raw = os.environ.get("TELEGRAM_MEDIA_MAX_BYTES")
+    if raw is None:
+        return DEFAULT_MEDIA_MAX_BYTES
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise RuntimeError("TELEGRAM_MEDIA_MAX_BYTES must be an integer") from exc
+    if value <= 0:
+        raise RuntimeError("TELEGRAM_MEDIA_MAX_BYTES must be positive")
+    return value
+
+
 def telegram_message_received_schema() -> Mapping[str, Any]:
     attachment_schema: Mapping[str, Any] = {
         "type": "object",
@@ -482,6 +731,7 @@ def telegram_message_received_schema() -> Mapping[str, Any]:
             "file_unique_id": {"type": "string"},
             "file_name": {"type": "string"},
             "mime_type": {"type": "string"},
+            "path": {"type": "string"},
             "file_size": {"type": "integer"},
             "duration": {"type": "integer"},
             "width": {"type": "integer"},

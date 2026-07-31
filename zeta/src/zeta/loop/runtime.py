@@ -29,7 +29,7 @@ from zeta.loop.cancellation import (
     run_abort_reason,
 )
 from zeta.loop.config import AgentConfig
-from zeta.loop.gateway import ModelGateway, run_model_metadata
+from zeta.loop.gateway import ModelGateway, model_request_from, run_model_metadata
 from zeta.loop.outcomes import (
     AgentRunResult,
     RunState,
@@ -136,7 +136,7 @@ async def run_agent_loop(
 ) -> AgentRunResult:
     """Run an assistant/tool loop without mutating session state."""
     gateway = model_gateway or DefaultModelGateway()
-    if not gateway.available(config):
+    if not gateway.available(model_request_from(config)):
         raise RuntimeError("model endpoint is not reachable")
     clock = time_monotonic
     deadline = agent_deadline(config.max_wall_seconds, deadline, clock=clock)

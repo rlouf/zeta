@@ -19,6 +19,7 @@ from zeta.journal.sqlite import (
     zeta_sqlite_path,
 )
 from zeta.models import chat_completion_messages
+from zeta.models.types import ModelRequest
 from zeta.substrate import InMemoryStore, SqliteObjectStore, Store
 from zeta.substrate.sqlite import sqlite_table_names
 from zeta.trace.diff import render_prompt_diff
@@ -530,14 +531,16 @@ def trace_replay(
     message = asyncio.run(
         chat_completion_messages(
             reconstructed.messages,
-            api=selection.api,
+            ModelRequest(
+                api=selection.api,
+                model=selection.model,
+                url=selection.url,
+                thinking=reconstructed.thinking,
+                session_id=session_id,
+            ),
             tools=reconstructed.tools or None,
             tool_choice="auto",
             max_tokens=reconstructed.max_tokens,
-            selected_model=selection.model,
-            selected_url=selection.url,
-            session_id=session_id,
-            thinking=reconstructed.thinking,
         )
     )
     replay_id = record_replay(store, prompt_id, message, selection)

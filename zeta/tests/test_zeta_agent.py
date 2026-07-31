@@ -299,6 +299,7 @@ def test_zeta_console_script_is_declared() -> None:
 def test_zeta_agent_turn_carries_reasoning_into_event(monkeypatch) -> None:
     async def fake_chat_completion_messages(
         messages: list[dict[str, Any]],
+        request: object = None,
         **kwargs: object,
     ) -> dict[str, Any]:
         return {"content": "done", "reasoning_content": "weighing the options"}
@@ -959,6 +960,7 @@ def test_zeta_model_turn_carries_typed_assistant_message() -> None:
 def test_zeta_request_assistant_message_returns_model_output(monkeypatch) -> None:
     async def fake_chat_completion_messages(
         messages: list[dict[str, Any]],
+        request: object = None,
         **kwargs: object,
     ) -> dict[str, Any]:
         del messages
@@ -1127,19 +1129,19 @@ async def test_zeta_build_prompt_step_returns_committed_model_input() -> None:
 
 def test_zeta_call_model_step_returns_output_and_telemetry() -> None:
     class FakeGateway:
-        def available(self, config: zeta_agent.AgentConfig) -> bool:
+        def available(self, request: zeta_model_shapes.ModelRequest) -> bool:
             return True
 
         async def generate(
             self,
             model_input: zeta_model_shapes.ModelInput,
-            config: zeta_agent.AgentConfig,
+            request: zeta_model_shapes.ModelRequest,
             *,
             stream: zeta_loop_gateway.ModelStream | None = None,
             telemetry_sink: Callable[[dict[str, Any]], None] | None = None,
             should_stop: Callable[[], str | None] | None = None,
         ) -> zeta_model_shapes.ModelOutput:
-            del config, stream
+            del request, stream
             assert model_input.messages == [{"role": "user", "content": "answer"}]
             assert model_input.tools == []
             if telemetry_sink is not None:
@@ -1191,19 +1193,19 @@ def test_zeta_call_model_step_updates_model_status_during_request() -> None:
             status_events.append(f"reasoning:{text}")
 
     class FakeGateway:
-        def available(self, config: zeta_agent.AgentConfig) -> bool:
+        def available(self, request: zeta_model_shapes.ModelRequest) -> bool:
             return True
 
         async def generate(
             self,
             model_input: zeta_model_shapes.ModelInput,
-            config: zeta_agent.AgentConfig,
+            request: zeta_model_shapes.ModelRequest,
             *,
             stream: zeta_loop_gateway.ModelStream | None = None,
             telemetry_sink: Callable[[dict[str, Any]], None] | None = None,
             should_stop: Callable[[], str | None] | None = None,
         ) -> zeta_model_shapes.ModelOutput:
-            del model_input, config, telemetry_sink
+            del model_input, request, telemetry_sink
             assert status_events == ["enter"]
             assert stream is not None
             stream.reasoning_delta("checking")
@@ -1233,19 +1235,19 @@ def test_zeta_agent_compaction_policy_bounds_model_input() -> None:
     captured: dict[str, zeta_model_shapes.ModelInput] = {}
 
     class FakeGateway:
-        def available(self, config: zeta_agent.AgentConfig) -> bool:
+        def available(self, request: zeta_model_shapes.ModelRequest) -> bool:
             return True
 
         async def generate(
             self,
             model_input: zeta_model_shapes.ModelInput,
-            config: zeta_agent.AgentConfig,
+            request: zeta_model_shapes.ModelRequest,
             *,
             stream: zeta_loop_gateway.ModelStream | None = None,
             telemetry_sink: Callable[[dict[str, Any]], None] | None = None,
             should_stop: Callable[[], str | None] | None = None,
         ) -> zeta_model_shapes.ModelOutput:
-            del config, stream, telemetry_sink
+            del request, stream, telemetry_sink
             captured["model_input"] = model_input
             return zeta_model_shapes.ModelOutput(message={"content": "done"})
 
@@ -1285,19 +1287,19 @@ def test_zeta_async_agent_turn_runs_turns_concurrently() -> None:
     seen: list[str] = []
 
     class BlockingGateway:
-        def available(self, config: zeta_agent.AgentConfig) -> bool:
+        def available(self, request: zeta_model_shapes.ModelRequest) -> bool:
             return True
 
         async def generate(
             self,
             model_input: zeta_model_shapes.ModelInput,
-            config: zeta_agent.AgentConfig,
+            request: zeta_model_shapes.ModelRequest,
             *,
             stream: zeta_loop_gateway.ModelStream | None = None,
             telemetry_sink: Callable[[dict[str, Any]], None] | None = None,
             should_stop: Callable[[], str | None] | None = None,
         ) -> zeta_model_shapes.ModelOutput:
-            del config, stream, telemetry_sink
+            del request, stream, telemetry_sink
             objective = str(model_input.messages[-1]["content"]).splitlines()[0]
             seen.append(objective)
             if len(seen) == 2:
@@ -1335,20 +1337,20 @@ def test_zeta_async_agent_turn_runs_turns_concurrently() -> None:
 
 def test_zeta_step_model_without_tool_calls_returns_info_and_stops() -> None:
     class FakeGateway:
-        def available(self, config: zeta_agent.AgentConfig) -> bool:
-            del config
+        def available(self, request: zeta_model_shapes.ModelRequest) -> bool:
+            del request
             return True
 
         async def generate(
             self,
             model_input: zeta_model_shapes.ModelInput,
-            config: zeta_agent.AgentConfig,
+            request: zeta_model_shapes.ModelRequest,
             *,
             stream: zeta_loop_gateway.ModelStream | None = None,
             telemetry_sink: Callable[[dict[str, Any]], None] | None = None,
             should_stop: Callable[[], str | None] | None = None,
         ) -> zeta_model_shapes.ModelOutput:
-            del model_input, config, stream
+            del model_input, request, stream
             if telemetry_sink is not None:
                 telemetry_sink({"usage": {"input_tokens": 1}})
             return zeta_model_shapes.ModelOutput(message={"content": "done"})
@@ -1392,20 +1394,20 @@ def test_zeta_step_model_with_tool_calls_records_pending_tools() -> None:
     tool_calls = tool_call_fixture("call-1", name="read", path="README.md")
 
     class FakeGateway:
-        def available(self, config: zeta_agent.AgentConfig) -> bool:
-            del config
+        def available(self, request: zeta_model_shapes.ModelRequest) -> bool:
+            del request
             return True
 
         async def generate(
             self,
             model_input: zeta_model_shapes.ModelInput,
-            config: zeta_agent.AgentConfig,
+            request: zeta_model_shapes.ModelRequest,
             *,
             stream: zeta_loop_gateway.ModelStream | None = None,
             telemetry_sink: Callable[[dict[str, Any]], None] | None = None,
             should_stop: Callable[[], str | None] | None = None,
         ) -> zeta_model_shapes.ModelOutput:
-            del model_input, config, stream
+            del model_input, request, stream
             if telemetry_sink is not None:
                 telemetry_sink({"usage": {"input_tokens": 2}})
             return zeta_model_shapes.ModelOutput(
@@ -5460,6 +5462,7 @@ def test_zeta_worker_agent_runner_uses_shared_runtime_session(
     ) -> AgentRunResult:
         captured["request"] = request
         captured.update(kwargs)
+        captured["request"] = request
         return AgentRunResult(final_answer="done")
 
     agents_dir = tmp_path / "agents"
@@ -5534,6 +5537,7 @@ def test_zeta_worker_agent_runner_uses_one_shot_runtime_session(
     ) -> AgentRunResult:
         captured["request"] = request
         captured.update(kwargs)
+        captured["request"] = request
         return AgentRunResult(final_answer="done")
 
     agents_dir = tmp_path / "agents"
@@ -5602,6 +5606,7 @@ def test_zeta_worker_agent_runner_uses_runtime_model_selection(
     ) -> AgentRunResult:
         captured["request"] = request
         captured.update(kwargs)
+        captured["request"] = request
         return AgentRunResult(final_answer="done")
 
     agents_dir = tmp_path / "agents"
@@ -5679,6 +5684,7 @@ def test_zeta_worker_returned_events_use_runtime_model_selection(
     ) -> AgentRunResult:
         captured["request"] = request
         captured.update(kwargs)
+        captured["request"] = request
         return AgentRunResult(final_answer="two observations")
 
     async def fake_structured_output(
@@ -5795,6 +5801,7 @@ def test_zeta_worker_agent_runner_uses_agent_model_config(
     ) -> AgentRunResult:
         captured["request"] = request
         captured.update(kwargs)
+        captured["request"] = request
         return AgentRunResult(final_answer="done")
 
     agents_dir = tmp_path / "agents"
@@ -6965,6 +6972,7 @@ def test_zeta_agent_turn_uses_explicit_tool_registry(monkeypatch) -> None:
 
     async def fake_chat_completion_messages(
         messages: list[dict[str, Any]],
+        request: object = None,
         **kwargs: object,
     ) -> dict[str, Any]:
         captured_messages.append(messages)
@@ -7065,9 +7073,11 @@ def test_zeta_agent_turn_passes_thinking_to_the_model(monkeypatch) -> None:
 
     async def fake_chat_completion_messages(
         messages: list[dict[str, Any]],
+        request: object = None,
         **kwargs: object,
     ) -> dict[str, Any]:
         captured["kwargs"] = kwargs
+        captured["request"] = request
         return {"content": "done"}
 
     monkeypatch.setattr(zeta_model_endpoint, "model_endpoint_open", lambda: True)
@@ -7083,8 +7093,7 @@ def test_zeta_agent_turn_passes_thinking_to_the_model(monkeypatch) -> None:
         ),
     )
 
-    kwargs = cast(dict[str, Any], captured["kwargs"])
-    assert kwargs["thinking"] == "none"
+    assert captured["request"].thinking == "none"
 
 
 def test_zeta_agent_event_omits_empty_reasoning() -> None:
@@ -7103,6 +7112,7 @@ def test_zeta_agent_tool_call_is_caused_by_assistant_event(
 
     async def fake_chat_completion_messages(
         messages: list[dict[str, Any]],
+        request: object = None,
         **kwargs: object,
     ) -> dict[str, Any]:
         return {
@@ -7148,10 +7158,12 @@ def test_zeta_agent_turn_finalizes_text(monkeypatch) -> None:
 
     async def fake_chat_completion_messages(
         messages: list[dict[str, Any]],
+        request: object = None,
         **kwargs: object,
     ) -> dict[str, Any]:
         captured["messages"] = messages
         captured["kwargs"] = kwargs
+        captured["request"] = request
         return {"content": "done"}
 
     monkeypatch.setattr(zeta_model_endpoint, "model_endpoint_open", lambda: True)
@@ -7188,10 +7200,12 @@ def test_zeta_agent_turn_stores_prompt_and_assistant_trace(monkeypatch) -> None:
 
     async def fake_chat_completion_messages(
         messages: list[dict[str, Any]],
+        request: object = None,
         **kwargs: object,
     ) -> dict[str, Any]:
         captured["messages"] = messages
         captured["kwargs"] = kwargs
+        captured["request"] = request
         return {"content": "done"}
 
     monkeypatch.setattr(zeta_model_endpoint, "model_endpoint_open", lambda: True)
@@ -7239,6 +7253,7 @@ def test_zeta_agent_turn_stores_prompt_and_assistant_trace(monkeypatch) -> None:
 def test_zeta_agent_turn_captures_model_telemetry(monkeypatch) -> None:
     async def fake_chat_completion_messages(
         messages: list[dict[str, Any]],
+        request: object = None,
         **kwargs: object,
     ) -> dict[str, Any]:
         del messages
@@ -7327,6 +7342,7 @@ def test_zeta_agent_turn_attaches_model_telemetry_to_first_tool_result(
 
     async def fake_chat_completion_messages(
         messages: list[dict[str, Any]],
+        request: object = None,
         **kwargs: object,
     ) -> dict[str, Any]:
         del messages
@@ -7371,7 +7387,7 @@ def test_zeta_agent_turn_records_one_prompt_trace_per_model_request(
     monkeypatch.setattr(
         zeta_models_api,
         "chat_completion_messages",
-        _as_async(lambda messages, **kwargs: next(responses)),
+        _as_async(lambda messages, request=None, **kwargs: next(responses)),
     )
     monkeypatch.setattr(
         zeta_capability_executors,
@@ -7419,7 +7435,7 @@ def test_zeta_agent_turn_records_tool_result_derivation(
     monkeypatch.setattr(
         zeta_models_api,
         "chat_completion_messages",
-        _as_async(lambda messages, **kwargs: next(responses)),
+        _as_async(lambda messages, request=None, **kwargs: next(responses)),
     )
     monkeypatch.setattr(
         zeta_capability_executors,
@@ -7524,6 +7540,7 @@ def test_zeta_agent_runtime_ui_events_do_not_feed_next_prompt(monkeypatch) -> No
 
     async def fake_chat_completion_messages(
         messages: list[dict[str, Any]],
+        request: object = None,
         **kwargs: object,
     ) -> dict[str, Any]:
         captured.append(messages)
@@ -7562,10 +7579,12 @@ def test_zeta_agent_turn_uses_request_model(monkeypatch) -> None:
 
     async def fake_chat_completion_messages(
         messages: list[dict[str, Any]],
+        request: object = None,
         **kwargs: object,
     ) -> dict[str, Any]:
         captured["messages"] = messages
         captured["kwargs"] = kwargs
+        captured["request"] = request
         return {"content": "done"}
 
     monkeypatch.setattr(
@@ -7588,9 +7607,8 @@ def test_zeta_agent_turn_uses_request_model(monkeypatch) -> None:
 
     assert result.final_answer == "done"
     assert captured["endpoint_url"] == "http://127.0.0.1:8081/v1/chat/completions"
-    kwargs = cast(dict[str, Any], captured["kwargs"])
-    assert kwargs["selected_model"] == "fast-model"
-    assert kwargs["selected_url"] == "http://127.0.0.1:8081/v1/chat/completions"
+    assert captured["request"].model == "fast-model"
+    assert captured["request"].url == "http://127.0.0.1:8081/v1/chat/completions"
 
 
 def test_zeta_agent_turn_runs_multiple_read_only_tools_in_order(monkeypatch) -> None:
@@ -7746,6 +7764,7 @@ def test_zeta_agent_turn_does_not_duplicate_current_objective(monkeypatch) -> No
 
     async def fake_chat_completion_messages(
         messages: list[dict[str, Any]],
+        request: object = None,
         **kwargs: object,
     ) -> dict[str, Any]:
         del kwargs
@@ -7800,6 +7819,7 @@ def test_zeta_agent_turn_orders_prior_timeline_before_current_events(
 
     async def fake_chat_completion_messages(
         messages: list[dict[str, Any]],
+        request: object = None,
         **kwargs: object,
     ) -> dict[str, Any]:
         del kwargs
@@ -8435,9 +8455,11 @@ def test_zeta_agent_turn_passes_api_to_the_model(monkeypatch) -> None:
 
     async def fake_chat_completion_messages(
         messages: list[dict[str, Any]],
+        request: object = None,
         **kwargs: object,
     ) -> dict[str, Any]:
         captured.update(kwargs)
+        captured["request"] = request
         return {"content": "done"}
 
     monkeypatch.setattr(zeta_model_endpoint, "model_endpoint_open", lambda: True)
@@ -8451,4 +8473,4 @@ def test_zeta_agent_turn_passes_api_to_the_model(monkeypatch) -> None:
         zeta_agent.AgentConfig(allowed_capabilities=("read",), max_turns=1),
     )
 
-    assert captured["api"] is None
+    assert captured["request"].api is None

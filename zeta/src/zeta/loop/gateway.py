@@ -14,7 +14,7 @@ from zeta.loop.config import AgentConfig
 from zeta.loop.streaming import ModelTurnStreamSink, StatusAwareModelStream
 from zeta.loop.types import AgentEventSink
 from zeta.models import DefaultModelGateway
-from zeta.models.types import ModelInput, ModelOutput
+from zeta.models.types import ModelInput, ModelOutput, ModelRequest
 
 
 class ModelStream(Protocol):
@@ -24,12 +24,12 @@ class ModelStream(Protocol):
 
 
 class ModelGateway(Protocol):
-    def available(self, config: AgentConfig) -> bool: ...
+    def available(self, request: ModelRequest) -> bool: ...
 
     async def generate(
         self,
         model_input: ModelInput,
-        config: AgentConfig,
+        request: ModelRequest,
         *,
         stream: ModelStream | None = None,
         telemetry_sink: Callable[[dict[str, Any]], None] | None = None,
@@ -37,8 +37,23 @@ class ModelGateway(Protocol):
     ) -> ModelOutput: ...
 
 
+def model_request_from(config: AgentConfig) -> ModelRequest:
+    """Convert a run's config into what a backend needs.
+
+    The models layer never reads a runtime object, so the conversion happens
+    here, once.
+    """
+    return ModelRequest(
+        api=config.model_api,
+        model=config.model_name,
+        url=config.model_url,
+        thinking=config.thinking,
+        session_id=config.model_session_id,
+    )
+
+
 def agent_model_endpoint_open(config: AgentConfig) -> bool:
-    return DefaultModelGateway().available(config)
+    return DefaultModelGateway().available(model_request_from(config))
 
 
 def run_model_metadata(config: AgentConfig) -> dict[str, str]:
@@ -68,7 +83,7 @@ async def request_assistant_message(
     if status_factory is None:
         model_output = await gateway.generate(
             model_input,
-            config,
+            model_request_from(config),
             stream=turn_stream_sink,
             telemetry_sink=model_telemetry.update,
             should_stop=should_stop,
@@ -77,7 +92,7 @@ async def request_assistant_message(
         with status_factory() as status:
             model_output = await gateway.generate(
                 model_input,
-                config,
+                model_request_from(config),
                 stream=StatusAwareModelStream(turn_stream_sink, status),
                 telemetry_sink=model_telemetry.update,
                 should_stop=should_stop,

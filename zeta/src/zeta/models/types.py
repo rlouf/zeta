@@ -82,3 +82,19 @@ class ModelRequestAborted(RuntimeError):
     def __init__(self, reason: str) -> None:
         super().__init__(f"model request aborted: {reason}")
         self.reason = reason
+
+
+@dataclass(frozen=True)
+class ModelRequest:
+    """What a backend needs to answer one prompt.
+
+    The loop builds this from its own config, so the models layer never reads
+    a runtime object. Every backend receives the same request and takes the
+    fields it understands, which is why no protocol needs a special case here.
+    """
+
+    api: str | None = None
+    model: str | None = None
+    url: str | None = None
+    thinking: str | None = None
+    session_id: str | None = None

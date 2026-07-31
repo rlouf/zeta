@@ -5,6 +5,7 @@ import os
 import re
 import tempfile
 import tomllib
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal, cast
@@ -26,6 +27,26 @@ THINKING_EFFORTS = ("none", "minimal", "low", "medium", "high")
 CHAT_COMPLETIONS_API = "chat-completions"
 CODEX_RESPONSES_API = "codex-responses"
 MODEL_APIS = (CHAT_COMPLETIONS_API, CODEX_RESPONSES_API)
+
+# What each protocol needs, as data rather than as a branch. A local endpoint
+# is probed before a run starts; a hosted one is assumed reachable and reports
+# its own failures.
+DEFAULT_ENDPOINTS: Mapping[str, str | None] = {
+    CHAT_COMPLETIONS_API: None,  # resolved from the local model URL
+    CODEX_RESPONSES_API: DEFAULT_CODEX_BASE_URL,
+}
+LOCAL_ENDPOINT_APIS = frozenset({CHAT_COMPLETIONS_API})
+
+
+def default_endpoint(api: str) -> str:
+    """Return the endpoint a protocol uses when a profile names none."""
+    configured = DEFAULT_ENDPOINTS.get(api)
+    return configured if configured is not None else model_url()
+
+
+def probes_endpoint(api: str | None) -> bool:
+    """Return whether this protocol has a local endpoint worth probing."""
+    return (api or CHAT_COMPLETIONS_API) in LOCAL_ENDPOINT_APIS
 
 
 def profile_session_dir(session_dir: Path | None = None) -> Path:
@@ -150,12 +171,7 @@ def resolve_model_profile(
     if profile is None:
         return None
     api = profile.api or CHAT_COMPLETIONS_API
-    if profile.url:
-        url = profile.url
-    elif api == CODEX_RESPONSES_API:
-        url = DEFAULT_CODEX_BASE_URL
-    else:
-        url = model_url()
+    url = profile.url or default_endpoint(api)
     return ModelSelection(
         profile=profile.name,
         model=profile.model,

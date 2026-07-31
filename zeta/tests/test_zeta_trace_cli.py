@@ -5,13 +5,14 @@ import json
 import sqlite3
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 
 import pytest
 import zeta.capabilities.executors as zeta_capability_executors
 import zeta.context.components as zeta_context
 import zeta.models.endpoint as zeta_model_endpoint
 import zeta.models.profiles as zeta_models
+import zeta.models.types as zeta_model_shapes
 from click.testing import CliRunner
 from zeta.cli.main import cli as zeta_cli
 from zeta.context.builder import PromptBuilder
@@ -2021,9 +2022,14 @@ def test_zeta_trace_replay_records_a_traced_answer(monkeypatch) -> None:
     monkeypatch.setattr("zeta.cli.traces.scoped_store", lambda *_args, **_kwargs: store)
     captured: dict[str, object] = {}
 
-    async def fake_chat(messages, **kwargs):
+    async def fake_chat(
+        messages: Any,
+        request: zeta_model_shapes.ModelRequest,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
         captured["messages"] = messages
         captured.update(kwargs)
+        captured["request"] = request
         return {"role": "assistant", "content": "a fresh answer"}
 
     monkeypatch.setattr("zeta.cli.traces.chat_completion_messages", fake_chat)
@@ -2056,7 +2062,7 @@ def test_zeta_trace_replay_diffs_old_and_new(monkeypatch) -> None:
     monkeypatch.setattr(
         "zeta.cli.traces.chat_completion_messages",
         _as_async(
-            lambda messages, **kwargs: {
+            lambda messages, request=None, **kwargs: {
                 "role": "assistant",
                 "content": "a fresh answer",
             }
@@ -2076,7 +2082,7 @@ def test_zeta_trace_replay_renders_tool_call_answers(monkeypatch) -> None:
     monkeypatch.setattr(
         "zeta.cli.traces.chat_completion_messages",
         _as_async(
-            lambda messages, **kwargs: {
+            lambda messages, request=None, **kwargs: {
                 "role": "assistant",
                 "content": "",
                 "tool_calls": [
@@ -2101,8 +2107,13 @@ def test_zeta_trace_replay_honors_a_named_profile(monkeypatch) -> None:
     monkeypatch.setattr("zeta.cli.traces.scoped_store", lambda *_args, **_kwargs: store)
     captured: dict[str, object] = {}
 
-    async def fake_chat(messages, **kwargs):
+    async def fake_chat(
+        messages: Any,
+        request: zeta_model_shapes.ModelRequest,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
         captured.update(kwargs)
+        captured["request"] = request
         return {"role": "assistant", "content": "a fresh answer"}
 
     monkeypatch.setattr("zeta.cli.traces.chat_completion_messages", fake_chat)
@@ -2127,8 +2138,9 @@ def test_zeta_trace_replay_honors_a_named_profile(monkeypatch) -> None:
     )
 
     assert ok.exit_code == 0
-    assert captured["selected_model"] == "fast-model"
-    assert captured["selected_url"] == "http://127.0.0.1:8081/v1/chat/completions"
+    replayed = cast(zeta_model_shapes.ModelRequest, captured["request"])
+    assert replayed.model == "fast-model"
+    assert replayed.url == "http://127.0.0.1:8081/v1/chat/completions"
     assert unknown.exit_code != 0
     assert "unknown model profile" in unknown.output
 

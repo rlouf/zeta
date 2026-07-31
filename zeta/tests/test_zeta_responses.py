@@ -401,7 +401,7 @@ def test_zeta_responses_codex_completion_returns_adapter_message(monkeypatch) ->
     message = asyncio.run(
         zeta_responses.codex_completion_messages(
             [{"role": "user", "content": "hi"}],
-            selected_model="gpt-5.5",
+            zeta_model_shapes.ModelRequest(model="gpt-5.5"),
         )
     )
 
@@ -564,9 +564,8 @@ def test_zeta_responses_codex_completion_round_trip(monkeypatch) -> None:
                 {"role": "system", "content": "Be terse."},
                 {"role": "user", "content": "hi"},
             ],
-            selected_model="gpt-5.5",
+            zeta_model_shapes.ModelRequest(model="gpt-5.5", thinking="high"),
             telemetry_sink=telemetry.update,
-            thinking="high",
         )
     )
 
@@ -588,6 +587,7 @@ def test_zeta_responses_codex_requires_a_model_name() -> None:
         asyncio.run(
             zeta_responses.codex_completion_messages(
                 [{"role": "user", "content": "hi"}],
+                zeta_model_shapes.ModelRequest(),
             )
         )
 
@@ -625,7 +625,7 @@ def test_zeta_responses_codex_guards_truncated_tool_calls(monkeypatch) -> None:
         asyncio.run(
             zeta_responses.codex_completion_messages(
                 [{"role": "user", "content": "hi"}],
-                selected_model="gpt-5.5",
+                zeta_model_shapes.ModelRequest(model="gpt-5.5"),
             )
         )
 
@@ -670,9 +670,9 @@ def test_zeta_responses_codex_structured_output(monkeypatch) -> None:
     data = asyncio.run(
         zeta_responses.codex_structured_output(
             [{"role": "user", "content": "summarize"}],
+            zeta_model_shapes.ModelRequest(model="gpt-5.5"),
             schema=schema,
             response_name="task_state",
-            selected_model="gpt-5.5",
         )
     )
 

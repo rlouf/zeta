@@ -3,7 +3,6 @@
 import asyncio
 import json
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any, cast
 
 import httpx
@@ -1265,8 +1264,10 @@ def test_zeta_chat_completion_messages_accepts_request_model(monkeypatch) -> Non
     message = asyncio.run(
         zeta_model.chat_completion_messages(
             [{"role": "user", "content": "hi"}],
-            selected_model="fast-model",
-            selected_url="http://127.0.0.1:8081/v1/chat/completions",
+            zeta_model_shapes.ModelRequest(
+                model="fast-model",
+                url="http://127.0.0.1:8081/v1/chat/completions",
+            ),
         )
     )
 
@@ -1310,7 +1311,9 @@ def test_zeta_chat_completion_messages_returns_adapter_message(monkeypatch) -> N
     )
 
     message = asyncio.run(
-        zeta_model.chat_completion_messages([{"role": "user", "content": "hi"}])
+        zeta_model.chat_completion_messages(
+            [{"role": "user", "content": "hi"}], zeta_model_shapes.ModelRequest()
+        )
     )
 
     assert message == {"role": "assistant", "content": "converted"}
@@ -1329,6 +1332,7 @@ def test_zeta_chat_completion_messages_sends_native_tools(monkeypatch) -> None:
     message = asyncio.run(
         zeta_model.chat_completion_messages(
             [{"role": "user", "content": "hi"}],
+            zeta_model_shapes.ModelRequest(),
             tools=[
                 {
                     "type": "function",
@@ -1358,7 +1362,9 @@ def test_zeta_chat_completion_messages_defaults_to_large_max_tokens(
     monkeypatch.setattr(zeta_model, "request_chat_completion", fake_request)
 
     asyncio.run(
-        zeta_model.chat_completion_messages([{"role": "user", "content": "hi"}])
+        zeta_model.chat_completion_messages(
+            [{"role": "user", "content": "hi"}], zeta_model_shapes.ModelRequest()
+        )
     )
 
     body = cast(dict[str, Any], captured["body"])
@@ -1396,7 +1402,9 @@ def test_zeta_chat_completion_messages_rejects_tool_calls_cut_by_max_tokens(
 
     with pytest.raises(RuntimeError, match="max_tokens"):
         asyncio.run(
-            zeta_model.chat_completion_messages([{"role": "user", "content": "hi"}])
+            zeta_model.chat_completion_messages(
+                [{"role": "user", "content": "hi"}], zeta_model_shapes.ModelRequest()
+            )
         )
 
 
@@ -1416,7 +1424,9 @@ def test_zeta_chat_completion_messages_keeps_text_cut_by_max_tokens(
     monkeypatch.setattr(zeta_model, "request_chat_completion", fake_request)
 
     message = asyncio.run(
-        zeta_model.chat_completion_messages([{"role": "user", "content": "hi"}])
+        zeta_model.chat_completion_messages(
+            [{"role": "user", "content": "hi"}], zeta_model_shapes.ModelRequest()
+        )
     )
 
     assert message["content"] == "partial answer"
@@ -1440,10 +1450,11 @@ def test_zeta_chat_structured_output_sends_json_schema(monkeypatch) -> None:
     extracted = asyncio.run(
         zeta_model.chat_structured_output(
             [{"role": "user", "content": "history"}],
+            zeta_model_shapes.ModelRequest(
+                model="state-model", url="http://127.0.0.1:8081/v1/chat/completions"
+            ),
             schema=TASK_STATE_SCHEMA,
             response_name="zeta_task_state",
-            selected_model="state-model",
-            selected_url="http://127.0.0.1:8081/v1/chat/completions",
         )
     )
 
@@ -1475,6 +1486,7 @@ def test_zeta_chat_structured_output_rejects_invalid_json_schema(
         asyncio.run(
             zeta_model.chat_structured_output(
                 [{"role": "user", "content": "history"}],
+                zeta_model_shapes.ModelRequest(),
                 schema=TASK_STATE_SCHEMA,
                 response_name="zeta_task_state",
             )
@@ -1503,6 +1515,7 @@ def test_zeta_chat_completion_messages_reports_model_telemetry(
     message = asyncio.run(
         zeta_model.chat_completion_messages(
             [{"role": "user", "content": "hi"}],
+            zeta_model_shapes.ModelRequest(),
             telemetry_sink=telemetry.append,
         )
     )
@@ -1576,10 +1589,12 @@ def test_zeta_models_package_dispatches_default_api_to_chat_completions(
 
     async def fake_chat_completion_messages(
         messages: list[dict[str, Any]],
+        request: Any = None,
         **options: Any,
     ) -> dict[str, Any]:
         captured["messages"] = messages
         captured["options"] = options
+        captured["request"] = request
         return {"role": "assistant", "content": "ok"}
 
     monkeypatch.setattr(
@@ -1589,13 +1604,14 @@ def test_zeta_models_package_dispatches_default_api_to_chat_completions(
     message = asyncio.run(
         models_pkg.chat_completion_messages(
             [{"role": "user", "content": "hi"}],
-            thinking="low",
+            zeta_model_shapes.ModelRequest(thinking="low"),
         )
     )
 
     assert message == {"role": "assistant", "content": "ok"}
     assert captured["messages"] == [{"role": "user", "content": "hi"}]
-    assert captured["options"] == {"thinking": "low"}
+    assert captured["options"] == {}
+    assert captured["request"].thinking == "low"
 
 
 def test_zeta_models_package_routes_codex_api_to_responses(monkeypatch) -> None:
@@ -1605,11 +1621,15 @@ def test_zeta_models_package_routes_codex_api_to_responses(monkeypatch) -> None:
 
     captured: dict[str, Any] = {}
 
-    async def fake_completion(messages: list[dict[str, Any]], **options: Any) -> dict:
+    async def fake_completion(
+        messages: list[dict[str, Any]], request=None, **options: Any
+    ) -> dict:
         captured["completion"] = (messages, options)
         return {"role": "assistant", "content": "ok"}
 
-    async def fake_structured(messages: list[dict[str, Any]], **options: Any) -> dict:
+    async def fake_structured(
+        messages: list[dict[str, Any]], request=None, **options: Any
+    ) -> dict:
         captured["structured"] = (messages, options)
         return {"state": "done"}
 
@@ -1618,21 +1638,22 @@ def test_zeta_models_package_routes_codex_api_to_responses(monkeypatch) -> None:
 
     message = asyncio.run(
         models_pkg.chat_completion_messages(
-            [{"role": "user", "content": "hi"}], api="codex-responses", thinking="low"
+            [{"role": "user", "content": "hi"}],
+            zeta_model_shapes.ModelRequest(api="codex-responses", thinking="low"),
         )
     )
     data = asyncio.run(
         models_pkg.chat_structured_output(
             [{"role": "user", "content": "hi"}],
+            zeta_model_shapes.ModelRequest(api="codex-responses"),
             schema={"type": "object"},
             response_name="state",
-            api="codex-responses",
         )
     )
 
     assert message == {"role": "assistant", "content": "ok"}
     assert data == {"state": "done"}
-    assert captured["completion"][1] == {"thinking": "low"}
+    assert captured["completion"][1] == {}
     assert captured["structured"][1]["response_name"] == "state"
 
 
@@ -1645,10 +1666,12 @@ def test_zeta_models_package_omits_session_id_for_chat_structured_output(
 
     async def fake_structured(
         messages: list[dict[str, Any]],
+        request: Any = None,
         **options: Any,
     ) -> dict[str, Any]:
         captured["messages"] = messages
         captured["options"] = options
+        captured["request"] = request
         return {"state": "done"}
 
     monkeypatch.setattr(zeta_model, "chat_structured_output", fake_structured)
@@ -1656,9 +1679,9 @@ def test_zeta_models_package_omits_session_id_for_chat_structured_output(
     data = asyncio.run(
         models_pkg.chat_structured_output(
             [{"role": "user", "content": "hi"}],
+            zeta_model_shapes.ModelRequest(session_id="agent/session"),
             schema={"type": "object"},
             response_name="state",
-            session_id="agent/session",
         )
     )
 
@@ -1669,112 +1692,59 @@ def test_zeta_models_package_omits_session_id_for_chat_structured_output(
     }
 
 
-def test_zeta_default_model_gateway_omits_session_id_for_chat_completions(
+def test_zeta_default_model_gateway_passes_one_request_to_every_backend(
     monkeypatch,
 ) -> None:
+    """Both protocols receive the same request; neither needs a special case."""
     from zeta import models as models_pkg
 
     captured: dict[str, Any] = {}
 
     async def fake_chat_completion_messages(
         messages: list[dict[str, Any]],
-        *,
-        api: str | None = None,
-        tools: list[dict[str, Any]],
-        tool_choice: str | dict[str, Any],
-        selected_model: str | None,
-        selected_url: str | None,
-        stream_sink: object | None,
-        telemetry_sink: object | None,
-        thinking: str | None,
-        should_stop: object | None = None,
-    ) -> dict[str, Any]:
-        captured["messages"] = messages
-        captured["api"] = api
-        captured["tools"] = tools
-        captured["tool_choice"] = tool_choice
-        captured["selected_model"] = selected_model
-        captured["selected_url"] = selected_url
-        captured["stream_sink"] = stream_sink
-        captured["telemetry_sink"] = telemetry_sink
-        captured["thinking"] = thinking
-        return {"role": "assistant", "content": "ok"}
-
-    monkeypatch.setattr(
-        models_pkg, "chat_completion_messages", fake_chat_completion_messages
-    )
-
-    output = asyncio.run(
-        models_pkg.DefaultModelGateway().generate(
-            zeta_models_api.ModelInput(
-                messages=[{"role": "user", "content": "hi"}],
-                tools=[],
-                tool_choice="auto",
-            ),
-            SimpleNamespace(
-                model_api=None,
-                model_name="unit-model",
-                model_url="http://model.invalid/v1/chat/completions",
-                model_session_id="agent/session",
-                thinking="none",
-            ),
-        )
-    )
-
-    assert output.message == {"role": "assistant", "content": "ok"}
-    assert captured == {
-        "messages": [{"role": "user", "content": "hi"}],
-        "api": None,
-        "tools": [],
-        "tool_choice": "auto",
-        "selected_model": "unit-model",
-        "selected_url": "http://model.invalid/v1/chat/completions",
-        "stream_sink": None,
-        "telemetry_sink": None,
-        "thinking": "none",
-    }
-
-
-def test_zeta_default_model_gateway_passes_session_id_for_codex_responses(
-    monkeypatch,
-) -> None:
-    from zeta import models as models_pkg
-
-    captured: dict[str, Any] = {}
-
-    async def fake_chat_completion_messages(
-        messages: list[dict[str, Any]],
+        request: zeta_model_shapes.ModelRequest,
         **options: Any,
     ) -> dict[str, Any]:
         captured["messages"] = messages
+        captured["request"] = request
         captured["options"] = options
+        captured["request"] = request
         return {"role": "assistant", "content": "ok"}
 
     monkeypatch.setattr(
         models_pkg, "chat_completion_messages", fake_chat_completion_messages
     )
 
-    output = asyncio.run(
-        models_pkg.DefaultModelGateway().generate(
-            zeta_models_api.ModelInput(
-                messages=[{"role": "user", "content": "hi"}],
-                tools=[],
-                tool_choice="auto",
-            ),
-            SimpleNamespace(
-                model_api="codex-responses",
-                model_name="gpt-test",
-                model_url=None,
-                model_session_id="agent/session",
-                thinking=None,
-            ),
+    for api in (None, zeta_models.CODEX_RESPONSES_API):
+        output = asyncio.run(
+            models_pkg.DefaultModelGateway().generate(
+                zeta_models_api.ModelInput(
+                    messages=[{"role": "user", "content": "hi"}],
+                    tools=[],
+                    tool_choice="auto",
+                ),
+                zeta_model_shapes.ModelRequest(
+                    api=api,
+                    model="unit-model",
+                    url="http://model.invalid/v1/chat/completions",
+                    thinking="none",
+                    session_id="agent/session",
+                ),
+            )
         )
-    )
 
-    assert output.message == {"role": "assistant", "content": "ok"}
-    assert captured["messages"] == [{"role": "user", "content": "hi"}]
-    assert captured["options"]["api"] == "codex-responses"
-    assert captured["options"]["session_id"] == "agent/session"
+        assert output.message == {"role": "assistant", "content": "ok"}
+        # session_id rides on the request for every protocol, so the gateway
+        # adds nothing and strips nothing.
+        assert captured["request"].session_id == "agent/session"
+        assert captured["request"].api == api
+        assert captured["options"] == {
+            "tools": [],
+            "tool_choice": "auto",
+            "stream_sink": None,
+            "telemetry_sink": None,
+            "should_stop": None,
+        }
 
 
 def test_zeta_models_package_rejects_unknown_api() -> None:
@@ -1783,7 +1753,8 @@ def test_zeta_models_package_rejects_unknown_api() -> None:
     with pytest.raises(ValueError, match="grpc"):
         asyncio.run(
             models_pkg.chat_completion_messages(
-                [{"role": "user", "content": "hi"}], api="grpc"
+                [{"role": "user", "content": "hi"}],
+                zeta_model_shapes.ModelRequest(api="grpc"),
             )
         )
 

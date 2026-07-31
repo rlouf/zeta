@@ -9,6 +9,7 @@ from jsonschema.exceptions import ValidationError
 from zeta.capabilities.delivery import content_hash
 from zeta.context.components import PromptComponent
 from zeta.models import chat_structured_output
+from zeta.models.types import ModelRequest
 
 TASK_STATE_RESPONSE_NAME = "zeta_task_state"
 TASK_STATE_SCHEMA_NAME = "zeta.task_state.v1"
@@ -140,11 +141,10 @@ class ModelTaskStateExtractor:
     async def extract(self, components: list[PromptComponent]) -> dict[str, Any]:
         return await chat_structured_output(
             task_state_extraction_messages(components),
+            ModelRequest(model=self.selected_model, url=self.selected_url),
             schema=TASK_STATE_SCHEMA,
             response_name=TASK_STATE_RESPONSE_NAME,
             max_tokens=self.max_tokens,
-            selected_model=self.selected_model,
-            selected_url=self.selected_url,
         )
 
 

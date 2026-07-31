@@ -30,7 +30,7 @@ from zeta.models.sse import (
     decode_stream_event,
     stream_json_sse,
 )
-from zeta.models.types import ModelInput
+from zeta.models.types import ModelInput, ModelRequest
 
 CODEX_ORIGINATOR = "zeta"
 CODEX_CONTEXT_TOKENS = {"gpt-5.3-codex-spark": 128_000}
@@ -264,33 +264,30 @@ def codex_model_name(selected_model: str | None) -> str:
 
 async def codex_completion_messages(
     messages: list[dict[str, Any]],
+    request: ModelRequest,
     *,
     tools: list[dict[str, Any]] | None = None,
     tool_choice: str | dict[str, Any] = "auto",
     max_tokens: int = DEFAULT_MAX_COMPLETION_TOKENS,
-    selected_model: str | None = None,
-    selected_url: str | None = None,
     stream_sink: ChatCompletionStreamSink | None = None,
     telemetry_sink: ModelTelemetrySink | None = None,
-    thinking: str | None = None,
-    session_id: str | None = None,
     should_stop: Callable[[], str | None] | None = None,
 ) -> dict[str, Any]:
     """Request one assistant message from the Codex Responses backend."""
-    model = codex_model_name(selected_model)
-    session = session_id or responses_session_id()
+    model = codex_model_name(request.model)
+    session = request.session_id or responses_session_id()
     body = responses_request_body(
         messages,
         model=model,
         tools=tools,
         tool_choice=tool_choice,
         max_tokens=max_tokens,
-        thinking=thinking,
+        thinking=request.thinking,
         session_id=session,
     )
     payload = await request_codex_response(
         body,
-        selected_url=selected_url,
+        selected_url=request.url,
         session=session,
         stream_sink=stream_sink,
         should_stop=should_stop,
@@ -311,6 +308,7 @@ async def codex_completion_messages(
 
 async def codex_structured_output(
     messages: list[dict[str, Any]],
+    request: ModelRequest,
     *,
     schema: dict[str, Any],
     response_name: str,
@@ -320,10 +318,10 @@ async def codex_structured_output(
     session_id: str | None = None,
 ) -> dict[str, Any]:
     """Request one schema-validated JSON object from the Codex backend."""
-    session = session_id or responses_session_id()
+    session = request.session_id or responses_session_id()
     body = responses_request_body(
         messages,
-        model=codex_model_name(selected_model),
+        model=codex_model_name(request.model),
         max_tokens=max_tokens,
         session_id=session,
     )
@@ -336,7 +334,7 @@ async def codex_structured_output(
         }
     }
     payload = await request_codex_response(
-        body, selected_url=selected_url, session=session
+        body, selected_url=request.url, session=session
     )
     message = payload["choices"][0]["message"]
     if not isinstance(message, dict):

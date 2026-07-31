@@ -14,7 +14,13 @@ from zeta.models.sse import (
     read_streamed_chat_completion,
     stream_json_sse,
 )
-from zeta.models.types import ModelInput, ModelOutput, ModelUsage, normalized_usage
+from zeta.models.types import (
+    ModelInput,
+    ModelOutput,
+    ModelRequest,
+    ModelUsage,
+    normalized_usage,
+)
 
 DEFAULT_MAX_COMPLETION_TOKENS = 8192
 
@@ -74,30 +80,28 @@ def emit_model_telemetry(
 
 async def chat_completion_messages(
     messages: list[dict[str, Any]],
+    request: ModelRequest,
     *,
     tools: list[dict[str, Any]] | None = None,
     tool_choice: str | dict[str, Any] = "auto",
     max_tokens: int = DEFAULT_MAX_COMPLETION_TOKENS,
-    selected_model: str | None = None,
-    selected_url: str | None = None,
     stream_sink: ChatCompletionStreamSink | None = None,
     telemetry_sink: ModelTelemetrySink | None = None,
-    thinking: str | None = None,
     should_stop: Callable[[], str | None] | None = None,
 ) -> dict[str, Any]:
     """Request one native OpenAI-compatible chat completion message."""
-    context_tokens = model_context_tokens(selected_url, selected_model)
+    context_tokens = model_context_tokens(request.url, request.model)
     body = chat_completion_request_body(
         messages,
         tools=tools,
         tool_choice=tool_choice,
         max_tokens=max_tokens,
-        selected_model=selected_model,
-        thinking=thinking,
+        selected_model=request.model,
+        thinking=request.thinking,
     )
     payload = await request_chat_completion(
         body,
-        selected_url=selected_url,
+        selected_url=request.url,
         stream_sink=stream_sink,
         should_stop=should_stop,
     )
@@ -122,8 +126,8 @@ def chat_completion_request_body(
     tool_choice: str | dict[str, Any] = "auto",
     max_tokens: int = DEFAULT_MAX_COMPLETION_TOKENS,
     selected_model: str | None = None,
-    response_format: dict[str, Any] | None = None,
     thinking: str | None = None,
+    response_format: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build the OpenAI-compatible chat completions request body.
 
@@ -234,24 +238,23 @@ def json_schema_response_format(
 
 async def chat_structured_output(
     messages: list[dict[str, Any]],
+    request: ModelRequest,
     *,
     schema: dict[str, Any],
     response_name: str,
     max_tokens: int = DEFAULT_MAX_COMPLETION_TOKENS,
-    selected_model: str | None = None,
-    selected_url: str | None = None,
 ) -> dict[str, Any]:
     """Request one JSON object using structured outputs and validate it."""
     body = chat_completion_request_body(
         messages,
         max_tokens=max_tokens,
-        selected_model=selected_model,
+        selected_model=request.model,
         response_format=json_schema_response_format(
             name=response_name,
             schema=schema,
         ),
     )
-    payload = await request_chat_completion(body, selected_url=selected_url)
+    payload = await request_chat_completion(body, selected_url=request.url)
     message = payload["choices"][0]["message"]
     if not isinstance(message, dict):
         raise RuntimeError("model request failed: assistant message was invalid")

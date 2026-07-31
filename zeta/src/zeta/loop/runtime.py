@@ -75,7 +75,6 @@ async def run_agent(
     user_message: dict[str, Any] = {
         "type": "user_message",
         "content": request.objective,
-        "workflow": request.workflow,
         "runtime": request.runtime,
         "available_tools": list(enabled_capabilities),
         "run_id": run_id,

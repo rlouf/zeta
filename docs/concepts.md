@@ -433,9 +433,9 @@ canonical capability id when it is unambiguous:
 | `edit` | `zeta.edit` | Edit files. |
 | `write` | `zeta.write` | Write files. |
 
-Capability execution goes through the registry and each capability's policy. In
-the local worker, mutating tools use the current staged execution contract unless
-the host supplies a different runtime configuration.
+Capability execution goes through the registry. Each declaration marks whether
+the tool mutates state. Zeta executes an allowed tool when the model calls it.
+Zeta does not defer a tool call for later execution.
 
 Side-effecting capabilities declare one delivery contract:
 
@@ -445,7 +445,7 @@ Side-effecting capabilities declare one delivery contract:
 - `at_least_once`: retries are allowed and duplicate delivery is possible.
 - `unsafe_to_retry`: an ambiguous started effect prevents automatic retry.
 
-Direct side-effecting calls write `runtime.effect.*` records around execution.
+Side-effecting calls write `runtime.effect.*` records around execution.
 The effect key is derived from the queue item, capability id, and canonical
 arguments, so a retry receives the same identity even when the model tool-call
 id changes. Built-in `write` and `edit` are content-idempotent; `bash` is unsafe

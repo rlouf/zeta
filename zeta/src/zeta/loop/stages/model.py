@@ -1,4 +1,4 @@
-"""Ask the model and record its answer.
+"""Request a model response and record it.
 
 This stage sends one prompt, receives one assistant message, and turns that
 message into durable records.

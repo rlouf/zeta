@@ -382,7 +382,6 @@ class RuntimeAgentLoop:
             return await run_agent(
                 AgentRunRequest(
                     objective=objective,
-                    workflow="agent",
                     runtime="zeta-agent",
                     tools=tuple(config.allowed_capabilities or ()),
                     context=context,

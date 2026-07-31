@@ -74,7 +74,7 @@ def available_skills(cwd: str | Path | None = None) -> list[Skill]:
 
 
 def available_skills_prompt(cwd: str | Path | None = None) -> str:
-    """Render the discoverable skill list for a workflow-owned prompt."""
+    """Render the discoverable skill list for a run prompt."""
     return render_available_skills(available_skills(cwd))
 
 

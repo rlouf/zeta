@@ -131,13 +131,11 @@ def test_zeta_agent_run_result_payload_serializes_result_boundary() -> None:
     result = AgentRunResult(
         final_answer="done",
         events=[draft],
-        staged_effect={"effect": {"status": "proposed"}},
     )
 
     assert zeta_outcomes.agent_run_result_payload(result) == {
         "final_answer": "done",
         "events": [asdict(draft)],
-        "staged_effect": {"effect": {"status": "proposed"}},
     }
 
 
@@ -256,7 +254,6 @@ def _test_capability(
     provider: str = "test",
     schema: dict[str, Any] | None = None,
     run_result: dict[str, Any] | None = None,
-    with_stage_executor: bool = False,
     delivery_semantics: DeliverySemantics | None = None,
 ) -> RegisteredCapability:
     return RegisteredCapability(
@@ -270,9 +267,6 @@ def _test_capability(
             lambda params: (
                 run_result or {"ok": True, "content": [{"type": "text", "text": "ok"}]}
             ),
-            (lambda params: {"ok": True, "effect": {"status": "proposed"}})
-            if with_stage_executor
-            else None,
         ),
     )
 
@@ -716,7 +710,6 @@ def test_zeta_handle_tool_call_emits_drafts() -> None:
             allowed_capabilities=allowed_capabilities,
             tool_schema=registry.model_tool_schema(allowed_capabilities),
             index=0,
-            execution_mode="direct",
             caused_by="model-1",
             ctx=ctx,
         )
@@ -749,17 +742,15 @@ def test_zeta_handle_tool_call_emits_drafts() -> None:
     assert [draft.caused_by for draft in drafts] == ["model-1", "model-1"]
 
 
-def test_zeta_direct_capability_records_and_propagates_effect_identity() -> None:
+def test_zeta_capability_records_and_propagates_effect_identity() -> None:
     drafts: list[DraftEvent] = []
     received_effect_keys: list[str | None] = []
 
     async def execute(
         _params: dict[str, Any],
         *,
-        mode: str,
         effect_key: str | None = None,
     ) -> dict[str, Any]:
-        assert mode == "direct"
         received_effect_keys.append(effect_key)
         return {"ok": True}
 
@@ -793,7 +784,6 @@ def test_zeta_direct_capability_records_and_propagates_effect_identity() -> None
             allowed_capabilities=("test.write",),
             tool_schema=registry.model_tool_schema(("test.write",)),
             index=0,
-            execution_mode="direct",
             ctx=ctx,
         )
     )
@@ -804,7 +794,6 @@ def test_zeta_direct_capability_records_and_propagates_effect_identity() -> None
             allowed_capabilities=("test.write",),
             tool_schema=registry.model_tool_schema(("test.write",)),
             index=0,
-            execution_mode="direct",
             ctx=ctx,
         )
     )
@@ -855,7 +844,6 @@ def test_zeta_unsafe_capability_failure_is_recorded_as_ambiguous() -> None:
             allowed_capabilities=("test.bash",),
             tool_schema=registry.model_tool_schema(("test.bash",)),
             index=0,
-            execution_mode="direct",
             ctx=ctx,
         )
     )
@@ -1662,13 +1650,12 @@ def test_zeta_run_capability_step_dispatches_to_injected_executor() -> None:
             self,
             capability_id: str,
             params: dict[str, Any],
-            mode: str,
             *,
             base_dir: Path | None,
             effect_key: str | None,
         ) -> dict[str, Any]:
             del base_dir, effect_key
-            calls.append((capability_id, params, mode))
+            calls.append((capability_id, params))
             return {"ok": True, "content": [{"type": "text", "text": "host"}]}
 
         async def aclose(self) -> None:
@@ -1691,7 +1678,7 @@ def test_zeta_run_capability_step_dispatches_to_injected_executor() -> None:
                 "function": {"name": "read", "arguments": '{"path": "README.md"}'},
             },
             index=0,
-            config=zeta_agent.AgentConfig(execution_mode="direct"),
+            config=zeta_agent.AgentConfig(),
             allowed_capabilities=allowed_capabilities,
             tool_schema=registry.model_tool_schema(allowed_capabilities),
             model_telemetry={},
@@ -1701,7 +1688,7 @@ def test_zeta_run_capability_step_dispatches_to_injected_executor() -> None:
         )
     )
 
-    assert calls == [("test.read", {"path": "README.md"}, "direct")]
+    assert calls == [("test.read", {"path": "README.md"})]
     projected = timeline_events(result.events)
     assert projected[-1]["type"] == "tool_result"
     assert projected[-1]["result"] == {
@@ -1722,12 +1709,11 @@ def test_zeta_run_capability_step_records_executor_refusal() -> None:
             self,
             capability_id: str,
             params: dict[str, Any],
-            mode: str,
             *,
             base_dir: Path | None,
             effect_key: str | None,
         ) -> dict[str, Any]:
-            del params, mode, base_dir, effect_key
+            del params, base_dir, effect_key
             return {
                 "ok": False,
                 "error": {
@@ -1753,7 +1739,7 @@ def test_zeta_run_capability_step_records_executor_refusal() -> None:
         loop_capability.run_capability_step(
             {"id": "call-1", "function": {"name": "read", "arguments": "{}"}},
             index=0,
-            config=zeta_agent.AgentConfig(execution_mode="direct"),
+            config=zeta_agent.AgentConfig(),
             allowed_capabilities=allowed_capabilities,
             tool_schema=registry.model_tool_schema(allowed_capabilities),
             model_telemetry={},
@@ -2721,11 +2707,13 @@ def test_zeta_rpc_tools_register_uses_documented_tool_shape() -> None:
                         "schema": {"type": "object"},
                         "timeout_sec": 2,
                         "delivery_semantics": "connector_deduplicated",
+                        "mutates": True,
                     },
                     {
                         "name": "open_panel",
                         "description": "Open a panel.",
                         "schema": {"type": "object"},
+                        "mutates": False,
                     },
                 ]
             },
@@ -2743,6 +2731,7 @@ def test_zeta_rpc_tools_register_uses_documented_tool_shape() -> None:
                 "schema": {"type": "object"},
                 "timeout_sec": 2,
                 "delivery_semantics": "connector_deduplicated",
+                "mutates": True,
             },
             {
                 "id": "rpc.open_panel",
@@ -2751,12 +2740,14 @@ def test_zeta_rpc_tools_register_uses_documented_tool_shape() -> None:
                 "description": "Open a panel.",
                 "schema": {"type": "object"},
                 "timeout_sec": None,
+                "mutates": False,
             },
         ]
     }
     pick_file = registry.get("rpc.pick_file")
     assert pick_file is not None
     assert pick_file.declaration.delivery_semantics == "connector_deduplicated"
+    assert pick_file.declaration.mutates is True
     assert registry.get("rpc.open_panel") is not None
 
 
@@ -2914,6 +2905,7 @@ def test_zeta_rpc_registered_tool_invokes_peer_call_tool() -> None:
                         "description": "Pick a file.",
                         "schema": {"type": "object"},
                         "timeout_sec": 2,
+                        "mutates": False,
                     }
                 ]
             },
@@ -2922,7 +2914,6 @@ def test_zeta_rpc_registered_tool_invokes_peer_call_tool() -> None:
         return await registry.invoke_async(
             "rpc.pick_file",
             {"pattern": "*.md"},
-            execution_mode="direct",
         )
 
     result = asyncio.run(run())
@@ -3107,12 +3098,10 @@ def test_zeta_run_agent_records_user_message_and_returns_result(
         zeta_agent.run_agent(
             zeta_agent.AgentRunRequest(
                 objective="answer",
-                workflow="ask",
                 runtime="zeta-rpc",
                 tools=(),
                 context="",
                 config=zeta_agent.AgentConfig(
-                    execution_mode="stage",
                     model_profile="qwen",
                     model_name="qwen3.6-27b-q8-local",
                     model_url="http://127.0.0.1:8080/v1/chat/completions",
@@ -3154,7 +3143,6 @@ def test_zeta_session_run_params_capture_defaults_and_options() -> None:
     )
 
     assert params.objective == "answer"
-    assert params.workflow == "ask"
     assert params.tools == ["read", "bash"]
     assert params.context == "existing notes"
     assert params.model == "gpt-test"
@@ -4891,12 +4879,11 @@ Triage the issue.
             self,
             capability_id: str,
             params: dict[str, Any],
-            mode: str,
             *,
             base_dir: Path | None,
             effect_key: str | None,
         ) -> dict[str, Any]:
-            del capability_id, params, mode, base_dir, effect_key
+            del capability_id, params, base_dir, effect_key
             return {"ok": True}
 
         async def aclose(self) -> None:
@@ -6889,7 +6876,6 @@ def test_zeta_agent_auto_enabled_capabilities_include_registered_tools() -> None
         _test_capability(
             "write",
             provider="rpc",
-            with_stage_executor=True,
         )
     )
 
@@ -7882,7 +7868,7 @@ def test_zeta_agent_turn_streams_tool_call_before_running_tool(monkeypatch) -> N
     ]
 
 
-def test_zeta_agent_turn_stops_after_staged_tool(monkeypatch) -> None:
+def test_zeta_agent_turn_stops_when_a_tool_requests_stop(monkeypatch) -> None:
     requests = 0
     store = zeta_trace.InMemoryStore()
 
@@ -7913,12 +7899,7 @@ def test_zeta_agent_turn_stops_after_staged_tool(monkeypatch) -> None:
         "invoke_capability",
         lambda name, params, **kwargs: {
             "ok": True,
-            "effect": {
-                "kind": "command",
-                "status": "proposed",
-                "command": "uv run pytest",
-                "reason": "Run tests.",
-            },
+            "stop": True,
         },
     )
 
@@ -7930,12 +7911,7 @@ def test_zeta_agent_turn_stops_after_staged_tool(monkeypatch) -> None:
     )
 
     assert requests == 1
-    assert result.staged_effect == {
-        "kind": "command",
-        "status": "proposed",
-        "command": "uv run pytest",
-        "reason": "Run tests.",
-    }
+    assert result.stop_reason == "tool_stop"
     assert len(result.prompt_traces) == 1
     assert_prompt_trace_replay_graph(store, result.prompt_traces[0])
     tool_call = event_by_type(result.events, "tool_call")
@@ -7948,62 +7924,6 @@ def test_zeta_agent_turn_stops_after_staged_tool(monkeypatch) -> None:
         call_object_id,
         result_object_id,
     )
-
-
-def test_zeta_agent_turn_stops_after_staged_effect(
-    monkeypatch,
-) -> None:
-    requests = 0
-    registry = CapabilityRegistry()
-    registry.register(
-        _test_capability(
-            "mutate",
-            with_stage_executor=True,
-        )
-    )
-
-    def fake_chat_completion_messages(
-        *args: object,
-        **kwargs: object,
-    ) -> dict[str, Any]:
-        nonlocal requests
-        requests += 1
-        return {
-            "tool_calls": [
-                {
-                    "id": "call-1",
-                    "type": "function",
-                    "function": {"name": "mutate", "arguments": "{}"},
-                }
-            ]
-        }
-
-    monkeypatch.setattr(zeta_model_endpoint, "model_endpoint_open", lambda: True)
-    monkeypatch.setattr(
-        zeta_models_api,
-        "chat_completion_messages",
-        fake_chat_completion_messages,
-    )
-
-    result = run_agent_turn(
-        "mutate",
-        [],
-        zeta_agent.AgentConfig(
-            allowed_capabilities=("mutate",),
-            max_turns=3,
-            stop_on_staged_effect=False,
-        ),
-        tool_registry=registry,
-    )
-
-    assert requests == 1
-    assert result.final_answer == ""
-    assert result.staged_effect is None
-    assert [event["type"] for event in timeline_events(result.events)] == [
-        "model",
-        "tool_call",
-        "tool_result",
-    ]
 
 
 def test_zeta_agent_turn_reports_max_turns_exhaustion(monkeypatch) -> None:
@@ -8050,7 +7970,7 @@ def test_zeta_agent_turn_reports_max_turns_exhaustion(monkeypatch) -> None:
     ]
 
 
-def test_zeta_agent_direct_mode_continues_after_bash(monkeypatch) -> None:
+def test_zeta_agent_continues_after_bash(monkeypatch) -> None:
     requests = 0
     responses = iter(
         [
@@ -8087,13 +8007,11 @@ def test_zeta_agent_direct_mode_continues_after_bash(monkeypatch) -> None:
         [],
         zeta_agent.AgentConfig(
             allowed_capabilities=("bash",),
-            execution_mode="direct",
             max_turns=3,
         ),
     )
 
     assert requests == 2
-    assert result.staged_effect is None
     assert result.final_answer == "done"
     tool_result = next(
         event
@@ -8447,7 +8365,6 @@ def test_zeta_agent_direct_mode_continues_after_edit(
         [],
         zeta_agent.AgentConfig(
             allowed_capabilities=("edit",),
-            execution_mode="direct",
             max_turns=3,
         ),
     )

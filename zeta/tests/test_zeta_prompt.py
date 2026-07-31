@@ -160,10 +160,7 @@ def test_model_capability_descriptors_include_auto_enabled_tools() -> None:
                 "Client write.",
                 {"type": "object"},
             ),
-            InProcessCapabilityExecutor(
-                lambda params: {"ok": True},
-                lambda params: {"ok": True, "effect": {"status": "proposed"}},
-            ),
+            InProcessCapabilityExecutor(lambda params: {"ok": True}),
         )
     )
 
@@ -1346,7 +1343,7 @@ def test_system_prompt_is_product_neutral_and_dynamic() -> None:
     assert "shell" not in prompt.lower()
     assert "handoff" not in prompt.lower()
     assert "Tool protocol:" in prompt
-    assert "staged effect" in prompt
+    assert "Mutating tools apply their effects" in prompt
     assert "Available tools:" in prompt
     assert (
         "- read(path, offset?, limit?): Read a UTF-8 text file or public HTTP(S) URL."

@@ -87,7 +87,6 @@ async def run_capability_step(
         allowed_capabilities=allowed_capabilities,
         tool_schema=tool_schema,
         index=index,
-        execution_mode=config.execution_mode,
         model_telemetry=model_telemetry,
         caused_by=assistant_event_id,
         ctx=capability_ctx,

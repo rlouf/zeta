@@ -11,40 +11,6 @@ import hashlib
 import os
 import tempfile
 from pathlib import Path
-from typing import Any
-
-
-def proposed_command_effect(
-    command: str, reason: str, *, artifact: str | None = None
-) -> dict[str, Any]:
-    effect = {
-        "kind": "command",
-        "status": "proposed",
-        "command": command,
-        "reason": reason,
-    }
-    if artifact is not None:
-        effect["artifact"] = artifact
-    return {"ok": True, "effect": effect}
-
-
-def proposed_effect(result: dict[str, Any]) -> dict[str, Any] | None:
-    if result.get("ok") is not True:
-        return None
-    effect = result.get("effect")
-    if not isinstance(effect, dict) or effect.get("status") != "proposed":
-        return None
-    return effect
-
-
-def effect_resolution(result: dict[str, Any]) -> dict[str, Any] | None:
-    effect = result.get("effect")
-    if not isinstance(effect, dict):
-        return None
-    status = effect.get("status")
-    if status not in {"resolved", "cancelled"}:
-        return None
-    return effect
 
 
 def content_hash(data: bytes | str) -> str:

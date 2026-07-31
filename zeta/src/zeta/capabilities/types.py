@@ -1,11 +1,9 @@
 """Capability declaration domain shapes."""
 
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Any
 
 from zeta.effects import DELIVERY_SEMANTICS, DeliverySemantics
-
-ExecutionMode = Literal["stage", "direct"]
 
 
 @dataclass(frozen=True)
@@ -36,6 +34,7 @@ class Capability:
     description: str
     input_schema: dict[str, Any]
     delivery_semantics: DeliverySemantics | None = None
+    mutates: bool = False
 
     def __post_init__(self) -> None:
         if (

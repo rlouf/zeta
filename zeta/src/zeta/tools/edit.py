@@ -2,7 +2,6 @@
 
 import difflib
 import re
-import shlex
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
@@ -11,7 +10,6 @@ from typing import Any
 from zeta.capabilities.delivery import (
     change_hashes,
     content_hash,
-    proposed_command_effect,
     short_tag,
     write_temp,
 )
@@ -31,7 +29,6 @@ SCHEMA: dict[str, Any] = {
         "location": {"type": "string", "minLength": 1},
         "old": {"type": "string", "minLength": 1},
         "new": {"type": "string"},
-        "reason": {"type": "string"},
     },
 }
 
@@ -40,27 +37,13 @@ SPEC = Capability(
     "Edit a file. Prefer tagged input from read: [path#tag] plus SWAP, DEL, INS.PRE, or INS.POST line operations.",
     SCHEMA,
     delivery_semantics="idempotent_with_key",
+    mutates=True,
 )
 
 HEADER_RE = re.compile(r"^\[(?P<path>.+)\]$")
 SWAP_RE = re.compile(r"^SWAP (?P<start>[1-9][0-9]*)\.\.(?P<end>[1-9][0-9]*):$")
 DEL_RE = re.compile(r"^DEL (?P<start>[1-9][0-9]*)\.\.(?P<end>[1-9][0-9]*)$")
 INS_RE = re.compile(r"^(?P<kind>INS\.PRE|INS\.POST) (?P<line>[1-9][0-9]*):$")
-
-
-def stage(params: dict[str, Any]) -> dict[str, Any]:
-    edit = prepare_edit(params)
-    if not isinstance(edit, PreparedEdit):
-        return edit
-    result = stage_patch(
-        edit.patch,
-        str(params.get("reason") or f"Apply edit in {edit.location}."),
-    )
-    result["metadata"] = change_hashes(edit.location, edit.updated) | {
-        "path": edit.location,
-        **edit.metadata,
-    }
-    return result
 
 
 def run(params: dict[str, Any]) -> dict[str, Any]:
@@ -142,7 +125,7 @@ def prepare_exact_replacement(
         location=location,
         updated=updated,
         patch=patch,
-        metadata={"mode": "direct_replace"},
+        metadata={"operation": "exact_replace"},
     )
 
 
@@ -352,15 +335,6 @@ def operation_metadata(operation: LineOperation) -> dict[str, Any]:
     if operation.body:
         metadata["lines"] = len(operation.body)
     return metadata
-
-
-def stage_patch(patch: str, reason: str) -> dict[str, Any]:
-    path = write_temp("zeta-edit-", ".patch", patch)
-    return proposed_command_effect(
-        f"git apply {shlex.quote(str(path))}",
-        reason,
-        artifact=str(path),
-    )
 
 
 def replacement_patch(location: str, old: str, new: str) -> str:

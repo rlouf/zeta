@@ -1,7 +1,7 @@
 """Abort checks for one turn.
 
 A run stops when it is cancelled or passes its deadline. These checks read that
-state and raise, so no stage decides on its own whether to continue.
+state and raise, so no component decides on its own whether to continue.
 """
 
 from __future__ import annotations

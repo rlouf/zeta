@@ -16,7 +16,7 @@ put a `gpt-realtime-*` conversation model in the v0 semantic path.**
 That is Architecture B with one specific implementation choice: use a Realtime
 **transcription** session for streaming ASR and endpointing, not a Realtime
 **voice-agent** session. It preserves a single semantic authority and lets a
-voice turn enter the same Zeta session used by Commas/CLI. The configured Zeta
+voice turn enter the same Zeta session used by the CLI. The configured Zeta
 model can remain a local OpenAI-compatible endpoint, Codex Responses backend,
 or a future provider.
 
@@ -70,49 +70,31 @@ This is a strong voice seam: a voice transcript can be a normal durable user
 message in an existing session. It does **not** require a separate voice
 conversation store.
 
-There are two closely related entry paths:
+The CLI and RPC path use `session.turn.requested` to start the native run loop.
+`session.run` creates a run id and an `asyncio.Event` cancellation token
+([routes.py](../zeta/src/zeta/rpc/routes.py),
+[thread_run.py](../zeta/src/zeta/loop/thread_run.py)).
 
-- Commas is the interactive CLI conversation frontend. Its session is
-  `COMMAS_SESSION_ID` (default `default`) and `zeta_session_for_commas()` builds
-  the Zeta `RuntimeContext` in the shared state directory
-  ([commas `__init__.py`](../commas/src/commas/__init__.py),
-  [sessions.py](../commas/src/commas/sessions.py)).
-- The daemon/RPC path uses `session.turn.requested` to start the same native
-  run loop. `session.run` creates a run id and an `asyncio.Event` cancellation
-  token ([routes.py](../zeta/src/zetad/rpc/routes.py),
-  [thread_run.py](../zeta/src/zeta/run/thread_run.py)).
-
-### Complete CLI trace: `commas ask "what changed?"`
+### Complete CLI trace: `zeta session.run`
 
 ```text
-commas.cli.step.cmd_ask
-  -> commas.workflows.ask.ask
-  -> commas.workflows.step.step
-      -> zeta_session_for_commas()              # selects the durable session
-      -> active_model_selection(session_dir=…)   # selects a provider/profile
-      -> record_user_message()                  # zeta.user_message
-      -> append_prompt_submitted_event()         # zeta.prompt.submitted
-      -> current_timeline()                      # prior durable events
-      -> run_agent_loop(...)
-          -> PromptBuilder.plan/commit/render
-          -> DefaultModelGateway.generate
-          -> record model event / execute tools / repeat
-      -> TurnRecorder.finish()                   # zeta.turn.completed/failed
-      -> render_final_answer()                   # stdout
+zeta session.run
+  -> session.turn.requested
+      -> RuntimeContext                           # selects the durable session
+      -> active_model_selection(session_dir=…)    # selects a provider/profile
+      -> run_agent(...)
+          -> record user message                  # zeta.user_message
+          -> current_timeline()                   # prior durable events
+          -> run_agent_loop(...)
+              -> PromptBuilder.plan/commit/render
+              -> DefaultModelGateway.generate
+              -> record model event / execute tools / repeat
+      -> session.turn.completed
 ```
 
-Concretely, `ask()` adds CLI-specific recent shell context then calls `step()`
-([ask.py](../commas/src/commas/workflows/ask.py),
-[step.py](../commas/src/commas/workflows/step.py)). `step()` records the user
-payload (prompt, workflow, system prompt, available tools, model metadata, and
-turn id) as `zeta.user_message`; `append_prompt_submitted_event()` creates the
-causally linked `zeta.prompt.submitted` audit record
-([state.py](../commas/src/commas/state.py)). Both are in the same SQLite event
-journal.
-
 `run_agent_loop()` initializes `AgentRun` and repeats `step()` until there is a
-final model answer, a staged effect, abort, or `max_turns`
-([runtime.py](../zeta/src/zeta/run/runtime.py)). `build_prompt_step()` sends:
+final model answer, a tool stop, abort, or `max_turns`
+([runtime.py](../zeta/src/zeta/loop/runtime.py)). `build_prompt_step()` sends:
 
 1. the durable timeline from earlier CLI/voice turns;
 2. events accumulated during the currently open run; and
@@ -129,14 +111,14 @@ puts the calls in `RunState.pending_tool_calls`, and `step_tools()` processes
 them. `handle_tool_call()` validates JSON, allow-list membership, and JSON
 Schema; emits a `tool_call` event; invokes the registered capability; then
 emits a terminal `tool_result` event
-([runtime.py](../zeta/src/zeta/run/runtime.py),
+([runtime.py](../zeta/src/zeta/loop/runtime.py),
 [execution.py](../zeta/src/zeta/capabilities/execution.py)). The next model
 call receives those result events as current-run context. A run can therefore
 remain open across arbitrarily alternating model/tool steps, bounded by
 `max_turns` (25 by default), rather than equating one user turn to one model
 request.
 
-For direct side effects, capability execution also journals
+For side effects, capability execution also journals
 `runtime.effect.planned`, `started`, then `completed`, `failed`, or `ambiguous`
 with an idempotency/effect key. This is the durable boundary described in
 [runtime semantics](runtime-semantics.md). It is valuable for voice: an
@@ -155,10 +137,10 @@ model-loop independence, not merely a model-name setting.
 Zeta already streams model text. Both adapters feed `content_delta()` and
 `reasoning_delta()` into `ModelTurnStreamSink`, producing
 `runtime.stream.chunk` and `runtime.status.update`
-([streaming.py](../zeta/src/zeta/run/streaming.py),
+([streaming.py](../zeta/src/zeta/loop/streaming.py),
 [chat_completions.py](../zeta/src/zeta/models/chat_completions.py),
-[responses.py](../zeta/src/zeta/models/responses.py)). Commas renders content
-immediately through `TraceAwareStreamRenderer`.
+[responses.py](../zeta/src/zeta/models/responses.py)). Clients can render
+content as it arrives.
 
 Those stream chunks are deliberately **UI events**, not durable timeline facts:
 `is_runtime_ui_event()` excludes them from prompt projection and the RPC
@@ -177,8 +159,8 @@ Cancellation exists but is not yet realtime-grade:
   `asyncio.to_thread`; capability invocation can also run in a thread.
   Setting the token does **not** close an in-flight provider HTTP stream or
   stop an in-flight tool. It prevents later steps after control returns.
-- Commas catches `KeyboardInterrupt` and records a failed/aborted turn, but
-  has no audio-aware interruption path.
+- CLI interruption records a failed or aborted turn. It has no audio-aware
+  interruption path.
 
 The text-coupled pieces are `ModelInput.messages`, provider chat/Responses
 adapters, `AssistantMessage.content`, terminal renderers, prompt components,
@@ -338,7 +320,7 @@ a provider integration, not another agent.
 | Voice channel | Browser microphone/speaker, SIP/phone | Sometimes: owns media/call lifecycle and delegates semantic work to a turn path or live model session. |
 | Collaborative surface | Shared canvas, IDE co-pilot, screen/control session | Often: continuous shared state and interruptions do not fit one request. |
 | Background execution | Queue workers, schedules, webhooks | Already represented by Zeta's worker/coordinator machinery. |
-| Human approval | UI confirmation, Slack button, spoken confirmation | Usually small: records a decision that releases or rejects a staged effect. |
+| Human approval | UI confirmation, Slack button, spoken confirmation | Usually small: records a decision for a later requested action. |
 
 Introduce the `LiveModelSession` abstraction only when a second genuine
 live-session provider needs it. Until then, `RealtimeLiveModelSession` can be a
@@ -417,7 +399,7 @@ agent should speak on Zeta's behalf.
 | 5. Partial assistant text in history | Do not write the full uncompleted generated text as an assistant result. Persist an explicit aborted turn and the conservative text actually delivered to the speaker. |
 | 6. Heard versus generated text | Audio Speech has no word-alignment contract. Persist only whole, fully played TTS segments as `voice.assistant.audible`; on a mid-segment cut, omit the unfinished sentence. The next prompt receives an explicit partial-assistant context item, not a fiction that the full answer was heard. |
 | 7. Tool calls already started | Preserve the existing `tool_call` and effect events. Cancel only not-yet-started calls; an in-flight read may finish but its result is not used for a cancelled run. An in-flight side effect follows its delivery semantics and is never silently retried because speech was interrupted. |
-| 8. Irreversible actions | Voice interruption cannot undo an external effect. Consequential tools remain staged by default and require an explicit, durable confirmation in a new Zeta turn; for ASR ambiguity, use a constrained confirmation such as "Yes, send it to Alice" and repeat material details. |
+| 8. Irreversible actions | Voice interruption cannot undo an external effect. Require an explicit, durable confirmation before a consequential tool call when ASR is ambiguous. Repeat material details. |
 
 This differs from the Realtime conversation truncation rule. In a native
 Realtime WebRTC session, the server can truncate audio based on actual played
@@ -445,14 +427,14 @@ retention feature, not a default event-log payload.
 | --- | --- | --- | --- |
 | Realtime model calls Zeta domain tools directly | One native loop after a function call. | Realtime selects calls; Zeta can audit execution but must mirror conversation and confirmation policy. | Reject for the primary Zeta voice path. |
 | One `delegate_to_zeta` Realtime tool | Adds at least a Zeta model loop plus a Realtime response generation. | Zeta can execute tools, but Realtime still chooses delegation and speaks/interprets result. | Reject: semantic drift and latency. |
-| Zeta alone selects and executes domain tools | Same as CLI; streaming text can begin before a final answer when no tool is needed. | Existing schemas, capability allow-lists, staging, effect keys, delivery semantics, and prompt trace all apply. | **Use this.** |
+| Zeta alone selects and executes domain tools | Same as CLI; streaming text can begin before a final answer when no tool is needed. | Existing schemas, capability allow-lists, effect keys, delivery semantics, and prompt trace all apply. | **Use this.** |
 | Realtime/client owns only voice-session tools | Immediate local control. | It may stop audio, change device, or display transcript; it cannot take domain action. | **Use this limited scope.** |
 
 The exact authority boundary is therefore:
 
 ```text
 Zeta configured model: choose clarification, answer, and domain tool calls.
-Zeta capability runtime: validate, authorize/stage, execute, journal effects.
+Zeta capability runtime: validate, authorize, execute, journal effects.
 Voice client/gateway: microphone, VAD, playback, ASR/TTS transport, cancellation signaling.
 OpenAI Realtime transcription: ASR and endpointing only.
 ```
@@ -460,14 +442,13 @@ OpenAI Realtime transcription: ASR and endpointing only.
 All consequential Zeta capabilities retain their normal delivery semantics and
 idempotency keys. In particular, a spoken acknowledgement cannot be evidence
 that an effect happened; only the tool/effect events are. This keeps voice
-replayable and consistent with Commas `ask`/`propose`/`do` workflows.
+replayable and consistent across all Zeta clients.
 
 ## 7. Recommended architecture
 
 ### State and continuity
 
-The voice client selects an existing Zeta `session_id`; for Commas continuity
-it uses the same state directory and `COMMAS_SESSION_ID` value. The gateway
+The voice client selects an existing Zeta `session_id`. The gateway
 creates a `RuntimeContext` via `session_for_id()` and submits the final
 transcript through the session-turn path. CLI and voice therefore read the same
 timeline, prompt objects, tool results, and turn records.
@@ -577,7 +558,7 @@ The prototype is complete enough only when one continuous session demonstrates:
 5. Speak over the answer. Playback must stop locally; TTS must be aborted; the
    Zeta run must become `voice_interrupted`; no new tool call may begin after the
    cancellation barrier.
-6. Continue by voice or `commas ask` with the same session ID and inspect the
+6. Continue by voice or the CLI with the same session ID and inspect the
    event log/prompt trace. It must show the final transcript, tool trail,
    interruption, and only the segments actually heard.
 
@@ -594,7 +575,7 @@ development. Do not mock VAD, cancellation, or real TTS in the acceptance run.
 - **Incremental TTS:** if the selected provider cannot expose usable text deltas
   or sentence segmentation produces unacceptable overlap/gaps, retain complete-
   answer TTS for v0 and treat low first-audio latency as later work.
-- **Continuity:** if a Commas turn in the selected session does not appear in the
+- **Continuity:** if a CLI turn in the selected session does not appear in the
   following voice prompt (or vice versa), stop: session-id/state-dir routing is
   wrong.
 - **Architecture C spike (optional, isolated):** configure a Realtime
@@ -620,7 +601,7 @@ development. Do not mock VAD, cancellation, or real TTS in the acceptance run.
 5. Add sentence segmentation, ordered streaming TTS, playback acknowledgements,
    and a TTS cancel handle. Keep all audio/transcript partials out of durable
    history by default.
-6. Add integration tests for same-session Commas/voice continuity, tool/event
+6. Add integration tests for same-session CLI/voice continuity, tool/event
    causality, cancellation-before-tool, interruption-during-playback, and
    unsafe-to-retry effects.
 7. If Architecture A is deliberately offered later, add a provider-native
@@ -643,9 +624,8 @@ development. Do not mock VAD, cancellation, or real TTS in the acceptance run.
 - Is segment-level audible history sufficient, or does a later product need
   word-aligned local playback accounting? The TTS docs do not provide a word
   timing contract, so avoid claiming exact character truncation.
-- Should a voice request default to Commas `ask` semantics, or present an
-  explicit workflow switch before entering `propose`/`do`? v0 should default to
-  `ask` and make side-effect confirmation conspicuous.
+- How should voice confirmation protect consequential tool calls without a
+  second client-side execution mode?
 
 ## 11. Sources
 
@@ -680,7 +660,7 @@ All external claims above use current official OpenAI documentation/examples:
    model streaming abortable.
 2. Implement sentence-segment TTS, audible segment events, interruption events,
    and conservative partial-context projection.
-3. Ship the local web harness with read-only default workflow, one safe tool
+3. Ship the local web harness with one safe tool
    test, VAD/push-to-talk fallback, and integration tests.
 
 ### Later improvements

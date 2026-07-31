@@ -55,7 +55,6 @@ def _test_capability(
     provider: str = "test",
     schema: dict[str, Any] | None = None,
     run_result: dict[str, Any] | None = None,
-    with_stage_executor: bool = False,
 ) -> RegisteredCapability:
     return RegisteredCapability(
         Capability(
@@ -65,9 +64,6 @@ def _test_capability(
         ),
         InProcessCapabilityExecutor(
             lambda params: run_result or {"ok": True, "metadata": params},
-            (lambda params: {"ok": True, "effect": {"status": "proposed"}})
-            if with_stage_executor
-            else None,
         ),
     )
 
@@ -121,7 +117,7 @@ def test_zeta_capability_registry_accepts_unchecked_capability_schema() -> None:
     assert registry.get("test.bad") is capability
 
 
-def test_zeta_capability_registry_runs_direct_only_capability_in_stage_mode() -> None:
+def test_zeta_capability_registry_executes_registered_capability() -> None:
     registry = CapabilityRegistry()
     registry.register(_test_capability("unit"))
 
@@ -171,15 +167,15 @@ def test_zeta_capability_result_validation_keeps_success_fields() -> None:
     }
 
 
-def test_zeta_capability_result_validation_keeps_proposed_effect() -> None:
+def test_zeta_capability_result_validation_keeps_extra_fields() -> None:
     payload = validated_capability_result_payload(
         "test.write",
-        {"ok": True, "effect": {"status": "proposed", "kind": "file"}},
+        {"ok": True, "metadata": {"kind": "file"}},
     )
 
     assert payload == {
         "ok": True,
-        "effect": {"status": "proposed", "kind": "file"},
+        "metadata": {"kind": "file"},
     }
 
 
@@ -252,47 +248,16 @@ def test_zeta_capability_registry_converts_executor_exception_to_error_result() 
     }
 
 
-def test_zeta_capability_registry_allows_stage_execution() -> None:
-    registry = CapabilityRegistry()
-    registry.register(
-        _test_capability(
-            "write",
-            with_stage_executor=True,
-        )
-    )
-
-    result = registry.invoke("write", {}, execution_mode="stage")
-
-    assert result == {"ok": True, "effect": {"status": "proposed"}}
-
-
-def test_zeta_in_process_capability_executor_runs_direct_capability() -> None:
+def test_zeta_in_process_capability_executor_runs_capability() -> None:
     capability = _test_capability("read")
 
     result = asyncio.run(
         capability.executor(
             {"path": "README.md"},
-            mode="stage",
         )
     )
 
     assert result == {"ok": True, "metadata": {"path": "README.md"}}
-
-
-def test_zeta_in_process_capability_executor_stages_mutating_capability() -> None:
-    capability = _test_capability(
-        "write",
-        with_stage_executor=True,
-    )
-
-    result = asyncio.run(
-        capability.executor(
-            {"path": "README.md"},
-            mode="stage",
-        )
-    )
-
-    assert result == {"ok": True, "effect": {"status": "proposed"}}
 
 
 def test_zeta_capability_registry_rejects_duplicate_canonical_ids() -> None:
@@ -718,7 +683,6 @@ def test_zeta_tool_grep_tag_can_ground_hashline_edit(tmp_path: Path) -> None:
     data = tool_registry.invoke(
         "edit",
         {"input": f"[{target}#{tag}]\nSWAP 2..2:\n+needle new\n"},
-        execution_mode="direct",
     )
 
     assert data["ok"] is True
@@ -775,7 +739,6 @@ def test_zeta_tool_ast_grep_tag_can_ground_hashline_edit(tmp_path: Path) -> None
     data = tool_registry.invoke(
         "edit",
         {"input": f"[{target}#{tag}]\nSWAP 4..4:\n+    return 'ok'\n"},
-        execution_mode="direct",
     )
 
     assert data["ok"] is True
@@ -810,40 +773,23 @@ def test_zeta_tool_grep_reports_invalid_pattern_error(tmp_path: Path) -> None:
     assert data["content"][0]["text"]
 
 
-def test_zeta_tool_bash_returns_proposed_command_effect() -> None:
-    data = tool_registry.invoke(
-        "bash", {"command": "uv run pytest", "reason": "Run tests."}
-    )
-
-    assert "handoff" not in data
-    assert data["effect"] == {
-        "kind": "command",
-        "status": "proposed",
-        "command": "uv run pytest",
-        "reason": "Run tests.",
-    }
-
-
-def test_zeta_tool_bash_direct_executes_command() -> None:
+def test_zeta_tool_bash_executes_command() -> None:
     data = tool_registry.invoke(
         "bash",
         {"command": "printf direct-bash"},
-        execution_mode="direct",
     )
 
     assert data["ok"] is True
-    assert data["metadata"]["mode"] == "direct"
     assert data["metadata"]["status"] == 0
     assert "stdout" not in data["metadata"]
     assert "stderr" not in data["metadata"]
     assert "direct-bash" in data["content"][0]["text"]
 
 
-def test_zeta_tool_bash_direct_normalizes_failure_error() -> None:
+def test_zeta_tool_bash_normalizes_failure_error() -> None:
     data = tool_registry.invoke(
         "bash",
         {"command": "sh -c 'echo \"ValueError: bad input\" >&2; exit 1'"},
-        execution_mode="direct",
     )
 
     assert data["ok"] is False
@@ -854,24 +800,22 @@ def test_zeta_tool_bash_direct_normalizes_failure_error() -> None:
     assert data["metadata"]["status"] == 1
 
 
-def test_zeta_tool_bash_direct_replaces_invalid_utf8_output() -> None:
+def test_zeta_tool_bash_replaces_invalid_utf8_output() -> None:
     data = tool_registry.invoke(
         "bash",
         {"command": "printf '\\377\\376'"},
-        execution_mode="direct",
     )
 
     assert data["ok"] is True
     assert "�" in data["content"][0]["text"]
 
 
-def test_zeta_tool_bash_direct_kills_command_on_timeout(monkeypatch) -> None:
+def test_zeta_tool_bash_kills_command_on_timeout(monkeypatch) -> None:
     monkeypatch.setattr(bash_tool, "DEFAULT_TIMEOUT_SECONDS", 0.2)
 
     data = tool_registry.invoke(
         "bash",
         {"command": "sleep 5"},
-        execution_mode="direct",
     )
 
     assert data["ok"] is False
@@ -880,11 +824,10 @@ def test_zeta_tool_bash_direct_kills_command_on_timeout(monkeypatch) -> None:
     assert "timed out" in data["content"][0]["text"]
 
 
-def test_zeta_tool_bash_direct_truncates_large_output() -> None:
+def test_zeta_tool_bash_truncates_large_output() -> None:
     data = tool_registry.invoke(
         "bash",
         {"command": "head -c 100000 /dev/zero | tr '\\0' 'x'"},
-        execution_mode="direct",
     )
 
     assert data["ok"] is True
@@ -894,18 +837,16 @@ def test_zeta_tool_bash_direct_truncates_large_output() -> None:
     assert "truncated" in text
 
 
-def test_zeta_tool_write_direct_writes_file(tmp_path: Path) -> None:
-    target = tmp_path / "direct.txt"
+def test_zeta_tool_write_writes_file(tmp_path: Path) -> None:
+    target = tmp_path / "written.txt"
 
     data = tool_registry.invoke(
         "write",
         {"path": str(target), "content": "hello\n"},
-        execution_mode="direct",
     )
 
     assert data["ok"] is True
     metadata = data["metadata"]
-    assert metadata["mode"] == "direct"
     assert metadata["path"] == str(target)
     assert target.read_text(encoding="utf-8") == "hello\n"
 
@@ -956,12 +897,11 @@ def test_zeta_tool_edit_writes_patch_artifact(tmp_path: Path) -> None:
     data = tool_registry.invoke(
         "edit", {"location": str(target), "old": "old\n", "new": "new\n"}
     )
-    artifact = Path(data["effect"]["artifact"])
+    artifact = Path(data["metadata"]["artifact"])
     assert artifact.exists()
     patch = artifact.read_text(encoding="utf-8")
     assert "-old\n" in patch
     assert "+new\n" in patch
-    assert data["effect"]["command"].startswith("git apply ")
 
 
 def test_zeta_tool_edit_accepts_exact_replacement(tmp_path: Path) -> None:
@@ -971,20 +911,17 @@ def test_zeta_tool_edit_accepts_exact_replacement(tmp_path: Path) -> None:
         "location": str(target),
         "old": "old\n",
         "new": "new\n",
-        "reason": "Replace one line.",
     }
 
     data = tool_registry.invoke("edit", payload)
 
-    artifact = Path(data["effect"]["artifact"])
+    artifact = Path(data["metadata"]["artifact"])
     patch = artifact.read_text(encoding="utf-8")
-    assert data["effect"]["command"].startswith("git apply ")
-    assert data["effect"]["reason"] == "Replace one line."
     assert "-old\n" in patch
     assert "+new\n" in patch
 
 
-def test_zeta_tool_edit_stages_hashline_swap_from_read_tag(tmp_path: Path) -> None:
+def test_zeta_tool_edit_applies_hashline_swap_from_read_tag(tmp_path: Path) -> None:
     target = tmp_path / "a.txt"
     target.write_text("hello\nold\nbye\n", encoding="utf-8")
     read = tool_registry.invoke("read", {"path": str(target)})
@@ -992,21 +929,19 @@ def test_zeta_tool_edit_stages_hashline_swap_from_read_tag(tmp_path: Path) -> No
 
     data = tool_registry.invoke(
         "edit",
-        {"input": f"[{target}#{tag}]\nSWAP 2..2:\n+new\n", "reason": "Use tag."},
+        {"input": f"[{target}#{tag}]\nSWAP 2..2:\n+new\n"},
     )
 
     assert data["ok"] is True
-    assert data["effect"]["command"].startswith("git apply ")
-    assert data["effect"]["reason"] == "Use tag."
-    patch = Path(data["effect"]["artifact"]).read_text(encoding="utf-8")
+    patch = Path(data["metadata"]["artifact"]).read_text(encoding="utf-8")
     assert "-old\n" in patch
     assert "+new\n" in patch
-    assert target.read_text(encoding="utf-8") == "hello\nold\nbye\n"
+    assert target.read_text(encoding="utf-8") == "hello\nnew\nbye\n"
     assert data["metadata"]["mode"] == "hashline"
     assert data["metadata"]["tag"] == tag
 
 
-def test_zeta_tool_edit_direct_applies_hashline_insert_and_delete(
+def test_zeta_tool_edit_applies_hashline_insert_and_delete(
     tmp_path: Path,
 ) -> None:
     target = tmp_path / "a.txt"
@@ -1025,7 +960,6 @@ def test_zeta_tool_edit_direct_applies_hashline_insert_and_delete(
                 "+inserted\n"
             )
         },
-        execution_mode="direct",
     )
 
     assert data["ok"] is True
@@ -1037,7 +971,6 @@ def test_zeta_tool_bash_honors_per_call_timeout() -> None:
     data = tool_registry.invoke(
         "bash",
         {"command": "sleep 5", "timeout": 1},
-        execution_mode="direct",
     )
 
     assert data["ok"] is False
@@ -1054,7 +987,6 @@ def test_zeta_tool_edit_rejects_overlapping_operations(tmp_path: Path) -> None:
     data = tool_registry.invoke(
         "edit",
         {"input": f"[{target}#{tag}]\nSWAP 1..2:\n+x\nDEL 2..3\n"},
-        execution_mode="direct",
     )
 
     assert data["ok"] is False
@@ -1117,21 +1049,20 @@ def test_zeta_tool_edit_rejects_hashline_noop(tmp_path: Path) -> None:
     assert data["error"]["code"] == "empty-edit"
 
 
-def test_zeta_tool_edit_direct_replace_writes_file(tmp_path: Path) -> None:
+def test_zeta_tool_edit_exact_replace_writes_file(tmp_path: Path) -> None:
     target = tmp_path / "a.txt"
     target.write_text("hello\nold\nbye\n", encoding="utf-8")
 
     data = tool_registry.invoke(
         "edit",
         {"location": str(target), "old": "old\n", "new": "new\n"},
-        execution_mode="direct",
     )
 
     assert data["ok"] is True
     assert target.read_text(encoding="utf-8") == "hello\nnew\nbye\n"
     assert "handoff" not in data
     metadata = data["metadata"]
-    assert metadata["mode"] == "direct_replace"
+    assert metadata["operation"] == "exact_replace"
     artifact = Path(metadata["artifact"])
     assert artifact.exists()
     assert "+new\n" in artifact.read_text(encoding="utf-8")
@@ -1144,7 +1075,6 @@ def test_zeta_tool_edit_rejects_non_utf8_file(tmp_path: Path) -> None:
     data = tool_registry.invoke(
         "edit",
         {"location": str(target), "old": "old", "new": "new"},
-        execution_mode="direct",
     )
 
     assert data["ok"] is False
@@ -1152,7 +1082,7 @@ def test_zeta_tool_edit_rejects_non_utf8_file(tmp_path: Path) -> None:
     assert target.read_bytes() == b"caf\xe9 old\n"
 
 
-def test_zeta_tool_edit_direct_reports_write_failure(tmp_path: Path) -> None:
+def test_zeta_tool_edit_reports_write_failure(tmp_path: Path) -> None:
     target = tmp_path / "readonly.txt"
     target.write_text("old\n", encoding="utf-8")
     target.chmod(0o444)
@@ -1160,7 +1090,6 @@ def test_zeta_tool_edit_direct_reports_write_failure(tmp_path: Path) -> None:
     data = tool_registry.invoke(
         "edit",
         {"location": str(target), "old": "old\n", "new": "new\n"},
-        execution_mode="direct",
     )
 
     target.chmod(0o644)
@@ -1189,7 +1118,7 @@ def test_zeta_tool_edit_marks_no_newline_exact_replacement(tmp_path: Path) -> No
         "edit", {"location": str(target), "old": "old", "new": "new"}
     )
 
-    artifact = Path(data["effect"]["artifact"])
+    artifact = Path(data["metadata"]["artifact"])
     patch = artifact.read_text(encoding="utf-8")
     assert "-old\n\\ No newline at end of file\n" in patch
     assert "+new\n\\ No newline at end of file\n" in patch
@@ -1201,11 +1130,10 @@ def test_zeta_builtin_metadata_declares_model_shape() -> None:
     assert tool_metadata("edit")["name"] == "edit"
 
 
-def test_zeta_tool_bash_direct_records_duration() -> None:
+def test_zeta_tool_bash_records_duration() -> None:
     data = tool_registry.invoke(
         "bash",
         {"command": "printf timed"},
-        execution_mode="direct",
     )
 
     duration = data["metadata"]["duration_ms"]
@@ -1213,33 +1141,18 @@ def test_zeta_tool_bash_direct_records_duration() -> None:
     assert duration >= 0
 
 
-def test_zeta_tool_write_direct_records_content_hashes(tmp_path: Path) -> None:
-    target = tmp_path / "direct.txt"
+def test_zeta_tool_write_records_content_hashes(tmp_path: Path) -> None:
+    target = tmp_path / "written.txt"
     target.write_text("old\n", encoding="utf-8")
 
     data = tool_registry.invoke(
         "write",
         {"path": str(target), "content": "hello\n"},
-        execution_mode="direct",
     )
 
     metadata = data["metadata"]
     assert metadata["before_hash"] == "sha256:" + hashlib.sha256(b"old\n").hexdigest()
     assert metadata["after_hash"] == "sha256:" + hashlib.sha256(b"hello\n").hexdigest()
-
-
-def test_zeta_tool_write_stage_records_staged_hashes(tmp_path: Path) -> None:
-    target = tmp_path / "staged.txt"
-    target.write_text("old\n", encoding="utf-8")
-
-    data = tool_registry.invoke("write", {"path": str(target), "content": "hello\n"})
-
-    assert data["effect"]["command"].startswith("cp ")
-    metadata = data["metadata"]
-    assert metadata["path"] == str(target)
-    assert metadata["before_hash"] == "sha256:" + hashlib.sha256(b"old\n").hexdigest()
-    assert metadata["after_hash"] == "sha256:" + hashlib.sha256(b"hello\n").hexdigest()
-    assert target.read_text(encoding="utf-8") == "old\n"
 
 
 def test_zeta_tool_write_omits_before_hash_for_new_file(tmp_path: Path) -> None:
@@ -1248,7 +1161,6 @@ def test_zeta_tool_write_omits_before_hash_for_new_file(tmp_path: Path) -> None:
     data = tool_registry.invoke(
         "write",
         {"path": str(target), "content": "hello\n"},
-        execution_mode="direct",
     )
 
     metadata = data["metadata"]
@@ -1256,14 +1168,13 @@ def test_zeta_tool_write_omits_before_hash_for_new_file(tmp_path: Path) -> None:
     assert metadata["after_hash"] == "sha256:" + hashlib.sha256(b"hello\n").hexdigest()
 
 
-def test_zeta_tool_edit_direct_records_content_hashes(tmp_path: Path) -> None:
+def test_zeta_tool_edit_records_content_hashes(tmp_path: Path) -> None:
     target = tmp_path / "a.txt"
     target.write_text("hello\nold\nbye\n", encoding="utf-8")
 
     data = tool_registry.invoke(
         "edit",
         {"location": str(target), "old": "old\n", "new": "new\n"},
-        execution_mode="direct",
     )
 
     metadata = data["metadata"]
@@ -1271,24 +1182,6 @@ def test_zeta_tool_edit_direct_records_content_hashes(tmp_path: Path) -> None:
     after = "sha256:" + hashlib.sha256(b"hello\nnew\nbye\n").hexdigest()
     assert metadata["before_hash"] == before
     assert metadata["after_hash"] == after
-
-
-def test_zeta_tool_edit_stage_records_staged_hashes(tmp_path: Path) -> None:
-    target = tmp_path / "a.txt"
-    target.write_text("hello\nold\nbye\n", encoding="utf-8")
-
-    data = tool_registry.invoke(
-        "edit", {"location": str(target), "old": "old\n", "new": "new\n"}
-    )
-
-    assert data["effect"]["command"].startswith("git apply ")
-    metadata = data["metadata"]
-    assert metadata["path"] == str(target)
-    before = "sha256:" + hashlib.sha256(b"hello\nold\nbye\n").hexdigest()
-    after = "sha256:" + hashlib.sha256(b"hello\nnew\nbye\n").hexdigest()
-    assert metadata["before_hash"] == before
-    assert metadata["after_hash"] == after
-    assert target.read_text(encoding="utf-8") == "hello\nold\nbye\n"
 
 
 def test_registered_capabilities_expands_only_scoped_mcp_wildcards() -> None:

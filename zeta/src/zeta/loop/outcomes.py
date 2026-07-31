@@ -32,7 +32,6 @@ class AgentRunResult:
     stop_reason: RunStopReason | None = None
     telemetry: dict[str, Any] = field(default_factory=dict)
     events: list[DraftEvent] = field(default_factory=list)
-    staged_effect: dict[str, Any] | None = None
     answer_streamed: bool = False
     model_telemetry_calls: list[dict[str, Any]] = field(default_factory=list)
     prompt_traces: list[PromptTrace] = field(default_factory=list)
@@ -45,12 +44,10 @@ def agent_run_result_payload(result: AgentRunResult) -> dict[str, Any]:
         payload["stop_reason"] = result.stop_reason
     if result.events:
         payload["events"] = [asdict(event) for event in result.events]
-    if result.staged_effect is not None:
-        payload["staged_effect"] = result.staged_effect
     return payload
 
 
-RunStopReason = Literal["finished", "staged_effect", "aborted", "max_turns"]
+RunStopReason = Literal["finished", "tool_stop", "aborted", "max_turns"]
 RunInfoKind = Literal["model", "tools", "stopped"]
 
 
@@ -60,7 +57,6 @@ class RunInfo:
     appended_events: tuple[DraftEvent, ...] = ()
     prompt_trace: PromptTrace | None = None
     model_telemetry: dict[str, Any] = field(default_factory=dict)
-    staged_effect: dict[str, Any] | None = None
     final_answer: str = ""
     answer_streamed: bool = False
 
@@ -83,14 +79,12 @@ class RunState:
         self,
         *,
         final_answer: str = "",
-        staged_effect: dict[str, Any] | None = None,
         answer_streamed: bool = False,
     ) -> AgentRunResult:
         return AgentRunResult(
             final_answer=final_answer,
             stop_reason=self.stop,
             events=self.events,
-            staged_effect=staged_effect,
             answer_streamed=answer_streamed,
             telemetry=self.latest_model_telemetry,
             model_telemetry_calls=self.model_telemetry_calls,

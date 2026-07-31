@@ -18,7 +18,7 @@ SUMMARY_FIELDS_BY_TOOL = {
     "grep": ("pattern", "query", "path", "glob"),
     "find": ("pattern", "query", "path", "glob"),
     "ls": ("pattern", "query", "path", "glob"),
-    "query_log": ("turn_id", "touched", "since", "workflow"),
+    "query_log": ("turn_id", "touched", "since"),
 }
 
 

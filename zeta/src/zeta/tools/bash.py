@@ -6,7 +6,6 @@ import subprocess
 import time
 from typing import Any
 
-from zeta.capabilities.delivery import proposed_command_effect
 from zeta.capabilities.paths import resolve_path
 from zeta.capabilities.registry import error_result
 from zeta.capabilities.types import Capability, CapabilityId
@@ -21,7 +20,6 @@ SCHEMA: dict[str, Any] = {
     "required": ["command"],
     "properties": {
         "command": {"type": "string"},
-        "reason": {"type": "string"},
         "timeout": {
             "type": "number",
             "minimum": 1,
@@ -33,20 +31,11 @@ SCHEMA: dict[str, Any] = {
 
 SPEC = Capability(
     CapabilityId("zeta", "bash"),
-    "Execute or stage a shell command, depending on the active workflow.",
+    "Execute a shell command.",
     SCHEMA,
     delivery_semantics="unsafe_to_retry",
+    mutates=True,
 )
-
-
-def stage(params: dict[str, Any]) -> dict[str, Any]:
-    command = str(params.get("command") or "").strip()
-    if not command:
-        return error_result("missing-command", "missing command")
-    return proposed_command_effect(
-        command,
-        str(params.get("reason") or "Run the proposed command."),
-    )
 
 
 def run(params: dict[str, Any]) -> dict[str, Any]:
@@ -89,7 +78,6 @@ def run(params: dict[str, Any]) -> dict[str, Any]:
             }
         ],
         "metadata": {
-            "mode": "direct",
             "command": command,
             "status": status,
             "duration_ms": duration_ms,

@@ -6,7 +6,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
-from zeta.capabilities.delivery import content_hash, effect_resolution, proposed_effect
+from zeta.capabilities.delivery import content_hash
 from zeta.context.system import (
     enabled_capability_ids,
     system_prompt,
@@ -122,13 +122,11 @@ def _chat_message_entries(
 ) -> list[ChatMessageEntry]:
     entries: list[ChatMessageEntry] = []
     tool_call_ids: set[str] = set()
-    resolved_effects = resolved_effect_call_ids(timeline)
     for index, event in enumerate(timeline):
         message = _project_one_chat_message(
             event,
             index=index,
             tool_call_ids=tool_call_ids,
-            resolved_effects=resolved_effects,
         )
         if message is not None:
             entries.append(ChatMessageEntry(index, event, message))
@@ -145,7 +143,6 @@ def _project_one_chat_message(
     *,
     index: int,
     tool_call_ids: set[str],
-    resolved_effects: set[str],
 ) -> dict[str, Any] | None:
     message = _chat_message_from_role_or_event(event)
     if message is not None:
@@ -157,40 +154,8 @@ def _project_one_chat_message(
             return None
         return tool_call_message(event, fallback_id=f"call-{index}")
     if event_type == "tool_result":
-        if is_resolved_proposed_effect(event, resolved_effects):
-            return None
         return tool_result_message(event, tool_call_ids)
     return None
-
-
-def resolved_effect_call_ids(timeline: list[dict[str, Any]]) -> set[str]:
-    """Return tool call ids that have a proposed-effect resolution."""
-    resolved: set[str] = set()
-    for event in timeline:
-        if str(event.get("type") or "") != "tool_result":
-            continue
-        result = event.get("result")
-        if not isinstance(result, dict) or effect_resolution(result) is None:
-            continue
-        tool_call_id = str(event.get("tool_call_id") or "")
-        if tool_call_id:
-            resolved.add(tool_call_id)
-    return resolved
-
-
-def is_resolved_proposed_effect(
-    event: dict[str, Any],
-    resolved_effects: set[str],
-) -> bool:
-    """Return whether this proposal was superseded by a resolution result."""
-    tool_call_id = str(event.get("tool_call_id") or "")
-    if not tool_call_id or tool_call_id not in resolved_effects:
-        return False
-    result = event.get("result")
-    if not isinstance(result, dict):
-        return False
-    effect = proposed_effect(result)
-    return effect is not None
 
 
 def _chat_message_from_role_or_event(event: dict[str, Any]) -> dict[str, Any] | None:

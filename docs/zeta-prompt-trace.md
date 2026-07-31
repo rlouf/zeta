@@ -261,7 +261,7 @@ Or did it fail despite a good prompt?
 Prompt trace lets us answer the first question directly.
 
 It also enables alternate replay. For example, we can start from the same run
-head with a different prompt transform policy and ask:
+head with a different prompt transform policy and inspect:
 
 ```text
 What prompt would this run have produced with no context transform?
@@ -309,7 +309,7 @@ destructive timeline rewrite.
 The same object graph can support models manipulating their own context later.
 
 Today, PromptBuilder decides which components go into the prompt. In the
-future, a model could propose context operations as structured actions:
+future, a model could request context operations as structured actions:
 
 - keep this source component
 - drop this component from future prompts
@@ -322,7 +322,7 @@ Those operations become much safer if they produce trace objects rather than
 mutating an opaque prompt string.
 
 ```text
-model proposes context edit
+model requests context edit
         |
         v
  context transform / policy check

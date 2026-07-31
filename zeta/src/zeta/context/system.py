@@ -21,8 +21,7 @@ TOOL_PROTOCOL_PROMPT = """Tool protocol:
 
 - Tools are native Chat Completions function tools exposed by the runtime.
 - You may request multiple read-only tool calls in one turn when useful.
-- Some workflows stage mutating tool calls for review; some apply them directly.
-- For staged effects, use one mutating tool at a time and then stop.
+- Mutating tools apply their effects when you call them.
 - Use a tool only when its schema matches the needed action.
 - Do not mention unavailable tools.
 - If no tool is needed, return a final answer.
@@ -60,7 +59,7 @@ def system_prompt(
 ) -> str:
     """Assemble the system prompt around the caller's base prompt.
 
-    The base prompt is workflow content and belongs to the caller; this
+    The base prompt belongs to the caller; this
     module only adds the runtime scaffolding: date line, tool protocol,
     and tool descriptors.
     """

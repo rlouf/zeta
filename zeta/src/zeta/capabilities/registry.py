@@ -8,10 +8,9 @@ from collections.abc import Coroutine
 from dataclasses import dataclass, field
 from typing import Any, cast
 
-from zeta.capabilities.types import Capability, ExecutionMode
+from zeta.capabilities.types import Capability
 
 __all__ = [
-    "ExecutionMode",
     "CapabilityDirectory",
     "CapabilityError",
     "CapabilityToolSchema",
@@ -183,15 +182,9 @@ class CapabilityRegistry(CapabilityDirectory):
         capability_id: str,
         params: dict[str, Any],
         *,
-        execution_mode: ExecutionMode = "stage",
         effect_key: str | None = None,
     ) -> dict[str, Any]:
-        """Invoke one capability under the staging contract its policy declares.
-
-        Read-only capabilities always run. Mutating capabilities run in direct
-        mode; in stage mode they stage their work for review, and a capability
-        without a staging implementation is refused.
-        """
+        """Invoke one registered capability."""
         capability_id = self.resolve(capability_id) or capability_id
         capability = self.get(capability_id)
         if capability is None:
@@ -202,7 +195,6 @@ class CapabilityRegistry(CapabilityDirectory):
             capability_id,
             capability,
             params,
-            execution_mode,
             effect_key=effect_key,
         )
 
@@ -211,7 +203,6 @@ class CapabilityRegistry(CapabilityDirectory):
         capability_id: str,
         params: dict[str, Any],
         *,
-        execution_mode: ExecutionMode = "stage",
         effect_key: str | None = None,
     ) -> dict[str, Any]:
         capability_id = self.resolve(capability_id) or capability_id
@@ -224,7 +215,6 @@ class CapabilityRegistry(CapabilityDirectory):
             capability_id,
             capability,
             params,
-            execution_mode,
             effect_key=effect_key,
         )
 
@@ -236,14 +226,13 @@ def invoke_executor(
     capability_id: str,
     capability: RegisteredCapability,
     params: dict[str, Any],
-    mode: ExecutionMode,
     *,
     effect_key: str | None = None,
 ) -> dict[str, Any]:
     try:
         result = capability.executor(
             params,
-            **executor_kwargs(capability.executor, mode, effect_key),
+            **executor_kwargs(capability.executor, effect_key),
         )
         if inspect.isawaitable(result):
             result = asyncio.run(cast(Coroutine[Any, Any, dict[str, Any]], result))
@@ -260,12 +249,11 @@ async def invoke_executor_async(
     capability_id: str,
     capability: RegisteredCapability,
     params: dict[str, Any],
-    mode: ExecutionMode,
     *,
     effect_key: str | None = None,
 ) -> dict[str, Any]:
     try:
-        kwargs = executor_kwargs(capability.executor, mode, effect_key)
+        kwargs = executor_kwargs(capability.executor, effect_key)
         if inspect.iscoroutinefunction(capability.executor):
             result = await capability.executor(params, **kwargs)
         else:
@@ -288,10 +276,9 @@ async def invoke_executor_async(
 
 def executor_kwargs(
     executor: Any,
-    mode: ExecutionMode,
     effect_key: str | None,
 ) -> dict[str, Any]:
-    kwargs: dict[str, Any] = {"mode": mode}
+    kwargs: dict[str, Any] = {}
     if effect_key is None:
         return kwargs
     try:

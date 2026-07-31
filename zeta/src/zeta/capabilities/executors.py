@@ -18,7 +18,6 @@ from zeta.capabilities.registry import (
     CapabilityRegistry,
 )
 from zeta.capabilities.registry import registry as _default_tool_registry
-from zeta.capabilities.types import ExecutionMode
 
 CapabilityFunction = Callable[
     [dict[str, Any]], dict[str, Any] | Awaitable[dict[str, Any]]
@@ -35,7 +34,6 @@ class CapabilityExecutor(Protocol):
         self,
         params: dict[str, Any],
         *,
-        mode: ExecutionMode,
         effect_key: str | None = None,
     ) -> dict[str, Any] | Awaitable[dict[str, Any]]: ...
 
@@ -51,7 +49,6 @@ class ToolExecutor(Protocol):
         self,
         capability_id: str,
         params: dict[str, Any],
-        mode: ExecutionMode,
         *,
         base_dir: Path | None,
         effect_key: str | None,
@@ -100,7 +97,6 @@ class InProcessToolExecutor:
         self,
         capability_id: str,
         params: dict[str, Any],
-        mode: ExecutionMode,
         *,
         base_dir: Path | None,
         effect_key: str | None,
@@ -110,7 +106,6 @@ class InProcessToolExecutor:
             result = invoke_capability(
                 capability_id,
                 params,
-                execution_mode=mode,
                 tool_registry=self.registry,
                 effect_key=effect_key,
             )
@@ -187,20 +182,15 @@ def load_entry_point_tool_executor_provider(entry_point: Any) -> ToolExecutorPro
 @dataclass(frozen=True)
 class InProcessCapabilityExecutor:
     run: CapabilityFunction
-    stage: CapabilityFunction | None = None
 
     async def __call__(
         self,
         params: dict[str, Any],
         *,
-        mode: ExecutionMode,
         effect_key: str | None = None,
     ) -> dict[str, Any]:
         del effect_key
-        if mode == "stage" and self.stage is not None:
-            result = self.stage(params)
-        else:
-            result = self.run(params)
+        result = self.run(params)
         if inspect.isawaitable(result):
             result = await result
         return dict(cast(dict[str, Any], result))
@@ -210,7 +200,6 @@ async def invoke_capability(
     capability_id: str,
     params: dict[str, Any],
     *,
-    execution_mode: ExecutionMode = "stage",
     tool_registry: CapabilityRegistry | None = None,
     effect_key: str | None = None,
 ) -> dict[str, Any]:
@@ -218,6 +207,5 @@ async def invoke_capability(
     return await active_tool_registry.invoke_async(
         capability_id,
         params,
-        execution_mode=execution_mode,
         effect_key=effect_key,
     )

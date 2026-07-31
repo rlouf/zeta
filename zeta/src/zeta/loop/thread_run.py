@@ -4,10 +4,9 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, Literal
+from typing import Any
 
 from zeta import ids
-from zeta.capabilities.types import ExecutionMode
 from zeta.events import DraftEvent, Event
 from zeta.loop.cancellation import AgentRunAborted, CancellationToken
 from zeta.loop.config import AgentConfig
@@ -42,13 +41,9 @@ class SessionRequestError(ValueError):
         super().__init__(self.message)
 
 
-SessionWorkflow = Literal["ask", "propose", "do"]
-
-
 @dataclass(frozen=True)
 class SessionRunParams:
     objective: str
-    workflow: SessionWorkflow = "ask"
     runtime: str | None = None
     run_id: str | None = None
     idempotency_key: str | None = None
@@ -66,7 +61,6 @@ class SessionRunParams:
     def run_payload(self, run_id: str) -> dict[str, Any]:
         payload: dict[str, Any] = {
             "objective": self.objective,
-            "workflow": self.workflow,
             "runtime": "zeta-rpc",
             "run_id": run_id,
             "tools": list(self.tools or ()),
@@ -105,15 +99,6 @@ def session_run_params(params: dict[str, Any]) -> SessionRunParams:
             "session.run requires objective",
             {"message": "session.run requires objective"},
         )
-    if request.workflow not in {"ask", "propose", "do"}:
-        raise SessionRequestError(
-            "invalid_workflow",
-            "workflow must be ask, propose, or do",
-            {
-                "message": "workflow must be ask, propose, or do",
-                "workflow": request.workflow,
-            },
-        )
     if request.idempotency_key is not None and (
         not isinstance(request.idempotency_key, str) or not request.idempotency_key
     ):
@@ -135,10 +120,8 @@ def session_run_params(params: dict[str, Any]) -> SessionRunParams:
 
 def session_agent_request(params: dict[str, Any]) -> AgentRunRequest:
     request = session_run_params(params)
-    execution_mode: ExecutionMode = "direct" if request.workflow == "do" else "stage"
     return AgentRunRequest(
         objective=request.objective,
-        workflow=request.workflow,
         runtime="zeta-rpc",
         tools=tuple(request.tools or ()),
         context=request.context,
@@ -146,8 +129,6 @@ def session_agent_request(params: dict[str, Any]) -> AgentRunRequest:
         config=AgentConfig(
             system_prompt=request.system,
             max_turns=request.max_steps,
-            stop_on_staged_effect=True,
-            execution_mode=execution_mode,
             model_name=request.model,
             model_url=request.url,
             thinking=request.thinking,
@@ -172,7 +153,6 @@ def session_agent_request_for_context(
         return request
     return AgentRunRequest(
         objective=request.objective,
-        workflow=request.workflow,
         runtime=request.runtime,
         tools=request.tools,
         context=request.context,
@@ -180,8 +160,6 @@ def session_agent_request_for_context(
         config=AgentConfig(
             system_prompt=config.system_prompt,
             max_turns=config.max_turns,
-            stop_on_staged_effect=config.stop_on_staged_effect,
-            execution_mode=config.execution_mode,
             model_profile=selection.profile,
             model_name=selection.model,
             model_url=selection.url,
@@ -222,8 +200,6 @@ async def run_session_request(
         )
     return _session_result(
         _session_outcome(
-            result.staged_effect,
-            result.final_answer,
             stop_reason=result.stop_reason,
         ),
         result.final_answer,
@@ -276,18 +252,15 @@ def _session_result(
 
 
 def _session_outcome(
-    staged_effect: dict[str, Any] | None,
-    final_answer: str,
     *,
     stop_reason: str | None = None,
 ) -> str:
-    del final_answer
     if stop_reason == "max_turns":
         return "max_turns"
     if stop_reason == "aborted":
         return "aborted"
-    if staged_effect is not None:
-        return "staged"
+    if stop_reason == "tool_stop":
+        return "stopped"
     return "completed"
 
 

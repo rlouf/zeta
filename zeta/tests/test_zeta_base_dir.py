@@ -68,7 +68,7 @@ def test_in_process_tool_executor_activates_base_dir_from_context():
                 "resolve a relative path against the active base",
                 {"type": "object", "additionalProperties": True},
             ),
-            InProcessCapabilityExecutor(probe, None),
+            InProcessCapabilityExecutor(probe),
         )
     )
     executor = InProcessToolExecutor(registry)
@@ -83,7 +83,6 @@ def test_in_process_tool_executor_activates_base_dir_from_context():
         executor.call(
             "test.probe",
             {},
-            "direct",
             base_dir=ctx.base_dir,
             effect_key=None,
         )

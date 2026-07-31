@@ -1,14 +1,9 @@
 """Write tool implementation."""
 
-import shlex
 from pathlib import Path
 from typing import Any
 
-from zeta.capabilities.delivery import (
-    change_hashes,
-    proposed_command_effect,
-    write_temp,
-)
+from zeta.capabilities.delivery import change_hashes
 from zeta.capabilities.paths import resolve_path
 from zeta.capabilities.registry import error_result
 from zeta.capabilities.types import Capability, CapabilityId
@@ -20,32 +15,16 @@ SCHEMA: dict[str, Any] = {
     "properties": {
         "path": {"type": "string"},
         "content": {"type": "string"},
-        "reason": {"type": "string"},
     },
 }
 
 SPEC = Capability(
     CapabilityId("zeta", "write"),
-    "Write content directly or stage a proposed cp command.",
+    "Write content to a file.",
     SCHEMA,
     delivery_semantics="idempotent_with_key",
+    mutates=True,
 )
-
-
-def stage(params: dict[str, Any]) -> dict[str, Any]:
-    dest = str(params.get("path") or "")
-    if not dest:
-        return error_result("missing-path", "missing path")
-    dest = str(resolve_path(dest))
-    content = str(params.get("content") or "")
-    path = write_temp("zeta-write-", ".tmp", content)
-    result = proposed_command_effect(
-        f"cp {shlex.quote(str(path))} {shlex.quote(dest)}",
-        str(params.get("reason") or f"Write {dest}."),
-        artifact=str(path),
-    )
-    result["metadata"] = change_hashes(dest, content) | {"path": dest}
-    return result
 
 
 def run(params: dict[str, Any]) -> dict[str, Any]:
@@ -62,5 +41,5 @@ def run(params: dict[str, Any]) -> dict[str, Any]:
     return {
         "ok": True,
         "content": [{"type": "text", "text": f"wrote {dest}"}],
-        "metadata": {"mode": "direct", "path": dest, **hashes},
+        "metadata": {"path": dest, **hashes},
     }

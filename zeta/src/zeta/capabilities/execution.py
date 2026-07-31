@@ -12,14 +12,12 @@ from typing import Any, cast
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import SchemaError
 
-from zeta.capabilities.delivery import proposed_effect
 from zeta.capabilities.executors import InProcessToolExecutor, ToolExecutor
 from zeta.capabilities.registry import (
     CapabilityRegistry,
     CapabilityToolSchema,
     validated_capability_result_payload,
 )
-from zeta.capabilities.types import ExecutionMode
 from zeta.effects import DeliverySemantics, effect_key
 from zeta.events import DraftEvent
 from zeta.journal.drafts import draft_from_runtime_event, ensure_runtime_event_id
@@ -52,7 +50,6 @@ class CapabilityExecutionContext:
 @dataclass(frozen=True)
 class CapabilityCallResult:
     events: list[DraftEvent]
-    staged_effect: dict[str, Any] | None = None
     stop: bool = False
 
 
@@ -148,7 +145,6 @@ async def handle_tool_call(
     allowed_capabilities: tuple[str, ...],
     tool_schema: CapabilityToolSchema,
     index: int,
-    execution_mode: ExecutionMode = "stage",
     model_telemetry: dict[str, Any] | None = None,
     caused_by: str | None = None,
     ctx: CapabilityExecutionContext,
@@ -184,7 +180,6 @@ async def handle_tool_call(
     return await run_valid_tool_call(
         invocation,
         capability_id=validation.capability_id,
-        execution_mode=execution_mode,
         model_telemetry=model_telemetry,
         ctx=ctx,
     )
@@ -220,7 +215,7 @@ def validate_tool_call(
             return ToolCallValidation(
                 error=(
                     "disallowed-tool",
-                    f"tool is not allowed in this workflow: {invocation.name}",
+                    f"tool is not allowed for this run: {invocation.name}",
                 )
             )
         return ToolCallValidation(
@@ -230,7 +225,7 @@ def validate_tool_call(
         return ToolCallValidation(
             error=(
                 "disallowed-tool",
-                f"tool is not allowed in this workflow: {invocation.name}",
+                f"tool is not allowed for this run: {invocation.name}",
             )
         )
     capability = tool_registry.get(capability_id)
@@ -292,7 +287,6 @@ async def run_valid_tool_call(
     invocation: CapabilityCallInvocation,
     *,
     capability_id: str,
-    execution_mode: ExecutionMode,
     model_telemetry: dict[str, Any] | None,
     ctx: CapabilityExecutionContext,
 ) -> CapabilityCallResult:
@@ -307,7 +301,7 @@ async def run_valid_tool_call(
     semantics = capability_delivery_semantics(capability_id, ctx=ctx)
     operation_key = None
     invocation_ctx = ctx
-    if execution_mode == "direct" and semantics is not None:
+    if semantics is not None:
         scope = ctx.effect_scope or invocation.call_id
         operation_key = effect_key(scope, capability_id, invocation.params)
         invocation_ctx = replace(ctx, effect_key=operation_key)
@@ -337,18 +331,12 @@ async def run_valid_tool_call(
         invoked = invoke_tool_executor(
             capability_id,
             invocation.params,
-            execution_mode=execution_mode,
             ctx=invocation_ctx,
         )
         result = await invoked if inspect.isawaitable(invoked) else invoked
     except Exception as exc:
         result = tool_error("tool-crashed", f"{type(exc).__name__}: {exc}")
-    staged_effect = proposed_effect(result)
-    stop = bool(
-        execution_mode == "stage"
-        and staged_effect is not None
-        and result.get("ok") is True
-    )
+    stop = bool(result.get("ok") is True and result.get("stop") is True)
     result_event = tool_result_event_payload(
         invocation.call_id,
         invocation.name,
@@ -380,7 +368,6 @@ async def run_valid_tool_call(
         )
     return CapabilityCallResult(
         events=events,
-        staged_effect=staged_effect,
         stop=stop,
     )
 
@@ -534,14 +521,12 @@ async def invoke_tool_executor(
     capability_id: str,
     params: dict[str, Any],
     *,
-    execution_mode: ExecutionMode = "stage",
     ctx: CapabilityExecutionContext,
 ) -> dict[str, Any]:
     executor = ctx.tool_executor or InProcessToolExecutor(ctx.tool_registry)
     result = await executor.call(
         capability_id,
         params,
-        execution_mode,
         base_dir=ctx.base_dir,
         effect_key=ctx.effect_key,
     )

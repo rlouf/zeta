@@ -32,7 +32,6 @@ class AgentRunRequest:
     """Durable request envelope shared by session and authored-agent runs."""
 
     objective: str
-    workflow: str
     runtime: str
     tools: tuple[str, ...]
     context: str

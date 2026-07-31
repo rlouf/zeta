@@ -580,7 +580,7 @@ body
         )
 
 
-def test_zeta_authored_agent_config_executes_tools_directly(tmp_path: Path) -> None:
+def test_zeta_authored_agent_config_sets_tools(tmp_path: Path) -> None:
     spec = zeta_agents.load_spec(
         _write_spec(
             tmp_path / "worker.md",
@@ -600,7 +600,6 @@ Run.
 
     config = zeta_agents.config_for_spec(spec, None)
 
-    assert config.execution_mode == "direct"
     assert config.model_name == "qwen3.6-27b-q8-local"
     assert config.model_url == "http://127.0.0.1:8080/v1/chat/completions"
     assert config.system_prompt == "Runs directly."

@@ -131,7 +131,6 @@ async def step_tools(
 ) -> tuple[RunState, RunInfo]:
     appended_events: list[DraftEvent] = []
     batch_events: list[DraftEvent] = []
-    staged_effect: dict[str, Any] | None = None
     tool_calls = list(state.pending_tool_calls)
     model_telemetry = dict(state.pending_model_telemetry)
     assistant_event_id = state.pending_tool_parent_id
@@ -158,19 +157,14 @@ async def step_tools(
                 ctx.builder.store(),
             )
         state.next_model_caused_by = next_model_parent(result_event.events)
-        if result_event.staged_effect is not None and config.stop_on_staged_effect:
-            staged_effect = result_event.staged_effect
-            state.stop = "staged_effect"
-            break
         if result_event.stop:
-            state.stop = "finished"
+            state.stop = "tool_stop"
             break
     state.events.extend(batch_events)
     state.turn += 1
     return state, RunInfo(
         kind="tools",
         appended_events=tuple(appended_events),
-        staged_effect=staged_effect,
     )
 
 
@@ -244,7 +238,6 @@ class AgentRun:
             self.state.note_step("finish_run")
             return self.state.result(
                 final_answer=info.final_answer,
-                staged_effect=info.staged_effect,
                 answer_streamed=info.answer_streamed,
             )
         self.state.stop = "max_turns"

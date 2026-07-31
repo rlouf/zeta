@@ -1200,6 +1200,24 @@ def test_zeta_event_connector_registry_rejects_duplicate_ids() -> None:
         registry.register(_slack_connector())
 
 
+def test_zeta_event_connector_registry_rejects_duplicate_event_owners() -> None:
+    registry = zeta_agents.EventConnectorRegistry()
+    registry.register(
+        zeta_agents.EventConnector(
+            id="first",
+            events={"message.received": None},
+        )
+    )
+
+    with pytest.raises(ValueError, match="message.received.*first"):
+        registry.register(
+            zeta_agents.EventConnector(
+                id="second",
+                events={"message.received": None},
+            )
+        )
+
+
 def test_zeta_event_connector_requires_egress_delivery_semantics() -> None:
     with pytest.raises(ValueError, match="missing delivery semantics"):
         zeta_agents.EventConnector(

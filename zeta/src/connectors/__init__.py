@@ -97,6 +97,7 @@ class EventConnectorRegistry:
 
     def __init__(self) -> None:
         self._connectors: dict[str, EventConnector] = {}
+        self._event_owners: dict[str, str] = {}
 
     @property
     def connectors(self) -> Mapping[str, EventConnector]:
@@ -105,16 +106,23 @@ class EventConnectorRegistry:
     def register(self, connector: EventConnector) -> None:
         if connector.id in self._connectors:
             raise ValueError(f"duplicate event connector {connector.id!r}")
+        for event_type in connector.events:
+            owner = self._event_owners.get(event_type)
+            if owner is not None:
+                raise ValueError(
+                    f"event {event_type!r} is already declared by "
+                    f"event connector {owner!r}"
+                )
         self._connectors[connector.id] = connector
+        for event_type in connector.events:
+            self._event_owners[event_type] = connector.id
 
     def resolve(self, connector_id: str) -> EventConnector | None:
         return self._connectors.get(connector_id)
 
     def connector_for_event(self, event_type: str) -> EventConnector | None:
-        for connector in self._connectors.values():
-            if event_type in connector.events:
-                return connector
-        return None
+        owner = self._event_owners.get(event_type)
+        return self._connectors.get(owner) if owner is not None else None
 
     def event_connectors(self) -> tuple[EventConnector, ...]:
         return tuple(self._connectors.values())

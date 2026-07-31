@@ -29,6 +29,7 @@ class DefaultModelGateway:
         *,
         stream: Any | None = None,
         telemetry_sink: Callable[[dict[str, Any]], None] | None = None,
+        should_stop: Callable[[], str | None] | None = None,
     ) -> _model_types.ModelOutput:
         api = getattr(config, "model_api", None)
         options = {
@@ -40,6 +41,7 @@ class DefaultModelGateway:
             "stream_sink": stream,
             "telemetry_sink": telemetry_sink,
             "thinking": getattr(config, "thinking", None),
+            "should_stop": should_stop,
         }
         if api == _profiles.CODEX_RESPONSES_API:
             options["session_id"] = getattr(config, "model_session_id", None)

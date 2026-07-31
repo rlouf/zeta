@@ -27,6 +27,7 @@ def request_chat_completion(
     *,
     selected_url: str | None = None,
     stream_sink: ChatCompletionStreamSink | None = None,
+    should_stop: Callable[[], str | None] | None = None,
 ) -> dict[str, Any]:
     """POST one streaming chat completions request and return the final response."""
     stream_body = {**body, "stream": True}
@@ -35,6 +36,7 @@ def request_chat_completion(
             model_url(selected_url),
             stream_body,
             headers={"Accept": "text/event-stream"},
+            should_stop=should_stop,
         ),
         stream_sink=stream_sink,
     )
@@ -81,6 +83,7 @@ def chat_completion_messages(
     stream_sink: ChatCompletionStreamSink | None = None,
     telemetry_sink: ModelTelemetrySink | None = None,
     thinking: str | None = None,
+    should_stop: Callable[[], str | None] | None = None,
 ) -> dict[str, Any]:
     """Request one native OpenAI-compatible chat completion message."""
     context_tokens = model_context_tokens(selected_url, selected_model)
@@ -93,7 +96,10 @@ def chat_completion_messages(
         thinking=thinking,
     )
     payload = request_chat_completion(
-        body, selected_url=selected_url, stream_sink=stream_sink
+        body,
+        selected_url=selected_url,
+        stream_sink=stream_sink,
+        should_stop=should_stop,
     )
     emit_model_telemetry(
         payload,

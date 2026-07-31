@@ -1127,6 +1127,7 @@ def test_zeta_call_model_step_returns_output_and_telemetry() -> None:
             *,
             stream: zeta_loop_gateway.ModelStream | None = None,
             telemetry_sink: Callable[[dict[str, Any]], None] | None = None,
+            should_stop: Callable[[], str | None] | None = None,
         ) -> zeta_model_shapes.ModelOutput:
             del config, stream
             assert model_input.messages == [{"role": "user", "content": "answer"}]
@@ -1190,6 +1191,7 @@ def test_zeta_call_model_step_updates_model_status_during_request() -> None:
             *,
             stream: zeta_loop_gateway.ModelStream | None = None,
             telemetry_sink: Callable[[dict[str, Any]], None] | None = None,
+            should_stop: Callable[[], str | None] | None = None,
         ) -> zeta_model_shapes.ModelOutput:
             del model_input, config, telemetry_sink
             assert status_events == ["enter"]
@@ -1231,6 +1233,7 @@ def test_zeta_agent_compaction_policy_bounds_model_input() -> None:
             *,
             stream: zeta_loop_gateway.ModelStream | None = None,
             telemetry_sink: Callable[[dict[str, Any]], None] | None = None,
+            should_stop: Callable[[], str | None] | None = None,
         ) -> zeta_model_shapes.ModelOutput:
             del config, stream, telemetry_sink
             captured["model_input"] = model_input
@@ -1282,6 +1285,7 @@ def test_zeta_async_agent_turn_runs_turns_concurrently() -> None:
             *,
             stream: zeta_loop_gateway.ModelStream | None = None,
             telemetry_sink: Callable[[dict[str, Any]], None] | None = None,
+            should_stop: Callable[[], str | None] | None = None,
         ) -> zeta_model_shapes.ModelOutput:
             del config, stream, telemetry_sink
             objective = str(model_input.messages[-1]["content"]).splitlines()[0]
@@ -1332,6 +1336,7 @@ def test_zeta_step_model_without_tool_calls_returns_info_and_stops() -> None:
             *,
             stream: zeta_loop_gateway.ModelStream | None = None,
             telemetry_sink: Callable[[dict[str, Any]], None] | None = None,
+            should_stop: Callable[[], str | None] | None = None,
         ) -> zeta_model_shapes.ModelOutput:
             del model_input, config, stream
             if telemetry_sink is not None:
@@ -1388,6 +1393,7 @@ def test_zeta_step_model_with_tool_calls_records_pending_tools() -> None:
             *,
             stream: zeta_loop_gateway.ModelStream | None = None,
             telemetry_sink: Callable[[dict[str, Any]], None] | None = None,
+            should_stop: Callable[[], str | None] | None = None,
         ) -> zeta_model_shapes.ModelOutput:
             del model_input, config, stream
             if telemetry_sink is not None:

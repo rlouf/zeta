@@ -7,7 +7,7 @@ and accumulate the deltas into one assistant message.
 from __future__ import annotations
 
 import json
-from collections.abc import Iterable, Iterator, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from typing import Any, Protocol
 
 from zeta.models.limits import (
@@ -15,7 +15,11 @@ from zeta.models.limits import (
     model_idle_timeout,
     model_stream_timeout,
 )
-from zeta.models.types import normalized_usage, tool_call_id
+from zeta.models.types import (
+    ModelRequestAborted,
+    normalized_usage,
+    tool_call_id,
+)
 
 
 class ChatCompletionStreamSink(Protocol):
@@ -37,8 +41,14 @@ def stream_json_sse(
     headers: Mapping[str, str],
     first_output_timeout: float | None = None,
     idle_timeout: float | None = None,
+    should_stop: Callable[[], str | None] | None = None,
 ) -> Iterator[str]:
-    """POST JSON and yield Server-Sent Event data payloads."""
+    """POST JSON and yield Server-Sent Event data payloads.
+
+    `should_stop` is polled between frames. Every model request streams, so a
+    cancelled run stops within one frame rather than waiting for the whole
+    generation.
+    """
     import httpx
 
     timeout = model_stream_timeout(
@@ -63,7 +73,12 @@ def stream_json_sse(
                 if getattr(response, "is_error", False):
                     response.read()
                 response.raise_for_status()
-                yield from parse_sse_lines(response.iter_lines())
+                for frame in parse_sse_lines(response.iter_lines()):
+                    if should_stop is not None:
+                        reason = should_stop()
+                        if reason is not None:
+                            raise ModelRequestAborted(reason)
+                    yield frame
     except httpx.HTTPStatusError as exc:
         raise RuntimeError(f"model request failed: {http_error_detail(exc)}") from exc
     except (

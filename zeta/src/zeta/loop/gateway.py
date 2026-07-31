@@ -34,6 +34,7 @@ class ModelGateway(Protocol):
         *,
         stream: ModelStream | None = None,
         telemetry_sink: Callable[[dict[str, Any]], None] | None = None,
+        should_stop: Callable[[], str | None] | None = None,
     ) -> ModelOutput: ...
 
 
@@ -58,6 +59,7 @@ async def request_assistant_message(
     model_gateway: ModelGateway | None = None,
     events: list[DraftEvent] | None = None,
     event_sink: AgentEventSink | None = None,
+    should_stop: Callable[[], str | None] | None = None,
 ) -> tuple[ModelOutput, bool, dict[str, Any]]:
     model_telemetry: dict[str, Any] = {}
     recorded_events = events if events is not None else []
@@ -70,6 +72,7 @@ async def request_assistant_message(
             config,
             stream=turn_stream_sink,
             telemetry_sink=model_telemetry.update,
+            should_stop=should_stop,
         )
         model_output = await generated if inspect.isawaitable(generated) else generated
     else:
@@ -79,6 +82,7 @@ async def request_assistant_message(
                 config,
                 stream=StatusAwareModelStream(turn_stream_sink, status),
                 telemetry_sink=model_telemetry.update,
+                should_stop=should_stop,
             )
             model_output = (
                 await generated if inspect.isawaitable(generated) else generated

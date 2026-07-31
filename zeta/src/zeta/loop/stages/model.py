@@ -7,7 +7,7 @@ message into durable records.
 from __future__ import annotations
 
 import inspect
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -35,13 +35,14 @@ from zeta.loop.request import (
     RunDependencies,
     record_runtime_event,
 )
+from zeta.loop.stages.abort import check_run_abort
 from zeta.loop.stages.prompt import build_prompt_step
 from zeta.loop.types import (
     AgentEventSink,
     TimelineEvent,
 )
 from zeta.models import DefaultModelGateway
-from zeta.models.types import ModelInput, ModelOutput
+from zeta.models.types import ModelInput, ModelOutput, ModelRequestAborted
 from zeta.trace.provenance import (
     project_prompt_trace_projection,
 )
@@ -158,6 +159,7 @@ async def call_model_step(
     state: RunState,
     model_gateway: ModelGateway | None = None,
     event_sink: AgentEventSink | None,
+    should_stop: Callable[[], str | None] | None = None,
 ) -> tuple[ModelOutput, bool, dict[str, Any]]:
     state.note_step("call_model")
     requested = request_assistant_message(
@@ -166,6 +168,7 @@ async def call_model_step(
         model_gateway=model_gateway or DefaultModelGateway(),
         events=state.events,
         event_sink=event_sink,
+        should_stop=should_stop,
     )
     model_output, streamed_content, model_telemetry = (
         await requested if inspect.isawaitable(requested) else requested
@@ -215,13 +218,19 @@ async def request_model_turn(
         state=state,
         builder=ctx.builder,
     )
-    model_output, streamed_content, model_telemetry = await call_model_step(
-        model_input,
-        config=config,
-        state=state,
-        model_gateway=ctx.model_gateway,
-        event_sink=ctx.event_sink,
-    )
+    try:
+        model_output, streamed_content, model_telemetry = await call_model_step(
+            model_input,
+            config=config,
+            state=state,
+            model_gateway=ctx.model_gateway,
+            event_sink=ctx.event_sink,
+            should_stop=ctx.abort_reason,
+        )
+    except ModelRequestAborted:
+        # The models layer cannot raise the run's abort, so translate it here.
+        check_run_abort(state, ctx=ctx)
+        raise
     assistant, prompt_trace = record_assistant_step(
         prepared_prompt,
         model_output,

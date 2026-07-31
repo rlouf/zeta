@@ -14,6 +14,7 @@ import zeta.models.endpoint as zeta_model_endpoint
 import zeta.models.limits as zeta_model_limits
 import zeta.models.profiles as zeta_models
 import zeta.models.sse as zeta_model_sse
+import zeta.models.types as zeta_model_shapes
 import zeta.models.types as zeta_models_api
 from click.testing import CliRunner
 from zeta.cli.main import cli as zeta_cli
@@ -220,6 +221,7 @@ def test_zeta_request_chat_completion_streams_final_message(monkeypatch) -> None
         body: dict[str, Any],
         *,
         headers: dict[str, str],
+        should_stop: object | None = None,
     ) -> list[str]:
         captured["url"] = url
         captured["body"] = body
@@ -597,8 +599,9 @@ def test_zeta_request_chat_completion_closes_stream_on_error(monkeypatch) -> Non
         body: dict[str, Any],
         *,
         headers: dict[str, str],
+        should_stop: object | None = None,
     ) -> Any:
-        del url, body, headers
+        del url, body, headers, should_stop
         nonlocal closed
         try:
             yield from sse_lines({"error": {"message": "generation failed"}})
@@ -1637,6 +1640,7 @@ def test_zeta_default_model_gateway_omits_session_id_for_chat_completions(
         stream_sink: object | None,
         telemetry_sink: object | None,
         thinking: str | None,
+        should_stop: object | None = None,
     ) -> dict[str, Any]:
         captured["messages"] = messages
         captured["api"] = api
@@ -1823,3 +1827,57 @@ default = true
         "model: codex -> gpt-5.5 @ https://chatgpt.com/backend-api (config)"
         in result.output
     )
+
+
+def test_zeta_stream_json_sse_stops_between_frames_when_the_run_aborts(
+    monkeypatch,
+) -> None:
+    """A cancelled run must not wait for the whole generation."""
+    frames = ["a", "b", "c", "d"]
+    delivered: list[str] = []
+
+    def fake_parse_sse_lines(lines: Any) -> Any:
+        yield from frames
+
+    class FakeResponse:
+        is_error = False
+
+        def raise_for_status(self) -> None:
+            return None
+
+        def iter_lines(self) -> Any:
+            return iter(())
+
+    class FakeStream:
+        def __enter__(self) -> FakeResponse:
+            return FakeResponse()
+
+        def __exit__(self, *_: object) -> bool:
+            return False
+
+    class FakeClient:
+        def __enter__(self) -> Any:
+            return self
+
+        def __exit__(self, *_: object) -> bool:
+            return False
+
+        def stream(self, *_: object, **__: object) -> FakeStream:
+            return FakeStream()
+
+    monkeypatch.setattr(zeta_model_sse, "parse_sse_lines", fake_parse_sse_lines)
+    monkeypatch.setattr(httpx, "Client", lambda **_: FakeClient())
+
+    def should_stop() -> str | None:
+        return "cancelled" if len(delivered) >= 2 else None
+
+    with pytest.raises(zeta_model_shapes.ModelRequestAborted, match="cancelled"):
+        for frame in zeta_model_sse.stream_json_sse(
+            "http://127.0.0.1:8080/v1/chat/completions",
+            {},
+            headers={},
+            should_stop=should_stop,
+        ):
+            delivered.append(frame)
+
+    assert delivered == ["a", "b"]  # stopped mid-stream, not after all four

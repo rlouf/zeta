@@ -70,3 +70,15 @@ def normalized_usage(value: Any) -> dict[str, int] | None:
         and not isinstance(token_count, bool)
     }
     return usage or None
+
+
+class ModelRequestAborted(RuntimeError):
+    """A model request stopped because the run was cancelled or timed out.
+
+    The models layer cannot see a run, so it raises this and lets the loop
+    translate it into the run's own abort.
+    """
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(f"model request aborted: {reason}")
+        self.reason = reason

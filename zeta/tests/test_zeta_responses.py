@@ -508,6 +508,7 @@ def test_zeta_responses_codex_completion_round_trip(monkeypatch) -> None:
         headers: dict[str, str],
         first_output_timeout: float | None,
         idle_timeout: float | None,
+        should_stop: object | None = None,
     ) -> list[str]:
         captured["url"] = url
         captured["headers"] = headers

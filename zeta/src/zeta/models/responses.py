@@ -9,7 +9,7 @@ their encrypted content) and item ids replay verbatim on the next request.
 import json
 import os
 import time
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from typing import Any
 
 from jsonschema import Draft202012Validator
@@ -68,6 +68,7 @@ def responses_request_body(
     max_tokens: int = DEFAULT_MAX_COMPLETION_TOKENS,
     thinking: str | None = None,
     session_id: str | None = None,
+    should_stop: Callable[[], str | None] | None = None,
 ) -> dict[str, Any]:
     """Build a streaming Responses request from chat-completions inputs.
 
@@ -236,6 +237,7 @@ def request_codex_response(
     selected_url: str | None = None,
     session: str,
     stream_sink: ChatCompletionStreamSink | None = None,
+    should_stop: Callable[[], str | None] | None = None,
 ) -> dict[str, Any]:
     """POST one streaming Codex request and return the final payload."""
     credentials = load_codex_credentials()
@@ -246,6 +248,7 @@ def request_codex_response(
             headers=codex_request_headers(credentials, session),
             first_output_timeout=model_first_output_timeout(),
             idle_timeout=model_idle_timeout(),
+            should_stop=should_stop,
         ),
         stream_sink=stream_sink,
     )
@@ -271,6 +274,7 @@ def codex_completion_messages(
     telemetry_sink: ModelTelemetrySink | None = None,
     thinking: str | None = None,
     session_id: str | None = None,
+    should_stop: Callable[[], str | None] | None = None,
 ) -> dict[str, Any]:
     """Request one assistant message from the Codex Responses backend."""
     model = codex_model_name(selected_model)
@@ -289,6 +293,7 @@ def codex_completion_messages(
         selected_url=selected_url,
         session=session,
         stream_sink=stream_sink,
+        should_stop=should_stop,
     )
     emit_model_telemetry(
         payload,

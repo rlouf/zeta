@@ -86,75 +86,20 @@ def _read_only_event_store(path: Path) -> SqliteEventStore:
 
 
 @dataclass(frozen=True)
-class RuntimeEventStore:
-    """Event log plus orchestration-owned runtime indexes."""
+class _SqliteBacked:
+    """State shared by the two halves of the runtime store.
+
+    Both halves hold the same `SqliteEventStore`, so they share one connection
+    and one write lock. The split is about ownership and recovery, not about a
+    second database.
+    """
 
     events: SqliteEventStore
     metrics: RuntimeMetrics = field(default_factory=NullRuntimeMetrics)
 
-    @classmethod
-    def open(
-        cls,
-        path: Path | str,
-        *,
-        metrics: RuntimeMetrics | None = None,
-        read_only: bool = False,
-    ) -> RuntimeEventStore:
-        """Keep first-time inspections from establishing runtime state."""
-
-        store_path = Path(path)
-        if read_only:
-            event_store = _read_only_event_store(store_path)
-        else:
-            event_store = SqliteEventStore(
-                store_path,
-                projections=(runtime_event_projection(),),
-            )
-        return cls(
-            event_store,
-            metrics or NullRuntimeMetrics(),
-        )
-
-    @property
-    def path(self) -> Path:
-        return self.events.path
-
-    @property
-    def journal(self) -> RuntimeJournal:
-        return self
-
-    @property
-    def coordination(self) -> CoordinationStore:
-        return self
-
     @property
     def connection(self) -> sqlite3.Connection:
         return self.events.connection
-
-    def close(self) -> None:
-        self.events.close()
-
-    def accept(self, draft: DraftEvent) -> AppendOutcome:
-        started = time.perf_counter()
-        try:
-            return self.events.accept(draft)
-        finally:
-            self.observe_runtime_metric(
-                "sqlite.event_append_ms",
-                _elapsed_ms(started),
-                event_type=draft.event_type,
-            )
-
-    def append(self, event: Event) -> AppendOutcome:
-        started = time.perf_counter()
-        try:
-            return self.events.append(event)
-        finally:
-            self.observe_runtime_metric(
-                "sqlite.event_append_ms",
-                _elapsed_ms(started),
-                event_type=event.event_type,
-            )
 
     def observe_runtime_metric(
         self,
@@ -168,32 +113,65 @@ class RuntimeEventStore:
             # Metrics must never change runtime state transitions.
             return
 
+
+@dataclass(frozen=True)
+class RuntimeJournalStore(_SqliteBacked):
+    """Durable historical facts.
+
+    Ingress, returned events, and lifecycle events are facts. They keep their
+    ids, idempotency keys, causality, and append order. The queue and attempt
+    tables are projections of this log, so a rebuild reproduces them.
+    """
+
+    def accept(self, draft: DraftEvent) -> AppendOutcome:
+        started = time.perf_counter()
+        try:
+            return self.events.accept(draft)
+        finally:
+            self.observe_runtime_metric(
+                "sqlite.event_append_ms",
+                _elapsed_ms(started),
+                event_type=draft.event_type,
+            )
+    def append(self, event: Event) -> AppendOutcome:
+        started = time.perf_counter()
+        try:
+            return self.events.append(event)
+        finally:
+            self.observe_runtime_metric(
+                "sqlite.event_append_ms",
+                _elapsed_ms(started),
+                event_type=event.event_type,
+            )
     def rebuild_projections(self) -> int:
         return self.events.rebuild_projections()
-
     def get(self, event_id: str) -> Event | None:
         return self.events.get(event_id)
-
     def list_events(self, filter: Filter) -> list[Event]:
         return self.events.list_events(filter)
-
     def children(self, event_id: str, *, limit: int | None = None) -> list[Event]:
         return self.events.children(event_id, limit=limit)
-
     def causal_chain(self, event_id: str) -> list[Event]:
         return self.events.causal_chain(event_id)
-
     def events_for_turn(self, turn_id: str) -> list[Event]:
         return self.events.events_for_turn(turn_id)
-
     def events_for_run(self, run_id: str) -> list[Event]:
         return self.events.events_for_run(run_id)
-
     def clear_session_events(self, session_id: str, *, event_type_prefix: str) -> int:
         return self.events.clear_session_events(
             session_id,
             event_type_prefix=event_type_prefix,
         )
+
+
+@dataclass(frozen=True)
+class CoordinationSqliteStore(_SqliteBacked):
+    """Live coordination state.
+
+    Claims, claim tokens, lease deadlines, heartbeats, and locks fence
+    concurrent workers. They are not historical facts, and a projection
+    rebuild discards them.
+    """
 
     def ensure_pending_queue_item(self, event: Event) -> str:
         queue_item_id = _pending_queue_item_id(event)
@@ -217,7 +195,6 @@ class RuntimeEventStore:
             )
             self.connection.commit()
         return queue_item_id
-
     def event_has_queue_item(self, event_id: str) -> bool:
         with self.events.write_lock:
             row = self.connection.execute(
@@ -230,7 +207,6 @@ class RuntimeEventStore:
                 (event_id,),
             ).fetchone()
         return row is not None
-
     def queue_item(self, queue_item_id: str) -> dict[str, Any] | None:
         with self.events.write_lock:
             row = self.connection.execute(
@@ -245,7 +221,6 @@ class RuntimeEventStore:
         if row is None:
             return None
         return _without_none_snapshot_fields(dict(row))
-
     def queue_item_attempt_count(self, queue_item_id: str) -> int:
         with self.events.write_lock:
             row = self.connection.execute(
@@ -253,7 +228,6 @@ class RuntimeEventStore:
                 (queue_item_id,),
             ).fetchone()
         return int(row["attempt_count"]) if row is not None else 0
-
     def list_queue_items(self) -> list[dict[str, Any]]:
         with self.events.write_lock:
             rows = self.connection.execute(
@@ -266,7 +240,6 @@ class RuntimeEventStore:
                 """
             ).fetchall()
         return [_without_none_snapshot_fields(dict(row)) for row in rows]
-
     def list_attempts(self) -> list[dict[str, Any]]:
         with self.events.write_lock:
             rows = self.connection.execute(
@@ -286,7 +259,6 @@ class RuntimeEventStore:
                 """
             ).fetchall()
         return [_row_to_attempt(row) for row in rows]
-
     def list_locks(self) -> list[dict[str, Any]]:
         with self.events.write_lock:
             rows = self.connection.execute(
@@ -297,7 +269,6 @@ class RuntimeEventStore:
                 """
             ).fetchall()
         return [dict(row) for row in rows]
-
     def acquire_locks(
         self,
         keys: Iterable[str],
@@ -368,7 +339,6 @@ class RuntimeEventStore:
                     lock_count=len(requested),
                 )
                 raise
-
     def release_locks(self, keys: Iterable[str], owner: str) -> int:
         requested = tuple(dict.fromkeys(keys))
         if not requested:
@@ -385,7 +355,6 @@ class RuntimeEventStore:
             )
             self.connection.commit()
         return int(cursor.rowcount)
-
     def renew_locks(
         self,
         keys: Iterable[str],
@@ -419,7 +388,6 @@ class RuntimeEventStore:
             except Exception:
                 self.connection.rollback()
                 raise
-
     def reconcile_expired_locks(self, *, now_ms: int) -> int:
         with self.events.write_lock:
             cursor = self.connection.execute(
@@ -431,7 +399,6 @@ class RuntimeEventStore:
             )
             self.connection.commit()
         return int(cursor.rowcount)
-
     def heartbeat_attempt(
         self,
         attempt_id: str,
@@ -513,7 +480,6 @@ class RuntimeEventStore:
                     _elapsed_ms(started),
                 )
                 raise
-
     def claim_next_queue_item(
         self,
         worker_name: str,
@@ -610,7 +576,6 @@ class RuntimeEventStore:
                     claimed=False,
                 )
                 raise
-
     def release_queue_claim(
         self,
         queue_item_id: str,
@@ -640,7 +605,6 @@ class RuntimeEventStore:
             )
             self.connection.commit()
         return cursor.rowcount == 1
-
     def queue_claim_is_current(
         self,
         queue_item_id: str,
@@ -661,7 +625,6 @@ class RuntimeEventStore:
                 (queue_item_id, worker_name, claim_token),
             ).fetchone()
         return row is not None
-
     def reconcile_expired_queue_claims(self, *, now_ms: int) -> int:
         with self.events.write_lock:
             cursor = self.connection.execute(
@@ -682,6 +645,196 @@ class RuntimeEventStore:
             )
             self.connection.commit()
         return int(cursor.rowcount)
+
+
+@dataclass(frozen=True)
+class RuntimeEventStore:
+    """One handle over the journal and the coordination store.
+
+    Callers keep one object. `journal` and `coordination` now return the two
+    implementations rather than this facade, so the boundary the runtime
+    semantics describe is visible in the code.
+    """
+
+    events: SqliteEventStore
+    metrics: RuntimeMetrics = field(default_factory=NullRuntimeMetrics)
+
+    @classmethod
+    def open(
+        cls,
+        path: Path | str,
+        *,
+        metrics: RuntimeMetrics | None = None,
+        read_only: bool = False,
+    ) -> RuntimeEventStore:
+        """Keep first-time inspections from establishing runtime state."""
+
+        store_path = Path(path)
+        if read_only:
+            event_store = _read_only_event_store(store_path)
+        else:
+            event_store = SqliteEventStore(
+                store_path,
+                projections=(runtime_event_projection(),),
+            )
+        return cls(event_store, metrics or NullRuntimeMetrics())
+
+    @property
+    def _journal(self) -> RuntimeJournalStore:
+        return RuntimeJournalStore(self.events, self.metrics)
+
+    @property
+    def _coordination(self) -> CoordinationSqliteStore:
+        return CoordinationSqliteStore(self.events, self.metrics)
+
+    @property
+    def journal(self) -> RuntimeJournal:
+        return self._journal
+
+    @property
+    def coordination(self) -> CoordinationStore:
+        return self._coordination
+
+    @property
+    def path(self) -> Path:
+        return self.events.path
+
+    @property
+    def connection(self) -> sqlite3.Connection:
+        return self.events.connection
+
+    def close(self) -> None:
+        self.events.close()
+
+    def accept(self, draft: DraftEvent) -> AppendOutcome:
+        return self._journal.accept(draft)
+
+    def append(self, event: Event) -> AppendOutcome:
+        return self._journal.append(event)
+
+    def rebuild_projections(self) -> int:
+        return self._journal.rebuild_projections()
+
+    def get(self, event_id: str) -> Event | None:
+        return self._journal.get(event_id)
+
+    def list_events(self, filter: Filter) -> list[Event]:
+        return self._journal.list_events(filter)
+
+    def children(self, event_id: str, *, limit: int | None = None) -> list[Event]:
+        return self._journal.children(event_id, limit=limit)
+
+    def causal_chain(self, event_id: str) -> list[Event]:
+        return self._journal.causal_chain(event_id)
+
+    def events_for_turn(self, turn_id: str) -> list[Event]:
+        return self._journal.events_for_turn(turn_id)
+
+    def events_for_run(self, run_id: str) -> list[Event]:
+        return self._journal.events_for_run(run_id)
+
+    def clear_session_events(self, session_id: str, *, event_type_prefix: str) -> int:
+        return self._journal.clear_session_events(session_id, event_type_prefix=event_type_prefix)
+
+    def ensure_pending_queue_item(self, event: Event) -> str:
+        return self._coordination.ensure_pending_queue_item(event)
+
+    def event_has_queue_item(self, event_id: str) -> bool:
+        return self._coordination.event_has_queue_item(event_id)
+
+    def queue_item(self, queue_item_id: str) -> dict[str, Any] | None:
+        return self._coordination.queue_item(queue_item_id)
+
+    def queue_item_attempt_count(self, queue_item_id: str) -> int:
+        return self._coordination.queue_item_attempt_count(queue_item_id)
+
+    def list_queue_items(self) -> list[dict[str, Any]]:
+        return self._coordination.list_queue_items()
+
+    def list_attempts(self) -> list[dict[str, Any]]:
+        return self._coordination.list_attempts()
+
+    def list_locks(self) -> list[dict[str, Any]]:
+        return self._coordination.list_locks()
+
+    def acquire_locks(
+        self,
+        keys: Iterable[str],
+        owner: str,
+        *,
+        lease_ms: int,
+        now_ms: int,
+    ) -> bool:
+        return self._coordination.acquire_locks(keys, owner, lease_ms=lease_ms, now_ms=now_ms)
+
+    def release_locks(self, keys: Iterable[str], owner: str) -> int:
+        return self._coordination.release_locks(keys, owner)
+
+    def renew_locks(
+        self,
+        keys: Iterable[str],
+        owner: str,
+        *,
+        lease_ms: int,
+        now_ms: int,
+    ) -> bool:
+        return self._coordination.renew_locks(keys, owner, lease_ms=lease_ms, now_ms=now_ms)
+
+    def reconcile_expired_locks(self, *, now_ms: int) -> int:
+        return self._coordination.reconcile_expired_locks(now_ms=now_ms)
+
+    def heartbeat_attempt(
+        self,
+        attempt_id: str,
+        queue_item_id: str,
+        worker_name: str,
+        *,
+        claim_token: str,
+        lease_ms: int,
+        now_ms: int,
+    ) -> bool:
+        return self._coordination.heartbeat_attempt(attempt_id, queue_item_id, worker_name, claim_token=claim_token, lease_ms=lease_ms, now_ms=now_ms)
+
+    def claim_next_queue_item(
+        self,
+        worker_name: str,
+        *,
+        lease_ms: int,
+        now_ms: int,
+        exclude_queue_item_ids: Iterable[str] = (),
+    ) -> QueueClaim | None:
+        return self._coordination.claim_next_queue_item(worker_name, lease_ms=lease_ms, now_ms=now_ms, exclude_queue_item_ids=exclude_queue_item_ids)
+
+    def release_queue_claim(
+        self,
+        queue_item_id: str,
+        worker_name: str,
+        *,
+        claim_token: str,
+        now_ms: int,
+    ) -> bool:
+        return self._coordination.release_queue_claim(queue_item_id, worker_name, claim_token=claim_token, now_ms=now_ms)
+
+    def queue_claim_is_current(
+        self,
+        queue_item_id: str,
+        worker_name: str,
+        claim_token: str,
+    ) -> bool:
+        return self._coordination.queue_claim_is_current(queue_item_id, worker_name, claim_token)
+
+    def reconcile_expired_queue_claims(self, *, now_ms: int) -> int:
+        return self._coordination.reconcile_expired_queue_claims(now_ms=now_ms)
+
+    def observe_runtime_metric(
+        self,
+        name: str,
+        value: float,
+        **attributes: MetricAttribute,
+    ) -> None:
+        return self._journal.observe_runtime_metric(name, value, **attributes)
+
+
 
 
 def _row_to_attempt(row: sqlite3.Row) -> dict[str, Any]:

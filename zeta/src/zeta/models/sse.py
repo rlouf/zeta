@@ -177,6 +177,43 @@ def format_stream_error(error: Any) -> str:
     return json.dumps(error, sort_keys=True)
 
 
+class StreamedText:
+    """Buffer content and reasoning deltas, forwarding each as it arrives.
+
+    Both protocols stream text the same way even though their wire formats
+    differ: a delta is appended and handed to the sink immediately, and the
+    parts are joined once at the end. Only that behaviour is shared, so only
+    that behaviour lives here.
+    """
+
+    def __init__(self, stream_sink: ChatCompletionStreamSink | None = None) -> None:
+        self.stream_sink = stream_sink
+        self.content: list[str] = []
+        self.reasoning: list[str] = []
+
+    def add_content(self, text: str) -> None:
+        if not text:
+            return
+        self.content.append(text)
+        if self.stream_sink is not None:
+            self.stream_sink.content_delta(text)
+
+    def add_reasoning(self, text: str) -> None:
+        if not text:
+            return
+        self.reasoning.append(text)
+        if self.stream_sink is not None:
+            self.stream_sink.reasoning_delta(text)
+
+    @property
+    def content_text(self) -> str:
+        return "".join(self.content)
+
+    @property
+    def reasoning_text(self) -> str:
+        return "".join(self.reasoning)
+
+
 class ChatStreamAccumulator:
     """Accumulate OpenAI-style chat completion chunks into a final message."""
 
@@ -187,8 +224,7 @@ class ChatStreamAccumulator:
     ) -> None:
         self.metadata: dict[str, Any] = {}
         self.role: str | None = None
-        self.content: list[str] = []
-        self.reasoning_content: list[str] = []
+        self.text = StreamedText(stream_sink)
         self.tool_calls: dict[int, dict[str, Any]] = {}
         self.finish_reason: Any = None
         self.usage: dict[str, int] | None = None
@@ -228,14 +264,10 @@ class ChatStreamAccumulator:
             self.role = role
         content = delta.get("content")
         if isinstance(content, str):
-            self.content.append(content)
-            if self.stream_sink is not None:
-                self.stream_sink.content_delta(content)
+            self.text.add_content(content)
         reasoning_content = delta.get("reasoning_content")
         if isinstance(reasoning_content, str):
-            self.reasoning_content.append(reasoning_content)
-            if reasoning_content and self.stream_sink is not None:
-                self.stream_sink.reasoning_delta(reasoning_content)
+            self.text.add_reasoning(reasoning_content)
         tool_calls = delta.get("tool_calls")
         if tool_calls is not None:
             self.add_tool_calls(tool_calls)
@@ -287,10 +319,10 @@ class ChatStreamAccumulator:
             raise RuntimeError("model stream failed: no completion choices received")
         message: dict[str, Any] = {
             "role": self.role or "assistant",
-            "content": "".join(self.content),
+            "content": self.text.content_text,
         }
-        if self.reasoning_content:
-            message["reasoning_content"] = "".join(self.reasoning_content)
+        if self.text.reasoning:
+            message["reasoning_content"] = self.text.reasoning_text
         if self.tool_calls:
             message["tool_calls"] = [
                 self.final_tool_call(index) for index in sorted(self.tool_calls)

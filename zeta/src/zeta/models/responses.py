@@ -27,6 +27,7 @@ from zeta.models.limits import model_first_output_timeout, model_idle_timeout
 from zeta.models.profiles import DEFAULT_CODEX_BASE_URL
 from zeta.models.sse import (
     ChatCompletionStreamSink,
+    StreamedText,
     decode_stream_event,
     stream_json_sse,
 )
@@ -371,9 +372,8 @@ class ResponsesStreamAccumulator:
         stream_sink: ChatCompletionStreamSink | None = None,
     ) -> None:
         self.stream_sink = stream_sink
+        self.text = StreamedText(stream_sink)
         self.items: list[dict[str, Any]] = []
-        self.content: list[str] = []
-        self.reasoning: list[str] = []
         self.tool_calls: list[dict[str, Any]] = []
         self.usage: dict[str, int] | None = None
         self.status: str | None = None
@@ -407,18 +407,10 @@ class ResponsesStreamAccumulator:
             self.response_id = str(response.get("id") or "") or None
 
     def add_reasoning_delta(self, text: str) -> None:
-        if not text:
-            return
-        self.reasoning.append(text)
-        if self.stream_sink is not None:
-            self.stream_sink.reasoning_delta(text)
+        self.text.add_reasoning(text)
 
     def add_content_delta(self, text: str) -> None:
-        if not text:
-            return
-        self.content.append(text)
-        if self.stream_sink is not None:
-            self.stream_sink.content_delta(text)
+        self.text.add_content(text)
 
     def add_item(self, item: Any) -> None:
         if not isinstance(item, dict):
@@ -470,7 +462,7 @@ class ResponsesStreamAccumulator:
             "role": "assistant",
             "content": self.final_content(),
         }
-        reasoning = "".join(self.reasoning).strip()
+        reasoning = self.text.reasoning_text.strip()
         if reasoning:
             message["reasoning_content"] = reasoning
         if self.tool_calls:
@@ -487,7 +479,7 @@ class ResponsesStreamAccumulator:
             for part in item.get("content") or []
             if isinstance(part, dict) and part.get("type") == "output_text"
         ]
-        text = "".join(parts) or "".join(self.content)
+        text = "".join(parts) or self.text.content_text
         if text:
             return text
         return None if self.tool_calls else ""

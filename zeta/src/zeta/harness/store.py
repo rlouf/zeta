@@ -133,6 +133,7 @@ class RuntimeJournalStore(_SqliteBacked):
                 _elapsed_ms(started),
                 event_type=draft.event_type,
             )
+
     def append(self, event: Event) -> AppendOutcome:
         started = time.perf_counter()
         try:
@@ -143,20 +144,28 @@ class RuntimeJournalStore(_SqliteBacked):
                 _elapsed_ms(started),
                 event_type=event.event_type,
             )
+
     def rebuild_projections(self) -> int:
         return self.events.rebuild_projections()
+
     def get(self, event_id: str) -> Event | None:
         return self.events.get(event_id)
+
     def list_events(self, filter: Filter) -> list[Event]:
         return self.events.list_events(filter)
+
     def children(self, event_id: str, *, limit: int | None = None) -> list[Event]:
         return self.events.children(event_id, limit=limit)
+
     def causal_chain(self, event_id: str) -> list[Event]:
         return self.events.causal_chain(event_id)
+
     def events_for_turn(self, turn_id: str) -> list[Event]:
         return self.events.events_for_turn(turn_id)
+
     def events_for_run(self, run_id: str) -> list[Event]:
         return self.events.events_for_run(run_id)
+
     def clear_session_events(self, session_id: str, *, event_type_prefix: str) -> int:
         return self.events.clear_session_events(
             session_id,
@@ -195,6 +204,7 @@ class CoordinationSqliteStore(_SqliteBacked):
             )
             self.connection.commit()
         return queue_item_id
+
     def event_has_queue_item(self, event_id: str) -> bool:
         with self.events.write_lock:
             row = self.connection.execute(
@@ -207,6 +217,7 @@ class CoordinationSqliteStore(_SqliteBacked):
                 (event_id,),
             ).fetchone()
         return row is not None
+
     def queue_item(self, queue_item_id: str) -> dict[str, Any] | None:
         with self.events.write_lock:
             row = self.connection.execute(
@@ -221,6 +232,7 @@ class CoordinationSqliteStore(_SqliteBacked):
         if row is None:
             return None
         return _without_none_snapshot_fields(dict(row))
+
     def queue_item_attempt_count(self, queue_item_id: str) -> int:
         with self.events.write_lock:
             row = self.connection.execute(
@@ -228,6 +240,7 @@ class CoordinationSqliteStore(_SqliteBacked):
                 (queue_item_id,),
             ).fetchone()
         return int(row["attempt_count"]) if row is not None else 0
+
     def list_queue_items(self) -> list[dict[str, Any]]:
         with self.events.write_lock:
             rows = self.connection.execute(
@@ -240,6 +253,7 @@ class CoordinationSqliteStore(_SqliteBacked):
                 """
             ).fetchall()
         return [_without_none_snapshot_fields(dict(row)) for row in rows]
+
     def list_attempts(self) -> list[dict[str, Any]]:
         with self.events.write_lock:
             rows = self.connection.execute(
@@ -259,6 +273,7 @@ class CoordinationSqliteStore(_SqliteBacked):
                 """
             ).fetchall()
         return [_row_to_attempt(row) for row in rows]
+
     def list_locks(self) -> list[dict[str, Any]]:
         with self.events.write_lock:
             rows = self.connection.execute(
@@ -269,6 +284,7 @@ class CoordinationSqliteStore(_SqliteBacked):
                 """
             ).fetchall()
         return [dict(row) for row in rows]
+
     def acquire_locks(
         self,
         keys: Iterable[str],
@@ -339,6 +355,7 @@ class CoordinationSqliteStore(_SqliteBacked):
                     lock_count=len(requested),
                 )
                 raise
+
     def release_locks(self, keys: Iterable[str], owner: str) -> int:
         requested = tuple(dict.fromkeys(keys))
         if not requested:
@@ -355,6 +372,7 @@ class CoordinationSqliteStore(_SqliteBacked):
             )
             self.connection.commit()
         return int(cursor.rowcount)
+
     def renew_locks(
         self,
         keys: Iterable[str],
@@ -388,6 +406,7 @@ class CoordinationSqliteStore(_SqliteBacked):
             except Exception:
                 self.connection.rollback()
                 raise
+
     def reconcile_expired_locks(self, *, now_ms: int) -> int:
         with self.events.write_lock:
             cursor = self.connection.execute(
@@ -399,6 +418,7 @@ class CoordinationSqliteStore(_SqliteBacked):
             )
             self.connection.commit()
         return int(cursor.rowcount)
+
     def heartbeat_attempt(
         self,
         attempt_id: str,
@@ -480,6 +500,7 @@ class CoordinationSqliteStore(_SqliteBacked):
                     _elapsed_ms(started),
                 )
                 raise
+
     def claim_next_queue_item(
         self,
         worker_name: str,
@@ -576,6 +597,7 @@ class CoordinationSqliteStore(_SqliteBacked):
                     claimed=False,
                 )
                 raise
+
     def release_queue_claim(
         self,
         queue_item_id: str,
@@ -605,6 +627,7 @@ class CoordinationSqliteStore(_SqliteBacked):
             )
             self.connection.commit()
         return cursor.rowcount == 1
+
     def queue_claim_is_current(
         self,
         queue_item_id: str,
@@ -625,6 +648,7 @@ class CoordinationSqliteStore(_SqliteBacked):
                 (queue_item_id, worker_name, claim_token),
             ).fetchone()
         return row is not None
+
     def reconcile_expired_queue_claims(self, *, now_ms: int) -> int:
         with self.events.write_lock:
             cursor = self.connection.execute(
@@ -734,7 +758,9 @@ class RuntimeEventStore:
         return self._journal.events_for_run(run_id)
 
     def clear_session_events(self, session_id: str, *, event_type_prefix: str) -> int:
-        return self._journal.clear_session_events(session_id, event_type_prefix=event_type_prefix)
+        return self._journal.clear_session_events(
+            session_id, event_type_prefix=event_type_prefix
+        )
 
     def ensure_pending_queue_item(self, event: Event) -> str:
         return self._coordination.ensure_pending_queue_item(event)
@@ -765,7 +791,9 @@ class RuntimeEventStore:
         lease_ms: int,
         now_ms: int,
     ) -> bool:
-        return self._coordination.acquire_locks(keys, owner, lease_ms=lease_ms, now_ms=now_ms)
+        return self._coordination.acquire_locks(
+            keys, owner, lease_ms=lease_ms, now_ms=now_ms
+        )
 
     def release_locks(self, keys: Iterable[str], owner: str) -> int:
         return self._coordination.release_locks(keys, owner)
@@ -778,7 +806,9 @@ class RuntimeEventStore:
         lease_ms: int,
         now_ms: int,
     ) -> bool:
-        return self._coordination.renew_locks(keys, owner, lease_ms=lease_ms, now_ms=now_ms)
+        return self._coordination.renew_locks(
+            keys, owner, lease_ms=lease_ms, now_ms=now_ms
+        )
 
     def reconcile_expired_locks(self, *, now_ms: int) -> int:
         return self._coordination.reconcile_expired_locks(now_ms=now_ms)
@@ -793,7 +823,14 @@ class RuntimeEventStore:
         lease_ms: int,
         now_ms: int,
     ) -> bool:
-        return self._coordination.heartbeat_attempt(attempt_id, queue_item_id, worker_name, claim_token=claim_token, lease_ms=lease_ms, now_ms=now_ms)
+        return self._coordination.heartbeat_attempt(
+            attempt_id,
+            queue_item_id,
+            worker_name,
+            claim_token=claim_token,
+            lease_ms=lease_ms,
+            now_ms=now_ms,
+        )
 
     def claim_next_queue_item(
         self,
@@ -803,7 +840,12 @@ class RuntimeEventStore:
         now_ms: int,
         exclude_queue_item_ids: Iterable[str] = (),
     ) -> QueueClaim | None:
-        return self._coordination.claim_next_queue_item(worker_name, lease_ms=lease_ms, now_ms=now_ms, exclude_queue_item_ids=exclude_queue_item_ids)
+        return self._coordination.claim_next_queue_item(
+            worker_name,
+            lease_ms=lease_ms,
+            now_ms=now_ms,
+            exclude_queue_item_ids=exclude_queue_item_ids,
+        )
 
     def release_queue_claim(
         self,
@@ -813,7 +855,9 @@ class RuntimeEventStore:
         claim_token: str,
         now_ms: int,
     ) -> bool:
-        return self._coordination.release_queue_claim(queue_item_id, worker_name, claim_token=claim_token, now_ms=now_ms)
+        return self._coordination.release_queue_claim(
+            queue_item_id, worker_name, claim_token=claim_token, now_ms=now_ms
+        )
 
     def queue_claim_is_current(
         self,
@@ -821,7 +865,9 @@ class RuntimeEventStore:
         worker_name: str,
         claim_token: str,
     ) -> bool:
-        return self._coordination.queue_claim_is_current(queue_item_id, worker_name, claim_token)
+        return self._coordination.queue_claim_is_current(
+            queue_item_id, worker_name, claim_token
+        )
 
     def reconcile_expired_queue_claims(self, *, now_ms: int) -> int:
         return self._coordination.reconcile_expired_queue_claims(now_ms=now_ms)
@@ -833,8 +879,6 @@ class RuntimeEventStore:
         **attributes: MetricAttribute,
     ) -> None:
         return self._journal.observe_runtime_metric(name, value, **attributes)
-
-
 
 
 def _row_to_attempt(row: sqlite3.Row) -> dict[str, Any]:

@@ -89,6 +89,16 @@ from zeta_test_support import (
 
 from zeta import models as zeta_models_api
 
+
+def _as_async(fn: Any) -> Any:
+    """Wrap a synchronous test double so it can stand in for an async function."""
+
+    async def call(*args: Any, **kwargs: Any) -> Any:
+        return fn(*args, **kwargs)
+
+    return call
+
+
 zeta_trace = SimpleNamespace(InMemoryStore=InMemoryStore)
 
 ensure_builtin_tools_registered()
@@ -287,7 +297,7 @@ def test_zeta_console_script_is_declared() -> None:
 
 
 def test_zeta_agent_turn_carries_reasoning_into_event(monkeypatch) -> None:
-    def fake_chat_completion_messages(
+    async def fake_chat_completion_messages(
         messages: list[dict[str, Any]],
         **kwargs: object,
     ) -> dict[str, Any]:
@@ -315,7 +325,7 @@ def test_zeta_agent_turn_emits_model_draft(monkeypatch) -> None:
     monkeypatch.setattr(
         zeta_models_api,
         "chat_completion_messages",
-        lambda *args, **kwargs: {"content": "done"},
+        _as_async(lambda *args, **kwargs: {"content": "done"}),
     )
 
     result = run_agent_turn(
@@ -947,7 +957,7 @@ def test_zeta_model_turn_carries_typed_assistant_message() -> None:
 
 
 def test_zeta_request_assistant_message_returns_model_output(monkeypatch) -> None:
-    def fake_chat_completion_messages(
+    async def fake_chat_completion_messages(
         messages: list[dict[str, Any]],
         **kwargs: object,
     ) -> dict[str, Any]:
@@ -1020,14 +1030,14 @@ def test_zeta_request_model_turn_builds_assistant_from_model_output(
                 thinking=thinking,
             )
 
-        def commit_prompt_plan(
+        async def commit_prompt_plan(
             self,
             plan: zeta_context.PromptPlan,
         ) -> zeta_context.StoredPrompt:
             self.committed = True
-            return super().commit_prompt_plan(plan)
+            return await super().commit_prompt_plan(plan)
 
-    def fake_request_assistant_message(
+    async def fake_request_assistant_message(
         model_input: zeta_model_shapes.ModelInput,
         **kwargs: object,
     ) -> tuple[zeta_model_shapes.ModelOutput, bool, dict[str, Any]]:
@@ -1088,11 +1098,11 @@ def test_zeta_request_model_turn_builds_assistant_from_model_output(
     assert turn.model_telemetry == {"usage": {"prompt_tokens": 1}}
 
 
-def test_zeta_build_prompt_step_returns_committed_model_input() -> None:
+async def test_zeta_build_prompt_step_returns_committed_model_input() -> None:
     store = zeta_trace.InMemoryStore()
     state = zeta_agent.RunState()
 
-    prepared_prompt, model_input = loop_prompt.build_prompt_step(
+    prepared_prompt, model_input = await loop_prompt.build_prompt_step(
         "answer",
         [{"role": "user", "content": "prior"}],
         config=zeta_agent.AgentConfig(model_name="unit-model"),
@@ -1542,11 +1552,11 @@ def test_zeta_step_tools_does_not_commit_partial_batch_on_error(
     assert state.events == []
 
 
-def test_zeta_record_assistant_step_links_output_to_prompt() -> None:
+async def test_zeta_record_assistant_step_links_output_to_prompt() -> None:
     store = zeta_trace.InMemoryStore()
     state = zeta_agent.RunState()
     builder = zeta_context.PromptBuilder(store=store)
-    prepared_prompt, _ = loop_prompt.build_prompt_step(
+    prepared_prompt, _ = await loop_prompt.build_prompt_step(
         "answer",
         [],
         config=zeta_agent.AgentConfig(),
@@ -5671,7 +5681,7 @@ def test_zeta_worker_returned_events_use_runtime_model_selection(
         captured.update(kwargs)
         return AgentRunResult(final_answer="two observations")
 
-    def fake_structured_output(
+    async def fake_structured_output(
         messages: list[dict[str, Any]],
         **options: Any,
     ) -> dict[str, Any]:
@@ -6953,7 +6963,7 @@ def test_zeta_agent_turn_uses_explicit_tool_registry(monkeypatch) -> None:
     )
     captured_messages: list[list[dict[str, Any]]] = []
 
-    def fake_chat_completion_messages(
+    async def fake_chat_completion_messages(
         messages: list[dict[str, Any]],
         **kwargs: object,
     ) -> dict[str, Any]:
@@ -7009,7 +7019,7 @@ def test_zeta_agent_turn_resolves_model_name_through_projection(monkeypatch) -> 
     )
     invoked: list[tuple[str, dict[str, Any]]] = []
 
-    def fake_invoke(
+    async def fake_invoke(
         capability_id: str,
         params: dict[str, Any],
         **kwargs: object,
@@ -7021,7 +7031,7 @@ def test_zeta_agent_turn_resolves_model_name_through_projection(monkeypatch) -> 
     monkeypatch.setattr(
         zeta_models_api,
         "chat_completion_messages",
-        lambda *args, **kwargs: next(responses),
+        _as_async(lambda *args, **kwargs: next(responses)),
     )
     monkeypatch.setattr(zeta_capability_executors, "invoke_capability", fake_invoke)
 
@@ -7053,7 +7063,7 @@ def test_zeta_agent_turn_resolves_model_name_through_projection(monkeypatch) -> 
 def test_zeta_agent_turn_passes_thinking_to_the_model(monkeypatch) -> None:
     captured: dict[str, Any] = {}
 
-    def fake_chat_completion_messages(
+    async def fake_chat_completion_messages(
         messages: list[dict[str, Any]],
         **kwargs: object,
     ) -> dict[str, Any]:
@@ -7091,7 +7101,7 @@ def test_zeta_agent_tool_call_is_caused_by_assistant_event(
     target.write_text("hello\n", encoding="utf-8")
     store = zeta_trace.InMemoryStore()
 
-    def fake_chat_completion_messages(
+    async def fake_chat_completion_messages(
         messages: list[dict[str, Any]],
         **kwargs: object,
     ) -> dict[str, Any]:
@@ -7136,7 +7146,7 @@ def test_zeta_agent_turn_finalizes_text(monkeypatch) -> None:
     captured: dict[str, Any] = {}
     store = zeta_trace.InMemoryStore()
 
-    def fake_chat_completion_messages(
+    async def fake_chat_completion_messages(
         messages: list[dict[str, Any]],
         **kwargs: object,
     ) -> dict[str, Any]:
@@ -7176,7 +7186,7 @@ def test_zeta_agent_turn_stores_prompt_and_assistant_trace(monkeypatch) -> None:
     captured: dict[str, Any] = {}
     store = zeta_trace.InMemoryStore()
 
-    def fake_chat_completion_messages(
+    async def fake_chat_completion_messages(
         messages: list[dict[str, Any]],
         **kwargs: object,
     ) -> dict[str, Any]:
@@ -7227,7 +7237,7 @@ def test_zeta_agent_turn_stores_prompt_and_assistant_trace(monkeypatch) -> None:
 
 
 def test_zeta_agent_turn_captures_model_telemetry(monkeypatch) -> None:
-    def fake_chat_completion_messages(
+    async def fake_chat_completion_messages(
         messages: list[dict[str, Any]],
         **kwargs: object,
     ) -> dict[str, Any]:
@@ -7315,7 +7325,7 @@ def test_zeta_agent_turn_attaches_model_telemetry_to_first_tool_result(
         ]
     )
 
-    def fake_chat_completion_messages(
+    async def fake_chat_completion_messages(
         messages: list[dict[str, Any]],
         **kwargs: object,
     ) -> dict[str, Any]:
@@ -7361,7 +7371,7 @@ def test_zeta_agent_turn_records_one_prompt_trace_per_model_request(
     monkeypatch.setattr(
         zeta_models_api,
         "chat_completion_messages",
-        lambda messages, **kwargs: next(responses),
+        _as_async(lambda messages, **kwargs: next(responses)),
     )
     monkeypatch.setattr(
         zeta_capability_executors,
@@ -7409,7 +7419,7 @@ def test_zeta_agent_turn_records_tool_result_derivation(
     monkeypatch.setattr(
         zeta_models_api,
         "chat_completion_messages",
-        lambda messages, **kwargs: next(responses),
+        _as_async(lambda messages, **kwargs: next(responses)),
     )
     monkeypatch.setattr(
         zeta_capability_executors,
@@ -7437,7 +7447,7 @@ def test_zeta_agent_turn_records_tool_result_derivation(
 def test_zeta_agent_turn_emits_stream_chunks_and_marks_final(monkeypatch) -> None:
     emitted: list[DraftEvent] = []
 
-    def fake_chat_completion_messages(
+    async def fake_chat_completion_messages(
         *args: object,
         **kwargs: object,
     ) -> dict[str, Any]:
@@ -7472,7 +7482,7 @@ def test_zeta_agent_turn_emits_stream_chunks_and_marks_final(monkeypatch) -> Non
 def test_zeta_agent_reasoning_deltas_emit_status_updates(monkeypatch) -> None:
     emitted: list[DraftEvent] = []
 
-    def fake_chat_completion_messages(
+    async def fake_chat_completion_messages(
         *args: object,
         **kwargs: object,
     ) -> dict[str, Any]:
@@ -7512,7 +7522,7 @@ def test_zeta_agent_runtime_ui_events_do_not_feed_next_prompt(monkeypatch) -> No
         ]
     )
 
-    def fake_chat_completion_messages(
+    async def fake_chat_completion_messages(
         messages: list[dict[str, Any]],
         **kwargs: object,
     ) -> dict[str, Any]:
@@ -7550,7 +7560,7 @@ def test_zeta_agent_turn_uses_request_model(monkeypatch) -> None:
         captured["endpoint_url"] = selected_url
         return True
 
-    def fake_chat_completion_messages(
+    async def fake_chat_completion_messages(
         messages: list[dict[str, Any]],
         **kwargs: object,
     ) -> dict[str, Any]:
@@ -7615,10 +7625,10 @@ def test_zeta_agent_turn_runs_multiple_read_only_tools_in_order(monkeypatch) -> 
     monkeypatch.setattr(
         zeta_models_api,
         "chat_completion_messages",
-        lambda *args, **kwargs: next(responses),
+        _as_async(lambda *args, **kwargs: next(responses)),
     )
 
-    def fake_invoke(
+    async def fake_invoke(
         name: str, params: dict[str, Any], **kwargs: object
     ) -> dict[str, Any]:
         ran.append((name, params))
@@ -7680,7 +7690,7 @@ def test_zeta_agent_turn_streams_text_between_tool_turns(monkeypatch) -> None:
         ]
     )
 
-    def fake_chat_completion_messages(
+    async def fake_chat_completion_messages(
         *args: object,
         **kwargs: object,
     ) -> dict[str, Any]:
@@ -7734,7 +7744,7 @@ def test_zeta_agent_turn_streams_text_between_tool_turns(monkeypatch) -> None:
 def test_zeta_agent_turn_does_not_duplicate_current_objective(monkeypatch) -> None:
     captured: dict[str, Any] = {}
 
-    def fake_chat_completion_messages(
+    async def fake_chat_completion_messages(
         messages: list[dict[str, Any]],
         **kwargs: object,
     ) -> dict[str, Any]:
@@ -7788,7 +7798,7 @@ def test_zeta_agent_turn_orders_prior_timeline_before_current_events(
         ]
     )
 
-    def fake_chat_completion_messages(
+    async def fake_chat_completion_messages(
         messages: list[dict[str, Any]],
         **kwargs: object,
     ) -> dict[str, Any]:
@@ -7845,21 +7855,23 @@ def test_zeta_agent_turn_streams_tool_call_before_running_tool(monkeypatch) -> N
     monkeypatch.setattr(
         zeta_models_api,
         "chat_completion_messages",
-        lambda *args, **kwargs: {
-            "tool_calls": [
-                {
-                    "id": "call-1",
-                    "type": "function",
-                    "function": {
-                        "name": "read",
-                        "arguments": '{"path":"README.md"}',
-                    },
-                }
-            ]
-        },
+        _as_async(
+            lambda *args, **kwargs: {
+                "tool_calls": [
+                    {
+                        "id": "call-1",
+                        "type": "function",
+                        "function": {
+                            "name": "read",
+                            "arguments": '{"path":"README.md"}',
+                        },
+                    }
+                ]
+            }
+        ),
     )
 
-    def fake_invoke(
+    async def fake_invoke(
         name: str, params: dict[str, Any], **kwargs: object
     ) -> dict[str, Any]:
         del name, params, kwargs
@@ -7901,7 +7913,7 @@ def test_zeta_agent_turn_stops_when_a_tool_requests_stop(monkeypatch) -> None:
     requests = 0
     store = zeta_trace.InMemoryStore()
 
-    def fake_chat_completion_messages(
+    async def fake_chat_completion_messages(
         *args: object, **kwargs: object
     ) -> dict[str, Any]:
         nonlocal requests
@@ -7959,7 +7971,7 @@ def test_zeta_agent_turn_reports_max_turns_exhaustion(monkeypatch) -> None:
     registry = CapabilityRegistry()
     registry.register(_test_capability("inspect"))
 
-    def fake_chat_completion_messages(
+    async def fake_chat_completion_messages(
         *args: object,
         **kwargs: object,
     ) -> dict[str, Any]:
@@ -8019,7 +8031,7 @@ def test_zeta_agent_continues_after_bash(monkeypatch) -> None:
         ]
     )
 
-    def fake_chat_completion_messages(
+    async def fake_chat_completion_messages(
         *args: object, **kwargs: object
     ) -> dict[str, Any]:
         nonlocal requests
@@ -8053,7 +8065,7 @@ def test_zeta_agent_continues_after_bash(monkeypatch) -> None:
 def test_zeta_agent_turn_stops_after_default_max_turns(monkeypatch) -> None:
     requests = 0
 
-    def fake_chat_completion_messages(*args: object, **kwargs: object) -> dict:
+    async def fake_chat_completion_messages(*args: object, **kwargs: object) -> dict:
         del args, kwargs
         nonlocal requests
         requests += 1
@@ -8145,7 +8157,7 @@ def test_zeta_agent_turn_aborts_on_deadline_between_model_turns(
     monkeypatch.setattr(
         zeta_models_api,
         "chat_completion_messages",
-        lambda *args, **kwargs: next(responses),
+        _as_async(lambda *args, **kwargs: next(responses)),
     )
     monkeypatch.setattr(
         zeta_capability_executors,
@@ -8220,7 +8232,7 @@ def test_zeta_agent_turn_converts_tool_crash_to_error_result(monkeypatch) -> Non
     def crash_invoke(name: str, params: dict[str, Any], **kwargs: object) -> dict:
         raise ValueError("boom")
 
-    def fake_chat_completion_messages(*args: object, **kwargs: object) -> dict:
+    async def fake_chat_completion_messages(*args: object, **kwargs: object) -> dict:
         del args, kwargs
         return next(responses)
 
@@ -8253,7 +8265,7 @@ def test_zeta_agent_turn_rejects_tool_call_that_violates_input_schema(
 ) -> None:
     ran_with: list[dict[str, Any]] = []
 
-    def fake_invoke(
+    async def fake_invoke(
         name: str,
         params: dict[str, Any],
         **kwargs: Any,
@@ -8266,18 +8278,20 @@ def test_zeta_agent_turn_rejects_tool_call_that_violates_input_schema(
     monkeypatch.setattr(
         zeta_models_api,
         "chat_completion_messages",
-        lambda *args, **kwargs: {
-            "tool_calls": [
-                {
-                    "id": "call-1",
-                    "type": "function",
-                    "function": {
-                        "name": "read",
-                        "arguments": '{"path":"README.md","unexpected":true}',
-                    },
-                }
-            ]
-        },
+        _as_async(
+            lambda *args, **kwargs: {
+                "tool_calls": [
+                    {
+                        "id": "call-1",
+                        "type": "function",
+                        "function": {
+                            "name": "read",
+                            "arguments": '{"path":"README.md","unexpected":true}',
+                        },
+                    }
+                ]
+            }
+        ),
     )
     monkeypatch.setattr(zeta_capability_executors, "invoke_capability", fake_invoke)
 
@@ -8310,18 +8324,20 @@ def test_zeta_agent_turn_rejects_disallowed_tool_before_running(monkeypatch) -> 
     monkeypatch.setattr(
         zeta_models_api,
         "chat_completion_messages",
-        lambda *args, **kwargs: {
-            "tool_calls": [
-                {
-                    "id": "call-1",
-                    "type": "function",
-                    "function": {
-                        "name": "bash",
-                        "arguments": '{"command":"uv run pytest"}',
-                    },
-                }
-            ]
-        },
+        _as_async(
+            lambda *args, **kwargs: {
+                "tool_calls": [
+                    {
+                        "id": "call-1",
+                        "type": "function",
+                        "function": {
+                            "name": "bash",
+                            "arguments": '{"command":"uv run pytest"}',
+                        },
+                    }
+                ]
+            }
+        ),
     )
     monkeypatch.setattr(zeta_capability_executors, "invoke_capability", fail_invoke)
 
@@ -8374,7 +8390,7 @@ def test_zeta_agent_direct_mode_continues_after_edit(
         ]
     )
 
-    def fake_chat_completion_messages(
+    async def fake_chat_completion_messages(
         *args: object,
         **kwargs: object,
     ) -> dict[str, Any]:
@@ -8417,7 +8433,7 @@ def test_zeta_agent_codex_api_skips_endpoint_probe(monkeypatch) -> None:
 def test_zeta_agent_turn_passes_api_to_the_model(monkeypatch) -> None:
     captured: dict[str, Any] = {}
 
-    def fake_chat_completion_messages(
+    async def fake_chat_completion_messages(
         messages: list[dict[str, Any]],
         **kwargs: object,
     ) -> dict[str, Any]:

@@ -1,5 +1,6 @@
 """Prompt components, budget, compaction, context, and skills tests."""
 
+import asyncio
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -107,7 +108,7 @@ def prepare_prompt(
     **kwargs: Any,
 ) -> zeta_context.PreparedPrompt:
     plan = builder.plan_prompt(objective, timeline, **kwargs)
-    stored = builder.commit_prompt_plan(plan)
+    stored = asyncio.run(builder.commit_prompt_plan(plan))
     return zeta_context.builder.prepared_prompt_from(stored)
 
 
@@ -489,8 +490,8 @@ def test_zeta_prompt_commit_is_object_id_idempotent() -> None:
         tools=[],
     )
 
-    first = builder.commit_prompt_plan(plan)
-    second = builder.commit_prompt_plan(plan)
+    first = asyncio.run(builder.commit_prompt_plan(plan))
+    second = asyncio.run(builder.commit_prompt_plan(plan))
 
     assert first == second
     assert first.prompt_object_id is not None
@@ -509,7 +510,7 @@ def test_zeta_prompt_render_model_input_matches_prepared_prompt() -> None:
         selected_model="unit-model",
         thinking="low",
     )
-    stored = builder.commit_prompt_plan(plan)
+    stored = asyncio.run(builder.commit_prompt_plan(plan))
 
     unstored_input = zeta_context.render_model_input(plan)
     stored_input = zeta_context.render_model_input(stored)
@@ -754,7 +755,7 @@ def test_zeta_prompt_builder_compaction_transform_preserves_source_links() -> No
     class CompactTranscript:
         producer = "PromptCompactor:v1"
 
-        def apply(
+        async def apply(
             self,
             components: list[zeta_context.PromptComponent],
         ) -> list[zeta_context.PromptComponent]:
@@ -822,7 +823,7 @@ def test_zeta_task_state_transform_replaces_transcript_with_structured_state() -
         def __init__(self) -> None:
             self.components: list[zeta_context.PromptComponent] = []
 
-        def extract(
+        async def extract(
             self,
             components: list[zeta_context.PromptComponent],
         ) -> dict[str, Any]:
@@ -870,7 +871,7 @@ def test_zeta_task_state_transform_replaces_transcript_with_structured_state() -
 
 def test_zeta_task_state_transform_fails_open() -> None:
     class FailingExtractor:
-        def extract(
+        async def extract(
             self,
             components: list[zeta_context.PromptComponent],
         ) -> dict[str, Any]:
@@ -1066,7 +1067,7 @@ def test_zeta_structural_trim_default_is_late_safety_valve() -> None:
         object_id="sha256:above",
     )
 
-    trimmed = transform.apply([below, above])
+    trimmed = asyncio.run(transform.apply([below, above]))
 
     assert trimmed[0].kind == "tool_result"
     assert trimmed[1].kind == "compacted_context"
@@ -1136,8 +1137,10 @@ def test_zeta_structural_trim_uses_source_result_without_message_json() -> None:
         object_id="sha256:source",
     )
 
-    trimmed = zeta_context.StructuralTrimPromptTransform(max_content_chars=20).apply(
-        [component]
+    trimmed = asyncio.run(
+        zeta_context.StructuralTrimPromptTransform(max_content_chars=20).apply(
+            [component]
+        )
     )[0]
 
     assert trimmed.kind == "compacted_context"
@@ -1557,8 +1560,10 @@ def test_zeta_structural_trim_works_without_trace_ids() -> None:
         },
     )
 
-    trimmed = zeta_context.StructuralTrimPromptTransform(max_content_chars=20).apply(
-        [component]
+    trimmed = asyncio.run(
+        zeta_context.StructuralTrimPromptTransform(max_content_chars=20).apply(
+            [component]
+        )
     )[0]
 
     assert trimmed.kind == "compacted_context"
@@ -1588,8 +1593,10 @@ def test_zeta_structural_trim_embeds_trim_payload_in_component_data() -> None:
         object_id="sha256:source",
     )
 
-    trimmed = zeta_context.StructuralTrimPromptTransform(max_content_chars=20).apply(
-        [component]
+    trimmed = asyncio.run(
+        zeta_context.StructuralTrimPromptTransform(max_content_chars=20).apply(
+            [component]
+        )
     )[0]
 
     trim = trimmed.data["trim"]
@@ -1606,7 +1613,7 @@ def test_zeta_structural_trim_embeds_trim_payload_in_component_data() -> None:
 
 def test_zeta_task_state_transform_compacts_components_without_trace_ids() -> None:
     class FakeExtractor:
-        def extract(
+        async def extract(
             self,
             components: list[zeta_context.PromptComponent],
         ) -> dict[str, Any]:
@@ -1630,7 +1637,7 @@ def test_zeta_task_state_transform_compacts_components_without_trace_ids() -> No
     transform = zeta_context.TaskStateExtractionPromptTransform(
         extractor=FakeExtractor()
     )
-    compacted = transform.apply(components)
+    compacted = asyncio.run(transform.apply(components))
 
     contents = [
         str(component.message.get("content") or "")
@@ -1648,7 +1655,7 @@ def test_zeta_task_state_transform_keeps_newest_messages_verbatim() -> None:
         def __init__(self) -> None:
             self.components: list[zeta_context.PromptComponent] = []
 
-        def extract(
+        async def extract(
             self,
             components: list[zeta_context.PromptComponent],
         ) -> dict[str, Any]:
@@ -1668,9 +1675,11 @@ def test_zeta_task_state_transform_keeps_newest_messages_verbatim() -> None:
     )
     extractor = FakeExtractor()
 
-    compacted = zeta_context.TaskStateExtractionPromptTransform(
-        extractor=extractor
-    ).apply(components)
+    compacted = asyncio.run(
+        zeta_context.TaskStateExtractionPromptTransform(extractor=extractor).apply(
+            components
+        )
+    )
 
     extracted_contents = [
         str(component.message.get("content") or "")
@@ -1720,7 +1729,7 @@ def test_zeta_task_state_extraction_is_cached_per_source_set() -> None:
         def __init__(self) -> None:
             self.calls = 0
 
-        def extract(
+        async def extract(
             self,
             components: list[zeta_context.PromptComponent],
         ) -> dict[str, Any]:
@@ -1735,8 +1744,8 @@ def test_zeta_task_state_extraction_is_cached_per_source_set() -> None:
     extractor = CountingExtractor()
     transform = zeta_context.TaskStateExtractionPromptTransform(extractor=extractor)
 
-    first = transform.apply(components)
-    second = transform.apply(components)
+    first = asyncio.run(transform.apply(components))
+    second = asyncio.run(transform.apply(components))
 
     assert extractor.calls == 1
     assert [c.kind for c in first] == [c.kind for c in second]
@@ -1749,7 +1758,7 @@ def test_zeta_budget_threshold_escalates_until_under_budget() -> None:
             self.label = label
             self.calls = calls
 
-        def apply(
+        async def apply(
             self,
             components: list[zeta_context.PromptComponent],
         ) -> list[zeta_context.PromptComponent]:
@@ -1770,7 +1779,7 @@ def test_zeta_budget_threshold_escalates_until_under_budget() -> None:
         escalation=(DropHalf("second", calls), DropHalf("third", calls)),
     )
 
-    output = gate.apply(components)
+    output = asyncio.run(gate.apply(components))
 
     assert calls == ["first", "second"]
     assert zeta_context.measure(output).total_tokens <= target
@@ -1785,7 +1794,7 @@ def test_zeta_budget_threshold_warns_when_still_over_budget(caplog) -> None:
     )
 
     with caplog.at_level("WARNING", logger="zeta.context"):
-        output = gate.apply(components)
+        output = asyncio.run(gate.apply(components))
 
     assert output
     assert any("over budget" in record.getMessage() for record in caplog.records)
@@ -1796,7 +1805,9 @@ def test_zeta_drop_oldest_removes_historical_messages_until_budget() -> None:
     total = zeta_context.measure(components).total_tokens
     target = total - 150
 
-    output = zeta_context.DropOldestPromptTransform(max_tokens=target).apply(components)
+    output = asyncio.run(
+        zeta_context.DropOldestPromptTransform(max_tokens=target).apply(components)
+    )
 
     assert zeta_context.measure(output).total_tokens <= target
     contents = [
@@ -1823,8 +1834,8 @@ def test_zeta_drop_oldest_drops_tool_results_with_their_call() -> None:
     )
     total = zeta_context.measure(components).total_tokens
 
-    output = zeta_context.DropOldestPromptTransform(max_tokens=total - 50).apply(
-        components
+    output = asyncio.run(
+        zeta_context.DropOldestPromptTransform(max_tokens=total - 50).apply(components)
     )
 
     roles = [c.message.get("role") for c in output if c.message is not None]

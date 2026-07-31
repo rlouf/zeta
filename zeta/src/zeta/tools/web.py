@@ -3,7 +3,7 @@
 import json
 import os
 import re
-from collections.abc import Iterable
+from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -95,7 +95,7 @@ class CodexSearchAccumulator:
         return answer or "".join(self.streamed_parts).strip()
 
 
-def search(params: dict[str, Any]) -> dict[str, Any]:
+async def search(params: dict[str, Any]) -> dict[str, Any]:
     query = str(params.get("query") or "").strip()
     if not query:
         return error_result("missing-query", "web_search requires query")
@@ -106,7 +106,7 @@ def search(params: dict[str, Any]) -> dict[str, Any]:
         config = config_from_env(limit=limit)
     except RuntimeError as exc:
         return error_result("codex-auth-missing", str(exc))
-    response = request_or_error(query, config)
+    response = await request_or_error(query, config)
     if response.get("ok") is False:
         return response
     result = response["result"]
@@ -151,16 +151,16 @@ def config_from_env(*, limit: int) -> WebConfig:
     )
 
 
-def request_or_error(query: str, config: WebConfig) -> dict[str, Any]:
+async def request_or_error(query: str, config: WebConfig) -> dict[str, Any]:
     try:
-        return {"ok": True, "result": codex_search(query, config)}
+        return {"ok": True, "result": await codex_search(query, config)}
     except RuntimeError as exc:
         return error_result("codex-request-failed", str(exc))
     except ValueError as exc:
         return error_result("codex-bad-response", str(exc))
 
 
-def codex_search(query: str, config: WebConfig) -> CodexSearch:
+async def codex_search(query: str, config: WebConfig) -> CodexSearch:
     body = {
         "model": config.model,
         "stream": True,
@@ -184,7 +184,7 @@ def codex_search(query: str, config: WebConfig) -> CodexSearch:
             "URL citations when possible."
         ),
     }
-    return parse_codex_search_events(
+    return await parse_codex_search_events(
         stream_json_sse(
             codex_responses_url(config.selected_url),
             body,
@@ -195,9 +195,9 @@ def codex_search(query: str, config: WebConfig) -> CodexSearch:
     )
 
 
-def parse_codex_search_events(events: Iterable[str]) -> CodexSearch:
+async def parse_codex_search_events(events: AsyncIterator[str]) -> CodexSearch:
     acc = CodexSearchAccumulator()
-    for payload in events:
+    async for payload in events:
         if payload == "[DONE]":
             break
         handle_codex_event(load_codex_event(payload), acc)

@@ -26,7 +26,7 @@ class StructuralTrimPromptTransform:
         self.max_content_chars = max_content_chars
         self.preserve_current_tool_results = preserve_current_tool_results
 
-    def apply(self, components: list[PromptComponent]) -> list[PromptComponent]:
+    async def apply(self, components: list[PromptComponent]) -> list[PromptComponent]:
         return [self.transform_component(component) for component in components]
 
     def transform_component(self, component: PromptComponent) -> PromptComponent:

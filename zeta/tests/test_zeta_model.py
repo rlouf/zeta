@@ -25,6 +25,26 @@ from zeta_test_support import (
 )
 
 
+def _drain(agen: Any) -> list[Any]:
+    """Collect an async generator from a synchronous test."""
+
+    async def run() -> list[Any]:
+        return [item async for item in agen]
+
+    return asyncio.run(run())
+
+
+async def _aiter(items: Any) -> Any:
+    """Feed a list of SSE frames to a reader that now takes an async iterator."""
+    for item in items:
+        yield item
+
+
+def _read_stream(reader: Any, frames: Any, **kwargs: Any) -> Any:
+    """Run an async SSE reader from a synchronous test."""
+    return asyncio.run(reader(_aiter(frames), **kwargs))
+
+
 def test_zeta_model_config_ignores_model_env_vars(monkeypatch) -> None:
     monkeypatch.delenv("ZETA_MODEL_IDLE_TIMEOUT_SECONDS", raising=False)
     monkeypatch.setenv("ZETA_MODEL_URL", "http://zeta.invalid/v1/chat/completions")
@@ -147,7 +167,8 @@ def test_zeta_model_output_from_chat_completion_preserves_message_usage_metadata
 
 
 def test_zeta_chat_completion_model_output_from_stream_payload() -> None:
-    payload = zeta_model_sse.read_streamed_chat_completion(
+    payload = _read_stream(
+        zeta_model_sse.read_streamed_chat_completion,
         sse_lines(
             {
                 "id": "chatcmpl-test",
@@ -174,7 +195,7 @@ def test_zeta_chat_completion_model_output_from_stream_payload() -> None:
                 ],
             },
             "[DONE]",
-        )
+        ),
     )
 
     output = zeta_model.model_output_from_chat_completion(payload)
@@ -214,22 +235,23 @@ def test_zeta_request_chat_completion_streams_final_message(monkeypatch) -> None
         "[DONE]",
     )
 
-    def fake_stream_json_sse(
+    async def fake_stream_json_sse(
         url: str,
         body: dict[str, Any],
         *,
         headers: dict[str, str],
         should_stop: object | None = None,
-    ) -> list[str]:
+    ) -> Any:
         captured["url"] = url
         captured["body"] = body
         captured["accept"] = headers["Accept"]
-        return events
+        for _frame in events:
+            yield _frame
 
     monkeypatch.setattr(zeta_model, "stream_json_sse", fake_stream_json_sse)
     body = {"model": "local-model", "messages": []}
 
-    payload = zeta_model.request_chat_completion(body)
+    payload = asyncio.run(zeta_model.request_chat_completion(body))
 
     assert body == {"model": "local-model", "messages": []}
     assert captured["body"]["stream"] is True
@@ -269,7 +291,8 @@ def test_zeta_model_stream_timeout_can_disable_all_bounds() -> None:
 def test_zeta_stream_forwards_reasoning_deltas_to_sink() -> None:
     sink = DeltaSink()
 
-    payload = zeta_model_sse.read_streamed_chat_completion(
+    payload = _read_stream(
+        zeta_model_sse.read_streamed_chat_completion,
         sse_lines(
             {
                 "choices": [
@@ -303,7 +326,8 @@ def test_zeta_stream_forwards_reasoning_deltas_to_sink() -> None:
 def test_zeta_stream_emits_content_deltas_in_order() -> None:
     sink = DeltaSink()
 
-    payload = zeta_model_sse.read_streamed_chat_completion(
+    payload = _read_stream(
+        zeta_model_sse.read_streamed_chat_completion,
         sse_lines(
             {
                 "choices": [
@@ -333,7 +357,8 @@ def test_zeta_stream_emits_content_deltas_in_order() -> None:
 
 
 def test_zeta_stream_preserves_usage_chunk() -> None:
-    payload = zeta_model_sse.read_streamed_chat_completion(
+    payload = _read_stream(
+        zeta_model_sse.read_streamed_chat_completion,
         sse_lines(
             {
                 "choices": [
@@ -352,7 +377,7 @@ def test_zeta_stream_preserves_usage_chunk() -> None:
                 },
             },
             "[DONE]",
-        )
+        ),
     )
 
     assert payload["usage"] == {
@@ -378,8 +403,10 @@ def test_zeta_stream_sink_does_not_change_reconstructed_message() -> None:
     )
     sink = DeltaSink()
 
-    without_sink = zeta_model_sse.read_streamed_chat_completion(frames)
-    with_sink = zeta_model_sse.read_streamed_chat_completion(frames, stream_sink=sink)
+    without_sink = _read_stream(zeta_model_sse.read_streamed_chat_completion, frames)
+    with_sink = _read_stream(
+        zeta_model_sse.read_streamed_chat_completion, frames, stream_sink=sink
+    )
 
     assert with_sink == without_sink
     assert sink.deltas == ["done"]
@@ -388,7 +415,8 @@ def test_zeta_stream_sink_does_not_change_reconstructed_message() -> None:
 def test_zeta_stream_does_not_render_tool_call_fragments() -> None:
     sink = DeltaSink()
 
-    payload = zeta_model_sse.read_streamed_chat_completion(
+    payload = _read_stream(
+        zeta_model_sse.read_streamed_chat_completion,
         sse_lines(
             {
                 "choices": [
@@ -443,7 +471,8 @@ def test_zeta_stream_does_not_render_tool_call_fragments() -> None:
 def test_zeta_stream_mixed_content_and_tool_call_exposes_completed_call() -> None:
     sink = DeltaSink()
 
-    payload = zeta_model_sse.read_streamed_chat_completion(
+    payload = _read_stream(
+        zeta_model_sse.read_streamed_chat_completion,
         sse_lines(
             {
                 "choices": [
@@ -490,7 +519,8 @@ def test_zeta_stream_mixed_content_and_tool_call_exposes_completed_call() -> Non
 
 
 def test_zeta_stream_reconstructs_split_tool_calls() -> None:
-    payload = zeta_model_sse.read_streamed_chat_completion(
+    payload = _read_stream(
+        zeta_model_sse.read_streamed_chat_completion,
         sse_lines(
             {
                 "choices": [
@@ -531,7 +561,7 @@ def test_zeta_stream_reconstructs_split_tool_calls() -> None:
                 ],
             },
             "[DONE]",
-        )
+        ),
     )
 
     message = payload["choices"][0]["message"]
@@ -549,7 +579,8 @@ def test_zeta_stream_reconstructs_split_tool_calls() -> None:
 
 
 def test_zeta_stream_orders_multiple_tool_calls_by_index() -> None:
-    payload = zeta_model_sse.read_streamed_chat_completion(
+    payload = _read_stream(
+        zeta_model_sse.read_streamed_chat_completion,
         sse_lines(
             {
                 "choices": [
@@ -582,7 +613,7 @@ def test_zeta_stream_orders_multiple_tool_calls_by_index() -> None:
                 ],
             },
             "[DONE]",
-        )
+        ),
     )
 
     calls = payload["choices"][0]["message"]["tool_calls"]
@@ -592,7 +623,7 @@ def test_zeta_stream_orders_multiple_tool_calls_by_index() -> None:
 def test_zeta_request_chat_completion_closes_stream_on_error(monkeypatch) -> None:
     closed = False
 
-    def fake_stream_json_sse(
+    async def fake_stream_json_sse(
         url: str,
         body: dict[str, Any],
         *,
@@ -602,21 +633,24 @@ def test_zeta_request_chat_completion_closes_stream_on_error(monkeypatch) -> Non
         del url, body, headers, should_stop
         nonlocal closed
         try:
-            yield from sse_lines({"error": {"message": "generation failed"}})
+            for line in sse_lines({"error": {"message": "generation failed"}}):
+                yield line
         finally:
             closed = True
 
     monkeypatch.setattr(zeta_model, "stream_json_sse", fake_stream_json_sse)
 
     with pytest.raises(RuntimeError, match="generation failed"):
-        zeta_model.request_chat_completion({"model": "local-model", "messages": []})
+        asyncio.run(
+            zeta_model.request_chat_completion({"model": "local-model", "messages": []})
+        )
 
     assert closed is True
 
 
 def test_zeta_stream_rejects_malformed_events() -> None:
     with pytest.raises(RuntimeError, match="invalid JSON event"):
-        zeta_model_sse.read_streamed_chat_completion(["nope"])
+        _read_stream(zeta_model_sse.read_streamed_chat_completion, ["nope"])
 
 
 def test_zeta_http_error_detail_surfaces_json_error_body() -> None:
@@ -1106,40 +1140,41 @@ def test_zeta_model_context_tokens_returns_none_when_unavailable(
 
 def test_zeta_stream_json_sse_accepts_missing_content_type(monkeypatch) -> None:
     class FakeStreamResponse:
-        def __enter__(self) -> "FakeStreamResponse":
+        async def __aenter__(self) -> "FakeStreamResponse":
             return self
 
-        def __exit__(self, *args: object) -> None:
+        async def __aexit__(self, *args: object) -> None:
             return None
 
         def raise_for_status(self) -> None:
             return None
 
-        def iter_lines(self) -> list[str]:
-            return [
+        async def aiter_lines(self) -> Any:
+            for _line in [
                 "event: response.output_text.delta",
                 'data: {"type":"response.output_text.delta","delta":"ok"}',
                 "",
                 "data: [DONE]",
                 "",
-            ]
+            ]:
+                yield _line
 
     class FakeClient:
         def __init__(self, **kwargs: object) -> None:
             pass
 
-        def __enter__(self) -> "FakeClient":
+        async def __aenter__(self) -> "FakeClient":
             return self
 
-        def __exit__(self, *args: object) -> None:
+        async def __aexit__(self, *args: object) -> None:
             return None
 
         def stream(self, *args: object, **kwargs: object) -> FakeStreamResponse:
             return FakeStreamResponse()
 
-    monkeypatch.setattr(httpx, "Client", FakeClient)
+    monkeypatch.setattr(httpx, "AsyncClient", FakeClient)
 
-    events = list(
+    events = _drain(
         zeta_model_sse.stream_json_sse(
             "https://chatgpt.com/backend-api/codex/responses",
             {"model": "gpt-5.5"},
@@ -1160,13 +1195,13 @@ def test_zeta_stream_json_sse_preserves_error_body(monkeypatch) -> None:
         def __init__(self) -> None:
             self._content = b""
 
-        def __enter__(self) -> "FakeStreamResponse":
+        async def __aenter__(self) -> "FakeStreamResponse":
             return self
 
-        def __exit__(self, *args: object) -> None:
+        async def __aexit__(self, *args: object) -> None:
             self._content = b""
 
-        def read(self) -> bytes:
+        async def aread(self) -> bytes:
             self._content = (
                 b'{"error":{"message":"tool schema was rejected by provider"}}'
             )
@@ -1191,19 +1226,19 @@ def test_zeta_stream_json_sse_preserves_error_body(monkeypatch) -> None:
         def __init__(self, **kwargs: object) -> None:
             pass
 
-        def __enter__(self) -> "FakeClient":
+        async def __aenter__(self) -> "FakeClient":
             return self
 
-        def __exit__(self, *args: object) -> None:
+        async def __aexit__(self, *args: object) -> None:
             return None
 
         def stream(self, *args: object, **kwargs: object) -> FakeStreamResponse:
             return FakeStreamResponse()
 
-    monkeypatch.setattr(httpx, "Client", FakeClient)
+    monkeypatch.setattr(httpx, "AsyncClient", FakeClient)
 
     with pytest.raises(RuntimeError, match="tool schema was rejected"):
-        list(
+        _drain(
             zeta_model_sse.stream_json_sse(
                 "https://example.test/v1/chat",
                 {"model": "test"},
@@ -1215,7 +1250,7 @@ def test_zeta_stream_json_sse_preserves_error_body(monkeypatch) -> None:
 def test_zeta_chat_completion_messages_accepts_request_model(monkeypatch) -> None:
     captured: dict[str, Any] = {}
 
-    def fake_request(
+    async def fake_request(
         body: dict[str, Any],
         *,
         selected_url: str | None = None,
@@ -1227,10 +1262,12 @@ def test_zeta_chat_completion_messages_accepts_request_model(monkeypatch) -> Non
 
     monkeypatch.setattr(zeta_model, "request_chat_completion", fake_request)
 
-    message = zeta_model.chat_completion_messages(
-        [{"role": "user", "content": "hi"}],
-        selected_model="fast-model",
-        selected_url="http://127.0.0.1:8081/v1/chat/completions",
+    message = asyncio.run(
+        zeta_model.chat_completion_messages(
+            [{"role": "user", "content": "hi"}],
+            selected_model="fast-model",
+            selected_url="http://127.0.0.1:8081/v1/chat/completions",
+        )
     )
 
     assert message == {"content": "done"}
@@ -1251,7 +1288,7 @@ def test_zeta_chat_completion_messages_returns_adapter_message(monkeypatch) -> N
     }
     converted: list[dict[str, Any]] = []
 
-    def fake_request(body: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
+    async def fake_request(body: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
         del body
         del kwargs
         return payload
@@ -1272,7 +1309,9 @@ def test_zeta_chat_completion_messages_returns_adapter_message(monkeypatch) -> N
         fake_model_output,
     )
 
-    message = zeta_model.chat_completion_messages([{"role": "user", "content": "hi"}])
+    message = asyncio.run(
+        zeta_model.chat_completion_messages([{"role": "user", "content": "hi"}])
+    )
 
     assert message == {"role": "assistant", "content": "converted"}
     assert converted == [payload]
@@ -1281,20 +1320,22 @@ def test_zeta_chat_completion_messages_returns_adapter_message(monkeypatch) -> N
 def test_zeta_chat_completion_messages_sends_native_tools(monkeypatch) -> None:
     captured: dict[str, Any] = {}
 
-    def fake_request(body: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
+    async def fake_request(body: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
         captured["body"] = body
         return {"choices": [{"message": {"content": "done"}}]}
 
     monkeypatch.setattr(zeta_model, "request_chat_completion", fake_request)
 
-    message = zeta_model.chat_completion_messages(
-        [{"role": "user", "content": "hi"}],
-        tools=[
-            {
-                "type": "function",
-                "function": {"name": "read", "description": "", "parameters": {}},
-            }
-        ],
+    message = asyncio.run(
+        zeta_model.chat_completion_messages(
+            [{"role": "user", "content": "hi"}],
+            tools=[
+                {
+                    "type": "function",
+                    "function": {"name": "read", "description": "", "parameters": {}},
+                }
+            ],
+        )
     )
 
     assert message == {"content": "done"}
@@ -1310,13 +1351,15 @@ def test_zeta_chat_completion_messages_defaults_to_large_max_tokens(
 ) -> None:
     captured: dict[str, Any] = {}
 
-    def fake_request(body: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
+    async def fake_request(body: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
         captured["body"] = body
         return {"choices": [{"message": {"content": "done"}}]}
 
     monkeypatch.setattr(zeta_model, "request_chat_completion", fake_request)
 
-    zeta_model.chat_completion_messages([{"role": "user", "content": "hi"}])
+    asyncio.run(
+        zeta_model.chat_completion_messages([{"role": "user", "content": "hi"}])
+    )
 
     body = cast(dict[str, Any], captured["body"])
     assert body["max_tokens"] == zeta_model.DEFAULT_MAX_COMPLETION_TOKENS
@@ -1326,7 +1369,7 @@ def test_zeta_chat_completion_messages_defaults_to_large_max_tokens(
 def test_zeta_chat_completion_messages_rejects_tool_calls_cut_by_max_tokens(
     monkeypatch,
 ) -> None:
-    def fake_request(body: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
+    async def fake_request(body: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
         return {
             "choices": [
                 {
@@ -1352,13 +1395,15 @@ def test_zeta_chat_completion_messages_rejects_tool_calls_cut_by_max_tokens(
     monkeypatch.setattr(zeta_model, "request_chat_completion", fake_request)
 
     with pytest.raises(RuntimeError, match="max_tokens"):
-        zeta_model.chat_completion_messages([{"role": "user", "content": "hi"}])
+        asyncio.run(
+            zeta_model.chat_completion_messages([{"role": "user", "content": "hi"}])
+        )
 
 
 def test_zeta_chat_completion_messages_keeps_text_cut_by_max_tokens(
     monkeypatch,
 ) -> None:
-    def fake_request(body: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
+    async def fake_request(body: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
         return {
             "choices": [
                 {
@@ -1370,7 +1415,9 @@ def test_zeta_chat_completion_messages_keeps_text_cut_by_max_tokens(
 
     monkeypatch.setattr(zeta_model, "request_chat_completion", fake_request)
 
-    message = zeta_model.chat_completion_messages([{"role": "user", "content": "hi"}])
+    message = asyncio.run(
+        zeta_model.chat_completion_messages([{"role": "user", "content": "hi"}])
+    )
 
     assert message["content"] == "partial answer"
 
@@ -1379,7 +1426,7 @@ def test_zeta_chat_structured_output_sends_json_schema(monkeypatch) -> None:
     captured: dict[str, Any] = {}
     state = task_state_fixture(objective="extract task state")
 
-    def fake_request(
+    async def fake_request(
         body: dict[str, Any],
         *,
         selected_url: str | None = None,
@@ -1390,12 +1437,14 @@ def test_zeta_chat_structured_output_sends_json_schema(monkeypatch) -> None:
 
     monkeypatch.setattr(zeta_model, "request_chat_completion", fake_request)
 
-    extracted = zeta_model.chat_structured_output(
-        [{"role": "user", "content": "history"}],
-        schema=TASK_STATE_SCHEMA,
-        response_name="zeta_task_state",
-        selected_model="state-model",
-        selected_url="http://127.0.0.1:8081/v1/chat/completions",
+    extracted = asyncio.run(
+        zeta_model.chat_structured_output(
+            [{"role": "user", "content": "history"}],
+            schema=TASK_STATE_SCHEMA,
+            response_name="zeta_task_state",
+            selected_model="state-model",
+            selected_url="http://127.0.0.1:8081/v1/chat/completions",
+        )
     )
 
     assert extracted == state
@@ -1411,7 +1460,7 @@ def test_zeta_chat_structured_output_sends_json_schema(monkeypatch) -> None:
 def test_zeta_chat_structured_output_rejects_invalid_json_schema(
     monkeypatch,
 ) -> None:
-    def fake_request(
+    async def fake_request(
         body: dict[str, Any],
         *,
         selected_url: str | None = None,
@@ -1423,10 +1472,12 @@ def test_zeta_chat_structured_output_rejects_invalid_json_schema(
     monkeypatch.setattr(zeta_model, "request_chat_completion", fake_request)
 
     with pytest.raises(RuntimeError, match="validation"):
-        zeta_model.chat_structured_output(
-            [{"role": "user", "content": "history"}],
-            schema=TASK_STATE_SCHEMA,
-            response_name="zeta_task_state",
+        asyncio.run(
+            zeta_model.chat_structured_output(
+                [{"role": "user", "content": "history"}],
+                schema=TASK_STATE_SCHEMA,
+                response_name="zeta_task_state",
+            )
         )
 
 
@@ -1435,7 +1486,7 @@ def test_zeta_chat_completion_messages_reports_model_telemetry(
 ) -> None:
     telemetry: list[dict[str, Any]] = []
 
-    def fake_request(body: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
+    async def fake_request(body: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
         del body
         return {
             "usage": {
@@ -1449,9 +1500,11 @@ def test_zeta_chat_completion_messages_reports_model_telemetry(
     monkeypatch.setattr(zeta_model, "model_context_tokens", lambda *args: 262_144)
     monkeypatch.setattr(zeta_model, "request_chat_completion", fake_request)
 
-    message = zeta_model.chat_completion_messages(
-        [{"role": "user", "content": "hi"}],
-        telemetry_sink=telemetry.append,
+    message = asyncio.run(
+        zeta_model.chat_completion_messages(
+            [{"role": "user", "content": "hi"}],
+            telemetry_sink=telemetry.append,
+        )
     )
 
     assert message == {"content": "done"}
@@ -1521,7 +1574,7 @@ def test_zeta_models_package_dispatches_default_api_to_chat_completions(
 
     captured: dict[str, Any] = {}
 
-    def fake_chat_completion_messages(
+    async def fake_chat_completion_messages(
         messages: list[dict[str, Any]],
         **options: Any,
     ) -> dict[str, Any]:
@@ -1533,9 +1586,11 @@ def test_zeta_models_package_dispatches_default_api_to_chat_completions(
         zeta_model, "chat_completion_messages", fake_chat_completion_messages
     )
 
-    message = models_pkg.chat_completion_messages(
-        [{"role": "user", "content": "hi"}],
-        thinking="low",
+    message = asyncio.run(
+        models_pkg.chat_completion_messages(
+            [{"role": "user", "content": "hi"}],
+            thinking="low",
+        )
     )
 
     assert message == {"role": "assistant", "content": "ok"}
@@ -1550,25 +1605,29 @@ def test_zeta_models_package_routes_codex_api_to_responses(monkeypatch) -> None:
 
     captured: dict[str, Any] = {}
 
-    def fake_completion(messages: list[dict[str, Any]], **options: Any) -> dict:
+    async def fake_completion(messages: list[dict[str, Any]], **options: Any) -> dict:
         captured["completion"] = (messages, options)
         return {"role": "assistant", "content": "ok"}
 
-    def fake_structured(messages: list[dict[str, Any]], **options: Any) -> dict:
+    async def fake_structured(messages: list[dict[str, Any]], **options: Any) -> dict:
         captured["structured"] = (messages, options)
         return {"state": "done"}
 
     monkeypatch.setattr(zeta_responses, "codex_completion_messages", fake_completion)
     monkeypatch.setattr(zeta_responses, "codex_structured_output", fake_structured)
 
-    message = models_pkg.chat_completion_messages(
-        [{"role": "user", "content": "hi"}], api="codex-responses", thinking="low"
+    message = asyncio.run(
+        models_pkg.chat_completion_messages(
+            [{"role": "user", "content": "hi"}], api="codex-responses", thinking="low"
+        )
     )
-    data = models_pkg.chat_structured_output(
-        [{"role": "user", "content": "hi"}],
-        schema={"type": "object"},
-        response_name="state",
-        api="codex-responses",
+    data = asyncio.run(
+        models_pkg.chat_structured_output(
+            [{"role": "user", "content": "hi"}],
+            schema={"type": "object"},
+            response_name="state",
+            api="codex-responses",
+        )
     )
 
     assert message == {"role": "assistant", "content": "ok"}
@@ -1584,7 +1643,7 @@ def test_zeta_models_package_omits_session_id_for_chat_structured_output(
 
     captured: dict[str, Any] = {}
 
-    def fake_structured(
+    async def fake_structured(
         messages: list[dict[str, Any]],
         **options: Any,
     ) -> dict[str, Any]:
@@ -1594,11 +1653,13 @@ def test_zeta_models_package_omits_session_id_for_chat_structured_output(
 
     monkeypatch.setattr(zeta_model, "chat_structured_output", fake_structured)
 
-    data = models_pkg.chat_structured_output(
-        [{"role": "user", "content": "hi"}],
-        schema={"type": "object"},
-        response_name="state",
-        session_id="agent/session",
+    data = asyncio.run(
+        models_pkg.chat_structured_output(
+            [{"role": "user", "content": "hi"}],
+            schema={"type": "object"},
+            response_name="state",
+            session_id="agent/session",
+        )
     )
 
     assert data == {"state": "done"}
@@ -1615,7 +1676,7 @@ def test_zeta_default_model_gateway_omits_session_id_for_chat_completions(
 
     captured: dict[str, Any] = {}
 
-    def fake_chat_completion_messages(
+    async def fake_chat_completion_messages(
         messages: list[dict[str, Any]],
         *,
         api: str | None = None,
@@ -1681,7 +1742,7 @@ def test_zeta_default_model_gateway_passes_session_id_for_codex_responses(
 
     captured: dict[str, Any] = {}
 
-    def fake_chat_completion_messages(
+    async def fake_chat_completion_messages(
         messages: list[dict[str, Any]],
         **options: Any,
     ) -> dict[str, Any]:
@@ -1720,8 +1781,10 @@ def test_zeta_models_package_rejects_unknown_api() -> None:
     from zeta import models as models_pkg
 
     with pytest.raises(ValueError, match="grpc"):
-        models_pkg.chat_completion_messages(
-            [{"role": "user", "content": "hi"}], api="grpc"
+        asyncio.run(
+            models_pkg.chat_completion_messages(
+                [{"role": "user", "content": "hi"}], api="grpc"
+            )
         )
 
 
@@ -1815,15 +1878,16 @@ default = true
     )
 
 
-def test_zeta_stream_json_sse_stops_between_frames_when_the_run_aborts(
+async def test_zeta_stream_json_sse_stops_between_frames_when_the_run_aborts(
     monkeypatch,
 ) -> None:
     """A cancelled run must not wait for the whole generation."""
     frames = ["a", "b", "c", "d"]
     delivered: list[str] = []
 
-    def fake_parse_sse_lines(lines: Any) -> Any:
-        yield from frames
+    async def fake_parse_sse_lines(lines: Any) -> Any:
+        for frame in frames:
+            yield frame
 
     class FakeResponse:
         is_error = False
@@ -1831,34 +1895,35 @@ def test_zeta_stream_json_sse_stops_between_frames_when_the_run_aborts(
         def raise_for_status(self) -> None:
             return None
 
-        def iter_lines(self) -> Any:
-            return iter(())
+        async def aiter_lines(self) -> Any:
+            for line in ():  # the fake stream yields no raw lines
+                yield line
 
     class FakeStream:
-        def __enter__(self) -> FakeResponse:
+        async def __aenter__(self) -> FakeResponse:
             return FakeResponse()
 
-        def __exit__(self, *_: object) -> bool:
+        async def __aexit__(self, *_: object) -> bool:
             return False
 
     class FakeClient:
-        def __enter__(self) -> Any:
+        async def __aenter__(self) -> Any:
             return self
 
-        def __exit__(self, *_: object) -> bool:
+        async def __aexit__(self, *_: object) -> bool:
             return False
 
         def stream(self, *_: object, **__: object) -> FakeStream:
             return FakeStream()
 
     monkeypatch.setattr(zeta_model_sse, "parse_sse_lines", fake_parse_sse_lines)
-    monkeypatch.setattr(httpx, "Client", lambda **_: FakeClient())
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **_: FakeClient())
 
     def should_stop() -> str | None:
         return "cancelled" if len(delivered) >= 2 else None
 
     with pytest.raises(zeta_model_shapes.ModelRequestAborted, match="cancelled"):
-        for frame in zeta_model_sse.stream_json_sse(
+        async for frame in zeta_model_sse.stream_json_sse(
             "http://127.0.0.1:8080/v1/chat/completions",
             {},
             headers={},

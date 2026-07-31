@@ -120,7 +120,7 @@ Do not include generic conversation summary prose.
 class TaskStateExtractor(Protocol):
     """Extract structured task state from prompt components."""
 
-    def extract(self, components: list[PromptComponent]) -> dict[str, Any]: ...
+    async def extract(self, components: list[PromptComponent]) -> dict[str, Any]: ...
 
 
 class ModelTaskStateExtractor:
@@ -137,8 +137,8 @@ class ModelTaskStateExtractor:
         self.selected_url = selected_url
         self.max_tokens = max_tokens
 
-    def extract(self, components: list[PromptComponent]) -> dict[str, Any]:
-        return chat_structured_output(
+    async def extract(self, components: list[PromptComponent]) -> dict[str, Any]:
+        return await chat_structured_output(
             task_state_extraction_messages(components),
             schema=TASK_STATE_SCHEMA,
             response_name=TASK_STATE_RESPONSE_NAME,
@@ -165,7 +165,7 @@ class TaskStateExtractionPromptTransform:
         # constant within the turn, so caching avoids re-extracting each call.
         self._extracted: dict[tuple[str, ...], dict[str, Any]] = {}
 
-    def apply(self, components: list[PromptComponent]) -> list[PromptComponent]:
+    async def apply(self, components: list[PromptComponent]) -> list[PromptComponent]:
         sources = task_state_source_components(components)
         if not sources:
             return list(components)
@@ -173,7 +173,7 @@ class TaskStateExtractionPromptTransform:
         state = self._extracted.get(key)
         if state is None:
             try:
-                state = validated_task_state(self.extractor.extract(sources))
+                state = validated_task_state(await self.extractor.extract(sources))
             except Exception:
                 if self.fail_open:
                     return list(components)

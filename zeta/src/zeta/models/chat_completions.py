@@ -22,7 +22,7 @@ DEFAULT_MAX_COMPLETION_TOKENS = 8192
 ModelTelemetrySink = Callable[[dict[str, Any]], None]
 
 
-def request_chat_completion(
+async def request_chat_completion(
     body: dict[str, Any],
     *,
     selected_url: str | None = None,
@@ -31,7 +31,7 @@ def request_chat_completion(
 ) -> dict[str, Any]:
     """POST one streaming chat completions request and return the final response."""
     stream_body = {**body, "stream": True}
-    payload = read_streamed_chat_completion(
+    payload = await read_streamed_chat_completion(
         stream_json_sse(
             model_url(selected_url),
             stream_body,
@@ -72,7 +72,7 @@ def emit_model_telemetry(
         telemetry_sink(telemetry)
 
 
-def chat_completion_messages(
+async def chat_completion_messages(
     messages: list[dict[str, Any]],
     *,
     tools: list[dict[str, Any]] | None = None,
@@ -95,7 +95,7 @@ def chat_completion_messages(
         selected_model=selected_model,
         thinking=thinking,
     )
-    payload = request_chat_completion(
+    payload = await request_chat_completion(
         body,
         selected_url=selected_url,
         stream_sink=stream_sink,
@@ -232,7 +232,7 @@ def json_schema_response_format(
     }
 
 
-def chat_structured_output(
+async def chat_structured_output(
     messages: list[dict[str, Any]],
     *,
     schema: dict[str, Any],
@@ -251,7 +251,7 @@ def chat_structured_output(
             schema=schema,
         ),
     )
-    payload = request_chat_completion(body, selected_url=selected_url)
+    payload = await request_chat_completion(body, selected_url=selected_url)
     message = payload["choices"][0]["message"]
     if not isinstance(message, dict):
         raise RuntimeError("model request failed: assistant message was invalid")

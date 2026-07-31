@@ -6,7 +6,6 @@ message into durable records.
 
 from __future__ import annotations
 
-import inspect
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Any
@@ -162,7 +161,7 @@ async def call_model_step(
     should_stop: Callable[[], str | None] | None = None,
 ) -> tuple[ModelOutput, bool, dict[str, Any]]:
     state.note_step("call_model")
-    requested = request_assistant_message(
+    return await request_assistant_message(
         model_input,
         config=config,
         model_gateway=model_gateway or DefaultModelGateway(),
@@ -170,10 +169,6 @@ async def call_model_step(
         event_sink=event_sink,
         should_stop=should_stop,
     )
-    model_output, streamed_content, model_telemetry = (
-        await requested if inspect.isawaitable(requested) else requested
-    )
-    return model_output, streamed_content, model_telemetry
 
 
 def record_assistant_step(
@@ -207,7 +202,7 @@ async def request_model_turn(
     state: RunState,
     ctx: RunDependencies,
 ) -> ModelTurn:
-    prepared_prompt, model_input = build_prompt_step(
+    prepared_prompt, model_input = await build_prompt_step(
         objective,
         timeline,
         config=config,

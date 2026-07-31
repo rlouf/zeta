@@ -601,8 +601,6 @@ class SqliteEventStore:
         return _row_to_event(row)
 
 
-
-
 def event_store_path(root: Path | None = None) -> Path:
     return (root if root is not None else resolve_state_dir()) / ZETA_STORE_NAME
 

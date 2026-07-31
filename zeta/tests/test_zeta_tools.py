@@ -405,7 +405,7 @@ def test_zeta_web_search_reports_missing_codex_credentials(monkeypatch) -> None:
 
     monkeypatch.setattr(web_tool, "load_codex_credentials", missing_credentials)
 
-    result = web_tool.search({"query": "parallel api docs"})
+    result = asyncio.run(web_tool.search({"query": "parallel api docs"}))
 
     assert result == {
         "ok": False,
@@ -426,7 +426,9 @@ def test_zeta_web_search_posts_codex_payload(monkeypatch) -> None:
         lambda: web_tool.CodexCredentials(access_token="tok-1", account_id="acct-1"),
     )
 
-    def fake_request(query: str, config: web_tool.WebConfig) -> web_tool.CodexSearch:
+    async def fake_request(
+        query: str, config: web_tool.WebConfig
+    ) -> web_tool.CodexSearch:
         calls.append((query, config))
         return web_tool.CodexSearch(
             answer="Parallel documents the Search API.",
@@ -444,7 +446,7 @@ def test_zeta_web_search_posts_codex_payload(monkeypatch) -> None:
 
     monkeypatch.setattr(web_tool, "codex_search", fake_request)
 
-    result = web_tool.search({"query": "parallel search api", "limit": 5})
+    result = asyncio.run(web_tool.search({"query": "parallel search api", "limit": 5}))
 
     assert result["ok"] is True
     assert calls == [

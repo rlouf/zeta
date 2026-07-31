@@ -72,7 +72,7 @@ def agent_allowed_capabilities(
     )
 
 
-def build_prompt_step(
+async def build_prompt_step(
     objective: str,
     timeline: Sequence[TimelineEvent],
     *,
@@ -100,7 +100,7 @@ def build_prompt_step(
         selected_model=config.model_name,
         thinking=config.thinking,
     )
-    stored_prompt = builder.commit_prompt_plan(prompt_plan)
+    stored_prompt = await builder.commit_prompt_plan(prompt_plan)
     model_input = render_model_input(stored_prompt)
     prepared_prompt = prepared_prompt_from(stored_prompt, model_input=model_input)
     return prepared_prompt, model_input

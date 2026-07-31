@@ -17,7 +17,7 @@ from zeta.journal.views import draft_event_view, event_view
 from zeta.loop.config import AgentConfig
 from zeta.loop.outcomes import AgentRunResult, agent_run_result_payload
 
-StructuredOutputRunner = Callable[..., dict[str, Any] | Awaitable[dict[str, Any]]]
+StructuredOutputRunner = Callable[..., Awaitable[dict[str, Any]]]
 AGENT_RETURN_RESPONSE_NAME = "zeta_agent_return"
 
 
@@ -50,7 +50,7 @@ class ReturnedEventPublisher:
         schema = derive_returns_schema(spec, self.event_registry)
         if schema is None:
             return agent_run_result_payload(result)
-        returned = self.structured_output(
+        returned = await self.structured_output(
             structured_return_messages(
                 spec,
                 result,

@@ -102,8 +102,8 @@ class PromptBuilder:
             thinking=thinking,
         )
 
-    def commit_prompt_plan(self, plan: PromptPlan) -> StoredPrompt:
-        return commit_prompt_plan(
+    async def commit_prompt_plan(self, plan: PromptPlan) -> StoredPrompt:
+        return await commit_prompt_plan(
             plan,
             self.store(),
             transform=self.transform,
@@ -146,7 +146,7 @@ def plan_prompt(
     )
 
 
-def commit_prompt_plan(
+async def commit_prompt_plan(
     plan: PromptPlan,
     store: Store | None,
     *,
@@ -156,7 +156,7 @@ def commit_prompt_plan(
     try:
         with store.batch() if store is not None else nullcontext():
             stored_components = store_components(list(plan.components), store)
-            transformed_components = prompt_transform.apply(stored_components)
+            transformed_components = await prompt_transform.apply(stored_components)
             traced_components = store_transform_outputs(
                 transformed_components,
                 store,

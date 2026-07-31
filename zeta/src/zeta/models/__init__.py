@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-import asyncio
-import importlib
 from collections.abc import Callable
 from typing import Any
 
+import zeta.models.chat_completions as _chat_completions
 import zeta.models.profiles as _profiles
+import zeta.models.responses as _responses
 import zeta.models.types as _model_types
 
 
@@ -45,8 +45,7 @@ class DefaultModelGateway:
         }
         if api == _profiles.CODEX_RESPONSES_API:
             options["session_id"] = getattr(config, "model_session_id", None)
-        assistant = await asyncio.to_thread(
-            chat_completion_messages,
+        assistant = await chat_completion_messages(
             model_input.messages,
             **options,
         )
@@ -60,7 +59,7 @@ __all__ = [
 ]
 
 
-def chat_completion_messages(
+async def chat_completion_messages(
     messages: list[dict[str, Any]],
     *,
     api: str | None = None,
@@ -68,15 +67,13 @@ def chat_completion_messages(
 ) -> dict[str, Any]:
     """Request one assistant message from the selected protocol client."""
     if api is None or api == _profiles.CHAT_COMPLETIONS_API:
-        chat_completions = importlib.import_module("zeta.models.chat_completions")
-        return chat_completions.chat_completion_messages(messages, **options)
+        return await _chat_completions.chat_completion_messages(messages, **options)
     if api == _profiles.CODEX_RESPONSES_API:
-        responses = importlib.import_module("zeta.models.responses")
-        return responses.codex_completion_messages(messages, **options)
+        return await _responses.codex_completion_messages(messages, **options)
     raise ValueError(f"unknown model api: {api!r}")
 
 
-def chat_structured_output(
+async def chat_structured_output(
     messages: list[dict[str, Any]],
     *,
     api: str | None = None,
@@ -85,9 +82,7 @@ def chat_structured_output(
     """Request one schema-validated JSON object from the selected client."""
     if api is None or api == _profiles.CHAT_COMPLETIONS_API:
         options.pop("session_id", None)
-        chat_completions = importlib.import_module("zeta.models.chat_completions")
-        return chat_completions.chat_structured_output(messages, **options)
+        return await _chat_completions.chat_structured_output(messages, **options)
     if api == _profiles.CODEX_RESPONSES_API:
-        responses = importlib.import_module("zeta.models.responses")
-        return responses.codex_structured_output(messages, **options)
+        return await _responses.codex_structured_output(messages, **options)
     raise ValueError(f"unknown model api: {api!r}")

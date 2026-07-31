@@ -83,6 +83,15 @@ from zeta.journal.store import Filter
 from zeta.loop.runtime import AgentRunResult
 
 
+def _async_events(events: list[Any]) -> Any:
+    """A structured-output runner that returns a fixed event list."""
+
+    async def run(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
+        return {"events": events}
+
+    return run
+
+
 def runtime_sqlite_event_store(path: Path) -> RuntimeEventStore:
     return RuntimeEventStore.open(path)
 
@@ -344,7 +353,7 @@ def _recording_return_run(
 def _recording_structured_return(
     calls: list[dict[str, Any]],
 ) -> Callable[..., Any]:
-    def structured_output(
+    async def structured_output(
         messages: list[dict[str, Any]],
         **kwargs: Any,
     ) -> dict[str, Any]:
@@ -2549,7 +2558,7 @@ def test_zeta_agent_with_returns_publishes_multiple_ordered_events(
     spec = _slack_return_agent_spec(tmp_path)
     events = _slack_return_event_registry()
 
-    def structured_output(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
+    async def structured_output(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
         return {
             "events": [
                 {
@@ -2611,7 +2620,7 @@ def test_zeta_agent_with_returns_may_publish_no_events(tmp_path: Path) -> None:
         spec,
         event_registry=events,
         agent_loop=_recording_return_run([]),
-        structured_output=lambda *_args, **_kwargs: {"events": []},
+        structured_output=_async_events([]),
     )
     store = zeta_events.SqliteEventStore(tmp_path / "events.sqlite3")
     dispatcher = harness_dispatch.QueueingDispatcher(store, executors=[compiled])

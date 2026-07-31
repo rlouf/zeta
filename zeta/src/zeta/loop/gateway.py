@@ -6,7 +6,6 @@ name that request, so the loop does not depend on a transport.
 
 from __future__ import annotations
 
-import inspect
 from collections.abc import Callable
 from typing import Any, Protocol
 
@@ -67,25 +66,21 @@ async def request_assistant_message(
     gateway = model_gateway or DefaultModelGateway()
     status_factory = config.model_status_factory
     if status_factory is None:
-        generated = gateway.generate(
+        model_output = await gateway.generate(
             model_input,
             config,
             stream=turn_stream_sink,
             telemetry_sink=model_telemetry.update,
             should_stop=should_stop,
         )
-        model_output = await generated if inspect.isawaitable(generated) else generated
     else:
         with status_factory() as status:
-            generated = gateway.generate(
+            model_output = await gateway.generate(
                 model_input,
                 config,
                 stream=StatusAwareModelStream(turn_stream_sink, status),
                 telemetry_sink=model_telemetry.update,
                 should_stop=should_stop,
-            )
-            model_output = (
-                await generated if inspect.isawaitable(generated) else generated
             )
     return (
         model_output,

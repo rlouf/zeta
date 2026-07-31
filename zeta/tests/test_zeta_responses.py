@@ -1,5 +1,6 @@
 """Tests for the OpenAI Responses translation layer."""
 
+import asyncio
 import json
 from typing import Any
 
@@ -7,6 +8,27 @@ import pytest
 import zeta.models.codex_auth as codex_auth
 import zeta.models.responses as zeta_responses
 import zeta.models.types as zeta_model_shapes
+
+
+def _aframes(frames: Any) -> Any:
+    """Stand in for stream_json_sse, which is now an async generator."""
+
+    async def stream(*_args: Any, **_kwargs: Any) -> Any:
+        for frame in frames:
+            yield frame
+
+    return stream
+
+
+async def _aiter(items: Any) -> Any:
+    """Feed a list of SSE frames to a reader that now takes an async iterator."""
+    for item in items:
+        yield item
+
+
+def _read_stream(reader: Any, frames: Any, **kwargs: Any) -> Any:
+    """Run an async SSE reader from a synchronous test."""
+    return asyncio.run(reader(_aiter(frames), **kwargs))
 
 
 def sse_frames(events: list[dict[str, Any]], *, done: bool = False) -> list[str]:
@@ -274,8 +296,10 @@ def test_zeta_responses_stream_accumulates_text_and_reasoning() -> None:
         COMPLETED,
     ]
 
-    payload = zeta_responses.read_streamed_responses(
-        iter(sse_frames(events)), stream_sink=sink
+    payload = _read_stream(
+        zeta_responses.read_streamed_responses,
+        iter(sse_frames(events)),
+        stream_sink=sink,
     )
 
     message = payload["choices"][0]["message"]
@@ -294,7 +318,8 @@ def test_zeta_responses_stream_accumulates_text_and_reasoning() -> None:
 
 
 def test_zeta_model_output_from_responses_payload_preserves_replay_items() -> None:
-    payload = zeta_responses.read_streamed_responses(
+    payload = _read_stream(
+        zeta_responses.read_streamed_responses,
         iter(
             sse_frames(
                 [
@@ -318,7 +343,7 @@ def test_zeta_model_output_from_responses_payload_preserves_replay_items() -> No
                     COMPLETED,
                 ]
             )
-        )
+        ),
     )
 
     output = zeta_responses.model_output_from_chat_completion(payload)
@@ -352,7 +377,7 @@ def test_zeta_responses_codex_completion_returns_adapter_message(monkeypatch) ->
     }
     converted: list[dict[str, Any]] = []
 
-    def fake_request(body: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
+    async def fake_request(body: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
         del body
         del kwargs
         return payload
@@ -373,9 +398,11 @@ def test_zeta_responses_codex_completion_returns_adapter_message(monkeypatch) ->
         fake_model_output,
     )
 
-    message = zeta_responses.codex_completion_messages(
-        [{"role": "user", "content": "hi"}],
-        selected_model="gpt-5.5",
+    message = asyncio.run(
+        zeta_responses.codex_completion_messages(
+            [{"role": "user", "content": "hi"}],
+            selected_model="gpt-5.5",
+        )
     )
 
     assert message == {"role": "assistant", "content": "converted"}
@@ -397,7 +424,9 @@ def test_zeta_responses_stream_collects_tool_calls() -> None:
         COMPLETED,
     ]
 
-    payload = zeta_responses.read_streamed_responses(iter(sse_frames(events)))
+    payload = _read_stream(
+        zeta_responses.read_streamed_responses, iter(sse_frames(events))
+    )
 
     message = payload["choices"][0]["message"]
     assert message["tool_calls"] == [
@@ -419,7 +448,9 @@ def test_zeta_responses_stream_marks_incomplete_as_length() -> None:
         },
     ]
 
-    payload = zeta_responses.read_streamed_responses(iter(sse_frames(events)))
+    payload = _read_stream(
+        zeta_responses.read_streamed_responses, iter(sse_frames(events))
+    )
 
     assert payload["choices"][0]["finish_reason"] == "length"
 
@@ -428,7 +459,7 @@ def test_zeta_responses_stream_raises_on_error_event() -> None:
     events = [{"type": "error", "code": "server_error", "message": "boom"}]
 
     with pytest.raises(RuntimeError, match="boom"):
-        zeta_responses.read_streamed_responses(iter(sse_frames(events)))
+        _read_stream(zeta_responses.read_streamed_responses, iter(sse_frames(events)))
 
 
 def test_zeta_responses_stream_renders_quota_errors_with_reset_hint() -> None:
@@ -449,14 +480,14 @@ def test_zeta_responses_stream_renders_quota_errors_with_reset_hint() -> None:
     ]
 
     with pytest.raises(RuntimeError, match="usage limit"):
-        zeta_responses.read_streamed_responses(iter(sse_frames(events)))
+        _read_stream(zeta_responses.read_streamed_responses, iter(sse_frames(events)))
 
 
 def test_zeta_responses_stream_requires_terminal_event() -> None:
     events = [{"type": "response.output_text.delta", "delta": "Hello"}]
 
     with pytest.raises(RuntimeError, match="ended before"):
-        zeta_responses.read_streamed_responses(iter(sse_frames(events)))
+        _read_stream(zeta_responses.read_streamed_responses, iter(sse_frames(events)))
 
 
 def test_zeta_responses_codex_url_appends_endpoint() -> None:
@@ -501,7 +532,7 @@ def test_zeta_responses_codex_completion_round_trip(monkeypatch) -> None:
     ]
     captured: dict[str, Any] = {}
 
-    def fake_stream_json_sse(
+    async def fake_stream_json_sse(
         url: str,
         body: dict[str, Any],
         *,
@@ -509,13 +540,14 @@ def test_zeta_responses_codex_completion_round_trip(monkeypatch) -> None:
         first_output_timeout: float | None,
         idle_timeout: float | None,
         should_stop: object | None = None,
-    ) -> list[str]:
+    ) -> Any:
         captured["url"] = url
         captured["headers"] = headers
         captured["body"] = body
         captured["first_output_timeout"] = first_output_timeout
         captured["idle_timeout"] = idle_timeout
-        return sse_frames(events)
+        for _frame in sse_frames(events):
+            yield _frame
 
     monkeypatch.setattr(zeta_responses, "stream_json_sse", fake_stream_json_sse)
     monkeypatch.setattr(
@@ -526,14 +558,16 @@ def test_zeta_responses_codex_completion_round_trip(monkeypatch) -> None:
     monkeypatch.setenv("ZETA_SESSION_ID", "session-1")
     telemetry: dict[str, Any] = {}
 
-    message = zeta_responses.codex_completion_messages(
-        [
-            {"role": "system", "content": "Be terse."},
-            {"role": "user", "content": "hi"},
-        ],
-        selected_model="gpt-5.5",
-        telemetry_sink=telemetry.update,
-        thinking="high",
+    message = asyncio.run(
+        zeta_responses.codex_completion_messages(
+            [
+                {"role": "system", "content": "Be terse."},
+                {"role": "user", "content": "hi"},
+            ],
+            selected_model="gpt-5.5",
+            telemetry_sink=telemetry.update,
+            thinking="high",
+        )
     )
 
     assert message["content"] == "Hello world"
@@ -551,8 +585,10 @@ def test_zeta_responses_codex_completion_round_trip(monkeypatch) -> None:
 
 def test_zeta_responses_codex_requires_a_model_name() -> None:
     with pytest.raises(RuntimeError, match="model"):
-        zeta_responses.codex_completion_messages(
-            [{"role": "user", "content": "hi"}],
+        asyncio.run(
+            zeta_responses.codex_completion_messages(
+                [{"role": "user", "content": "hi"}],
+            )
         )
 
 
@@ -577,7 +613,7 @@ def test_zeta_responses_codex_guards_truncated_tool_calls(monkeypatch) -> None:
     monkeypatch.setattr(
         zeta_responses,
         "stream_json_sse",
-        lambda *args, **kwargs: sse_frames(events),
+        _aframes(sse_frames(events)),
     )
     monkeypatch.setattr(
         zeta_responses,
@@ -586,9 +622,11 @@ def test_zeta_responses_codex_guards_truncated_tool_calls(monkeypatch) -> None:
     )
 
     with pytest.raises(RuntimeError, match="max_tokens"):
-        zeta_responses.codex_completion_messages(
-            [{"role": "user", "content": "hi"}],
-            selected_model="gpt-5.5",
+        asyncio.run(
+            zeta_responses.codex_completion_messages(
+                [{"role": "user", "content": "hi"}],
+                selected_model="gpt-5.5",
+            )
         )
 
 
@@ -607,14 +645,15 @@ def test_zeta_responses_codex_structured_output(monkeypatch) -> None:
     ]
     captured: dict[str, Any] = {}
 
-    def fake_stream_json_sse(
+    async def fake_stream_json_sse(
         url: str,
         body: dict[str, Any],
         **kwargs: Any,
-    ) -> list[str]:
+    ) -> Any:
         del url, kwargs
         captured["body"] = body
-        return sse_frames(events)
+        for _frame in sse_frames(events):
+            yield _frame
 
     monkeypatch.setattr(zeta_responses, "stream_json_sse", fake_stream_json_sse)
     monkeypatch.setattr(
@@ -628,11 +667,13 @@ def test_zeta_responses_codex_structured_output(monkeypatch) -> None:
         "required": ["summary"],
     }
 
-    data = zeta_responses.codex_structured_output(
-        [{"role": "user", "content": "summarize"}],
-        schema=schema,
-        response_name="task_state",
-        selected_model="gpt-5.5",
+    data = asyncio.run(
+        zeta_responses.codex_structured_output(
+            [{"role": "user", "content": "summarize"}],
+            schema=schema,
+            response_name="task_state",
+            selected_model="gpt-5.5",
+        )
     )
 
     assert data == {"summary": "done"}

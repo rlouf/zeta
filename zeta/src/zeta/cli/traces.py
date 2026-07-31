@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 from collections.abc import Callable
@@ -526,16 +527,18 @@ def trace_replay(
     )
     original = latest_model_answer(store, prompt_id)
 
-    message = chat_completion_messages(
-        reconstructed.messages,
-        api=selection.api,
-        tools=reconstructed.tools or None,
-        tool_choice="auto",
-        max_tokens=reconstructed.max_tokens,
-        selected_model=selection.model,
-        selected_url=selection.url,
-        session_id=session_id,
-        thinking=reconstructed.thinking,
+    message = asyncio.run(
+        chat_completion_messages(
+            reconstructed.messages,
+            api=selection.api,
+            tools=reconstructed.tools or None,
+            tool_choice="auto",
+            max_tokens=reconstructed.max_tokens,
+            selected_model=selection.model,
+            selected_url=selection.url,
+            session_id=session_id,
+            thinking=reconstructed.thinking,
+        )
     )
     replay_id = record_replay(store, prompt_id, message, selection)
     for line in render_replay(

@@ -14,13 +14,15 @@ _warned_over_budget = False
 class PromptTransform(Protocol):
     """Transform prompt components before the final model payload is built."""
 
-    def apply(self, components: list[PromptComponent]) -> list[PromptComponent]: ...
+    async def apply(
+        self, components: list[PromptComponent]
+    ) -> list[PromptComponent]: ...
 
 
 class NoOpPromptTransform:
     """Default prompt transform that preserves current runtime behavior."""
 
-    def apply(self, components: list[PromptComponent]) -> list[PromptComponent]:
+    async def apply(self, components: list[PromptComponent]) -> list[PromptComponent]:
         return list(components)
 
 
@@ -41,14 +43,14 @@ class BudgetThresholdPromptTransform:
     def producer(self) -> str:
         return str(getattr(self.transform, "producer", "") or "")
 
-    def apply(self, components: list[PromptComponent]) -> list[PromptComponent]:
+    async def apply(self, components: list[PromptComponent]) -> list[PromptComponent]:
         if measure(components).total_tokens <= self.max_tokens:
             return list(components)
-        output = self.transform.apply(components)
+        output = await self.transform.apply(components)
         for transform in self.escalation:
             if measure(output).total_tokens <= self.max_tokens:
                 return output
-            output = transform.apply(output)
+            output = await transform.apply(output)
         usage = measure(output)
         if usage.total_tokens > self.max_tokens:
             warn_over_budget(usage, self.max_tokens)

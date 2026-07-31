@@ -7,8 +7,10 @@ and accumulate the deltas into one assistant message.
 from __future__ import annotations
 
 import json
-from collections.abc import Callable, Iterable, Iterator, Mapping
+from collections.abc import AsyncIterator, Callable, Mapping
 from typing import Any, Protocol
+
+import httpx
 
 from zeta.models.limits import (
     model_first_output_timeout,
@@ -34,7 +36,7 @@ class ChatCompletionStreamSink(Protocol):
         ...
 
 
-def stream_json_sse(
+async def stream_json_sse(
     url: str,
     body: dict[str, Any],
     *,
@@ -42,15 +44,13 @@ def stream_json_sse(
     first_output_timeout: float | None = None,
     idle_timeout: float | None = None,
     should_stop: Callable[[], str | None] | None = None,
-) -> Iterator[str]:
+) -> AsyncIterator[str]:
     """POST JSON and yield Server-Sent Event data payloads.
 
     `should_stop` is polled between frames. Every model request streams, so a
     cancelled run stops within one frame rather than waiting for the whole
     generation.
     """
-    import httpx
-
     timeout = model_stream_timeout(
         first_output_timeout=model_first_output_timeout()
         if first_output_timeout is None
@@ -63,17 +63,17 @@ def stream_json_sse(
         **dict(headers),
     }
     try:
-        with httpx.Client(timeout=timeout) as client:
-            with client.stream(
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            async with client.stream(
                 "POST",
                 url,
                 json=body,
                 headers=request_headers,
             ) as response:
                 if getattr(response, "is_error", False):
-                    response.read()
+                    await response.aread()
                 response.raise_for_status()
-                for frame in parse_sse_lines(response.iter_lines()):
+                async for frame in parse_sse_lines(response.aiter_lines()):
                     if should_stop is not None:
                         reason = should_stop()
                         if reason is not None:
@@ -91,10 +91,10 @@ def stream_json_sse(
         raise RuntimeError(f"model request failed: {exc}") from exc
 
 
-def parse_sse_lines(lines: Iterable[str]) -> Iterator[str]:
+async def parse_sse_lines(lines: AsyncIterator[str]) -> AsyncIterator[str]:
     """Yield SSE data frames without requiring a Content-Type header."""
     data: list[str] = []
-    for line in lines:
+    async for line in lines:
         if line == "":
             if data:
                 yield "\n".join(data)
@@ -144,15 +144,15 @@ def decode_stream_event(data: str) -> dict[str, Any] | None:
     return event
 
 
-def read_streamed_chat_completion(
-    events: Iterable[str],
+async def read_streamed_chat_completion(
+    events: AsyncIterator[str],
     *,
     stream_sink: ChatCompletionStreamSink | None = None,
 ) -> dict[str, Any]:
     """Read OpenAI-style chat completion SSE frames into one final response."""
     accumulator = ChatStreamAccumulator(stream_sink=stream_sink)
     done = False
-    for data in events:
+    async for data in events:
         chunk = decode_stream_event(data)
         if chunk is None:
             done = True

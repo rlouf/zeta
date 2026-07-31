@@ -9,7 +9,7 @@ their encrypted content) and item ids replay verbatim on the next request.
 import json
 import os
 import time
-from collections.abc import Callable, Iterable
+from collections.abc import AsyncIterator, Callable
 from typing import Any
 
 from jsonschema import Draft202012Validator
@@ -231,7 +231,7 @@ def codex_context_tokens(model: str) -> int:
     return CODEX_CONTEXT_TOKENS.get(model, DEFAULT_CODEX_CONTEXT_TOKENS)
 
 
-def request_codex_response(
+async def request_codex_response(
     body: dict[str, Any],
     *,
     selected_url: str | None = None,
@@ -241,7 +241,7 @@ def request_codex_response(
 ) -> dict[str, Any]:
     """POST one streaming Codex request and return the final payload."""
     credentials = load_codex_credentials()
-    return read_streamed_responses(
+    return await read_streamed_responses(
         stream_json_sse(
             codex_responses_url(selected_url),
             body,
@@ -262,7 +262,7 @@ def codex_model_name(selected_model: str | None) -> str:
     )
 
 
-def codex_completion_messages(
+async def codex_completion_messages(
     messages: list[dict[str, Any]],
     *,
     tools: list[dict[str, Any]] | None = None,
@@ -288,7 +288,7 @@ def codex_completion_messages(
         thinking=thinking,
         session_id=session,
     )
-    payload = request_codex_response(
+    payload = await request_codex_response(
         body,
         selected_url=selected_url,
         session=session,
@@ -309,7 +309,7 @@ def codex_completion_messages(
     return output.message
 
 
-def codex_structured_output(
+async def codex_structured_output(
     messages: list[dict[str, Any]],
     *,
     schema: dict[str, Any],
@@ -335,7 +335,9 @@ def codex_structured_output(
             "schema": schema,
         }
     }
-    payload = request_codex_response(body, selected_url=selected_url, session=session)
+    payload = await request_codex_response(
+        body, selected_url=selected_url, session=session
+    )
     message = payload["choices"][0]["message"]
     if not isinstance(message, dict):
         raise RuntimeError("model request failed: assistant message was invalid")
@@ -347,14 +349,14 @@ def codex_structured_output(
     return data
 
 
-def read_streamed_responses(
-    events: Iterable[str],
+async def read_streamed_responses(
+    events: AsyncIterator[str],
     *,
     stream_sink: ChatCompletionStreamSink | None = None,
 ) -> dict[str, Any]:
     """Read Responses SSE frames into one chat-completions-shaped payload."""
     accumulator = ResponsesStreamAccumulator(stream_sink=stream_sink)
-    for data in events:
+    async for data in events:
         event = decode_stream_event(data)
         if event is None:
             break

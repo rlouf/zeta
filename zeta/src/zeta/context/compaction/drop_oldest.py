@@ -14,7 +14,7 @@ class DropOldestPromptTransform:
     def __init__(self, *, max_tokens: int) -> None:
         self.max_tokens = max_tokens
 
-    def apply(self, components: list[PromptComponent]) -> list[PromptComponent]:
+    async def apply(self, components: list[PromptComponent]) -> list[PromptComponent]:
         output = list(components)
         while measure(output).total_tokens > self.max_tokens:
             remaining = without_oldest_historical_message(output)

@@ -897,7 +897,7 @@ def test_zeta_model_cli_lists_builtin_codex(tmp_path: Path, monkeypatch) -> None
     result = CliRunner().invoke(zeta_cli, ["models", "list"])
 
     assert result.exit_code == 0, result.output
-    assert "codex  gpt-5.5  chatgpt.com  (active)" in result.output
+    assert "codex  gpt-5.6-sol  chatgpt.com  (active)" in result.output
     assert "no profiles configured; using built-in Codex" in result.output
 
 

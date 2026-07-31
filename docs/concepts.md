@@ -167,7 +167,7 @@ thinking = "high"
 ```
 
 At most one profile may set `default = true`. If no default exists, Zeta uses
-the built-in Codex profile: `codex` with `gpt-5.5`. `thinking` may be `"none"`,
+the built-in Codex profile: `codex` with `gpt-5.6-sol`. `thinking` may be `"none"`,
 `"minimal"`, `"low"`, `"medium"`, or `"high"`.
 
 You can also make the Codex Responses backend an explicit profile:
@@ -175,7 +175,7 @@ You can also make the Codex Responses backend an explicit profile:
 ```toml
 [[models]]
 name = "codex"
-model = "gpt-5.5"
+model = "gpt-5.6-sol"
 api = "codex-responses"
 thinking = "high"
 ```

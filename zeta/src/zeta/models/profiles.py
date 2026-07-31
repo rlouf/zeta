@@ -17,7 +17,7 @@ MODEL_NAME_PATTERN = re.compile(r"^[a-z0-9-]+$")
 DEFAULT_MODEL_URL = "http://127.0.0.1:8080/v1/chat/completions"
 DEFAULT_MODEL_NAME = "local-model"
 DEFAULT_CODEX_BASE_URL = "https://chatgpt.com/backend-api"
-DEFAULT_CODEX_MODEL_NAME = "gpt-5.5"
+DEFAULT_CODEX_MODEL_NAME = "gpt-5.6-sol"
 DEFAULT_CODEX_PROFILE_NAME = "codex"
 
 ModelSource = Literal["session", "config", "builtin"]

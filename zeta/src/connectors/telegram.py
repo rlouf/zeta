@@ -199,19 +199,27 @@ def telegram_message_draft(
     *,
     allowed_senders: frozenset[int],
 ) -> DraftEvent | None:
-    """Return a draft for an allowed text message, else None."""
+    """Return a draft for an allowed text or media message, else None."""
 
-    text = message.get("text")
+    raw_text = message.get("text")
+    caption = message.get("caption")
     chat = message.get("chat")
     sender = message.get("from")
     message_id = message.get("message_id")
     date = message.get("date")
-    if not isinstance(text, str) or not text:
-        return None  # a sticker, a photo, or a service message
+    if raw_text is not None and not isinstance(raw_text, str):
+        return None
+    if caption is not None and not isinstance(caption, str):
+        return None
     if not isinstance(chat, dict) or not isinstance(sender, dict):
         return None
     if not isinstance(message_id, int) or not isinstance(date, int):
         return None
+
+    attachments = telegram_message_attachments(message)
+    text = raw_text if isinstance(raw_text, str) else caption or ""
+    if not text and not attachments:
+        return None  # a sticker or a service message
 
     chat_id = chat.get("id")
     from_id = sender.get("id")
@@ -231,12 +239,72 @@ def telegram_message_draft(
         "text": text,
         "date": date,
     }
+    if attachments:
+        payload["attachments"] = attachments
     return DraftEvent(
         TELEGRAM_MESSAGE_RECEIVED,
         "telegram",
         payload,
         idempotency_key=f"telegram:{update_id}",
     )
+
+
+def telegram_message_attachments(message: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """Return the supported attachment metadata from one Telegram message."""
+    voice = telegram_file_attachment("voice", message.get("voice"))
+    if voice is not None:
+        return [voice]
+
+    photo = telegram_photo_attachment(message.get("photo"))
+    if photo is not None:
+        return [photo]
+
+    document = telegram_file_attachment("document", message.get("document"))
+    if document is not None:
+        return [document]
+
+    audio = telegram_file_attachment("audio", message.get("audio"))
+    return [audio] if audio is not None else []
+
+
+def telegram_photo_attachment(value: Any) -> dict[str, Any] | None:
+    """Return metadata for the largest valid Telegram photo size."""
+    if not isinstance(value, list):
+        return None
+    photos = [
+        attachment
+        for item in value
+        if (attachment := telegram_file_attachment("photo", item)) is not None
+    ]
+    if not photos:
+        return None
+    return max(
+        photos,
+        key=lambda attachment: (
+            int(attachment.get("width") or 0) * int(attachment.get("height") or 0),
+            int(attachment.get("file_size") or 0),
+        ),
+    )
+
+
+def telegram_file_attachment(kind: str, value: Any) -> dict[str, Any] | None:
+    """Return a supported Telegram file reference, else ``None``."""
+    if not isinstance(value, Mapping):
+        return None
+    file_id = value.get("file_id")
+    if not isinstance(file_id, str) or not file_id:
+        return None
+
+    attachment: dict[str, Any] = {"type": kind, "file_id": file_id}
+    for key in ("file_unique_id", "file_name", "mime_type"):
+        item = value.get(key)
+        if isinstance(item, str):
+            attachment[key] = item
+    for key in ("file_size", "duration", "width", "height"):
+        item = value.get(key)
+        if isinstance(item, int) and not isinstance(item, bool):
+            attachment[key] = item
+    return attachment
 
 
 def telegram_message_reaction_draft(
@@ -405,6 +473,22 @@ def allowed_senders_from_env() -> frozenset[int]:
 
 
 def telegram_message_received_schema() -> Mapping[str, Any]:
+    attachment_schema: Mapping[str, Any] = {
+        "type": "object",
+        "required": ["type", "file_id"],
+        "properties": {
+            "type": {"enum": ["voice", "photo", "document", "audio"]},
+            "file_id": {"type": "string"},
+            "file_unique_id": {"type": "string"},
+            "file_name": {"type": "string"},
+            "mime_type": {"type": "string"},
+            "file_size": {"type": "integer"},
+            "duration": {"type": "integer"},
+            "width": {"type": "integer"},
+            "height": {"type": "integer"},
+        },
+        "additionalProperties": False,
+    }
     return {
         "type": "object",
         "required": [
@@ -425,6 +509,11 @@ def telegram_message_received_schema() -> Mapping[str, Any]:
             "from_username": {"type": ["string", "null"]},
             "text": {"type": "string"},
             "date": {"type": "integer"},
+            "attachments": {
+                "type": "array",
+                "minItems": 1,
+                "items": attachment_schema,
+            },
         },
         "additionalProperties": False,
     }

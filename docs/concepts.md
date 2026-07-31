@@ -514,6 +514,10 @@ Use `telegram.message.reaction` when a reaction can confirm an action. The
 event carries the reacted `message_id`, the user ID, and both reaction sets.
 Match the message ID to the confirmation message before the agent acts.
 
+Telegram also accepts voice, photo, document, and audio messages. Each received
+message event can contain an `attachments` list with Telegram file metadata.
+Zeta preserves the file ID and caption. It does not download or inspect media.
+
 The bundled filesystem connector (`id: filesystem`) polls a directory and emits
 `file.created` events with a `{path, name, dir}` payload.
 

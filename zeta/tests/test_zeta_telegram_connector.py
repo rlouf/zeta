@@ -71,6 +71,25 @@ def _reaction_update(
     }
 
 
+def _media_update(
+    media_type: str,
+    media: Any,
+    *,
+    update_id: int = 3,
+    caption: str | None = None,
+) -> dict[str, Any]:
+    message: dict[str, Any] = {
+        "message_id": 8,
+        "date": 1_700_000_002,
+        "chat": {"id": 999, "type": "private"},
+        "from": {"id": 4242, "username": "remi"},
+        media_type: media,
+    }
+    if caption is not None:
+        message["caption"] = caption
+    return {"update_id": update_id, "message": message}
+
+
 def _request(
     body: dict[str, Any] | bytes,
     *,
@@ -117,6 +136,117 @@ def test_zeta_telegram_ingress_draft_matches_its_schema() -> None:
     Draft202012Validator(dict(telegram_message_received_schema())).validate(
         dict(drafts[0].payload)
     )
+
+
+@pytest.mark.parametrize(
+    ("media_type", "media", "expected_attachment"),
+    [
+        (
+            "voice",
+            {
+                "file_id": "voice-file",
+                "file_unique_id": "voice-unique",
+                "mime_type": "audio/ogg",
+                "duration": 5,
+                "file_size": 500,
+            },
+            {
+                "type": "voice",
+                "file_id": "voice-file",
+                "file_unique_id": "voice-unique",
+                "mime_type": "audio/ogg",
+                "duration": 5,
+                "file_size": 500,
+            },
+        ),
+        (
+            "photo",
+            [
+                {"file_id": "photo-small", "width": 32, "height": 32},
+                {
+                    "file_id": "photo-large",
+                    "file_unique_id": "photo-unique",
+                    "width": 640,
+                    "height": 480,
+                    "file_size": 8_000,
+                },
+            ],
+            {
+                "type": "photo",
+                "file_id": "photo-large",
+                "file_unique_id": "photo-unique",
+                "width": 640,
+                "height": 480,
+                "file_size": 8_000,
+            },
+        ),
+        (
+            "document",
+            {
+                "file_id": "document-file",
+                "file_unique_id": "document-unique",
+                "file_name": "notes.pdf",
+                "mime_type": "application/pdf",
+                "file_size": 12_000,
+            },
+            {
+                "type": "document",
+                "file_id": "document-file",
+                "file_unique_id": "document-unique",
+                "file_name": "notes.pdf",
+                "mime_type": "application/pdf",
+                "file_size": 12_000,
+            },
+        ),
+        (
+            "audio",
+            {
+                "file_id": "audio-file",
+                "file_unique_id": "audio-unique",
+                "file_name": "song.mp3",
+                "mime_type": "audio/mpeg",
+                "duration": 180,
+                "file_size": 1_000_000,
+            },
+            {
+                "type": "audio",
+                "file_id": "audio-file",
+                "file_unique_id": "audio-unique",
+                "file_name": "song.mp3",
+                "mime_type": "audio/mpeg",
+                "duration": 180,
+                "file_size": 1_000_000,
+            },
+        ),
+    ],
+)
+def test_zeta_telegram_ingress_accepts_supported_media(
+    media_type: str,
+    media: Any,
+    expected_attachment: dict[str, Any],
+) -> None:
+    response, drafts = _ingress(
+        _request(_media_update(media_type, media, caption="Look"))
+    )
+
+    assert response.status_code == 200
+    assert len(drafts) == 1
+    draft = drafts[0]
+    assert draft.event_type == TELEGRAM_MESSAGE_RECEIVED
+    assert draft.payload["text"] == "Look"
+    assert draft.payload["attachments"] == [expected_attachment]
+    Draft202012Validator(dict(telegram_message_received_schema())).validate(
+        dict(draft.payload)
+    )
+
+
+def test_zeta_telegram_ingress_accepts_media_without_a_caption() -> None:
+    _, drafts = _ingress(_request(_media_update("voice", {"file_id": "voice-file"})))
+
+    assert drafts[0].payload["text"] == ""
+    assert drafts[0].payload["attachments"] == [
+        {"type": "voice", "file_id": "voice-file"}
+    ]
 
 
 def test_zeta_telegram_ingress_accepts_a_verified_reaction() -> None:

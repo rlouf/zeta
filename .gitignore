@@ -1,5 +1,7 @@
 __pycache__/
 *.py[cod]
+*.egg-info/
+.coverage
 .venv/
 .pytest_cache/
 .ruff_cache/
@@ -11,7 +13,6 @@ dist/
 commas/src/commas/_version.py
 commas/src/commas.egg-info/
 zeta/src/zeta/_version.py
-zeta/src/zeta.egg-info/
 node_modules/
 package-lock.json
 .claude/

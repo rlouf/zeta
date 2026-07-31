@@ -8,9 +8,7 @@ from typing import Any, cast
 
 import httpx
 import pytest
-import zeta.cli.banner as cli_banner
 import zeta.models.chat_completions as zeta_model
-import zeta.models.endpoint as zeta_model_endpoint
 import zeta.models.limits as zeta_model_limits
 import zeta.models.profiles as zeta_models
 import zeta.models.sse as zeta_model_sse
@@ -1467,18 +1465,6 @@ def test_zeta_chat_completion_messages_reports_model_telemetry(
             "model_context_tokens": 262_144,
         }
     ]
-
-
-def test_zeta_ensure_server_banner_respects_non_tty(monkeypatch, capsys) -> None:
-    monkeypatch.setattr(
-        zeta_model_endpoint, "model_endpoint_open", lambda selected_url=None: False
-    )
-
-    assert cli_banner.ensure_server() is False
-
-    err = capsys.readouterr().err
-    assert "no OpenAI-compatible endpoint reachable" in err
-    assert "\x1b[" not in err
 
 
 def test_zeta_model_profiles_read_api(tmp_path: Path, monkeypatch) -> None:

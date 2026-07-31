@@ -60,11 +60,12 @@ the intermediate text. [Voice agents](https://developers.openai.com/api/docs/gui
 
 Zeta does not store a mutable `Conversation` object. A conversation is the
 model-visible projection of append-only events in one `RuntimeContext.session_id`.
-`zeta.run.runtime.current_timeline()` reads the session's `zeta.*` events and
+`zeta.loop.runtime.current_timeline()` reads the session's `zeta.*` events and
 keeps only `user_message`, `model`, `model_usage`, `tool_call`, `tool_result`,
-and `turn_aborted` ([runtime.py](../zeta/src/zeta/run/runtime.py)). The durable
+and `turn_aborted` ([runtime.py](../zeta/src/zeta/loop/runtime.py)). The durable
 event journal is SQLite; prompt/object provenance is a separate SQLite-backed
-object store created by `session_for_id()` ([context.py](../zeta/src/zeta/run/context.py)).
+object store created by `session_for_id()`
+([runtime_context.py](../zeta/src/zeta/loop/runtime_context.py)).
 
 This is a strong voice seam: a voice transcript can be a normal durable user
 message in an existing session. It does **not** require a separate voice
@@ -504,15 +505,15 @@ use whichever model Zeta is already configured to use.
 
 | Component | Responsibility | Existing integration point |
 | --- | --- | --- |
-| `zetad.voice` gateway (new) | Session selection, token mint endpoint, browser control WebSocket, run registry, TTS proxy, event persistence. | `RuntimeContext` / `session_for_id()` and `run_session_request()`; do not fork a new agent loop. |
+| `zeta.voice` gateway (new) | Session selection, token mint endpoint, browser control WebSocket, run registry, TTS proxy, event persistence. | `RuntimeContext` / `session_for_id()` and `run_session_request()`; do not fork a new agent loop. |
 | Local web harness (new) | WebRTC microphone track, ASR event handling, partial transcript UI, PCM playback, immediate stop, control WebSocket. | Uses gateway protocol only. |
-| Progress subscription (new/refactor) | Delivers `runtime.stream.chunk`, tool-start/result, final/aborted notifications per `run_id`; remains transient. | `ModelTurnStreamSink` in `zeta.run.streaming`, `run_agent()` and `zetad.rpc.routes.route_run()`. |
-| Abortable model transport (new/refactor) | Makes `session.cancel` close the active provider stream and establishes a cancellation barrier before new tools/calls. | `ModelGateway.generate`, `chat_completions.py`, `responses.py`, and `zeta.run.runtime`. |
-| Voice event projection (new) | Makes final transcript and conservatively audible partial assistant text visible to a following prompt. | `zeta.records.events`, `MODEL_TIMELINE_TYPES`, and `zeta.context.components`. |
+| Progress subscription (new/refactor) | Delivers `runtime.stream.chunk`, tool-start/result, final/aborted notifications per `run_id`; remains transient. | `ModelTurnStreamSink` in `zeta.loop.streaming`, `run_agent()` and `zeta.rpc.routes.route_run()`. |
+| Abortable model transport (new/refactor) | Makes `session.cancel` close the active provider stream and establishes a cancellation barrier before new tools/calls. | `ModelGateway.generate`, `chat_completions.py`, `responses.py`, and `zeta.loop.runtime`. |
+| Voice event projection (new) | Makes final transcript and conservatively audible partial assistant text visible to a following prompt. | `zeta.journal.drafts`, `MODEL_TIMELINE_TYPES`, and `zeta.context.components`. |
 
 The current RPC `RunState` is held per `RpcClient`; a browser gateway must not
 depend on a short-lived stdio peer to cancel a run. Extract a server-owned
-`RunRegistry` from [routes.py](../zeta/src/zetad/rpc/routes.py), then share it
+`RunRegistry` from [routes.py](../zeta/src/zeta/rpc/routes.py), then share it
 between RPC and the voice gateway.
 
 ### Minimal control protocol

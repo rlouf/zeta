@@ -1,6 +1,0 @@
-click>=8.1
-croniter
-httpx
-jinja2>=3.1
-jsonschema>=4.0
-PyYAML

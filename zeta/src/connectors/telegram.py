@@ -30,6 +30,7 @@ from connectors import (
 )
 
 TELEGRAM_MESSAGE_RECEIVED = "telegram.message.received"
+TELEGRAM_MESSAGE_REACTION = "telegram.message.reaction"
 TELEGRAM_MESSAGE_SEND = "telegram.message.send"
 TELEGRAM_SEND_SEMANTICS: DeliverySemantics = "at_least_once"
 TELEGRAM_EGRESS_SEMANTICS: Mapping[str, DeliverySemantics] = {
@@ -97,6 +98,7 @@ def telegram_event_connector(
         id="telegram",
         events={
             TELEGRAM_MESSAGE_RECEIVED: telegram_message_received_schema(),
+            TELEGRAM_MESSAGE_REACTION: telegram_message_reaction_schema(),
             TELEGRAM_MESSAGE_SEND: telegram_message_send_schema(),
         },
         push_ingress=lambda request: handle_telegram_push_ingress(
@@ -169,11 +171,35 @@ def telegram_draft_from_update(
     *,
     allowed_senders: frozenset[int],
 ) -> DraftEvent | None:
-    """Return a draft for a text message from an allowed sender, else None."""
+    """Return a draft for an allowed text message or reaction, else None."""
     update_id = update.get("update_id")
     message = update.get("message")
-    if not isinstance(update_id, int) or not isinstance(message, dict):
+    if not isinstance(update_id, int):
         return None
+    if isinstance(message, Mapping):
+        return telegram_message_draft(
+            update_id,
+            message,
+            allowed_senders=allowed_senders,
+        )
+
+    message_reaction = update.get("message_reaction")
+    if isinstance(message_reaction, Mapping):
+        return telegram_message_reaction_draft(
+            update_id,
+            message_reaction,
+            allowed_senders=allowed_senders,
+        )
+    return None
+
+
+def telegram_message_draft(
+    update_id: int,
+    message: Mapping[str, Any],
+    *,
+    allowed_senders: frozenset[int],
+) -> DraftEvent | None:
+    """Return a draft for an allowed text message, else None."""
 
     text = message.get("text")
     chat = message.get("chat")
@@ -211,6 +237,85 @@ def telegram_draft_from_update(
         payload,
         idempotency_key=f"telegram:{update_id}",
     )
+
+
+def telegram_message_reaction_draft(
+    update_id: int,
+    message_reaction: Mapping[str, Any],
+    *,
+    allowed_senders: frozenset[int],
+) -> DraftEvent | None:
+    """Return a draft for a known user's reaction, else None.
+
+    Telegram omits ``user`` for anonymous reactions. Those updates do not prove
+    a particular user confirmed an action, so the connector ignores them.
+    """
+    chat = message_reaction.get("chat")
+    sender = message_reaction.get("user")
+    message_id = message_reaction.get("message_id")
+    date = message_reaction.get("date")
+    if not isinstance(chat, Mapping) or not isinstance(sender, Mapping):
+        return None
+    if not isinstance(message_id, int) or not isinstance(date, int):
+        return None
+
+    chat_id = chat.get("id")
+    from_id = sender.get("id")
+    if not isinstance(chat_id, int) or not isinstance(from_id, int):
+        return None
+    if from_id not in allowed_senders:
+        return None
+
+    old_reaction = telegram_reaction_types(message_reaction.get("old_reaction"))
+    new_reaction = telegram_reaction_types(message_reaction.get("new_reaction"))
+    if old_reaction is None or new_reaction is None:
+        return None
+
+    username = sender.get("username")
+    payload: dict[str, Any] = {
+        "update_id": update_id,
+        "message_id": message_id,
+        "chat_id": chat_id,
+        "chat_type": str(chat.get("type") or "private"),
+        "from_id": from_id,
+        "from_username": username if isinstance(username, str) else None,
+        "old_reaction": old_reaction,
+        "new_reaction": new_reaction,
+        "date": date,
+    }
+    return DraftEvent(
+        TELEGRAM_MESSAGE_REACTION,
+        "telegram",
+        payload,
+        idempotency_key=f"telegram:{update_id}",
+    )
+
+
+def telegram_reaction_types(value: Any) -> list[dict[str, str]] | None:
+    """Return valid Telegram reaction types, else ``None``."""
+    if not isinstance(value, list):
+        return None
+
+    reactions: list[dict[str, str]] = []
+    for item in value:
+        if not isinstance(item, Mapping):
+            return None
+        kind = item.get("type")
+        if kind == "emoji":
+            emoji = item.get("emoji")
+            if not isinstance(emoji, str):
+                return None
+            reactions.append({"type": kind, "emoji": emoji})
+        elif kind == "custom_emoji":
+            custom_emoji_id = item.get("custom_emoji_id")
+            if not isinstance(custom_emoji_id, str):
+                return None
+            reactions.append({"type": kind, "custom_emoji_id": custom_emoji_id})
+        elif kind == "paid":
+            reactions.append({"type": kind})
+        else:
+            return None
+    return reactions
 
 
 async def send_telegram_message(
@@ -319,6 +424,44 @@ def telegram_message_received_schema() -> Mapping[str, Any]:
             "from_id": {"type": "integer"},
             "from_username": {"type": ["string", "null"]},
             "text": {"type": "string"},
+            "date": {"type": "integer"},
+        },
+        "additionalProperties": False,
+    }
+
+
+def telegram_message_reaction_schema() -> Mapping[str, Any]:
+    reaction_type_schema: Mapping[str, Any] = {
+        "type": "object",
+        "required": ["type"],
+        "properties": {
+            "type": {"enum": ["emoji", "custom_emoji", "paid"]},
+            "emoji": {"type": "string"},
+            "custom_emoji_id": {"type": "string"},
+        },
+        "additionalProperties": False,
+    }
+    return {
+        "type": "object",
+        "required": [
+            "update_id",
+            "message_id",
+            "chat_id",
+            "chat_type",
+            "from_id",
+            "old_reaction",
+            "new_reaction",
+            "date",
+        ],
+        "properties": {
+            "update_id": {"type": "integer"},
+            "message_id": {"type": "integer"},
+            "chat_id": {"type": "integer"},
+            "chat_type": {"type": "string"},
+            "from_id": {"type": "integer"},
+            "from_username": {"type": ["string", "null"]},
+            "old_reaction": {"type": "array", "items": reaction_type_schema},
+            "new_reaction": {"type": "array", "items": reaction_type_schema},
             "date": {"type": "integer"},
         },
         "additionalProperties": False,

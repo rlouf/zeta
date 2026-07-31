@@ -499,6 +499,21 @@ The bundled Slack connector uses:
 - `SLACK_BOT_TOKEN` for `chat.postMessage`
 - `SLACK_SIGNING_SECRET` for push ingress request verification
 
+The bundled Telegram connector uses:
+
+- `TELEGRAM_BOT_TOKEN` for `sendMessage`
+- `TELEGRAM_WEBHOOK_SECRET` for webhook request verification
+- `TELEGRAM_ALLOWED_SENDERS` for a comma-separated user allowlist
+
+Set the Telegram webhook to Zeta's `/connectors/telegram` endpoint. Include
+`message` and `message_reaction` in the webhook `allowed_updates` list.
+Telegram sends named user reactions only when the bot is a chat administrator.
+Anonymous reactions have no user identity, so Zeta ignores them.
+
+Use `telegram.message.reaction` when a reaction can confirm an action. The
+event carries the reacted `message_id`, the user ID, and both reaction sets.
+Match the message ID to the confirmation message before the agent acts.
+
 The bundled filesystem connector (`id: filesystem`) polls a directory and emits
 `file.created` events with a `{path, name, dir}` payload.
 

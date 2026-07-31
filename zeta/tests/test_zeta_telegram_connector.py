@@ -10,12 +10,14 @@ import pytest
 from connectors import EgressBinding, InboundRequest
 from connectors.telegram import (
     MAX_MESSAGE_CHARS,
+    TELEGRAM_MESSAGE_REACTION,
     TELEGRAM_MESSAGE_RECEIVED,
     allowed_senders_from_env,
     handle_telegram_push_ingress,
     send_telegram_message,
     split_message,
     telegram_event_connector,
+    telegram_message_reaction_schema,
     telegram_message_received_schema,
 )
 from jsonschema import Draft202012Validator
@@ -41,6 +43,32 @@ def _update(
     if text is not None:
         message["text"] = text
     return {"update_id": update_id, "message": message}
+
+
+def _reaction_update(
+    update_id: int = 2,
+    *,
+    from_id: int = 4242,
+    message_id: int = 101,
+    chat_id: int = 999,
+    old_reaction: list[dict[str, str]] | None = None,
+    new_reaction: list[dict[str, str]] | None = None,
+) -> dict[str, Any]:
+    return {
+        "update_id": update_id,
+        "message_reaction": {
+            "chat": {"id": chat_id, "type": "supergroup"},
+            "message_id": message_id,
+            "user": {"id": from_id, "username": "remi"},
+            "date": 1_700_000_001,
+            "old_reaction": [] if old_reaction is None else old_reaction,
+            "new_reaction": (
+                [{"type": "emoji", "emoji": "✅"}]
+                if new_reaction is None
+                else new_reaction
+            ),
+        },
+    }
 
 
 def _request(
@@ -91,6 +119,56 @@ def test_zeta_telegram_ingress_draft_matches_its_schema() -> None:
     )
 
 
+def test_zeta_telegram_ingress_accepts_a_verified_reaction() -> None:
+    response, drafts = _ingress(_request(_reaction_update(update_id=12)))
+
+    assert response.status_code == 200
+    assert len(drafts) == 1
+    draft = drafts[0]
+    assert draft.event_type == TELEGRAM_MESSAGE_REACTION
+    assert draft.idempotency_key == "telegram:12"
+    assert draft.payload == {
+        "update_id": 12,
+        "message_id": 101,
+        "chat_id": 999,
+        "chat_type": "supergroup",
+        "from_id": 4242,
+        "from_username": "remi",
+        "old_reaction": [],
+        "new_reaction": [{"type": "emoji", "emoji": "✅"}],
+        "date": 1_700_000_001,
+    }
+
+
+def test_zeta_telegram_reaction_draft_matches_its_schema() -> None:
+    _, drafts = _ingress(
+        _request(
+            _reaction_update(
+                old_reaction=[{"type": "emoji", "emoji": "👍"}],
+                new_reaction=[{"type": "custom_emoji", "custom_emoji_id": "emoji-1"}],
+            )
+        )
+    )
+
+    Draft202012Validator(dict(telegram_message_reaction_schema())).validate(
+        dict(drafts[0].payload)
+    )
+
+
+def test_zeta_telegram_ingress_accepts_a_reaction_removal() -> None:
+    _, drafts = _ingress(
+        _request(
+            _reaction_update(
+                old_reaction=[{"type": "emoji", "emoji": "✅"}],
+                new_reaction=[],
+            )
+        )
+    )
+
+    assert drafts[0].payload["old_reaction"] == [{"type": "emoji", "emoji": "✅"}]
+    assert drafts[0].payload["new_reaction"] == []
+
+
 def test_zeta_telegram_ingress_rejects_a_wrong_secret_token() -> None:
     response, drafts = _ingress(_request(_update(), secret="wrong"))
 
@@ -109,6 +187,26 @@ def test_zeta_telegram_ingress_drops_a_sender_that_is_not_allowed() -> None:
     response, drafts = _ingress(_request(_update(from_id=1)))
 
     assert response.status_code == 200  # a rejected sender is not a retryable failure
+    assert drafts == ()
+
+
+def test_zeta_telegram_ingress_drops_a_reaction_from_a_sender_that_is_not_allowed() -> (
+    None
+):
+    response, drafts = _ingress(_request(_reaction_update(from_id=1)))
+
+    assert response.status_code == 200
+    assert drafts == ()
+
+
+def test_zeta_telegram_ingress_drops_an_anonymous_reaction() -> None:
+    update = _reaction_update()
+    del update["message_reaction"]["user"]
+    update["message_reaction"]["actor_chat"] = {"id": -100, "type": "supergroup"}
+
+    response, drafts = _ingress(_request(update))
+
+    assert response.status_code == 200
     assert drafts == ()
 
 
@@ -287,6 +385,7 @@ def test_zeta_telegram_connector_declares_at_least_once_delivery() -> None:
         allowed_senders=ALLOWED,
     )
 
+    assert TELEGRAM_MESSAGE_REACTION in connector.events
     assert connector.egress["telegram.message.send"] is not None
     assert connector.egress_semantics["telegram.message.send"] == "at_least_once"
     assert connector.push_ingress is not None

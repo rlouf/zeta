@@ -46,6 +46,9 @@ APPLY_PATCH_SCHEMA: dict[str, Any] = {
 }
 
 NATIVE_TOOL_PROFILE = ToolProfile("native", {})
+
+# Models call tools more reliably when the tool interface matches their training.
+# Keep this mapping here so capability IDs and executors stay stable.
 CODEX_TOOL_PROFILE = ToolProfile(
     "codex",
     {

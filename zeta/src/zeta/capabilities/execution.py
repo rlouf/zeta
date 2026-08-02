@@ -231,6 +231,8 @@ def validate_tool_call(
                 f"tool is not allowed for this run: {invocation.name}",
             )
         )
+    # Validate both contracts. A bad presentation must not send unchecked
+    # arguments to the canonical executor.
     schema_error = tool_args_schema_error(invocation.params, route.input_schema)
     if schema_error is not None:
         return ToolCallValidation(
@@ -330,6 +332,7 @@ async def run_valid_tool_call(
     invocation_ctx = ctx
     if semantics is not None:
         scope = ctx.effect_scope or invocation.call_id
+        # Canonical arguments give one effect identity for all tool profiles.
         operation_key = effect_key(scope, capability_id, canonical_params)
         invocation_ctx = replace(ctx, effect_key=operation_key)
         emit_capability_effect_event(

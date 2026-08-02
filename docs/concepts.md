@@ -195,6 +195,9 @@ stored under `.zeta/sessions/default`. For agents, the usual choices
 are to set a `default = true` profile in `models.toml` or to set a per-agent
 `model:` override in the agent frontmatter.
 
+See [Model-Specific Tool Profiles](tool-profiles.md) for the design, the
+execution flow, and the `zeta.edit` and `zeta.patch` contracts.
+
 Inspect the configured profiles and the active selection:
 
 ```sh

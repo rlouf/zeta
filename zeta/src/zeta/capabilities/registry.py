@@ -8,11 +8,18 @@ from collections.abc import Coroutine
 from dataclasses import dataclass, field
 from typing import Any, cast
 
+from zeta.capabilities.profiles import (
+    ArgumentAdapter,
+    ToolProfile,
+    identity_arguments,
+    resolve_tool_profile,
+)
 from zeta.capabilities.types import Capability
 
 __all__ = [
     "CapabilityDirectory",
     "CapabilityError",
+    "CapabilityToolRoute",
     "CapabilityToolSchema",
     "CapabilityRegistry",
     "RegisteredCapability",
@@ -81,9 +88,20 @@ def error_result(
 
 
 @dataclass(frozen=True)
+class CapabilityToolRoute:
+    capability_id: str
+    input_schema: dict[str, Any]
+    adapt_arguments: ArgumentAdapter
+
+
+@dataclass(frozen=True)
 class CapabilityToolSchema:
-    name_to_id: dict[str, str]
+    routes: dict[str, CapabilityToolRoute]
     descriptors: list[dict[str, Any]]
+
+    @property
+    def name_to_id(self) -> dict[str, str]:
+        return {name: route.capability_id for name, route in self.routes.items()}
 
 
 @dataclass(frozen=True)
@@ -137,11 +155,13 @@ class CapabilityDirectory:
         self,
         enabled_ids: tuple[str, ...],
         *,
+        tool_profile: str | ToolProfile | None = None,
         name_overrides: dict[str, str] | None = None,
     ) -> CapabilityToolSchema:
         """Build the per-run model-visible tool schema for capabilities."""
+        profile = resolve_tool_profile(tool_profile)
         name_overrides = name_overrides or {}
-        name_to_id: dict[str, str] = {}
+        routes: dict[str, CapabilityToolRoute] = {}
         descriptors = []
         for requested_id in enabled_ids:
             capability_id = self.resolve(requested_id)
@@ -150,16 +170,39 @@ class CapabilityDirectory:
             capability = self.get(capability_id)
             if capability is None:
                 continue
-            name = name_overrides.get(capability_id, self.model_name(capability_id))
-            existing = name_to_id.get(name)
-            if existing is not None and existing != capability_id:
+            presentation = profile.overrides.get(capability_id)
+            native_name = self.model_name(capability_id)
+            name = name_overrides.get(
+                capability_id,
+                presentation.name if presentation is not None else native_name,
+            )
+            existing = routes.get(name)
+            if existing is not None and existing.capability_id != capability_id:
                 raise ValueError(
                     f"ambiguous capability name {name!r}: "
-                    f"{existing!r} and {capability_id!r}"
+                    f"{existing.capability_id!r} and {capability_id!r}"
                 )
-            name_to_id[name] = capability_id
-            descriptors.append(model_descriptor(name, capability))
-        return CapabilityToolSchema(name_to_id=name_to_id, descriptors=descriptors)
+            description = (
+                presentation.description
+                if presentation is not None
+                else capability.declaration.description
+            )
+            input_schema = (
+                presentation.input_schema
+                if presentation is not None
+                else capability.declaration.input_schema
+            )
+            routes[name] = CapabilityToolRoute(
+                capability_id=capability_id,
+                input_schema=input_schema,
+                adapt_arguments=(
+                    presentation.adapt_arguments
+                    if presentation is not None
+                    else identity_arguments
+                ),
+            )
+            descriptors.append(model_descriptor(name, description, input_schema))
+        return CapabilityToolSchema(routes=routes, descriptors=descriptors)
 
 
 class CapabilityRegistry(CapabilityDirectory):
@@ -302,12 +345,16 @@ def invalid_capability_result_error(capability_id: str) -> dict[str, Any]:
     ).to_mapping()
 
 
-def model_descriptor(alias: str, capability: RegisteredCapability) -> dict[str, Any]:
+def model_descriptor(
+    name: str,
+    description: str,
+    input_schema: dict[str, Any],
+) -> dict[str, Any]:
     return {
         "type": "function",
         "function": {
-            "name": alias,
-            "description": capability.declaration.description,
-            "parameters": capability.declaration.input_schema,
+            "name": name,
+            "description": description,
+            "parameters": input_schema,
         },
     }

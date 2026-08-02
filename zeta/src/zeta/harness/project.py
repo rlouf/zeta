@@ -422,6 +422,7 @@ def model_manifest(selection: ModelSelection | None) -> dict[str, Any] | None:
         "url": selection.url,
         "thinking": selection.thinking,
         "api": selection.api,
+        "tool_profile": selection.tool_profile,
     }
 
 

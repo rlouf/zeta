@@ -19,6 +19,9 @@ DEFAULT_MODEL_NAME = "local-model"
 DEFAULT_CODEX_BASE_URL = "https://chatgpt.com/backend-api"
 DEFAULT_CODEX_MODEL_NAME = "gpt-5.6-sol"
 DEFAULT_CODEX_PROFILE_NAME = "codex"
+DEFAULT_TOOL_PROFILE_NAME = "native"
+DEFAULT_CODEX_TOOL_PROFILE_NAME = "codex"
+TOOL_PROFILE_NAMES = (DEFAULT_CODEX_TOOL_PROFILE_NAME, DEFAULT_TOOL_PROFILE_NAME)
 
 ModelSource = Literal["session", "config", "builtin"]
 
@@ -68,6 +71,7 @@ class ModelProfile:
     thinking: str | None = None
     api: str | None = None
     default: bool = False
+    tool_profile: str = DEFAULT_TOOL_PROFILE_NAME
 
 
 @dataclass(frozen=True)
@@ -90,6 +94,7 @@ class ModelSelection:
     url: str
     thinking: str | None = None
     api: str = CHAT_COMPLETIONS_API
+    tool_profile: str = DEFAULT_TOOL_PROFILE_NAME
 
 
 @dataclass(frozen=True)
@@ -178,6 +183,7 @@ def resolve_model_profile(
         url=url,
         thinking=profile.thinking,
         api=api,
+        tool_profile=profile.tool_profile,
     )
 
 
@@ -269,6 +275,7 @@ def default_model_selection() -> ModelSelection:
         model=DEFAULT_CODEX_MODEL_NAME,
         url=DEFAULT_CODEX_BASE_URL,
         api=CODEX_RESPONSES_API,
+        tool_profile=DEFAULT_CODEX_TOOL_PROFILE_NAME,
     )
 
 
@@ -333,6 +340,7 @@ def _profile_validation_diagnostic(
         or _validate_profile_model(path, label, value)
         or _validate_profile_thinking(path, label, value)
         or _validate_profile_api(path, label, value)
+        or _validate_tool_profile(path, label, value)
     )
 
 
@@ -389,6 +397,20 @@ def _validate_profile_api(
     return None
 
 
+def _validate_tool_profile(
+    path: Path,
+    label: str,
+    value: dict[str, Any],
+) -> ModelDiagnostic | None:
+    tool_profile = value.get("tool_profile")
+    if tool_profile is not None and tool_profile not in TOOL_PROFILE_NAMES:
+        return ModelDiagnostic(
+            path,
+            f"{label}.tool_profile must be one of {', '.join(TOOL_PROFILE_NAMES)}",
+        )
+    return None
+
+
 def _profile_from_config(value: dict[str, Any]) -> ModelProfile:
     url = value.get("url")
     default = value.get("default")
@@ -399,4 +421,5 @@ def _profile_from_config(value: dict[str, Any]) -> ModelProfile:
         thinking=cast(str | None, value.get("thinking")),
         api=cast(str | None, value.get("api")),
         default=cast(bool, default) if default is not None else False,
+        tool_profile=cast(str, value.get("tool_profile") or DEFAULT_TOOL_PROFILE_NAME),
     )

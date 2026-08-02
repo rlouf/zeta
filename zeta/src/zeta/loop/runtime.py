@@ -159,7 +159,10 @@ async def run_agent_loop(
         model_gateway=gateway,
         abort_reason=run_abort_reason(cancellation_event, deadline, clock=clock),
     )
-    tool_schema = active_tool_registry.model_tool_schema(allowed_capabilities)
+    tool_schema = active_tool_registry.model_tool_schema(
+        allowed_capabilities,
+        tool_profile=config.tool_profile,
+    )
     tools = tool_schema.descriptors
     return await AgentRun(
         objective=objective,

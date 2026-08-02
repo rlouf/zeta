@@ -177,11 +177,18 @@ You can also make the Codex Responses backend an explicit profile:
 name = "codex"
 model = "gpt-5.6-sol"
 api = "codex-responses"
+tool_profile = "codex"
 thinking = "high"
 ```
 
 That sends prompts and any tool-read file contents to OpenAI's backend. Run
 `codex login` first so `~/.codex/auth.json` exists.
+
+`tool_profile` selects the tool names, descriptions, and input schemas that the
+model sees. If you omit it, Zeta uses `native`. The built-in Codex model uses
+`codex`. Zeta does not infer the tool profile from the model name. The Codex
+profile presents `zeta.bash` as `exec_command` and `zeta.patch` as
+`apply_patch`. Other capabilities keep their native presentation.
 
 The `zeta run` worker resolves its model from the project runtime session
 stored under `.zeta/sessions/default`. For agents, the usual choices
@@ -431,6 +438,7 @@ canonical capability id when it is unambiguous:
 | `web_search` | `zeta.web_search` | Web search. |
 | `bash` | `zeta.bash` | Run shell commands. |
 | `edit` | `zeta.edit` | Edit files. |
+| `patch` | `zeta.patch` | Apply patches to files. |
 | `write` | `zeta.write` | Write files. |
 
 Capability execution goes through the registry. Zeta executes an allowed tool

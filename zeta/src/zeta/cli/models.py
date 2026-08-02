@@ -93,6 +93,7 @@ def model_row(selection: ModelSelection, active: ModelSelection) -> dict[str, ob
         "endpoint": endpoint_label(selection.url),
         "thinking": selection.thinking,
         "api": selection.api,
+        "tool_profile": selection.tool_profile,
         "active": selection.profile == active.profile,
     }
 

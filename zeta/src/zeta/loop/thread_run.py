@@ -166,6 +166,7 @@ def session_agent_request_for_context(
             model_url=selection.url,
             thinking=selection.thinking,
             model_api=selection.api,
+            tool_profile=selection.tool_profile,
             max_wall_seconds=config.max_wall_seconds,
         ),
     )

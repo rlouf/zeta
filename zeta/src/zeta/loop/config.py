@@ -38,6 +38,7 @@ class AgentConfig:
     model_session_id: str | None = None
     thinking: str | None = None
     model_api: str | None = None
+    tool_profile: str = "native"
     max_wall_seconds: float | None = None
     compaction_policy: CompactionPolicy | None = None
     model_status_factory: Callable[[], ModelStatus] | None = None

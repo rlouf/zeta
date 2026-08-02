@@ -5,7 +5,7 @@ from __future__ import annotations
 import inspect
 import json
 from collections.abc import Callable
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, cast
 
@@ -136,6 +136,7 @@ class CapabilityCallInvocation:
 @dataclass(frozen=True)
 class ToolCallValidation:
     capability_id: str = ""
+    canonical_params: dict[str, Any] = field(default_factory=dict)
     error: tuple[str, str] | None = None
 
 
@@ -180,6 +181,7 @@ async def handle_tool_call(
     return await run_valid_tool_call(
         invocation,
         capability_id=validation.capability_id,
+        canonical_params=validation.canonical_params,
         model_telemetry=model_telemetry,
         ctx=ctx,
     )
@@ -209,8 +211,8 @@ def validate_tool_call(
 ) -> ToolCallValidation:
     if invocation.parse_error:
         return ToolCallValidation(error=("invalid-json-args", invocation.parse_error))
-    capability_id = tool_schema.name_to_id.get(invocation.name)
-    if capability_id is None:
+    route = tool_schema.routes.get(invocation.name)
+    if route is None:
         if tool_registry.resolve(invocation.name) is not None:
             return ToolCallValidation(
                 error=(
@@ -221,6 +223,7 @@ def validate_tool_call(
         return ToolCallValidation(
             error=("unknown-tool", f"unknown tool: {invocation.name}")
         )
+    capability_id = route.capability_id
     if capability_id not in allowed_capabilities:
         return ToolCallValidation(
             error=(
@@ -228,14 +231,37 @@ def validate_tool_call(
                 f"tool is not allowed for this run: {invocation.name}",
             )
         )
+    schema_error = tool_args_schema_error(invocation.params, route.input_schema)
+    if schema_error is not None:
+        return ToolCallValidation(
+            error=("invalid-tool-args", f"model arguments: {schema_error}")
+        )
+    try:
+        canonical_params = route.adapt_arguments(dict(invocation.params))
+    except Exception as exc:
+        return ToolCallValidation(
+            error=(
+                "invalid-tool-args",
+                f"could not adapt model arguments: {type(exc).__name__}: {exc}",
+            )
+        )
+    if not isinstance(canonical_params, dict):
+        return ToolCallValidation(
+            error=("invalid-tool-args", "adapted arguments must be an object")
+        )
     capability = tool_registry.get(capability_id)
     if capability is not None:
         schema_error = tool_args_schema_error(
-            invocation.params, capability.declaration.input_schema
+            canonical_params, capability.declaration.input_schema
         )
         if schema_error is not None:
-            return ToolCallValidation(error=("invalid-tool-args", schema_error))
-    return ToolCallValidation(capability_id=capability_id)
+            return ToolCallValidation(
+                error=("invalid-tool-args", f"canonical arguments: {schema_error}")
+            )
+    return ToolCallValidation(
+        capability_id=capability_id,
+        canonical_params=canonical_params,
+    )
 
 
 def tool_args_schema_error(
@@ -287,6 +313,7 @@ async def run_valid_tool_call(
     invocation: CapabilityCallInvocation,
     *,
     capability_id: str,
+    canonical_params: dict[str, Any],
     model_telemetry: dict[str, Any] | None,
     ctx: CapabilityExecutionContext,
 ) -> CapabilityCallResult:
@@ -303,13 +330,13 @@ async def run_valid_tool_call(
     invocation_ctx = ctx
     if semantics is not None:
         scope = ctx.effect_scope or invocation.call_id
-        operation_key = effect_key(scope, capability_id, invocation.params)
+        operation_key = effect_key(scope, capability_id, canonical_params)
         invocation_ctx = replace(ctx, effect_key=operation_key)
         emit_capability_effect_event(
             events,
             "planned",
             capability_id=capability_id,
-            params=invocation.params,
+            params=canonical_params,
             effect_key=operation_key,
             semantics=semantics,
             scope=scope,
@@ -320,7 +347,7 @@ async def run_valid_tool_call(
             events,
             "started",
             capability_id=capability_id,
-            params=invocation.params,
+            params=canonical_params,
             effect_key=operation_key,
             semantics=semantics,
             scope=scope,
@@ -330,7 +357,7 @@ async def run_valid_tool_call(
     try:
         invoked = invoke_tool_executor(
             capability_id,
-            invocation.params,
+            canonical_params,
             ctx=invocation_ctx,
         )
         result = await invoked if inspect.isawaitable(invoked) else invoked
@@ -358,7 +385,7 @@ async def run_valid_tool_call(
             events,
             effect_status,
             capability_id=capability_id,
-            params=invocation.params,
+            params=canonical_params,
             effect_key=operation_key,
             semantics=semantics,
             scope=ctx.effect_scope or invocation.call_id,

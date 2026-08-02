@@ -439,6 +439,7 @@ def config_with_model_selection(
         model_url=selection.url,
         thinking=selection.thinking,
         model_api=selection.api,
+        tool_profile=selection.tool_profile,
     )
 
 

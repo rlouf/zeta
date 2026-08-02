@@ -886,6 +886,7 @@ def test_zeta_models_resolve_active_model_falls_back_to_builtin(
         model=zeta_models.DEFAULT_CODEX_MODEL_NAME,
         url=zeta_models.DEFAULT_CODEX_BASE_URL,
         api="codex-responses",
+        tool_profile="codex",
     )
     assert zeta_models.active_model_selection() == resolution.selection
 

@@ -32,6 +32,7 @@ def builtin_capabilities() -> dict[str, RegisteredCapability]:
         "zeta.bash": builtin_capability(bash.SPEC, bash.run),
         "zeta.ast_grep": builtin_capability(grep.AST_GREP_SPEC, grep.run_ast_grep),
         "zeta.edit": builtin_capability(edit.SPEC, edit.run),
+        "zeta.patch": builtin_capability(edit.PATCH_SPEC, edit.run_patch),
         "zeta.grep": builtin_capability(grep.SPEC, grep.run),
         "zeta.ls": builtin_capability(ls.SPEC, ls.run),
         "zeta.read": builtin_capability(read.SPEC, read.run),

@@ -238,6 +238,113 @@ def test_zeta_tool_profile_adapts_arguments_before_execution() -> None:
     assert effect.payload["params"] == {"command": "uv run pytest"}
 
 
+def test_zeta_query_log_uses_the_injected_runtime_reader() -> None:
+    class RejectingExecutor:
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+
+        async def call(
+            self,
+            capability_id: str,
+            params: dict[str, Any],
+            *,
+            base_dir: Path | None,
+            effect_key: str | None,
+        ) -> dict[str, Any]:
+            del params, base_dir, effect_key
+            self.calls.append(capability_id)
+            raise AssertionError("query_log must not reach the tool executor")
+
+        async def aclose(self) -> None:
+            return None
+
+    registry = CapabilityRegistry()
+    register_builtin_tools(registry)
+    executor = RejectingExecutor()
+    ctx = CapabilityExecutionContext(
+        event_sink=None,
+        trace_store=None,
+        tool_registry=registry,
+        tool_executor=executor,
+        query_log_reader=lambda params: {
+            "ok": True,
+            "content": [{"type": "text", "text": "prior run"}],
+            "metadata": {"params": params},
+        },
+    )
+
+    result = asyncio.run(
+        handle_tool_call(
+            {
+                "id": "call-query-log",
+                "type": "function",
+                "function": {"name": "query_log", "arguments": "{}"},
+            },
+            allowed_capabilities=("zeta.query_log",),
+            tool_schema=registry.model_tool_schema(("zeta.query_log",)),
+            index=0,
+            ctx=ctx,
+        )
+    )
+
+    tool_result = event_by_type(result.events, "tool_result")
+    assert tool_result["result"] == {
+        "ok": True,
+        "content": [{"type": "text", "text": "prior run"}],
+        "metadata": {"params": {}},
+    }
+    assert executor.calls == []
+
+
+def test_zeta_query_log_without_a_runtime_reader_is_unavailable() -> None:
+    class RejectingExecutor:
+        async def call(
+            self,
+            capability_id: str,
+            params: dict[str, Any],
+            *,
+            base_dir: Path | None,
+            effect_key: str | None,
+        ) -> dict[str, Any]:
+            del capability_id, params, base_dir, effect_key
+            raise AssertionError("query_log must not reach the tool executor")
+
+        async def aclose(self) -> None:
+            return None
+
+    registry = CapabilityRegistry()
+    register_builtin_tools(registry)
+    ctx = CapabilityExecutionContext(
+        event_sink=None,
+        trace_store=None,
+        tool_registry=registry,
+        tool_executor=RejectingExecutor(),
+    )
+
+    result = asyncio.run(
+        handle_tool_call(
+            {
+                "id": "call-query-log",
+                "type": "function",
+                "function": {"name": "query_log", "arguments": "{}"},
+            },
+            allowed_capabilities=("zeta.query_log",),
+            tool_schema=registry.model_tool_schema(("zeta.query_log",)),
+            index=0,
+            ctx=ctx,
+        )
+    )
+
+    tool_result = event_by_type(result.events, "tool_result")
+    assert tool_result["result"] == {
+        "ok": False,
+        "error": {
+            "code": "query-log-unavailable",
+            "message": "query_log is unavailable outside a durable runtime session",
+        },
+    }
+
+
 def test_zeta_tool_profile_validates_model_arguments_before_adaptation() -> None:
     received: list[dict[str, Any]] = []
     registry = CapabilityRegistry()

@@ -55,6 +55,8 @@ class MemoryEventStore:
 
     def list_events(self, filter: Filter) -> list[Event]:
         events = [event for event in self._events if matches_filter(event, filter)]
+        if filter.newest_first:
+            events.reverse()
         if filter.limit is not None:
             return events[: filter.limit]
         return events

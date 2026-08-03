@@ -25,6 +25,7 @@ from zeta.loop.types import AgentEventSink
 from zeta.models import DefaultModelGateway
 from zeta.substrate import Store
 from zeta.trace.provenance import project_prompt_trace_projection
+from zeta.trace.query import QueryLogReader
 
 
 @dataclass(frozen=True)
@@ -48,6 +49,7 @@ class RunDependencies:
     builder: PromptBuilder
     abort_reason: AbortReason
     model_gateway: ModelGateway = field(default_factory=DefaultModelGateway)
+    query_log_reader: QueryLogReader | None = None
 
 
 def silent_run_dependencies(ctx: RunDependencies) -> RunDependencies:

@@ -439,6 +439,7 @@ canonical capability id when it is unambiguous:
 | `grep` | `zeta.grep` | Text search. |
 | `ast_grep` | `zeta.ast_grep` | Structural code search. |
 | `web_search` | `zeta.web_search` | Web search. |
+| `query_log` | `zeta.query_log` | Query prior runs in the current session. |
 | `bash` | `zeta.bash` | Run shell commands. |
 | `edit` | `zeta.edit` | Edit files. |
 | `patch` | `zeta.patch` | Apply patches to files. |
@@ -460,6 +461,14 @@ The effect key is derived from the queue item, capability id, and canonical
 arguments, so a retry receives the same identity even when the model tool-call
 id changes. Built-in `write` and `edit` are content-idempotent; `bash` is unsafe
 to retry automatically. Read-only capabilities do not create effect records.
+
+`query_log` reads prior model runs from the durable journal. Its runtime-bound
+reader always scopes the query to the current session and excludes the active
+run. Models can list recent runs, filter by time or failed outcome, and expand
+one run by id prefix. Listing and expansion are bounded; models cannot select
+another session through tool arguments. Expansion includes the objective,
+outcome, final answer, compact tool activity, and prompt trace ids; it does not
+replay provider usage telemetry or raw tool arguments and results.
 
 Shared agent skills are Markdown files under `agents/skills/`. The filename stem
 is the skill name, and agents opt in with `skills:`.

@@ -81,6 +81,7 @@ async def run_capability_step(
         tool_executor=ctx.tool_executor,
         base_dir=config.base_dir,
         effect_scope=config.effect_scope,
+        query_log_reader=ctx.query_log_reader,
     )
     handled = handle_tool_call(
         tool_call,

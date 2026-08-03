@@ -524,6 +524,7 @@ class SqliteEventStore:
         if filter.limit is not None:
             limit = "LIMIT ?"
             params.append(filter.limit)
+        order = "DESC" if filter.newest_first else "ASC"
         with self._write_lock:
             rows = self.connection.execute(
                 f"""
@@ -531,7 +532,7 @@ class SqliteEventStore:
                        session_id, run_id, turn_id, timestamp
                 FROM events
                 {where}
-                ORDER BY seq ASC
+                ORDER BY seq {order}
                 {limit}
                 """,
                 params,

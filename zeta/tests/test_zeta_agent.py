@@ -72,7 +72,7 @@ from zeta.models.profiles import ModelSelection
 from zeta.rpc import jsonrpc as rpc_jsonrpc
 from zeta.rpc import routes as rpc_routes
 from zeta.substrate import InMemoryStore
-from zeta.tools import ensure_builtin_tools_registered
+from zeta.tools import ensure_builtin_tools_registered, register_builtin_tools
 from zeta_test_support import (
     assert_prompt_trace_replay_graph,
     assert_tool_call_derivation,
@@ -3176,6 +3176,114 @@ def test_zeta_run_agent_records_user_message_and_returns_result(
     assert published[0].run_id == "run_direct"
 
 
+def test_zeta_run_agent_exposes_query_log_and_returns_prior_session_history(
+    tmp_path: Path,
+) -> None:
+    registry = CapabilityRegistry()
+    register_builtin_tools(registry)
+    event_store = zeta_events.MemoryEventStore()
+    event_store.accept(
+        DraftEvent(
+            "zeta.user_message",
+            "zeta",
+            {"content": "repair the parser"},
+            session_id="ctx-session",
+            run_id="run-prior-1111",
+        )
+    )
+    event_store.accept(
+        DraftEvent(
+            "runtime.queue_item.completed",
+            "zeta",
+            {
+                "target_agent": "zeta.session.turn",
+                "result": {
+                    "outcome": "completed",
+                    "final_answer": "parser repaired",
+                },
+            },
+            session_id="ctx-session",
+            run_id="run-prior-1111",
+        )
+    )
+    context = zeta_runtime_context.RuntimeContext(
+        session_id="ctx-session",
+        event_sink=event_store,
+        trace_store=zeta_trace.InMemoryStore(session_id="ctx-session"),
+        tool_registry=registry,
+        state_dir=tmp_path,
+        session_dir=tmp_path / "sessions" / "ctx-session",
+    )
+    model_inputs: list[zeta_model_shapes.ModelInput] = []
+    responses = iter(
+        [
+            zeta_model_shapes.ModelOutput(
+                message={
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "id": "call-query-log",
+                            "type": "function",
+                            "function": {
+                                "name": "query_log",
+                                "arguments": "{}",
+                            },
+                        }
+                    ],
+                }
+            ),
+            zeta_model_shapes.ModelOutput(message={"content": "history recovered"}),
+        ]
+    )
+
+    class FakeGateway:
+        def available(self, request: zeta_model_shapes.ModelRequest) -> bool:
+            del request
+            return True
+
+        async def generate(
+            self,
+            model_input: zeta_model_shapes.ModelInput,
+            request: zeta_model_shapes.ModelRequest,
+            *,
+            stream: zeta_loop_gateway.ModelStream | None = None,
+            telemetry_sink: Callable[[dict[str, Any]], None] | None = None,
+            should_stop: Callable[[], str | None] | None = None,
+        ) -> zeta_model_shapes.ModelOutput:
+            del request, stream, telemetry_sink, should_stop
+            model_inputs.append(model_input)
+            return next(responses)
+
+    result = asyncio.run(
+        zeta_agent.run_agent(
+            zeta_agent.AgentRunRequest(
+                objective="inspect prior work",
+                runtime="zeta-rpc",
+                tools=("query_log",),
+                context="",
+                config=zeta_agent.AgentConfig(max_turns=2),
+            ),
+            run_id="run-current-2222",
+            caused_by="evt-request",
+            publish_event=lambda event: None,
+            runtime_context=context,
+            cancellation_event=None,
+            model_gateway=FakeGateway(),
+            tool_executor=zeta_capability_executors.local_tool_executor(registry),
+        )
+    )
+
+    first_tools = model_inputs[0].tools
+    assert first_tools is not None
+    tool_names = [tool["function"]["name"] for tool in first_tools]
+    second_prompt = json.dumps(model_inputs[1].messages)
+    assert tool_names == ["query_log"]
+    assert "run-prior-1111" in second_prompt
+    assert "repair the parser" in second_prompt
+    assert "run-current-2222" not in second_prompt
+    assert result.final_answer == "history recovered"
+
+
 def test_zeta_session_run_params_capture_defaults_and_options() -> None:
     params = zeta_requests.SessionRunParams(
         objective="answer",
@@ -3401,6 +3509,31 @@ def test_zeta_sqlite_event_store_serializes_threaded_appends(
         "evt_thread_1",
         "evt_thread_2",
     ]
+
+
+def test_zeta_sqlite_event_store_lists_newest_events_with_limit(
+    tmp_path: Path,
+) -> None:
+    event_store = zeta_events.SqliteEventStore(tmp_path / "events.sqlite3")
+    for index in range(1, 4):
+        event_store.append(
+            Event(
+                id=f"evt_{index}",
+                event_type="github.issue.opened",
+                source="github",
+                payload={"id": index},
+                idempotency_key=None,
+                caused_by=None,
+                session_id=None,
+                run_id=None,
+                turn_id=None,
+                timestamp_ms=index,
+            )
+        )
+
+    events = event_store.list_events(Filter(limit=2, newest_first=True))
+
+    assert [event.id for event in events] == ["evt_3", "evt_2"]
 
 
 def test_zeta_sqlite_event_store_rebuilds_projection_tables(

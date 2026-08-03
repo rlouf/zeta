@@ -19,6 +19,7 @@ class Filter:
     caused_by: str | None = None
     after_cursor: int | None = None
     limit: int | None = None
+    newest_first: bool = False
 
 
 @runtime_checkable

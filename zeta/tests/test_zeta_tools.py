@@ -7,6 +7,7 @@ import asyncio
 import hashlib
 import shutil
 from collections.abc import Mapping
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -27,12 +28,19 @@ from zeta.capabilities.types import (
     Capability,
     CapabilityId,
 )
+from zeta.events import Event
+from zeta.journal.memory import MemoryEventStore
 from zeta.loop.runtime import registered_capabilities
 from zeta.tools import bash as bash_tool
 from zeta.tools import ensure_builtin_tools_registered, register_builtin_tools
 from zeta.tools import grep as grep_tool
 from zeta.tools import read as read_tool
 from zeta.tools import web as web_tool
+from zeta.trace.query import (
+    MAX_QUERY_LOG_EVENTS,
+    MAX_QUERY_LOG_OUTPUT_CHARS,
+    query_run_log,
+)
 
 ensure_builtin_tools_registered()
 
@@ -319,6 +327,7 @@ def test_zeta_registers_builtin_tools_explicitly() -> None:
         "zeta.ls",
         "zeta.bash",
         "zeta.edit",
+        "zeta.query_log",
         "zeta.write",
         "zeta.web_search",
     } <= set(registry.list_capability_ids())
@@ -336,6 +345,7 @@ def test_zeta_ensures_shared_registry_has_builtins() -> None:
         "zeta.ls",
         "zeta.bash",
         "zeta.edit",
+        "zeta.query_log",
         "zeta.write",
         "zeta.web_search",
     } <= names
@@ -1130,6 +1140,448 @@ def test_zeta_builtin_metadata_declares_model_shape() -> None:
     assert tool_metadata("bash")["name"] == "bash"
     assert tool_metadata("read")["name"] == "read"
     assert tool_metadata("edit")["name"] == "edit"
+
+
+def query_log_event(
+    event_id: str,
+    event_type: str,
+    *,
+    run_id: str,
+    timestamp_ms: int,
+    session_id: str = "session-a",
+    payload: dict[str, Any] | None = None,
+) -> Event:
+    return Event(
+        id=event_id,
+        event_type=event_type,
+        source="zeta",
+        payload=payload or {},
+        idempotency_key=None,
+        caused_by=None,
+        session_id=session_id,
+        run_id=run_id,
+        timestamp_ms=timestamp_ms,
+    )
+
+
+def seed_query_log_runs() -> MemoryEventStore:
+    store = MemoryEventStore()
+    events = [
+        query_log_event(
+            "evt-old-user",
+            "zeta.user_message",
+            run_id="run-old-1111",
+            timestamp_ms=1_000,
+            payload={"content": "fix the parser"},
+        ),
+        query_log_event(
+            "evt-old-model",
+            "zeta.model_call.completed",
+            run_id="run-old-1111",
+            timestamp_ms=2_000,
+            payload={
+                "_timeline_type": "model",
+                "content": "parser fixed",
+                "prompt_object_id": "sha256:prompt",
+            },
+        ),
+        query_log_event(
+            "evt-old-tool-started",
+            "zeta.tool_call.started",
+            run_id="run-old-1111",
+            timestamp_ms=2_100,
+            payload={
+                "_timeline_type": "tool_call",
+                "tool_call_id": "call-edit",
+                "name": "edit",
+                "input": {"location": "parser.py"},
+            },
+        ),
+        query_log_event(
+            "evt-old-tool",
+            "zeta.tool_call.completed",
+            run_id="run-old-1111",
+            timestamp_ms=2_200,
+            payload={
+                "_timeline_type": "tool_result",
+                "tool_call_id": "call-edit",
+                "name": "edit",
+                "result": {
+                    "ok": True,
+                    "content": [{"type": "text", "text": "updated parser.py"}],
+                },
+                "model_telemetry": {"usage": {"input_tokens": 12, "output_tokens": 3}},
+            },
+        ),
+        query_log_event(
+            "evt-old-done",
+            "runtime.queue_item.completed",
+            run_id="run-old-1111",
+            timestamp_ms=3_000,
+            payload={
+                "target_agent": "zeta.session.turn",
+                "result": {
+                    "outcome": "completed",
+                    "final_answer": "parser fixed",
+                },
+            },
+        ),
+        query_log_event(
+            "evt-failed-user",
+            "zeta.user_message",
+            run_id="run-failed-2222",
+            timestamp_ms=4_000,
+            payload={"content": "deploy it"},
+        ),
+        query_log_event(
+            "evt-failed-tool-started",
+            "zeta.tool_call.started",
+            run_id="run-failed-2222",
+            timestamp_ms=4_500,
+            payload={
+                "_timeline_type": "tool_call",
+                "tool_call_id": "call-bash",
+                "name": "bash",
+                "input": {"command": "uv run pytest"},
+            },
+        ),
+        query_log_event(
+            "evt-failed-tool",
+            "zeta.tool_call.failed",
+            run_id="run-failed-2222",
+            timestamp_ms=4_750,
+            payload={
+                "_timeline_type": "tool_result",
+                "tool_call_id": "call-bash",
+                "name": "bash",
+                "result": {
+                    "ok": False,
+                    "error": {
+                        "code": "timeout",
+                        "message": "deadline exceeded",
+                    },
+                },
+            },
+        ),
+        query_log_event(
+            "evt-failed",
+            "zeta.turn.failed",
+            run_id="run-failed-2222",
+            timestamp_ms=5_000,
+            payload={"reason": "deadline exceeded"},
+        ),
+        query_log_event(
+            "evt-other",
+            "zeta.user_message",
+            run_id="run-secret-3333",
+            timestamp_ms=6_000,
+            session_id="session-b",
+            payload={"content": "other session secret"},
+        ),
+        query_log_event(
+            "evt-current",
+            "zeta.user_message",
+            run_id="run-current-4444",
+            timestamp_ms=7_000,
+            payload={"content": "inspect the log"},
+        ),
+    ]
+    for event in events:
+        store.append(event)
+    return store
+
+
+def test_zeta_query_log_metadata_declares_session_scoped_run_history() -> None:
+    metadata = tool_metadata("query_log")
+    schema = metadata["input_schema"]
+
+    assert metadata["id"] == "zeta.query_log"
+    assert schema["additionalProperties"] is False
+    assert set(schema["properties"]) == {"since", "failed", "run_id", "limit"}
+    assert schema["properties"]["limit"]["maximum"] == 50
+    assert "session" in metadata["description"]
+
+
+def test_zeta_query_log_lists_only_prior_runs_in_the_bound_session() -> None:
+    result = query_run_log(
+        {},
+        event_reader=seed_query_log_runs(),
+        session_id="session-a",
+        current_run_id="run-current-4444",
+    )
+
+    assert result["ok"] is True
+    text = result["content"][0]["text"]
+    assert text.index("run-failed-2222") < text.index("run-old-1111")
+    assert "run-current-4444" not in text
+    assert "run-secret-3333" not in text
+    assert "other session secret" not in text
+    assert result["metadata"] == {
+        "runs": 2,
+        "run_ids": ["run-failed-2222", "run-old-1111"],
+        "session_id": "session-a",
+        "limit": 20,
+    }
+
+
+def test_zeta_query_log_filters_failed_since_and_caps_limit() -> None:
+    store = seed_query_log_runs()
+
+    failed = query_run_log(
+        {"failed": True},
+        event_reader=store,
+        session_id="session-a",
+        current_run_id="run-current-4444",
+    )
+    recent = query_run_log(
+        {"since": "1m"},
+        event_reader=store,
+        session_id="session-a",
+        current_run_id="run-current-4444",
+        now=datetime.fromtimestamp(64, tz=UTC),
+    )
+    dated = query_run_log(
+        {"since": "1970-01-01"},
+        event_reader=store,
+        session_id="session-a",
+        current_run_id="run-current-4444",
+    )
+    capped = query_run_log(
+        {"limit": 500},
+        event_reader=store,
+        session_id="session-a",
+        current_run_id="run-current-4444",
+    )
+
+    assert failed["metadata"]["run_ids"] == ["run-failed-2222"]
+    assert recent["metadata"]["run_ids"] == ["run-failed-2222"]
+    assert dated["metadata"]["run_ids"] == ["run-failed-2222", "run-old-1111"]
+    assert capped["metadata"]["limit"] == 50
+
+
+def test_zeta_query_log_expands_one_run_by_prefix() -> None:
+    result = query_run_log(
+        {"run_id": "run-old"},
+        event_reader=seed_query_log_runs(),
+        session_id="session-a",
+        current_run_id="run-current-4444",
+    )
+
+    assert result["ok"] is True
+    text = result["content"][0]["text"]
+    assert "run      run-old-1111" in text
+    assert "objective fix the parser" in text
+    assert "outcome  completed" in text
+    assert "usage" not in text
+    assert "edit: ok · parser.py" in text
+    assert "updated parser.py" not in text
+    assert "answer   parser fixed" in text
+    assert "sha256:prompt" in text
+    assert result["metadata"]["run_id"] == "run-old-1111"
+
+
+def test_zeta_query_log_expands_compact_tool_failure_details() -> None:
+    result = query_run_log(
+        {"run_id": "run-failed"},
+        event_reader=seed_query_log_runs(),
+        session_id="session-a",
+        current_run_id="run-current-4444",
+    )
+
+    text = result["content"][0]["text"]
+    assert "bash: failed · uv run pytest · timeout: deadline exceeded" in text
+
+
+def test_zeta_query_log_rejects_bad_since_and_scoped_run_ids() -> None:
+    store = seed_query_log_runs()
+    store.append(
+        query_log_event(
+            "evt-failed-also",
+            "zeta.user_message",
+            run_id="run-failed-9999",
+            timestamp_ms=5_500,
+            payload={"content": "fail differently"},
+        )
+    )
+    store.append(
+        query_log_event(
+            "evt-exact",
+            "zeta.user_message",
+            run_id="run-exact",
+            timestamp_ms=5_600,
+            payload={"content": "the exact run"},
+        )
+    )
+    store.append(
+        query_log_event(
+            "evt-exact-longer",
+            "zeta.user_message",
+            run_id="run-exact-longer",
+            timestamp_ms=5_700,
+            payload={"content": "a longer run id"},
+        )
+    )
+
+    ambiguous = query_run_log(
+        {"run_id": "run-failed"},
+        event_reader=store,
+        session_id="session-a",
+        current_run_id="run-current-4444",
+    )
+    unknown = query_run_log(
+        {"run_id": "run-secret"},
+        event_reader=store,
+        session_id="session-a",
+        current_run_id="run-current-4444",
+    )
+    invalid_since = query_run_log(
+        {"since": "yesterday-ish"},
+        event_reader=store,
+        session_id="session-a",
+        current_run_id="run-current-4444",
+    )
+    overflowing_since = query_run_log(
+        {"since": "999999999999999999999d"},
+        event_reader=store,
+        session_id="session-a",
+        current_run_id="run-current-4444",
+    )
+    exact = query_run_log(
+        {"run_id": "run-exact"},
+        event_reader=store,
+        session_id="session-a",
+        current_run_id="run-current-4444",
+    )
+
+    assert ambiguous["error"]["code"] == "ambiguous-run-id"
+    assert unknown["error"] == {
+        "code": "unknown-run-id",
+        "message": "no run matches 'run-secret'",
+    }
+    assert invalid_since["error"]["code"] == "invalid-since"
+    assert overflowing_since["error"]["code"] == "invalid-since"
+    assert exact["metadata"]["run_id"] == "run-exact"
+
+
+def test_zeta_query_log_handles_empty_history_and_omits_large_tool_results() -> None:
+    empty = query_run_log(
+        {},
+        event_reader=MemoryEventStore(),
+        session_id="session-a",
+        current_run_id="run-current-4444",
+    )
+    store = seed_query_log_runs()
+    store.append(
+        query_log_event(
+            "evt-large",
+            "zeta.tool_call.completed",
+            run_id="run-old-1111",
+            timestamp_ms=2_500,
+            payload={
+                "_timeline_type": "tool_result",
+                "tool_call_id": "call-read",
+                "name": "read",
+                "result": {
+                    "ok": True,
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "x" * (MAX_QUERY_LOG_OUTPUT_CHARS * 2),
+                        }
+                    ],
+                },
+            },
+        )
+    )
+    store.append(
+        query_log_event(
+            "evt-large-answer",
+            "runtime.queue_item.completed",
+            run_id="run-old-1111",
+            timestamp_ms=2_750,
+            payload={
+                "target_agent": "zeta.session.turn",
+                "result": {
+                    "outcome": "completed",
+                    "final_answer": "y" * (MAX_QUERY_LOG_OUTPUT_CHARS * 2),
+                },
+            },
+        )
+    )
+    expanded = query_run_log(
+        {"run_id": "run-old-1111"},
+        event_reader=store,
+        session_id="session-a",
+        current_run_id="run-current-4444",
+    )
+
+    assert empty["ok"] is True
+    assert empty["content"][0]["text"] == "no prior runs recorded"
+    assert empty["metadata"]["runs"] == 0
+    assert len(expanded["content"][0]["text"]) <= MAX_QUERY_LOG_OUTPUT_CHARS
+    assert expanded["content"][0]["text"].endswith("…")
+    assert "x" * 100 not in expanded["content"][0]["text"]
+
+
+def test_zeta_query_log_bounds_the_newest_event_scan() -> None:
+    captured_filters: list[Any] = []
+    store = seed_query_log_runs()
+
+    class RecordingReader:
+        def list_events(self, filter: Any) -> list[Event]:
+            captured_filters.append(filter)
+            return store.list_events(filter)
+
+    result = query_run_log(
+        {},
+        event_reader=RecordingReader(),
+        session_id="session-a",
+        current_run_id="run-current-4444",
+    )
+
+    assert result["ok"] is True
+    assert len(captured_filters) == 1
+    assert captured_filters[0].newest_first is True
+    assert captured_filters[0].limit == MAX_QUERY_LOG_EVENTS
+
+
+def test_zeta_query_log_expands_authored_agent_terminal_results() -> None:
+    store = MemoryEventStore()
+    store.append(
+        query_log_event(
+            "evt-authored-user",
+            "zeta.user_message",
+            run_id="run-authored-1111",
+            timestamp_ms=1_000,
+            payload={"content": "review the release"},
+        )
+    )
+    store.append(
+        query_log_event(
+            "evt-authored-terminal",
+            "runtime.queue_item.completed",
+            run_id="run-authored-1111",
+            timestamp_ms=2_000,
+            payload={
+                "target_agent": "agent:release-reviewer",
+                "result": {
+                    "outcome": "stopped",
+                    "final_answer": "release needs changes",
+                },
+            },
+        )
+    )
+
+    result = query_run_log(
+        {"run_id": "run-authored"},
+        event_reader=store,
+        session_id="session-a",
+        current_run_id="run-current-4444",
+    )
+
+    text = result["content"][0]["text"]
+    assert "outcome  stopped" in text
+    assert "answer   release needs changes" in text
 
 
 def test_zeta_tool_bash_records_duration() -> None:

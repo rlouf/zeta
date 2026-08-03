@@ -51,6 +51,7 @@ from zeta.trace import warn_trace_failure_once
 from zeta.trace.provenance import (
     project_prompt_trace_projection,
 )
+from zeta.trace.query import QueryLogReader, bind_query_log_reader
 
 
 async def run_agent(
@@ -115,6 +116,11 @@ async def run_agent(
         model_gateway=model_gateway,
         caused_by=caused_by,
         cancellation_event=cancellation_event,
+        query_log_reader=bind_query_log_reader(
+            runtime_context.event_sink,
+            session_id=runtime_context.session_id,
+            current_run_id=run_id,
+        ),
     )
 
 
@@ -133,6 +139,7 @@ async def run_agent_loop(
     caused_by: str | None = None,
     cancellation_event: CancellationToken | None = None,
     deadline: float | None = None,
+    query_log_reader: QueryLogReader | None = None,
 ) -> AgentRunResult:
     """Run an assistant/tool loop without mutating session state."""
     gateway = model_gateway or DefaultModelGateway()
@@ -158,6 +165,7 @@ async def run_agent_loop(
         builder=builder,
         model_gateway=gateway,
         abort_reason=run_abort_reason(cancellation_event, deadline, clock=clock),
+        query_log_reader=query_log_reader,
     )
     tool_schema = active_tool_registry.model_tool_schema(
         allowed_capabilities,

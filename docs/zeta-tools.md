@@ -1,6 +1,7 @@
 # Zeta Tools
 
-This document currently describes only `publish_event`.
+This document describes the Zeta-specific tools `publish_event` and
+`query_log`.
 
 ## `publish_event`
 
@@ -154,3 +155,131 @@ A failed or cancelled run publishes none of its requested events.
 If `at` is absent or is at or before the completion time, Zeta publishes the
 event after the run completes. If `at` is later, Zeta publishes the event at
 that time.
+
+## `query_log`
+
+Use `query_log` to read summaries of earlier model runs in the current
+session. The summaries can help an agent recover earlier decisions, results,
+and failed actions.
+
+### Availability
+
+Add `query_log` to the agent `tools` list:
+
+```yaml
+---
+name: Release Investigator
+description: Investigates release failures.
+accepts:
+  - release.investigation.requested
+tools:
+  - query_log
+---
+```
+
+`query_log` is available only in a durable runtime session. Zeta limits every
+query to the current session and excludes the active run. The tool does not
+accept a session id.
+
+### Examples
+
+#### Review Recent Work
+
+Use an empty object to list the most recent prior runs:
+
+```json
+{}
+```
+
+The list can help an agent find the run that made an earlier decision. The
+agent can cite the returned run id when it uses that decision.
+
+#### Find Recent Failures
+
+Use `failed` and `since` to find failed or aborted runs from a recent period:
+
+```json
+{
+  "failed": true,
+  "since": "6h",
+  "limit": 10
+}
+```
+
+This query can help an agent find a failed deployment, test run, or connector
+delivery without reading every prior run.
+
+#### Inspect One Run
+
+Use a full run id or a unique prefix to expand one run:
+
+```json
+{
+  "run_id": "run_01JXYZ"
+}
+```
+
+The expanded result can help an agent recover the objective, final answer,
+tool failures, and prompt trace ids from that run.
+
+### Input
+
+The tool accepts this object:
+
+| Field | Required | Rule |
+| --- | --- | --- |
+| `since` | no | Use `YYYY-MM-DD` or an age such as `2d`, `6h`, or `30m`. |
+| `failed` | no | Use `true` to list only failed or aborted runs. |
+| `run_id` | no | Use a full run id or a unique run id prefix. |
+| `limit` | no | Use an integer from 1 through 50. The default is 20. |
+
+The object cannot contain other fields. If `run_id` is present, Zeta expands
+that run and does not apply the listing filters.
+
+### Result
+
+A list result contains one text summary and metadata:
+
+```json
+{
+  "ok": true,
+  "content": [
+    {
+      "type": "text",
+      "text": "run_01JXYZ  failed  2030-01-02T09:00:00+00:00  deploy release"
+    }
+  ],
+  "metadata": {
+    "runs": 1,
+    "run_ids": ["run_01JXYZ"],
+    "session_id": "release-session",
+    "limit": 20
+  }
+}
+```
+
+An expanded result can include these fields in its text summary:
+
+- Run id and start time.
+- Outcome and objective.
+- Final answer.
+- Compact tool activity and failure details.
+- Prompt trace ids.
+
+The expanded result does not include provider usage data, raw tool arguments,
+or raw tool results.
+
+The tool can return these error codes:
+
+| Code | Meaning |
+| --- | --- |
+| `query-log-unavailable` | The run is not in a durable runtime session. |
+| `invalid-since` | The `since` value has an invalid format. |
+| `unknown-run-id` | No run in the current session matches the id. |
+| `ambiguous-run-id` | More than one run matches the id prefix. |
+
+### Limits
+
+Zeta reads at most the 5,000 newest events in the current session. A result
+contains at most 50 runs and 12,000 text characters. These limits keep the
+model context bounded.

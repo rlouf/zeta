@@ -1,12 +1,13 @@
 import asyncio
 from contextlib import nullcontext
 
-from zeta.events import Event
+from zeta.events import DraftEvent, Event
 from zeta.harness.coordinator import AttemptCoordinator
 from zeta.harness.lifecycle import LifecycleRecorder
 from zeta.harness.queue import RoutedQueueItem
 from zeta.harness.retry import RetryPolicy
 from zeta.harness.routing import AgentDefinition, EventPattern, ExecutableAgent
+from zeta.harness.store import RuntimeEventStore
 from zeta.journal.memory import MemoryEventStore
 from zeta.journal.store import Filter
 
@@ -84,6 +85,22 @@ def publish_event_request(
         "payload": {"position": position},
         "at": at,
         "position": position,
+    }
+
+
+def wait_request(
+    *,
+    handle: str = "wait_qi_1_0",
+    event_type: str = "issue.updated",
+    fields: dict[str, object] | None = None,
+    deadline: str | None = None,
+) -> dict[str, object]:
+    return {
+        "handle": handle,
+        "event_type": event_type,
+        "fields": fields or {},
+        "deadline": deadline,
+        "position": 0,
     }
 
 
@@ -563,3 +580,149 @@ def test_attempt_coordinator_records_future_request_inside_success_barrier() -> 
         "source_queue_item_id": "qi_1",
         "position": 3,
     }
+
+
+def test_attempt_coordinator_records_wait_inside_success_barrier() -> None:
+    async def run(_invocation):
+        return {
+            "final_answer": "",
+            "stop_reason": "tool_stop",
+            "wait_requests": [
+                wait_request(
+                    fields={"repository": "zeta"},
+                    deadline="2030-01-02T03:04:05+00:00",
+                )
+            ],
+        }
+
+    runtime, store = coordinator(claim_is_current=lambda _queue_item_id: True)
+    agent = ExecutableAgent(
+        AgentDefinition(
+            "worker",
+            (EventPattern("work.requested"),),
+            project_generation="generation-1",
+        ),
+        run,
+    )
+
+    asyncio.run(runtime.run(agent, triggering_event(), queue_item()))
+
+    journal = stored_events(store)
+    assert [event.event_type for event in journal] == [
+        "runtime.queue_item.claimed",
+        "runtime.attempt.started",
+        "runtime.attempt.completed",
+        "runtime.wait.created",
+        "runtime.queue_item.completed",
+    ]
+    assert journal[3].caused_by == journal[2].id
+    assert journal[3].session_id == "agent/worker/evt_1"
+    assert journal[3].payload == {
+        "handle": "wait_qi_1_0",
+        "agent_id": "worker",
+        "session_id": "agent/worker/evt_1",
+        "event_type": "issue.updated",
+        "fields": {"repository": "zeta"},
+        "deadline": "2030-01-02T03:04:05+00:00",
+        "source_queue_item_id": "qi_1",
+        "project_generation": "generation-1",
+    }
+
+
+def test_attempt_coordinator_does_not_record_wait_from_cancelled_attempt() -> None:
+    async def cancel(_invocation):
+        return {
+            "outcome": "cancelled",
+            "wait_requests": [wait_request()],
+        }
+
+    runtime, store = coordinator(claim_is_current=lambda _queue_item_id: True)
+
+    asyncio.run(
+        runtime.run(
+            ExecutableAgent(
+                AgentDefinition("worker", (EventPattern("work.requested"),)),
+                cancel,
+            ),
+            triggering_event(),
+            queue_item(),
+        )
+    )
+
+    assert [event.event_type for event in stored_events(store)] == [
+        "runtime.queue_item.claimed",
+        "runtime.attempt.started",
+        "runtime.attempt.cancelled",
+        "runtime.queue_item.cancelled",
+    ]
+
+
+def test_attempt_coordinator_rejects_a_second_active_wait(tmp_path) -> None:
+    store = RuntimeEventStore.open(tmp_path / "runtime.sqlite3")
+    store.accept(
+        DraftEvent(
+            "runtime.wait.created",
+            "zeta",
+            {
+                "handle": "wait-existing",
+                "agent_id": "worker",
+                "session_id": "agent/worker/evt_1",
+                "event_type": "issue.updated",
+                "fields": {},
+                "deadline": None,
+                "source_queue_item_id": "qi-existing",
+                "project_generation": None,
+            },
+            session_id="agent/worker/evt_1",
+        )
+    )
+
+    def publisher(*_args):
+        async def publish(_draft):
+            raise AssertionError("wait creation must not publish an agent event")
+
+        return publish
+
+    def unexpected_retry(*_args, **_kwargs):
+        raise AssertionError("an active-wait conflict must be permanent")
+
+    runtime = AttemptCoordinator(
+        LifecycleRecorder(store.journal),
+        claim_is_current=lambda _queue_item_id: True,
+        next_attempt_number=lambda _queue_item_id: 1,
+        start_heartbeat=lambda _attempt_id, _queue_item_id, _locks: None,
+        stop_heartbeat=stop_heartbeat,
+        event_publisher=publisher,
+        retry_scheduler=unexpected_retry,
+        retry_policy=RetryPolicy(max_attempts=1),
+        completion_batch=store.transaction,
+    )
+
+    async def run(_invocation):
+        return {"wait_requests": [wait_request(handle="wait-conflict")]}
+
+    events = asyncio.run(
+        runtime.run(
+            ExecutableAgent(
+                AgentDefinition("worker", (EventPattern("work.requested"),)),
+                run,
+            ),
+            triggering_event(),
+            queue_item(),
+        )
+    )
+
+    assert [event.event_type for event in events] == [
+        "runtime.queue_item.claimed",
+        "runtime.attempt.started",
+        "runtime.attempt.failed",
+        "runtime.queue_item.dead_lettered",
+    ]
+    assert [row["handle"] for row in store.list_waits()] == ["wait-existing"]
+    assert (
+        store.list_events(Filter(event_type="runtime.wait.created"))[0].payload[
+            "handle"
+        ]
+        == "wait-existing"
+    )
+    store.close()

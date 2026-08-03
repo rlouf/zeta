@@ -7,7 +7,7 @@ the root group and the process exit contract only.
 import click
 from zeta.cli.commands.agents import agents
 from zeta.cli.commands.attempts import attempts
-from zeta.cli.commands.events import events
+from zeta.cli.commands.events import events, waits
 from zeta.cli.commands.new import new
 from zeta.cli.commands.ps import ps
 from zeta.cli.commands.queue import queue
@@ -27,6 +27,7 @@ def cli() -> None:
 cli.add_command(queue)
 cli.add_command(attempts)
 cli.add_command(events)
+cli.add_command(waits)
 cli.add_command(new)
 cli.add_command(ps)
 cli.add_command(run)

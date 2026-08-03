@@ -13,7 +13,11 @@ from __future__ import annotations
 
 from zeta import ids
 from zeta.events import Event
-from zeta.harness.routing import AgentDefinition, ExecutableAgent
+from zeta.harness.routing import (
+    AgentDefinition,
+    ExecutableAgent,
+    is_wait_continuation_for,
+)
 from zeta.harness.templates import agent_session_id as session_id_for
 
 
@@ -33,6 +37,9 @@ def invocation_session_id(agent: ExecutableAgent, event: Event) -> str | None:
     A session turn carries its own session, because the caller owns the
     timeline. Every other event uses the agent's own session rule.
     """
-    if event.event_type == "session.turn.requested" and event.session_id is not None:
+    if (
+        event.event_type == "session.turn.requested"
+        or is_wait_continuation_for(event, agent.agent_id)
+    ) and event.session_id is not None:
         return event.session_id
     return agent_session_id(agent.definition, event)

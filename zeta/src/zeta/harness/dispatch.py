@@ -27,6 +27,7 @@ from zeta.harness.routing import (
     AgentRoute,
     EventPattern,
     ExecutableAgent,
+    is_wait_continuation_for,
 )
 from zeta.journal.store import (
     EventReader,
@@ -385,8 +386,10 @@ class _QueueingDispatcher:
                 and executor.definition.project_generation != project_generation
             ):
                 continue
-            if triggering_event is not None and not executor.definition.accepts(
-                triggering_event
+            if (
+                triggering_event is not None
+                and not executor.definition.accepts(triggering_event)
+                and not is_wait_continuation_for(triggering_event, agent_id)
             ):
                 continue
             return executor

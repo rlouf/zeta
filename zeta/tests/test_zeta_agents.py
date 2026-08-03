@@ -78,7 +78,7 @@ from zeta.harness.routing import (
     compile_agent_definitions,
     config_for_spec,
 )
-from zeta.harness.sessions import agent_session_id
+from zeta.harness.sessions import agent_session_id, invocation_session_id
 from zeta.harness.store import RuntimeEventStore
 from zeta.journal.store import Filter
 from zeta.loop.outcomes import PublishEventRequest
@@ -2989,6 +2989,81 @@ def test_zeta_one_shot_agent_uses_trigger_event_session_id() -> None:
     )
 
     assert agent_session_id(definition, event) == "agent/slack-qa/evt_first"
+
+
+def test_zeta_wait_continuation_resumes_exact_agent_session_and_prompt(
+    tmp_path: Path,
+) -> None:
+    spec = zeta_agents.load_spec(
+        _write_spec(
+            tmp_path / "issue-agent.md",
+            """---
+name: Issue agent
+description: Handles issues.
+accepts:
+  - work.requested
+---
+Resume for {{ event.event_type }} #{{ event.payload.issue }}.
+""",
+        )
+    )
+    calls: list[tuple[str, str]] = []
+
+    async def record_run(
+        _invocation,
+        objective,
+        _timeline,
+        _context,
+        _config,
+        session_id,
+        _run_id,
+    ) -> AgentRunResult:
+        calls.append((objective, session_id))
+        return AgentRunResult(final_answer="resumed")
+
+    compiled = zeta_agents.compile_agent_definition(spec, agent_loop=record_run)
+    store = RuntimeEventStore.open(tmp_path / "runtime.sqlite3")
+    store.append(
+        Event(
+            id="wait-created-1",
+            event_type="runtime.wait.created",
+            source="zeta",
+            payload={
+                "handle": "wait-1",
+                "agent_id": "issue-agent",
+                "session_id": "agent/issue-agent/original",
+                "event_type": "github.issue.updated",
+                "fields": {"issue": 5},
+                "deadline": None,
+                "source_queue_item_id": "qi-source",
+                "project_generation": None,
+            },
+            idempotency_key="agent.wait:qi-source:0",
+            caused_by="attempt-completed-1",
+            session_id="agent/issue-agent/original",
+            timestamp_ms=500,
+        )
+    )
+    store.accept(
+        DraftEvent(
+            "github.issue.updated",
+            "github",
+            {"issue": 5},
+        )
+    )
+    dispatcher = harness_dispatch.QueueingDispatcher(store, executors=[compiled])
+
+    asyncio.run(dispatcher.drain())
+
+    matched = store.list_events(Filter(event_type="runtime.wait.matched"))[0]
+    assert invocation_session_id(compiled, matched) == "agent/issue-agent/original"
+    assert calls == [
+        (
+            "Resume for github.issue.updated #5.",
+            "agent/issue-agent/original",
+        )
+    ]
+    store.close()
 
 
 def test_zeta_agent_spec_session_defaults_to_per_event(tmp_path: Path) -> None:

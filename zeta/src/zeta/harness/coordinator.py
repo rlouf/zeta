@@ -13,6 +13,7 @@ from zeta.effects import EffectDeliveryError
 from zeta.events import DraftEvent, Event
 from zeta.harness.attempts import AttemptStatus
 from zeta.harness.lifecycle import LifecycleRecorder
+from zeta.harness.projections import ActiveWaitConflict
 from zeta.harness.queue import QueueItemStatus, RoutedQueueItem
 from zeta.harness.retry import RetryPolicy, error_code_for_exception
 from zeta.harness.routing import (
@@ -166,12 +167,26 @@ class AttemptCoordinator:
 
         # The transaction fences the final claim check from competing writers.
         # Notifications wait for its commit so observers see only durable facts.
-        with self.lifecycle.defer_publications():
-            with self.completion_batch():
-                if not self.claim_is_current(queue_item_id):
-                    return events
-                terminal = await self.terminal_events(
-                    result,
+        try:
+            with self.lifecycle.defer_publications():
+                with self.completion_batch():
+                    if not self.claim_is_current(queue_item_id):
+                        return events
+                    terminal = await self.terminal_events(
+                        result,
+                        triggering_event,
+                        agent,
+                        queue_item_id,
+                        attempt_id,
+                        attempt_number,
+                        started_at,
+                        session_id,
+                        run_id,
+                    )
+        except ActiveWaitConflict as exc:
+            events.extend(
+                self.failed_events(
+                    exc,
                     triggering_event,
                     agent,
                     queue_item_id,
@@ -181,6 +196,8 @@ class AttemptCoordinator:
                     session_id,
                     run_id,
                 )
+            )
+            return events
         events.extend(terminal)
         return events
 
@@ -338,6 +355,16 @@ class AttemptCoordinator:
                     run_id,
                 )
             )
+            events.extend(
+                self.record_wait_requests(
+                    result,
+                    attempt_event,
+                    agent,
+                    queue_item_id,
+                    session_id,
+                    run_id,
+                )
+            )
         events.append(
             self.lifecycle.queue_item(
                 triggering_event,
@@ -351,6 +378,40 @@ class AttemptCoordinator:
             )
         )
         return events
+
+    def record_wait_requests(
+        self,
+        result: dict[str, Any],
+        completed_attempt: Event,
+        agent: ExecutableAgent,
+        queue_item_id: str,
+        session_id: str | None,
+        run_id: str | None,
+    ) -> list[Event]:
+        requests = cast(list[dict[str, Any]], result.get("wait_requests", []))
+        recorded: list[Event] = []
+        for request in sorted(requests, key=lambda item: item["position"]):
+            position = request["position"]
+            recorded.append(
+                self.lifecycle.append(
+                    "runtime.wait.created",
+                    completed_attempt,
+                    {
+                        "handle": request["handle"],
+                        "agent_id": agent.definition.agent_id,
+                        "session_id": session_id,
+                        "event_type": request["event_type"],
+                        "fields": request["fields"],
+                        "deadline": request["deadline"],
+                        "source_queue_item_id": queue_item_id,
+                        "project_generation": agent.definition.project_generation,
+                    },
+                    idempotency_key=f"agent.wait:{queue_item_id}:{position}",
+                    session_id=session_id,
+                    run_id=run_id,
+                )
+            )
+        return recorded
 
     async def publish_requests(
         self,

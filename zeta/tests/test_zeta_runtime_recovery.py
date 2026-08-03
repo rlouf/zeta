@@ -39,6 +39,37 @@ def _scheduled_event_created(
     )
 
 
+def _wait_created(
+    *,
+    event_id: str,
+    handle: str,
+    session_id: str = "session-1",
+    event_type: str = "github.issue.updated",
+    fields: dict[str, object] | None = None,
+    deadline: str | None = None,
+) -> Event:
+    return Event(
+        id=event_id,
+        event_type="runtime.wait.created",
+        source="zeta",
+        payload={
+            "handle": handle,
+            "agent_id": "issue-agent",
+            "session_id": session_id,
+            "event_type": event_type,
+            "fields": fields or {},
+            "deadline": deadline,
+            "source_queue_item_id": "qi-source",
+            "project_generation": "generation-1",
+        },
+        idempotency_key=f"agent.wait:{handle}",
+        caused_by="attempt-completed-1",
+        session_id=session_id,
+        run_id="run-1",
+        timestamp_ms=500,
+    )
+
+
 def test_projection_rebuild_preserves_unfinished_attempt_and_releases_claim(
     tmp_path: Path,
 ) -> None:
@@ -144,6 +175,358 @@ def test_scheduled_event_created_projection_survives_close_and_reopen(
 
     assert reopened.list_scheduled_events() == scheduled
     reopened.close()
+
+
+def test_wait_created_projection_survives_reopen_and_rebuild(tmp_path: Path) -> None:
+    path = tmp_path / "runtime.sqlite3"
+    store = RuntimeEventStore.open(path)
+    created = _wait_created(
+        event_id="wait-created-1",
+        handle="wait-1",
+        fields={"repository": "zeta"},
+        deadline="2030-01-02T03:04:05+00:00",
+    )
+    store.append(created)
+
+    waits = store.list_waits()
+
+    assert waits == [
+        {
+            "handle": "wait-1",
+            "agent_id": "issue-agent",
+            "session_id": "session-1",
+            "event_type": "github.issue.updated",
+            "fields": {"repository": "zeta"},
+            "deadline_ms": 1_893_553_445_000,
+            "source_queue_item_id": "qi-source",
+            "project_generation": "generation-1",
+            "created_event_id": created.id,
+            "status": "active",
+            "matched_event_id": None,
+            "terminal_event_id": None,
+            "updated_at": 500,
+        }
+    ]
+    store.close()
+
+    reopened = RuntimeEventStore.open(path)
+    assert reopened.list_waits() == waits
+    reopened.rebuild_projections()
+    assert reopened.list_waits() == waits
+    reopened.close()
+
+
+def test_wait_projection_ignores_malformed_created_event(tmp_path: Path) -> None:
+    store = RuntimeEventStore.open(tmp_path / "runtime.sqlite3")
+    store.accept(
+        DraftEvent(
+            "runtime.wait.created",
+            "zeta",
+            {"handle": "wait-malformed"},
+        )
+    )
+
+    assert store.list_waits() == []
+    store.close()
+
+
+def test_wait_projection_rejects_a_second_active_wait_for_one_session(
+    tmp_path: Path,
+) -> None:
+    store = RuntimeEventStore.open(tmp_path / "runtime.sqlite3")
+    store.append(_wait_created(event_id="wait-created-1", handle="wait-1"))
+
+    with pytest.raises(ValueError, match="session-1.*active wait"):
+        store.append(_wait_created(event_id="wait-created-2", handle="wait-2"))
+
+    assert [wait["handle"] for wait in store.list_waits()] == ["wait-1"]
+    store.close()
+
+
+def test_wait_matches_exact_top_level_fields_only(tmp_path: Path) -> None:
+    store = RuntimeEventStore.open(tmp_path / "runtime.sqlite3")
+    store.append(
+        _wait_created(
+            event_id="wait-created-1",
+            handle="wait-1",
+            fields={"repository": {"name": "zeta"}},
+        )
+    )
+
+    store.accept(
+        DraftEvent(
+            "github.issue.updated",
+            "github",
+            {"repository": {"name": "zeta", "owner": "rlouf"}},
+        )
+    )
+    store.accept(
+        DraftEvent(
+            "github.issue.opened",
+            "github",
+            {"repository": {"name": "zeta"}},
+        )
+    )
+
+    assert store.list_waits()[0]["status"] == "active"
+    assert store.list_events(Filter(event_type="runtime.wait.matched")) == []
+    store.close()
+
+
+def test_matching_event_consumes_wait_and_creates_continuation(
+    tmp_path: Path,
+) -> None:
+    store = RuntimeEventStore.open(tmp_path / "runtime.sqlite3")
+    store.append(
+        _wait_created(
+            event_id="wait-created-1",
+            handle="wait-1",
+            fields={"repository": "zeta"},
+        )
+    )
+
+    matched_event = store.accept(
+        DraftEvent(
+            "github.issue.updated",
+            "github",
+            {"repository": "zeta", "issue": 5},
+            idempotency_key="github-delivery-1",
+        )
+    ).event
+
+    matched_facts = store.list_events(Filter(event_type="runtime.wait.matched"))
+    assert len(matched_facts) == 1
+    matched = matched_facts[0]
+    assert matched.caused_by == matched_event.id
+    assert matched.session_id == "session-1"
+    assert matched.payload == {
+        "handle": "wait-1",
+        "agent_id": "issue-agent",
+        "session_id": "session-1",
+        "matched_event_id": matched_event.id,
+        "event_type": "github.issue.updated",
+        "payload": {"repository": "zeta", "issue": 5},
+        "project_generation": "generation-1",
+    }
+
+    wait = store.list_waits()[0]
+    assert wait["status"] == "matched"
+    assert wait["matched_event_id"] == matched_event.id
+    assert wait["terminal_event_id"] == matched.id
+
+    continuation_facts = store.list_events(
+        Filter(event_type="runtime.queue_item.available")
+    )
+    assert len(continuation_facts) == 1
+    continuation = continuation_facts[0]
+    assert continuation.caused_by == matched.id
+    assert continuation.session_id == "session-1"
+    assert continuation.payload["event_id"] == matched.id
+    assert continuation.payload["target_agent"] == "issue-agent"
+    assert continuation.payload["project_generation"] == "generation-1"
+    assert any(
+        item["event_id"] == matched_event.id and item["target_agent"] == ""
+        for item in store.list_queue_items()
+    )
+
+    expected_wait = store.list_waits()
+    store.rebuild_projections()
+    assert store.list_waits() == expected_wait
+    assert store.queue_item(str(continuation.payload["queue_item_id"])) is not None
+    store.close()
+
+
+def test_duplicate_matching_event_does_not_resume_wait_twice(tmp_path: Path) -> None:
+    store = RuntimeEventStore.open(tmp_path / "runtime.sqlite3")
+    store.append(_wait_created(event_id="wait-created-1", handle="wait-1"))
+    draft = DraftEvent(
+        "github.issue.updated",
+        "github",
+        {"issue": 5},
+        idempotency_key="github-delivery-1",
+    )
+
+    first = store.accept(draft)
+    second = store.accept(draft)
+
+    assert first.inserted
+    assert not second.inserted
+    assert len(store.list_events(Filter(event_type="runtime.wait.matched"))) == 1
+    assert (
+        len(store.list_events(Filter(event_type="runtime.queue_item.available"))) == 1
+    )
+    store.close()
+
+
+def test_concurrent_matching_events_consume_wait_once(tmp_path: Path) -> None:
+    path = tmp_path / "runtime.sqlite3"
+    first_store = RuntimeEventStore.open(path)
+    second_store = RuntimeEventStore.open(path)
+    first_store.append(_wait_created(event_id="wait-created-1", handle="wait-1"))
+    ready = Barrier(2)
+
+    def append_match(store: RuntimeEventStore, delivery: str) -> None:
+        ready.wait()
+        store.accept(
+            DraftEvent(
+                "github.issue.updated",
+                "github",
+                {"issue": 5},
+                idempotency_key=delivery,
+            )
+        )
+
+    try:
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            futures = (
+                executor.submit(append_match, first_store, "github-delivery-1"),
+                executor.submit(append_match, second_store, "github-delivery-2"),
+            )
+            for future in futures:
+                future.result()
+
+        assert (
+            len(first_store.list_events(Filter(event_type="runtime.wait.matched"))) == 1
+        )
+        assert (
+            len(
+                first_store.list_events(
+                    Filter(event_type="runtime.queue_item.available")
+                )
+            )
+            == 1
+        )
+        assert first_store.list_waits()[0]["status"] == "matched"
+    finally:
+        first_store.close()
+        second_store.close()
+
+
+def test_due_scheduled_event_can_match_an_active_wait(tmp_path: Path) -> None:
+    store = RuntimeEventStore.open(tmp_path / "runtime.sqlite3")
+    store.append(
+        _wait_created(
+            event_id="wait-created-1",
+            handle="wait-1",
+            event_type="report.ready",
+            fields={"report_id": "publication-1"},
+        )
+    )
+    store.append(
+        _scheduled_event_created(
+            event_id="schedule-created-1",
+            handle="publication-1",
+            publish_at="1970-01-01T00:00:01+00:00",
+            position=0,
+        )
+    )
+
+    requested = store.publish_next_due_scheduled_event(now_ms=2_000)
+
+    assert requested is not None
+    assert store.list_waits()[0]["status"] == "matched"
+    matched = store.list_events(Filter(event_type="runtime.wait.matched"))[0]
+    assert matched.payload["matched_event_id"] == requested.id
+    store.close()
+
+
+def test_wait_does_not_time_out_before_deadline(tmp_path: Path) -> None:
+    store = RuntimeEventStore.open(tmp_path / "runtime.sqlite3")
+    store.append(
+        _wait_created(
+            event_id="wait-created-1",
+            handle="wait-1",
+            deadline="1970-01-01T00:00:02+00:00",
+        )
+    )
+
+    assert store.timeout_next_due_wait(now_ms=1_999) is None
+    assert store.list_waits()[0]["status"] == "active"
+    store.close()
+
+
+def test_due_wait_times_out_and_creates_continuation(tmp_path: Path) -> None:
+    store = RuntimeEventStore.open(tmp_path / "runtime.sqlite3")
+    store.append(
+        _wait_created(
+            event_id="wait-created-1",
+            handle="wait-1",
+            deadline="1970-01-01T00:00:02+00:00",
+        )
+    )
+
+    timed_out = store.timeout_next_due_wait(now_ms=2_000)
+
+    assert timed_out is not None
+    assert timed_out.event_type == "runtime.wait.timed_out"
+    assert timed_out.caused_by == "wait-created-1"
+    assert timed_out.session_id == "session-1"
+    assert timed_out.payload == {
+        "handle": "wait-1",
+        "agent_id": "issue-agent",
+        "session_id": "session-1",
+        "deadline": "1970-01-01T00:00:02+00:00",
+        "project_generation": "generation-1",
+    }
+    wait = store.list_waits()[0]
+    assert wait["status"] == "timed_out"
+    assert wait["matched_event_id"] is None
+    assert wait["terminal_event_id"] == timed_out.id
+    continuation = store.list_events(Filter(event_type="runtime.queue_item.available"))[
+        0
+    ]
+    assert continuation.payload["event_id"] == timed_out.id
+    assert continuation.payload["target_agent"] == "issue-agent"
+    assert continuation.payload["project_generation"] == "generation-1"
+
+    expected_wait = store.list_waits()
+    store.rebuild_projections()
+    assert store.list_waits() == expected_wait
+    store.close()
+
+
+def test_match_and_timeout_race_consumes_wait_once(tmp_path: Path) -> None:
+    path = tmp_path / "runtime.sqlite3"
+    match_store = RuntimeEventStore.open(path)
+    timeout_store = RuntimeEventStore.open(path)
+    match_store.append(
+        _wait_created(
+            event_id="wait-created-1",
+            handle="wait-1",
+            deadline="1970-01-01T00:00:02+00:00",
+        )
+    )
+    ready = Barrier(2)
+
+    def match() -> None:
+        ready.wait()
+        match_store.accept(DraftEvent("github.issue.updated", "github", {"issue": 5}))
+
+    def time_out() -> None:
+        ready.wait()
+        timeout_store.timeout_next_due_wait(now_ms=2_000)
+
+    try:
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            futures = (executor.submit(match), executor.submit(time_out))
+            for future in futures:
+                future.result()
+
+        matched = match_store.list_events(Filter(event_type="runtime.wait.matched"))
+        timed_out = match_store.list_events(Filter(event_type="runtime.wait.timed_out"))
+        assert len(matched) + len(timed_out) == 1
+        assert (
+            len(
+                match_store.list_events(
+                    Filter(event_type="runtime.queue_item.available")
+                )
+            )
+            == 1
+        )
+        assert match_store.list_waits()[0]["status"] in {"matched", "timed_out"}
+    finally:
+        match_store.close()
+        timeout_store.close()
 
 
 def test_projection_rebuild_restores_scheduled_event_terminal_states(

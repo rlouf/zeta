@@ -184,6 +184,9 @@ async def run_agent_loop(
     if publishable_events and source_queue_item_id is not None:
         tool_schema = publish_event_tool_schema(tool_schema)
         allowed_capabilities = (*allowed_capabilities, "zeta.publish_event")
+    if source_queue_item_id is not None:
+        tool_schema = wait_for_tool_schema(tool_schema)
+        allowed_capabilities = (*allowed_capabilities, "zeta.wait_for")
     tools = tool_schema.descriptors
     return await AgentRun(
         objective=objective,
@@ -231,6 +234,45 @@ def publish_event_tool_schema(
             model_descriptor(
                 "publish_event",
                 "Request an event when this agent attempt completes successfully.",
+                input_schema,
+            ),
+        ],
+    )
+
+
+def wait_for_tool_schema(
+    tool_schema: CapabilityToolSchema,
+) -> CapabilityToolSchema:
+    existing = tool_schema.routes.get("wait_for")
+    if existing is not None:
+        raise ValueError(
+            "reserved tool name 'wait_for' is already in use by "
+            f"{existing.capability_id!r}"
+        )
+    input_schema = {
+        "type": "object",
+        "required": ["event_type"],
+        "properties": {
+            "event_type": {"type": "string", "minLength": 1},
+            "fields": {"type": "object"},
+            "deadline": {"type": "string"},
+        },
+        "additionalProperties": False,
+    }
+    return CapabilityToolSchema(
+        routes={
+            **tool_schema.routes,
+            "wait_for": CapabilityToolRoute(
+                capability_id="zeta.wait_for",
+                input_schema=input_schema,
+                adapt_arguments=identity_arguments,
+            ),
+        },
+        descriptors=[
+            *tool_schema.descriptors,
+            model_descriptor(
+                "wait_for",
+                "End this run and resume when a matching event arrives.",
                 input_schema,
             ),
         ],

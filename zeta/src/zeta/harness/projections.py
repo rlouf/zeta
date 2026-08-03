@@ -16,11 +16,17 @@ from zeta.harness.queue import (
 )
 
 
+class ActiveWaitConflict(ValueError):
+    """A session already owns a different active wait."""
+
+    dispatch_error_code = "malformed_event_payload"
+
+
 class RuntimeEventProjection:
     """Projects runtime queue and attempt events into queryable tables."""
 
     name = "zeta.harness.runtime"
-    version = 5
+    version = 7
 
     def init_schema(self, connection: sqlite3.Connection) -> None:
         connection.executescript(
@@ -106,6 +112,33 @@ class RuntimeEventProjection:
                 source_queue_item_id,
                 position
               );
+
+            CREATE TABLE IF NOT EXISTS waits (
+              handle TEXT PRIMARY KEY,
+              agent_id TEXT NOT NULL,
+              session_id TEXT NOT NULL,
+              event_type TEXT NOT NULL,
+              fields_json TEXT NOT NULL,
+              deadline_ms INTEGER,
+              source_queue_item_id TEXT NOT NULL,
+              project_generation TEXT,
+              created_event_id TEXT NOT NULL,
+              status TEXT NOT NULL,
+              matched_event_id TEXT,
+              terminal_event_id TEXT,
+              updated_at INTEGER NOT NULL
+            ) STRICT;
+
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_waits_active_session
+              ON waits(session_id)
+              WHERE status = 'active';
+
+            CREATE INDEX IF NOT EXISTS idx_waits_match
+              ON waits(status, event_type);
+
+            CREATE INDEX IF NOT EXISTS idx_waits_due
+              ON waits(status, deadline_ms)
+              WHERE deadline_ms IS NOT NULL;
             """
         )
 
@@ -113,6 +146,7 @@ class RuntimeEventProjection:
         connection.executescript(
             """
             DELETE FROM locks;
+            DELETE FROM waits;
             DELETE FROM scheduled_events;
             DELETE FROM attempt_results;
             DELETE FROM attempts;
@@ -124,6 +158,7 @@ class RuntimeEventProjection:
         connection.executescript(
             """
             DROP TABLE IF EXISTS locks;
+            DROP TABLE IF EXISTS waits;
             DROP TABLE IF EXISTS scheduled_events;
             DROP TABLE IF EXISTS attempt_results;
             DROP TABLE IF EXISTS attempts;
@@ -155,6 +190,9 @@ class RuntimeEventProjection:
         )
 
     def index(self, connection: sqlite3.Connection, event: Event) -> None:
+        if event.event_type.startswith("runtime.wait."):
+            _index_one_wait(connection, event)
+            return
         if event.event_type.startswith("runtime.scheduled_event."):
             _index_one_scheduled_event(connection, event)
             return
@@ -170,6 +208,108 @@ class RuntimeEventProjection:
 
 def runtime_event_projection() -> RuntimeEventProjection:
     return RuntimeEventProjection()
+
+
+def _index_one_wait(connection: sqlite3.Connection, event: Event) -> None:
+    handle = _optional_str(event.payload.get("handle"))
+    if handle is None:
+        return
+    if event.event_type == "runtime.wait.matched":
+        matched_event_id = _optional_str(event.payload.get("matched_event_id"))
+        if matched_event_id is not None:
+            _index_wait_terminal(
+                connection,
+                event,
+                handle,
+                status="matched",
+                matched_event_id=matched_event_id,
+            )
+        return
+    if event.event_type == "runtime.wait.timed_out":
+        _index_wait_terminal(
+            connection,
+            event,
+            handle,
+            status="timed_out",
+            matched_event_id=None,
+        )
+        return
+    if event.event_type != "runtime.wait.created":
+        return
+    agent_id = _optional_str(event.payload.get("agent_id"))
+    session_id = _optional_str(event.payload.get("session_id"))
+    event_type = _optional_str(event.payload.get("event_type"))
+    fields = event.payload.get("fields")
+    source_queue_item_id = _optional_str(event.payload.get("source_queue_item_id"))
+    deadline = event.payload.get("deadline")
+    if (
+        agent_id is None
+        or session_id is None
+        or event_type is None
+        or not isinstance(fields, dict)
+        or source_queue_item_id is None
+        or (deadline is not None and not isinstance(deadline, str))
+    ):
+        return
+    deadline_ms = _iso_timestamp_ms(deadline) if deadline is not None else None
+    if deadline is not None and deadline_ms is None:
+        return
+    active = connection.execute(
+        "SELECT handle FROM waits WHERE session_id = ? AND status = 'active'",
+        (session_id,),
+    ).fetchone()
+    if active is not None and str(active["handle"]) != handle:
+        raise ActiveWaitConflict(f"session {session_id!r} already has an active wait")
+    connection.execute(
+        """
+        INSERT INTO waits
+          (handle, agent_id, session_id, event_type, fields_json, deadline_ms,
+           source_queue_item_id, project_generation, created_event_id, status,
+           updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?)
+        ON CONFLICT(handle) DO NOTHING
+        """,
+        (
+            handle,
+            agent_id,
+            session_id,
+            event_type,
+            json.dumps(fields, ensure_ascii=False, separators=(",", ":")),
+            deadline_ms,
+            source_queue_item_id,
+            _optional_str(event.payload.get("project_generation")),
+            event.id,
+            event.timestamp_ms,
+        ),
+    )
+
+
+def _index_wait_terminal(
+    connection: sqlite3.Connection,
+    event: Event,
+    handle: str,
+    *,
+    status: str,
+    matched_event_id: str | None,
+) -> None:
+    connection.execute(
+        """
+        UPDATE waits
+        SET status = ?,
+            matched_event_id = ?,
+            terminal_event_id = ?,
+            updated_at = ?
+        WHERE handle = ?
+          AND status = 'active'
+        """,
+        (
+            status,
+            matched_event_id,
+            event.id,
+            event.timestamp_ms,
+            handle,
+        ),
+    )
 
 
 def _index_one_scheduled_event(

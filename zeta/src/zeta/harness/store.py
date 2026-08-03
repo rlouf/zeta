@@ -6,9 +6,10 @@ import json
 import secrets
 import sqlite3
 import time
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from contextlib import AbstractContextManager
 from dataclasses import dataclass, field, replace
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
 
@@ -23,7 +24,14 @@ from zeta.journal.types import AppendOutcome
 from zeta.substrate.sqlite import sqlite_table_names
 
 RUNTIME_PROJECTION_TABLES = frozenset(
-    {"queue_items", "attempts", "attempt_results", "locks", "scheduled_events"}
+    {
+        "queue_items",
+        "attempts",
+        "attempt_results",
+        "locks",
+        "scheduled_events",
+        "waits",
+    }
 )
 ScheduledEventCancellationStatus = Literal[
     "cancelled",
@@ -133,7 +141,7 @@ class RuntimeJournalStore(_SqliteBacked):
     def accept(self, draft: DraftEvent) -> AppendOutcome:
         started = time.perf_counter()
         try:
-            return self.events.accept(draft)
+            return self._append_and_match(Event.from_draft(draft))
         finally:
             self.observe_runtime_metric(
                 "sqlite.event_append_ms",
@@ -144,12 +152,46 @@ class RuntimeJournalStore(_SqliteBacked):
     def append(self, event: Event) -> AppendOutcome:
         started = time.perf_counter()
         try:
-            return self.events.append(event)
+            return self._append_and_match(event)
         finally:
             self.observe_runtime_metric(
                 "sqlite.event_append_ms",
                 _elapsed_ms(started),
                 event_type=event.event_type,
+            )
+
+    def _append_and_match(self, event: Event) -> AppendOutcome:
+        with self.events.transaction():
+            outcome = self.events.append_in_transaction(event)
+            if outcome.inserted:
+                self._match_waits(outcome.event)
+            return outcome
+
+    def _match_waits(self, event: Event) -> None:
+        if event.event_type.startswith("runtime."):
+            return
+        rows = self.connection.execute(
+            """
+            SELECT handle, agent_id, session_id, fields_json,
+                   project_generation
+            FROM waits
+            WHERE status = 'active'
+              AND event_type = ?
+            ORDER BY created_event_id ASC, handle ASC
+            """,
+            (event.event_type,),
+        ).fetchall()
+        for row in rows:
+            fields = _json_column(row["fields_json"])
+            if not isinstance(fields, dict) or not _wait_fields_match(
+                fields, event.payload
+            ):
+                continue
+            matched = self.events.append_in_transaction(_wait_matched_event(row, event))
+            if not matched.inserted:
+                continue
+            self.events.append_in_transaction(
+                _wait_continuation_event(row, matched.event)
             )
 
     def transaction(self) -> AbstractContextManager[None]:
@@ -196,6 +238,20 @@ class RuntimeJournalStore(_SqliteBacked):
             ).fetchall()
         return [_row_to_scheduled_event(row) for row in rows]
 
+    def list_waits(self) -> list[dict[str, Any]]:
+        with self.events.write_lock:
+            rows = self.connection.execute(
+                """
+                SELECT handle, agent_id, session_id, event_type, fields_json,
+                       deadline_ms, source_queue_item_id, project_generation,
+                       created_event_id, status, matched_event_id,
+                       terminal_event_id, updated_at
+                FROM waits
+                ORDER BY updated_at ASC, handle ASC
+                """
+            ).fetchall()
+        return [_row_to_wait(row) for row in rows]
+
     def publish_next_due_scheduled_event(
         self,
         *,
@@ -234,6 +290,7 @@ class RuntimeJournalStore(_SqliteBacked):
                     return None
                 requested = _scheduled_requested_event(row, publication_time)
                 requested = self.events.append_in_transaction(requested).event
+                self._match_waits(requested)
                 published = _scheduled_terminal_event(
                     row,
                     event_type="runtime.scheduled_event.published",
@@ -245,6 +302,47 @@ class RuntimeJournalStore(_SqliteBacked):
                 self.events.append_in_transaction(published)
                 self.connection.commit()
                 return requested
+            except Exception:
+                self.connection.rollback()
+                raise
+
+    def timeout_next_due_wait(
+        self,
+        *,
+        now_ms: int | None = None,
+    ) -> Event | None:
+        timeout_time = _now_ms(now_ms)
+        with self.events.write_lock:
+            self.events.begin_immediate()
+            try:
+                row = self.connection.execute(
+                    """
+                    SELECT handle, agent_id, session_id, deadline_ms,
+                           project_generation, created_event_id
+                    FROM waits
+                    WHERE status = 'active'
+                      AND deadline_ms IS NOT NULL
+                      AND deadline_ms <= ?
+                    ORDER BY deadline_ms ASC, created_event_id ASC, handle ASC
+                    LIMIT 1
+                    """,
+                    (timeout_time,),
+                ).fetchone()
+                if row is None:
+                    self.connection.commit()
+                    return None
+                timed_out = self.events.append_in_transaction(
+                    _wait_timed_out_event(row, timeout_time)
+                )
+                if not timed_out.inserted:
+                    raise RuntimeError(
+                        f"active wait {row['handle']!r} already timed out"
+                    )
+                self.events.append_in_transaction(
+                    _wait_continuation_event(row, timed_out.event)
+                )
+                self.connection.commit()
+                return timed_out.event
             except Exception:
                 self.connection.rollback()
                 raise
@@ -902,12 +1000,22 @@ class RuntimeEventStore:
     def list_scheduled_events(self) -> list[dict[str, Any]]:
         return self._journal.list_scheduled_events()
 
+    def list_waits(self) -> list[dict[str, Any]]:
+        return self._journal.list_waits()
+
     def publish_next_due_scheduled_event(
         self,
         *,
         now_ms: int | None = None,
     ) -> Event | None:
         return self._journal.publish_next_due_scheduled_event(now_ms=now_ms)
+
+    def timeout_next_due_wait(
+        self,
+        *,
+        now_ms: int | None = None,
+    ) -> Event | None:
+        return self._journal.timeout_next_due_wait(now_ms=now_ms)
 
     def cancel_scheduled_event(
         self,
@@ -1060,6 +1168,100 @@ def _row_to_scheduled_event(row: sqlite3.Row) -> dict[str, Any]:
     }
 
 
+def _row_to_wait(row: sqlite3.Row) -> dict[str, Any]:
+    deadline_ms = row["deadline_ms"]
+    return {
+        "handle": str(row["handle"]),
+        "agent_id": str(row["agent_id"]),
+        "session_id": str(row["session_id"]),
+        "event_type": str(row["event_type"]),
+        "fields": _json_column(row["fields_json"]),
+        "deadline_ms": int(deadline_ms) if isinstance(deadline_ms, int) else None,
+        "source_queue_item_id": str(row["source_queue_item_id"]),
+        "project_generation": _optional_str(row["project_generation"]),
+        "created_event_id": str(row["created_event_id"]),
+        "status": str(row["status"]),
+        "matched_event_id": _optional_str(row["matched_event_id"]),
+        "terminal_event_id": _optional_str(row["terminal_event_id"]),
+        "updated_at": int(row["updated_at"]),
+    }
+
+
+def _wait_matched_event(row: sqlite3.Row, event: Event) -> Event:
+    handle = str(row["handle"])
+    session_id = str(row["session_id"])
+    return Event.from_draft(
+        DraftEvent(
+            event_type="runtime.wait.matched",
+            source="zeta",
+            payload={
+                "handle": handle,
+                "agent_id": str(row["agent_id"]),
+                "session_id": session_id,
+                "matched_event_id": event.id,
+                "event_type": event.event_type,
+                "payload": dict(event.payload),
+                "project_generation": _optional_str(row["project_generation"]),
+            },
+            idempotency_key=f"wait.matched:{handle}",
+            caused_by=event.id,
+            session_id=session_id,
+        )
+    )
+
+
+def _wait_continuation_event(row: sqlite3.Row, matched: Event) -> Event:
+    agent_id = str(row["agent_id"])
+    queue_item_id = ids.queue_item_id(matched.id, agent_id)
+    project_generation = _optional_str(row["project_generation"])
+    payload: dict[str, Any] = {
+        "queue_item_id": queue_item_id,
+        "event_id": matched.id,
+        "target_agent": agent_id,
+        "status": "available",
+    }
+    if project_generation is not None:
+        payload["project_generation"] = project_generation
+    return Event.from_draft(
+        DraftEvent(
+            event_type="runtime.queue_item.available",
+            source="zeta",
+            payload=payload,
+            idempotency_key=ids.queue_item_idempotency_key(
+                matched.id,
+                agent_id,
+                "available",
+            ),
+            caused_by=matched.id,
+            session_id=str(row["session_id"]),
+        )
+    )
+
+
+def _wait_timed_out_event(row: sqlite3.Row, timestamp_ms: int) -> Event:
+    handle = str(row["handle"])
+    session_id = str(row["session_id"])
+    deadline_ms = int(row["deadline_ms"])
+    draft = DraftEvent(
+        event_type="runtime.wait.timed_out",
+        source="zeta",
+        payload={
+            "handle": handle,
+            "agent_id": str(row["agent_id"]),
+            "session_id": session_id,
+            "deadline": datetime.fromtimestamp(
+                deadline_ms / 1_000,
+                tz=UTC,
+            ).isoformat(),
+            "project_generation": _optional_str(row["project_generation"]),
+        },
+        idempotency_key=f"wait.timed_out:{handle}",
+        caused_by=str(row["created_event_id"]),
+        session_id=session_id,
+    )
+    return replace(Event.from_draft(draft), timestamp_ms=timestamp_ms)
+
+
 def _scheduled_requested_event(row: sqlite3.Row, timestamp_ms: int) -> Event:
     draft = DraftEvent(
         event_type=str(row["event_type"]),
@@ -1185,6 +1387,22 @@ def _json_column(value: object) -> Any | None:
     if not isinstance(value, str):
         return None
     return json.loads(value)
+
+
+def _wait_fields_match(
+    fields: dict[str, Any],
+    payload: Mapping[str, Any],
+) -> bool:
+    return all(
+        key in payload and _json_equal(payload[key], expected)
+        for key, expected in fields.items()
+    )
+
+
+def _json_equal(left: Any, right: Any) -> bool:
+    return json.dumps(left, sort_keys=True, separators=(",", ":")) == json.dumps(
+        right, sort_keys=True, separators=(",", ":")
+    )
 
 
 def _sql_placeholders(values: tuple[object, ...]) -> str:

@@ -56,10 +56,10 @@ Each arrow is one-to-many. One event can fan out to several queue items, and
 one queue item can hold several attempts.
 
 The `events` table is the only source of truth. `queue_items`, `attempts`,
-`attempt_results`, `scheduled_events`, and `session_mappings` are projections.
-You can delete them and rebuild them from the journal. Claims, leases, and
-locks are neither facts nor projections. They are live coordination state, and
-a rebuild discards them.
+`attempt_results`, `scheduled_events`, `waits`, and `session_mappings` are
+projections. You can delete them and rebuild them from the journal. Claims,
+leases, and locks are neither facts nor projections. They are live coordination
+state, and a rebuild discards them.
 See [Runtime Semantics](runtime-semantics.md) for the state machines, the
 derived id scheme, and the recovery rules.
 

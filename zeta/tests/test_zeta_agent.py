@@ -190,6 +190,88 @@ def run_agent_turn(*args: Any, **kwargs: Any) -> AgentRunResult:
     return asyncio.run(zeta_agent.run_agent_loop(*args, **kwargs))
 
 
+PUBLISHED_EVENT_SCHEMAS = {
+    "issue.triaged": {
+        "type": "object",
+        "required": ["status"],
+        "properties": {"status": {"type": "string"}},
+        "additionalProperties": False,
+    }
+}
+
+
+def publish_event_tool_call(
+    call_id: str,
+    *,
+    event_type: str = "issue.triaged",
+    payload: dict[str, Any] | None = None,
+    at: str | None = None,
+) -> dict[str, Any]:
+    arguments: dict[str, Any] = {
+        "event_type": event_type,
+        "payload": payload if payload is not None else {"status": "ready"},
+    }
+    if at is not None:
+        arguments["at"] = at
+    return {
+        "id": call_id,
+        "type": "function",
+        "function": {
+            "name": "publish_event",
+            "arguments": json.dumps(arguments),
+        },
+    }
+
+
+class PublishEventGateway:
+    def __init__(self, messages: Iterable[dict[str, Any]]) -> None:
+        self.messages = iter(messages)
+        self.tool_names: list[list[str]] = []
+
+    def available(self, request: zeta_model_shapes.ModelRequest) -> bool:
+        del request
+        return True
+
+    async def generate(
+        self,
+        model_input: zeta_model_shapes.ModelInput,
+        request: zeta_model_shapes.ModelRequest,
+        *,
+        stream: zeta_loop_gateway.ModelStream | None = None,
+        telemetry_sink: Callable[[dict[str, Any]], None] | None = None,
+        should_stop: Callable[[], str | None] | None = None,
+    ) -> zeta_model_shapes.ModelOutput:
+        del request, stream, telemetry_sink, should_stop
+        self.tool_names.append(
+            [descriptor["function"]["name"] for descriptor in (model_input.tools or [])]
+        )
+        return zeta_model_shapes.ModelOutput(message=next(self.messages))
+
+
+def run_publish_event_calls(
+    *tool_calls: dict[str, Any],
+    tool_executor: ToolExecutor | None = None,
+) -> AgentRunResult:
+    gateway = PublishEventGateway(
+        [
+            *({"content": "", "tool_calls": [tool_call]} for tool_call in tool_calls),
+            {"content": "done"},
+        ]
+    )
+    kwargs: dict[str, Any] = {}
+    if tool_executor is not None:
+        kwargs["tool_executor"] = tool_executor
+    return run_agent_turn(
+        "publish",
+        [],
+        zeta_agent.AgentConfig(max_turns=len(tool_calls) + 1),
+        model_gateway=gateway,
+        publishable_events=PUBLISHED_EVENT_SCHEMAS,
+        source_queue_item_id="qi-work",
+        **kwargs,
+    )
+
+
 def never_abort(*, check_deadline: bool = True) -> str | None:
     del check_deadline
     return None
@@ -1336,6 +1418,155 @@ def test_zeta_async_agent_turn_runs_turns_concurrently() -> None:
 
     asyncio.run(run())
     assert set(seen) == {"first", "second"}
+
+
+def test_zeta_publish_event_is_visible_only_with_publishes() -> None:
+    without_publishes = PublishEventGateway([{"content": "done"}])
+    with_publishes = PublishEventGateway([{"content": "done"}])
+
+    run_agent_turn(
+        "answer",
+        [],
+        zeta_agent.AgentConfig(max_turns=1),
+        model_gateway=without_publishes,
+    )
+    run_agent_turn(
+        "answer",
+        [],
+        zeta_agent.AgentConfig(max_turns=1),
+        model_gateway=with_publishes,
+        publishable_events=PUBLISHED_EVENT_SCHEMAS,
+        source_queue_item_id="qi-work",
+    )
+
+    assert "publish_event" not in without_publishes.tool_names[0]
+    assert "publish_event" in with_publishes.tool_names[0]
+
+
+def test_zeta_publish_event_rejects_an_existing_model_tool_name() -> None:
+    input_schema = {"type": "object"}
+    tool_schema = zeta_agent.CapabilityToolSchema(
+        routes={
+            "publish_event": zeta_agent.CapabilityToolRoute(
+                capability_id="provider.publish",
+                input_schema=input_schema,
+                adapt_arguments=zeta_agent.identity_arguments,
+            )
+        },
+        descriptors=[
+            zeta_agent.model_descriptor(
+                "publish_event",
+                "Publish through the provider.",
+                input_schema,
+            )
+        ],
+    )
+
+    with pytest.raises(ValueError, match="reserved tool name 'publish_event'"):
+        zeta_agent.publish_event_tool_schema(tool_schema)
+
+
+def test_zeta_publish_event_returns_a_stable_handle_and_request() -> None:
+    def run_once() -> AgentRunResult:
+        return run_publish_event_calls(publish_event_tool_call("call-1"))
+
+    first = run_once()
+    second = run_once()
+
+    assert len(first.publish_event_requests) == 1
+    request = first.publish_event_requests[0]
+    assert request.event_type == "issue.triaged"
+    assert request.payload == {"status": "ready"}
+    assert request.at is None
+    assert request.position == 0
+    assert request.handle == second.publish_event_requests[0].handle
+    tool_result = event_by_type(first.events, "tool_result")
+    assert tool_result["result"]["ok"] is True
+    assert request.handle in json.dumps(tool_result["result"])
+
+
+def test_zeta_publish_event_rejects_an_undeclared_event_type() -> None:
+    result = run_publish_event_calls(
+        publish_event_tool_call("call-1", event_type="issue.closed")
+    )
+
+    assert result.publish_event_requests == []
+    tool_result = event_by_type(result.events, "tool_result")
+    assert tool_result["result"]["ok"] is False
+    assert tool_result["status"] == "failed"
+
+
+def test_zeta_publish_event_rejects_an_invalid_payload() -> None:
+    result = run_publish_event_calls(
+        publish_event_tool_call("call-1", payload={"status": 3})
+    )
+
+    assert result.publish_event_requests == []
+    tool_result = event_by_type(result.events, "tool_result")
+    assert tool_result["result"]["ok"] is False
+    assert tool_result["status"] == "failed"
+
+
+@pytest.mark.parametrize("at", ["not-a-date", "2030-01-02T03:04:05"])
+def test_zeta_publish_event_rejects_invalid_or_naive_time(at: str) -> None:
+    result = run_publish_event_calls(publish_event_tool_call("call-1", at=at))
+
+    assert result.publish_event_requests == []
+    tool_result = event_by_type(result.events, "tool_result")
+    assert tool_result["result"]["ok"] is False
+    assert tool_result["status"] == "failed"
+
+
+def test_zeta_publish_event_normalizes_an_aware_time_to_utc() -> None:
+    result = run_publish_event_calls(
+        publish_event_tool_call("call-1", at="2030-01-02T05:04:05+02:00")
+    )
+
+    assert result.publish_event_requests[0].at == "2030-01-02T03:04:05+00:00"
+
+
+def test_zeta_publish_event_bypasses_executor_and_effect_facts() -> None:
+    class UnexpectedExecutor:
+        async def call(
+            self,
+            capability_id: str,
+            params: dict[str, Any],
+            *,
+            base_dir: Path | None,
+            effect_key: str | None,
+        ) -> dict[str, Any]:
+            del capability_id, params, base_dir, effect_key
+            raise AssertionError("publish_event must not use the tool executor")
+
+        async def aclose(self) -> None:
+            return None
+
+    result = run_publish_event_calls(
+        publish_event_tool_call("call-1"),
+        tool_executor=UnexpectedExecutor(),
+    )
+
+    assert len(result.publish_event_requests) == 1
+    assert not any(
+        event.event_type.startswith("runtime.effect.") for event in result.events
+    )
+
+
+def test_zeta_publish_event_keeps_global_order_across_model_turns() -> None:
+    result = run_publish_event_calls(
+        publish_event_tool_call("call-1"),
+        publish_event_tool_call(
+            "call-2",
+            payload={"status": "complete"},
+        ),
+    )
+
+    assert [request.position for request in result.publish_event_requests] == [0, 1]
+    assert [request.payload for request in result.publish_event_requests] == [
+        {"status": "ready"},
+        {"status": "complete"},
+    ]
+    assert len({request.handle for request in result.publish_event_requests}) == 2
 
 
 def test_zeta_step_model_without_tool_calls_returns_info_and_stops() -> None:
@@ -4190,6 +4421,83 @@ def test_zeta_cli_events_json_lists_durable_events(tmp_path: Path) -> None:
     ]
 
 
+def test_zeta_cli_events_lists_and_cancels_scheduled_events(tmp_path: Path) -> None:
+    state_dir = tmp_path / ".zeta"
+    event_store = zeta_events.SqliteEventStore(event_store_path(state_dir))
+    event_store.accept(
+        DraftEvent(
+            "runtime.scheduled_event.created",
+            "zeta",
+            {
+                "handle": "publication-1",
+                "event_type": "report.ready",
+                "payload": {"report_id": "report-1"},
+                "publish_at": "2030-01-02T03:04:05+00:00",
+                "source_agent_id": "reporter",
+                "source_session_id": "session-1",
+                "source_queue_item_id": "qi-report",
+                "position": 0,
+            },
+            idempotency_key="agent.schedule:qi-report:0",
+        )
+    )
+    event_store.close()
+
+    listed = CliRunner().invoke(
+        cli_main.cli,
+        ["events", "scheduled", "--state-dir", str(state_dir), "--json"],
+    )
+    text_listed = CliRunner().invoke(
+        cli_main.cli,
+        ["events", "scheduled", "--state-dir", str(state_dir)],
+    )
+    cancelled = CliRunner().invoke(
+        cli_main.cli,
+        [
+            "events",
+            "cancel-scheduled",
+            "publication-1",
+            "--state-dir",
+            str(state_dir),
+        ],
+    )
+    repeated = CliRunner().invoke(
+        cli_main.cli,
+        [
+            "events",
+            "cancel-scheduled",
+            "publication-1",
+            "--state-dir",
+            str(state_dir),
+        ],
+    )
+    unknown = CliRunner().invoke(
+        cli_main.cli,
+        [
+            "events",
+            "cancel-scheduled",
+            "missing",
+            "--state-dir",
+            str(state_dir),
+        ],
+    )
+
+    assert listed.exit_code == 0
+    rows = json.loads(listed.output)
+    assert rows[0]["handle"] == "publication-1"
+    assert rows[0]["event_type"] == "report.ready"
+    assert rows[0]["payload"] == {"report_id": "report-1"}
+    assert rows[0]["status"] == "pending"
+    assert text_listed.exit_code == 0
+    assert text_listed.output.startswith("pending\tpublication-1\treport.ready\t")
+    assert cancelled.exit_code == 0
+    assert cancelled.output == "cancelled publication-1\n"
+    assert repeated.exit_code == 1
+    assert "scheduled event is already cancelled: publication-1" in repeated.output
+    assert unknown.exit_code == 1
+    assert "scheduled event not found: missing" in unknown.output
+
+
 def test_zeta_cli_events_filters_default_listing(tmp_path: Path) -> None:
     state_dir = tmp_path / ".zeta"
     event_store = zeta_events.SqliteEventStore(event_store_path(state_dir))
@@ -5808,12 +6116,11 @@ Ping.
     assert config.thinking == "high"
 
 
-def test_zeta_worker_returned_events_use_runtime_model_selection(
+def test_zeta_worker_final_answer_does_not_publish_event(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     captured: dict[str, Any] = {}
-    published: list[DraftEvent] = []
 
     async def fake_run_agent(
         request: Any,
@@ -5822,24 +6129,7 @@ def test_zeta_worker_returned_events_use_runtime_model_selection(
         captured["request"] = request
         captured.update(kwargs)
         captured["request"] = request
-        return AgentRunResult(final_answer="two observations")
-
-    async def fake_structured_output(
-        messages: list[dict[str, Any]],
-        **options: Any,
-    ) -> dict[str, Any]:
-        captured["structured_messages"] = messages
-        captured["structured_options"] = options
-        return {
-            "events": [
-                {"type": "agent.ponged", "payload": {"value": "one"}},
-                {"type": "agent.ponged", "payload": {"value": "two"}},
-            ]
-        }
-
-    async def publish_event(draft: DraftEvent) -> Event:
-        published.append(draft)
-        return Event.from_draft(draft)
+        return AgentRunResult(final_answer="No event requested.")
 
     agents_dir = tmp_path / "agents"
     agents_dir.mkdir()
@@ -5860,28 +6150,15 @@ name: Ping
 description: Reacts to pings.
 accepts:
   - agent.ping
-returns:
+publishes:
   - agent.ponged
 ---
-Return every pong.
+Publish a pong when one is needed.
 """,
         encoding="utf-8",
     )
-    selection = ModelSelection(
-        profile="codex",
-        model="gpt-test",
-        url="https://chatgpt.com/backend-api",
-        thinking="high",
-        api="codex-responses",
-    )
     monkeypatch.setattr(harness_worker, "run_agent", fake_run_agent)
-    monkeypatch.setattr(
-        zeta_models_api,
-        "chat_structured_output",
-        fake_structured_output,
-    )
     runtime = harness_worker.build_worker_services(project_root=tmp_path)
-    runtime.model_selection = selection
 
     with asyncio.Runner() as runner:
         try:
@@ -5906,7 +6183,6 @@ Return every pong.
                         harness_dispatch.AgentInvocation(
                             agent.definition,
                             event,
-                            publish_event=publish_event,
                             attempt_id="att_qi_evt_ping_1",
                         )
                     ),
@@ -5915,15 +6191,98 @@ Return every pong.
         finally:
             runner.run(runtime.aclose())
 
-    options = captured["structured_options"]
-    assert options["api"] == "codex-responses"
-    assert options["selected_model"] == "gpt-test"
-    assert options["selected_url"] == "https://chatgpt.com/backend-api"
-    assert [draft.payload for draft in published] == [
-        {"value": "one"},
-        {"value": "two"},
+    request = captured["request"]
+    assert request.publishable_events == {
+        "agent.ponged": {
+            "type": "object",
+            "required": ["value"],
+            "properties": {"value": {"type": "string"}},
+            "additionalProperties": False,
+        }
+    }
+    assert request.source_queue_item_id == "qi_evt_ping_ping"
+    assert result == {"final_answer": "No event requested."}
+
+
+def test_zeta_worker_preserves_explicit_publish_request(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_run_agent(request: Any, **kwargs: Any) -> AgentRunResult:
+        del request, kwargs
+        return AgentRunResult(
+            final_answer="done",
+            publish_event_requests=[
+                zeta_outcomes.PublishEventRequest(
+                    handle="pub_explicit",
+                    event_type="agent.ponged",
+                    payload={"value": "explicit"},
+                    at=None,
+                    position=0,
+                )
+            ],
+        )
+
+    agents_dir = tmp_path / "agents"
+    agents_dir.mkdir()
+    write_project_event_schema(tmp_path, "agent.ping")
+    write_project_event_schema(tmp_path, "agent.ponged")
+    (agents_dir / "ping.md").write_text(
+        """---
+name: Ping
+description: Reacts to pings.
+accepts:
+  - agent.ping
+publishes:
+  - agent.ponged
+---
+Publish a pong.
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(harness_worker, "run_agent", fake_run_agent)
+    runtime = harness_worker.build_worker_services(project_root=tmp_path)
+
+    with asyncio.Runner() as runner:
+        try:
+            agent = harness_worker.project_executors(runtime)[0]
+            result = runner.run(
+                cast(
+                    Coroutine[Any, Any, dict[str, Any]],
+                    agent.run(
+                        harness_dispatch.AgentInvocation(
+                            agent.definition,
+                            Event(
+                                id="evt_ping",
+                                event_type="agent.ping",
+                                source="manual",
+                                payload={},
+                                idempotency_key=None,
+                                caused_by=None,
+                                session_id=None,
+                                run_id=None,
+                                turn_id=None,
+                                timestamp_ms=1,
+                                cursor=1,
+                            ),
+                            queue_item_id="qi_ping",
+                            attempt_id="att_qi_ping_1",
+                        )
+                    ),
+                )
+            )
+        finally:
+            runner.run(runtime.aclose())
+
+    assert result["publish_event_requests"] == [
+        {
+            "handle": "pub_explicit",
+            "event_type": "agent.ponged",
+            "payload": {"value": "explicit"},
+            "at": None,
+            "position": 0,
+        }
     ]
-    assert len(result["returned_events"]) == 2
 
 
 def test_zeta_worker_agent_runner_uses_agent_model_config(
@@ -6113,6 +6472,61 @@ def test_zeta_local_runtime_does_not_complete_stale_queue_claim(
     assert "runtime.queue_item.completed" not in event_types
     assert queue_item["status"] == "claimed"
     assert queue_item["claimed_by"] == "local-runtime"
+    assert attempt["status"] == "running"
+
+
+def test_zeta_local_runtime_does_not_complete_an_expired_queue_claim(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    event_store = zeta_events.SqliteEventStore(tmp_path / "events.sqlite3")
+    accepted = event_store.accept(
+        zeta_events.DraftEvent("github.issue.opened", "github", {})
+    ).event
+
+    claim_time_ms = accepted.timestamp_ms + 1_000
+    now_ms = [claim_time_ms]
+
+    async def run_agent(_run: harness_dispatch.AgentInvocation) -> dict[str, object]:
+        now_ms[0] = claim_time_ms + 1_001
+        return {"final_answer": "stale"}
+
+    agent = harness_dispatch.ExecutableAgent(
+        harness_dispatch.AgentDefinition(
+            "issue-triage",
+            (harness_dispatch.EventPattern("github.issue.opened"),),
+        ),
+        run=run_agent,
+    )
+    monkeypatch.setattr(harness_worker, "project_executors", lambda _runtime: (agent,))
+    runtime = harness_worker.WorkerServices(
+        project_root=tmp_path,
+        state_dir=tmp_path,
+        events=event_store,
+    )
+    monkeypatch.setattr(
+        harness_dispatch,
+        "current_time_ms",
+        lambda: now_ms[0],
+    )
+    monkeypatch.setattr(harness_worker, "QUEUE_LEASE_MS", 1_000)
+
+    with asyncio.Runner() as runner:
+        try:
+            message = runner.run(harness_worker.run_once(runtime))
+            event_types = [
+                event.event_type
+                for event in event_store.list_events(zeta_events.Filter())
+            ]
+            queue_item = event_store.list_queue_items()[0]
+            attempt = event_store.list_attempts()[0]
+        finally:
+            runner.run(runtime.aclose())
+
+    assert message.startswith("ran ")
+    assert "runtime.attempt.completed" not in event_types
+    assert "runtime.queue_item.completed" not in event_types
+    assert queue_item["status"] == "claimed"
     assert attempt["status"] == "running"
 
 

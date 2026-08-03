@@ -41,9 +41,36 @@ default; the worker builds it and passes its `run` method. Remote transport,
 tool brokering, and trace streaming build on this boundary. They are not
 separate runtimes.
 
+### Agent Event Requests
+
+An authored agent that declares `publishes` receives the `publish_event` control
+tool. The tool accepts one declared event type, its payload, and an optional
+absolute `at` time. The time must include a UTC offset.
+
+The agent must use `publish_event` to request each event. Zeta does not infer
+events from the model response.
+
+The loop validates the request and returns a stable handle. The loop does not
+write the requested event. The loop adds an ordered `PublishEventRequest` to the run
+result. This keeps event writes under the queue claim that owns the attempt.
+
+The coordinator performs the final claim check inside one journal transaction. It
+sends event notifications only after that transaction commits. The transaction
+contains:
+
+```text
+runtime.attempt.completed
+requested events or runtime.scheduled_event.created facts
+runtime.queue_item.completed
+```
+
+A failed, cancelled, or stale attempt writes none of its requests. A retry
+uses the source queue item and request position to get the same handle and
+idempotency key.
+
 ## Runtime Journal
 
-The `events` table is the durable journal. Ingress, returned events, queue
+The `events` table is the durable journal. Ingress, published events, queue
 lifecycle events, attempt lifecycle events, and connector delivery events are
 historical facts. They retain their event ids, idempotency keys, causality, and
 append order.
@@ -54,6 +81,7 @@ rebuilt:
 - `queue_items`
 - `attempts`
 - `attempt_results`
+- `scheduled_events`
 - `session_mappings`
 
 Rebuilding them must produce the same terminal queue and attempt history.
@@ -68,6 +96,7 @@ event_id       = evt_<uuid>
 queue_item_id  = qi_<event_id>_<agent_id>
 attempt_id     = att_<queue_item_id>_<attempt_number>
 run_id         = run_<attempt_id>
+publish_handle = pub_<hash(queue_item_id, position)>
 ```
 
 This is what makes the chain idempotent. A router that sees the same event
@@ -137,9 +166,33 @@ running -> completed
 Retries create a new attempt; they never restart or mutate a terminal attempt.
 
 An agent-published event is appended and projected as pending work during the
-current attempt. The current attempt reaches a terminal state before the
-coordinator claims that downstream event. No recursive dispatch path remains:
-an agent never runs a downstream event inside its own attempt.
+successful completion transaction. The attempt reaches a terminal state before
+the event becomes downstream work. No recursive dispatch path remains: an
+agent never runs a downstream event inside its own attempt.
+
+## One-Shot Scheduled Events
+
+A future `publish_event` request creates a
+`runtime.scheduled_event.created` fact. The `scheduled_events` projection keeps
+its target time and terminal state. A rebuild restores this state from created,
+published, and cancelled facts.
+
+Before a worker claims queue work, it publishes one due scheduled event. It
+uses one SQLite transaction to claim the row, append the normal event, append
+`runtime.scheduled_event.published`, and update the projections. If a crash
+occurs, SQLite rolls back the transaction. The scheduled event stays pending.
+Two workers cannot publish the same row.
+
+Cancellation appends `runtime.scheduled_event.cancelled`. Publication and
+cancellation use the same conditional claim, so only one can win.
+
+Inspect and cancel these requests with:
+
+```sh
+zeta events scheduled
+zeta events scheduled --json
+zeta events cancel-scheduled <handle>
+```
 
 ## Claim Fencing
 

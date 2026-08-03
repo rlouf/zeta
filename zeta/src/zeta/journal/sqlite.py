@@ -9,8 +9,8 @@ import json
 import sqlite3
 import threading
 import time
-from collections.abc import Iterable, Sequence
-from contextlib import AbstractContextManager
+from collections.abc import Iterable, Iterator, Sequence
+from contextlib import AbstractContextManager, contextmanager
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -281,6 +281,27 @@ class SqliteEventStore:
         """Open an immediate write transaction, retrying transient locks."""
         _execute_with_retry(self.connection, "BEGIN IMMEDIATE")
 
+    @contextmanager
+    def transaction(self) -> Iterator[None]:
+        """Join or own one write transaction.
+
+        Nested event writes must leave the commit decision to the operation
+        that owns the complete runtime state transition.
+        """
+        with self._write_lock:
+            owns_transaction = not self.connection.in_transaction
+            if owns_transaction:
+                self.begin_immediate()
+            try:
+                yield
+            except BaseException:
+                if owns_transaction:
+                    self.connection.rollback()
+                raise
+            else:
+                if owns_transaction:
+                    self.connection.commit()
+
     def _init_schema(self) -> None:
         with self._write_lock:
             self.connection.executescript(
@@ -398,50 +419,52 @@ class SqliteEventStore:
         return self.append(Event.from_draft(draft))
 
     def append(self, event: Event) -> AppendOutcome:
+        with self.transaction():
+            return self.append_in_transaction(event)
+
+    def append_in_transaction(self, event: Event) -> AppendOutcome:
+        """Append without ending the caller's transaction.
+
+        A runtime state transition sometimes needs one event and its related
+        facts to become visible together. The caller owns the write lock,
+        commit, and rollback so a duplicate cannot commit a partial batch.
+        """
+        if not self.connection.in_transaction:
+            raise RuntimeError("transaction-local append requires a transaction")
         payload = json.dumps(
             json_native_payload(event.payload),
             ensure_ascii=False,
             separators=(",", ":"),
         )
-        with self._write_lock:
-            _execute_with_retry(self.connection, "BEGIN IMMEDIATE")
-            try:
-                cursor = self.connection.execute(
-                    """
-                    INSERT INTO events
-                      (id, type, source, payload, idempotency_key, caused_by,
-                       session_id, run_id, turn_id, timestamp)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    ON CONFLICT DO NOTHING
-                    """,
-                    (
-                        event.id,
-                        event.event_type,
-                        event.source,
-                        payload,
-                        event.idempotency_key,
-                        event.caused_by,
-                        event.session_id,
-                        event.run_id,
-                        event.turn_id,
-                        event.timestamp_ms,
-                    ),
-                )
-                if cursor.rowcount != 1:
-                    self.connection.commit()
-                    return AppendOutcome(
-                        event=self._duplicate_for(event), inserted=False
-                    )
-                inserted = self.get(event.id)
-                if inserted is None:
-                    raise sqlite3.IntegrityError(f"append failed for event {event.id}")
-                self._index_one_session_mapping(inserted)
-                self._index_one_runtime_event(inserted)
-                self.connection.commit()
-                return AppendOutcome(event=inserted, inserted=True)
-            except Exception:
-                self.connection.rollback()
-                raise
+        cursor = self.connection.execute(
+            """
+            INSERT INTO events
+              (id, type, source, payload, idempotency_key, caused_by,
+               session_id, run_id, turn_id, timestamp)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT DO NOTHING
+            """,
+            (
+                event.id,
+                event.event_type,
+                event.source,
+                payload,
+                event.idempotency_key,
+                event.caused_by,
+                event.session_id,
+                event.run_id,
+                event.turn_id,
+                event.timestamp_ms,
+            ),
+        )
+        if cursor.rowcount != 1:
+            return AppendOutcome(event=self._duplicate_for(event), inserted=False)
+        inserted = self.get(event.id)
+        if inserted is None:
+            raise sqlite3.IntegrityError(f"append failed for event {event.id}")
+        self._index_one_session_mapping(inserted)
+        self._index_one_runtime_event(inserted)
+        return AppendOutcome(event=inserted, inserted=True)
 
     def _index_one_session_mapping(self, event: Event) -> None:
         if event.session_id is None or event.run_id is None:

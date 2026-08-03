@@ -16,6 +16,7 @@ from connectors import (
     EventConnectorRegistry,
 )
 
+from zeta import ids
 from zeta.authoring.resources import load_connector_registry
 from zeta.authoring.spec import executor_config
 from zeta.capabilities.executors import (
@@ -262,6 +263,7 @@ async def run_once(runtime: WorkerServices) -> str:
             return serviced
     record_project_snapshot(runtime.events, runtime.project_snapshot)
     publish_due_schedules(runtime)
+    runtime.events.publish_next_due_scheduled_event()
     executors = project_executors(runtime)
     return await run_available_queue_item(
         runtime.events,
@@ -386,6 +388,10 @@ class RuntimeAgentLoop:
         started = time.perf_counter()
         try:
             tool_executor = await self.runtime.tool_executor_for(invocation.agent)
+            queue_item_id = invocation.queue_item_id or ids.queue_item_id(
+                invocation.triggering_event.id,
+                invocation.agent.agent_id,
+            )
             return await run_agent(
                 AgentRunRequest(
                     objective=objective,
@@ -397,8 +403,10 @@ class RuntimeAgentLoop:
                             config,
                             self.runtime.model_selection,
                         ),
-                        effect_scope=invocation.queue_item_id,
+                        effect_scope=queue_item_id,
                     ),
+                    publishable_events=invocation.agent.publishable_events,
+                    source_queue_item_id=queue_item_id,
                 ),
                 run_id=run_id,
                 caused_by=invocation.triggering_event.id,

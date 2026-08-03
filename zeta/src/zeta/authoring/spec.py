@@ -21,7 +21,7 @@ BUILT_IN_FRONTMATTER_KEYS = frozenset(
         "model",
         "executor",
         "accepts",
-        "returns",
+        "publishes",
         "skills",
         "tools",
         "schedules",
@@ -79,7 +79,7 @@ class AgentSpec:
     model: ModelSpec | None = None
     executor: ExecutorSpec = field(default_factory=ExecutorSpec)
     accepts: tuple[str, ...] = ()
-    returns: tuple[str, ...] = ()
+    publishes: tuple[str, ...] = ()
     skills: tuple[str, ...] = ()
     tools: tuple[str, ...] = ()
     schedules: tuple[ScheduleEntry, ...] = ()
@@ -114,7 +114,10 @@ def load_spec(path: str | Path) -> AgentSpec:
         )
         schedules = schedule_tuple(frontmatter.get("schedules", ()), path)
         accepts = accepts_with_schedules(authored_accepts, schedules, slug)
-        returns, egress = returns_entries(frontmatter.get("returns", ()), path)
+        publishes, egress = publishes_entries(
+            frontmatter.get("publishes", ()),
+            path,
+        )
         return AgentSpec(
             slug=slug,
             name=required_string(frontmatter, "name", path),
@@ -127,7 +130,7 @@ def load_spec(path: str | Path) -> AgentSpec:
             model=model_spec(frontmatter.get("model"), path),
             executor=executor_spec(frontmatter.get("executor"), path),
             accepts=accepts,
-            returns=returns,
+            publishes=publishes,
             skills=string_tuple(frontmatter.get("skills", ()), "skills", path),
             tools=string_tuple(frontmatter.get("tools", ()), "tools", path),
             schedules=schedules,
@@ -415,35 +418,35 @@ def accepts_entries(
     return tuple(events), tuple(bindings)
 
 
-def returns_entries(
+def publishes_entries(
     value: Any, path: Path
 ) -> tuple[tuple[str, ...], tuple[EgressBinding, ...]]:
     if value is None or value == ():
         return (), ()
     if not isinstance(value, list | tuple):
-        raise SpecError(f"invalid value for 'returns' in {path}: expected list")
+        raise SpecError(f"invalid value for 'publishes' in {path}: expected list")
     events: list[str] = []
     bindings: list[EgressBinding] = []
     for index, item in enumerate(value):
         if isinstance(item, str) and item:
             events.append(item)
             continue
-        entry = event_entry(item, "returns", index, path)
-        event = required_event(entry, "returns", index, path)
+        entry = event_entry(item, "publishes", index, path)
+        event = required_event(entry, "publishes", index, path)
         events.append(event)
         bindings.append(
             EgressBinding(
                 event=event,
                 options=mapping_field(
                     entry.get("with", {}),
-                    "returns",
+                    "publishes",
                     "with",
                     index,
                     path,
                 ),
                 idempotency_key=optional_string_field(
                     entry.get("idempotency_key"),
-                    "returns",
+                    "publishes",
                     "idempotency_key",
                     index,
                     path,
@@ -464,10 +467,10 @@ def event_entry(value: Any, field: str, index: int, path: Path) -> Mapping[str, 
         if field == "accepts"
         else {"event", "with", "idempotency_key"}
     )
-    if field == "returns" and "filter" in value:
+    if field == "publishes" and "filter" in value:
         raise SpecError(
-            f"invalid value for 'returns' in {path}: item {index} must use "
-            "'with' for returned event options"
+            f"invalid value for 'publishes' in {path}: item {index} must use "
+            "'with' for published event options"
         )
     unknown = sorted(set(value) - supported)
     if unknown:

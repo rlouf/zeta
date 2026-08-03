@@ -72,6 +72,67 @@ def events_list(
     return 0
 
 
+@events.command("scheduled")
+@state_dir_option
+@click.option("--json", "json_output", is_flag=True, help="Emit JSON.")
+def events_scheduled(
+    state_dir: Path | None,
+    json_output: bool,
+) -> int:
+    """List one-shot events requested by agents."""
+
+    event_store = runtime_event_store(state_dir)
+    try:
+        scheduled_events = event_store.list_scheduled_events()
+    finally:
+        event_store.close()
+    if json_output:
+        click.echo(json.dumps(scheduled_events, ensure_ascii=False))
+        return 0
+    if not scheduled_events:
+        click.echo("scheduled events empty")
+        return 0
+    for scheduled in scheduled_events:
+        click.echo(
+            "\t".join(
+                [
+                    scheduled["status"],
+                    scheduled["handle"],
+                    scheduled["event_type"],
+                    str(scheduled["publish_at_ms"]),
+                ]
+            )
+        )
+    return 0
+
+
+@events.command("cancel-scheduled")
+@state_dir_option
+@click.argument("handle")
+def events_cancel_scheduled(
+    state_dir: Path | None,
+    handle: str,
+) -> int:
+    """Cancel one pending event request by HANDLE."""
+
+    event_store = runtime_event_store(state_dir, read_only=False)
+    try:
+        status = event_store.cancel_scheduled_event(handle)
+    finally:
+        event_store.close()
+    if status == "cancelled":
+        click.echo(f"cancelled {handle}")
+        return 0
+    if status == "unknown":
+        raise click.ClickException(f"scheduled event not found: {handle}")
+    if status.startswith("already_"):
+        terminal_status = status.removeprefix("already_")
+        raise click.ClickException(
+            f"scheduled event is already {terminal_status}: {handle}"
+        )
+    raise click.ClickException(f"scheduled event changed while cancelling: {handle}")
+
+
 @events.command("publish")
 @state_dir_option
 @click.argument("event_type")

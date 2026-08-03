@@ -10,9 +10,11 @@ from zeta.capabilities.registry import CapabilityRegistry
 from zeta.events import DraftEvent
 from zeta.harness.dispatch import QueueingDispatcher
 from zeta.harness.project import (
+    ProjectSnapshot,
     ProjectSnapshotUnavailable,
     agent_from_manifest,
     agent_manifest,
+    content_id,
     load_project_snapshot,
     load_recorded_project_snapshot,
     record_project_snapshot,
@@ -39,6 +41,8 @@ name: Worker
 description: {description}
 accepts:
   - work.requested
+publishes:
+  - work.completed
 ---
 Handle the work.
 """,
@@ -46,6 +50,17 @@ Handle the work.
     )
     (events / "work.requested.json").write_text(
         json.dumps({"type": "object", "additionalProperties": False}),
+        encoding="utf-8",
+    )
+    (events / "work.completed.json").write_text(
+        json.dumps(
+            {
+                "type": "object",
+                "properties": {"result": {"type": "string"}},
+                "required": ["result"],
+                "additionalProperties": False,
+            }
+        ),
         encoding="utf-8",
     )
     return agents
@@ -80,6 +95,75 @@ def test_project_snapshot_generation_is_content_addressed(tmp_path: Path) -> Non
     assert first.generation_id == second.generation_id
     assert first.manifest == second.manifest
     assert changed.generation_id != first.generation_id
+
+
+def test_project_snapshot_round_trips_publishes(tmp_path: Path) -> None:
+    snapshot = load_snapshot(write_snapshot_project(tmp_path))
+    store = RuntimeEventStore.open(tmp_path / "zeta.sqlite3")
+
+    record_project_snapshot(store, snapshot)
+    restored = load_recorded_project_snapshot(
+        store,
+        snapshot.generation_id,
+        registry=EventConnectorRegistry(),
+    )
+
+    agent = snapshot.manifest["agents"][0]
+    assert snapshot.manifest["version"] == 2
+    assert agent["publishes"] == ["work.completed"]
+    assert "returns" not in agent
+    assert restored.project.specs[0].publishes == ("work.completed",)
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "error"),
+    [
+        ("schema", "zeta.other_snapshot", "unsupported project snapshot schema"),
+        ("version", 1, "unsupported project snapshot version"),
+    ],
+)
+def test_recorded_project_snapshot_rejects_other_formats(
+    tmp_path: Path,
+    field: str,
+    value: object,
+    error: str,
+) -> None:
+    current = load_snapshot(write_snapshot_project(tmp_path))
+    manifest = {**current.manifest, field: value}
+    generation_id = content_id("project", manifest)
+    legacy = ProjectSnapshot(generation_id, current.project, manifest)
+    store = RuntimeEventStore.open(tmp_path / "zeta.sqlite3")
+    record_project_snapshot(store, legacy)
+
+    with pytest.raises(ProjectSnapshotUnavailable, match=error):
+        load_recorded_project_snapshot(
+            store,
+            generation_id,
+            registry=EventConnectorRegistry(),
+        )
+
+
+def test_execution_manifest_contains_publishes_and_relevant_schemas(
+    tmp_path: Path,
+) -> None:
+    snapshot = load_snapshot(write_snapshot_project(tmp_path))
+
+    execution_manifest = snapshot.execution_manifest(snapshot.project.specs[0])
+
+    assert execution_manifest["version"] == 2
+    assert execution_manifest["agent"]["publishes"] == ["work.completed"]
+    assert "returns" not in execution_manifest["agent"]
+    assert set(execution_manifest["events"]) == {"work.requested", "work.completed"}
+    assert execution_manifest["events"]["work.requested"] == {
+        "type": "object",
+        "additionalProperties": False,
+    }
+    assert execution_manifest["events"]["work.completed"] == {
+        "type": "object",
+        "properties": {"result": {"type": "string"}},
+        "required": ["result"],
+        "additionalProperties": False,
+    }
 
 
 def test_project_snapshot_preserves_executor_config(tmp_path: Path) -> None:
@@ -150,6 +234,7 @@ def test_attempt_records_project_and_execution_manifests(tmp_path: Path) -> None
     executor = compile_agent_definition(
         spec,
         agent_loop=successful_agent_loop,
+        event_registry=snapshot.project.events,
         project_generation=snapshot.generation_id,
         execution_manifest=execution_manifest,
     )

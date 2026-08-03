@@ -42,7 +42,6 @@ from zeta.authoring.resources import (
     load_skill_registry,
     validate_agent_project,
 )
-from zeta.authoring.returns import derive_returns_schema
 from zeta.authoring.schemas import EventRegistry
 from zeta.authoring.spec import (
     AgentSpec,
@@ -80,16 +79,8 @@ from zeta.harness.routing import (
 from zeta.harness.sessions import agent_session_id
 from zeta.harness.store import RuntimeEventStore
 from zeta.journal.store import Filter
+from zeta.loop.outcomes import PublishEventRequest
 from zeta.loop.runtime import AgentRunResult
-
-
-def _async_events(events: list[Any]) -> Any:
-    """A structured-output runner that returns a fixed event list."""
-
-    async def run(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
-        return {"events": events}
-
-    return run
 
 
 def runtime_sqlite_event_store(path: Path) -> RuntimeEventStore:
@@ -128,7 +119,6 @@ zeta_agents = SimpleNamespace(
     compile_agent_definition=compile_agent_definition,
     compile_agent_definitions=compile_agent_definitions,
     config_for_spec=config_for_spec,
-    derive_returns_schema=derive_returns_schema,
     enabled_event_connector_ids=enabled_event_connector_ids,
     event_connector_entry_points=event_connector_entry_points,
     load_connector_registry=load_connector_registry,
@@ -280,7 +270,7 @@ class FakeSlackClient:
         return self.post_result
 
 
-def _slack_return_agent_spec(tmp_path: Path) -> AgentSpec:
+def _slack_publish_agent_spec(tmp_path: Path) -> AgentSpec:
     return zeta_agents.load_spec(
         _write_spec(
             tmp_path / "slack-qa.md",
@@ -289,7 +279,7 @@ name: Slack Q&A
 description: Answers workspace questions in Slack.
 accepts:
   - slack.message.received
-returns:
+publishes:
   - message.delivery.requested
 tools:
   - read
@@ -300,7 +290,7 @@ User asked: {{ event.payload.text }}
     )
 
 
-def _slack_return_event_registry() -> EventRegistry:
+def _slack_publish_event_registry() -> EventRegistry:
     return zeta_agents.EventRegistry(
         {
             "slack.message.received": {
@@ -322,8 +312,10 @@ def _slack_return_event_registry() -> EventRegistry:
     )
 
 
-def _recording_return_run(
+def _recording_publish_run(
     calls: list[dict[str, Any]],
+    *,
+    requests: list[PublishEventRequest] | None = None,
 ) -> Any:
     async def agent_loop(
         invocation: Any,
@@ -345,62 +337,41 @@ def _recording_return_run(
                 "run_id": run_id,
             }
         )
-        return AgentRunResult(final_answer="Send a reply to C1.")
+        return AgentRunResult(
+            final_answer="Send a reply to C1.",
+            publish_event_requests=requests
+            if requests is not None
+            else [
+                PublishEventRequest(
+                    handle="pub_explicit",
+                    event_type="message.delivery.requested",
+                    payload={"channel_id": "C1", "text": "hello"},
+                    at=None,
+                    position=0,
+                )
+            ],
+        )
 
     return agent_loop
 
 
-def _recording_structured_return(
-    calls: list[dict[str, Any]],
-) -> Callable[..., Any]:
-    async def structured_output(
-        messages: list[dict[str, Any]],
-        **kwargs: Any,
-    ) -> dict[str, Any]:
-        calls.append({"messages": messages, "kwargs": kwargs})
-        return {
-            "events": [
-                {
-                    "type": "message.delivery.requested",
-                    "payload": {"channel_id": "C1", "text": "hello"},
-                }
-            ]
-        }
-
-    return structured_output
-
-
-def _assert_return_run_called(calls: list[dict[str, Any]]) -> None:
+def _assert_publish_run_called(calls: list[dict[str, Any]]) -> None:
     assert len(calls) == 1
     assert calls[0]["objective"] == "User asked: hello"
-
-
-def _assert_structured_return_called(
-    calls: list[dict[str, Any]],
-    spec: AgentSpec,
-    events: EventRegistry,
-) -> None:
-    assert len(calls) == 1
-    assert calls[0]["kwargs"]["response_name"] == "zeta_agent_return"
-    assert calls[0]["kwargs"]["schema"] == zeta_agents.derive_returns_schema(
-        spec, events
-    )
-    assert calls[0]["kwargs"]["selected_model"] is None
-    assert calls[0]["kwargs"]["api"] is None
-    assert "Send a reply to C1." in calls[0]["messages"][1]["content"]
 
 
 def _assert_message_delivery_event(events: list[Any]) -> None:
     assert len(events) == 1
     assert events[0].source == "agent:slack-qa"
-    assert events[0].payload["channel_id"] == "C1"
-    assert events[0].payload["text"] == "hello"
+    assert events[0].payload == {"channel_id": "C1", "text": "hello"}
 
 
-def _assert_terminal_return_event(terminal: dict[str, Any] | None) -> None:
+def _assert_terminal_publish_event(terminal: dict[str, Any] | None) -> None:
     assert terminal is not None
     assert terminal["final_answer"] == "Send a reply to C1."
-    assert terminal["returned_events"][0]["type"] == "message.delivery.requested"
+    assert terminal["publish_event_requests"][0]["event_type"] == (
+        "message.delivery.requested"
+    )
 
 
 def test_zeta_agent_spec_loads_frontmatter_body_and_manifest(tmp_path: Path) -> None:
@@ -416,7 +387,7 @@ model:
   url: http://127.0.0.1:8080/v1/chat/completions
 accepts:
   - slack.message.received
-returns:
+publishes:
   - message.delivery.requested
 tools:
   - read
@@ -442,7 +413,7 @@ User asked: {{ event.payload.text }}
         url="http://127.0.0.1:8080/v1/chat/completions",
     )
     assert spec.accepts == ("slack.message.received", "agent.slack-qa.scheduled")
-    assert spec.returns == ("message.delivery.requested",)
+    assert spec.publishes == ("message.delivery.requested",)
     assert spec.tools == ("read",)
     assert spec.skills == ()
     assert spec.schedules == (
@@ -629,7 +600,7 @@ accepts:
     filter:
       channel_ids: ["C123"]
     idempotency_key: "slack:message:{team_id}:{channel_id}:{message_ts}"
-returns:
+publishes:
   - event: slack.message.post
     with:
       channel_ids: ["C123"]
@@ -641,7 +612,7 @@ Reply.
 
     assert spec.manifest == {}
     assert spec.accepts == ("slack.message.received",)
-    assert spec.returns == ("slack.message.post",)
+    assert spec.publishes == ("slack.message.post",)
     assert zeta_agents.ingress_bindings(spec) == (
         zeta_agents.IngressBinding(
             event="slack.message.received",
@@ -669,19 +640,19 @@ Reply.
             "event is required",
         ),
         (
-            """returns:
+            """publishes:
   - with:
       channel_ids: ["C123"]
 """,
             "event is required",
         ),
         (
-            """returns:
+            """publishes:
   - event: slack.message.post
     filter:
       channel_ids: ["C123"]
 """,
-            "use 'with' for returned event options",
+            "use 'with' for published event options",
         ),
     ],
 )
@@ -847,7 +818,7 @@ Summarize the repo.
             "name: Worker\ndescription: Worker\naccepts: github.issue.opened\n",
             "accepts",
         ),
-        ("name: Worker\ndescription: Worker\nreturns:\n  - 1\n", "returns"),
+        ("name: Worker\ndescription: Worker\npublishes:\n  - 1\n", "publishes"),
         ("name: Worker\ndescription: Worker\ntools:\n  - read\n  - 2\n", "tools"),
         ("name: Worker\ndescription: Worker\nskills:\n  - review\n  - 2\n", "skills"),
         ("name: Worker\ndescription: Worker\nexecutor: local\n", "executor"),
@@ -919,7 +890,30 @@ Do work.
         zeta_agents.load_spec(spec_path)
 
 
-def test_zeta_agent_spec_validates_renders_matches_and_derives_schema(
+def test_zeta_agent_manifest_rejects_legacy_returns_section(tmp_path: Path) -> None:
+    spec = zeta_agents.load_spec(
+        _write_spec(
+            tmp_path / "worker.md",
+            """---
+name: Worker
+description: Does work.
+returns:
+  - work.completed
+---
+Do work.
+""",
+        )
+    )
+
+    assert spec.publishes == ()
+    with pytest.raises(
+        zeta_agents.ManifestError,
+        match="unknown manifest section 'returns'",
+    ):
+        zeta_agents.Manifest().validate(spec)
+
+
+def test_zeta_agent_spec_validates_renders_and_matches(
     tmp_path: Path,
 ) -> None:
     spec = zeta_agents.load_spec(
@@ -930,7 +924,7 @@ name: Slack Q&A
 description: Answers workspace questions in Slack.
 accepts:
   - slack.message.received
-returns:
+publishes:
   - message.delivery.requested
 tools:
   - read
@@ -967,98 +961,9 @@ User asked: {{ event.payload.text }}
             "payload": {"text": "why is this slow?"},
         },
     )
-    returns_schema = zeta_agents.derive_returns_schema(spec, events)
-
     assert zeta_agents.matches(spec, "slack.message.received")
     assert not zeta_agents.matches(spec, "slack.dm.sent")
     assert rendered == "User asked: why is this slow?"
-    assert returns_schema == {
-        "type": "object",
-        "required": ["events"],
-        "properties": {
-            "events": {
-                "type": "array",
-                "items": {
-                    "anyOf": [
-                        {
-                            "type": "object",
-                            "required": ["type", "payload"],
-                            "properties": {
-                                "type": {
-                                    "type": "string",
-                                    "const": "message.delivery.requested",
-                                },
-                                "payload": {
-                                    "type": "object",
-                                    "required": ["channel_id", "text"],
-                                    "properties": {
-                                        "channel_id": {"type": "string"},
-                                        "text": {"type": "string"},
-                                    },
-                                },
-                            },
-                            "additionalProperties": False,
-                        },
-                    ]
-                },
-                "maxItems": 100,
-            }
-        },
-        "additionalProperties": False,
-    }
-
-
-def test_zeta_agent_return_schema_hoists_payload_local_definitions(
-    tmp_path: Path,
-) -> None:
-    spec = zeta_agents.load_spec(
-        _write_spec(
-            tmp_path / "reply.md",
-            """---
-name: Reply
-description: Replies with citations.
-accepts:
-  - message.received
-returns:
-  - message.replied
----
-Reply.
-""",
-        )
-    )
-    events = zeta_agents.EventRegistry(
-        {
-            "message.replied": {
-                "type": "object",
-                "required": ["evidence"],
-                "properties": {
-                    "evidence": {
-                        "type": "array",
-                        "items": {"$ref": "#/$defs/citation"},
-                    }
-                },
-                "$defs": {
-                    "citation": {
-                        "type": "object",
-                        "required": ["ref"],
-                        "properties": {"ref": {"type": "string"}},
-                        "additionalProperties": False,
-                    }
-                },
-                "additionalProperties": False,
-            }
-        }
-    )
-
-    schema = zeta_agents.derive_returns_schema(spec, events)
-
-    assert schema is not None
-    assert schema["properties"]["events"]["items"]["anyOf"][0]["properties"]["payload"][
-        "properties"
-    ]["evidence"]["items"] == {"$ref": "#/$defs/event_0_citation"}
-    assert schema["$defs"]["event_0_citation"]["properties"] == {
-        "ref": {"type": "string"}
-    }
 
 
 def test_zeta_agent_manifest_rejects_unknown_tool(tmp_path: Path) -> None:
@@ -1078,6 +983,84 @@ Use a tool.
 
     with pytest.raises(zeta_agents.ManifestError, match="unknown tool 'Missing'"):
         zeta_agents.Manifest(tools=CapabilityRegistry()).validate(spec)
+
+
+def test_zeta_agent_manifest_rejects_publish_event_as_authored_tool(
+    tmp_path: Path,
+) -> None:
+    spec = zeta_agents.load_spec(
+        _write_spec(
+            tmp_path / "worker.md",
+            """---
+name: Worker
+description: Does work.
+tools:
+  - publish_event
+---
+Publish an event.
+""",
+        )
+    )
+
+    with pytest.raises(
+        zeta_agents.ManifestError, match="reserved tool 'publish_event'"
+    ):
+        zeta_agents.Manifest().validate(spec)
+
+
+def test_zeta_agent_manifest_allows_authored_tool_named_dunder_return(
+    tmp_path: Path,
+) -> None:
+    spec = zeta_agents.load_spec(
+        _write_spec(
+            tmp_path / "worker.md",
+            """---
+name: Worker
+description: Does work.
+tools:
+  - __return
+---
+Use the tool.
+""",
+        )
+    )
+    tools = CapabilityRegistry()
+    tools.register(
+        RegisteredCapability(
+            Capability(
+                CapabilityId("host", "__return"),
+                "Publish a result.",
+                {"type": "object"},
+            ),
+            InProcessCapabilityExecutor(lambda params: {"ok": True}),
+        )
+    )
+
+    zeta_agents.Manifest(tools=tools).validate(spec)
+
+
+def test_zeta_agent_manifest_rejects_unknown_published_event(
+    tmp_path: Path,
+) -> None:
+    spec = zeta_agents.load_spec(
+        _write_spec(
+            tmp_path / "worker.md",
+            """---
+name: Worker
+description: Does work.
+publishes:
+  - work.completed
+---
+Do work.
+""",
+        )
+    )
+
+    with pytest.raises(
+        zeta_agents.ManifestError,
+        match="unknown event 'work.completed' in publishes",
+    ):
+        zeta_agents.Manifest(events=EventRegistry({})).validate(spec)
 
 
 def test_zeta_agent_manifest_rejects_unknown_skill(tmp_path: Path) -> None:
@@ -1631,7 +1614,7 @@ accepts:
     filter:
       channel_ids: ["C123"]
     idempotency_key: "slack:message:{team_id}:{channel_id}:{message_ts}"
-returns:
+publishes:
   - event: slack.message.post
     with:
       channel_ids: ["C123"]
@@ -1783,19 +1766,19 @@ Run.
             "invalid ingress filter",
         ),
         (
-            """returns:
+            """publishes:
   - event: missing.event
 """,
             "unknown egress event 'missing.event'",
         ),
         (
-            """returns:
+            """publishes:
   - event: slack.message.delete
 """,
             "unknown egress event 'slack.message.delete'",
         ),
         (
-            """returns:
+            """publishes:
   - event: slack.message.post
     with:
       channel_ids: [1]
@@ -1838,7 +1821,7 @@ ingress:
   - event: slack.message.received
     idempotency_key: "k"
 """,
-        """returns:
+        """publishes:
   - slack.message.post
 egress:
   - event: slack.message.post
@@ -2295,6 +2278,83 @@ Summarize.
     assert enqueued is True
 
 
+def test_zeta_run_once_routes_due_one_shot_event_after_restart(tmp_path: Path) -> None:
+    agents_dir = tmp_path / "agents"
+    events_dir = agents_dir / "events"
+    events_dir.mkdir(parents=True)
+    (events_dir / "work.ready.json").write_text(
+        json.dumps({"type": "object"}),
+        encoding="utf-8",
+    )
+    _write_spec(
+        agents_dir / "worker.md",
+        """---
+name: Worker
+description: Handles ready work.
+accepts:
+  - work.ready
+---
+Handle the work.
+""",
+    )
+    state_dir = tmp_path / ".zeta"
+    initial = harness_worker.build_worker_services(
+        project_root=tmp_path,
+        state_dir=state_dir,
+    )
+    initial.events.append(
+        Event(
+            id="scheduled-created",
+            event_type="runtime.scheduled_event.created",
+            source="zeta",
+            payload={
+                "handle": "publication-restart",
+                "event_type": "work.ready",
+                "payload": {"work_id": "work-1"},
+                "publish_at": "2020-01-02T03:04:05+00:00",
+                "source_agent_id": "producer",
+                "source_session_id": "session-1",
+                "source_queue_item_id": "qi-source",
+                "position": 0,
+            },
+            idempotency_key="agent.schedule:qi-source:0",
+            caused_by="attempt-completed",
+            session_id="session-1",
+            run_id="run-1",
+            timestamp_ms=1,
+        )
+    )
+    asyncio.run(initial.aclose())
+
+    runtime = harness_worker.build_worker_services(
+        project_root=tmp_path,
+        state_dir=state_dir,
+    )
+    with asyncio.Runner() as runner:
+        try:
+            message = runner.run(harness_worker.run_once(runtime))
+            requested = runtime.events.list_events(Filter(event_type="work.ready"))[0]
+            published = runtime.events.list_events(
+                Filter(event_type="runtime.scheduled_event.published")
+            )
+            queue_items = runtime.events.list_queue_items()
+            scheduled = runtime.events.list_scheduled_events()
+        finally:
+            runner.run(runtime.aclose())
+
+    assert message == f"routed {requested.id}"
+    assert requested.payload == {"work_id": "work-1"}
+    assert len(published) == 1
+    assert published[0].payload["published_event_id"] == requested.id
+    assert scheduled[0]["status"] == "published"
+    assert any(
+        item["event_id"] == requested.id
+        and item["target_agent"] == "worker"
+        and item["status"] == "available"
+        for item in queue_items
+    )
+
+
 def test_zeta_resolve_state_dir_explicit_and_environment_precedence(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -2472,7 +2532,7 @@ name: Worker
 description: Does work.
 accepts:
   - repo.requested
-returns:
+publishes:
   - repo.completed
 tools:
   - read
@@ -2502,26 +2562,24 @@ description: Does work.
         zeta_agents.validate_prompt(spec)
 
 
-def test_zeta_agent_with_returns_requires_event_registry(tmp_path: Path) -> None:
-    spec = _slack_return_agent_spec(tmp_path)
+def test_zeta_agent_with_publishes_requires_event_registry(tmp_path: Path) -> None:
+    spec = _slack_publish_agent_spec(tmp_path)
 
-    with pytest.raises(ValueError, match="returns require an event registry"):
+    with pytest.raises(ValueError, match="publishes require an event registry"):
         zeta_agents.compile_agent_definition(spec)
 
 
-def test_zeta_agent_with_returns_publishes_structured_return_event(
+def test_zeta_agent_with_publishes_publishes_explicit_request(
     tmp_path: Path,
 ) -> None:
-    spec = _slack_return_agent_spec(tmp_path)
-    events = _slack_return_event_registry()
+    spec = _slack_publish_agent_spec(tmp_path)
+    events = _slack_publish_event_registry()
     run_calls: list[dict[str, Any]] = []
-    structured_calls: list[dict[str, Any]] = []
 
     compiled = zeta_agents.compile_agent_definition(
         spec,
         event_registry=events,
-        agent_loop=_recording_return_run(run_calls),
-        structured_output=_recording_structured_return(structured_calls),
+        agent_loop=_recording_publish_run(run_calls),
     )
     store = zeta_events.SqliteEventStore(tmp_path / "events.sqlite3")
     dispatcher = harness_dispatch.QueueingDispatcher(store, executors=[compiled])
@@ -2537,7 +2595,7 @@ def test_zeta_agent_with_returns_publishes_structured_return_event(
             ),
         )
     )
-    returned = store.list_events(
+    published = store.list_events(
         zeta_events.Filter(event_type="message.delivery.requested")
     )
     terminal = harness_queue.terminal_queue_item_result(
@@ -2546,107 +2604,101 @@ def test_zeta_agent_with_returns_publishes_structured_return_event(
         target_agent="slack-qa",
     )
 
-    _assert_return_run_called(run_calls)
-    _assert_structured_return_called(structured_calls, spec, events)
-    _assert_message_delivery_event(returned)
-    _assert_terminal_return_event(terminal)
+    assert compiled.definition.publishable_events == {
+        "message.delivery.requested": events.schema("message.delivery.requested")
+    }
+    _assert_publish_run_called(run_calls)
+    _assert_message_delivery_event(published)
+    _assert_terminal_publish_event(terminal)
 
 
-def test_zeta_agent_with_returns_publishes_multiple_ordered_events(
+def test_zeta_completion_batch_discards_notifications_when_storage_fails(
     tmp_path: Path,
+    monkeypatch,
 ) -> None:
-    spec = _slack_return_agent_spec(tmp_path)
-    events = _slack_return_event_registry()
-
-    async def structured_output(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
-        return {
-            "events": [
-                {
-                    "type": "message.delivery.requested",
-                    "payload": {"channel_id": "C1", "text": "first"},
-                },
-                {
-                    "type": "message.delivery.requested",
-                    "payload": {"channel_id": "C2", "text": "second"},
-                },
-            ]
-        }
-
+    spec = _slack_publish_agent_spec(tmp_path)
     compiled = zeta_agents.compile_agent_definition(
         spec,
-        event_registry=events,
-        agent_loop=_recording_return_run([]),
-        structured_output=structured_output,
+        event_registry=_slack_publish_event_registry(),
+        agent_loop=_recording_publish_run([]),
     )
     store = zeta_events.SqliteEventStore(tmp_path / "events.sqlite3")
-    dispatcher = harness_dispatch.QueueingDispatcher(store, executors=[compiled])
+    published: list[Event] = []
+    append_in_transaction = store.events.append_in_transaction
 
-    outcome = asyncio.run(
-        dispatch_and_drain(
-            dispatcher,
-            zeta_events.DraftEvent(
-                "slack.message.received",
-                "test",
-                {"text": "hello"},
-            ),
+    def fail_completion(event: Event):
+        if event.event_type == "runtime.queue_item.completed":
+            raise RuntimeError("completion write failed")
+        return append_in_transaction(event)
+
+    monkeypatch.setattr(store.events, "append_in_transaction", fail_completion)
+
+    dispatcher = harness_dispatch.QueueingDispatcher(
+        store,
+        executors=[compiled],
+        publish_event=published.append,
+    )
+
+    with pytest.raises(RuntimeError, match="completion write failed"):
+        asyncio.run(
+            dispatch_and_drain(
+                dispatcher,
+                DraftEvent(
+                    "slack.message.received",
+                    "test",
+                    {"text": "hello"},
+                ),
+            )
         )
-    )
-    returned = store.list_events(
-        zeta_events.Filter(event_type="message.delivery.requested")
-    )
-    terminal = harness_queue.terminal_queue_item_result(
-        outcome.lifecycle_events,
-        event_id=outcome.event.id,
-        target_agent="slack-qa",
-    )
 
-    assert [event.payload["text"] for event in returned] == ["first", "second"]
-    assert returned[0].idempotency_key == (f"agent.return:{outcome.event.id}:slack-qa")
-    assert returned[1].idempotency_key == (
-        f"agent.return:{outcome.event.id}:slack-qa:1"
-    )
-    assert terminal is not None
-    assert [event["text"] for event in terminal["returned_events"]] == [
-        "first",
-        "second",
-    ]
+    event_types = [event.event_type for event in store.list_events(Filter())]
+    assert "runtime.attempt.started" in event_types
+    assert "runtime.attempt.completed" not in event_types
+    assert "message.delivery.requested" not in event_types
+    assert "runtime.queue_item.completed" not in event_types
+    assert "runtime.attempt.completed" not in {event.event_type for event in published}
+    assert "message.delivery.requested" not in {event.event_type for event in published}
 
 
-def test_zeta_agent_with_returns_may_publish_no_events(tmp_path: Path) -> None:
-    spec = _slack_return_agent_spec(tmp_path)
-    events = _slack_return_event_registry()
-
+def test_zeta_completion_callbacks_observe_committed_events(tmp_path: Path) -> None:
+    spec = _slack_publish_agent_spec(tmp_path)
     compiled = zeta_agents.compile_agent_definition(
         spec,
-        event_registry=events,
-        agent_loop=_recording_return_run([]),
-        structured_output=_async_events([]),
+        event_registry=_slack_publish_event_registry(),
+        agent_loop=_recording_publish_run([]),
     )
-    store = zeta_events.SqliteEventStore(tmp_path / "events.sqlite3")
-    dispatcher = harness_dispatch.QueueingDispatcher(store, executors=[compiled])
+    path = tmp_path / "events.sqlite3"
+    store = zeta_events.SqliteEventStore(path)
+    observer = zeta_events.SqliteEventStore(path)
+    published: list[str] = []
 
-    outcome = asyncio.run(
-        dispatch_and_drain(
-            dispatcher,
-            zeta_events.DraftEvent(
-                "slack.message.received",
-                "test",
-                {"text": "hello"},
-            ),
+    def observe_committed_event(event: Event) -> None:
+        assert observer.get(event.id) == event
+        published.append(event.event_type)
+
+    dispatcher = harness_dispatch.QueueingDispatcher(
+        store,
+        executors=[compiled],
+        publish_event=observe_committed_event,
+    )
+
+    try:
+        asyncio.run(
+            dispatch_and_drain(
+                dispatcher,
+                DraftEvent(
+                    "slack.message.received",
+                    "test",
+                    {"text": "hello"},
+                ),
+            )
         )
-    )
-    terminal = harness_queue.terminal_queue_item_result(
-        outcome.lifecycle_events,
-        event_id=outcome.event.id,
-        target_agent="slack-qa",
-    )
+    finally:
+        observer.close()
 
-    assert (
-        store.list_events(zeta_events.Filter(event_type="message.delivery.requested"))
-        == []
-    )
-    assert terminal is not None
-    assert terminal["returned_events"] == []
+    assert "runtime.attempt.completed" in published
+    assert "message.delivery.requested" in published
+    assert "runtime.queue_item.completed" in published
 
 
 def test_zeta_shared_session_agent_uses_stable_session_id() -> None:

@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Callable, Iterable
+from contextlib import AbstractContextManager, nullcontext
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, cast
 
 from zeta import ids
 from zeta.effects import EffectDeliveryError
@@ -27,6 +28,7 @@ AgentEventPublisherFactory = Callable[
     AgentEventPublisher,
 ]
 RetryScheduler = Callable[..., Event]
+CompletionBatch = Callable[[], AbstractContextManager[None]]
 
 
 class AttemptCoordinator:
@@ -44,6 +46,7 @@ class AttemptCoordinator:
         retry_scheduler: RetryScheduler,
         retry_policy: RetryPolicy,
         blocking_unsafe_effect: Callable[[str], str | None] | None = None,
+        completion_batch: CompletionBatch = nullcontext,
     ) -> None:
         self.lifecycle = lifecycle
         self.claim_is_current = claim_is_current
@@ -54,6 +57,7 @@ class AttemptCoordinator:
         self.retry_scheduler = retry_scheduler
         self.retry_policy = retry_policy
         self.blocking_unsafe_effect = blocking_unsafe_effect or (lambda _item: None)
+        self.completion_batch = completion_batch
 
     async def run(
         self,
@@ -160,21 +164,24 @@ class AttemptCoordinator:
         finally:
             await self.stop_heartbeat(heartbeat_task)
 
-        if not self.claim_is_current(queue_item_id):
-            return events
-        events.extend(
-            self.terminal_events(
-                result,
-                triggering_event,
-                agent,
-                queue_item_id,
-                attempt_id,
-                attempt_number,
-                started_at,
-                session_id,
-                run_id,
-            )
-        )
+        # The transaction fences the final claim check from competing writers.
+        # Notifications wait for its commit so observers see only durable facts.
+        with self.lifecycle.defer_publications():
+            with self.completion_batch():
+                if not self.claim_is_current(queue_item_id):
+                    return events
+                terminal = await self.terminal_events(
+                    result,
+                    triggering_event,
+                    agent,
+                    queue_item_id,
+                    attempt_id,
+                    attempt_number,
+                    started_at,
+                    session_id,
+                    run_id,
+                )
+        events.extend(terminal)
         return events
 
     def failed_events(
@@ -269,7 +276,7 @@ class AttemptCoordinator:
             run_id=run_id,
         )
 
-    def terminal_events(
+    async def terminal_events(
         self,
         result: dict[str, Any],
         triggering_event: Event,
@@ -281,7 +288,14 @@ class AttemptCoordinator:
         session_id: str | None,
         run_id: str | None,
     ) -> list[Event]:
-        cancelled = result.get("outcome") in {"aborted", "cancelled"}
+        cancelled = (
+            result.get("outcome")
+            in {
+                "aborted",
+                "cancelled",
+            }
+            or result.get("stop_reason") == "aborted"
+        )
         attempt_status: AttemptStatus = "cancelled" if cancelled else "completed"
         queue_status: QueueItemStatus = "cancelled" if cancelled else "completed"
         attempt_payload_extra: dict[str, Any] = {"result": result}
@@ -294,21 +308,37 @@ class AttemptCoordinator:
             value = result.get(key)
             if value is not None:
                 attempt_payload_extra[key] = value
-        return [
-            self.lifecycle.attempt(
-                triggering_event,
-                agent,
-                queue_item_id,
-                attempt_id,
-                attempt_number,
-                event_suffix=attempt_status,
-                status=attempt_status,
-                started_at=started_at,
-                finished_at=event_timestamp(),
-                session_id=session_id,
-                run_id=run_id,
-                **attempt_payload_extra,
-            ),
+        finished_at = event_timestamp()
+        attempt_event = self.lifecycle.attempt(
+            triggering_event,
+            agent,
+            queue_item_id,
+            attempt_id,
+            attempt_number,
+            event_suffix=attempt_status,
+            status=attempt_status,
+            started_at=started_at,
+            finished_at=finished_at,
+            session_id=session_id,
+            run_id=run_id,
+            **attempt_payload_extra,
+        )
+        events = [attempt_event]
+        if not cancelled:
+            events.extend(
+                await self.publish_requests(
+                    result,
+                    triggering_event,
+                    attempt_event,
+                    finished_at,
+                    agent,
+                    queue_item_id,
+                    attempt_id,
+                    session_id,
+                    run_id,
+                )
+            )
+        events.append(
             self.lifecycle.queue_item(
                 triggering_event,
                 agent.route,
@@ -318,9 +348,88 @@ class AttemptCoordinator:
                 result=result,
                 session_id=session_id,
                 run_id=run_id,
-            ),
-        ]
+            )
+        )
+        return events
+
+    async def publish_requests(
+        self,
+        result: dict[str, Any],
+        triggering_event: Event,
+        completed_attempt: Event,
+        completed_at: str,
+        agent: ExecutableAgent,
+        queue_item_id: str,
+        attempt_id: str,
+        session_id: str | None,
+        run_id: str | None,
+    ) -> list[Event]:
+        """Publish here so failed or stale attempts cannot create downstream work."""
+        requests = cast(
+            list[dict[str, Any]],
+            result.get("publish_event_requests", []),
+        )
+        publisher = self.event_publisher(
+            agent,
+            triggering_event,
+            queue_item_id,
+            attempt_id,
+            session_id,
+            run_id,
+        )
+        published: list[Event] = []
+        for request in sorted(requests, key=lambda item: item["position"]):
+            position = request["position"]
+            at = request["at"]
+            if publication_is_immediate(at, completed_at):
+                published.append(
+                    await publisher(
+                        DraftEvent(
+                            request["event_type"],
+                            f"agent:{agent.definition.agent_id}",
+                            request["payload"],
+                            idempotency_key=(
+                                f"agent.publish:{queue_item_id}:{position}"
+                            ),
+                            caused_by=completed_attempt.id,
+                            session_id=session_id,
+                            run_id=run_id,
+                            turn_id=triggering_event.turn_id,
+                        )
+                    )
+                )
+                continue
+            published.append(
+                self.lifecycle.append(
+                    "runtime.scheduled_event.created",
+                    completed_attempt,
+                    {
+                        "handle": request["handle"],
+                        "event_type": request["event_type"],
+                        "payload": request["payload"],
+                        "publish_at": at,
+                        "source_agent_id": agent.definition.agent_id,
+                        "source_session_id": session_id,
+                        "source_queue_item_id": queue_item_id,
+                        "position": position,
+                    },
+                    idempotency_key=f"agent.schedule:{queue_item_id}:{position}",
+                    session_id=session_id,
+                    run_id=run_id,
+                )
+            )
+        return published
 
 
 def event_timestamp() -> str:
     return datetime.now(UTC).isoformat().replace("+00:00", "Z")
+
+
+def publication_is_immediate(at: str | None, completed_at: str) -> bool:
+    if at is None:
+        return True
+    return parse_timestamp(at) <= parse_timestamp(completed_at)
+
+
+def parse_timestamp(value: str) -> datetime:
+    return datetime.fromisoformat(value.replace("Z", "+00:00"))

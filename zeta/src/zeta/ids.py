@@ -34,10 +34,12 @@ layer may use it.
 from __future__ import annotations
 
 import uuid
+from hashlib import sha256
 
 QUEUE_ITEM_PREFIX = "qi_"
 ATTEMPT_PREFIX = "att_"
 RUN_PREFIX = "run_"
+PUBLISH_EVENT_PREFIX = "pub_"
 
 
 def safe_agent_id(agent_id: str) -> str:
@@ -82,6 +84,16 @@ def claimed_run_id() -> str:
 def run_id_for_attempt(claimed: str | None, attempt_id_value: str) -> str:
     """Adopt a run id claimed in advance, else derive one from the attempt."""
     return claimed or derived_run_id(attempt_id_value)
+
+
+def publish_event_handle(queue_item_id_value: str, position: int) -> str:
+    """Return a stable handle for one event requested during an attempt.
+
+    The handle uses the queue item instead of the attempt so a retry refers to
+    the same requested event.
+    """
+    identity = f"{queue_item_id_value}:{position}".encode()
+    return f"{PUBLISH_EVENT_PREFIX}{sha256(identity).hexdigest()[:24]}"
 
 
 def agent_session_id(agent_id: str, suffix: str | None) -> str:

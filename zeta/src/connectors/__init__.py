@@ -20,7 +20,7 @@ class IngressBinding:
 
 @dataclass(frozen=True)
 class EgressBinding:
-    """External event binding parsed from a returned event declaration."""
+    """Preserve connector delivery options from a `publishes` declaration."""
 
     event: str
     options: Mapping[str, Any] = field(default_factory=dict)

@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from typing import Any
 
 from zeta import ids
@@ -37,6 +39,30 @@ class LifecycleRecorder:
         self.event_sink = event_sink
         self.publish_callback = publish_event
         self.worker_name = worker_name
+        self._deferred_publications: ContextVar[list[Event] | None] = ContextVar(
+            "zeta_deferred_lifecycle_publications",
+            default=None,
+        )
+
+    @contextmanager
+    def defer_publications(self) -> Iterator[None]:
+        """Delay notifications so observers cannot see rolled-back events."""
+
+        parent = self._deferred_publications.get()
+        deferred: list[Event] = []
+        token = self._deferred_publications.set(deferred)
+        try:
+            yield
+        except BaseException:
+            self._deferred_publications.reset(token)
+            raise
+        else:
+            self._deferred_publications.reset(token)
+            if parent is not None:
+                parent.extend(deferred)
+            elif self.publish_callback is not None:
+                for event in deferred:
+                    self.publish_callback(event)
 
     def queue_item(
         self,
@@ -202,5 +228,8 @@ class LifecycleRecorder:
         return event
 
     def publish(self, event: Event) -> None:
-        if self.publish_callback is not None:
+        deferred = self._deferred_publications.get()
+        if deferred is not None:
+            deferred.append(event)
+        elif self.publish_callback is not None:
             self.publish_callback(event)

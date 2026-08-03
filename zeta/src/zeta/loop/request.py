@@ -6,7 +6,9 @@ carries queue state or retry authority.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
+from typing import Any
 
 from zeta.capabilities.executors import ToolExecutor
 from zeta.capabilities.registry import (
@@ -38,6 +40,10 @@ class AgentRunRequest:
     context: str
     config: AgentConfig
     fresh: bool = False
+    publishable_events: Mapping[str, dict[str, Any] | None] = field(
+        default_factory=dict
+    )
+    source_queue_item_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -50,6 +56,10 @@ class RunDependencies:
     abort_reason: AbortReason
     model_gateway: ModelGateway = field(default_factory=DefaultModelGateway)
     query_log_reader: QueryLogReader | None = None
+    publishable_events: Mapping[str, dict[str, Any] | None] = field(
+        default_factory=dict
+    )
+    source_queue_item_id: str | None = None
 
 
 def silent_run_dependencies(ctx: RunDependencies) -> RunDependencies:

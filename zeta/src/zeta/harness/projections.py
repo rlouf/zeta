@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from datetime import datetime
 
 from zeta import ids
 from zeta.events import Event
@@ -19,7 +20,7 @@ class RuntimeEventProjection:
     """Projects runtime queue and attempt events into queryable tables."""
 
     name = "zeta.harness.runtime"
-    version = 4
+    version = 5
 
     def init_schema(self, connection: sqlite3.Connection) -> None:
         connection.executescript(
@@ -80,6 +81,31 @@ class RuntimeEventProjection:
               acquired_at INTEGER NOT NULL,
               expires_at INTEGER NOT NULL
             ) STRICT;
+
+            CREATE TABLE IF NOT EXISTS scheduled_events (
+              handle TEXT PRIMARY KEY,
+              event_type TEXT NOT NULL,
+              payload_json TEXT NOT NULL,
+              publish_at_ms INTEGER NOT NULL,
+              source_agent_id TEXT NOT NULL,
+              source_session_id TEXT,
+              source_run_id TEXT,
+              source_queue_item_id TEXT NOT NULL,
+              position INTEGER NOT NULL,
+              created_event_id TEXT NOT NULL,
+              status TEXT NOT NULL,
+              published_event_id TEXT,
+              terminal_event_id TEXT,
+              updated_at INTEGER NOT NULL
+            ) STRICT;
+
+            CREATE INDEX IF NOT EXISTS idx_scheduled_events_due
+              ON scheduled_events(
+                status,
+                publish_at_ms,
+                source_queue_item_id,
+                position
+              );
             """
         )
 
@@ -87,6 +113,7 @@ class RuntimeEventProjection:
         connection.executescript(
             """
             DELETE FROM locks;
+            DELETE FROM scheduled_events;
             DELETE FROM attempt_results;
             DELETE FROM attempts;
             DELETE FROM queue_items;
@@ -97,6 +124,7 @@ class RuntimeEventProjection:
         connection.executescript(
             """
             DROP TABLE IF EXISTS locks;
+            DROP TABLE IF EXISTS scheduled_events;
             DROP TABLE IF EXISTS attempt_results;
             DROP TABLE IF EXISTS attempts;
             DROP TABLE IF EXISTS queue_items;
@@ -118,8 +146,18 @@ class RuntimeEventProjection:
             WHERE status = 'claimed'
             """
         )
+        connection.execute(
+            """
+            UPDATE scheduled_events
+            SET status = 'pending'
+            WHERE status = 'claimed'
+            """
+        )
 
     def index(self, connection: sqlite3.Connection, event: Event) -> None:
+        if event.event_type.startswith("runtime.scheduled_event."):
+            _index_one_scheduled_event(connection, event)
+            return
         if is_queueable_event(event):
             _index_pending_queue_item(connection, event)
             return
@@ -132,6 +170,126 @@ class RuntimeEventProjection:
 
 def runtime_event_projection() -> RuntimeEventProjection:
     return RuntimeEventProjection()
+
+
+def _index_one_scheduled_event(
+    connection: sqlite3.Connection,
+    event: Event,
+) -> None:
+    handle = _optional_str(event.payload.get("handle"))
+    if handle is None:
+        return
+    if event.event_type == "runtime.scheduled_event.created":
+        _index_scheduled_event_created(connection, event, handle)
+        return
+    if event.event_type == "runtime.scheduled_event.published":
+        published_event_id = _optional_str(event.payload.get("published_event_id"))
+        if published_event_id is None:
+            return
+        _index_scheduled_event_terminal(
+            connection,
+            event,
+            handle,
+            status="published",
+            published_event_id=published_event_id,
+        )
+        return
+    if event.event_type == "runtime.scheduled_event.cancelled":
+        _index_scheduled_event_terminal(
+            connection,
+            event,
+            handle,
+            status="cancelled",
+            published_event_id=None,
+        )
+
+
+def _index_scheduled_event_created(
+    connection: sqlite3.Connection,
+    event: Event,
+    handle: str,
+) -> None:
+    event_type = _optional_str(event.payload.get("event_type"))
+    payload = event.payload.get("payload")
+    publish_at = _optional_str(event.payload.get("publish_at"))
+    source_agent_id = _optional_str(event.payload.get("source_agent_id"))
+    source_queue_item_id = _optional_str(event.payload.get("source_queue_item_id"))
+    position = event.payload.get("position")
+    if (
+        event_type is None
+        or not isinstance(payload, dict)
+        or publish_at is None
+        or source_agent_id is None
+        or source_queue_item_id is None
+        or not isinstance(position, int)
+        or isinstance(position, bool)
+    ):
+        return
+    publish_at_ms = _iso_timestamp_ms(publish_at)
+    if publish_at_ms is None:
+        return
+    source_session_id = _optional_str(event.payload.get("source_session_id"))
+    connection.execute(
+        """
+        INSERT INTO scheduled_events
+          (handle, event_type, payload_json, publish_at_ms, source_agent_id,
+           source_session_id, source_run_id, source_queue_item_id, position,
+           created_event_id, status, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)
+        ON CONFLICT(handle) DO NOTHING
+        """,
+        (
+            handle,
+            event_type,
+            json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
+            publish_at_ms,
+            source_agent_id,
+            source_session_id if source_session_id is not None else event.session_id,
+            event.run_id,
+            source_queue_item_id,
+            position,
+            event.id,
+            event.timestamp_ms,
+        ),
+    )
+
+
+def _index_scheduled_event_terminal(
+    connection: sqlite3.Connection,
+    event: Event,
+    handle: str,
+    *,
+    status: str,
+    published_event_id: str | None,
+) -> None:
+    connection.execute(
+        """
+        UPDATE scheduled_events
+        SET status = ?,
+            published_event_id = ?,
+            terminal_event_id = ?,
+            updated_at = ?
+        WHERE handle = ?
+          AND status IN ('pending', 'claimed')
+        """,
+        (
+            status,
+            published_event_id,
+            event.id,
+            event.timestamp_ms,
+            handle,
+        ),
+    )
+
+
+def _iso_timestamp_ms(value: str) -> int | None:
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        return None
+    return int(parsed.timestamp() * 1_000)
 
 
 def _index_pending_queue_item(connection: sqlite3.Connection, event: Event) -> None:

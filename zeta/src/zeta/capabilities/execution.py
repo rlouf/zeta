@@ -35,6 +35,7 @@ def diagnostic(
 
 
 CapabilityEventSink = Callable[[DraftEvent], None]
+InternalToolExecutor = Callable[[str, dict[str, Any]], dict[str, Any] | None]
 
 
 @dataclass(frozen=True)
@@ -47,6 +48,7 @@ class CapabilityExecutionContext:
     effect_scope: str | None = None
     effect_key: str | None = None
     query_log_reader: QueryLogReader | None = None
+    internal_tool_executor: InternalToolExecutor | None = None
 
 
 @dataclass(frozen=True)
@@ -329,7 +331,16 @@ async def run_valid_tool_call(
         call_event,
         ctx=ctx,
     )
-    semantics = capability_delivery_semantics(capability_id, ctx=ctx)
+    internal_result = (
+        ctx.internal_tool_executor(capability_id, canonical_params)
+        if ctx.internal_tool_executor is not None
+        else None
+    )
+    semantics = (
+        None
+        if internal_result is not None
+        else capability_delivery_semantics(capability_id, ctx=ctx)
+    )
     operation_key = None
     invocation_ctx = ctx
     if semantics is not None:
@@ -360,12 +371,15 @@ async def run_valid_tool_call(
             ctx=ctx,
         )
     try:
-        invoked = invoke_tool_executor(
-            capability_id,
-            canonical_params,
-            ctx=invocation_ctx,
-        )
-        result = await invoked if inspect.isawaitable(invoked) else invoked
+        if internal_result is not None:
+            result = internal_result
+        else:
+            invoked = invoke_tool_executor(
+                capability_id,
+                canonical_params,
+                ctx=invocation_ctx,
+            )
+            result = await invoked if inspect.isawaitable(invoked) else invoked
     except Exception as exc:
         result = tool_error("tool-crashed", f"{type(exc).__name__}: {exc}")
     stop = bool(result.get("ok") is True and result.get("stop") is True)

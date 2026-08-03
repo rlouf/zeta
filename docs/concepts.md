@@ -481,6 +481,7 @@ one run by id prefix. Listing and expansion are bounded; models cannot select
 another session through tool arguments. Expansion includes the objective,
 outcome, final answer, compact tool activity, and prompt trace ids; it does not
 replay provider usage telemetry or raw tool arguments and results.
+See [Zeta Tools](zeta-tools.md#query_log) for the complete tool contract.
 
 Shared agent skills are Markdown files under `agents/skills/`. The filename stem
 is the skill name, and agents opt in with `skills:`.

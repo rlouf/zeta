@@ -7,9 +7,10 @@ import secrets
 import sqlite3
 import time
 from collections.abc import Iterable
-from dataclasses import dataclass, field
+from contextlib import AbstractContextManager
+from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from zeta import ids
 from zeta.events import DraftEvent, Event
@@ -22,8 +23,14 @@ from zeta.journal.types import AppendOutcome
 from zeta.substrate.sqlite import sqlite_table_names
 
 RUNTIME_PROJECTION_TABLES = frozenset(
-    {"queue_items", "attempts", "attempt_results", "locks"}
+    {"queue_items", "attempts", "attempt_results", "locks", "scheduled_events"}
 )
+ScheduledEventCancellationStatus = Literal[
+    "cancelled",
+    "already_cancelled",
+    "already_published",
+    "unknown",
+]
 
 
 def _in_memory_read_only_event_store(
@@ -118,7 +125,7 @@ class _SqliteBacked:
 class RuntimeJournalStore(_SqliteBacked):
     """Durable historical facts.
 
-    Ingress, returned events, and lifecycle events are facts. They keep their
+    Ingress, published events, and lifecycle events are facts. They keep their
     ids, idempotency keys, causality, and append order. The queue and attempt
     tables are projections of this log, so a rebuild reproduces them.
     """
@@ -144,6 +151,9 @@ class RuntimeJournalStore(_SqliteBacked):
                 _elapsed_ms(started),
                 event_type=event.event_type,
             )
+
+    def transaction(self) -> AbstractContextManager[None]:
+        return self.events.transaction()
 
     def rebuild_projections(self) -> int:
         return self.events.rebuild_projections()
@@ -172,6 +182,128 @@ class RuntimeJournalStore(_SqliteBacked):
             event_type_prefix=event_type_prefix,
         )
 
+    def list_scheduled_events(self) -> list[dict[str, Any]]:
+        with self.events.write_lock:
+            rows = self.connection.execute(
+                """
+                SELECT handle, event_type, payload_json, publish_at_ms,
+                       source_agent_id, source_session_id, source_run_id,
+                       source_queue_item_id, position, created_event_id, status,
+                       published_event_id, terminal_event_id, updated_at
+                FROM scheduled_events
+                ORDER BY publish_at_ms ASC, source_queue_item_id ASC, position ASC
+                """
+            ).fetchall()
+        return [_row_to_scheduled_event(row) for row in rows]
+
+    def publish_next_due_scheduled_event(
+        self,
+        *,
+        now_ms: int | None = None,
+    ) -> Event | None:
+        publication_time = _now_ms(now_ms)
+        with self.events.write_lock:
+            self.events.begin_immediate()
+            try:
+                row = self.connection.execute(
+                    """
+                    SELECT handle, event_type, payload_json, source_agent_id,
+                           source_session_id, source_run_id, source_queue_item_id,
+                           position, created_event_id
+                    FROM scheduled_events
+                    WHERE status = 'pending'
+                      AND publish_at_ms <= ?
+                    ORDER BY publish_at_ms ASC, source_queue_item_id ASC, position ASC
+                    LIMIT 1
+                    """,
+                    (publication_time,),
+                ).fetchone()
+                if row is None:
+                    self.connection.commit()
+                    return None
+                claimed = self.connection.execute(
+                    """
+                    UPDATE scheduled_events
+                    SET status = 'claimed', updated_at = ?
+                    WHERE handle = ? AND status = 'pending'
+                    """,
+                    (publication_time, row["handle"]),
+                )
+                if claimed.rowcount != 1:
+                    self.connection.rollback()
+                    return None
+                requested = _scheduled_requested_event(row, publication_time)
+                requested = self.events.append_in_transaction(requested).event
+                published = _scheduled_terminal_event(
+                    row,
+                    event_type="runtime.scheduled_event.published",
+                    idempotency_key=f"scheduled_event.published:{row['handle']}",
+                    caused_by=requested.id,
+                    timestamp_ms=publication_time,
+                    published_event_id=requested.id,
+                )
+                self.events.append_in_transaction(published)
+                self.connection.commit()
+                return requested
+            except Exception:
+                self.connection.rollback()
+                raise
+
+    def cancel_scheduled_event(
+        self,
+        handle: str,
+        *,
+        now_ms: int | None = None,
+    ) -> ScheduledEventCancellationStatus:
+        cancellation_time = _now_ms(now_ms)
+        with self.events.write_lock:
+            self.events.begin_immediate()
+            try:
+                row = self.connection.execute(
+                    """
+                    SELECT handle, source_agent_id, source_session_id, source_run_id,
+                           source_queue_item_id, position, created_event_id, status
+                    FROM scheduled_events
+                    WHERE handle = ?
+                    """,
+                    (handle,),
+                ).fetchone()
+                if row is None:
+                    self.connection.commit()
+                    return "unknown"
+                status = str(row["status"])
+                if status == "cancelled":
+                    self.connection.commit()
+                    return "already_cancelled"
+                if status == "published":
+                    self.connection.commit()
+                    return "already_published"
+                if status != "pending":
+                    raise RuntimeError(f"invalid scheduled event status {status!r}")
+                claimed = self.connection.execute(
+                    """
+                    UPDATE scheduled_events
+                    SET status = 'claimed', updated_at = ?
+                    WHERE handle = ? AND status = 'pending'
+                    """,
+                    (cancellation_time, handle),
+                )
+                if claimed.rowcount != 1:
+                    raise RuntimeError(f"failed to claim scheduled event {handle!r}")
+                cancelled = _scheduled_terminal_event(
+                    row,
+                    event_type="runtime.scheduled_event.cancelled",
+                    idempotency_key=f"scheduled_event.cancelled:{handle}",
+                    caused_by=str(row["created_event_id"]),
+                    timestamp_ms=cancellation_time,
+                )
+                self.events.append_in_transaction(cancelled)
+                self.connection.commit()
+                return "cancelled"
+            except Exception:
+                self.connection.rollback()
+                raise
+
 
 @dataclass(frozen=True)
 class CoordinationSqliteStore(_SqliteBacked):
@@ -184,7 +316,7 @@ class CoordinationSqliteStore(_SqliteBacked):
 
     def ensure_pending_queue_item(self, event: Event) -> str:
         queue_item_id = _pending_queue_item_id(event)
-        with self.events.write_lock:
+        with self.events.transaction():
             self.connection.execute(
                 """
                 INSERT INTO queue_items
@@ -202,7 +334,6 @@ class CoordinationSqliteStore(_SqliteBacked):
                     event.timestamp_ms,
                 ),
             )
-            self.connection.commit()
         return queue_item_id
 
     def event_has_queue_item(self, event_id: str) -> bool:
@@ -633,6 +764,8 @@ class CoordinationSqliteStore(_SqliteBacked):
         queue_item_id: str,
         worker_name: str,
         claim_token: str,
+        *,
+        now_ms: int,
     ) -> bool:
         with self.events.write_lock:
             row = self.connection.execute(
@@ -643,9 +776,10 @@ class CoordinationSqliteStore(_SqliteBacked):
                   AND claimed_by = ?
                   AND claimed_token = ?
                   AND status = 'claimed'
+                  AND claimed_until >= ?
                 LIMIT 1
                 """,
-                (queue_item_id, worker_name, claim_token),
+                (queue_item_id, worker_name, claim_token, now_ms),
             ).fetchone()
         return row is not None
 
@@ -736,6 +870,9 @@ class RuntimeEventStore:
     def append(self, event: Event) -> AppendOutcome:
         return self._journal.append(event)
 
+    def transaction(self) -> AbstractContextManager[None]:
+        return self._journal.transaction()
+
     def rebuild_projections(self) -> int:
         return self._journal.rebuild_projections()
 
@@ -761,6 +898,24 @@ class RuntimeEventStore:
         return self._journal.clear_session_events(
             session_id, event_type_prefix=event_type_prefix
         )
+
+    def list_scheduled_events(self) -> list[dict[str, Any]]:
+        return self._journal.list_scheduled_events()
+
+    def publish_next_due_scheduled_event(
+        self,
+        *,
+        now_ms: int | None = None,
+    ) -> Event | None:
+        return self._journal.publish_next_due_scheduled_event(now_ms=now_ms)
+
+    def cancel_scheduled_event(
+        self,
+        handle: str,
+        *,
+        now_ms: int | None = None,
+    ) -> ScheduledEventCancellationStatus:
+        return self._journal.cancel_scheduled_event(handle, now_ms=now_ms)
 
     def ensure_pending_queue_item(self, event: Event) -> str:
         return self._coordination.ensure_pending_queue_item(event)
@@ -864,9 +1019,14 @@ class RuntimeEventStore:
         queue_item_id: str,
         worker_name: str,
         claim_token: str,
+        *,
+        now_ms: int,
     ) -> bool:
         return self._coordination.queue_claim_is_current(
-            queue_item_id, worker_name, claim_token
+            queue_item_id,
+            worker_name,
+            claim_token,
+            now_ms=now_ms,
         )
 
     def reconcile_expired_queue_claims(self, *, now_ms: int) -> int:
@@ -879,6 +1039,73 @@ class RuntimeEventStore:
         **attributes: MetricAttribute,
     ) -> None:
         return self._journal.observe_runtime_metric(name, value, **attributes)
+
+
+def _row_to_scheduled_event(row: sqlite3.Row) -> dict[str, Any]:
+    return {
+        "handle": str(row["handle"]),
+        "event_type": str(row["event_type"]),
+        "payload": _json_column(row["payload_json"]),
+        "publish_at_ms": int(row["publish_at_ms"]),
+        "source_agent_id": str(row["source_agent_id"]),
+        "source_session_id": _optional_str(row["source_session_id"]),
+        "source_run_id": _optional_str(row["source_run_id"]),
+        "source_queue_item_id": str(row["source_queue_item_id"]),
+        "position": int(row["position"]),
+        "created_event_id": str(row["created_event_id"]),
+        "status": str(row["status"]),
+        "published_event_id": _optional_str(row["published_event_id"]),
+        "terminal_event_id": _optional_str(row["terminal_event_id"]),
+        "updated_at": int(row["updated_at"]),
+    }
+
+
+def _scheduled_requested_event(row: sqlite3.Row, timestamp_ms: int) -> Event:
+    draft = DraftEvent(
+        event_type=str(row["event_type"]),
+        source=f"agent:{row['source_agent_id']}",
+        payload=_json_column(row["payload_json"]) or {},
+        idempotency_key=(
+            f"agent.publish:{row['source_queue_item_id']}:{row['position']}"
+        ),
+        caused_by=str(row["created_event_id"]),
+        session_id=_optional_str(row["source_session_id"]),
+        run_id=_optional_str(row["source_run_id"]),
+    )
+    return replace(Event.from_draft(draft), timestamp_ms=timestamp_ms)
+
+
+def _scheduled_terminal_event(
+    row: sqlite3.Row,
+    *,
+    event_type: str,
+    idempotency_key: str,
+    caused_by: str,
+    timestamp_ms: int,
+    published_event_id: str | None = None,
+) -> Event:
+    payload = {
+        "handle": str(row["handle"]),
+        "source_agent_id": str(row["source_agent_id"]),
+        "source_queue_item_id": str(row["source_queue_item_id"]),
+        "position": int(row["position"]),
+    }
+    if published_event_id is not None:
+        payload["published_event_id"] = published_event_id
+    draft = DraftEvent(
+        event_type=event_type,
+        source="zeta",
+        payload=payload,
+        idempotency_key=idempotency_key,
+        caused_by=caused_by,
+        session_id=_optional_str(row["source_session_id"]),
+        run_id=_optional_str(row["source_run_id"]),
+    )
+    return replace(Event.from_draft(draft), timestamp_ms=timestamp_ms)
+
+
+def _now_ms(value: int | None) -> int:
+    return time.time_ns() // 1_000_000 if value is None else value
 
 
 def _row_to_attempt(row: sqlite3.Row) -> dict[str, Any]:

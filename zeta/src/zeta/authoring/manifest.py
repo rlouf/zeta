@@ -18,7 +18,7 @@ from zeta.authoring.schemas import EventRegistry
 from zeta.authoring.spec import AgentSpec
 from zeta.capabilities.executors import ToolExecutorProviderRegistry
 
-RESERVED_TOOL_NAMES = frozenset({"__return"})
+RESERVED_TOOL_NAMES = frozenset({"publish_event", "zeta.publish_event"})
 
 
 class ManifestError(ValueError):
@@ -103,10 +103,11 @@ def validate_events(spec: AgentSpec, registry: EventRegistry | None) -> None:
             raise ManifestError(
                 f"agent {spec.slug!r} references unknown event {event_type!r} in accepts"
             )
-    for event_type in spec.returns:
+    for event_type in spec.publishes:
         if not registry.knows(event_type):
             raise ManifestError(
-                f"agent {spec.slug!r} references unknown event {event_type!r} in returns"
+                f"agent {spec.slug!r} references unknown event {event_type!r} "
+                "in publishes"
             )
 
 
@@ -163,9 +164,10 @@ def validate_egress_binding(
         raise ManifestError(
             f"agent {spec.slug!r} references unknown egress event {binding.event!r}"
         )
-    if binding.event not in spec.returns:
+    if binding.event not in spec.publishes:
         raise ManifestError(
-            f"agent {spec.slug!r} egress event {binding.event!r} is not listed in returns"
+            f"agent {spec.slug!r} egress event {binding.event!r} is not listed "
+            "in publishes"
         )
     validate_binding_config(
         binding.options,

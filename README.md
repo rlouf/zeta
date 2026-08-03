@@ -87,7 +87,7 @@ zeta traces log --session agent/inbox-summarizer
 An agent is one Markdown file in `agents/`.
 
 Its frontmatter declares the events it accepts, the tools it may use, and the
-events it may return. Its body gives the agent instructions.
+events it may publish. Its body gives the agent instructions.
 
 ```md
 ---
@@ -97,17 +97,18 @@ schedules:
   - cron: "0 9 * * 1"
     timezone: Europe/Paris
     catchup: latest
-returns:
+publishes:
   - release.summary.ready
 tools:
   - bash
 ---
 Summarize pull requests merged during the last week.
 
-Write release notes for the team. Return them as `release.summary.ready`.
+Write release notes for the team. Use `publish_event` to publish them as
+`release.summary.ready`.
 ```
 
-A schedule creates an event for the agent. A returned event can start another
+A schedule creates an event for the agent. A published event can start another
 agent.
 
 ## Build an agent system

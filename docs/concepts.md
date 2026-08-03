@@ -56,9 +56,10 @@ Each arrow is one-to-many. One event can fan out to several queue items, and
 one queue item can hold several attempts.
 
 The `events` table is the only source of truth. `queue_items`, `attempts`,
-`attempt_results`, and `session_mappings` are projections. You can delete them
-and rebuild them from the journal. Claims, leases, and locks are neither facts
-nor projections. They are live coordination state, and a rebuild discards them.
+`attempt_results`, `scheduled_events`, and `session_mappings` are projections.
+You can delete them and rebuild them from the journal. Claims, leases, and
+locks are neither facts nor projections. They are live coordination state, and
+a rebuild discards them.
 See [Runtime Semantics](runtime-semantics.md) for the state machines, the
 derived id scheme, and the recovery rules.
 
@@ -247,7 +248,7 @@ accepts:
     filter:
       channel_ids: ["C123"]
     idempotency_key: "slack:message:{team_id}:{channel_id}:{message_ts}"
-returns:
+publishes:
   - event: slack.message.post
     with:
       channel_ids: ["C123"]
@@ -277,14 +278,14 @@ Core frontmatter fields:
 | `session` | no | What identifies a session. `shared`, `per-event` (default), or a template. |
 | `model` | no | Per-agent `{name, url}` override. |
 | `accepts` | no | Event types that can trigger the agent. |
-| `returns` | no | Event types the agent may publish after it finishes. |
+| `publishes` | no | Event types that the agent can publish. |
 | `tools` | no | Capability names granted to the model. |
 | `skills` | no | Shared Markdown skills from `agents/skills/`. |
 | `schedules` | no | Cron triggers that publish synthetic events. |
 | `accepts[*].filter` | no | Connector-owned inbound event selection. |
 | `accepts[*].idempotency_key` | no | Required for connector ingress bindings. |
-| `returns[*].with` | no | Connector-owned delivery options for returned events. |
-| `returns[*].idempotency_key` | no | Optional egress idempotency template. |
+| `publishes[*].with` | no | Connector-owned delivery options for published events. |
+| `publishes[*].idempotency_key` | no | Optional egress idempotency template. |
 
 Schedules automatically add `agent.<slug>.scheduled` to `accepts`. For example,
 `agents/release-manager.md` with a schedule accepts
@@ -391,40 +392,45 @@ or an object with a `schema` field:
 }
 ```
 
-External events listed in `accepts` and all events listed in `returns` must have
-a schema from `agents/events/` or from an enabled connector. Scheduled events
-are registered internally with an empty object payload schema.
+External events listed in `accepts` and all events listed in `publishes` must
+have a schema from `agents/events/` or from an enabled connector. Scheduled
+events are registered internally with an empty object payload schema.
 
-## Returned Events
+## Publishing Events
 
-When an agent declares `returns`, Zeta runs the normal assistant/tool loop first.
-After the loop finishes, it performs one final structured generation with no
-tools available. The schema is derived from the declared return event schemas:
+When an agent declares `publishes`, Zeta gives the agent the `publish_event` control
+tool. The tool does not belong in the authored `tools` list. The model can use
+`publish_event` more than once during the run:
 
 ```json
 {
-  "events": [
-    {
-      "type": "release.summary.ready",
-      "payload": {
-        "summary": "Runtime release notes are ready."
-      }
-    },
-    {
-      "type": "release.summary.ready",
-      "payload": {
-        "summary": "SDK release notes are ready."
-      }
-    }
-  ]
+  "event_type": "release.summary.ready",
+  "payload": {
+    "summary": "Runtime release notes are ready."
+  }
 }
 ```
 
-The `events` array may be empty and is capped at 100 items. Each item is
-validated independently against its event schema, then published in order as a
-durable event from `agent:<slug>`. Each position has a stable idempotency key,
-so retries do not duplicate events that were already published. Connector
-egress handlers can then deliver those events to external systems.
+The optional `at` field schedules the event for an absolute future time:
+
+```json
+{
+  "event_type": "release.summary.ready",
+  "payload": {
+    "summary": "Runtime release notes are ready."
+  },
+  "at": "2030-01-02T09:00:00+01:00"
+}
+```
+
+Zeta checks the event type, payload schema, and time. It then returns a stable
+publication handle. It keeps valid requests until the attempt succeeds. A
+failed, cancelled, or stale attempt publishes nothing.
+
+The model must call `publish_event` for each event. Zeta does not infer events
+from the model response. Zeta publishes all requested events in call order
+after the attempt completes. Connector egress handlers can then deliver these
+events to external systems.
 
 ## Tools And Skills
 
@@ -444,6 +450,12 @@ canonical capability id when it is unambiguous:
 | `edit` | `zeta.edit` | Edit files. |
 | `patch` | `zeta.patch` | Apply patches to files. |
 | `write` | `zeta.write` | Write files. |
+
+`publish_event` is a runtime control tool, not an installed capability. It is
+available only when the agent declares at least one event in `publishes`. It
+does not use the selected tool executor and does not create capability effect
+records. See [Zeta Tools](zeta-tools.md#publish_event) for the complete tool
+contract.
 
 Capability execution goes through the registry. Zeta executes an allowed tool
 when the model calls it. Zeta does not defer a tool call for later execution.
@@ -496,7 +508,7 @@ accepts:
     filter:
       channel_ids: ["C123"]
     idempotency_key: "slack:message:{team_id}:{channel_id}:{message_ts}"
-returns:
+publishes:
   - event: slack.message.post
     with:
       channel_ids: ["C123"]
@@ -504,7 +516,7 @@ returns:
 
 `accepts[*].filter` is validated against the connector's ingress selection
 schema. Connector ingress bindings require `idempotency_key` so connectors can
-avoid duplicate ingests. `returns[*].with` is validated against the connector's
+avoid duplicate ingests. `publishes[*].with` is validated against the connector's
 egress options schema. Egress defaults to a connector/event idempotency key when
 one is not supplied.
 
@@ -590,6 +602,13 @@ zeta events publish github.pr.opened \
   --payload-json '{"number":17,"title":"Fix release notes"}'
 ```
 
+Inspect or cancel future events requested by agents:
+
+```sh
+zeta events scheduled
+zeta events cancel-scheduled pub_0123456789abcdef
+```
+
 Fire due schedules and drain the queue until it is empty, then exit:
 
 ```sh
@@ -664,7 +683,7 @@ zeta queue list --json
 zeta ps
 
 # Inspect one run, including trigger event, queue item, attempt result,
-# returned events, tool calls, and usage.
+# published events, tool calls, and usage.
 zeta ps run_att_qi_evt_123_issue-triage_1 --json
 
 # Read raw durable events.

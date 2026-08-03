@@ -3,7 +3,7 @@
 import asyncio
 import time
 from collections.abc import Awaitable, Callable, Iterable, Mapping
-from contextlib import suppress
+from contextlib import nullcontext, suppress
 from dataclasses import dataclass
 from typing import Any, Protocol, cast
 
@@ -81,8 +81,10 @@ class RuntimeQueueStore(Protocol):
         queue_item_id: str,
         worker_name: str,
         claim_token: str,
+        *,
+        now_ms: int,
     ) -> bool:
-        """Return whether the queue claim token still owns the item."""
+        """Return whether the unexpired queue claim still owns the item."""
 
     def heartbeat_attempt(
         self,
@@ -207,6 +209,7 @@ class _QueueingDispatcher:
             event_sink,
             publish_event=publish_event,
         )
+        completion_batch = getattr(event_sink, "transaction", nullcontext)
         self.attempt_coordinator = AttemptCoordinator(
             self.lifecycle,
             claim_is_current=self._queue_claim_is_current,
@@ -217,6 +220,7 @@ class _QueueingDispatcher:
             retry_scheduler=self.schedule_retry,
             retry_policy=self.retry_policy,
             blocking_unsafe_effect=self._blocking_unsafe_effect,
+            completion_batch=completion_batch,
         )
 
     async def publish_event(
@@ -589,16 +593,25 @@ class _QueueingDispatcher:
         run_id: str | None,
     ) -> Callable[[DraftEvent], Awaitable[Event]]:
         async def publish(draft: DraftEvent) -> Event:
+            payload = dict(draft.payload)
+            # A completion request must keep the payload that passed its event
+            # schema. Its journal fields already carry the run correlation.
+            if not (
+                draft.idempotency_key is not None
+                and draft.idempotency_key.startswith("agent.publish:")
+            ):
+                payload.update(
+                    {
+                        "_zeta_queue_item_id": queue_item_id,
+                        "_zeta_attempt_id": attempt_id,
+                        "_zeta_target_agent": agent.definition.agent_id,
+                        "_zeta_triggering_event_id": triggering_event.id,
+                    }
+                )
             tagged = DraftEvent(
                 draft.event_type,
                 draft.source,
-                {
-                    **draft.payload,
-                    "_zeta_queue_item_id": queue_item_id,
-                    "_zeta_attempt_id": attempt_id,
-                    "_zeta_target_agent": agent.definition.agent_id,
-                    "_zeta_triggering_event_id": triggering_event.id,
-                },
+                payload,
                 idempotency_key=draft.idempotency_key,
                 caused_by=draft.caused_by or triggering_event.id,
                 session_id=draft.session_id or session_id,
@@ -744,6 +757,7 @@ class QueueingDispatcher(_QueueingDispatcher):
             queue_item_id,
             self.worker_name,
             self.claim_token,
+            now_ms=current_time_ms(),
         )
 
     def _start_attempt_heartbeat(

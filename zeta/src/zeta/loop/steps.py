@@ -138,9 +138,12 @@ async def step_tools(
     state.pending_model_telemetry = {}
     state.pending_tool_parent_id = None
     for index, tool_call in enumerate(tool_calls):
+        position = state.next_tool_position
+        state.next_tool_position += 1
         result_event = await run_capability_step(
             tool_call,
             index=index,
+            position=position,
             config=config,
             allowed_capabilities=allowed_capabilities,
             tool_schema=tool_schema,

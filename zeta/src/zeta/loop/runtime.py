@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import replace
 from typing import Any
 
 from zeta.capabilities.executors import ToolExecutor
+from zeta.capabilities.profiles import identity_arguments
 from zeta.capabilities.registry import (
     CapabilityRegistry,
+    CapabilityToolRoute,
+    CapabilityToolSchema,
+    model_descriptor,
 )
 from zeta.capabilities.registry import registry as _runtime_tool_registry
 from zeta.context import prompt_transform_from_policy
@@ -121,6 +125,8 @@ async def run_agent(
             session_id=runtime_context.session_id,
             current_run_id=run_id,
         ),
+        publishable_events=request.publishable_events,
+        source_queue_item_id=request.source_queue_item_id,
     )
 
 
@@ -140,6 +146,8 @@ async def run_agent_loop(
     cancellation_event: CancellationToken | None = None,
     deadline: float | None = None,
     query_log_reader: QueryLogReader | None = None,
+    publishable_events: Mapping[str, dict[str, Any] | None] | None = None,
+    source_queue_item_id: str | None = None,
 ) -> AgentRunResult:
     """Run an assistant/tool loop without mutating session state."""
     gateway = model_gateway or DefaultModelGateway()
@@ -166,11 +174,16 @@ async def run_agent_loop(
         model_gateway=gateway,
         abort_reason=run_abort_reason(cancellation_event, deadline, clock=clock),
         query_log_reader=query_log_reader,
+        publishable_events=publishable_events or {},
+        source_queue_item_id=source_queue_item_id,
     )
     tool_schema = active_tool_registry.model_tool_schema(
         allowed_capabilities,
         tool_profile=config.tool_profile,
     )
+    if publishable_events and source_queue_item_id is not None:
+        tool_schema = publish_event_tool_schema(tool_schema)
+        allowed_capabilities = (*allowed_capabilities, "zeta.publish_event")
     tools = tool_schema.descriptors
     return await AgentRun(
         objective=objective,
@@ -183,6 +196,45 @@ async def run_agent_loop(
         tools=tools,
         state=state,
     ).run()
+
+
+def publish_event_tool_schema(
+    tool_schema: CapabilityToolSchema,
+) -> CapabilityToolSchema:
+    existing = tool_schema.routes.get("publish_event")
+    if existing is not None:
+        raise ValueError(
+            "reserved tool name 'publish_event' is already in use by "
+            f"{existing.capability_id!r}"
+        )
+    input_schema = {
+        "type": "object",
+        "required": ["event_type", "payload"],
+        "properties": {
+            "event_type": {"type": "string"},
+            "payload": {"type": "object"},
+            "at": {"type": "string"},
+        },
+        "additionalProperties": False,
+    }
+    return CapabilityToolSchema(
+        routes={
+            **tool_schema.routes,
+            "publish_event": CapabilityToolRoute(
+                capability_id="zeta.publish_event",
+                input_schema=input_schema,
+                adapt_arguments=identity_arguments,
+            ),
+        },
+        descriptors=[
+            *tool_schema.descriptors,
+            model_descriptor(
+                "publish_event",
+                "Request an event when this agent attempt completes successfully.",
+                input_schema,
+            ),
+        ],
+    )
 
 
 def current_timeline(*, runtime_context: RuntimeContext) -> list[Event]:

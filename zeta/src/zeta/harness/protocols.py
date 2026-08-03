@@ -44,6 +44,8 @@ class CoordinationStore(Protocol):
         queue_item_id: str,
         worker_name: str,
         claim_token: str,
+        *,
+        now_ms: int,
     ) -> bool: ...
 
     def heartbeat_attempt(

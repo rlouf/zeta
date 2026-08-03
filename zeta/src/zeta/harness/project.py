@@ -41,7 +41,9 @@ from zeta.models.profiles import ModelSelection
 
 PROJECT_SNAPSHOT_RECORDED = "runtime.project_snapshot.recorded"
 PROJECT_SNAPSHOT_SCHEMA = "zeta.project_snapshot"
+PROJECT_SNAPSHOT_VERSION = 2
 EXECUTION_MANIFEST_SCHEMA = "zeta.execution_manifest"
+EXECUTION_MANIFEST_VERSION = 2
 
 
 class ProjectSnapshotUnavailable(RuntimeError):
@@ -69,11 +71,11 @@ class ProjectSnapshot:
         }
         relevant_events = {
             event_type: self.manifest["events"].get(event_type)
-            for event_type in (*spec.accepts, *spec.returns)
+            for event_type in (*spec.accepts, *spec.publishes)
         }
         manifest = {
             "schema": EXECUTION_MANIFEST_SCHEMA,
-            "version": 1,
+            "version": EXECUTION_MANIFEST_VERSION,
             "project_generation": self.generation_id,
             "agent": agent_manifest(spec),
             "events": relevant_events,
@@ -165,7 +167,7 @@ def project_manifest(
 ) -> dict[str, Any]:
     return {
         "schema": PROJECT_SNAPSHOT_SCHEMA,
-        "version": 1,
+        "version": PROJECT_SNAPSHOT_VERSION,
         "agents": [agent_manifest(spec) for spec in project.specs],
         "events": {event_type: schema for event_type, schema in project.events.items()},
         "skills": {
@@ -193,6 +195,16 @@ def project_from_manifest(
     *,
     registry: EventConnectorRegistry | None,
 ) -> AgentProject:
+    schema = manifest.get("schema")
+    if schema != PROJECT_SNAPSHOT_SCHEMA:
+        raise ProjectSnapshotUnavailable(
+            f"unsupported project snapshot schema {schema!r}"
+        )
+    version = manifest.get("version")
+    if version != PROJECT_SNAPSHOT_VERSION:
+        raise ProjectSnapshotUnavailable(
+            f"unsupported project snapshot version {version!r}"
+        )
     connectors = registry or EventConnectorRegistry()
     recorded_connectors = manifest.get("connectors")
     current_connectors = [
@@ -294,7 +306,7 @@ def agent_from_manifest(value: Any) -> AgentSpec:
         model=model,
         executor=ExecutorSpec(provider=provider, config=normalized_config),
         accepts=_string_tuple(value.get("accepts")),
-        returns=_string_tuple(value.get("returns")),
+        publishes=_string_tuple(value.get("publishes")),
         skills=_string_tuple(value.get("skills")),
         tools=_string_tuple(value.get("tools")),
         schedules=schedules,
@@ -336,7 +348,7 @@ def agent_manifest(spec: AgentSpec) -> dict[str, Any]:
             "config": executor_config(spec.executor.config),
         },
         "accepts": list(spec.accepts),
-        "returns": list(spec.returns),
+        "publishes": list(spec.publishes),
         "skills": list(spec.skills),
         "tools": list(spec.tools),
         "schedules": [

@@ -12,6 +12,7 @@ from zeta.authoring.prompts import render_prompt
 from zeta.authoring.spec import AgentSpec, ExecutorSpec
 from zeta.events import DraftEvent, Event
 from zeta.harness.retry import RetryPolicy
+from zeta.harness.returned_events import ReturnedEventPublisher, StructuredOutputRunner
 from zeta.harness.templates import agent_session_id
 from zeta.loop.config import AgentConfig
 from zeta.loop.outcomes import agent_run_result_payload
@@ -172,6 +173,7 @@ def compile_agent_definition(
     timeline: Sequence[dict[str, Any]] | TimelineFactory = (),
     agent_loop: AgentLoop | None = None,
     event_registry: EventRegistry | None = None,
+    structured_output: StructuredOutputRunner | None = None,
     project_generation: str | None = None,
     execution_manifest: Mapping[str, Any] | None = None,
 ) -> ExecutableAgent:
@@ -187,6 +189,7 @@ def compile_agent_definition(
         timeline=timeline,
         agent_loop=agent_loop,
         event_registry=event_registry,
+        structured_output=structured_output,
         project_generation=project_generation,
         execution_manifest=execution_manifest,
     )[0]
@@ -200,14 +203,16 @@ def compile_agent_definitions(
     timeline: Sequence[dict[str, Any]] | TimelineFactory = (),
     agent_loop: AgentLoop | None = None,
     event_registry: EventRegistry | None = None,
+    structured_output: StructuredOutputRunner | None = None,
     project_generation: str | None = None,
     execution_manifest: Mapping[str, Any] | None = None,
 ) -> list[ExecutableAgent]:
     """Compile one authored spec into runtime definitions for each accepted event."""
     if not spec.enabled or not spec.accepts:
         return []
-    if spec.publishes and event_registry is None:
-        raise ValueError("agent publishes require an event registry")
+    if (spec.publishes or spec.returns) and event_registry is None:
+        field = "publishes" if spec.publishes else "returns"
+        raise ValueError(f"agent {field} require an event registry")
     return [
         ExecutableAgent(
             AgentDefinition(
@@ -235,6 +240,14 @@ def compile_agent_definitions(
                 context,
                 timeline,
                 agent_loop or in_process_agent_loop,
+                (
+                    ReturnedEventPublisher(
+                        event_registry,
+                        structured_output or default_structured_output_runner(),
+                    )
+                    if spec.returns and event_registry is not None
+                    else None
+                ),
             ),
         )
         for event_type in spec.accepts
@@ -260,6 +273,7 @@ def agent_runner(
     context: str | ContextFactory,
     timeline: Sequence[dict[str, Any]] | TimelineFactory,
     agent_loop: AgentLoop,
+    returned_event_publisher: ReturnedEventPublisher | None,
 ) -> Callable[[AgentInvocation], Awaitable[dict[str, Any]]]:
     async def run(agent_run: AgentInvocation) -> dict[str, Any]:
         effective_config = config_for_spec(spec, config)
@@ -294,6 +308,14 @@ def agent_runner(
             session_id,
             run_id,
         )
+        if returned_event_publisher is not None and result.stop_reason != "aborted":
+            return await returned_event_publisher.publish(
+                spec,
+                result,
+                agent_run,
+                objective=objective,
+                config=effective_config,
+            )
         return agent_run_result_mapping(result)
 
     return run
@@ -338,3 +360,9 @@ def retry_policy_for_spec(spec: AgentSpec) -> RetryPolicy | None:
 
 def agent_run_result_mapping(result: AgentRunResult) -> dict[str, Any]:
     return agent_run_result_payload(result)
+
+
+def default_structured_output_runner() -> StructuredOutputRunner:
+    from zeta.models import chat_structured_output
+
+    return chat_structured_output

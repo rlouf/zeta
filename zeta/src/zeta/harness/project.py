@@ -71,7 +71,7 @@ class ProjectSnapshot:
         }
         relevant_events = {
             event_type: self.manifest["events"].get(event_type)
-            for event_type in (*spec.accepts, *spec.publishes)
+            for event_type in (*spec.accepts, *spec.publishes, *spec.returns)
         }
         manifest = {
             "schema": EXECUTION_MANIFEST_SCHEMA,
@@ -307,6 +307,7 @@ def agent_from_manifest(value: Any) -> AgentSpec:
         executor=ExecutorSpec(provider=provider, config=normalized_config),
         accepts=_string_tuple(value.get("accepts")),
         publishes=_string_tuple(value.get("publishes")),
+        returns=_string_tuple(value.get("returns")),
         skills=_string_tuple(value.get("skills")),
         tools=_string_tuple(value.get("tools")),
         schedules=schedules,
@@ -329,7 +330,7 @@ def skill_from_manifest(name: str, value: Any) -> SkillResource:
 
 
 def agent_manifest(spec: AgentSpec) -> dict[str, Any]:
-    return {
+    manifest = {
         "slug": spec.slug,
         "name": spec.name,
         "description": spec.description,
@@ -370,6 +371,9 @@ def agent_manifest(spec: AgentSpec) -> dict[str, Any]:
         "base_dir": str(spec.base_dir) if spec.base_dir is not None else None,
         "manifest": spec.manifest,
     }
+    if spec.returns:
+        manifest["returns"] = list(spec.returns)
+    return manifest
 
 
 def connector_manifest(connector: EventConnector) -> dict[str, Any]:

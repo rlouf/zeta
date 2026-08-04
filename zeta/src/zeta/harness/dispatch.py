@@ -594,11 +594,13 @@ class _QueueingDispatcher:
     ) -> Callable[[DraftEvent], Awaitable[Event]]:
         async def publish(draft: DraftEvent) -> Event:
             payload = dict(draft.payload)
-            # A completion request must keep the payload that passed its event
-            # schema. Its journal fields already carry the run correlation.
+            # Completion and return events keep payloads validated against their
+            # declared event schemas. Journal fields carry their correlation.
             if not (
                 draft.idempotency_key is not None
-                and draft.idempotency_key.startswith("agent.publish:")
+                and draft.idempotency_key.startswith(
+                    ("agent.publish:", "agent.return:")
+                )
             ):
                 payload.update(
                     {

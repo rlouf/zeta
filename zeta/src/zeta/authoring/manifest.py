@@ -109,6 +109,12 @@ def validate_events(spec: AgentSpec, registry: EventRegistry | None) -> None:
                 f"agent {spec.slug!r} references unknown event {event_type!r} "
                 "in publishes"
             )
+    for event_type in spec.returns:
+        if not registry.knows(event_type):
+            raise ManifestError(
+                f"agent {spec.slug!r} references unknown event {event_type!r} "
+                "in returns"
+            )
 
 
 def validate_connector_bindings(

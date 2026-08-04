@@ -166,6 +166,20 @@ def test_execution_manifest_contains_publishes_and_relevant_schemas(
     }
 
 
+def test_execution_manifest_preserves_returns_and_relevant_schemas(
+    tmp_path: Path,
+) -> None:
+    snapshot = load_snapshot(write_snapshot_project(tmp_path))
+    spec = replace(snapshot.project.specs[0], returns=("work.completed",))
+
+    execution_manifest = snapshot.execution_manifest(spec)
+    restored = agent_from_manifest(agent_manifest(spec))
+
+    assert execution_manifest["agent"]["returns"] == ["work.completed"]
+    assert set(execution_manifest["events"]) == {"work.requested", "work.completed"}
+    assert restored.returns == ("work.completed",)
+
+
 def test_project_snapshot_preserves_executor_config(tmp_path: Path) -> None:
     spec = load_snapshot(write_snapshot_project(tmp_path)).project.specs[0]
     config = {

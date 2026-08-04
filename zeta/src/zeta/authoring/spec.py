@@ -22,6 +22,7 @@ BUILT_IN_FRONTMATTER_KEYS = frozenset(
         "executor",
         "accepts",
         "publishes",
+        "returns",
         "skills",
         "tools",
         "schedules",
@@ -80,6 +81,7 @@ class AgentSpec:
     executor: ExecutorSpec = field(default_factory=ExecutorSpec)
     accepts: tuple[str, ...] = ()
     publishes: tuple[str, ...] = ()
+    returns: tuple[str, ...] = ()
     skills: tuple[str, ...] = ()
     tools: tuple[str, ...] = ()
     schedules: tuple[ScheduleEntry, ...] = ()
@@ -118,6 +120,7 @@ def load_spec(path: str | Path) -> AgentSpec:
             frontmatter.get("publishes", ()),
             path,
         )
+        returns = string_tuple(frontmatter.get("returns", ()), "returns", path)
         return AgentSpec(
             slug=slug,
             name=required_string(frontmatter, "name", path),
@@ -131,6 +134,7 @@ def load_spec(path: str | Path) -> AgentSpec:
             executor=executor_spec(frontmatter.get("executor"), path),
             accepts=accepts,
             publishes=publishes,
+            returns=returns,
             skills=string_tuple(frontmatter.get("skills", ()), "skills", path),
             tools=string_tuple(frontmatter.get("tools", ()), "tools", path),
             schedules=schedules,

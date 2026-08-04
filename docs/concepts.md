@@ -252,6 +252,8 @@ publishes:
   - event: slack.message.post
     with:
       channel_ids: ["C123"]
+returns:
+  - support.reply.completed
 tools:
   - read
   - grep
@@ -278,7 +280,8 @@ Core frontmatter fields:
 | `session` | no | What identifies a session. `shared`, `per-event` (default), or a template. |
 | `model` | no | Per-agent `{name, url}` override. |
 | `accepts` | no | Event types that can trigger the agent. |
-| `publishes` | no | Event types that the agent can publish. |
+| `publishes` | no | Event types that the agent can publish as intermediate effects. |
+| `returns` | no | Event types eligible for the one final typed result of a turn. |
 | `tools` | no | Capability names granted to the model. |
 | `skills` | no | Shared Markdown skills from `agents/skills/`. |
 | `schedules` | no | Cron triggers that publish synthetic events. |
@@ -290,6 +293,19 @@ Core frontmatter fields:
 Schedules automatically add `agent.<slug>.scheduled` to `accepts`. For example,
 `agents/release-manager.md` with a schedule accepts
 `agent.release-manager.scheduled`.
+
+### Published Effects and Returned Results
+
+`publishes` and `returns` are independent declarations. `publishes` grants the
+`publish_event` tool during the normal agent/tool loop. In the Slack Support
+example, the agent can publish `slack.message.post` as an intermediate effect
+while it works. `returns` does not grant a tool. After a successful normal
+loop, Zeta runs one final no-tools structured generation that must select one
+declared return type, here `support.reply.completed`, and produce a payload
+valid against its registered event schema. Zeta persists and routes that event
+with the agent and triggering-event provenance. An agent may use both fields:
+send the Slack reply through `publishes`, then return the typed resolution
+through `returns`.
 
 By default, Zeta backfills a missed schedule only later on the same calendar
 day. Set `catchup: latest` to keep the latest occurrence eligible across days.

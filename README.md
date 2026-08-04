@@ -99,6 +99,8 @@ schedules:
     catchup: latest
 publishes:
   - release.summary.ready
+returns:
+  - release.digest.completed
 tools:
   - bash
 ---
@@ -108,8 +110,13 @@ Write release notes for the team. Use `publish_event` to publish them as
 `release.summary.ready`.
 ```
 
-A schedule creates an event for the agent. A published event can start another
-agent.
+A schedule creates an event for the agent. `publishes` authorizes intermediate
+effects: this agent can call `publish_event` while it works to hand the release
+notes to an announcer. `returns` is different: after the normal agent/tool
+loop ends, Zeta makes one final no-tools structured generation that selects
+`release.digest.completed` and validates its payload against that event's
+schema. Zeta then persists and routes that returned event. An agent may declare
+both fields.
 
 ## Build an agent system
 

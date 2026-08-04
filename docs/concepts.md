@@ -571,6 +571,86 @@ metadata. Zeta stores each attachment under `.zeta/media/telegram` by default.
 It preserves the file ID, caption, and MIME type. The default size limit is 20 MiB.
 Zeta returns a retryable failure when a media download fails.
 
+### Pushover
+
+The bundled Pushover connector sends notifications to the Pushover app. The
+app can show a notification on an iPhone and a paired Apple Watch.
+
+Enable the connector in `agents/connectors.yaml`:
+
+```yaml
+event_connectors:
+  - pushover
+```
+
+Set these environment variables:
+
+- `PUSHOVER_API_TOKEN` is the application API token.
+- `PUSHOVER_USER_KEY` is the user or group key.
+- `PUSHOVER_DEVICE` is an optional device name.
+
+Pushover can send to all active devices when a device name is invalid. Do not
+use `PUSHOVER_DEVICE` as a security control.
+
+Declare each event that an agent can publish:
+
+```yaml
+publishes:
+  - event: pushover.message.send
+  - event: pushover.glance.update
+```
+
+Use `pushover.message.send` for an alert that needs attention. For example, an
+agent can report a failed deployment, ask for approval, or confirm that a long
+job is complete:
+
+```json
+{
+  "event_type": "pushover.message.send",
+  "payload": {
+    "title": "Deployment failed",
+    "message": "The production health check did not pass.",
+    "priority": 1,
+    "url": "https://example.com/runs/42",
+    "url_title": "Open run"
+  }
+}
+```
+
+The `message` field is required. A message can also contain `title`, `priority`,
+`sound`, `url`, `url_title`, `ttl`, `retry`, and `expire`. Priority `2` is an
+emergency notification. It requires `retry` and `expire`. Pushover has no
+idempotency key for messages. Zeta can send a duplicate after an uncertain
+delivery failure.
+
+Use `pushover.glance.update` for short status data that is useful without
+opening an app. For example, a Glance can show a queue count, job progress, or
+the current service state:
+
+```json
+{
+  "event_type": "pushover.glance.update",
+  "payload": {
+    "title": "Release",
+    "text": "Uploading artifacts",
+    "count": 3,
+    "percent": 60
+  }
+}
+```
+
+A Glance update can contain `title`, `text`, `subtext`, `count`, or `percent`.
+The update must contain at least one field. An omitted field keeps its current
+value. An empty string clears a field. Zero is a valid count or percent.
+
+Use an hourly schedule for regular Glance updates. Pushover recommends at
+least 20 minutes between updates and permits no more than 50 Apple Watch
+updates per day. Zeta does not retry an uncertain Glance delivery. A retry
+could use more of this daily allowance.
+
+The Apple Watch must have a registered Pushover Glance or complication. A
+change can take up to ten minutes to appear.
+
 The bundled filesystem connector (`id: filesystem`) polls a directory and emits
 `file.created` events with a `{path, name, dir}` payload.
 

@@ -1384,13 +1384,14 @@ def test_zeta_load_connector_registry_honors_process_allowlist(
     assert registry.resolve("github") == github
 
 
-def test_zeta_slack_connector_is_discoverable_as_entry_point() -> None:
+def test_zeta_bundled_connectors_are_discoverable_as_entry_points() -> None:
     metadata = tomllib.loads(Path("zeta/pyproject.toml").read_text(encoding="utf-8"))
 
     assert metadata["project"]["entry-points"]["zeta.event_connectors"] == {
         "slack": "connectors.slack:slack_event_connector",
         "filesystem": "connectors.filesystem:filesystem_event_connector",
         "telegram": "connectors.telegram:telegram_event_connector",
+        "pushover": "connectors.pushover:pushover_event_connector",
     }
 
 

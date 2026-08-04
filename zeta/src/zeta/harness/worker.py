@@ -408,6 +408,7 @@ class RuntimeAgentLoop:
                     ),
                     publishable_events=invocation.agent.publishable_events,
                     source_queue_item_id=queue_item_id,
+                    source_agent_id=invocation.agent.agent_id,
                 ),
                 run_id=run_id,
                 caused_by=invocation.triggering_event.id,

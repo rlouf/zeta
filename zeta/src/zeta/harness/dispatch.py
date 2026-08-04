@@ -222,6 +222,7 @@ class _QueueingDispatcher:
             retry_policy=self.retry_policy,
             blocking_unsafe_effect=self._blocking_unsafe_effect,
             completion_batch=completion_batch,
+            resource_canceller=getattr(event_sink, "cancel_resource", None),
         )
 
     async def publish_event(

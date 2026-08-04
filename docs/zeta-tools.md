@@ -1,7 +1,7 @@
 # Zeta Tools
 
 This document describes the Zeta-specific tools `publish_event`, `wait_for`,
-and `query_log`.
+`cancel`, and `query_log`.
 
 ## `publish_event`
 
@@ -252,6 +252,63 @@ matched. The original event still follows normal event routing.
 
 Use `zeta waits list` to inspect active and completed waits. Add `--json` for
 JSON output.
+
+## `cancel`
+
+Use `cancel` to stop future work created by the same agent session. The tool
+accepts an active `wait_...` handle or a pending `pub_...` handle.
+
+Zeta adds `cancel` to authored agents automatically. Do not add it to the
+agent's `tools` list. The name is reserved. Session runs do not receive this
+tool.
+
+### Input
+
+| Field | Required | Rule |
+| --- | --- | --- |
+| `handle` | yes | An active `wait_...` handle or pending `pub_...` handle. |
+| `reason` | no | A non-empty reason for the cancellation. |
+
+The object cannot contain other fields.
+
+### Result
+
+A valid tool call records a cancellation request. The agent run continues:
+
+```json
+{
+  "ok": true,
+  "handle": "wait_0123456789abcdef01234567",
+  "status": "requested"
+}
+```
+
+Zeta applies the request only after the attempt completes successfully. A
+failed, cancelled, or stale attempt does not cancel any work.
+
+The handle must belong to the same agent session. A request for another
+session's handle fails the attempt.
+
+Cancelling an active wait records `runtime.wait.cancelled`. Zeta does not
+start a continuation for that wait. Cancelling a pending scheduled event
+records `runtime.scheduled_event.cancelled`. Zeta does not publish that event.
+
+Matching, timeout, publication, and cancellation are atomic. Only one terminal
+state can win. Repeating a cancellation is safe. Zeta returns the resource's
+current terminal state and does not add another cancellation event.
+
+### Command Line
+
+Runtime operators can cancel any supported handle:
+
+```sh
+zeta cancel wait_0123456789abcdef01234567
+zeta cancel pub_0123456789abcdef01234567 --reason "No longer needed"
+zeta cancel wait_0123456789abcdef01234567 --json
+```
+
+The command reports the current terminal state. A repeated command succeeds
+and reports `changed: false` in JSON output.
 
 ## `query_log`
 

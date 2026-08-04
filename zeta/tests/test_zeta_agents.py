@@ -1065,6 +1065,27 @@ Publish an event.
         zeta_agents.Manifest().validate(spec)
 
 
+def test_zeta_agent_manifest_rejects_cancel_as_authored_tool(
+    tmp_path: Path,
+) -> None:
+    spec = zeta_agents.load_spec(
+        _write_spec(
+            tmp_path / "worker.md",
+            """---
+name: Worker
+description: Does work.
+tools:
+  - cancel
+---
+Cancel future work.
+""",
+        )
+    )
+
+    with pytest.raises(zeta_agents.ManifestError, match="reserved tool 'cancel'"):
+        zeta_agents.Manifest().validate(spec)
+
+
 def test_zeta_agent_manifest_allows_authored_tool_named_dunder_return(
     tmp_path: Path,
 ) -> None:

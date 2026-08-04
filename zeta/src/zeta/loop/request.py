@@ -44,6 +44,7 @@ class AgentRunRequest:
         default_factory=dict
     )
     source_queue_item_id: str | None = None
+    source_agent_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -60,6 +61,8 @@ class RunDependencies:
         default_factory=dict
     )
     source_queue_item_id: str | None = None
+    source_agent_id: str | None = None
+    source_session_id: str | None = None
 
 
 def silent_run_dependencies(ctx: RunDependencies) -> RunDependencies:

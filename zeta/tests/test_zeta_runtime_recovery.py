@@ -5,7 +5,12 @@ from threading import Barrier
 
 import pytest
 from zeta.events import DraftEvent, Event
-from zeta.harness.store import RuntimeEventStore
+from zeta.harness.store import (
+    InvalidCancellationHandle,
+    RuntimeEventStore,
+    UnauthorizedCancellation,
+    UnknownCancellationHandle,
+)
 from zeta.journal.sqlite import SqliteEventStore
 from zeta.journal.store import Filter
 
@@ -529,6 +534,212 @@ def test_match_and_timeout_race_consumes_wait_once(tmp_path: Path) -> None:
         timeout_store.close()
 
 
+def test_cancel_active_wait_records_one_terminal_fact_and_survives_rebuild(
+    tmp_path: Path,
+) -> None:
+    store = RuntimeEventStore.open(tmp_path / "runtime.sqlite3")
+    handle = "wait_0123456789abcdef01234567"
+    store.append(_wait_created(event_id="wait-created-1", handle=handle))
+
+    first = store.cancel_resource(
+        handle,
+        reason="The issue was closed",
+        source_agent_id="issue-agent",
+        source_session_id="session-1",
+        now_ms=1_000,
+    )
+    second = store.cancel_resource(
+        handle,
+        source_agent_id="issue-agent",
+        source_session_id="session-1",
+        now_ms=1_001,
+    )
+
+    assert (first.resource_type, first.status, first.changed) == (
+        "wait",
+        "cancelled",
+        True,
+    )
+    assert (second.resource_type, second.status, second.changed) == (
+        "wait",
+        "cancelled",
+        False,
+    )
+    cancelled = store.list_events(Filter(event_type="runtime.wait.cancelled"))
+    assert len(cancelled) == 1
+    assert cancelled[0].payload == {
+        "handle": handle,
+        "agent_id": "issue-agent",
+        "session_id": "session-1",
+        "reason": "The issue was closed",
+        "cancelled_by_agent_id": "issue-agent",
+        "cancelled_by_session_id": "session-1",
+    }
+    assert store.list_waits()[0]["status"] == "cancelled"
+    assert not store.list_events(Filter(event_type="runtime.queue_item.available"))
+
+    expected = store.list_waits()
+    store.rebuild_projections()
+    assert store.list_waits() == expected
+    store.close()
+
+
+def test_cancel_pending_scheduled_event_records_terminal_state(tmp_path: Path) -> None:
+    store = RuntimeEventStore.open(tmp_path / "runtime.sqlite3")
+    handle = "pub_0123456789abcdef01234567"
+    store.append(
+        _scheduled_event_created(
+            event_id="schedule-created-1",
+            handle=handle,
+            publish_at="2030-01-01T00:00:00+00:00",
+            position=0,
+        )
+    )
+
+    first = store.cancel_resource(
+        handle,
+        reason="Superseded",
+        source_agent_id="reporter",
+        source_session_id="session-1",
+        now_ms=1_000,
+    )
+    second = store.cancel_resource(handle, now_ms=1_001)
+
+    assert (first.resource_type, first.status, first.changed) == (
+        "scheduled_event",
+        "cancelled",
+        True,
+    )
+    assert (second.resource_type, second.status, second.changed) == (
+        "scheduled_event",
+        "cancelled",
+        False,
+    )
+    cancelled = store.list_events(
+        Filter(event_type="runtime.scheduled_event.cancelled")
+    )
+    assert len(cancelled) == 1
+    assert cancelled[0].payload["reason"] == "Superseded"
+    assert cancelled[0].payload["cancelled_by_agent_id"] == "reporter"
+    assert cancelled[0].payload["cancelled_by_session_id"] == "session-1"
+    assert store.list_scheduled_events()[0]["status"] == "cancelled"
+    store.close()
+
+
+def test_cancel_returns_the_existing_terminal_state(tmp_path: Path) -> None:
+    store = RuntimeEventStore.open(tmp_path / "runtime.sqlite3")
+    matched_handle = "wait_111111111111111111111111"
+    timed_out_handle = "wait_222222222222222222222222"
+    published_handle = "pub_333333333333333333333333"
+    store.append(_wait_created(event_id="wait-created-matched", handle=matched_handle))
+    store.accept(DraftEvent("github.issue.updated", "github", {}))
+    store.append(
+        _wait_created(
+            event_id="wait-created-timeout",
+            handle=timed_out_handle,
+            session_id="session-2",
+            deadline="1970-01-01T00:00:01+00:00",
+        )
+    )
+    store.timeout_next_due_wait(now_ms=2_000)
+    store.append(
+        _scheduled_event_created(
+            event_id="schedule-created-published",
+            handle=published_handle,
+            publish_at="1970-01-01T00:00:01+00:00",
+            position=0,
+        )
+    )
+    store.publish_next_due_scheduled_event(now_ms=2_000)
+
+    assert store.cancel_resource(matched_handle).status == "matched"
+    assert store.cancel_resource(timed_out_handle).status == "timed_out"
+    assert store.cancel_resource(published_handle).status == "published"
+    assert not store.list_events(Filter(event_type="runtime.wait.cancelled"))
+    store.close()
+
+
+def test_cancel_validates_handle_and_session_ownership(tmp_path: Path) -> None:
+    store = RuntimeEventStore.open(tmp_path / "runtime.sqlite3")
+    handle = "wait_0123456789abcdef01234567"
+    store.append(_wait_created(event_id="wait-created-1", handle=handle))
+
+    with pytest.raises(InvalidCancellationHandle):
+        store.cancel_resource("queue_012345")
+    with pytest.raises(UnknownCancellationHandle):
+        store.cancel_resource("wait_999999999999999999999999")
+    with pytest.raises(UnauthorizedCancellation):
+        store.cancel_resource(
+            handle,
+            source_agent_id="issue-agent",
+            source_session_id="session-2",
+        )
+
+    assert store.list_waits()[0]["status"] == "active"
+    assert store.cancel_resource(handle).status == "cancelled"
+    store.close()
+
+
+@pytest.mark.parametrize("operation", ["match", "timeout"])
+def test_cancel_and_wait_completion_race_has_one_terminal_fact(
+    tmp_path: Path,
+    operation: str,
+) -> None:
+    path = tmp_path / "runtime.sqlite3"
+    cancel_store = RuntimeEventStore.open(path)
+    completion_store = RuntimeEventStore.open(path)
+    handle = "wait_0123456789abcdef01234567"
+    cancel_store.append(
+        _wait_created(
+            event_id="wait-created-race",
+            handle=handle,
+            deadline="1970-01-01T00:00:01+00:00",
+        )
+    )
+    ready = Barrier(2)
+
+    def cancel() -> object:
+        ready.wait()
+        return cancel_store.cancel_resource(
+            handle,
+            source_agent_id="issue-agent",
+            source_session_id="session-1",
+            now_ms=2_000,
+        )
+
+    def complete() -> object:
+        ready.wait()
+        if operation == "match":
+            return completion_store.accept(
+                DraftEvent("github.issue.updated", "github", {})
+            )
+        return completion_store.timeout_next_due_wait(now_ms=2_000)
+
+    try:
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            futures = (executor.submit(cancel), executor.submit(complete))
+            for future in futures:
+                future.result()
+
+        terminal = sum(
+            len(cancel_store.list_events(Filter(event_type=event_type)))
+            for event_type in (
+                "runtime.wait.cancelled",
+                "runtime.wait.matched",
+                "runtime.wait.timed_out",
+            )
+        )
+        assert terminal == 1
+        assert cancel_store.list_waits()[0]["status"] in {
+            "cancelled",
+            "matched",
+            "timed_out",
+        }
+    finally:
+        cancel_store.close()
+        completion_store.close()
+
+
 def test_projection_rebuild_restores_scheduled_event_terminal_states(
     tmp_path: Path,
 ) -> None:
@@ -665,7 +876,7 @@ def test_cancel_and_publish_race_has_one_terminal_scheduled_event(
     setup_store = RuntimeEventStore.open(path)
     created = _scheduled_event_created(
         event_id="schedule-created-race",
-        handle="publication-race",
+        handle="pub_0123456789abcdef01234567",
         publish_at="1970-01-01T00:00:01+00:00",
         position=0,
     )
@@ -677,8 +888,10 @@ def test_cancel_and_publish_race_has_one_terminal_scheduled_event(
 
     def cancel() -> object:
         ready.wait()
-        return cancel_store.cancel_scheduled_event(
-            "publication-race",
+        return cancel_store.cancel_resource(
+            "pub_0123456789abcdef01234567",
+            source_agent_id="reporter",
+            source_session_id="session-1",
             now_ms=2_000,
         )
 

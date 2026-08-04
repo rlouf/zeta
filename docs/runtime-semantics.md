@@ -229,6 +229,27 @@ matched continuation renders the agent prompt with the original event type and
 payload. A projection rebuild restores the terminal wait and continuation from
 the lifecycle facts.
 
+## Durable Cancellation
+
+An authored agent can request cancellation of an active wait or a pending
+scheduled event. The model loop returns a `CancelRequest`; it does not change
+runtime state. The request contains the handle, optional reason, source agent,
+source session, and tool-call position.
+
+The coordinator applies cancellation inside the successful attempt completion
+transaction. Failed, cancelled, and stale attempts do not cancel work. An
+agent request can cancel only a resource created by the same session. Runtime
+operators can cancel any resource through the CLI.
+
+Cancellation appends `runtime.wait.cancelled` or
+`runtime.scheduled_event.cancelled`. The projection keeps that terminal state
+after restart or rebuild. A cancelled wait does not create a continuation. A
+cancelled scheduled event is never published.
+
+Cancellation uses the same transaction boundary as wait matching, wait
+timeout, and scheduled publication. Only one terminal operation can win. A
+repeated request returns the existing terminal state and adds no event.
+
 ## Claim Fencing
 
 Every durable claim has an opaque token. Heartbeats and claim releases must

@@ -9,13 +9,45 @@ ownership that a projection rebuild discards.
 from __future__ import annotations
 
 from collections.abc import Iterable
-from dataclasses import dataclass
-from typing import Any, Protocol, runtime_checkable
+from dataclasses import dataclass, field
+from typing import Any, Literal, Protocol, runtime_checkable
 
 from zeta.events import DraftEvent, Event
 from zeta.harness.metrics import MetricAttribute
 from zeta.journal.store import Filter
 from zeta.journal.types import AppendOutcome
+
+CancellationResourceType = Literal["wait", "scheduled_event"]
+CancellationStatus = Literal["cancelled", "matched", "timed_out", "published"]
+
+
+class CancellationError(ValueError):
+    """A cancellation request cannot be applied safely."""
+
+    dispatch_error_code = "malformed_event_payload"
+
+
+class InvalidCancellationHandle(CancellationError):
+    """The handle does not identify a cancellable resource type."""
+
+
+class UnknownCancellationHandle(CancellationError):
+    """No cancellable resource has this handle."""
+
+
+class UnauthorizedCancellation(CancellationError):
+    """The authored session does not own this resource."""
+
+
+@dataclass(frozen=True)
+class CancellationResult:
+    """The current terminal state after a cancellation request."""
+
+    handle: str
+    resource_type: CancellationResourceType
+    status: CancellationStatus
+    changed: bool
+    event: Event | None = field(default=None, compare=False, repr=False)
 
 
 @runtime_checkable
@@ -29,6 +61,16 @@ class RuntimeJournal(Protocol):
     def get(self, event_id: str) -> Event | None: ...
 
     def list_events(self, filter: Filter) -> list[Event]: ...
+
+    def cancel_resource(
+        self,
+        handle: str,
+        *,
+        reason: str | None = None,
+        source_agent_id: str | None = None,
+        source_session_id: str | None = None,
+        now_ms: int | None = None,
+    ) -> CancellationResult: ...
 
 
 @runtime_checkable

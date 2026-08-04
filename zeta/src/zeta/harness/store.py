@@ -11,13 +11,22 @@ from contextlib import AbstractContextManager
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 from zeta import ids
 from zeta.events import DraftEvent, Event
 from zeta.harness.metrics import MetricAttribute, NullRuntimeMetrics, RuntimeMetrics
 from zeta.harness.projections import runtime_event_projection
-from zeta.harness.protocols import CoordinationStore, QueueClaim, RuntimeJournal
+from zeta.harness.protocols import (
+    CancellationResult,
+    CancellationStatus,
+    CoordinationStore,
+    InvalidCancellationHandle,
+    QueueClaim,
+    RuntimeJournal,
+    UnauthorizedCancellation,
+    UnknownCancellationHandle,
+)
 from zeta.journal.sqlite import SqliteEventStore
 from zeta.journal.store import Filter
 from zeta.journal.types import AppendOutcome
@@ -251,6 +260,95 @@ class RuntimeJournalStore(_SqliteBacked):
                 """
             ).fetchall()
         return [_row_to_wait(row) for row in rows]
+
+    def cancel_resource(
+        self,
+        handle: str,
+        *,
+        reason: str | None = None,
+        source_agent_id: str | None = None,
+        source_session_id: str | None = None,
+        now_ms: int | None = None,
+    ) -> CancellationResult:
+        cancellation_time = _now_ms(now_ms)
+        if handle.startswith("wait_"):
+            resource_type = "wait"
+            creator_agent_column = "agent_id"
+            creator_session_column = "session_id"
+        elif handle.startswith("pub_"):
+            resource_type = "scheduled_event"
+            creator_agent_column = "source_agent_id"
+            creator_session_column = "source_session_id"
+        else:
+            raise InvalidCancellationHandle("handle must start with 'wait_' or 'pub_'")
+
+        with self.events.transaction():
+            if resource_type == "wait":
+                row = self.connection.execute(
+                    "SELECT * FROM waits WHERE handle = ?",
+                    (handle,),
+                ).fetchone()
+            else:
+                row = self.connection.execute(
+                    "SELECT * FROM scheduled_events WHERE handle = ?",
+                    (handle,),
+                ).fetchone()
+            if row is None:
+                raise UnknownCancellationHandle(
+                    f"unknown cancellation handle {handle!r}"
+                )
+            creator_agent_id = str(row[creator_agent_column])
+            creator_session_id = _optional_str(row[creator_session_column])
+            if (
+                source_session_id is not None
+                and source_session_id != creator_session_id
+            ) or (source_agent_id is not None and source_agent_id != creator_agent_id):
+                raise UnauthorizedCancellation(
+                    f"session {source_session_id!r} does not own {handle!r}"
+                )
+
+            status = str(row["status"])
+            if status != ("active" if resource_type == "wait" else "pending"):
+                if status not in {"cancelled", "matched", "timed_out", "published"}:
+                    raise RuntimeError(
+                        f"invalid {resource_type} cancellation status {status!r}"
+                    )
+                return CancellationResult(
+                    handle=handle,
+                    resource_type=resource_type,
+                    status=cast(CancellationStatus, status),
+                    changed=False,
+                )
+
+            if resource_type == "wait":
+                cancelled = _wait_cancelled_event(
+                    row,
+                    timestamp_ms=cancellation_time,
+                    reason=reason,
+                    cancelled_by_agent_id=source_agent_id,
+                    cancelled_by_session_id=source_session_id,
+                )
+            else:
+                cancelled = _scheduled_terminal_event(
+                    row,
+                    event_type="runtime.scheduled_event.cancelled",
+                    idempotency_key=f"scheduled_event.cancelled:{handle}",
+                    caused_by=str(row["created_event_id"]),
+                    timestamp_ms=cancellation_time,
+                    reason=reason,
+                    cancelled_by_agent_id=source_agent_id,
+                    cancelled_by_session_id=source_session_id,
+                )
+            outcome = self.events.append_in_transaction(cancelled)
+            if not outcome.inserted:
+                raise RuntimeError(f"failed to cancel {resource_type} {handle!r}")
+            return CancellationResult(
+                handle=handle,
+                resource_type=resource_type,
+                status="cancelled",
+                changed=True,
+                event=outcome.event,
+            )
 
     def publish_next_due_scheduled_event(
         self,
@@ -1025,6 +1123,23 @@ class RuntimeEventStore:
     ) -> ScheduledEventCancellationStatus:
         return self._journal.cancel_scheduled_event(handle, now_ms=now_ms)
 
+    def cancel_resource(
+        self,
+        handle: str,
+        *,
+        reason: str | None = None,
+        source_agent_id: str | None = None,
+        source_session_id: str | None = None,
+        now_ms: int | None = None,
+    ) -> CancellationResult:
+        return self._journal.cancel_resource(
+            handle,
+            reason=reason,
+            source_agent_id=source_agent_id,
+            source_session_id=source_session_id,
+            now_ms=now_ms,
+        )
+
     def ensure_pending_queue_item(self, event: Event) -> str:
         return self._coordination.ensure_pending_queue_item(event)
 
@@ -1262,6 +1377,38 @@ def _wait_timed_out_event(row: sqlite3.Row, timestamp_ms: int) -> Event:
     return replace(Event.from_draft(draft), timestamp_ms=timestamp_ms)
 
 
+def _wait_cancelled_event(
+    row: sqlite3.Row,
+    *,
+    timestamp_ms: int,
+    reason: str | None,
+    cancelled_by_agent_id: str | None,
+    cancelled_by_session_id: str | None,
+) -> Event:
+    handle = str(row["handle"])
+    session_id = str(row["session_id"])
+    payload: dict[str, Any] = {
+        "handle": handle,
+        "agent_id": str(row["agent_id"]),
+        "session_id": session_id,
+    }
+    if reason is not None:
+        payload["reason"] = reason
+    if cancelled_by_agent_id is not None:
+        payload["cancelled_by_agent_id"] = cancelled_by_agent_id
+    if cancelled_by_session_id is not None:
+        payload["cancelled_by_session_id"] = cancelled_by_session_id
+    draft = DraftEvent(
+        event_type="runtime.wait.cancelled",
+        source="zeta",
+        payload=payload,
+        idempotency_key=f"wait.cancelled:{handle}",
+        caused_by=str(row["created_event_id"]),
+        session_id=session_id,
+    )
+    return replace(Event.from_draft(draft), timestamp_ms=timestamp_ms)
+
+
 def _scheduled_requested_event(row: sqlite3.Row, timestamp_ms: int) -> Event:
     draft = DraftEvent(
         event_type=str(row["event_type"]),
@@ -1285,6 +1432,9 @@ def _scheduled_terminal_event(
     caused_by: str,
     timestamp_ms: int,
     published_event_id: str | None = None,
+    reason: str | None = None,
+    cancelled_by_agent_id: str | None = None,
+    cancelled_by_session_id: str | None = None,
 ) -> Event:
     payload = {
         "handle": str(row["handle"]),
@@ -1294,6 +1444,12 @@ def _scheduled_terminal_event(
     }
     if published_event_id is not None:
         payload["published_event_id"] = published_event_id
+    if reason is not None:
+        payload["reason"] = reason
+    if cancelled_by_agent_id is not None:
+        payload["cancelled_by_agent_id"] = cancelled_by_agent_id
+    if cancelled_by_session_id is not None:
+        payload["cancelled_by_session_id"] = cancelled_by_session_id
     draft = DraftEvent(
         event_type=event_type,
         source="zeta",

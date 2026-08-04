@@ -27,6 +27,7 @@ from zeta.journal.views import (
 )
 from zeta.loop.config import AgentConfig
 from zeta.loop.outcomes import (
+    CancelRequest,
     PublishEventRequest,
     RunState,
     WaitRequest,
@@ -38,6 +39,7 @@ from zeta.models.types import tool_call_id
 TERMINAL_TOOL_STATUSES = {"completed", "failed", "refused", "cancelled", "timed_out"}
 PUBLISH_EVENT_CAPABILITY_ID = "zeta.publish_event"
 WAIT_FOR_CAPABILITY_ID = "zeta.wait_for"
+CANCEL_CAPABILITY_ID = "zeta.cancel"
 
 
 def terminal_capability_result_event(
@@ -98,6 +100,13 @@ async def run_capability_step(
             )
         if capability_id == WAIT_FOR_CAPABILITY_ID:
             return request_wait(
+                params,
+                position=position,
+                state=state,
+                ctx=ctx,
+            )
+        if capability_id == CANCEL_CAPABILITY_ID:
+            return request_cancellation(
                 params,
                 position=position,
                 state=state,
@@ -198,6 +207,31 @@ def request_wait(
         )
     )
     return {"ok": True, "handle": handle, "stop": True}
+
+
+def request_cancellation(
+    params: dict[str, Any],
+    *,
+    position: int,
+    state: RunState,
+    ctx: RunDependencies,
+) -> dict[str, Any]:
+    if ctx.source_agent_id is None or ctx.source_session_id is None:
+        return publish_event_error(
+            "missing-cancel-source",
+            "the run does not have an authored agent session",
+        )
+    handle = params["handle"]
+    state.cancel_requests.append(
+        CancelRequest(
+            handle=handle,
+            reason=params.get("reason"),
+            source_agent_id=ctx.source_agent_id,
+            source_session_id=ctx.source_session_id,
+            position=position,
+        )
+    )
+    return {"ok": True, "handle": handle, "status": "requested"}
 
 
 def normalized_wait_deadline(value: Any) -> str | None | dict[str, Any]:

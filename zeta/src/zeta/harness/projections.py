@@ -26,7 +26,7 @@ class RuntimeEventProjection:
     """Projects runtime queue and attempt events into queryable tables."""
 
     name = "zeta.harness.runtime"
-    version = 7
+    version = 8
 
     def init_schema(self, connection: sqlite3.Connection) -> None:
         connection.executescript(
@@ -231,6 +231,15 @@ def _index_one_wait(connection: sqlite3.Connection, event: Event) -> None:
             event,
             handle,
             status="timed_out",
+            matched_event_id=None,
+        )
+        return
+    if event.event_type == "runtime.wait.cancelled":
+        _index_wait_terminal(
+            connection,
+            event,
+            handle,
+            status="cancelled",
             matched_event_id=None,
         )
         return

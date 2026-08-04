@@ -117,6 +117,10 @@ def error_code_for_exception(exc: Exception) -> DispatchErrorCode:
     if isinstance(exc, TimeoutError):
         return "provider_timeout"
     error_code = getattr(exc, "dispatch_error_code", None)
-    if error_code in {"effect_delivery_failed", "unsafe_effect_ambiguous"}:
+    if error_code in {
+        "malformed_event_payload",
+        "effect_delivery_failed",
+        "unsafe_effect_ambiguous",
+    }:
         return error_code
     return "agent_execution_failed"

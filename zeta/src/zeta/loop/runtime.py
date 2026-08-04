@@ -127,6 +127,8 @@ async def run_agent(
         ),
         publishable_events=request.publishable_events,
         source_queue_item_id=request.source_queue_item_id,
+        source_agent_id=request.source_agent_id,
+        source_session_id=runtime_context.session_id,
     )
 
 
@@ -148,6 +150,8 @@ async def run_agent_loop(
     query_log_reader: QueryLogReader | None = None,
     publishable_events: Mapping[str, dict[str, Any] | None] | None = None,
     source_queue_item_id: str | None = None,
+    source_agent_id: str | None = None,
+    source_session_id: str | None = None,
 ) -> AgentRunResult:
     """Run an assistant/tool loop without mutating session state."""
     gateway = model_gateway or DefaultModelGateway()
@@ -176,6 +180,8 @@ async def run_agent_loop(
         query_log_reader=query_log_reader,
         publishable_events=publishable_events or {},
         source_queue_item_id=source_queue_item_id,
+        source_agent_id=source_agent_id,
+        source_session_id=source_session_id,
     )
     tool_schema = active_tool_registry.model_tool_schema(
         allowed_capabilities,
@@ -184,6 +190,16 @@ async def run_agent_loop(
     if publishable_events and source_queue_item_id is not None:
         tool_schema = publish_event_tool_schema(tool_schema)
         allowed_capabilities = (*allowed_capabilities, "zeta.publish_event")
+    if source_queue_item_id is not None:
+        tool_schema = wait_for_tool_schema(tool_schema)
+        allowed_capabilities = (*allowed_capabilities, "zeta.wait_for")
+    if (
+        source_queue_item_id is not None
+        and source_agent_id is not None
+        and source_session_id is not None
+    ):
+        tool_schema = cancel_tool_schema(tool_schema)
+        allowed_capabilities = (*allowed_capabilities, "zeta.cancel")
     tools = tool_schema.descriptors
     return await AgentRun(
         objective=objective,
@@ -231,6 +247,86 @@ def publish_event_tool_schema(
             model_descriptor(
                 "publish_event",
                 "Request an event when this agent attempt completes successfully.",
+                input_schema,
+            ),
+        ],
+    )
+
+
+def wait_for_tool_schema(
+    tool_schema: CapabilityToolSchema,
+) -> CapabilityToolSchema:
+    existing = tool_schema.routes.get("wait_for")
+    if existing is not None:
+        raise ValueError(
+            "reserved tool name 'wait_for' is already in use by "
+            f"{existing.capability_id!r}"
+        )
+    input_schema = {
+        "type": "object",
+        "required": ["event_type"],
+        "properties": {
+            "event_type": {"type": "string", "minLength": 1},
+            "fields": {"type": "object"},
+            "deadline": {"type": "string"},
+        },
+        "additionalProperties": False,
+    }
+    return CapabilityToolSchema(
+        routes={
+            **tool_schema.routes,
+            "wait_for": CapabilityToolRoute(
+                capability_id="zeta.wait_for",
+                input_schema=input_schema,
+                adapt_arguments=identity_arguments,
+            ),
+        },
+        descriptors=[
+            *tool_schema.descriptors,
+            model_descriptor(
+                "wait_for",
+                "End this run and resume when a matching event arrives.",
+                input_schema,
+            ),
+        ],
+    )
+
+
+def cancel_tool_schema(
+    tool_schema: CapabilityToolSchema,
+) -> CapabilityToolSchema:
+    existing = tool_schema.routes.get("cancel")
+    if existing is not None:
+        raise ValueError(
+            "reserved tool name 'cancel' is already in use by "
+            f"{existing.capability_id!r}"
+        )
+    input_schema = {
+        "type": "object",
+        "required": ["handle"],
+        "properties": {
+            "handle": {
+                "type": "string",
+                "pattern": "^(?:wait|pub)_.+$",
+            },
+            "reason": {"type": "string", "minLength": 1},
+        },
+        "additionalProperties": False,
+    }
+    return CapabilityToolSchema(
+        routes={
+            **tool_schema.routes,
+            "cancel": CapabilityToolRoute(
+                capability_id="zeta.cancel",
+                input_schema=input_schema,
+                adapt_arguments=identity_arguments,
+            ),
+        },
+        descriptors=[
+            *tool_schema.descriptors,
+            model_descriptor(
+                "cancel",
+                "Cancel an active wait or pending scheduled event from this session.",
                 input_schema,
             ),
         ],

@@ -13,6 +13,12 @@ from zeta.effects import EffectDeliveryError
 from zeta.events import DraftEvent, Event
 from zeta.harness.attempts import AttemptStatus
 from zeta.harness.lifecycle import LifecycleRecorder
+from zeta.harness.projections import ActiveWaitConflict
+from zeta.harness.protocols import (
+    CancellationError,
+    CancellationResult,
+    UnauthorizedCancellation,
+)
 from zeta.harness.queue import QueueItemStatus, RoutedQueueItem
 from zeta.harness.retry import RetryPolicy, error_code_for_exception
 from zeta.harness.routing import (
@@ -29,6 +35,7 @@ AgentEventPublisherFactory = Callable[
 ]
 RetryScheduler = Callable[..., Event]
 CompletionBatch = Callable[[], AbstractContextManager[None]]
+ResourceCanceller = Callable[..., CancellationResult]
 
 
 class AttemptCoordinator:
@@ -47,6 +54,7 @@ class AttemptCoordinator:
         retry_policy: RetryPolicy,
         blocking_unsafe_effect: Callable[[str], str | None] | None = None,
         completion_batch: CompletionBatch = nullcontext,
+        resource_canceller: ResourceCanceller | None = None,
     ) -> None:
         self.lifecycle = lifecycle
         self.claim_is_current = claim_is_current
@@ -58,6 +66,7 @@ class AttemptCoordinator:
         self.retry_policy = retry_policy
         self.blocking_unsafe_effect = blocking_unsafe_effect or (lambda _item: None)
         self.completion_batch = completion_batch
+        self.resource_canceller = resource_canceller
 
     async def run(
         self,
@@ -166,12 +175,26 @@ class AttemptCoordinator:
 
         # The transaction fences the final claim check from competing writers.
         # Notifications wait for its commit so observers see only durable facts.
-        with self.lifecycle.defer_publications():
-            with self.completion_batch():
-                if not self.claim_is_current(queue_item_id):
-                    return events
-                terminal = await self.terminal_events(
-                    result,
+        try:
+            with self.lifecycle.defer_publications():
+                with self.completion_batch():
+                    if not self.claim_is_current(queue_item_id):
+                        return events
+                    terminal = await self.terminal_events(
+                        result,
+                        triggering_event,
+                        agent,
+                        queue_item_id,
+                        attempt_id,
+                        attempt_number,
+                        started_at,
+                        session_id,
+                        run_id,
+                    )
+        except (ActiveWaitConflict, CancellationError) as exc:
+            events.extend(
+                self.failed_events(
+                    exc,
                     triggering_event,
                     agent,
                     queue_item_id,
@@ -181,6 +204,8 @@ class AttemptCoordinator:
                     session_id,
                     run_id,
                 )
+            )
+            return events
         events.extend(terminal)
         return events
 
@@ -326,7 +351,7 @@ class AttemptCoordinator:
         events = [attempt_event]
         if not cancelled:
             events.extend(
-                await self.publish_requests(
+                await self.record_control_requests(
                     result,
                     triggering_event,
                     attempt_event,
@@ -352,7 +377,7 @@ class AttemptCoordinator:
         )
         return events
 
-    async def publish_requests(
+    async def record_control_requests(
         self,
         result: dict[str, Any],
         triggering_event: Event,
@@ -364,11 +389,17 @@ class AttemptCoordinator:
         session_id: str | None,
         run_id: str | None,
     ) -> list[Event]:
-        """Publish here so failed or stale attempts cannot create downstream work."""
-        requests = cast(
-            list[dict[str, Any]],
-            result.get("publish_event_requests", []),
-        )
+        controls: list[tuple[int, str, dict[str, Any]]] = []
+        for result_key, kind in (
+            ("publish_event_requests", "publish"),
+            ("wait_requests", "wait"),
+            ("cancel_requests", "cancel"),
+        ):
+            requests = cast(list[dict[str, Any]], result.get(result_key, []))
+            controls.extend(
+                (request["position"], kind, request) for request in requests
+            )
+
         publisher = self.event_publisher(
             agent,
             triggering_event,
@@ -377,48 +408,140 @@ class AttemptCoordinator:
             session_id,
             run_id,
         )
-        published: list[Event] = []
-        for request in sorted(requests, key=lambda item: item["position"]):
-            position = request["position"]
-            at = request["at"]
-            if publication_is_immediate(at, completed_at):
-                published.append(
-                    await publisher(
-                        DraftEvent(
-                            request["event_type"],
-                            f"agent:{agent.definition.agent_id}",
-                            request["payload"],
-                            idempotency_key=(
-                                f"agent.publish:{queue_item_id}:{position}"
-                            ),
-                            caused_by=completed_attempt.id,
-                            session_id=session_id,
-                            run_id=run_id,
-                            turn_id=triggering_event.turn_id,
-                        )
+        recorded: list[Event] = []
+        for _position, kind, request in sorted(controls, key=lambda item: item[0]):
+            if kind == "publish":
+                recorded.append(
+                    await self.publish_request(
+                        request,
+                        publisher,
+                        triggering_event,
+                        completed_attempt,
+                        completed_at,
+                        agent,
+                        queue_item_id,
+                        session_id,
+                        run_id,
                     )
                 )
-                continue
-            published.append(
-                self.lifecycle.append(
-                    "runtime.scheduled_event.created",
-                    completed_attempt,
-                    {
-                        "handle": request["handle"],
-                        "event_type": request["event_type"],
-                        "payload": request["payload"],
-                        "publish_at": at,
-                        "source_agent_id": agent.definition.agent_id,
-                        "source_session_id": session_id,
-                        "source_queue_item_id": queue_item_id,
-                        "position": position,
-                    },
-                    idempotency_key=f"agent.schedule:{queue_item_id}:{position}",
+            elif kind == "wait":
+                recorded.append(
+                    self.record_wait_request(
+                        request,
+                        completed_attempt,
+                        agent,
+                        queue_item_id,
+                        session_id,
+                        run_id,
+                    )
+                )
+            else:
+                cancellation_event = self.cancel_request(
+                    request,
+                    agent,
+                    session_id,
+                )
+                if cancellation_event is not None:
+                    recorded.append(cancellation_event)
+        return recorded
+
+    def record_wait_request(
+        self,
+        request: dict[str, Any],
+        completed_attempt: Event,
+        agent: ExecutableAgent,
+        queue_item_id: str,
+        session_id: str | None,
+        run_id: str | None,
+    ) -> Event:
+        position = request["position"]
+        return self.lifecycle.append(
+            "runtime.wait.created",
+            completed_attempt,
+            {
+                "handle": request["handle"],
+                "agent_id": agent.definition.agent_id,
+                "session_id": session_id,
+                "event_type": request["event_type"],
+                "fields": request["fields"],
+                "deadline": request["deadline"],
+                "source_queue_item_id": queue_item_id,
+                "project_generation": agent.definition.project_generation,
+            },
+            idempotency_key=f"agent.wait:{queue_item_id}:{position}",
+            session_id=session_id,
+            run_id=run_id,
+        )
+
+    async def publish_request(
+        self,
+        request: dict[str, Any],
+        publisher: AgentEventPublisher,
+        triggering_event: Event,
+        completed_attempt: Event,
+        completed_at: str,
+        agent: ExecutableAgent,
+        queue_item_id: str,
+        session_id: str | None,
+        run_id: str | None,
+    ) -> Event:
+        position = request["position"]
+        at = request["at"]
+        if publication_is_immediate(at, completed_at):
+            return await publisher(
+                DraftEvent(
+                    request["event_type"],
+                    f"agent:{agent.definition.agent_id}",
+                    request["payload"],
+                    idempotency_key=f"agent.publish:{queue_item_id}:{position}",
+                    caused_by=completed_attempt.id,
                     session_id=session_id,
                     run_id=run_id,
+                    turn_id=triggering_event.turn_id,
                 )
             )
-        return published
+        return self.lifecycle.append(
+            "runtime.scheduled_event.created",
+            completed_attempt,
+            {
+                "handle": request["handle"],
+                "event_type": request["event_type"],
+                "payload": request["payload"],
+                "publish_at": at,
+                "source_agent_id": agent.definition.agent_id,
+                "source_session_id": session_id,
+                "source_queue_item_id": queue_item_id,
+                "position": position,
+            },
+            idempotency_key=f"agent.schedule:{queue_item_id}:{position}",
+            session_id=session_id,
+            run_id=run_id,
+        )
+
+    def cancel_request(
+        self,
+        request: dict[str, Any],
+        agent: ExecutableAgent,
+        session_id: str | None,
+    ) -> Event | None:
+        if self.resource_canceller is None:
+            raise RuntimeError("the runtime does not support resource cancellation")
+        if (
+            request.get("source_agent_id") != agent.definition.agent_id
+            or request.get("source_session_id") != session_id
+        ):
+            raise UnauthorizedCancellation(
+                "cancellation source does not match the active agent session"
+            )
+        result = self.resource_canceller(
+            request["handle"],
+            reason=request.get("reason"),
+            source_agent_id=agent.definition.agent_id,
+            source_session_id=session_id,
+        )
+        if result.event is not None:
+            self.lifecycle.publish(result.event)
+        return result.event
 
 
 def event_timestamp() -> str:

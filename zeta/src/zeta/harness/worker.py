@@ -264,6 +264,7 @@ async def run_once(runtime: WorkerServices) -> str:
     record_project_snapshot(runtime.events, runtime.project_snapshot)
     publish_due_schedules(runtime)
     runtime.events.publish_next_due_scheduled_event()
+    runtime.events.timeout_next_due_wait()
     executors = project_executors(runtime)
     return await run_available_queue_item(
         runtime.events,
@@ -407,6 +408,7 @@ class RuntimeAgentLoop:
                     ),
                     publishable_events=invocation.agent.publishable_events,
                     source_queue_item_id=queue_item_id,
+                    source_agent_id=invocation.agent.agent_id,
                 ),
                 run_id=run_id,
                 caused_by=invocation.triggering_event.id,

@@ -12,12 +12,94 @@ from zeta.cli.rendering import (
     print_event_sequence,
 )
 from zeta.events import DraftEvent
+from zeta.harness.protocols import CancellationError
 from zeta.journal.store import Filter
 
 
 @click.group("events")
 def events() -> None:
     """Inspect and publish durable runtime events."""
+
+
+@click.group("waits")
+def waits() -> None:
+    """Inspect durable agent waits."""
+
+
+@waits.command("list")
+@state_dir_option
+@click.option("--json", "json_output", is_flag=True, help="Emit JSON.")
+def waits_list(
+    state_dir: Path | None,
+    json_output: bool,
+) -> int:
+    """List active and terminal waits."""
+
+    event_store = runtime_event_store(state_dir)
+    try:
+        rows = event_store.list_waits()
+    finally:
+        event_store.close()
+    if json_output:
+        click.echo(json.dumps(rows, ensure_ascii=False))
+        return 0
+    if not rows:
+        click.echo("waits empty")
+        return 0
+    for row in rows:
+        deadline = row["deadline_ms"]
+        click.echo(
+            "\t".join(
+                [
+                    row["status"],
+                    row["handle"],
+                    row["agent_id"],
+                    row["event_type"],
+                    str(deadline) if deadline is not None else "-",
+                ]
+            )
+        )
+    return 0
+
+
+@click.command("cancel")
+@state_dir_option
+@click.argument("handle")
+@click.option("--reason", help="Why the future work is no longer needed.")
+@click.option("--json", "json_output", is_flag=True, help="Emit JSON.")
+def cancel(
+    state_dir: Path | None,
+    handle: str,
+    reason: str | None,
+    json_output: bool,
+) -> int:
+    """Cancel an active wait or pending scheduled event by HANDLE."""
+
+    event_store = runtime_event_store(state_dir, read_only=False)
+    try:
+        result = event_store.cancel_resource(handle, reason=reason)
+    except CancellationError as error:
+        raise click.ClickException(str(error)) from error
+    finally:
+        event_store.close()
+    if json_output:
+        click.echo(
+            json.dumps(
+                {
+                    "handle": result.handle,
+                    "resource_type": result.resource_type,
+                    "status": result.status,
+                    "changed": result.changed,
+                },
+                ensure_ascii=False,
+            )
+        )
+        return 0
+    if result.changed:
+        click.echo(f"cancelled {result.resource_type} {result.handle}")
+    else:
+        click.echo(f"{result.resource_type} {result.handle} is already {result.status}")
+    return 0
 
 
 @events.command("list")

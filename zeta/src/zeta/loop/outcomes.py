@@ -37,6 +37,8 @@ class AgentRunResult:
     prompt_traces: list[PromptTrace] = field(default_factory=list)
     steps: list[StepResult] = field(default_factory=list)
     publish_event_requests: list[PublishEventRequest] = field(default_factory=list)
+    wait_requests: list[WaitRequest] = field(default_factory=list)
+    cancel_requests: list[CancelRequest] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -50,6 +52,28 @@ class PublishEventRequest:
     position: int
 
 
+@dataclass(frozen=True)
+class WaitRequest:
+    """A wait that becomes durable only when the attempt succeeds."""
+
+    handle: str
+    event_type: str
+    fields: dict[str, Any]
+    deadline: str | None
+    position: int
+
+
+@dataclass(frozen=True)
+class CancelRequest:
+    """A cancellation that becomes durable only when the attempt succeeds."""
+
+    handle: str
+    reason: str | None
+    source_agent_id: str
+    source_session_id: str
+    position: int
+
+
 def agent_run_result_payload(result: AgentRunResult) -> dict[str, Any]:
     payload: dict[str, Any] = {"final_answer": result.final_answer}
     if result.stop_reason is not None:
@@ -59,6 +83,12 @@ def agent_run_result_payload(result: AgentRunResult) -> dict[str, Any]:
     if result.publish_event_requests:
         payload["publish_event_requests"] = [
             asdict(request) for request in result.publish_event_requests
+        ]
+    if result.wait_requests:
+        payload["wait_requests"] = [asdict(request) for request in result.wait_requests]
+    if result.cancel_requests:
+        payload["cancel_requests"] = [
+            asdict(request) for request in result.cancel_requests
         ]
     return payload
 
@@ -91,6 +121,8 @@ class RunState:
     turn: int = 0
     stop: RunStopReason | None = None
     publish_event_requests: list[PublishEventRequest] = field(default_factory=list)
+    wait_requests: list[WaitRequest] = field(default_factory=list)
+    cancel_requests: list[CancelRequest] = field(default_factory=list)
     next_tool_position: int = 0
 
     def result(
@@ -109,6 +141,8 @@ class RunState:
             prompt_traces=self.prompt_traces,
             steps=self.steps,
             publish_event_requests=self.publish_event_requests,
+            wait_requests=self.wait_requests,
+            cancel_requests=self.cancel_requests,
         )
 
     def note_model_telemetry(self, model_telemetry: dict[str, Any]) -> None:

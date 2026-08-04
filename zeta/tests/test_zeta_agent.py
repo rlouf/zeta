@@ -223,6 +223,47 @@ def publish_event_tool_call(
     }
 
 
+def wait_for_tool_call(
+    call_id: str,
+    *,
+    event_type: str = "issue.updated",
+    fields: dict[str, Any] | None = None,
+    deadline: str | None = None,
+) -> dict[str, Any]:
+    arguments: dict[str, Any] = {"event_type": event_type}
+    if fields is not None:
+        arguments["fields"] = fields
+    if deadline is not None:
+        arguments["deadline"] = deadline
+    return {
+        "id": call_id,
+        "type": "function",
+        "function": {
+            "name": "wait_for",
+            "arguments": json.dumps(arguments),
+        },
+    }
+
+
+def cancel_tool_call(
+    call_id: str,
+    *,
+    handle: str = "wait_0123456789abcdef01234567",
+    reason: str | None = None,
+) -> dict[str, Any]:
+    arguments: dict[str, Any] = {"handle": handle}
+    if reason is not None:
+        arguments["reason"] = reason
+    return {
+        "id": call_id,
+        "type": "function",
+        "function": {
+            "name": "cancel",
+            "arguments": json.dumps(arguments),
+        },
+    }
+
+
 class PublishEventGateway:
     def __init__(self, messages: Iterable[dict[str, Any]]) -> None:
         self.messages = iter(messages)
@@ -270,6 +311,46 @@ def run_publish_event_calls(
         source_queue_item_id="qi-work",
         **kwargs,
     )
+
+
+def run_wait_for_call(
+    tool_call: dict[str, Any],
+) -> tuple[AgentRunResult, PublishEventGateway]:
+    gateway = PublishEventGateway(
+        [
+            {"content": "", "tool_calls": [tool_call]},
+            {"content": "unexpected second model turn"},
+        ]
+    )
+    result = run_agent_turn(
+        "wait",
+        [],
+        zeta_agent.AgentConfig(max_turns=2),
+        model_gateway=gateway,
+        source_queue_item_id="qi-work",
+    )
+    return result, gateway
+
+
+def run_cancel_calls(
+    *tool_calls: dict[str, Any],
+) -> tuple[AgentRunResult, PublishEventGateway]:
+    gateway = PublishEventGateway(
+        [
+            *({"content": "", "tool_calls": [tool_call]} for tool_call in tool_calls),
+            {"content": "done"},
+        ]
+    )
+    result = run_agent_turn(
+        "cancel",
+        [],
+        zeta_agent.AgentConfig(max_turns=len(tool_calls) + 1),
+        model_gateway=gateway,
+        source_queue_item_id="qi-work",
+        source_agent_id="issue-agent",
+        source_session_id="agent/issue-agent/session-1",
+    )
+    return result, gateway
 
 
 def never_abort(*, check_deadline: bool = True) -> str | None:
@@ -1567,6 +1648,241 @@ def test_zeta_publish_event_keeps_global_order_across_model_turns() -> None:
         {"status": "complete"},
     ]
     assert len({request.handle for request in result.publish_event_requests}) == 2
+
+
+def test_zeta_wait_for_is_visible_only_to_authored_agent_runs() -> None:
+    session_gateway = PublishEventGateway([{"content": "done"}])
+    authored_gateway = PublishEventGateway([{"content": "done"}])
+
+    run_agent_turn(
+        "answer",
+        [],
+        zeta_agent.AgentConfig(max_turns=1),
+        model_gateway=session_gateway,
+    )
+    run_agent_turn(
+        "answer",
+        [],
+        zeta_agent.AgentConfig(max_turns=1),
+        model_gateway=authored_gateway,
+        source_queue_item_id="qi-work",
+    )
+
+    assert "wait_for" not in session_gateway.tool_names[0]
+    assert "wait_for" in authored_gateway.tool_names[0]
+
+
+def test_zeta_wait_for_rejects_an_existing_model_tool_name() -> None:
+    input_schema = {"type": "object"}
+    tool_schema = zeta_agent.CapabilityToolSchema(
+        routes={
+            "wait_for": zeta_agent.CapabilityToolRoute(
+                capability_id="provider.wait",
+                input_schema=input_schema,
+                adapt_arguments=zeta_agent.identity_arguments,
+            )
+        },
+        descriptors=[
+            zeta_agent.model_descriptor(
+                "wait_for",
+                "Wait through the provider.",
+                input_schema,
+            )
+        ],
+    )
+
+    with pytest.raises(ValueError, match="reserved tool name 'wait_for'"):
+        zeta_agent.wait_for_tool_schema(tool_schema)
+
+
+def test_zeta_wait_for_returns_a_stable_handle_and_stops_the_run() -> None:
+    def run_once() -> tuple[AgentRunResult, PublishEventGateway]:
+        return run_wait_for_call(
+            wait_for_tool_call(
+                "call-1",
+                fields={"repository": "zeta"},
+            )
+        )
+
+    first, first_gateway = run_once()
+    second, _ = run_once()
+
+    assert first.stop_reason == "tool_stop"
+    assert first.final_answer == ""
+    assert len(first_gateway.tool_names) == 1
+    assert len(first.wait_requests) == 1
+    request = first.wait_requests[0]
+    assert request.event_type == "issue.updated"
+    assert request.fields == {"repository": "zeta"}
+    assert request.deadline is None
+    assert request.position == 0
+    assert request.handle.startswith("wait_")
+    assert request.handle == second.wait_requests[0].handle
+    tool_result = event_by_type(first.events, "tool_result")
+    assert tool_result["result"] == {
+        "ok": True,
+        "handle": request.handle,
+        "stop": True,
+    }
+
+
+def test_zeta_wait_for_defaults_to_empty_fields_and_serializes_the_request() -> None:
+    result, _ = run_wait_for_call(wait_for_tool_call("call-1"))
+
+    request = result.wait_requests[0]
+    assert request.fields == {}
+    assert zeta_outcomes.agent_run_result_payload(result)["wait_requests"] == [
+        asdict(request)
+    ]
+
+
+def test_zeta_wait_for_rejects_an_empty_event_type() -> None:
+    result, gateway = run_wait_for_call(wait_for_tool_call("call-1", event_type=""))
+
+    assert result.wait_requests == []
+    assert result.stop_reason == "finished"
+    assert len(gateway.tool_names) == 2
+    tool_result = event_by_type(result.events, "tool_result")
+    assert tool_result["result"]["ok"] is False
+
+
+@pytest.mark.parametrize("deadline", ["not-a-date", "2030-01-02T03:04:05"])
+def test_zeta_wait_for_rejects_invalid_or_naive_deadline(deadline: str) -> None:
+    result, gateway = run_wait_for_call(wait_for_tool_call("call-1", deadline=deadline))
+
+    assert result.wait_requests == []
+    assert result.stop_reason == "finished"
+    assert len(gateway.tool_names) == 2
+    tool_result = event_by_type(result.events, "tool_result")
+    assert tool_result["result"]["ok"] is False
+    assert tool_result["result"]["error"]["code"] == "invalid-wait-deadline"
+
+
+def test_zeta_wait_for_normalizes_an_aware_deadline_to_utc() -> None:
+    result, _ = run_wait_for_call(
+        wait_for_tool_call("call-1", deadline="2030-01-02T05:04:05+02:00")
+    )
+
+    assert result.wait_requests[0].deadline == "2030-01-02T03:04:05+00:00"
+
+
+def test_zeta_cancel_is_visible_only_to_authored_agent_runs() -> None:
+    session_gateway = PublishEventGateway([{"content": "done"}])
+    authored_gateway = PublishEventGateway([{"content": "done"}])
+
+    run_agent_turn(
+        "answer",
+        [],
+        zeta_agent.AgentConfig(max_turns=1),
+        model_gateway=session_gateway,
+    )
+    run_agent_turn(
+        "answer",
+        [],
+        zeta_agent.AgentConfig(max_turns=1),
+        model_gateway=authored_gateway,
+        source_queue_item_id="qi-work",
+        source_agent_id="issue-agent",
+        source_session_id="agent/issue-agent/session-1",
+    )
+
+    assert "cancel" not in session_gateway.tool_names[0]
+    assert "cancel" in authored_gateway.tool_names[0]
+
+
+def test_zeta_cancel_rejects_an_existing_model_tool_name() -> None:
+    input_schema = {"type": "object"}
+    tool_schema = zeta_agent.CapabilityToolSchema(
+        routes={
+            "cancel": zeta_agent.CapabilityToolRoute(
+                capability_id="provider.cancel",
+                input_schema=input_schema,
+                adapt_arguments=zeta_agent.identity_arguments,
+            )
+        },
+        descriptors=[
+            zeta_agent.model_descriptor(
+                "cancel",
+                "Cancel through the provider.",
+                input_schema,
+            )
+        ],
+    )
+
+    with pytest.raises(ValueError, match="reserved tool name 'cancel'"):
+        zeta_agent.cancel_tool_schema(tool_schema)
+
+
+def test_zeta_cancel_records_source_identity_and_does_not_stop() -> None:
+    result, gateway = run_cancel_calls(
+        cancel_tool_call("call-1", reason="No longer needed")
+    )
+
+    assert result.stop_reason == "finished"
+    assert len(gateway.tool_names) == 2
+    assert len(result.cancel_requests) == 1
+    request = result.cancel_requests[0]
+    assert request.handle == "wait_0123456789abcdef01234567"
+    assert request.reason == "No longer needed"
+    assert request.source_agent_id == "issue-agent"
+    assert request.source_session_id == "agent/issue-agent/session-1"
+    assert request.position == 0
+    assert zeta_outcomes.agent_run_result_payload(result)["cancel_requests"] == [
+        asdict(request)
+    ]
+    tool_result = event_by_type(result.events, "tool_result")
+    assert tool_result["result"] == {
+        "ok": True,
+        "handle": request.handle,
+        "status": "requested",
+    }
+
+
+@pytest.mark.parametrize(
+    ("handle", "reason"),
+    [
+        ("unknown_012345", None),
+        ("", None),
+        ("wait_0123456789abcdef01234567", ""),
+    ],
+)
+def test_zeta_cancel_rejects_invalid_arguments(
+    handle: str,
+    reason: str | None,
+) -> None:
+    result, gateway = run_cancel_calls(
+        cancel_tool_call("call-1", handle=handle, reason=reason)
+    )
+
+    assert result.cancel_requests == []
+    assert result.stop_reason == "finished"
+    assert len(gateway.tool_names) == 2
+    tool_result = event_by_type(result.events, "tool_result")
+    assert tool_result["result"]["ok"] is False
+
+
+def test_zeta_control_requests_keep_global_tool_call_positions() -> None:
+    gateway = PublishEventGateway(
+        [
+            {"content": "", "tool_calls": [publish_event_tool_call("call-1")]},
+            {"content": "", "tool_calls": [cancel_tool_call("call-2")]},
+            {"content": "done"},
+        ]
+    )
+
+    result = run_agent_turn(
+        "control",
+        [],
+        zeta_agent.AgentConfig(max_turns=3),
+        model_gateway=gateway,
+        publishable_events=PUBLISHED_EVENT_SCHEMAS,
+        source_queue_item_id="qi-work",
+        source_agent_id="issue-agent",
+        source_session_id="agent/issue-agent/session-1",
+    )
+
+    assert result.publish_event_requests[0].position == 0
+    assert result.cancel_requests[0].position == 1
 
 
 def test_zeta_step_model_without_tool_calls_returns_info_and_stops() -> None:
@@ -4498,6 +4814,130 @@ def test_zeta_cli_events_lists_and_cancels_scheduled_events(tmp_path: Path) -> N
     assert "scheduled event not found: missing" in unknown.output
 
 
+def test_zeta_cli_cancel_handles_any_supported_resource(tmp_path: Path) -> None:
+    state_dir = tmp_path / ".zeta"
+    handle = "wait_0123456789abcdef01234567"
+    event_store = zeta_events.SqliteEventStore(event_store_path(state_dir))
+    event_store.accept(
+        DraftEvent(
+            "runtime.wait.created",
+            "zeta",
+            {
+                "handle": handle,
+                "agent_id": "issue-agent",
+                "session_id": "session-1",
+                "event_type": "github.issue.updated",
+                "fields": {"number": 7},
+                "deadline": None,
+                "source_queue_item_id": "qi-source",
+                "project_generation": "generation-1",
+            },
+            idempotency_key="agent.wait:qi-source:0",
+            session_id="session-1",
+        )
+    )
+    event_store.close()
+
+    cancelled = CliRunner().invoke(
+        cli_main.cli,
+        [
+            "cancel",
+            handle,
+            "--reason",
+            "Issue closed",
+            "--state-dir",
+            str(state_dir),
+            "--json",
+        ],
+    )
+    repeated = CliRunner().invoke(
+        cli_main.cli,
+        ["cancel", handle, "--state-dir", str(state_dir), "--json"],
+    )
+    unknown = CliRunner().invoke(
+        cli_main.cli,
+        [
+            "cancel",
+            "pub_999999999999999999999999",
+            "--state-dir",
+            str(state_dir),
+        ],
+    )
+    invalid = CliRunner().invoke(
+        cli_main.cli,
+        ["cancel", "qi-1", "--state-dir", str(state_dir)],
+    )
+
+    assert cancelled.exit_code == 0
+    assert json.loads(cancelled.output) == {
+        "handle": handle,
+        "resource_type": "wait",
+        "status": "cancelled",
+        "changed": True,
+    }
+    assert repeated.exit_code == 0
+    assert json.loads(repeated.output) == {
+        "handle": handle,
+        "resource_type": "wait",
+        "status": "cancelled",
+        "changed": False,
+    }
+    assert unknown.exit_code == 1
+    assert "unknown cancellation handle" in unknown.output
+    assert invalid.exit_code == 1
+    assert "handle must start with 'wait_' or 'pub_'" in invalid.output
+
+    store = RuntimeEventStore.open(event_store_path(state_dir), read_only=True)
+    facts = store.list_events(Filter(event_type="runtime.wait.cancelled"))
+    assert facts[0].payload["reason"] == "Issue closed"
+    store.close()
+
+
+def test_zeta_cli_waits_lists_active_waits(tmp_path: Path) -> None:
+    state_dir = tmp_path / ".zeta"
+    event_store = zeta_events.SqliteEventStore(event_store_path(state_dir))
+    event_store.accept(
+        DraftEvent(
+            "runtime.wait.created",
+            "zeta",
+            {
+                "handle": "wait-1",
+                "agent_id": "issue-agent",
+                "session_id": "session-1",
+                "event_type": "github.issue.updated",
+                "fields": {"number": 7},
+                "deadline": None,
+                "source_queue_item_id": "qi-source",
+                "project_generation": "generation-1",
+            },
+            idempotency_key="agent.wait:qi-source:0",
+            session_id="session-1",
+        )
+    )
+    event_store.close()
+
+    listed = CliRunner().invoke(
+        cli_main.cli,
+        ["waits", "list", "--state-dir", str(state_dir), "--json"],
+    )
+    text_listed = CliRunner().invoke(
+        cli_main.cli,
+        ["waits", "list", "--state-dir", str(state_dir)],
+    )
+
+    assert listed.exit_code == 0
+    rows = json.loads(listed.output)
+    assert rows[0]["handle"] == "wait-1"
+    assert rows[0]["agent_id"] == "issue-agent"
+    assert rows[0]["event_type"] == "github.issue.updated"
+    assert rows[0]["fields"] == {"number": 7}
+    assert rows[0]["status"] == "active"
+    assert text_listed.exit_code == 0
+    assert text_listed.output == (
+        "active\twait-1\tissue-agent\tgithub.issue.updated\t-\n"
+    )
+
+
 def test_zeta_cli_events_filters_default_listing(tmp_path: Path) -> None:
     state_dir = tmp_path / ".zeta"
     event_store = zeta_events.SqliteEventStore(event_store_path(state_dir))
@@ -5828,6 +6268,65 @@ Triage the issue.
             status="completed",
         )
     ]
+
+
+def test_zeta_local_runtime_run_once_resumes_a_due_wait(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    event_store = zeta_events.SqliteEventStore(tmp_path / "events.sqlite3")
+    event_store.append(
+        zeta_events.Event(
+            id="wait-created-1",
+            event_type="runtime.wait.created",
+            source="zeta",
+            payload={
+                "handle": "wait-1",
+                "agent_id": "issue-agent",
+                "session_id": "agent/issue-agent/original",
+                "event_type": "github.issue.updated",
+                "fields": {"issue": 5},
+                "deadline": "1970-01-01T00:00:02+00:00",
+                "source_queue_item_id": "qi-source",
+                "project_generation": None,
+            },
+            idempotency_key="agent.wait:qi-source:0",
+            caused_by="attempt-completed-1",
+            session_id="agent/issue-agent/original",
+            timestamp_ms=500,
+        )
+    )
+    calls: list[harness_dispatch.AgentInvocation] = []
+
+    async def run_agent(run: harness_dispatch.AgentInvocation) -> dict[str, object]:
+        calls.append(run)
+        return {"final_answer": "resumed"}
+
+    agent = harness_dispatch.ExecutableAgent(
+        harness_dispatch.AgentDefinition(
+            "issue-agent",
+            (harness_dispatch.EventPattern("work.requested"),),
+        ),
+        run=run_agent,
+    )
+    monkeypatch.setattr(harness_worker, "project_executors", lambda _runtime: (agent,))
+    runtime = harness_worker.WorkerServices(
+        project_root=tmp_path,
+        state_dir=tmp_path,
+        events=event_store,
+    )
+
+    with asyncio.Runner() as runner:
+        try:
+            message = runner.run(harness_worker.run_once(runtime))
+            attempts = event_store.list_attempts()
+        finally:
+            runner.run(runtime.aclose())
+
+    assert message.startswith("ran qi_")
+    assert len(calls) == 1
+    assert calls[0].triggering_event.event_type == "runtime.wait.timed_out"
+    assert attempts[0]["session_id"] == "agent/issue-agent/original"
 
 
 def test_zeta_worker_validates_project_event_schemas_before_compile(

@@ -21,14 +21,16 @@ from zeta.capabilities.registry import (
     CapabilityToolSchema,
 )
 from zeta.events import DraftEvent
-from zeta.ids import publish_event_handle
+from zeta.ids import publish_event_handle, wait_handle
 from zeta.journal.views import (
     draft_timeline_type,
 )
 from zeta.loop.config import AgentConfig
 from zeta.loop.outcomes import (
+    CancelRequest,
     PublishEventRequest,
     RunState,
+    WaitRequest,
 )
 from zeta.loop.request import RunDependencies
 from zeta.loop.stages.abort import check_run_abort
@@ -36,6 +38,8 @@ from zeta.models.types import tool_call_id
 
 TERMINAL_TOOL_STATUSES = {"completed", "failed", "refused", "cancelled", "timed_out"}
 PUBLISH_EVENT_CAPABILITY_ID = "zeta.publish_event"
+WAIT_FOR_CAPABILITY_ID = "zeta.wait_for"
+CANCEL_CAPABILITY_ID = "zeta.cancel"
 
 
 def terminal_capability_result_event(
@@ -87,9 +91,28 @@ async def run_capability_step(
         capability_id: str,
         params: dict[str, Any],
     ) -> dict[str, Any] | None:
-        if capability_id != PUBLISH_EVENT_CAPABILITY_ID:
-            return None
-        return request_published_event(params, position=position, state=state, ctx=ctx)
+        if capability_id == PUBLISH_EVENT_CAPABILITY_ID:
+            return request_published_event(
+                params,
+                position=position,
+                state=state,
+                ctx=ctx,
+            )
+        if capability_id == WAIT_FOR_CAPABILITY_ID:
+            return request_wait(
+                params,
+                position=position,
+                state=state,
+                ctx=ctx,
+            )
+        if capability_id == CANCEL_CAPABILITY_ID:
+            return request_cancellation(
+                params,
+                position=position,
+                state=state,
+                ctx=ctx,
+            )
+        return None
 
     capability_ctx = CapabilityExecutionContext(
         event_sink=ctx.event_sink,
@@ -156,6 +179,77 @@ def request_published_event(
         )
     )
     return {"ok": True, "handle": handle}
+
+
+def request_wait(
+    params: dict[str, Any],
+    *,
+    position: int,
+    state: RunState,
+    ctx: RunDependencies,
+) -> dict[str, Any]:
+    if ctx.source_queue_item_id is None:
+        return publish_event_error(
+            "missing-wait-source",
+            "the run does not have a source queue item",
+        )
+    deadline = normalized_wait_deadline(params.get("deadline"))
+    if isinstance(deadline, dict):
+        return deadline
+    handle = wait_handle(ctx.source_queue_item_id, position)
+    state.wait_requests.append(
+        WaitRequest(
+            handle=handle,
+            event_type=params["event_type"],
+            fields=dict(params.get("fields") or {}),
+            deadline=deadline,
+            position=position,
+        )
+    )
+    return {"ok": True, "handle": handle, "stop": True}
+
+
+def request_cancellation(
+    params: dict[str, Any],
+    *,
+    position: int,
+    state: RunState,
+    ctx: RunDependencies,
+) -> dict[str, Any]:
+    if ctx.source_agent_id is None or ctx.source_session_id is None:
+        return publish_event_error(
+            "missing-cancel-source",
+            "the run does not have an authored agent session",
+        )
+    handle = params["handle"]
+    state.cancel_requests.append(
+        CancelRequest(
+            handle=handle,
+            reason=params.get("reason"),
+            source_agent_id=ctx.source_agent_id,
+            source_session_id=ctx.source_session_id,
+            position=position,
+        )
+    )
+    return {"ok": True, "handle": handle, "status": "requested"}
+
+
+def normalized_wait_deadline(value: Any) -> str | None | dict[str, Any]:
+    if value is None:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+    except (TypeError, ValueError):
+        return publish_event_error(
+            "invalid-wait-deadline",
+            "deadline must be an ISO 8601 date-time with a UTC offset",
+        )
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        return publish_event_error(
+            "invalid-wait-deadline",
+            "deadline must include a UTC offset",
+        )
+    return parsed.astimezone(UTC).isoformat()
 
 
 def normalized_publish_time(value: Any) -> str | None | dict[str, Any]:

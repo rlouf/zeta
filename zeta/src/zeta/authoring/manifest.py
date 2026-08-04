@@ -18,7 +18,16 @@ from zeta.authoring.schemas import EventRegistry
 from zeta.authoring.spec import AgentSpec
 from zeta.capabilities.executors import ToolExecutorProviderRegistry
 
-RESERVED_TOOL_NAMES = frozenset({"publish_event", "zeta.publish_event"})
+RESERVED_TOOL_NAMES = frozenset(
+    {
+        "publish_event",
+        "zeta.publish_event",
+        "wait_for",
+        "zeta.wait_for",
+        "cancel",
+        "zeta.cancel",
+    }
+)
 
 
 class ManifestError(ValueError):

@@ -40,6 +40,7 @@ QUEUE_ITEM_PREFIX = "qi_"
 ATTEMPT_PREFIX = "att_"
 RUN_PREFIX = "run_"
 PUBLISH_EVENT_PREFIX = "pub_"
+WAIT_PREFIX = "wait_"
 
 
 def safe_agent_id(agent_id: str) -> str:
@@ -94,6 +95,15 @@ def publish_event_handle(queue_item_id_value: str, position: int) -> str:
     """
     identity = f"{queue_item_id_value}:{position}".encode()
     return f"{PUBLISH_EVENT_PREFIX}{sha256(identity).hexdigest()[:24]}"
+
+
+def wait_handle(queue_item_id_value: str, position: int) -> str:
+    """Return a stable handle for one wait requested during an attempt.
+
+    The queue item and call position keep the handle stable across retries.
+    """
+    identity = f"{queue_item_id_value}:{position}".encode()
+    return f"{WAIT_PREFIX}{sha256(identity).hexdigest()[:24]}"
 
 
 def agent_session_id(agent_id: str, suffix: str | None) -> str:

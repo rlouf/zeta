@@ -29,6 +29,9 @@ AgentLoop = Callable[
     ["AgentInvocation", str, list[dict[str, Any]], str, AgentConfig, str, str],
     Awaitable["AgentRunResult"],
 ]
+WAIT_CONTINUATION_EVENT_TYPES = frozenset(
+    {"runtime.wait.matched", "runtime.wait.timed_out"}
+)
 
 
 @dataclass(frozen=True)
@@ -44,6 +47,24 @@ class EventPattern:
 
     def matches(self, event: Event) -> bool:
         return fnmatchcase(event.event_type, self.event_type)
+
+
+def is_wait_continuation_for(event: Event, agent_id: str) -> bool:
+    """Limit the routing bypass to the agent that owns the durable wait."""
+    return (
+        event.event_type in WAIT_CONTINUATION_EVENT_TYPES
+        and event.payload.get("agent_id") == agent_id
+    )
+
+
+def prompt_event(event: Event) -> dict[str, Any]:
+    """Let a resumed agent see the event it requested instead of lifecycle data."""
+    if event.event_type == "runtime.wait.matched":
+        event_type = event.payload.get("event_type")
+        payload = event.payload.get("payload")
+        if isinstance(event_type, str) and isinstance(payload, dict):
+            return {"event_type": event_type, "payload": payload}
+    return {"event_type": event.event_type, "payload": dict(event.payload)}
 
 
 @dataclass(frozen=True)
@@ -107,7 +128,7 @@ async def in_process_agent_loop(
 ) -> AgentRunResult:
     """Run the model loop locally when no runtime service is present."""
 
-    del session_id, run_id
+    del run_id
     from zeta.capabilities.executors import local_tool_executor
     from zeta.loop.runtime import run_agent_loop
 
@@ -124,6 +145,8 @@ async def in_process_agent_loop(
             invocation.triggering_event.id,
             invocation.agent.agent_id,
         ),
+        source_agent_id=invocation.agent.agent_id,
+        source_session_id=session_id,
     )
 
 
@@ -278,10 +301,7 @@ def agent_runner(
     async def run(agent_run: AgentInvocation) -> dict[str, Any]:
         effective_config = config_for_spec(spec, config)
         event = agent_run.triggering_event
-        objective = render_prompt(
-            spec,
-            {"event_type": event.event_type, "payload": dict(event.payload)},
-        )
+        objective = render_prompt(spec, prompt_event(event))
         if callable(timeline):
             run_timeline = cast(TimelineFactory, timeline)(agent_run)
         else:
@@ -290,11 +310,16 @@ def agent_runner(
             run_context = cast(ContextFactory, context)(agent_run)
         else:
             run_context = context
-        session_id = agent_session_id(
-            agent_run.agent.agent_id,
-            agent_run.agent.session,
-            event,
-        )
+        if is_wait_continuation_for(event, agent_run.agent.agent_id):
+            if event.session_id is None:
+                raise RuntimeError("wait continuation is missing its session id")
+            session_id = event.session_id
+        else:
+            session_id = agent_session_id(
+                agent_run.agent.agent_id,
+                agent_run.agent.session,
+                event,
+            )
         run_id = ids.run_id_for_attempt(
             agent_run.run_id,
             agent_run.attempt_id or agent_run.triggering_event.id,

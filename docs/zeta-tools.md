@@ -1,7 +1,7 @@
 # Zeta Tools
 
-This document describes the Zeta-specific tools `publish_event` and
-`query_log`.
+This document describes the Zeta-specific tools `publish_event`, `wait_for`,
+`cancel`, and `query_log`.
 
 ## `publish_event`
 
@@ -155,6 +155,160 @@ A failed or cancelled run publishes none of its requested events.
 If `at` is absent or is at or before the completion time, Zeta publishes the
 event after the run completes. If `at` is later, Zeta publishes the event at
 that time.
+
+## `wait_for`
+
+Use `wait_for` when an agent must pause until an event arrives. The current run
+ends. Zeta starts a new run in the same agent session when the event arrives.
+
+You can also set a deadline. If no matching event arrives by that time, Zeta
+starts a new run with a timeout event.
+
+Zeta adds `wait_for` to authored agents automatically. Do not add it to the
+agent's `tools` list. The name is reserved.
+
+### Input
+
+The tool accepts this object:
+
+| Field | Required | Rule |
+| --- | --- | --- |
+| `event_type` | yes | A non-empty event type. |
+| `fields` | no | Top-level event payload fields that must have the same JSON values. |
+| `deadline` | no | An ISO 8601 date-time with a UTC offset. |
+
+The object cannot contain other fields.
+
+`fields` is optional. If it is absent or empty, any event with the requested
+type matches.
+
+If `fields` contains a key, the event payload must contain that key with the
+same value. Other top-level fields in the event payload are allowed. Zeta does
+not match part of a nested object. The complete nested value must be equal.
+
+### Example
+
+This call waits for an update to issue 7:
+
+```json
+{
+  "event_type": "github.issue.updated",
+  "fields": {
+    "number": 7
+  },
+  "deadline": "2030-01-02T10:00:00Z"
+}
+```
+
+This event matches because `number` is `7`. The extra `state` field is
+allowed:
+
+```json
+{
+  "number": 7,
+  "state": "closed"
+}
+```
+
+### Result
+
+A valid request returns a stable wait handle and stops the current run:
+
+```json
+{
+  "ok": true,
+  "handle": "wait_0123456789abcdef01234567",
+  "stop": true
+}
+```
+
+An invalid deadline returns this error and does not stop the run:
+
+```json
+{
+  "ok": false,
+  "error": {
+    "code": "invalid-wait-deadline",
+    "message": "deadline must include a UTC offset"
+  }
+}
+```
+
+### What Zeta Does
+
+Zeta saves the wait only after the current attempt completes successfully. A
+failed, cancelled, or stale attempt does not create a wait.
+
+One agent session can have one active wait. A second wait for the same session
+fails the attempt and does not replace the first wait.
+
+The first matching event consumes the wait once. A duplicate delivery does not
+start a second continuation. If matching and timeout happen at the same time,
+only one of them wins.
+
+The continuation uses the same agent, session, and project version as the
+original run. For a match, the prompt receives the event type and payload that
+matched. The original event still follows normal event routing.
+
+Use `zeta waits list` to inspect active and completed waits. Add `--json` for
+JSON output.
+
+## `cancel`
+
+Use `cancel` to stop future work created by the same agent session. The tool
+accepts an active `wait_...` handle or a pending `pub_...` handle.
+
+Zeta adds `cancel` to authored agents automatically. Do not add it to the
+agent's `tools` list. The name is reserved. Session runs do not receive this
+tool.
+
+### Input
+
+| Field | Required | Rule |
+| --- | --- | --- |
+| `handle` | yes | An active `wait_...` handle or pending `pub_...` handle. |
+| `reason` | no | A non-empty reason for the cancellation. |
+
+The object cannot contain other fields.
+
+### Result
+
+A valid tool call records a cancellation request. The agent run continues:
+
+```json
+{
+  "ok": true,
+  "handle": "wait_0123456789abcdef01234567",
+  "status": "requested"
+}
+```
+
+Zeta applies the request only after the attempt completes successfully. A
+failed, cancelled, or stale attempt does not cancel any work.
+
+The handle must belong to the same agent session. A request for another
+session's handle fails the attempt.
+
+Cancelling an active wait records `runtime.wait.cancelled`. Zeta does not
+start a continuation for that wait. Cancelling a pending scheduled event
+records `runtime.scheduled_event.cancelled`. Zeta does not publish that event.
+
+Matching, timeout, publication, and cancellation are atomic. Only one terminal
+state can win. Repeating a cancellation is safe. Zeta returns the resource's
+current terminal state and does not add another cancellation event.
+
+### Command Line
+
+Runtime operators can cancel any supported handle:
+
+```sh
+zeta cancel wait_0123456789abcdef01234567
+zeta cancel pub_0123456789abcdef01234567 --reason "No longer needed"
+zeta cancel wait_0123456789abcdef01234567 --json
+```
+
+The command reports the current terminal state. A repeated command succeeds
+and reports `changed: false` in JSON output.
 
 ## `query_log`
 

@@ -82,6 +82,7 @@ rebuilt:
 - `attempts`
 - `attempt_results`
 - `scheduled_events`
+- `waits`
 - `session_mappings`
 
 Rebuilding them must produce the same terminal queue and attempt history.
@@ -97,6 +98,7 @@ queue_item_id  = qi_<event_id>_<agent_id>
 attempt_id     = att_<queue_item_id>_<attempt_number>
 run_id         = run_<attempt_id>
 publish_handle = pub_<hash(queue_item_id, position)>
+wait_handle    = wait_<hash(queue_item_id, position)>
 ```
 
 This is what makes the chain idempotent. A router that sees the same event
@@ -193,6 +195,60 @@ zeta events scheduled
 zeta events scheduled --json
 zeta events cancel-scheduled <handle>
 ```
+
+## Durable Agent Waits
+
+An authored agent can end a successful run with `wait_for`. The loop returns a
+`WaitRequest`; it does not write runtime state. Inside the attempt completion
+transaction, the coordinator appends `runtime.wait.created` between
+`runtime.attempt.completed` and `runtime.queue_item.completed`.
+
+The `waits` projection stores the active condition, exact top-level payload
+fields, optional absolute deadline, source session, agent, queue item, and
+project generation. One session may own one active wait. A second request is a
+permanent attempt failure and leaves the existing wait unchanged.
+
+Inspect active and terminal waits with:
+
+```sh
+zeta waits list
+zeta waits list --json
+```
+
+A newly stored non-runtime event checks active waits in the same transaction.
+If its type and selected top-level payload fields match, Zeta appends
+`runtime.wait.matched` and a directly targeted queue item. The original event
+still enters normal routing. Duplicate delivery cannot consume the wait twice.
+
+Before a worker claims queue work, it expires one due deadline. Expiry appends
+`runtime.wait.timed_out` and a directly targeted queue item in one transaction.
+Matching and expiry both require an active row, so only one can win.
+
+The continuation uses the stored agent, session, and project generation. A
+matched continuation renders the agent prompt with the original event type and
+payload. A projection rebuild restores the terminal wait and continuation from
+the lifecycle facts.
+
+## Durable Cancellation
+
+An authored agent can request cancellation of an active wait or a pending
+scheduled event. The model loop returns a `CancelRequest`; it does not change
+runtime state. The request contains the handle, optional reason, source agent,
+source session, and tool-call position.
+
+The coordinator applies cancellation inside the successful attempt completion
+transaction. Failed, cancelled, and stale attempts do not cancel work. An
+agent request can cancel only a resource created by the same session. Runtime
+operators can cancel any resource through the CLI.
+
+Cancellation appends `runtime.wait.cancelled` or
+`runtime.scheduled_event.cancelled`. The projection keeps that terminal state
+after restart or rebuild. A cancelled wait does not create a continuation. A
+cancelled scheduled event is never published.
+
+Cancellation uses the same transaction boundary as wait matching, wait
+timeout, and scheduled publication. Only one terminal operation can win. A
+repeated request returns the existing terminal state and adds no event.
 
 ## Claim Fencing
 

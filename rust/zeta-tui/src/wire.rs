@@ -106,6 +106,15 @@ impl Event {
         };
         message.to_owned()
     }
+
+    pub(super) fn work_label(&self) -> String {
+        match (&self.session_id, &self.run_id) {
+            (Some(session), Some(run)) => format!("{} / {}", session.0, run.0),
+            (Some(session), None) => session.0.clone(),
+            (None, Some(run)) => run.0.clone(),
+            (None, None) => "uncorrelated".to_owned(),
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]

@@ -8,7 +8,7 @@ use crossterm::terminal::{
 use ratatui::Frame;
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
-use ratatui::layout::{Constraint, Layout};
+use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph};
@@ -17,14 +17,23 @@ use crate::wire::{Cursor, Event};
 
 pub(super) struct App {
     protocol: String,
+    work: Vec<String>,
     events: Vec<Event>,
     cursor: Option<Cursor>,
 }
 
 impl App {
     pub(super) fn connected(protocol: String, events: Vec<Event>, cursor: Option<Cursor>) -> Self {
+        let mut work = Vec::new();
+        for event in &events {
+            let label = event.work_label();
+            if !work.contains(&label) {
+                work.push(label);
+            }
+        }
         Self {
             protocol,
+            work,
             events,
             cursor,
         }
@@ -122,6 +131,32 @@ pub(super) fn draw(frame: &mut Frame<'_>, app: &App) {
     );
     frame.render_widget(header, areas[0]);
 
+    if areas[1].width >= 60 {
+        let body = Layout::horizontal([Constraint::Length(28), Constraint::Min(1)]).split(areas[1]);
+        render_work(frame, body[0], app);
+        render_timeline(frame, body[1], app);
+    } else {
+        let body = Layout::vertical([Constraint::Length(5), Constraint::Min(3)]).split(areas[1]);
+        render_work(frame, body[0], app);
+        render_timeline(frame, body[1], app);
+    }
+
+    frame.render_widget(Paragraph::new("q quit"), areas[2]);
+}
+
+fn render_work(frame: &mut Frame<'_>, area: Rect, app: &App) {
+    let mut rows = Vec::new();
+    for label in &app.work {
+        rows.push(ListItem::new(label.as_str()));
+    }
+    if rows.is_empty() {
+        rows.push(ListItem::new("No correlated work"));
+    }
+    let work = List::new(rows).block(Block::default().title("Work").borders(Borders::ALL));
+    frame.render_widget(work, area);
+}
+
+fn render_timeline(frame: &mut Frame<'_>, area: Rect, app: &App) {
     let mut rows = Vec::new();
     for event in &app.events {
         rows.push(ListItem::new(Line::from(vec![
@@ -134,9 +169,7 @@ pub(super) fn draw(frame: &mut Frame<'_>, app: &App) {
         rows.push(ListItem::new("No events yet"));
     }
     let timeline = List::new(rows).block(Block::default().title("Timeline").borders(Borders::ALL));
-    frame.render_widget(timeline, areas[1]);
-
-    frame.render_widget(Paragraph::new("q quit"), areas[2]);
+    frame.render_widget(timeline, area);
 }
 
 #[cfg(test)]
@@ -174,6 +207,8 @@ mod tests {
         let screen = terminal.backend().to_string();
 
         assert!(screen.contains("Zeta  connected · protocol 0.1 · cursor 42"));
+        assert!(screen.contains("Work"));
+        assert!(screen.contains("default / run_123"));
         assert!(screen.contains("Timeline"));
         assert!(screen.contains("zeta.user_message"));
         assert!(screen.contains("hello from Zeta"));
@@ -190,5 +225,22 @@ mod tests {
         assert!(should_quit(&escape));
         assert!(!should_quit(&other));
         assert!(!should_quit(&TerminalEvent::Resize(80, 24)));
+    }
+
+    #[test]
+    fn narrow_terminal_stacks_work_above_timeline() {
+        let app = App::connected("0.1".to_owned(), Vec::new(), None);
+        let backend = TestBackend::new(40, 12);
+        let mut terminal = Terminal::new(backend).expect("terminal should initialize");
+
+        terminal
+            .draw(|frame| draw(frame, &app))
+            .expect("screen should draw");
+        let screen = terminal.backend().to_string();
+
+        assert!(screen.contains("Work"));
+        assert!(screen.contains("No correlated work"));
+        assert!(screen.contains("Timeline"));
+        assert!(screen.contains("No events yet"));
     }
 }

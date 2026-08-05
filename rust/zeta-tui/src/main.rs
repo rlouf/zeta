@@ -12,7 +12,7 @@ use tokio::io::AsyncWriteExt;
 use tokio::process::{ChildStdin, ChildStdout, Command};
 use tokio_util::codec::{FramedRead, LinesCodec};
 
-use crate::app::{App, run_terminal};
+use crate::app::{App, AppAction, run_terminal};
 use crate::wire::{EventsListResult, IncomingMessage, InitializeResult, RequestId, RpcRequest};
 
 const MAX_JSONRPC_LINE_BYTES: usize = 1024 * 1024;
@@ -80,14 +80,53 @@ async fn run() -> Result<(), BoxError> {
     .await?;
     let result = receive_response(&mut output, list_id).await?;
     let listed: EventsListResult = serde_json::from_value(result)?;
-    let app = App::connected(initialized.protocol, listed.events, listed.next_cursor);
+    let mut app = App::connected(initialized.protocol, listed.events, listed.next_cursor);
+    let mut next_request_id = 3;
+    let mut next_message_id = 1;
+
+    loop {
+        match run_terminal(&mut app)? {
+            AppAction::None => {}
+            AppAction::Quit => break,
+            AppAction::Submit(objective) => {
+                let run_id = RequestId(next_request_id);
+                next_request_id += 1;
+                let idempotency_key = format!("zeta-tui-message-{next_message_id}");
+                next_message_id += 1;
+                send_request(
+                    &mut input,
+                    &RpcRequest::new(
+                        run_id,
+                        "session.run",
+                        json!({
+                            "objective": objective,
+                            "tools": [],
+                            "idempotency_key": idempotency_key
+                        }),
+                    ),
+                )
+                .await?;
+                receive_response(&mut output, run_id).await?;
+
+                let list_id = RequestId(next_request_id);
+                next_request_id += 1;
+                let mut params = json!({"limit": 200});
+                if let Some(cursor) = app.cursor() {
+                    params["after_cursor"] = json!(cursor);
+                }
+                send_request(&mut input, &RpcRequest::new(list_id, "events.list", params)).await?;
+                let result = receive_response(&mut output, list_id).await?;
+                let listed: EventsListResult = serde_json::from_value(result)?;
+                app.append_events(listed.events, listed.next_cursor);
+            }
+        }
+    }
 
     drop(input);
     let status = child.wait().await?;
     if !status.success() {
         return Err(io::Error::other(format!("zeta RPC exited with {status}")).into());
     }
-    run_terminal(&app)?;
     Ok(())
 }
 

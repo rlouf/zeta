@@ -20,6 +20,21 @@ pub(super) struct App {
     work: Vec<String>,
     events: Vec<Event>,
     cursor: Option<Cursor>,
+    mode: Mode,
+    draft: String,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum Mode {
+    Browse,
+    Compose,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum AppAction {
+    None,
+    Quit,
+    Submit(String),
 }
 
 impl App {
@@ -36,11 +51,76 @@ impl App {
             work,
             events,
             cursor,
+            mode: Mode::Browse,
+            draft: String::new(),
         }
+    }
+
+    pub(super) fn handle_event(&mut self, event: &TerminalEvent) -> AppAction {
+        let TerminalEvent::Key(key) = event else {
+            return AppAction::None;
+        };
+        if key.kind != KeyEventKind::Press {
+            return AppAction::None;
+        }
+
+        match self.mode {
+            Mode::Browse => {
+                if key.code == KeyCode::Char('q') || key.code == KeyCode::Esc {
+                    return AppAction::Quit;
+                }
+                if key.code == KeyCode::Char('i') {
+                    self.mode = Mode::Compose;
+                }
+                AppAction::None
+            }
+            Mode::Compose => {
+                if key.code == KeyCode::Esc {
+                    self.mode = Mode::Browse;
+                    return AppAction::None;
+                }
+                if key.code == KeyCode::Enter {
+                    let message = self.draft.trim();
+                    if message.is_empty() {
+                        return AppAction::None;
+                    }
+                    let message = message.to_owned();
+                    self.draft.clear();
+                    self.mode = Mode::Browse;
+                    return AppAction::Submit(message);
+                }
+                if key.code == KeyCode::Backspace {
+                    self.draft.pop();
+                    return AppAction::None;
+                }
+                if let KeyCode::Char(character) = key.code {
+                    self.draft.push(character);
+                }
+                AppAction::None
+            }
+        }
+    }
+
+    pub(super) fn cursor(&self) -> Option<u64> {
+        if let Some(cursor) = self.cursor {
+            return Some(cursor.0);
+        }
+        None
+    }
+
+    pub(super) fn append_events(&mut self, events: Vec<Event>, cursor: Option<Cursor>) {
+        for event in events {
+            let label = event.work_label();
+            if !self.work.contains(&label) {
+                self.work.push(label);
+            }
+            self.events.push(event);
+        }
+        self.cursor = cursor;
     }
 }
 
-pub(super) fn run_terminal(app: &App) -> io::Result<()> {
+pub(super) fn run_terminal(app: &mut App) -> io::Result<AppAction> {
     enable_raw_mode()?;
     let mut output = io::stdout();
     if let Err(error) = execute!(output, EnterAlternateScreen) {
@@ -79,39 +159,33 @@ pub(super) fn run_terminal(app: &App) -> io::Result<()> {
     let raw_result = disable_raw_mode();
     let screen_result = execute!(terminal.backend_mut(), LeaveAlternateScreen);
     let cursor_result = terminal.show_cursor();
-    run_result?;
+    let action = run_result?;
     raw_result?;
     screen_result?;
-    cursor_result
+    cursor_result?;
+    Ok(action)
 }
 
 fn run_event_loop(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
-    app: &App,
-) -> io::Result<()> {
+    app: &mut App,
+) -> io::Result<AppAction> {
     loop {
         terminal.draw(|frame| draw(frame, app))?;
         let event = event::read()?;
-        if should_quit(&event) {
-            return Ok(());
+        match app.handle_event(&event) {
+            AppAction::None => {}
+            AppAction::Quit => return Ok(AppAction::Quit),
+            AppAction::Submit(message) => return Ok(AppAction::Submit(message)),
         }
     }
-}
-
-fn should_quit(event: &TerminalEvent) -> bool {
-    let TerminalEvent::Key(key) = event else {
-        return false;
-    };
-    if key.kind != KeyEventKind::Press {
-        return false;
-    }
-    key.code == KeyCode::Char('q') || key.code == KeyCode::Esc
 }
 
 pub(super) fn draw(frame: &mut Frame<'_>, app: &App) {
     let areas = Layout::vertical([
         Constraint::Length(1),
         Constraint::Min(3),
+        Constraint::Length(3),
         Constraint::Length(1),
     ])
     .split(frame.area());
@@ -141,7 +215,15 @@ pub(super) fn draw(frame: &mut Frame<'_>, app: &App) {
         render_timeline(frame, body[1], app);
     }
 
-    frame.render_widget(Paragraph::new("q quit"), areas[2]);
+    let composer = Paragraph::new(app.draft.as_str())
+        .block(Block::default().title("Message").borders(Borders::ALL));
+    frame.render_widget(composer, areas[2]);
+
+    let help = match app.mode {
+        Mode::Browse => "i compose · q quit",
+        Mode::Compose => "Enter send · Esc cancel",
+    };
+    frame.render_widget(Paragraph::new(help), areas[3]);
 }
 
 fn render_work(frame: &mut Frame<'_>, area: Rect, app: &App) {
@@ -178,7 +260,7 @@ mod tests {
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
 
-    use super::{App, draw, should_quit};
+    use super::{App, AppAction, draw};
     use crate::wire::{Cursor, Event};
 
     #[test]
@@ -212,19 +294,32 @@ mod tests {
         assert!(screen.contains("Timeline"));
         assert!(screen.contains("zeta.user_message"));
         assert!(screen.contains("hello from Zeta"));
+        assert!(screen.contains("Message"));
         assert!(screen.contains("q quit"));
     }
 
     #[test]
-    fn quit_keys_exit_but_other_events_do_not() {
+    fn browse_mode_quits_but_composer_accepts_text() {
+        let mut app = App::connected("0.1".to_owned(), Vec::new(), None);
         let q = TerminalEvent::Key(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE));
         let escape = TerminalEvent::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
-        let other = TerminalEvent::Key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE));
+        let compose = TerminalEvent::Key(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE));
+        let h = TerminalEvent::Key(KeyEvent::new(KeyCode::Char('h'), KeyModifiers::NONE));
+        let i = TerminalEvent::Key(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE));
+        let enter = TerminalEvent::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
-        assert!(should_quit(&q));
-        assert!(should_quit(&escape));
-        assert!(!should_quit(&other));
-        assert!(!should_quit(&TerminalEvent::Resize(80, 24)));
+        assert_eq!(app.handle_event(&compose), AppAction::None);
+        assert_eq!(app.handle_event(&h), AppAction::None);
+        assert_eq!(app.handle_event(&i), AppAction::None);
+        assert_eq!(app.draft, "hi");
+        assert_eq!(app.handle_event(&enter), AppAction::Submit("hi".to_owned()));
+        assert!(app.draft.is_empty());
+        assert_eq!(app.handle_event(&q), AppAction::Quit);
+        assert_eq!(app.handle_event(&escape), AppAction::Quit);
+        assert_eq!(
+            app.handle_event(&TerminalEvent::Resize(80, 24)),
+            AppAction::None
+        );
     }
 
     #[test]

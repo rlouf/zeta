@@ -1,3 +1,4 @@
+mod app;
 mod wire;
 
 use std::env;
@@ -11,6 +12,7 @@ use tokio::io::AsyncWriteExt;
 use tokio::process::{ChildStdin, ChildStdout, Command};
 use tokio_util::codec::{FramedRead, LinesCodec};
 
+use crate::app::{App, run_terminal};
 use crate::wire::{EventsListResult, IncomingMessage, InitializeResult, RequestId, RpcRequest};
 
 const MAX_JSONRPC_LINE_BYTES: usize = 1024 * 1024;
@@ -62,10 +64,13 @@ async fn run() -> Result<(), BoxError> {
     .await?;
     let result = receive_response(&mut output, initialize_id).await?;
     let initialized: InitializeResult = serde_json::from_value(result)?;
-    println!(
-        "connected to {} protocol {}",
-        initialized.server, initialized.protocol
-    );
+    if initialized.server != "zeta" {
+        return Err(io::Error::other(format!(
+            "expected zeta server, received {}",
+            initialized.server
+        ))
+        .into());
+    }
 
     let list_id = RequestId(2);
     send_request(
@@ -75,20 +80,14 @@ async fn run() -> Result<(), BoxError> {
     .await?;
     let result = receive_response(&mut output, list_id).await?;
     let listed: EventsListResult = serde_json::from_value(result)?;
-    let cursor = match listed.next_cursor {
-        Some(cursor) => cursor.0.to_string(),
-        None => "none".to_owned(),
-    };
-    println!("events through cursor {cursor}");
-    for event in listed.events {
-        println!("{}", serde_json::to_string(&event)?);
-    }
+    let app = App::connected(initialized.protocol, listed.events, listed.next_cursor);
 
     drop(input);
     let status = child.wait().await?;
     if !status.success() {
         return Err(io::Error::other(format!("zeta RPC exited with {status}")).into());
     }
+    run_terminal(&app)?;
     Ok(())
 }
 

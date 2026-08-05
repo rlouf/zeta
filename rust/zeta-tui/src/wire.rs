@@ -76,7 +76,7 @@ struct RunId(String);
 #[serde(transparent)]
 struct TurnId(String);
 
-#[derive(Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(transparent)]
 pub(super) struct Cursor(pub(super) u64);
 
@@ -93,6 +93,19 @@ pub(super) struct Event {
     turn_id: Option<TurnId>,
     timestamp_ms: i64,
     cursor: Option<Cursor>,
+}
+
+impl Event {
+    pub(super) fn event_type(&self) -> &str {
+        &self.event_type
+    }
+
+    pub(super) fn timeline_text(&self) -> String {
+        let Some(message) = self.payload.get("message").and_then(Value::as_str) else {
+            return self.payload.to_string();
+        };
+        message.to_owned()
+    }
 }
 
 #[derive(Debug, Deserialize)]

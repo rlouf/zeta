@@ -5530,6 +5530,21 @@ def test_zeta_cli_inspects_diffs_and_restores_agent_content(tmp_path: Path) -> N
             "--json",
         ],
     )
+    redone = runner.invoke(
+        cli_main.cli,
+        [
+            "agents",
+            "content",
+            "restore",
+            "writer",
+            second,
+            "--state-dir",
+            str(state_dir),
+            "--reason",
+            "Return to the newer revision.",
+            "--json",
+        ],
+    )
 
     assert shown.exit_code == 0, shown.output
     assert json.loads(shown.output) == {
@@ -5574,10 +5589,17 @@ def test_zeta_cli_inspects_diffs_and_restores_agent_content(tmp_path: Path) -> N
         "head": first,
         "reason": "The second procedure was wrong.",
     }
+    assert redone.exit_code == 0, redone.output
+    assert json.loads(redone.output) == {
+        "agent": "writer",
+        "old_head": first,
+        "head": second,
+        "reason": "Return to the newer revision.",
+    }
     reopened = RuntimeEventStore.open(event_store_path(state_dir), read_only=True)
     restored_ref = reopened.content_store().get_ref("agent/writer/content/head")
     assert restored_ref is not None
-    assert restored_ref.object_id == first
+    assert restored_ref.object_id == second
     assert reopened.content_store().get_object(second) is not None
     reopened.close()
 

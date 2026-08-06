@@ -104,6 +104,14 @@ class ContentTransformInput:
 
 
 @dataclass(frozen=True)
+class ContentFinishResult:
+    """Resolve a graph value only when the run selects it as its answer."""
+
+    object_id: ObjectId
+    content: str
+
+
+@dataclass(frozen=True)
 class ContentTransformResult:
     """Return references so transformation data stays outside the root context."""
 
@@ -355,6 +363,35 @@ class ContentWorkspace:
             ContentTransformInput(key, object_id, self._node(object_id))
             for key, object_id in resolved.selected
         )
+
+    def finish(self, object_id: ObjectId) -> ContentFinishResult:
+        """Keep final reads inside the active graph instead of copying context."""
+
+        closure = self.store.graph_closure([self.current_head()])
+        obj = closure.get(object_id)
+        if obj is None:
+            raise ContentValidationError(
+                "finished object must be reachable from the current content head"
+            )
+        if obj.kind == "content_node":
+            value = content_node_from_object(obj).content
+        elif obj.kind == "assistant_message":
+            message = obj.data.get("message")
+            value = message.get("content") if isinstance(message, Mapping) else None
+        else:
+            value = obj.data
+        content = (
+            value
+            if isinstance(value, str)
+            else json.dumps(
+                value,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+                allow_nan=False,
+            )
+        )
+        return ContentFinishResult(object_id, content)
 
     def store_transformed_value(
         self,

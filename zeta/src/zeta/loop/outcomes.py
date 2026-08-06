@@ -30,6 +30,7 @@ class StepResult:
 @dataclass(frozen=True)
 class AgentRunResult:
     final_answer: str = ""
+    final_object_id: str | None = None
     stop_reason: RunStopReason | None = None
     telemetry: dict[str, Any] = field(default_factory=dict)
     events: list[DraftEvent] = field(default_factory=list)
@@ -78,6 +79,8 @@ class CancelRequest:
 
 def agent_run_result_payload(result: AgentRunResult) -> dict[str, Any]:
     payload: dict[str, Any] = {"final_answer": result.final_answer}
+    if result.final_object_id is not None:
+        payload["final_object_id"] = result.final_object_id
     if result.stop_reason is not None:
         payload["stop_reason"] = result.stop_reason
     if result.events:
@@ -130,6 +133,8 @@ class RunState:
     wait_requests: list[WaitRequest] = field(default_factory=list)
     cancel_requests: list[CancelRequest] = field(default_factory=list)
     content_promotions: list[ContentPromotion] = field(default_factory=list)
+    final_object_id: str | None = None
+    selected_final_answer: str = ""
     next_tool_position: int = 0
 
     def result(
@@ -139,7 +144,8 @@ class RunState:
         answer_streamed: bool = False,
     ) -> AgentRunResult:
         return AgentRunResult(
-            final_answer=final_answer,
+            final_answer=self.selected_final_answer or final_answer,
+            final_object_id=self.final_object_id,
             stop_reason=self.stop,
             events=self.events,
             answer_streamed=answer_streamed,

@@ -104,7 +104,16 @@ class InMemoryStore(StoreBase):
 
     @contextmanager
     def batch(self) -> Iterator[None]:
-        yield
+        objects = dict(self._objects)
+        refs = dict(self._refs)
+        derivations = dict(self.derivations)
+        try:
+            yield
+        except BaseException:
+            self._objects = objects
+            self._refs = refs
+            self.derivations = derivations
+            raise
 
     def record_derivation(self, derivation: Derivation) -> str:
         id_value = derivation.content_address()

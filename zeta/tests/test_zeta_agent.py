@@ -3416,6 +3416,194 @@ def test_zeta_rpc_initialize_returns_server_metadata() -> None:
     ]
 
 
+def test_zeta_rpc_queues_and_queries_authored_sessions(tmp_path: Path) -> None:
+    event_store = RuntimeEventStore.open(tmp_path / "events.sqlite3")
+    session = zeta_runtime_context.RuntimeContext(
+        session_id="rpc-control",
+        event_sink=event_store,
+        trace_store=InMemoryStore(),
+        tool_registry=CapabilityRegistry(),
+        state_dir=tmp_path,
+        session_dir=tmp_path / "sessions" / "rpc-control",
+    )
+    master = zeta_agent_spec.AgentSpec(
+        slug="zeta.master",
+        name="Master",
+        description="Work with the user.",
+        instructions="{{ event.payload.message }}",
+        path=tmp_path / "master.md",
+        sha256="master",
+    )
+    snapshot = SimpleNamespace(
+        generation_id="generation-1",
+        project=SimpleNamespace(specs=(master,)),
+        manifest={"generation": 1},
+    )
+    client = rpc_routes.RpcClient(
+        connection=None,
+        session=session,
+        dispatcher=harness_dispatch.QueueingDispatcher(event_store),
+        pending_runs={},
+        pending_tool_calls={},
+        project_snapshot=cast(Any, snapshot),
+    )
+    router = rpc_routes.build_rpc_router(client)
+
+    async def request(method: str, params: dict[str, Any]) -> dict[str, Any]:
+        response = await router.response_for_message(
+            {"jsonrpc": "2.0", "id": method, "method": method, "params": params}
+        )
+        assert response is not None
+        return response
+
+    started = asyncio.run(
+        request(
+            "session.start",
+            {"message": "Plan the release.", "idempotency_key": "start-1"},
+        )
+    )["result"]
+    repeated = asyncio.run(
+        request(
+            "session.start",
+            {"message": "Plan the release.", "idempotency_key": "start-1"},
+        )
+    )["result"]
+    sent = asyncio.run(
+        request(
+            "session.send",
+            {
+                "session_id": started["session_id"],
+                "message": "Include the migration.",
+                "idempotency_key": "send-1",
+            },
+        )
+    )["result"]
+    status = asyncio.run(
+        request("session.status", {"session_id": started["session_id"]})
+    )["result"]
+    listed = asyncio.run(request("session.list", {}))["result"]
+
+    assert repeated == started
+    assert started["status"] == "queued"
+    assert started["agent_id"] == "zeta.master"
+    assert sent["session_id"] == started["session_id"]
+    assert sent["status"] == "queued"
+    assert status["status"] == "queued"
+    assert status["queued_turns"] == 2
+    assert listed == {"sessions": [status]}
+    assert event_store.list_attempts() == []
+
+
+def test_zeta_rpc_reports_unknown_and_conflicting_sessions(tmp_path: Path) -> None:
+    event_store = RuntimeEventStore.open(tmp_path / "events.sqlite3")
+    session = zeta_runtime_context.RuntimeContext(
+        session_id="rpc-control",
+        event_sink=event_store,
+        trace_store=InMemoryStore(),
+        tool_registry=CapabilityRegistry(),
+        state_dir=tmp_path,
+        session_dir=tmp_path / "sessions" / "rpc-control",
+    )
+    specs = tuple(
+        zeta_agent_spec.AgentSpec(
+            slug=agent_id,
+            name=agent_id,
+            description="Handles work.",
+            instructions="Handle work.",
+            path=tmp_path / f"{agent_id}.md",
+            sha256=agent_id,
+        )
+        for agent_id in ("agent-a", "agent-b", "zeta.master")
+    )
+    snapshot = SimpleNamespace(
+        generation_id="generation-1",
+        project=SimpleNamespace(specs=specs),
+        manifest={"generation": 1},
+    )
+    for index, agent_id in enumerate(("agent-a", "agent-b"), start=1):
+        event_store.accept(
+            DraftEvent(
+                "runtime.queue_item.completed",
+                "zeta",
+                {
+                    "queue_item_id": f"qi-conflict-{index}",
+                    "event_id": f"event-{index}",
+                    "target_agent": agent_id,
+                    "session_id": "session-conflict",
+                    "status": "completed",
+                },
+                session_id="session-conflict",
+            )
+        )
+    event_store.accept(
+        DraftEvent(
+            "runtime.queue_item.completed",
+            "zeta",
+            {
+                "queue_item_id": "qi-unavailable",
+                "event_id": "event-unavailable",
+                "target_agent": "agent-removed",
+                "session_id": "session-unavailable",
+                "status": "completed",
+            },
+            session_id="session-unavailable",
+        )
+    )
+    client = rpc_routes.RpcClient(
+        connection=None,
+        session=session,
+        dispatcher=harness_dispatch.QueueingDispatcher(event_store),
+        pending_runs={},
+        pending_tool_calls={},
+        project_snapshot=cast(Any, snapshot),
+    )
+    router = rpc_routes.build_rpc_router(client)
+
+    unknown = asyncio.run(
+        router.response_for_message(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "session.status",
+                "params": {"session_id": "session-missing"},
+            }
+        )
+    )
+    conflict = asyncio.run(
+        router.response_for_message(
+            {
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "session.send",
+                "params": {
+                    "session_id": "session-conflict",
+                    "message": "Continue.",
+                },
+            }
+        )
+    )
+    unavailable = asyncio.run(
+        router.response_for_message(
+            {
+                "jsonrpc": "2.0",
+                "id": 3,
+                "method": "session.send",
+                "params": {
+                    "session_id": "session-unavailable",
+                    "message": "Continue.",
+                },
+            }
+        )
+    )
+
+    assert unknown is not None
+    assert unknown["error"]["data"]["code"] == "session_not_found"
+    assert conflict is not None
+    assert conflict["error"]["data"]["code"] == "session_owner_conflict"
+    assert unavailable is not None
+    assert unavailable["error"]["data"]["code"] == "session_owner_unavailable"
+
+
 def test_zeta_rpc_oversized_line_returns_parse_error_and_continues(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -6536,6 +6724,10 @@ def test_zeta_cli_nested_state_dir_works_after_subcommand(
         ["queue", "list", "--help"],
         ["queue", "status", "--help"],
         ["attempts", "list", "--help"],
+        ["sessions", "start", "--help"],
+        ["sessions", "send", "--help"],
+        ["sessions", "status", "--help"],
+        ["sessions", "list", "--help"],
         ["ps", "--help"],
         ["schedules", "status", "--help"],
         ["traces", "log", "--help"],
@@ -6564,7 +6756,7 @@ def test_zeta_cli_stateful_leaves_accept_state_dir(
 
 @pytest.mark.parametrize(
     "namespace",
-    ["queue", "attempts", "events", "schedules", "traces"],
+    ["queue", "attempts", "events", "sessions", "schedules", "traces"],
 )
 def test_zeta_cli_resource_groups_reject_state_dir(
     namespace: str,
@@ -6588,6 +6780,7 @@ def test_zeta_cli_resource_groups_reject_state_dir(
     [
         ("queue", ("list", "status")),
         ("attempts", ("list",)),
+        ("sessions", ("start", "send", "status", "list")),
         (
             "events",
             ("list", "publish", "chain", "root", "descendants", "turn"),
@@ -6679,12 +6872,108 @@ def test_zeta_cli_rpc_stdio_runs_the_stdio_transport(
     assert len(captured) == 1
 
 
+def test_zeta_cli_sessions_detach_and_keep_rpc_status_shape(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project_root = tmp_path / "project"
+    (project_root / "agents").mkdir(parents=True)
+    state_dir = tmp_path / "state"
+    runner = CliRunner()
+
+    started = runner.invoke(
+        cli_main.cli,
+        [
+            "sessions",
+            "start",
+            "Plan the release.",
+            "--project-root",
+            str(project_root),
+            "--state-dir",
+            str(state_dir),
+            "--idempotency-key",
+            "start-1",
+            "--json",
+        ],
+    )
+    assert started.exit_code == 0
+    start_result = json.loads(started.output)
+    session_id = start_result["session_id"]
+
+    sent = runner.invoke(
+        cli_main.cli,
+        [
+            "sessions",
+            "send",
+            session_id,
+            "Include the migration.",
+            "--project-root",
+            str(project_root),
+            "--state-dir",
+            str(state_dir),
+            "--idempotency-key",
+            "send-1",
+            "--json",
+        ],
+    )
+    status = runner.invoke(
+        cli_main.cli,
+        ["sessions", "status", session_id, "--state-dir", str(state_dir), "--json"],
+    )
+    listed = runner.invoke(
+        cli_main.cli,
+        ["sessions", "list", "--state-dir", str(state_dir), "--json"],
+    )
+
+    assert sent.exit_code == 0
+    assert status.exit_code == 0
+    assert listed.exit_code == 0
+    queued_status = json.loads(status.output)
+    assert start_result["status"] == "queued"
+    assert json.loads(sent.output)["status"] == "queued"
+    assert queued_status["queued_turns"] == 2
+    assert json.loads(listed.output) == [queued_status]
+
+    objectives: list[str] = []
+
+    async def fake_run_agent(request: Any, **_kwargs: Any) -> AgentRunResult:
+        objectives.append(request.objective)
+        return AgentRunResult(final_answer="done")
+
+    monkeypatch.setattr(harness_worker, "run_agent", fake_run_agent)
+    registry = CapabilityRegistry()
+    register_builtin_tools(registry)
+    runtime = harness_worker.build_worker_services(
+        project_root=project_root,
+        state_dir=state_dir,
+        tool_registry=registry,
+    )
+    with asyncio.Runner() as async_runner:
+        try:
+            async_runner.run(harness_worker.run_until_idle(runtime))
+        finally:
+            async_runner.run(runtime.aclose())
+
+    completed = runner.invoke(
+        cli_main.cli,
+        ["sessions", "status", session_id, "--state-dir", str(state_dir), "--json"],
+    )
+
+    assert objectives == ["Plan the release.", "Include the migration."]
+    assert completed.exit_code == 0
+    completed_status = json.loads(completed.output)
+    assert completed_status["status"] == "idle"
+    assert completed_status["queued_turns"] == 0
+
+
 @pytest.mark.parametrize(
     "command",
     [
         ["queue", "list", "--help"],
         ["queue", "status", "--help"],
         ["attempts", "list", "--help"],
+        ["sessions", "status", "--help"],
+        ["sessions", "list", "--help"],
         ["events", "list", "--help"],
         ["events", "chain", "--help"],
         ["ps", "--help"],
@@ -6704,6 +6993,8 @@ def test_zeta_cli_inspection_help_omits_project_root(command: list[str]) -> None
         ["queue", "list"],
         ["queue", "status"],
         ["attempts", "list"],
+        ["sessions", "status", "missing"],
+        ["sessions", "list"],
         ["events", "list"],
         ["events", "chain", "missing"],
         ["ps"],
@@ -8607,6 +8898,40 @@ def test_zeta_local_runtime_run_once_handles_eventlog_rpc_request(
     assert response.payload["result"]["events"][0]["id"] == stored.id
     assert captured["tool_registry"] is registry
     assert queue_items == []
+
+
+def test_zeta_eventlog_rpc_queues_a_detached_master_session(tmp_path: Path) -> None:
+    (tmp_path / "agents").mkdir()
+    registry = CapabilityRegistry()
+    register_builtin_tools(registry)
+    runtime = harness_worker.build_worker_services(
+        project_root=tmp_path,
+        state_dir=tmp_path / ".zeta",
+        tool_registry=registry,
+        rpc_step=rpc_eventlog.eventlog_rpc_step,
+    )
+    request = runtime.events.accept(
+        rpc_routes.rpc_requested_draft(
+            "session.start",
+            {"message": "Plan the release.", "idempotency_key": "start-1"},
+        )
+    ).event
+
+    with asyncio.Runner() as runner:
+        try:
+            message = runner.run(harness_worker.run_once(runtime))
+            response = runtime.events.children(request.id)[0]
+            queue_items = runtime.events.list_queue_items()
+            attempts = runtime.events.list_attempts()
+        finally:
+            runner.run(runtime.aclose())
+
+    assert message == f"rpc {request.id}"
+    assert response.event_type == "rpc.responded"
+    assert response.payload["result"]["status"] == "queued"
+    assert queue_items[0]["target_agent"] == "zeta.master"
+    assert queue_items[0]["session_id"] == response.payload["result"]["session_id"]
+    assert attempts == []
 
 
 def test_zeta_scheduler_publishes_due_schedules_directly_once_per_minute(

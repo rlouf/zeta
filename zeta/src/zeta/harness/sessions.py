@@ -17,7 +17,7 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
 from zeta import ids
-from zeta.authoring.spec import MASTER_AGENT_ID, SESSION_MESSAGE_REQUESTED
+from zeta.authoring.spec import MASTER_AGENT_ID, SESSION_MESSAGE_REQUESTED, AgentSpec
 from zeta.events import DraftEvent, Event
 from zeta.harness.routing import (
     AgentDefinition,
@@ -42,6 +42,10 @@ class SessionNotFound(LookupError):
 
 class SessionOwnerConflict(RuntimeError):
     """One session id refers to more than one owning agent."""
+
+
+class SessionOwnerUnavailable(RuntimeError):
+    """The current generation cannot continue a session's authored agent."""
 
 
 @dataclass
@@ -120,6 +124,21 @@ def submit_session_message(
         project_generation=project_generation,
         durable_key=durable_key,
     )
+
+
+def session_owner_for_submission(
+    session: Mapping[str, Any],
+    specs: Iterable[AgentSpec],
+) -> str:
+    """Require the current generation so a continuation cannot change agents."""
+    agent_id = session.get("agent_id")
+    if not isinstance(agent_id, str) or not agent_id:
+        raise SessionOwnerConflict("session has no single owner agent")
+    if not any(spec.slug == agent_id and spec.enabled for spec in specs):
+        raise SessionOwnerUnavailable(
+            f"session owner {agent_id!r} is not enabled in the current project"
+        )
+    return agent_id
 
 
 def _store_session_message(

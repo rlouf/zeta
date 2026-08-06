@@ -209,6 +209,16 @@ If the session has an active wait, the same transaction cancels the wait before
 it stores the new request. A repeated idempotency key returns the first request.
 It does not cancel another wait or create another queue item.
 
+The `sessions start` and `sessions send` CLI commands stop after this
+transaction. The `session.start` and `session.send` RPC methods do the same.
+They record the selected project generation before they queue the message. A
+client can disconnect after it receives `queued`. The normal worker owns the
+claim, attempt, retry, and completion.
+
+`sessions send` and `session.send` derive the owner from durable session
+activity. They require that owner to be enabled in the current project. They do
+not accept a model, prompt, tool, skill, executor, or generation override.
+
 ## Attempt State Machine
 
 Each claim may create one numbered attempt:

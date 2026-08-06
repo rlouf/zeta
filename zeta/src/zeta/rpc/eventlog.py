@@ -43,6 +43,7 @@ async def run_eventlog_rpc_request(
     runtime: WorkerServices,
     request: Event,
 ) -> Event | None:
+    project_snapshot = runtime.project_snapshot
     session_id = request.session_id or "default"
     trace_store = SqliteObjectStore(
         zeta_sqlite_path(runtime.state_dir),
@@ -86,6 +87,7 @@ async def run_eventlog_rpc_request(
         dispatcher=dispatcher,
         pending_runs=pending_runs,
         pending_tool_calls={},
+        project_snapshot=project_snapshot,
     )
     router = build_rpc_router(client)
     try:

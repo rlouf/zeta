@@ -724,7 +724,8 @@ put `--state-dir` after the operation, as in
 Commands that only inspect runtime records start discovery from the current
 directory. Commands that load agent definitions, including `schedules status`,
 start from their resolved project root instead. `--project-root` therefore
-belongs only to `run`, `serve`, `schedules status`, and `agents new`;
+belongs only to `run`, `serve`, `schedules status`, `sessions start`,
+`sessions send`, and `agents new`;
 use `--state-dir` when a runtime-only inspection command must read a different
 store.
 
@@ -786,16 +787,41 @@ Inspect schedule backfill and next-fire state without publishing anything:
 zeta schedules status
 ```
 
+Start a session with the packaged master agent:
+
+```sh
+zeta sessions start "Plan the next release"
+```
+
+The command stores the message and returns immediately. A `zeta run` or
+`zeta serve` worker processes it. Use the returned session id to send another
+message or inspect activity:
+
+```sh
+zeta sessions send session_123 "Include the migration"
+zeta sessions status session_123
+zeta sessions list
+```
+
+`sessions send` keeps the existing owner agent. It uses that agent's current
+definition and project generation. It fails if the owner is not enabled in the
+current project. Use `--idempotency-key` when a client may repeat a start or
+send request.
+
 ## Observability And Debugging
 
 The `zeta` CLI reads the discovered project runtime journal and queue. Listing
 and inspection commands do not create or migrate runtime state. `events
-publish` is the explicitly mutating command in this group:
+publish`, `sessions start`, and `sessions send` create durable work:
 
 ```text
 zeta queue status [--state-dir DIR]
 zeta queue list [--state-dir DIR] [--json]
 zeta attempts list [--state-dir DIR] [--json]
+zeta sessions start MESSAGE [--project-root DIR] [--state-dir DIR] [--idempotency-key KEY] [--json]
+zeta sessions send SESSION_ID MESSAGE [--project-root DIR] [--state-dir DIR] [--idempotency-key KEY] [--json]
+zeta sessions status SESSION_ID [--state-dir DIR] [--json]
+zeta sessions list [--state-dir DIR] [--json]
 zeta ps [RUN_ID] [--state-dir DIR] [--json]
 zeta events list [--state-dir DIR] [--type-prefix PREFIX] [--session ID] [--limit N] [--json]
 zeta events chain EVENT_ID [--state-dir DIR] [--json]
@@ -936,6 +962,10 @@ Supported methods:
 | Method | Purpose |
 | --- | --- |
 | `initialize` | Return server and protocol metadata. |
+| `session.start` | Queue a new session with the packaged master agent. |
+| `session.send` | Queue a message for an existing session owner. |
+| `session.status` | Return one derived session activity record. |
+| `session.list` | Return the derived session catalog. |
 | `session.run` | Start a session run. |
 | `session.cancel` | Cancel an active run by `run_id`. |
 | `events.list` | List durable events by cursor, session, turn, and limit. |
@@ -948,6 +978,11 @@ only when retrying the same logical request. Zeta scopes the key to the
 session, so a retry never starts a second run or repeats its effects. While the
 original run is still active, the retry returns its existing started event;
 after it finishes, the retry returns the original terminal result.
+
+`session.start` and `session.send` return `queued` after Zeta stores the queue
+binding. They do not run the model and do not wait for a worker. Both methods
+accept an optional non-empty `idempotency_key`. `session.run` remains the live,
+RPC-owned run path and keeps its existing cancellation behavior.
 
 Server notifications:
 

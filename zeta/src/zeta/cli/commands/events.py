@@ -4,7 +4,8 @@ import json
 from pathlib import Path
 
 import click
-from zeta.cli.common import runtime_event_store, state_dir_option
+from zeta.authoring.spec import MASTER_AGENT_ID
+from zeta.cli.common import cli_tool_registry, runtime_event_store, state_dir_option
 from zeta.cli.rendering import (
     descendant_events,
     event_record,
@@ -12,7 +13,17 @@ from zeta.cli.rendering import (
     print_event_sequence,
 )
 from zeta.events import DraftEvent
+from zeta.harness import worker
+from zeta.harness.project import record_project_snapshot
 from zeta.harness.protocols import CancellationError
+from zeta.harness.sessions import (
+    SessionNotFound,
+    SessionOwnerConflict,
+    SessionOwnerUnavailable,
+    session_owner_for_submission,
+    start_master_session,
+    submit_session_message,
+)
 from zeta.journal.store import Filter
 
 
@@ -24,6 +35,172 @@ def events() -> None:
 @click.group("waits")
 def waits() -> None:
     """Inspect durable agent waits."""
+
+
+@click.group("sessions")
+def sessions() -> None:
+    """Start, continue, and inspect authored agent sessions."""
+
+
+@sessions.command("start")
+@click.argument("message")
+@click.option(
+    "--project-root",
+    type=click.Path(file_okay=False, path_type=Path),
+    default=Path("."),
+    show_default=True,
+    help="Project root containing agents/ specs.",
+)
+@state_dir_option
+@click.option("--idempotency-key", help="Stable key for a repeated request.")
+@click.option("--json", "json_output", is_flag=True, help="Emit JSON.")
+def sessions_start(
+    message: str,
+    project_root: Path,
+    state_dir: Path | None,
+    idempotency_key: str | None,
+    json_output: bool,
+) -> int:
+    """Queue MESSAGE as the first turn for a new master session."""
+    runtime = worker.build_worker_services(
+        project_root=project_root,
+        state_dir=state_dir,
+        tool_registry=cli_tool_registry(),
+    )
+    try:
+        snapshot = runtime.project_snapshot
+        session_owner_for_submission(
+            {"agent_id": MASTER_AGENT_ID},
+            snapshot.project.specs,
+        )
+        record_project_snapshot(runtime.events, snapshot)
+        result = start_master_session(
+            runtime.events,
+            message=message,
+            project_generation=snapshot.generation_id,
+            idempotency_key=idempotency_key,
+        )
+    except SessionOwnerUnavailable as error:
+        raise click.ClickException(str(error)) from error
+    finally:
+        runtime.events.close()
+    print_session_submission(result, json_output)
+    return 0
+
+
+@sessions.command("send")
+@click.argument("session_id")
+@click.argument("message")
+@click.option(
+    "--project-root",
+    type=click.Path(file_okay=False, path_type=Path),
+    default=Path("."),
+    show_default=True,
+    help="Project root containing agents/ specs.",
+)
+@state_dir_option
+@click.option("--idempotency-key", help="Stable key for a repeated request.")
+@click.option("--json", "json_output", is_flag=True, help="Emit JSON.")
+def sessions_send(
+    session_id: str,
+    message: str,
+    project_root: Path,
+    state_dir: Path | None,
+    idempotency_key: str | None,
+    json_output: bool,
+) -> int:
+    """Queue MESSAGE for the existing owner of SESSION_ID."""
+    runtime = worker.build_worker_services(
+        project_root=project_root,
+        state_dir=state_dir,
+        tool_registry=cli_tool_registry(),
+    )
+    try:
+        snapshot = runtime.project_snapshot
+        session = runtime.events.session_status(session_id)
+        agent_id = session_owner_for_submission(session, snapshot.project.specs)
+        record_project_snapshot(runtime.events, snapshot)
+        result = submit_session_message(
+            runtime.events,
+            message=message,
+            agent_id=agent_id,
+            session_id=session_id,
+            project_generation=snapshot.generation_id,
+            idempotency_key=idempotency_key,
+        )
+    except (SessionNotFound, SessionOwnerConflict, SessionOwnerUnavailable) as error:
+        raise click.ClickException(str(error)) from error
+    finally:
+        runtime.events.close()
+    print_session_submission(result, json_output)
+    return 0
+
+
+@sessions.command("status")
+@click.argument("session_id")
+@state_dir_option
+@click.option("--json", "json_output", is_flag=True, help="Emit JSON.")
+def sessions_status(
+    session_id: str,
+    state_dir: Path | None,
+    json_output: bool,
+) -> int:
+    """Show the current activity for SESSION_ID."""
+    event_store = runtime_event_store(state_dir)
+    try:
+        session = event_store.session_status(session_id)
+    except (SessionNotFound, SessionOwnerConflict) as error:
+        raise click.ClickException(str(error)) from error
+    finally:
+        event_store.close()
+    print_session_status(session, json_output)
+    return 0
+
+
+@sessions.command("list")
+@state_dir_option
+@click.option("--json", "json_output", is_flag=True, help="Emit JSON.")
+def sessions_list(state_dir: Path | None, json_output: bool) -> int:
+    """List authored sessions from durable runtime activity."""
+    event_store = runtime_event_store(state_dir)
+    try:
+        rows = event_store.list_sessions()
+    except SessionOwnerConflict as error:
+        raise click.ClickException(str(error)) from error
+    finally:
+        event_store.close()
+    if json_output:
+        click.echo(json.dumps(rows, ensure_ascii=False))
+        return 0
+    if not rows:
+        click.echo("sessions empty")
+        return 0
+    for row in rows:
+        print_session_status(row, False)
+    return 0
+
+
+def print_session_submission(result: dict[str, object], json_output: bool) -> None:
+    if json_output:
+        click.echo(json.dumps(result, ensure_ascii=False))
+        return
+    click.echo(f"queued {result['session_id']} {result['run_id']}")
+
+
+def print_session_status(session: dict[str, object], json_output: bool) -> None:
+    if json_output:
+        click.echo(json.dumps(session, ensure_ascii=False))
+        return
+    click.echo(
+        "\t".join(
+            [
+                str(session["status"]),
+                str(session["session_id"]),
+                str(session["agent_id"]),
+                str(session["queued_turns"]),
+            ]
+        )
+    )
 
 
 @waits.command("list")

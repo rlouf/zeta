@@ -197,6 +197,7 @@ Use the CLI to inspect work:
 
 ```sh
 zeta ps
+zeta sessions list
 zeta events list
 zeta queue list
 zeta attempts list

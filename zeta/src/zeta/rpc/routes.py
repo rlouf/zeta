@@ -11,16 +11,27 @@ from typing import Any
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import SchemaError
 
+from zeta.authoring.spec import MASTER_AGENT_ID
 from zeta.capabilities.registry import RegisteredCapability, error_result
 from zeta.capabilities.types import Capability, CapabilityId
 from zeta.effects import DELIVERY_SEMANTICS, DeliverySemantics
 from zeta.events import DraftEvent, Event
 from zeta.harness.dispatch import QueueingDispatcher, ReservedRuntimeEventError
+from zeta.harness.project import ProjectSnapshot, record_project_snapshot
 from zeta.harness.runs import RunStatus
 from zeta.harness.session_turn import (
     SESSION_TURN_AGENT_ID,
     terminal_session_turn_result,
 )
+from zeta.harness.sessions import (
+    SessionNotFound,
+    SessionOwnerConflict,
+    SessionOwnerUnavailable,
+    session_owner_for_submission,
+    start_master_session,
+    submit_session_message,
+)
+from zeta.harness.store import RuntimeEventStore
 from zeta.journal.store import EventReader, EventStoreProtocol, Filter
 from zeta.journal.wire import event_to_wire
 from zeta.loop.runtime_context import RuntimeContext
@@ -78,6 +89,7 @@ class RpcClient:
     pending_runs: dict[str, RunState]
     pending_tool_calls: dict[str, asyncio.Future[dict[str, Any]]]
     background_tasks: set[asyncio.Task[Any]] = field(default_factory=set)
+    project_snapshot: ProjectSnapshot | None = None
 
     async def notify(self, method: str, params: dict[str, Any]) -> None:
         if self.connection is not None:
@@ -492,6 +504,157 @@ async def session_run(params: dict[str, Any], client: RpcClient) -> dict[str, An
     }
 
 
+async def session_start(params: dict[str, Any], client: RpcClient) -> dict[str, Any]:
+    """Queue a master turn without giving the submitting client worker ownership."""
+    message, idempotency_key = session_message_params(
+        params,
+        supported={"message", "idempotency_key"},
+    )
+    store, snapshot = session_submission_resources(client)
+    try:
+        session_owner_for_submission(
+            {"agent_id": MASTER_AGENT_ID},
+            snapshot.project.specs,
+        )
+    except SessionOwnerUnavailable as exc:
+        raise session_route_error(exc, None) from exc
+    record_project_snapshot(store, snapshot)
+    return start_master_session(
+        store,
+        message=message,
+        project_generation=snapshot.generation_id,
+        idempotency_key=idempotency_key,
+    )
+
+
+async def session_send(params: dict[str, Any], client: RpcClient) -> dict[str, Any]:
+    """Queue one message for the existing session owner in the current generation."""
+    message, idempotency_key = session_message_params(
+        params,
+        supported={"session_id", "message", "idempotency_key"},
+    )
+    session_id = required_session_id(params)
+    store, snapshot = session_submission_resources(client)
+    try:
+        session = store.session_status(session_id)
+        agent_id = session_owner_for_submission(session, snapshot.project.specs)
+    except (SessionNotFound, SessionOwnerConflict, SessionOwnerUnavailable) as exc:
+        raise session_route_error(exc, session_id) from exc
+    record_project_snapshot(store, snapshot)
+    return submit_session_message(
+        store,
+        message=message,
+        agent_id=agent_id,
+        session_id=session_id,
+        project_generation=snapshot.generation_id,
+        idempotency_key=idempotency_key,
+    )
+
+
+async def session_status(params: dict[str, Any], client: RpcClient) -> dict[str, Any]:
+    """Return one session activity record from durable runtime state."""
+    reject_unknown_params(params, {"session_id"})
+    session_id = required_session_id(params)
+    store = session_runtime_store(client)
+    try:
+        return store.session_status(session_id)
+    except (SessionNotFound, SessionOwnerConflict) as exc:
+        raise session_route_error(exc, session_id) from exc
+
+
+async def session_list(params: dict[str, Any], client: RpcClient) -> dict[str, Any]:
+    """Return the derived authored-session catalog."""
+    reject_unknown_params(params, set())
+    store = session_runtime_store(client)
+    try:
+        return {"sessions": store.list_sessions()}
+    except SessionOwnerConflict as exc:
+        raise session_route_error(exc, None) from exc
+
+
+def session_submission_resources(
+    client: RpcClient,
+) -> tuple[RuntimeEventStore, ProjectSnapshot]:
+    store = session_runtime_store(client)
+    snapshot = client.project_snapshot
+    if snapshot is None:
+        raise RpcError(
+            -32000,
+            "sessions_unavailable",
+            "Server error",
+            {"message": "session submission is not configured"},
+        )
+    return store, snapshot
+
+
+def session_runtime_store(client: RpcClient) -> RuntimeEventStore:
+    store = client.session.event_sink
+    if not isinstance(store, RuntimeEventStore):
+        raise RpcError(
+            -32000,
+            "sessions_unavailable",
+            "Server error",
+            {"message": "session queries require a durable runtime store"},
+        )
+    return store
+
+
+def session_message_params(
+    params: dict[str, Any],
+    *,
+    supported: set[str],
+) -> tuple[str, str | None]:
+    reject_unknown_params(params, supported)
+    message = params.get("message")
+    if not isinstance(message, str) or not message:
+        raise invalid_params("invalid_message", "message must be non-empty")
+    idempotency_key = params.get("idempotency_key")
+    if idempotency_key is not None and (
+        not isinstance(idempotency_key, str) or not idempotency_key
+    ):
+        raise invalid_params(
+            "invalid_idempotency_key",
+            "idempotency_key must be a non-empty string",
+        )
+    return message, idempotency_key
+
+
+def required_session_id(params: dict[str, Any]) -> str:
+    session_id = params.get("session_id")
+    if not isinstance(session_id, str) or not session_id:
+        raise invalid_params("invalid_session_id", "session_id must be non-empty")
+    return session_id
+
+
+def reject_unknown_params(params: dict[str, Any], supported: set[str]) -> None:
+    unknown = sorted(set(params) - supported)
+    if unknown:
+        raise invalid_params(
+            "unknown_session_fields",
+            f"session request contains unsupported fields: {', '.join(unknown)}",
+            fields=unknown,
+        )
+
+
+def session_route_error(
+    error: Exception,
+    session_id: str | None,
+) -> RpcError:
+    if isinstance(error, SessionNotFound):
+        code = "session_not_found"
+        jsonrpc_code = -32004
+    elif isinstance(error, SessionOwnerUnavailable):
+        code = "session_owner_unavailable"
+        jsonrpc_code = -32004
+    else:
+        code = "session_owner_conflict"
+        jsonrpc_code = -32009
+    data: dict[str, Any] = {"message": str(error)}
+    if session_id is not None:
+        data["session_id"] = session_id
+    return RpcError(jsonrpc_code, code, "Session error", data)
+
+
 def session_result_status(result: dict[str, Any]) -> RunStatus:
     """Map a durable session result back to the RPC-visible run status."""
 
@@ -668,6 +831,10 @@ def build_rpc_router(client: RpcClient) -> JsonRpcRouter:
     router.route("initialize", initialize)
     router.route("events.publish", events_publish)
     router.route("events.list", events_list)
+    router.route("session.start", session_start)
+    router.route("session.send", session_send)
+    router.route("session.status", session_status)
+    router.route("session.list", session_list)
     router.route("session.run", session_run)
     router.route("session.cancel", session_cancel)
     router.route("tools.register", tools_register)

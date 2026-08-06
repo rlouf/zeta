@@ -676,6 +676,99 @@ def test_content_workspace_drop_removes_content_without_deleting_history() -> No
     assert store.get_object(object_id) is not None
 
 
+def test_content_workspace_projects_prompt_nodes_and_a_bounded_manifest() -> None:
+    store = InMemoryStore()
+    workspace = context_transforms.ContentWorkspace(
+        store,
+        run_id="run-1",
+        session_id="session-1",
+        owner="writer",
+    )
+    nodes = {
+        key: context_transforms.put_content_node(
+            store,
+            context_transforms.ContentNode(key, kind, content),
+        )
+        for key, kind, content in (
+            ("instruction", "instruction", "Always run focused tests."),
+            ("data", "text", "Workspace data."),
+            ("large", "procedure", "x" * 1_000),
+        )
+    }
+    head = context_transforms.advance_content_head(
+        store,
+        workspace.run_head,
+        expected_head=None,
+        nodes=nodes,
+        projection_order=("instruction", "data", "large"),
+        source_scopes={"instruction": "agent", "data": "run", "large": "session"},
+        reason="Seed prompt content.",
+    )
+
+    components = workspace.prompt_components(max_chars=200)
+
+    assert [component.kind for component in components] == [
+        "content_manifest",
+        "content_instruction",
+    ]
+    manifest = components[0]
+    assert manifest.data["head"] == head
+    assert manifest.data["projected_keys"] == ["instruction"]
+    assert manifest.data["omitted_keys"] == ["large"]
+    assert manifest.links == (head,)
+    projected = components[1]
+    assert projected.source_object_id == nodes["instruction"]
+    assert projected.links == (nodes["instruction"],)
+    assert "Always run focused tests." in projected.message["content"]
+
+
+def test_prompt_builder_records_the_exact_content_head() -> None:
+    store = InMemoryStore()
+    workspace = context_transforms.ContentWorkspace(
+        store,
+        run_id="run-1",
+        session_id="session-1",
+        owner="writer",
+    )
+    node_id = context_transforms.put_content_node(
+        store,
+        context_transforms.ContentNode(
+            "testing",
+            "procedure",
+            "Run focused tests first.",
+        ),
+    )
+    head = context_transforms.advance_content_head(
+        store,
+        workspace.run_head,
+        expected_head=None,
+        nodes={"testing": node_id},
+        projection_order=("testing",),
+        source_scopes={"testing": "run"},
+        reason="Seed prompt content.",
+    )
+    builder = PromptBuilder(store=store)
+
+    plan = builder.plan_prompt(
+        "Ship the change.",
+        [],
+        tools=[],
+        content_components=workspace.prompt_components(),
+    )
+    stored = asyncio.run(builder.commit_prompt_plan(plan))
+
+    assert [component.kind for component in stored.components[:4]] == [
+        "system_prompt",
+        "tool_descriptor_set",
+        "content_manifest",
+        "content_procedure",
+    ]
+    assert stored.prompt_object_id is not None
+    closure = store.graph_closure([stored.prompt_object_id])
+    assert head in closure
+    assert node_id in closure
+
+
 def prepare_prompt(
     builder: zeta_context.PromptBuilder,
     objective: str,

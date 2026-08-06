@@ -281,6 +281,7 @@ class PublishEventGateway:
     def __init__(self, messages: Iterable[dict[str, Any]]) -> None:
         self.messages = iter(messages)
         self.tool_names: list[list[str]] = []
+        self.model_inputs: list[zeta_model_shapes.ModelInput] = []
 
     def available(self, request: zeta_model_shapes.ModelRequest) -> bool:
         del request
@@ -296,6 +297,7 @@ class PublishEventGateway:
         should_stop: Callable[[], str | None] | None = None,
     ) -> zeta_model_shapes.ModelOutput:
         del request, stream, telemetry_sink, should_stop
+        self.model_inputs.append(model_input)
         self.tool_names.append(
             [descriptor["function"]["name"] for descriptor in (model_input.tools or [])]
         )
@@ -1190,6 +1192,7 @@ def test_zeta_request_model_turn_builds_assistant_from_model_output(
             allowed_capabilities: Iterable[str] | None = None,
             context: str = "",
             current_events: Iterable[dict[str, Any]] = (),
+            content_components: Iterable[zeta_context.PromptComponent] = (),
             tools: list[dict[str, Any]] | None = None,
             tool_choice: str | dict[str, Any] = "auto",
             max_tokens: int = zeta_model.DEFAULT_MAX_COMPLETION_TOKENS,
@@ -1204,6 +1207,7 @@ def test_zeta_request_model_turn_builds_assistant_from_model_output(
                 allowed_capabilities=allowed_capabilities,
                 context=context,
                 current_events=current_events,
+                content_components=content_components,
                 tools=tools,
                 tool_choice=tool_choice,
                 max_tokens=max_tokens,
@@ -1609,6 +1613,7 @@ def test_zeta_content_tools_update_and_query_the_run_workspace() -> None:
     assert tool_results[0]["result"]["status"] == "applied"
     assert tool_results[1]["result"]["items"][0]["key"] == "release/check"
     assert tool_results[1]["result"]["items"][0]["preview"] == ("Check the manifest.")
+    assert "Check the manifest." in json.dumps(gateway.model_inputs[1].messages)
 
 
 def test_zeta_transform_content_records_durable_promotion_requests() -> None:

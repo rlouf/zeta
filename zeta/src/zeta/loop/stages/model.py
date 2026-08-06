@@ -209,6 +209,11 @@ async def request_model_turn(
         allowed_capabilities=allowed_capabilities,
         context=context,
         current_events=draft_views_for_prompt(state.events, ctx.builder),
+        content_components=(
+            ctx.content_workspace.prompt_components()
+            if ctx.content_workspace is not None
+            else ()
+        ),
         tools=tools,
         state=state,
         builder=ctx.builder,

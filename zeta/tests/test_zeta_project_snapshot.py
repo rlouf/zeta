@@ -81,7 +81,14 @@ def load_snapshot(agents: Path):
     )
 
 
-def agent_tool_source(owner: str, name: str, *, prefix: str = "") -> str:
+def agent_tool_source(
+    owner: str,
+    name: str,
+    *,
+    prefix: str = "",
+    factory: bool = False,
+) -> str:
+    export = "def tool():\n    return capability" if factory else "tool = capability"
     return f'''
 from zeta.capabilities.executors import InProcessCapabilityExecutor
 from zeta.capabilities.registry import RegisteredCapability
@@ -90,7 +97,7 @@ from zeta.capabilities.types import Capability, CapabilityId
 def run(params):
     return {{"ok": True, "echo": {prefix!r} + params["text"]}}
 
-tool = RegisteredCapability(
+capability = RegisteredCapability(
     Capability(
         CapabilityId("agent.{owner}", "{name}"),
         "Echo text from an agent-authored tool.",
@@ -103,6 +110,7 @@ tool = RegisteredCapability(
     ),
     InProcessCapabilityExecutor(run),
 )
+{export}
 '''
 
 
@@ -224,6 +232,88 @@ def test_project_snapshot_compiles_a_file_tool_through_the_agent_tool_path(
             "source": source,
         }
     ]
+
+
+def test_project_snapshot_loads_a_file_tool_factory(tmp_path: Path) -> None:
+    agents = write_snapshot_project(tmp_path)
+    tools = agents / "tools" / "worker"
+    tools.mkdir(parents=True)
+    (tools / "echo.py").write_text(
+        agent_tool_source("worker", "echo", factory=True),
+        encoding="utf-8",
+    )
+
+    snapshot = load_snapshot(agents)
+
+    assert snapshot.tool_registry.invoke("agent.worker.echo", {"text": "hello"}) == {
+        "ok": True,
+        "echo": "hello",
+    }
+
+
+def test_project_snapshot_rejects_an_invalid_agent_tool_schema(tmp_path: Path) -> None:
+    agents = write_snapshot_project(tmp_path)
+    tools = agents / "tools" / "worker"
+    tools.mkdir(parents=True)
+    source = agent_tool_source("worker", "echo").replace(
+        '"type": "object",',
+        '"type": "not-a-json-schema-type",',
+        1,
+    )
+    (tools / "echo.py").write_text(source, encoding="utf-8")
+
+    with pytest.raises(ProjectSnapshotUnavailable, match="could not be imported"):
+        load_snapshot(agents)
+
+
+def test_project_snapshot_rejects_duplicate_file_and_content_tools(
+    tmp_path: Path,
+) -> None:
+    agents = write_snapshot_project(tmp_path)
+    tools = agents / "tools" / "worker"
+    tools.mkdir(parents=True)
+    (tools / "echo.py").write_text(
+        agent_tool_source("worker", "echo", prefix="file:"),
+        encoding="utf-8",
+    )
+    content = InMemoryStore()
+    workspace = ContentWorkspace(
+        content,
+        run_id="run-tool",
+        session_id="session-tool",
+        owner="worker",
+    )
+    transformed = workspace.transform(
+        {
+            "expected_head": workspace.initialize(),
+            "reason": "Create another echo implementation.",
+            "inputs": {},
+            "transformation": {
+                "type": "literal",
+                "value": {
+                    "name": "echo",
+                    "capability_id": "agent.worker.echo",
+                    "source": agent_tool_source("worker", "echo", prefix="graph:"),
+                },
+            },
+            "destination": {
+                "key": "tools/echo",
+                "kind": "tool_definition",
+                "scope": "agent",
+                "expected_object_id": None,
+            },
+        }
+    )
+    workspace.promote(transformed.promotions[0])
+
+    with pytest.raises(ProjectSnapshotUnavailable, match="already registered"):
+        load_project_snapshot(
+            agents,
+            registry=EventConnectorRegistry(),
+            tool_registry=CapabilityRegistry(),
+            model_selection=None,
+            content_store=content,
+        )
 
 
 def test_project_snapshot_keeps_each_agent_tool_generation_stable(

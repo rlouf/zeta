@@ -5346,6 +5346,151 @@ def test_zeta_cli_inspects_diffs_and_restores_agent_content(tmp_path: Path) -> N
     reopened.close()
 
 
+def test_zeta_cli_lists_disables_and_restores_agent_tools(tmp_path: Path) -> None:
+    state_dir = tmp_path / ".zeta"
+    runtime = RuntimeEventStore.open(event_store_path(state_dir))
+    store = runtime.content_store()
+    head = zeta_content_transforms.ContentHead("agent", "writer", "writer")
+    with store.batch():
+        first_tool = zeta_content_transforms.put_content_node(
+            store,
+            zeta_content_transforms.ContentNode(
+                key="tools/echo",
+                kind="tool_definition",
+                content={
+                    "name": "echo",
+                    "capability_id": "agent.writer.echo",
+                    "source": "first source",
+                },
+            ),
+        )
+        first_head = zeta_content_transforms.advance_content_head(
+            store,
+            head,
+            expected_head=None,
+            nodes={"tools/echo": first_tool},
+            projection_order=("tools/echo",),
+            source_scopes={"tools/echo": "agent"},
+            reason="Create the first tool.",
+        )
+        second_tool = zeta_content_transforms.put_content_node(
+            store,
+            zeta_content_transforms.ContentNode(
+                key="tools/echo",
+                kind="tool_definition",
+                content={
+                    "name": "echo",
+                    "capability_id": "agent.writer.echo",
+                    "source": "second source",
+                },
+            ),
+        )
+        second_head = zeta_content_transforms.advance_content_head(
+            store,
+            head,
+            expected_head=first_head,
+            nodes={"tools/echo": second_tool},
+            projection_order=("tools/echo",),
+            source_scopes={"tools/echo": "agent"},
+            reason="Replace the tool.",
+            source_ids=(first_tool,),
+        )
+    assert store.get_ref("agent/writer/content/head").object_id == second_head
+    runtime.close()
+    persisted = RuntimeEventStore.open(event_store_path(state_dir), read_only=True)
+    assert persisted.content_store().get_ref("agent/writer/content/head").object_id == (
+        second_head
+    )
+    persisted.close()
+
+    runner = CliRunner()
+    listed = runner.invoke(
+        cli_main.cli,
+        [
+            "agents",
+            "tools",
+            "list",
+            "writer",
+            "--state-dir",
+            str(state_dir),
+            "--json",
+        ],
+    )
+    shown = runner.invoke(
+        cli_main.cli,
+        [
+            "agents",
+            "tools",
+            "show",
+            "writer",
+            "echo",
+            "--state-dir",
+            str(state_dir),
+            "--json",
+        ],
+    )
+    disabled = runner.invoke(
+        cli_main.cli,
+        [
+            "agents",
+            "tools",
+            "disable",
+            "writer",
+            "echo",
+            "--state-dir",
+            str(state_dir),
+            "--reason",
+            "This version is broken.",
+            "--json",
+        ],
+    )
+    restored = runner.invoke(
+        cli_main.cli,
+        [
+            "agents",
+            "tools",
+            "restore",
+            "writer",
+            "echo",
+            first_tool,
+            "--state-dir",
+            str(state_dir),
+            "--reason",
+            "Use the first working version.",
+            "--json",
+        ],
+    )
+
+    assert listed.exit_code == 0, listed.output
+    assert json.loads(listed.output) == [
+        {
+            "key": "tools/echo",
+            "name": "echo",
+            "capability_id": "agent.writer.echo",
+            "object_id": second_tool,
+        }
+    ]
+    assert shown.exit_code == 0, shown.output
+    assert json.loads(shown.output)["source"] == "second source"
+    assert disabled.exit_code == 0, disabled.output
+    disabled_result = json.loads(disabled.output)
+    assert disabled_result["old_head"] == second_head
+    assert disabled_result["disabled_object_id"] == second_tool
+    assert restored.exit_code == 0, restored.output
+    restored_result = json.loads(restored.output)
+    assert restored_result["old_head"] == disabled_result["head"]
+    assert restored_result["object_id"] == first_tool
+    reopened = RuntimeEventStore.open(event_store_path(state_dir), read_only=True)
+    active = reopened.content_store().get_ref("agent/writer/content/head")
+    assert active is not None
+    revision = zeta_content_transforms.content_revision_from_object(
+        reopened.content_store().get_object(active.object_id)
+    )
+    assert revision.nodes == {"tools/echo": first_tool}
+    assert reopened.content_store().get_object(second_tool) is not None
+    reopened.close()
+
+
 def test_zeta_cli_ps_lists_and_shows_runs(tmp_path: Path) -> None:
     state_dir = tmp_path / ".zeta"
     event_store = zeta_events.SqliteEventStore(event_store_path(state_dir))

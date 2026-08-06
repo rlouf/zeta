@@ -8,6 +8,7 @@ from typing import Any, Literal
 from zeta.context.components import PromptTrace
 from zeta.context.transforms import ContentPromotion
 from zeta.events import DraftEvent
+from zeta.tools.events import CancelRequest, PublishEventRequest, WaitRequest
 
 StepName = Literal[
     "check_budget",
@@ -42,39 +43,6 @@ class AgentRunResult:
     wait_requests: list[WaitRequest] = field(default_factory=list)
     cancel_requests: list[CancelRequest] = field(default_factory=list)
     content_promotions: list[ContentPromotion] = field(default_factory=list)
-
-
-@dataclass(frozen=True)
-class PublishEventRequest:
-    """An event request that becomes durable only when the attempt succeeds."""
-
-    handle: str
-    event_type: str
-    payload: dict[str, Any]
-    at: str | None
-    position: int
-
-
-@dataclass(frozen=True)
-class WaitRequest:
-    """A wait that becomes durable only when the attempt succeeds."""
-
-    handle: str
-    event_type: str
-    fields: dict[str, Any]
-    deadline: str | None
-    position: int
-
-
-@dataclass(frozen=True)
-class CancelRequest:
-    """A cancellation that becomes durable only when the attempt succeeds."""
-
-    handle: str
-    reason: str | None
-    source_agent_id: str
-    source_session_id: str
-    position: int
 
 
 def agent_run_result_payload(result: AgentRunResult) -> dict[str, Any]:

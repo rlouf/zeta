@@ -7,12 +7,18 @@ from dataclasses import replace
 from typing import Any
 
 from zeta.capabilities.executors import ToolExecutor
-from zeta.capabilities.profiles import identity_arguments
+from zeta.capabilities.profiles import identity_arguments as identity_arguments
 from zeta.capabilities.registry import (
     CapabilityRegistry,
-    CapabilityToolRoute,
-    CapabilityToolSchema,
-    model_descriptor,
+)
+from zeta.capabilities.registry import (
+    CapabilityToolRoute as CapabilityToolRoute,
+)
+from zeta.capabilities.registry import (
+    CapabilityToolSchema as CapabilityToolSchema,
+)
+from zeta.capabilities.registry import (
+    model_descriptor as model_descriptor,
 )
 from zeta.capabilities.registry import registry as _runtime_tool_registry
 from zeta.context import prompt_transform_from_policy
@@ -52,6 +58,11 @@ from zeta.loop.types import (
 )
 from zeta.models import DefaultModelGateway
 from zeta.substrate import Store
+from zeta.tools.events import (
+    cancel_tool_schema,
+    publish_event_tool_schema,
+    wait_for_tool_schema,
+)
 from zeta.trace import warn_trace_failure_once
 from zeta.trace.provenance import (
     project_prompt_trace_projection,
@@ -225,125 +236,6 @@ async def run_agent_loop(
         tools=tools,
         state=state,
     ).run()
-
-
-def publish_event_tool_schema(
-    tool_schema: CapabilityToolSchema,
-) -> CapabilityToolSchema:
-    existing = tool_schema.routes.get("publish_event")
-    if existing is not None:
-        raise ValueError(
-            "reserved tool name 'publish_event' is already in use by "
-            f"{existing.capability_id!r}"
-        )
-    input_schema = {
-        "type": "object",
-        "required": ["event_type", "payload"],
-        "properties": {
-            "event_type": {"type": "string"},
-            "payload": {"type": "object"},
-            "at": {"type": "string"},
-        },
-        "additionalProperties": False,
-    }
-    return CapabilityToolSchema(
-        routes={
-            **tool_schema.routes,
-            "publish_event": CapabilityToolRoute(
-                capability_id="zeta.publish_event",
-                input_schema=input_schema,
-                adapt_arguments=identity_arguments,
-            ),
-        },
-        descriptors=[
-            *tool_schema.descriptors,
-            model_descriptor(
-                "publish_event",
-                "Request an event when this agent attempt completes successfully.",
-                input_schema,
-            ),
-        ],
-    )
-
-
-def wait_for_tool_schema(
-    tool_schema: CapabilityToolSchema,
-) -> CapabilityToolSchema:
-    existing = tool_schema.routes.get("wait_for")
-    if existing is not None:
-        raise ValueError(
-            "reserved tool name 'wait_for' is already in use by "
-            f"{existing.capability_id!r}"
-        )
-    input_schema = {
-        "type": "object",
-        "required": ["event_type"],
-        "properties": {
-            "event_type": {"type": "string", "minLength": 1},
-            "fields": {"type": "object"},
-            "deadline": {"type": "string"},
-        },
-        "additionalProperties": False,
-    }
-    return CapabilityToolSchema(
-        routes={
-            **tool_schema.routes,
-            "wait_for": CapabilityToolRoute(
-                capability_id="zeta.wait_for",
-                input_schema=input_schema,
-                adapt_arguments=identity_arguments,
-            ),
-        },
-        descriptors=[
-            *tool_schema.descriptors,
-            model_descriptor(
-                "wait_for",
-                "End this run and resume when a matching event arrives.",
-                input_schema,
-            ),
-        ],
-    )
-
-
-def cancel_tool_schema(
-    tool_schema: CapabilityToolSchema,
-) -> CapabilityToolSchema:
-    existing = tool_schema.routes.get("cancel")
-    if existing is not None:
-        raise ValueError(
-            "reserved tool name 'cancel' is already in use by "
-            f"{existing.capability_id!r}"
-        )
-    input_schema = {
-        "type": "object",
-        "required": ["handle"],
-        "properties": {
-            "handle": {
-                "type": "string",
-                "pattern": "^(?:wait|pub)_.+$",
-            },
-            "reason": {"type": "string", "minLength": 1},
-        },
-        "additionalProperties": False,
-    }
-    return CapabilityToolSchema(
-        routes={
-            **tool_schema.routes,
-            "cancel": CapabilityToolRoute(
-                capability_id="zeta.cancel",
-                input_schema=input_schema,
-                adapt_arguments=identity_arguments,
-            ),
-        },
-        descriptors=[
-            *tool_schema.descriptors,
-            model_descriptor(
-                "cancel",
-                "Cancel an active wait or pending scheduled event from this session.",
-                input_schema,
-            ),
-        ],
-    )
 
 
 def current_timeline(*, runtime_context: RuntimeContext) -> list[Event]:

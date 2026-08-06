@@ -31,6 +31,7 @@ from zeta.harness.protocols import (
     UnauthorizedCancellation,
     UnknownCancellationHandle,
 )
+from zeta.harness.sessions import project_sessions, session_record
 from zeta.journal.sqlite import SqliteEventStore
 from zeta.journal.store import Filter
 from zeta.journal.types import AppendOutcome
@@ -1147,6 +1148,16 @@ class RuntimeEventStore:
 
     def list_waits(self) -> list[dict[str, Any]]:
         return self._journal.list_waits()
+
+    def list_sessions(self) -> list[dict[str, Any]]:
+        return project_sessions(
+            self.list_queue_items(),
+            self.list_attempts(),
+            self.list_waits(),
+        )
+
+    def session_status(self, session_id: str) -> dict[str, Any]:
+        return session_record(self.list_sessions(), session_id)
 
     def publish_next_due_scheduled_event(
         self,

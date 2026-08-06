@@ -574,6 +574,19 @@ def test_attempt_records_project_and_execution_manifests(tmp_path: Path) -> None
     assert attempt["execution_manifest_id"] == execution_manifest["id"]
     assert attempt["execution_manifest"] == execution_manifest
     assert started.payload["execution_manifest"] == execution_manifest
+    assert store.session_status(queue_item["session_id"]) == {
+        "session_id": queue_item["session_id"],
+        "agent_id": spec.slug,
+        "status": "idle",
+        "active_run_id": None,
+        "queued_turns": 0,
+        "active_wait": None,
+        "latest_run": {
+            "run_id": attempt["run_id"],
+            "status": "completed",
+        },
+        "updated_at": store.list_sessions()[0]["updated_at"],
+    }
 
 
 def test_dispatcher_selects_executor_for_routed_generation(tmp_path: Path) -> None:

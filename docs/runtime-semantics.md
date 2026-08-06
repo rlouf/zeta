@@ -161,6 +161,27 @@ id, and project generation before execution starts.
 Terminal queue states are `completed`, `cancelled`, `dead_lettered`, and
 `unhandled`. No later lifecycle transition is legal for a terminal item.
 
+## Session Activity
+
+Zeta derives the session catalog from queue items, attempts, and waits. It does
+not store a separate session record. A projection rebuild therefore restores
+the same catalog.
+
+Each session has one activity status:
+
+- `running`: The session has a running attempt.
+- `queued`: The session has work that is not terminal.
+- `waiting`: The session has an active wait and no queued or running work.
+- `idle`: All requested work is terminal.
+
+Zeta applies this priority: `running`, `queued`, `waiting`, then `idle`. The
+status also includes the active run, queued turn count, active wait, latest
+run, and last activity time.
+
+A session belongs to one agent. Zeta reports an ownership conflict if durable
+records assign the same session id to different agents. It does not select one
+owner from conflicting history.
+
 ## Attempt State Machine
 
 Each claim may create one numbered attempt:

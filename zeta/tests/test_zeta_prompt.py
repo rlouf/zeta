@@ -311,6 +311,149 @@ def test_content_revision_requires_complete_projection_metadata() -> None:
         context_transforms.content_revision_object(revision)
 
 
+def test_content_workspace_merges_agent_then_session_content() -> None:
+    store = InMemoryStore()
+    agent_head = context_transforms.ContentHead("agent", "writer", "writer")
+    agent_shared = context_transforms.put_content_node(
+        store,
+        context_transforms.ContentNode("shared", "memory", "Agent value."),
+    )
+    agent_only = context_transforms.put_content_node(
+        store,
+        context_transforms.ContentNode("agent-only", "procedure", "Agent procedure."),
+    )
+    context_transforms.advance_content_head(
+        store,
+        agent_head,
+        expected_head=None,
+        nodes={"shared": agent_shared, "agent-only": agent_only},
+        projection_order=("shared", "agent-only"),
+        source_scopes={"shared": "agent", "agent-only": "agent"},
+        reason="Seed agent content.",
+    )
+    session_head = context_transforms.ContentHead("session", "session-1", "writer")
+    session_shared = context_transforms.put_content_node(
+        store,
+        context_transforms.ContentNode("shared", "memory", "Session value."),
+    )
+    session_only = context_transforms.put_content_node(
+        store,
+        context_transforms.ContentNode("session-only", "text", "Session note."),
+    )
+    context_transforms.advance_content_head(
+        store,
+        session_head,
+        expected_head=None,
+        nodes={"shared": session_shared, "session-only": session_only},
+        projection_order=("shared", "session-only"),
+        source_scopes={"shared": "session", "session-only": "session"},
+        reason="Seed session content.",
+    )
+    workspace = context_transforms.ContentWorkspace(
+        store,
+        run_id="run-1",
+        session_id="session-1",
+        owner="writer",
+    )
+
+    run_head = workspace.initialize()
+    revision = workspace.revision()
+
+    assert run_head == workspace.initialize()
+    assert revision.nodes == {
+        "shared": session_shared,
+        "agent-only": agent_only,
+        "session-only": session_only,
+    }
+    assert revision.projection_order == ("shared", "agent-only", "session-only")
+    assert revision.source_scopes == {
+        "shared": "session",
+        "agent-only": "agent",
+        "session-only": "session",
+    }
+
+
+def test_content_workspace_query_is_bounded_and_stable() -> None:
+    store = InMemoryStore()
+    workspace = context_transforms.ContentWorkspace(
+        store,
+        run_id="run-1",
+        session_id="session-1",
+        owner="writer",
+    )
+    node_ids = {
+        key: context_transforms.put_content_node(
+            store,
+            context_transforms.ContentNode(key, kind, content),
+        )
+        for key, kind, content in (
+            ("release/a", "procedure", "A" * 700),
+            ("release/b", "procedure", "B"),
+            ("other", "memory", "C"),
+        )
+    }
+    context_transforms.advance_content_head(
+        store,
+        workspace.run_head,
+        expected_head=None,
+        nodes=node_ids,
+        projection_order=("release/a", "release/b", "other"),
+        source_scopes={
+            "release/a": "agent",
+            "release/b": "session",
+            "other": "run",
+        },
+        reason="Seed the run content.",
+    )
+
+    first = workspace.query(key_prefix="release/", kind="procedure", limit=1)
+    second = workspace.query(
+        key_prefix="release/",
+        kind="procedure",
+        limit=1,
+        cursor=first["next_cursor"],
+    )
+
+    assert first["head"] == workspace.current_head()
+    assert first["items"] == [
+        {
+            "key": "release/a",
+            "kind": "procedure",
+            "title": "",
+            "object_id": node_ids["release/a"],
+            "source_scope": "agent",
+            "chars": 700,
+            "preview": "A" * 500,
+        }
+    ]
+    assert first["next_cursor"] == 1
+    assert second["items"][0]["key"] == "release/b"
+    assert second["next_cursor"] is None
+
+
+def test_content_workspace_rejects_content_from_another_owner() -> None:
+    store = InMemoryStore()
+    foreign_head = context_transforms.ContentHead("agent", "writer", "other")
+    context_transforms.advance_content_head(
+        store,
+        foreign_head,
+        expected_head=None,
+        nodes={},
+        projection_order=(),
+        source_scopes={},
+        reason="Seed foreign content.",
+    )
+    workspace = context_transforms.ContentWorkspace(
+        store,
+        run_id="run-1",
+        session_id="session-1",
+        owner="writer",
+    )
+
+    with pytest.raises(context_transforms.ContentValidationError, match="owner"):
+        workspace.initialize()
+
+
 def prepare_prompt(
     builder: zeta_context.PromptBuilder,
     objective: str,

@@ -6,6 +6,7 @@ from dataclasses import asdict, dataclass, field
 from typing import Any, Literal
 
 from zeta.context.components import PromptTrace
+from zeta.context.transforms import ContentPromotion
 from zeta.events import DraftEvent
 
 StepName = Literal[
@@ -39,6 +40,7 @@ class AgentRunResult:
     publish_event_requests: list[PublishEventRequest] = field(default_factory=list)
     wait_requests: list[WaitRequest] = field(default_factory=list)
     cancel_requests: list[CancelRequest] = field(default_factory=list)
+    content_promotions: list[ContentPromotion] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -90,6 +92,10 @@ def agent_run_result_payload(result: AgentRunResult) -> dict[str, Any]:
         payload["cancel_requests"] = [
             asdict(request) for request in result.cancel_requests
         ]
+    if result.content_promotions:
+        payload["content_promotions"] = [
+            asdict(request) for request in result.content_promotions
+        ]
     return payload
 
 
@@ -123,6 +129,7 @@ class RunState:
     publish_event_requests: list[PublishEventRequest] = field(default_factory=list)
     wait_requests: list[WaitRequest] = field(default_factory=list)
     cancel_requests: list[CancelRequest] = field(default_factory=list)
+    content_promotions: list[ContentPromotion] = field(default_factory=list)
     next_tool_position: int = 0
 
     def result(
@@ -143,6 +150,7 @@ class RunState:
             publish_event_requests=self.publish_event_requests,
             wait_requests=self.wait_requests,
             cancel_requests=self.cancel_requests,
+            content_promotions=self.content_promotions,
         )
 
     def note_model_telemetry(self, model_telemetry: dict[str, Any]) -> None:

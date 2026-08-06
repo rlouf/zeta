@@ -327,7 +327,9 @@ def test_zeta_registers_builtin_tools_explicitly() -> None:
         "zeta.ls",
         "zeta.bash",
         "zeta.edit",
+        "zeta.query_content",
         "zeta.query_log",
+        "zeta.transform_content",
         "zeta.write",
         "zeta.web_search",
     } <= set(registry.list_capability_ids())
@@ -345,7 +347,9 @@ def test_zeta_ensures_shared_registry_has_builtins() -> None:
         "zeta.ls",
         "zeta.bash",
         "zeta.edit",
+        "zeta.query_content",
         "zeta.query_log",
+        "zeta.transform_content",
         "zeta.write",
         "zeta.web_search",
     } <= names

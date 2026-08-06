@@ -20,6 +20,7 @@ from zeta.capabilities.execution import (
 from zeta.capabilities.registry import (
     CapabilityToolSchema,
 )
+from zeta.context.transforms import ContentConflict, ContentValidationError
 from zeta.events import DraftEvent
 from zeta.ids import publish_event_handle, wait_handle
 from zeta.journal.views import (
@@ -40,6 +41,8 @@ TERMINAL_TOOL_STATUSES = {"completed", "failed", "refused", "cancelled", "timed_
 PUBLISH_EVENT_CAPABILITY_ID = "zeta.publish_event"
 WAIT_FOR_CAPABILITY_ID = "zeta.wait_for"
 CANCEL_CAPABILITY_ID = "zeta.cancel"
+QUERY_CONTENT_CAPABILITY_ID = "zeta.query_content"
+TRANSFORM_CONTENT_CAPABILITY_ID = "zeta.transform_content"
 
 
 def terminal_capability_result_event(
@@ -112,6 +115,10 @@ async def run_capability_step(
                 state=state,
                 ctx=ctx,
             )
+        if capability_id == QUERY_CONTENT_CAPABILITY_ID:
+            return request_content_query(params, ctx=ctx)
+        if capability_id == TRANSFORM_CONTENT_CAPABILITY_ID:
+            return request_content_transform(params, state=state, ctx=ctx)
         return None
 
     capability_ctx = CapabilityExecutionContext(
@@ -136,6 +143,60 @@ async def run_capability_step(
     result = await handled if inspect.isawaitable(handled) else handled
     state.note_step("record_capability_result")
     return result
+
+
+def request_content_query(
+    params: dict[str, Any],
+    *,
+    ctx: RunDependencies,
+) -> dict[str, Any] | None:
+    workspace = ctx.content_workspace
+    if workspace is None:
+        return None
+    try:
+        result = workspace.query(
+            key_prefix=params.get("key_prefix"),
+            kind=params.get("kind"),
+            source_scope=params.get("source_scope"),
+            limit=params.get("limit", 20),
+            cursor=params.get("cursor"),
+        )
+    except ContentValidationError as exc:
+        return publish_event_error("invalid-content-query", str(exc))
+    return {"ok": True, **result}
+
+
+def request_content_transform(
+    params: dict[str, Any],
+    *,
+    state: RunState,
+    ctx: RunDependencies,
+) -> dict[str, Any] | None:
+    workspace = ctx.content_workspace
+    if workspace is None:
+        return None
+    try:
+        result = workspace.transform(params)
+    except ContentConflict as exc:
+        return publish_event_error("content-conflict", str(exc))
+    except ContentValidationError as exc:
+        return publish_event_error("invalid-content-transform", str(exc))
+    state.content_promotions.extend(result.promotions)
+    return {
+        "ok": True,
+        "status": "applied",
+        "active_scope": "run",
+        "head": result.head,
+        "object_ids": list(result.output_ids),
+        "promotions": [
+            {
+                "scope": promotion.scope,
+                "key": promotion.key,
+                "status": "requested",
+            }
+            for promotion in result.promotions
+        ],
+    }
 
 
 def request_published_event(

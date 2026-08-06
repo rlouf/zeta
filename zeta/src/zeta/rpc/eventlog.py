@@ -48,6 +48,7 @@ async def run_eventlog_rpc_request(
         zeta_sqlite_path(runtime.state_dir),
         session_id=session_id,
     )
+    content_store = SqliteObjectStore(zeta_sqlite_path(runtime.state_dir))
     session = RuntimeContext(
         session_id=session_id,
         event_sink=runtime.events,
@@ -55,6 +56,7 @@ async def run_eventlog_rpc_request(
         tool_registry=runtime.tool_registry,
         state_dir=runtime.state_dir,
         session_dir=runtime.state_dir / "sessions" / session_id,
+        content_store=content_store,
     )
     pending_runs: dict[str, RunState] = {}
 
@@ -89,6 +91,7 @@ async def run_eventlog_rpc_request(
     try:
         return await run_eventlog_rpc_once(router)
     finally:
+        content_store.close()
         trace_store.close()
 
 

@@ -19,6 +19,7 @@ from zeta.context import prompt_transform_from_policy
 from zeta.context.builder import (
     PromptBuilder,
 )
+from zeta.context.transforms import ContentWorkspace
 from zeta.events import DraftEvent, Event
 from zeta.journal.drafts import (
     user_message_draft,
@@ -104,6 +105,15 @@ async def run_agent(
         )
         publish_event(persisted)
 
+    content_workspace = ContentWorkspace(
+        runtime_context.content_store or runtime_context.trace_store,
+        run_id=run_id,
+        session_id=runtime_context.session_id,
+        owner=request.source_agent_id or f"session:{runtime_context.session_id}",
+        include_agent_content=request.source_agent_id is not None,
+    )
+    content_workspace.initialize()
+
     return await run_agent_loop(
         request.objective,
         prior_timeline,
@@ -129,6 +139,7 @@ async def run_agent(
         source_queue_item_id=request.source_queue_item_id,
         source_agent_id=request.source_agent_id,
         source_session_id=runtime_context.session_id,
+        content_workspace=content_workspace,
     )
 
 
@@ -152,6 +163,7 @@ async def run_agent_loop(
     source_queue_item_id: str | None = None,
     source_agent_id: str | None = None,
     source_session_id: str | None = None,
+    content_workspace: ContentWorkspace | None = None,
 ) -> AgentRunResult:
     """Run an assistant/tool loop without mutating session state."""
     gateway = model_gateway or DefaultModelGateway()
@@ -182,6 +194,7 @@ async def run_agent_loop(
         source_queue_item_id=source_queue_item_id,
         source_agent_id=source_agent_id,
         source_session_id=source_session_id,
+        content_workspace=content_workspace,
     )
     tool_schema = active_tool_registry.model_tool_schema(
         allowed_capabilities,

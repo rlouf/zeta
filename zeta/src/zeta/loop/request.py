@@ -17,6 +17,7 @@ from zeta.capabilities.registry import (
 from zeta.context.builder import (
     PromptBuilder,
 )
+from zeta.context.transforms import ContentWorkspace
 from zeta.events import DraftEvent
 from zeta.loop.cancellation import (
     AbortReason,
@@ -63,6 +64,7 @@ class RunDependencies:
     source_queue_item_id: str | None = None
     source_agent_id: str | None = None
     source_session_id: str | None = None
+    content_workspace: ContentWorkspace | None = None
 
 
 def silent_run_dependencies(ctx: RunDependencies) -> RunDependencies:

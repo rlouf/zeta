@@ -16,6 +16,7 @@ import pytest
 import zeta.capabilities.execution as zeta_capability_execution
 import zeta.capabilities.executors as zeta_capability_executors
 import zeta.cli.commands.rpc as cli_rpc
+import zeta.context.transforms as zeta_content_transforms
 import zeta.loop.cancellation as zeta_loop_cancellation
 import zeta.loop.gateway as zeta_loop_gateway
 import zeta.loop.stages.capability as loop_capability
@@ -261,6 +262,18 @@ def cancel_tool_call(
             "name": "cancel",
             "arguments": json.dumps(arguments),
         },
+    }
+
+
+def content_tool_call(
+    call_id: str,
+    name: str,
+    arguments: dict[str, Any],
+) -> dict[str, Any]:
+    return {
+        "id": call_id,
+        "type": "function",
+        "function": {"name": name, "arguments": json.dumps(arguments)},
     }
 
 
@@ -1522,6 +1535,195 @@ def test_zeta_publish_event_is_visible_only_with_publishes() -> None:
 
     assert "publish_event" not in without_publishes.tool_names[0]
     assert "publish_event" in with_publishes.tool_names[0]
+
+
+def test_zeta_content_tools_update_and_query_the_run_workspace() -> None:
+    registry = CapabilityRegistry()
+    register_builtin_tools(registry)
+    workspace = zeta_content_transforms.ContentWorkspace(
+        InMemoryStore(),
+        run_id="run-content",
+        session_id="session-content",
+        owner="writer",
+    )
+    initial_head = workspace.initialize()
+    gateway = PublishEventGateway(
+        [
+            {
+                "content": "",
+                "tool_calls": [
+                    content_tool_call(
+                        "call-transform",
+                        "transform_content",
+                        {
+                            "expected_head": initial_head,
+                            "reason": "Keep the release procedure.",
+                            "inputs": {},
+                            "transformation": {
+                                "type": "literal",
+                                "value": "Check the manifest.",
+                            },
+                            "destination": {
+                                "key": "release/check",
+                                "kind": "procedure",
+                                "scope": "run",
+                                "expected_object_id": None,
+                            },
+                        },
+                    )
+                ],
+            },
+            {
+                "content": "",
+                "tool_calls": [
+                    content_tool_call(
+                        "call-query",
+                        "query_content",
+                        {"key_prefix": "release/"},
+                    )
+                ],
+            },
+            {"content": "done"},
+        ]
+    )
+
+    result = run_agent_turn(
+        "manage content",
+        [],
+        zeta_agent.AgentConfig(
+            max_turns=3,
+            allowed_capabilities=("transform_content", "query_content"),
+        ),
+        model_gateway=gateway,
+        tool_registry=registry,
+        content_workspace=workspace,
+    )
+
+    assert gateway.tool_names[0] == ["transform_content", "query_content"]
+    tool_results = [
+        event
+        for event in timeline_events(result.events)
+        if event.get("type") == "tool_result"
+    ]
+    assert tool_results[0]["result"]["ok"] is True
+    assert tool_results[0]["result"]["status"] == "applied"
+    assert tool_results[1]["result"]["items"][0]["key"] == "release/check"
+    assert tool_results[1]["result"]["items"][0]["preview"] == ("Check the manifest.")
+
+
+def test_zeta_transform_content_records_durable_promotion_requests() -> None:
+    registry = CapabilityRegistry()
+    register_builtin_tools(registry)
+    workspace = zeta_content_transforms.ContentWorkspace(
+        InMemoryStore(),
+        run_id="run-content",
+        session_id="session-content",
+        owner="writer",
+    )
+    initial_head = workspace.initialize()
+    gateway = PublishEventGateway(
+        [
+            {
+                "content": "",
+                "tool_calls": [
+                    content_tool_call(
+                        "call-transform",
+                        "transform_content",
+                        {
+                            "expected_head": initial_head,
+                            "reason": "Use this procedure in later runs.",
+                            "inputs": {},
+                            "transformation": {
+                                "type": "literal",
+                                "value": "Run focused tests first.",
+                            },
+                            "destination": {
+                                "key": "testing",
+                                "kind": "procedure",
+                                "scope": "agent",
+                                "expected_object_id": None,
+                            },
+                        },
+                    )
+                ],
+            },
+            {"content": "done"},
+        ]
+    )
+
+    result = run_agent_turn(
+        "manage content",
+        [],
+        zeta_agent.AgentConfig(
+            max_turns=2,
+            allowed_capabilities=("transform_content",),
+        ),
+        model_gateway=gateway,
+        tool_registry=registry,
+        content_workspace=workspace,
+    )
+
+    assert len(result.content_promotions) == 1
+    assert result.content_promotions[0].scope == "agent"
+    assert zeta_outcomes.agent_run_result_payload(result)["content_promotions"] == [
+        asdict(result.content_promotions[0])
+    ]
+    assert workspace.store.get_ref("agent/writer/content/head") is None
+
+
+def test_zeta_transform_content_returns_stale_head_errors() -> None:
+    registry = CapabilityRegistry()
+    register_builtin_tools(registry)
+    workspace = zeta_content_transforms.ContentWorkspace(
+        InMemoryStore(),
+        run_id="run-content",
+        session_id="session-content",
+        owner="writer",
+    )
+    workspace.initialize()
+    gateway = PublishEventGateway(
+        [
+            {
+                "content": "",
+                "tool_calls": [
+                    content_tool_call(
+                        "call-transform",
+                        "transform_content",
+                        {
+                            "expected_head": "sha256:stale",
+                            "reason": "Apply stale content.",
+                            "inputs": {},
+                            "transformation": {"type": "literal", "value": "bad"},
+                            "destination": {
+                                "key": "bad",
+                                "kind": "text",
+                                "scope": "run",
+                                "expected_object_id": None,
+                            },
+                        },
+                    )
+                ],
+            },
+            {"content": "done"},
+        ]
+    )
+
+    result = run_agent_turn(
+        "manage content",
+        [],
+        zeta_agent.AgentConfig(
+            max_turns=2,
+            allowed_capabilities=("transform_content",),
+        ),
+        model_gateway=gateway,
+        tool_registry=registry,
+        content_workspace=workspace,
+    )
+
+    tool_result = event_by_type(result.events, "tool_result")
+    assert tool_result["result"]["ok"] is False
+    assert tool_result["result"]["error"]["code"] == "content-conflict"
+    assert result.content_promotions == []
 
 
 def test_zeta_publish_event_rejects_an_existing_model_tool_name() -> None:

@@ -796,7 +796,11 @@ async def _request_child_model_transform(
     content = model_output.message.get("content")
     if not isinstance(content, str):
         raise ContentValidationError("model transformation returned no text")
-    ctx.content_transform_budget.record_model_output(len(content))
+    ctx.content_transform_budget.record_model_output(
+        len(content),
+        input_chars=sum(len(_content_transform_input_text(item)) for item in inputs),
+        total_tokens=_model_total_tokens(telemetry),
+    )
     if stored.prompt_object_id is None:
         raise ContentValidationError("model transformation prompt was not stored")
     message = dict(model_output.message)
@@ -825,6 +829,27 @@ async def _request_child_model_transform(
         cache_ref,
         _ChildModelResult(content, assistant_id),
     )
+
+
+def _model_total_tokens(telemetry: Mapping[str, Any]) -> int | None:
+    usage = telemetry.get("usage")
+    if not isinstance(usage, Mapping):
+        return None
+    total = usage.get("total_tokens")
+    if isinstance(total, int) and not isinstance(total, bool) and total >= 0:
+        return total
+    prompt = usage.get("prompt_tokens", usage.get("input_tokens"))
+    completion = usage.get("completion_tokens", usage.get("output_tokens"))
+    if (
+        isinstance(prompt, int)
+        and not isinstance(prompt, bool)
+        and prompt >= 0
+        and isinstance(completion, int)
+        and not isinstance(completion, bool)
+        and completion >= 0
+    ):
+        return prompt + completion
+    return None
 
 
 def _content_transform_input_text(item: ContentTransformInput) -> str:

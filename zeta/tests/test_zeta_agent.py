@@ -2157,6 +2157,76 @@ async def main(ctx, transform):
     assert "Combined answer." in json.dumps(gateway.model_inputs[-1].messages)
 
 
+def test_zeta_python_transform_observes_run_cancellation() -> None:
+    registry = CapabilityRegistry()
+    register_builtin_tools(registry)
+    store = InMemoryStore()
+    workspace = zeta_content_transforms.ContentWorkspace(
+        store,
+        run_id="run-content",
+        session_id="session-content",
+        owner="writer",
+    )
+    head = workspace.initialize()
+    gateway = PublishEventGateway(
+        [
+            {
+                "content": "",
+                "tool_calls": [
+                    content_tool_call(
+                        "call-transform",
+                        "transform_content",
+                        {
+                            "expected_head": head,
+                            "reason": "Run cancellable Python.",
+                            "inputs": {},
+                            "transformation": {
+                                "type": "python",
+                                "source": (
+                                    "def main(ctx, transform):\n"
+                                    "    while True:\n"
+                                    "        pass\n"
+                                ),
+                                "timeout_seconds": 10,
+                            },
+                            "destination": {
+                                "key": "answer",
+                                "kind": "text",
+                                "scope": "run",
+                                "expected_object_id": None,
+                            },
+                        },
+                    )
+                ],
+            }
+        ]
+    )
+    cancellation = threading.Event()
+    cancel = threading.Timer(0.05, cancellation.set)
+    cancel.start()
+    try:
+        with pytest.raises(zeta_loop_cancellation.AgentRunAborted) as raised:
+            run_agent_turn(
+                "cancel the Python program",
+                [],
+                zeta_agent.AgentConfig(
+                    max_turns=2,
+                    allowed_capabilities=("transform_content",),
+                ),
+                model_gateway=gateway,
+                tool_registry=registry,
+                trace_store=store,
+                content_workspace=workspace,
+                cancellation_event=cancellation,
+            )
+    finally:
+        cancel.cancel()
+        cancel.join(timeout=1)
+
+    assert raised.value.reason == "cancelled"
+    assert workspace.current_head() == head
+
+
 def test_zeta_finish_returns_a_graph_object_without_another_model_turn() -> None:
     registry = CapabilityRegistry()
     register_builtin_tools(registry)

@@ -289,8 +289,8 @@ Core frontmatter fields:
 | `accepts` | no | Event types that can trigger the agent. |
 | `publishes` | no | Event types that the agent can publish as intermediate effects. |
 | `returns` | no | Event types eligible for the one final typed result of a turn. |
-| `tools` | no | Capability names granted to the model. |
-| `skills` | no | Shared Markdown skills from `agents/skills/`. |
+| `tools` | no | Capability names granted to the model. Omit this field to grant all available tools. |
+| `skills` | no | Shared Markdown skills from `agents/skills/`. Omit this field to grant all available skills. |
 | `schedules` | no | Cron triggers that publish synthetic events. |
 | `accepts[*].filter` | no | Connector-owned inbound event selection. |
 | `accepts[*].idempotency_key` | no | Required for connector ingress bindings. |
@@ -300,6 +300,16 @@ Core frontmatter fields:
 Schedules automatically add `agent.<slug>.scheduled` to `accepts`. For example,
 `agents/release-manager.md` with a schedule accepts
 `agent.release-manager.scheduled`.
+
+Zeta applies the same selection rule to `tools` and `skills`:
+
+- Omit the field to select all available entries.
+- Use `[]` to select no entries.
+- List names to select only those entries.
+
+Zeta resolves omitted fields when it creates the project generation. The
+generation records the exact tool and skill names. A later catalog change does
+not change an existing generation.
 
 ### Published Effects and Returned Results
 
@@ -345,6 +355,22 @@ session: "{event.id}"                 # the same as per-event
 
 A template that names a field the event lacks raises. It never falls back,
 because a silent fallback would merge every conversation into one timeline.
+
+### The Master Agent
+
+Zeta includes one authored agent named `zeta.master`. It provides a neutral
+entry point when a user starts a session without naming an agent. Its omitted
+`tools` and `skills` fields give it the complete catalog for the project
+generation.
+
+The master uses the same authored-agent compiler and runtime as project agents.
+It does not have a separate execution path. A project agent can also own a
+user-started session when the user names that agent.
+
+A user can send more messages to an existing session. Each message becomes a
+durable event and a directly bound queue item for the session owner. The
+message keeps the existing session id, so the agent receives the existing
+timeline.
 
 ### Scaffolding
 

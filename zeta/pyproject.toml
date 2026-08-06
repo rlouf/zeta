@@ -58,7 +58,7 @@ pushover = "connectors.pushover:pushover_event_connector"
 package-dir = { "" = "src" }
 
 [tool.setuptools.package-data]
-zeta = ["py.typed"]
+zeta = ["master.md", "py.typed"]
 connectors = ["py.typed"]
 
 [tool.setuptools.packages.find]

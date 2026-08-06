@@ -31,7 +31,7 @@ from zeta.authoring.spec import (
 )
 from zeta.capabilities.executors import (
     ToolExecutorProviderRegistry,
-    load_tool_executor_provider_registry,
+    tool_executor_providers_with_local,
 )
 from zeta.capabilities.registry import (
     AgentToolDefinition,
@@ -53,9 +53,9 @@ from zeta.substrate import Store
 
 PROJECT_SNAPSHOT_RECORDED = "runtime.project_snapshot.recorded"
 PROJECT_SNAPSHOT_SCHEMA = "zeta.project_snapshot"
-PROJECT_SNAPSHOT_VERSION = 3
+PROJECT_SNAPSHOT_VERSION = 4
 EXECUTION_MANIFEST_SCHEMA = "zeta.execution_manifest"
-EXECUTION_MANIFEST_VERSION = 2
+EXECUTION_MANIFEST_VERSION = 3
 
 
 class ProjectSnapshotUnavailable(RuntimeError):
@@ -127,9 +127,10 @@ def load_project_snapshot(
     validate_agent_tool_counts(project, definitions)
     snapshot_registry = registry_with_agent_tools(tool_registry, definitions)
     project = project_with_agent_tool_grants(project, definitions)
+    project = project_with_inherited_capabilities(project, snapshot_registry)
     validate_agent_project(
         project,
-        tool_executors=tool_executors or load_tool_executor_provider_registry(),
+        tool_executors=tool_executor_providers_with_local(tool_executors),
     )
     manifest = project_manifest(
         project,
@@ -189,7 +190,7 @@ def load_recorded_project_snapshot(
         )
         validate_agent_project(
             project,
-            tool_executors=tool_executors or load_tool_executor_provider_registry(),
+            tool_executors=tool_executor_providers_with_local(tool_executors),
         )
         return ProjectSnapshot(
             generation_id,
@@ -371,6 +372,26 @@ def project_with_agent_tool_grants(
     return replace(project, specs=tuple(specs))
 
 
+def project_with_inherited_capabilities(
+    project: AgentProject,
+    registry: CapabilityRegistry,
+) -> AgentProject:
+    """Resolve inheritance before Zeta hashes and executes a generation."""
+    tools = tuple(registry.list_capability_ids())
+    skills = tuple(sorted(project.skills.skills))
+    return replace(
+        project,
+        specs=tuple(
+            replace(
+                spec,
+                tools=tools if spec.tools_inherit else spec.tools,
+                skills=skills if spec.skills_inherit else spec.skills,
+            )
+            for spec in project.specs
+        ),
+    )
+
+
 def agent_tools_from_manifest(
     manifest: Mapping[str, Any],
 ) -> tuple[AgentToolDefinition, ...]:
@@ -517,7 +538,9 @@ def agent_from_manifest(value: Any) -> AgentSpec:
         publishes=_string_tuple(value.get("publishes")),
         returns=_string_tuple(value.get("returns")),
         skills=_string_tuple(value.get("skills")),
+        skills_inherit=bool(value.get("skills_inherit", False)),
         tools=_string_tuple(value.get("tools")),
+        tools_inherit=bool(value.get("tools_inherit", False)),
         schedules=schedules,
         retry=retry,
         base_dir=(
@@ -559,7 +582,9 @@ def agent_manifest(spec: AgentSpec) -> dict[str, Any]:
         "accepts": list(spec.accepts),
         "publishes": list(spec.publishes),
         "skills": list(spec.skills),
+        "skills_inherit": spec.skills_inherit,
         "tools": list(spec.tools),
+        "tools_inherit": spec.tools_inherit,
         "schedules": [
             {
                 "cron": schedule.cron,

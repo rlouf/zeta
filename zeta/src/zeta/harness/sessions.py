@@ -14,16 +14,22 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from zeta import ids
-from zeta.events import Event
+from zeta.authoring.spec import MASTER_AGENT_ID, SESSION_MESSAGE_REQUESTED
+from zeta.events import DraftEvent, Event
 from zeta.harness.routing import (
     AgentDefinition,
     ExecutableAgent,
+    is_session_message_for,
     is_wait_continuation_for,
 )
 from zeta.harness.templates import agent_session_id as session_id_for
+from zeta.journal.store import Filter
+
+if TYPE_CHECKING:
+    from zeta.harness.store import RuntimeEventStore
 
 TERMINAL_SESSION_QUEUE_STATUSES = frozenset(
     {"completed", "failed", "cancelled", "dead_lettered", "unhandled"}
@@ -65,9 +71,170 @@ def invocation_session_id(agent: ExecutableAgent, event: Event) -> str | None:
     if (
         event.event_type == "session.turn.requested"
         or is_wait_continuation_for(event, agent.agent_id)
+        or is_session_message_for(event, agent.agent_id)
     ) and event.session_id is not None:
         return event.session_id
     return agent_session_id(agent.definition, event)
+
+
+def start_master_session(
+    store: RuntimeEventStore,
+    *,
+    message: str,
+    project_generation: str,
+    idempotency_key: str | None = None,
+) -> dict[str, Any]:
+    durable_key = (
+        f"session.start:{idempotency_key}" if idempotency_key is not None else None
+    )
+    return _store_session_message(
+        store,
+        message=message,
+        agent_id=MASTER_AGENT_ID,
+        session_id=ids.claimed_session_id(),
+        project_generation=project_generation,
+        durable_key=durable_key,
+    )
+
+
+def submit_session_message(
+    store: RuntimeEventStore,
+    *,
+    message: str,
+    agent_id: str,
+    session_id: str,
+    project_generation: str,
+    idempotency_key: str | None = None,
+) -> dict[str, Any]:
+    """Store one addressed turn and its queue binding in one transaction."""
+    durable_key = (
+        f"session.message:{session_id}:{idempotency_key}"
+        if idempotency_key is not None
+        else None
+    )
+    return _store_session_message(
+        store,
+        message=message,
+        agent_id=agent_id,
+        session_id=session_id,
+        project_generation=project_generation,
+        durable_key=durable_key,
+    )
+
+
+def _store_session_message(
+    store: RuntimeEventStore,
+    *,
+    message: str,
+    agent_id: str,
+    session_id: str,
+    project_generation: str,
+    durable_key: str | None,
+) -> dict[str, Any]:
+    if not message:
+        raise ValueError("session message must not be empty")
+    if not agent_id or not session_id or not project_generation:
+        raise ValueError("agent, session, and project generation are required")
+    with store.transaction():
+        requested = _existing_session_message(store, durable_key)
+        if requested is None:
+            _cancel_active_wait(store, agent_id, session_id)
+            run_id = ids.claimed_run_id()
+            requested = store.accept(
+                DraftEvent(
+                    SESSION_MESSAGE_REQUESTED,
+                    "user",
+                    {
+                        "message": message,
+                        "agent_id": agent_id,
+                        "session_id": session_id,
+                        "run_id": run_id,
+                    },
+                    idempotency_key=durable_key,
+                    session_id=session_id,
+                    run_id=run_id,
+                )
+            ).event
+        run_id = requested.run_id
+        if run_id is None:
+            raise RuntimeError("stored session message is missing its run id")
+        stored_agent_id = requested.payload.get("agent_id")
+        stored_session_id = requested.session_id
+        if not isinstance(stored_agent_id, str) or stored_session_id is None:
+            raise RuntimeError("stored session message is missing its owner")
+        queue_item_id = ids.queue_item_id(requested.id, stored_agent_id)
+        store.accept(
+            DraftEvent(
+                "runtime.queue_item.available",
+                "zeta",
+                {
+                    "queue_item_id": queue_item_id,
+                    "event_id": requested.id,
+                    "target_agent": stored_agent_id,
+                    "project_generation": project_generation,
+                    "session_id": stored_session_id,
+                    "status": "available",
+                },
+                idempotency_key=ids.queue_item_idempotency_key(
+                    requested.id,
+                    stored_agent_id,
+                    "available",
+                ),
+                caused_by=requested.id,
+                session_id=stored_session_id,
+                run_id=run_id,
+            )
+        )
+    return {
+        "event_id": requested.id,
+        "queue_item_id": queue_item_id,
+        "agent_id": stored_agent_id,
+        "session_id": stored_session_id,
+        "run_id": run_id,
+        "status": "queued",
+    }
+
+
+def _existing_session_message(
+    store: RuntimeEventStore,
+    idempotency_key: str | None,
+) -> Event | None:
+    if idempotency_key is None:
+        return None
+    return next(
+        (
+            event
+            for event in store.list_events(Filter(event_type=SESSION_MESSAGE_REQUESTED))
+            if event.idempotency_key == idempotency_key
+        ),
+        None,
+    )
+
+
+def _cancel_active_wait(
+    store: RuntimeEventStore,
+    agent_id: str,
+    session_id: str,
+) -> None:
+    active = next(
+        (
+            wait
+            for wait in store.list_waits()
+            if wait.get("session_id") == session_id and wait.get("status") == "active"
+        ),
+        None,
+    )
+    if active is None:
+        return
+    handle = active.get("handle")
+    if not isinstance(handle, str):
+        raise RuntimeError("active wait is missing its handle")
+    store.cancel_resource(
+        handle,
+        reason="The user continued the session.",
+        source_agent_id=agent_id,
+        source_session_id=session_id,
+    )
 
 
 def project_sessions(

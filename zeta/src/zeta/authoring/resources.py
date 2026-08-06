@@ -7,8 +7,9 @@ import importlib.util
 import json
 import sys
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from importlib import metadata as importlib_metadata
+from importlib.resources import as_file, files
 from pathlib import Path
 from typing import Any, cast
 
@@ -17,7 +18,14 @@ from connectors import EventConnector, EventConnectorRegistry
 
 from zeta.authoring.manifest import Manifest
 from zeta.authoring.schemas import EventRegistry, EventRegistryError
-from zeta.authoring.spec import AgentSpec, load_specs, scheduled_event_type
+from zeta.authoring.spec import (
+    MASTER_AGENT_ID,
+    SESSION_MESSAGE_REQUESTED,
+    AgentSpec,
+    load_spec,
+    load_specs,
+    scheduled_event_type,
+)
 from zeta.capabilities.executors import ToolExecutorProviderRegistry
 
 
@@ -66,7 +74,7 @@ def load_agent_project(
     connector_names: Iterable[str] | None = None,
 ) -> AgentProject:
     """Load flat authored agents and their shared validation resources."""
-    specs = load_specs(agents_dir)
+    specs = (*load_specs(agents_dir), load_packaged_master_spec())
     connectors = registry or load_connector_registry(
         agents_dir,
         entry_points=entry_points,
@@ -76,12 +84,38 @@ def load_agent_project(
         agents_dir,
         connectors=connectors.event_connectors(),
     )
+    register_session_message_event(events)
     register_scheduled_events(events, specs)
     return AgentProject(
         specs=specs,
         events=events,
         skills=load_skill_registry(agents_dir),
         connectors=connectors,
+    )
+
+
+def load_packaged_master_spec() -> AgentSpec:
+    """Load Zeta's default entry point through the authored-agent parser."""
+    with as_file(files("zeta").joinpath("master.md")) as path:
+        return replace(load_spec(path), slug=MASTER_AGENT_ID)
+
+
+def register_session_message_event(events: EventRegistry) -> None:
+    register_event_schema(
+        events,
+        SESSION_MESSAGE_REQUESTED,
+        {
+            "type": "object",
+            "properties": {
+                "message": {"type": "string"},
+                "agent_id": {"type": "string"},
+                "session_id": {"type": "string"},
+                "run_id": {"type": "string"},
+            },
+            "required": ["message", "agent_id", "session_id", "run_id"],
+            "additionalProperties": False,
+        },
+        source="Zeta packaged session event",
     )
 
 

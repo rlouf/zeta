@@ -156,6 +156,19 @@ def load_tool_executor_provider_registry(
     return registry
 
 
+def tool_executor_providers_with_local(
+    registry: ToolExecutorProviderRegistry | None,
+) -> ToolExecutorProviderRegistry:
+    """Keep Zeta's local executor available when a host adds providers."""
+    if registry is None:
+        return load_tool_executor_provider_registry()
+    if registry.resolve("local") is not None:
+        return registry
+    combined = ToolExecutorProviderRegistry(dict(registry.providers))
+    combined.register(ToolExecutorProvider("local", local_tool_executor_provider))
+    return combined
+
+
 def tool_executor_entry_points(
     entry_points: Iterable[Any] | None = None,
 ) -> tuple[Any, ...]:

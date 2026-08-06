@@ -5,6 +5,7 @@ from threading import Barrier
 
 import pytest
 from zeta.events import DraftEvent, Event
+from zeta.harness.sessions import submit_session_message
 from zeta.harness.store import (
     InvalidCancellationHandle,
     RuntimeEventStore,
@@ -221,6 +222,54 @@ def test_wait_created_projection_survives_reopen_and_rebuild(tmp_path: Path) -> 
     reopened.rebuild_projections()
     assert reopened.list_waits() == waits
     reopened.close()
+
+
+def test_direct_message_cancels_an_active_wait_in_the_same_transaction(
+    tmp_path: Path,
+) -> None:
+    store = RuntimeEventStore.open(tmp_path / "runtime.sqlite3")
+    created = _wait_created(
+        event_id="wait-created-1",
+        handle="wait_0123456789abcdef01234567",
+        session_id="session-1",
+    )
+    store.append(created)
+
+    submission = submit_session_message(
+        store,
+        message="Use this answer instead.",
+        agent_id="issue-agent",
+        session_id="session-1",
+        project_generation="generation-2",
+        idempotency_key="message-1",
+    )
+    repeated = submit_session_message(
+        store,
+        message="Use this answer instead.",
+        agent_id="issue-agent",
+        session_id="session-1",
+        project_generation="generation-2",
+        idempotency_key="message-1",
+    )
+
+    assert repeated == submission
+    wait = store.list_waits()[0]
+    assert wait["status"] == "cancelled"
+    queue_item = store.list_queue_items()[0]
+    assert queue_item["session_id"] == "session-1"
+    assert queue_item["project_generation"] == "generation-2"
+    cancelled = store.list_events(Filter(event_type="runtime.wait.cancelled"))[0]
+    requested = store.get(submission["event_id"])
+    available = store.list_events(Filter(event_type="runtime.queue_item.available"))[0]
+    assert requested is not None
+    assert cancelled.cursor is not None
+    assert requested.cursor is not None
+    assert available.cursor is not None
+    assert cancelled.cursor < requested.cursor < available.cursor
+    assert len(store.list_events(Filter(event_type="session.message.requested"))) == 1
+    assert (
+        len(store.list_events(Filter(event_type="runtime.queue_item.available"))) == 1
+    )
 
 
 def test_wait_projection_ignores_malformed_created_event(tmp_path: Path) -> None:

@@ -7633,13 +7633,13 @@ def test_zeta_worker_passes_project_event_registry_to_compiler(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    captured: dict[str, Any] = {}
+    captured: dict[str, Any] = {"specs": []}
 
     def compile_agents(
         spec: object,
         **kwargs: object,
     ) -> list[harness_dispatch.ExecutableAgent]:
-        captured["spec"] = spec
+        captured["specs"].append(spec)
         captured["event_registry"] = kwargs["event_registry"]
         return []
 
@@ -7665,7 +7665,7 @@ Triage the issue.
     finally:
         asyncio.run(runtime.aclose())
 
-    assert captured["spec"].slug == "triage"
+    assert [spec.slug for spec in captured["specs"]] == ["triage", "zeta.master"]
     assert captured["event_registry"].knows("github.issue.opened")
 
 

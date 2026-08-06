@@ -182,6 +182,23 @@ A session belongs to one agent. Zeta reports an ownership conflict if durable
 records assign the same session id to different agents. It does not select one
 owner from conflicting history.
 
+## Direct Session Messages
+
+A user can start a session with the packaged `zeta.master` agent or with a
+named authored agent. The master follows the normal authored-agent path. It
+does not bypass project generation, capability selection, prompt compilation,
+or the attempt coordinator.
+
+A user message creates `session.message.requested` and a directly bound queue
+item in one transaction. The queue item records the session owner and project
+generation. The agent receives the message text as its objective. It does not
+need to declare `session.message.requested` in `accepts` when the event names
+that agent and session exactly.
+
+If the session has an active wait, the same transaction cancels the wait before
+it stores the new request. A repeated idempotency key returns the first request.
+It does not cancel another wait or create another queue item.
+
 ## Attempt State Machine
 
 Each claim may create one numbered attempt:

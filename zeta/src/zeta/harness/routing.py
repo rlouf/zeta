@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 from zeta import ids
 from zeta.authoring.prompts import render_prompt
-from zeta.authoring.spec import AgentSpec, ExecutorSpec
+from zeta.authoring.spec import SESSION_MESSAGE_REQUESTED, AgentSpec, ExecutorSpec
 from zeta.events import DraftEvent, Event
 from zeta.harness.retry import RetryPolicy
 from zeta.harness.returned_events import ReturnedEventPublisher, StructuredOutputRunner
@@ -55,6 +55,22 @@ def is_wait_continuation_for(event: Event, agent_id: str) -> bool:
         event.event_type in WAIT_CONTINUATION_EVENT_TYPES
         and event.payload.get("agent_id") == agent_id
     )
+
+
+def is_session_message_for(event: Event, agent_id: str) -> bool:
+    """Limit direct-message routing to the agent named by the session input."""
+    return (
+        event.event_type == SESSION_MESSAGE_REQUESTED
+        and event.payload.get("agent_id") == agent_id
+        and event.payload.get("session_id") == event.session_id
+    )
+
+
+def session_message(event: Event) -> str:
+    message = event.payload.get("message")
+    if not isinstance(message, str) or not message:
+        raise RuntimeError("session message is missing non-empty text")
+    return message
 
 
 def prompt_event(event: Event) -> dict[str, Any]:
@@ -304,7 +320,11 @@ def agent_runner(
     async def run(agent_run: AgentInvocation) -> dict[str, Any]:
         effective_config = config_for_spec(spec, config)
         event = agent_run.triggering_event
-        objective = render_prompt(spec, prompt_event(event))
+        objective = (
+            session_message(event)
+            if is_session_message_for(event, agent_run.agent.agent_id)
+            else render_prompt(spec, prompt_event(event))
+        )
         if callable(timeline):
             run_timeline = cast(TimelineFactory, timeline)(agent_run)
         else:

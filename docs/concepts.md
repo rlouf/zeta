@@ -469,6 +469,7 @@ canonical capability id when it is unambiguous:
 | `ast_grep` | `zeta.ast_grep` | Structural code search. |
 | `web_search` | `zeta.web_search` | Web search. |
 | `query_log` | `zeta.query_log` | Query prior runs in the current session. |
+| `query_context_budget` | `zeta.query_context_budget` | Inspect the active model context budget. |
 | `bash` | `zeta.bash` | Run shell commands. |
 | `edit` | `zeta.edit` | Edit files. |
 | `patch` | `zeta.patch` | Apply patches to files. |
@@ -505,6 +506,13 @@ another session through tool arguments. Expansion includes the objective,
 outcome, final answer, compact tool activity, and prompt trace ids; it does not
 replay provider usage telemetry or raw tool arguments and results.
 See [Zeta Tools](zeta-tools.md#query_log) for the complete tool contract.
+
+`query_context_budget` reports the latest prompt use, the model context window,
+the output reservation, and the remaining token budget. It also reports the
+active prompt compaction strategy and threshold. The tool does not change the
+prompt. A model can use the result to decide when it should reduce content.
+See [Zeta Tools](zeta-tools.md#query_context_budget) for the complete tool
+contract.
 
 Shared agent skills are Markdown files under `agents/skills/`. The filename stem
 is the skill name, and agents opt in with `skills:`.

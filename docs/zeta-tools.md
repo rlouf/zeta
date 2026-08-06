@@ -1,7 +1,8 @@
 # Zeta Tools
 
 This document describes the Zeta-specific tools `publish_event`, `wait_for`,
-`cancel`, `query_log`, `query_content`, `transform_content`, and `finish`.
+`cancel`, `query_log`, `query_context_budget`, `query_content`,
+`transform_content`, and `finish`.
 
 ## `publish_event`
 
@@ -437,6 +438,89 @@ The tool can return these error codes:
 Zeta reads at most the 5,000 newest events in the current session. A result
 contains at most 50 runs and 12,000 text characters. These limits keep the
 model context bounded.
+
+## `query_context_budget`
+
+Use `query_context_budget` to inspect the context budget for the active model
+turn. The tool does not change the prompt. It does not start compaction.
+
+### Availability
+
+Add `query_context_budget` to the agent `tools` list:
+
+```yaml
+---
+name: Context-Aware Investigator
+description: Investigates large sets of evidence.
+accepts:
+  - investigation.requested
+tools:
+  - query_context_budget
+---
+```
+
+The tool accepts an empty object. The model cannot select another model,
+prompt, endpoint, or budget.
+
+### Result
+
+The result describes the latest prompt and its active model:
+
+```json
+{
+  "ok": true,
+  "context_window_tokens": 32768,
+  "prompt_tokens": 12288,
+  "prompt_tokens_source": "provider",
+  "reserved_output_tokens": 8192,
+  "remaining_tokens": 12288,
+  "usage_ratio": 0.5,
+  "compaction_strategy": "structural_trim",
+  "compaction_threshold_tokens": 15000
+}
+```
+
+The fields have these meanings:
+
+| Field | Meaning |
+| --- | --- |
+| `context_window_tokens` | The context window that Zeta found for the active model. |
+| `prompt_tokens` | The token use of the latest prompt. |
+| `prompt_tokens_source` | `provider`, `estimate`, or `unavailable`. |
+| `reserved_output_tokens` | The token space reserved for the model output. |
+| `remaining_tokens` | The context window minus the prompt and output reservation. |
+| `usage_ratio` | The prompt use divided by the usable prompt budget. |
+| `compaction_strategy` | The active prompt compaction strategy, or `off`. |
+| `compaction_threshold_tokens` | The active compaction threshold, or `null`. |
+
+Zeta uses provider usage when the provider reports it. Otherwise, Zeta can
+estimate the prompt use from the stored prompt trace. The estimate is stable,
+but it can differ from the provider tokenizer.
+
+Some model endpoints do not report a context window. In that case,
+`context_window_tokens`, `remaining_tokens`, and `usage_ratio` are `null`.
+The query still succeeds. `prompt_tokens` is also `null` when Zeta has no
+provider usage and no stored prompt trace.
+
+`remaining_tokens` can be negative. `usage_ratio` can be greater than `1.0`.
+These values show that the prompt and output reservation exceed the model
+budget.
+
+### Examples
+
+#### Compact Evidence Before More Reads
+
+An investigation agent can read many large files. It can call
+`query_context_budget` before it reads the next group. If little space remains,
+the agent can use `transform_content` to reduce the current evidence into one
+short session memory. It can continue from that memory in the next turn.
+
+#### Reduce Recursive Model Results
+
+A root model can ask child models to inspect many documents. It can call
+`query_context_budget` after each batch. If the usage ratio is high, it can use
+`transform_content` to reduce the child results before it starts the next
+batch. This keeps the root context focused on conclusions and open questions.
 
 ## Content Tools
 

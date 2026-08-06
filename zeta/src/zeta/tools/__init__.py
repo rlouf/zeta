@@ -102,7 +102,16 @@ TRANSFORM_CONTENT_SCHEMA: dict[str, Any] = {
             "type": "object",
             "required": ["type"],
             "properties": {
-                "type": {"enum": ["literal", "patch", "drop", "identity", "model"]},
+                "type": {
+                    "enum": [
+                        "literal",
+                        "patch",
+                        "drop",
+                        "identity",
+                        "model",
+                        "python",
+                    ]
+                },
                 "value": {},
                 "title": {"type": "string"},
                 "attributes": {"type": "object"},
@@ -110,6 +119,12 @@ TRANSFORM_CONTENT_SCHEMA: dict[str, Any] = {
                 "instruction": {"type": "string", "minLength": 1},
                 "mode": {"enum": ["one", "map", "reduce"]},
                 "max_concurrency": {"type": "integer", "minimum": 1, "maximum": 8},
+                "source": {"type": "string", "minLength": 1, "maxLength": 131072},
+                "timeout_seconds": {
+                    "type": "number",
+                    "exclusiveMinimum": 0,
+                    "maximum": 300,
+                },
             },
         },
         "destination": {

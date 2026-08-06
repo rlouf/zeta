@@ -28,9 +28,11 @@ from zeta.context.builder import PromptBuilder, render_model_input
 from zeta.context.components import PromptComponent
 from zeta.context.transforms import (
     ContentConflict,
+    ContentNode,
     ContentTransformInput,
     ContentTransformResult,
     ContentValidationError,
+    put_content_node,
 )
 from zeta.events import DraftEvent
 from zeta.ids import publish_event_handle, wait_handle
@@ -62,6 +64,48 @@ TRANSFORM_CONTENT_CAPABILITY_ID = "zeta.transform_content"
 class _ChildModelResult:
     content: str
     assistant_id: ObjectId
+
+
+@dataclass(frozen=True)
+class _DerivedModelResult:
+    value: Any
+    assistant_ids: tuple[ObjectId, ...]
+    instruction: str
+    mode: str
+
+
+@dataclass(frozen=True)
+class _PythonContentValue:
+    key: str
+    object_id: ObjectId
+    node: ContentNode
+
+
+class _PythonContentContext:
+    """Give a Python transform only the immutable values selected by its caller."""
+
+    def __init__(self, values: tuple[_PythonContentValue, ...]) -> None:
+        self._values = values
+
+    def select(
+        self,
+        *,
+        keys: list[str] | tuple[str, ...] | None = None,
+        kind: str | None = None,
+    ) -> list[_PythonContentValue]:
+        selected_keys = None if keys is None else set(keys)
+        return [
+            value
+            for value in self._values
+            if (selected_keys is None or value.key in selected_keys)
+            and (kind is None or value.node.kind == kind)
+        ]
+
+    def get(self, key: str) -> _PythonContentValue:
+        for value in self._values:
+            if value.key == key:
+                return value
+        raise KeyError(key)
 
 
 def terminal_capability_result_event(
@@ -208,6 +252,12 @@ async def request_content_transform(
                 config=config,
                 ctx=ctx,
             )
+        elif isinstance(operation, Mapping) and operation.get("type") == "python":
+            result = await python_content_transform(
+                params,
+                config=config,
+                ctx=ctx,
+            )
         else:
             result = workspace.transform(params)
     except ContentConflict as exc:
@@ -244,13 +294,46 @@ async def model_content_transform(
     operation = params.get("transformation")
     if not isinstance(operation, Mapping):
         raise ContentValidationError("content transformation must be an object")
+    derived = await _derive_model_content(
+        workspace.transform_inputs(params),
+        operation,
+        config=config,
+        ctx=ctx,
+    )
+    if derived.mode == "map":
+        destination = params.get("destination")
+        if (
+            not isinstance(destination, Mapping)
+            or destination.get("kind") != "collection"
+        ):
+            raise ContentValidationError(
+                "model map destination kind must be collection"
+            )
+    return workspace.store_transformed_value(
+        params,
+        derived.value,
+        source_ids=derived.assistant_ids,
+        producer="ModelTransform:v1",
+        producer_params={
+            "instruction": derived.instruction,
+            "mode": derived.mode,
+        },
+    )
+
+
+async def _derive_model_content(
+    inputs: tuple[ContentTransformInput, ...],
+    operation: Mapping[str, Any],
+    *,
+    config: AgentConfig,
+    ctx: RunDependencies,
+) -> _DerivedModelResult:
     instruction = operation.get("instruction")
     if not isinstance(instruction, str) or not instruction.strip():
         raise ContentValidationError("model transformation requires an instruction")
     mode = operation.get("mode", "one")
     if mode not in {"one", "map", "reduce"}:
         raise ContentValidationError(f"unsupported model transformation mode {mode!r}")
-    inputs = workspace.transform_inputs(params)
     groups = _model_transform_groups(inputs, str(mode))
     input_chars = sum(
         len(_content_transform_input_text(item)) for group in groups for item in group
@@ -282,25 +365,196 @@ async def model_content_transform(
 
     children = await asyncio.gather(*(transform_one(group) for group in groups))
     assistant_ids = tuple(child.assistant_id for child in children)
-    value: Any
     if mode == "map":
-        destination = params.get("destination")
-        if (
-            not isinstance(destination, Mapping)
-            or destination.get("kind") != "collection"
-        ):
-            raise ContentValidationError(
-                "model map destination kind must be collection"
-            )
         value = {"object_ids": list(assistant_ids)}
     else:
         value = children[0].content
+    return _DerivedModelResult(
+        value=value,
+        assistant_ids=assistant_ids,
+        instruction=instruction,
+        mode=str(mode),
+    )
+
+
+async def python_content_transform(
+    params: Mapping[str, Any],
+    *,
+    config: AgentConfig,
+    ctx: RunDependencies,
+) -> ContentTransformResult:
+    workspace = ctx.content_workspace
+    if workspace is None:
+        raise ContentValidationError("content workspace is unavailable")
+    operation = params.get("transformation")
+    if not isinstance(operation, Mapping):
+        raise ContentValidationError("content transformation must be an object")
+    source = operation.get("source")
+    if not isinstance(source, str) or not source.strip():
+        raise ContentValidationError("python transformation requires source")
+    if len(source.encode("utf-8")) > 131_072:
+        raise ContentValidationError("python transformation source is too large")
+    timeout = operation.get("timeout_seconds", 30)
+    if (
+        not isinstance(timeout, (int, float))
+        or isinstance(timeout, bool)
+        or timeout <= 0
+        or timeout > 300
+    ):
+        raise ContentValidationError(
+            "python timeout_seconds must be greater than 0 and at most 300"
+        )
+    selected = workspace.transform_inputs(params)
+    values = tuple(
+        _PythonContentValue(item.key, item.object_id, item.node) for item in selected
+    )
+    program_id = workspace.store.put_object(
+        Object(
+            kind="python_program",
+            schema="zeta.python_transform.v1",
+            data={"source": source},
+            links=tuple(item.object_id for item in selected),
+        )
+    )
+    parent_loop = asyncio.get_running_loop()
+
+    async def nested_transform(request: dict[str, Any]) -> _PythonContentValue:
+        return await _nested_python_transform(
+            request,
+            config=config,
+            ctx=ctx,
+        )
+
+    output = await asyncio.wait_for(
+        asyncio.to_thread(
+            _run_python_program,
+            source,
+            _PythonContentContext(values),
+            nested_transform,
+            parent_loop,
+            float(timeout),
+        ),
+        timeout=float(timeout) + 1,
+    )
+    source_ids: tuple[ObjectId, ...] = (program_id,)
+    if isinstance(output, _PythonContentValue):
+        value = output.node.content
+        source_ids = (program_id, output.object_id)
+    else:
+        value = output
     return workspace.store_transformed_value(
         params,
         value,
-        source_ids=assistant_ids,
-        producer="ModelTransform:v1",
-        producer_params={"instruction": instruction, "mode": mode},
+        source_ids=source_ids,
+        producer="PythonTransform:v1",
+        producer_params={"program_id": program_id, "timeout_seconds": timeout},
+    )
+
+
+def _run_python_program(
+    source: str,
+    content_ctx: _PythonContentContext,
+    nested_transform: Any,
+    parent_loop: asyncio.AbstractEventLoop,
+    timeout: float,
+) -> Any:
+    namespace: dict[str, Any] = {"__name__": "zeta_content_transform"}
+    exec(compile(source, "<zeta-content-transform>", "exec"), namespace)
+    main = namespace.get("main")
+    if not callable(main):
+        raise ContentValidationError(
+            "python transformation must define a callable main(ctx, transform)"
+        )
+
+    async def transform(**request: Any) -> _PythonContentValue:
+        future = asyncio.run_coroutine_threadsafe(
+            nested_transform(dict(request)),
+            parent_loop,
+        )
+        return await asyncio.wrap_future(future)
+
+    async def invoke() -> Any:
+        result = main(content_ctx, transform)
+        return await result if inspect.isawaitable(result) else result
+
+    return asyncio.run(asyncio.wait_for(invoke(), timeout=timeout))
+
+
+async def _nested_python_transform(
+    request: Mapping[str, Any],
+    *,
+    config: AgentConfig,
+    ctx: RunDependencies,
+) -> _PythonContentValue:
+    workspace = ctx.content_workspace
+    if workspace is None:
+        raise ContentValidationError("content workspace is unavailable")
+    values = _python_transform_values(request.get("inputs"))
+    operation = request.get("transformation")
+    if not isinstance(operation, Mapping) or operation.get("type") != "model":
+        raise ContentValidationError(
+            "nested Python transform must use a model transformation"
+        )
+    destination = request.get("destination")
+    if not isinstance(destination, Mapping):
+        raise ContentValidationError("nested Python destination must be an object")
+    key = destination.get("key")
+    kind = destination.get("kind")
+    if (
+        not isinstance(key, str)
+        or not key
+        or not isinstance(kind, str)
+        or not kind
+        or destination.get("scope") != "run"
+    ):
+        raise ContentValidationError(
+            "nested Python destination requires a key, kind, and run scope"
+        )
+    inputs = tuple(
+        ContentTransformInput(value.key, value.object_id, value.node)
+        for value in values
+    )
+    derived = await _derive_model_content(
+        inputs,
+        operation,
+        config=config,
+        ctx=ctx,
+    )
+    if derived.mode == "map" and kind != "collection":
+        raise ContentValidationError(
+            "nested model map destination kind must be collection"
+        )
+    links = tuple(
+        dict.fromkeys(
+            (*tuple(value.object_id for value in values), *derived.assistant_ids)
+        )
+    )
+    node = ContentNode(key, kind, derived.value)
+    object_id = put_content_node(workspace.store, node, links=links)
+    workspace.store.record_derivation(
+        Derivation(
+            producer="ModelTransform:v1",
+            output_id=object_id,
+            input_ids=links,
+            params={
+                "instruction": derived.instruction,
+                "mode": derived.mode,
+                "nested": True,
+            },
+        )
+    )
+    return _PythonContentValue(key, object_id, node)
+
+
+def _python_transform_values(value: Any) -> tuple[_PythonContentValue, ...]:
+    if isinstance(value, _PythonContentValue):
+        return (value,)
+    if isinstance(value, (list, tuple)) and all(
+        isinstance(item, _PythonContentValue) for item in value
+    ):
+        return tuple(value)
+    raise ContentValidationError(
+        "nested Python inputs must come from ctx or an earlier transform"
     )
 
 

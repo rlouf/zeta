@@ -17,7 +17,7 @@ from zeta.capabilities.registry import (
 from zeta.context.builder import (
     PromptBuilder,
 )
-from zeta.context.transforms import ContentWorkspace
+from zeta.context.transforms import ContentValidationError, ContentWorkspace
 from zeta.events import DraftEvent
 from zeta.loop.cancellation import (
     AbortReason,
@@ -65,6 +65,42 @@ class RunDependencies:
     source_agent_id: str | None = None
     source_session_id: str | None = None
     content_workspace: ContentWorkspace | None = None
+    content_transform_budget: ContentTransformBudget = field(
+        default_factory=lambda: ContentTransformBudget()
+    )
+
+
+@dataclass
+class ContentTransformBudget:
+    """Bound child calls before a recursive transform can consume the run."""
+
+    max_model_calls: int = 16
+    max_input_chars: int = 1_000_000
+    max_output_chars: int = 1_000_000
+    max_total_tokens: int = 200_000
+    max_concurrency: int = 8
+    model_calls: int = 0
+    input_chars: int = 0
+    output_chars: int = 0
+    reserved_tokens: int = 0
+
+    def reserve_model_calls(self, *, calls: int, input_chars: int) -> int:
+        estimated_tokens = (input_chars + 3) // 4 + calls * 4_096
+        if self.model_calls + calls > self.max_model_calls:
+            raise ContentValidationError("content model call budget is exhausted")
+        if self.input_chars + input_chars > self.max_input_chars:
+            raise ContentValidationError("content model input budget is exhausted")
+        if self.reserved_tokens + estimated_tokens > self.max_total_tokens:
+            raise ContentValidationError("content model token budget is exhausted")
+        self.model_calls += calls
+        self.input_chars += input_chars
+        self.reserved_tokens += estimated_tokens
+        return min(self.max_concurrency, calls)
+
+    def record_model_output(self, output_chars: int) -> None:
+        if self.output_chars + output_chars > self.max_output_chars:
+            raise ContentValidationError("content model output budget is exhausted")
+        self.output_chars += output_chars
 
 
 def silent_run_dependencies(ctx: RunDependencies) -> RunDependencies:

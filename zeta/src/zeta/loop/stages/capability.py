@@ -6,7 +6,11 @@ including the terminal statuses that end a call.
 
 from __future__ import annotations
 
+import asyncio
 import inspect
+import json
+from collections.abc import Mapping
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
@@ -20,13 +24,21 @@ from zeta.capabilities.execution import (
 from zeta.capabilities.registry import (
     CapabilityToolSchema,
 )
-from zeta.context.transforms import ContentConflict, ContentValidationError
+from zeta.context.builder import PromptBuilder, render_model_input
+from zeta.context.components import PromptComponent
+from zeta.context.transforms import (
+    ContentConflict,
+    ContentTransformInput,
+    ContentTransformResult,
+    ContentValidationError,
+)
 from zeta.events import DraftEvent
 from zeta.ids import publish_event_handle, wait_handle
 from zeta.journal.views import (
     draft_timeline_type,
 )
 from zeta.loop.config import AgentConfig
+from zeta.loop.gateway import request_assistant_message
 from zeta.loop.outcomes import (
     CancelRequest,
     PublishEventRequest,
@@ -36,6 +48,7 @@ from zeta.loop.outcomes import (
 from zeta.loop.request import RunDependencies
 from zeta.loop.stages.abort import check_run_abort
 from zeta.models.types import tool_call_id
+from zeta.substrate import Derivation, Object, ObjectId
 
 TERMINAL_TOOL_STATUSES = {"completed", "failed", "refused", "cancelled", "timed_out"}
 PUBLISH_EVENT_CAPABILITY_ID = "zeta.publish_event"
@@ -43,6 +56,12 @@ WAIT_FOR_CAPABILITY_ID = "zeta.wait_for"
 CANCEL_CAPABILITY_ID = "zeta.cancel"
 QUERY_CONTENT_CAPABILITY_ID = "zeta.query_content"
 TRANSFORM_CONTENT_CAPABILITY_ID = "zeta.transform_content"
+
+
+@dataclass(frozen=True)
+class _ChildModelResult:
+    content: str
+    assistant_id: ObjectId
 
 
 def terminal_capability_result_event(
@@ -90,7 +109,7 @@ async def run_capability_step(
     state.note_step("record_capability_call")
     state.note_step("execute_capability")
 
-    def run_internal_tool(
+    async def run_internal_tool(
         capability_id: str,
         params: dict[str, Any],
     ) -> dict[str, Any] | None:
@@ -118,7 +137,12 @@ async def run_capability_step(
         if capability_id == QUERY_CONTENT_CAPABILITY_ID:
             return request_content_query(params, ctx=ctx)
         if capability_id == TRANSFORM_CONTENT_CAPABILITY_ID:
-            return request_content_transform(params, state=state, ctx=ctx)
+            return await request_content_transform(
+                params,
+                config=config,
+                state=state,
+                ctx=ctx,
+            )
         return None
 
     capability_ctx = CapabilityExecutionContext(
@@ -166,9 +190,10 @@ def request_content_query(
     return {"ok": True, **result}
 
 
-def request_content_transform(
+async def request_content_transform(
     params: dict[str, Any],
     *,
+    config: AgentConfig,
     state: RunState,
     ctx: RunDependencies,
 ) -> dict[str, Any] | None:
@@ -176,7 +201,15 @@ def request_content_transform(
     if workspace is None:
         return None
     try:
-        result = workspace.transform(params)
+        operation = params.get("transformation")
+        if isinstance(operation, Mapping) and operation.get("type") == "model":
+            result = await model_content_transform(
+                params,
+                config=config,
+                ctx=ctx,
+            )
+        else:
+            result = workspace.transform(params)
     except ContentConflict as exc:
         return publish_event_error("content-conflict", str(exc))
     except ContentValidationError as exc:
@@ -197,6 +230,179 @@ def request_content_transform(
             for promotion in result.promotions
         ],
     }
+
+
+async def model_content_transform(
+    params: Mapping[str, Any],
+    *,
+    config: AgentConfig,
+    ctx: RunDependencies,
+) -> ContentTransformResult:
+    workspace = ctx.content_workspace
+    if workspace is None:
+        raise ContentValidationError("content workspace is unavailable")
+    operation = params.get("transformation")
+    if not isinstance(operation, Mapping):
+        raise ContentValidationError("content transformation must be an object")
+    instruction = operation.get("instruction")
+    if not isinstance(instruction, str) or not instruction.strip():
+        raise ContentValidationError("model transformation requires an instruction")
+    mode = operation.get("mode", "one")
+    if mode not in {"one", "map", "reduce"}:
+        raise ContentValidationError(f"unsupported model transformation mode {mode!r}")
+    inputs = workspace.transform_inputs(params)
+    groups = _model_transform_groups(inputs, str(mode))
+    input_chars = sum(
+        len(_content_transform_input_text(item)) for group in groups for item in group
+    )
+    concurrency = ctx.content_transform_budget.reserve_model_calls(
+        calls=len(groups),
+        input_chars=input_chars,
+    )
+    requested_concurrency = operation.get("max_concurrency", concurrency)
+    if (
+        not isinstance(requested_concurrency, int)
+        or isinstance(requested_concurrency, bool)
+        or requested_concurrency < 1
+    ):
+        raise ContentValidationError("model max_concurrency must be a positive integer")
+    semaphore = asyncio.Semaphore(min(concurrency, requested_concurrency))
+
+    async def transform_one(
+        group: tuple[ContentTransformInput, ...],
+    ) -> _ChildModelResult:
+        async with semaphore:
+            return await _request_child_model_transform(
+                group,
+                instruction=instruction,
+                mode=str(mode),
+                config=config,
+                ctx=ctx,
+            )
+
+    children = await asyncio.gather(*(transform_one(group) for group in groups))
+    assistant_ids = tuple(child.assistant_id for child in children)
+    value: Any
+    if mode == "map":
+        destination = params.get("destination")
+        if (
+            not isinstance(destination, Mapping)
+            or destination.get("kind") != "collection"
+        ):
+            raise ContentValidationError(
+                "model map destination kind must be collection"
+            )
+        value = {"object_ids": list(assistant_ids)}
+    else:
+        value = children[0].content
+    return workspace.store_transformed_value(
+        params,
+        value,
+        source_ids=assistant_ids,
+        producer="ModelTransform:v1",
+        producer_params={"instruction": instruction, "mode": mode},
+    )
+
+
+def _model_transform_groups(
+    inputs: tuple[ContentTransformInput, ...],
+    mode: str,
+) -> tuple[tuple[ContentTransformInput, ...], ...]:
+    if mode == "map":
+        if not inputs:
+            raise ContentValidationError("model map requires content inputs")
+        return tuple((item,) for item in inputs)
+    return (inputs,)
+
+
+async def _request_child_model_transform(
+    inputs: tuple[ContentTransformInput, ...],
+    *,
+    instruction: str,
+    mode: str,
+    config: AgentConfig,
+    ctx: RunDependencies,
+) -> _ChildModelResult:
+    workspace = ctx.content_workspace
+    if workspace is None:
+        raise ContentValidationError("content workspace is unavailable")
+    builder = PromptBuilder(store=workspace.store)
+    components = tuple(
+        PromptComponent(
+            kind="content_transform_input",
+            data={
+                "key": item.key,
+                "kind": item.node.kind,
+                "object_id": item.object_id,
+            },
+            message={"role": "system", "content": _content_transform_input_text(item)},
+            source_object_id=item.object_id,
+            links=(item.object_id,),
+        )
+        for item in inputs
+    )
+    plan = builder.plan_prompt(
+        instruction,
+        [],
+        system=(
+            "Transform only the supplied content. Return only the transformed content."
+        ),
+        content_components=components,
+        tools=[],
+        selected_model=config.model_name,
+        thinking=config.thinking,
+    )
+    stored = await builder.commit_prompt_plan(plan)
+    model_output, _streamed, telemetry = await request_assistant_message(
+        render_model_input(stored),
+        config=config,
+        model_gateway=ctx.model_gateway,
+        should_stop=ctx.abort_reason,
+    )
+    content = model_output.message.get("content")
+    if not isinstance(content, str):
+        raise ContentValidationError("model transformation returned no text")
+    ctx.content_transform_budget.record_model_output(len(content))
+    if stored.prompt_object_id is None:
+        raise ContentValidationError("model transformation prompt was not stored")
+    message = dict(model_output.message)
+    assistant_id = workspace.store.put_object(
+        Object(
+            kind="assistant_message",
+            schema="zeta.model_output.v1",
+            data={
+                "message": message,
+                "model_output": {"message": message},
+                "telemetry": telemetry,
+            },
+            links=(stored.prompt_object_id,),
+        )
+    )
+    workspace.store.record_derivation(
+        Derivation(
+            producer="ModelResponse",
+            output_id=assistant_id,
+            input_ids=(stored.prompt_object_id,),
+            params={"mode": mode},
+        )
+    )
+    return _ChildModelResult(content, assistant_id)
+
+
+def _content_transform_input_text(item: ContentTransformInput) -> str:
+    content = item.node.content
+    rendered = (
+        content
+        if isinstance(content, str)
+        else json.dumps(
+            content,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+    )
+    return f"Content key: {item.key}\nKind: {item.node.kind}\n{rendered}"
 
 
 def request_published_event(

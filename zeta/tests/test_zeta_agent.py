@@ -1676,6 +1676,193 @@ def test_zeta_transform_content_records_durable_promotion_requests() -> None:
     assert workspace.store.get_ref("agent/writer/content/head") is None
 
 
+def test_zeta_model_content_transform_records_child_prompt_and_answer() -> None:
+    registry = CapabilityRegistry()
+    register_builtin_tools(registry)
+    store = InMemoryStore()
+    workspace = zeta_content_transforms.ContentWorkspace(
+        store,
+        run_id="run-content",
+        session_id="session-content",
+        owner="writer",
+    )
+    source = workspace.transform(
+        {
+            "expected_head": workspace.initialize(),
+            "reason": "Add source material.",
+            "inputs": {},
+            "transformation": {"type": "literal", "value": "Release evidence."},
+            "destination": {
+                "key": "evidence",
+                "kind": "document",
+                "scope": "run",
+                "expected_object_id": None,
+            },
+        }
+    )
+    gateway = PublishEventGateway(
+        [
+            {
+                "content": "",
+                "tool_calls": [
+                    content_tool_call(
+                        "call-transform",
+                        "transform_content",
+                        {
+                            "expected_head": source.head,
+                            "reason": "Summarize the evidence.",
+                            "inputs": {"keys": ["evidence"]},
+                            "transformation": {
+                                "type": "model",
+                                "mode": "one",
+                                "instruction": "Write one short release summary.",
+                            },
+                            "destination": {
+                                "key": "summary",
+                                "kind": "procedure",
+                                "scope": "run",
+                                "expected_object_id": None,
+                            },
+                        },
+                    )
+                ],
+            },
+            {"content": "Check the release evidence."},
+            {"content": "done"},
+        ]
+    )
+
+    result = run_agent_turn(
+        "manage content",
+        [],
+        zeta_agent.AgentConfig(
+            max_turns=2,
+            allowed_capabilities=("transform_content",),
+        ),
+        model_gateway=gateway,
+        tool_registry=registry,
+        trace_store=store,
+        content_workspace=workspace,
+    )
+
+    tool_result = next(
+        event
+        for event in timeline_events(result.events)
+        if event.get("type") == "tool_result"
+    )["result"]
+    assert tool_result["ok"] is True
+    output_id = tool_result["object_ids"][0]
+    output = store.get_object(output_id)
+    assert output is not None
+    assert output.data["content"] == "Check the release evidence."
+    assert "Release evidence." in json.dumps(gateway.model_inputs[1].messages)
+    assert gateway.model_inputs[1].tools == []
+    assert "Check the release evidence." in json.dumps(gateway.model_inputs[2].messages)
+    derivations = store.derivations_for_output(output_id)
+    assert any(item.producer == "ModelTransform:v1" for item in derivations)
+    assistant_ids = [
+        object_id
+        for object_id in output.links
+        if store.get_object(object_id).kind == "assistant_message"
+    ]
+    assert len(assistant_ids) == 1
+    assistant = store.get_object(assistant_ids[0])
+    assert assistant is not None
+    assert assistant.links
+    assert store.get_object(assistant.links[0]).kind == "prompt"
+
+
+def test_zeta_model_map_transform_keeps_source_order_in_a_collection() -> None:
+    registry = CapabilityRegistry()
+    register_builtin_tools(registry)
+    store = InMemoryStore()
+    workspace = zeta_content_transforms.ContentWorkspace(
+        store,
+        run_id="run-content",
+        session_id="session-content",
+        owner="writer",
+    )
+    head = workspace.initialize()
+    for key, value in (("a", "First source."), ("b", "Second source.")):
+        changed = workspace.transform(
+            {
+                "expected_head": head,
+                "reason": f"Add source {key}.",
+                "inputs": {},
+                "transformation": {"type": "literal", "value": value},
+                "destination": {
+                    "key": key,
+                    "kind": "document",
+                    "scope": "run",
+                    "expected_object_id": None,
+                },
+            }
+        )
+        head = changed.head
+    gateway = PublishEventGateway(
+        [
+            {
+                "content": "",
+                "tool_calls": [
+                    content_tool_call(
+                        "call-transform",
+                        "transform_content",
+                        {
+                            "expected_head": head,
+                            "reason": "Extract each finding.",
+                            "inputs": {"keys": ["a", "b"]},
+                            "transformation": {
+                                "type": "model",
+                                "mode": "map",
+                                "instruction": "Extract one finding.",
+                                "max_concurrency": 2,
+                            },
+                            "destination": {
+                                "key": "findings",
+                                "kind": "collection",
+                                "scope": "run",
+                                "expected_object_id": None,
+                            },
+                        },
+                    )
+                ],
+            },
+            {"content": "Finding A."},
+            {"content": "Finding B."},
+            {"content": "done"},
+        ]
+    )
+
+    result = run_agent_turn(
+        "map content",
+        [],
+        zeta_agent.AgentConfig(
+            max_turns=2,
+            allowed_capabilities=("transform_content",),
+        ),
+        model_gateway=gateway,
+        tool_registry=registry,
+        trace_store=store,
+        content_workspace=workspace,
+    )
+
+    tool_result = next(
+        event
+        for event in timeline_events(result.events)
+        if event.get("type") == "tool_result"
+    )["result"]
+    collection = store.get_object(tool_result["object_ids"][0])
+    assert collection is not None
+    assert collection.data["content"] == {"object_ids": list(collection.links[-2:])}
+    assert [
+        store.get_object(item).data["message"]["content"]
+        for item in collection.links[-2:]
+    ] == [
+        "Finding A.",
+        "Finding B.",
+    ]
+
+
 def test_zeta_transform_content_returns_stale_head_errors() -> None:
     registry = CapabilityRegistry()
     register_builtin_tools(registry)

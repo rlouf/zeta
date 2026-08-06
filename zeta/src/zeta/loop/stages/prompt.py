@@ -19,6 +19,7 @@ from zeta.context.builder import (
     prepared_prompt_from,
     render_model_input,
 )
+from zeta.context.components import PromptComponent
 from zeta.events import Event
 from zeta.journal.views import (
     event_view,
@@ -80,6 +81,7 @@ async def build_prompt_step(
     allowed_capabilities: tuple[str, ...],
     context: str,
     current_events: Iterable[dict[str, Any]],
+    content_components: Iterable[PromptComponent] = (),
     tools: list[dict[str, Any]],
     state: RunState,
     builder: PromptBuilder,
@@ -95,6 +97,7 @@ async def build_prompt_step(
         allowed_capabilities=allowed_capabilities,
         context=context,
         current_events=current_events,
+        content_components=content_components,
         tools=tools,
         tool_choice="auto",
         selected_model=config.model_name,

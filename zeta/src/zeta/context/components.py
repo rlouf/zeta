@@ -328,6 +328,7 @@ def prompt_components(
     allowed_capabilities: Iterable[str] | None = None,
     context: str = "",
     current_events: Iterable[dict[str, Any]] = (),
+    content_components: Iterable[PromptComponent] = (),
     tools: list[dict[str, Any]] | None = None,
     include_non_message_components: bool = True,
 ) -> list[PromptComponent]:
@@ -366,6 +367,7 @@ def prompt_components(
                 enabled_capabilities=enabled_capabilities,
             )
         )
+    components.extend(content_components)
     components.extend(
         project_timeline_message_components(
             from_message_boundary(timeline[-TIMELINE_TAIL_LIMIT:]),

@@ -35,6 +35,9 @@ MAX_CONTENT_NODE_BYTES = 256_000
 MAX_CONTENT_ATTRIBUTES_BYTES = 32_000
 MAX_CONTENT_QUERY_LIMIT = 50
 MAX_CONTENT_PREVIEW_CHARS = 500
+MAX_CONTENT_MANIFEST_ITEMS = 50
+MAX_PROJECTED_CONTENT_CHARS = 50_000
+PROMPT_CONTENT_KINDS = frozenset({"instruction", "procedure", "memory", "example"})
 
 
 class ContentValidationError(ValueError):
@@ -217,6 +220,68 @@ class ContentWorkspace:
             "items": page,
             "next_cursor": next_offset if next_offset < len(items) else None,
         }
+
+    def prompt_components(
+        self,
+        *,
+        max_chars: int = MAX_PROJECTED_CONTENT_CHARS,
+    ) -> tuple[PromptComponent, ...]:
+        """Project bounded content while retaining the exact source head in trace."""
+
+        head_id = self.current_head()
+        revision = content_revision_from_object(self.store.get_object(head_id))
+        projected: list[PromptComponent] = []
+        projected_keys: list[str] = []
+        omitted_keys: list[str] = []
+        used_chars = 0
+        for key in revision.projection_order:
+            object_id = revision.nodes[key]
+            node = self._node(object_id)
+            if node.kind not in PROMPT_CONTENT_KINDS:
+                continue
+            message = self._content_message(node)
+            if used_chars + len(message) > max_chars:
+                omitted_keys.append(key)
+                continue
+            used_chars += len(message)
+            projected_keys.append(key)
+            projected.append(
+                PromptComponent(
+                    kind=f"content_{node.kind}",
+                    data={
+                        "key": key,
+                        "kind": node.kind,
+                        "title": node.title,
+                        "source_scope": revision.source_scopes[key],
+                    },
+                    message={"role": "system", "content": message},
+                    source_object_id=object_id,
+                    links=(object_id,),
+                )
+            )
+        manifest_items = [
+            self._manifest_item(key, revision)
+            for key in revision.projection_order[:MAX_CONTENT_MANIFEST_ITEMS]
+        ]
+        manifest_text = self._manifest_message(
+            head_id,
+            manifest_items,
+            total=len(revision.projection_order),
+        )
+        manifest = PromptComponent(
+            kind="content_manifest",
+            data={
+                "head": head_id,
+                "items": manifest_items,
+                "total": len(revision.projection_order),
+                "projected_keys": projected_keys,
+                "omitted_keys": omitted_keys,
+            },
+            message={"role": "system", "content": manifest_text},
+            source_object_id=head_id,
+            links=(head_id,),
+        )
+        return (manifest, *projected)
 
     def transform(self, params: Mapping[str, Any]) -> ContentTransformResult:
         """Apply one typed operation and expose durable writes as requests."""
@@ -591,6 +656,58 @@ class ContentWorkspace:
             "chars": len(rendered),
             "preview": rendered[:MAX_CONTENT_PREVIEW_CHARS],
         }
+
+    def _content_message(self, node: ContentNode) -> str:
+        title = f"\nTitle: {node.title}" if node.title else ""
+        return (
+            f"Content key: {node.key}\nKind: {node.kind}{title}\n"
+            f"{self._render_content(node.content)}"
+        )
+
+    def _manifest_item(
+        self,
+        key: str,
+        revision: ContentRevision,
+    ) -> dict[str, Any]:
+        object_id = revision.nodes[key]
+        node = self._node(object_id)
+        rendered = self._render_content(node.content)
+        return {
+            "key": key,
+            "kind": node.kind,
+            "title": node.title,
+            "source_scope": revision.source_scopes[key],
+            "object_id": object_id,
+            "chars": len(rendered),
+        }
+
+    def _manifest_message(
+        self,
+        head_id: ObjectId,
+        items: list[dict[str, Any]],
+        *,
+        total: int,
+    ) -> str:
+        lines = [f"Content workspace head: {head_id}", "Available content:"]
+        lines.extend(
+            f"- {item['key']} ({item['kind']}, {item['source_scope']}, "
+            f"{item['object_id']})"
+            for item in items
+        )
+        if total > len(items):
+            lines.append(f"- {total - len(items)} more items. Use query_content.")
+        return "\n".join(lines)
+
+    def _render_content(self, content: Any) -> str:
+        if isinstance(content, str):
+            return content
+        return json.dumps(
+            content,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
 
 
 def _required_string(value: Mapping[str, Any], field: str) -> str:

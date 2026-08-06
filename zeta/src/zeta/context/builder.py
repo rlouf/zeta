@@ -82,6 +82,7 @@ class PromptBuilder:
         allowed_capabilities: Iterable[str] | None = None,
         context: str = "",
         current_events: Iterable[dict[str, Any]] = (),
+        content_components: Iterable[PromptComponent] = (),
         tools: list[dict[str, Any]] | None = None,
         tool_choice: str | dict[str, Any] = "auto",
         max_tokens: int = DEFAULT_MAX_COMPLETION_TOKENS,
@@ -95,6 +96,7 @@ class PromptBuilder:
             allowed_capabilities=allowed_capabilities,
             context=context,
             current_events=current_events,
+            content_components=content_components,
             tools=tools,
             tool_choice=tool_choice,
             max_tokens=max_tokens,
@@ -121,6 +123,7 @@ def plan_prompt(
     allowed_capabilities: Iterable[str] | None = None,
     context: str = "",
     current_events: Iterable[dict[str, Any]] = (),
+    content_components: Iterable[PromptComponent] = (),
     tools: list[dict[str, Any]] | None = None,
     tool_choice: str | dict[str, Any] = "auto",
     max_tokens: int = DEFAULT_MAX_COMPLETION_TOKENS,
@@ -134,6 +137,7 @@ def plan_prompt(
         allowed_capabilities=allowed_capabilities,
         context=context,
         current_events=current_events,
+        content_components=content_components,
         tools=tools,
     )
     return PromptPlan(

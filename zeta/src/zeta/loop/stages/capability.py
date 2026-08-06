@@ -10,6 +10,8 @@ import asyncio
 import hashlib
 import inspect
 import json
+import sys
+import time
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -40,6 +42,7 @@ from zeta.ids import publish_event_handle, wait_handle
 from zeta.journal.views import (
     draft_timeline_type,
 )
+from zeta.loop.cancellation import AbortReason
 from zeta.loop.config import AgentConfig
 from zeta.loop.gateway import request_assistant_message
 from zeta.loop.outcomes import (
@@ -522,6 +525,7 @@ async def python_content_transform(
             nested_transform,
             parent_loop,
             float(timeout),
+            ctx.abort_reason,
         ),
         timeout=float(timeout) + 1,
     )
@@ -546,27 +550,44 @@ def _run_python_program(
     nested_transform: Any,
     parent_loop: asyncio.AbstractEventLoop,
     timeout: float,
+    should_stop: AbortReason,
 ) -> Any:
-    namespace: dict[str, Any] = {"__name__": "zeta_content_transform"}
-    exec(compile(source, "<zeta-content-transform>", "exec"), namespace)
-    main = namespace.get("main")
-    if not callable(main):
-        raise ContentValidationError(
-            "python transformation must define a callable main(ctx, transform)"
-        )
+    deadline = time.monotonic() + timeout
 
-    async def transform(**request: Any) -> _PythonContentValue:
-        future = asyncio.run_coroutine_threadsafe(
-            nested_transform(dict(request)),
-            parent_loop,
-        )
-        return await asyncio.wrap_future(future)
+    def trace_python(_frame: Any, _event: str, _argument: Any) -> Any:
+        reason = should_stop()
+        if reason is not None:
+            raise ContentValidationError(
+                f"python transformation stopped because the run is {reason}"
+            )
+        if time.monotonic() >= deadline:
+            raise ContentValidationError("python transformation timed out")
+        return trace_python
 
-    async def invoke() -> Any:
-        result = main(content_ctx, transform)
-        return await result if inspect.isawaitable(result) else result
+    sys.settrace(trace_python)
+    try:
+        namespace: dict[str, Any] = {"__name__": "zeta_content_transform"}
+        exec(compile(source, "<zeta-content-transform>", "exec"), namespace)
+        main = namespace.get("main")
+        if not callable(main):
+            raise ContentValidationError(
+                "python transformation must define a callable main(ctx, transform)"
+            )
 
-    return asyncio.run(asyncio.wait_for(invoke(), timeout=timeout))
+        async def transform(**request: Any) -> _PythonContentValue:
+            future = asyncio.run_coroutine_threadsafe(
+                nested_transform(dict(request)),
+                parent_loop,
+            )
+            return await asyncio.wrap_future(future)
+
+        async def invoke() -> Any:
+            result = main(content_ctx, transform)
+            return await result if inspect.isawaitable(result) else result
+
+        return asyncio.run(asyncio.wait_for(invoke(), timeout=timeout))
+    finally:
+        sys.settrace(None)
 
 
 async def _nested_python_transform(

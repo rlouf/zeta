@@ -95,6 +95,15 @@ class ContentPromotionResult:
 
 
 @dataclass(frozen=True)
+class ContentTransformInput:
+    """Expose selected graph values without exposing mutable workspace state."""
+
+    key: str
+    object_id: ObjectId
+    node: ContentNode
+
+
+@dataclass(frozen=True)
 class ContentTransformResult:
     """Return references so transformation data stays outside the root context."""
 
@@ -109,6 +118,16 @@ class _ContentDestination:
     key: str | None
     kind: str | None
     expected_object_id: ObjectId | None
+
+
+@dataclass(frozen=True)
+class _ResolvedContentTransform:
+    expected_head: ObjectId
+    reason: str
+    operation: Mapping[str, Any]
+    destination: _ContentDestination
+    revision: ContentRevision
+    selected: tuple[tuple[str, ObjectId], ...]
 
 
 @dataclass(frozen=True)
@@ -298,41 +317,81 @@ class ContentWorkspace:
     def transform(self, params: Mapping[str, Any]) -> ContentTransformResult:
         """Apply one typed operation and expose durable writes as requests."""
 
-        expected_head = _required_string(params, "expected_head")
-        current_head = self.current_head()
-        if expected_head != current_head:
-            raise ContentConflict(
-                f"content head {self.run_head.ref_name!r} changed from "
-                f"{expected_head!r} to {current_head!r}"
-            )
-        reason = _required_string(params, "reason")
-        inputs = _mapping_field(params, "inputs")
-        operation = _mapping_field(params, "transformation")
-        destination = _content_destination(_mapping_field(params, "destination"))
-        revision = self.revision()
-        selected = self._select(revision, inputs)
-        operation_type = _required_string(operation, "type")
+        resolved = self._resolve_transform(params)
+        operation_type = _required_string(resolved.operation, "type")
         if operation_type == "drop":
             return self._drop(
-                revision,
-                selected,
-                destination=destination,
-                expected_head=expected_head,
-                reason=reason,
+                resolved.revision,
+                resolved.selected,
+                destination=resolved.destination,
+                expected_head=resolved.expected_head,
+                reason=resolved.reason,
             )
         node = self._derived_node(
             operation_type,
-            operation,
-            selected,
-            destination=destination,
+            resolved.operation,
+            resolved.selected,
+            destination=resolved.destination,
         )
         return self._store_derived_node(
-            revision,
+            resolved.revision,
             node,
-            selected,
-            destination=destination,
-            expected_head=expected_head,
-            reason=reason,
+            resolved.selected,
+            destination=resolved.destination,
+            expected_head=resolved.expected_head,
+            reason=resolved.reason,
+            producer=f"Content{operation_type.title()}:v1",
+            producer_params={"type": operation_type},
+        )
+
+    def transform_inputs(
+        self,
+        params: Mapping[str, Any],
+    ) -> tuple[ContentTransformInput, ...]:
+        """Resolve exact values before a model or Python transform leaves storage."""
+
+        resolved = self._resolve_transform(params)
+        return tuple(
+            ContentTransformInput(key, object_id, self._node(object_id))
+            for key, object_id in resolved.selected
+        )
+
+    def store_transformed_value(
+        self,
+        params: Mapping[str, Any],
+        value: Any,
+        *,
+        source_ids: tuple[ObjectId, ...],
+        producer: str,
+        producer_params: Mapping[str, Any],
+    ) -> ContentTransformResult:
+        """Recheck the head before a slow derived value becomes active."""
+
+        resolved = self._resolve_transform(params)
+        if resolved.destination.key is None or resolved.destination.kind is None:
+            raise ContentValidationError(
+                "content destination key and kind are required"
+            )
+        title = str(resolved.operation.get("title") or "")
+        attributes = resolved.operation.get("attributes")
+        if attributes is not None and not isinstance(attributes, Mapping):
+            raise ContentValidationError("content attributes must be an object")
+        return self._store_derived_node(
+            resolved.revision,
+            ContentNode(
+                resolved.destination.key,
+                resolved.destination.kind,
+                value,
+                title=title,
+                attributes=dict(attributes or {}),
+            ),
+            resolved.selected,
+            destination=resolved.destination,
+            expected_head=resolved.expected_head,
+            reason=resolved.reason,
+            extra_source_ids=source_ids,
+            producer=producer,
+            producer_params=producer_params,
         )
 
     def promote(self, promotion: ContentPromotion) -> ObjectId:
@@ -491,6 +550,9 @@ class ContentWorkspace:
         destination: _ContentDestination,
         expected_head: ObjectId,
         reason: str,
+        extra_source_ids: tuple[ObjectId, ...] = (),
+        producer: str,
+        producer_params: Mapping[str, Any],
     ) -> ContentTransformResult:
         if destination.key is None:
             raise ContentValidationError("content destination key is required")
@@ -501,9 +563,20 @@ class ContentWorkspace:
             reason=reason,
             validate_only=True,
         )
-        source_ids = tuple(object_id for _, object_id in selected)
+        source_ids = _unique_ids(
+            *(object_id for _, object_id in selected),
+            *extra_source_ids,
+        )
         with self.store.batch():
             object_id = put_content_node(self.store, node, links=source_ids)
+            self.store.record_derivation(
+                Derivation(
+                    producer=producer,
+                    output_id=object_id,
+                    input_ids=source_ids,
+                    params=dict(producer_params),
+                )
+            )
             nodes = dict(revision.nodes)
             order = list(revision.projection_order)
             if destination.key not in nodes:
@@ -535,6 +608,28 @@ class ContentWorkspace:
             head=head,
             output_ids=(object_id,),
             promotions=(() if promotion is None else (promotion,)),
+        )
+
+    def _resolve_transform(
+        self,
+        params: Mapping[str, Any],
+    ) -> _ResolvedContentTransform:
+        expected_head = _required_string(params, "expected_head")
+        current_head = self.current_head()
+        if expected_head != current_head:
+            raise ContentConflict(
+                f"content head {self.run_head.ref_name!r} changed from "
+                f"{expected_head!r} to {current_head!r}"
+            )
+        revision = self.revision()
+        inputs = _mapping_field(params, "inputs")
+        return _ResolvedContentTransform(
+            expected_head=expected_head,
+            reason=_required_string(params, "reason"),
+            operation=_mapping_field(params, "transformation"),
+            destination=_content_destination(_mapping_field(params, "destination")),
+            revision=revision,
+            selected=self._select(revision, inputs),
         )
 
     def _derived_node(

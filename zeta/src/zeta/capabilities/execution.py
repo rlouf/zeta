@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import inspect
 import json
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, cast
@@ -35,7 +35,10 @@ def diagnostic(
 
 
 CapabilityEventSink = Callable[[DraftEvent], None]
-InternalToolExecutor = Callable[[str, dict[str, Any]], dict[str, Any] | None]
+InternalToolExecutor = Callable[
+    [str, dict[str, Any]],
+    dict[str, Any] | None | Awaitable[dict[str, Any] | None],
+]
 
 
 @dataclass(frozen=True)
@@ -331,11 +334,15 @@ async def run_valid_tool_call(
         call_event,
         ctx=ctx,
     )
-    internal_result = (
-        ctx.internal_tool_executor(capability_id, canonical_params)
-        if ctx.internal_tool_executor is not None
-        else None
-    )
+    internal_result: dict[str, Any] | None = None
+    if ctx.internal_tool_executor is not None:
+        internal_call = ctx.internal_tool_executor(capability_id, canonical_params)
+        internal_result = cast(
+            dict[str, Any] | None,
+            await internal_call
+            if inspect.isawaitable(internal_call)
+            else internal_call,
+        )
     semantics = (
         None
         if internal_result is not None

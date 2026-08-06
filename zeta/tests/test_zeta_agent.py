@@ -4658,6 +4658,134 @@ def test_zeta_run_agent_exposes_query_log_and_returns_prior_session_history(
     assert result.final_answer == "history recovered"
 
 
+def test_zeta_run_agent_queries_the_active_context_budget(tmp_path: Path) -> None:
+    registry = CapabilityRegistry()
+    register_builtin_tools(registry)
+    context = zeta_runtime_context.RuntimeContext(
+        session_id="ctx-session",
+        event_sink=zeta_events.MemoryEventStore(),
+        trace_store=zeta_trace.InMemoryStore(session_id="ctx-session"),
+        tool_registry=registry,
+        state_dir=tmp_path,
+        session_dir=tmp_path / "sessions" / "ctx-session",
+    )
+    model_inputs: list[zeta_model_shapes.ModelInput] = []
+    responses = iter(
+        [
+            zeta_model_shapes.ModelOutput(
+                message={
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "id": "call-query-context-budget",
+                            "type": "function",
+                            "function": {
+                                "name": "query_context_budget",
+                                "arguments": "{}",
+                            },
+                        }
+                    ],
+                }
+            ),
+            zeta_model_shapes.ModelOutput(message={"content": "budget checked"}),
+        ]
+    )
+
+    class FakeGateway:
+        def available(self, request: zeta_model_shapes.ModelRequest) -> bool:
+            del request
+            return True
+
+        async def generate(
+            self,
+            model_input: zeta_model_shapes.ModelInput,
+            request: zeta_model_shapes.ModelRequest,
+            *,
+            stream: zeta_loop_gateway.ModelStream | None = None,
+            telemetry_sink: Callable[[dict[str, Any]], None] | None = None,
+            should_stop: Callable[[], str | None] | None = None,
+        ) -> zeta_model_shapes.ModelOutput:
+            del request, stream, should_stop
+            model_inputs.append(model_input)
+            if len(model_inputs) == 1 and telemetry_sink is not None:
+                telemetry_sink(
+                    {
+                        "usage": {"prompt_tokens": 10_000},
+                        "model_context_tokens": 32_768,
+                    }
+                )
+            return next(responses)
+
+    class RejectingExecutor:
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+
+        async def call(
+            self,
+            capability_id: str,
+            params: dict[str, Any],
+            *,
+            base_dir: Path | None,
+            effect_key: str | None,
+        ) -> dict[str, Any]:
+            del params, base_dir, effect_key
+            self.calls.append(capability_id)
+            raise AssertionError(
+                "query_context_budget must not reach the tool executor"
+            )
+
+        async def aclose(self) -> None:
+            return None
+
+    executor = RejectingExecutor()
+    result = asyncio.run(
+        zeta_agent.run_agent(
+            zeta_agent.AgentRunRequest(
+                objective="inspect the active context",
+                runtime="zeta-rpc",
+                tools=("query_context_budget",),
+                context="",
+                config=zeta_agent.AgentConfig(
+                    max_turns=2,
+                    compaction_policy=CompactionPolicy(
+                        strategy="structural_trim",
+                        max_context_tokens=15_000,
+                    ),
+                ),
+            ),
+            run_id="run-current-2222",
+            caused_by="evt-request",
+            publish_event=lambda event: None,
+            runtime_context=context,
+            cancellation_event=None,
+            model_gateway=FakeGateway(),
+            tool_executor=executor,
+        )
+    )
+
+    first_tools = model_inputs[0].tools
+    assert first_tools is not None
+    assert [tool["function"]["name"] for tool in first_tools] == [
+        "query_context_budget"
+    ]
+    tool_message = next(
+        message for message in model_inputs[1].messages if message["role"] == "tool"
+    )
+    assert json.loads(tool_message["content"]) == {
+        "ok": True,
+        "context_window_tokens": 32_768,
+        "prompt_tokens": 10_000,
+        "prompt_tokens_source": "provider",
+        "reserved_output_tokens": 8_192,
+        "remaining_tokens": 14_576,
+        "usage_ratio": pytest.approx(10_000 / 24_576),
+        "compaction_strategy": "structural_trim",
+        "compaction_threshold_tokens": 15_000,
+    }
+    assert executor.calls == []
+    assert result.final_answer == "budget checked"
+
+
 def test_zeta_session_run_params_capture_defaults_and_options() -> None:
     params = zeta_requests.SessionRunParams(
         objective="answer",

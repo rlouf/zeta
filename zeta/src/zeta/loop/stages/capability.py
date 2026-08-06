@@ -26,7 +26,12 @@ from zeta.tools.content import (
     bind_content_tools,
 )
 from zeta.tools.events import EventToolBindings, bind_event_tools
-from zeta.tools.history import bind_history_tools
+from zeta.tools.history import (
+    ContextBudgetBinding,
+    bind_context_budget_tools,
+    bind_history_tools,
+    context_compaction_settings,
+)
 
 TERMINAL_TOOL_STATUSES = {"completed", "failed", "refused", "cancelled", "timed_out"}
 
@@ -88,6 +93,9 @@ async def run_capability_step(
         state.final_object_id = object_id
         state.selected_final_answer = content
 
+    compaction_strategy, compaction_threshold_tokens = context_compaction_settings(
+        ctx.builder.transform
+    )
     runtime_tools = {
         **bind_content_tools(
             ContentToolRuntime(
@@ -118,6 +126,21 @@ async def run_capability_step(
                 publish_event_requests=state.publish_event_requests,
                 wait_requests=state.wait_requests,
                 cancel_requests=state.cancel_requests,
+            )
+        ),
+        **bind_context_budget_tools(
+            ContextBudgetBinding(
+                telemetry=model_telemetry or {},
+                prompt_object_id=(
+                    state.prompt_traces[-1].prompt_object_id
+                    if state.prompt_traces
+                    else None
+                ),
+                store=ctx.builder.store(),
+                selected_url=config.model_url,
+                selected_model=config.model_name,
+                compaction_strategy=compaction_strategy,
+                compaction_threshold_tokens=compaction_threshold_tokens,
             )
         ),
         **bind_history_tools(ctx.query_log_reader),

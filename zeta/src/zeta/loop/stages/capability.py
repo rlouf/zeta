@@ -55,6 +55,7 @@ from zeta.tools.events import (
 from zeta.tools.events import (
     event_tool_error as publish_event_error,
 )
+from zeta.tools.history import bind_history_tools
 
 TERMINAL_TOOL_STATUSES = {"completed", "failed", "refused", "cancelled", "timed_out"}
 QUERY_CONTENT_CAPABILITY_ID = "zeta.query_content"
@@ -154,29 +155,32 @@ async def run_capability_step(
         return CapabilityCallResult(events=[])
     state.note_step("record_capability_call")
     state.note_step("execute_capability")
-    event_tools = bind_event_tools(
-        EventToolBindings(
-            position=position,
-            publishable_events=ctx.publishable_events,
-            source_queue_item_id=ctx.source_queue_item_id,
-            source_agent_id=ctx.source_agent_id,
-            source_session_id=ctx.source_session_id,
-            publish_event_requests=state.publish_event_requests,
-            wait_requests=state.wait_requests,
-            cancel_requests=state.cancel_requests,
-        )
-    )
+    runtime_tools = {
+        **bind_event_tools(
+            EventToolBindings(
+                position=position,
+                publishable_events=ctx.publishable_events,
+                source_queue_item_id=ctx.source_queue_item_id,
+                source_agent_id=ctx.source_agent_id,
+                source_session_id=ctx.source_session_id,
+                publish_event_requests=state.publish_event_requests,
+                wait_requests=state.wait_requests,
+                cancel_requests=state.cancel_requests,
+            )
+        ),
+        **bind_history_tools(ctx.query_log_reader),
+    }
 
     async def run_internal_tool(
         capability_id: str,
         params: dict[str, Any],
     ) -> dict[str, Any] | None:
-        event_tool = event_tools.get(capability_id)
-        if event_tool is not None:
-            event_result = event_tool(params)
-            if inspect.isawaitable(event_result):
-                return await cast(Awaitable[dict[str, Any]], event_result)
-            return event_result
+        runtime_tool = runtime_tools.get(capability_id)
+        if runtime_tool is not None:
+            runtime_result = runtime_tool(params)
+            if inspect.isawaitable(runtime_result):
+                return await cast(Awaitable[dict[str, Any]], runtime_result)
+            return runtime_result
         if capability_id == QUERY_CONTENT_CAPABILITY_ID:
             return request_content_query(params, ctx=ctx)
         if capability_id == TRANSFORM_CONTENT_CAPABILITY_ID:
@@ -198,7 +202,6 @@ async def run_capability_step(
         tool_executor=ctx.tool_executor,
         base_dir=config.base_dir,
         effect_scope=config.effect_scope,
-        query_log_reader=ctx.query_log_reader,
         internal_tool_executor=run_internal_tool,
     )
     handled = handle_tool_call(

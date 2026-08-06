@@ -462,28 +462,31 @@ class _QueueingDispatcher:
             if executor is None:
                 return self._missing_executor_events(triggering_event, bound_item)
             return await self._run_agent(executor, triggering_event, bound_item)
-        lifecycle_events = [
-            self._append_queue_item_event_for_target(
-                triggering_event,
-                queue_item.queue_item_id,
-                "",
-                event_suffix="completed",
-                status="completed",
-            )
-        ]
-        for decision in decisions:
-            route = decision.route
-            queue_item_id = decision.queue_item.queue_item_id
-            lifecycle_events.append(
-                self._append_queue_item_event(
-                    triggering_event,
-                    route,
-                    queue_item_id,
-                    event_suffix="available",
-                    status="available",
-                    session_id=decision.queue_item.session_id,
-                )
-            )
+        event_batch = getattr(self.event_sink, "transaction", nullcontext)
+        with self.lifecycle.defer_publications():
+            with event_batch():
+                lifecycle_events = [
+                    self._append_queue_item_event_for_target(
+                        triggering_event,
+                        queue_item.queue_item_id,
+                        "",
+                        event_suffix="completed",
+                        status="completed",
+                    )
+                ]
+                for decision in decisions:
+                    route = decision.route
+                    queue_item_id = decision.queue_item.queue_item_id
+                    lifecycle_events.append(
+                        self._append_queue_item_event(
+                            triggering_event,
+                            route,
+                            queue_item_id,
+                            event_suffix="available",
+                            status="available",
+                            session_id=decision.queue_item.session_id,
+                        )
+                    )
         return lifecycle_events
 
     def _stored_event(self, event_id: str) -> Event:

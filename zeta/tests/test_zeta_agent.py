@@ -8834,6 +8834,63 @@ def test_zeta_local_runtime_run_once_fans_out_pending_queue_item(
     ]
 
 
+def test_zeta_fanout_publishes_every_session_binding_before_releasing_routing(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "events.sqlite3"
+    event_store = zeta_events.SqliteEventStore(path)
+    observer = zeta_events.SqliteEventStore(path)
+    first = event_store.accept(DraftEvent("work.requested", "test", {})).event
+    later = event_store.accept(DraftEvent("work.later", "test", {})).event
+    event_store.accept(
+        DraftEvent(
+            "runtime.queue_item.available",
+            "zeta",
+            {
+                "queue_item_id": f"qi_{later.id}_agent_two",
+                "event_id": later.id,
+                "target_agent": "agent.two",
+                "session_id": "agent/agent.two",
+                "status": "available",
+            },
+            session_id="agent/agent.two",
+        )
+    )
+    observed_claims: list[str | None] = []
+
+    def observe(event: Event) -> None:
+        if event.event_type != "runtime.queue_item.completed" or observed_claims:
+            return
+        claim = observer.claim_next_queue_item(
+            "observer",
+            lease_ms=1_000,
+            now_ms=later.timestamp_ms + 1_000,
+            exclude_queue_item_ids=(f"qi_{first.id}_agent_one",),
+        )
+        observed_claims.append(claim.queue_item_id if claim is not None else None)
+
+    dispatcher = harness_dispatch.QueueingDispatcher(
+        event_store,
+        routes=(
+            harness_dispatch.AgentRoute(
+                "agent.one",
+                (harness_dispatch.EventPattern("work.requested"),),
+                session="shared",
+            ),
+            harness_dispatch.AgentRoute(
+                "agent.two",
+                (harness_dispatch.EventPattern("work.requested"),),
+                session="shared",
+            ),
+        ),
+        publish_event=observe,
+    )
+
+    asyncio.run(dispatcher.run_next())
+
+    assert observed_claims == [f"qi_{first.id}_agent_two"]
+
+
 def test_zeta_local_runtime_run_once_handles_eventlog_rpc_request(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

@@ -166,7 +166,8 @@ An unbound item has no session id yet. An earlier unbound item blocks later
 claims until routing binds or completes it. This short routing barrier prevents
 a second worker from claiming a later turn before Zeta knows whether both turns
 belong to the same session. It does not stop work in another session after the
-earlier item is bound.
+earlier item is bound. A fan-out route stores every child binding and completes
+the unbound item in one transaction.
 
 Terminal queue states are `completed`, `cancelled`, `dead_lettered`, and
 `unhandled`. No later lifecycle transition is legal for a terminal item.

@@ -7,49 +7,12 @@ from typing import TYPE_CHECKING, Any
 from zeta.capabilities.executors import CapabilityFunction, InProcessCapabilityExecutor
 from zeta.capabilities.registry import RegisteredCapability
 from zeta.capabilities.types import Capability, CapabilityId
-from zeta.tools import bash, edit, grep, ls, read, web, write
+from zeta.tools import bash, edit, grep, history, ls, read, web, write
 
 if TYPE_CHECKING:
     from zeta.capabilities.registry import CapabilityRegistry
 
 __all__ = ["ensure_builtin_tools_registered", "register_builtin_tools"]
-
-QUERY_LOG_SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "additionalProperties": False,
-    "properties": {
-        "since": {
-            "type": "string",
-            "description": (
-                "Only runs at or after YYYY-MM-DD, or an age like 2d, 6h, or 30m."
-            ),
-        },
-        "failed": {
-            "type": "boolean",
-            "description": "Only failed or aborted runs.",
-        },
-        "run_id": {
-            "type": "string",
-            "description": "Expand one prior run by full id or unique id prefix.",
-        },
-        "limit": {
-            "type": "integer",
-            "minimum": 1,
-            "maximum": 50,
-            "description": "Maximum number of prior runs to list.",
-        },
-    },
-}
-
-QUERY_LOG_SPEC = Capability(
-    CapabilityId("zeta", "query_log"),
-    (
-        "Query prior model runs in the current authorized session. Use it to "
-        "recover earlier decisions, outcomes, tool activity, and prompt trace ids. "
-        "Cite the returned run ids when relying on history."
-    ),
-    QUERY_LOG_SCHEMA,
-)
 
 QUERY_CONTENT_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -189,8 +152,8 @@ def builtin_capabilities() -> dict[str, RegisteredCapability]:
             content_workspace_unavailable,
         ),
         "zeta.query_log": builtin_capability(
-            QUERY_LOG_SPEC,
-            query_log_unavailable,
+            history.QUERY_LOG_SPEC,
+            history.query_log_unavailable,
         ),
         "zeta.transform_content": builtin_capability(
             TRANSFORM_CONTENT_SPEC,
@@ -201,17 +164,6 @@ def builtin_capabilities() -> dict[str, RegisteredCapability]:
         "zeta.read": builtin_capability(read.SPEC, read.run),
         "zeta.web_search": builtin_capability(web.SEARCH_SPEC, web.search),
         "zeta.write": builtin_capability(write.SPEC, write.run),
-    }
-
-
-def query_log_unavailable(_params: dict[str, Any]) -> dict[str, Any]:
-    """Refuse history access unless the runtime supplies an authorized reader."""
-    return {
-        "ok": False,
-        "error": {
-            "code": "query-log-unavailable",
-            "message": "query_log is unavailable outside a durable runtime session",
-        },
     }
 
 

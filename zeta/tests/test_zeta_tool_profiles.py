@@ -27,6 +27,7 @@ from zeta.models import profiles as model_profiles
 from zeta.models.types import ModelInput, ModelOutput, ModelRequest
 from zeta.substrate import InMemoryStore
 from zeta.tools import edit as edit_tool
+from zeta.tools import history as zeta_history
 from zeta.tools import register_builtin_tools
 from zeta_test_support import event_by_type
 
@@ -261,16 +262,21 @@ def test_zeta_query_log_uses_the_injected_runtime_reader() -> None:
     registry = CapabilityRegistry()
     register_builtin_tools(registry)
     executor = RejectingExecutor()
+    history_tools = zeta_history.bind_history_tools(
+        lambda params: {
+            "ok": True,
+            "content": [{"type": "text", "text": "prior run"}],
+            "metadata": {"params": params},
+        }
+    )
     ctx = CapabilityExecutionContext(
         event_sink=None,
         trace_store=None,
         tool_registry=registry,
         tool_executor=executor,
-        query_log_reader=lambda params: {
-            "ok": True,
-            "content": [{"type": "text", "text": "prior run"}],
-            "metadata": {"params": params},
-        },
+        internal_tool_executor=lambda capability_id, params: history_tools[
+            capability_id
+        ](params),
     )
 
     result = asyncio.run(
@@ -314,11 +320,15 @@ def test_zeta_query_log_without_a_runtime_reader_is_unavailable() -> None:
 
     registry = CapabilityRegistry()
     register_builtin_tools(registry)
+    history_tools = zeta_history.bind_history_tools(None)
     ctx = CapabilityExecutionContext(
         event_sink=None,
         trace_store=None,
         tool_registry=registry,
         tool_executor=RejectingExecutor(),
+        internal_tool_executor=lambda capability_id, params: history_tools[
+            capability_id
+        ](params),
     )
 
     result = asyncio.run(

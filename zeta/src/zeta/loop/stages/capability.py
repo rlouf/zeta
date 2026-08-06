@@ -12,12 +12,9 @@ import inspect
 import json
 import sys
 import time
-from collections.abc import Mapping
+from collections.abc import Awaitable, Mapping
 from dataclasses import dataclass
-from datetime import UTC, datetime
-from typing import Any
-
-from jsonschema import Draft202012Validator
+from typing import Any, cast
 
 from zeta.capabilities.execution import (
     CapabilityCallResult,
@@ -38,7 +35,6 @@ from zeta.context.transforms import (
     put_content_node,
 )
 from zeta.events import DraftEvent
-from zeta.ids import publish_event_handle, wait_handle
 from zeta.journal.views import (
     draft_timeline_type,
 )
@@ -46,20 +42,21 @@ from zeta.loop.cancellation import AbortReason
 from zeta.loop.config import AgentConfig
 from zeta.loop.gateway import request_assistant_message
 from zeta.loop.outcomes import (
-    CancelRequest,
-    PublishEventRequest,
     RunState,
-    WaitRequest,
 )
 from zeta.loop.request import RunDependencies
 from zeta.loop.stages.abort import check_run_abort
 from zeta.models.types import tool_call_id
 from zeta.substrate import Derivation, Object, ObjectId, Store
+from zeta.tools.events import (
+    EventToolBindings,
+    bind_event_tools,
+)
+from zeta.tools.events import (
+    event_tool_error as publish_event_error,
+)
 
 TERMINAL_TOOL_STATUSES = {"completed", "failed", "refused", "cancelled", "timed_out"}
-PUBLISH_EVENT_CAPABILITY_ID = "zeta.publish_event"
-WAIT_FOR_CAPABILITY_ID = "zeta.wait_for"
-CANCEL_CAPABILITY_ID = "zeta.cancel"
 QUERY_CONTENT_CAPABILITY_ID = "zeta.query_content"
 TRANSFORM_CONTENT_CAPABILITY_ID = "zeta.transform_content"
 FINISH_CAPABILITY_ID = "zeta.finish"
@@ -157,32 +154,29 @@ async def run_capability_step(
         return CapabilityCallResult(events=[])
     state.note_step("record_capability_call")
     state.note_step("execute_capability")
+    event_tools = bind_event_tools(
+        EventToolBindings(
+            position=position,
+            publishable_events=ctx.publishable_events,
+            source_queue_item_id=ctx.source_queue_item_id,
+            source_agent_id=ctx.source_agent_id,
+            source_session_id=ctx.source_session_id,
+            publish_event_requests=state.publish_event_requests,
+            wait_requests=state.wait_requests,
+            cancel_requests=state.cancel_requests,
+        )
+    )
 
     async def run_internal_tool(
         capability_id: str,
         params: dict[str, Any],
     ) -> dict[str, Any] | None:
-        if capability_id == PUBLISH_EVENT_CAPABILITY_ID:
-            return request_published_event(
-                params,
-                position=position,
-                state=state,
-                ctx=ctx,
-            )
-        if capability_id == WAIT_FOR_CAPABILITY_ID:
-            return request_wait(
-                params,
-                position=position,
-                state=state,
-                ctx=ctx,
-            )
-        if capability_id == CANCEL_CAPABILITY_ID:
-            return request_cancellation(
-                params,
-                position=position,
-                state=state,
-                ctx=ctx,
-            )
+        event_tool = event_tools.get(capability_id)
+        if event_tool is not None:
+            event_result = event_tool(params)
+            if inspect.isawaitable(event_result):
+                return await cast(Awaitable[dict[str, Any]], event_result)
+            return event_result
         if capability_id == QUERY_CONTENT_CAPABILITY_ID:
             return request_content_query(params, ctx=ctx)
         if capability_id == TRANSFORM_CONTENT_CAPABILITY_ID:
@@ -887,139 +881,3 @@ def _content_transform_input_text(item: ContentTransformInput) -> str:
         )
     )
     return f"Content key: {item.key}\nKind: {item.node.kind}\n{rendered}"
-
-
-def request_published_event(
-    params: dict[str, Any],
-    *,
-    position: int,
-    state: RunState,
-    ctx: RunDependencies,
-) -> dict[str, Any]:
-    event_type = params["event_type"]
-    schema = ctx.publishable_events.get(event_type)
-    if event_type not in ctx.publishable_events:
-        return publish_event_error(
-            "undeclared-event-type",
-            f"the agent does not list event {event_type!r} in publishes",
-        )
-    payload = params["payload"]
-    if schema is not None:
-        errors = sorted(
-            Draft202012Validator(schema).iter_errors(payload),
-            key=lambda error: list(error.path),
-        )
-        if errors:
-            return publish_event_error("invalid-event-payload", errors[0].message)
-    at = normalized_publish_time(params.get("at"))
-    if isinstance(at, dict):
-        return at
-    if ctx.source_queue_item_id is None:
-        return publish_event_error(
-            "missing-event-source",
-            "the run does not have a source queue item",
-        )
-    handle = publish_event_handle(ctx.source_queue_item_id, position)
-    state.publish_event_requests.append(
-        PublishEventRequest(
-            handle=handle,
-            event_type=event_type,
-            payload=dict(payload),
-            at=at,
-            position=position,
-        )
-    )
-    return {"ok": True, "handle": handle}
-
-
-def request_wait(
-    params: dict[str, Any],
-    *,
-    position: int,
-    state: RunState,
-    ctx: RunDependencies,
-) -> dict[str, Any]:
-    if ctx.source_queue_item_id is None:
-        return publish_event_error(
-            "missing-wait-source",
-            "the run does not have a source queue item",
-        )
-    deadline = normalized_wait_deadline(params.get("deadline"))
-    if isinstance(deadline, dict):
-        return deadline
-    handle = wait_handle(ctx.source_queue_item_id, position)
-    state.wait_requests.append(
-        WaitRequest(
-            handle=handle,
-            event_type=params["event_type"],
-            fields=dict(params.get("fields") or {}),
-            deadline=deadline,
-            position=position,
-        )
-    )
-    return {"ok": True, "handle": handle, "stop": True}
-
-
-def request_cancellation(
-    params: dict[str, Any],
-    *,
-    position: int,
-    state: RunState,
-    ctx: RunDependencies,
-) -> dict[str, Any]:
-    if ctx.source_agent_id is None or ctx.source_session_id is None:
-        return publish_event_error(
-            "missing-cancel-source",
-            "the run does not have an authored agent session",
-        )
-    handle = params["handle"]
-    state.cancel_requests.append(
-        CancelRequest(
-            handle=handle,
-            reason=params.get("reason"),
-            source_agent_id=ctx.source_agent_id,
-            source_session_id=ctx.source_session_id,
-            position=position,
-        )
-    )
-    return {"ok": True, "handle": handle, "status": "requested"}
-
-
-def normalized_wait_deadline(value: Any) -> str | None | dict[str, Any]:
-    if value is None:
-        return None
-    try:
-        parsed = datetime.fromisoformat(value)
-    except (TypeError, ValueError):
-        return publish_event_error(
-            "invalid-wait-deadline",
-            "deadline must be an ISO 8601 date-time with a UTC offset",
-        )
-    if parsed.tzinfo is None or parsed.utcoffset() is None:
-        return publish_event_error(
-            "invalid-wait-deadline",
-            "deadline must include a UTC offset",
-        )
-    return parsed.astimezone(UTC).isoformat()
-
-
-def normalized_publish_time(value: Any) -> str | None | dict[str, Any]:
-    if value is None:
-        return None
-    try:
-        parsed = datetime.fromisoformat(value)
-    except (TypeError, ValueError):
-        return publish_event_error(
-            "invalid-publish-time",
-            "at must be an ISO 8601 date-time with a UTC offset",
-        )
-    if parsed.tzinfo is None or parsed.utcoffset() is None:
-        return publish_event_error(
-            "invalid-publish-time",
-            "at must include a UTC offset",
-        )
-    return parsed.astimezone(UTC).isoformat()
-
-
-def publish_event_error(code: str, message: str) -> dict[str, Any]:
-    return {"ok": False, "error": {"code": code, "message": message}}

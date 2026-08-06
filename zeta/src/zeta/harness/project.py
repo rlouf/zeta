@@ -39,6 +39,7 @@ from zeta.capabilities.registry import (
     CapabilityRegistry,
     agent_tool_definition_from_content,
     load_agent_tool_definition,
+    validate_agent_tool_definition,
 )
 from zeta.context.transforms import (
     content_node_from_object,
@@ -119,7 +120,11 @@ def load_project_snapshot(
     content_store: Store | None = None,
 ) -> ProjectSnapshot:
     project = load_agent_project(agents_dir, registry=registry)
-    definitions = agent_content_tool_definitions(project, content_store)
+    definitions = (
+        *agent_file_tool_definitions(agents_dir, project),
+        *agent_content_tool_definitions(project, content_store),
+    )
+    validate_agent_tool_counts(project, definitions)
     snapshot_registry = registry_with_agent_tools(tool_registry, definitions)
     project = project_with_agent_tool_grants(project, definitions)
     validate_agent_project(
@@ -238,7 +243,6 @@ def agent_content_tool_definitions(
         return ()
     definitions: list[AgentToolDefinition] = []
     for spec in project.specs:
-        agent_definition_count = 0
         current = store.get_ref(f"agent/{spec.slug}/content/head")
         if current is None:
             continue
@@ -261,14 +265,72 @@ def agent_content_tool_definitions(
                         object_id=object_id,
                     )
                 )
-                agent_definition_count += 1
             except AgentToolDefinitionError as exc:
                 raise ProjectSnapshotUnavailable(str(exc)) from exc
-            if agent_definition_count > 32:
-                raise ProjectSnapshotUnavailable(
-                    f"agent {spec.slug!r} has too many authored tools"
-                )
     return tuple(definitions)
+
+
+def agent_file_tool_definitions(
+    agents_dir: Path,
+    project: AgentProject,
+) -> tuple[AgentToolDefinition, ...]:
+    definitions: list[AgentToolDefinition] = []
+    tools_dir = agents_dir / "tools"
+    for spec in project.specs:
+        owner_dir = tools_dir / spec.slug
+        if not owner_dir.exists():
+            continue
+        if not owner_dir.is_dir():
+            raise ProjectSnapshotUnavailable(
+                f"agent tool path {owner_dir} is not a directory"
+            )
+        for path in sorted(owner_dir.glob("*.py")):
+            if path.is_symlink() or not path.is_file():
+                raise ProjectSnapshotUnavailable(
+                    f"agent tool path {path} must be a regular file"
+                )
+            name = path.stem
+            key = f"tools/{name}"
+            capability_id = f"agent.{spec.slug}.{name}"
+            try:
+                source = path.read_text(encoding="utf-8")
+            except (OSError, UnicodeError) as exc:
+                raise ProjectSnapshotUnavailable(
+                    f"agent tool source {path} could not be read"
+                ) from exc
+            content = {
+                "name": name,
+                "capability_id": capability_id,
+                "source": source,
+            }
+            object_id = content_id(
+                "tool_definition",
+                {"owner": spec.slug, "key": key, "content": content},
+            )
+            try:
+                definitions.append(
+                    validate_agent_tool_definition(
+                        content,
+                        owner=spec.slug,
+                        key=key,
+                        object_id=object_id,
+                    )
+                )
+            except AgentToolDefinitionError as exc:
+                raise ProjectSnapshotUnavailable(str(exc)) from exc
+    return tuple(definitions)
+
+
+def validate_agent_tool_counts(
+    project: AgentProject,
+    definitions: tuple[AgentToolDefinition, ...],
+) -> None:
+    for spec in project.specs:
+        count = sum(definition.owner == spec.slug for definition in definitions)
+        if count > 32:
+            raise ProjectSnapshotUnavailable(
+                f"agent {spec.slug!r} has too many authored tools"
+            )
 
 
 def registry_with_agent_tools(

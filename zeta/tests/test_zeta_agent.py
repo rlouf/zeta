@@ -1863,6 +1863,139 @@ def test_zeta_model_map_transform_keeps_source_order_in_a_collection() -> None:
     ]
 
 
+def test_zeta_python_transform_composes_a_traced_map_and_reduce() -> None:
+    registry = CapabilityRegistry()
+    register_builtin_tools(registry)
+    store = InMemoryStore()
+    workspace = zeta_content_transforms.ContentWorkspace(
+        store,
+        run_id="run-content",
+        session_id="session-content",
+        owner="writer",
+    )
+    head = workspace.initialize()
+    for key, value in (("a", "First source."), ("b", "Second source.")):
+        changed = workspace.transform(
+            {
+                "expected_head": head,
+                "reason": f"Add source {key}.",
+                "inputs": {},
+                "transformation": {"type": "literal", "value": value},
+                "destination": {
+                    "key": key,
+                    "kind": "document",
+                    "scope": "run",
+                    "expected_object_id": None,
+                },
+            }
+        )
+        head = changed.head
+    source = """
+async def main(ctx, transform):
+    documents = ctx.select(kind="document")
+    findings = await transform(
+        inputs=documents,
+        transformation={
+            "type": "model",
+            "mode": "map",
+            "instruction": "Extract one finding.",
+            "max_concurrency": 2,
+        },
+        destination={"key": "findings", "kind": "collection", "scope": "run"},
+    )
+    return await transform(
+        inputs=findings,
+        transformation={
+            "type": "model",
+            "mode": "reduce",
+            "instruction": "Combine the findings.",
+        },
+        destination={"key": "answer", "kind": "text", "scope": "run"},
+    )
+"""
+    gateway = PublishEventGateway(
+        [
+            {
+                "content": "",
+                "tool_calls": [
+                    content_tool_call(
+                        "call-transform",
+                        "transform_content",
+                        {
+                            "expected_head": head,
+                            "reason": "Run a bounded evidence program.",
+                            "inputs": {"keys": ["a", "b"]},
+                            "transformation": {
+                                "type": "python",
+                                "source": source,
+                                "timeout_seconds": 10,
+                            },
+                            "destination": {
+                                "key": "answer",
+                                "kind": "procedure",
+                                "scope": "run",
+                                "expected_object_id": None,
+                            },
+                        },
+                    )
+                ],
+            },
+            {"content": "Finding A."},
+            {"content": "Finding B."},
+            {"content": "Combined answer."},
+            {"content": "done"},
+        ]
+    )
+
+    result = run_agent_turn(
+        "run the evidence program",
+        [],
+        zeta_agent.AgentConfig(
+            max_turns=2,
+            allowed_capabilities=("transform_content",),
+        ),
+        model_gateway=gateway,
+        tool_registry=registry,
+        trace_store=store,
+        content_workspace=workspace,
+    )
+
+    tool_result = next(
+        event
+        for event in timeline_events(result.events)
+        if event.get("type") == "tool_result"
+    )["result"]
+    assert tool_result["ok"] is True
+    output_id = tool_result["object_ids"][0]
+    output = store.get_object(output_id)
+    assert output is not None
+    assert output.data["content"] == "Combined answer."
+    assert any(
+        item.producer == "PythonTransform:v1"
+        for item in store.derivations_for_output(output_id)
+    )
+    model_nodes = [
+        (object_id, obj)
+        for object_id, obj in store.objects("content_node")
+        if any(
+            item.producer == "ModelTransform:v1"
+            for item in store.derivations_for_output(object_id)
+        )
+    ]
+    assert {item.data["key"] for _object_id, item in model_nodes} == {
+        "findings",
+        "answer",
+    }
+    findings_id = next(
+        object_id for object_id, item in model_nodes if item.data["key"] == "findings"
+    )
+    reduced = next(
+        item for _object_id, item in model_nodes if item.data["key"] == "answer"
+    )
+    assert findings_id in reduced.links
+    assert "Combined answer." in json.dumps(gateway.model_inputs[-1].messages)
+
+
 def test_zeta_transform_content_returns_stale_head_errors() -> None:
     registry = CapabilityRegistry()
     register_builtin_tools(registry)

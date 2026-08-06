@@ -1761,16 +1761,19 @@ def test_zeta_model_content_transform_records_child_prompt_and_answer() -> None:
     assert "Check the release evidence." in json.dumps(gateway.model_inputs[2].messages)
     derivations = store.derivations_for_output(output_id)
     assert any(item.producer == "ModelTransform:v1" for item in derivations)
-    assistant_ids = [
-        object_id
-        for object_id in output.links
-        if store.get_object(object_id).kind == "assistant_message"
-    ]
+    assistant_ids = []
+    for object_id in output.links:
+        linked = store.get_object(object_id)
+        assert linked is not None
+        if linked.kind == "assistant_message":
+            assistant_ids.append(object_id)
     assert len(assistant_ids) == 1
     assistant = store.get_object(assistant_ids[0])
     assert assistant is not None
     assert assistant.links
-    assert store.get_object(assistant.links[0]).kind == "prompt"
+    prompt = store.get_object(assistant.links[0])
+    assert prompt is not None
+    assert prompt.kind == "prompt"
 
 
 def test_zeta_model_content_transform_reuses_a_retry_child_result() -> None:
@@ -2015,10 +2018,12 @@ def test_zeta_model_map_transform_keeps_source_order_in_a_collection() -> None:
     collection = store.get_object(tool_result["object_ids"][0])
     assert collection is not None
     assert collection.data["content"] == {"object_ids": list(collection.links[-2:])}
-    assert [
-        store.get_object(item).data["message"]["content"]
-        for item in collection.links[-2:]
-    ] == [
+    messages = []
+    for item in collection.links[-2:]:
+        assistant = store.get_object(item)
+        assert assistant is not None
+        messages.append(assistant.data["message"]["content"])
+    assert messages == [
         "Finding A.",
         "Finding B.",
     ]
@@ -5570,9 +5575,9 @@ def test_zeta_cli_inspects_diffs_and_restores_agent_content(tmp_path: Path) -> N
         "reason": "The second procedure was wrong.",
     }
     reopened = RuntimeEventStore.open(event_store_path(state_dir), read_only=True)
-    assert reopened.content_store().get_ref("agent/writer/content/head").object_id == (
-        first
-    )
+    restored_ref = reopened.content_store().get_ref("agent/writer/content/head")
+    assert restored_ref is not None
+    assert restored_ref.object_id == first
     assert reopened.content_store().get_object(second) is not None
     reopened.close()
 
@@ -5626,12 +5631,14 @@ def test_zeta_cli_lists_disables_and_restores_agent_tools(tmp_path: Path) -> Non
             reason="Replace the tool.",
             source_ids=(first_tool,),
         )
-    assert store.get_ref("agent/writer/content/head").object_id == second_head
+    active_ref = store.get_ref("agent/writer/content/head")
+    assert active_ref is not None
+    assert active_ref.object_id == second_head
     runtime.close()
     persisted = RuntimeEventStore.open(event_store_path(state_dir), read_only=True)
-    assert persisted.content_store().get_ref("agent/writer/content/head").object_id == (
-        second_head
-    )
+    persisted_ref = persisted.content_store().get_ref("agent/writer/content/head")
+    assert persisted_ref is not None
+    assert persisted_ref.object_id == second_head
     persisted.close()
 
     runner = CliRunner()

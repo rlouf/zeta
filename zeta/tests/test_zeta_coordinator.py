@@ -1,4 +1,5 @@
 import asyncio
+from collections.abc import Awaitable, Callable
 from contextlib import nullcontext
 from dataclasses import asdict
 
@@ -206,14 +207,30 @@ def test_attempt_coordinator_promotes_content_inside_the_success_barrier(
     async def run(_invocation):
         return {"content_promotions": [asdict(transformed.promotions[0])]}
 
+    def reject_publication(
+        _agent: ExecutableAgent,
+        _event: Event,
+        _queue_item_id: str,
+        _attempt_id: str,
+        _session_id: str | None,
+        _run_id: str | None,
+    ) -> Callable[[DraftEvent], Awaitable[Event]]:
+        async def publish(_draft: DraftEvent) -> Event:
+            raise AssertionError("content promotion must not publish an event")
+
+        return publish
+
+    def reject_retry(*_args: object, **_kwargs: object) -> Event:
+        raise AssertionError("content promotion must not schedule a retry")
+
     runtime = AttemptCoordinator(
         LifecycleRecorder(store.journal),
         claim_is_current=lambda _queue_item_id: True,
         next_attempt_number=lambda _queue_item_id: 1,
         start_heartbeat=lambda _attempt_id, _queue_item_id, _locks: None,
         stop_heartbeat=stop_heartbeat,
-        event_publisher=lambda *_args: None,
-        retry_scheduler=lambda *_args, **_kwargs: None,
+        event_publisher=reject_publication,
+        retry_scheduler=reject_retry,
         retry_policy=RetryPolicy(),
         completion_batch=store.transaction,
         content_promoter=store.promote_content,

@@ -857,6 +857,7 @@ def test_content_workspace_projects_prompt_nodes_and_a_bounded_manifest() -> Non
     projected = components[1]
     assert projected.source_object_id == nodes["instruction"]
     assert projected.links == (nodes["instruction"],)
+    assert projected.message is not None
     assert "Always run focused tests." in projected.message["content"]
 
 

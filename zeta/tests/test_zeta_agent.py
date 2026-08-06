@@ -68,6 +68,7 @@ from zeta.loop import outcomes as zeta_outcomes
 from zeta.loop import runtime as zeta_agent
 from zeta.loop import runtime_context as zeta_runtime_context
 from zeta.loop import thread_run as zeta_requests
+from zeta.loop.request import ContentTransformBudget
 from zeta.loop.runtime import AgentRunResult
 from zeta.models.profiles import ModelSelection
 from zeta.rpc import jsonrpc as rpc_jsonrpc
@@ -1908,6 +1909,28 @@ def test_zeta_model_content_transform_reuses_a_retry_child_result() -> None:
     assert first_output.links[-1] == second_output.links[-1]
     assert len(first_gateway.model_inputs) == 3
     assert len(second_gateway.model_inputs) == 2
+
+
+def test_zeta_content_transform_budget_reconciles_reserved_model_tokens() -> None:
+    budget = ContentTransformBudget(
+        max_model_calls=2,
+        max_total_tokens=5_000,
+    )
+
+    assert budget.reserve_model_calls(calls=1, input_chars=4) == 1
+    budget.record_model_output(
+        10,
+        input_chars=4,
+        total_tokens=50,
+    )
+
+    assert budget.reserved_tokens == 50
+    assert budget.reserve_model_calls(calls=1, input_chars=4) == 1
+    with pytest.raises(
+        zeta_content_transforms.ContentValidationError,
+        match="model call budget",
+    ):
+        budget.reserve_model_calls(calls=1, input_chars=4)
 
 
 def test_zeta_model_map_transform_keeps_source_order_in_a_collection() -> None:

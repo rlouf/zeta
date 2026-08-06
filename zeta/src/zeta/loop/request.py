@@ -85,7 +85,7 @@ class ContentTransformBudget:
     reserved_tokens: int = 0
 
     def reserve_model_calls(self, *, calls: int, input_chars: int) -> int:
-        estimated_tokens = (input_chars + 3) // 4 + calls * 4_096
+        estimated_tokens = _model_token_reservation(calls, input_chars)
         if self.model_calls + calls > self.max_model_calls:
             raise ContentValidationError("content model call budget is exhausted")
         if self.input_chars + input_chars > self.max_input_chars:
@@ -97,10 +97,32 @@ class ContentTransformBudget:
         self.reserved_tokens += estimated_tokens
         return min(self.max_concurrency, calls)
 
-    def record_model_output(self, output_chars: int) -> None:
+    def record_model_output(
+        self,
+        output_chars: int,
+        *,
+        input_chars: int = 0,
+        total_tokens: int | None = None,
+    ) -> None:
         if self.output_chars + output_chars > self.max_output_chars:
             raise ContentValidationError("content model output budget is exhausted")
+        if total_tokens is not None:
+            if (
+                not isinstance(total_tokens, int)
+                or isinstance(total_tokens, bool)
+                or total_tokens < 0
+            ):
+                raise ContentValidationError("content model token usage is invalid")
+            reserved = _model_token_reservation(1, input_chars)
+            reconciled = max(0, self.reserved_tokens - reserved) + total_tokens
+            if reconciled > self.max_total_tokens:
+                raise ContentValidationError("content model token budget is exhausted")
+            self.reserved_tokens = reconciled
         self.output_chars += output_chars
+
+
+def _model_token_reservation(calls: int, input_chars: int) -> int:
+    return (input_chars + 3) // 4 + calls * 4_096
 
 
 def silent_run_dependencies(ctx: RunDependencies) -> RunDependencies:

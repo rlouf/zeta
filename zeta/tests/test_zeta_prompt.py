@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+import zeta.capabilities.registry as zeta_capability_registry
 import zeta.models.chat_completions as zeta_model
 import zeta.models.types as zeta_models_api
 from zeta.authoring import skills as zeta_skills
@@ -166,10 +167,10 @@ def test_content_head_advance_stores_a_complete_immutable_revision(
             producer="ContentAdvance:v1",
             output_id=revision_id,
             input_ids=(trigger_id,),
-                params={
-                    "owner": "release-agent",
-                    "prior_head": None,
-                    "reason": "Start the run workspace.",
+            params={
+                "owner": "release-agent",
+                "prior_head": None,
+                "reason": "Start the run workspace.",
                 "scope": "run",
                 "scope_id": "run-1",
             },
@@ -538,6 +539,53 @@ def test_content_workspace_rejects_a_tool_outside_the_agent_namespace() -> None:
         )
 
     assert workspace.current_head() == initial_head
+
+
+def test_content_workspace_rejects_a_tool_import_that_times_out(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        zeta_capability_registry,
+        "AGENT_TOOL_IMPORT_TIMEOUT_SECONDS",
+        0.01,
+    )
+    store = InMemoryStore()
+    workspace = context_transforms.ContentWorkspace(
+        store,
+        run_id="run-1",
+        session_id="session-1",
+        owner="writer",
+    )
+    initial_head = workspace.initialize()
+
+    with pytest.raises(
+        context_transforms.ContentValidationError,
+        match="import timed out",
+    ):
+        workspace.transform(
+            {
+                "expected_head": initial_head,
+                "reason": "Create a slow tool.",
+                "inputs": {},
+                "transformation": {
+                    "type": "literal",
+                    "value": {
+                        "name": "slow",
+                        "capability_id": "agent.writer.slow",
+                        "source": "import time\ntime.sleep(1)\ntool = None",
+                    },
+                },
+                "destination": {
+                    "key": "tools/slow",
+                    "kind": "tool_definition",
+                    "scope": "agent",
+                    "expected_object_id": None,
+                },
+            }
+        )
+
+    assert workspace.current_head() == initial_head
+    assert store.get_ref("agent/writer/content/head") is None
 
 
 def test_content_workspace_patch_creates_a_new_node() -> None:

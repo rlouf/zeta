@@ -317,6 +317,20 @@ The content graph has immutable `content_node` objects and complete
 A transformation creates new objects and moves the run content ref with a
 compare-and-swap operation.
 
+Content addressing and compare-and-swap have different purposes. A
+content-addressed object id identifies one exact immutable value.
+Compare-and-swap protects the active ref from an old transformation. It moves
+the ref only when its current head is the head that the transformation read.
+
+```text
+read exact revision -> compute -> store result and derivation -> compare and swap active head
+```
+
+Python or model computation can happen outside the store transaction. Zeta
+stores the candidate objects after the computation. It then activates the new
+revision with one atomic ref update. If another transformation already moved
+the ref, the candidate does not replace the newer active revision.
+
 ```text
 content revision R1 --> transform_content --> content revision R2
                                                 |

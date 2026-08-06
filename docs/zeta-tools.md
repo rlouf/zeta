@@ -515,7 +515,7 @@ An investigation agent can read many large files. It can call
 the agent can use `transform_content` to reduce the current evidence into one
 short session memory. It can continue from that memory in the next turn.
 
-#### Reduce Recursive Model Results
+#### Reduce Child Model Results
 
 A root model can ask child models to inspect many documents. It can call
 `query_context_budget` after each batch. If the usage ratio is high, it can use
@@ -614,6 +614,18 @@ process these values outside the root context.
 
 Use `transform_content` to create a new content revision. Each call selects
 inputs, applies one transformation, and writes one destination.
+
+Each call is one logical commit:
+
+```text
+read an exact revision -> compute -> store the result and its derivation -> try to advance the head
+```
+
+Python or model computation can take time. Another transformation can advance
+the head before that computation finishes. `expected_head` makes Zeta activate
+the result only when the selected revision is still current. If the head moved,
+Zeta does not make the candidate revision active. This prevents an old result
+from replacing newer content.
 
 The call must include `expected_head`. Zeta rejects the call if another change
 moved the current head. A replacement must also include the current object id

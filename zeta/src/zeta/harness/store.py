@@ -521,15 +521,16 @@ class CoordinationSqliteStore(_SqliteBacked):
             self.connection.execute(
                 """
                 INSERT INTO queue_items
-                  (queue_item_id, event_id, target_agent, status, available_at,
-                   updated_at)
-                VALUES (?, ?, ?, ?, ?, ?)
+                  (queue_item_id, event_id, target_agent, input_cursor, status,
+                   available_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(queue_item_id) DO NOTHING
                 """,
                 (
                     queue_item_id,
                     event.id,
                     "",
+                    event.cursor if event.cursor is not None else event.timestamp_ms,
                     "pending",
                     event.timestamp_ms,
                     event.timestamp_ms,
@@ -555,7 +556,7 @@ class CoordinationSqliteStore(_SqliteBacked):
             row = self.connection.execute(
                 """
                 SELECT queue_item_id, event_id, target_agent, project_generation,
-                       session_id, status
+                       session_id, input_cursor, status
                 FROM queue_items
                 WHERE queue_item_id = ?
                 """,
@@ -581,7 +582,7 @@ class CoordinationSqliteStore(_SqliteBacked):
             rows = self.connection.execute(
                 """
                 SELECT queue_item_id, event_id, target_agent, project_generation,
-                       session_id, status, available_at,
+                       session_id, input_cursor, status, available_at,
                        claimed_by, claimed_until, attempt_count, last_error, updated_at
                 FROM queue_items
                 ORDER BY updated_at ASC, queue_item_id ASC
@@ -854,7 +855,7 @@ class CoordinationSqliteStore(_SqliteBacked):
         excluded_params: tuple[str, ...] = ()
         if excluded:
             excluded_clause = (
-                f"AND queue_item_id NOT IN ({_sql_placeholders(excluded)})"
+                f"AND candidate.queue_item_id NOT IN ({_sql_placeholders(excluded)})"
             )
             excluded_params = excluded
         with self.events.write_lock:
@@ -862,12 +863,55 @@ class CoordinationSqliteStore(_SqliteBacked):
             try:
                 row = self.connection.execute(
                     f"""
-                    SELECT queue_item_id, available_at, updated_at
-                    FROM queue_items
-                    WHERE status IN ('pending', 'available')
-                      AND (available_at IS NULL OR available_at <= ?)
+                    SELECT candidate.queue_item_id,
+                           candidate.available_at,
+                           candidate.updated_at
+                    FROM queue_items AS candidate
+                    WHERE candidate.status IN ('pending', 'available')
+                      AND (
+                        candidate.available_at IS NULL
+                        OR candidate.available_at <= ?
+                      )
                       {excluded_clause}
-                    ORDER BY available_at ASC, queue_item_id ASC
+                      AND NOT EXISTS (
+                        SELECT 1
+                        FROM queue_items AS unbound
+                        WHERE unbound.target_agent = ''
+                          AND unbound.status IN ('pending', 'claimed')
+                          AND (
+                            unbound.input_cursor < candidate.input_cursor
+                            OR (
+                              unbound.input_cursor = candidate.input_cursor
+                              AND unbound.queue_item_id < candidate.queue_item_id
+                            )
+                          )
+                      )
+                      AND (
+                        candidate.session_id IS NULL
+                        OR NOT EXISTS (
+                          SELECT 1
+                          FROM queue_items AS earlier
+                          WHERE earlier.session_id = candidate.session_id
+                            AND earlier.status NOT IN (
+                              'completed',
+                              'failed',
+                              'cancelled',
+                              'dead_lettered',
+                              'unhandled'
+                            )
+                            AND (
+                              earlier.input_cursor < candidate.input_cursor
+                              OR (
+                                earlier.input_cursor = candidate.input_cursor
+                                AND earlier.queue_item_id
+                                  < candidate.queue_item_id
+                              )
+                            )
+                        )
+                      )
+                    ORDER BY candidate.available_at ASC,
+                             candidate.input_cursor ASC,
+                             candidate.queue_item_id ASC
                     LIMIT 1
                     """,
                     (now_ms, *excluded_params),

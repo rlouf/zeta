@@ -5297,6 +5297,144 @@ def test_zeta_sqlite_event_store_claims_pending_queue_items(
     assert [row["queue_item_id"] for row in rows] == [queue_item_id]
 
 
+def test_zeta_queue_claim_keeps_a_later_session_turn_behind_a_retry(
+    tmp_path: Path,
+) -> None:
+    event_store = zeta_events.SqliteEventStore(tmp_path / "events.sqlite3")
+    first = event_store.accept(DraftEvent("work.first", "test", {})).event
+    second = event_store.accept(DraftEvent("work.second", "test", {})).event
+    other = event_store.accept(DraftEvent("work.other", "test", {})).event
+    now_ms = other.timestamp_ms + 1_000
+
+    def bind(event: Event, agent: str, session: str, not_before: int) -> None:
+        event_store.accept(
+            DraftEvent(
+                "runtime.queue_item.available",
+                "zeta",
+                {
+                    "queue_item_id": f"qi_{event.id}_{agent}",
+                    "event_id": event.id,
+                    "target_agent": agent,
+                    "session_id": session,
+                    "status": "available",
+                    "not_before": not_before,
+                },
+                session_id=session,
+            )
+        )
+
+    bind(first, "agent-a", "session-a", now_ms + 10_000)
+    bind(second, "agent-a", "session-a", now_ms)
+    bind(other, "agent-b", "session-b", now_ms)
+    event_store.rebuild_projections()
+
+    other_claim = event_store.claim_next_queue_item(
+        "worker-a", lease_ms=1_000, now_ms=now_ms
+    )
+    blocked_claim = event_store.claim_next_queue_item(
+        "worker-b", lease_ms=1_000, now_ms=now_ms
+    )
+    event_store.accept(
+        DraftEvent(
+            "runtime.queue_item.dead_lettered",
+            "zeta",
+            {
+                "queue_item_id": f"qi_{first.id}_agent-a",
+                "event_id": first.id,
+                "target_agent": "agent-a",
+                "session_id": "session-a",
+                "status": "dead_lettered",
+            },
+            session_id="session-a",
+        )
+    )
+    released_claim = event_store.claim_next_queue_item(
+        "worker-b", lease_ms=1_000, now_ms=now_ms
+    )
+
+    assert other_claim is not None
+    assert other_claim.queue_item_id == f"qi_{other.id}_agent-b"
+    assert blocked_claim is None
+    assert released_claim is not None
+    assert released_claim.queue_item_id == f"qi_{second.id}_agent-a"
+
+
+def test_zeta_queue_claim_runs_only_one_turn_per_session(
+    tmp_path: Path,
+) -> None:
+    event_store = zeta_events.SqliteEventStore(tmp_path / "events.sqlite3")
+    first = event_store.accept(DraftEvent("work.first", "test", {})).event
+    second = event_store.accept(DraftEvent("work.second", "test", {})).event
+    other = event_store.accept(DraftEvent("work.other", "test", {})).event
+
+    for event, agent, session in (
+        (first, "agent-a", "session-a"),
+        (second, "agent-a", "session-a"),
+        (other, "agent-b", "session-b"),
+    ):
+        event_store.accept(
+            DraftEvent(
+                "runtime.queue_item.available",
+                "zeta",
+                {
+                    "queue_item_id": f"qi_{event.id}_{agent}",
+                    "event_id": event.id,
+                    "target_agent": agent,
+                    "session_id": session,
+                    "status": "available",
+                },
+                session_id=session,
+            )
+        )
+    now_ms = other.timestamp_ms + 1_000
+
+    first_claim = event_store.claim_next_queue_item(
+        "worker-a", lease_ms=1_000, now_ms=now_ms
+    )
+    concurrent_claim = event_store.claim_next_queue_item(
+        "worker-b", lease_ms=1_000, now_ms=now_ms
+    )
+
+    assert first_claim is not None
+    assert first_claim.queue_item_id == f"qi_{first.id}_agent-a"
+    assert concurrent_claim is not None
+    assert concurrent_claim.queue_item_id == f"qi_{other.id}_agent-b"
+
+
+def test_zeta_queue_claim_does_not_pass_an_earlier_unbound_event(
+    tmp_path: Path,
+) -> None:
+    event_store = zeta_events.SqliteEventStore(tmp_path / "events.sqlite3")
+    earlier = event_store.accept(DraftEvent("work.earlier", "test", {})).event
+    later = event_store.accept(DraftEvent("work.later", "test", {})).event
+    event_store.accept(
+        DraftEvent(
+            "runtime.queue_item.available",
+            "zeta",
+            {
+                "queue_item_id": f"qi_{later.id}_agent-a",
+                "event_id": later.id,
+                "target_agent": "agent-a",
+                "session_id": "session-a",
+                "status": "available",
+            },
+            session_id="session-a",
+        )
+    )
+    now_ms = later.timestamp_ms + 1_000
+
+    first_claim = event_store.claim_next_queue_item(
+        "worker-a", lease_ms=1_000, now_ms=now_ms
+    )
+    second_claim = event_store.claim_next_queue_item(
+        "worker-b", lease_ms=1_000, now_ms=now_ms
+    )
+
+    assert first_claim is not None
+    assert first_claim.queue_item_id == f"qi_{earlier.id}"
+    assert second_claim is None
+
+
 def test_zeta_sqlite_event_append_projects_pending_work_transactionally(
     tmp_path: Path,
 ) -> None:
@@ -5311,6 +5449,7 @@ def test_zeta_sqlite_event_append_projects_pending_work_transactionally(
             "queue_item_id": f"qi_{accepted.id}",
             "event_id": accepted.id,
             "target_agent": "",
+            "input_cursor": accepted.cursor,
             "status": "pending",
             "available_at": accepted.timestamp_ms,
             "claimed_by": None,
@@ -8191,6 +8330,51 @@ def test_zeta_local_runtime_heartbeats_running_locks(
     assert message == f"ran qi_{accepted.id}"
     assert renewed_locks
     assert locks == []
+
+
+def test_zeta_local_runtime_binds_the_session_before_the_agent_runs(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    event_store = zeta_events.SqliteEventStore(tmp_path / "events.sqlite3")
+    accepted = event_store.accept(
+        zeta_events.DraftEvent("github.issue.opened", "github", {})
+    ).event
+    observed: dict[str, Any] = {}
+
+    async def run_agent(run: harness_dispatch.AgentInvocation) -> dict[str, object]:
+        observed.update(event_store.queue_item(cast(str, run.queue_item_id)) or {})
+        observed["claimed_events"] = len(
+            event_store.list_events(Filter(event_type="runtime.queue_item.claimed"))
+        )
+        return {"event_id": run.triggering_event.id}
+
+    agent = harness_dispatch.ExecutableAgent(
+        harness_dispatch.AgentDefinition(
+            "issue-triage",
+            (harness_dispatch.EventPattern("github.issue.opened"),),
+            session="shared",
+        ),
+        run=run_agent,
+    )
+    monkeypatch.setattr(harness_worker, "project_executors", lambda _runtime: (agent,))
+    runtime = harness_worker.WorkerServices(
+        project_root=tmp_path,
+        state_dir=tmp_path,
+        events=event_store,
+    )
+
+    with asyncio.Runner() as runner:
+        try:
+            runner.run(harness_worker.run_once(runtime))
+        finally:
+            runner.run(runtime.aclose())
+
+    assert observed["queue_item_id"] == f"qi_{accepted.id}"
+    assert observed["target_agent"] == "issue-triage"
+    assert observed["session_id"] == "agent/issue-triage"
+    assert observed["status"] == "claimed"
+    assert observed["claimed_events"] == 1
 
 
 def test_zeta_local_runtime_does_not_complete_stale_queue_claim(

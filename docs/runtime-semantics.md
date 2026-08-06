@@ -156,7 +156,17 @@ available -> cancelled
 `pending` is the unbound queue state created for an ingress event. Routing may
 bind it directly when one agent matches, fan it out into multiple `available`
 items, or mark it `unhandled`. Each bound item stores its target agent, session
-id, and project generation before execution starts.
+id, input event cursor, and project generation before execution starts.
+
+The claim query does not pass an earlier non-terminal item in the same session.
+The input event cursor defines this order. A retry keeps the same queue item and
+therefore keeps the same position. Terminal items do not block later turns.
+
+An unbound item has no session id yet. An earlier unbound item blocks later
+claims until routing binds or completes it. This short routing barrier prevents
+a second worker from claiming a later turn before Zeta knows whether both turns
+belong to the same session. It does not stop work in another session after the
+earlier item is bound.
 
 Terminal queue states are `completed`, `cancelled`, `dead_lettered`, and
 `unhandled`. No later lifecycle transition is legal for a terminal item.

@@ -372,6 +372,10 @@ durable event and a directly bound queue item for the session owner. The
 message keeps the existing session id, so the agent receives the existing
 timeline.
 
+Zeta runs one turn at a time in each session. It uses the durable input order.
+A retry keeps its position and blocks later turns in the same session. Other
+sessions can run at the same time.
+
 ### Scaffolding
 
 `zeta new <path>` creates an empty project with the default Inbox Summarizer.

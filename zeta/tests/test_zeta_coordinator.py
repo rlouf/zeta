@@ -1,6 +1,8 @@
 import asyncio
 from contextlib import nullcontext
+from dataclasses import asdict
 
+from zeta.context.transforms import ContentWorkspace
 from zeta.events import DraftEvent, Event
 from zeta.harness.coordinator import AttemptCoordinator
 from zeta.harness.lifecycle import LifecycleRecorder
@@ -10,6 +12,7 @@ from zeta.harness.routing import AgentDefinition, EventPattern, ExecutableAgent
 from zeta.harness.store import RuntimeEventStore
 from zeta.journal.memory import MemoryEventStore
 from zeta.journal.store import Filter
+from zeta.substrate import SqliteObjectStore
 
 
 def triggering_event() -> Event:
@@ -171,6 +174,77 @@ def test_attempt_coordinator_records_successful_transition_sequence() -> None:
         "runtime.attempt.completed",
         "runtime.queue_item.completed",
     ]
+
+
+def test_attempt_coordinator_promotes_content_inside_the_success_barrier(
+    tmp_path,
+) -> None:
+    store = RuntimeEventStore.open(tmp_path / "runtime.sqlite3")
+    content = SqliteObjectStore(store.path)
+    workspace = ContentWorkspace(
+        content,
+        run_id="run-content",
+        session_id="agent/worker/evt_1",
+        owner="worker",
+    )
+    transformed = workspace.transform(
+        {
+            "expected_head": workspace.initialize(),
+            "reason": "Keep this procedure for later runs.",
+            "inputs": {},
+            "transformation": {"type": "literal", "value": "Check the release."},
+            "destination": {
+                "key": "release/check",
+                "kind": "procedure",
+                "scope": "agent",
+                "expected_object_id": None,
+            },
+        }
+    )
+    content.close()
+
+    async def run(_invocation):
+        return {"content_promotions": [asdict(transformed.promotions[0])]}
+
+    runtime = AttemptCoordinator(
+        LifecycleRecorder(store.journal),
+        claim_is_current=lambda _queue_item_id: True,
+        next_attempt_number=lambda _queue_item_id: 1,
+        start_heartbeat=lambda _attempt_id, _queue_item_id, _locks: None,
+        stop_heartbeat=stop_heartbeat,
+        event_publisher=lambda *_args: None,
+        retry_scheduler=lambda *_args, **_kwargs: None,
+        retry_policy=RetryPolicy(),
+        completion_batch=store.transaction,
+        content_promoter=store.promote_content,
+    )
+
+    events = asyncio.run(
+        runtime.run(
+            ExecutableAgent(
+                AgentDefinition("worker", (EventPattern("work.requested"),)),
+                run,
+            ),
+            triggering_event(),
+            queue_item(),
+        )
+    )
+
+    assert [event.event_type for event in events] == [
+        "runtime.queue_item.claimed",
+        "runtime.attempt.started",
+        "runtime.attempt.completed",
+        "runtime.content.promoted",
+        "runtime.queue_item.completed",
+    ]
+    content = SqliteObjectStore(store.path)
+    agent_ref = content.get_ref("agent/worker/content/head")
+    assert agent_ref is not None
+    promoted = content.get_object(agent_ref.object_id)
+    assert promoted is not None
+    assert promoted.data["nodes"]["release/check"] == transformed.output_ids[0]
+    content.close()
+    store.close()
 
 
 def test_attempt_coordinator_checks_completion_claim_inside_batch() -> None:

@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Awaitable, Callable, Iterable
+from collections.abc import Awaitable, Callable, Iterable, Mapping
 from contextlib import AbstractContextManager, nullcontext
 from datetime import UTC, datetime
 from typing import Any, cast
 
 from zeta import ids
+from zeta.context.transforms import ContentConflict, ContentValidationError
 from zeta.effects import EffectDeliveryError
 from zeta.events import DraftEvent, Event
 from zeta.harness.attempts import AttemptStatus
@@ -36,6 +37,7 @@ AgentEventPublisherFactory = Callable[
 RetryScheduler = Callable[..., Event]
 CompletionBatch = Callable[[], AbstractContextManager[None]]
 ResourceCanceller = Callable[..., CancellationResult]
+ContentPromoter = Callable[..., list[dict[str, Any]]]
 
 
 class AttemptCoordinator:
@@ -55,6 +57,7 @@ class AttemptCoordinator:
         blocking_unsafe_effect: Callable[[str], str | None] | None = None,
         completion_batch: CompletionBatch = nullcontext,
         resource_canceller: ResourceCanceller | None = None,
+        content_promoter: ContentPromoter | None = None,
     ) -> None:
         self.lifecycle = lifecycle
         self.claim_is_current = claim_is_current
@@ -67,6 +70,7 @@ class AttemptCoordinator:
         self.blocking_unsafe_effect = blocking_unsafe_effect or (lambda _item: None)
         self.completion_batch = completion_batch
         self.resource_canceller = resource_canceller
+        self.content_promoter = content_promoter
 
     async def run(
         self,
@@ -191,7 +195,12 @@ class AttemptCoordinator:
                         session_id,
                         run_id,
                     )
-        except (ActiveWaitConflict, CancellationError) as exc:
+        except (
+            ActiveWaitConflict,
+            CancellationError,
+            ContentConflict,
+            ContentValidationError,
+        ) as exc:
             events.extend(
                 self.failed_events(
                     exc,
@@ -351,6 +360,16 @@ class AttemptCoordinator:
         events = [attempt_event]
         if not cancelled:
             events.extend(
+                self.record_content_promotions(
+                    result,
+                    attempt_event,
+                    agent,
+                    queue_item_id,
+                    session_id,
+                    run_id,
+                )
+            )
+            events.extend(
                 await self.record_control_requests(
                     result,
                     triggering_event,
@@ -376,6 +395,49 @@ class AttemptCoordinator:
             )
         )
         return events
+
+    def record_content_promotions(
+        self,
+        result: dict[str, Any],
+        completed_attempt: Event,
+        agent: ExecutableAgent,
+        queue_item_id: str,
+        session_id: str | None,
+        run_id: str | None,
+    ) -> list[Event]:
+        raw_requests = result.get("content_promotions", [])
+        if not isinstance(raw_requests, list) or not all(
+            isinstance(request, Mapping) for request in raw_requests
+        ):
+            raise ContentValidationError("content promotions must be a list of objects")
+        if not raw_requests:
+            return []
+        if self.content_promoter is None:
+            raise RuntimeError("the runtime does not support content promotion")
+        if session_id is None or run_id is None:
+            raise ContentValidationError("content promotion requires a session and run")
+        promoted = self.content_promoter(
+            raw_requests,
+            agent_id=agent.definition.agent_id,
+            session_id=session_id,
+            run_id=run_id,
+        )
+        return [
+            self.lifecycle.append(
+                "runtime.content.promoted",
+                completed_attempt,
+                {
+                    **item,
+                    "agent_id": agent.definition.agent_id,
+                    "session_id": session_id,
+                    "source_queue_item_id": queue_item_id,
+                },
+                idempotency_key=f"agent.content:{queue_item_id}:{position}",
+                session_id=session_id,
+                run_id=run_id,
+            )
+            for position, item in enumerate(promoted)
+        ]
 
     async def record_control_requests(
         self,

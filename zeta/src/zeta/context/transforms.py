@@ -83,6 +83,18 @@ class ContentPromotion:
 
 
 @dataclass(frozen=True)
+class ContentPromotionResult:
+    """Describe the exact durable ref change for authoring history."""
+
+    scope: ContentScope
+    key: str
+    object_id: ObjectId | None
+    old_head: ObjectId | None
+    new_head: ObjectId
+    reason: str
+
+
+@dataclass(frozen=True)
 class ContentTransformResult:
     """Return references so transformation data stays outside the root context."""
 
@@ -326,42 +338,102 @@ class ContentWorkspace:
     def promote(self, promotion: ContentPromotion) -> ObjectId:
         """Make requested content durable only at the coordinator success boundary."""
 
-        if promotion.scope == "run":
-            raise ContentValidationError("run content does not need promotion")
-        target = self._head_for_scope(promotion.scope)
+        return self.promote_all((promotion,))[0].new_head
+
+    def promote_all(
+        self,
+        promotions: tuple[ContentPromotion, ...],
+    ) -> tuple[ContentPromotionResult, ...]:
+        """Validate one attempt's baseline before its ordered changes become active."""
+
+        grouped: dict[ContentScope, list[ContentPromotion]] = {}
+        for promotion in promotions:
+            if promotion.scope == "run":
+                raise ContentValidationError("run content does not need promotion")
+            grouped.setdefault(promotion.scope, []).append(promotion)
+        results: list[ContentPromotionResult] = []
+        with self.store.batch():
+            for scope, requests in grouped.items():
+                results.extend(self._promote_scope(scope, requests))
+        return tuple(results)
+
+    def _promote_scope(
+        self,
+        scope: ContentScope,
+        requests: list[ContentPromotion],
+    ) -> list[ContentPromotionResult]:
+        target = self._head_for_scope(scope)
         current = self.store.get_ref(target.ref_name)
-        current_head = current.object_id if current is not None else None
-        if current_head != promotion.expected_head:
-            raise ContentConflict(
-                f"content head {target.ref_name!r} changed from "
-                f"{promotion.expected_head!r} to {current_head!r}"
+        head = current.object_id if current is not None else None
+        revision = self._revision_or_empty(head)
+        self._validate_promotion_baseline(target, head, revision, requests)
+        results: list[ContentPromotionResult] = []
+        for request in requests:
+            next_revision = self._promoted_revision(revision, request)
+            new_head = advance_content_head(
+                self.store,
+                target,
+                expected_head=head,
+                nodes=next_revision.nodes,
+                projection_order=next_revision.projection_order,
+                source_scopes=next_revision.source_scopes,
+                reason=request.reason,
+                source_ids=(request.source_head,),
             )
-        revision = self._revision_or_empty(current_head)
-        if revision.nodes.get(promotion.key) != promotion.expected_object_id:
-            raise ContentConflict(
-                f"content object {promotion.key!r} changed before promotion"
+            results.append(
+                ContentPromotionResult(
+                    scope=request.scope,
+                    key=request.key,
+                    object_id=request.object_id,
+                    old_head=head,
+                    new_head=new_head,
+                    reason=request.reason,
+                )
             )
+            head = new_head
+            revision = next_revision
+        return results
+
+    def _validate_promotion_baseline(
+        self,
+        target: ContentHead,
+        head: ObjectId | None,
+        revision: ContentRevision,
+        requests: list[ContentPromotion],
+    ) -> None:
+        for request in requests:
+            if request.expected_head != head:
+                raise ContentConflict(
+                    f"content head {target.ref_name!r} changed from "
+                    f"{request.expected_head!r} to {head!r}"
+                )
+            if revision.nodes.get(request.key) != request.expected_object_id:
+                raise ContentConflict(
+                    f"content object {request.key!r} changed before promotion"
+                )
+
+    def _promoted_revision(
+        self,
+        revision: ContentRevision,
+        request: ContentPromotion,
+    ) -> ContentRevision:
         nodes = dict(revision.nodes)
         order = list(revision.projection_order)
         sources = dict(revision.source_scopes)
-        if promotion.object_id is None:
-            nodes.pop(promotion.key, None)
-            sources.pop(promotion.key, None)
-            order = [key for key in order if key != promotion.key]
+        if request.object_id is None:
+            nodes.pop(request.key, None)
+            sources.pop(request.key, None)
+            order = [key for key in order if key != request.key]
         else:
-            if promotion.key not in nodes:
-                order.append(promotion.key)
-            nodes[promotion.key] = promotion.object_id
-            sources[promotion.key] = promotion.scope
-        return advance_content_head(
-            self.store,
-            target,
-            expected_head=promotion.expected_head,
-            nodes=nodes,
-            projection_order=tuple(order),
-            source_scopes=sources,
-            reason=promotion.reason,
-            source_ids=(promotion.source_head,),
+            if request.key not in nodes:
+                order.append(request.key)
+            nodes[request.key] = request.object_id
+            sources[request.key] = request.scope
+        return ContentRevision(
+            self.run_head.owner,
+            nodes,
+            tuple(order),
+            sources,
         )
 
     def _drop(
@@ -722,6 +794,38 @@ def _mapping_field(value: Mapping[str, Any], field: str) -> Mapping[str, Any]:
     if not isinstance(item, Mapping):
         raise ContentValidationError(f"content {field} must be an object")
     return item
+
+
+def content_promotion_from_mapping(value: Mapping[str, Any]) -> ContentPromotion:
+    """Validate delayed writes again at the trusted coordinator boundary."""
+
+    raw_scope = value.get("scope")
+    if raw_scope == "session":
+        scope: ContentScope = "session"
+    elif raw_scope == "agent":
+        scope = "agent"
+    else:
+        raise ContentValidationError("content promotion scope must be durable")
+    return ContentPromotion(
+        scope=scope,
+        key=_content_key(_required_string(value, "key")),
+        object_id=_optional_object_id(value.get("object_id"), "object_id"),
+        expected_head=_optional_object_id(value.get("expected_head"), "expected_head"),
+        expected_object_id=_optional_object_id(
+            value.get("expected_object_id"),
+            "expected_object_id",
+        ),
+        source_head=_required_string(value, "source_head"),
+        reason=_required_string(value, "reason"),
+    )
+
+
+def _optional_object_id(value: Any, field: str) -> ObjectId | None:
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value:
+        raise ContentValidationError(f"content {field} must be a string")
+    return value
 
 
 def _content_destination(value: Mapping[str, Any]) -> _ContentDestination:

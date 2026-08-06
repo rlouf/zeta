@@ -633,6 +633,56 @@ def test_content_workspace_identity_requests_promotion_until_success() -> None:
     assert agent_revision.source_scopes == {"testing": "agent"}
 
 
+def test_content_workspace_promotes_several_changes_from_one_durable_head() -> None:
+    store = InMemoryStore()
+    workspace = context_transforms.ContentWorkspace(
+        store,
+        run_id="run-1",
+        session_id="session-1",
+        owner="writer",
+    )
+    first = workspace.transform(
+        {
+            "expected_head": workspace.initialize(),
+            "reason": "Keep the first procedure.",
+            "inputs": {},
+            "transformation": {"type": "literal", "value": "First."},
+            "destination": {
+                "key": "first",
+                "kind": "procedure",
+                "scope": "agent",
+                "expected_object_id": None,
+            },
+        }
+    )
+    second = workspace.transform(
+        {
+            "expected_head": first.head,
+            "reason": "Keep the second procedure.",
+            "inputs": {},
+            "transformation": {"type": "literal", "value": "Second."},
+            "destination": {
+                "key": "second",
+                "kind": "procedure",
+                "scope": "agent",
+                "expected_object_id": None,
+            },
+        }
+    )
+
+    results = workspace.promote_all((*first.promotions, *second.promotions))
+
+    assert results[0].old_head is None
+    assert results[1].old_head == results[0].new_head
+    agent_ref = store.get_ref("agent/writer/content/head")
+    assert agent_ref is not None
+    assert agent_ref.object_id == results[1].new_head
+    revision = context_transforms.content_revision_from_object(
+        store.get_object(agent_ref.object_id)
+    )
+    assert list(revision.nodes) == ["first", "second"]
+
+
 def test_content_workspace_drop_removes_content_without_deleting_history() -> None:
     store = InMemoryStore()
     workspace = context_transforms.ContentWorkspace(

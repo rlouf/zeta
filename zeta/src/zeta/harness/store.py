@@ -8,12 +8,16 @@ import sqlite3
 import time
 from collections.abc import Iterable, Mapping
 from contextlib import AbstractContextManager
-from dataclasses import dataclass, field, replace
+from dataclasses import asdict, dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal, cast
 
 from zeta import ids
+from zeta.context.transforms import (
+    ContentWorkspace,
+    content_promotion_from_mapping,
+)
 from zeta.events import DraftEvent, Event
 from zeta.harness.metrics import MetricAttribute, NullRuntimeMetrics, RuntimeMetrics
 from zeta.harness.projections import runtime_event_projection
@@ -30,7 +34,7 @@ from zeta.harness.protocols import (
 from zeta.journal.sqlite import SqliteEventStore
 from zeta.journal.store import Filter
 from zeta.journal.types import AppendOutcome
-from zeta.substrate.sqlite import sqlite_table_names
+from zeta.substrate.sqlite import SqliteObjectStore, sqlite_table_names
 
 RUNTIME_PROJECTION_TABLES = frozenset(
     {
@@ -1068,6 +1072,42 @@ class RuntimeEventStore:
 
     def transaction(self) -> AbstractContextManager[None]:
         return self._journal.transaction()
+
+    def content_store(self) -> SqliteObjectStore:
+        """Share the runtime transaction so content and lifecycle commit together."""
+
+        tables = sqlite_table_names(self.connection)
+        required = {"objects", "refs", "derivations", "derivation_inputs"}
+        initialize = not required.issubset(tables)
+        if initialize and self.connection.in_transaction:
+            raise RuntimeError(
+                "content storage must be initialized before a transaction"
+            )
+        return SqliteObjectStore.share_connection(
+            self.path,
+            self.connection,
+            write_lock=self.events._write_lock,
+            initialize=initialize,
+        )
+
+    def promote_content(
+        self,
+        requests: Iterable[Mapping[str, Any]],
+        *,
+        agent_id: str,
+        session_id: str,
+        run_id: str,
+    ) -> list[dict[str, Any]]:
+        """Apply authored content under the same commit as attempt completion."""
+
+        workspace = ContentWorkspace(
+            self.content_store(),
+            run_id=run_id,
+            session_id=session_id,
+            owner=agent_id,
+        )
+        promotions = tuple(content_promotion_from_mapping(item) for item in requests)
+        return [asdict(result) for result in workspace.promote_all(promotions)]
 
     def rebuild_projections(self) -> int:
         return self._journal.rebuild_projections()

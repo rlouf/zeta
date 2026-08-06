@@ -84,6 +84,7 @@ class SqliteObjectStore(StoreBase):
         self.path = path
         self.session_id = session_id
         self.read_only = read_only
+        self._owns_connection = True
         if read_only:
             self.connection = sqlite3.connect(
                 sqlite_read_only_uri(path),
@@ -106,6 +107,30 @@ class SqliteObjectStore(StoreBase):
     def scope(self) -> str:
         return f"session/{self.session_id}" if self.session_id is not None else "global"
 
+    @classmethod
+    def share_connection(
+        cls,
+        path: Path,
+        connection: sqlite3.Connection,
+        *,
+        write_lock: threading.RLock,
+        session_id: str | None = None,
+        initialize: bool = False,
+    ) -> SqliteObjectStore:
+        """Join a caller-owned transaction so one commit owns all durable facts."""
+
+        store = cls.__new__(cls)
+        store.path = path
+        store.session_id = session_id
+        store.read_only = False
+        store._owns_connection = False
+        store.connection = connection
+        store._write_lock = write_lock
+        store._batch_depth = 0
+        if initialize:
+            store._init_schema()
+        return store
+
     @contextmanager
     def batch(self) -> Any:
         """Group writes into one transaction resolved at the outermost exit.
@@ -115,21 +140,26 @@ class SqliteObjectStore(StoreBase):
         """
         self._ensure_writable()
         with self._write_lock:
+            owns_transaction = (
+                self._batch_depth == 0 and not self.connection.in_transaction
+            )
+            if owns_transaction:
+                self.connection.execute("BEGIN IMMEDIATE")
             self._batch_depth += 1
             try:
                 yield
             except BaseException:
-                if self._batch_depth == 1:
+                if owns_transaction:
                     self.connection.rollback()
                 raise
             else:
-                if self._batch_depth == 1:
+                if owns_transaction:
                     self.connection.commit()
             finally:
                 self._batch_depth -= 1
 
     def _commit(self) -> None:
-        if self._batch_depth == 0:
+        if self._batch_depth == 0 and self._owns_connection:
             self.connection.commit()
 
     def _fetchone(self, sql: str, params: Sequence[Any] = ()) -> sqlite3.Row | None:
@@ -145,7 +175,8 @@ class SqliteObjectStore(StoreBase):
             raise sqlite3.OperationalError("trace store is read-only")
 
     def close(self) -> None:
-        self.connection.close()
+        if self._owns_connection:
+            self.connection.close()
 
     def __del__(self) -> None:
         try:

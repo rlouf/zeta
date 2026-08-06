@@ -222,11 +222,18 @@ agents/
     code-review.md
     release-notes.md
   tools/
+    release-manager/
+      check_release.py
 ```
 
 Only top-level `agents/*.md` files are interpreted as agents. Directories such
 as `agents/events/`, `agents/skills/`, and `agents/tools/` are resources, not
 nested agents.
+
+A Python file in `agents/tools/<agent-slug>/` defines one tool for that agent.
+The file must expose one `RegisteredCapability` as `tool` or through a
+zero-argument `tool()` factory. Zeta validates the file and records its exact
+source in the project generation. See [Zeta Tools](zeta-tools.md#agent-authored-tools).
 
 The filename stem is the agent slug. It must match `[a-z0-9_-]+`.
 

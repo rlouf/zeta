@@ -1,7 +1,7 @@
 # Zeta Tools
 
 This document describes the Zeta-specific tools `publish_event`, `wait_for`,
-`cancel`, and `query_log`.
+`cancel`, `query_log`, `query_content`, `transform_content`, and `finish`.
 
 ## `publish_event`
 
@@ -437,3 +437,343 @@ The tool can return these error codes:
 Zeta reads at most the 5,000 newest events in the current session. A result
 contains at most 50 runs and 12,000 text characters. These limits keep the
 model context bounded.
+
+## Content Tools
+
+The content tools let an agent use values that do not fit in the root model
+context. The agent can inspect a bounded list, transform selected values, and
+return a stored value.
+
+Add the required tools to the agent definition:
+
+```yaml
+tools:
+  - query_content
+  - transform_content
+  - finish
+```
+
+Content has one of these scopes:
+
+| Scope | Lifetime |
+| --- | --- |
+| `run` | The content is available in later turns of the current run. |
+| `session` | The content is available in later runs of the current session. |
+| `agent` | The content is available in later runs of the same agent. |
+
+Zeta changes the run scope immediately. Zeta changes the session or agent
+scope only after the run succeeds. A failed or cancelled run does not promote
+content.
+
+### Why Content Tools Are Useful
+
+- An agent can keep a complete tool result outside the root context. It can
+  make a short summary for the next turn.
+- An agent can map one model instruction over many documents. It can reduce
+  the results into one report.
+- An agent can keep a decision in the current session. A later run can use the
+  decision without reading the complete earlier conversation.
+- An agent can improve a procedure and keep it for later runs.
+- An agent can build a large answer in content objects. It can return the
+  final object with `finish`.
+
+## `query_content`
+
+Use `query_content` to inspect the current content workspace. The result has
+stable keys, object ids, scopes, and bounded previews. It also has the current
+head id. Use this head id in the next `transform_content` call.
+
+This example lists procedure content whose key starts with `release/`:
+
+```json
+{
+  "key_prefix": "release/",
+  "kind": "procedure",
+  "limit": 20
+}
+```
+
+The tool accepts these fields:
+
+| Field | Required | Rule |
+| --- | --- | --- |
+| `key_prefix` | no | Return keys that start with this value. |
+| `kind` | no | Return content with this kind. |
+| `source_scope` | no | Use `run`, `session`, or `agent`. |
+| `limit` | no | Use an integer from 1 through 50. The default is 20. |
+| `cursor` | no | Use the cursor from an earlier result. |
+
+A result has this form:
+
+```json
+{
+  "ok": true,
+  "head": "sha256:0123456789abcdef",
+  "items": [
+    {
+      "key": "release/check-manifest",
+      "kind": "procedure",
+      "object_id": "sha256:abcdef0123456789",
+      "source_scope": "agent",
+      "chars": 48,
+      "preview": "Check the release manifest before publication."
+    }
+  ],
+  "next_cursor": null
+}
+```
+
+The result does not include complete large values. Use a transformation to
+process these values outside the root context.
+
+## `transform_content`
+
+Use `transform_content` to create a new content revision. Each call selects
+inputs, applies one transformation, and writes one destination.
+
+The call must include `expected_head`. Zeta rejects the call if another change
+moved the current head. A replacement must also include the current object id
+in `destination.expected_object_id`.
+
+### Transformation Types
+
+| Type | Use |
+| --- | --- |
+| `literal` | Store a supplied text or JSON value. |
+| `patch` | Replace selected fields of one content node. |
+| `drop` | Remove selected keys from the new revision. |
+| `identity` | Copy one selected value to another key or scope. |
+| `model` | Run a model over selected values. |
+| `python` | Run Python over selected values and compose model transforms. |
+
+Model transformations support these modes:
+
+| Mode | Use |
+| --- | --- |
+| `one` | Transform the selected values into one result. |
+| `map` | Transform each selected value and keep the input order. |
+| `reduce` | Combine the selected values into one result. |
+
+### Store A Procedure
+
+This call stores a procedure for later runs of the same agent:
+
+```json
+{
+  "expected_head": "sha256:0123456789abcdef",
+  "reason": "The release failed because this check was absent.",
+  "inputs": {},
+  "transformation": {
+    "type": "literal",
+    "value": "Check the manifest before publication.",
+    "title": "Check the release manifest"
+  },
+  "destination": {
+    "key": "release/check-manifest",
+    "kind": "procedure",
+    "scope": "agent",
+    "expected_object_id": null
+  }
+}
+```
+
+The new value is available in the next turn of this run. Zeta requests agent
+promotion. The value becomes durable only if the run succeeds.
+
+### Map Over Documents
+
+This call extracts one finding from each selected document:
+
+```json
+{
+  "expected_head": "sha256:0123456789abcdef",
+  "reason": "Extract evidence from each document.",
+  "inputs": {
+    "kind": "document"
+  },
+  "transformation": {
+    "type": "model",
+    "mode": "map",
+    "instruction": "Extract evidence that is relevant to the objective.",
+    "max_concurrency": 4
+  },
+  "destination": {
+    "key": "findings",
+    "kind": "collection",
+    "scope": "run",
+    "expected_object_id": null
+  }
+}
+```
+
+Zeta stores each child prompt and answer. The collection links to the answers
+in input order. All child calls use one shared run budget.
+
+### Compose Transforms With Python
+
+A Python transformation must define `main(ctx, transform)`. `ctx.select`
+returns the selected graph values. `transform` requests a nested model
+transformation.
+
+```python
+async def main(ctx, transform):
+    documents = ctx.select(kind="document")
+    findings = await transform(
+        inputs=documents,
+        transformation={
+            "type": "model",
+            "mode": "map",
+            "instruction": "Extract one relevant fact.",
+            "max_concurrency": 4,
+        },
+        destination={
+            "key": "findings",
+            "kind": "collection",
+            "scope": "run",
+        },
+    )
+    return await transform(
+        inputs=findings,
+        transformation={
+            "type": "model",
+            "mode": "reduce",
+            "instruction": "Write one report from the findings.",
+        },
+        destination={"key": "report", "kind": "text", "scope": "run"},
+    )
+```
+
+Python can use arbitrary imports, files, network calls, and subprocesses. Zeta
+does not use a security sandbox. Zeta applies a timeout and the shared run
+cancellation signal. Nested model calls use the normal model path and trace.
+
+### Result
+
+A successful call returns object references and the new run head:
+
+```json
+{
+  "ok": true,
+  "status": "applied",
+  "active_scope": "run",
+  "head": "sha256:fedcba9876543210",
+  "object_ids": ["sha256:abcdef0123456789"],
+  "promotions": [
+    {
+      "scope": "agent",
+      "key": "release/check-manifest",
+      "status": "requested"
+    }
+  ]
+}
+```
+
+## `finish`
+
+Use `finish` to select a reachable content object as the final answer. The
+root model does not have to copy a large value into another message.
+
+```json
+{
+  "object_id": "sha256:abcdef0123456789"
+}
+```
+
+A valid call returns this result and stops the run:
+
+```json
+{
+  "ok": true,
+  "stop": true,
+  "object_id": "sha256:abcdef0123456789"
+}
+```
+
+The object must be reachable from the current content head. Zeta reads the
+complete value only at the external result boundary.
+
+## Agent-Authored Tools
+
+An agent can store Python source as content with the kind `tool_definition`.
+The content must contain these fields:
+
+```json
+{
+  "name": "check_release",
+  "capability_id": "agent.release-agent.check_release",
+  "source": "from zeta.capabilities.registry import RegisteredCapability\n..."
+}
+```
+
+The source must expose one `RegisteredCapability` as `tool`. It can also
+expose a zero-argument `tool()` factory. The capability id must have this
+form:
+
+```text
+agent.<agent-slug>.<tool-name>
+```
+
+Use `transform_content` with an agent destination:
+
+```json
+{
+  "expected_head": "sha256:0123456789abcdef",
+  "reason": "Use the release check in later runs.",
+  "inputs": {},
+  "transformation": {
+    "type": "literal",
+    "value": {
+      "name": "check_release",
+      "capability_id": "agent.release-agent.check_release",
+      "source": "...Python source..."
+    }
+  },
+  "destination": {
+    "key": "tools/check_release",
+    "kind": "tool_definition",
+    "scope": "agent",
+    "expected_object_id": null
+  }
+}
+```
+
+Zeta compiles and imports the source in a subprocess before it stores the
+revision. Zeta checks the namespace, name, input schema, delivery mode, source
+size, and collisions. This check tests correctness. It is not a security
+sandbox.
+
+The tool cannot change the current run's tool schema. Zeta activates the tool
+in the next project generation after the run succeeds. The owner agent gets
+the tool automatically. The generation records the exact source, schema, and
+content object id.
+
+Human-authored tools use the same validation and execution path. Put one
+Python module in this directory:
+
+```text
+agents/tools/<agent-slug>/<tool-name>.py
+```
+
+### Inspect And Restore Content
+
+Use these commands to inspect and restore durable agent content:
+
+```sh
+zeta agents content show release-agent
+zeta agents content log release-agent
+zeta agents content diff release-agent OLD_HEAD NEW_HEAD
+zeta agents content restore release-agent HEAD --reason "Restore a working revision."
+```
+
+Use these commands for graph-authored tools:
+
+```sh
+zeta agents tools list release-agent
+zeta agents tools show release-agent check_release
+zeta agents tools disable release-agent check_release --reason "This version is broken."
+zeta agents tools restore release-agent check_release OBJECT_ID --reason "Use the working version."
+```
+
+Restore and disable create new ref states. They do not delete content objects
+or earlier revisions. File-authored modules remain project files and are not
+changed by these commands.

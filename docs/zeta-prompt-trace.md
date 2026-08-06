@@ -71,6 +71,9 @@ Examples:
 
 - `prompt/current`
 - `run/<id>/head`
+- `run/<id>/content/head`
+- `session/<id>/content/head`
+- `agent/<agent-slug>/content/head`
 
 The run head names the latest meaningful trace leaf for a run. In a completed
 model turn this is usually an `assistant_message`. During an interrupted shell
@@ -304,38 +307,40 @@ That gives us a clean contract for future context transforms:
 This is why compaction belongs in prompt construction rather than as a
 destructive timeline rewrite.
 
-### Future Model-Controlled Context
+### Content Transformations
 
-The same object graph can support models manipulating their own context later.
+Zeta does not let a model change a prompt that already exists. The model can
+change the content that Zeta projects into a later prompt.
 
-Today, PromptBuilder decides which components go into the prompt. In the
-future, a model could request context operations as structured actions:
-
-- keep this source component
-- drop this component from future prompts
-- replace these messages with a task-state object
-- rehydrate this compacted source
-- replace this project context with a newer object
-- pin this decision or constraint for the rest of the run
-
-Those operations become much safer if they produce trace objects rather than
-mutating an opaque prompt string.
+The content graph has immutable `content_node` objects and complete
+`content_graph_revision` objects. One content ref selects the active revision.
+A transformation creates new objects and moves the run content ref with a
+compare-and-swap operation.
 
 ```text
-model requests context edit
-        |
-        v
- context transform / policy check
-        |
-        v
- new prompt components with links to old components
-        |
-        v
- next PromptBuilder run
+content revision R1 --> transform_content --> content revision R2
+                                                |
+                                                v
+                                      next PromptBuilder run
 ```
 
-This turns "the model manages its context" from an informal behavior into an
-auditable protocol.
+Each prompt records the exact content revision that it used. Zeta projects one
+prompt component for each selected instruction, procedure, memory, or example.
+Each component links to its source content node. A content manifest records
+the selected keys and the keys that did not fit in the prompt budget.
+
+`query_content` returns bounded previews and object ids. `transform_content`
+can apply a literal, patch, drop, identity, Python, or model transformation.
+`finish` can select a graph object as the final answer.
+
+A Python transformation can request child model transforms. Each child prompt
+and answer uses the normal trace objects. The child answer links to its exact
+prompt. A retry can reuse the recorded child answer through a stable retry
+ref.
+
+Session and agent changes become durable only after the run succeeds. A failed
+or cancelled run keeps its run-local trace, but it does not promote those
+changes.
 
 ## What The Trace Enables
 

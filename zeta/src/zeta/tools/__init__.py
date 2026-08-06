@@ -41,6 +41,10 @@ def builtin_capabilities() -> dict[str, RegisteredCapability]:
             content.QUERY_CONTENT_SPEC,
             content.content_workspace_unavailable,
         ),
+        "zeta.query_context_budget": builtin_capability(
+            history.QUERY_CONTEXT_BUDGET_SPEC,
+            history.query_context_budget_unavailable,
+        ),
         "zeta.query_log": builtin_capability(
             history.QUERY_LOG_SPEC,
             history.query_log_unavailable,

@@ -31,9 +31,11 @@ from zeta.capabilities.types import (
 from zeta.events import Event
 from zeta.journal.memory import MemoryEventStore
 from zeta.loop.runtime import registered_capabilities
+from zeta.substrate import Derivation, InMemoryStore, Object
 from zeta.tools import bash as bash_tool
 from zeta.tools import ensure_builtin_tools_registered, register_builtin_tools
 from zeta.tools import grep as grep_tool
+from zeta.tools import history as history_tool
 from zeta.tools import read as read_tool
 from zeta.tools import web as web_tool
 from zeta.trace.query import (
@@ -41,6 +43,7 @@ from zeta.trace.query import (
     MAX_QUERY_LOG_OUTPUT_CHARS,
     query_run_log,
 )
+from zeta.trace.summarize import estimated_prompt_tokens
 
 ensure_builtin_tools_registered()
 
@@ -1304,6 +1307,157 @@ def test_zeta_query_log_metadata_declares_session_scoped_run_history() -> None:
     assert set(schema["properties"]) == {"since", "failed", "run_id", "limit"}
     assert schema["properties"]["limit"]["maximum"] == 50
     assert "session" in metadata["description"]
+
+
+def test_zeta_query_context_budget_metadata_accepts_no_agent_inputs() -> None:
+    metadata = tool_metadata("query_context_budget")
+
+    assert metadata["id"] == "zeta.query_context_budget"
+    assert metadata["input_schema"] == {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {},
+    }
+    assert "context" in metadata["description"]
+
+
+def test_zeta_query_context_budget_prefers_provider_usage(monkeypatch) -> None:
+    monkeypatch.setattr(
+        history_tool,
+        "model_context_tokens",
+        lambda _url, _model: 99_999,
+    )
+    binding = history_tool.ContextBudgetBinding(
+        telemetry={
+            "usage": {"prompt_tokens": 10_000},
+            "model_context_tokens": 32_768,
+        },
+        selected_url="https://models.test/v1/chat/completions",
+        selected_model="test-model",
+        compaction_strategy="off",
+        compaction_threshold_tokens=None,
+    )
+
+    result = history_tool.query_context_budget({}, binding=binding)
+
+    assert result == {
+        "ok": True,
+        "context_window_tokens": 32_768,
+        "prompt_tokens": 10_000,
+        "prompt_tokens_source": "provider",
+        "reserved_output_tokens": 8_192,
+        "remaining_tokens": 14_576,
+        "usage_ratio": pytest.approx(10_000 / 24_576),
+        "compaction_strategy": "off",
+        "compaction_threshold_tokens": None,
+    }
+
+
+def test_zeta_query_context_budget_estimates_stored_prompt(monkeypatch) -> None:
+    store = InMemoryStore()
+    component_id = store.put_object(
+        Object(
+            kind="user_message",
+            schema="zeta.prompt_component.v1",
+            data={
+                "message": {
+                    "role": "user",
+                    "content": "Inspect the context before compacting it.",
+                }
+            },
+        )
+    )
+    prompt_id = store.put_object(
+        Object(
+            kind="prompt",
+            schema="zeta.prompt.v1",
+            links=(component_id,),
+        )
+    )
+    store.record_derivation(
+        Derivation(
+            producer="PromptBuilder",
+            output_id=prompt_id,
+            input_ids=(component_id,),
+            params={"max_tokens": 1_024},
+        )
+    )
+    monkeypatch.setattr(
+        history_tool,
+        "model_context_tokens",
+        lambda _url, _model: 20_000,
+    )
+    binding = history_tool.ContextBudgetBinding(
+        telemetry={},
+        prompt_object_id=prompt_id,
+        store=store,
+        selected_url="https://models.test/v1/chat/completions",
+        selected_model="test-model",
+        compaction_strategy="structural_trim",
+        compaction_threshold_tokens=15_000,
+    )
+    expected_prompt_tokens = estimated_prompt_tokens(
+        (component_id,),
+        store.get_object,
+    )
+
+    result = history_tool.query_context_budget({}, binding=binding)
+
+    assert result == {
+        "ok": True,
+        "context_window_tokens": 20_000,
+        "prompt_tokens": expected_prompt_tokens,
+        "prompt_tokens_source": "estimate",
+        "reserved_output_tokens": 1_024,
+        "remaining_tokens": 20_000 - expected_prompt_tokens - 1_024,
+        "usage_ratio": pytest.approx(expected_prompt_tokens / 18_976),
+        "compaction_strategy": "structural_trim",
+        "compaction_threshold_tokens": 15_000,
+    }
+
+
+def test_zeta_query_context_budget_keeps_overflow_visible(monkeypatch) -> None:
+    monkeypatch.setattr(
+        history_tool,
+        "model_context_tokens",
+        lambda _url, _model: None,
+    )
+    binding = history_tool.ContextBudgetBinding(
+        telemetry={
+            "usage": {"input_tokens": 2_500},
+            "model_context_tokens": 10_000,
+        },
+    )
+
+    result = history_tool.query_context_budget({}, binding=binding)
+
+    assert result["remaining_tokens"] == -692
+    assert result["usage_ratio"] == pytest.approx(2_500 / 1_808)
+
+
+def test_zeta_query_context_budget_reports_unavailable_values(monkeypatch) -> None:
+    monkeypatch.setattr(
+        history_tool,
+        "model_context_tokens",
+        lambda _url, _model: None,
+    )
+
+    result = history_tool.query_context_budget(
+        {},
+        binding=history_tool.ContextBudgetBinding(telemetry={}),
+    )
+
+    assert result == {
+        "ok": True,
+        "context_window_tokens": None,
+        "prompt_tokens": None,
+        "prompt_tokens_source": "unavailable",
+        "reserved_output_tokens": 8_192,
+        "remaining_tokens": None,
+        "usage_ratio": None,
+        "compaction_strategy": "off",
+        "compaction_threshold_tokens": None,
+    }
 
 
 def test_zeta_query_log_lists_only_prior_runs_in_the_bound_session() -> None:

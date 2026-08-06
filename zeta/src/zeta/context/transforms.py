@@ -67,6 +67,36 @@ class ContentRevision:
 
 
 @dataclass(frozen=True)
+class ContentPromotion:
+    """Delay durable scope changes until the owning attempt succeeds."""
+
+    scope: ContentScope
+    key: str
+    object_id: ObjectId | None
+    expected_head: ObjectId | None
+    expected_object_id: ObjectId | None
+    source_head: ObjectId
+    reason: str
+
+
+@dataclass(frozen=True)
+class ContentTransformResult:
+    """Return references so transformation data stays outside the root context."""
+
+    head: ObjectId
+    output_ids: tuple[ObjectId, ...]
+    promotions: tuple[ContentPromotion, ...] = ()
+
+
+@dataclass(frozen=True)
+class _ContentDestination:
+    scope: ContentScope
+    key: str | None
+    kind: str | None
+    expected_object_id: ObjectId | None
+
+
+@dataclass(frozen=True)
 class ContentHead:
     """Keep durable content refs explicit and separate from prompt trace refs."""
 
@@ -188,6 +218,322 @@ class ContentWorkspace:
             "next_cursor": next_offset if next_offset < len(items) else None,
         }
 
+    def transform(self, params: Mapping[str, Any]) -> ContentTransformResult:
+        """Apply one typed operation and expose durable writes as requests."""
+
+        expected_head = _required_string(params, "expected_head")
+        current_head = self.current_head()
+        if expected_head != current_head:
+            raise ContentConflict(
+                f"content head {self.run_head.ref_name!r} changed from "
+                f"{expected_head!r} to {current_head!r}"
+            )
+        reason = _required_string(params, "reason")
+        inputs = _mapping_field(params, "inputs")
+        operation = _mapping_field(params, "transformation")
+        destination = _content_destination(_mapping_field(params, "destination"))
+        revision = self.revision()
+        selected = self._select(revision, inputs)
+        operation_type = _required_string(operation, "type")
+        if operation_type == "drop":
+            return self._drop(
+                revision,
+                selected,
+                destination=destination,
+                expected_head=expected_head,
+                reason=reason,
+            )
+        node = self._derived_node(
+            operation_type,
+            operation,
+            selected,
+            destination=destination,
+        )
+        return self._store_derived_node(
+            revision,
+            node,
+            selected,
+            destination=destination,
+            expected_head=expected_head,
+            reason=reason,
+        )
+
+    def promote(self, promotion: ContentPromotion) -> ObjectId:
+        """Make requested content durable only at the coordinator success boundary."""
+
+        if promotion.scope == "run":
+            raise ContentValidationError("run content does not need promotion")
+        target = self._head_for_scope(promotion.scope)
+        current = self.store.get_ref(target.ref_name)
+        current_head = current.object_id if current is not None else None
+        if current_head != promotion.expected_head:
+            raise ContentConflict(
+                f"content head {target.ref_name!r} changed from "
+                f"{promotion.expected_head!r} to {current_head!r}"
+            )
+        revision = self._revision_or_empty(current_head)
+        if revision.nodes.get(promotion.key) != promotion.expected_object_id:
+            raise ContentConflict(
+                f"content object {promotion.key!r} changed before promotion"
+            )
+        nodes = dict(revision.nodes)
+        order = list(revision.projection_order)
+        sources = dict(revision.source_scopes)
+        if promotion.object_id is None:
+            nodes.pop(promotion.key, None)
+            sources.pop(promotion.key, None)
+            order = [key for key in order if key != promotion.key]
+        else:
+            if promotion.key not in nodes:
+                order.append(promotion.key)
+            nodes[promotion.key] = promotion.object_id
+            sources[promotion.key] = promotion.scope
+        return advance_content_head(
+            self.store,
+            target,
+            expected_head=promotion.expected_head,
+            nodes=nodes,
+            projection_order=tuple(order),
+            source_scopes=sources,
+            reason=promotion.reason,
+            source_ids=(promotion.source_head,),
+        )
+
+    def _drop(
+        self,
+        revision: ContentRevision,
+        selected: tuple[tuple[str, ObjectId], ...],
+        *,
+        destination: _ContentDestination,
+        expected_head: ObjectId,
+        reason: str,
+    ) -> ContentTransformResult:
+        key, object_id = _one_selected(selected, "drop")
+        if destination.key is not None and destination.key != key:
+            raise ContentValidationError("drop destination key must match its input")
+        destination = _ContentDestination(
+            destination.scope,
+            key,
+            None,
+            destination.expected_object_id,
+        )
+        promotion = self._promotion_for(
+            destination,
+            object_id=None,
+            source_head=expected_head,
+            reason=reason,
+        )
+        nodes = dict(revision.nodes)
+        nodes.pop(key)
+        sources = dict(revision.source_scopes)
+        sources.pop(key)
+        order = tuple(item for item in revision.projection_order if item != key)
+        head = advance_content_head(
+            self.store,
+            self.run_head,
+            expected_head=expected_head,
+            nodes=nodes,
+            projection_order=order,
+            source_scopes=sources,
+            reason=reason,
+            source_ids=(object_id,),
+        )
+        promotion = _promotion_with_source_head(promotion, head)
+        return ContentTransformResult(
+            head=head,
+            output_ids=(),
+            promotions=(() if promotion is None else (promotion,)),
+        )
+
+    def _store_derived_node(
+        self,
+        revision: ContentRevision,
+        node: ContentNode,
+        selected: tuple[tuple[str, ObjectId], ...],
+        *,
+        destination: _ContentDestination,
+        expected_head: ObjectId,
+        reason: str,
+    ) -> ContentTransformResult:
+        if destination.key is None:
+            raise ContentValidationError("content destination key is required")
+        promotion = self._promotion_for(
+            destination,
+            object_id=None,
+            source_head=expected_head,
+            reason=reason,
+            validate_only=True,
+        )
+        source_ids = tuple(object_id for _, object_id in selected)
+        with self.store.batch():
+            object_id = put_content_node(self.store, node, links=source_ids)
+            nodes = dict(revision.nodes)
+            order = list(revision.projection_order)
+            if destination.key not in nodes:
+                order.append(destination.key)
+            nodes[destination.key] = object_id
+            sources = dict(revision.source_scopes)
+            sources[destination.key] = "run"
+            head = advance_content_head(
+                self.store,
+                self.run_head,
+                expected_head=expected_head,
+                nodes=nodes,
+                projection_order=tuple(order),
+                source_scopes=sources,
+                reason=reason,
+                source_ids=source_ids,
+            )
+            if promotion is not None:
+                promotion = ContentPromotion(
+                    scope=promotion.scope,
+                    key=promotion.key,
+                    object_id=object_id,
+                    expected_head=promotion.expected_head,
+                    expected_object_id=promotion.expected_object_id,
+                    source_head=head,
+                    reason=promotion.reason,
+                )
+        return ContentTransformResult(
+            head=head,
+            output_ids=(object_id,),
+            promotions=(() if promotion is None else (promotion,)),
+        )
+
+    def _derived_node(
+        self,
+        operation_type: str,
+        operation: Mapping[str, Any],
+        selected: tuple[tuple[str, ObjectId], ...],
+        *,
+        destination: _ContentDestination,
+    ) -> ContentNode:
+        if destination.key is None or destination.kind is None:
+            raise ContentValidationError(
+                "content destination key and kind are required"
+            )
+        if operation_type == "literal":
+            if "value" not in operation:
+                raise ContentValidationError("literal transformation requires value")
+            attributes = operation.get("attributes")
+            if attributes is not None and not isinstance(attributes, Mapping):
+                raise ContentValidationError("content attributes must be an object")
+            return ContentNode(
+                destination.key,
+                destination.kind,
+                operation["value"],
+                title=str(operation.get("title") or ""),
+                attributes=dict(attributes or {}),
+            )
+        key, object_id = _one_selected(selected, operation_type)
+        source = self._node(object_id)
+        if operation_type == "identity":
+            return ContentNode(
+                destination.key,
+                destination.kind,
+                source.content,
+                title=source.title,
+                attributes=dict(source.attributes or {}),
+            )
+        if operation_type != "patch":
+            raise ContentValidationError(
+                f"unsupported content transformation {operation_type!r}"
+            )
+        patch = _mapping_field(operation, "patch")
+        unknown = set(patch) - {"content", "title", "attributes"}
+        if unknown:
+            raise ContentValidationError(
+                f"unsupported content patch fields: {', '.join(sorted(unknown))}"
+            )
+        attributes = patch.get("attributes", source.attributes or {})
+        if not isinstance(attributes, Mapping):
+            raise ContentValidationError("content attributes must be an object")
+        return ContentNode(
+            destination.key,
+            destination.kind,
+            patch.get("content", source.content),
+            title=str(patch.get("title", source.title)),
+            attributes=dict(attributes),
+        )
+
+    def _select(
+        self,
+        revision: ContentRevision,
+        inputs: Mapping[str, Any],
+    ) -> tuple[tuple[str, ObjectId], ...]:
+        raw_keys = inputs.get("keys")
+        keys: list[str]
+        if raw_keys is None:
+            keys = (
+                list(revision.projection_order)
+                if "kind" in inputs or "source_scope" in inputs
+                else []
+            )
+        elif isinstance(raw_keys, list) and all(
+            isinstance(key, str) for key in raw_keys
+        ):
+            keys = list(dict.fromkeys(key for key in raw_keys if isinstance(key, str)))
+        else:
+            raise ContentValidationError("content input keys must be a string list")
+        missing = [key for key in keys if key not in revision.nodes]
+        if missing:
+            raise ContentValidationError(f"unknown content key {missing[0]!r}")
+        kind = inputs.get("kind")
+        source_scope = inputs.get("source_scope")
+        return tuple(
+            (key, revision.nodes[key])
+            for key in keys
+            if (kind is None or self._node(revision.nodes[key]).kind == kind)
+            and (source_scope is None or revision.source_scopes[key] == source_scope)
+        )
+
+    def _promotion_for(
+        self,
+        destination: _ContentDestination,
+        *,
+        object_id: ObjectId | None,
+        source_head: ObjectId,
+        reason: str,
+        validate_only: bool = False,
+    ) -> ContentPromotion | None:
+        if destination.key is None:
+            raise ContentValidationError("content destination key is required")
+        target = self._head_for_scope(destination.scope)
+        current = self.store.get_ref(target.ref_name)
+        current_head = current.object_id if current is not None else None
+        revision = self._revision_or_empty(current_head)
+        if revision.nodes.get(destination.key) != destination.expected_object_id:
+            raise ContentConflict(
+                f"content object {destination.key!r} changed before transformation"
+            )
+        if destination.scope == "run":
+            return None
+        return ContentPromotion(
+            scope=destination.scope,
+            key=destination.key,
+            object_id=None if validate_only else object_id,
+            expected_head=current_head,
+            expected_object_id=destination.expected_object_id,
+            source_head=source_head,
+            reason=reason,
+        )
+
+    def _head_for_scope(self, scope: ContentScope) -> ContentHead:
+        if scope == "run":
+            return self.run_head
+        if scope == "session":
+            return self.session_head
+        if self.agent_head is None:
+            raise ContentValidationError("agent content is unavailable for this run")
+        return self.agent_head
+
+    def _revision_or_empty(self, head_id: ObjectId | None) -> ContentRevision:
+        if head_id is None:
+            return ContentRevision(self.run_head.owner, {}, (), {})
+        revision = content_revision_from_object(self.store.get_object(head_id))
+        self._validate_owner(revision)
+        return revision
+
     def _merge_durable_head(
         self,
         head: ContentHead,
@@ -245,6 +591,72 @@ class ContentWorkspace:
             "chars": len(rendered),
             "preview": rendered[:MAX_CONTENT_PREVIEW_CHARS],
         }
+
+
+def _required_string(value: Mapping[str, Any], field: str) -> str:
+    item = value.get(field)
+    if not isinstance(item, str) or not item.strip():
+        raise ContentValidationError(f"content {field} must be a non-empty string")
+    return item
+
+
+def _mapping_field(value: Mapping[str, Any], field: str) -> Mapping[str, Any]:
+    item = value.get(field)
+    if not isinstance(item, Mapping):
+        raise ContentValidationError(f"content {field} must be an object")
+    return item
+
+
+def _content_destination(value: Mapping[str, Any]) -> _ContentDestination:
+    if "scope" not in value:
+        raise ContentValidationError("content destination scope is required")
+    raw_scope = value.get("scope")
+    if raw_scope == "run":
+        scope: ContentScope = "run"
+    elif raw_scope == "session":
+        scope = "session"
+    elif raw_scope == "agent":
+        scope = "agent"
+    else:
+        raise ContentValidationError(f"unsupported content scope {raw_scope!r}")
+    raw_key = value.get("key")
+    key = None if raw_key is None else _content_key(str(raw_key))
+    raw_kind = value.get("kind")
+    kind = None if raw_kind is None else str(raw_kind)
+    if "expected_object_id" not in value:
+        raise ContentValidationError("content expected_object_id is required")
+    expected_object_id = value.get("expected_object_id")
+    if expected_object_id is not None and not isinstance(expected_object_id, str):
+        raise ContentValidationError("content expected_object_id must be a string")
+    return _ContentDestination(scope, key, kind, expected_object_id)
+
+
+def _one_selected(
+    selected: tuple[tuple[str, ObjectId], ...],
+    operation: str,
+) -> tuple[str, ObjectId]:
+    if len(selected) != 1:
+        raise ContentValidationError(
+            f"{operation} transformation requires exactly one content input"
+        )
+    return selected[0]
+
+
+def _promotion_with_source_head(
+    promotion: ContentPromotion | None,
+    source_head: ObjectId,
+) -> ContentPromotion | None:
+    if promotion is None:
+        return None
+    return ContentPromotion(
+        scope=promotion.scope,
+        key=promotion.key,
+        object_id=promotion.object_id,
+        expected_head=promotion.expected_head,
+        expected_object_id=promotion.expected_object_id,
+        source_head=source_head,
+        reason=promotion.reason,
+    )
 
 
 def content_node_object(

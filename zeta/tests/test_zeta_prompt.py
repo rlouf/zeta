@@ -454,6 +454,228 @@ def test_content_workspace_rejects_content_from_another_owner() -> None:
         workspace.initialize()
 
 
+def test_content_workspace_literal_transform_updates_the_run_head() -> None:
+    store = InMemoryStore()
+    workspace = context_transforms.ContentWorkspace(
+        store,
+        run_id="run-1",
+        session_id="session-1",
+        owner="writer",
+    )
+    initial_head = workspace.initialize()
+
+    result = workspace.transform(
+        {
+            "expected_head": initial_head,
+            "reason": "Keep the release procedure.",
+            "inputs": {},
+            "transformation": {
+                "type": "literal",
+                "value": "Check the manifest before release.",
+                "title": "Release check",
+                "attributes": {"priority": 50},
+            },
+            "destination": {
+                "key": "release/check",
+                "kind": "procedure",
+                "scope": "run",
+                "expected_object_id": None,
+            },
+        }
+    )
+
+    assert result.head == workspace.current_head()
+    assert result.head != initial_head
+    assert result.promotions == ()
+    assert workspace.query()["items"] == [
+        {
+            "key": "release/check",
+            "kind": "procedure",
+            "title": "Release check",
+            "object_id": result.output_ids[0],
+            "source_scope": "run",
+            "chars": 34,
+            "preview": "Check the manifest before release.",
+        }
+    ]
+
+
+def test_content_workspace_patch_creates_a_new_node() -> None:
+    store = InMemoryStore()
+    workspace = context_transforms.ContentWorkspace(
+        store,
+        run_id="run-1",
+        session_id="session-1",
+        owner="writer",
+    )
+    initial_head = workspace.initialize()
+    created = workspace.transform(
+        {
+            "expected_head": initial_head,
+            "reason": "Create a decision.",
+            "inputs": {},
+            "transformation": {"type": "literal", "value": "Use memory."},
+            "destination": {
+                "key": "storage",
+                "kind": "memory",
+                "scope": "run",
+                "expected_object_id": None,
+            },
+        }
+    )
+    old_node = created.output_ids[0]
+
+    patched = workspace.transform(
+        {
+            "expected_head": created.head,
+            "reason": "Use durable storage.",
+            "inputs": {"keys": ["storage"]},
+            "transformation": {
+                "type": "patch",
+                "patch": {"content": "Use SQLite.", "title": "Storage decision"},
+            },
+            "destination": {
+                "key": "storage",
+                "kind": "memory",
+                "scope": "run",
+                "expected_object_id": old_node,
+            },
+        }
+    )
+
+    assert patched.output_ids != created.output_ids
+    assert (
+        context_transforms.content_node_from_object(store.get_object(old_node)).content
+        == "Use memory."
+    )
+    assert context_transforms.content_node_from_object(
+        store.get_object(patched.output_ids[0])
+    ) == context_transforms.ContentNode(
+        key="storage",
+        kind="memory",
+        content="Use SQLite.",
+        title="Storage decision",
+        attributes={},
+    )
+    with pytest.raises(context_transforms.ContentConflict, match="content head"):
+        workspace.transform(
+            {
+                "expected_head": created.head,
+                "reason": "Apply stale work.",
+                "inputs": {"keys": ["storage"]},
+                "transformation": {
+                    "type": "patch",
+                    "patch": {"content": "Use files."},
+                },
+                "destination": {
+                    "key": "storage",
+                    "kind": "memory",
+                    "scope": "run",
+                    "expected_object_id": old_node,
+                },
+            }
+        )
+
+
+def test_content_workspace_identity_requests_promotion_until_success() -> None:
+    store = InMemoryStore()
+    workspace = context_transforms.ContentWorkspace(
+        store,
+        run_id="run-1",
+        session_id="session-1",
+        owner="writer",
+    )
+    initial_head = workspace.initialize()
+    created = workspace.transform(
+        {
+            "expected_head": initial_head,
+            "reason": "Create a reusable procedure.",
+            "inputs": {},
+            "transformation": {
+                "type": "literal",
+                "value": "Run focused tests first.",
+            },
+            "destination": {
+                "key": "testing",
+                "kind": "procedure",
+                "scope": "run",
+                "expected_object_id": None,
+            },
+        }
+    )
+
+    promoted = workspace.transform(
+        {
+            "expected_head": created.head,
+            "reason": "Reuse this procedure in later runs.",
+            "inputs": {"keys": ["testing"]},
+            "transformation": {"type": "identity"},
+            "destination": {
+                "key": "testing",
+                "kind": "procedure",
+                "scope": "agent",
+                "expected_object_id": None,
+            },
+        }
+    )
+
+    assert store.get_ref("agent/writer/content/head") is None
+    assert len(promoted.promotions) == 1
+    promotion = promoted.promotions[0]
+    assert promotion.scope == "agent"
+    workspace.promote(promotion)
+    agent_ref = store.get_ref("agent/writer/content/head")
+    assert agent_ref is not None
+    agent_revision = context_transforms.content_revision_from_object(
+        store.get_object(agent_ref.object_id)
+    )
+    assert agent_revision.nodes == {"testing": promoted.output_ids[0]}
+    assert agent_revision.source_scopes == {"testing": "agent"}
+
+
+def test_content_workspace_drop_removes_content_without_deleting_history() -> None:
+    store = InMemoryStore()
+    workspace = context_transforms.ContentWorkspace(
+        store,
+        run_id="run-1",
+        session_id="session-1",
+        owner="writer",
+    )
+    initial = workspace.initialize()
+    created = workspace.transform(
+        {
+            "expected_head": initial,
+            "reason": "Create temporary content.",
+            "inputs": {},
+            "transformation": {"type": "literal", "value": "Temporary."},
+            "destination": {
+                "key": "temporary",
+                "kind": "text",
+                "scope": "run",
+                "expected_object_id": None,
+            },
+        }
+    )
+    object_id = created.output_ids[0]
+
+    dropped = workspace.transform(
+        {
+            "expected_head": created.head,
+            "reason": "Remove temporary content.",
+            "inputs": {"keys": ["temporary"]},
+            "transformation": {"type": "drop"},
+            "destination": {
+                "scope": "run",
+                "expected_object_id": object_id,
+            },
+        }
+    )
+
+    assert dropped.output_ids == ()
+    assert workspace.revision().nodes == {}
+    assert store.get_object(object_id) is not None
+
+
 def prepare_prompt(
     builder: zeta_context.PromptBuilder,
     objective: str,

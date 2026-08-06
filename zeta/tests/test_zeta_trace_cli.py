@@ -17,6 +17,7 @@ from click.testing import CliRunner
 from zeta.cli.main import cli as zeta_cli
 from zeta.context.builder import PromptBuilder
 from zeta.events import DraftEvent
+from zeta.harness.store import RuntimeEventStore
 from zeta.journal.sqlite import (
     SqliteEventStore,
     available_session_ids,
@@ -1604,6 +1605,25 @@ def test_zeta_sqlite_store_batch_defers_commit(tmp_path: Path) -> None:
     assert reader.get_object(object_id) is not None
     store.close()
     reader.close()
+
+
+def test_zeta_shared_content_store_leaves_rollback_to_runtime_transaction(
+    tmp_path: Path,
+) -> None:
+    runtime = RuntimeEventStore.open(tmp_path / "runtime.sqlite3")
+    shared = runtime.content_store()
+    content = Object("text", "test.v1", {"value": "temporary"})
+
+    with pytest.raises(RuntimeError, match="roll back"):
+        with runtime.transaction():
+            object_id = shared.put_object(content)
+            raise RuntimeError("roll back")
+
+    reader = SqliteObjectStore(runtime.path)
+    assert reader.get_object(object_id) is None
+    reader.close()
+    shared.close()
+    runtime.close()
 
 
 def test_zeta_record_event_does_not_write_trace_timeline_batch() -> None:

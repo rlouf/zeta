@@ -195,6 +195,7 @@ class _QueueingDispatcher:
         executors: Iterable[ExecutableAgent] = (),
         publish_event: Callable[[Event], None] | None = None,
         retry_policy: RetryPolicy | None = None,
+        content_promoter: Callable[..., list[dict[str, Any]]] | None = None,
     ) -> None:
         self.event_sink = event_sink
         self.executors = tuple(executors)
@@ -223,6 +224,7 @@ class _QueueingDispatcher:
             blocking_unsafe_effect=self._blocking_unsafe_effect,
             completion_batch=completion_batch,
             resource_canceller=getattr(event_sink, "cancel_resource", None),
+            content_promoter=content_promoter,
         )
 
     async def publish_event(
@@ -652,14 +654,16 @@ class QueueingDispatcher(_QueueingDispatcher):
         lease_ms: int = 60_000,
         claim_token: str | None = None,
     ) -> None:
+        resolved_queue_store = queue_store or cast(RuntimeQueueStore, event_sink)
         super().__init__(
             event_sink,
             routes=routes,
             executors=executors,
             publish_event=publish_event,
             retry_policy=retry_policy,
+            content_promoter=getattr(resolved_queue_store, "promote_content", None),
         )
-        self.queue_store = queue_store or cast(RuntimeQueueStore, event_sink)
+        self.queue_store = resolved_queue_store
         self.worker_name = worker_name
         self.lifecycle.worker_name = worker_name
         self.heartbeat_interval_seconds = heartbeat_interval_seconds

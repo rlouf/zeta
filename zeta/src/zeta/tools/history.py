@@ -9,6 +9,7 @@ from typing import Any
 from zeta.capabilities.executors import CapabilityFunction
 from zeta.capabilities.types import Capability, CapabilityId
 from zeta.context.builder import prompt_builder_params
+from zeta.context.transforms import BudgetThresholdPromptTransform
 from zeta.models.chat_completions import DEFAULT_MAX_COMPLETION_TOKENS
 from zeta.models.limits import model_context_tokens
 from zeta.substrate import ObjectId, Store
@@ -99,6 +100,18 @@ def bind_context_budget_tools(
             binding=binding,
         ),
     }
+
+
+def context_compaction_settings(transform: object) -> tuple[str, int | None]:
+    """Report the effective threshold without exposing prompt transform objects."""
+    if not isinstance(transform, BudgetThresholdPromptTransform):
+        return "off", None
+    strategies = {
+        "PromptStructuralTrim:v1": "structural_trim",
+        "PromptDropOldest:v1": "drop_oldest",
+        "PromptTaskStateExtractor:v1": "task_state",
+    }
+    return strategies.get(transform.producer, "custom"), transform.max_tokens
 
 
 def query_log(

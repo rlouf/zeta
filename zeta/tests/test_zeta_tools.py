@@ -1460,6 +1460,55 @@ def test_zeta_query_context_budget_reports_unavailable_values(monkeypatch) -> No
     }
 
 
+def test_zeta_query_context_budget_rejects_calls_without_an_active_run() -> None:
+    assert history_tool.query_context_budget_unavailable({}) == {
+        "ok": False,
+        "error": {
+            "code": "query-context-budget-unavailable",
+            "message": "query_context_budget is unavailable outside an active run",
+        },
+    }
+
+
+def test_zeta_query_context_budget_ignores_a_non_prompt_trace(monkeypatch) -> None:
+    store = InMemoryStore()
+    object_id = store.put_object(
+        Object(kind="tool_result", schema="zeta.tool_result.v1")
+    )
+    monkeypatch.setattr(
+        history_tool,
+        "model_context_tokens",
+        lambda _url, _model: None,
+    )
+
+    result = history_tool.query_context_budget(
+        {},
+        binding=history_tool.ContextBudgetBinding(
+            telemetry={},
+            prompt_object_id=object_id,
+            store=store,
+        ),
+    )
+
+    assert result["prompt_tokens"] is None
+    assert result["prompt_tokens_source"] == "unavailable"
+
+
+def test_zeta_query_context_budget_omits_ratio_without_usable_prompt_space() -> None:
+    result = history_tool.query_context_budget(
+        {},
+        binding=history_tool.ContextBudgetBinding(
+            telemetry={
+                "usage": {"prompt_tokens": 1},
+                "model_context_tokens": 8_192,
+            },
+        ),
+    )
+
+    assert result["remaining_tokens"] == -1
+    assert result["usage_ratio"] is None
+
+
 def test_zeta_query_log_lists_only_prior_runs_in_the_bound_session() -> None:
     result = query_run_log(
         {},

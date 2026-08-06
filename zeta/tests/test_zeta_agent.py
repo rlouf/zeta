@@ -1996,6 +1996,70 @@ async def main(ctx, transform):
     assert "Combined answer." in json.dumps(gateway.model_inputs[-1].messages)
 
 
+def test_zeta_finish_returns_a_graph_object_without_another_model_turn() -> None:
+    registry = CapabilityRegistry()
+    register_builtin_tools(registry)
+    store = InMemoryStore()
+    workspace = zeta_content_transforms.ContentWorkspace(
+        store,
+        run_id="run-content",
+        session_id="session-content",
+        owner="writer",
+    )
+    transformed = workspace.transform(
+        {
+            "expected_head": workspace.initialize(),
+            "reason": "Store the complete answer.",
+            "inputs": {},
+            "transformation": {
+                "type": "literal",
+                "value": "The complete graph-backed answer.",
+            },
+            "destination": {
+                "key": "answer",
+                "kind": "text",
+                "scope": "run",
+                "expected_object_id": None,
+            },
+        }
+    )
+    answer_id = transformed.output_ids[0]
+    gateway = PublishEventGateway(
+        [
+            {
+                "content": "",
+                "tool_calls": [
+                    content_tool_call(
+                        "call-finish",
+                        "finish",
+                        {"object_id": answer_id},
+                    )
+                ],
+            }
+        ]
+    )
+
+    result = run_agent_turn(
+        "return the stored answer",
+        [],
+        zeta_agent.AgentConfig(
+            max_turns=2,
+            allowed_capabilities=("finish",),
+        ),
+        model_gateway=gateway,
+        tool_registry=registry,
+        trace_store=store,
+        content_workspace=workspace,
+    )
+
+    assert result.stop_reason == "tool_stop"
+    assert result.final_object_id == answer_id
+    assert result.final_answer == "The complete graph-backed answer."
+    assert len(gateway.model_inputs) == 1
+    payload = zeta_outcomes.agent_run_result_payload(result)
+    assert payload["final_object_id"] == answer_id
+
+
 def test_zeta_transform_content_returns_stale_head_errors() -> None:
     registry = CapabilityRegistry()
     register_builtin_tools(registry)

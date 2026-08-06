@@ -150,6 +150,20 @@ TRANSFORM_CONTENT_SPEC = Capability(
     TRANSFORM_CONTENT_SCHEMA,
 )
 
+FINISH_SPEC = Capability(
+    CapabilityId("zeta", "finish"),
+    (
+        "Select one object from the current content graph as the final answer. "
+        "Use this when copying the complete value into a model message is wasteful."
+    ),
+    {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["object_id"],
+        "properties": {"object_id": {"type": "string", "minLength": 1}},
+    },
+)
+
 
 def ensure_builtin_tools_registered() -> None:
     from zeta.capabilities.registry import registry
@@ -168,6 +182,7 @@ def builtin_capabilities() -> dict[str, RegisteredCapability]:
         "zeta.bash": builtin_capability(bash.SPEC, bash.run),
         "zeta.ast_grep": builtin_capability(grep.AST_GREP_SPEC, grep.run_ast_grep),
         "zeta.edit": builtin_capability(edit.SPEC, edit.run),
+        "zeta.finish": builtin_capability(FINISH_SPEC, content_workspace_unavailable),
         "zeta.patch": builtin_capability(edit.PATCH_SPEC, edit.run_patch),
         "zeta.query_content": builtin_capability(
             QUERY_CONTENT_SPEC,

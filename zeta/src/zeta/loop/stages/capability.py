@@ -58,6 +58,7 @@ WAIT_FOR_CAPABILITY_ID = "zeta.wait_for"
 CANCEL_CAPABILITY_ID = "zeta.cancel"
 QUERY_CONTENT_CAPABILITY_ID = "zeta.query_content"
 TRANSFORM_CONTENT_CAPABILITY_ID = "zeta.transform_content"
+FINISH_CAPABILITY_ID = "zeta.finish"
 
 
 @dataclass(frozen=True)
@@ -187,6 +188,8 @@ async def run_capability_step(
                 state=state,
                 ctx=ctx,
             )
+        if capability_id == FINISH_CAPABILITY_ID:
+            return request_content_finish(params, state=state, ctx=ctx)
         return None
 
     capability_ctx = CapabilityExecutionContext(
@@ -232,6 +235,28 @@ def request_content_query(
     except ContentValidationError as exc:
         return publish_event_error("invalid-content-query", str(exc))
     return {"ok": True, **result}
+
+
+def request_content_finish(
+    params: dict[str, Any],
+    *,
+    state: RunState,
+    ctx: RunDependencies,
+) -> dict[str, Any] | None:
+    workspace = ctx.content_workspace
+    if workspace is None:
+        return None
+    try:
+        result = workspace.finish(params["object_id"])
+    except ContentValidationError as exc:
+        return publish_event_error("invalid-finish-object", str(exc))
+    state.final_object_id = result.object_id
+    state.selected_final_answer = result.content
+    return {
+        "ok": True,
+        "stop": True,
+        "object_id": result.object_id,
+    }
 
 
 async def request_content_transform(

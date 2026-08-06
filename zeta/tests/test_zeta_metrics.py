@@ -14,6 +14,7 @@ from zeta.harness.routing import (
     ExecutableAgent,
 )
 from zeta.harness.store import RuntimeEventStore
+from zeta.journal.store import Filter
 
 
 async def dispatch_and_drain(
@@ -123,6 +124,13 @@ def test_queueing_dispatcher_records_retry_scheduling(tmp_path: Path) -> None:
     ]
     assert len(retries) == 1
     assert retries[0].attributes == {"target_agent": "issue-triage"}
+    queue_item = store.list_queue_items()[0]
+    session_id = f"agent/issue-triage/{queue_item['event_id']}"
+    assert queue_item["session_id"] == session_id
+    retry_event = store.list_events(Filter(event_type="runtime.queue_item.available"))[
+        0
+    ]
+    assert retry_event.payload["session_id"] == session_id
 
     store.close()
 

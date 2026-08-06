@@ -98,6 +98,7 @@ def test_projection_rebuild_preserves_unfinished_attempt_and_releases_claim(
                 "queue_item_id": queue_item_id,
                 "event_id": accepted.id,
                 "target_agent": "issue-triage",
+                "session_id": "agent/issue-triage/thread-7",
                 "status": "claimed",
             },
             idempotency_key=None,
@@ -133,6 +134,7 @@ def test_projection_rebuild_preserves_unfinished_attempt_and_releases_claim(
     queue_item = store.list_queue_items()[0]
     assert queue_item["queue_item_id"] == queue_item_id
     assert queue_item["status"] == "available"
+    assert queue_item["session_id"] == "agent/issue-triage/thread-7"
     assert queue_item["claimed_by"] is None
     assert queue_item["claimed_until"] is None
     assert store.list_attempts()[0]["status"] == "running"

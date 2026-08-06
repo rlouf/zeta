@@ -7,7 +7,6 @@ from contextlib import nullcontext, suppress
 from dataclasses import dataclass
 from typing import Any, Protocol, cast
 
-from zeta import ids
 from zeta.events import DraftEvent, Event
 from zeta.harness.coordinator import AttemptCoordinator
 from zeta.harness.lifecycle import LifecycleRecorder
@@ -304,6 +303,7 @@ class _QueueingDispatcher:
             event_suffix="available",
             status="available",
             attempt_number=next_attempt_number,
+            session_id=routed_queue_item.session_id,
             not_before=not_before,
             **generation_payload,
         )
@@ -431,8 +431,8 @@ class _QueueingDispatcher:
         triggering_event: Event,
         queue_item: RoutedQueueItem,
     ) -> list[Event]:
-        matching_routes = self.matching_routes(triggering_event)
-        if not matching_routes:
+        decisions = self.router.plan(triggering_event).decisions
+        if not decisions:
             return [
                 self._append_queue_item_event_for_target(
                     triggering_event,
@@ -442,13 +442,15 @@ class _QueueingDispatcher:
                     status="unhandled",
                 )
             ]
-        if len(matching_routes) == 1:
-            route = matching_routes[0]
+        if len(decisions) == 1:
+            decision = decisions[0]
+            route = decision.route
             bound_item = RoutedQueueItem(
                 queue_item_id=queue_item.queue_item_id,
                 event_id=queue_item.event_id,
                 target_agent=route.agent_id,
                 project_generation=route.project_generation,
+                session_id=decision.queue_item.session_id,
             )
             executor = self._executor_for_id(
                 route.agent_id,
@@ -467,8 +469,9 @@ class _QueueingDispatcher:
                 status="completed",
             )
         ]
-        for route in matching_routes:
-            queue_item_id = ids.queue_item_id(triggering_event.id, route.agent_id)
+        for decision in decisions:
+            route = decision.route
+            queue_item_id = decision.queue_item.queue_item_id
             lifecycle_events.append(
                 self._append_queue_item_event(
                     triggering_event,
@@ -476,6 +479,7 @@ class _QueueingDispatcher:
                     queue_item_id,
                     event_suffix="available",
                     status="available",
+                    session_id=decision.queue_item.session_id,
                 )
             )
         return lifecycle_events
@@ -532,6 +536,7 @@ class _QueueingDispatcher:
                 queue_item.target_agent,
                 event_suffix="unhandled",
                 status="unhandled",
+                session_id=queue_item.session_id,
                 error=error,
             )
         ]

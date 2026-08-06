@@ -31,7 +31,7 @@ AgentLoop = Callable[
 The harness supplies the invocation, the rendered objective, the timeline, the
 project context, the model configuration, the session id, and the run id. The
 loop returns an `AgentRunResult`. `AgentInvocation` carries the matched
-definition, the triggering event, and the queue, attempt, and run ids.
+definition, the triggering event, and the queue, attempt, session, and run ids.
 
 An agent loop receives no runtime database, no queue state, and no retry
 authority. `compile_agent_definition` accepts an `agent_loop` argument, so an
@@ -111,9 +111,14 @@ attempt lifecycle key is `attempt:<queue_item_id>:<attempt_number>:<status>`,
 so a retried append of a status that was already recorded is a duplicate, not
 a new fact.
 
-Session ids follow the agent's dispatch mode. A `session_scoped` agent uses
-`agent/<agent_id>`, and a `one_shot` agent uses `agent/<agent_id>/<event_id>`.
-Attempt numbers, not session ids, distinguish retries.
+Session ids follow the authored agent's `session` rule. A `shared` agent uses
+`agent/<agent_id>`. A `per-event` agent uses
+`agent/<agent_id>/<event_id>`. A session template uses its rendered value as
+the last part of the id.
+
+Routing resolves the session id before the agent runs. The queue lifecycle
+records this id. Each attempt uses the id from its queue item. A retry keeps the
+same id. Attempt numbers, not session ids, distinguish retries.
 
 ## Coordination State
 
@@ -150,7 +155,8 @@ available -> cancelled
 
 `pending` is the unbound queue state created for an ingress event. Routing may
 bind it directly when one agent matches, fan it out into multiple `available`
-items, or mark it `unhandled`.
+items, or mark it `unhandled`. Each bound item stores its target agent, session
+id, and project generation before execution starts.
 
 Terminal queue states are `completed`, `cancelled`, `dead_lettered`, and
 `unhandled`. No later lifecycle transition is legal for a terminal item.

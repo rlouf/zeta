@@ -110,6 +110,7 @@ class AgentInvocation:
     queue_item_id: str | None = None
     attempt_id: str | None = None
     run_id: str | None = None
+    session_id: str | None = None
 
     async def publish(self, draft: DraftEvent) -> Event:
         if self.publish_event is None:
@@ -156,6 +157,7 @@ class AgentRoute:
 
     agent_id: str
     accepts: tuple[EventPattern, ...]
+    session: str = "per-event"
     lock_keys: tuple[str, ...] = ()
     project_generation: str | None = None
 
@@ -164,6 +166,7 @@ class AgentRoute:
         return cls(
             agent_id=definition.agent_id,
             accepts=definition.triggers,
+            session=definition.session,
             lock_keys=definition.lock_keys,
             project_generation=definition.project_generation,
         )
@@ -310,16 +313,18 @@ def agent_runner(
             run_context = cast(ContextFactory, context)(agent_run)
         else:
             run_context = context
-        if is_wait_continuation_for(event, agent_run.agent.agent_id):
-            if event.session_id is None:
-                raise RuntimeError("wait continuation is missing its session id")
-            session_id = event.session_id
-        else:
-            session_id = agent_session_id(
-                agent_run.agent.agent_id,
-                agent_run.agent.session,
-                event,
-            )
+        session_id = agent_run.session_id
+        if session_id is None:
+            if is_wait_continuation_for(event, agent_run.agent.agent_id):
+                if event.session_id is None:
+                    raise RuntimeError("wait continuation is missing its session id")
+                session_id = event.session_id
+            else:
+                session_id = agent_session_id(
+                    agent_run.agent.agent_id,
+                    agent_run.agent.session,
+                    event,
+                )
         run_id = ids.run_id_for_attempt(
             agent_run.run_id,
             agent_run.attempt_id or agent_run.triggering_event.id,

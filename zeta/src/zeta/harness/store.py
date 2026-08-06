@@ -554,7 +554,7 @@ class CoordinationSqliteStore(_SqliteBacked):
             row = self.connection.execute(
                 """
                 SELECT queue_item_id, event_id, target_agent, project_generation,
-                       status
+                       session_id, status
                 FROM queue_items
                 WHERE queue_item_id = ?
                 """,
@@ -562,7 +562,10 @@ class CoordinationSqliteStore(_SqliteBacked):
             ).fetchone()
         if row is None:
             return None
-        return _without_none_snapshot_fields(dict(row))
+        record = _without_none_snapshot_fields(dict(row))
+        if record.get("session_id") is None:
+            record.pop("session_id", None)
+        return record
 
     def queue_item_attempt_count(self, queue_item_id: str) -> int:
         with self.events.write_lock:
@@ -577,13 +580,17 @@ class CoordinationSqliteStore(_SqliteBacked):
             rows = self.connection.execute(
                 """
                 SELECT queue_item_id, event_id, target_agent, project_generation,
-                       status, available_at,
+                       session_id, status, available_at,
                        claimed_by, claimed_until, attempt_count, last_error, updated_at
                 FROM queue_items
                 ORDER BY updated_at ASC, queue_item_id ASC
                 """
             ).fetchall()
-        return [_without_none_snapshot_fields(dict(row)) for row in rows]
+        records = [_without_none_snapshot_fields(dict(row)) for row in rows]
+        for record in records:
+            if record.get("session_id") is None:
+                record.pop("session_id", None)
+        return records
 
     def list_attempts(self) -> list[dict[str, Any]]:
         with self.events.write_lock:

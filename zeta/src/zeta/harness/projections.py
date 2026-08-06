@@ -26,7 +26,7 @@ class RuntimeEventProjection:
     """Projects runtime queue and attempt events into queryable tables."""
 
     name = "zeta.harness.runtime"
-    version = 8
+    version = 9
 
     def init_schema(self, connection: sqlite3.Connection) -> None:
         connection.executescript(
@@ -36,6 +36,7 @@ class RuntimeEventProjection:
               event_id TEXT NOT NULL,
               target_agent TEXT NOT NULL,
               project_generation TEXT,
+              session_id TEXT,
               status TEXT NOT NULL,
               available_at INTEGER,
               claimed_by TEXT,
@@ -476,9 +477,9 @@ def _index_one_queue_item(connection: sqlite3.Connection, event: Event) -> None:
     connection.execute(
         """
         INSERT INTO queue_items
-          (queue_item_id, event_id, target_agent, project_generation, status, available_at,
-           last_error, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+          (queue_item_id, event_id, target_agent, project_generation, session_id,
+           status, available_at, last_error, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(queue_item_id) DO UPDATE SET
           event_id = excluded.event_id,
           target_agent = excluded.target_agent,
@@ -486,6 +487,7 @@ def _index_one_queue_item(connection: sqlite3.Connection, event: Event) -> None:
             excluded.project_generation,
             queue_items.project_generation
           ),
+          session_id = COALESCE(excluded.session_id, queue_items.session_id),
           status = excluded.status,
           available_at = CASE
             WHEN excluded.status = 'available' THEN excluded.available_at
@@ -511,6 +513,7 @@ def _index_one_queue_item(connection: sqlite3.Connection, event: Event) -> None:
             queue_item.event_id,
             queue_item.target_agent,
             _optional_str(event.payload.get("project_generation")),
+            _optional_str(event.payload.get("session_id")) or event.session_id,
             queue_item.status,
             _queue_item_available_at(event)
             if queue_item.status == "available"

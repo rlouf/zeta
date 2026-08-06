@@ -47,6 +47,7 @@ class RoutedQueueItem:
     event_id: str
     target_agent: str
     project_generation: str | None = None
+    session_id: str | None = None
 
 
 QUEUE_ITEM_STATUSES = frozenset(
@@ -174,6 +175,8 @@ def routed_queue_item_from_event(event: Event) -> RoutedQueueItem:
         event_id=event_id,
         target_agent=target_agent,
         project_generation=_optional_string(event.payload.get("project_generation")),
+        session_id=_optional_string(event.payload.get("session_id"))
+        or event.session_id,
     )
 
 
@@ -183,6 +186,7 @@ def queue_item_from_record(record: Mapping[str, Any]) -> RoutedQueueItem:
         event_id=str(record["event_id"]),
         target_agent=str(record["target_agent"]),
         project_generation=_optional_string(record.get("project_generation")),
+        session_id=_optional_string(record.get("session_id")),
     )
 
 

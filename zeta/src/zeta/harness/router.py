@@ -8,6 +8,7 @@ from zeta import ids
 from zeta.events import Event
 from zeta.harness.queue import RoutedQueueItem
 from zeta.harness.routing import AgentRoute
+from zeta.harness.templates import agent_session_id
 
 
 @dataclass(frozen=True)
@@ -46,6 +47,11 @@ class EventRouter:
                         event_id=event.id,
                         target_agent=route.agent_id,
                         project_generation=route.project_generation,
+                        session_id=agent_session_id(
+                            route.agent_id,
+                            route.session,
+                            event,
+                        ),
                     ),
                 )
                 for route in self.matching_routes(event)

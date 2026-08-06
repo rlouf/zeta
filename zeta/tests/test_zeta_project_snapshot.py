@@ -568,6 +568,8 @@ def test_attempt_records_project_and_execution_manifests(tmp_path: Path) -> None
 
     assert queue_item["event_id"] == outcome.event.id
     assert queue_item["project_generation"] == snapshot.generation_id
+    assert queue_item["session_id"] == f"agent/{spec.slug}/{outcome.event.id}"
+    assert attempt["session_id"] == queue_item["session_id"]
     assert attempt["project_generation"] == snapshot.generation_id
     assert attempt["execution_manifest_id"] == execution_manifest["id"]
     assert attempt["execution_manifest"] == execution_manifest

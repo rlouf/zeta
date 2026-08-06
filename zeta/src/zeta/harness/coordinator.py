@@ -83,7 +83,10 @@ class AttemptCoordinator:
         attempt_number = self.next_attempt_number(queue_item_id)
         attempt_id = ids.attempt_id(queue_item_id, attempt_number)
         run_id = ids.run_id_for_attempt(triggering_event.run_id, attempt_id)
-        session_id = invocation_session_id(agent, triggering_event)
+        session_id = queue_item.session_id or invocation_session_id(
+            agent,
+            triggering_event,
+        )
         if not self.claim_is_current(queue_item_id):
             return events
         events.append(
@@ -155,6 +158,7 @@ class AttemptCoordinator:
                         queue_item_id=queue_item_id,
                         attempt_id=attempt_id,
                         run_id=run_id,
+                        session_id=session_id,
                     )
                 )
             except Exception as exc:
@@ -274,6 +278,7 @@ class AttemptCoordinator:
                     event_id=triggering_event.id,
                     target_agent=agent.definition.agent_id,
                     project_generation=agent.definition.project_generation,
+                    session_id=session_id,
                 ),
                 attempt_number=attempt_number + 1,
                 policy=retry_policy,

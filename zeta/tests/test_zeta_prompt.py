@@ -49,7 +49,7 @@ from zeta.context.instructions import (
 from zeta.context.system import model_capability_descriptors, system_prompt
 from zeta.events import Event
 from zeta.paths import zeta_state_dir
-from zeta.substrate import Derivation, InMemoryStore, Object
+from zeta.substrate import Derivation, InMemoryStore, Object, SqliteObjectStore
 from zeta.tools import ensure_builtin_tools_registered
 from zeta.trace.provenance import project_prompt_trace_projection
 from zeta_test_support import (
@@ -99,6 +99,216 @@ zeta_context = SimpleNamespace(
     transforms=context_transforms,
     zeta_context_message=zeta_context_message,
 )
+
+
+@pytest.mark.parametrize(
+    "make_store",
+    [
+        pytest.param(lambda tmp_path: InMemoryStore(), id="memory"),
+        pytest.param(
+            lambda tmp_path: SqliteObjectStore(tmp_path / "content.sqlite3"),
+            id="sqlite",
+        ),
+    ],
+)
+def test_content_head_advance_stores_a_complete_immutable_revision(
+    tmp_path: Path,
+    make_store: Any,
+) -> None:
+    store = make_store(tmp_path)
+    head = context_transforms.ContentHead("run", "run-1", "release-agent")
+    first = context_transforms.put_content_node(
+        store,
+        context_transforms.ContentNode(
+            key="release/check",
+            kind="procedure",
+            title="Check the release",
+            content="Check the manifest before release.",
+            attributes={"priority": 50},
+        ),
+    )
+    second = context_transforms.put_content_node(
+        store,
+        context_transforms.ContentNode(
+            key="release/owner",
+            kind="memory",
+            content="The release owner is Remi.",
+        ),
+    )
+    trigger_id = store.put_object(
+        Object(kind="event", schema="v1", data={"type": "release.requested"})
+    )
+
+    revision_id = context_transforms.advance_content_head(
+        store,
+        head,
+        expected_head=None,
+        nodes={"release/check": first, "release/owner": second},
+        projection_order=("release/check", "release/owner"),
+        source_scopes={"release/check": "run", "release/owner": "agent"},
+        reason="Start the run workspace.",
+        source_ids=(trigger_id,),
+    )
+
+    assert store.get_ref("run/run-1/content/head").object_id == revision_id
+    revision = context_transforms.content_revision_from_object(
+        store.get_object(revision_id)
+    )
+    assert revision == context_transforms.ContentRevision(
+        owner="release-agent",
+        nodes={"release/check": first, "release/owner": second},
+        projection_order=("release/check", "release/owner"),
+        source_scopes={"release/check": "run", "release/owner": "agent"},
+    )
+    assert store.get_object(revision_id).links == (first, second)
+    assert store.derivations_for_output(revision_id) == [
+        Derivation(
+            producer="ContentAdvance:v1",
+            output_id=revision_id,
+            input_ids=(trigger_id,),
+            params={
+                "owner": "release-agent",
+                "reason": "Start the run workspace.",
+                "scope": "run",
+                "scope_id": "run-1",
+            },
+        )
+    ]
+
+
+def test_content_head_advance_uses_compare_and_swap() -> None:
+    store = InMemoryStore()
+    head = context_transforms.ContentHead("agent", "writer", "writer")
+    node_id = context_transforms.put_content_node(
+        store,
+        context_transforms.ContentNode(
+            key="procedure/write",
+            kind="procedure",
+            content="Write the tests first.",
+        ),
+    )
+    first_head = context_transforms.advance_content_head(
+        store,
+        head,
+        expected_head=None,
+        nodes={"procedure/write": node_id},
+        projection_order=("procedure/write",),
+        source_scopes={"procedure/write": "agent"},
+        reason="Save the procedure.",
+    )
+    replacement_id = context_transforms.put_content_node(
+        store,
+        context_transforms.ContentNode(
+            key="procedure/write",
+            kind="procedure",
+            content="Write focused tests first.",
+        ),
+    )
+    object_count = store.stats().object_count
+    derivation_count = len(store.derivations)
+
+    with pytest.raises(context_transforms.ContentConflict, match="content head"):
+        context_transforms.advance_content_head(
+            store,
+            head,
+            expected_head=None,
+            nodes={"procedure/write": replacement_id},
+            projection_order=("procedure/write",),
+            source_scopes={"procedure/write": "agent"},
+            reason="Overwrite stale content.",
+        )
+
+    current = store.get_ref("agent/writer/content/head")
+    assert current is not None
+    assert current.object_id == first_head
+    assert store.stats().object_count == object_count
+    assert len(store.derivations) == derivation_count
+
+
+def test_content_head_restore_moves_to_an_older_revision() -> None:
+    store = InMemoryStore()
+    head = context_transforms.ContentHead("session", "session-1", "writer")
+    first_node = context_transforms.put_content_node(
+        store,
+        context_transforms.ContentNode("decision", "memory", "Use SQLite."),
+    )
+    first_head = context_transforms.advance_content_head(
+        store,
+        head,
+        expected_head=None,
+        nodes={"decision": first_node},
+        projection_order=("decision",),
+        source_scopes={"decision": "session"},
+        reason="Save the decision.",
+    )
+    second_node = context_transforms.put_content_node(
+        store,
+        context_transforms.ContentNode("decision", "memory", "Use memory."),
+    )
+    second_head = context_transforms.advance_content_head(
+        store,
+        head,
+        expected_head=first_head,
+        nodes={"decision": second_node},
+        projection_order=("decision",),
+        source_scopes={"decision": "session"},
+        reason="Change the decision.",
+    )
+
+    context_transforms.restore_content_head(
+        store,
+        head,
+        expected_head=second_head,
+        target_head=first_head,
+        reason="Restore the working decision.",
+    )
+
+    current = store.get_ref("session/session-1/content/head")
+    assert current is not None
+    assert current.object_id == first_head
+    assert context_transforms.content_head_history(store, second_head) == (
+        second_head,
+        first_head,
+    )
+    assert any(
+        derivation.producer == "ContentRestore:v1"
+        and derivation.input_ids == (second_head,)
+        for derivation in store.derivations_for_output(first_head)
+    )
+
+
+@pytest.mark.parametrize(
+    "node",
+    [
+        pytest.param(
+            context_transforms.ContentNode("", "text", "value"),
+            id="empty-key",
+        ),
+        pytest.param(
+            context_transforms.ContentNode("key", "unknown", "value"),
+            id="unknown-kind",
+        ),
+        pytest.param(
+            context_transforms.ContentNode("key", "text", {"bad": object()}),
+            id="non-json-content",
+        ),
+    ],
+)
+def test_content_node_validation_rejects_invalid_values(node: Any) -> None:
+    with pytest.raises(context_transforms.ContentValidationError):
+        context_transforms.content_node_object(node)
+
+
+def test_content_revision_requires_complete_projection_metadata() -> None:
+    revision = context_transforms.ContentRevision(
+        owner="writer",
+        nodes={"one": "sha256:one", "two": "sha256:two"},
+        projection_order=("one",),
+        source_scopes={"one": "run", "two": "run"},
+    )
+
+    with pytest.raises(context_transforms.ContentValidationError):
+        context_transforms.content_revision_object(revision)
 
 
 def prepare_prompt(

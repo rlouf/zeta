@@ -318,8 +318,21 @@ def test_zeta_trace_global_scope_includes_objects_without_derivations(
     assert orphan in ids
 
 
-def test_zeta_trace_batch_rolls_back_on_exception(tmp_path: Path) -> None:
-    store = zeta_trace.SqliteObjectStore(tmp_path / "trace.sqlite3")
+@pytest.mark.parametrize(
+    "make_store",
+    [
+        pytest.param(lambda tmp_path: zeta_trace.InMemoryStore(), id="memory"),
+        pytest.param(
+            lambda tmp_path: zeta_trace.SqliteObjectStore(tmp_path / "trace.sqlite3"),
+            id="sqlite",
+        ),
+    ],
+)
+def test_zeta_trace_batch_rolls_back_on_exception(
+    tmp_path: Path,
+    make_store: Any,
+) -> None:
+    store = make_store(tmp_path)
 
     with pytest.raises(RuntimeError, match="boom"):
         with store.batch():

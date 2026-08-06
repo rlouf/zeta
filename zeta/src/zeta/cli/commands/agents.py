@@ -367,10 +367,6 @@ def agents_content_restore(
         store = runtime.content_store()
         current_id, _current = _active_agent_revision(store, agent)
         target_id, _target = _resolve_agent_revision(store, agent, head)
-        if target_id not in content_head_history(store, current_id, limit=1000):
-            raise ContentValidationError(
-                "target revision is not in the active agent content history"
-            )
         restored = restore_content_head(
             store,
             ContentHead("agent", agent, agent),
@@ -421,6 +417,15 @@ def _resolve_agent_revision(
     if revision.owner != agent:
         raise ContentValidationError(
             f"content revision belongs to {revision.owner!r}, not {agent!r}"
+        )
+    if not any(
+        derivation.producer == "ContentAdvance:v1"
+        and derivation.params.get("scope") == "agent"
+        and derivation.params.get("scope_id") == agent
+        for derivation in store.derivations_for_output(object_id)
+    ):
+        raise ContentValidationError(
+            f"content revision {object_id!r} is not an agent revision for {agent!r}"
         )
     return object_id, revision
 

@@ -6,7 +6,7 @@ import hashlib
 import inspect
 import json
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
@@ -33,15 +33,26 @@ from zeta.capabilities.executors import (
     ToolExecutorProviderRegistry,
     load_tool_executor_provider_registry,
 )
-from zeta.capabilities.registry import CapabilityRegistry
+from zeta.capabilities.registry import (
+    AgentToolDefinition,
+    AgentToolDefinitionError,
+    CapabilityRegistry,
+    agent_tool_definition_from_content,
+    load_agent_tool_definition,
+)
+from zeta.context.transforms import (
+    content_node_from_object,
+    content_revision_from_object,
+)
 from zeta.events import DraftEvent, Event
 from zeta.harness.store import RuntimeEventStore
 from zeta.journal.store import Filter
 from zeta.models.profiles import ModelSelection
+from zeta.substrate import Store
 
 PROJECT_SNAPSHOT_RECORDED = "runtime.project_snapshot.recorded"
 PROJECT_SNAPSHOT_SCHEMA = "zeta.project_snapshot"
-PROJECT_SNAPSHOT_VERSION = 2
+PROJECT_SNAPSHOT_VERSION = 3
 EXECUTION_MANIFEST_SCHEMA = "zeta.execution_manifest"
 EXECUTION_MANIFEST_VERSION = 2
 
@@ -57,6 +68,11 @@ class ProjectSnapshot:
     generation_id: str
     project: AgentProject
     manifest: dict[str, Any]
+    tool_registry: CapabilityRegistry = field(
+        default_factory=CapabilityRegistry,
+        compare=False,
+        repr=False,
+    )
 
     def execution_manifest(self, spec: AgentSpec) -> dict[str, Any]:
         selected_skills = {
@@ -84,6 +100,11 @@ class ProjectSnapshot:
             "connectors": self.manifest["connectors"],
             "model": self.manifest["model"],
             "runtime_version": self.manifest["runtime_version"],
+            "agent_tools": [
+                item
+                for item in self.manifest.get("agent_tools", [])
+                if item.get("owner") == spec.slug
+            ],
         }
         return {**manifest, "id": content_id("execution_manifest", manifest)}
 
@@ -95,21 +116,27 @@ def load_project_snapshot(
     tool_registry: CapabilityRegistry,
     model_selection: ModelSelection | None,
     tool_executors: ToolExecutorProviderRegistry | None = None,
+    content_store: Store | None = None,
 ) -> ProjectSnapshot:
     project = load_agent_project(agents_dir, registry=registry)
+    definitions = agent_content_tool_definitions(project, content_store)
+    snapshot_registry = registry_with_agent_tools(tool_registry, definitions)
+    project = project_with_agent_tool_grants(project, definitions)
     validate_agent_project(
         project,
         tool_executors=tool_executors or load_tool_executor_provider_registry(),
     )
     manifest = project_manifest(
         project,
-        tool_registry=tool_registry,
+        tool_registry=snapshot_registry,
         model_selection=model_selection,
+        agent_tools=definitions,
     )
     return ProjectSnapshot(
         generation_id=content_id("project", manifest),
         project=project,
         manifest=manifest,
+        tool_registry=snapshot_registry,
     )
 
 
@@ -136,6 +163,7 @@ def load_recorded_project_snapshot(
     *,
     registry: EventConnectorRegistry | None,
     tool_executors: ToolExecutorProviderRegistry | None = None,
+    tool_registry: CapabilityRegistry | None = None,
 ) -> ProjectSnapshot:
     for event in events.list_events(Filter(event_type=PROJECT_SNAPSHOT_RECORDED)):
         if event.payload.get("generation_id") != generation_id:
@@ -149,11 +177,21 @@ def load_recorded_project_snapshot(
                 f"recorded project snapshot {generation_id!r} failed verification"
             )
         project = project_from_manifest(parsed_manifest, registry=registry)
+        definitions = agent_tools_from_manifest(parsed_manifest)
+        snapshot_registry = registry_with_agent_tools(
+            tool_registry or CapabilityRegistry(),
+            definitions,
+        )
         validate_agent_project(
             project,
             tool_executors=tool_executors or load_tool_executor_provider_registry(),
         )
-        return ProjectSnapshot(generation_id, project, parsed_manifest)
+        return ProjectSnapshot(
+            generation_id,
+            project,
+            parsed_manifest,
+            snapshot_registry,
+        )
     raise ProjectSnapshotUnavailable(
         f"recorded project snapshot {generation_id!r} was not found"
     )
@@ -164,6 +202,7 @@ def project_manifest(
     *,
     tool_registry: CapabilityRegistry,
     model_selection: ModelSelection | None,
+    agent_tools: tuple[AgentToolDefinition, ...] = (),
 ) -> dict[str, Any]:
     return {
         "schema": PROJECT_SNAPSHOT_SCHEMA,
@@ -185,9 +224,116 @@ def project_manifest(
             )
         ],
         "capabilities": capability_manifests(tool_registry),
+        "agent_tools": [asdict(definition) for definition in agent_tools],
         "model": model_manifest(model_selection),
         "runtime_version": __version__,
     }
+
+
+def agent_content_tool_definitions(
+    project: AgentProject,
+    store: Store | None,
+) -> tuple[AgentToolDefinition, ...]:
+    if store is None:
+        return ()
+    definitions: list[AgentToolDefinition] = []
+    for spec in project.specs:
+        agent_definition_count = 0
+        current = store.get_ref(f"agent/{spec.slug}/content/head")
+        if current is None:
+            continue
+        revision = content_revision_from_object(store.get_object(current.object_id))
+        if revision.owner != spec.slug:
+            raise ProjectSnapshotUnavailable(
+                f"agent content for {spec.slug!r} belongs to another owner"
+            )
+        for key in revision.projection_order:
+            object_id = revision.nodes[key]
+            node = content_node_from_object(store.get_object(object_id))
+            if node.kind != "tool_definition":
+                continue
+            try:
+                definitions.append(
+                    agent_tool_definition_from_content(
+                        node.content,
+                        owner=spec.slug,
+                        key=key,
+                        object_id=object_id,
+                    )
+                )
+                agent_definition_count += 1
+            except AgentToolDefinitionError as exc:
+                raise ProjectSnapshotUnavailable(str(exc)) from exc
+            if agent_definition_count > 32:
+                raise ProjectSnapshotUnavailable(
+                    f"agent {spec.slug!r} has too many authored tools"
+                )
+    return tuple(definitions)
+
+
+def registry_with_agent_tools(
+    base: CapabilityRegistry,
+    definitions: tuple[AgentToolDefinition, ...],
+) -> CapabilityRegistry:
+    if not definitions:
+        return base
+    registry = base.copy()
+    for definition in definitions:
+        try:
+            registry.register(load_agent_tool_definition(definition))
+        except (AgentToolDefinitionError, ValueError) as exc:
+            raise ProjectSnapshotUnavailable(str(exc)) from exc
+    return registry
+
+
+def project_with_agent_tool_grants(
+    project: AgentProject,
+    definitions: tuple[AgentToolDefinition, ...],
+) -> AgentProject:
+    grants: dict[str, list[str]] = {}
+    for definition in definitions:
+        grants.setdefault(definition.owner, []).append(definition.capability_id)
+    specs = []
+    for spec in project.specs:
+        authored = grants.get(spec.slug, [])
+        if authored and spec.executor.provider != "local":
+            raise ProjectSnapshotUnavailable(
+                f"agent {spec.slug!r} must use the local executor for authored tools"
+            )
+        specs.append(
+            replace(
+                spec,
+                tools=tuple(dict.fromkeys((*spec.tools, *authored))),
+            )
+        )
+    return replace(project, specs=tuple(specs))
+
+
+def agent_tools_from_manifest(
+    manifest: Mapping[str, Any],
+) -> tuple[AgentToolDefinition, ...]:
+    raw_tools = manifest.get("agent_tools")
+    if not isinstance(raw_tools, list):
+        raise ProjectSnapshotUnavailable("project snapshot has invalid agent tools")
+    definitions = []
+    for raw in raw_tools:
+        if not isinstance(raw, Mapping):
+            raise ProjectSnapshotUnavailable("project snapshot has invalid agent tool")
+        try:
+            definition = agent_tool_definition_from_content(
+                {
+                    "name": raw.get("name"),
+                    "capability_id": raw.get("capability_id"),
+                    "source": raw.get("source"),
+                },
+                owner=str(raw.get("owner") or ""),
+                key=str(raw.get("key") or ""),
+                object_id=str(raw.get("object_id") or ""),
+            )
+        except AgentToolDefinitionError as exc:
+            raise ProjectSnapshotUnavailable(str(exc)) from exc
+        definitions.append(definition)
+    return tuple(definitions)
 
 
 def project_from_manifest(

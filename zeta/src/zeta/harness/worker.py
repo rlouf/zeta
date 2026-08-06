@@ -8,7 +8,6 @@ import logging
 import time
 from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass, field, replace
-from functools import cached_property
 from pathlib import Path
 from typing import Any
 
@@ -69,7 +68,7 @@ QUEUE_LEASE_MS = 60_000
 ATTEMPT_HEARTBEAT_INTERVAL_SECONDS = 15.0
 
 
-ToolExecutorCacheKey = tuple[str, str, str]
+ToolExecutorCacheKey = tuple[str, str, str, str]
 
 
 RpcStep = Callable[["WorkerServices"], Awaitable[str | None]]
@@ -120,7 +119,7 @@ class WorkerServices:
         compare=False,
     )
 
-    @cached_property
+    @property
     def project_snapshot(self) -> ProjectSnapshot:
         return load_project_snapshot(
             self.project_root / "agents",
@@ -128,6 +127,7 @@ class WorkerServices:
             tool_registry=self.tool_registry,
             model_selection=self.model_selection,
             tool_executors=self.tool_executors,
+            content_store=self.events.content_store(),
         )
 
     async def aclose(self) -> None:
@@ -176,13 +176,18 @@ class WorkerServices:
         if errors:
             raise BaseExceptionGroup("tool executor shutdown failed", errors)
 
-    async def tool_executor_for(self, agent: AgentDefinition) -> ToolExecutor:
+    async def tool_executor_for(
+        self,
+        agent: AgentDefinition,
+        tool_registry: CapabilityRegistry | None = None,
+    ) -> ToolExecutor:
         if self.shutdown_task is not None:
             raise RuntimeError("worker services are closed")
         config = executor_config(agent.tool_executor.config)
         key = (
             agent.tool_executor.provider,
             agent.agent_id,
+            agent.project_generation or "",
             json.dumps(
                 config,
                 sort_keys=True,
@@ -214,7 +219,7 @@ class WorkerServices:
                 )
             executor = await provider.setup(
                 agent.agent_id,
-                self.tool_registry,
+                tool_registry or self.tool_registry,
                 config,
             )
             self.executor_cache[key] = executor
@@ -311,6 +316,7 @@ def project_executors(runtime: WorkerServices) -> tuple[ExecutableAgent, ...]:
                     generation,
                     registry=runtime.registry,
                     tool_executors=runtime.tool_executors,
+                    tool_registry=runtime.tool_registry,
                 )
             )
         except ProjectSnapshotUnavailable:
@@ -328,7 +334,7 @@ def compile_snapshot_executors(
     snapshot: ProjectSnapshot,
 ) -> tuple[ExecutableAgent, ...]:
     project = snapshot.project
-    agent_loop = RuntimeAgentLoop(runtime)
+    agent_loop = RuntimeAgentLoop(runtime, snapshot.tool_registry)
     execution_manifests = {
         spec.slug: snapshot.execution_manifest(spec) for spec in project.specs
     }
@@ -361,8 +367,13 @@ def compile_snapshot_executors(
 class RuntimeAgentLoop:
     """Run an agent's model loop inside the local runtime harness."""
 
-    def __init__(self, runtime: WorkerServices) -> None:
+    def __init__(
+        self,
+        runtime: WorkerServices,
+        tool_registry: CapabilityRegistry,
+    ) -> None:
         self.runtime = runtime
+        self.tool_registry = tool_registry
 
     async def run(
         self,
@@ -383,14 +394,17 @@ class RuntimeAgentLoop:
             session_id=session_id,
             event_sink=self.runtime.events,
             trace_store=trace_store,
-            tool_registry=self.runtime.tool_registry,
+            tool_registry=self.tool_registry,
             state_dir=self.runtime.state_dir,
             session_dir=self.runtime.state_dir / "sessions" / session_id,
             content_store=content_store,
         )
         started = time.perf_counter()
         try:
-            tool_executor = await self.runtime.tool_executor_for(invocation.agent)
+            tool_executor = await self.runtime.tool_executor_for(
+                invocation.agent,
+                self.tool_registry,
+            )
             queue_item_id = invocation.queue_item_id or ids.queue_item_id(
                 invocation.triggering_event.id,
                 invocation.agent.agent_id,

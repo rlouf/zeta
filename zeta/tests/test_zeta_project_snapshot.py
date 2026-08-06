@@ -7,6 +7,7 @@ import pytest
 from connectors import EventConnectorRegistry
 from zeta.authoring.spec import ExecutorSpec
 from zeta.capabilities.registry import CapabilityRegistry
+from zeta.context.transforms import ContentWorkspace
 from zeta.events import DraftEvent
 from zeta.harness.dispatch import QueueingDispatcher
 from zeta.harness.project import (
@@ -29,6 +30,7 @@ from zeta.harness.store import RuntimeEventStore
 from zeta.journal.store import Filter
 from zeta.loop.outcomes import AgentRunResult
 from zeta.models.profiles import ModelSelection
+from zeta.substrate import InMemoryStore
 
 
 def write_snapshot_project(root: Path, *, description: str = "Handles work.") -> Path:
@@ -79,6 +81,31 @@ def load_snapshot(agents: Path):
     )
 
 
+def agent_tool_source(owner: str, name: str, *, prefix: str = "") -> str:
+    return f'''
+from zeta.capabilities.executors import InProcessCapabilityExecutor
+from zeta.capabilities.registry import RegisteredCapability
+from zeta.capabilities.types import Capability, CapabilityId
+
+def run(params):
+    return {{"ok": True, "echo": {prefix!r} + params["text"]}}
+
+tool = RegisteredCapability(
+    Capability(
+        CapabilityId("agent.{owner}", "{name}"),
+        "Echo text from an agent-authored tool.",
+        {{
+            "type": "object",
+            "required": ["text"],
+            "properties": {{"text": {{"type": "string"}}}},
+            "additionalProperties": False,
+        }},
+    ),
+    InProcessCapabilityExecutor(run),
+)
+'''
+
+
 def test_project_snapshot_generation_is_content_addressed(tmp_path: Path) -> None:
     agents = write_snapshot_project(tmp_path)
 
@@ -97,6 +124,164 @@ def test_project_snapshot_generation_is_content_addressed(tmp_path: Path) -> Non
     assert changed.generation_id != first.generation_id
 
 
+def test_project_snapshot_activates_an_agent_content_tool_in_the_next_generation(
+    tmp_path: Path,
+) -> None:
+    agents = write_snapshot_project(tmp_path)
+    registry = CapabilityRegistry()
+    content = InMemoryStore()
+    before = load_project_snapshot(
+        agents,
+        registry=EventConnectorRegistry(),
+        tool_registry=registry,
+        model_selection=None,
+        content_store=content,
+    )
+    workspace = ContentWorkspace(
+        content,
+        run_id="run-tool",
+        session_id="session-tool",
+        owner="worker",
+    )
+    transformed = workspace.transform(
+        {
+            "expected_head": workspace.initialize(),
+            "reason": "Reuse the echo operation.",
+            "inputs": {},
+            "transformation": {
+                "type": "literal",
+                "value": {
+                    "name": "echo",
+                    "capability_id": "agent.worker.echo",
+                    "source": agent_tool_source("worker", "echo"),
+                },
+            },
+            "destination": {
+                "key": "tools/echo",
+                "kind": "tool_definition",
+                "scope": "agent",
+                "expected_object_id": None,
+            },
+        }
+    )
+
+    assert before.tool_registry.resolve("echo") is None
+    workspace.promote(transformed.promotions[0])
+    after = load_project_snapshot(
+        agents,
+        registry=EventConnectorRegistry(),
+        tool_registry=registry,
+        model_selection=None,
+        content_store=content,
+    )
+
+    assert after.generation_id != before.generation_id
+    assert after.project.specs[0].tools == ("agent.worker.echo",)
+    assert after.tool_registry.invoke("agent.worker.echo", {"text": "hello"}) == {
+        "ok": True,
+        "echo": "hello",
+    }
+    assert after.manifest["agent_tools"][0]["object_id"] == transformed.output_ids[0]
+
+    runtime = RuntimeEventStore.open(tmp_path / "runtime.sqlite3")
+    record_project_snapshot(runtime, after)
+    restored = load_recorded_project_snapshot(
+        runtime,
+        after.generation_id,
+        registry=EventConnectorRegistry(),
+        tool_registry=registry,
+    )
+    assert restored.tool_registry.invoke("echo", {"text": "again"}) == {
+        "ok": True,
+        "echo": "again",
+    }
+    runtime.close()
+
+
+def test_project_snapshot_keeps_each_agent_tool_generation_stable(
+    tmp_path: Path,
+) -> None:
+    agents = write_snapshot_project(tmp_path)
+    registry = CapabilityRegistry()
+    content = InMemoryStore()
+    workspace = ContentWorkspace(
+        content,
+        run_id="run-tool",
+        session_id="session-tool",
+        owner="worker",
+    )
+    head = workspace.initialize()
+    first_change = workspace.transform(
+        {
+            "expected_head": head,
+            "reason": "Create the first echo implementation.",
+            "inputs": {},
+            "transformation": {
+                "type": "literal",
+                "value": {
+                    "name": "echo",
+                    "capability_id": "agent.worker.echo",
+                    "source": agent_tool_source("worker", "echo", prefix="one:"),
+                },
+            },
+            "destination": {
+                "key": "tools/echo",
+                "kind": "tool_definition",
+                "scope": "agent",
+                "expected_object_id": None,
+            },
+        }
+    )
+    workspace.promote(first_change.promotions[0])
+    first = load_project_snapshot(
+        agents,
+        registry=EventConnectorRegistry(),
+        tool_registry=registry,
+        model_selection=None,
+        content_store=content,
+    )
+    second_change = workspace.transform(
+        {
+            "expected_head": first_change.head,
+            "reason": "Change the echo implementation.",
+            "inputs": {},
+            "transformation": {
+                "type": "literal",
+                "value": {
+                    "name": "echo",
+                    "capability_id": "agent.worker.echo",
+                    "source": agent_tool_source("worker", "echo", prefix="two:"),
+                },
+            },
+            "destination": {
+                "key": "tools/echo",
+                "kind": "tool_definition",
+                "scope": "agent",
+                "expected_object_id": first_change.output_ids[0],
+            },
+        }
+    )
+    workspace.promote(second_change.promotions[0])
+
+    second = load_project_snapshot(
+        agents,
+        registry=EventConnectorRegistry(),
+        tool_registry=registry,
+        model_selection=None,
+        content_store=content,
+    )
+
+    assert first.generation_id != second.generation_id
+    assert first.tool_registry.invoke("echo", {"text": "hello"}) == {
+        "ok": True,
+        "echo": "one:hello",
+    }
+    assert second.tool_registry.invoke("echo", {"text": "hello"}) == {
+        "ok": True,
+        "echo": "two:hello",
+    }
+
+
 def test_project_snapshot_round_trips_publishes(tmp_path: Path) -> None:
     snapshot = load_snapshot(write_snapshot_project(tmp_path))
     store = RuntimeEventStore.open(tmp_path / "zeta.sqlite3")
@@ -109,7 +294,7 @@ def test_project_snapshot_round_trips_publishes(tmp_path: Path) -> None:
     )
 
     agent = snapshot.manifest["agents"][0]
-    assert snapshot.manifest["version"] == 2
+    assert snapshot.manifest["version"] == 3
     assert agent["publishes"] == ["work.completed"]
     assert "returns" not in agent
     assert restored.project.specs[0].publishes == ("work.completed",)

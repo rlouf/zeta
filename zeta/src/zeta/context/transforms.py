@@ -6,6 +6,10 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Literal, Protocol
 
+from zeta.capabilities.registry import (
+    AgentToolDefinitionError,
+    validate_agent_tool_definition,
+)
 from zeta.context.budget import ContextUsage, measure
 from zeta.context.components import PromptComponent
 from zeta.substrate import Derivation, Object, ObjectId, Store
@@ -593,6 +597,15 @@ class ContentWorkspace:
     ) -> ContentTransformResult:
         if destination.key is None:
             raise ContentValidationError("content destination key is required")
+        if node.kind == "tool_definition":
+            try:
+                validate_agent_tool_definition(
+                    node.content,
+                    owner=self.run_head.owner,
+                    key=node.key,
+                )
+            except AgentToolDefinitionError as exc:
+                raise ContentValidationError(str(exc)) from exc
         promotion = self._promotion_for(
             destination,
             object_id=None,

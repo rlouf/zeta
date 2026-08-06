@@ -31,6 +31,7 @@ class RuntimeContext:
     tool_registry: CapabilityRegistry
     state_dir: Path
     session_dir: Path
+    content_store: Store | None = None
 
 
 def default_session() -> RuntimeContext:
@@ -66,4 +67,5 @@ def session_for_id(
         tool_registry=tool_registry,
         state_dir=state_dir,
         session_dir=session_dir,
+        content_store=SqliteObjectStore(zeta_sqlite_path(state_dir)),
     )

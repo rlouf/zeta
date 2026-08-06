@@ -378,6 +378,7 @@ class RuntimeAgentLoop:
             zeta_sqlite_path(self.runtime.state_dir),
             session_id=session_id,
         )
+        content_store = SqliteObjectStore(zeta_sqlite_path(self.runtime.state_dir))
         runtime_context = RuntimeContext(
             session_id=session_id,
             event_sink=self.runtime.events,
@@ -385,6 +386,7 @@ class RuntimeAgentLoop:
             tool_registry=self.runtime.tool_registry,
             state_dir=self.runtime.state_dir,
             session_dir=self.runtime.state_dir / "sessions" / session_id,
+            content_store=content_store,
         )
         started = time.perf_counter()
         try:
@@ -425,6 +427,7 @@ class RuntimeAgentLoop:
             )
             trace_started = time.perf_counter()
             try:
+                content_store.close()
                 trace_store.close()
             finally:
                 self.runtime.events.observe_runtime_metric(

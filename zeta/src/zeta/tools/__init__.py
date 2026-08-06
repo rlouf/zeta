@@ -51,6 +51,87 @@ QUERY_LOG_SPEC = Capability(
     QUERY_LOG_SCHEMA,
 )
 
+QUERY_CONTENT_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "key_prefix": {"type": "string"},
+        "kind": {"type": "string"},
+        "source_scope": {"enum": ["run", "session", "agent"]},
+        "limit": {"type": "integer", "minimum": 1, "maximum": 50},
+        "cursor": {"type": "integer", "minimum": 0},
+    },
+}
+
+QUERY_CONTENT_SPEC = Capability(
+    CapabilityId("zeta", "query_content"),
+    (
+        "Query the current content workspace. The result contains stable object "
+        "references and bounded previews."
+    ),
+    QUERY_CONTENT_SCHEMA,
+)
+
+TRANSFORM_CONTENT_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": [
+        "expected_head",
+        "reason",
+        "inputs",
+        "transformation",
+        "destination",
+    ],
+    "properties": {
+        "expected_head": {"type": "string", "minLength": 1},
+        "reason": {"type": "string", "minLength": 1},
+        "inputs": {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "keys": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "uniqueItems": True,
+                },
+                "kind": {"type": "string"},
+                "source_scope": {"enum": ["run", "session", "agent"]},
+            },
+        },
+        "transformation": {
+            "type": "object",
+            "required": ["type"],
+            "properties": {
+                "type": {"enum": ["literal", "patch", "drop", "identity"]},
+                "value": {},
+                "title": {"type": "string"},
+                "attributes": {"type": "object"},
+                "patch": {"type": "object"},
+            },
+        },
+        "destination": {
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["scope", "expected_object_id"],
+            "properties": {
+                "key": {"type": "string", "minLength": 1},
+                "kind": {"type": "string", "minLength": 1},
+                "scope": {"enum": ["run", "session", "agent"]},
+                "expected_object_id": {"type": ["string", "null"]},
+            },
+        },
+    },
+}
+
+TRANSFORM_CONTENT_SPEC = Capability(
+    CapabilityId("zeta", "transform_content"),
+    (
+        "Create a new content revision. Use an explicit run, session, or agent "
+        "destination. Durable changes become active only after the run succeeds."
+    ),
+    TRANSFORM_CONTENT_SCHEMA,
+)
+
 
 def ensure_builtin_tools_registered() -> None:
     from zeta.capabilities.registry import registry
@@ -70,9 +151,17 @@ def builtin_capabilities() -> dict[str, RegisteredCapability]:
         "zeta.ast_grep": builtin_capability(grep.AST_GREP_SPEC, grep.run_ast_grep),
         "zeta.edit": builtin_capability(edit.SPEC, edit.run),
         "zeta.patch": builtin_capability(edit.PATCH_SPEC, edit.run_patch),
+        "zeta.query_content": builtin_capability(
+            QUERY_CONTENT_SPEC,
+            content_workspace_unavailable,
+        ),
         "zeta.query_log": builtin_capability(
             QUERY_LOG_SPEC,
             query_log_unavailable,
+        ),
+        "zeta.transform_content": builtin_capability(
+            TRANSFORM_CONTENT_SPEC,
+            content_workspace_unavailable,
         ),
         "zeta.grep": builtin_capability(grep.SPEC, grep.run),
         "zeta.ls": builtin_capability(ls.SPEC, ls.run),
@@ -89,6 +178,17 @@ def query_log_unavailable(_params: dict[str, Any]) -> dict[str, Any]:
         "error": {
             "code": "query-log-unavailable",
             "message": "query_log is unavailable outside a durable runtime session",
+        },
+    }
+
+
+def content_workspace_unavailable(_params: dict[str, Any]) -> dict[str, Any]:
+    """Refuse content changes when no run owns a content workspace."""
+    return {
+        "ok": False,
+        "error": {
+            "code": "content-workspace-unavailable",
+            "message": "content tools are unavailable outside a Zeta run",
         },
     }
 

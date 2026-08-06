@@ -7,6 +7,7 @@ including the terminal statuses that end a call.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import inspect
 import json
 from collections.abc import Mapping
@@ -50,7 +51,7 @@ from zeta.loop.outcomes import (
 from zeta.loop.request import RunDependencies
 from zeta.loop.stages.abort import check_run_abort
 from zeta.models.types import tool_call_id
-from zeta.substrate import Derivation, Object, ObjectId
+from zeta.substrate import Derivation, Object, ObjectId, Store
 
 TERMINAL_TOOL_STATUSES = {"completed", "failed", "refused", "cancelled", "timed_out"}
 PUBLISH_EVENT_CAPABILITY_ID = "zeta.publish_event"
@@ -184,6 +185,7 @@ async def run_capability_step(
         if capability_id == TRANSFORM_CONTENT_CAPABILITY_ID:
             return await request_content_transform(
                 params,
+                position=position,
                 config=config,
                 state=state,
                 ctx=ctx,
@@ -262,6 +264,7 @@ def request_content_finish(
 async def request_content_transform(
     params: dict[str, Any],
     *,
+    position: int,
     config: AgentConfig,
     state: RunState,
     ctx: RunDependencies,
@@ -274,12 +277,14 @@ async def request_content_transform(
         if isinstance(operation, Mapping) and operation.get("type") == "model":
             result = await model_content_transform(
                 params,
+                position=position,
                 config=config,
                 ctx=ctx,
             )
         elif isinstance(operation, Mapping) and operation.get("type") == "python":
             result = await python_content_transform(
                 params,
+                position=position,
                 config=config,
                 ctx=ctx,
             )
@@ -310,6 +315,7 @@ async def request_content_transform(
 async def model_content_transform(
     params: Mapping[str, Any],
     *,
+    position: int,
     config: AgentConfig,
     ctx: RunDependencies,
 ) -> ContentTransformResult:
@@ -319,18 +325,26 @@ async def model_content_transform(
     operation = params.get("transformation")
     if not isinstance(operation, Mapping):
         raise ContentValidationError("content transformation must be an object")
+    inputs = workspace.transform_inputs(params)
+    destination = params.get("destination")
+    if not isinstance(destination, Mapping):
+        raise ContentValidationError("content destination must be an object")
     derived = await _derive_model_content(
-        workspace.transform_inputs(params),
+        inputs,
         operation,
+        retry_seed=_content_transform_retry_seed(
+            inputs,
+            operation,
+            destination,
+            position=position,
+            config=config,
+            ctx=ctx,
+        ),
         config=config,
         ctx=ctx,
     )
     if derived.mode == "map":
-        destination = params.get("destination")
-        if (
-            not isinstance(destination, Mapping)
-            or destination.get("kind") != "collection"
-        ):
+        if destination.get("kind") != "collection":
             raise ContentValidationError(
                 "model map destination kind must be collection"
             )
@@ -350,9 +364,13 @@ async def _derive_model_content(
     inputs: tuple[ContentTransformInput, ...],
     operation: Mapping[str, Any],
     *,
+    retry_seed: str,
     config: AgentConfig,
     ctx: RunDependencies,
 ) -> _DerivedModelResult:
+    workspace = ctx.content_workspace
+    if workspace is None:
+        raise ContentValidationError("content workspace is unavailable")
     instruction = operation.get("instruction")
     if not isinstance(instruction, str) or not instruction.strip():
         raise ContentValidationError("model transformation requires an instruction")
@@ -360,35 +378,41 @@ async def _derive_model_content(
     if mode not in {"one", "map", "reduce"}:
         raise ContentValidationError(f"unsupported model transformation mode {mode!r}")
     groups = _model_transform_groups(inputs, str(mode))
-    input_chars = sum(
-        len(_content_transform_input_text(item)) for group in groups for item in group
+    cache_refs = tuple(
+        _child_model_cache_ref(retry_seed, index) for index in range(len(groups))
     )
-    concurrency = ctx.content_transform_budget.reserve_model_calls(
-        calls=len(groups),
-        input_chars=input_chars,
+    cached = tuple(
+        _cached_child_model_result(workspace.store, cache_ref)
+        for cache_ref in cache_refs
     )
-    requested_concurrency = operation.get("max_concurrency", concurrency)
-    if (
-        not isinstance(requested_concurrency, int)
-        or isinstance(requested_concurrency, bool)
-        or requested_concurrency < 1
-    ):
-        raise ContentValidationError("model max_concurrency must be a positive integer")
+    concurrency, requested_concurrency = _model_transform_concurrency(
+        groups,
+        cached,
+        operation,
+        ctx=ctx,
+    )
     semaphore = asyncio.Semaphore(min(concurrency, requested_concurrency))
 
     async def transform_one(
+        index: int,
         group: tuple[ContentTransformInput, ...],
     ) -> _ChildModelResult:
+        reused = cached[index]
+        if reused is not None:
+            return reused
         async with semaphore:
             return await _request_child_model_transform(
                 group,
                 instruction=instruction,
                 mode=str(mode),
+                cache_ref=cache_refs[index],
                 config=config,
                 ctx=ctx,
             )
 
-    children = await asyncio.gather(*(transform_one(group) for group in groups))
+    children = await asyncio.gather(
+        *(transform_one(index, group) for index, group in enumerate(groups))
+    )
     assistant_ids = tuple(child.assistant_id for child in children)
     if mode == "map":
         value = {"object_ids": list(assistant_ids)}
@@ -402,9 +426,37 @@ async def _derive_model_content(
     )
 
 
+def _model_transform_concurrency(
+    groups: tuple[tuple[ContentTransformInput, ...], ...],
+    cached: tuple[_ChildModelResult | None, ...],
+    operation: Mapping[str, Any],
+    *,
+    ctx: RunDependencies,
+) -> tuple[int, int]:
+    missing = tuple(index for index, child in enumerate(cached) if child is None)
+    input_chars = sum(
+        len(_content_transform_input_text(item))
+        for index in missing
+        for item in groups[index]
+    )
+    concurrency = (
+        ctx.content_transform_budget.reserve_model_calls(
+            calls=len(missing),
+            input_chars=input_chars,
+        )
+        if missing
+        else 1
+    )
+    requested = operation.get("max_concurrency", concurrency)
+    if not isinstance(requested, int) or isinstance(requested, bool) or requested < 1:
+        raise ContentValidationError("model max_concurrency must be a positive integer")
+    return concurrency, requested
+
+
 async def python_content_transform(
     params: Mapping[str, Any],
     *,
+    position: int,
     config: AgentConfig,
     ctx: RunDependencies,
 ) -> ContentTransformResult:
@@ -430,6 +482,17 @@ async def python_content_transform(
             "python timeout_seconds must be greater than 0 and at most 300"
         )
     selected = workspace.transform_inputs(params)
+    destination = params.get("destination")
+    if not isinstance(destination, Mapping):
+        raise ContentValidationError("content destination must be an object")
+    retry_seed = _content_transform_retry_seed(
+        selected,
+        operation,
+        destination,
+        position=position,
+        config=config,
+        ctx=ctx,
+    )
     values = tuple(
         _PythonContentValue(item.key, item.object_id, item.node) for item in selected
     )
@@ -446,6 +509,7 @@ async def python_content_transform(
     async def nested_transform(request: dict[str, Any]) -> _PythonContentValue:
         return await _nested_python_transform(
             request,
+            parent_retry_seed=retry_seed,
             config=config,
             ctx=ctx,
         )
@@ -508,6 +572,7 @@ def _run_python_program(
 async def _nested_python_transform(
     request: Mapping[str, Any],
     *,
+    parent_retry_seed: str,
     config: AgentConfig,
     ctx: RunDependencies,
 ) -> _PythonContentValue:
@@ -542,6 +607,15 @@ async def _nested_python_transform(
     derived = await _derive_model_content(
         inputs,
         operation,
+        retry_seed=_content_transform_retry_seed(
+            inputs,
+            operation,
+            destination,
+            position=None,
+            config=config,
+            ctx=ctx,
+            parent_retry_seed=parent_retry_seed,
+        ),
         config=config,
         ctx=ctx,
     )
@@ -594,17 +668,98 @@ def _model_transform_groups(
     return (inputs,)
 
 
+def _content_transform_retry_seed(
+    inputs: tuple[ContentTransformInput, ...],
+    operation: Mapping[str, Any],
+    destination: Mapping[str, Any],
+    *,
+    position: int | None,
+    config: AgentConfig,
+    ctx: RunDependencies,
+    parent_retry_seed: str | None = None,
+) -> str:
+    workspace = ctx.content_workspace
+    if workspace is None:
+        raise ContentValidationError("content workspace is unavailable")
+    parent = (
+        parent_retry_seed
+        or ctx.source_queue_item_id
+        or f"run:{workspace.run_head.scope_id}"
+    )
+    payload = {
+        "parent": parent,
+        "position": position,
+        "input_ids": [item.object_id for item in inputs],
+        "transformation": dict(operation),
+        "destination": dict(destination),
+        "model": {
+            "profile": config.model_profile,
+            "name": config.model_name,
+            "url": config.model_url,
+            "thinking": config.thinking,
+            "api": config.model_api,
+        },
+    }
+    encoded = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode()
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _child_model_cache_ref(retry_seed: str, position: int) -> str:
+    return f"content-transform/retry/{retry_seed}/{position}"
+
+
+def _cached_child_model_result(
+    store: Store,
+    cache_ref: str,
+) -> _ChildModelResult | None:
+    ref = store.get_ref(cache_ref)
+    if ref is None:
+        return None
+    obj = store.get_object(ref.object_id)
+    if obj is None or obj.kind != "assistant_message":
+        raise ContentValidationError("recorded model transformation is unavailable")
+    message = obj.data.get("message")
+    content = message.get("content") if isinstance(message, Mapping) else None
+    if not isinstance(content, str):
+        raise ContentValidationError("recorded model transformation has no text")
+    return _ChildModelResult(content, ref.object_id)
+
+
+def _cache_child_model_result(
+    store: Store,
+    cache_ref: str,
+    result: _ChildModelResult,
+) -> _ChildModelResult:
+    update = store.move_ref(cache_ref, None, result.assistant_id)
+    if update.updated:
+        return result
+    accepted = _cached_child_model_result(store, cache_ref)
+    if accepted is None:
+        raise ContentValidationError("model transformation retry result was lost")
+    return accepted
+
+
 async def _request_child_model_transform(
     inputs: tuple[ContentTransformInput, ...],
     *,
     instruction: str,
     mode: str,
+    cache_ref: str,
     config: AgentConfig,
     ctx: RunDependencies,
 ) -> _ChildModelResult:
     workspace = ctx.content_workspace
     if workspace is None:
         raise ContentValidationError("content workspace is unavailable")
+    cached = _cached_child_model_result(workspace.store, cache_ref)
+    if cached is not None:
+        return cached
     builder = PromptBuilder(store=workspace.store)
     components = tuple(
         PromptComponent(
@@ -662,10 +817,14 @@ async def _request_child_model_transform(
             producer="ModelResponse",
             output_id=assistant_id,
             input_ids=(stored.prompt_object_id,),
-            params={"mode": mode},
+            params={"mode": mode, "retry_ref": cache_ref},
         )
     )
-    return _ChildModelResult(content, assistant_id)
+    return _cache_child_model_result(
+        workspace.store,
+        cache_ref,
+        _ChildModelResult(content, assistant_id),
+    )
 
 
 def _content_transform_input_text(item: ContentTransformInput) -> str:

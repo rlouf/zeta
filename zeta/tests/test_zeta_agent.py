@@ -1772,6 +1772,144 @@ def test_zeta_model_content_transform_records_child_prompt_and_answer() -> None:
     assert store.get_object(assistant.links[0]).kind == "prompt"
 
 
+def test_zeta_model_content_transform_reuses_a_retry_child_result() -> None:
+    registry = CapabilityRegistry()
+    register_builtin_tools(registry)
+    store = InMemoryStore()
+    seed = zeta_content_transforms.ContentWorkspace(
+        store,
+        run_id="run-seed",
+        session_id="session-content",
+        owner="writer",
+    )
+    source = seed.transform(
+        {
+            "expected_head": seed.initialize(),
+            "reason": "Keep source material.",
+            "inputs": {},
+            "transformation": {"type": "literal", "value": "Release evidence."},
+            "destination": {
+                "key": "evidence",
+                "kind": "document",
+                "scope": "agent",
+                "expected_object_id": None,
+            },
+        }
+    )
+    seed.promote(source.promotions[0])
+
+    def retry_workspace(run_id: str) -> zeta_content_transforms.ContentWorkspace:
+        workspace = zeta_content_transforms.ContentWorkspace(
+            store,
+            run_id=run_id,
+            session_id="session-content",
+            owner="writer",
+        )
+        workspace.initialize()
+        return workspace
+
+    def transform_params(
+        workspace: zeta_content_transforms.ContentWorkspace,
+    ) -> dict[str, Any]:
+        return {
+            "expected_head": workspace.current_head(),
+            "reason": "Summarize the evidence.",
+            "inputs": {"keys": ["evidence"]},
+            "transformation": {
+                "type": "model",
+                "mode": "one",
+                "instruction": "Write one short release summary.",
+            },
+            "destination": {
+                "key": "summary",
+                "kind": "procedure",
+                "scope": "run",
+                "expected_object_id": None,
+            },
+        }
+
+    first_workspace = retry_workspace("run-attempt-1")
+    first_gateway = PublishEventGateway(
+        [
+            {
+                "content": "",
+                "tool_calls": [
+                    content_tool_call(
+                        "call-transform",
+                        "transform_content",
+                        transform_params(first_workspace),
+                    )
+                ],
+            },
+            {"content": "Cached summary."},
+            {"content": "done"},
+        ]
+    )
+    first_result = run_agent_turn(
+        "manage content",
+        [],
+        zeta_agent.AgentConfig(
+            max_turns=2,
+            allowed_capabilities=("transform_content",),
+        ),
+        model_gateway=first_gateway,
+        tool_registry=registry,
+        trace_store=store,
+        content_workspace=first_workspace,
+        source_queue_item_id="qi_retry",
+    )
+    first_tool_result = next(
+        event
+        for event in timeline_events(first_result.events)
+        if event.get("type") == "tool_result"
+    )["result"]
+
+    second_workspace = retry_workspace("run-attempt-2")
+    second_gateway = PublishEventGateway(
+        [
+            {
+                "content": "",
+                "tool_calls": [
+                    content_tool_call(
+                        "call-transform",
+                        "transform_content",
+                        transform_params(second_workspace),
+                    )
+                ],
+            },
+            {"content": "done"},
+        ]
+    )
+    second_result = run_agent_turn(
+        "manage content",
+        [],
+        zeta_agent.AgentConfig(
+            max_turns=2,
+            allowed_capabilities=("transform_content",),
+        ),
+        model_gateway=second_gateway,
+        tool_registry=registry,
+        trace_store=store,
+        content_workspace=second_workspace,
+        source_queue_item_id="qi_retry",
+    )
+    second_tool_result = next(
+        event
+        for event in timeline_events(second_result.events)
+        if event.get("type") == "tool_result"
+    )["result"]
+    first_output = store.get_object(first_tool_result["object_ids"][0])
+    second_output = store.get_object(second_tool_result["object_ids"][0])
+
+    assert first_output is not None
+    assert second_output is not None
+    assert first_output.data["content"] == "Cached summary."
+    assert second_output.data["content"] == "Cached summary."
+    assert first_output.links[-1] == second_output.links[-1]
+    assert len(first_gateway.model_inputs) == 3
+    assert len(second_gateway.model_inputs) == 2
+
+
 def test_zeta_model_map_transform_keeps_source_order_in_a_collection() -> None:
     registry = CapabilityRegistry()
     register_builtin_tools(registry)

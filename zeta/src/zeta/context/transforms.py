@@ -1198,6 +1198,7 @@ def advance_content_head(
                 input_ids=derivation_inputs,
                 params={
                     "owner": head.owner,
+                    "prior_head": expected_head,
                     "reason": reason.strip(),
                     "scope": head.scope,
                     "scope_id": head.scope_id,
@@ -1271,6 +1272,9 @@ def _prior_content_head(store: Store, output_id: ObjectId) -> ObjectId | None:
     for derivation in reversed(derivations):
         if derivation.producer != "ContentAdvance:v1":
             continue
+        if "prior_head" in derivation.params:
+            prior = derivation.params.get("prior_head")
+            return prior if isinstance(prior, str) else None
         for input_id in derivation.input_ids:
             obj = store.get_object(input_id)
             if obj is not None and obj.kind == "content_graph_revision":

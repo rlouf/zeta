@@ -5195,6 +5195,157 @@ def test_zeta_cli_ps_replaces_runs_listing(tmp_path: Path) -> None:
     assert "No such command 'runs'" in removed_alias.output
 
 
+def test_zeta_cli_inspects_diffs_and_restores_agent_content(tmp_path: Path) -> None:
+    state_dir = tmp_path / ".zeta"
+    runtime = RuntimeEventStore.open(event_store_path(state_dir))
+    store = runtime.content_store()
+    workspace = zeta_content_transforms.ContentWorkspace(
+        store,
+        run_id="run-content",
+        session_id="session-content",
+        owner="writer",
+    )
+    first_change = workspace.transform(
+        {
+            "expected_head": workspace.initialize(),
+            "reason": "Keep the first procedure.",
+            "inputs": {},
+            "transformation": {"type": "literal", "value": "First."},
+            "destination": {
+                "key": "procedure",
+                "kind": "procedure",
+                "scope": "agent",
+                "expected_object_id": None,
+            },
+        }
+    )
+    first = workspace.promote(first_change.promotions[0])
+    second_change = workspace.transform(
+        {
+            "expected_head": first_change.head,
+            "reason": "Replace the procedure.",
+            "inputs": {"keys": ["procedure"]},
+            "transformation": {
+                "type": "patch",
+                "patch": {"content": "Second."},
+            },
+            "destination": {
+                "key": "procedure",
+                "kind": "procedure",
+                "scope": "agent",
+                "expected_object_id": first_change.output_ids[0],
+            },
+        }
+    )
+    second = workspace.promote(second_change.promotions[0])
+    runtime.close()
+
+    runner = CliRunner()
+    shown = runner.invoke(
+        cli_main.cli,
+        [
+            "agents",
+            "content",
+            "show",
+            "writer",
+            "--state-dir",
+            str(state_dir),
+            "--json",
+        ],
+    )
+    logged = runner.invoke(
+        cli_main.cli,
+        [
+            "agents",
+            "content",
+            "log",
+            "writer",
+            "--state-dir",
+            str(state_dir),
+            "--json",
+        ],
+    )
+    diffed = runner.invoke(
+        cli_main.cli,
+        [
+            "agents",
+            "content",
+            "diff",
+            "writer",
+            first,
+            second,
+            "--state-dir",
+            str(state_dir),
+            "--json",
+        ],
+    )
+    restored = runner.invoke(
+        cli_main.cli,
+        [
+            "agents",
+            "content",
+            "restore",
+            "writer",
+            first,
+            "--state-dir",
+            str(state_dir),
+            "--reason",
+            "The second procedure was wrong.",
+            "--json",
+        ],
+    )
+
+    assert shown.exit_code == 0, shown.output
+    assert json.loads(shown.output) == {
+        "agent": "writer",
+        "head": second,
+        "nodes": [
+            {
+                "key": "procedure",
+                "kind": "procedure",
+                "title": None,
+                "object_id": second_change.output_ids[0],
+                "source_scope": "agent",
+                "chars": 7,
+                "preview": "Second.",
+            }
+        ],
+    }
+    assert logged.exit_code == 0, logged.output
+    assert [item["head"] for item in json.loads(logged.output)] == [
+        second,
+        first,
+    ]
+    assert diffed.exit_code == 0, diffed.output
+    assert json.loads(diffed.output) == {
+        "agent": "writer",
+        "old_head": first,
+        "new_head": second,
+        "added": [],
+        "removed": [],
+        "changed": [
+            {
+                "key": "procedure",
+                "old_object_id": first_change.output_ids[0],
+                "new_object_id": second_change.output_ids[0],
+            }
+        ],
+    }
+    assert restored.exit_code == 0, restored.output
+    assert json.loads(restored.output) == {
+        "agent": "writer",
+        "old_head": second,
+        "head": first,
+        "reason": "The second procedure was wrong.",
+    }
+    reopened = RuntimeEventStore.open(event_store_path(state_dir), read_only=True)
+    assert reopened.content_store().get_ref("agent/writer/content/head").object_id == (
+        first
+    )
+    assert reopened.content_store().get_object(second) is not None
+    reopened.close()
+
+
 def test_zeta_cli_ps_lists_and_shows_runs(tmp_path: Path) -> None:
     state_dir = tmp_path / ".zeta"
     event_store = zeta_events.SqliteEventStore(event_store_path(state_dir))

@@ -166,9 +166,10 @@ def test_content_head_advance_stores_a_complete_immutable_revision(
             producer="ContentAdvance:v1",
             output_id=revision_id,
             input_ids=(trigger_id,),
-            params={
-                "owner": "release-agent",
-                "reason": "Start the run workspace.",
+                params={
+                    "owner": "release-agent",
+                    "prior_head": None,
+                    "reason": "Start the run workspace.",
                 "scope": "run",
                 "scope_id": "run-1",
             },

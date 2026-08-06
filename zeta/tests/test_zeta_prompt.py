@@ -541,6 +541,45 @@ def test_content_workspace_rejects_a_tool_outside_the_agent_namespace() -> None:
     assert workspace.current_head() == initial_head
 
 
+def test_content_workspace_rejects_a_tool_key_that_does_not_match_its_name() -> None:
+    store = InMemoryStore()
+    workspace = context_transforms.ContentWorkspace(
+        store,
+        run_id="run-1",
+        session_id="session-1",
+        owner="writer",
+    )
+    initial_head = workspace.initialize()
+
+    with pytest.raises(
+        context_transforms.ContentValidationError,
+        match="tool definition key must be 'tools/echo'",
+    ):
+        workspace.transform(
+            {
+                "expected_head": initial_head,
+                "reason": "Create an echo tool under the wrong key.",
+                "inputs": {},
+                "transformation": {
+                    "type": "literal",
+                    "value": {
+                        "name": "echo",
+                        "capability_id": "agent.writer.echo",
+                        "source": "tool = None",
+                    },
+                },
+                "destination": {
+                    "key": "tools/other",
+                    "kind": "tool_definition",
+                    "scope": "agent",
+                    "expected_object_id": None,
+                },
+            }
+        )
+
+    assert workspace.current_head() == initial_head
+
+
 def test_content_workspace_rejects_a_tool_import_that_times_out(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -326,6 +326,9 @@ def agent_tool_definition_from_content(
     source = content.get("source")
     if not isinstance(name, str) or AGENT_TOOL_NAME.fullmatch(name) is None:
         raise AgentToolDefinitionError("tool definition name is invalid")
+    expected_key = f"tools/{name}"
+    if key != expected_key:
+        raise AgentToolDefinitionError(f"tool definition key must be {expected_key!r}")
     expected_id = f"agent.{owner}.{name}"
     if capability_id != expected_id:
         raise AgentToolDefinitionError(

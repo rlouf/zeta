@@ -198,6 +198,34 @@ def test_project_snapshot_activates_an_agent_content_tool_in_the_next_generation
     runtime.close()
 
 
+def test_project_snapshot_compiles_a_file_tool_through_the_agent_tool_path(
+    tmp_path: Path,
+) -> None:
+    agents = write_snapshot_project(tmp_path)
+    tools = agents / "tools" / "worker"
+    tools.mkdir(parents=True)
+    source = agent_tool_source("worker", "echo", prefix="file:")
+    (tools / "echo.py").write_text(source, encoding="utf-8")
+
+    snapshot = load_snapshot(agents)
+
+    assert snapshot.project.specs[0].tools == ("agent.worker.echo",)
+    assert snapshot.tool_registry.invoke(
+        "agent.worker.echo",
+        {"text": "hello"},
+    ) == {"ok": True, "echo": "file:hello"}
+    assert snapshot.manifest["agent_tools"] == [
+        {
+            "owner": "worker",
+            "key": "tools/echo",
+            "object_id": snapshot.manifest["agent_tools"][0]["object_id"],
+            "name": "echo",
+            "capability_id": "agent.worker.echo",
+            "source": source,
+        }
+    ]
+
+
 def test_project_snapshot_keeps_each_agent_tool_generation_stable(
     tmp_path: Path,
 ) -> None:

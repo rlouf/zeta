@@ -33,6 +33,8 @@ MAX_CONTENT_KEY_CHARS = 256
 MAX_CONTENT_TITLE_CHARS = 512
 MAX_CONTENT_NODE_BYTES = 256_000
 MAX_CONTENT_ATTRIBUTES_BYTES = 32_000
+MAX_CONTENT_QUERY_LIMIT = 50
+MAX_CONTENT_PREVIEW_CHARS = 500
 
 
 class ContentValidationError(ValueError):
@@ -83,6 +85,166 @@ class ContentHead:
     @property
     def ref_name(self) -> str:
         return f"{self.scope}/{self.scope_id}/content/head"
+
+
+class ContentWorkspace:
+    """Give one run an isolated head while it reads durable owner content."""
+
+    def __init__(
+        self,
+        store: Store,
+        *,
+        run_id: str,
+        session_id: str,
+        owner: str,
+        include_agent_content: bool = True,
+    ) -> None:
+        self.store = store
+        self.run_head = ContentHead("run", run_id, owner)
+        self.session_head = ContentHead("session", session_id, owner)
+        self.agent_head = (
+            ContentHead("agent", owner, owner) if include_agent_content else None
+        )
+
+    def initialize(self) -> ObjectId:
+        """Snapshot durable heads once so retries and later turns use exact inputs."""
+
+        existing = self.store.get_ref(self.run_head.ref_name)
+        if existing is not None:
+            revision = content_revision_from_object(
+                self.store.get_object(existing.object_id)
+            )
+            self._validate_owner(revision)
+            return existing.object_id
+        nodes: dict[str, ObjectId] = {}
+        order: list[str] = []
+        sources: dict[str, str] = {}
+        input_heads: list[ObjectId] = []
+        if self.agent_head is not None:
+            self._merge_durable_head(
+                self.agent_head,
+                nodes=nodes,
+                order=order,
+                sources=sources,
+                input_heads=input_heads,
+            )
+        self._merge_durable_head(
+            self.session_head,
+            nodes=nodes,
+            order=order,
+            sources=sources,
+            input_heads=input_heads,
+        )
+        return advance_content_head(
+            self.store,
+            self.run_head,
+            expected_head=None,
+            nodes=nodes,
+            projection_order=tuple(order),
+            source_scopes=sources,
+            reason="Initialize the run content workspace.",
+            source_ids=tuple(input_heads),
+        )
+
+    def current_head(self) -> ObjectId:
+        current = self.store.get_ref(self.run_head.ref_name)
+        return current.object_id if current is not None else self.initialize()
+
+    def revision(self) -> ContentRevision:
+        return content_revision_from_object(self.store.get_object(self.current_head()))
+
+    def query(
+        self,
+        *,
+        key_prefix: str | None = None,
+        kind: str | None = None,
+        source_scope: str | None = None,
+        limit: int = 20,
+        cursor: int | None = None,
+    ) -> dict[str, Any]:
+        """Return bounded previews so large content stays outside the root context."""
+
+        if limit < 1 or limit > MAX_CONTENT_QUERY_LIMIT:
+            raise ContentValidationError(
+                f"content query limit must be from 1 to {MAX_CONTENT_QUERY_LIMIT}"
+            )
+        offset = 0 if cursor is None else cursor
+        if offset < 0:
+            raise ContentValidationError("content query cursor must not be negative")
+        head_id = self.current_head()
+        revision = content_revision_from_object(self.store.get_object(head_id))
+        items = [
+            self._query_item(key, revision)
+            for key in revision.projection_order
+            if (key_prefix is None or key.startswith(key_prefix))
+            and (kind is None or self._node(revision.nodes[key]).kind == kind)
+            and (source_scope is None or revision.source_scopes[key] == source_scope)
+        ]
+        page = items[offset : offset + limit]
+        next_offset = offset + len(page)
+        return {
+            "head": head_id,
+            "items": page,
+            "next_cursor": next_offset if next_offset < len(items) else None,
+        }
+
+    def _merge_durable_head(
+        self,
+        head: ContentHead,
+        *,
+        nodes: dict[str, ObjectId],
+        order: list[str],
+        sources: dict[str, str],
+        input_heads: list[ObjectId],
+    ) -> None:
+        current = self.store.get_ref(head.ref_name)
+        if current is None:
+            return
+        revision = content_revision_from_object(
+            self.store.get_object(current.object_id)
+        )
+        self._validate_owner(revision)
+        input_heads.append(current.object_id)
+        for key in revision.projection_order:
+            if key not in nodes:
+                order.append(key)
+            nodes[key] = revision.nodes[key]
+            sources[key] = head.scope
+
+    def _validate_owner(self, revision: ContentRevision) -> None:
+        if revision.owner != self.run_head.owner:
+            raise ContentValidationError("content revision belongs to another owner")
+
+    def _node(self, object_id: ObjectId) -> ContentNode:
+        return content_node_from_object(self.store.get_object(object_id))
+
+    def _query_item(
+        self,
+        key: str,
+        revision: ContentRevision,
+    ) -> dict[str, Any]:
+        object_id = revision.nodes[key]
+        node = self._node(object_id)
+        rendered = (
+            node.content
+            if isinstance(node.content, str)
+            else json.dumps(
+                node.content,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+                allow_nan=False,
+            )
+        )
+        return {
+            "key": key,
+            "kind": node.kind,
+            "title": node.title,
+            "object_id": object_id,
+            "source_scope": revision.source_scopes[key],
+            "chars": len(rendered),
+            "preview": rendered[:MAX_CONTENT_PREVIEW_CHARS],
+        }
 
 
 def content_node_object(

@@ -4,9 +4,17 @@ from __future__ import annotations
 
 import asyncio
 import inspect
-from collections.abc import Coroutine
-from dataclasses import dataclass, field
+import json
+import re
+import subprocess
+import sys
+import tempfile
+from collections.abc import Coroutine, Mapping
+from dataclasses import asdict, dataclass, field
 from typing import Any, cast
+
+from jsonschema import Draft202012Validator
+from jsonschema.exceptions import SchemaError
 
 from zeta.capabilities.profiles import (
     ArgumentAdapter,
@@ -23,8 +31,32 @@ __all__ = [
     "CapabilityToolSchema",
     "CapabilityRegistry",
     "RegisteredCapability",
+    "AgentToolDefinition",
+    "AgentToolDefinitionError",
+    "agent_tool_definition_from_content",
+    "load_agent_tool_definition",
+    "validate_agent_tool_definition",
     "registry",
 ]
+
+MAX_AGENT_TOOL_SOURCE_BYTES = 131_072
+AGENT_TOOL_IMPORT_TIMEOUT_SECONDS = 5
+AGENT_TOOL_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,63}$")
+AGENT_TOOL_VALIDATION_MARKER = "__ZETA_AGENT_TOOL_VALID__"
+
+
+class AgentToolDefinitionError(ValueError):
+    """Reject a tool revision before it can enter an agent generation."""
+
+
+@dataclass(frozen=True)
+class AgentToolDefinition:
+    owner: str
+    key: str
+    object_id: str
+    name: str
+    capability_id: str
+    source: str
 
 
 @dataclass(frozen=True)
@@ -220,6 +252,16 @@ class CapabilityRegistry(CapabilityDirectory):
         self._capabilities[capability_id] = capability
         self._names.setdefault(capability.declaration.id.name, []).append(capability_id)
 
+    def copy(self) -> CapabilityRegistry:
+        """Keep one generation's executable registry stable while later ones load."""
+
+        copied = CapabilityRegistry()
+        for capability_id in self.list_capability_ids():
+            capability = self.get(capability_id)
+            if capability is not None:
+                copied.register(capability)
+        return copied
+
     def invoke(
         self,
         capability_id: str,
@@ -263,6 +305,127 @@ class CapabilityRegistry(CapabilityDirectory):
 
 
 registry = CapabilityRegistry()
+
+
+def agent_tool_definition_from_content(
+    content: Any,
+    *,
+    owner: str,
+    key: str,
+    object_id: str = "",
+) -> AgentToolDefinition:
+    if not isinstance(content, Mapping):
+        raise AgentToolDefinitionError("tool definition content must be an object")
+    unknown = set(content) - {"name", "capability_id", "source"}
+    if unknown:
+        raise AgentToolDefinitionError(
+            f"tool definition has unsupported field {sorted(unknown)[0]!r}"
+        )
+    name = content.get("name")
+    capability_id = content.get("capability_id")
+    source = content.get("source")
+    if not isinstance(name, str) or AGENT_TOOL_NAME.fullmatch(name) is None:
+        raise AgentToolDefinitionError("tool definition name is invalid")
+    expected_id = f"agent.{owner}.{name}"
+    if capability_id != expected_id:
+        raise AgentToolDefinitionError(
+            f"tool definition capability_id must be {expected_id!r}"
+        )
+    if not isinstance(source, str) or not source.strip():
+        raise AgentToolDefinitionError("tool definition source must not be empty")
+    if len(source.encode("utf-8")) > MAX_AGENT_TOOL_SOURCE_BYTES:
+        raise AgentToolDefinitionError("tool definition source is too large")
+    return AgentToolDefinition(owner, key, object_id, name, expected_id, source)
+
+
+def validate_agent_tool_definition(
+    content: Any,
+    *,
+    owner: str,
+    key: str,
+    object_id: str = "",
+) -> AgentToolDefinition:
+    """Import authored code away from the worker before a revision can commit."""
+
+    definition = agent_tool_definition_from_content(
+        content,
+        owner=owner,
+        key=key,
+        object_id=object_id,
+    )
+    script = (
+        "import json, sys\n"
+        "from zeta.capabilities.registry import "
+        "AgentToolDefinition, load_agent_tool_definition\n"
+        "definition = AgentToolDefinition(**json.loads(sys.stdin.read()))\n"
+        "load_agent_tool_definition(definition)\n"
+        f"print({AGENT_TOOL_VALIDATION_MARKER!r}, flush=True)\n"
+    )
+    try:
+        with tempfile.TemporaryFile(mode="w+") as output:
+            completed = subprocess.run(
+                [sys.executable, "-c", script],
+                input=json.dumps(asdict(definition)),
+                text=True,
+                stdout=output,
+                stderr=subprocess.DEVNULL,
+                timeout=AGENT_TOOL_IMPORT_TIMEOUT_SECONDS,
+                check=False,
+            )
+            output.seek(0)
+            imported = AGENT_TOOL_VALIDATION_MARKER in output.read()
+    except subprocess.TimeoutExpired as exc:
+        raise AgentToolDefinitionError("tool definition import timed out") from exc
+    if completed.returncode != 0 or not imported:
+        raise AgentToolDefinitionError("tool definition could not be imported")
+    return definition
+
+
+def load_agent_tool_definition(
+    definition: AgentToolDefinition,
+) -> RegisteredCapability:
+    """Compile the exact source stored in an immutable project generation."""
+
+    namespace: dict[str, Any] = {"__name__": f"zeta_agent_tool_{definition.owner}"}
+    try:
+        exec(
+            compile(definition.source, f"<{definition.capability_id}>", "exec"),
+            namespace,
+        )
+    except BaseException as exc:
+        raise AgentToolDefinitionError(
+            f"tool definition raised {type(exc).__name__} during import"
+        ) from exc
+    candidate = namespace.get("tool")
+    if callable(candidate) and not isinstance(candidate, RegisteredCapability):
+        try:
+            candidate = candidate()
+        except BaseException as exc:
+            raise AgentToolDefinitionError(
+                f"tool definition factory raised {type(exc).__name__}"
+            ) from exc
+    if not isinstance(candidate, RegisteredCapability):
+        raise AgentToolDefinitionError(
+            "tool definition must expose RegisteredCapability as tool or tool()"
+        )
+    declaration = candidate.declaration
+    if declaration.id.canonical() != definition.capability_id:
+        raise AgentToolDefinitionError(
+            "tool source capability id does not match its definition"
+        )
+    if declaration.id.name != definition.name:
+        raise AgentToolDefinitionError("tool source name does not match its definition")
+    if not declaration.description.strip():
+        raise AgentToolDefinitionError("tool description must not be empty")
+    if not isinstance(declaration.input_schema, dict):
+        raise AgentToolDefinitionError("tool input schema must be an object")
+    try:
+        Draft202012Validator.check_schema(declaration.input_schema)
+    except SchemaError as exc:
+        raise AgentToolDefinitionError("tool input schema is invalid") from exc
+    if not callable(candidate.executor):
+        raise AgentToolDefinitionError("tool executor must be callable")
+    return candidate
 
 
 def invoke_executor(

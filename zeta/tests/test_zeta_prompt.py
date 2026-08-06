@@ -500,6 +500,45 @@ def test_content_workspace_literal_transform_updates_the_run_head() -> None:
     ]
 
 
+def test_content_workspace_rejects_a_tool_outside_the_agent_namespace() -> None:
+    store = InMemoryStore()
+    workspace = context_transforms.ContentWorkspace(
+        store,
+        run_id="run-1",
+        session_id="session-1",
+        owner="writer",
+    )
+    initial_head = workspace.initialize()
+
+    with pytest.raises(
+        context_transforms.ContentValidationError,
+        match="capability_id must be 'agent.writer.echo'",
+    ):
+        workspace.transform(
+            {
+                "expected_head": initial_head,
+                "reason": "Create an echo tool.",
+                "inputs": {},
+                "transformation": {
+                    "type": "literal",
+                    "value": {
+                        "name": "echo",
+                        "capability_id": "agent.other.echo",
+                        "source": "tool = None",
+                    },
+                },
+                "destination": {
+                    "key": "tools/echo",
+                    "kind": "tool_definition",
+                    "scope": "agent",
+                    "expected_object_id": None,
+                },
+            }
+        )
+
+    assert workspace.current_head() == initial_head
+
+
 def test_content_workspace_patch_creates_a_new_node() -> None:
     store = InMemoryStore()
     workspace = context_transforms.ContentWorkspace(

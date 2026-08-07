@@ -1,6 +1,6 @@
 use std::io;
 
-use crossterm::event::{self, Event as TerminalEvent, KeyCode, KeyEventKind};
+use crossterm::event::{Event as TerminalEvent, KeyCode, KeyEventKind};
 use crossterm::execute;
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
@@ -36,6 +36,11 @@ pub(super) enum AppAction {
     None,
     Quit,
     Submit(String),
+}
+
+pub(super) struct TerminalSession {
+    terminal: Terminal<CrosstermBackend<io::Stdout>>,
+    active: bool,
 }
 
 impl App {
@@ -187,64 +192,69 @@ impl App {
     }
 }
 
-pub(super) fn run_terminal(app: &mut App) -> io::Result<AppAction> {
-    enable_raw_mode()?;
-    let mut output = io::stdout();
-    if let Err(error) = execute!(output, EnterAlternateScreen) {
-        let restore_result = disable_raw_mode();
-        if let Err(restore_error) = restore_result {
-            return Err(io::Error::other(format!(
-                "{error}; raw-mode restoration failed: {restore_error}"
-            )));
-        }
-        return Err(error);
-    }
-
-    let backend = CrosstermBackend::new(output);
-    let terminal = Terminal::new(backend);
-    let mut terminal = match terminal {
-        Ok(terminal) => terminal,
-        Err(error) => {
-            let raw_result = disable_raw_mode();
-            let mut output = io::stdout();
-            let screen_result = execute!(output, LeaveAlternateScreen);
-            if let Err(restore_error) = raw_result {
+impl TerminalSession {
+    pub(super) fn start() -> io::Result<Self> {
+        enable_raw_mode()?;
+        let mut output = io::stdout();
+        if let Err(error) = execute!(output, EnterAlternateScreen) {
+            let restore_result = disable_raw_mode();
+            if let Err(restore_error) = restore_result {
                 return Err(io::Error::other(format!(
                     "{error}; raw-mode restoration failed: {restore_error}"
                 )));
             }
-            if let Err(restore_error) = screen_result {
-                return Err(io::Error::other(format!(
-                    "{error}; screen restoration failed: {restore_error}"
-                )));
-            }
             return Err(error);
         }
-    };
 
-    let run_result = run_event_loop(&mut terminal, app);
-    let raw_result = disable_raw_mode();
-    let screen_result = execute!(terminal.backend_mut(), LeaveAlternateScreen);
-    let cursor_result = terminal.show_cursor();
-    let action = run_result?;
-    raw_result?;
-    screen_result?;
-    cursor_result?;
-    Ok(action)
+        let backend = CrosstermBackend::new(output);
+        let terminal = match Terminal::new(backend) {
+            Ok(terminal) => terminal,
+            Err(error) => {
+                let raw_result = disable_raw_mode();
+                let mut output = io::stdout();
+                let screen_result = execute!(output, LeaveAlternateScreen);
+                if let Err(restore_error) = raw_result {
+                    return Err(io::Error::other(format!(
+                        "{error}; raw-mode restoration failed: {restore_error}"
+                    )));
+                }
+                if let Err(restore_error) = screen_result {
+                    return Err(io::Error::other(format!(
+                        "{error}; screen restoration failed: {restore_error}"
+                    )));
+                }
+                return Err(error);
+            }
+        };
+        Ok(Self {
+            terminal,
+            active: true,
+        })
+    }
+
+    pub(super) fn draw(&mut self, app: &App) -> io::Result<()> {
+        self.terminal.draw(|frame| draw(frame, app))?;
+        Ok(())
+    }
+
+    pub(super) fn restore(&mut self) -> io::Result<()> {
+        if !self.active {
+            return Ok(());
+        }
+        self.active = false;
+        let raw_result = disable_raw_mode();
+        let screen_result = execute!(self.terminal.backend_mut(), LeaveAlternateScreen);
+        let cursor_result = self.terminal.show_cursor();
+        raw_result?;
+        screen_result?;
+        cursor_result?;
+        Ok(())
+    }
 }
 
-fn run_event_loop(
-    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
-    app: &mut App,
-) -> io::Result<AppAction> {
-    loop {
-        terminal.draw(|frame| draw(frame, app))?;
-        let event = event::read()?;
-        match app.handle_event(&event) {
-            AppAction::None => {}
-            AppAction::Quit => return Ok(AppAction::Quit),
-            AppAction::Submit(message) => return Ok(AppAction::Submit(message)),
-        }
+impl Drop for TerminalSession {
+    fn drop(&mut self) {
+        let _ = self.restore();
     }
 }
 

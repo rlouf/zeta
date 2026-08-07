@@ -26,7 +26,7 @@ class RuntimeEventProjection:
     """Projects runtime queue and attempt events into queryable tables."""
 
     name = "zeta.harness.runtime"
-    version = 10
+    version = 11
 
     def init_schema(self, connection: sqlite3.Connection) -> None:
         connection.executescript(
@@ -45,6 +45,9 @@ class RuntimeEventProjection:
               claimed_until INTEGER,
               attempt_count INTEGER NOT NULL DEFAULT 0,
               last_error TEXT,
+              cancel_requested_event_id TEXT,
+              cancel_requested_at INTEGER,
+              cancel_reason TEXT,
               updated_at INTEGER NOT NULL
             ) STRICT;
 
@@ -206,6 +209,9 @@ class RuntimeEventProjection:
             return
         if is_queueable_event(event):
             _index_pending_queue_item(connection, event)
+            return
+        if event.event_type == "runtime.queue_item.cancel_requested":
+            _index_queue_item_cancel_requested(connection, event)
             return
         if event.event_type.startswith("runtime.queue_item."):
             _index_one_queue_item(connection, event)
@@ -532,6 +538,30 @@ def _index_one_queue_item(connection: sqlite3.Connection, event: Event) -> None:
             error,
             event.timestamp_ms,
         ),
+    )
+
+
+def _index_queue_item_cancel_requested(
+    connection: sqlite3.Connection,
+    event: Event,
+) -> None:
+    queue_item_id = _optional_str(event.payload.get("queue_item_id"))
+    if queue_item_id is None:
+        return
+    reason = _optional_str(event.payload.get("reason"))
+    connection.execute(
+        """
+        UPDATE queue_items
+        SET cancel_requested_event_id = COALESCE(
+              cancel_requested_event_id,
+              ?
+            ),
+            cancel_requested_at = COALESCE(cancel_requested_at, ?),
+            cancel_reason = COALESCE(cancel_reason, ?),
+            updated_at = MAX(updated_at, ?)
+        WHERE queue_item_id = ?
+        """,
+        (event.id, event.timestamp_ms, reason, event.timestamp_ms, queue_item_id),
     )
 
 

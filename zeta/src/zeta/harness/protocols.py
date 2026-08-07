@@ -19,6 +19,20 @@ from zeta.journal.types import AppendOutcome
 
 CancellationResourceType = Literal["wait", "scheduled_event"]
 CancellationStatus = Literal["cancelled", "matched", "timed_out", "published"]
+QueueItemCancellationStatus = Literal[
+    "cancelling",
+    "cancelled",
+    "already_cancelled",
+    "already_terminal",
+    "unknown",
+]
+QueueItemTerminalStatus = Literal[
+    "completed",
+    "failed",
+    "cancelled",
+    "dead_lettered",
+    "unhandled",
+]
 
 
 class CancellationError(ValueError):
@@ -50,6 +64,19 @@ class CancellationResult:
     event: Event | None = field(default=None, compare=False, repr=False)
 
 
+@dataclass(frozen=True)
+class QueueItemCancellationResult:
+    """The durable state of one turn after a cancellation request."""
+
+    queue_item_id: str
+    run_id: str | None
+    session_id: str | None
+    status: QueueItemCancellationStatus
+    changed: bool
+    terminal_status: QueueItemTerminalStatus | None = None
+    event: Event | None = field(default=None, compare=False, repr=False)
+
+
 @runtime_checkable
 class RuntimeJournal(Protocol):
     """Append-only historical truth used by orchestration components."""
@@ -71,6 +98,15 @@ class RuntimeJournal(Protocol):
         source_session_id: str | None = None,
         now_ms: int | None = None,
     ) -> CancellationResult: ...
+
+    def cancel_queue_item(
+        self,
+        queue_item_id: str,
+        *,
+        expected_session_id: str | None = None,
+        reason: str | None = None,
+        now_ms: int | None = None,
+    ) -> QueueItemCancellationResult: ...
 
 
 @runtime_checkable

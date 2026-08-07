@@ -296,6 +296,33 @@ the lifecycle facts.
 
 ## Durable Cancellation
 
+A session turn uses its queue item as the durable cancellation target. The
+queue item stays the same across retries. An attempt does not.
+
+Zeta first appends `runtime.queue_item.cancel_requested`. This event records
+that Zeta accepted the request. It does not record that running work has
+stopped.
+
+For queued work, Zeta appends `runtime.queue_item.cancelled` in the same
+transaction. For claimed work, the queue item stays `claimed` until its worker
+stops. The queue projection stores the request event, request time, and first
+reason. A projection rebuild restores these fields.
+
+A repeated request does not add another event. If the queue item is already
+terminal, the operation returns its current terminal state. Cancellation does
+not change a completed, failed, dead-lettered, or unhandled item.
+
+The event names describe separate facts:
+
+- `runtime.queue_item.cancel_requested`: Zeta accepted a request.
+- `runtime.attempt.cancelled`: A running attempt stopped.
+- `runtime.queue_item.cancelled`: The turn is terminal and will not run again.
+
+Zeta does not use a general `runtime.cancellation.applied` event. The existing
+terminal events identify the affected resource and record the result.
+
+### Agent-created resources
+
 An authored agent can request cancellation of an active wait or a pending
 scheduled event. The model loop returns a `CancelRequest`; it does not change
 runtime state. The request contains the handle, optional reason, source agent,

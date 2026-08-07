@@ -27,6 +27,8 @@ from zeta.harness.protocols import (
     CoordinationStore,
     InvalidCancellationHandle,
     QueueClaim,
+    QueueItemCancellationResult,
+    QueueItemTerminalStatus,
     RuntimeJournal,
     UnauthorizedCancellation,
     UnknownCancellationHandle,
@@ -505,6 +507,136 @@ class RuntimeJournalStore(_SqliteBacked):
                 self.connection.rollback()
                 raise
 
+    def cancel_queue_item(
+        self,
+        queue_item_id: str,
+        *,
+        expected_session_id: str | None = None,
+        reason: str | None = None,
+        now_ms: int | None = None,
+    ) -> QueueItemCancellationResult:
+        """Record intent first so a worker restart cannot lose cancellation."""
+
+        cancellation_time = _now_ms(now_ms)
+        with self.events.write_lock:
+            self.events.begin_immediate()
+            try:
+                row = self.connection.execute(
+                    """
+                    SELECT q.queue_item_id, q.event_id, q.target_agent,
+                           q.project_generation, q.session_id, q.status,
+                           q.cancel_requested_event_id,
+                           COALESCE(
+                             input.run_id,
+                             (
+                               SELECT attempt.run_id
+                               FROM attempts AS attempt
+                               WHERE attempt.queue_item_id = q.queue_item_id
+                               ORDER BY attempt.attempt_number DESC
+                               LIMIT 1
+                             )
+                           ) AS run_id
+                    FROM queue_items AS q
+                    LEFT JOIN events AS input ON input.id = q.event_id
+                    WHERE q.queue_item_id = ?
+                    """,
+                    (queue_item_id,),
+                ).fetchone()
+                if row is None:
+                    self.connection.commit()
+                    return QueueItemCancellationResult(
+                        queue_item_id,
+                        None,
+                        None,
+                        "unknown",
+                        False,
+                    )
+                session_id = _optional_str(row["session_id"])
+                if (
+                    expected_session_id is not None
+                    and session_id != expected_session_id
+                ):
+                    raise UnauthorizedCancellation(
+                        f"session {expected_session_id!r} does not own "
+                        f"queue item {queue_item_id!r}"
+                    )
+                status = str(row["status"])
+                run_id = _optional_str(row["run_id"])
+                request_event = self._queue_cancel_request_event(row)
+                if status == "cancelled":
+                    self.connection.commit()
+                    return QueueItemCancellationResult(
+                        queue_item_id,
+                        run_id,
+                        session_id,
+                        "already_cancelled",
+                        False,
+                        "cancelled",
+                        request_event,
+                    )
+                if status in {
+                    "completed",
+                    "failed",
+                    "dead_lettered",
+                    "unhandled",
+                }:
+                    self.connection.commit()
+                    return QueueItemCancellationResult(
+                        queue_item_id,
+                        run_id,
+                        session_id,
+                        "already_terminal",
+                        False,
+                        cast("QueueItemTerminalStatus", status),
+                        request_event,
+                    )
+                changed = False
+                if request_event is None:
+                    requested = self.events.append_in_transaction(
+                        _queue_item_cancel_requested_event(
+                            row,
+                            timestamp_ms=cancellation_time,
+                            reason=reason,
+                        )
+                    )
+                    request_event = requested.event
+                    changed = requested.inserted
+                if status == "claimed":
+                    self.connection.commit()
+                    return QueueItemCancellationResult(
+                        queue_item_id,
+                        run_id,
+                        session_id,
+                        "cancelling",
+                        changed,
+                        event=request_event,
+                    )
+                cancelled = self.events.append_in_transaction(
+                    _queue_item_cancelled_event(
+                        row,
+                        request_event,
+                        timestamp_ms=cancellation_time,
+                        reason=reason,
+                    )
+                )
+                self.connection.commit()
+                return QueueItemCancellationResult(
+                    queue_item_id,
+                    run_id,
+                    session_id,
+                    "cancelled",
+                    changed or cancelled.inserted,
+                    "cancelled",
+                    request_event,
+                )
+            except Exception:
+                self.connection.rollback()
+                raise
+
+    def _queue_cancel_request_event(self, row: sqlite3.Row) -> Event | None:
+        event_id = _optional_str(row["cancel_requested_event_id"])
+        return self.events.get(event_id) if event_id is not None else None
+
 
 @dataclass(frozen=True)
 class CoordinationSqliteStore(_SqliteBacked):
@@ -556,7 +688,9 @@ class CoordinationSqliteStore(_SqliteBacked):
             row = self.connection.execute(
                 """
                 SELECT queue_item_id, event_id, target_agent, project_generation,
-                       session_id, input_cursor, status
+                       session_id, input_cursor, status,
+                       cancel_requested_event_id, cancel_requested_at,
+                       cancel_reason
                 FROM queue_items
                 WHERE queue_item_id = ?
                 """,
@@ -567,6 +701,13 @@ class CoordinationSqliteStore(_SqliteBacked):
         record = _without_none_snapshot_fields(dict(row))
         if record.get("session_id") is None:
             record.pop("session_id", None)
+        for key in (
+            "cancel_requested_event_id",
+            "cancel_requested_at",
+            "cancel_reason",
+        ):
+            if record.get(key) is None:
+                record.pop(key, None)
         return record
 
     def queue_item_attempt_count(self, queue_item_id: str) -> int:
@@ -583,7 +724,9 @@ class CoordinationSqliteStore(_SqliteBacked):
                 """
                 SELECT queue_item_id, event_id, target_agent, project_generation,
                        session_id, input_cursor, status, available_at,
-                       claimed_by, claimed_until, attempt_count, last_error, updated_at
+                       claimed_by, claimed_until, attempt_count, last_error,
+                       cancel_requested_event_id, cancel_requested_at,
+                       cancel_reason, updated_at
                 FROM queue_items
                 ORDER BY updated_at ASC, queue_item_id ASC
                 """
@@ -592,6 +735,13 @@ class CoordinationSqliteStore(_SqliteBacked):
         for record in records:
             if record.get("session_id") is None:
                 record.pop("session_id", None)
+            for key in (
+                "cancel_requested_event_id",
+                "cancel_requested_at",
+                "cancel_reason",
+            ):
+                if record.get(key) is None:
+                    record.pop(key, None)
         return records
 
     def list_attempts(self) -> list[dict[str, Any]]:
@@ -1242,6 +1392,21 @@ class RuntimeEventStore:
             now_ms=now_ms,
         )
 
+    def cancel_queue_item(
+        self,
+        queue_item_id: str,
+        *,
+        expected_session_id: str | None = None,
+        reason: str | None = None,
+        now_ms: int | None = None,
+    ) -> QueueItemCancellationResult:
+        return self._journal.cancel_queue_item(
+            queue_item_id,
+            expected_session_id=expected_session_id,
+            reason=reason,
+            now_ms=now_ms,
+        )
+
     def ensure_pending_queue_item(self, event: Event) -> str:
         return self._coordination.ensure_pending_queue_item(event)
 
@@ -1562,6 +1727,79 @@ def _scheduled_terminal_event(
         run_id=_optional_str(row["source_run_id"]),
     )
     return replace(Event.from_draft(draft), timestamp_ms=timestamp_ms)
+
+
+def _queue_item_cancel_requested_event(
+    row: sqlite3.Row,
+    *,
+    timestamp_ms: int,
+    reason: str | None,
+) -> Event:
+    payload = _queue_item_lifecycle_payload(row, status=str(row["status"]))
+    if reason is not None:
+        payload["reason"] = reason
+    draft = DraftEvent(
+        event_type="runtime.queue_item.cancel_requested",
+        source="zeta",
+        payload=payload,
+        idempotency_key=ids.queue_item_idempotency_key(
+            str(row["event_id"]),
+            str(row["target_agent"]),
+            "cancel_requested",
+        ),
+        caused_by=str(row["event_id"]),
+        session_id=_optional_str(row["session_id"]),
+        run_id=_optional_str(row["run_id"]),
+    )
+    return replace(Event.from_draft(draft), timestamp_ms=timestamp_ms)
+
+
+def _queue_item_cancelled_event(
+    row: sqlite3.Row,
+    requested: Event,
+    *,
+    timestamp_ms: int,
+    reason: str | None,
+) -> Event:
+    payload = _queue_item_lifecycle_payload(row, status="cancelled")
+    payload["result"] = {"outcome": "cancelled"}
+    if reason is not None:
+        payload["reason"] = reason
+        payload["result"] = {"outcome": "cancelled", "reason": reason}
+    draft = DraftEvent(
+        event_type="runtime.queue_item.cancelled",
+        source="zeta",
+        payload=payload,
+        idempotency_key=ids.queue_item_idempotency_key(
+            str(row["event_id"]),
+            str(row["target_agent"]),
+            "cancelled",
+        ),
+        caused_by=requested.id,
+        session_id=_optional_str(row["session_id"]),
+        run_id=_optional_str(row["run_id"]),
+    )
+    return replace(Event.from_draft(draft), timestamp_ms=timestamp_ms)
+
+
+def _queue_item_lifecycle_payload(
+    row: sqlite3.Row,
+    *,
+    status: str,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "queue_item_id": str(row["queue_item_id"]),
+        "event_id": str(row["event_id"]),
+        "target_agent": str(row["target_agent"]),
+        "status": status,
+    }
+    project_generation = _optional_str(row["project_generation"])
+    session_id = _optional_str(row["session_id"])
+    if project_generation is not None:
+        payload["project_generation"] = project_generation
+    if session_id is not None:
+        payload["session_id"] = session_id
+    return payload
 
 
 def _now_ms(value: int | None) -> int:

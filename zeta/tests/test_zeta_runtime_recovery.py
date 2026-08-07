@@ -153,6 +153,184 @@ def test_projection_rebuild_preserves_unfinished_attempt_and_releases_claim(
     store.close()
 
 
+def test_queue_item_cancel_request_cancels_queued_turn_and_survives_rebuild(
+    tmp_path: Path,
+) -> None:
+    store = RuntimeEventStore.open(tmp_path / "runtime.sqlite3")
+    queued = submit_session_message(
+        store,
+        message="Stop this turn",
+        agent_id="master",
+        session_id="session-1",
+        project_generation="generation-1",
+    )
+
+    result = store.cancel_queue_item(
+        queued["queue_item_id"],
+        expected_session_id="session-1",
+        reason="user changed direction",
+        now_ms=1_000,
+    )
+
+    assert result.status == "cancelled"
+    assert result.changed is True
+    assert result.queue_item_id == queued["queue_item_id"]
+    assert result.run_id == queued["run_id"]
+    assert result.session_id == "session-1"
+    assert result.terminal_status == "cancelled"
+    assert result.event is not None
+    assert [event.event_type for event in store.events_for_run(queued["run_id"])][
+        -2:
+    ] == [
+        "runtime.queue_item.cancel_requested",
+        "runtime.queue_item.cancelled",
+    ]
+    assert not store.list_events(Filter(event_type="runtime.cancellation.applied"))
+    assert store.queue_item(queued["queue_item_id"]) == {
+        "queue_item_id": queued["queue_item_id"],
+        "event_id": queued["event_id"],
+        "target_agent": "master",
+        "project_generation": "generation-1",
+        "session_id": "session-1",
+        "input_cursor": 1,
+        "status": "cancelled",
+        "cancel_requested_event_id": result.event.id,
+        "cancel_requested_at": 1_000,
+        "cancel_reason": "user changed direction",
+    }
+
+    repeated = store.cancel_queue_item(
+        queued["queue_item_id"],
+        expected_session_id="session-1",
+        reason="a later reason",
+        now_ms=2_000,
+    )
+
+    assert repeated.status == "already_cancelled"
+    assert repeated.changed is False
+    assert (
+        len(store.list_events(Filter(event_type="runtime.queue_item.cancel_requested")))
+        == 1
+    )
+    store.rebuild_projections()
+    rebuilt = store.queue_item(queued["queue_item_id"])
+    assert rebuilt is not None
+    assert rebuilt["status"] == "cancelled"
+    assert rebuilt["cancel_requested_event_id"] == result.event.id
+    assert rebuilt["cancel_requested_at"] == 1_000
+    assert rebuilt["cancel_reason"] == "user changed direction"
+    store.close()
+
+
+def test_queue_item_cancel_request_marks_claimed_turn_as_cancelling(
+    tmp_path: Path,
+) -> None:
+    store = RuntimeEventStore.open(tmp_path / "runtime.sqlite3")
+    queued = submit_session_message(
+        store,
+        message="Start this turn",
+        agent_id="master",
+        session_id="session-1",
+        project_generation="generation-1",
+    )
+    queued_event = store.get(queued["event_id"])
+    assert queued_event is not None
+    claim = store.claim_next_queue_item(
+        "worker-1",
+        lease_ms=1_000,
+        now_ms=queued_event.timestamp_ms + 1,
+    )
+    assert claim is not None
+
+    result = store.cancel_queue_item(
+        queued["queue_item_id"],
+        expected_session_id="session-1",
+        now_ms=600,
+    )
+
+    assert result.status == "cancelling"
+    assert result.changed is True
+    assert result.terminal_status is None
+    item = store.queue_item(queued["queue_item_id"])
+    assert item is not None
+    assert item["status"] == "claimed"
+    assert item["cancel_requested_at"] == 600
+    assert (
+        len(store.list_events(Filter(event_type="runtime.queue_item.cancel_requested")))
+        == 1
+    )
+    assert not store.list_events(Filter(event_type="runtime.queue_item.cancelled"))
+    store.close()
+
+
+def test_queue_item_cancel_request_rejects_a_different_session(tmp_path: Path) -> None:
+    store = RuntimeEventStore.open(tmp_path / "runtime.sqlite3")
+    queued = submit_session_message(
+        store,
+        message="Private turn",
+        agent_id="master",
+        session_id="session-owner",
+        project_generation="generation-1",
+    )
+
+    with pytest.raises(UnauthorizedCancellation):
+        store.cancel_queue_item(
+            queued["queue_item_id"],
+            expected_session_id="session-other",
+        )
+
+    assert not store.list_events(
+        Filter(event_type="runtime.queue_item.cancel_requested")
+    )
+    store.close()
+
+
+def test_queue_item_cancel_request_reports_unknown_and_terminal_items(
+    tmp_path: Path,
+) -> None:
+    store = RuntimeEventStore.open(tmp_path / "runtime.sqlite3")
+
+    unknown = store.cancel_queue_item("qi-unknown")
+
+    assert unknown.status == "unknown"
+    assert unknown.changed is False
+    queued = submit_session_message(
+        store,
+        message="Finished turn",
+        agent_id="master",
+        session_id="session-1",
+        project_generation="generation-1",
+    )
+    store.accept(
+        DraftEvent(
+            "runtime.queue_item.completed",
+            "zeta",
+            {
+                "queue_item_id": queued["queue_item_id"],
+                "event_id": queued["event_id"],
+                "target_agent": "master",
+                "project_generation": "generation-1",
+                "session_id": "session-1",
+                "status": "completed",
+            },
+            idempotency_key=f"queue_item:{queued['event_id']}:master:completed",
+            caused_by=queued["event_id"],
+            session_id="session-1",
+            run_id=queued["run_id"],
+        )
+    )
+
+    terminal = store.cancel_queue_item(queued["queue_item_id"])
+
+    assert terminal.status == "already_terminal"
+    assert terminal.terminal_status == "completed"
+    assert terminal.changed is False
+    assert not store.list_events(
+        Filter(event_type="runtime.queue_item.cancel_requested")
+    )
+    store.close()
+
+
 def test_scheduled_event_created_projection_survives_close_and_reopen(
     tmp_path: Path,
 ) -> None:

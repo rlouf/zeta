@@ -27,10 +27,13 @@ from zeta.harness.protocols import (
     CoordinationStore,
     InvalidCancellationHandle,
     QueueClaim,
+    QueueItemCancellationResult,
+    QueueItemTerminalStatus,
     RuntimeJournal,
     UnauthorizedCancellation,
     UnknownCancellationHandle,
 )
+from zeta.harness.sessions import project_sessions, session_record
 from zeta.journal.sqlite import SqliteEventStore
 from zeta.journal.store import Filter
 from zeta.journal.types import AppendOutcome
@@ -504,6 +507,257 @@ class RuntimeJournalStore(_SqliteBacked):
                 self.connection.rollback()
                 raise
 
+    def cancel_queue_item(
+        self,
+        queue_item_id: str,
+        *,
+        expected_session_id: str | None = None,
+        reason: str | None = None,
+        now_ms: int | None = None,
+    ) -> QueueItemCancellationResult:
+        """Record intent first so a worker restart cannot lose cancellation."""
+
+        cancellation_time = _now_ms(now_ms)
+        with self.events.write_lock:
+            self.events.begin_immediate()
+            try:
+                row = self.connection.execute(
+                    """
+                    SELECT q.queue_item_id, q.event_id, q.target_agent,
+                           q.project_generation, q.session_id, q.status,
+                           q.cancel_requested_event_id,
+                           COALESCE(
+                             input.run_id,
+                             (
+                               SELECT attempt.run_id
+                               FROM attempts AS attempt
+                               WHERE attempt.queue_item_id = q.queue_item_id
+                               ORDER BY attempt.attempt_number DESC
+                               LIMIT 1
+                             )
+                           ) AS run_id
+                    FROM queue_items AS q
+                    LEFT JOIN events AS input ON input.id = q.event_id
+                    WHERE q.queue_item_id = ?
+                    """,
+                    (queue_item_id,),
+                ).fetchone()
+                if row is None:
+                    self.connection.commit()
+                    return QueueItemCancellationResult(
+                        queue_item_id,
+                        None,
+                        None,
+                        "unknown",
+                        False,
+                    )
+                session_id = _optional_str(row["session_id"])
+                if (
+                    expected_session_id is not None
+                    and session_id != expected_session_id
+                ):
+                    raise UnauthorizedCancellation(
+                        f"session {expected_session_id!r} does not own "
+                        f"queue item {queue_item_id!r}"
+                    )
+                status = str(row["status"])
+                run_id = _optional_str(row["run_id"])
+                request_event = self._queue_cancel_request_event(row)
+                if status == "cancelled":
+                    self.connection.commit()
+                    return QueueItemCancellationResult(
+                        queue_item_id,
+                        run_id,
+                        session_id,
+                        "already_cancelled",
+                        False,
+                        "cancelled",
+                        request_event,
+                    )
+                if status in {
+                    "completed",
+                    "failed",
+                    "dead_lettered",
+                    "unhandled",
+                }:
+                    self.connection.commit()
+                    return QueueItemCancellationResult(
+                        queue_item_id,
+                        run_id,
+                        session_id,
+                        "already_terminal",
+                        False,
+                        cast("QueueItemTerminalStatus", status),
+                        request_event,
+                    )
+                changed = False
+                if request_event is None:
+                    requested = self.events.append_in_transaction(
+                        _queue_item_cancel_requested_event(
+                            row,
+                            timestamp_ms=cancellation_time,
+                            reason=reason,
+                        )
+                    )
+                    request_event = requested.event
+                    changed = requested.inserted
+                if status == "claimed":
+                    self.connection.commit()
+                    return QueueItemCancellationResult(
+                        queue_item_id,
+                        run_id,
+                        session_id,
+                        "cancelling",
+                        changed,
+                        event=request_event,
+                    )
+                cancelled = self.events.append_in_transaction(
+                    _queue_item_cancelled_event(
+                        row,
+                        request_event,
+                        timestamp_ms=cancellation_time,
+                        reason=reason,
+                    )
+                )
+                self.connection.commit()
+                return QueueItemCancellationResult(
+                    queue_item_id,
+                    run_id,
+                    session_id,
+                    "cancelled",
+                    changed or cancelled.inserted,
+                    "cancelled",
+                    request_event,
+                )
+            except Exception:
+                self.connection.rollback()
+                raise
+
+    def cancel_run(
+        self,
+        run_id: str,
+        *,
+        expected_session_id: str | None = None,
+        reason: str | None = None,
+        now_ms: int | None = None,
+    ) -> QueueItemCancellationResult:
+        """Resolve the public run handle to the turn's stable queue item."""
+
+        with self.events.write_lock:
+            row = self.connection.execute(
+                """
+                SELECT q.queue_item_id
+                FROM queue_items AS q
+                LEFT JOIN events AS input ON input.id = q.event_id
+                WHERE input.run_id = ?
+                   OR EXISTS (
+                     SELECT 1
+                     FROM attempts AS attempt
+                     WHERE attempt.queue_item_id = q.queue_item_id
+                       AND attempt.run_id = ?
+                   )
+                ORDER BY CASE
+                    WHEN q.status IN (
+                      'completed', 'failed', 'cancelled',
+                      'dead_lettered', 'unhandled'
+                    ) THEN 1
+                    ELSE 0
+                  END,
+                  q.input_cursor ASC,
+                  q.queue_item_id ASC
+                LIMIT 1
+                """,
+                (run_id, run_id),
+            ).fetchone()
+        if row is None:
+            return QueueItemCancellationResult(
+                None,
+                run_id,
+                None,
+                "unknown",
+                False,
+            )
+        return self.cancel_queue_item(
+            str(row["queue_item_id"]),
+            expected_session_id=expected_session_id,
+            reason=reason,
+            now_ms=now_ms,
+        )
+
+    def _queue_cancel_request_event(self, row: sqlite3.Row) -> Event | None:
+        event_id = _optional_str(row["cancel_requested_event_id"])
+        return self.events.get(event_id) if event_id is not None else None
+
+    def finalize_next_cancel_requested_queue_item(
+        self,
+        *,
+        now_ms: int | None = None,
+    ) -> tuple[str, list[Event]] | None:
+        """Close recovered work before another worker can execute it."""
+
+        cancellation_time = _now_ms(now_ms)
+        with self.events.write_lock:
+            self.events.begin_immediate()
+            try:
+                row = self.connection.execute(
+                    """
+                    SELECT q.queue_item_id, q.event_id, q.target_agent,
+                           q.project_generation, q.session_id, q.status,
+                           q.cancel_requested_event_id, q.cancel_reason,
+                           COALESCE(input.run_id, attempt.run_id) AS run_id,
+                           attempt.attempt_id, attempt.attempt_number,
+                           attempt.status AS attempt_status,
+                           attempt.started_at, attempt.worker_name
+                    FROM queue_items AS q
+                    LEFT JOIN events AS input ON input.id = q.event_id
+                    LEFT JOIN attempts AS attempt ON attempt.attempt_id = (
+                      SELECT latest.attempt_id
+                      FROM attempts AS latest
+                      WHERE latest.queue_item_id = q.queue_item_id
+                      ORDER BY latest.attempt_number DESC
+                      LIMIT 1
+                    )
+                    WHERE q.cancel_requested_event_id IS NOT NULL
+                      AND q.status IN ('pending', 'available', 'retry_scheduled')
+                    ORDER BY q.input_cursor ASC, q.queue_item_id ASC
+                    LIMIT 1
+                    """
+                ).fetchone()
+                if row is None:
+                    self.connection.commit()
+                    return None
+                request_event = self._queue_cancel_request_event(row)
+                if request_event is None:
+                    raise RuntimeError(
+                        f"queue item {row['queue_item_id']!r} has no cancel request"
+                    )
+                events: list[Event] = []
+                if row["attempt_status"] == "running":
+                    events.append(
+                        self.events.append_in_transaction(
+                            _recovered_attempt_cancelled_event(
+                                row,
+                                request_event,
+                                timestamp_ms=cancellation_time,
+                            )
+                        ).event
+                    )
+                events.append(
+                    self.events.append_in_transaction(
+                        _queue_item_cancelled_event(
+                            row,
+                            request_event,
+                            timestamp_ms=cancellation_time,
+                            reason=_optional_str(row["cancel_reason"]),
+                        )
+                    ).event
+                )
+                self.connection.commit()
+                return str(row["queue_item_id"]), events
+            except Exception:
+                self.connection.rollback()
+                raise
+
 
 @dataclass(frozen=True)
 class CoordinationSqliteStore(_SqliteBacked):
@@ -520,15 +774,16 @@ class CoordinationSqliteStore(_SqliteBacked):
             self.connection.execute(
                 """
                 INSERT INTO queue_items
-                  (queue_item_id, event_id, target_agent, status, available_at,
-                   updated_at)
-                VALUES (?, ?, ?, ?, ?, ?)
+                  (queue_item_id, event_id, target_agent, input_cursor, status,
+                   available_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(queue_item_id) DO NOTHING
                 """,
                 (
                     queue_item_id,
                     event.id,
                     "",
+                    event.cursor if event.cursor is not None else event.timestamp_ms,
                     "pending",
                     event.timestamp_ms,
                     event.timestamp_ms,
@@ -554,7 +809,9 @@ class CoordinationSqliteStore(_SqliteBacked):
             row = self.connection.execute(
                 """
                 SELECT queue_item_id, event_id, target_agent, project_generation,
-                       status
+                       session_id, input_cursor, status,
+                       cancel_requested_event_id, cancel_requested_at,
+                       cancel_reason
                 FROM queue_items
                 WHERE queue_item_id = ?
                 """,
@@ -562,7 +819,17 @@ class CoordinationSqliteStore(_SqliteBacked):
             ).fetchone()
         if row is None:
             return None
-        return _without_none_snapshot_fields(dict(row))
+        record = _without_none_snapshot_fields(dict(row))
+        if record.get("session_id") is None:
+            record.pop("session_id", None)
+        for key in (
+            "cancel_requested_event_id",
+            "cancel_requested_at",
+            "cancel_reason",
+        ):
+            if record.get(key) is None:
+                record.pop(key, None)
+        return record
 
     def queue_item_attempt_count(self, queue_item_id: str) -> int:
         with self.events.write_lock:
@@ -572,18 +839,43 @@ class CoordinationSqliteStore(_SqliteBacked):
             ).fetchone()
         return int(row["attempt_count"]) if row is not None else 0
 
+    def queue_item_cancellation_requested(self, queue_item_id: str) -> bool:
+        with self.events.write_lock:
+            row = self.connection.execute(
+                """
+                SELECT cancel_requested_event_id
+                FROM queue_items
+                WHERE queue_item_id = ?
+                """,
+                (queue_item_id,),
+            ).fetchone()
+        return row is not None and row["cancel_requested_event_id"] is not None
+
     def list_queue_items(self) -> list[dict[str, Any]]:
         with self.events.write_lock:
             rows = self.connection.execute(
                 """
                 SELECT queue_item_id, event_id, target_agent, project_generation,
-                       status, available_at,
-                       claimed_by, claimed_until, attempt_count, last_error, updated_at
+                       session_id, input_cursor, status, available_at,
+                       claimed_by, claimed_until, attempt_count, last_error,
+                       cancel_requested_event_id, cancel_requested_at,
+                       cancel_reason, updated_at
                 FROM queue_items
                 ORDER BY updated_at ASC, queue_item_id ASC
                 """
             ).fetchall()
-        return [_without_none_snapshot_fields(dict(row)) for row in rows]
+        records = [_without_none_snapshot_fields(dict(row)) for row in rows]
+        for record in records:
+            if record.get("session_id") is None:
+                record.pop("session_id", None)
+            for key in (
+                "cancel_requested_event_id",
+                "cancel_requested_at",
+                "cancel_reason",
+            ):
+                if record.get(key) is None:
+                    record.pop(key, None)
+        return records
 
     def list_attempts(self) -> list[dict[str, Any]]:
         with self.events.write_lock:
@@ -846,7 +1138,7 @@ class CoordinationSqliteStore(_SqliteBacked):
         excluded_params: tuple[str, ...] = ()
         if excluded:
             excluded_clause = (
-                f"AND queue_item_id NOT IN ({_sql_placeholders(excluded)})"
+                f"AND candidate.queue_item_id NOT IN ({_sql_placeholders(excluded)})"
             )
             excluded_params = excluded
         with self.events.write_lock:
@@ -854,12 +1146,56 @@ class CoordinationSqliteStore(_SqliteBacked):
             try:
                 row = self.connection.execute(
                     f"""
-                    SELECT queue_item_id, available_at, updated_at
-                    FROM queue_items
-                    WHERE status IN ('pending', 'available')
-                      AND (available_at IS NULL OR available_at <= ?)
+                    SELECT candidate.queue_item_id,
+                           candidate.available_at,
+                           candidate.updated_at
+                    FROM queue_items AS candidate
+                    WHERE candidate.status IN ('pending', 'available')
+                      AND candidate.cancel_requested_event_id IS NULL
+                      AND (
+                        candidate.available_at IS NULL
+                        OR candidate.available_at <= ?
+                      )
                       {excluded_clause}
-                    ORDER BY available_at ASC, queue_item_id ASC
+                      AND NOT EXISTS (
+                        SELECT 1
+                        FROM queue_items AS unbound
+                        WHERE unbound.target_agent = ''
+                          AND unbound.status IN ('pending', 'claimed')
+                          AND (
+                            unbound.input_cursor < candidate.input_cursor
+                            OR (
+                              unbound.input_cursor = candidate.input_cursor
+                              AND unbound.queue_item_id < candidate.queue_item_id
+                            )
+                          )
+                      )
+                      AND (
+                        candidate.session_id IS NULL
+                        OR NOT EXISTS (
+                          SELECT 1
+                          FROM queue_items AS earlier
+                          WHERE earlier.session_id = candidate.session_id
+                            AND earlier.status NOT IN (
+                              'completed',
+                              'failed',
+                              'cancelled',
+                              'dead_lettered',
+                              'unhandled'
+                            )
+                            AND (
+                              earlier.input_cursor < candidate.input_cursor
+                              OR (
+                                earlier.input_cursor = candidate.input_cursor
+                                AND earlier.queue_item_id
+                                  < candidate.queue_item_id
+                              )
+                            )
+                        )
+                      )
+                    ORDER BY candidate.available_at ASC,
+                             candidate.input_cursor ASC,
+                             candidate.queue_item_id ASC
                     LIMIT 1
                     """,
                     (now_ms, *excluded_params),
@@ -1141,6 +1477,16 @@ class RuntimeEventStore:
     def list_waits(self) -> list[dict[str, Any]]:
         return self._journal.list_waits()
 
+    def list_sessions(self) -> list[dict[str, Any]]:
+        return project_sessions(
+            self.list_queue_items(),
+            self.list_attempts(),
+            self.list_waits(),
+        )
+
+    def session_status(self, session_id: str) -> dict[str, Any]:
+        return session_record(self.list_sessions(), session_id)
+
     def publish_next_due_scheduled_event(
         self,
         *,
@@ -1180,6 +1526,43 @@ class RuntimeEventStore:
             now_ms=now_ms,
         )
 
+    def cancel_queue_item(
+        self,
+        queue_item_id: str,
+        *,
+        expected_session_id: str | None = None,
+        reason: str | None = None,
+        now_ms: int | None = None,
+    ) -> QueueItemCancellationResult:
+        return self._journal.cancel_queue_item(
+            queue_item_id,
+            expected_session_id=expected_session_id,
+            reason=reason,
+            now_ms=now_ms,
+        )
+
+    def cancel_run(
+        self,
+        run_id: str,
+        *,
+        expected_session_id: str | None = None,
+        reason: str | None = None,
+        now_ms: int | None = None,
+    ) -> QueueItemCancellationResult:
+        return self._journal.cancel_run(
+            run_id,
+            expected_session_id=expected_session_id,
+            reason=reason,
+            now_ms=now_ms,
+        )
+
+    def finalize_next_cancel_requested_queue_item(
+        self,
+        *,
+        now_ms: int | None = None,
+    ) -> tuple[str, list[Event]] | None:
+        return self._journal.finalize_next_cancel_requested_queue_item(now_ms=now_ms)
+
     def ensure_pending_queue_item(self, event: Event) -> str:
         return self._coordination.ensure_pending_queue_item(event)
 
@@ -1191,6 +1574,9 @@ class RuntimeEventStore:
 
     def queue_item_attempt_count(self, queue_item_id: str) -> int:
         return self._coordination.queue_item_attempt_count(queue_item_id)
+
+    def queue_item_cancellation_requested(self, queue_item_id: str) -> bool:
+        return self._coordination.queue_item_cancellation_requested(queue_item_id)
 
     def list_queue_items(self) -> list[dict[str, Any]]:
         return self._coordination.list_queue_items()
@@ -1502,8 +1888,131 @@ def _scheduled_terminal_event(
     return replace(Event.from_draft(draft), timestamp_ms=timestamp_ms)
 
 
+def _queue_item_cancel_requested_event(
+    row: sqlite3.Row,
+    *,
+    timestamp_ms: int,
+    reason: str | None,
+) -> Event:
+    payload = _queue_item_lifecycle_payload(row, status=str(row["status"]))
+    if reason is not None:
+        payload["reason"] = reason
+    draft = DraftEvent(
+        event_type="runtime.queue_item.cancel_requested",
+        source="zeta",
+        payload=payload,
+        idempotency_key=ids.queue_item_idempotency_key(
+            str(row["event_id"]),
+            str(row["target_agent"]),
+            "cancel_requested",
+        ),
+        caused_by=str(row["event_id"]),
+        session_id=_optional_str(row["session_id"]),
+        run_id=_optional_str(row["run_id"]),
+    )
+    return replace(Event.from_draft(draft), timestamp_ms=timestamp_ms)
+
+
+def _queue_item_cancelled_event(
+    row: sqlite3.Row,
+    requested: Event,
+    *,
+    timestamp_ms: int,
+    reason: str | None,
+) -> Event:
+    payload = _queue_item_lifecycle_payload(row, status="cancelled")
+    payload["result"] = {"outcome": "cancelled"}
+    if reason is not None:
+        payload["reason"] = reason
+        payload["result"] = {"outcome": "cancelled", "reason": reason}
+    draft = DraftEvent(
+        event_type="runtime.queue_item.cancelled",
+        source="zeta",
+        payload=payload,
+        idempotency_key=ids.queue_item_idempotency_key(
+            str(row["event_id"]),
+            str(row["target_agent"]),
+            "cancelled",
+        ),
+        caused_by=requested.id,
+        session_id=_optional_str(row["session_id"]),
+        run_id=_optional_str(row["run_id"]),
+    )
+    return replace(Event.from_draft(draft), timestamp_ms=timestamp_ms)
+
+
+def _recovered_attempt_cancelled_event(
+    row: sqlite3.Row,
+    requested: Event,
+    *,
+    timestamp_ms: int,
+) -> Event:
+    queue_item_id = str(row["queue_item_id"])
+    attempt_number = int(row["attempt_number"])
+    reason = _optional_str(row["cancel_reason"])
+    result: dict[str, Any] = {"outcome": "cancelled"}
+    if reason is not None:
+        result["reason"] = reason
+    payload: dict[str, Any] = {
+        "attempt_id": str(row["attempt_id"]),
+        "queue_item_id": queue_item_id,
+        "event_id": str(row["event_id"]),
+        "attempt_number": attempt_number,
+        "target_agent": str(row["target_agent"]),
+        "worker_name": _optional_str(row["worker_name"]),
+        "status": "cancelled",
+        "started_at": str(row["started_at"]),
+        "finished_at": _timestamp_iso(timestamp_ms),
+        "session_id": _optional_str(row["session_id"]),
+        "run_id": _optional_str(row["run_id"]),
+        "result": result,
+    }
+    draft = DraftEvent(
+        event_type="runtime.attempt.cancelled",
+        source="zeta",
+        payload=payload,
+        idempotency_key=ids.attempt_idempotency_key(
+            queue_item_id,
+            attempt_number,
+            "cancelled",
+        ),
+        caused_by=requested.id,
+        session_id=_optional_str(row["session_id"]),
+        run_id=_optional_str(row["run_id"]),
+    )
+    return replace(Event.from_draft(draft), timestamp_ms=timestamp_ms)
+
+
+def _queue_item_lifecycle_payload(
+    row: sqlite3.Row,
+    *,
+    status: str,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "queue_item_id": str(row["queue_item_id"]),
+        "event_id": str(row["event_id"]),
+        "target_agent": str(row["target_agent"]),
+        "status": status,
+    }
+    project_generation = _optional_str(row["project_generation"])
+    session_id = _optional_str(row["session_id"])
+    if project_generation is not None:
+        payload["project_generation"] = project_generation
+    if session_id is not None:
+        payload["session_id"] = session_id
+    return payload
+
+
 def _now_ms(value: int | None) -> int:
     return time.time_ns() // 1_000_000 if value is None else value
+
+
+def _timestamp_iso(timestamp_ms: int) -> str:
+    return (
+        datetime.fromtimestamp(timestamp_ms / 1_000, tz=UTC)
+        .isoformat()
+        .replace("+00:00", "Z")
+    )
 
 
 def _row_to_attempt(row: sqlite3.Row) -> dict[str, Any]:

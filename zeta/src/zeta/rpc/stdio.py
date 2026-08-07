@@ -4,14 +4,13 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import replace
+from pathlib import Path
 from typing import Any, TextIO
 
 from zeta.events import Event
 from zeta.harness.dispatch import QueueingDispatcher
 from zeta.harness.session_turn import session_turn_agent
-from zeta.harness.store import RuntimeEventStore
-from zeta.journal.sqlite import event_store_path
-from zeta.loop.runtime import CancellationToken
+from zeta.harness.worker import build_worker_services
 from zeta.loop.runtime_context import default_session
 from zeta.rpc.jsonrpc import (
     MAX_JSONRPC_LINE_BYTES,
@@ -36,7 +35,12 @@ async def run_stdio_async(input: TextIO, output: TextIO) -> None:
     connection = JsonRpcConnection(reader, writer)
     session = default_session()
     session.event_sink.close()
-    event_store = RuntimeEventStore.open(event_store_path(session.state_dir))
+    runtime = build_worker_services(
+        project_root=Path.cwd(),
+        state_dir=session.state_dir,
+        tool_registry=session.tool_registry,
+    )
+    event_store = runtime.events
     session = replace(
         session,
         event_sink=event_store,
@@ -55,10 +59,6 @@ async def run_stdio_async(input: TextIO, output: TextIO) -> None:
         if not task.cancelled():
             task.exception()
 
-    def cancellation_event_for_run(run_id: str) -> CancellationToken | None:
-        state = pending_runs.get(run_id)
-        return state.cancellation_event if state is not None else None
-
     def notify_event(event: Event) -> None:
         retain_background_task(
             connection.notify("events.notify", {"event": event_to_wire(event)})
@@ -71,7 +71,6 @@ async def run_stdio_async(input: TextIO, output: TextIO) -> None:
             session_turn_agent(
                 session,
                 publish_event=notify_event,
-                cancellation_event_for_run=cancellation_event_for_run,
             )
         ],
         publish_event=notify_event,
@@ -83,9 +82,13 @@ async def run_stdio_async(input: TextIO, output: TextIO) -> None:
         dispatcher=dispatcher,
         pending_runs=pending_runs,
         pending_tool_calls=pending_tool_calls,
+        project_snapshot=runtime.project_snapshot,
     )
     router = build_rpc_router(client)
-    await connection.serve(router)
+    try:
+        await connection.serve(router)
+    finally:
+        await runtime.aclose()
 
 
 async def stdio_streams(

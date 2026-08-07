@@ -49,3 +49,72 @@ def test_event_router_returns_unhandled_plan_without_side_effects() -> None:
 
     assert plan.handled is False
     assert plan.decisions == ()
+
+
+def test_event_router_resolves_shared_session_before_execution() -> None:
+    event = Event(
+        id="evt_1",
+        event_type="work.requested",
+        source="test",
+        payload={},
+        idempotency_key=None,
+        caused_by=None,
+        session_id=None,
+        timestamp_ms=1,
+    )
+
+    plan = EventRouter(
+        (AgentRoute("worker", (EventPattern("work.requested"),), session="shared"),)
+    ).plan(event)
+
+    assert plan.decisions[0].queue_item.session_id == "agent/worker"
+
+
+def test_event_router_resolves_per_event_session_before_execution() -> None:
+    event = Event(
+        id="evt_1",
+        event_type="work.requested",
+        source="test",
+        payload={},
+        idempotency_key=None,
+        caused_by=None,
+        session_id=None,
+        timestamp_ms=1,
+    )
+
+    plan = EventRouter(
+        (
+            AgentRoute(
+                "worker",
+                (EventPattern("work.requested"),),
+                session="per-event",
+            ),
+        )
+    ).plan(event)
+
+    assert plan.decisions[0].queue_item.session_id == "agent/worker/evt_1"
+
+
+def test_event_router_resolves_templated_session_before_execution() -> None:
+    event = Event(
+        id="evt_1",
+        event_type="work.requested",
+        source="test",
+        payload={"thread_id": "thread-7"},
+        idempotency_key=None,
+        caused_by=None,
+        session_id=None,
+        timestamp_ms=1,
+    )
+
+    plan = EventRouter(
+        (
+            AgentRoute(
+                "worker",
+                (EventPattern("work.requested"),),
+                session="{thread_id}",
+            ),
+        )
+    ).plan(event)
+
+    assert plan.decisions[0].queue_item.session_id == "agent/worker/thread-7"

@@ -22,6 +22,7 @@ from zeta.capabilities.executors import (
     ToolExecutor,
     ToolExecutorProviderRegistry,
     load_tool_executor_provider_registry,
+    tool_executor_providers_with_local,
 )
 from zeta.capabilities.registry import CapabilityRegistry
 from zeta.events import Event
@@ -256,7 +257,7 @@ def build_worker_services(
         model_selection=active_model_selection(
             session_dir=resolved_state_dir / "sessions" / "default"
         ),
-        tool_executors=tool_executors or load_tool_executor_provider_registry(),
+        tool_executors=tool_executor_providers_with_local(tool_executors),
         rpc_step=rpc_step,
     )
 
@@ -430,7 +431,7 @@ class RuntimeAgentLoop:
                 caused_by=invocation.triggering_event.id,
                 publish_event=lambda _event: None,
                 runtime_context=runtime_context,
-                cancellation_event=None,
+                cancellation_event=invocation.cancellation_event,
                 tool_executor=tool_executor,
             )
         finally:

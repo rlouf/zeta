@@ -82,6 +82,11 @@ def claimed_run_id() -> str:
     return f"{RUN_PREFIX}{uuid.uuid4().hex}"
 
 
+def claimed_session_id() -> str:
+    """Return an id for a session that starts without a triggering event."""
+    return f"session_{uuid.uuid4().hex}"
+
+
 def run_id_for_attempt(claimed: str | None, attempt_id_value: str) -> str:
     """Adopt a run id claimed in advance, else derive one from the attempt."""
     return claimed or derived_run_id(attempt_id_value)

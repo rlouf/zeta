@@ -26,11 +26,13 @@ from zeta.harness.routing import (
     ExecutableAgent,
     compile_agent_definition,
 )
+from zeta.harness.sessions import start_master_session, submit_session_message
 from zeta.harness.store import RuntimeEventStore
 from zeta.journal.store import Filter
 from zeta.loop.outcomes import AgentRunResult
 from zeta.models.profiles import ModelSelection
 from zeta.substrate import InMemoryStore
+from zeta.tools import register_builtin_tools
 
 
 def write_snapshot_project(root: Path, *, description: str = "Handles work.") -> Path:
@@ -130,6 +132,147 @@ def test_project_snapshot_generation_is_content_addressed(tmp_path: Path) -> Non
     assert first.generation_id == second.generation_id
     assert first.manifest == second.manifest
     assert changed.generation_id != first.generation_id
+
+
+def test_project_snapshot_inherits_omitted_tools_and_skills(tmp_path: Path) -> None:
+    agents = write_snapshot_project(tmp_path)
+    (agents / "limited.md").write_text(
+        """---
+name: Limited
+description: Runs without tools or skills.
+accepts:
+  - work.requested
+tools: []
+skills: []
+---
+Handle the work.
+""",
+        encoding="utf-8",
+    )
+    skills = agents / "skills"
+    skills.mkdir()
+    (skills / "review.md").write_text("Review the result.\n", encoding="utf-8")
+    registry = CapabilityRegistry()
+    register_builtin_tools(registry)
+
+    snapshot = load_project_snapshot(
+        agents,
+        registry=EventConnectorRegistry(),
+        tool_registry=registry,
+        model_selection=None,
+    )
+
+    worker = next(spec for spec in snapshot.project.specs if spec.slug == "worker")
+    limited = next(spec for spec in snapshot.project.specs if spec.slug == "limited")
+    master = next(spec for spec in snapshot.project.specs if spec.slug == "zeta.master")
+    inherited_tools = tuple(registry.list_capability_ids())
+    assert worker.tools == inherited_tools
+    assert worker.skills == ("review",)
+    assert master.tools == inherited_tools
+    assert master.skills == ("review",)
+    assert master.accepts == ("session.message.requested",)
+    assert limited.tools == ()
+    assert limited.skills == ()
+    master_manifest = snapshot.execution_manifest(master)
+    assert tuple(master_manifest["capabilities"]) == inherited_tools
+    assert tuple(master_manifest["skills"]) == ("review",)
+    assert master_manifest["agent"]["tools_inherit"] is True
+    assert master_manifest["agent"]["skills_inherit"] is True
+
+
+def test_direct_message_runs_the_owning_authored_agent(tmp_path: Path) -> None:
+    snapshot = load_snapshot(write_snapshot_project(tmp_path))
+    spec = next(spec for spec in snapshot.project.specs if spec.slug == "worker")
+    calls: list[tuple[str, str, str]] = []
+
+    async def successful_agent_loop(
+        _invocation,
+        objective,
+        _timeline,
+        _context,
+        _config,
+        session_id,
+        run_id,
+    ) -> AgentRunResult:
+        calls.append((objective, session_id, run_id))
+        return AgentRunResult(final_answer="done")
+
+    executor = compile_agent_definition(
+        spec,
+        agent_loop=successful_agent_loop,
+        event_registry=snapshot.project.events,
+        project_generation=snapshot.generation_id,
+        execution_manifest=snapshot.execution_manifest(spec),
+    )
+    store = RuntimeEventStore.open(tmp_path / "zeta.sqlite3")
+    submission = submit_session_message(
+        store,
+        message="Continue with the new evidence.",
+        agent_id=spec.slug,
+        session_id="session-existing",
+        project_generation=snapshot.generation_id,
+        idempotency_key="message-1",
+    )
+    dispatcher = QueueingDispatcher(store, executors=[executor])
+
+    asyncio.run(dispatcher.drain())
+
+    assert calls == [
+        (
+            "Continue with the new evidence.",
+            "session-existing",
+            submission["run_id"],
+        )
+    ]
+    assert store.session_status("session-existing")["agent_id"] == "worker"
+    assert store.session_status("session-existing")["status"] == "idle"
+
+
+def test_packaged_master_runs_through_the_authored_agent_path(tmp_path: Path) -> None:
+    snapshot = load_snapshot(write_snapshot_project(tmp_path))
+    spec = next(spec for spec in snapshot.project.specs if spec.slug == "zeta.master")
+    calls: list[tuple[str, str]] = []
+
+    async def successful_agent_loop(
+        invocation,
+        objective,
+        _timeline,
+        _context,
+        _config,
+        session_id,
+        _run_id,
+    ) -> AgentRunResult:
+        calls.append((invocation.agent.agent_id, objective))
+        assert session_id.startswith("session_")
+        return AgentRunResult(final_answer="done")
+
+    executor = compile_agent_definition(
+        spec,
+        agent_loop=successful_agent_loop,
+        event_registry=snapshot.project.events,
+        project_generation=snapshot.generation_id,
+        execution_manifest=snapshot.execution_manifest(spec),
+    )
+    store = RuntimeEventStore.open(tmp_path / "zeta.sqlite3")
+    first = start_master_session(
+        store,
+        message="Inspect this project.",
+        project_generation=snapshot.generation_id,
+        idempotency_key="start-1",
+    )
+    repeated = start_master_session(
+        store,
+        message="Inspect this project.",
+        project_generation=snapshot.generation_id,
+        idempotency_key="start-1",
+    )
+    dispatcher = QueueingDispatcher(store, executors=[executor])
+
+    asyncio.run(dispatcher.drain())
+
+    assert repeated == first
+    assert calls == [("zeta.master", "Inspect this project.")]
+    assert store.session_status(first["session_id"])["agent_id"] == "zeta.master"
 
 
 def test_project_snapshot_activates_an_agent_content_tool_in_the_next_generation(
@@ -412,7 +555,7 @@ def test_project_snapshot_round_trips_publishes(tmp_path: Path) -> None:
     )
 
     agent = snapshot.manifest["agents"][0]
-    assert snapshot.manifest["version"] == 3
+    assert snapshot.manifest["version"] == 4
     assert agent["publishes"] == ["work.completed"]
     assert "returns" not in agent
     assert restored.project.specs[0].publishes == ("work.completed",)
@@ -453,7 +596,7 @@ def test_execution_manifest_contains_publishes_and_relevant_schemas(
 
     execution_manifest = snapshot.execution_manifest(snapshot.project.specs[0])
 
-    assert execution_manifest["version"] == 2
+    assert execution_manifest["version"] == 3
     assert execution_manifest["agent"]["publishes"] == ["work.completed"]
     assert "returns" not in execution_manifest["agent"]
     assert set(execution_manifest["events"]) == {"work.requested", "work.completed"}
@@ -568,10 +711,26 @@ def test_attempt_records_project_and_execution_manifests(tmp_path: Path) -> None
 
     assert queue_item["event_id"] == outcome.event.id
     assert queue_item["project_generation"] == snapshot.generation_id
+    assert queue_item["session_id"] == f"agent/{spec.slug}/{outcome.event.id}"
+    assert attempt["session_id"] == queue_item["session_id"]
     assert attempt["project_generation"] == snapshot.generation_id
     assert attempt["execution_manifest_id"] == execution_manifest["id"]
     assert attempt["execution_manifest"] == execution_manifest
     assert started.payload["execution_manifest"] == execution_manifest
+    assert store.session_status(queue_item["session_id"]) == {
+        "session_id": queue_item["session_id"],
+        "agent_id": spec.slug,
+        "status": "idle",
+        "cancellation_requested": False,
+        "active_run_id": None,
+        "queued_turns": 0,
+        "active_wait": None,
+        "latest_run": {
+            "run_id": attempt["run_id"],
+            "status": "completed",
+        },
+        "updated_at": store.list_sessions()[0]["updated_at"],
+    }
 
 
 def test_dispatcher_selects_executor_for_routed_generation(tmp_path: Path) -> None:

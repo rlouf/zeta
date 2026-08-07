@@ -19,6 +19,20 @@ from zeta.journal.types import AppendOutcome
 
 CancellationResourceType = Literal["wait", "scheduled_event"]
 CancellationStatus = Literal["cancelled", "matched", "timed_out", "published"]
+QueueItemCancellationStatus = Literal[
+    "cancelling",
+    "cancelled",
+    "already_cancelled",
+    "already_terminal",
+    "unknown",
+]
+QueueItemTerminalStatus = Literal[
+    "completed",
+    "failed",
+    "cancelled",
+    "dead_lettered",
+    "unhandled",
+]
 
 
 class CancellationError(ValueError):
@@ -50,6 +64,19 @@ class CancellationResult:
     event: Event | None = field(default=None, compare=False, repr=False)
 
 
+@dataclass(frozen=True)
+class QueueItemCancellationResult:
+    """The durable state of one turn after a cancellation request."""
+
+    queue_item_id: str | None
+    run_id: str | None
+    session_id: str | None
+    status: QueueItemCancellationStatus
+    changed: bool
+    terminal_status: QueueItemTerminalStatus | None = None
+    event: Event | None = field(default=None, compare=False, repr=False)
+
+
 @runtime_checkable
 class RuntimeJournal(Protocol):
     """Append-only historical truth used by orchestration components."""
@@ -72,6 +99,24 @@ class RuntimeJournal(Protocol):
         now_ms: int | None = None,
     ) -> CancellationResult: ...
 
+    def cancel_queue_item(
+        self,
+        queue_item_id: str,
+        *,
+        expected_session_id: str | None = None,
+        reason: str | None = None,
+        now_ms: int | None = None,
+    ) -> QueueItemCancellationResult: ...
+
+    def cancel_run(
+        self,
+        run_id: str,
+        *,
+        expected_session_id: str | None = None,
+        reason: str | None = None,
+        now_ms: int | None = None,
+    ) -> QueueItemCancellationResult: ...
+
 
 @runtime_checkable
 class CoordinationStore(Protocol):
@@ -80,6 +125,8 @@ class CoordinationStore(Protocol):
     def queue_item(self, queue_item_id: str) -> dict[str, Any] | None: ...
 
     def queue_item_attempt_count(self, queue_item_id: str) -> int: ...
+
+    def queue_item_cancellation_requested(self, queue_item_id: str) -> bool: ...
 
     def queue_claim_is_current(
         self,

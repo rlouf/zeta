@@ -107,6 +107,8 @@ class LifecycleRecorder:
         run_id: str | None = None,
         **payload_extra: Any,
     ) -> Event:
+        if session_id is not None:
+            payload_extra = {"session_id": session_id, **payload_extra}
         queue_item = QueueItem(
             queue_item_id=queue_item_id,
             event_id=triggering_event.id,

@@ -472,7 +472,9 @@ User asked: {{ event.payload.text }}
     assert spec.accepts == ("slack.message.received", "agent.slack-qa.scheduled")
     assert spec.publishes == ("message.delivery.requested",)
     assert spec.tools == ("read",)
+    assert spec.tools_inherit is False
     assert spec.skills == ()
+    assert spec.skills_inherit is True
     assert spec.schedules == (
         zeta_agents.ScheduleEntry(
             cron="* * * * *",

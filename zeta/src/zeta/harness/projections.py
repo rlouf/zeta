@@ -26,7 +26,7 @@ class RuntimeEventProjection:
     """Projects runtime queue and attempt events into queryable tables."""
 
     name = "zeta.harness.runtime"
-    version = 8
+    version = 11
 
     def init_schema(self, connection: sqlite3.Connection) -> None:
         connection.executescript(
@@ -36,6 +36,8 @@ class RuntimeEventProjection:
               event_id TEXT NOT NULL,
               target_agent TEXT NOT NULL,
               project_generation TEXT,
+              session_id TEXT,
+              input_cursor INTEGER NOT NULL,
               status TEXT NOT NULL,
               available_at INTEGER,
               claimed_by TEXT,
@@ -43,8 +45,17 @@ class RuntimeEventProjection:
               claimed_until INTEGER,
               attempt_count INTEGER NOT NULL DEFAULT 0,
               last_error TEXT,
+              cancel_requested_event_id TEXT,
+              cancel_requested_at INTEGER,
+              cancel_reason TEXT,
               updated_at INTEGER NOT NULL
             ) STRICT;
+
+            CREATE INDEX IF NOT EXISTS idx_queue_items_session_order
+              ON queue_items(session_id, input_cursor, status);
+
+            CREATE INDEX IF NOT EXISTS idx_queue_items_unbound_order
+              ON queue_items(target_agent, input_cursor, status);
 
             CREATE TABLE IF NOT EXISTS attempts (
               attempt_id TEXT PRIMARY KEY,
@@ -198,6 +209,9 @@ class RuntimeEventProjection:
             return
         if is_queueable_event(event):
             _index_pending_queue_item(connection, event)
+            return
+        if event.event_type == "runtime.queue_item.cancel_requested":
+            _index_queue_item_cancel_requested(connection, event)
             return
         if event.event_type.startswith("runtime.queue_item."):
             _index_one_queue_item(connection, event)
@@ -445,13 +459,15 @@ def _index_pending_queue_item(connection: sqlite3.Connection, event: Event) -> N
     connection.execute(
         """
         INSERT INTO queue_items
-          (queue_item_id, event_id, target_agent, status, available_at, updated_at)
-        VALUES (?, ?, '', 'pending', ?, ?)
+          (queue_item_id, event_id, target_agent, input_cursor, status,
+           available_at, updated_at)
+        VALUES (?, ?, '', ?, 'pending', ?, ?)
         ON CONFLICT(queue_item_id) DO NOTHING
         """,
         (
             pending_queue_item_id(event),
             event.id,
+            _event_cursor(event),
             event.timestamp_ms,
             event.timestamp_ms,
         ),
@@ -476,9 +492,9 @@ def _index_one_queue_item(connection: sqlite3.Connection, event: Event) -> None:
     connection.execute(
         """
         INSERT INTO queue_items
-          (queue_item_id, event_id, target_agent, project_generation, status, available_at,
-           last_error, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+          (queue_item_id, event_id, target_agent, project_generation, session_id,
+           input_cursor, status, available_at, last_error, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(queue_item_id) DO UPDATE SET
           event_id = excluded.event_id,
           target_agent = excluded.target_agent,
@@ -486,6 +502,8 @@ def _index_one_queue_item(connection: sqlite3.Connection, event: Event) -> None:
             excluded.project_generation,
             queue_items.project_generation
           ),
+          session_id = COALESCE(excluded.session_id, queue_items.session_id),
+          input_cursor = excluded.input_cursor,
           status = excluded.status,
           available_at = CASE
             WHEN excluded.status = 'available' THEN excluded.available_at
@@ -511,6 +529,8 @@ def _index_one_queue_item(connection: sqlite3.Connection, event: Event) -> None:
             queue_item.event_id,
             queue_item.target_agent,
             _optional_str(event.payload.get("project_generation")),
+            _optional_str(event.payload.get("session_id")) or event.session_id,
+            _input_event_cursor(connection, queue_item.event_id, event),
             queue_item.status,
             _queue_item_available_at(event)
             if queue_item.status == "available"
@@ -519,6 +539,48 @@ def _index_one_queue_item(connection: sqlite3.Connection, event: Event) -> None:
             event.timestamp_ms,
         ),
     )
+
+
+def _index_queue_item_cancel_requested(
+    connection: sqlite3.Connection,
+    event: Event,
+) -> None:
+    queue_item_id = _optional_str(event.payload.get("queue_item_id"))
+    if queue_item_id is None:
+        return
+    reason = _optional_str(event.payload.get("reason"))
+    connection.execute(
+        """
+        UPDATE queue_items
+        SET cancel_requested_event_id = COALESCE(
+              cancel_requested_event_id,
+              ?
+            ),
+            cancel_requested_at = COALESCE(cancel_requested_at, ?),
+            cancel_reason = COALESCE(cancel_reason, ?),
+            updated_at = MAX(updated_at, ?)
+        WHERE queue_item_id = ?
+        """,
+        (event.id, event.timestamp_ms, reason, event.timestamp_ms, queue_item_id),
+    )
+
+
+def _input_event_cursor(
+    connection: sqlite3.Connection,
+    event_id: str,
+    lifecycle_event: Event,
+) -> int:
+    row = connection.execute(
+        "SELECT seq FROM events WHERE id = ?",
+        (event_id,),
+    ).fetchone()
+    if row is not None:
+        return int(row["seq"])
+    return _event_cursor(lifecycle_event)
+
+
+def _event_cursor(event: Event) -> int:
+    return event.cursor if event.cursor is not None else event.timestamp_ms
 
 
 def _index_one_attempt(connection: sqlite3.Connection, event: Event) -> None:

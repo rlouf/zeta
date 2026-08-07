@@ -72,9 +72,11 @@ message in an existing session. It does **not** require a separate voice
 conversation store.
 
 The CLI and RPC path use `session.turn.requested` to start the native run loop.
-`session.run` creates a run id and an `asyncio.Event` cancellation token
+`session.run` creates a public run ID. `session.cancel` stores a durable queue
+cancellation request. The worker creates the local cancellation token and
+passes it to the run loop
 ([routes.py](../zeta/src/zeta/rpc/routes.py),
-[thread_run.py](../zeta/src/zeta/loop/thread_run.py)).
+[coordinator.py](../zeta/src/zeta/harness/coordinator.py)).
 
 ### Complete CLI trace: `zeta session.run`
 
@@ -153,7 +155,10 @@ must not make every token a durable message simply to play speech.
 
 Cancellation exists but is not yet realtime-grade:
 
-- `session.cancel` sets the per-RPC-run `asyncio.Event`.
+- `session.cancel` records `runtime.queue_item.cancel_requested`. The request
+  survives a client disconnect and a worker restart.
+- The worker sets the active attempt's local `asyncio.Event` when it observes
+  the durable request.
 - `check_run_abort()` examines that token before a model step, before a tool
   step, and after a model request, then records a `turn_aborted` event.
 - The Chat Completions request runs as a blocking streaming call in

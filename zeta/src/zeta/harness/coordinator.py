@@ -28,7 +28,7 @@ from zeta.harness.routing import (
 )
 from zeta.harness.sessions import invocation_session_id
 
-HeartbeatTask = asyncio.Task[None] | None
+AttemptControlTask = asyncio.Task[None] | None
 AgentEventPublisher = Callable[[DraftEvent], Awaitable[Event]]
 AgentEventPublisherFactory = Callable[
     [ExecutableAgent, Event, str, str, str | None, str | None],
@@ -49,8 +49,11 @@ class AttemptCoordinator:
         *,
         claim_is_current: Callable[[str], bool],
         next_attempt_number: Callable[[str], int],
-        start_heartbeat: Callable[[str, str, Iterable[str]], HeartbeatTask],
-        stop_heartbeat: Callable[[HeartbeatTask], Awaitable[None]],
+        start_attempt_control: Callable[
+            [str, str, Iterable[str], asyncio.Event], AttemptControlTask
+        ],
+        stop_attempt_control: Callable[[AttemptControlTask], Awaitable[None]],
+        cancellation_requested: Callable[[str], bool],
         event_publisher: AgentEventPublisherFactory,
         retry_scheduler: RetryScheduler,
         retry_policy: RetryPolicy,
@@ -62,8 +65,9 @@ class AttemptCoordinator:
         self.lifecycle = lifecycle
         self.claim_is_current = claim_is_current
         self.next_attempt_number = next_attempt_number
-        self.start_heartbeat = start_heartbeat
-        self.stop_heartbeat = stop_heartbeat
+        self.start_attempt_control = start_attempt_control
+        self.stop_attempt_control = stop_attempt_control
+        self.cancellation_requested = cancellation_requested
         self.event_publisher = event_publisher
         self.retry_scheduler = retry_scheduler
         self.retry_policy = retry_policy
@@ -83,7 +87,10 @@ class AttemptCoordinator:
         attempt_number = self.next_attempt_number(queue_item_id)
         attempt_id = ids.attempt_id(queue_item_id, attempt_number)
         run_id = ids.run_id_for_attempt(triggering_event.run_id, attempt_id)
-        session_id = invocation_session_id(agent, triggering_event)
+        session_id = queue_item.session_id or invocation_session_id(
+            agent,
+            triggering_event,
+        )
         if not self.claim_is_current(queue_item_id):
             return events
         events.append(
@@ -113,88 +120,82 @@ class AttemptCoordinator:
                 run_id=run_id,
             )
         )
+        execution_error: Exception | None = None
+        result: dict[str, Any] = {}
         blocked_effect_key = self.blocking_unsafe_effect(queue_item_id)
         if blocked_effect_key is not None:
-            events.extend(
-                self.failed_events(
-                    EffectDeliveryError(
-                        blocked_effect_key,
-                        "unsafe_to_retry",
-                        f"unsafe effect {blocked_effect_key} may already have occurred",
-                    ),
-                    triggering_event,
-                    agent,
-                    queue_item_id,
-                    attempt_id,
-                    attempt_number,
-                    started_at,
-                    session_id,
-                    run_id,
-                )
+            execution_error = EffectDeliveryError(
+                blocked_effect_key,
+                "unsafe_to_retry",
+                f"unsafe effect {blocked_effect_key} may already have occurred",
             )
-            return events
-        heartbeat_task = self.start_heartbeat(
-            attempt_id,
-            queue_item_id,
-            agent.definition.lock_keys,
-        )
-        try:
+        else:
+            cancellation_event = asyncio.Event()
+            if self.cancellation_requested(queue_item_id):
+                cancellation_event.set()
+            control_task = self.start_attempt_control(
+                attempt_id,
+                queue_item_id,
+                agent.definition.lock_keys,
+                cancellation_event,
+            )
             try:
-                result = await agent.run(
-                    AgentInvocation(
-                        agent.definition,
-                        triggering_event,
-                        publish_event=self.event_publisher(
-                            agent,
+                try:
+                    result = await agent.run(
+                        AgentInvocation(
+                            agent.definition,
                             triggering_event,
-                            queue_item_id,
-                            attempt_id,
-                            session_id,
-                            run_id,
-                        ),
-                        queue_item_id=queue_item_id,
-                        attempt_id=attempt_id,
-                        run_id=run_id,
+                            publish_event=self.event_publisher(
+                                agent,
+                                triggering_event,
+                                queue_item_id,
+                                attempt_id,
+                                session_id,
+                                run_id,
+                            ),
+                            queue_item_id=queue_item_id,
+                            attempt_id=attempt_id,
+                            run_id=run_id,
+                            session_id=session_id,
+                            cancellation_event=cancellation_event,
+                        )
                     )
-                )
-            except Exception as exc:
-                if not self.claim_is_current(queue_item_id):
-                    return events
-                events.extend(
-                    self.failed_events(
-                        exc,
-                        triggering_event,
-                        agent,
-                        queue_item_id,
-                        attempt_id,
-                        attempt_number,
-                        started_at,
-                        session_id,
-                        run_id,
-                    )
-                )
-                return events
-        finally:
-            await self.stop_heartbeat(heartbeat_task)
+                except Exception as exc:
+                    execution_error = exc
+            finally:
+                await self.stop_attempt_control(control_task)
 
-        # The transaction fences the final claim check from competing writers.
-        # Notifications wait for its commit so observers see only durable facts.
         try:
             with self.lifecycle.defer_publications():
                 with self.completion_batch():
                     if not self.claim_is_current(queue_item_id):
                         return events
-                    terminal = await self.terminal_events(
-                        result,
-                        triggering_event,
-                        agent,
-                        queue_item_id,
-                        attempt_id,
-                        attempt_number,
-                        started_at,
-                        session_id,
-                        run_id,
-                    )
+                    if self.cancellation_requested(queue_item_id):
+                        result = durable_cancelled_result(result)
+                    if execution_error is not None and not is_cancelled(result):
+                        terminal = self.failed_events(
+                            execution_error,
+                            triggering_event,
+                            agent,
+                            queue_item_id,
+                            attempt_id,
+                            attempt_number,
+                            started_at,
+                            session_id,
+                            run_id,
+                        )
+                    else:
+                        terminal = await self.terminal_events(
+                            result,
+                            triggering_event,
+                            agent,
+                            queue_item_id,
+                            attempt_id,
+                            attempt_number,
+                            started_at,
+                            session_id,
+                            run_id,
+                        )
         except (
             ActiveWaitConflict,
             CancellationError,
@@ -274,6 +275,7 @@ class AttemptCoordinator:
                     event_id=triggering_event.id,
                     target_agent=agent.definition.agent_id,
                     project_generation=agent.definition.project_generation,
+                    session_id=session_id,
                 ),
                 attempt_number=attempt_number + 1,
                 policy=retry_policy,
@@ -322,14 +324,7 @@ class AttemptCoordinator:
         session_id: str | None,
         run_id: str | None,
     ) -> list[Event]:
-        cancelled = (
-            result.get("outcome")
-            in {
-                "aborted",
-                "cancelled",
-            }
-            or result.get("stop_reason") == "aborted"
-        )
+        cancelled = is_cancelled(result)
         attempt_status: AttemptStatus = "cancelled" if cancelled else "completed"
         queue_status: QueueItemStatus = "cancelled" if cancelled else "completed"
         attempt_payload_extra: dict[str, Any] = {"result": result}
@@ -608,6 +603,19 @@ class AttemptCoordinator:
 
 def event_timestamp() -> str:
     return datetime.now(UTC).isoformat().replace("+00:00", "Z")
+
+
+def is_cancelled(result: Mapping[str, Any]) -> bool:
+    return (
+        result.get("outcome") in {"aborted", "cancelled"}
+        or result.get("stop_reason") == "aborted"
+    )
+
+
+def durable_cancelled_result(result: Mapping[str, Any]) -> dict[str, Any]:
+    """Make the durable request authoritative over a late successful result."""
+
+    return {**result, "outcome": "cancelled", "stop_reason": "aborted"}
 
 
 def publication_is_immediate(at: str | None, completed_at: str) -> bool:

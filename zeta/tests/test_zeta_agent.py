@@ -57,6 +57,7 @@ from zeta.harness import scheduling as harness_scheduling
 from zeta.harness import session_turn as harness_session_turn
 from zeta.harness import worker as harness_worker
 from zeta.harness.queue import QueueItem
+from zeta.harness.sessions import submit_session_message
 from zeta.harness.store import RuntimeEventStore
 from zeta.journal import drafts as zeta_event_drafts
 from zeta.journal import views as zeta_event_views
@@ -3416,6 +3417,194 @@ def test_zeta_rpc_initialize_returns_server_metadata() -> None:
     ]
 
 
+def test_zeta_rpc_queues_and_queries_authored_sessions(tmp_path: Path) -> None:
+    event_store = RuntimeEventStore.open(tmp_path / "events.sqlite3")
+    session = zeta_runtime_context.RuntimeContext(
+        session_id="rpc-control",
+        event_sink=event_store,
+        trace_store=InMemoryStore(),
+        tool_registry=CapabilityRegistry(),
+        state_dir=tmp_path,
+        session_dir=tmp_path / "sessions" / "rpc-control",
+    )
+    master = zeta_agent_spec.AgentSpec(
+        slug="zeta.master",
+        name="Master",
+        description="Work with the user.",
+        instructions="{{ event.payload.message }}",
+        path=tmp_path / "master.md",
+        sha256="master",
+    )
+    snapshot = SimpleNamespace(
+        generation_id="generation-1",
+        project=SimpleNamespace(specs=(master,)),
+        manifest={"generation": 1},
+    )
+    client = rpc_routes.RpcClient(
+        connection=None,
+        session=session,
+        dispatcher=harness_dispatch.QueueingDispatcher(event_store),
+        pending_runs={},
+        pending_tool_calls={},
+        project_snapshot=cast(Any, snapshot),
+    )
+    router = rpc_routes.build_rpc_router(client)
+
+    async def request(method: str, params: dict[str, Any]) -> dict[str, Any]:
+        response = await router.response_for_message(
+            {"jsonrpc": "2.0", "id": method, "method": method, "params": params}
+        )
+        assert response is not None
+        return response
+
+    started = asyncio.run(
+        request(
+            "session.start",
+            {"message": "Plan the release.", "idempotency_key": "start-1"},
+        )
+    )["result"]
+    repeated = asyncio.run(
+        request(
+            "session.start",
+            {"message": "Plan the release.", "idempotency_key": "start-1"},
+        )
+    )["result"]
+    sent = asyncio.run(
+        request(
+            "session.send",
+            {
+                "session_id": started["session_id"],
+                "message": "Include the migration.",
+                "idempotency_key": "send-1",
+            },
+        )
+    )["result"]
+    status = asyncio.run(
+        request("session.status", {"session_id": started["session_id"]})
+    )["result"]
+    listed = asyncio.run(request("session.list", {}))["result"]
+
+    assert repeated == started
+    assert started["status"] == "queued"
+    assert started["agent_id"] == "zeta.master"
+    assert sent["session_id"] == started["session_id"]
+    assert sent["status"] == "queued"
+    assert status["status"] == "queued"
+    assert status["queued_turns"] == 2
+    assert listed == {"sessions": [status]}
+    assert event_store.list_attempts() == []
+
+
+def test_zeta_rpc_reports_unknown_and_conflicting_sessions(tmp_path: Path) -> None:
+    event_store = RuntimeEventStore.open(tmp_path / "events.sqlite3")
+    session = zeta_runtime_context.RuntimeContext(
+        session_id="rpc-control",
+        event_sink=event_store,
+        trace_store=InMemoryStore(),
+        tool_registry=CapabilityRegistry(),
+        state_dir=tmp_path,
+        session_dir=tmp_path / "sessions" / "rpc-control",
+    )
+    specs = tuple(
+        zeta_agent_spec.AgentSpec(
+            slug=agent_id,
+            name=agent_id,
+            description="Handles work.",
+            instructions="Handle work.",
+            path=tmp_path / f"{agent_id}.md",
+            sha256=agent_id,
+        )
+        for agent_id in ("agent-a", "agent-b", "zeta.master")
+    )
+    snapshot = SimpleNamespace(
+        generation_id="generation-1",
+        project=SimpleNamespace(specs=specs),
+        manifest={"generation": 1},
+    )
+    for index, agent_id in enumerate(("agent-a", "agent-b"), start=1):
+        event_store.accept(
+            DraftEvent(
+                "runtime.queue_item.completed",
+                "zeta",
+                {
+                    "queue_item_id": f"qi-conflict-{index}",
+                    "event_id": f"event-{index}",
+                    "target_agent": agent_id,
+                    "session_id": "session-conflict",
+                    "status": "completed",
+                },
+                session_id="session-conflict",
+            )
+        )
+    event_store.accept(
+        DraftEvent(
+            "runtime.queue_item.completed",
+            "zeta",
+            {
+                "queue_item_id": "qi-unavailable",
+                "event_id": "event-unavailable",
+                "target_agent": "agent-removed",
+                "session_id": "session-unavailable",
+                "status": "completed",
+            },
+            session_id="session-unavailable",
+        )
+    )
+    client = rpc_routes.RpcClient(
+        connection=None,
+        session=session,
+        dispatcher=harness_dispatch.QueueingDispatcher(event_store),
+        pending_runs={},
+        pending_tool_calls={},
+        project_snapshot=cast(Any, snapshot),
+    )
+    router = rpc_routes.build_rpc_router(client)
+
+    unknown = asyncio.run(
+        router.response_for_message(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "session.status",
+                "params": {"session_id": "session-missing"},
+            }
+        )
+    )
+    conflict = asyncio.run(
+        router.response_for_message(
+            {
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "session.send",
+                "params": {
+                    "session_id": "session-conflict",
+                    "message": "Continue.",
+                },
+            }
+        )
+    )
+    unavailable = asyncio.run(
+        router.response_for_message(
+            {
+                "jsonrpc": "2.0",
+                "id": 3,
+                "method": "session.send",
+                "params": {
+                    "session_id": "session-unavailable",
+                    "message": "Continue.",
+                },
+            }
+        )
+    )
+
+    assert unknown is not None
+    assert unknown["error"]["data"]["code"] == "session_not_found"
+    assert conflict is not None
+    assert conflict["error"]["data"]["code"] == "session_owner_conflict"
+    assert unavailable is not None
+    assert unavailable["error"]["data"]["code"] == "session_owner_unavailable"
+
+
 def test_zeta_rpc_oversized_line_returns_parse_error_and_continues(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -4085,24 +4274,98 @@ def test_zeta_session_agent_request_preserves_explicit_model_override(
     assert request.config.model_url == "http://127.0.0.1:9999/v1/chat/completions"
 
 
-def test_zeta_rpc_session_cancel_updates_run_state() -> None:
-    _, client, router = rpc_client()
-    cancellation_event = asyncio.Event()
-    client.pending_runs["run_active"] = rpc_routes.RunState(
-        run_id="run_active",
-        cancellation_event=cancellation_event,
+def test_zeta_rpc_session_cancel_records_a_durable_request(tmp_path: Path) -> None:
+    event_store = RuntimeEventStore.open(tmp_path / "events.sqlite3")
+    queued = submit_session_message(
+        event_store,
+        message="Long task",
+        agent_id="zeta.master",
+        session_id="session-1",
+        project_generation="generation-1",
     )
+    requested = event_store.get(queued["event_id"])
+    assert requested is not None
+    assert (
+        event_store.claim_next_queue_item(
+            "worker-1",
+            lease_ms=1_000,
+            now_ms=requested.timestamp_ms + 1,
+        )
+        is not None
+    )
+    session = zeta_runtime_context.RuntimeContext(
+        session_id="rpc-control",
+        event_sink=event_store,
+        trace_store=InMemoryStore(),
+        tool_registry=CapabilityRegistry(),
+        state_dir=tmp_path,
+        session_dir=tmp_path / "sessions" / "rpc-control",
+    )
+    client = rpc_client_without_connection(session=session)
+    client.pending_runs[queued["run_id"]] = rpc_routes.RunState(run_id=queued["run_id"])
 
     result = asyncio.run(
-        rpc_routes.session_cancel({"run_id": "run_active"}, router.client)
+        rpc_routes.session_cancel(
+            {"run_id": queued["run_id"], "reason": "user changed direction"},
+            client,
+        )
     )
 
     assert result == {
         "cancelled": True,
-        "run_id": "run_active",
+        "changed": True,
+        "run_id": queued["run_id"],
+        "queue_item_id": queued["queue_item_id"],
+        "session_id": "session-1",
         "status": "cancelling",
+        "terminal_status": None,
     }
-    assert cancellation_event.is_set()
+    assert client.pending_runs[queued["run_id"]].status == "cancelling"
+    assert event_store.queue_item_cancellation_requested(queued["queue_item_id"])
+    event_store.close()
+
+
+def test_zeta_rpc_session_cancel_survives_a_new_client(tmp_path: Path) -> None:
+    event_store = RuntimeEventStore.open(tmp_path / "events.sqlite3")
+    queued = submit_session_message(
+        event_store,
+        message="Queued task",
+        agent_id="zeta.master",
+        session_id="session-1",
+        project_generation="generation-1",
+    )
+    session = zeta_runtime_context.RuntimeContext(
+        session_id="new-client",
+        event_sink=event_store,
+        trace_store=InMemoryStore(),
+        tool_registry=CapabilityRegistry(),
+        state_dir=tmp_path,
+        session_dir=tmp_path / "sessions" / "new-client",
+    )
+    client = rpc_client_without_connection(session=session)
+
+    cancelled = asyncio.run(
+        rpc_routes.session_cancel({"run_id": queued["run_id"]}, client)
+    )
+    repeated = asyncio.run(
+        rpc_routes.session_cancel({"run_id": queued["run_id"]}, client)
+    )
+    unknown = asyncio.run(rpc_routes.session_cancel({"run_id": "run_unknown"}, client))
+
+    assert cancelled["status"] == "cancelled"
+    assert cancelled["changed"] is True
+    assert repeated["status"] == "already_cancelled"
+    assert repeated["changed"] is False
+    assert unknown == {
+        "cancelled": False,
+        "changed": False,
+        "run_id": "run_unknown",
+        "queue_item_id": None,
+        "session_id": None,
+        "status": "unknown",
+        "terminal_status": None,
+    }
+    event_store.close()
 
 
 def test_zeta_rpc_tools_register_uses_documented_tool_shape() -> None:
@@ -4439,9 +4702,6 @@ def test_zeta_session_turn_agent_adapts_requested_event_to_turn_runner(
     agent = harness_session_turn.session_turn_agent(
         context,
         publish_event=published.append,
-        cancellation_event_for_run=lambda run_id: (
-            cancellation_event if run_id == "run_event" else None
-        ),
     )
     triggering_event = Event(
         id="evt_request",
@@ -4461,7 +4721,11 @@ def test_zeta_session_turn_agent_adapts_requested_event_to_turn_runner(
         cast(
             Coroutine[Any, Any, dict[str, Any]],
             runner(
-                harness_dispatch.AgentInvocation(agent.definition, triggering_event)
+                harness_dispatch.AgentInvocation(
+                    agent.definition,
+                    triggering_event,
+                    cancellation_event=cancellation_event,
+                )
             ),
         )
     )
@@ -5297,6 +5561,144 @@ def test_zeta_sqlite_event_store_claims_pending_queue_items(
     assert [row["queue_item_id"] for row in rows] == [queue_item_id]
 
 
+def test_zeta_queue_claim_keeps_a_later_session_turn_behind_a_retry(
+    tmp_path: Path,
+) -> None:
+    event_store = zeta_events.SqliteEventStore(tmp_path / "events.sqlite3")
+    first = event_store.accept(DraftEvent("work.first", "test", {})).event
+    second = event_store.accept(DraftEvent("work.second", "test", {})).event
+    other = event_store.accept(DraftEvent("work.other", "test", {})).event
+    now_ms = other.timestamp_ms + 1_000
+
+    def bind(event: Event, agent: str, session: str, not_before: int) -> None:
+        event_store.accept(
+            DraftEvent(
+                "runtime.queue_item.available",
+                "zeta",
+                {
+                    "queue_item_id": f"qi_{event.id}_{agent}",
+                    "event_id": event.id,
+                    "target_agent": agent,
+                    "session_id": session,
+                    "status": "available",
+                    "not_before": not_before,
+                },
+                session_id=session,
+            )
+        )
+
+    bind(first, "agent-a", "session-a", now_ms + 10_000)
+    bind(second, "agent-a", "session-a", now_ms)
+    bind(other, "agent-b", "session-b", now_ms)
+    event_store.rebuild_projections()
+
+    other_claim = event_store.claim_next_queue_item(
+        "worker-a", lease_ms=1_000, now_ms=now_ms
+    )
+    blocked_claim = event_store.claim_next_queue_item(
+        "worker-b", lease_ms=1_000, now_ms=now_ms
+    )
+    event_store.accept(
+        DraftEvent(
+            "runtime.queue_item.dead_lettered",
+            "zeta",
+            {
+                "queue_item_id": f"qi_{first.id}_agent-a",
+                "event_id": first.id,
+                "target_agent": "agent-a",
+                "session_id": "session-a",
+                "status": "dead_lettered",
+            },
+            session_id="session-a",
+        )
+    )
+    released_claim = event_store.claim_next_queue_item(
+        "worker-b", lease_ms=1_000, now_ms=now_ms
+    )
+
+    assert other_claim is not None
+    assert other_claim.queue_item_id == f"qi_{other.id}_agent-b"
+    assert blocked_claim is None
+    assert released_claim is not None
+    assert released_claim.queue_item_id == f"qi_{second.id}_agent-a"
+
+
+def test_zeta_queue_claim_runs_only_one_turn_per_session(
+    tmp_path: Path,
+) -> None:
+    event_store = zeta_events.SqliteEventStore(tmp_path / "events.sqlite3")
+    first = event_store.accept(DraftEvent("work.first", "test", {})).event
+    second = event_store.accept(DraftEvent("work.second", "test", {})).event
+    other = event_store.accept(DraftEvent("work.other", "test", {})).event
+
+    for event, agent, session in (
+        (first, "agent-a", "session-a"),
+        (second, "agent-a", "session-a"),
+        (other, "agent-b", "session-b"),
+    ):
+        event_store.accept(
+            DraftEvent(
+                "runtime.queue_item.available",
+                "zeta",
+                {
+                    "queue_item_id": f"qi_{event.id}_{agent}",
+                    "event_id": event.id,
+                    "target_agent": agent,
+                    "session_id": session,
+                    "status": "available",
+                },
+                session_id=session,
+            )
+        )
+    now_ms = other.timestamp_ms + 1_000
+
+    first_claim = event_store.claim_next_queue_item(
+        "worker-a", lease_ms=1_000, now_ms=now_ms
+    )
+    concurrent_claim = event_store.claim_next_queue_item(
+        "worker-b", lease_ms=1_000, now_ms=now_ms
+    )
+
+    assert first_claim is not None
+    assert first_claim.queue_item_id == f"qi_{first.id}_agent-a"
+    assert concurrent_claim is not None
+    assert concurrent_claim.queue_item_id == f"qi_{other.id}_agent-b"
+
+
+def test_zeta_queue_claim_does_not_pass_an_earlier_unbound_event(
+    tmp_path: Path,
+) -> None:
+    event_store = zeta_events.SqliteEventStore(tmp_path / "events.sqlite3")
+    earlier = event_store.accept(DraftEvent("work.earlier", "test", {})).event
+    later = event_store.accept(DraftEvent("work.later", "test", {})).event
+    event_store.accept(
+        DraftEvent(
+            "runtime.queue_item.available",
+            "zeta",
+            {
+                "queue_item_id": f"qi_{later.id}_agent-a",
+                "event_id": later.id,
+                "target_agent": "agent-a",
+                "session_id": "session-a",
+                "status": "available",
+            },
+            session_id="session-a",
+        )
+    )
+    now_ms = later.timestamp_ms + 1_000
+
+    first_claim = event_store.claim_next_queue_item(
+        "worker-a", lease_ms=1_000, now_ms=now_ms
+    )
+    second_claim = event_store.claim_next_queue_item(
+        "worker-b", lease_ms=1_000, now_ms=now_ms
+    )
+
+    assert first_claim is not None
+    assert first_claim.queue_item_id == f"qi_{earlier.id}"
+    assert second_claim is None
+
+
 def test_zeta_sqlite_event_append_projects_pending_work_transactionally(
     tmp_path: Path,
 ) -> None:
@@ -5311,6 +5713,7 @@ def test_zeta_sqlite_event_append_projects_pending_work_transactionally(
             "queue_item_id": f"qi_{accepted.id}",
             "event_id": accepted.id,
             "target_agent": "",
+            "input_cursor": accepted.cursor,
             "status": "pending",
             "available_at": accepted.timestamp_ms,
             "claimed_by": None,
@@ -6111,6 +6514,13 @@ def test_zeta_cli_cancel_handles_any_supported_resource(tmp_path: Path) -> None:
             session_id="session-1",
         )
     )
+    queued = submit_session_message(
+        event_store,
+        message="Cancel from the CLI",
+        agent_id="zeta.master",
+        session_id="session-2",
+        project_generation="generation-1",
+    )
     event_store.close()
 
     cancelled = CliRunner().invoke(
@@ -6142,6 +6552,10 @@ def test_zeta_cli_cancel_handles_any_supported_resource(tmp_path: Path) -> None:
         cli_main.cli,
         ["cancel", "qi-1", "--state-dir", str(state_dir)],
     )
+    cancelled_run = CliRunner().invoke(
+        cli_main.cli,
+        ["cancel", queued["run_id"], "--state-dir", str(state_dir), "--json"],
+    )
 
     assert cancelled.exit_code == 0
     assert json.loads(cancelled.output) == {
@@ -6161,6 +6575,15 @@ def test_zeta_cli_cancel_handles_any_supported_resource(tmp_path: Path) -> None:
     assert "unknown cancellation handle" in unknown.output
     assert invalid.exit_code == 1
     assert "handle must start with 'wait_' or 'pub_'" in invalid.output
+    assert cancelled_run.exit_code == 0
+    assert json.loads(cancelled_run.output) == {
+        "run_id": queued["run_id"],
+        "queue_item_id": queued["queue_item_id"],
+        "session_id": "session-2",
+        "status": "cancelled",
+        "terminal_status": "cancelled",
+        "changed": True,
+    }
 
     store = RuntimeEventStore.open(event_store_path(state_dir), read_only=True)
     facts = store.list_events(Filter(event_type="runtime.wait.cancelled"))
@@ -6397,6 +6820,10 @@ def test_zeta_cli_nested_state_dir_works_after_subcommand(
         ["queue", "list", "--help"],
         ["queue", "status", "--help"],
         ["attempts", "list", "--help"],
+        ["sessions", "start", "--help"],
+        ["sessions", "send", "--help"],
+        ["sessions", "status", "--help"],
+        ["sessions", "list", "--help"],
         ["ps", "--help"],
         ["schedules", "status", "--help"],
         ["traces", "log", "--help"],
@@ -6425,7 +6852,7 @@ def test_zeta_cli_stateful_leaves_accept_state_dir(
 
 @pytest.mark.parametrize(
     "namespace",
-    ["queue", "attempts", "events", "schedules", "traces"],
+    ["queue", "attempts", "events", "sessions", "schedules", "traces"],
 )
 def test_zeta_cli_resource_groups_reject_state_dir(
     namespace: str,
@@ -6449,6 +6876,7 @@ def test_zeta_cli_resource_groups_reject_state_dir(
     [
         ("queue", ("list", "status")),
         ("attempts", ("list",)),
+        ("sessions", ("start", "send", "status", "list")),
         (
             "events",
             ("list", "publish", "chain", "root", "descendants", "turn"),
@@ -6540,12 +6968,108 @@ def test_zeta_cli_rpc_stdio_runs_the_stdio_transport(
     assert len(captured) == 1
 
 
+def test_zeta_cli_sessions_detach_and_keep_rpc_status_shape(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project_root = tmp_path / "project"
+    (project_root / "agents").mkdir(parents=True)
+    state_dir = tmp_path / "state"
+    runner = CliRunner()
+
+    started = runner.invoke(
+        cli_main.cli,
+        [
+            "sessions",
+            "start",
+            "Plan the release.",
+            "--project-root",
+            str(project_root),
+            "--state-dir",
+            str(state_dir),
+            "--idempotency-key",
+            "start-1",
+            "--json",
+        ],
+    )
+    assert started.exit_code == 0
+    start_result = json.loads(started.output)
+    session_id = start_result["session_id"]
+
+    sent = runner.invoke(
+        cli_main.cli,
+        [
+            "sessions",
+            "send",
+            session_id,
+            "Include the migration.",
+            "--project-root",
+            str(project_root),
+            "--state-dir",
+            str(state_dir),
+            "--idempotency-key",
+            "send-1",
+            "--json",
+        ],
+    )
+    status = runner.invoke(
+        cli_main.cli,
+        ["sessions", "status", session_id, "--state-dir", str(state_dir), "--json"],
+    )
+    listed = runner.invoke(
+        cli_main.cli,
+        ["sessions", "list", "--state-dir", str(state_dir), "--json"],
+    )
+
+    assert sent.exit_code == 0
+    assert status.exit_code == 0
+    assert listed.exit_code == 0
+    queued_status = json.loads(status.output)
+    assert start_result["status"] == "queued"
+    assert json.loads(sent.output)["status"] == "queued"
+    assert queued_status["queued_turns"] == 2
+    assert json.loads(listed.output) == [queued_status]
+
+    objectives: list[str] = []
+
+    async def fake_run_agent(request: Any, **_kwargs: Any) -> AgentRunResult:
+        objectives.append(request.objective)
+        return AgentRunResult(final_answer="done")
+
+    monkeypatch.setattr(harness_worker, "run_agent", fake_run_agent)
+    registry = CapabilityRegistry()
+    register_builtin_tools(registry)
+    runtime = harness_worker.build_worker_services(
+        project_root=project_root,
+        state_dir=state_dir,
+        tool_registry=registry,
+    )
+    with asyncio.Runner() as async_runner:
+        try:
+            async_runner.run(harness_worker.run_until_idle(runtime))
+        finally:
+            async_runner.run(runtime.aclose())
+
+    completed = runner.invoke(
+        cli_main.cli,
+        ["sessions", "status", session_id, "--state-dir", str(state_dir), "--json"],
+    )
+
+    assert objectives == ["Plan the release.", "Include the migration."]
+    assert completed.exit_code == 0
+    completed_status = json.loads(completed.output)
+    assert completed_status["status"] == "idle"
+    assert completed_status["queued_turns"] == 0
+
+
 @pytest.mark.parametrize(
     "command",
     [
         ["queue", "list", "--help"],
         ["queue", "status", "--help"],
         ["attempts", "list", "--help"],
+        ["sessions", "status", "--help"],
+        ["sessions", "list", "--help"],
         ["events", "list", "--help"],
         ["events", "chain", "--help"],
         ["ps", "--help"],
@@ -6565,6 +7089,8 @@ def test_zeta_cli_inspection_help_omits_project_root(command: list[str]) -> None
         ["queue", "list"],
         ["queue", "status"],
         ["attempts", "list"],
+        ["sessions", "status", "missing"],
+        ["sessions", "list"],
         ["events", "list"],
         ["events", "chain", "missing"],
         ["ps"],
@@ -7633,13 +8159,13 @@ def test_zeta_worker_passes_project_event_registry_to_compiler(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    captured: dict[str, Any] = {}
+    captured: dict[str, Any] = {"specs": []}
 
     def compile_agents(
         spec: object,
         **kwargs: object,
     ) -> list[harness_dispatch.ExecutableAgent]:
-        captured["spec"] = spec
+        captured["specs"].append(spec)
         captured["event_registry"] = kwargs["event_registry"]
         return []
 
@@ -7665,7 +8191,7 @@ Triage the issue.
     finally:
         asyncio.run(runtime.aclose())
 
-    assert captured["spec"].slug == "triage"
+    assert [spec.slug for spec in captured["specs"]] == ["triage", "zeta.master"]
     assert captured["event_registry"].knows("github.issue.opened")
 
 
@@ -7705,6 +8231,7 @@ Triage the issue.
         project_root=tmp_path,
         tool_registry=registry,
     )
+    cancellation_event = asyncio.Event()
 
     with asyncio.Runner() as runner:
         try:
@@ -7730,6 +8257,7 @@ Triage the issue.
                             agent.definition,
                             event,
                             attempt_id="att_qi_evt_issue_triage_1",
+                            cancellation_event=cancellation_event,
                         )
                     ),
                 ),
@@ -7742,6 +8270,7 @@ Triage the issue.
     assert captured["runtime_context"].tool_registry is registry
     assert captured["run_id"] == "run_att_qi_evt_issue_triage_1"
     assert captured["request"].objective == "Triage the issue."
+    assert captured["cancellation_event"] is cancellation_event
 
 
 def test_zeta_worker_agent_runner_uses_one_shot_runtime_session(
@@ -8193,6 +8722,110 @@ def test_zeta_local_runtime_heartbeats_running_locks(
     assert locks == []
 
 
+def test_zeta_local_runtime_stops_after_a_durable_cancel_request(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    event_store = zeta_events.SqliteEventStore(tmp_path / "events.sqlite3")
+    accepted = event_store.accept(
+        zeta_events.DraftEvent("github.issue.opened", "github", {})
+    ).event
+    started = asyncio.Event()
+
+    async def run_agent(run: harness_dispatch.AgentInvocation) -> dict[str, object]:
+        cancellation_event = cast(asyncio.Event, run.cancellation_event)
+        started.set()
+        await asyncio.wait_for(cancellation_event.wait(), timeout=1)
+        return {"outcome": "cancelled", "stop_reason": "aborted"}
+
+    agent = harness_dispatch.ExecutableAgent(
+        harness_dispatch.AgentDefinition(
+            "issue-triage",
+            (harness_dispatch.EventPattern("github.issue.opened"),),
+        ),
+        run=run_agent,
+    )
+    monkeypatch.setattr(harness_worker, "project_executors", lambda _runtime: (agent,))
+    monkeypatch.setattr(harness_worker, "ATTEMPT_HEARTBEAT_INTERVAL_SECONDS", 0.01)
+    runtime = harness_worker.WorkerServices(
+        project_root=tmp_path,
+        state_dir=tmp_path,
+        events=event_store,
+    )
+
+    async def exercise() -> tuple[str, Any]:
+        task = asyncio.create_task(harness_worker.run_once(runtime))
+        await asyncio.wait_for(started.wait(), timeout=1)
+        cancellation = event_store.cancel_queue_item(f"qi_{accepted.id}")
+        return await task, cancellation
+
+    with asyncio.Runner() as runner:
+        try:
+            message, cancellation = runner.run(exercise())
+            queue_event_types = [
+                event.event_type
+                for event in event_store.list_events(
+                    Filter(event_type_prefix="runtime.queue_item.")
+                )
+            ]
+            attempts = event_store.list_attempts()
+        finally:
+            runner.run(runtime.aclose())
+
+    assert message == f"ran qi_{accepted.id}"
+    assert cancellation.status == "cancelling"
+    assert queue_event_types[-2:] == [
+        "runtime.queue_item.cancel_requested",
+        "runtime.queue_item.cancelled",
+    ]
+    assert attempts[0]["status"] == "cancelled"
+
+
+def test_zeta_local_runtime_binds_the_session_before_the_agent_runs(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    event_store = zeta_events.SqliteEventStore(tmp_path / "events.sqlite3")
+    accepted = event_store.accept(
+        zeta_events.DraftEvent("github.issue.opened", "github", {})
+    ).event
+    observed: dict[str, Any] = {}
+
+    async def run_agent(run: harness_dispatch.AgentInvocation) -> dict[str, object]:
+        observed.update(event_store.queue_item(cast(str, run.queue_item_id)) or {})
+        observed["claimed_events"] = len(
+            event_store.list_events(Filter(event_type="runtime.queue_item.claimed"))
+        )
+        return {"event_id": run.triggering_event.id}
+
+    agent = harness_dispatch.ExecutableAgent(
+        harness_dispatch.AgentDefinition(
+            "issue-triage",
+            (harness_dispatch.EventPattern("github.issue.opened"),),
+            session="shared",
+        ),
+        run=run_agent,
+    )
+    monkeypatch.setattr(harness_worker, "project_executors", lambda _runtime: (agent,))
+    runtime = harness_worker.WorkerServices(
+        project_root=tmp_path,
+        state_dir=tmp_path,
+        events=event_store,
+    )
+
+    with asyncio.Runner() as runner:
+        try:
+            runner.run(harness_worker.run_once(runtime))
+        finally:
+            runner.run(runtime.aclose())
+
+    assert observed["queue_item_id"] == f"qi_{accepted.id}"
+    assert observed["target_agent"] == "issue-triage"
+    assert observed["session_id"] == "agent/issue-triage"
+    assert observed["status"] == "claimed"
+    assert observed["claimed_events"] == 1
+
+
 def test_zeta_local_runtime_does_not_complete_stale_queue_claim(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -8359,6 +8992,63 @@ def test_zeta_local_runtime_run_once_fans_out_pending_queue_item(
     ]
 
 
+def test_zeta_fanout_publishes_every_session_binding_before_releasing_routing(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "events.sqlite3"
+    event_store = zeta_events.SqliteEventStore(path)
+    observer = zeta_events.SqliteEventStore(path)
+    first = event_store.accept(DraftEvent("work.requested", "test", {})).event
+    later = event_store.accept(DraftEvent("work.later", "test", {})).event
+    event_store.accept(
+        DraftEvent(
+            "runtime.queue_item.available",
+            "zeta",
+            {
+                "queue_item_id": f"qi_{later.id}_agent_two",
+                "event_id": later.id,
+                "target_agent": "agent.two",
+                "session_id": "agent/agent.two",
+                "status": "available",
+            },
+            session_id="agent/agent.two",
+        )
+    )
+    observed_claims: list[str | None] = []
+
+    def observe(event: Event) -> None:
+        if event.event_type != "runtime.queue_item.completed" or observed_claims:
+            return
+        claim = observer.claim_next_queue_item(
+            "observer",
+            lease_ms=1_000,
+            now_ms=later.timestamp_ms + 1_000,
+            exclude_queue_item_ids=(f"qi_{first.id}_agent_one",),
+        )
+        observed_claims.append(claim.queue_item_id if claim is not None else None)
+
+    dispatcher = harness_dispatch.QueueingDispatcher(
+        event_store,
+        routes=(
+            harness_dispatch.AgentRoute(
+                "agent.one",
+                (harness_dispatch.EventPattern("work.requested"),),
+                session="shared",
+            ),
+            harness_dispatch.AgentRoute(
+                "agent.two",
+                (harness_dispatch.EventPattern("work.requested"),),
+                session="shared",
+            ),
+        ),
+        publish_event=observe,
+    )
+
+    asyncio.run(dispatcher.run_next())
+
+    assert observed_claims == [f"qi_{first.id}_agent_two"]
+
+
 def test_zeta_local_runtime_run_once_handles_eventlog_rpc_request(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -8388,15 +9078,11 @@ def test_zeta_local_runtime_run_once_handles_eventlog_rpc_request(
         session: zeta_runtime_context.RuntimeContext,
         *,
         publish_event: Callable[[harness_session_turn.RuntimePublishedEvent], None],
-        cancellation_event_for_run: (
-            harness_session_turn.CancellationEventForRun | None
-        ) = None,
     ) -> harness_dispatch.ExecutableAgent:
         captured["tool_registry"] = session.tool_registry
         return original_session_turn_agent(
             session,
             publish_event=publish_event,
-            cancellation_event_for_run=cancellation_event_for_run,
         )
 
     monkeypatch.setattr(rpc_eventlog, "session_turn_agent", capture_session_turn_agent)
@@ -8423,6 +9109,40 @@ def test_zeta_local_runtime_run_once_handles_eventlog_rpc_request(
     assert response.payload["result"]["events"][0]["id"] == stored.id
     assert captured["tool_registry"] is registry
     assert queue_items == []
+
+
+def test_zeta_eventlog_rpc_queues_a_detached_master_session(tmp_path: Path) -> None:
+    (tmp_path / "agents").mkdir()
+    registry = CapabilityRegistry()
+    register_builtin_tools(registry)
+    runtime = harness_worker.build_worker_services(
+        project_root=tmp_path,
+        state_dir=tmp_path / ".zeta",
+        tool_registry=registry,
+        rpc_step=rpc_eventlog.eventlog_rpc_step,
+    )
+    request = runtime.events.accept(
+        rpc_routes.rpc_requested_draft(
+            "session.start",
+            {"message": "Plan the release.", "idempotency_key": "start-1"},
+        )
+    ).event
+
+    with asyncio.Runner() as runner:
+        try:
+            message = runner.run(harness_worker.run_once(runtime))
+            response = runtime.events.children(request.id)[0]
+            queue_items = runtime.events.list_queue_items()
+            attempts = runtime.events.list_attempts()
+        finally:
+            runner.run(runtime.aclose())
+
+    assert message == f"rpc {request.id}"
+    assert response.event_type == "rpc.responded"
+    assert response.payload["result"]["status"] == "queued"
+    assert queue_items[0]["target_agent"] == "zeta.master"
+    assert queue_items[0]["session_id"] == response.payload["result"]["session_id"]
+    assert attempts == []
 
 
 def test_zeta_scheduler_publishes_due_schedules_directly_once_per_minute(

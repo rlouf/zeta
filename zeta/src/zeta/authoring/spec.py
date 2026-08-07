@@ -12,6 +12,8 @@ import yaml
 from connectors import EgressBinding, IngressBinding
 
 SLUG_PATTERN = re.compile(r"^[a-z0-9_-]+$")
+MASTER_AGENT_ID = "zeta.master"
+SESSION_MESSAGE_REQUESTED = "session.message.requested"
 BUILT_IN_FRONTMATTER_KEYS = frozenset(
     {
         "name",
@@ -83,7 +85,9 @@ class AgentSpec:
     publishes: tuple[str, ...] = ()
     returns: tuple[str, ...] = ()
     skills: tuple[str, ...] = ()
+    skills_inherit: bool = True
     tools: tuple[str, ...] = ()
+    tools_inherit: bool = True
     schedules: tuple[ScheduleEntry, ...] = ()
     retry: RetrySpec | None = None
     base_dir: Path | None = None
@@ -136,7 +140,9 @@ def load_spec(path: str | Path) -> AgentSpec:
             publishes=publishes,
             returns=returns,
             skills=string_tuple(frontmatter.get("skills", ()), "skills", path),
+            skills_inherit="skills" not in frontmatter,
             tools=string_tuple(frontmatter.get("tools", ()), "tools", path),
+            tools_inherit="tools" not in frontmatter,
             schedules=schedules,
             retry=retry_spec(frontmatter.get("retry"), path),
             base_dir=base_dir_field(frontmatter.get("base_dir"), path),

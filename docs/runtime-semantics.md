@@ -31,7 +31,7 @@ AgentLoop = Callable[
 The harness supplies the invocation, the rendered objective, the timeline, the
 project context, the model configuration, the session id, and the run id. The
 loop returns an `AgentRunResult`. `AgentInvocation` carries the matched
-definition, the triggering event, and the queue, attempt, and run ids.
+definition, the triggering event, and the queue, attempt, session, and run ids.
 
 An agent loop receives no runtime database, no queue state, and no retry
 authority. `compile_agent_definition` accepts an `agent_loop` argument, so an
@@ -111,9 +111,14 @@ attempt lifecycle key is `attempt:<queue_item_id>:<attempt_number>:<status>`,
 so a retried append of a status that was already recorded is a duplicate, not
 a new fact.
 
-Session ids follow the agent's dispatch mode. A `session_scoped` agent uses
-`agent/<agent_id>`, and a `one_shot` agent uses `agent/<agent_id>/<event_id>`.
-Attempt numbers, not session ids, distinguish retries.
+Session ids follow the authored agent's `session` rule. A `shared` agent uses
+`agent/<agent_id>`. A `per-event` agent uses
+`agent/<agent_id>/<event_id>`. A session template uses its rendered value as
+the last part of the id.
+
+Routing resolves the session id before the agent runs. The queue lifecycle
+records this id. Each attempt uses the id from its queue item. A retry keeps the
+same id. Attempt numbers, not session ids, distinguish retries.
 
 ## Coordination State
 
@@ -150,10 +155,72 @@ available -> cancelled
 
 `pending` is the unbound queue state created for an ingress event. Routing may
 bind it directly when one agent matches, fan it out into multiple `available`
-items, or mark it `unhandled`.
+items, or mark it `unhandled`. Each bound item stores its target agent, session
+id, input event cursor, and project generation before execution starts.
+
+The claim query does not pass an earlier non-terminal item in the same session.
+The input event cursor defines this order. A retry keeps the same queue item and
+therefore keeps the same position. Terminal items do not block later turns.
+
+An unbound item has no session id yet. An earlier unbound item blocks later
+claims until routing binds or completes it. This short routing barrier prevents
+a second worker from claiming a later turn before Zeta knows whether both turns
+belong to the same session. It does not stop work in another session after the
+earlier item is bound. A fan-out route stores every child binding and completes
+the unbound item in one transaction.
 
 Terminal queue states are `completed`, `cancelled`, `dead_lettered`, and
 `unhandled`. No later lifecycle transition is legal for a terminal item.
+
+## Session Activity
+
+Zeta derives the session catalog from queue items, attempts, and waits. It does
+not store a separate session record. A projection rebuild therefore restores
+the same catalog.
+
+Each session has one activity status:
+
+- `running`: The session has a running attempt.
+- `queued`: The session has work that is not terminal.
+- `waiting`: The session has an active wait and no queued or running work.
+- `idle`: All requested work is terminal.
+
+Zeta applies this priority: `running`, `queued`, `waiting`, then `idle`. The
+status also includes the active run, queued turn count, active wait, latest
+run, last activity time, and `cancellation_requested`. The activity stays
+`running` while a worker stops. Cancellation does not add another activity
+state.
+
+A session belongs to one agent. Zeta reports an ownership conflict if durable
+records assign the same session id to different agents. It does not select one
+owner from conflicting history.
+
+## Direct Session Messages
+
+A user can start a session with the packaged `zeta.master` agent or with a
+named authored agent. The master follows the normal authored-agent path. It
+does not bypass project generation, capability selection, prompt compilation,
+or the attempt coordinator.
+
+A user message creates `session.message.requested` and a directly bound queue
+item in one transaction. The queue item records the session owner and project
+generation. The agent receives the message text as its objective. It does not
+need to declare `session.message.requested` in `accepts` when the event names
+that agent and session exactly.
+
+If the session has an active wait, the same transaction cancels the wait before
+it stores the new request. A repeated idempotency key returns the first request.
+It does not cancel another wait or create another queue item.
+
+The `sessions start` and `sessions send` CLI commands stop after this
+transaction. The `session.start` and `session.send` RPC methods do the same.
+They record the selected project generation before they queue the message. A
+client can disconnect after it receives `queued`. The normal worker owns the
+claim, attempt, retry, and completion.
+
+`sessions send` and `session.send` derive the owner from durable session
+activity. They require that owner to be enabled in the current project. They do
+not accept a model, prompt, tool, skill, executor, or generation override.
 
 ## Attempt State Machine
 
@@ -230,6 +297,58 @@ payload. A projection rebuild restores the terminal wait and continuation from
 the lifecycle facts.
 
 ## Durable Cancellation
+
+A session turn uses its queue item as the durable cancellation target. The
+queue item stays the same across retries. An attempt does not.
+
+Zeta first appends `runtime.queue_item.cancel_requested`. This event records
+that Zeta accepted the request. It does not record that running work has
+stopped.
+
+For queued work, Zeta appends `runtime.queue_item.cancelled` in the same
+transaction. For claimed work, the queue item stays `claimed` until its worker
+stops. The queue projection stores the request event, request time, and first
+reason. A projection rebuild restores these fields.
+
+A durable worker gives each attempt one local cancellation token. Its control
+task checks for a durable request while it renews the attempt lease. When the
+request exists, the task sets the token. The authored runtime passes this same
+token to the model and tool loop.
+
+The completion transaction checks the durable request again. If cancellation
+committed first, Zeta records `runtime.attempt.cancelled` and
+`runtime.queue_item.cancelled`. It does not apply content promotions, publish
+events, create waits, cancel other resources, or schedule a retry from that
+attempt. If normal completion committed first, a later request reports the
+existing terminal state.
+
+After a worker failure, recovery releases its claim. A queue item with a
+cancellation request is not claimable. The next worker closes any unfinished
+attempt, cancels the queue item, and then continues with normal work. This
+prevents the cancelled turn from running again after a restart.
+
+Cancellation is cooperative. It stops work at the model and tool cancellation
+boundaries. It cannot undo an external effect that already completed, and it
+does not kill an executor process.
+
+A repeated request does not add another event. If the queue item is already
+terminal, the operation returns its current terminal state. Cancellation does
+not change a completed, failed, dead-lettered, or unhandled item.
+
+The event names describe separate facts:
+
+- `runtime.queue_item.cancel_requested`: Zeta accepted a request.
+- `runtime.attempt.cancelled`: A running attempt stopped.
+- `runtime.queue_item.cancelled`: The turn is terminal and will not run again.
+
+Zeta does not use a general `runtime.cancellation.applied` event. The existing
+terminal events identify the affected resource and record the result.
+
+Users cancel a turn with `session.cancel` or `zeta cancel <run_id>`. These
+interfaces accept the public run ID and resolve it to the queue item. They do
+not depend on the client connection that started or queued the turn.
+
+### Agent-created resources
 
 An authored agent can request cancellation of an active wait or a pending
 scheduled event. The model loop returns a `CancelRequest`; it does not change

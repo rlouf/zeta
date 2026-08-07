@@ -7,7 +7,6 @@ from contextlib import nullcontext, suppress
 from dataclasses import dataclass
 from typing import Any, Protocol, cast
 
-from zeta import ids
 from zeta.events import DraftEvent, Event
 from zeta.harness.coordinator import AttemptCoordinator
 from zeta.harness.lifecycle import LifecycleRecorder
@@ -27,6 +26,7 @@ from zeta.harness.routing import (
     AgentRoute,
     EventPattern,
     ExecutableAgent,
+    is_session_message_for,
     is_wait_continuation_for,
 )
 from zeta.journal.store import (
@@ -57,6 +57,7 @@ RESERVED_RUNTIME_EVENT_PREFIXES = (
     "runtime.effect.",
     "runtime.project_snapshot.",
 )
+CANCELLATION_POLL_INTERVAL_SECONDS = 0.1
 
 
 class RuntimeQueueStore(Protocol):
@@ -98,6 +99,16 @@ class RuntimeQueueStore(Protocol):
         now_ms: int,
     ) -> bool:
         """Refresh a running attempt heartbeat and its queue lease."""
+
+    def queue_item_cancellation_requested(self, queue_item_id: str) -> bool:
+        """Return whether a durable request exists for this queue item."""
+
+    def finalize_next_cancel_requested_queue_item(
+        self,
+        *,
+        now_ms: int | None = None,
+    ) -> tuple[str, list[Event]] | None:
+        """Make one recovered cancellation terminal before normal claims."""
 
     def renew_locks(
         self,
@@ -216,8 +227,9 @@ class _QueueingDispatcher:
             self.lifecycle,
             claim_is_current=self._queue_claim_is_current,
             next_attempt_number=self._next_attempt_number,
-            start_heartbeat=self._start_attempt_heartbeat,
-            stop_heartbeat=self._stop_attempt_heartbeat,
+            start_attempt_control=self._start_attempt_control,
+            stop_attempt_control=self._stop_attempt_control,
+            cancellation_requested=self._queue_item_cancellation_requested,
             event_publisher=self._agent_event_publisher,
             retry_scheduler=self.schedule_retry,
             retry_policy=self.retry_policy,
@@ -304,6 +316,7 @@ class _QueueingDispatcher:
             event_suffix="available",
             status="available",
             attempt_number=next_attempt_number,
+            session_id=routed_queue_item.session_id,
             not_before=not_before,
             **generation_payload,
         )
@@ -355,24 +368,30 @@ class _QueueingDispatcher:
                 return effect_key
         return None
 
-    def _start_attempt_heartbeat(
+    def _queue_item_cancellation_requested(self, queue_item_id: str) -> bool:
+        return False
+
+    def _start_attempt_control(
         self,
         attempt_id: str,
         queue_item_id: str,
         lock_keys: Iterable[str] = (),
+        cancellation_event: asyncio.Event | None = None,
     ) -> asyncio.Task[None] | None:
-        """No durable lease to keep alive in-process."""
+        """No durable state exists to monitor in-process."""
+
+        del attempt_id, queue_item_id, lock_keys, cancellation_event
         return None
 
-    async def _stop_attempt_heartbeat(
+    async def _stop_attempt_control(
         self,
-        heartbeat_task: asyncio.Task[None] | None,
+        control_task: asyncio.Task[None] | None,
     ) -> None:
-        if heartbeat_task is None:
+        if control_task is None:
             return
-        heartbeat_task.cancel()
+        control_task.cancel()
         with suppress(asyncio.CancelledError):
-            await heartbeat_task
+            await control_task
 
     def _executor_for_id(
         self,
@@ -393,6 +412,7 @@ class _QueueingDispatcher:
                 triggering_event is not None
                 and not executor.definition.accepts(triggering_event)
                 and not is_wait_continuation_for(triggering_event, agent_id)
+                and not is_session_message_for(triggering_event, agent_id)
             ):
                 continue
             return executor
@@ -431,8 +451,8 @@ class _QueueingDispatcher:
         triggering_event: Event,
         queue_item: RoutedQueueItem,
     ) -> list[Event]:
-        matching_routes = self.matching_routes(triggering_event)
-        if not matching_routes:
+        decisions = self.router.plan(triggering_event).decisions
+        if not decisions:
             return [
                 self._append_queue_item_event_for_target(
                     triggering_event,
@@ -442,13 +462,15 @@ class _QueueingDispatcher:
                     status="unhandled",
                 )
             ]
-        if len(matching_routes) == 1:
-            route = matching_routes[0]
+        if len(decisions) == 1:
+            decision = decisions[0]
+            route = decision.route
             bound_item = RoutedQueueItem(
                 queue_item_id=queue_item.queue_item_id,
                 event_id=queue_item.event_id,
                 target_agent=route.agent_id,
                 project_generation=route.project_generation,
+                session_id=decision.queue_item.session_id,
             )
             executor = self._executor_for_id(
                 route.agent_id,
@@ -458,26 +480,31 @@ class _QueueingDispatcher:
             if executor is None:
                 return self._missing_executor_events(triggering_event, bound_item)
             return await self._run_agent(executor, triggering_event, bound_item)
-        lifecycle_events = [
-            self._append_queue_item_event_for_target(
-                triggering_event,
-                queue_item.queue_item_id,
-                "",
-                event_suffix="completed",
-                status="completed",
-            )
-        ]
-        for route in matching_routes:
-            queue_item_id = ids.queue_item_id(triggering_event.id, route.agent_id)
-            lifecycle_events.append(
-                self._append_queue_item_event(
-                    triggering_event,
-                    route,
-                    queue_item_id,
-                    event_suffix="available",
-                    status="available",
-                )
-            )
+        event_batch = getattr(self.event_sink, "transaction", nullcontext)
+        with self.lifecycle.defer_publications():
+            with event_batch():
+                lifecycle_events = [
+                    self._append_queue_item_event_for_target(
+                        triggering_event,
+                        queue_item.queue_item_id,
+                        "",
+                        event_suffix="completed",
+                        status="completed",
+                    )
+                ]
+                for decision in decisions:
+                    route = decision.route
+                    queue_item_id = decision.queue_item.queue_item_id
+                    lifecycle_events.append(
+                        self._append_queue_item_event(
+                            triggering_event,
+                            route,
+                            queue_item_id,
+                            event_suffix="available",
+                            status="available",
+                            session_id=decision.queue_item.session_id,
+                        )
+                    )
         return lifecycle_events
 
     def _stored_event(self, event_id: str) -> Event:
@@ -532,6 +559,7 @@ class _QueueingDispatcher:
                 queue_item.target_agent,
                 event_suffix="unhandled",
                 status="unhandled",
+                session_id=queue_item.session_id,
                 error=error,
             )
         ]
@@ -690,6 +718,11 @@ class QueueingDispatcher(_QueueingDispatcher):
             now_ms = current_time_ms()
             self.queue_store.reconcile_expired_queue_claims(now_ms=now_ms)
             self.queue_store.reconcile_expired_locks(now_ms=now_ms)
+            finalized = self.queue_store.finalize_next_cancel_requested_queue_item(
+                now_ms=now_ms
+            )
+            if finalized is not None:
+                return finalized
             claim = self.queue_store.claim_next_queue_item(
                 self.worker_name,
                 lease_ms=self.lease_ms,
@@ -770,41 +803,60 @@ class QueueingDispatcher(_QueueingDispatcher):
             now_ms=current_time_ms(),
         )
 
-    def _start_attempt_heartbeat(
+    def _queue_item_cancellation_requested(self, queue_item_id: str) -> bool:
+        return self.queue_store.queue_item_cancellation_requested(queue_item_id)
+
+    def _start_attempt_control(
         self,
         attempt_id: str,
         queue_item_id: str,
         lock_keys: Iterable[str] = (),
+        cancellation_event: asyncio.Event | None = None,
     ) -> asyncio.Task[None] | None:
         if (
             self.worker_name is None
             or self.claim_token is None
-            or self.heartbeat_interval_seconds is None
-            or self.heartbeat_interval_seconds <= 0
+            or cancellation_event is None
         ):
             return None
         return asyncio.create_task(
-            self._heartbeat_attempt(attempt_id, queue_item_id, tuple(lock_keys))
+            self._monitor_attempt(
+                attempt_id,
+                queue_item_id,
+                tuple(lock_keys),
+                cancellation_event,
+            )
         )
 
-    async def _heartbeat_attempt(
+    async def _monitor_attempt(
         self,
         attempt_id: str,
         queue_item_id: str,
         lock_keys: tuple[str, ...],
+        cancellation_event: asyncio.Event,
     ) -> None:
-        if (
-            self.worker_name is None
-            or self.claim_token is None
-            or self.heartbeat_interval_seconds is None
-        ):
+        """Bridge durable intent to the local token after clients disconnect."""
+
+        if self.worker_name is None or self.claim_token is None:
             return
+        heartbeat_interval = self.heartbeat_interval_seconds
+        last_heartbeat = time.monotonic()
         while True:
-            expected_at = time.monotonic() + self.heartbeat_interval_seconds
-            await asyncio.sleep(self.heartbeat_interval_seconds)
+            if self.queue_store.queue_item_cancellation_requested(queue_item_id):
+                cancellation_event.set()
+                return
+            poll_interval = CANCELLATION_POLL_INTERVAL_SECONDS
+            if heartbeat_interval is not None and heartbeat_interval > 0:
+                poll_interval = min(poll_interval, heartbeat_interval)
+            await asyncio.sleep(poll_interval)
+            if heartbeat_interval is None or heartbeat_interval <= 0:
+                continue
+            elapsed = time.monotonic() - last_heartbeat
+            if elapsed < heartbeat_interval:
+                continue
             self.queue_store.observe_runtime_metric(
                 "runtime.heartbeat_delay_ms",
-                max(0.0, (time.monotonic() - expected_at) * 1000),
+                max(0.0, (elapsed - heartbeat_interval) * 1000),
                 queue_item_id=queue_item_id,
             )
             now_ms = current_time_ms()
@@ -816,6 +868,9 @@ class QueueingDispatcher(_QueueingDispatcher):
                 lease_ms=self.lease_ms,
                 now_ms=now_ms,
             )
+            if not heartbeat_current:
+                cancellation_event.set()
+                return
             if heartbeat_current and lock_keys:
                 self.queue_store.renew_locks(
                     lock_keys,
@@ -823,6 +878,7 @@ class QueueingDispatcher(_QueueingDispatcher):
                     lease_ms=self.lease_ms,
                     now_ms=now_ms,
                 )
+            last_heartbeat = time.monotonic()
 
 
 def reject_reserved_runtime_event(draft: DraftEvent) -> None:

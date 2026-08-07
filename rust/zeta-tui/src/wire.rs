@@ -101,10 +101,34 @@ impl Event {
     }
 
     pub(super) fn timeline_text(&self) -> String {
-        let Some(message) = self.payload.get("message").and_then(Value::as_str) else {
-            return self.payload.to_string();
+        if let Some(message) = self.payload.get("message").and_then(Value::as_str) {
+            return message.to_owned();
+        }
+        if let Some(content) = self.payload.get("content").and_then(Value::as_str) {
+            return content.to_owned();
+        }
+        self.payload.to_string()
+    }
+
+    pub(super) fn is_direct_message_request(&self) -> bool {
+        self.event_type == "session.message.requested"
+    }
+
+    pub(super) fn is_runtime_user_message(&self) -> bool {
+        self.event_type == "zeta.user_message"
+    }
+
+    pub(super) fn user_message_key(&self) -> Option<(&str, &str, &str)> {
+        let session_id = self.session_id.as_ref()?;
+        let run_id = self.run_id.as_ref()?;
+        let text = if self.is_direct_message_request() {
+            self.payload.get("message").and_then(Value::as_str)?
+        } else if self.is_runtime_user_message() {
+            self.payload.get("content").and_then(Value::as_str)?
+        } else {
+            return None;
         };
-        message.to_owned()
+        Some((&session_id.0, &run_id.0, text))
     }
 }
 

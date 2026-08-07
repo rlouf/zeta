@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::io;
 
 use crossterm::event::{Event as TerminalEvent, KeyCode, KeyEventKind};
@@ -165,6 +166,38 @@ impl App {
         }
     }
 
+    fn timeline_events(&self) -> Vec<&Event> {
+        let mut direct_messages = HashSet::new();
+        for event in &self.events {
+            if !event.is_direct_message_request() {
+                continue;
+            }
+            if let Some(key) = event.user_message_key() {
+                direct_messages.insert(key);
+            }
+        }
+
+        let mut runtime_messages = HashSet::new();
+        let mut timeline = Vec::new();
+        for event in &self.events {
+            if !event.is_runtime_user_message() {
+                timeline.push(event);
+                continue;
+            }
+            let Some(key) = event.user_message_key() else {
+                timeline.push(event);
+                continue;
+            };
+            if direct_messages.contains(&key) {
+                continue;
+            }
+            if runtime_messages.insert(key) {
+                timeline.push(event);
+            }
+        }
+        timeline
+    }
+
     fn select_next_session(&mut self) {
         if self.sessions.is_empty() {
             self.selected_session = None;
@@ -322,7 +355,7 @@ fn render_work(frame: &mut Frame<'_>, area: Rect, app: &App) {
 
 fn render_timeline(frame: &mut Frame<'_>, area: Rect, app: &App) {
     let mut rows = Vec::new();
-    for event in &app.events {
+    for event in app.timeline_events() {
         rows.push(ListItem::new(Line::from(vec![
             Span::styled(event.event_type(), Style::default().fg(Color::Yellow)),
             Span::raw("  "),
@@ -344,6 +377,117 @@ mod tests {
 
     use super::{App, AppAction, draw};
     use crate::wire::{Cursor, Event, Session};
+
+    fn event(
+        event_type: &str,
+        payload: serde_json::Value,
+        session_id: &str,
+        run_id: &str,
+        cursor: u64,
+    ) -> Event {
+        serde_json::from_value(serde_json::json!({
+            "id": format!("evt_{cursor}"),
+            "event_type": event_type,
+            "source": "user",
+            "payload": payload,
+            "idempotency_key": null,
+            "caused_by": null,
+            "session_id": session_id,
+            "run_id": run_id,
+            "turn_id": null,
+            "timestamp_ms": 1_754_438_400_000_i64 + cursor as i64,
+            "cursor": cursor
+        }))
+        .expect("event should parse")
+    }
+
+    #[test]
+    fn runtime_user_message_folds_into_the_direct_request() {
+        let runtime_message = event(
+            "zeta.user_message",
+            serde_json::json!({"content": "hello"}),
+            "session_1",
+            "run_1",
+            2,
+        );
+        let request = event(
+            "session.message.requested",
+            serde_json::json!({"message": "hello"}),
+            "session_1",
+            "run_1",
+            1,
+        );
+        let app = App::connected(
+            "0.1".to_owned(),
+            Vec::new(),
+            vec![runtime_message, request],
+            Some(Cursor(2)),
+        );
+
+        let timeline = app.timeline_events();
+
+        assert_eq!(timeline.len(), 1);
+        assert_eq!(timeline[0].event_type(), "session.message.requested");
+    }
+
+    #[test]
+    fn retry_user_messages_fold_without_a_direct_request() {
+        let first = event(
+            "zeta.user_message",
+            serde_json::json!({"content": "hello"}),
+            "session_1",
+            "run_1",
+            1,
+        );
+        let retry = event(
+            "zeta.user_message",
+            serde_json::json!({"content": "hello"}),
+            "session_1",
+            "run_1",
+            2,
+        );
+        let app = App::connected(
+            "0.1".to_owned(),
+            Vec::new(),
+            vec![first, retry],
+            Some(Cursor(2)),
+        );
+
+        assert_eq!(app.timeline_events().len(), 1);
+    }
+
+    #[test]
+    fn mismatched_or_differently_correlated_messages_remain_distinct() {
+        let request = event(
+            "session.message.requested",
+            serde_json::json!({"message": "hello"}),
+            "session_1",
+            "run_1",
+            1,
+        );
+        let changed = event(
+            "zeta.user_message",
+            serde_json::json!({"content": "changed"}),
+            "session_1",
+            "run_1",
+            2,
+        );
+        let other_run = event(
+            "zeta.user_message",
+            serde_json::json!({"content": "hello"}),
+            "session_1",
+            "run_2",
+            3,
+        );
+        let app = App::connected(
+            "0.1".to_owned(),
+            Vec::new(),
+            vec![request, changed, other_run],
+            Some(Cursor(3)),
+        );
+
+        assert_eq!(app.timeline_events().len(), 3);
+    }
 
     #[test]
     fn connected_timeline_renders_current_events() {

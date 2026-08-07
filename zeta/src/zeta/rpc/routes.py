@@ -18,6 +18,7 @@ from zeta.effects import DELIVERY_SEMANTICS, DeliverySemantics
 from zeta.events import DraftEvent, Event
 from zeta.harness.dispatch import QueueingDispatcher, ReservedRuntimeEventError
 from zeta.harness.project import ProjectSnapshot, record_project_snapshot
+from zeta.harness.protocols import UnauthorizedCancellation
 from zeta.harness.runs import RunStatus
 from zeta.harness.session_turn import (
     SESSION_TURN_AGENT_ID,
@@ -54,7 +55,6 @@ class RunState:
     """RPC-visible session run state used for cancellation and status responses."""
 
     run_id: str
-    cancellation_event: asyncio.Event
     task: asyncio.Task[None] | None = None
     status: RunStatus = "running"
 
@@ -488,11 +488,7 @@ async def session_run(params: dict[str, Any], client: RpcClient) -> dict[str, An
         }
 
     if outcome.inserted:
-        cancellation_event = asyncio.Event()
-        state = RunState(
-            run_id=requested_run_id,
-            cancellation_event=cancellation_event,
-        )
+        state = RunState(run_id=requested_run_id)
         client.pending_runs[requested_run_id] = state
         state.task = asyncio.create_task(route_run(client, state, requested_event))
 
@@ -704,32 +700,58 @@ def run_status_from_lifecycle(
             event.event_type == "runtime.queue_item.completed"
             and event.payload.get("target_agent") == SESSION_TURN_AGENT_ID
         ):
-            return (
-                "cancelled"
-                if state.cancellation_event.is_set()
-                and isinstance(event.payload.get("result"), dict)
-                and event.payload["result"].get("outcome") == "aborted"
-                else "completed"
-            )
-    return "cancelled" if state.cancellation_event.is_set() else "completed"
+            return "completed"
+    return "cancelled" if state.status == "cancelling" else "completed"
 
 
 async def session_cancel(params: dict[str, Any], client: RpcClient) -> dict[str, Any]:
-    """Request cancellation for an RPC-started session run by run id."""
+    """Use durable state so cancellation does not depend on this RPC peer."""
 
+    reject_unknown_params(params, {"run_id", "session_id", "reason"})
     run_id = params.get("run_id")
     if not isinstance(run_id, str) or not run_id:
         raise invalid_params("invalid_run_id", "run_id must be non-empty")
-
+    expected_session_id = params.get("session_id")
+    if expected_session_id is not None and (
+        not isinstance(expected_session_id, str) or not expected_session_id
+    ):
+        raise invalid_params("invalid_session_id", "session_id must be non-empty")
+    reason = params.get("reason")
+    if reason is not None and (not isinstance(reason, str) or not reason):
+        raise invalid_params("invalid_reason", "reason must be non-empty")
+    store = session_runtime_store(client)
+    try:
+        result = store.cancel_run(
+            run_id,
+            expected_session_id=expected_session_id,
+            reason=reason,
+        )
+    except UnauthorizedCancellation as exc:
+        raise RpcError(
+            -32009,
+            "session_cancel_forbidden",
+            "Session error",
+            {"message": str(exc), "run_id": run_id},
+        ) from exc
     state = client.pending_runs.get(run_id)
-    if state is None:
-        return {"cancelled": False, "run_id": run_id, "status": "unknown"}
-    if state.status not in {"running", "cancelling"}:
-        return {"cancelled": False, "run_id": run_id, "status": state.status}
-    state.status = "cancelling"
-    state.cancellation_event.set()
-
-    return {"cancelled": True, "run_id": run_id, "status": state.status}
+    if state is not None:
+        if result.status == "cancelling":
+            state.status = "cancelling"
+        elif result.status in {"cancelled", "already_cancelled"}:
+            state.status = "cancelled"
+        elif result.status == "already_terminal":
+            state.status = (
+                "completed" if result.terminal_status == "completed" else "failed"
+            )
+    return {
+        "cancelled": result.status in {"cancelling", "cancelled", "already_cancelled"},
+        "changed": result.changed,
+        "run_id": run_id,
+        "queue_item_id": result.queue_item_id,
+        "session_id": result.session_id,
+        "status": result.status,
+        "terminal_status": result.terminal_status,
+    }
 
 
 async def tools_register(params: dict[str, Any], client: RpcClient) -> dict[str, Any]:

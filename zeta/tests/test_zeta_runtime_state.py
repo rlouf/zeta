@@ -113,6 +113,8 @@ def test_session_projection_uses_activity_priority_and_counts_queued_turns() -> 
             "target_agent": "worker",
             "session_id": "session-running",
             "status": "claimed",
+            "cancel_requested_event_id": "evt_cancel_request",
+            "cancel_requested_at": 45,
             "updated_at": 40,
         },
         {
@@ -180,7 +182,9 @@ def test_session_projection_uses_activity_priority_and_counts_queued_turns() -> 
     assert running["status"] == "running"
     assert running["active_run_id"] == "run_running"
     assert running["queued_turns"] == 1
+    assert running["cancellation_requested"] is True
     assert session_record(records, "session-queued")["status"] == "queued"
+    assert session_record(records, "session-queued")["cancellation_requested"] is False
     waiting = session_record(records, "session-waiting")
     assert waiting["status"] == "waiting"
     assert waiting["active_wait"] == {

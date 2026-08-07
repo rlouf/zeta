@@ -57,6 +57,7 @@ from zeta.harness import scheduling as harness_scheduling
 from zeta.harness import session_turn as harness_session_turn
 from zeta.harness import worker as harness_worker
 from zeta.harness.queue import QueueItem
+from zeta.harness.sessions import submit_session_message
 from zeta.harness.store import RuntimeEventStore
 from zeta.journal import drafts as zeta_event_drafts
 from zeta.journal import views as zeta_event_views
@@ -4273,24 +4274,98 @@ def test_zeta_session_agent_request_preserves_explicit_model_override(
     assert request.config.model_url == "http://127.0.0.1:9999/v1/chat/completions"
 
 
-def test_zeta_rpc_session_cancel_updates_run_state() -> None:
-    _, client, router = rpc_client()
-    cancellation_event = asyncio.Event()
-    client.pending_runs["run_active"] = rpc_routes.RunState(
-        run_id="run_active",
-        cancellation_event=cancellation_event,
+def test_zeta_rpc_session_cancel_records_a_durable_request(tmp_path: Path) -> None:
+    event_store = RuntimeEventStore.open(tmp_path / "events.sqlite3")
+    queued = submit_session_message(
+        event_store,
+        message="Long task",
+        agent_id="zeta.master",
+        session_id="session-1",
+        project_generation="generation-1",
     )
+    requested = event_store.get(queued["event_id"])
+    assert requested is not None
+    assert (
+        event_store.claim_next_queue_item(
+            "worker-1",
+            lease_ms=1_000,
+            now_ms=requested.timestamp_ms + 1,
+        )
+        is not None
+    )
+    session = zeta_runtime_context.RuntimeContext(
+        session_id="rpc-control",
+        event_sink=event_store,
+        trace_store=InMemoryStore(),
+        tool_registry=CapabilityRegistry(),
+        state_dir=tmp_path,
+        session_dir=tmp_path / "sessions" / "rpc-control",
+    )
+    client = rpc_client_without_connection(session=session)
+    client.pending_runs[queued["run_id"]] = rpc_routes.RunState(run_id=queued["run_id"])
 
     result = asyncio.run(
-        rpc_routes.session_cancel({"run_id": "run_active"}, router.client)
+        rpc_routes.session_cancel(
+            {"run_id": queued["run_id"], "reason": "user changed direction"},
+            client,
+        )
     )
 
     assert result == {
         "cancelled": True,
-        "run_id": "run_active",
+        "changed": True,
+        "run_id": queued["run_id"],
+        "queue_item_id": queued["queue_item_id"],
+        "session_id": "session-1",
         "status": "cancelling",
+        "terminal_status": None,
     }
-    assert cancellation_event.is_set()
+    assert client.pending_runs[queued["run_id"]].status == "cancelling"
+    assert event_store.queue_item_cancellation_requested(queued["queue_item_id"])
+    event_store.close()
+
+
+def test_zeta_rpc_session_cancel_survives_a_new_client(tmp_path: Path) -> None:
+    event_store = RuntimeEventStore.open(tmp_path / "events.sqlite3")
+    queued = submit_session_message(
+        event_store,
+        message="Queued task",
+        agent_id="zeta.master",
+        session_id="session-1",
+        project_generation="generation-1",
+    )
+    session = zeta_runtime_context.RuntimeContext(
+        session_id="new-client",
+        event_sink=event_store,
+        trace_store=InMemoryStore(),
+        tool_registry=CapabilityRegistry(),
+        state_dir=tmp_path,
+        session_dir=tmp_path / "sessions" / "new-client",
+    )
+    client = rpc_client_without_connection(session=session)
+
+    cancelled = asyncio.run(
+        rpc_routes.session_cancel({"run_id": queued["run_id"]}, client)
+    )
+    repeated = asyncio.run(
+        rpc_routes.session_cancel({"run_id": queued["run_id"]}, client)
+    )
+    unknown = asyncio.run(rpc_routes.session_cancel({"run_id": "run_unknown"}, client))
+
+    assert cancelled["status"] == "cancelled"
+    assert cancelled["changed"] is True
+    assert repeated["status"] == "already_cancelled"
+    assert repeated["changed"] is False
+    assert unknown == {
+        "cancelled": False,
+        "changed": False,
+        "run_id": "run_unknown",
+        "queue_item_id": None,
+        "session_id": None,
+        "status": "unknown",
+        "terminal_status": None,
+    }
+    event_store.close()
 
 
 def test_zeta_rpc_tools_register_uses_documented_tool_shape() -> None:
@@ -4627,9 +4702,6 @@ def test_zeta_session_turn_agent_adapts_requested_event_to_turn_runner(
     agent = harness_session_turn.session_turn_agent(
         context,
         publish_event=published.append,
-        cancellation_event_for_run=lambda run_id: (
-            cancellation_event if run_id == "run_event" else None
-        ),
     )
     triggering_event = Event(
         id="evt_request",
@@ -4649,7 +4721,11 @@ def test_zeta_session_turn_agent_adapts_requested_event_to_turn_runner(
         cast(
             Coroutine[Any, Any, dict[str, Any]],
             runner(
-                harness_dispatch.AgentInvocation(agent.definition, triggering_event)
+                harness_dispatch.AgentInvocation(
+                    agent.definition,
+                    triggering_event,
+                    cancellation_event=cancellation_event,
+                )
             ),
         )
     )
@@ -6438,6 +6514,13 @@ def test_zeta_cli_cancel_handles_any_supported_resource(tmp_path: Path) -> None:
             session_id="session-1",
         )
     )
+    queued = submit_session_message(
+        event_store,
+        message="Cancel from the CLI",
+        agent_id="zeta.master",
+        session_id="session-2",
+        project_generation="generation-1",
+    )
     event_store.close()
 
     cancelled = CliRunner().invoke(
@@ -6469,6 +6552,10 @@ def test_zeta_cli_cancel_handles_any_supported_resource(tmp_path: Path) -> None:
         cli_main.cli,
         ["cancel", "qi-1", "--state-dir", str(state_dir)],
     )
+    cancelled_run = CliRunner().invoke(
+        cli_main.cli,
+        ["cancel", queued["run_id"], "--state-dir", str(state_dir), "--json"],
+    )
 
     assert cancelled.exit_code == 0
     assert json.loads(cancelled.output) == {
@@ -6488,6 +6575,15 @@ def test_zeta_cli_cancel_handles_any_supported_resource(tmp_path: Path) -> None:
     assert "unknown cancellation handle" in unknown.output
     assert invalid.exit_code == 1
     assert "handle must start with 'wait_' or 'pub_'" in invalid.output
+    assert cancelled_run.exit_code == 0
+    assert json.loads(cancelled_run.output) == {
+        "run_id": queued["run_id"],
+        "queue_item_id": queued["queue_item_id"],
+        "session_id": "session-2",
+        "status": "cancelled",
+        "terminal_status": "cancelled",
+        "changed": True,
+    }
 
     store = RuntimeEventStore.open(event_store_path(state_dir), read_only=True)
     facts = store.list_events(Filter(event_type="runtime.wait.cancelled"))
@@ -8982,15 +9078,11 @@ def test_zeta_local_runtime_run_once_handles_eventlog_rpc_request(
         session: zeta_runtime_context.RuntimeContext,
         *,
         publish_event: Callable[[harness_session_turn.RuntimePublishedEvent], None],
-        cancellation_event_for_run: (
-            harness_session_turn.CancellationEventForRun | None
-        ) = None,
     ) -> harness_dispatch.ExecutableAgent:
         captured["tool_registry"] = session.tool_registry
         return original_session_turn_agent(
             session,
             publish_event=publish_event,
-            cancellation_event_for_run=cancellation_event_for_run,
         )
 
     monkeypatch.setattr(rpc_eventlog, "session_turn_agent", capture_session_turn_agent)

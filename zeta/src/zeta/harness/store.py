@@ -633,6 +633,57 @@ class RuntimeJournalStore(_SqliteBacked):
                 self.connection.rollback()
                 raise
 
+    def cancel_run(
+        self,
+        run_id: str,
+        *,
+        expected_session_id: str | None = None,
+        reason: str | None = None,
+        now_ms: int | None = None,
+    ) -> QueueItemCancellationResult:
+        """Resolve the public run handle to the turn's stable queue item."""
+
+        with self.events.write_lock:
+            row = self.connection.execute(
+                """
+                SELECT q.queue_item_id
+                FROM queue_items AS q
+                LEFT JOIN events AS input ON input.id = q.event_id
+                WHERE input.run_id = ?
+                   OR EXISTS (
+                     SELECT 1
+                     FROM attempts AS attempt
+                     WHERE attempt.queue_item_id = q.queue_item_id
+                       AND attempt.run_id = ?
+                   )
+                ORDER BY CASE
+                    WHEN q.status IN (
+                      'completed', 'failed', 'cancelled',
+                      'dead_lettered', 'unhandled'
+                    ) THEN 1
+                    ELSE 0
+                  END,
+                  q.input_cursor ASC,
+                  q.queue_item_id ASC
+                LIMIT 1
+                """,
+                (run_id, run_id),
+            ).fetchone()
+        if row is None:
+            return QueueItemCancellationResult(
+                None,
+                run_id,
+                None,
+                "unknown",
+                False,
+            )
+        return self.cancel_queue_item(
+            str(row["queue_item_id"]),
+            expected_session_id=expected_session_id,
+            reason=reason,
+            now_ms=now_ms,
+        )
+
     def _queue_cancel_request_event(self, row: sqlite3.Row) -> Event | None:
         event_id = _optional_str(row["cancel_requested_event_id"])
         return self.events.get(event_id) if event_id is not None else None
@@ -1485,6 +1536,21 @@ class RuntimeEventStore:
     ) -> QueueItemCancellationResult:
         return self._journal.cancel_queue_item(
             queue_item_id,
+            expected_session_id=expected_session_id,
+            reason=reason,
+            now_ms=now_ms,
+        )
+
+    def cancel_run(
+        self,
+        run_id: str,
+        *,
+        expected_session_id: str | None = None,
+        reason: str | None = None,
+        now_ms: int | None = None,
+    ) -> QueueItemCancellationResult:
+        return self._journal.cancel_run(
+            run_id,
             expected_session_id=expected_session_id,
             reason=reason,
             now_ms=now_ms,

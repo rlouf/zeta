@@ -721,6 +721,7 @@ def test_attempt_records_project_and_execution_manifests(tmp_path: Path) -> None
         "session_id": queue_item["session_id"],
         "agent_id": spec.slug,
         "status": "idle",
+        "cancellation_requested": False,
         "active_run_id": None,
         "queued_turns": 0,
         "active_wait": None,

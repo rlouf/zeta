@@ -341,6 +341,11 @@ def _session_record_from_sources(
         "session_id": session_id,
         "agent_id": owners[0] if len(owners) == 1 else None,
         "status": _session_activity(running, queued, active_waits),
+        "cancellation_requested": any(
+            isinstance(item.get("cancel_requested_event_id"), str)
+            and item.get("status") not in TERMINAL_SESSION_QUEUE_STATUSES
+            for item in source.queue_items
+        ),
         "active_run_id": _mapping_string(active_attempt, "run_id"),
         "queued_turns": len(queued),
         "active_wait": _active_wait_record(active_wait),

@@ -15,7 +15,6 @@ from zeta.harness.routing import (
     ExecutableAgent,
 )
 from zeta.journal.store import EventReader, Filter
-from zeta.loop.cancellation import CancellationToken
 from zeta.loop.runtime import empty_session_trace_result
 from zeta.loop.runtime_context import RuntimeContext
 from zeta.loop.thread_run import (
@@ -25,7 +24,6 @@ from zeta.loop.thread_run import (
 )
 
 RuntimePublishedEvent = Event
-CancellationEventForRun = Callable[[str], CancellationToken | None]
 SESSION_TURN_AGENT_ID = "zeta.session.turn"
 
 
@@ -33,7 +31,6 @@ def session_turn_agent(
     runtime_context: RuntimeContext,
     *,
     publish_event: Callable[[RuntimePublishedEvent], None],
-    cancellation_event_for_run: CancellationEventForRun | None = None,
 ) -> ExecutableAgent:
     async def run_agent(invocation: AgentInvocation) -> dict[str, Any]:
         params = dict(invocation.triggering_event.payload)
@@ -42,18 +39,13 @@ def session_turn_agent(
         )
         if run_id is None:
             run_id = session_run_id()
-        cancellation_event = (
-            cancellation_event_for_run(run_id)
-            if cancellation_event_for_run is not None
-            else None
-        )
         return await run_session_request(
             params,
             run_id=run_id,
             caused_by=invocation.triggering_event.id,
             publish_event=publish_event,
             runtime_context=runtime_context,
-            cancellation_event=cancellation_event,
+            cancellation_event=invocation.cancellation_event,
         )
 
     return ExecutableAgent(

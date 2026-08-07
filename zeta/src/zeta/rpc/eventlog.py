@@ -7,8 +7,6 @@ decides whether event-log RPC is served at all.
 
 from __future__ import annotations
 
-import asyncio
-
 from zeta.events import Event
 from zeta.harness.dispatch import QueueingDispatcher
 from zeta.harness.session_turn import session_turn_agent
@@ -61,10 +59,6 @@ async def run_eventlog_rpc_request(
     )
     pending_runs: dict[str, RunState] = {}
 
-    def cancellation_event_for_run(run_id: str) -> asyncio.Event | None:
-        state = pending_runs.get(run_id)
-        return state.cancellation_event if state is not None else None
-
     dispatcher = QueueingDispatcher(
         runtime.events,
         runtime.events,
@@ -72,7 +66,6 @@ async def run_eventlog_rpc_request(
             session_turn_agent(
                 session,
                 publish_event=lambda _event: None,
-                cancellation_event_for_run=cancellation_event_for_run,
             ),
             *project_executors(runtime),
         ),

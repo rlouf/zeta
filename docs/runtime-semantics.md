@@ -187,7 +187,9 @@ Each session has one activity status:
 
 Zeta applies this priority: `running`, `queued`, `waiting`, then `idle`. The
 status also includes the active run, queued turn count, active wait, latest
-run, and last activity time.
+run, last activity time, and `cancellation_requested`. The activity stays
+`running` while a worker stops. Cancellation does not add another activity
+state.
 
 A session belongs to one agent. Zeta reports an ownership conflict if durable
 records assign the same session id to different agents. It does not select one
@@ -341,6 +343,10 @@ The event names describe separate facts:
 
 Zeta does not use a general `runtime.cancellation.applied` event. The existing
 terminal events identify the affected resource and record the result.
+
+Users cancel a turn with `session.cancel` or `zeta cancel <run_id>`. These
+interfaces accept the public run ID and resolve it to the queue item. They do
+not depend on the client connection that started or queued the turn.
 
 ### Agent-created resources
 

@@ -303,13 +303,18 @@ current terminal state and does not add another cancellation event.
 Runtime operators can cancel any supported handle:
 
 ```sh
+zeta cancel run_0123456789abcdef01234567
 zeta cancel wait_0123456789abcdef01234567
 zeta cancel pub_0123456789abcdef01234567 --reason "No longer needed"
 zeta cancel wait_0123456789abcdef01234567 --json
 ```
 
-The command reports the current terminal state. A repeated command succeeds
-and reports `changed: false` in JSON output.
+For a run ID, the command cancels the related queue item. A queued turn becomes
+terminal immediately. A running turn reports `cancelling` until its worker
+stops. The request survives client and worker restarts.
+
+The command reports the current state. A repeated command succeeds and
+reports `changed: false` in JSON output.
 
 ## `query_log`
 

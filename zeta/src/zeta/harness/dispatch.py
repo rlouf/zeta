@@ -835,6 +835,8 @@ class QueueingDispatcher(_QueueingDispatcher):
         lock_keys: tuple[str, ...],
         cancellation_event: asyncio.Event,
     ) -> None:
+        """Bridge durable intent to the local token after clients disconnect."""
+
         if self.worker_name is None or self.claim_token is None:
             return
         heartbeat_interval = self.heartbeat_interval_seconds

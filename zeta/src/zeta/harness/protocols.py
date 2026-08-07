@@ -68,7 +68,7 @@ class CancellationResult:
 class QueueItemCancellationResult:
     """The durable state of one turn after a cancellation request."""
 
-    queue_item_id: str
+    queue_item_id: str | None
     run_id: str | None
     session_id: str | None
     status: QueueItemCancellationStatus
@@ -102,6 +102,15 @@ class RuntimeJournal(Protocol):
     def cancel_queue_item(
         self,
         queue_item_id: str,
+        *,
+        expected_session_id: str | None = None,
+        reason: str | None = None,
+        now_ms: int | None = None,
+    ) -> QueueItemCancellationResult: ...
+
+    def cancel_run(
+        self,
+        run_id: str,
         *,
         expected_session_id: str | None = None,
         reason: str | None = None,

@@ -250,10 +250,31 @@ def cancel(
     reason: str | None,
     json_output: bool,
 ) -> int:
-    """Cancel an active wait or pending scheduled event by HANDLE."""
+    """Cancel a run, active wait, or pending scheduled event by HANDLE."""
 
     event_store = runtime_event_store(state_dir, read_only=False)
     try:
+        if handle.startswith("run_"):
+            run_result = event_store.cancel_run(handle, reason=reason)
+            if json_output:
+                click.echo(
+                    json.dumps(
+                        {
+                            "run_id": handle,
+                            "queue_item_id": run_result.queue_item_id,
+                            "session_id": run_result.session_id,
+                            "status": run_result.status,
+                            "terminal_status": run_result.terminal_status,
+                            "changed": run_result.changed,
+                        },
+                        ensure_ascii=False,
+                    )
+                )
+            elif run_result.status == "unknown":
+                click.echo(f"run {handle} is unknown")
+            else:
+                click.echo(f"run {handle} is {run_result.status}")
+            return 0
         result = event_store.cancel_resource(handle, reason=reason)
     except CancellationError as error:
         raise click.ClickException(str(error)) from error

@@ -263,6 +263,95 @@ def test_queue_item_cancel_request_marks_claimed_turn_as_cancelling(
     store.close()
 
 
+def test_worker_recovery_finalizes_a_requested_turn_before_claiming_it(
+    tmp_path: Path,
+) -> None:
+    store = RuntimeEventStore.open(tmp_path / "runtime.sqlite3")
+    queued = submit_session_message(
+        store,
+        message="Interrupted turn",
+        agent_id="master",
+        session_id="session-1",
+        project_generation="generation-1",
+    )
+    requested = store.get(queued["event_id"])
+    assert requested is not None
+    claim = store.claim_next_queue_item(
+        "worker-1",
+        lease_ms=1_000,
+        now_ms=requested.timestamp_ms + 1,
+    )
+    assert claim is not None
+    attempt_id = f"att_{queued['queue_item_id']}_1"
+    store.accept(
+        DraftEvent(
+            "runtime.attempt.started",
+            "zeta",
+            {
+                "attempt_id": attempt_id,
+                "queue_item_id": queued["queue_item_id"],
+                "event_id": queued["event_id"],
+                "attempt_number": 1,
+                "target_agent": "master",
+                "worker_name": "worker-1",
+                "status": "running",
+                "started_at": "2026-08-07T10:00:00Z",
+                "session_id": "session-1",
+                "run_id": queued["run_id"],
+            },
+            idempotency_key=f"attempt:{queued['queue_item_id']}:1:started",
+            caused_by=queued["event_id"],
+            session_id="session-1",
+            run_id=queued["run_id"],
+        )
+    )
+    cancellation = store.cancel_queue_item(
+        queued["queue_item_id"],
+        reason="worker stopped",
+        now_ms=requested.timestamp_ms + 2,
+    )
+    assert cancellation.status == "cancelling"
+    assert cancellation.event is not None
+
+    store.rebuild_projections()
+
+    recovered = store.queue_item(queued["queue_item_id"])
+    assert recovered is not None
+    assert recovered["status"] == "available"
+    assert recovered["cancel_requested_event_id"] == cancellation.event.id
+    assert (
+        store.claim_next_queue_item(
+            "worker-2",
+            lease_ms=1_000,
+            now_ms=requested.timestamp_ms + 3,
+        )
+        is None
+    )
+
+    finalized = store.finalize_next_cancel_requested_queue_item(
+        now_ms=requested.timestamp_ms + 4
+    )
+
+    assert finalized is not None
+    queue_item_id, events = finalized
+    assert queue_item_id == queued["queue_item_id"]
+    assert [event.event_type for event in events] == [
+        "runtime.attempt.cancelled",
+        "runtime.queue_item.cancelled",
+    ]
+    assert store.list_attempts()[0]["status"] == "cancelled"
+    terminal = store.queue_item(queued["queue_item_id"])
+    assert terminal is not None
+    assert terminal["status"] == "cancelled"
+    assert store.finalize_next_cancel_requested_queue_item() is None
+    store.rebuild_projections()
+    assert store.list_attempts()[0]["status"] == "cancelled"
+    rebuilt = store.queue_item(queued["queue_item_id"])
+    assert rebuilt is not None
+    assert rebuilt["status"] == "cancelled"
+    store.close()
+
+
 def test_queue_item_cancel_request_rejects_a_different_session(tmp_path: Path) -> None:
     store = RuntimeEventStore.open(tmp_path / "runtime.sqlite3")
     queued = submit_session_message(

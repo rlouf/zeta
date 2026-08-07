@@ -29,7 +29,7 @@ def triggering_event() -> Event:
     )
 
 
-async def stop_heartbeat(_task) -> None:
+async def stop_attempt_control(_task) -> None:
     return None
 
 
@@ -41,6 +41,8 @@ def coordinator(
     allow_publication: bool = False,
     next_attempt_number=None,
     completion_batch=None,
+    cancellation_requested=None,
+    start_attempt_control=None,
 ):
     store = MemoryEventStore()
     recorder = LifecycleRecorder(store)
@@ -61,8 +63,11 @@ def coordinator(
             recorder,
             claim_is_current=claim_is_current,
             next_attempt_number=next_attempt_number or (lambda _queue_item_id: 1),
-            start_heartbeat=lambda _attempt_id, _queue_item_id, _locks: None,
-            stop_heartbeat=stop_heartbeat,
+            start_attempt_control=start_attempt_control
+            or (lambda _attempt_id, _queue_item_id, _locks, _cancel: None),
+            stop_attempt_control=stop_attempt_control,
+            cancellation_requested=cancellation_requested
+            or (lambda _queue_item_id: False),
             event_publisher=publisher,
             retry_scheduler=unexpected_retry,
             retry_policy=retry_policy or RetryPolicy(),
@@ -139,8 +144,9 @@ def durable_coordinator(store: RuntimeEventStore) -> AttemptCoordinator:
         LifecycleRecorder(store.journal),
         claim_is_current=lambda _queue_item_id: True,
         next_attempt_number=lambda _queue_item_id: 1,
-        start_heartbeat=lambda _attempt_id, _queue_item_id, _locks: None,
-        stop_heartbeat=stop_heartbeat,
+        start_attempt_control=lambda _attempt_id, _queue_item_id, _locks, _cancel: None,
+        stop_attempt_control=stop_attempt_control,
+        cancellation_requested=lambda _queue_item_id: False,
         event_publisher=publisher,
         retry_scheduler=unexpected_retry,
         retry_policy=RetryPolicy(),
@@ -227,8 +233,9 @@ def test_attempt_coordinator_promotes_content_inside_the_success_barrier(
         LifecycleRecorder(store.journal),
         claim_is_current=lambda _queue_item_id: True,
         next_attempt_number=lambda _queue_item_id: 1,
-        start_heartbeat=lambda _attempt_id, _queue_item_id, _locks: None,
-        stop_heartbeat=stop_heartbeat,
+        start_attempt_control=lambda _attempt_id, _queue_item_id, _locks, _cancel: None,
+        stop_attempt_control=stop_attempt_control,
+        cancellation_requested=lambda _queue_item_id: False,
         event_publisher=reject_publication,
         retry_scheduler=reject_retry,
         retry_policy=RetryPolicy(),
@@ -556,6 +563,73 @@ def test_attempt_coordinator_does_not_publish_request_from_cancelled_attempt() -
             ExecutableAgent(
                 AgentDefinition("worker", (EventPattern("work.requested"),)),
                 cancel,
+            ),
+            triggering_event(),
+            queue_item(),
+        )
+    )
+
+    assert [event.event_type for event in stored_events(store)] == [
+        "runtime.queue_item.claimed",
+        "runtime.attempt.started",
+        "runtime.attempt.cancelled",
+        "runtime.queue_item.cancelled",
+    ]
+
+
+def test_durable_cancel_request_overrides_a_successful_result() -> None:
+    def start_control(_attempt_id, _queue_item_id, _locks, cancellation_event):
+        cancellation_event.set()
+        return None
+
+    async def finish_after_request(invocation):
+        assert invocation.cancellation_event is not None
+        assert invocation.cancellation_event.is_set()
+        return {
+            "final_answer": "must not win",
+            "publish_event_requests": [publish_event_request("work.finished", 0)],
+        }
+
+    runtime, store = coordinator(
+        claim_is_current=lambda _queue_item_id: True,
+        allow_publication=True,
+        cancellation_requested=lambda _queue_item_id: True,
+        start_attempt_control=start_control,
+    )
+
+    asyncio.run(
+        runtime.run(
+            ExecutableAgent(
+                AgentDefinition("worker", (EventPattern("work.requested"),)),
+                finish_after_request,
+            ),
+            triggering_event(),
+            queue_item(),
+        )
+    )
+
+    assert [event.event_type for event in stored_events(store)] == [
+        "runtime.queue_item.claimed",
+        "runtime.attempt.started",
+        "runtime.attempt.cancelled",
+        "runtime.queue_item.cancelled",
+    ]
+
+
+def test_durable_cancel_request_prevents_retry_after_an_error() -> None:
+    async def fail(_invocation):
+        raise RuntimeError("model connection closed")
+
+    runtime, store = coordinator(
+        claim_is_current=lambda _queue_item_id: True,
+        cancellation_requested=lambda _queue_item_id: True,
+    )
+
+    asyncio.run(
+        runtime.run(
+            ExecutableAgent(
+                AgentDefinition("worker", (EventPattern("work.requested"),)),
+                fail,
             ),
             triggering_event(),
             queue_item(),
@@ -987,8 +1061,9 @@ def test_attempt_coordinator_rejects_a_second_active_wait(tmp_path) -> None:
         LifecycleRecorder(store.journal),
         claim_is_current=lambda _queue_item_id: True,
         next_attempt_number=lambda _queue_item_id: 1,
-        start_heartbeat=lambda _attempt_id, _queue_item_id, _locks: None,
-        stop_heartbeat=stop_heartbeat,
+        start_attempt_control=lambda _attempt_id, _queue_item_id, _locks, _cancel: None,
+        stop_attempt_control=stop_attempt_control,
+        cancellation_requested=lambda _queue_item_id: False,
         event_publisher=publisher,
         retry_scheduler=unexpected_retry,
         retry_policy=RetryPolicy(max_attempts=1),

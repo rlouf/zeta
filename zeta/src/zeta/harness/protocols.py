@@ -117,6 +117,8 @@ class CoordinationStore(Protocol):
 
     def queue_item_attempt_count(self, queue_item_id: str) -> int: ...
 
+    def queue_item_cancellation_requested(self, queue_item_id: str) -> bool: ...
+
     def queue_claim_is_current(
         self,
         queue_item_id: str,

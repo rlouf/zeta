@@ -8135,6 +8135,7 @@ Triage the issue.
         project_root=tmp_path,
         tool_registry=registry,
     )
+    cancellation_event = asyncio.Event()
 
     with asyncio.Runner() as runner:
         try:
@@ -8160,6 +8161,7 @@ Triage the issue.
                             agent.definition,
                             event,
                             attempt_id="att_qi_evt_issue_triage_1",
+                            cancellation_event=cancellation_event,
                         )
                     ),
                 ),
@@ -8172,6 +8174,7 @@ Triage the issue.
     assert captured["runtime_context"].tool_registry is registry
     assert captured["run_id"] == "run_att_qi_evt_issue_triage_1"
     assert captured["request"].objective == "Triage the issue."
+    assert captured["cancellation_event"] is cancellation_event
 
 
 def test_zeta_worker_agent_runner_uses_one_shot_runtime_session(
@@ -8621,6 +8624,65 @@ def test_zeta_local_runtime_heartbeats_running_locks(
     assert message == f"ran qi_{accepted.id}"
     assert renewed_locks
     assert locks == []
+
+
+def test_zeta_local_runtime_stops_after_a_durable_cancel_request(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    event_store = zeta_events.SqliteEventStore(tmp_path / "events.sqlite3")
+    accepted = event_store.accept(
+        zeta_events.DraftEvent("github.issue.opened", "github", {})
+    ).event
+    started = asyncio.Event()
+
+    async def run_agent(run: harness_dispatch.AgentInvocation) -> dict[str, object]:
+        cancellation_event = cast(asyncio.Event, run.cancellation_event)
+        started.set()
+        await asyncio.wait_for(cancellation_event.wait(), timeout=1)
+        return {"outcome": "cancelled", "stop_reason": "aborted"}
+
+    agent = harness_dispatch.ExecutableAgent(
+        harness_dispatch.AgentDefinition(
+            "issue-triage",
+            (harness_dispatch.EventPattern("github.issue.opened"),),
+        ),
+        run=run_agent,
+    )
+    monkeypatch.setattr(harness_worker, "project_executors", lambda _runtime: (agent,))
+    monkeypatch.setattr(harness_worker, "ATTEMPT_HEARTBEAT_INTERVAL_SECONDS", 0.01)
+    runtime = harness_worker.WorkerServices(
+        project_root=tmp_path,
+        state_dir=tmp_path,
+        events=event_store,
+    )
+
+    async def exercise() -> tuple[str, Any]:
+        task = asyncio.create_task(harness_worker.run_once(runtime))
+        await asyncio.wait_for(started.wait(), timeout=1)
+        cancellation = event_store.cancel_queue_item(f"qi_{accepted.id}")
+        return await task, cancellation
+
+    with asyncio.Runner() as runner:
+        try:
+            message, cancellation = runner.run(exercise())
+            queue_event_types = [
+                event.event_type
+                for event in event_store.list_events(
+                    Filter(event_type_prefix="runtime.queue_item.")
+                )
+            ]
+            attempts = event_store.list_attempts()
+        finally:
+            runner.run(runtime.aclose())
+
+    assert message == f"ran qi_{accepted.id}"
+    assert cancellation.status == "cancelling"
+    assert queue_event_types[-2:] == [
+        "runtime.queue_item.cancel_requested",
+        "runtime.queue_item.cancelled",
+    ]
+    assert attempts[0]["status"] == "cancelled"
 
 
 def test_zeta_local_runtime_binds_the_session_before_the_agent_runs(

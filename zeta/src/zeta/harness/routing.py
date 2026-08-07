@@ -19,6 +19,7 @@ from zeta.loop.outcomes import agent_run_result_payload
 
 if TYPE_CHECKING:
     from zeta.authoring.schemas import EventRegistry
+    from zeta.loop.cancellation import CancellationToken
     from zeta.loop.outcomes import AgentRunResult
 
 AgentEventPublisher = Callable[[DraftEvent], Awaitable[Event]]
@@ -127,6 +128,7 @@ class AgentInvocation:
     attempt_id: str | None = None
     run_id: str | None = None
     session_id: str | None = None
+    cancellation_event: CancellationToken | None = None
 
     async def publish(self, draft: DraftEvent) -> Event:
         if self.publish_event is None:
@@ -164,6 +166,7 @@ async def in_process_agent_loop(
         ),
         source_agent_id=invocation.agent.agent_id,
         source_session_id=session_id,
+        cancellation_event=invocation.cancellation_event,
     )
 
 

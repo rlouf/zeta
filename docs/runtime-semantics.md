@@ -308,6 +308,27 @@ transaction. For claimed work, the queue item stays `claimed` until its worker
 stops. The queue projection stores the request event, request time, and first
 reason. A projection rebuild restores these fields.
 
+A durable worker gives each attempt one local cancellation token. Its control
+task checks for a durable request while it renews the attempt lease. When the
+request exists, the task sets the token. The authored runtime passes this same
+token to the model and tool loop.
+
+The completion transaction checks the durable request again. If cancellation
+committed first, Zeta records `runtime.attempt.cancelled` and
+`runtime.queue_item.cancelled`. It does not apply content promotions, publish
+events, create waits, cancel other resources, or schedule a retry from that
+attempt. If normal completion committed first, a later request reports the
+existing terminal state.
+
+After a worker failure, recovery releases its claim. A queue item with a
+cancellation request is not claimable. The next worker closes any unfinished
+attempt, cancels the queue item, and then continues with normal work. This
+prevents the cancelled turn from running again after a restart.
+
+Cancellation is cooperative. It stops work at the model and tool cancellation
+boundaries. It cannot undo an external effect that already completed, and it
+does not kill an executor process.
+
 A repeated request does not add another event. If the queue item is already
 terminal, the operation returns its current terminal state. Cancellation does
 not change a completed, failed, dead-lettered, or unhandled item.

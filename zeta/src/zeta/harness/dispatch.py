@@ -57,6 +57,7 @@ RESERVED_RUNTIME_EVENT_PREFIXES = (
     "runtime.effect.",
     "runtime.project_snapshot.",
 )
+CANCELLATION_POLL_INTERVAL_SECONDS = 0.1
 
 
 class RuntimeQueueStore(Protocol):
@@ -98,6 +99,16 @@ class RuntimeQueueStore(Protocol):
         now_ms: int,
     ) -> bool:
         """Refresh a running attempt heartbeat and its queue lease."""
+
+    def queue_item_cancellation_requested(self, queue_item_id: str) -> bool:
+        """Return whether a durable request exists for this queue item."""
+
+    def finalize_next_cancel_requested_queue_item(
+        self,
+        *,
+        now_ms: int | None = None,
+    ) -> tuple[str, list[Event]] | None:
+        """Make one recovered cancellation terminal before normal claims."""
 
     def renew_locks(
         self,
@@ -216,8 +227,9 @@ class _QueueingDispatcher:
             self.lifecycle,
             claim_is_current=self._queue_claim_is_current,
             next_attempt_number=self._next_attempt_number,
-            start_heartbeat=self._start_attempt_heartbeat,
-            stop_heartbeat=self._stop_attempt_heartbeat,
+            start_attempt_control=self._start_attempt_control,
+            stop_attempt_control=self._stop_attempt_control,
+            cancellation_requested=self._queue_item_cancellation_requested,
             event_publisher=self._agent_event_publisher,
             retry_scheduler=self.schedule_retry,
             retry_policy=self.retry_policy,
@@ -356,24 +368,30 @@ class _QueueingDispatcher:
                 return effect_key
         return None
 
-    def _start_attempt_heartbeat(
+    def _queue_item_cancellation_requested(self, queue_item_id: str) -> bool:
+        return False
+
+    def _start_attempt_control(
         self,
         attempt_id: str,
         queue_item_id: str,
         lock_keys: Iterable[str] = (),
+        cancellation_event: asyncio.Event | None = None,
     ) -> asyncio.Task[None] | None:
-        """No durable lease to keep alive in-process."""
+        """No durable state exists to monitor in-process."""
+
+        del attempt_id, queue_item_id, lock_keys, cancellation_event
         return None
 
-    async def _stop_attempt_heartbeat(
+    async def _stop_attempt_control(
         self,
-        heartbeat_task: asyncio.Task[None] | None,
+        control_task: asyncio.Task[None] | None,
     ) -> None:
-        if heartbeat_task is None:
+        if control_task is None:
             return
-        heartbeat_task.cancel()
+        control_task.cancel()
         with suppress(asyncio.CancelledError):
-            await heartbeat_task
+            await control_task
 
     def _executor_for_id(
         self,
@@ -700,6 +718,11 @@ class QueueingDispatcher(_QueueingDispatcher):
             now_ms = current_time_ms()
             self.queue_store.reconcile_expired_queue_claims(now_ms=now_ms)
             self.queue_store.reconcile_expired_locks(now_ms=now_ms)
+            finalized = self.queue_store.finalize_next_cancel_requested_queue_item(
+                now_ms=now_ms
+            )
+            if finalized is not None:
+                return finalized
             claim = self.queue_store.claim_next_queue_item(
                 self.worker_name,
                 lease_ms=self.lease_ms,
@@ -780,41 +803,58 @@ class QueueingDispatcher(_QueueingDispatcher):
             now_ms=current_time_ms(),
         )
 
-    def _start_attempt_heartbeat(
+    def _queue_item_cancellation_requested(self, queue_item_id: str) -> bool:
+        return self.queue_store.queue_item_cancellation_requested(queue_item_id)
+
+    def _start_attempt_control(
         self,
         attempt_id: str,
         queue_item_id: str,
         lock_keys: Iterable[str] = (),
+        cancellation_event: asyncio.Event | None = None,
     ) -> asyncio.Task[None] | None:
         if (
             self.worker_name is None
             or self.claim_token is None
-            or self.heartbeat_interval_seconds is None
-            or self.heartbeat_interval_seconds <= 0
+            or cancellation_event is None
         ):
             return None
         return asyncio.create_task(
-            self._heartbeat_attempt(attempt_id, queue_item_id, tuple(lock_keys))
+            self._monitor_attempt(
+                attempt_id,
+                queue_item_id,
+                tuple(lock_keys),
+                cancellation_event,
+            )
         )
 
-    async def _heartbeat_attempt(
+    async def _monitor_attempt(
         self,
         attempt_id: str,
         queue_item_id: str,
         lock_keys: tuple[str, ...],
+        cancellation_event: asyncio.Event,
     ) -> None:
-        if (
-            self.worker_name is None
-            or self.claim_token is None
-            or self.heartbeat_interval_seconds is None
-        ):
+        if self.worker_name is None or self.claim_token is None:
             return
+        heartbeat_interval = self.heartbeat_interval_seconds
+        last_heartbeat = time.monotonic()
         while True:
-            expected_at = time.monotonic() + self.heartbeat_interval_seconds
-            await asyncio.sleep(self.heartbeat_interval_seconds)
+            if self.queue_store.queue_item_cancellation_requested(queue_item_id):
+                cancellation_event.set()
+                return
+            poll_interval = CANCELLATION_POLL_INTERVAL_SECONDS
+            if heartbeat_interval is not None and heartbeat_interval > 0:
+                poll_interval = min(poll_interval, heartbeat_interval)
+            await asyncio.sleep(poll_interval)
+            if heartbeat_interval is None or heartbeat_interval <= 0:
+                continue
+            elapsed = time.monotonic() - last_heartbeat
+            if elapsed < heartbeat_interval:
+                continue
             self.queue_store.observe_runtime_metric(
                 "runtime.heartbeat_delay_ms",
-                max(0.0, (time.monotonic() - expected_at) * 1000),
+                max(0.0, (elapsed - heartbeat_interval) * 1000),
                 queue_item_id=queue_item_id,
             )
             now_ms = current_time_ms()
@@ -826,6 +866,9 @@ class QueueingDispatcher(_QueueingDispatcher):
                 lease_ms=self.lease_ms,
                 now_ms=now_ms,
             )
+            if not heartbeat_current:
+                cancellation_event.set()
+                return
             if heartbeat_current and lock_keys:
                 self.queue_store.renew_locks(
                     lock_keys,
@@ -833,6 +876,7 @@ class QueueingDispatcher(_QueueingDispatcher):
                     lease_ms=self.lease_ms,
                     now_ms=now_ms,
                 )
+            last_heartbeat = time.monotonic()
 
 
 def reject_reserved_runtime_event(draft: DraftEvent) -> None:

@@ -431,7 +431,7 @@ class RuntimeAgentLoop:
                 caused_by=invocation.triggering_event.id,
                 publish_event=lambda _event: None,
                 runtime_context=runtime_context,
-                cancellation_event=None,
+                cancellation_event=invocation.cancellation_event,
                 tool_executor=tool_executor,
             )
         finally:

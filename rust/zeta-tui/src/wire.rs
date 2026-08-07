@@ -106,15 +106,6 @@ impl Event {
         };
         message.to_owned()
     }
-
-    pub(super) fn work_label(&self) -> String {
-        match (&self.session_id, &self.run_id) {
-            (Some(session), Some(run)) => format!("{} / {}", session.0, run.0),
-            (Some(session), None) => session.0.clone(),
-            (None, Some(run)) => run.0.clone(),
-            (None, None) => "uncorrelated".to_owned(),
-        }
-    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -129,13 +120,39 @@ pub(super) struct InitializeResult {
     pub(super) protocol: String,
 }
 
+#[derive(Debug, Deserialize)]
+pub(super) struct Session {
+    session_id: SessionId,
+    agent_id: Option<String>,
+    status: String,
+}
+
+impl Session {
+    pub(super) fn session_id(&self) -> &str {
+        &self.session_id.0
+    }
+
+    pub(super) fn label(&self) -> String {
+        let agent = match &self.agent_id {
+            Some(agent) => agent.as_str(),
+            None => "unknown agent",
+        };
+        format!("{agent} · {}", self.status)
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub(super) struct SessionsListResult {
+    pub(super) sessions: Vec<Session>,
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json::json;
 
     use super::{
         Cursor, Event, EventId, EventsListResult, IncomingMessage, InitializeResult, RequestId,
-        RpcRequest, RunId, SessionId,
+        RpcRequest, RunId, SessionId, SessionsListResult,
     };
 
     #[test]
@@ -238,5 +255,28 @@ mod tests {
 
         assert_eq!(result.server, "zeta");
         assert_eq!(result.protocol, "0.1");
+    }
+
+    #[test]
+    fn session_list_response_parses_current_activity_shape() {
+        let result: SessionsListResult = serde_json::from_value(json!({
+            "sessions": [{
+                "session_id": "session_123",
+                "agent_id": "zeta.master",
+                "status": "queued",
+                "cancellation_requested": false,
+                "active_run_id": null,
+                "queued_turns": 1,
+                "active_wait": null,
+                "latest_run": null,
+                "updated_at": "2026-08-07T12:00:00Z",
+                "future_field": true
+            }]
+        }))
+        .expect("session list should parse");
+
+        assert_eq!(result.sessions.len(), 1);
+        assert_eq!(result.sessions[0].session_id(), "session_123");
+        assert_eq!(result.sessions[0].label(), "zeta.master · queued");
     }
 }

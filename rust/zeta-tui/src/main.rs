@@ -11,9 +11,12 @@ use serde_json::{Value, json};
 use tokio::io::AsyncWriteExt;
 use tokio::process::{ChildStdin, ChildStdout, Command};
 use tokio_util::codec::{FramedRead, LinesCodec};
+use uuid::Uuid;
 
 use crate::app::{App, AppAction, run_terminal};
-use crate::wire::{EventsListResult, IncomingMessage, InitializeResult, RequestId, RpcRequest};
+use crate::wire::{
+    EventsListResult, IncomingMessage, InitializeResult, RequestId, RpcRequest, SessionsListResult,
+};
 
 const MAX_JSONRPC_LINE_BYTES: usize = 1024 * 1024;
 
@@ -75,38 +78,54 @@ async fn run() -> Result<(), BoxError> {
     let list_id = RequestId(2);
     send_request(
         &mut input,
+        &RpcRequest::new(list_id, "session.list", json!({})),
+    )
+    .await?;
+    let result = receive_response(&mut output, list_id).await?;
+    let sessions: SessionsListResult = serde_json::from_value(result)?;
+
+    let list_id = RequestId(3);
+    send_request(
+        &mut input,
         &RpcRequest::new(list_id, "events.list", json!({"limit": 200})),
     )
     .await?;
     let result = receive_response(&mut output, list_id).await?;
     let listed: EventsListResult = serde_json::from_value(result)?;
-    let mut app = App::connected(initialized.protocol, listed.events, listed.next_cursor);
-    let mut next_request_id = 3;
-    let mut next_message_id = 1;
+    let mut app = App::connected(
+        initialized.protocol,
+        sessions.sessions,
+        listed.events,
+        listed.next_cursor,
+    );
+    let mut next_request_id = 4;
 
     loop {
         match run_terminal(&mut app)? {
             AppAction::None => {}
             AppAction::Quit => break,
             AppAction::Submit(objective) => {
-                let run_id = RequestId(next_request_id);
+                let request_id = RequestId(next_request_id);
                 next_request_id += 1;
-                let idempotency_key = format!("zeta-tui-message-{next_message_id}");
-                next_message_id += 1;
+                let idempotency_key = Uuid::new_v4().to_string();
+                let (method, params) = session_message_request(
+                    app.selected_session_id(),
+                    &objective,
+                    &idempotency_key,
+                );
+                send_request(&mut input, &RpcRequest::new(request_id, method, params)).await?;
+                receive_response(&mut output, request_id).await?;
+
+                let list_id = RequestId(next_request_id);
+                next_request_id += 1;
                 send_request(
                     &mut input,
-                    &RpcRequest::new(
-                        run_id,
-                        "session.run",
-                        json!({
-                            "objective": objective,
-                            "tools": [],
-                            "idempotency_key": idempotency_key
-                        }),
-                    ),
+                    &RpcRequest::new(list_id, "session.list", json!({})),
                 )
                 .await?;
-                receive_response(&mut output, run_id).await?;
+                let result = receive_response(&mut output, list_id).await?;
+                let sessions: SessionsListResult = serde_json::from_value(result)?;
+                app.replace_sessions(sessions.sessions);
 
                 let list_id = RequestId(next_request_id);
                 next_request_id += 1;
@@ -193,4 +212,62 @@ fn validate_jsonrpc_version(version: &str) -> Result<(), BoxError> {
         return Err(io::Error::other(format!("unsupported JSON-RPC version {version}")).into());
     }
     Ok(())
+}
+
+fn session_message_request(
+    session_id: Option<&str>,
+    message: &str,
+    idempotency_key: &str,
+) -> (&'static str, Value) {
+    match session_id {
+        Some(session_id) => (
+            "session.send",
+            json!({
+                "session_id": session_id,
+                "message": message,
+                "idempotency_key": idempotency_key
+            }),
+        ),
+        None => (
+            "session.start",
+            json!({
+                "message": message,
+                "idempotency_key": idempotency_key
+            }),
+        ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::session_message_request;
+
+    #[test]
+    fn session_message_starts_without_a_selected_session() {
+        let (method, params) = session_message_request(None, "hello", "message-1");
+
+        assert_eq!(method, "session.start");
+        assert_eq!(
+            params,
+            json!({"message": "hello", "idempotency_key": "message-1"})
+        );
+    }
+
+    #[test]
+    fn session_message_addresses_the_selected_session() {
+        let (method, params) =
+            session_message_request(Some("session_123"), "continue", "message-2");
+
+        assert_eq!(method, "session.send");
+        assert_eq!(
+            params,
+            json!({
+                "session_id": "session_123",
+                "message": "continue",
+                "idempotency_key": "message-2"
+            })
+        );
+    }
 }

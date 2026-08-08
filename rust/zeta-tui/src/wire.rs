@@ -110,6 +110,13 @@ impl Event {
         self.payload.to_string()
     }
 
+    pub(super) fn belongs_to_session(&self, session_id: &str) -> bool {
+        let Some(event_session_id) = &self.session_id else {
+            return false;
+        };
+        event_session_id.0 == session_id
+    }
+
     pub(super) fn is_direct_message_request(&self) -> bool {
         self.event_type == "session.message.requested"
     }

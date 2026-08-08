@@ -22,8 +22,15 @@ pub(super) struct App {
     selected_session: Option<usize>,
     events: Vec<Event>,
     cursor: Option<Cursor>,
+    view: View,
     mode: Mode,
     draft: String,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum View {
+    Sessions,
+    Attached(String),
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -58,6 +65,7 @@ impl App {
             selected_session,
             events,
             cursor,
+            view: View::Sessions,
             mode: Mode::Browse,
             draft: String::new(),
         }
@@ -73,24 +81,45 @@ impl App {
 
         match self.mode {
             Mode::Browse => {
-                if key.code == KeyCode::Char('q') || key.code == KeyCode::Esc {
+                if key.code == KeyCode::Char('q') {
                     return AppAction::Quit;
                 }
-                if key.code == KeyCode::Down || key.code == KeyCode::Char('j') {
-                    self.select_next_session();
-                    return AppAction::None;
-                }
-                if key.code == KeyCode::Up || key.code == KeyCode::Char('k') {
-                    self.select_previous_session();
-                    return AppAction::None;
-                }
-                if key.code == KeyCode::Char('i') {
-                    self.mode = Mode::Compose;
+                match &self.view {
+                    View::Sessions => {
+                        if key.code == KeyCode::Down || key.code == KeyCode::Char('j') {
+                            self.select_next_session();
+                            return AppAction::None;
+                        }
+                        if key.code == KeyCode::Up || key.code == KeyCode::Char('k') {
+                            self.select_previous_session();
+                            return AppAction::None;
+                        }
+                        if key.code == KeyCode::Char('n') {
+                            self.mode = Mode::Compose;
+                            return AppAction::None;
+                        }
+                        if key.code == KeyCode::Enter {
+                            let Some(session_id) = self.selected_session_id() else {
+                                return AppAction::None;
+                            };
+                            self.view = View::Attached(session_id.to_owned());
+                        }
+                    }
+                    View::Attached(_) => {
+                        if key.code == KeyCode::Esc {
+                            self.view = View::Sessions;
+                            return AppAction::None;
+                        }
+                        if key.code == KeyCode::Char('i') {
+                            self.mode = Mode::Compose;
+                        }
+                    }
                 }
                 AppAction::None
             }
             Mode::Compose => {
                 if key.code == KeyCode::Esc {
+                    self.draft.clear();
                     self.mode = Mode::Browse;
                     return AppAction::None;
                 }
@@ -141,6 +170,13 @@ impl App {
         Some(session.session_id())
     }
 
+    pub(super) fn attached_session_id(&self) -> Option<&str> {
+        match &self.view {
+            View::Sessions => None,
+            View::Attached(session_id) => Some(session_id),
+        }
+    }
+
     #[allow(clippy::manual_map)]
     pub(super) fn replace_sessions(&mut self, sessions: Vec<Session>) {
         let selected_id = match self.selected_session_id() {
@@ -167,8 +203,14 @@ impl App {
     }
 
     fn timeline_events(&self) -> Vec<&Event> {
+        let Some(session_id) = self.attached_session_id() else {
+            return Vec::new();
+        };
         let mut direct_messages = HashSet::new();
         for event in &self.events {
+            if !event.belongs_to_session(session_id) {
+                continue;
+            }
             if !event.is_direct_message_request() {
                 continue;
             }
@@ -180,6 +222,9 @@ impl App {
         let mut runtime_messages = HashSet::new();
         let mut timeline = Vec::new();
         for event in &self.events {
+            if !event.belongs_to_session(session_id) {
+                continue;
+            }
             if !event.is_runtime_user_message() {
                 timeline.push(event);
                 continue;
@@ -196,6 +241,27 @@ impl App {
             }
         }
         timeline
+    }
+
+    fn shows_composer(&self) -> bool {
+        match (&self.view, &self.mode) {
+            (View::Sessions, Mode::Browse) => false,
+            (View::Sessions, Mode::Compose)
+            | (View::Attached(_), Mode::Browse)
+            | (View::Attached(_), Mode::Compose) => true,
+        }
+    }
+
+    fn attached_label(&self) -> String {
+        let Some(session_id) = self.attached_session_id() else {
+            return "Timeline".to_owned();
+        };
+        for session in &self.sessions {
+            if session.session_id() == session_id {
+                return session.label();
+            }
+        }
+        session_id.to_owned()
     }
 
     fn select_next_session(&mut self) {
@@ -292,10 +358,11 @@ impl Drop for TerminalSession {
 }
 
 pub(super) fn draw(frame: &mut Frame<'_>, app: &App) {
+    let composer_height = if app.shows_composer() { 3 } else { 0 };
     let areas = Layout::vertical([
         Constraint::Length(1),
         Constraint::Min(3),
-        Constraint::Length(3),
+        Constraint::Length(composer_height),
         Constraint::Length(1),
     ])
     .split(frame.area());
@@ -315,28 +382,31 @@ pub(super) fn draw(frame: &mut Frame<'_>, app: &App) {
     );
     frame.render_widget(header, areas[0]);
 
-    if areas[1].width >= 60 {
-        let body = Layout::horizontal([Constraint::Length(28), Constraint::Min(1)]).split(areas[1]);
-        render_work(frame, body[0], app);
-        render_timeline(frame, body[1], app);
-    } else {
-        let body = Layout::vertical([Constraint::Length(5), Constraint::Min(3)]).split(areas[1]);
-        render_work(frame, body[0], app);
-        render_timeline(frame, body[1], app);
+    match &app.view {
+        View::Sessions => render_sessions(frame, areas[1], app),
+        View::Attached(_) => render_timeline(frame, areas[1], app),
     }
 
-    let composer = Paragraph::new(app.draft.as_str())
-        .block(Block::default().title("Message").borders(Borders::ALL));
-    frame.render_widget(composer, areas[2]);
+    if app.shows_composer() {
+        let title = match &app.view {
+            View::Sessions => "New session",
+            View::Attached(_) => "Message",
+        };
+        let composer = Paragraph::new(app.draft.as_str())
+            .block(Block::default().title(title).borders(Borders::ALL));
+        frame.render_widget(composer, areas[2]);
+    }
 
-    let help = match app.mode {
-        Mode::Browse => "↑/↓ sessions · i compose · q quit",
-        Mode::Compose => "Enter send · Esc cancel",
+    let help = match (&app.view, &app.mode) {
+        (View::Sessions, Mode::Browse) => "↑/↓ sessions · Enter attach · n new · q quit",
+        (View::Sessions, Mode::Compose) => "Enter start · Esc cancel",
+        (View::Attached(_), Mode::Browse) => "i compose · Esc detach · q quit",
+        (View::Attached(_), Mode::Compose) => "Enter send · Esc cancel",
     };
     frame.render_widget(Paragraph::new(help), areas[3]);
 }
 
-fn render_work(frame: &mut Frame<'_>, area: Rect, app: &App) {
+fn render_sessions(frame: &mut Frame<'_>, area: Rect, app: &App) {
     let mut rows = Vec::new();
     for (index, session) in app.sessions.iter().enumerate() {
         let marker = if app.selected_session == Some(index) {
@@ -349,8 +419,8 @@ fn render_work(frame: &mut Frame<'_>, area: Rect, app: &App) {
     if rows.is_empty() {
         rows.push(ListItem::new("No sessions"));
     }
-    let work = List::new(rows).block(Block::default().title("Work").borders(Borders::ALL));
-    frame.render_widget(work, area);
+    let sessions = List::new(rows).block(Block::default().title("Sessions").borders(Borders::ALL));
+    frame.render_widget(sessions, area);
 }
 
 fn render_timeline(frame: &mut Frame<'_>, area: Rect, app: &App) {
@@ -365,7 +435,11 @@ fn render_timeline(frame: &mut Frame<'_>, area: Rect, app: &App) {
     if rows.is_empty() {
         rows.push(ListItem::new("No events yet"));
     }
-    let timeline = List::new(rows).block(Block::default().title("Timeline").borders(Borders::ALL));
+    let timeline = List::new(rows).block(
+        Block::default()
+            .title(app.attached_label())
+            .borders(Borders::ALL),
+    );
     frame.render_widget(timeline, area);
 }
 
@@ -401,6 +475,117 @@ mod tests {
         .expect("event should parse")
     }
 
+    fn session(session_id: &str, agent_id: &str, status: &str) -> Session {
+        serde_json::from_value(serde_json::json!({
+            "session_id": session_id,
+            "agent_id": agent_id,
+            "status": status
+        }))
+        .expect("session should parse")
+    }
+
+    #[test]
+    fn startup_renders_only_the_session_list() {
+        let app = App::connected(
+            "0.1".to_owned(),
+            vec![session("session_1", "zeta.master", "queued")],
+            Vec::new(),
+            None,
+        );
+        let backend = TestBackend::new(80, 18);
+        let mut terminal = Terminal::new(backend).expect("terminal should initialize");
+
+        terminal
+            .draw(|frame| draw(frame, &app))
+            .expect("screen should draw");
+        let screen = terminal.backend().to_string();
+
+        assert!(screen.contains("Sessions"));
+        assert!(screen.contains("zeta.master · queued"));
+        assert!(!screen.contains("Timeline"));
+        assert!(!screen.contains("Message"));
+        assert!(screen.contains("Enter attach"));
+        assert!(screen.contains("n new"));
+    }
+
+    #[test]
+    fn enter_attaches_and_escape_returns_to_sessions() {
+        let selected_event = event(
+            "zeta.user_message",
+            serde_json::json!({"content": "selected progress"}),
+            "session_1",
+            "run_1",
+            1,
+        );
+        let other_event = event(
+            "zeta.user_message",
+            serde_json::json!({"content": "other progress"}),
+            "session_2",
+            "run_2",
+            2,
+        );
+        let mut app = App::connected(
+            "0.1".to_owned(),
+            vec![
+                session("session_1", "zeta.master", "running"),
+                session("session_2", "reviewer", "idle"),
+            ],
+            vec![selected_event, other_event],
+            Some(Cursor(2)),
+        );
+        let enter = TerminalEvent::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        let escape = TerminalEvent::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        let backend = TestBackend::new(80, 18);
+        let mut terminal = Terminal::new(backend).expect("terminal should initialize");
+
+        assert_eq!(app.handle_event(&enter), AppAction::None);
+        terminal
+            .draw(|frame| draw(frame, &app))
+            .expect("attached screen should draw");
+        let screen = terminal.backend().to_string();
+        assert!(screen.contains("zeta.master · running"));
+        assert!(screen.contains("selected progress"));
+        assert!(!screen.contains("other progress"));
+        assert!(!screen.contains("Sessions"));
+
+        assert_eq!(app.handle_event(&escape), AppAction::None);
+        terminal
+            .draw(|frame| draw(frame, &app))
+            .expect("detached screen should draw");
+        let screen = terminal.backend().to_string();
+        assert!(screen.contains("Sessions"));
+        assert!(!screen.contains("selected progress"));
+    }
+
+    #[test]
+    fn new_and_attached_composers_route_by_attachment() {
+        let mut app = App::connected(
+            "0.1".to_owned(),
+            vec![session("session_1", "zeta.master", "idle")],
+            Vec::new(),
+            None,
+        );
+        let new = TerminalEvent::Key(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE));
+        let compose = TerminalEvent::Key(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE));
+        let h = TerminalEvent::Key(KeyEvent::new(KeyCode::Char('h'), KeyModifiers::NONE));
+        let i = TerminalEvent::Key(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE));
+        let enter = TerminalEvent::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        assert_eq!(app.handle_event(&new), AppAction::None);
+        assert_eq!(app.handle_event(&h), AppAction::None);
+        assert_eq!(app.handle_event(&i), AppAction::None);
+        assert_eq!(app.handle_event(&enter), AppAction::Submit("hi".to_owned()));
+        assert_eq!(app.attached_session_id(), None);
+
+        assert_eq!(app.handle_event(&enter), AppAction::None);
+        assert_eq!(app.attached_session_id(), Some("session_1"));
+        assert_eq!(app.handle_event(&compose), AppAction::None);
+        assert_eq!(app.handle_event(&h), AppAction::None);
+        assert_eq!(app.handle_event(&i), AppAction::None);
+        assert_eq!(app.handle_event(&enter), AppAction::Submit("hi".to_owned()));
+        assert_eq!(app.attached_session_id(), Some("session_1"));
+    }
+
     #[test]
     fn runtime_user_message_folds_into_the_direct_request() {
         let runtime_message = event(
@@ -419,10 +604,13 @@ mod tests {
         );
         let app = App::connected(
             "0.1".to_owned(),
-            Vec::new(),
+            vec![session("session_1", "zeta.master", "running")],
             vec![runtime_message, request],
             Some(Cursor(2)),
         );
+        let mut app = app;
+        let enter = TerminalEvent::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(app.handle_event(&enter), AppAction::None);
 
         let timeline = app.timeline_events();
 
@@ -448,10 +636,13 @@ mod tests {
         );
         let app = App::connected(
             "0.1".to_owned(),
-            Vec::new(),
+            vec![session("session_1", "zeta.master", "running")],
             vec![first, retry],
             Some(Cursor(2)),
         );
+        let mut app = app;
+        let enter = TerminalEvent::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(app.handle_event(&enter), AppAction::None);
 
         assert_eq!(app.timeline_events().len(), 1);
     }
@@ -481,82 +672,23 @@ mod tests {
         );
         let app = App::connected(
             "0.1".to_owned(),
-            Vec::new(),
+            vec![session("session_1", "zeta.master", "running")],
             vec![request, changed, other_run],
             Some(Cursor(3)),
         );
+        let mut app = app;
+        let enter = TerminalEvent::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(app.handle_event(&enter), AppAction::None);
 
         assert_eq!(app.timeline_events().len(), 3);
     }
 
     #[test]
-    fn connected_timeline_renders_current_events() {
-        let event: Event = serde_json::from_value(serde_json::json!({
-            "id": "evt_123",
-            "event_type": "zeta.user_message",
-            "source": "user",
-            "payload": {"message": "hello from Zeta"},
-            "idempotency_key": null,
-            "caused_by": null,
-            "session_id": "default",
-            "run_id": "run_123",
-            "turn_id": null,
-            "timestamp_ms": 1_754_438_400_000_i64,
-            "cursor": 42
-        }))
-        .expect("event should parse");
-        let session: Session = serde_json::from_value(serde_json::json!({
-            "session_id": "session_123",
-            "agent_id": "zeta.master",
-            "status": "queued",
-            "cancellation_requested": false,
-            "active_run_id": null,
-            "queued_turns": 1,
-            "updated_at": "2026-08-07T12:00:00Z"
-        }))
-        .expect("session should parse");
-        let app = App::connected(
-            "0.1".to_owned(),
-            vec![session],
-            vec![event],
-            Some(Cursor(42)),
-        );
-        let backend = TestBackend::new(80, 18);
-        let mut terminal = Terminal::new(backend).expect("terminal should initialize");
-
-        terminal
-            .draw(|frame| draw(frame, &app))
-            .expect("screen should draw");
-        let screen = terminal.backend().to_string();
-
-        assert!(screen.contains("Zeta  connected · protocol 0.1 · cursor 42"));
-        assert!(screen.contains("Work"));
-        assert!(screen.contains("zeta.master · queued"));
-        assert!(screen.contains("Timeline"));
-        assert!(screen.contains("zeta.user_message"));
-        assert!(screen.contains("hello from Zeta"));
-        assert!(screen.contains("Message"));
-        assert!(screen.contains("q quit"));
-    }
-
-    #[test]
-    fn browse_mode_quits_but_composer_accepts_text() {
+    fn session_list_quits_and_ignores_non_key_events() {
         let mut app = App::connected("0.1".to_owned(), Vec::new(), Vec::new(), None);
         let q = TerminalEvent::Key(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE));
-        let escape = TerminalEvent::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
-        let compose = TerminalEvent::Key(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE));
-        let h = TerminalEvent::Key(KeyEvent::new(KeyCode::Char('h'), KeyModifiers::NONE));
-        let i = TerminalEvent::Key(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE));
-        let enter = TerminalEvent::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
-        assert_eq!(app.handle_event(&compose), AppAction::None);
-        assert_eq!(app.handle_event(&h), AppAction::None);
-        assert_eq!(app.handle_event(&i), AppAction::None);
-        assert_eq!(app.draft, "hi");
-        assert_eq!(app.handle_event(&enter), AppAction::Submit("hi".to_owned()));
-        assert!(app.draft.is_empty());
         assert_eq!(app.handle_event(&q), AppAction::Quit);
-        assert_eq!(app.handle_event(&escape), AppAction::Quit);
         assert_eq!(
             app.handle_event(&TerminalEvent::Resize(80, 24)),
             AppAction::None
@@ -564,24 +696,7 @@ mod tests {
     }
 
     #[test]
-    fn narrow_terminal_stacks_work_above_timeline() {
-        let app = App::connected("0.1".to_owned(), Vec::new(), Vec::new(), None);
-        let backend = TestBackend::new(40, 12);
-        let mut terminal = Terminal::new(backend).expect("terminal should initialize");
-
-        terminal
-            .draw(|frame| draw(frame, &app))
-            .expect("screen should draw");
-        let screen = terminal.backend().to_string();
-
-        assert!(screen.contains("Work"));
-        assert!(screen.contains("No sessions"));
-        assert!(screen.contains("Timeline"));
-        assert!(screen.contains("No events yet"));
-    }
-
-    #[test]
-    fn browse_mode_selects_the_session_that_receives_messages() {
+    fn session_list_navigation_does_not_attach() {
         let first: Session = serde_json::from_value(serde_json::json!({
             "session_id": "session_first",
             "agent_id": "zeta.master",
@@ -601,7 +716,9 @@ mod tests {
         assert_eq!(app.selected_session_id(), Some("session_first"));
         assert_eq!(app.handle_event(&down), AppAction::None);
         assert_eq!(app.selected_session_id(), Some("session_second"));
+        assert_eq!(app.attached_session_id(), None);
         assert_eq!(app.handle_event(&up), AppAction::None);
         assert_eq!(app.selected_session_id(), Some("session_first"));
+        assert_eq!(app.attached_session_id(), None);
     }
 }

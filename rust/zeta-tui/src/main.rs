@@ -154,7 +154,7 @@ async fn run() -> Result<(), BoxError> {
                         next_request_id += 1;
                         let idempotency_key = Uuid::new_v4().to_string();
                         let (method, params) = session_message_request(
-                            app.selected_session_id(),
+                            app.attached_session_id(),
                             &objective,
                             &idempotency_key,
                         );

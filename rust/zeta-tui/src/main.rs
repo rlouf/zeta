@@ -20,6 +20,7 @@ use uuid::Uuid;
 use crate::app::{App, AppAction, TerminalSession};
 use crate::wire::{
     EventsListResult, IncomingMessage, InitializeResult, RequestId, RpcRequest, SessionsListResult,
+    SubmitResult,
 };
 
 const MAX_JSONRPC_LINE_BYTES: usize = 1024 * 1024;
@@ -27,18 +28,18 @@ const REFRESH_INTERVAL: Duration = Duration::from_millis(500);
 
 type BoxError = Box<dyn Error>;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 enum RequestPurpose {
     RefreshSessions,
     RefreshEvents,
-    Submit,
+    Submit(String),
 }
 
 impl RequestPurpose {
-    fn is_refresh(self) -> bool {
+    fn is_refresh(&self) -> bool {
         match self {
             Self::RefreshSessions | Self::RefreshEvents => true,
-            Self::Submit => false,
+            Self::Submit(_) => false,
         }
     }
 }
@@ -153,17 +154,27 @@ async fn run() -> Result<(), BoxError> {
                         let request_id = RequestId(next_request_id);
                         next_request_id += 1;
                         let idempotency_key = Uuid::new_v4().to_string();
+                        let attached_session_id = app.attached_session_id().map(str::to_owned);
+                        app.submission_started(idempotency_key.clone(), objective.clone());
                         let (method, params) = session_message_request(
-                            app.attached_session_id(),
+                            attached_session_id.as_deref(),
                             &objective,
                             &idempotency_key,
                         );
-                        send_request(
+                        if let Err(error) = send_request(
                             &mut input,
                             &RpcRequest::new(request_id, method, params),
                         )
-                        .await?;
-                        let replaced = pending.insert(request_id, RequestPurpose::Submit);
+                        .await
+                        {
+                            app.submission_failed(&idempotency_key, &error.to_string());
+                            dirty = true;
+                            continue;
+                        }
+                        let replaced = pending.insert(
+                            request_id,
+                            RequestPurpose::Submit(idempotency_key),
+                        );
                         debug_assert!(replaced.is_none());
                     }
                 }
@@ -191,23 +202,35 @@ async fn run() -> Result<(), BoxError> {
                         if purpose.is_refresh() {
                             pending_refreshes -= 1;
                         }
-                        apply_response(&mut app, purpose, response.result)?;
+                        if let Err(error) = apply_response(&mut app, &purpose, response.result) {
+                            match &purpose {
+                                RequestPurpose::Submit(submission_id) => {
+                                    app.submission_failed(submission_id, &error.to_string());
+                                }
+                                RequestPurpose::RefreshSessions | RequestPurpose::RefreshEvents => {
+                                    return Err(error);
+                                }
+                            }
+                        }
                         dirty = true;
                     }
                     IncomingMessage::Failure(response) => {
                         validate_jsonrpc_version(&response.jsonrpc)?;
-                        let Some(_purpose) = pending.remove(&response.id) else {
+                        let Some(purpose) = pending.remove(&response.id) else {
                             return Err(io::Error::other(format!(
                                 "received error for unknown request {}",
                                 response.id.0
                             ))
                             .into());
                         };
-                        return Err(rpc_error(
+                        apply_failure(
+                            &mut app,
+                            purpose,
                             response.error.code,
                             &response.error.message,
                             response.error.data,
-                        ));
+                        )?;
+                        dirty = true;
                     }
                     IncomingMessage::Notification(notification) => {
                         validate_jsonrpc_version(&notification.jsonrpc)?;
@@ -350,7 +373,7 @@ fn events_list_params(cursor: Option<u64>) -> Value {
     params
 }
 
-fn apply_response(app: &mut App, purpose: RequestPurpose, result: Value) -> Result<(), BoxError> {
+fn apply_response(app: &mut App, purpose: &RequestPurpose, result: Value) -> Result<(), BoxError> {
     match purpose {
         RequestPurpose::RefreshSessions => {
             let sessions: SessionsListResult = serde_json::from_value(result)?;
@@ -360,17 +383,48 @@ fn apply_response(app: &mut App, purpose: RequestPurpose, result: Value) -> Resu
             let listed: EventsListResult = serde_json::from_value(result)?;
             app.append_events(listed.events, listed.next_cursor);
         }
-        RequestPurpose::Submit => {}
+        RequestPurpose::Submit(submission_id) => {
+            let submitted: SubmitResult = serde_json::from_value(result)?;
+            if submitted.status != "queued" {
+                return Err(io::Error::other(format!(
+                    "unexpected submission status {}",
+                    submitted.status
+                ))
+                .into());
+            }
+            app.submission_queued(submission_id, &submitted.event_id, &submitted.session_id);
+        }
     }
     Ok(())
+}
+
+fn apply_failure(
+    app: &mut App,
+    purpose: RequestPurpose,
+    code: i64,
+    message: &str,
+    data: Option<Value>,
+) -> Result<(), BoxError> {
+    let error = rpc_error(code, message, data);
+    match purpose {
+        RequestPurpose::Submit(submission_id) => {
+            app.submission_failed(&submission_id, &error.to_string());
+            Ok(())
+        }
+        RequestPurpose::RefreshSessions | RequestPurpose::RefreshEvents => Err(error),
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use serde_json::json;
 
-    use super::{RequestPurpose, apply_response, events_list_params, session_message_request};
-    use crate::app::App;
+    use crossterm::event::{Event as TerminalEvent, KeyCode, KeyEvent, KeyModifiers};
+
+    use super::{
+        RequestPurpose, apply_failure, apply_response, events_list_params, session_message_request,
+    };
+    use crate::app::{App, AppAction};
 
     #[test]
     fn events_list_continues_after_the_latest_cursor() {
@@ -387,13 +441,13 @@ mod tests {
 
         apply_response(
             &mut app,
-            RequestPurpose::RefreshEvents,
+            &RequestPurpose::RefreshEvents,
             json!({"events": [], "next_cursor": 42}),
         )
         .expect("event refresh should apply");
         apply_response(
             &mut app,
-            RequestPurpose::RefreshSessions,
+            &RequestPurpose::RefreshSessions,
             json!({
                 "sessions": [{
                     "session_id": "session_123",
@@ -416,6 +470,56 @@ mod tests {
         assert_eq!(
             params,
             json!({"message": "hello", "idempotency_key": "message-1"})
+        );
+    }
+
+    #[test]
+    fn submit_response_moves_a_starting_submission_into_its_session() {
+        let mut app = App::connected("0.1".to_owned(), Vec::new(), Vec::new(), None);
+        app.submission_started("message-1".to_owned(), "hello".to_owned());
+
+        apply_response(
+            &mut app,
+            &RequestPurpose::Submit("message-1".to_owned()),
+            json!({
+                "event_id": "evt_1",
+                "session_id": "session_1",
+                "status": "queued"
+            }),
+        )
+        .expect("submit response should apply");
+
+        assert_eq!(app.attached_session_id(), Some("session_1"));
+    }
+
+    #[test]
+    fn submit_rpc_failure_is_retryable_while_refresh_failure_remains_fatal() {
+        let mut app = App::connected("0.1".to_owned(), Vec::new(), Vec::new(), None);
+        app.submission_started("message-1".to_owned(), "hello".to_owned());
+
+        apply_failure(
+            &mut app,
+            RequestPurpose::Submit("message-1".to_owned()),
+            -32_602,
+            "session unavailable",
+            None,
+        )
+        .expect("submit failure should stay inside the app");
+        let enter = TerminalEvent::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(
+            app.handle_event(&enter),
+            AppAction::Submit("hello".to_owned())
+        );
+
+        assert!(
+            apply_failure(
+                &mut app,
+                RequestPurpose::RefreshEvents,
+                -32_603,
+                "internal error",
+                None,
+            )
+            .is_err()
         );
     }
 

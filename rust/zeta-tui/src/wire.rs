@@ -96,6 +96,14 @@ pub(super) struct Event {
 }
 
 impl Event {
+    pub(super) fn id(&self) -> &str {
+        &self.id.0
+    }
+
+    pub(super) fn idempotency_key(&self) -> Option<&str> {
+        self.idempotency_key.as_deref()
+    }
+
     pub(super) fn event_type(&self) -> &str {
         &self.event_type
     }
@@ -189,13 +197,20 @@ pub(super) struct SessionsListResult {
     pub(super) sessions: Vec<Session>,
 }
 
+#[derive(Debug, Deserialize)]
+pub(super) struct SubmitResult {
+    pub(super) event_id: String,
+    pub(super) session_id: String,
+    pub(super) status: String,
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json::json;
 
     use super::{
         Cursor, Event, EventId, EventsListResult, IncomingMessage, InitializeResult, RequestId,
-        RpcRequest, RunId, SessionId, SessionsListResult,
+        RpcRequest, RunId, SessionId, SessionsListResult, SubmitResult,
     };
 
     #[test]
@@ -322,5 +337,22 @@ mod tests {
         assert_eq!(result.sessions[0].session_id(), "session_123");
         assert_eq!(result.sessions[0].agent_id(), "zeta.master");
         assert_eq!(result.sessions[0].status(), "queued");
+    }
+
+    #[test]
+    fn submit_result_identifies_the_durable_event_and_session() {
+        let result: SubmitResult = serde_json::from_value(json!({
+            "event_id": "evt_123",
+            "queue_item_id": "queue_123",
+            "agent_id": "zeta.master",
+            "session_id": "session_123",
+            "run_id": "run_123",
+            "status": "queued"
+        }))
+        .expect("submit result should parse");
+
+        assert_eq!(result.event_id, "evt_123");
+        assert_eq!(result.session_id, "session_123");
+        assert_eq!(result.status, "queued");
     }
 }

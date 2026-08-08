@@ -30,6 +30,7 @@ pub(super) struct App {
     timeline_mode: TimelineMode,
     timeline_position: TimelinePosition,
     timeline_max_offset: usize,
+    submissions: Vec<Submission>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -67,6 +68,31 @@ struct DraftLayout {
     lines: Vec<String>,
     cursor_row: usize,
     cursor_column: usize,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct SubmissionId(String);
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum SubmissionTarget {
+    NewSession,
+    Session(String),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum SubmissionState {
+    Sending,
+    Queued,
+    Failed(String),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Submission {
+    id: SubmissionId,
+    target: SubmissionTarget,
+    message: String,
+    state: SubmissionState,
+    event_id: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -112,6 +138,11 @@ impl Draft {
     fn insert(&mut self, text: &str) {
         self.text.insert_str(self.cursor, text);
         self.cursor += text.len();
+    }
+
+    fn replace(&mut self, text: String) {
+        self.cursor = text.len();
+        self.text = text;
     }
 
     fn insert_char(&mut self, character: char) {
@@ -263,6 +294,7 @@ impl App {
             timeline_mode: TimelineMode::Semantic,
             timeline_position: TimelinePosition::Follow,
             timeline_max_offset: 0,
+            submissions: Vec::new(),
         }
     }
 
@@ -406,9 +438,79 @@ impl App {
 
     pub(super) fn append_events(&mut self, events: Vec<Event>, cursor: Option<Cursor>) {
         for event in events {
+            let event_id = event.id();
+            let durable_submission_id = if event.is_direct_message_request() {
+                event
+                    .idempotency_key()
+                    .and_then(|key| key.rsplit(':').next())
+            } else {
+                None
+            };
+            self.submissions.retain(|submission| {
+                submission.event_id.as_deref() != Some(event_id)
+                    && durable_submission_id != Some(&submission.id.0)
+            });
             self.events.push(event);
         }
         self.cursor = cursor;
+    }
+
+    pub(super) fn submission_started(&mut self, id: String, message: String) {
+        let target = match self.attached_session_id() {
+            Some(session_id) => SubmissionTarget::Session(session_id.to_owned()),
+            None => SubmissionTarget::NewSession,
+        };
+        self.submissions.retain(|submission| {
+            let failed = match &submission.state {
+                SubmissionState::Failed(_) => true,
+                SubmissionState::Sending | SubmissionState::Queued => false,
+            };
+            submission.target != target || submission.message != message || !failed
+        });
+        self.submissions.push(Submission {
+            id: SubmissionId(id),
+            target,
+            message,
+            state: SubmissionState::Sending,
+            event_id: None,
+        });
+        self.timeline_position = TimelinePosition::Follow;
+    }
+
+    pub(super) fn submission_queued(&mut self, id: &str, event_id: &str, session_id: &str) {
+        let event_exists = self.events.iter().any(|event| event.id() == event_id);
+        let Some(submission) = self
+            .submissions
+            .iter_mut()
+            .find(|submission| submission.id.0 == id)
+        else {
+            return;
+        };
+        let started_session = submission.target == SubmissionTarget::NewSession;
+        submission.target = SubmissionTarget::Session(session_id.to_owned());
+        submission.state = SubmissionState::Queued;
+        submission.event_id = Some(event_id.to_owned());
+        if event_exists {
+            self.submissions
+                .retain(|submission| submission.event_id.as_deref() != Some(event_id));
+        }
+        if started_session {
+            self.view = View::Attached(session_id.to_owned());
+            self.timeline_position = TimelinePosition::Follow;
+        }
+    }
+
+    pub(super) fn submission_failed(&mut self, id: &str, error: &str) {
+        let Some(submission) = self
+            .submissions
+            .iter_mut()
+            .find(|submission| submission.id.0 == id)
+        else {
+            return;
+        };
+        submission.state = SubmissionState::Failed(single_line(error));
+        self.draft.replace(submission.message.clone());
+        self.mode = Mode::Compose;
     }
 
     #[allow(clippy::question_mark)]
@@ -541,10 +643,44 @@ impl App {
 
     fn timeline_items(&self) -> Vec<TimelineItem> {
         let events = self.timeline_events();
-        match self.timeline_mode {
+        let mut items = match self.timeline_mode {
             TimelineMode::Raw => raw_timeline_items(&events),
             TimelineMode::Semantic => semantic_timeline_items(&events),
+        };
+        if self.timeline_mode == TimelineMode::Raw {
+            return items;
         }
+        let Some(session_id) = self.attached_session_id() else {
+            return items;
+        };
+        for submission in &self.submissions {
+            let SubmissionTarget::Session(target_session_id) = &submission.target else {
+                continue;
+            };
+            if target_session_id != session_id {
+                continue;
+            }
+            items.push(TimelineItem::User(submission.message.clone()));
+            match &submission.state {
+                SubmissionState::Sending => {
+                    push_activity(&mut items, "·", "Sending…".to_owned(), Color::Yellow)
+                }
+                SubmissionState::Queued => {
+                    push_activity(&mut items, "·", "Queued".to_owned(), Color::Yellow);
+                }
+                SubmissionState::Failed(error) => {
+                    push_activity(&mut items, "×", format!("Failed — {error}"), Color::Red)
+                }
+            }
+        }
+        items
+    }
+
+    fn new_session_submission(&self) -> Option<&Submission> {
+        self.submissions
+            .iter()
+            .rev()
+            .find(|submission| submission.target == SubmissionTarget::NewSession)
     }
 
     fn timeline_offset(&mut self, row_count: usize, viewport_height: usize) -> usize {
@@ -1005,6 +1141,33 @@ fn render_sessions(frame: &mut Frame<'_>, area: Rect, app: &App) {
         areas[0],
     );
 
+    let mut sessions_area = areas[1];
+    if let Some(submission) = app.new_session_submission() {
+        let submission_areas =
+            Layout::vertical([Constraint::Length(3), Constraint::Min(1)]).split(sessions_area);
+        let state = match &submission.state {
+            SubmissionState::Sending => {
+                Span::styled("· Starting session…", Style::default().fg(Color::Yellow))
+            }
+            SubmissionState::Queued => Span::styled("· Queued", Style::default().fg(Color::Yellow)),
+            SubmissionState::Failed(error) => Span::styled(
+                format!("× Failed — {error}"),
+                Style::default().fg(Color::Red),
+            ),
+        };
+        frame.render_widget(
+            Paragraph::new(vec![
+                Line::from(Span::styled(
+                    ellipsize(&submission.message, usize::from(submission_areas[0].width)),
+                    Style::default().add_modifier(Modifier::BOLD),
+                )),
+                Line::from(state),
+            ]),
+            submission_areas[0],
+        );
+        sessions_area = submission_areas[1];
+    }
+
     if app.sessions.is_empty() {
         let empty = Paragraph::new(vec![
             Line::from(Span::styled(
@@ -1016,7 +1179,7 @@ fn render_sessions(frame: &mut Frame<'_>, area: Rect, app: &App) {
                 Style::default().fg(Color::DarkGray),
             )),
         ]);
-        frame.render_widget(empty, areas[1]);
+        frame.render_widget(empty, sessions_area);
         return;
     }
 
@@ -1031,7 +1194,7 @@ fn render_sessions(frame: &mut Frame<'_>, area: Rect, app: &App) {
             Style::default().add_modifier(Modifier::BOLD)
         };
         let title = app.session_title(session.session_id());
-        let title = ellipsize(&title, usize::from(areas[1].width.saturating_sub(4)));
+        let title = ellipsize(&title, usize::from(sessions_area.width.saturating_sub(4)));
         rows.push(ListItem::new(vec![
             Line::from(Span::styled(title, title_style)),
             Line::from(vec![
@@ -1053,7 +1216,7 @@ fn render_sessions(frame: &mut Frame<'_>, area: Rect, app: &App) {
         .highlight_style(Style::default().add_modifier(Modifier::BOLD));
     let mut state = ListState::default();
     state.select(app.selected_session);
-    frame.render_stateful_widget(sessions, areas[1], &mut state);
+    frame.render_stateful_widget(sessions, sessions_area, &mut state);
 }
 
 fn render_timeline(frame: &mut Frame<'_>, area: Rect, app: &mut App) {
@@ -1431,12 +1594,23 @@ mod tests {
         run_id: &str,
         cursor: u64,
     ) -> Event {
+        event_with_idempotency(event_type, payload, session_id, run_id, cursor, None)
+    }
+
+    fn event_with_idempotency(
+        event_type: &str,
+        payload: serde_json::Value,
+        session_id: &str,
+        run_id: &str,
+        cursor: u64,
+        idempotency_key: Option<&str>,
+    ) -> Event {
         serde_json::from_value(serde_json::json!({
             "id": format!("evt_{cursor}"),
             "event_type": event_type,
             "source": "user",
             "payload": payload,
-            "idempotency_key": null,
+            "idempotency_key": idempotency_key,
             "caused_by": null,
             "session_id": session_id,
             "run_id": run_id,
@@ -1976,6 +2150,144 @@ mod tests {
         assert!(screen.contains("first line wraps"));
         assert!(screen.contains("second"));
         assert!(terminal.get_cursor_position().is_ok());
+    }
+
+    #[test]
+    fn attached_submission_echoes_sending_and_queued_before_durable_reconciliation() {
+        let mut app = App::connected(
+            "0.1".to_owned(),
+            vec![session("session_1", "zeta.master", "idle")],
+            Vec::new(),
+            None,
+        );
+        let enter = TerminalEvent::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(app.handle_event(&enter), AppAction::None);
+
+        app.submission_started("client-1".to_owned(), "hello".to_owned());
+        assert_eq!(
+            app.timeline_items(),
+            vec![
+                super::TimelineItem::User("hello".to_owned()),
+                super::TimelineItem::Activity {
+                    glyph: "·",
+                    text: "Sending…".to_owned(),
+                    color: ratatui::style::Color::Yellow,
+                },
+            ]
+        );
+
+        app.submission_queued("client-1", "evt_2", "session_1");
+        assert_eq!(
+            app.timeline_items(),
+            vec![
+                super::TimelineItem::User("hello".to_owned()),
+                super::TimelineItem::Activity {
+                    glyph: "·",
+                    text: "Queued".to_owned(),
+                    color: ratatui::style::Color::Yellow,
+                },
+            ]
+        );
+
+        let request = event(
+            "session.message.requested",
+            serde_json::json!({"message": "hello"}),
+            "session_1",
+            "run_1",
+            2,
+        );
+        app.append_events(vec![request], Some(Cursor(2)));
+        assert_eq!(
+            app.timeline_items(),
+            vec![super::TimelineItem::User("hello".to_owned())]
+        );
+    }
+
+    #[test]
+    fn durable_submission_reconciles_even_when_its_event_arrives_before_the_rpc_response() {
+        let mut app = App::connected(
+            "0.1".to_owned(),
+            vec![session("session_1", "zeta.master", "idle")],
+            Vec::new(),
+            None,
+        );
+        let enter = TerminalEvent::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(app.handle_event(&enter), AppAction::None);
+        app.submission_started("client-1".to_owned(), "hello".to_owned());
+
+        let request = event_with_idempotency(
+            "session.message.requested",
+            serde_json::json!({"message": "hello"}),
+            "session_1",
+            "run_1",
+            2,
+            Some("session.message:session_1:client-1"),
+        );
+        app.append_events(vec![request], Some(Cursor(2)));
+
+        assert_eq!(
+            app.timeline_items(),
+            vec![super::TimelineItem::User("hello".to_owned())]
+        );
+        app.submission_queued("client-1", "evt_2", "session_1");
+        assert_eq!(
+            app.timeline_items(),
+            vec![super::TimelineItem::User("hello".to_owned())]
+        );
+    }
+
+    #[test]
+    fn failed_submission_stays_inline_and_restores_the_draft_for_retry() {
+        let mut app = App::connected(
+            "0.1".to_owned(),
+            vec![session("session_1", "zeta.master", "idle")],
+            Vec::new(),
+            None,
+        );
+        let enter = TerminalEvent::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(app.handle_event(&enter), AppAction::None);
+
+        app.submission_started("client-1".to_owned(), "try again".to_owned());
+        app.submission_failed("client-1", "session is unavailable");
+        let backend = TestBackend::new(80, 18);
+        let mut terminal = Terminal::new(backend).expect("terminal should initialize");
+        terminal
+            .draw(|frame| draw(frame, &mut app))
+            .expect("failed submission should draw");
+        let screen = terminal.backend().to_string();
+
+        assert!(screen.contains("try again"));
+        assert!(screen.contains("Failed — session is unavailable"));
+        assert!(screen.contains("enter send"));
+        assert!(terminal.get_cursor_position().is_ok());
+    }
+
+    #[test]
+    fn new_submission_shows_starting_state_then_attaches_to_the_created_session() {
+        let mut app = App::connected("0.1".to_owned(), Vec::new(), Vec::new(), None);
+        app.submission_started("client-1".to_owned(), "build it".to_owned());
+        let backend = TestBackend::new(80, 18);
+        let mut terminal = Terminal::new(backend).expect("terminal should initialize");
+        terminal
+            .draw(|frame| draw(frame, &mut app))
+            .expect("starting submission should draw");
+
+        assert!(terminal.backend().to_string().contains("Starting session…"));
+
+        app.submission_queued("client-1", "evt_1", "session_new");
+
+        assert_eq!(app.attached_session_id(), Some("session_new"));
+        assert_eq!(
+            app.timeline_items(),
+            vec![
+                super::TimelineItem::User("build it".to_owned()),
+                super::TimelineItem::Activity {
+                    glyph: "·",
+                    text: "Queued".to_owned(),
+                    color: ratatui::style::Color::Yellow,
+                },
+            ]
+        );
     }
 
     #[test]

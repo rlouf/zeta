@@ -131,7 +131,7 @@ async fn run() -> Result<(), BoxError> {
 
     loop {
         if dirty {
-            terminal.draw(&app)?;
+            terminal.draw(&mut app)?;
             dirty = false;
         }
 

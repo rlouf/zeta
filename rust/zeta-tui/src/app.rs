@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::io;
 
-use crossterm::event::{Event as TerminalEvent, KeyCode, KeyEventKind};
+use crossterm::event::{Event as TerminalEvent, KeyCode, KeyEventKind, KeyModifiers};
 use crossterm::execute;
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
@@ -14,6 +14,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
 use serde_json::Value;
+use unicode_width::UnicodeWidthChar;
 
 use crate::wire::{Cursor, Event, Session};
 
@@ -25,7 +26,7 @@ pub(super) struct App {
     cursor: Option<Cursor>,
     view: View,
     mode: Mode,
-    draft: String,
+    draft: Draft,
     timeline_mode: TimelineMode,
     timeline_position: TimelinePosition,
     timeline_max_offset: usize,
@@ -53,6 +54,19 @@ enum TimelineMode {
 enum TimelinePosition {
     Follow,
     Offset(usize),
+}
+
+#[derive(Debug, Default, PartialEq, Eq)]
+struct Draft {
+    text: String,
+    cursor: usize,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct DraftLayout {
+    lines: Vec<String>,
+    cursor_row: usize,
+    cursor_column: usize,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -89,6 +103,146 @@ pub(super) struct TerminalSession {
     active: bool,
 }
 
+impl Draft {
+    fn clear(&mut self) {
+        self.text.clear();
+        self.cursor = 0;
+    }
+
+    fn insert(&mut self, text: &str) {
+        self.text.insert_str(self.cursor, text);
+        self.cursor += text.len();
+    }
+
+    fn insert_char(&mut self, character: char) {
+        self.text.insert(self.cursor, character);
+        self.cursor += character.len_utf8();
+    }
+
+    fn move_left(&mut self) {
+        self.cursor = self.previous_boundary();
+    }
+
+    fn move_right(&mut self) {
+        let Some(character) = self.text[self.cursor..].chars().next() else {
+            return;
+        };
+        self.cursor += character.len_utf8();
+    }
+
+    fn move_to_start(&mut self) {
+        self.cursor = 0;
+    }
+
+    fn move_to_end(&mut self) {
+        self.cursor = self.text.len();
+    }
+
+    fn delete_backward(&mut self) {
+        let start = self.previous_boundary();
+        self.text.replace_range(start..self.cursor, "");
+        self.cursor = start;
+    }
+
+    fn delete_forward(&mut self) {
+        let Some(character) = self.text[self.cursor..].chars().next() else {
+            return;
+        };
+        let end = self.cursor + character.len_utf8();
+        self.text.replace_range(self.cursor..end, "");
+    }
+
+    fn delete_word_backward(&mut self) {
+        let end = self.cursor;
+        let mut start = end;
+        while let Some((index, character)) = self.text[..start].char_indices().next_back() {
+            if !character.is_whitespace() {
+                break;
+            }
+            start = index;
+        }
+        while let Some((index, character)) = self.text[..start].char_indices().next_back() {
+            if character.is_whitespace() {
+                break;
+            }
+            start = index;
+        }
+        while let Some((index, character)) = self.text[..start].char_indices().next_back() {
+            if character == '\n' || !character.is_whitespace() {
+                break;
+            }
+            start = index;
+        }
+        self.text.replace_range(start..end, "");
+        self.cursor = start;
+    }
+
+    fn trimmed(&self) -> &str {
+        self.text.trim()
+    }
+
+    fn is_empty(&self) -> bool {
+        self.text.is_empty()
+    }
+
+    fn layout(&self, width: usize) -> DraftLayout {
+        let width = width.max(1);
+        let mut lines = vec![String::new()];
+        let mut row = 0;
+        let mut column = 0;
+        let mut cursor_row = 0;
+        let mut cursor_column = 0;
+
+        for (index, character) in self.text.char_indices() {
+            if index == self.cursor {
+                cursor_row = row;
+                cursor_column = column;
+            }
+            if character == '\n' {
+                lines.push(String::new());
+                row += 1;
+                column = 0;
+                continue;
+            }
+            let character_width = character.width().unwrap_or(0);
+            if column > 0 && column + character_width > width {
+                lines.push(String::new());
+                row += 1;
+                column = 0;
+                if index == self.cursor {
+                    cursor_row = row;
+                    cursor_column = column;
+                }
+            }
+            lines[row].push(character);
+            column += character_width;
+        }
+        if self.cursor == self.text.len() {
+            if column >= width {
+                lines.push(String::new());
+                cursor_row = row + 1;
+                cursor_column = 0;
+            } else {
+                cursor_row = row;
+                cursor_column = column;
+            }
+        }
+
+        DraftLayout {
+            lines,
+            cursor_row,
+            cursor_column,
+        }
+    }
+
+    fn previous_boundary(&self) -> usize {
+        let Some((index, _)) = self.text[..self.cursor].char_indices().next_back() else {
+            return 0;
+        };
+        index
+    }
+}
+
 impl App {
     pub(super) fn connected(
         protocol: String,
@@ -105,7 +259,7 @@ impl App {
             cursor,
             view: View::Sessions,
             mode: Mode::Browse,
-            draft: String::new(),
+            draft: Draft::default(),
             timeline_mode: TimelineMode::Semantic,
             timeline_position: TimelinePosition::Follow,
             timeline_max_offset: 0,
@@ -113,6 +267,12 @@ impl App {
     }
 
     pub(super) fn handle_event(&mut self, event: &TerminalEvent) -> AppAction {
+        if self.mode == Mode::Compose
+            && let TerminalEvent::Paste(text) = event
+        {
+            self.draft.insert(text);
+            return AppAction::None;
+        }
         let TerminalEvent::Key(key) = event else {
             return AppAction::None;
         };
@@ -185,7 +345,7 @@ impl App {
                     return AppAction::None;
                 }
                 if key.code == KeyCode::Enter {
-                    let message = self.draft.trim();
+                    let message = self.draft.trimmed();
                     if message.is_empty() {
                         return AppAction::None;
                     }
@@ -194,12 +354,43 @@ impl App {
                     self.mode = Mode::Browse;
                     return AppAction::Submit(message);
                 }
-                if key.code == KeyCode::Backspace {
-                    self.draft.pop();
+                if key.code == KeyCode::Left {
+                    self.draft.move_left();
                     return AppAction::None;
                 }
-                if let KeyCode::Char(character) = key.code {
-                    self.draft.push(character);
+                if key.code == KeyCode::Right {
+                    self.draft.move_right();
+                    return AppAction::None;
+                }
+                if key.code == KeyCode::Home {
+                    self.draft.move_to_start();
+                    return AppAction::None;
+                }
+                if key.code == KeyCode::End {
+                    self.draft.move_to_end();
+                    return AppAction::None;
+                }
+                if key.code == KeyCode::Backspace {
+                    if key.modifiers.contains(KeyModifiers::ALT) {
+                        self.draft.delete_word_backward();
+                    } else {
+                        self.draft.delete_backward();
+                    }
+                    return AppAction::None;
+                }
+                if key.code == KeyCode::Delete {
+                    self.draft.delete_forward();
+                    return AppAction::None;
+                }
+                if key.code == KeyCode::Char('w') && key.modifiers.contains(KeyModifiers::CONTROL) {
+                    self.draft.delete_word_backward();
+                    return AppAction::None;
+                }
+                if let KeyCode::Char(character) = key.code
+                    && !key.modifiers.contains(KeyModifiers::CONTROL)
+                    && !key.modifiers.contains(KeyModifiers::SUPER)
+                {
+                    self.draft.insert_char(character);
                 }
                 AppAction::None
             }
@@ -396,6 +587,18 @@ impl App {
             | (View::Attached(_), Mode::Browse)
             | (View::Attached(_), Mode::Compose) => true,
         }
+    }
+
+    fn composer_height(&self, width: u16) -> u16 {
+        if !self.shows_composer() {
+            return 0;
+        }
+        if self.mode == Mode::Browse || self.draft.is_empty() {
+            return 2;
+        }
+        let input_width = usize::from(width.saturating_sub(2));
+        let line_count = self.draft.layout(input_width).lines.len().clamp(1, 4);
+        u16::try_from(line_count + 1).unwrap_or(5)
     }
 
     fn select_next_session(&mut self) {
@@ -772,7 +975,7 @@ impl Drop for TerminalSession {
 
 pub(super) fn draw(frame: &mut Frame<'_>, app: &mut App) {
     let area = padded_area(frame.area());
-    let composer_height = if app.shows_composer() { 3 } else { 0 };
+    let composer_height = app.composer_height(area.width);
     let areas = Layout::vertical([
         Constraint::Length(2),
         Constraint::Min(3),
@@ -969,28 +1172,56 @@ fn render_composer(frame: &mut Frame<'_>, area: Rect, app: &App) {
         .borders(Borders::TOP)
         .border_style(border_style);
     let inner = block.inner(area);
-    let line = if composing {
-        Line::from(vec![
-            Span::styled("› ", Style::default().fg(Color::Cyan)),
-            Span::raw(app.draft.clone()),
-        ])
-    } else {
-        Line::from(Span::styled(
+    if !composing {
+        let line = Line::from(Span::styled(
             "› Message Zeta…",
             Style::default().fg(Color::DarkGray),
-        ))
-    };
-    frame.render_widget(Paragraph::new(line).block(block), area);
-
-    if composing {
-        let draft_width = u16::try_from(app.draft.chars().count()).unwrap_or(u16::MAX);
-        let cursor_x = inner
-            .x
-            .saturating_add(2)
-            .saturating_add(draft_width)
-            .min(inner.right().saturating_sub(1));
-        frame.set_cursor_position((cursor_x, inner.y));
+        ));
+        frame.render_widget(Paragraph::new(line).block(block), area);
+        return;
     }
+
+    if app.draft.is_empty() {
+        let prompt = match &app.view {
+            View::Sessions => "What should Zeta do?",
+            View::Attached(_) => "Message Zeta…",
+        };
+        let line = Line::from(vec![
+            Span::styled("› ", Style::default().fg(Color::Cyan)),
+            Span::styled(prompt, Style::default().fg(Color::DarkGray)),
+        ]);
+        frame.render_widget(Paragraph::new(line).block(block), area);
+        frame.set_cursor_position((inner.x.saturating_add(2), inner.y));
+        return;
+    }
+
+    let input_width = usize::from(inner.width.saturating_sub(2));
+    let layout = app.draft.layout(input_width);
+    let visible_height = usize::from(inner.height).max(1);
+    let latest_start = layout.lines.len().saturating_sub(visible_height);
+    let start = layout
+        .cursor_row
+        .saturating_sub(visible_height.saturating_sub(1))
+        .min(latest_start);
+    let mut lines = Vec::new();
+    for line in layout.lines.iter().skip(start).take(visible_height) {
+        lines.push(Line::from(vec![
+            Span::styled("› ", Style::default().fg(Color::Cyan)),
+            Span::raw(line.clone()),
+        ]));
+    }
+    frame.render_widget(Paragraph::new(lines).block(block), area);
+
+    let cursor_x = inner
+        .x
+        .saturating_add(2)
+        .saturating_add(u16::try_from(layout.cursor_column).unwrap_or(u16::MAX))
+        .min(inner.right().saturating_sub(1));
+    let cursor_y = inner
+        .y
+        .saturating_add(u16::try_from(layout.cursor_row.saturating_sub(start)).unwrap_or(u16::MAX))
+        .min(inner.bottom().saturating_sub(1));
+    frame.set_cursor_position((cursor_x, cursor_y));
 }
 
 fn footer_line(app: &App) -> Line<'static> {
@@ -1470,7 +1701,7 @@ mod tests {
             .expect("screen should draw");
         let screen = terminal.backend().to_string();
         assert!(screen.contains("row-11-xxxxxxxxxxxxxxxxxxxxxxxx"));
-        assert!(!screen.contains("row-05-xxxxxxxxxxxxxxxxxxxxxxxx"));
+        assert!(!screen.contains("row-04-xxxxxxxxxxxxxxxxxxxxxxxx"));
 
         let up = TerminalEvent::Key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
         assert_eq!(app.handle_event(&up), AppAction::None);
@@ -1478,7 +1709,7 @@ mod tests {
             .draw(|frame| draw(frame, &mut app))
             .expect("screen should draw");
         let screen = terminal.backend().to_string();
-        assert!(screen.contains("row-05-xxxxxxxxxxxxxxxxxxxxxxxx"));
+        assert!(screen.contains("row-04-xxxxxxxxxxxxxxxxxxxxxxxx"));
         assert!(screen.contains("row-11-xxxxxxxxxxxxxxxxxxxxxxxx"));
 
         let completed = event(
@@ -1493,7 +1724,7 @@ mod tests {
             .draw(|frame| draw(frame, &mut app))
             .expect("screen should draw");
         let screen = terminal.backend().to_string();
-        assert!(screen.contains("row-05-xxxxxxxxxxxxxxxxxxxxxxxx"));
+        assert!(screen.contains("row-04-xxxxxxxxxxxxxxxxxxxxxxxx"));
         assert!(!screen.contains("Completed"));
 
         let down = TerminalEvent::Key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
@@ -1639,6 +1870,112 @@ mod tests {
         assert_eq!(app.handle_event(&i), AppAction::None);
         assert_eq!(app.handle_event(&enter), AppAction::Submit("hi".to_owned()));
         assert_eq!(app.attached_session_id(), Some("session_1"));
+    }
+
+    #[test]
+    fn composer_edits_utf8_at_the_cursor_and_preserves_multiline_paste() {
+        let mut app = App::connected("0.1".to_owned(), Vec::new(), Vec::new(), None);
+        let new = TerminalEvent::Key(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE));
+        let a = TerminalEvent::Key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE));
+        let c = TerminalEvent::Key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE));
+        let accent = TerminalEvent::Key(KeyEvent::new(KeyCode::Char('é'), KeyModifiers::NONE));
+        let emoji = TerminalEvent::Key(KeyEvent::new(KeyCode::Char('🙂'), KeyModifiers::NONE));
+        let left = TerminalEvent::Key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE));
+        let home = TerminalEvent::Key(KeyEvent::new(KeyCode::Home, KeyModifiers::NONE));
+        let end = TerminalEvent::Key(KeyEvent::new(KeyCode::End, KeyModifiers::NONE));
+        let delete = TerminalEvent::Key(KeyEvent::new(KeyCode::Delete, KeyModifiers::NONE));
+        let delete_word =
+            TerminalEvent::Key(KeyEvent::new(KeyCode::Char('w'), KeyModifiers::CONTROL));
+        let enter = TerminalEvent::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        assert_eq!(app.handle_event(&new), AppAction::None);
+        assert_eq!(app.handle_event(&a), AppAction::None);
+        assert_eq!(app.handle_event(&c), AppAction::None);
+        assert_eq!(app.handle_event(&left), AppAction::None);
+        assert_eq!(app.handle_event(&accent), AppAction::None);
+        assert_eq!(app.handle_event(&home), AppAction::None);
+        assert_eq!(app.handle_event(&delete), AppAction::None);
+        assert_eq!(app.handle_event(&end), AppAction::None);
+        assert_eq!(
+            app.handle_event(&TerminalEvent::Paste("\nnext word".to_owned())),
+            AppAction::None
+        );
+        assert_eq!(app.handle_event(&delete_word), AppAction::None);
+        assert_eq!(app.handle_event(&emoji), AppAction::None);
+
+        assert_eq!(
+            app.handle_event(&enter),
+            AppAction::Submit("éc\nnext🙂".to_owned())
+        );
+    }
+
+    #[test]
+    fn composer_backspace_deletes_before_the_cursor_and_cancel_clears_the_draft() {
+        let mut app = App::connected("0.1".to_owned(), Vec::new(), Vec::new(), None);
+        let new = TerminalEvent::Key(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE));
+        let a = TerminalEvent::Key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE));
+        let b = TerminalEvent::Key(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::NONE));
+        let left = TerminalEvent::Key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE));
+        let backspace = TerminalEvent::Key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
+        let escape = TerminalEvent::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        let enter = TerminalEvent::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        assert_eq!(app.handle_event(&new), AppAction::None);
+        assert_eq!(app.handle_event(&a), AppAction::None);
+        assert_eq!(app.handle_event(&b), AppAction::None);
+        assert_eq!(app.handle_event(&left), AppAction::None);
+        assert_eq!(app.handle_event(&backspace), AppAction::None);
+        assert_eq!(app.handle_event(&enter), AppAction::Submit("b".to_owned()));
+
+        assert_eq!(app.handle_event(&new), AppAction::None);
+        assert_eq!(app.handle_event(&a), AppAction::None);
+        assert_eq!(app.handle_event(&escape), AppAction::None);
+        assert_eq!(app.handle_event(&new), AppAction::None);
+        assert_eq!(app.handle_event(&enter), AppAction::None);
+    }
+
+    #[test]
+    fn composer_renders_contextual_prompt_and_cursor_for_wrapped_input() {
+        let mut app = App::connected(
+            "0.1".to_owned(),
+            vec![session("session_1", "zeta.master", "idle")],
+            Vec::new(),
+            None,
+        );
+        let new = TerminalEvent::Key(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE));
+        let enter = TerminalEvent::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        let compose = TerminalEvent::Key(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE));
+        let escape = TerminalEvent::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        let backend = TestBackend::new(36, 14);
+        let mut terminal = Terminal::new(backend).expect("terminal should initialize");
+
+        assert_eq!(app.handle_event(&new), AppAction::None);
+        terminal
+            .draw(|frame| draw(frame, &mut app))
+            .expect("new-session composer should draw");
+        assert!(
+            terminal
+                .backend()
+                .to_string()
+                .contains("What should Zeta do?")
+        );
+
+        assert_eq!(app.handle_event(&escape), AppAction::None);
+        assert_eq!(app.handle_event(&enter), AppAction::None);
+        assert_eq!(app.handle_event(&compose), AppAction::None);
+        assert_eq!(
+            app.handle_event(&TerminalEvent::Paste(
+                "first line wraps across the composer\nsecond".to_owned()
+            )),
+            AppAction::None
+        );
+        terminal
+            .draw(|frame| draw(frame, &mut app))
+            .expect("attached composer should draw");
+        let screen = terminal.backend().to_string();
+        assert!(screen.contains("first line wraps"));
+        assert!(screen.contains("second"));
+        assert!(terminal.get_cursor_position().is_ok());
     }
 
     #[test]

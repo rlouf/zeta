@@ -3,9 +3,6 @@
 import asyncio
 import json
 import logging
-import os
-import sys
-import sysconfig
 import threading
 import tomllib
 from collections.abc import Callable, Coroutine, Iterable, Mapping
@@ -7145,42 +7142,6 @@ def test_zeta_cli_main_reports_invalid_state_marker(
     assert exit_code == 1
     assert "runtime state marker is not a directory" in captured.err
     assert "Traceback" not in captured.err
-
-
-def test_zeta_cli_without_a_command_launches_the_bundled_tui(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    calls: list[tuple[Path, list[str]]] = []
-
-    def execv(executable: Path, arguments: list[str]) -> None:
-        calls.append((executable, arguments))
-
-    monkeypatch.setattr(os, "execv", execv)
-    monkeypatch.setattr(sysconfig, "get_path", lambda name: "/venv/bin")
-    monkeypatch.setattr(sys, "argv", ["/venv/bin/zeta"])
-
-    result = CliRunner().invoke(cli_main.cli, [])
-
-    assert result.exit_code == 0
-    assert calls == [
-        (
-            Path("/venv/bin/zeta-tui"),
-            ["/venv/bin/zeta-tui", "/venv/bin/zeta"],
-        )
-    ]
-
-
-def test_zeta_cli_subcommand_does_not_launch_the_tui(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    def execv(_executable: Path, _arguments: list[str]) -> None:
-        raise AssertionError("subcommands must not launch the TUI")
-
-    monkeypatch.setattr(os, "execv", execv)
-
-    result = CliRunner().invoke(cli_main.cli, ["rpc", "--help"])
-
-    assert result.exit_code == 0
 
 
 def test_zeta_cli_inspection_does_not_mutate_existing_state(tmp_path: Path) -> None:

@@ -4,11 +4,6 @@ Each command group lives in its own module under `commands/`. This module owns
 the root group and the process exit contract only.
 """
 
-import os
-import sys
-import sysconfig
-from pathlib import Path
-
 import click
 from zeta.cli.commands.agents import agents
 from zeta.cli.commands.attempts import attempts
@@ -24,22 +19,9 @@ from zeta.cli.models import models_group
 from zeta.cli.traces import traces_group
 
 
-@click.group(
-    context_settings={"help_option_names": ["-h", "--help"]},
-    invoke_without_command=True,
-)
-@click.pass_context
-def cli(context: click.Context) -> None:
-    """Runs the interactive interface by default and exposes runtime commands."""
-    if context.invoked_subcommand is not None:
-        return
-    suffix = ".exe" if os.name == "nt" else ""
-    executable = Path(sysconfig.get_path("scripts")) / f"zeta-tui{suffix}"
-    zeta = Path(sys.argv[0]).resolve()
-    try:
-        os.execv(executable, [str(executable), str(zeta)])
-    except OSError as error:
-        raise click.ClickException(f"cannot launch bundled TUI: {error}") from error
+@click.group(context_settings={"help_option_names": ["-h", "--help"]})
+def cli() -> None:
+    """Zeta runtime commands."""
 
 
 cli.add_command(queue)

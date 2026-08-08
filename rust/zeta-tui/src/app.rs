@@ -33,6 +33,7 @@ pub(super) struct App {
     timeline_viewport_height: usize,
     timeline_unseen_rows: usize,
     timeline_changed: bool,
+    animation_frame: usize,
     submissions: Vec<Submission>,
 }
 
@@ -100,8 +101,8 @@ struct Submission {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum ToolOutcome {
-    Completed,
-    Failed(String),
+    Completed { timestamp_ms: i64 },
+    Failed { message: String, timestamp_ms: i64 },
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -110,7 +111,7 @@ enum TimelineItem {
     AgentHeading,
     Agent(String),
     Activity {
-        glyph: &'static str,
+        glyph: String,
         text: String,
         color: Color,
     },
@@ -300,6 +301,7 @@ impl App {
             timeline_viewport_height: 1,
             timeline_unseen_rows: 0,
             timeline_changed: false,
+            animation_frame: 0,
             submissions: Vec::new(),
         }
     }
@@ -456,6 +458,10 @@ impl App {
             return Some(cursor.0);
         }
         None
+    }
+
+    pub(super) fn advance_animation(&mut self) {
+        self.animation_frame = (self.animation_frame + 1) % 4;
     }
 
     pub(super) fn append_events(&mut self, events: Vec<Event>, cursor: Option<Cursor>) {
@@ -675,7 +681,7 @@ impl App {
         let events = self.timeline_events();
         let mut items = match self.timeline_mode {
             TimelineMode::Raw => raw_timeline_items(&events),
-            TimelineMode::Semantic => semantic_timeline_items(&events),
+            TimelineMode::Semantic => semantic_timeline_items(&events, self.animation_frame),
         };
         if self.timeline_mode == TimelineMode::Raw {
             return items;
@@ -711,6 +717,24 @@ impl App {
             .iter()
             .rev()
             .find(|submission| submission.target == SubmissionTarget::NewSession)
+    }
+
+    fn session_activity(&self, session_id: &str) -> Option<String> {
+        let mut events = Vec::new();
+        for event in &self.events {
+            if event.belongs_to_session(session_id) {
+                events.push(event);
+            }
+        }
+        let items = semantic_timeline_items(&events, self.animation_frame);
+        for item in items.into_iter().rev() {
+            match item {
+                TimelineItem::Agent(content) => return Some(single_line(&content)),
+                TimelineItem::Activity { text, .. } => return Some(text),
+                TimelineItem::User(_) | TimelineItem::AgentHeading | TimelineItem::Raw { .. } => {}
+            }
+        }
+        None
     }
 
     fn timeline_offset(&mut self, row_count: usize, viewport_height: usize) -> usize {
@@ -844,9 +868,10 @@ fn raw_timeline_items(events: &[&Event]) -> Vec<TimelineItem> {
     items
 }
 
-fn semantic_timeline_items(events: &[&Event]) -> Vec<TimelineItem> {
+fn semantic_timeline_items(events: &[&Event], animation_frame: usize) -> Vec<TimelineItem> {
     let outcomes = tool_outcomes(events);
     let completed_runs = completed_model_runs(events);
+    let terminal_runs = terminal_runs(events);
     let mut seen_tool_calls = HashSet::new();
     let mut items = Vec::new();
     let mut agent_started = false;
@@ -892,7 +917,17 @@ fn semantic_timeline_items(events: &[&Event]) -> Vec<TimelineItem> {
                 }
             };
             start_agent_timeline(&mut items, &mut agent_started);
-            push_activity(&mut items, "·", text, Color::DarkGray);
+            let active = status == "reasoning_delta"
+                && match event.run_id() {
+                    Some(run_id) => !terminal_runs.contains(run_id),
+                    None => true,
+                };
+            let glyph = if active {
+                active_glyph(animation_frame)
+            } else {
+                "·"
+            };
+            push_activity(&mut items, glyph, text, Color::DarkGray);
             continue;
         }
         if event_type == "zeta.model_call.completed" {
@@ -914,14 +949,27 @@ fn semantic_timeline_items(events: &[&Event]) -> Vec<TimelineItem> {
             };
             seen_tool_calls.insert(tool_call_id.to_owned());
             match outcomes.get(tool_call_id) {
-                Some(ToolOutcome::Completed) => {
-                    push_activity(&mut items, "✓", description, Color::Green);
+                Some(ToolOutcome::Completed { timestamp_ms }) => {
+                    let text = with_duration(description, event.timestamp_ms(), *timestamp_ms);
+                    push_activity(&mut items, "✓", text, Color::Green);
                 }
-                Some(ToolOutcome::Failed(message)) => {
-                    let text = format!("{description} failed: {message}");
+                Some(ToolOutcome::Failed {
+                    message,
+                    timestamp_ms,
+                }) => {
+                    let text = with_duration(
+                        format!("{description} failed: {message}"),
+                        event.timestamp_ms(),
+                        *timestamp_ms,
+                    );
                     push_activity(&mut items, "×", text, Color::Red);
                 }
-                None => push_activity(&mut items, "↳", description, Color::DarkGray),
+                None => push_activity(
+                    &mut items,
+                    active_glyph(animation_frame),
+                    description,
+                    Color::DarkGray,
+                ),
             }
             continue;
         }
@@ -1002,6 +1050,19 @@ fn completed_model_runs(events: &[&Event]) -> HashSet<String> {
     runs
 }
 
+fn terminal_runs(events: &[&Event]) -> HashSet<String> {
+    let mut runs = HashSet::new();
+    for event in events {
+        if event.event_type() != "zeta.turn.completed" && event.event_type() != "zeta.turn.failed" {
+            continue;
+        }
+        if let Some(run_id) = event.run_id() {
+            runs.insert(run_id.to_owned());
+        }
+    }
+    runs
+}
+
 fn tool_outcomes(events: &[&Event]) -> HashMap<String, ToolOutcome> {
     let mut outcomes = HashMap::new();
     for event in events {
@@ -1014,9 +1075,14 @@ fn tool_outcomes(events: &[&Event]) -> HashMap<String, ToolOutcome> {
         };
         let outcome = if event_type == "zeta.tool_call.failed" {
             let message = event_error(event).unwrap_or_else(|| "unknown error".to_owned());
-            ToolOutcome::Failed(message)
+            ToolOutcome::Failed {
+                message,
+                timestamp_ms: event.timestamp_ms(),
+            }
         } else {
-            ToolOutcome::Completed
+            ToolOutcome::Completed {
+                timestamp_ms: event.timestamp_ms(),
+            }
         };
         outcomes.insert(tool_call_id.to_owned(), outcome);
     }
@@ -1074,8 +1140,43 @@ fn append_agent_text(items: &mut Vec<TimelineItem>, text: &str) {
     }
 }
 
-fn push_activity(items: &mut Vec<TimelineItem>, glyph: &'static str, text: String, color: Color) {
-    items.push(TimelineItem::Activity { glyph, text, color });
+fn push_activity(items: &mut Vec<TimelineItem>, glyph: &str, text: String, color: Color) {
+    items.push(TimelineItem::Activity {
+        glyph: glyph.to_owned(),
+        text,
+        color,
+    });
+}
+
+fn active_glyph(animation_frame: usize) -> &'static str {
+    match animation_frame % 4 {
+        0 => "·",
+        1 => "∙",
+        2 => "•",
+        3 => "∙",
+        _ => unreachable!(),
+    }
+}
+
+fn with_duration(text: String, started_at_ms: i64, completed_at_ms: i64) -> String {
+    let Some(duration_ms) = completed_at_ms.checked_sub(started_at_ms) else {
+        return text;
+    };
+    if duration_ms < 0 {
+        return text;
+    }
+    if duration_ms < 1_000 {
+        return format!("{text} · {duration_ms}ms");
+    }
+    let seconds = duration_ms / 1_000;
+    let milliseconds = duration_ms % 1_000;
+    if milliseconds == 0 {
+        return format!("{text} · {seconds}s");
+    }
+    let fractional = format!("{milliseconds:03}")
+        .trim_end_matches('0')
+        .to_owned();
+    format!("{text} · {seconds}.{fractional}s")
 }
 
 fn single_line(text: &str) -> String {
@@ -1264,20 +1365,25 @@ fn render_sessions(frame: &mut Frame<'_>, area: Rect, app: &App) {
         };
         let title = app.session_title(session.session_id());
         let title = ellipsize(&title, usize::from(sessions_area.width.saturating_sub(4)));
+        let mut metadata = vec![
+            Span::styled(
+                session.agent_id().to_owned(),
+                Style::default().fg(Color::DarkGray),
+            ),
+            Span::raw("  "),
+        ];
+        metadata.extend(status_spans(session.status()));
+        let activity = match app.session_activity(session.session_id()) {
+            Some(activity) => ellipsize(
+                &activity,
+                usize::from(sessions_area.width.saturating_sub(4)),
+            ),
+            None => "No activity yet".to_owned(),
+        };
         rows.push(ListItem::new(vec![
             Line::from(Span::styled(title, title_style)),
-            Line::from(vec![
-                Span::styled(
-                    session.agent_id().to_owned(),
-                    Style::default().fg(Color::DarkGray),
-                ),
-                Span::raw("  "),
-                Span::styled(
-                    session.status().to_uppercase(),
-                    status_style(session.status()),
-                ),
-            ]),
-            Line::default(),
+            Line::from(metadata),
+            Line::from(Span::styled(activity, Style::default().fg(Color::DarkGray))),
         ]));
     }
     let sessions = List::new(rows)
@@ -1368,17 +1474,15 @@ fn render_header(frame: &mut Frame<'_>, area: Rect, app: &App) {
             Style::default().add_modifier(Modifier::BOLD),
         ));
         if let Some(session) = app.attached_session() {
-            left.push(Line::from(vec![
+            let mut metadata = vec![
                 Span::styled(
                     session.agent_id().to_owned(),
                     Style::default().fg(Color::DarkGray),
                 ),
                 Span::raw("  "),
-                Span::styled(
-                    session.status().to_uppercase(),
-                    status_style(session.status()),
-                ),
-            ]));
+            ];
+            metadata.extend(status_spans(session.status()));
+            left.push(Line::from(metadata));
         }
     }
     frame.render_widget(Paragraph::new(left), areas[0]);
@@ -1567,12 +1671,7 @@ fn agent_lines(content: String, width: usize) -> Vec<Line<'static>> {
     lines
 }
 
-fn activity_lines(
-    glyph: &'static str,
-    text: String,
-    color: Color,
-    width: usize,
-) -> Vec<Line<'static>> {
+fn activity_lines(glyph: String, text: String, color: Color, width: usize) -> Vec<Line<'static>> {
     let wrapped = wrap_text(&text, width.saturating_sub(4).max(1));
     let mut lines = Vec::new();
     for (index, line) in wrapped.into_iter().enumerate() {
@@ -1653,7 +1752,7 @@ fn ellipsize(text: &str, width: usize) -> String {
 }
 
 fn status_style(status: &str) -> Style {
-    if status == "running" {
+    if status == "running" || status == "completed" {
         return Style::default().fg(Color::Green);
     }
     if status == "queued" || status == "waiting" {
@@ -1663,6 +1762,33 @@ fn status_style(status: &str) -> Style {
         return Style::default().fg(Color::Red);
     }
     Style::default().fg(Color::DarkGray)
+}
+
+fn status_spans(status: &str) -> Vec<Span<'static>> {
+    let (glyph, label) = match status {
+        "running" => ("● ", "Running".to_owned()),
+        "queued" => ("◌ ", "Queued".to_owned()),
+        "waiting" => ("◌ ", "Waiting".to_owned()),
+        "completed" => ("✓ ", "Completed".to_owned()),
+        "failed" => ("× ", "Failed".to_owned()),
+        "cancelled" => ("× ", "Cancelled".to_owned()),
+        "idle" => ("○ ", "Idle".to_owned()),
+        other => ("○ ", title_case(&humanize(other))),
+    };
+    vec![
+        Span::styled(glyph, status_style(status)),
+        Span::styled(label, status_style(status)),
+    ]
+}
+
+fn title_case(text: &str) -> String {
+    let mut characters = text.chars();
+    let Some(first) = characters.next() else {
+        return String::new();
+    };
+    let mut output = first.to_uppercase().collect::<String>();
+    output.extend(characters);
+    output
 }
 
 fn padded_area(area: Rect) -> Rect {
@@ -1762,7 +1888,7 @@ mod tests {
         assert!(screen.contains("Sessions"));
         assert!(screen.contains("Summarize the current project"));
         assert!(screen.contains("zeta.master"));
-        assert!(screen.contains("QUEUED"));
+        assert!(screen.contains("◌ Queued"));
         assert!(!screen.contains("Timeline"));
         assert!(!screen.contains("Message"));
         assert!(!screen.contains("protocol 0.1"));
@@ -1958,7 +2084,7 @@ mod tests {
         );
         let mut app = App::connected(
             "0.1".to_owned(),
-            vec![session("session_1", "zeta.master", "completed")],
+            vec![session("session_1", "zeta.master", "running")],
             vec![request, model],
             Some(Cursor(2)),
         );
@@ -2230,7 +2356,7 @@ mod tests {
             .expect("attached screen should draw");
         let screen = terminal.backend().to_string();
         assert!(screen.contains("zeta.master"));
-        assert!(screen.contains("RUNNING"));
+        assert!(screen.contains("● Running"));
         assert!(screen.contains("selected progress"));
         assert!(!screen.contains("other progress"));
         assert!(!screen.contains("Sessions"));
@@ -2397,7 +2523,7 @@ mod tests {
             vec![
                 super::TimelineItem::User("hello".to_owned()),
                 super::TimelineItem::Activity {
-                    glyph: "·",
+                    glyph: "·".to_owned(),
                     text: "Sending…".to_owned(),
                     color: ratatui::style::Color::Yellow,
                 },
@@ -2410,7 +2536,7 @@ mod tests {
             vec![
                 super::TimelineItem::User("hello".to_owned()),
                 super::TimelineItem::Activity {
-                    glyph: "·",
+                    glyph: "·".to_owned(),
                     text: "Queued".to_owned(),
                     color: ratatui::style::Color::Yellow,
                 },
@@ -2510,7 +2636,7 @@ mod tests {
             vec![
                 super::TimelineItem::User("build it".to_owned()),
                 super::TimelineItem::Activity {
-                    glyph: "·",
+                    glyph: "·".to_owned(),
                     text: "Queued".to_owned(),
                     color: ratatui::style::Color::Yellow,
                 },
@@ -2652,5 +2778,129 @@ mod tests {
         assert_eq!(app.handle_event(&up), AppAction::None);
         assert_eq!(app.selected_session_id(), Some("session_first"));
         assert_eq!(app.attached_session_id(), None);
+    }
+
+    #[test]
+    fn session_rows_pair_human_status_with_the_latest_activity() {
+        let request = event(
+            "session.message.requested",
+            serde_json::json!({"message": "Inspect the project"}),
+            "session_1",
+            "run_1",
+            1,
+        );
+        let tool = event(
+            "zeta.tool_call.started",
+            serde_json::json!({
+                "tool_call_id": "call_1",
+                "name": "read",
+                "input": {"path": "README.md"}
+            }),
+            "session_1",
+            "run_1",
+            2,
+        );
+        let mut app = App::connected(
+            "0.1".to_owned(),
+            vec![session("session_1", "zeta.master", "running")],
+            vec![request, tool],
+            Some(Cursor(2)),
+        );
+        let backend = TestBackend::new(80, 18);
+        let mut terminal = Terminal::new(backend).expect("terminal should initialize");
+        terminal
+            .draw(|frame| draw(frame, &mut app))
+            .expect("session list should draw");
+        let screen = terminal.backend().to_string();
+
+        assert!(screen.contains("● Running"));
+        assert!(screen.contains("read README.md"));
+        assert!(!screen.contains("RUNNING"));
+    }
+
+    #[test]
+    fn completed_tool_activity_shows_exact_duration_and_stays_stable() {
+        let started = event(
+            "zeta.tool_call.started",
+            serde_json::json!({
+                "tool_call_id": "call_1",
+                "name": "read",
+                "input": {"path": "README.md"}
+            }),
+            "session_1",
+            "run_1",
+            1,
+        );
+        let completed = event(
+            "zeta.tool_call.completed",
+            serde_json::json!({
+                "tool_call_id": "call_1",
+                "name": "read",
+                "result": {"ok": true}
+            }),
+            "session_1",
+            "run_1",
+            1_501,
+        );
+        let mut app = App::connected(
+            "0.1".to_owned(),
+            vec![session("session_1", "zeta.master", "completed")],
+            vec![started, completed],
+            Some(Cursor(1_501)),
+        );
+        let enter = TerminalEvent::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(app.handle_event(&enter), AppAction::None);
+        let backend = TestBackend::new(80, 18);
+        let mut terminal = Terminal::new(backend).expect("terminal should initialize");
+        terminal
+            .draw(|frame| draw(frame, &mut app))
+            .expect("completed activity should draw");
+        let before = terminal.backend().to_string();
+        assert!(before.contains("✓ read README.md · 1.5s"));
+
+        app.advance_animation();
+        terminal
+            .draw(|frame| draw(frame, &mut app))
+            .expect("completed activity should redraw");
+        let after = terminal.backend().to_string();
+        assert_eq!(before, after);
+    }
+
+    #[test]
+    fn active_tool_activity_has_a_subtle_animation_tick() {
+        let started = event(
+            "zeta.tool_call.started",
+            serde_json::json!({
+                "tool_call_id": "call_1",
+                "name": "read",
+                "input": {"path": "README.md"}
+            }),
+            "session_1",
+            "run_1",
+            1,
+        );
+        let mut app = App::connected(
+            "0.1".to_owned(),
+            vec![session("session_1", "zeta.master", "running")],
+            vec![started],
+            Some(Cursor(1)),
+        );
+        let enter = TerminalEvent::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(app.handle_event(&enter), AppAction::None);
+        let backend = TestBackend::new(80, 18);
+        let mut terminal = Terminal::new(backend).expect("terminal should initialize");
+        terminal
+            .draw(|frame| draw(frame, &mut app))
+            .expect("active activity should draw");
+        let before = terminal.backend().to_string();
+        assert!(before.contains("· read README.md"));
+
+        app.advance_animation();
+        terminal
+            .draw(|frame| draw(frame, &mut app))
+            .expect("active activity should redraw");
+        let after = terminal.backend().to_string();
+        assert!(after.contains("∙ read README.md"));
+        assert_ne!(before, after);
     }
 }

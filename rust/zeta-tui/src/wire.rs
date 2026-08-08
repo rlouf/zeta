@@ -104,6 +104,10 @@ impl Event {
         self.idempotency_key.as_deref()
     }
 
+    pub(super) fn timestamp_ms(&self) -> i64 {
+        self.timestamp_ms
+    }
+
     pub(super) fn event_type(&self) -> &str {
         &self.event_type
     }

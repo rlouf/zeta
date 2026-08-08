@@ -238,6 +238,8 @@ async fn run() -> Result<(), BoxError> {
                 }
             }
             _ = refresh_interval.tick(), if pending_refreshes == 0 => {
+                app.advance_animation();
+                dirty = true;
                 let request_id = RequestId(next_request_id);
                 next_request_id += 1;
                 send_request(

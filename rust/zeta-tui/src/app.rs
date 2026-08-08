@@ -57,6 +57,7 @@ enum ToolOutcome {
 #[derive(Debug, PartialEq, Eq)]
 enum TimelineItem {
     User(String),
+    AgentHeading,
     Agent(String),
     Activity {
         glyph: &'static str,
@@ -429,18 +430,21 @@ fn semantic_timeline_items(events: &[&Event]) -> Vec<TimelineItem> {
     let completed_runs = completed_model_runs(events);
     let mut seen_tool_calls = HashSet::new();
     let mut items = Vec::new();
+    let mut agent_started = false;
 
     for event in events {
         let event_type = event.event_type();
         if event.is_direct_message_request() {
             if let Some(message) = payload_string(event, "message") {
                 items.push(TimelineItem::User(message.to_owned()));
+                agent_started = false;
             }
             continue;
         }
         if event.is_runtime_user_message() {
             if let Some(message) = payload_string(event, "content") {
                 items.push(TimelineItem::User(message.to_owned()));
+                agent_started = false;
             }
             continue;
         }
@@ -453,6 +457,7 @@ fn semantic_timeline_items(events: &[&Event]) -> Vec<TimelineItem> {
                 continue;
             }
             if let Some(text) = payload_string(event, "text") {
+                start_agent_timeline(&mut items, &mut agent_started);
                 append_agent_text(&mut items, text);
             }
             continue;
@@ -467,6 +472,7 @@ fn semantic_timeline_items(events: &[&Event]) -> Vec<TimelineItem> {
                     None => humanize(status),
                 }
             };
+            start_agent_timeline(&mut items, &mut agent_started);
             push_activity(&mut items, "·", text, Color::DarkGray);
             continue;
         }
@@ -475,12 +481,14 @@ fn semantic_timeline_items(events: &[&Event]) -> Vec<TimelineItem> {
                 continue;
             };
             if !content.trim().is_empty() {
+                start_agent_timeline(&mut items, &mut agent_started);
                 items.push(TimelineItem::Agent(content.to_owned()));
             }
             continue;
         }
         if event_type == "zeta.tool_call.started" {
             let description = tool_description(event);
+            start_agent_timeline(&mut items, &mut agent_started);
             let Some(tool_call_id) = payload_string(event, "tool_call_id") else {
                 push_activity(&mut items, "↳", description, Color::DarkGray);
                 continue;
@@ -508,6 +516,7 @@ fn semantic_timeline_items(events: &[&Event]) -> Vec<TimelineItem> {
                 continue;
             }
             let description = tool_description(event);
+            start_agent_timeline(&mut items, &mut agent_started);
             if event_type == "zeta.tool_call.failed" {
                 let message = event_error(event).unwrap_or_else(|| "unknown error".to_owned());
                 push_activity(
@@ -522,6 +531,7 @@ fn semantic_timeline_items(events: &[&Event]) -> Vec<TimelineItem> {
             continue;
         }
         if event_type == "zeta.turn.completed" {
+            start_agent_timeline(&mut items, &mut agent_started);
             push_activity(&mut items, "✓", "Completed".to_owned(), Color::Green);
             continue;
         }
@@ -529,6 +539,7 @@ fn semantic_timeline_items(events: &[&Event]) -> Vec<TimelineItem> {
             let message = payload_string(event, "content")
                 .or_else(|| payload_string(event, "reason"))
                 .unwrap_or("Turn failed");
+            start_agent_timeline(&mut items, &mut agent_started);
             push_activity(&mut items, "×", single_line(message), Color::Red);
             continue;
         }
@@ -539,9 +550,18 @@ fn semantic_timeline_items(events: &[&Event]) -> Vec<TimelineItem> {
         {
             continue;
         }
+        start_agent_timeline(&mut items, &mut agent_started);
         push_activity(&mut items, "•", humanize(event_type), Color::DarkGray);
     }
     items
+}
+
+fn start_agent_timeline(items: &mut Vec<TimelineItem>, agent_started: &mut bool) {
+    if *agent_started {
+        return;
+    }
+    items.push(TimelineItem::AgentHeading);
+    *agent_started = true;
 }
 
 fn completed_model_runs(events: &[&Event]) -> HashSet<String> {
@@ -628,6 +648,7 @@ fn append_agent_text(items: &mut Vec<TimelineItem>, text: &str) {
     match items.last_mut() {
         Some(TimelineItem::Agent(content)) => content.push_str(text),
         Some(TimelineItem::User(_))
+        | Some(TimelineItem::AgentHeading)
         | Some(TimelineItem::Activity { .. })
         | Some(TimelineItem::Raw { .. })
         | None => items.push(TimelineItem::Agent(text.to_owned())),
@@ -822,6 +843,8 @@ fn render_sessions(frame: &mut Frame<'_>, area: Rect, app: &App) {
 }
 
 fn render_timeline(frame: &mut Frame<'_>, area: Rect, app: &App) {
+    let areas = Layout::vertical([Constraint::Length(1), Constraint::Min(1)]).split(area);
+    let area = areas[1];
     let items = app.timeline_items();
     if items.is_empty() {
         frame.render_widget(
@@ -992,8 +1015,9 @@ fn push_key_hint(spans: &mut Vec<Span<'static>>, key: &'static str, label: &'sta
 
 fn timeline_list_item(item: TimelineItem, width: usize) -> ListItem<'static> {
     match item {
-        TimelineItem::User(content) => speaker_item("You", content, Color::Cyan, width),
-        TimelineItem::Agent(content) => speaker_item("Zeta", content, Color::Reset, width),
+        TimelineItem::User(content) => speaker_item("You", content, width),
+        TimelineItem::AgentHeading => speaker_heading("Zeta"),
+        TimelineItem::Agent(content) => agent_item(content, width),
         TimelineItem::Activity { glyph, text, color } => activity_item(glyph, text, color, width),
         TimelineItem::Raw {
             event_type,
@@ -1002,16 +1026,27 @@ fn timeline_list_item(item: TimelineItem, width: usize) -> ListItem<'static> {
     }
 }
 
-fn speaker_item(
-    speaker: &'static str,
-    content: String,
-    color: Color,
-    width: usize,
-) -> ListItem<'static> {
+fn speaker_item(speaker: &'static str, content: String, width: usize) -> ListItem<'static> {
     let mut lines = vec![Line::from(Span::styled(
         speaker,
-        Style::default().fg(color).add_modifier(Modifier::BOLD),
+        Style::default().add_modifier(Modifier::BOLD),
     ))];
+    for line in wrap_text(&content, width.saturating_sub(2).max(1)) {
+        lines.push(Line::from(format!("  {line}")));
+    }
+    lines.push(Line::default());
+    ListItem::new(lines)
+}
+
+fn speaker_heading(speaker: &'static str) -> ListItem<'static> {
+    ListItem::new(Line::from(Span::styled(
+        speaker,
+        Style::default().add_modifier(Modifier::BOLD),
+    )))
+}
+
+fn agent_item(content: String, width: usize) -> ListItem<'static> {
+    let mut lines = Vec::new();
     for line in wrap_text(&content, width.saturating_sub(2).max(1)) {
         lines.push(Line::from(format!("  {line}")));
     }
@@ -1131,6 +1166,7 @@ mod tests {
     use crossterm::event::{Event as TerminalEvent, KeyCode, KeyEvent, KeyModifiers};
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
+    use ratatui::style::Modifier;
 
     use super::{App, AppAction, draw};
     use crate::wire::{Cursor, Event, Session};
@@ -1165,6 +1201,15 @@ mod tests {
             "status": status
         }))
         .expect("session should parse")
+    }
+
+    fn text_position(screen: &str, text: &str) -> (u16, u16) {
+        for (row, line) in screen.lines().enumerate() {
+            if let Some(column) = line.find(text) {
+                return (column as u16, row as u16);
+            }
+        }
+        panic!("{text:?} should be visible");
     }
 
     #[test]
@@ -1261,6 +1306,13 @@ mod tests {
             "run_1",
             2,
         );
+        let thinking = event(
+            "runtime.status.update",
+            serde_json::json!({"status": "reasoning_delta"}),
+            "session_1",
+            "run_1",
+            3,
+        );
         let tool_started = event(
             "zeta.tool_call.started",
             serde_json::json!({
@@ -1271,7 +1323,7 @@ mod tests {
             }),
             "session_1",
             "run_1",
-            3,
+            4,
         );
         let tool_completed = event(
             "zeta.tool_call.completed",
@@ -1283,7 +1335,7 @@ mod tests {
             }),
             "session_1",
             "run_1",
-            4,
+            5,
         );
         let model = event(
             "zeta.model_call.completed",
@@ -1293,14 +1345,14 @@ mod tests {
             }),
             "session_1",
             "run_1",
-            5,
+            6,
         );
         let completed = event(
             "zeta.turn.completed",
             serde_json::json!({"content": "done"}),
             "session_1",
             "run_1",
-            6,
+            7,
         );
         let mut app = App::connected(
             "0.1".to_owned(),
@@ -1308,12 +1360,13 @@ mod tests {
             vec![
                 request,
                 queued,
+                thinking,
                 tool_started,
                 tool_completed,
                 model,
                 completed,
             ],
-            Some(Cursor(6)),
+            Some(Cursor(7)),
         );
         let enter = TerminalEvent::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
         assert_eq!(app.handle_event(&enter), AppAction::None);
@@ -1334,6 +1387,26 @@ mod tests {
         assert!(!screen.contains("runtime.queue_item.available"));
         assert!(!screen.contains("queue_item_id"));
         assert!(screen.contains("v raw"));
+
+        let (_, metadata_row) = text_position(&screen, "zeta.master");
+        let (you_column, you_row) = text_position(&screen, "You");
+        let (zeta_column, zeta_row) = text_position(&screen, "Zeta");
+        let (_, thinking_row) = text_position(&screen, "Thinking");
+        let (_, tool_row) = text_position(&screen, "read README.md");
+
+        assert!(you_row > metadata_row + 1);
+        assert!(zeta_row < thinking_row);
+        assert!(zeta_row < tool_row);
+        assert!(
+            terminal.backend().buffer()[(you_column, you_row)]
+                .modifier
+                .contains(Modifier::BOLD)
+        );
+        assert!(
+            terminal.backend().buffer()[(zeta_column, zeta_row)]
+                .modifier
+                .contains(Modifier::BOLD)
+        );
     }
 
     #[test]

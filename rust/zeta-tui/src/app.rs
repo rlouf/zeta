@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::io;
 
 use crossterm::event::{Event as TerminalEvent, KeyCode, KeyEventKind};
@@ -9,10 +9,11 @@ use crossterm::terminal::{
 use ratatui::Frame;
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
-use ratatui::layout::{Constraint, Layout, Rect};
+use ratatui::layout::{Alignment, Constraint, Layout, Margin, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph};
+use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
+use serde_json::Value;
 
 use crate::wire::{Cursor, Event, Session};
 
@@ -25,6 +26,8 @@ pub(super) struct App {
     view: View,
     mode: Mode,
     draft: String,
+    timeline_mode: TimelineMode,
+    timeline_position: Option<usize>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -37,6 +40,33 @@ enum View {
 enum Mode {
     Browse,
     Compose,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum TimelineMode {
+    Semantic,
+    Raw,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum ToolOutcome {
+    Completed,
+    Failed(String),
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum TimelineItem {
+    User(String),
+    Agent(String),
+    Activity {
+        glyph: &'static str,
+        text: String,
+        color: Color,
+    },
+    Raw {
+        event_type: String,
+        payload: String,
+    },
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -68,6 +98,8 @@ impl App {
             view: View::Sessions,
             mode: Mode::Browse,
             draft: String::new(),
+            timeline_mode: TimelineMode::Semantic,
+            timeline_position: None,
         }
     }
 
@@ -103,15 +135,35 @@ impl App {
                                 return AppAction::None;
                             };
                             self.view = View::Attached(session_id.to_owned());
+                            self.timeline_mode = TimelineMode::Semantic;
+                            self.timeline_position = None;
                         }
                     }
                     View::Attached(_) => {
                         if key.code == KeyCode::Esc {
                             self.view = View::Sessions;
+                            self.timeline_mode = TimelineMode::Semantic;
+                            self.timeline_position = None;
                             return AppAction::None;
                         }
                         if key.code == KeyCode::Char('i') {
                             self.mode = Mode::Compose;
+                            return AppAction::None;
+                        }
+                        if key.code == KeyCode::Char('v') {
+                            self.timeline_mode = match self.timeline_mode {
+                                TimelineMode::Semantic => TimelineMode::Raw,
+                                TimelineMode::Raw => TimelineMode::Semantic,
+                            };
+                            self.timeline_position = None;
+                            return AppAction::None;
+                        }
+                        if key.code == KeyCode::Down || key.code == KeyCode::Char('j') {
+                            self.scroll_timeline_down();
+                            return AppAction::None;
+                        }
+                        if key.code == KeyCode::Up || key.code == KeyCode::Char('k') {
+                            self.scroll_timeline_up();
                         }
                     }
                 }
@@ -243,6 +295,88 @@ impl App {
         timeline
     }
 
+    fn session_title(&self, session_id: &str) -> String {
+        let mut runtime_message = None;
+        for event in &self.events {
+            if !event.belongs_to_session(session_id) {
+                continue;
+            }
+            if event.is_direct_message_request() {
+                let Some(message) = event.payload().get("message").and_then(Value::as_str) else {
+                    continue;
+                };
+                return single_line(message);
+            }
+            if !event.is_runtime_user_message() || runtime_message.is_some() {
+                continue;
+            }
+            let Some(message) = event.payload().get("content").and_then(Value::as_str) else {
+                continue;
+            };
+            runtime_message = Some(single_line(message));
+        }
+        match runtime_message {
+            Some(message) => message,
+            None => format!("Session {}", abbreviated_id(session_id)),
+        }
+    }
+
+    #[allow(clippy::manual_find)]
+    fn attached_session(&self) -> Option<&Session> {
+        let session_id = self.attached_session_id()?;
+        for session in &self.sessions {
+            if session.session_id() == session_id {
+                return Some(session);
+            }
+        }
+        None
+    }
+
+    fn attached_title(&self) -> String {
+        let Some(session_id) = self.attached_session_id() else {
+            return "Sessions".to_owned();
+        };
+        self.session_title(session_id)
+    }
+
+    fn timeline_items(&self) -> Vec<TimelineItem> {
+        let events = self.timeline_events();
+        match self.timeline_mode {
+            TimelineMode::Raw => raw_timeline_items(&events),
+            TimelineMode::Semantic => semantic_timeline_items(&events),
+        }
+    }
+
+    fn visible_timeline_position(&self, item_count: usize) -> Option<usize> {
+        if item_count == 0 {
+            return None;
+        }
+        match self.timeline_position {
+            Some(position) => Some(position.min(item_count - 1)),
+            None => Some(item_count - 1),
+        }
+    }
+
+    fn scroll_timeline_up(&mut self) {
+        let item_count = self.timeline_items().len();
+        let Some(position) = self.visible_timeline_position(item_count) else {
+            return;
+        };
+        self.timeline_position = Some(position.saturating_sub(1));
+    }
+
+    fn scroll_timeline_down(&mut self) {
+        let item_count = self.timeline_items().len();
+        let Some(position) = self.timeline_position else {
+            return;
+        };
+        if position + 1 >= item_count.saturating_sub(1) {
+            self.timeline_position = None;
+            return;
+        }
+        self.timeline_position = Some(position + 1);
+    }
+
     fn shows_composer(&self) -> bool {
         match (&self.view, &self.mode) {
             (View::Sessions, Mode::Browse) => false,
@@ -250,18 +384,6 @@ impl App {
             | (View::Attached(_), Mode::Browse)
             | (View::Attached(_), Mode::Compose) => true,
         }
-    }
-
-    fn attached_label(&self) -> String {
-        let Some(session_id) = self.attached_session_id() else {
-            return "Timeline".to_owned();
-        };
-        for session in &self.sessions {
-            if session.session_id() == session_id {
-                return session.label();
-            }
-        }
-        session_id.to_owned()
     }
 
     fn select_next_session(&mut self) {
@@ -289,6 +411,265 @@ impl App {
         };
         self.selected_session = Some(index.saturating_sub(1));
     }
+}
+
+fn raw_timeline_items(events: &[&Event]) -> Vec<TimelineItem> {
+    let mut items = Vec::new();
+    for event in events {
+        items.push(TimelineItem::Raw {
+            event_type: event.event_type().to_owned(),
+            payload: event.timeline_text(),
+        });
+    }
+    items
+}
+
+fn semantic_timeline_items(events: &[&Event]) -> Vec<TimelineItem> {
+    let outcomes = tool_outcomes(events);
+    let completed_runs = completed_model_runs(events);
+    let mut seen_tool_calls = HashSet::new();
+    let mut items = Vec::new();
+
+    for event in events {
+        let event_type = event.event_type();
+        if event.is_direct_message_request() {
+            if let Some(message) = payload_string(event, "message") {
+                items.push(TimelineItem::User(message.to_owned()));
+            }
+            continue;
+        }
+        if event.is_runtime_user_message() {
+            if let Some(message) = payload_string(event, "content") {
+                items.push(TimelineItem::User(message.to_owned()));
+            }
+            continue;
+        }
+        if event_type == "runtime.stream.chunk" {
+            let completed = match event.run_id() {
+                Some(run_id) => completed_runs.contains(run_id),
+                None => false,
+            };
+            if completed {
+                continue;
+            }
+            if let Some(text) = payload_string(event, "text") {
+                append_agent_text(&mut items, text);
+            }
+            continue;
+        }
+        if event_type == "runtime.status.update" {
+            let status = payload_string(event, "status").unwrap_or("working");
+            let text = if status == "reasoning_delta" {
+                "Thinking".to_owned()
+            } else {
+                match payload_string(event, "text") {
+                    Some(text) => single_line(text),
+                    None => humanize(status),
+                }
+            };
+            push_activity(&mut items, "·", text, Color::DarkGray);
+            continue;
+        }
+        if event_type == "zeta.model_call.completed" {
+            let Some(content) = payload_string(event, "content") else {
+                continue;
+            };
+            if !content.trim().is_empty() {
+                items.push(TimelineItem::Agent(content.to_owned()));
+            }
+            continue;
+        }
+        if event_type == "zeta.tool_call.started" {
+            let description = tool_description(event);
+            let Some(tool_call_id) = payload_string(event, "tool_call_id") else {
+                push_activity(&mut items, "↳", description, Color::DarkGray);
+                continue;
+            };
+            seen_tool_calls.insert(tool_call_id.to_owned());
+            match outcomes.get(tool_call_id) {
+                Some(ToolOutcome::Completed) => {
+                    push_activity(&mut items, "✓", description, Color::Green);
+                }
+                Some(ToolOutcome::Failed(message)) => {
+                    let text = format!("{description} failed: {message}");
+                    push_activity(&mut items, "×", text, Color::Red);
+                }
+                None => push_activity(&mut items, "↳", description, Color::DarkGray),
+            }
+            continue;
+        }
+        if event_type == "zeta.tool_call.completed" || event_type == "zeta.tool_call.failed" {
+            let tool_call_id = payload_string(event, "tool_call_id");
+            let already_rendered = match tool_call_id {
+                Some(tool_call_id) => seen_tool_calls.contains(tool_call_id),
+                None => false,
+            };
+            if already_rendered {
+                continue;
+            }
+            let description = tool_description(event);
+            if event_type == "zeta.tool_call.failed" {
+                let message = event_error(event).unwrap_or_else(|| "unknown error".to_owned());
+                push_activity(
+                    &mut items,
+                    "×",
+                    format!("{description} failed: {message}"),
+                    Color::Red,
+                );
+            } else {
+                push_activity(&mut items, "✓", description, Color::Green);
+            }
+            continue;
+        }
+        if event_type == "zeta.turn.completed" {
+            push_activity(&mut items, "✓", "Completed".to_owned(), Color::Green);
+            continue;
+        }
+        if event_type == "zeta.turn.failed" {
+            let message = payload_string(event, "content")
+                .or_else(|| payload_string(event, "reason"))
+                .unwrap_or("Turn failed");
+            push_activity(&mut items, "×", single_line(message), Color::Red);
+            continue;
+        }
+        if event_type.starts_with("runtime.")
+            || event_type.starts_with("session.")
+            || event_type.starts_with("zeta.")
+            || event_type.starts_with("rpc.")
+        {
+            continue;
+        }
+        push_activity(&mut items, "•", humanize(event_type), Color::DarkGray);
+    }
+    items
+}
+
+fn completed_model_runs(events: &[&Event]) -> HashSet<String> {
+    let mut runs = HashSet::new();
+    for event in events {
+        if event.event_type() != "zeta.model_call.completed" {
+            continue;
+        }
+        let Some(content) = payload_string(event, "content") else {
+            continue;
+        };
+        if content.trim().is_empty() {
+            continue;
+        }
+        if let Some(run_id) = event.run_id() {
+            runs.insert(run_id.to_owned());
+        }
+    }
+    runs
+}
+
+fn tool_outcomes(events: &[&Event]) -> HashMap<String, ToolOutcome> {
+    let mut outcomes = HashMap::new();
+    for event in events {
+        let event_type = event.event_type();
+        if event_type != "zeta.tool_call.completed" && event_type != "zeta.tool_call.failed" {
+            continue;
+        }
+        let Some(tool_call_id) = payload_string(event, "tool_call_id") else {
+            continue;
+        };
+        let outcome = if event_type == "zeta.tool_call.failed" {
+            let message = event_error(event).unwrap_or_else(|| "unknown error".to_owned());
+            ToolOutcome::Failed(message)
+        } else {
+            ToolOutcome::Completed
+        };
+        outcomes.insert(tool_call_id.to_owned(), outcome);
+    }
+    outcomes
+}
+
+fn payload_string<'a>(event: &'a Event, key: &str) -> Option<&'a str> {
+    event.payload().get(key).and_then(Value::as_str)
+}
+
+fn event_error(event: &Event) -> Option<String> {
+    let result = event.payload().get("result")?;
+    let message = result
+        .get("error")
+        .and_then(|error| error.get("message"))
+        .and_then(Value::as_str);
+    if let Some(message) = message {
+        return Some(single_line(message));
+    }
+    let message = result
+        .get("refusal")
+        .and_then(|refusal| refusal.get("message"))
+        .and_then(Value::as_str);
+    if let Some(message) = message {
+        return Some(single_line(message));
+    }
+    payload_string(event, "error").map(single_line)
+}
+
+fn tool_description(event: &Event) -> String {
+    let name = payload_string(event, "name").unwrap_or("tool");
+    let Some(input) = event.payload().get("input") else {
+        return name.to_owned();
+    };
+    for key in ["path", "command", "query", "pattern", "url"] {
+        let Some(value) = input.get(key).and_then(Value::as_str) else {
+            continue;
+        };
+        let value = single_line(value);
+        if !value.is_empty() {
+            return format!("{name} {value}");
+        }
+    }
+    name.to_owned()
+}
+
+fn append_agent_text(items: &mut Vec<TimelineItem>, text: &str) {
+    match items.last_mut() {
+        Some(TimelineItem::Agent(content)) => content.push_str(text),
+        Some(TimelineItem::User(_))
+        | Some(TimelineItem::Activity { .. })
+        | Some(TimelineItem::Raw { .. })
+        | None => items.push(TimelineItem::Agent(text.to_owned())),
+    }
+}
+
+fn push_activity(items: &mut Vec<TimelineItem>, glyph: &'static str, text: String, color: Color) {
+    items.push(TimelineItem::Activity { glyph, text, color });
+}
+
+fn single_line(text: &str) -> String {
+    let mut output = String::new();
+    for word in text.split_whitespace() {
+        if !output.is_empty() {
+            output.push(' ');
+        }
+        output.push_str(word);
+    }
+    output
+}
+
+fn humanize(value: &str) -> String {
+    let mut output = String::new();
+    for character in value.chars() {
+        if character == '.' || character == '_' {
+            output.push(' ');
+        } else {
+            output.push(character);
+        }
+    }
+    output
+}
+
+fn abbreviated_id(value: &str) -> String {
+    let mut output = String::new();
+    for character in value.chars() {
+        if output.chars().count() == 8 {
+            break;
+        }
+        output.push(character);
+    }
+    output
 }
 
 impl TerminalSession {
@@ -358,29 +739,17 @@ impl Drop for TerminalSession {
 }
 
 pub(super) fn draw(frame: &mut Frame<'_>, app: &App) {
+    let area = padded_area(frame.area());
     let composer_height = if app.shows_composer() { 3 } else { 0 };
     let areas = Layout::vertical([
-        Constraint::Length(1),
+        Constraint::Length(2),
         Constraint::Min(3),
         Constraint::Length(composer_height),
         Constraint::Length(1),
     ])
-    .split(frame.area());
+    .split(area);
 
-    let cursor = match app.cursor {
-        Some(cursor) => cursor.0.to_string(),
-        None => "none".to_owned(),
-    };
-    let header = Paragraph::new(format!(
-        "Zeta  connected · protocol {} · cursor {cursor}",
-        app.protocol
-    ))
-    .style(
-        Style::default()
-            .fg(Color::Cyan)
-            .add_modifier(Modifier::BOLD),
-    );
-    frame.render_widget(header, areas[0]);
+    render_header(frame, areas[0], app);
 
     match &app.view {
         View::Sessions => render_sessions(frame, areas[1], app),
@@ -388,59 +757,373 @@ pub(super) fn draw(frame: &mut Frame<'_>, app: &App) {
     }
 
     if app.shows_composer() {
-        let title = match &app.view {
-            View::Sessions => "New session",
-            View::Attached(_) => "Message",
-        };
-        let composer = Paragraph::new(app.draft.as_str())
-            .block(Block::default().title(title).borders(Borders::ALL));
-        frame.render_widget(composer, areas[2]);
+        render_composer(frame, areas[2], app);
     }
 
-    let help = match (&app.view, &app.mode) {
-        (View::Sessions, Mode::Browse) => "↑/↓ sessions · Enter attach · n new · q quit",
-        (View::Sessions, Mode::Compose) => "Enter start · Esc cancel",
-        (View::Attached(_), Mode::Browse) => "i compose · Esc detach · q quit",
-        (View::Attached(_), Mode::Compose) => "Enter send · Esc cancel",
-    };
-    frame.render_widget(Paragraph::new(help), areas[3]);
+    frame.render_widget(Paragraph::new(footer_line(app)), areas[3]);
 }
 
 fn render_sessions(frame: &mut Frame<'_>, area: Rect, app: &App) {
+    let areas = Layout::vertical([Constraint::Length(2), Constraint::Min(1)]).split(area);
+    frame.render_widget(
+        Paragraph::new("Sessions").style(Style::default().add_modifier(Modifier::BOLD)),
+        areas[0],
+    );
+
+    if app.sessions.is_empty() {
+        let empty = Paragraph::new(vec![
+            Line::from(Span::styled(
+                "No sessions yet",
+                Style::default().add_modifier(Modifier::BOLD),
+            )),
+            Line::from(Span::styled(
+                "Press n to start one.",
+                Style::default().fg(Color::DarkGray),
+            )),
+        ]);
+        frame.render_widget(empty, areas[1]);
+        return;
+    }
+
     let mut rows = Vec::new();
     for (index, session) in app.sessions.iter().enumerate() {
-        let marker = if app.selected_session == Some(index) {
-            "> "
+        let selected = app.selected_session == Some(index);
+        let title_style = if selected {
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD)
         } else {
-            "  "
+            Style::default().add_modifier(Modifier::BOLD)
         };
-        rows.push(ListItem::new(format!("{marker}{}", session.label())));
+        let title = app.session_title(session.session_id());
+        let title = ellipsize(&title, usize::from(areas[1].width.saturating_sub(4)));
+        rows.push(ListItem::new(vec![
+            Line::from(Span::styled(title, title_style)),
+            Line::from(vec![
+                Span::styled(
+                    session.agent_id().to_owned(),
+                    Style::default().fg(Color::DarkGray),
+                ),
+                Span::raw("  "),
+                Span::styled(
+                    session.status().to_uppercase(),
+                    status_style(session.status()),
+                ),
+            ]),
+            Line::default(),
+        ]));
     }
-    if rows.is_empty() {
-        rows.push(ListItem::new("No sessions"));
-    }
-    let sessions = List::new(rows).block(Block::default().title("Sessions").borders(Borders::ALL));
-    frame.render_widget(sessions, area);
+    let sessions = List::new(rows)
+        .highlight_symbol("› ")
+        .highlight_style(Style::default().add_modifier(Modifier::BOLD));
+    let mut state = ListState::default();
+    state.select(app.selected_session);
+    frame.render_stateful_widget(sessions, areas[1], &mut state);
 }
 
 fn render_timeline(frame: &mut Frame<'_>, area: Rect, app: &App) {
+    let items = app.timeline_items();
+    if items.is_empty() {
+        frame.render_widget(
+            Paragraph::new("Waiting for activity…").style(Style::default().fg(Color::DarkGray)),
+            area,
+        );
+        return;
+    }
+
     let mut rows = Vec::new();
-    for event in app.timeline_events() {
-        rows.push(ListItem::new(Line::from(vec![
-            Span::styled(event.event_type(), Style::default().fg(Color::Yellow)),
-            Span::raw("  "),
-            Span::raw(event.timeline_text()),
-        ])));
+    let width = usize::from(area.width.saturating_sub(2)).max(1);
+    for item in items {
+        rows.push(timeline_list_item(item, width));
     }
-    if rows.is_empty() {
-        rows.push(ListItem::new("No events yet"));
+    let item_count = rows.len();
+    let mut state = ListState::default();
+    state.select(app.visible_timeline_position(item_count));
+    frame.render_stateful_widget(List::new(rows), area, &mut state);
+}
+
+fn render_header(frame: &mut Frame<'_>, area: Rect, app: &App) {
+    let areas =
+        Layout::horizontal([Constraint::Percentage(70), Constraint::Percentage(30)]).split(area);
+    let mut left = vec![Line::from(Span::styled(
+        "zeta",
+        Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD),
+    ))];
+    if let View::Attached(_) = &app.view {
+        left[0].spans.push(Span::raw("  "));
+        left[0].spans.push(Span::styled(
+            ellipsize(
+                &app.attached_title(),
+                usize::from(areas[0].width.saturating_sub(8)),
+            ),
+            Style::default().add_modifier(Modifier::BOLD),
+        ));
+        if let Some(session) = app.attached_session() {
+            left.push(Line::from(vec![
+                Span::styled(
+                    session.agent_id().to_owned(),
+                    Style::default().fg(Color::DarkGray),
+                ),
+                Span::raw("  "),
+                Span::styled(
+                    session.status().to_uppercase(),
+                    status_style(session.status()),
+                ),
+            ]));
+        }
     }
-    let timeline = List::new(rows).block(
-        Block::default()
-            .title(app.attached_label())
-            .borders(Borders::ALL),
-    );
-    frame.render_widget(timeline, area);
+    frame.render_widget(Paragraph::new(left), areas[0]);
+
+    let right = match app.timeline_mode {
+        TimelineMode::Semantic => vec![connected_line()],
+        TimelineMode::Raw => {
+            let cursor = match app.cursor {
+                Some(cursor) => cursor.0.to_string(),
+                None => "none".to_owned(),
+            };
+            vec![
+                Line::from(vec![
+                    Span::styled("raw events", Style::default().fg(Color::Yellow)),
+                    Span::styled("  ", Style::default()),
+                    Span::styled("● ", Style::default().fg(Color::Green)),
+                    Span::styled("connected", Style::default().fg(Color::DarkGray)),
+                ]),
+                Line::from(Span::styled(
+                    format!("protocol {} · cursor {cursor}", app.protocol),
+                    Style::default().fg(Color::DarkGray),
+                )),
+            ]
+        }
+    };
+    frame.render_widget(Paragraph::new(right).alignment(Alignment::Right), areas[1]);
+}
+
+fn connected_line() -> Line<'static> {
+    Line::from(vec![
+        Span::styled("● ", Style::default().fg(Color::Green)),
+        Span::styled("connected", Style::default().fg(Color::DarkGray)),
+    ])
+}
+
+fn render_composer(frame: &mut Frame<'_>, area: Rect, app: &App) {
+    let title = match &app.view {
+        View::Sessions => " New session ",
+        View::Attached(_) => " Message ",
+    };
+    let composing = app.mode == Mode::Compose;
+    let border_style = if composing {
+        Style::default().fg(Color::Cyan)
+    } else {
+        Style::default().fg(Color::DarkGray)
+    };
+    let block = Block::default()
+        .title(title)
+        .title_style(border_style)
+        .borders(Borders::TOP)
+        .border_style(border_style);
+    let inner = block.inner(area);
+    let line = if composing {
+        Line::from(vec![
+            Span::styled("› ", Style::default().fg(Color::Cyan)),
+            Span::raw(app.draft.clone()),
+        ])
+    } else {
+        Line::from(Span::styled(
+            "› Message Zeta…",
+            Style::default().fg(Color::DarkGray),
+        ))
+    };
+    frame.render_widget(Paragraph::new(line).block(block), area);
+
+    if composing {
+        let draft_width = u16::try_from(app.draft.chars().count()).unwrap_or(u16::MAX);
+        let cursor_x = inner
+            .x
+            .saturating_add(2)
+            .saturating_add(draft_width)
+            .min(inner.right().saturating_sub(1));
+        frame.set_cursor_position((cursor_x, inner.y));
+    }
+}
+
+fn footer_line(app: &App) -> Line<'static> {
+    let mut spans = Vec::new();
+    match (&app.view, &app.mode) {
+        (View::Sessions, Mode::Browse) => {
+            push_key_hint(&mut spans, "↑/↓", "sessions");
+            push_key_hint(&mut spans, "enter", "attach");
+            push_key_hint(&mut spans, "n", "new");
+            push_key_hint(&mut spans, "q", "quit");
+        }
+        (View::Sessions, Mode::Compose) => {
+            push_key_hint(&mut spans, "enter", "start");
+            push_key_hint(&mut spans, "esc", "cancel");
+        }
+        (View::Attached(_), Mode::Browse) => {
+            push_key_hint(&mut spans, "↑/↓", "scroll");
+            push_key_hint(&mut spans, "i", "message");
+            push_key_hint(&mut spans, "esc", "detach");
+            push_key_hint(&mut spans, "v", "raw");
+            push_key_hint(&mut spans, "q", "quit");
+        }
+        (View::Attached(_), Mode::Compose) => {
+            push_key_hint(&mut spans, "enter", "send");
+            push_key_hint(&mut spans, "esc", "cancel");
+        }
+    }
+    Line::from(spans)
+}
+
+fn push_key_hint(spans: &mut Vec<Span<'static>>, key: &'static str, label: &'static str) {
+    if !spans.is_empty() {
+        spans.push(Span::raw("   "));
+    }
+    spans.push(Span::styled(
+        key,
+        Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD),
+    ));
+    spans.push(Span::raw(" "));
+    spans.push(Span::styled(label, Style::default().fg(Color::DarkGray)));
+}
+
+fn timeline_list_item(item: TimelineItem, width: usize) -> ListItem<'static> {
+    match item {
+        TimelineItem::User(content) => speaker_item("You", content, Color::Cyan, width),
+        TimelineItem::Agent(content) => speaker_item("Zeta", content, Color::Reset, width),
+        TimelineItem::Activity { glyph, text, color } => activity_item(glyph, text, color, width),
+        TimelineItem::Raw {
+            event_type,
+            payload,
+        } => raw_item(event_type, payload, width),
+    }
+}
+
+fn speaker_item(
+    speaker: &'static str,
+    content: String,
+    color: Color,
+    width: usize,
+) -> ListItem<'static> {
+    let mut lines = vec![Line::from(Span::styled(
+        speaker,
+        Style::default().fg(color).add_modifier(Modifier::BOLD),
+    ))];
+    for line in wrap_text(&content, width.saturating_sub(2).max(1)) {
+        lines.push(Line::from(format!("  {line}")));
+    }
+    lines.push(Line::default());
+    ListItem::new(lines)
+}
+
+fn activity_item(
+    glyph: &'static str,
+    text: String,
+    color: Color,
+    width: usize,
+) -> ListItem<'static> {
+    let wrapped = wrap_text(&text, width.saturating_sub(4).max(1));
+    let mut lines = Vec::new();
+    for (index, line) in wrapped.into_iter().enumerate() {
+        if index == 0 {
+            lines.push(Line::from(vec![
+                Span::raw("  "),
+                Span::styled(format!("{glyph} "), Style::default().fg(color)),
+                Span::styled(line, Style::default().fg(Color::DarkGray)),
+            ]));
+        } else {
+            lines.push(Line::from(Span::styled(
+                format!("    {line}"),
+                Style::default().fg(Color::DarkGray),
+            )));
+        }
+    }
+    ListItem::new(lines)
+}
+
+fn raw_item(event_type: String, payload: String, width: usize) -> ListItem<'static> {
+    let mut lines = vec![Line::from(Span::styled(
+        event_type,
+        Style::default().fg(Color::Yellow),
+    ))];
+    for line in wrap_text(&payload, width.saturating_sub(2).max(1)) {
+        lines.push(Line::from(Span::styled(
+            format!("  {line}"),
+            Style::default().fg(Color::DarkGray),
+        )));
+    }
+    lines.push(Line::default());
+    ListItem::new(lines)
+}
+
+fn wrap_text(text: &str, width: usize) -> Vec<String> {
+    let mut lines = Vec::new();
+    for paragraph in text.lines() {
+        if paragraph.is_empty() {
+            lines.push(String::new());
+            continue;
+        }
+        let mut line = String::new();
+        for word in paragraph.split_whitespace() {
+            let separator = if line.is_empty() { 0 } else { 1 };
+            if line.chars().count() + separator + word.chars().count() > width && !line.is_empty() {
+                lines.push(line);
+                line = String::new();
+            }
+            if !line.is_empty() {
+                line.push(' ');
+            }
+            line.push_str(word);
+        }
+        lines.push(line);
+    }
+    if lines.is_empty() {
+        lines.push(String::new());
+    }
+    lines
+}
+
+fn ellipsize(text: &str, width: usize) -> String {
+    if text.chars().count() <= width {
+        return text.to_owned();
+    }
+    if width <= 1 {
+        return "…".to_owned();
+    }
+    let mut output = String::new();
+    for character in text.chars() {
+        if output.chars().count() == width - 1 {
+            break;
+        }
+        output.push(character);
+    }
+    output.push('…');
+    output
+}
+
+fn status_style(status: &str) -> Style {
+    if status == "running" {
+        return Style::default().fg(Color::Green);
+    }
+    if status == "queued" || status == "waiting" {
+        return Style::default().fg(Color::Yellow);
+    }
+    if status == "failed" || status == "cancelled" {
+        return Style::default().fg(Color::Red);
+    }
+    Style::default().fg(Color::DarkGray)
+}
+
+fn padded_area(area: Rect) -> Rect {
+    let horizontal = if area.width >= 40 { 2 } else { 1 };
+    let vertical = if area.height >= 10 { 1 } else { 0 };
+    area.inner(Margin {
+        horizontal,
+        vertical,
+    })
 }
 
 #[cfg(test)]
@@ -486,11 +1169,18 @@ mod tests {
 
     #[test]
     fn startup_renders_only_the_session_list() {
+        let request = event(
+            "session.message.requested",
+            serde_json::json!({"message": "Summarize the current project"}),
+            "session_1",
+            "run_1",
+            1,
+        );
         let app = App::connected(
             "0.1".to_owned(),
             vec![session("session_1", "zeta.master", "queued")],
-            Vec::new(),
-            None,
+            vec![request],
+            Some(Cursor(1)),
         );
         let backend = TestBackend::new(80, 18);
         let mut terminal = Terminal::new(backend).expect("terminal should initialize");
@@ -501,11 +1191,190 @@ mod tests {
         let screen = terminal.backend().to_string();
 
         assert!(screen.contains("Sessions"));
-        assert!(screen.contains("zeta.master · queued"));
+        assert!(screen.contains("Summarize the current project"));
+        assert!(screen.contains("zeta.master"));
+        assert!(screen.contains("QUEUED"));
         assert!(!screen.contains("Timeline"));
         assert!(!screen.contains("Message"));
-        assert!(screen.contains("Enter attach"));
+        assert!(!screen.contains("protocol 0.1"));
+        assert!(!screen.contains("cursor 1"));
+        assert!(screen.contains("enter attach"));
         assert!(screen.contains("n new"));
+    }
+
+    #[test]
+    fn empty_session_list_teaches_the_primary_action() {
+        let app = App::connected("0.1".to_owned(), Vec::new(), Vec::new(), None);
+        let backend = TestBackend::new(80, 18);
+        let mut terminal = Terminal::new(backend).expect("terminal should initialize");
+
+        terminal
+            .draw(|frame| draw(frame, &app))
+            .expect("screen should draw");
+        let screen = terminal.backend().to_string();
+
+        assert!(screen.contains("No sessions yet"));
+        assert!(screen.contains("Press n to start one."));
+    }
+
+    #[test]
+    fn narrow_terminal_keeps_the_primary_controls_visible() {
+        let request = event(
+            "session.message.requested",
+            serde_json::json!({"message": "A title that cannot fit on a narrow terminal"}),
+            "session_1",
+            "run_1",
+            1,
+        );
+        let app = App::connected(
+            "0.1".to_owned(),
+            vec![session("session_1", "zeta.master", "running")],
+            vec![request],
+            Some(Cursor(1)),
+        );
+        let backend = TestBackend::new(40, 10);
+        let mut terminal = Terminal::new(backend).expect("terminal should initialize");
+
+        terminal
+            .draw(|frame| draw(frame, &app))
+            .expect("narrow screen should draw");
+        let screen = terminal.backend().to_string();
+
+        assert!(screen.contains("Sessions"));
+        assert!(screen.contains("A title that cannot"));
+        assert!(screen.contains("n new"));
+    }
+
+    #[test]
+    fn attached_timeline_renders_conversation_and_activity_instead_of_wire_events() {
+        let request = event(
+            "session.message.requested",
+            serde_json::json!({"message": "Inspect the project"}),
+            "session_1",
+            "run_1",
+            1,
+        );
+        let queued = event(
+            "runtime.queue_item.available",
+            serde_json::json!({"queue_item_id": "queue_1"}),
+            "session_1",
+            "run_1",
+            2,
+        );
+        let tool_started = event(
+            "zeta.tool_call.started",
+            serde_json::json!({
+                "_timeline_type": "tool_call",
+                "tool_call_id": "call_1",
+                "name": "read",
+                "input": {"path": "README.md"}
+            }),
+            "session_1",
+            "run_1",
+            3,
+        );
+        let tool_completed = event(
+            "zeta.tool_call.completed",
+            serde_json::json!({
+                "_timeline_type": "tool_result",
+                "tool_call_id": "call_1",
+                "name": "read",
+                "result": {"ok": true}
+            }),
+            "session_1",
+            "run_1",
+            4,
+        );
+        let model = event(
+            "zeta.model_call.completed",
+            serde_json::json!({
+                "_timeline_type": "model",
+                "content": "The project is ready for the next step."
+            }),
+            "session_1",
+            "run_1",
+            5,
+        );
+        let completed = event(
+            "zeta.turn.completed",
+            serde_json::json!({"content": "done"}),
+            "session_1",
+            "run_1",
+            6,
+        );
+        let mut app = App::connected(
+            "0.1".to_owned(),
+            vec![session("session_1", "zeta.master", "idle")],
+            vec![
+                request,
+                queued,
+                tool_started,
+                tool_completed,
+                model,
+                completed,
+            ],
+            Some(Cursor(6)),
+        );
+        let enter = TerminalEvent::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(app.handle_event(&enter), AppAction::None);
+        let backend = TestBackend::new(100, 24);
+        let mut terminal = Terminal::new(backend).expect("terminal should initialize");
+
+        terminal
+            .draw(|frame| draw(frame, &app))
+            .expect("screen should draw");
+        let screen = terminal.backend().to_string();
+
+        assert!(screen.contains("You"));
+        assert!(screen.contains("Inspect the project"));
+        assert!(screen.contains("Zeta"));
+        assert!(screen.contains("The project is ready for the next step."));
+        assert!(screen.contains("read README.md"));
+        assert!(screen.contains("Completed"));
+        assert!(!screen.contains("runtime.queue_item.available"));
+        assert!(!screen.contains("queue_item_id"));
+        assert!(screen.contains("v raw"));
+    }
+
+    #[test]
+    fn raw_timeline_toggle_exposes_protocol_details() {
+        let request = event(
+            "session.message.requested",
+            serde_json::json!({"message": "Inspect the project"}),
+            "session_1",
+            "run_1",
+            1,
+        );
+        let queued = event(
+            "runtime.queue_item.available",
+            serde_json::json!({"queue_item_id": "queue_1"}),
+            "session_1",
+            "run_1",
+            2,
+        );
+        let mut app = App::connected(
+            "0.1".to_owned(),
+            vec![session("session_1", "zeta.master", "queued")],
+            vec![request, queued],
+            Some(Cursor(2)),
+        );
+        let enter = TerminalEvent::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        let verbose = TerminalEvent::Key(KeyEvent::new(KeyCode::Char('v'), KeyModifiers::NONE));
+        assert_eq!(app.handle_event(&enter), AppAction::None);
+        assert_eq!(app.handle_event(&verbose), AppAction::None);
+        let backend = TestBackend::new(100, 20);
+        let mut terminal = Terminal::new(backend).expect("terminal should initialize");
+
+        terminal
+            .draw(|frame| draw(frame, &app))
+            .expect("screen should draw");
+        let screen = terminal.backend().to_string();
+
+        assert!(screen.contains("raw events"));
+        assert!(screen.contains("protocol 0.1"));
+        assert!(screen.contains("cursor 2"));
+        assert!(screen.contains("runtime.queue_item.available"));
+        assert!(screen.contains("queue_item_id"));
     }
 
     #[test]
@@ -543,7 +1412,8 @@ mod tests {
             .draw(|frame| draw(frame, &app))
             .expect("attached screen should draw");
         let screen = terminal.backend().to_string();
-        assert!(screen.contains("zeta.master · running"));
+        assert!(screen.contains("zeta.master"));
+        assert!(screen.contains("RUNNING"));
         assert!(screen.contains("selected progress"));
         assert!(!screen.contains("other progress"));
         assert!(!screen.contains("Sessions"));
@@ -554,7 +1424,8 @@ mod tests {
             .expect("detached screen should draw");
         let screen = terminal.backend().to_string();
         assert!(screen.contains("Sessions"));
-        assert!(!screen.contains("selected progress"));
+        assert!(screen.contains("selected progress"));
+        assert!(!screen.contains("Message Zeta"));
     }
 
     #[test]

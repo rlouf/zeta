@@ -110,6 +110,15 @@ impl Event {
         self.payload.to_string()
     }
 
+    pub(super) fn payload(&self) -> &Value {
+        &self.payload
+    }
+
+    pub(super) fn run_id(&self) -> Option<&str> {
+        let run_id = self.run_id.as_ref()?;
+        Some(&run_id.0)
+    }
+
     pub(super) fn belongs_to_session(&self, session_id: &str) -> bool {
         let Some(event_session_id) = &self.session_id else {
             return false;
@@ -163,12 +172,15 @@ impl Session {
         &self.session_id.0
     }
 
-    pub(super) fn label(&self) -> String {
-        let agent = match &self.agent_id {
-            Some(agent) => agent.as_str(),
+    pub(super) fn agent_id(&self) -> &str {
+        match &self.agent_id {
+            Some(agent_id) => agent_id,
             None => "unknown agent",
-        };
-        format!("{agent} · {}", self.status)
+        }
+    }
+
+    pub(super) fn status(&self) -> &str {
+        &self.status
     }
 }
 
@@ -308,6 +320,7 @@ mod tests {
 
         assert_eq!(result.sessions.len(), 1);
         assert_eq!(result.sessions[0].session_id(), "session_123");
-        assert_eq!(result.sessions[0].label(), "zeta.master · queued");
+        assert_eq!(result.sessions[0].agent_id(), "zeta.master");
+        assert_eq!(result.sessions[0].status(), "queued");
     }
 }

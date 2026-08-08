@@ -1805,6 +1805,7 @@ mod tests {
     use crossterm::event::{Event as TerminalEvent, KeyCode, KeyEvent, KeyModifiers};
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
+    use ratatui::layout::Rect;
     use ratatui::style::Modifier;
 
     use super::{App, AppAction, draw};
@@ -2902,5 +2903,52 @@ mod tests {
         let after = terminal.backend().to_string();
         assert!(after.contains("∙ read README.md"));
         assert_ne!(before, after);
+    }
+
+    #[test]
+    fn tiny_and_tall_terminals_render_the_same_attached_unicode_draft() {
+        let request = event(
+            "session.message.requested",
+            serde_json::json!({"message": "Inspect 🦀 behavior"}),
+            "session_1",
+            "run_1",
+            1,
+        );
+        let mut app = App::connected(
+            "0.1".to_owned(),
+            vec![session("session_1", "zeta.master", "running")],
+            vec![request],
+            Some(Cursor(1)),
+        );
+        let enter = TerminalEvent::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        let compose = TerminalEvent::Key(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE));
+        assert_eq!(app.handle_event(&enter), AppAction::None);
+        assert_eq!(app.handle_event(&compose), AppAction::None);
+        assert_eq!(
+            app.handle_event(&TerminalEvent::Paste(
+                "first 🦀 line\nsecond line".to_owned()
+            )),
+            AppAction::None
+        );
+        let backend = TestBackend::new(20, 6);
+        let mut terminal = Terminal::new(backend).expect("terminal should initialize");
+        terminal
+            .draw(|frame| draw(frame, &mut app))
+            .expect("tiny terminal should draw");
+
+        terminal.backend_mut().resize(100, 40);
+        terminal
+            .resize(Rect::new(0, 0, 100, 40))
+            .expect("terminal should resize");
+        terminal
+            .draw(|frame| draw(frame, &mut app))
+            .expect("tall terminal should draw");
+        let screen = terminal.backend().to_string();
+
+        assert!(screen.contains("Inspect 🦀 behavior"));
+        assert!(screen.contains("first 🦀 line"));
+        assert!(screen.contains("second line"));
+        assert!(screen.contains("enter send"));
+        assert!(terminal.get_cursor_position().is_ok());
     }
 }

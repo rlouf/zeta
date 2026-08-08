@@ -30,6 +30,9 @@ pub(super) struct App {
     timeline_mode: TimelineMode,
     timeline_position: TimelinePosition,
     timeline_max_offset: usize,
+    timeline_viewport_height: usize,
+    timeline_unseen_rows: usize,
+    timeline_changed: bool,
     submissions: Vec<Submission>,
 }
 
@@ -294,6 +297,9 @@ impl App {
             timeline_mode: TimelineMode::Semantic,
             timeline_position: TimelinePosition::Follow,
             timeline_max_offset: 0,
+            timeline_viewport_height: 1,
+            timeline_unseen_rows: 0,
+            timeline_changed: false,
             submissions: Vec::new(),
         }
     }
@@ -337,14 +343,14 @@ impl App {
                             };
                             self.view = View::Attached(session_id.to_owned());
                             self.timeline_mode = TimelineMode::Semantic;
-                            self.timeline_position = TimelinePosition::Follow;
+                            self.follow_timeline();
                         }
                     }
                     View::Attached(_) => {
                         if key.code == KeyCode::Esc {
                             self.view = View::Sessions;
                             self.timeline_mode = TimelineMode::Semantic;
-                            self.timeline_position = TimelinePosition::Follow;
+                            self.follow_timeline();
                             return AppAction::None;
                         }
                         if key.code == KeyCode::Char('i') {
@@ -356,7 +362,23 @@ impl App {
                                 TimelineMode::Semantic => TimelineMode::Raw,
                                 TimelineMode::Raw => TimelineMode::Semantic,
                             };
-                            self.timeline_position = TimelinePosition::Follow;
+                            self.follow_timeline();
+                            return AppAction::None;
+                        }
+                        if key.code == KeyCode::Char('g') {
+                            self.timeline_position = TimelinePosition::Offset(0);
+                            return AppAction::None;
+                        }
+                        if key.code == KeyCode::Char('G') {
+                            self.follow_timeline();
+                            return AppAction::None;
+                        }
+                        if key.code == KeyCode::PageUp {
+                            self.scroll_timeline_page_up();
+                            return AppAction::None;
+                        }
+                        if key.code == KeyCode::PageDown {
+                            self.scroll_timeline_page_down();
                             return AppAction::None;
                         }
                         if key.code == KeyCode::Down || key.code == KeyCode::Char('j') {
@@ -437,7 +459,13 @@ impl App {
     }
 
     pub(super) fn append_events(&mut self, events: Vec<Event>, cursor: Option<Cursor>) {
+        let attached_session_id = self.attached_session_id().map(str::to_owned);
         for event in events {
+            if let Some(session_id) = &attached_session_id
+                && event.belongs_to_session(session_id)
+            {
+                self.timeline_changed = true;
+            }
             let event_id = event.id();
             let durable_submission_id = if event.is_direct_message_request() {
                 event
@@ -475,6 +503,8 @@ impl App {
             event_id: None,
         });
         self.timeline_position = TimelinePosition::Follow;
+        self.timeline_unseen_rows = 0;
+        self.timeline_changed = false;
     }
 
     pub(super) fn submission_queued(&mut self, id: &str, event_id: &str, session_id: &str) {
@@ -496,7 +526,7 @@ impl App {
         }
         if started_session {
             self.view = View::Attached(session_id.to_owned());
-            self.timeline_position = TimelinePosition::Follow;
+            self.follow_timeline();
         }
     }
 
@@ -684,9 +714,21 @@ impl App {
     }
 
     fn timeline_offset(&mut self, row_count: usize, viewport_height: usize) -> usize {
+        let previous_max_offset = self.timeline_max_offset;
+        self.timeline_viewport_height = viewport_height.max(1);
         self.timeline_max_offset = row_count.saturating_sub(viewport_height);
+        if self.timeline_changed {
+            if let TimelinePosition::Offset(_) = self.timeline_position {
+                self.timeline_unseen_rows +=
+                    self.timeline_max_offset.saturating_sub(previous_max_offset);
+            }
+            self.timeline_changed = false;
+        }
         match self.timeline_position {
-            TimelinePosition::Follow => self.timeline_max_offset,
+            TimelinePosition::Follow => {
+                self.timeline_unseen_rows = 0;
+                self.timeline_max_offset
+            }
             TimelinePosition::Offset(offset) => {
                 let offset = offset.min(self.timeline_max_offset);
                 self.timeline_position = TimelinePosition::Offset(offset);
@@ -708,12 +750,39 @@ impl App {
             TimelinePosition::Follow => {}
             TimelinePosition::Offset(offset) => {
                 if offset >= self.timeline_max_offset.saturating_sub(1) {
-                    self.timeline_position = TimelinePosition::Follow;
+                    self.follow_timeline();
                 } else {
                     self.timeline_position = TimelinePosition::Offset(offset + 1);
                 }
             }
         }
+    }
+
+    fn scroll_timeline_page_up(&mut self) {
+        let offset = match self.timeline_position {
+            TimelinePosition::Follow => self.timeline_max_offset,
+            TimelinePosition::Offset(offset) => offset,
+        };
+        self.timeline_position =
+            TimelinePosition::Offset(offset.saturating_sub(self.timeline_viewport_height));
+    }
+
+    fn scroll_timeline_page_down(&mut self) {
+        let TimelinePosition::Offset(offset) = self.timeline_position else {
+            return;
+        };
+        let offset = offset.saturating_add(self.timeline_viewport_height);
+        if offset >= self.timeline_max_offset {
+            self.follow_timeline();
+        } else {
+            self.timeline_position = TimelinePosition::Offset(offset);
+        }
+    }
+
+    fn follow_timeline(&mut self) {
+        self.timeline_position = TimelinePosition::Follow;
+        self.timeline_unseen_rows = 0;
+        self.timeline_changed = false;
     }
 
     fn shows_composer(&self) -> bool {
@@ -1225,6 +1294,7 @@ fn render_timeline(frame: &mut Frame<'_>, area: Rect, app: &mut App) {
     let items = app.timeline_items();
     if items.is_empty() {
         app.timeline_offset(0, usize::from(area.height));
+        render_timeline_position(frame, areas[0], app);
         frame.render_widget(
             Paragraph::new("Waiting for activity…").style(Style::default().fg(Color::DarkGray)),
             area,
@@ -1240,6 +1310,7 @@ fn render_timeline(frame: &mut Frame<'_>, area: Rect, app: &mut App) {
         }
     }
     let offset = app.timeline_offset(lines.len(), usize::from(area.height));
+    render_timeline_position(frame, areas[0], app);
     let mut visible = Vec::new();
     for (index, line) in lines.into_iter().enumerate() {
         if index < offset {
@@ -1251,6 +1322,31 @@ fn render_timeline(frame: &mut Frame<'_>, area: Rect, app: &mut App) {
         visible.push(line);
     }
     frame.render_widget(Paragraph::new(visible), area);
+}
+
+fn render_timeline_position(frame: &mut Frame<'_>, area: Rect, app: &App) {
+    let line = match app.timeline_position {
+        TimelinePosition::Follow => {
+            Line::from(Span::styled("↓ live", Style::default().fg(Color::DarkGray)))
+        }
+        TimelinePosition::Offset(offset) => Line::from(vec![
+            Span::styled(
+                format!("↑ {offset} lines above"),
+                Style::default().fg(Color::DarkGray),
+            ),
+            Span::styled(
+                format!(" · {} new · ", app.timeline_unseen_rows),
+                if app.timeline_unseen_rows == 0 {
+                    Style::default().fg(Color::DarkGray)
+                } else {
+                    Style::default().fg(Color::Yellow)
+                },
+            ),
+            Span::styled("G", Style::default().fg(Color::Cyan)),
+            Span::styled(" return to live", Style::default().fg(Color::DarkGray)),
+        ]),
+    };
+    frame.render_widget(Paragraph::new(line).alignment(Alignment::Right), area);
 }
 
 fn render_header(frame: &mut Frame<'_>, area: Rect, app: &App) {
@@ -1401,7 +1497,8 @@ fn footer_line(app: &App) -> Line<'static> {
             push_key_hint(&mut spans, "esc", "cancel");
         }
         (View::Attached(_), Mode::Browse) => {
-            push_key_hint(&mut spans, "↑/↓", "scroll");
+            push_key_hint(&mut spans, "↑/↓ pgup/pgdn", "scroll");
+            push_key_hint(&mut spans, "g/G", "top/live");
             push_key_hint(&mut spans, "i", "message");
             push_key_hint(&mut spans, "esc", "detach");
             push_key_hint(&mut spans, "v", "raw");
@@ -1923,6 +2020,137 @@ mod tests {
             .expect("screen should draw");
         let screen = terminal.backend().to_string();
         assert!(screen.contains("Waiting for approval"));
+    }
+
+    #[test]
+    fn attached_timeline_jumps_between_top_pages_and_live_output() {
+        let request = event(
+            "session.message.requested",
+            serde_json::json!({"message": "Inspect the project"}),
+            "session_1",
+            "run_1",
+            1,
+        );
+        let mut content = String::new();
+        for row in 0..18 {
+            content.push_str(&format!("row-{row:02}-xxxxxxxxxxxxxxxxxxxxxxxx "));
+        }
+        let model = event(
+            "zeta.model_call.completed",
+            serde_json::json!({"content": content}),
+            "session_1",
+            "run_1",
+            2,
+        );
+        let mut app = App::connected(
+            "0.1".to_owned(),
+            vec![session("session_1", "zeta.master", "completed")],
+            vec![request, model],
+            Some(Cursor(2)),
+        );
+        let enter = TerminalEvent::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        let top = TerminalEvent::Key(KeyEvent::new(KeyCode::Char('g'), KeyModifiers::NONE));
+        let live = TerminalEvent::Key(KeyEvent::new(KeyCode::Char('G'), KeyModifiers::SHIFT));
+        let page_up = TerminalEvent::Key(KeyEvent::new(KeyCode::PageUp, KeyModifiers::NONE));
+        let page_down = TerminalEvent::Key(KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE));
+        assert_eq!(app.handle_event(&enter), AppAction::None);
+        let backend = TestBackend::new(44, 16);
+        let mut terminal = Terminal::new(backend).expect("terminal should initialize");
+        terminal
+            .draw(|frame| draw(frame, &mut app))
+            .expect("live timeline should draw");
+        assert!(terminal.backend().to_string().contains("↓ live"));
+
+        assert_eq!(app.handle_event(&top), AppAction::None);
+        terminal
+            .draw(|frame| draw(frame, &mut app))
+            .expect("top timeline should draw");
+        let screen = terminal.backend().to_string();
+        assert!(screen.contains("row-00-xxxxxxxxxxxxxxxxxxxxxxxx"));
+        assert!(screen.contains("↑ 0 lines above"));
+
+        assert_eq!(app.handle_event(&page_down), AppAction::None);
+        terminal
+            .draw(|frame| draw(frame, &mut app))
+            .expect("next page should draw");
+        assert!(!terminal.backend().to_string().contains("↑ 0 lines above"));
+
+        assert_eq!(app.handle_event(&page_up), AppAction::None);
+        terminal
+            .draw(|frame| draw(frame, &mut app))
+            .expect("previous page should draw");
+        assert!(terminal.backend().to_string().contains("↑ 0 lines above"));
+
+        assert_eq!(app.handle_event(&live), AppAction::None);
+        terminal
+            .draw(|frame| draw(frame, &mut app))
+            .expect("live timeline should draw");
+        let screen = terminal.backend().to_string();
+        assert!(screen.contains("row-17-xxxxxxxxxxxxxxxxxxxxxxxx"));
+        assert!(screen.contains("↓ live"));
+    }
+
+    #[test]
+    fn anchored_history_counts_new_rows_until_returning_live() {
+        let request = event(
+            "session.message.requested",
+            serde_json::json!({"message": "Inspect the project"}),
+            "session_1",
+            "run_1",
+            1,
+        );
+        let mut content = String::new();
+        for row in 0..12 {
+            content.push_str(&format!("row-{row:02}-xxxxxxxxxxxxxxxxxxxxxxxx "));
+        }
+        let model = event(
+            "zeta.model_call.completed",
+            serde_json::json!({"content": content}),
+            "session_1",
+            "run_1",
+            2,
+        );
+        let mut app = App::connected(
+            "0.1".to_owned(),
+            vec![session("session_1", "zeta.master", "running")],
+            vec![request, model],
+            Some(Cursor(2)),
+        );
+        let enter = TerminalEvent::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        let up = TerminalEvent::Key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+        let live = TerminalEvent::Key(KeyEvent::new(KeyCode::Char('G'), KeyModifiers::SHIFT));
+        assert_eq!(app.handle_event(&enter), AppAction::None);
+        let backend = TestBackend::new(64, 16);
+        let mut terminal = Terminal::new(backend).expect("terminal should initialize");
+        terminal
+            .draw(|frame| draw(frame, &mut app))
+            .expect("live timeline should draw");
+        assert_eq!(app.handle_event(&up), AppAction::None);
+
+        let completed = event(
+            "zeta.turn.completed",
+            serde_json::json!({"content": "done"}),
+            "session_1",
+            "run_1",
+            3,
+        );
+        app.append_events(vec![completed], Some(Cursor(3)));
+        terminal
+            .draw(|frame| draw(frame, &mut app))
+            .expect("anchored history should draw");
+        let screen = terminal.backend().to_string();
+        assert!(screen.contains("1 new"));
+        assert!(screen.contains("G return to live"));
+        assert!(!screen.contains("Completed"));
+
+        assert_eq!(app.handle_event(&live), AppAction::None);
+        terminal
+            .draw(|frame| draw(frame, &mut app))
+            .expect("live timeline should draw");
+        let screen = terminal.backend().to_string();
+        assert!(screen.contains("↓ live"));
+        assert!(screen.contains("Completed"));
+        assert!(!screen.contains("1 new"));
     }
 
     #[test]

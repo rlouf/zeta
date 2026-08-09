@@ -7,6 +7,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
+use crossterm::cursor::Show;
 use crossterm::event::{
     DisableBracketedPaste, EnableBracketedPaste, Event as TerminalEvent, KeyCode, KeyEventKind,
     KeyModifiers, KeyboardEnhancementFlags, PopKeyboardEnhancementFlags,
@@ -306,6 +307,7 @@ impl TimelineItem {
 pub(super) enum AppAction {
     None,
     Quit,
+    Suspend,
     Submit(String),
     Copy(String),
 }
@@ -1053,6 +1055,12 @@ impl App {
         if key.kind != KeyEventKind::Press {
             return AppAction::None;
         }
+        if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
+            return AppAction::Quit;
+        }
+        if key.code == KeyCode::Char('z') && key.modifiers.contains(KeyModifiers::CONTROL) {
+            return AppAction::Suspend;
+        }
 
         match self.mode {
             Mode::Browse => {
@@ -1623,9 +1631,12 @@ impl App {
 
     #[allow(clippy::manual_map)]
     pub(super) fn replace_sessions(&mut self, sessions: Vec<Session>) {
-        let selected_id = match self.selected_session_id() {
-            Some(session_id) => Some(session_id.to_owned()),
-            None => None,
+        let selected_id = match &self.view {
+            View::Attached(session_id) => Some(session_id.clone()),
+            View::Sessions => match self.selected_session_id() {
+                Some(session_id) => Some(session_id.to_owned()),
+                None => None,
+            },
         };
         self.sessions = sessions;
         for session in &self.sessions {
@@ -2682,6 +2693,60 @@ impl TerminalSession {
             .backend_mut()
             .flush()
             .map_err(|_error| ClipboardError::WriteFailed)
+    }
+
+    pub(super) fn install_panic_hook(&self) {
+        let previous = std::panic::take_hook();
+        let keyboard_enhancement = self.keyboard_enhancement;
+        std::panic::set_hook(Box::new(move |panic_info| {
+            let _ = disable_raw_mode();
+            let mut output = io::stdout();
+            if keyboard_enhancement {
+                let _ = execute!(
+                    output,
+                    DisableBracketedPaste,
+                    PopKeyboardEnhancementFlags,
+                    LeaveAlternateScreen,
+                    Show
+                );
+            } else {
+                let _ = execute!(output, DisableBracketedPaste, LeaveAlternateScreen, Show);
+            }
+            previous(panic_info);
+        }));
+    }
+
+    pub(super) fn resume(&mut self) -> io::Result<()> {
+        if self.active {
+            return Ok(());
+        }
+        enable_raw_mode()?;
+        self.active = true;
+        let result = if self.keyboard_enhancement {
+            execute!(
+                self.terminal.backend_mut(),
+                EnterAlternateScreen,
+                PushKeyboardEnhancementFlags(
+                    KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
+                        | KeyboardEnhancementFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES
+                        | KeyboardEnhancementFlags::REPORT_ALTERNATE_KEYS
+                        | KeyboardEnhancementFlags::REPORT_EVENT_TYPES
+                ),
+                EnableBracketedPaste
+            )
+        } else {
+            execute!(
+                self.terminal.backend_mut(),
+                EnterAlternateScreen,
+                EnableBracketedPaste
+            )
+        };
+        if let Err(error) = result {
+            let _ = self.restore();
+            return Err(error);
+        }
+        self.terminal.clear()?;
+        Ok(())
     }
 
     pub(super) fn draw(&mut self, app: &mut App) -> io::Result<()> {
@@ -5529,5 +5594,61 @@ mod tests {
         assert!(symbols.contains("Cargo"));
         assert!(symbols.contains("missing/file"));
         assert_eq!(symbols.matches("\u{1b}]8;;file://").count(), 6);
+    }
+
+    #[test]
+    fn terminal_controls_cover_quit_suspend_resize_bursts_and_large_paste() {
+        let mut app = App::connected("0.1".to_owned(), Vec::new(), Vec::new(), None);
+        let control_c =
+            TerminalEvent::Key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
+        let control_z =
+            TerminalEvent::Key(KeyEvent::new(KeyCode::Char('z'), KeyModifiers::CONTROL));
+        assert_eq!(app.handle_event(&control_c), AppAction::Quit);
+        assert_eq!(app.handle_event(&control_z), AppAction::Suspend);
+
+        let new = TerminalEvent::Key(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE));
+        assert_eq!(app.handle_event(&new), AppAction::None);
+        let pasted = "release🙂\n".repeat(20_000);
+        assert_eq!(
+            app.handle_event(&TerminalEvent::Paste(pasted.clone())),
+            AppAction::None
+        );
+        assert_eq!(app.new_session_view.draft.text, pasted);
+
+        for width in 20..120 {
+            assert_eq!(
+                app.handle_event(&TerminalEvent::Resize(width, 24)),
+                AppAction::None
+            );
+        }
+        let backend = TestBackend::new(42, 12);
+        let mut terminal = Terminal::new(backend).expect("terminal should initialize");
+        terminal
+            .draw(|frame| draw(frame, &mut app))
+            .expect("large paste should remain renderable after resize bursts");
+        assert!(terminal.backend().to_string().contains("line 20001/20001"));
+    }
+
+    #[test]
+    fn detaching_from_a_new_session_keeps_it_selected_for_reattachment() {
+        let mut app = App::connected(
+            "0.1".to_owned(),
+            vec![session("session_old", "zeta.master", "idle")],
+            Vec::new(),
+            None,
+        );
+        app.submission_started("message-1".to_owned(), "Start something new".to_owned());
+        app.submission_queued("message-1", "evt_new", "session_new");
+        app.replace_sessions(vec![
+            session("session_old", "zeta.master", "idle"),
+            session("session_new", "zeta.master", "running"),
+        ]);
+
+        let escape = TerminalEvent::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert_eq!(app.handle_event(&escape), AppAction::None);
+        assert_eq!(app.selected_session_id(), Some("session_new"));
+        let enter = TerminalEvent::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(app.handle_event(&enter), AppAction::None);
+        assert_eq!(app.attached_session_id(), Some("session_new"));
     }
 }

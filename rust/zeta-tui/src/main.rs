@@ -7,6 +7,10 @@ use std::error::Error;
 use std::ffi::{OsStr, OsString};
 use std::io;
 use std::process::Stdio;
+#[cfg(unix)]
+use std::sync::Arc;
+#[cfg(unix)]
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use crossterm::event::{Event as TerminalEvent, EventStream};
@@ -26,6 +30,7 @@ use crate::wire::{
 
 const MAX_JSONRPC_LINE_BYTES: usize = 1024 * 1024;
 const REFRESH_INTERVAL: Duration = Duration::from_millis(500);
+const LIFECYCLE_INTERVAL: Duration = Duration::from_millis(50);
 
 type BoxError = Box<dyn Error>;
 
@@ -57,6 +62,54 @@ enum LoopEvent {
     Terminal(Option<Result<TerminalEvent, io::Error>>),
     Rpc(Option<Result<String, LinesCodecError>>),
     Refresh,
+    Lifecycle,
+}
+
+#[cfg(unix)]
+struct ProcessSignals {
+    terminate: Arc<AtomicBool>,
+    suspend: Arc<AtomicBool>,
+}
+
+#[cfg(not(unix))]
+struct ProcessSignals;
+
+#[cfg(unix)]
+impl ProcessSignals {
+    fn install() -> io::Result<Self> {
+        use signal_hook::consts::signal::{SIGHUP, SIGINT, SIGTERM, SIGTSTP};
+
+        let terminate = Arc::new(AtomicBool::new(false));
+        let suspend = Arc::new(AtomicBool::new(false));
+        signal_hook::flag::register(SIGINT, Arc::clone(&terminate))?;
+        signal_hook::flag::register(SIGTERM, Arc::clone(&terminate))?;
+        signal_hook::flag::register(SIGHUP, Arc::clone(&terminate))?;
+        signal_hook::flag::register(SIGTSTP, Arc::clone(&suspend))?;
+        Ok(Self { terminate, suspend })
+    }
+
+    fn take_termination(&self) -> bool {
+        self.terminate.swap(false, Ordering::Relaxed)
+    }
+
+    fn take_suspend(&self) -> bool {
+        self.suspend.swap(false, Ordering::Relaxed)
+    }
+}
+
+#[cfg(not(unix))]
+impl ProcessSignals {
+    fn install() -> io::Result<Self> {
+        Ok(Self)
+    }
+
+    fn take_termination(&self) -> bool {
+        false
+    }
+
+    fn take_suspend(&self) -> bool {
+        false
+    }
 }
 
 impl RequestPurpose {
@@ -185,6 +238,7 @@ async fn run() -> Result<(), BoxError> {
 
     let mut app = App::connected("unknown".to_owned(), Vec::new(), Vec::new(), None);
     let mut terminal = TerminalSession::start()?;
+    terminal.install_panic_hook();
     app.set_keyboard_enhancement(terminal.keyboard_enhancement());
     app.set_terminal_capabilities(terminal.capabilities());
     app.set_reconnecting(1, 0, "Starting zeta RPC".to_owned());
@@ -192,6 +246,10 @@ async fn run() -> Result<(), BoxError> {
     let mut refresh_interval = tokio::time::interval(REFRESH_INTERVAL);
     refresh_interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
     refresh_interval.tick().await;
+    let mut lifecycle_interval = tokio::time::interval(LIFECYCLE_INTERVAL);
+    lifecycle_interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
+    lifecycle_interval.tick().await;
+    let process_signals = ProcessSignals::install()?;
     let mut transport = None;
     let mut pending = HashMap::<RequestId, RequestPurpose>::new();
     let mut pending_refreshes = 0;
@@ -200,76 +258,78 @@ async fn run() -> Result<(), BoxError> {
     let mut backoff = ReconnectBackoff::default();
     let mut reconnect_at = Instant::now();
 
-    loop {
+    'application: loop {
         terminal.draw(&mut app)?;
 
         if transport.is_none() {
-            let reconnect = tokio::time::sleep_until(reconnect_at);
-            tokio::pin!(reconnect);
-            tokio::select! {
-                terminal_event = terminal_events.next() => {
-                    let Some(terminal_event) = terminal_event else {
-                        return Err(io::Error::new(
-                            io::ErrorKind::UnexpectedEof,
-                            "terminal event stream closed",
-                        )
-                        .into());
-                    };
-                    let terminal_event = terminal_event?;
-                    match app.handle_event(&terminal_event) {
-                        AppAction::None => {}
-                        AppAction::Quit => break,
-                        AppAction::Submit(objective) => {
-                            let (submission_id, _, _) = begin_submission(&mut app, objective);
-                            add_replay_submission(&mut replay_submissions, submission_id);
-                        }
-                        AppAction::Copy(content) => match terminal.copy_to_clipboard(&content) {
-                            Ok(()) => app.copy_succeeded(),
-                            Err(error) => app.copy_failed(error),
-                        },
-                    }
-                }
-                _ = &mut reconnect => {
-                    match RpcTransport::connect(&zeta, app.cursor()).await {
-                        Ok((new_transport, bootstrap)) => {
-                            app.set_protocol(bootstrap.initialized.protocol);
-                            app.replace_sessions(bootstrap.sessions.sessions);
-                            app.append_events(
-                                bootstrap.events.events,
-                                bootstrap.events.next_cursor,
-                            );
-                            next_request_id = 4;
-                            pending.clear();
-                            pending_refreshes = 0;
-                            transport = Some(new_transport);
-                            let replay_result = replay_pending_submissions(
-                                &app,
-                                transport
-                                    .as_mut()
-                                    .expect("connected state owns a transport"),
-                                &mut replay_submissions,
-                                &mut pending,
-                                &mut next_request_id,
+            let cursor = app.cursor();
+            let connect_at = reconnect_at;
+            let connect = async {
+                tokio::time::sleep_until(connect_at).await;
+                RpcTransport::connect(&zeta, cursor).await
+            };
+            tokio::pin!(connect);
+            let connect_result = loop {
+                tokio::select! {
+                    terminal_event = terminal_events.next() => {
+                        let Some(terminal_event) = terminal_event else {
+                            return Err(io::Error::new(
+                                io::ErrorKind::UnexpectedEof,
+                                "terminal event stream closed",
                             )
-                            .await;
-                            match replay_result {
-                                Ok(()) => {
-                                    app.set_connected();
-                                    backoff.reset();
-                                    refresh_interval.reset();
-                                }
-                                Err(error) => {
-                                    reconnect_at = begin_reconnect(
-                                        &mut app,
-                                        error.to_string(),
-                                        &mut transport,
-                                        &mut pending,
-                                        &mut pending_refreshes,
-                                        &mut replay_submissions,
-                                        &mut backoff,
-                                    );
-                                }
+                            .into());
+                        };
+                        let terminal_event = terminal_event?;
+                        match app.handle_event(&terminal_event) {
+                            AppAction::None => {}
+                            AppAction::Quit => break 'application,
+                            AppAction::Suspend => suspend_process(&mut terminal)?,
+                            AppAction::Submit(objective) => {
+                                let (submission_id, _, _) = begin_submission(&mut app, objective);
+                                add_replay_submission(&mut replay_submissions, submission_id);
                             }
+                            AppAction::Copy(content) => match terminal.copy_to_clipboard(&content) {
+                                Ok(()) => app.copy_succeeded(),
+                                Err(error) => app.copy_failed(error),
+                            },
+                        }
+                    }
+                    _ = lifecycle_interval.tick() => {
+                        if process_signals.take_termination() {
+                            break 'application;
+                        }
+                        if process_signals.take_suspend() {
+                            suspend_process(&mut terminal)?;
+                        }
+                    }
+                    connect_result = &mut connect => break connect_result,
+                }
+                terminal.draw(&mut app)?;
+            };
+            match connect_result {
+                Ok((new_transport, bootstrap)) => {
+                    app.set_protocol(bootstrap.initialized.protocol);
+                    app.replace_sessions(bootstrap.sessions.sessions);
+                    app.append_events(bootstrap.events.events, bootstrap.events.next_cursor);
+                    next_request_id = 4;
+                    pending.clear();
+                    pending_refreshes = 0;
+                    transport = Some(new_transport);
+                    let replay_result = replay_pending_submissions(
+                        &app,
+                        transport
+                            .as_mut()
+                            .expect("connected state owns a transport"),
+                        &mut replay_submissions,
+                        &mut pending,
+                        &mut next_request_id,
+                    )
+                    .await;
+                    match replay_result {
+                        Ok(()) => {
+                            app.set_connected();
+                            backoff.reset();
+                            refresh_interval.reset();
                         }
                         Err(error) => {
                             reconnect_at = begin_reconnect(
@@ -284,6 +344,17 @@ async fn run() -> Result<(), BoxError> {
                         }
                     }
                 }
+                Err(error) => {
+                    reconnect_at = begin_reconnect(
+                        &mut app,
+                        error.to_string(),
+                        &mut transport,
+                        &mut pending,
+                        &mut pending_refreshes,
+                        &mut replay_submissions,
+                        &mut backoff,
+                    );
+                }
             }
             continue;
         }
@@ -296,6 +367,7 @@ async fn run() -> Result<(), BoxError> {
                 terminal_event = terminal_events.next() => LoopEvent::Terminal(terminal_event),
                 line = current_transport.output.next() => LoopEvent::Rpc(line),
                 _ = refresh_interval.tick(), if pending_refreshes == 0 => LoopEvent::Refresh,
+                _ = lifecycle_interval.tick() => LoopEvent::Lifecycle,
             }
         };
         let mut transport_error = None;
@@ -312,6 +384,7 @@ async fn run() -> Result<(), BoxError> {
                 match app.handle_event(&terminal_event) {
                     AppAction::None => {}
                     AppAction::Quit => break,
+                    AppAction::Suspend => suspend_process(&mut terminal)?,
                     AppAction::Submit(objective) => {
                         let (idempotency_key, method, params) =
                             begin_submission(&mut app, objective);
@@ -415,6 +488,14 @@ async fn run() -> Result<(), BoxError> {
                     Err(error) => transport_error = Some(error.to_string()),
                 }
             }
+            LoopEvent::Lifecycle => {
+                if process_signals.take_termination() {
+                    break;
+                }
+                if process_signals.take_suspend() {
+                    suspend_process(&mut terminal)?;
+                }
+            }
         }
         if let Some(error) = transport_error {
             reconnect_at = begin_reconnect(
@@ -433,6 +514,14 @@ async fn run() -> Result<(), BoxError> {
     if let Some(transport) = transport {
         transport.close().await?;
     }
+    Ok(())
+}
+
+fn suspend_process(terminal: &mut TerminalSession) -> Result<(), BoxError> {
+    terminal.restore()?;
+    #[cfg(unix)]
+    signal_hook::low_level::raise(signal_hook::consts::signal::SIGSTOP)?;
+    terminal.resume()?;
     Ok(())
 }
 

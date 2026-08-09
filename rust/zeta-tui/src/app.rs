@@ -26,13 +26,8 @@ pub(super) struct App {
     cursor: Option<Cursor>,
     view: View,
     mode: Mode,
-    draft: Draft,
-    timeline_mode: TimelineMode,
-    timeline_position: TimelinePosition,
-    timeline_max_offset: usize,
-    timeline_viewport_height: usize,
-    timeline_unseen_rows: usize,
-    timeline_changed: bool,
+    session_views: HashMap<String, SessionViewState>,
+    new_session_view: SessionViewState,
     animation_frame: usize,
     submissions: Vec<Submission>,
 }
@@ -49,7 +44,7 @@ enum Mode {
     Compose,
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum TimelineMode {
     Semantic,
     Raw,
@@ -72,6 +67,31 @@ struct DraftLayout {
     lines: Vec<String>,
     cursor_row: usize,
     cursor_column: usize,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct SessionViewState {
+    draft: Draft,
+    timeline_mode: TimelineMode,
+    timeline_position: TimelinePosition,
+    timeline_max_offset: usize,
+    timeline_viewport_height: usize,
+    timeline_unseen_rows: usize,
+    timeline_changed: bool,
+}
+
+impl Default for SessionViewState {
+    fn default() -> Self {
+        Self {
+            draft: Draft::default(),
+            timeline_mode: TimelineMode::Semantic,
+            timeline_position: TimelinePosition::Follow,
+            timeline_max_offset: 0,
+            timeline_viewport_height: 1,
+            timeline_unseen_rows: 0,
+            timeline_changed: false,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -286,6 +306,10 @@ impl App {
         cursor: Option<Cursor>,
     ) -> Self {
         let selected_session = if sessions.is_empty() { None } else { Some(0) };
+        let mut session_views = HashMap::new();
+        for session in &sessions {
+            session_views.insert(session.session_id().to_owned(), SessionViewState::default());
+        }
         Self {
             protocol,
             sessions,
@@ -294,13 +318,8 @@ impl App {
             cursor,
             view: View::Sessions,
             mode: Mode::Browse,
-            draft: Draft::default(),
-            timeline_mode: TimelineMode::Semantic,
-            timeline_position: TimelinePosition::Follow,
-            timeline_max_offset: 0,
-            timeline_viewport_height: 1,
-            timeline_unseen_rows: 0,
-            timeline_changed: false,
+            session_views,
+            new_session_view: SessionViewState::default(),
             animation_frame: 0,
             submissions: Vec::new(),
         }
@@ -310,7 +329,7 @@ impl App {
         if self.mode == Mode::Compose
             && let TerminalEvent::Paste(text) = event
         {
-            self.draft.insert(text);
+            self.view_state_mut().draft.insert(text);
             return AppAction::None;
         }
         let TerminalEvent::Key(key) = event else {
@@ -343,16 +362,12 @@ impl App {
                             let Some(session_id) = self.selected_session_id() else {
                                 return AppAction::None;
                             };
-                            self.view = View::Attached(session_id.to_owned());
-                            self.timeline_mode = TimelineMode::Semantic;
-                            self.follow_timeline();
+                            self.attach_session(session_id.to_owned());
                         }
                     }
                     View::Attached(_) => {
                         if key.code == KeyCode::Esc {
                             self.view = View::Sessions;
-                            self.timeline_mode = TimelineMode::Semantic;
-                            self.follow_timeline();
                             return AppAction::None;
                         }
                         if key.code == KeyCode::Char('i') {
@@ -360,15 +375,16 @@ impl App {
                             return AppAction::None;
                         }
                         if key.code == KeyCode::Char('v') {
-                            self.timeline_mode = match self.timeline_mode {
+                            let timeline_mode = match self.view_state().timeline_mode {
                                 TimelineMode::Semantic => TimelineMode::Raw,
                                 TimelineMode::Raw => TimelineMode::Semantic,
                             };
+                            self.view_state_mut().timeline_mode = timeline_mode;
                             self.follow_timeline();
                             return AppAction::None;
                         }
                         if key.code == KeyCode::Char('g') {
-                            self.timeline_position = TimelinePosition::Offset(0);
+                            self.view_state_mut().timeline_position = TimelinePosition::Offset(0);
                             return AppAction::None;
                         }
                         if key.code == KeyCode::Char('G') {
@@ -396,57 +412,56 @@ impl App {
             }
             Mode::Compose => {
                 if key.code == KeyCode::Esc {
-                    self.draft.clear();
                     self.mode = Mode::Browse;
                     return AppAction::None;
                 }
                 if key.code == KeyCode::Enter {
-                    let message = self.draft.trimmed();
+                    let message = self.view_state().draft.trimmed();
                     if message.is_empty() {
                         return AppAction::None;
                     }
                     let message = message.to_owned();
-                    self.draft.clear();
+                    self.view_state_mut().draft.clear();
                     self.mode = Mode::Browse;
                     return AppAction::Submit(message);
                 }
                 if key.code == KeyCode::Left {
-                    self.draft.move_left();
+                    self.view_state_mut().draft.move_left();
                     return AppAction::None;
                 }
                 if key.code == KeyCode::Right {
-                    self.draft.move_right();
+                    self.view_state_mut().draft.move_right();
                     return AppAction::None;
                 }
                 if key.code == KeyCode::Home {
-                    self.draft.move_to_start();
+                    self.view_state_mut().draft.move_to_start();
                     return AppAction::None;
                 }
                 if key.code == KeyCode::End {
-                    self.draft.move_to_end();
+                    self.view_state_mut().draft.move_to_end();
                     return AppAction::None;
                 }
                 if key.code == KeyCode::Backspace {
                     if key.modifiers.contains(KeyModifiers::ALT) {
-                        self.draft.delete_word_backward();
+                        self.view_state_mut().draft.delete_word_backward();
                     } else {
-                        self.draft.delete_backward();
+                        self.view_state_mut().draft.delete_backward();
                     }
                     return AppAction::None;
                 }
                 if key.code == KeyCode::Delete {
-                    self.draft.delete_forward();
+                    self.view_state_mut().draft.delete_forward();
                     return AppAction::None;
                 }
                 if key.code == KeyCode::Char('w') && key.modifiers.contains(KeyModifiers::CONTROL) {
-                    self.draft.delete_word_backward();
+                    self.view_state_mut().draft.delete_word_backward();
                     return AppAction::None;
                 }
                 if let KeyCode::Char(character) = key.code
                     && !key.modifiers.contains(KeyModifiers::CONTROL)
                     && !key.modifiers.contains(KeyModifiers::SUPER)
                 {
-                    self.draft.insert_char(character);
+                    self.view_state_mut().draft.insert_char(character);
                 }
                 AppAction::None
             }
@@ -465,12 +480,11 @@ impl App {
     }
 
     pub(super) fn append_events(&mut self, events: Vec<Event>, cursor: Option<Cursor>) {
-        let attached_session_id = self.attached_session_id().map(str::to_owned);
         for event in events {
-            if let Some(session_id) = &attached_session_id
-                && event.belongs_to_session(session_id)
-            {
-                self.timeline_changed = true;
+            for (session_id, state) in &mut self.session_views {
+                if event.belongs_to_session(session_id) {
+                    state.timeline_changed = true;
+                }
             }
             let event_id = event.id();
             let durable_submission_id = if event.is_direct_message_request() {
@@ -508,9 +522,7 @@ impl App {
             state: SubmissionState::Sending,
             event_id: None,
         });
-        self.timeline_position = TimelinePosition::Follow;
-        self.timeline_unseen_rows = 0;
-        self.timeline_changed = false;
+        self.follow_timeline();
     }
 
     pub(super) fn submission_queued(&mut self, id: &str, event_id: &str, session_id: &str) {
@@ -531,7 +543,7 @@ impl App {
                 .retain(|submission| submission.event_id.as_deref() != Some(event_id));
         }
         if started_session {
-            self.view = View::Attached(session_id.to_owned());
+            self.attach_session(session_id.to_owned());
             self.follow_timeline();
         }
     }
@@ -545,8 +557,20 @@ impl App {
             return;
         };
         submission.state = SubmissionState::Failed(single_line(error));
-        self.draft.replace(submission.message.clone());
-        self.mode = Mode::Compose;
+        let target = submission.target.clone();
+        let message = submission.message.clone();
+        match &target {
+            SubmissionTarget::NewSession => self.new_session_view.draft.replace(message),
+            SubmissionTarget::Session(session_id) => self
+                .session_views
+                .entry(session_id.to_owned())
+                .or_default()
+                .draft
+                .replace(message),
+        }
+        if self.current_submission_target() == target {
+            self.mode = Mode::Compose;
+        }
     }
 
     #[allow(clippy::question_mark)]
@@ -567,6 +591,38 @@ impl App {
         }
     }
 
+    fn current_submission_target(&self) -> SubmissionTarget {
+        match &self.view {
+            View::Sessions => SubmissionTarget::NewSession,
+            View::Attached(session_id) => SubmissionTarget::Session(session_id.to_owned()),
+        }
+    }
+
+    fn attach_session(&mut self, session_id: String) {
+        self.session_views.entry(session_id.clone()).or_default();
+        self.view = View::Attached(session_id);
+    }
+
+    fn view_state(&self) -> &SessionViewState {
+        match &self.view {
+            View::Sessions => &self.new_session_view,
+            View::Attached(session_id) => self
+                .session_views
+                .get(session_id)
+                .expect("attached sessions own viewer state"),
+        }
+    }
+
+    fn view_state_mut(&mut self) -> &mut SessionViewState {
+        match &self.view {
+            View::Sessions => &mut self.new_session_view,
+            View::Attached(session_id) => self
+                .session_views
+                .get_mut(session_id)
+                .expect("attached sessions own viewer state"),
+        }
+    }
+
     #[allow(clippy::manual_map)]
     pub(super) fn replace_sessions(&mut self, sessions: Vec<Session>) {
         let selected_id = match self.selected_session_id() {
@@ -574,6 +630,11 @@ impl App {
             None => None,
         };
         self.sessions = sessions;
+        for session in &self.sessions {
+            self.session_views
+                .entry(session.session_id().to_owned())
+                .or_default();
+        }
         self.selected_session = None;
         let Some(selected_id) = selected_id else {
             if !self.sessions.is_empty() {
@@ -679,11 +740,12 @@ impl App {
 
     fn timeline_items(&self) -> Vec<TimelineItem> {
         let events = self.timeline_events();
-        let mut items = match self.timeline_mode {
+        let timeline_mode = self.view_state().timeline_mode;
+        let mut items = match timeline_mode {
             TimelineMode::Raw => raw_timeline_items(&events),
             TimelineMode::Semantic => semantic_timeline_items(&events, self.animation_frame),
         };
-        if self.timeline_mode == TimelineMode::Raw {
+        if timeline_mode == TimelineMode::Raw {
             return items;
         }
         let Some(session_id) = self.attached_session_id() else {
@@ -738,75 +800,86 @@ impl App {
     }
 
     fn timeline_offset(&mut self, row_count: usize, viewport_height: usize) -> usize {
-        let previous_max_offset = self.timeline_max_offset;
-        self.timeline_viewport_height = viewport_height.max(1);
-        self.timeline_max_offset = row_count.saturating_sub(viewport_height);
-        if self.timeline_changed {
-            if let TimelinePosition::Offset(_) = self.timeline_position {
-                self.timeline_unseen_rows +=
-                    self.timeline_max_offset.saturating_sub(previous_max_offset);
+        let state = self.view_state_mut();
+        let previous_max_offset = state.timeline_max_offset;
+        state.timeline_viewport_height = viewport_height.max(1);
+        state.timeline_max_offset = row_count.saturating_sub(viewport_height);
+        if state.timeline_changed {
+            if let TimelinePosition::Offset(_) = state.timeline_position {
+                state.timeline_unseen_rows += state
+                    .timeline_max_offset
+                    .saturating_sub(previous_max_offset);
             }
-            self.timeline_changed = false;
+            state.timeline_changed = false;
         }
-        match self.timeline_position {
+        match state.timeline_position {
             TimelinePosition::Follow => {
-                self.timeline_unseen_rows = 0;
-                self.timeline_max_offset
+                state.timeline_unseen_rows = 0;
+                state.timeline_max_offset
             }
             TimelinePosition::Offset(offset) => {
-                let offset = offset.min(self.timeline_max_offset);
-                self.timeline_position = TimelinePosition::Offset(offset);
+                let offset = offset.min(state.timeline_max_offset);
+                state.timeline_position = TimelinePosition::Offset(offset);
                 offset
             }
         }
     }
 
     fn scroll_timeline_up(&mut self) {
-        let offset = match self.timeline_position {
-            TimelinePosition::Follow => self.timeline_max_offset,
+        let state = self.view_state_mut();
+        let offset = match state.timeline_position {
+            TimelinePosition::Follow => state.timeline_max_offset,
             TimelinePosition::Offset(offset) => offset,
         };
-        self.timeline_position = TimelinePosition::Offset(offset.saturating_sub(1));
+        state.timeline_position = TimelinePosition::Offset(offset.saturating_sub(1));
     }
 
     fn scroll_timeline_down(&mut self) {
-        match self.timeline_position {
+        let state = self.view_state_mut();
+        match state.timeline_position {
             TimelinePosition::Follow => {}
             TimelinePosition::Offset(offset) => {
-                if offset >= self.timeline_max_offset.saturating_sub(1) {
-                    self.follow_timeline();
+                if offset >= state.timeline_max_offset.saturating_sub(1) {
+                    state.timeline_position = TimelinePosition::Follow;
+                    state.timeline_unseen_rows = 0;
+                    state.timeline_changed = false;
                 } else {
-                    self.timeline_position = TimelinePosition::Offset(offset + 1);
+                    state.timeline_position = TimelinePosition::Offset(offset + 1);
                 }
             }
         }
     }
 
     fn scroll_timeline_page_up(&mut self) {
-        let offset = match self.timeline_position {
-            TimelinePosition::Follow => self.timeline_max_offset,
+        let state = self.view_state_mut();
+        let offset = match state.timeline_position {
+            TimelinePosition::Follow => state.timeline_max_offset,
             TimelinePosition::Offset(offset) => offset,
         };
-        self.timeline_position =
-            TimelinePosition::Offset(offset.saturating_sub(self.timeline_viewport_height));
+        state.timeline_position =
+            TimelinePosition::Offset(offset.saturating_sub(state.timeline_viewport_height));
     }
 
     fn scroll_timeline_page_down(&mut self) {
-        let TimelinePosition::Offset(offset) = self.timeline_position else {
+        let state = self.view_state_mut();
+        let TimelinePosition::Offset(offset) = state.timeline_position else {
             return;
         };
-        let offset = offset.saturating_add(self.timeline_viewport_height);
-        if offset >= self.timeline_max_offset {
-            self.follow_timeline();
+        let offset = offset.saturating_add(state.timeline_viewport_height);
+        if offset >= state.timeline_max_offset {
+            state.timeline_position = TimelinePosition::Follow;
+            state.timeline_unseen_rows = 0;
+            state.timeline_changed = false;
         } else {
-            self.timeline_position = TimelinePosition::Offset(offset);
+            state.timeline_position = TimelinePosition::Offset(offset);
         }
     }
 
     fn follow_timeline(&mut self) {
-        self.timeline_position = TimelinePosition::Follow;
-        self.timeline_unseen_rows = 0;
-        self.timeline_changed = false;
+        let state = self.view_state_mut();
+        state.timeline_position = TimelinePosition::Follow;
+        state.timeline_unseen_rows = 0;
+        state.timeline_changed = false;
     }
 
     fn shows_composer(&self) -> bool {
@@ -822,11 +895,17 @@ impl App {
         if !self.shows_composer() {
             return 0;
         }
-        if self.mode == Mode::Browse || self.draft.is_empty() {
+        if self.mode == Mode::Browse || self.view_state().draft.is_empty() {
             return 2;
         }
         let input_width = usize::from(width.saturating_sub(2));
-        let line_count = self.draft.layout(input_width).lines.len().clamp(1, 4);
+        let line_count = self
+            .view_state()
+            .draft
+            .layout(input_width)
+            .lines
+            .len()
+            .clamp(1, 4);
         u16::try_from(line_count + 1).unwrap_or(5)
     }
 
@@ -1431,7 +1510,8 @@ fn render_timeline(frame: &mut Frame<'_>, area: Rect, app: &mut App) {
 }
 
 fn render_timeline_position(frame: &mut Frame<'_>, area: Rect, app: &App) {
-    let line = match app.timeline_position {
+    let state = app.view_state();
+    let line = match state.timeline_position {
         TimelinePosition::Follow => {
             Line::from(Span::styled("↓ live", Style::default().fg(Color::DarkGray)))
         }
@@ -1444,11 +1524,11 @@ fn render_timeline_position(frame: &mut Frame<'_>, area: Rect, app: &App) {
                 format!("↑ {offset} lines above")
             };
             let mut spans = vec![Span::styled(position, Style::default().fg(Color::DarkGray))];
-            if app.timeline_unseen_rows == 0 {
+            if state.timeline_unseen_rows == 0 {
                 spans.push(Span::styled(" · ", Style::default().fg(Color::DarkGray)));
             } else {
                 spans.push(Span::styled(
-                    format!(" · {} new · ", app.timeline_unseen_rows),
+                    format!(" · {} new · ", state.timeline_unseen_rows),
                     Style::default().fg(Color::Yellow),
                 ));
             }
@@ -1495,7 +1575,7 @@ fn render_header(frame: &mut Frame<'_>, area: Rect, app: &App) {
     }
     frame.render_widget(Paragraph::new(left), areas[0]);
 
-    let right = match app.timeline_mode {
+    let right = match app.view_state().timeline_mode {
         TimelineMode::Semantic => vec![connected_line()],
         TimelineMode::Raw => {
             let cursor = match app.cursor {
@@ -1552,7 +1632,7 @@ fn render_composer(frame: &mut Frame<'_>, area: Rect, app: &App) {
         return;
     }
 
-    if app.draft.is_empty() {
+    if app.view_state().draft.is_empty() {
         let prompt = match &app.view {
             View::Sessions => "What should Zeta do?",
             View::Attached(_) => "Message Zeta…",
@@ -1567,7 +1647,7 @@ fn render_composer(frame: &mut Frame<'_>, area: Rect, app: &App) {
     }
 
     let input_width = usize::from(inner.width.saturating_sub(2));
-    let layout = app.draft.layout(input_width);
+    let layout = app.view_state().draft.layout(input_width);
     let visible_height = usize::from(inner.height).max(1);
     let latest_start = layout.lines.len().saturating_sub(visible_height);
     let start = layout
@@ -2458,7 +2538,7 @@ mod tests {
     }
 
     #[test]
-    fn composer_backspace_deletes_before_the_cursor_and_cancel_clears_the_draft() {
+    fn composer_backspace_deletes_before_the_cursor_and_escape_preserves_the_draft() {
         let mut app = App::connected("0.1".to_owned(), Vec::new(), Vec::new(), None);
         let new = TerminalEvent::Key(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE));
         let a = TerminalEvent::Key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE));
@@ -2479,7 +2559,105 @@ mod tests {
         assert_eq!(app.handle_event(&a), AppAction::None);
         assert_eq!(app.handle_event(&escape), AppAction::None);
         assert_eq!(app.handle_event(&new), AppAction::None);
+        assert_eq!(app.handle_event(&enter), AppAction::Submit("a".to_owned()));
+    }
+
+    #[test]
+    fn sessions_preserve_independent_drafts_and_history_positions() {
+        let mut first_content = String::new();
+        let mut second_content = String::new();
+        for row in 0..18 {
+            first_content.push_str(&format!("first-{row:02}-xxxxxxxxxxxxxxxxxxxxxxxx "));
+            second_content.push_str(&format!("second-{row:02}-xxxxxxxxxxxxxxxxxxxxxxx "));
+        }
+        let first = event(
+            "zeta.model_call.completed",
+            serde_json::json!({"content": first_content}),
+            "session_1",
+            "run_1",
+            1,
+        );
+        let second = event(
+            "zeta.model_call.completed",
+            serde_json::json!({"content": second_content}),
+            "session_2",
+            "run_2",
+            2,
+        );
+        let mut app = App::connected(
+            "0.1".to_owned(),
+            vec![
+                session("session_1", "zeta.master", "idle"),
+                session("session_2", "zeta.master", "idle"),
+            ],
+            vec![first, second],
+            Some(Cursor(2)),
+        );
+        let enter = TerminalEvent::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        let compose = TerminalEvent::Key(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE));
+        let escape = TerminalEvent::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        let down = TerminalEvent::Key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        let up = TerminalEvent::Key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+        let page_up = TerminalEvent::Key(KeyEvent::new(KeyCode::PageUp, KeyModifiers::NONE));
+        let backend = TestBackend::new(48, 16);
+        let mut terminal = Terminal::new(backend).expect("terminal should initialize");
+
         assert_eq!(app.handle_event(&enter), AppAction::None);
+        terminal
+            .draw(|frame| draw(frame, &mut app))
+            .expect("first session should draw");
+        assert_eq!(app.handle_event(&page_up), AppAction::None);
+        assert_eq!(app.handle_event(&compose), AppAction::None);
+        assert_eq!(
+            app.handle_event(&TerminalEvent::Paste("first draft".to_owned())),
+            AppAction::None
+        );
+        assert_eq!(app.handle_event(&escape), AppAction::None);
+        assert_eq!(app.handle_event(&escape), AppAction::None);
+        app.append_events(
+            vec![event(
+                "zeta.turn.completed",
+                serde_json::json!({"content": "new first output"}),
+                "session_1",
+                "run_1",
+                3,
+            )],
+            Some(Cursor(3)),
+        );
+
+        assert_eq!(app.handle_event(&down), AppAction::None);
+        assert_eq!(app.handle_event(&enter), AppAction::None);
+        terminal
+            .draw(|frame| draw(frame, &mut app))
+            .expect("second session should draw");
+        assert!(terminal.backend().to_string().contains("↓ live"));
+        assert_eq!(app.handle_event(&compose), AppAction::None);
+        assert_eq!(
+            app.handle_event(&TerminalEvent::Paste("second draft".to_owned())),
+            AppAction::None
+        );
+        assert_eq!(app.handle_event(&escape), AppAction::None);
+        assert_eq!(app.handle_event(&escape), AppAction::None);
+
+        assert_eq!(app.handle_event(&up), AppAction::None);
+        assert_eq!(app.handle_event(&enter), AppAction::None);
+        terminal
+            .draw(|frame| draw(frame, &mut app))
+            .expect("first session should restore");
+        let screen = terminal.backend().to_string();
+        assert!(screen.contains("↑"));
+        assert!(app.view_state().timeline_unseen_rows > 0);
+        assert_eq!(app.handle_event(&compose), AppAction::None);
+        terminal
+            .draw(|frame| draw(frame, &mut app))
+            .expect("first draft should restore");
+        let screen = terminal.backend().to_string();
+        assert!(screen.contains("first draft"));
+        assert!(!screen.contains("second draft"));
+        assert_eq!(
+            app.handle_event(&enter),
+            AppAction::Submit("first draft".to_owned())
+        );
     }
 
     #[test]

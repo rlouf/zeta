@@ -336,6 +336,33 @@ fn rpc_error(code: i64, message: &str, data: Option<Value>) -> BoxError {
     io::Error::other(format!("JSON-RPC error {code}: {message}{data}")).into()
 }
 
+fn submission_error_message(message: &str, data: Option<&Value>) -> String {
+    let message = message.trim();
+    let detail = match data {
+        Some(Value::String(detail)) => Some(detail.as_str()),
+        Some(Value::Object(data)) => {
+            let detail = data.get("detail").and_then(Value::as_str);
+            match detail {
+                Some(detail) => Some(detail),
+                None => data.get("message").and_then(Value::as_str),
+            }
+        }
+        Some(Value::Null)
+        | Some(Value::Bool(_))
+        | Some(Value::Number(_))
+        | Some(Value::Array(_))
+        | None => None,
+    };
+    let Some(detail) = detail else {
+        return message.to_owned();
+    };
+    let detail = detail.trim();
+    if detail.is_empty() || detail.eq_ignore_ascii_case(message) {
+        return message.to_owned();
+    }
+    format!("{message}: {detail}")
+}
+
 fn validate_jsonrpc_version(version: &str) -> Result<(), BoxError> {
     if version != "2.0" {
         return Err(io::Error::other(format!("unsupported JSON-RPC version {version}")).into());
@@ -407,13 +434,15 @@ fn apply_failure(
     message: &str,
     data: Option<Value>,
 ) -> Result<(), BoxError> {
-    let error = rpc_error(code, message, data);
     match purpose {
         RequestPurpose::Submit(submission_id) => {
-            app.submission_failed(&submission_id, &error.to_string());
+            let error = submission_error_message(message, data.as_ref());
+            app.submission_failed(&submission_id, &error);
             Ok(())
         }
-        RequestPurpose::RefreshSessions | RequestPurpose::RefreshEvents => Err(error),
+        RequestPurpose::RefreshSessions | RequestPurpose::RefreshEvents => {
+            Err(rpc_error(code, message, data))
+        }
     }
 }
 
@@ -522,6 +551,24 @@ mod tests {
                 None,
             )
             .is_err()
+        );
+    }
+
+    #[test]
+    fn submission_error_prefers_human_detail_and_omits_structural_data() {
+        assert_eq!(
+            super::submission_error_message(
+                "Session unavailable",
+                Some(&json!({"detail": "Agent is not accepting messages"})),
+            ),
+            "Session unavailable: Agent is not accepting messages"
+        );
+        assert_eq!(
+            super::submission_error_message(
+                "Session unavailable",
+                Some(&json!({"session_id": "session_1", "retryable": false})),
+            ),
+            "Session unavailable"
         );
     }
 

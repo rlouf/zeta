@@ -1435,22 +1435,30 @@ fn render_timeline_position(frame: &mut Frame<'_>, area: Rect, app: &App) {
         TimelinePosition::Follow => {
             Line::from(Span::styled("↓ live", Style::default().fg(Color::DarkGray)))
         }
-        TimelinePosition::Offset(offset) => Line::from(vec![
-            Span::styled(
-                format!("↑ {offset} lines above"),
+        TimelinePosition::Offset(offset) => {
+            let position = if offset == 0 {
+                "↑ top".to_owned()
+            } else if offset == 1 {
+                "↑ 1 line above".to_owned()
+            } else {
+                format!("↑ {offset} lines above")
+            };
+            let mut spans = vec![Span::styled(position, Style::default().fg(Color::DarkGray))];
+            if app.timeline_unseen_rows == 0 {
+                spans.push(Span::styled(" · ", Style::default().fg(Color::DarkGray)));
+            } else {
+                spans.push(Span::styled(
+                    format!(" · {} new · ", app.timeline_unseen_rows),
+                    Style::default().fg(Color::Yellow),
+                ));
+            }
+            spans.push(Span::styled("G", Style::default().fg(Color::Cyan)));
+            spans.push(Span::styled(
+                " return to live",
                 Style::default().fg(Color::DarkGray),
-            ),
-            Span::styled(
-                format!(" · {} new · ", app.timeline_unseen_rows),
-                if app.timeline_unseen_rows == 0 {
-                    Style::default().fg(Color::DarkGray)
-                } else {
-                    Style::default().fg(Color::Yellow)
-                },
-            ),
-            Span::styled("G", Style::default().fg(Color::Cyan)),
-            Span::styled(" return to live", Style::default().fg(Color::DarkGray)),
-        ]),
+            ));
+            Line::from(spans)
+        }
     };
     frame.render_widget(Paragraph::new(line).alignment(Alignment::Right), area);
 }
@@ -2178,6 +2186,7 @@ mod tests {
         let enter = TerminalEvent::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
         let top = TerminalEvent::Key(KeyEvent::new(KeyCode::Char('g'), KeyModifiers::NONE));
         let live = TerminalEvent::Key(KeyEvent::new(KeyCode::Char('G'), KeyModifiers::SHIFT));
+        let down = TerminalEvent::Key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
         let page_up = TerminalEvent::Key(KeyEvent::new(KeyCode::PageUp, KeyModifiers::NONE));
         let page_down = TerminalEvent::Key(KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE));
         assert_eq!(app.handle_event(&enter), AppAction::None);
@@ -2194,19 +2203,29 @@ mod tests {
             .expect("top timeline should draw");
         let screen = terminal.backend().to_string();
         assert!(screen.contains("row-00-xxxxxxxxxxxxxxxxxxxxxxxx"));
-        assert!(screen.contains("↑ 0 lines above"));
+        assert!(screen.contains("↑ top"));
+        assert!(!screen.contains("0 lines above"));
+        assert!(!screen.contains("0 new"));
+
+        assert_eq!(app.handle_event(&down), AppAction::None);
+        terminal
+            .draw(|frame| draw(frame, &mut app))
+            .expect("next line should draw");
+        assert!(terminal.backend().to_string().contains("↑ 1 line above"));
+
+        assert_eq!(app.handle_event(&top), AppAction::None);
 
         assert_eq!(app.handle_event(&page_down), AppAction::None);
         terminal
             .draw(|frame| draw(frame, &mut app))
             .expect("next page should draw");
-        assert!(!terminal.backend().to_string().contains("↑ 0 lines above"));
+        assert!(!terminal.backend().to_string().contains("↑ top"));
 
         assert_eq!(app.handle_event(&page_up), AppAction::None);
         terminal
             .draw(|frame| draw(frame, &mut app))
             .expect("previous page should draw");
-        assert!(terminal.backend().to_string().contains("↑ 0 lines above"));
+        assert!(terminal.backend().to_string().contains("↑ top"));
 
         assert_eq!(app.handle_event(&live), AppAction::None);
         terminal

@@ -44,6 +44,8 @@ pub(super) struct App {
     switcher: Option<SwitcherState>,
     fuzzy_matcher: RefCell<Matcher>,
     connection: ConnectionStatus,
+    help: bool,
+    feedback: Option<Feedback>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -80,6 +82,14 @@ enum ConnectionStatus {
         retry_delay_ms: u64,
         error: String,
     },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Feedback {
+    glyph: &'static str,
+    text: String,
+    color: Color,
+    remaining_ticks: usize,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -901,10 +911,23 @@ impl App {
             switcher: None,
             fuzzy_matcher: RefCell::new(Matcher::new(MatcherConfig::DEFAULT)),
             connection: ConnectionStatus::Connected,
+            help: false,
+            feedback: None,
         }
     }
 
     pub(super) fn handle_event(&mut self, event: &TerminalEvent) -> AppAction {
+        if self.help {
+            let TerminalEvent::Key(key) = event else {
+                return AppAction::None;
+            };
+            if key.kind == KeyEventKind::Press
+                && (key.code == KeyCode::Esc || key.code == KeyCode::Char('?'))
+            {
+                self.help = false;
+            }
+            return AppAction::None;
+        }
         if self.switcher.is_some() {
             return self.handle_switcher_event(event);
         }
@@ -930,6 +953,10 @@ impl App {
                 }
                 if key.code == KeyCode::Char('/') {
                     self.switcher = Some(SwitcherState::default());
+                    return AppAction::None;
+                }
+                if key.code == KeyCode::Char('?') {
+                    self.help = true;
                     return AppAction::None;
                 }
                 match &self.view {
@@ -1204,6 +1231,13 @@ impl App {
 
     pub(super) fn advance_animation(&mut self) {
         self.animation_frame = (self.animation_frame + 1) % 4;
+        let Some(feedback) = &mut self.feedback else {
+            return;
+        };
+        feedback.remaining_ticks = feedback.remaining_ticks.saturating_sub(1);
+        if feedback.remaining_ticks == 0 {
+            self.feedback = None;
+        }
     }
 
     pub(super) fn set_keyboard_enhancement(&mut self, supported: bool) {
@@ -1293,6 +1327,12 @@ impl App {
             self.attach_session(session_id.to_owned());
             self.follow_timeline();
         }
+        self.feedback = Some(Feedback {
+            glyph: "✓",
+            text: "Sent".to_owned(),
+            color: Color::Green,
+            remaining_ticks: 4,
+        });
     }
 
     pub(super) fn submission_failed(&mut self, id: &str, error: &str) {
@@ -1318,6 +1358,12 @@ impl App {
         if self.current_submission_target() == target {
             self.mode = Mode::Compose;
         }
+        self.feedback = Some(Feedback {
+            glyph: "↺",
+            text: "Draft restored for retry".to_owned(),
+            color: Color::Yellow,
+            remaining_ticks: 6,
+        });
     }
 
     pub(super) fn submission_for_replay(&self, id: &str) -> Option<(Option<String>, String)> {
@@ -1597,7 +1643,7 @@ impl App {
                     push_activity(&mut items, "·", "Queued".to_owned(), Color::Yellow);
                 }
                 SubmissionState::Failed(error) => {
-                    push_activity(&mut items, "×", format!("Failed — {error}"), Color::Red)
+                    push_activity(&mut items, "×", format!("Failed: {error}"), Color::Red)
                 }
             }
         }
@@ -1713,7 +1759,7 @@ impl App {
     }
 
     fn shows_composer(&self) -> bool {
-        if self.switcher.is_some() {
+        if self.switcher.is_some() || self.help {
             return false;
         }
         match (&self.view, &self.mode) {
@@ -2495,7 +2541,9 @@ pub(super) fn draw(frame: &mut Frame<'_>, app: &mut App) {
 
     render_header(frame, areas[0], app);
 
-    if app.switcher.is_some() {
+    if app.help {
+        render_help(frame, areas[1], app);
+    } else if app.switcher.is_some() {
         render_switcher(frame, areas[1], app);
     } else {
         match &app.view {
@@ -2509,6 +2557,52 @@ pub(super) fn draw(frame: &mut Frame<'_>, app: &mut App) {
     }
 
     frame.render_widget(Paragraph::new(footer_line(app)), areas[3]);
+}
+
+fn render_help(frame: &mut Frame<'_>, area: Rect, app: &App) {
+    let mut lines = vec![Line::from(Span::styled(
+        match &app.view {
+            View::Sessions => "Session keys",
+            View::Attached(_) => "Conversation keys",
+        },
+        Style::default().add_modifier(Modifier::BOLD),
+    ))];
+    lines.push(Line::default());
+    match &app.view {
+        View::Sessions => {
+            push_help_key(&mut lines, "↑/↓ or j/k", "Move selection");
+            push_help_key(&mut lines, "enter", "Attach to selected session");
+            push_help_key(&mut lines, "1–9", "Attach directly");
+            push_help_key(&mut lines, "/", "Switch sessions");
+            push_help_key(&mut lines, "n", "Start a new session");
+            push_help_key(&mut lines, "q", "Quit");
+        }
+        View::Attached(_) => {
+            push_help_key(&mut lines, "↑/↓ or j/k", "Scroll one line");
+            push_help_key(&mut lines, "pgup/pgdn", "Scroll one page");
+            push_help_key(&mut lines, "g / G", "Jump to top / live output");
+            push_help_key(&mut lines, "i", "Message Zeta");
+            push_help_key(&mut lines, "/", "Switch sessions");
+            push_help_key(&mut lines, "v", "Toggle raw events");
+            push_help_key(&mut lines, "esc", "Detach to sessions");
+            push_help_key(&mut lines, "q", "Quit");
+        }
+    }
+    lines.push(Line::default());
+    push_help_key(&mut lines, "?", "Close help");
+    frame.render_widget(Paragraph::new(lines), area);
+}
+
+fn push_help_key(lines: &mut Vec<Line<'static>>, key: &'static str, label: &'static str) {
+    lines.push(Line::from(vec![
+        Span::styled(
+            format!("{key:<12}"),
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(label, Style::default().fg(Color::DarkGray)),
+    ]));
 }
 
 fn render_switcher(frame: &mut Frame<'_>, area: Rect, app: &App) {
@@ -2634,7 +2728,7 @@ fn render_sessions(frame: &mut Frame<'_>, area: Rect, app: &App) {
             }
             SubmissionState::Queued => Span::styled("· Queued", Style::default().fg(Color::Yellow)),
             SubmissionState::Failed(error) => Span::styled(
-                format!("× Failed — {error}"),
+                format!("× Failed: {error}"),
                 Style::default().fg(Color::Red),
             ),
         };
@@ -2658,7 +2752,7 @@ fn render_sessions(frame: &mut Frame<'_>, area: Rect, app: &App) {
                 Style::default().add_modifier(Modifier::BOLD),
             )),
             Line::from(Span::styled(
-                "Press n to start one.",
+                "Press n and tell Zeta what to do.",
                 Style::default().fg(Color::DarkGray),
             )),
         ]);
@@ -2715,7 +2809,16 @@ fn render_timeline(frame: &mut Frame<'_>, area: Rect, app: &mut App) {
         app.timeline_offset(0, usize::from(area.height));
         render_timeline_position(frame, areas[0], app);
         frame.render_widget(
-            Paragraph::new("Waiting for activity…").style(Style::default().fg(Color::DarkGray)),
+            Paragraph::new(vec![
+                Line::from(Span::styled(
+                    "No conversation yet",
+                    Style::default().add_modifier(Modifier::BOLD),
+                )),
+                Line::from(Span::styled(
+                    "Press i to message Zeta.",
+                    Style::default().fg(Color::DarkGray),
+                )),
+            ]),
             area,
         );
         return;
@@ -2947,6 +3050,17 @@ fn render_composer(frame: &mut Frame<'_>, area: Rect, app: &App) {
 
 fn footer_line(app: &App) -> Line<'static> {
     let mut spans = Vec::new();
+    if app.help {
+        push_key_hint(&mut spans, "esc", "close");
+        return Line::from(spans);
+    }
+    if let Some(feedback) = &app.feedback {
+        spans.push(Span::styled(
+            format!("{} {}", feedback.glyph, feedback.text),
+            Style::default().fg(feedback.color),
+        ));
+        return Line::from(spans);
+    }
     if app.switcher.is_some() {
         push_key_hint(&mut spans, "↑/↓", "choose");
         push_key_hint(&mut spans, "enter", "attach");
@@ -2955,11 +3069,9 @@ fn footer_line(app: &App) -> Line<'static> {
     }
     match (&app.view, &app.mode) {
         (View::Sessions, Mode::Browse) => {
-            push_key_hint(&mut spans, "↑/↓", "sessions");
             push_key_hint(&mut spans, "enter", "attach");
             push_key_hint(&mut spans, "n", "new");
-            push_key_hint(&mut spans, "/", "switch");
-            push_key_hint(&mut spans, "q", "quit");
+            push_key_hint(&mut spans, "?", "help");
         }
         (View::Sessions, Mode::Compose) => {
             push_key_hint(&mut spans, "enter", "start");
@@ -2971,13 +3083,9 @@ fn footer_line(app: &App) -> Line<'static> {
             push_key_hint(&mut spans, "esc", "cancel");
         }
         (View::Attached(_), Mode::Browse) => {
-            push_key_hint(&mut spans, "↑/↓ pgup/pgdn", "scroll");
-            push_key_hint(&mut spans, "g/G", "top/live");
             push_key_hint(&mut spans, "i", "message");
             push_key_hint(&mut spans, "/", "switch");
-            push_key_hint(&mut spans, "esc", "detach");
-            push_key_hint(&mut spans, "v", "raw");
-            push_key_hint(&mut spans, "q", "quit");
+            push_key_hint(&mut spans, "?", "help");
         }
         (View::Attached(_), Mode::Compose) => {
             push_key_hint(&mut spans, "enter", "send");
@@ -3281,7 +3389,7 @@ mod tests {
         let screen = terminal.backend().to_string();
 
         assert!(screen.contains("No sessions yet"));
-        assert!(screen.contains("Press n to start one."));
+        assert!(screen.contains("Press n and tell Zeta what to do."));
     }
 
     #[test]
@@ -3409,7 +3517,7 @@ mod tests {
         assert!(!screen.contains("Completed"));
         assert!(!screen.contains("runtime.queue_item.available"));
         assert!(!screen.contains("queue_item_id"));
-        assert!(screen.contains("v raw"));
+        assert!(screen.contains("? help"));
 
         let (_, metadata_row) = text_position(&screen, "zeta.master");
         let (you_column, you_row) = text_position(&screen, "You");
@@ -4288,8 +4396,8 @@ mod tests {
         let screen = terminal.backend().to_string();
 
         assert!(screen.contains("try again"));
-        assert!(screen.contains("Failed — session is unavailable"));
-        assert!(screen.contains("enter send"));
+        assert!(screen.contains("Failed: session is unavailable"));
+        assert!(screen.contains("↺ Draft restored for retry"));
         assert!(terminal.get_cursor_position().is_ok());
     }
 
@@ -4882,5 +4990,104 @@ mod tests {
         assert!(!screen.contains("reconnecting"));
         assert!(!screen.contains("● connected"));
         assert!(screen.contains("Preserve this draft"));
+    }
+
+    #[test]
+    fn contextual_footer_stays_quiet_and_help_reveals_the_complete_key_map() {
+        let request = event(
+            "session.message.requested",
+            serde_json::json!({"message": "Inspect the release"}),
+            "session_1",
+            "run_1",
+            1,
+        );
+        let mut app = App::connected(
+            "0.1".to_owned(),
+            vec![session("session_1", "zeta.master", "idle")],
+            vec![request],
+            Some(Cursor(1)),
+        );
+        let backend = TestBackend::new(80, 18);
+        let mut terminal = Terminal::new(backend).expect("terminal should initialize");
+        terminal
+            .draw(|frame| draw(frame, &mut app))
+            .expect("sessions should draw");
+        let screen = terminal.backend().to_string();
+        assert!(screen.contains("enter attach"));
+        assert!(screen.contains("n new"));
+        assert!(screen.contains("? help"));
+        assert!(!screen.contains("q quit"));
+        assert!(!screen.contains("↑/↓ sessions"));
+
+        let help = TerminalEvent::Key(KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE));
+        assert_eq!(app.handle_event(&help), AppAction::None);
+        terminal
+            .draw(|frame| draw(frame, &mut app))
+            .expect("help should draw");
+        let screen = terminal.backend().to_string();
+        assert!(screen.contains("Session keys"));
+        assert!(screen.contains("Switch sessions"));
+        assert!(screen.contains("Attach directly"));
+        assert!(screen.contains("Quit"));
+        assert!(screen.contains("esc close"));
+
+        let escape = TerminalEvent::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert_eq!(app.handle_event(&escape), AppAction::None);
+        assert_eq!(
+            app.handle_event(&TerminalEvent::Resize(42, 10)),
+            AppAction::None
+        );
+        terminal.backend_mut().resize(42, 10);
+        terminal
+            .resize(Rect::new(0, 0, 42, 10))
+            .expect("terminal should resize");
+        terminal
+            .draw(|frame| draw(frame, &mut app))
+            .expect("narrow sessions should draw");
+        assert!(terminal.backend().to_string().contains("? help"));
+    }
+
+    #[test]
+    fn submission_confirmation_replaces_controls_briefly_then_clears() {
+        let mut app = App::connected("0.1".to_owned(), Vec::new(), Vec::new(), None);
+        app.submission_started("message-1".to_owned(), "Prepare release".to_owned());
+        app.submission_queued("message-1", "evt_1", "session_1");
+        let backend = TestBackend::new(80, 18);
+        let mut terminal = Terminal::new(backend).expect("terminal should initialize");
+
+        terminal
+            .draw(|frame| draw(frame, &mut app))
+            .expect("confirmation should draw");
+        assert!(terminal.backend().to_string().contains("✓ Sent"));
+        for _ in 0..5 {
+            app.advance_animation();
+        }
+        terminal
+            .draw(|frame| draw(frame, &mut app))
+            .expect("controls should return");
+        let screen = terminal.backend().to_string();
+        assert!(!screen.contains("✓ Sent"));
+        assert!(screen.contains("i message"));
+    }
+
+    #[test]
+    fn attached_empty_state_explains_how_to_begin() {
+        let mut app = App::connected(
+            "0.1".to_owned(),
+            vec![session("session_1", "zeta.master", "idle")],
+            Vec::new(),
+            None,
+        );
+        let enter = TerminalEvent::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(app.handle_event(&enter), AppAction::None);
+        let backend = TestBackend::new(80, 18);
+        let mut terminal = Terminal::new(backend).expect("terminal should initialize");
+
+        terminal
+            .draw(|frame| draw(frame, &mut app))
+            .expect("empty conversation should draw");
+        let screen = terminal.backend().to_string();
+        assert!(screen.contains("No conversation yet"));
+        assert!(screen.contains("Press i to message Zeta."));
     }
 }

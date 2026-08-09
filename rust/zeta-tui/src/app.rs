@@ -11,6 +11,7 @@ use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
     supports_keyboard_enhancement,
 };
+use pulldown_cmark::{Event as MarkdownEvent, Options, Parser, Tag, TagEnd};
 use ratatui::Frame;
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
@@ -19,7 +20,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
 use serde_json::Value;
-use unicode_width::UnicodeWidthChar;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::wire::{Cursor, Event, Session};
 
@@ -73,6 +74,35 @@ struct DraftLayout {
     lines: Vec<String>,
     cursor_row: usize,
     cursor_column: usize,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct StyledFragment {
+    text: String,
+    style: Style,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct StyledWord {
+    text: String,
+    style: Style,
+    leading_space: bool,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct MarkdownRenderer {
+    width: usize,
+    lines: Vec<Line<'static>>,
+    fragments: Vec<StyledFragment>,
+    first_prefix: String,
+    continuation_prefix: String,
+    lists: Vec<Option<u64>>,
+    quote_depth: usize,
+    bold_depth: usize,
+    italic_depth: usize,
+    strikethrough_depth: usize,
+    link_depth: usize,
+    code_block: bool,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -368,6 +398,418 @@ impl SessionViewState {
         self.draft = draft;
         self.history_position = None;
     }
+}
+
+impl MarkdownRenderer {
+    fn new(width: usize) -> Self {
+        Self {
+            width: width.max(1),
+            lines: Vec::new(),
+            fragments: Vec::new(),
+            first_prefix: "  ".to_owned(),
+            continuation_prefix: "  ".to_owned(),
+            lists: Vec::new(),
+            quote_depth: 0,
+            bold_depth: 0,
+            italic_depth: 0,
+            strikethrough_depth: 0,
+            link_depth: 0,
+            code_block: false,
+        }
+    }
+
+    fn render(mut self, content: &str) -> Vec<Line<'static>> {
+        let parser = Parser::new_ext(content, Options::ENABLE_STRIKETHROUGH);
+        for event in parser {
+            self.handle_event(event);
+        }
+        self.flush_prose(false);
+        while self.lines.last().is_some_and(|line| line.spans.is_empty()) {
+            self.lines.pop();
+        }
+        self.lines.push(Line::default());
+        self.lines
+    }
+
+    fn handle_event(&mut self, event: MarkdownEvent<'_>) {
+        match event {
+            MarkdownEvent::Start(tag) => self.start_tag(tag),
+            MarkdownEvent::End(tag) => self.end_tag(tag),
+            MarkdownEvent::Text(text) => {
+                if self.code_block {
+                    self.push_code(&text);
+                } else {
+                    self.push_text(&text, self.current_style());
+                }
+            }
+            MarkdownEvent::Code(code) => {
+                let style = self.current_style().fg(Color::Cyan);
+                self.push_text(&code, style);
+            }
+            MarkdownEvent::InlineMath(math) => {
+                let style = self.current_style().fg(Color::Cyan);
+                self.push_text(&math, style);
+            }
+            MarkdownEvent::DisplayMath(math) => {
+                self.flush_prose(false);
+                self.push_literal_line("    ", &math, Style::default().fg(Color::Cyan));
+                self.push_blank();
+            }
+            MarkdownEvent::Html(html) | MarkdownEvent::InlineHtml(html) => {
+                self.push_text(&html, self.current_style());
+            }
+            MarkdownEvent::FootnoteReference(label) => {
+                self.push_text(&format!("[{label}]"), self.current_style());
+            }
+            MarkdownEvent::SoftBreak => self.push_text(" ", self.current_style()),
+            MarkdownEvent::HardBreak => self.flush_prose(false),
+            MarkdownEvent::Rule => {
+                self.flush_prose(false);
+                let rule_width = self.width.saturating_sub(2).min(24);
+                self.push_literal_line(
+                    "  ",
+                    &"─".repeat(rule_width),
+                    Style::default().fg(Color::DarkGray),
+                );
+                self.push_blank();
+            }
+            MarkdownEvent::TaskListMarker(checked) => {
+                let marker = if checked { "☑ " } else { "☐ " };
+                self.push_text(marker, self.current_style());
+            }
+        }
+    }
+
+    fn start_tag(&mut self, tag: Tag<'_>) {
+        match tag {
+            Tag::Paragraph => {}
+            Tag::Heading {
+                level: _level,
+                id: _id,
+                classes: _classes,
+                attrs: _attrs,
+            } => {
+                self.flush_prose(false);
+                self.bold_depth += 1;
+            }
+            Tag::BlockQuote(_kind) => {
+                self.flush_prose(false);
+                self.quote_depth += 1;
+                self.set_quote_prefix();
+            }
+            Tag::CodeBlock(_kind) => {
+                self.flush_prose(false);
+                self.code_block = true;
+            }
+            Tag::HtmlBlock => self.flush_prose(false),
+            Tag::List(start) => {
+                self.flush_prose(false);
+                self.lists.push(start);
+            }
+            Tag::Item => {
+                self.flush_prose(false);
+                self.set_item_prefix();
+            }
+            Tag::FootnoteDefinition(_label) => self.flush_prose(false),
+            Tag::DefinitionList | Tag::DefinitionListTitle | Tag::DefinitionListDefinition => {
+                self.flush_prose(false)
+            }
+            Tag::Table(_alignments) => self.flush_prose(false),
+            Tag::TableHead | Tag::TableRow | Tag::TableCell => self.flush_prose(false),
+            Tag::Emphasis => self.italic_depth += 1,
+            Tag::Strong => self.bold_depth += 1,
+            Tag::Strikethrough => self.strikethrough_depth += 1,
+            Tag::Superscript | Tag::Subscript => {}
+            Tag::Link {
+                link_type: _link_type,
+                dest_url: _dest_url,
+                title: _title,
+                id: _id,
+            } => self.link_depth += 1,
+            Tag::Image {
+                link_type: _link_type,
+                dest_url: _dest_url,
+                title: _title,
+                id: _id,
+            } => self.push_text("image: ", Style::default().fg(Color::DarkGray)),
+            Tag::MetadataBlock(_kind) => self.flush_prose(false),
+        }
+    }
+
+    fn end_tag(&mut self, tag: TagEnd) {
+        match tag {
+            TagEnd::Paragraph => self.flush_prose(self.lists.is_empty()),
+            TagEnd::Heading(_level) => {
+                self.bold_depth = self.bold_depth.saturating_sub(1);
+                self.flush_prose(true);
+            }
+            TagEnd::BlockQuote(_kind) => {
+                self.flush_prose(true);
+                self.quote_depth = self.quote_depth.saturating_sub(1);
+                self.reset_prefix();
+            }
+            TagEnd::CodeBlock => {
+                self.code_block = false;
+                self.push_blank();
+            }
+            TagEnd::HtmlBlock => self.flush_prose(true),
+            TagEnd::List(_ordered) => {
+                self.flush_prose(false);
+                self.lists.pop();
+                self.reset_prefix();
+                if self.lists.is_empty() {
+                    self.push_blank();
+                }
+            }
+            TagEnd::Item => {
+                self.flush_prose(false);
+                self.reset_prefix();
+            }
+            TagEnd::FootnoteDefinition
+            | TagEnd::DefinitionList
+            | TagEnd::DefinitionListTitle
+            | TagEnd::DefinitionListDefinition
+            | TagEnd::Table
+            | TagEnd::TableHead
+            | TagEnd::TableRow
+            | TagEnd::TableCell => self.flush_prose(true),
+            TagEnd::MetadataBlock(_kind) => self.flush_prose(true),
+            TagEnd::Emphasis => self.italic_depth = self.italic_depth.saturating_sub(1),
+            TagEnd::Strong => self.bold_depth = self.bold_depth.saturating_sub(1),
+            TagEnd::Strikethrough => {
+                self.strikethrough_depth = self.strikethrough_depth.saturating_sub(1);
+            }
+            TagEnd::Superscript | TagEnd::Subscript => {}
+            TagEnd::Link => self.link_depth = self.link_depth.saturating_sub(1),
+            TagEnd::Image => {}
+        }
+    }
+
+    fn current_style(&self) -> Style {
+        let mut style = Style::default();
+        if self.bold_depth > 0 {
+            style = style.add_modifier(Modifier::BOLD);
+        }
+        if self.italic_depth > 0 {
+            style = style.add_modifier(Modifier::ITALIC);
+        }
+        if self.strikethrough_depth > 0 {
+            style = style.add_modifier(Modifier::CROSSED_OUT);
+        }
+        if self.link_depth > 0 {
+            style = style.fg(Color::Cyan).add_modifier(Modifier::UNDERLINED);
+        }
+        style
+    }
+
+    fn push_text(&mut self, text: &str, style: Style) {
+        let mut parts = text.split('\n').peekable();
+        while let Some(part) = parts.next() {
+            if !part.is_empty() {
+                self.fragments.push(StyledFragment {
+                    text: part.to_owned(),
+                    style,
+                });
+            }
+            if parts.peek().is_some() {
+                self.flush_prose(false);
+            }
+        }
+    }
+
+    fn push_code(&mut self, code: &str) {
+        let mut lines = code.split('\n').peekable();
+        while let Some(line) = lines.next() {
+            if line.is_empty() && lines.peek().is_none() {
+                break;
+            }
+            self.push_literal_line("    ", line, Style::default().fg(Color::Gray));
+        }
+    }
+
+    fn push_literal_line(&mut self, prefix: &str, text: &str, style: Style) {
+        let available = self
+            .width
+            .saturating_sub(UnicodeWidthStr::width(prefix))
+            .max(1);
+        let wrapped = wrap_literal(text, available);
+        for line in wrapped {
+            self.lines.push(Line::from(vec![
+                Span::raw(prefix.to_owned()),
+                Span::styled(line, style),
+            ]));
+        }
+    }
+
+    fn flush_prose(&mut self, blank_after: bool) {
+        if self.fragments.is_empty() {
+            if blank_after {
+                self.push_blank();
+            }
+            return;
+        }
+        let words = styled_words(&self.fragments);
+        self.fragments.clear();
+        let mut line = Vec::new();
+        let mut line_width = UnicodeWidthStr::width(self.first_prefix.as_str());
+        let mut prefix = self.first_prefix.clone();
+        for StyledWord {
+            text,
+            style,
+            leading_space,
+        } in words
+        {
+            let separator = if leading_space && !line.is_empty() {
+                1
+            } else {
+                0
+            };
+            let word_width = UnicodeWidthStr::width(text.as_str());
+            if !line.is_empty() && line_width + separator + word_width > self.width {
+                self.push_word_line(&prefix, line);
+                prefix = self.continuation_prefix.clone();
+                line = Vec::new();
+                line_width = UnicodeWidthStr::width(prefix.as_str());
+            }
+            if separator > 0 {
+                line.push(Span::raw(" "));
+                line_width += 1;
+            }
+            let style = if looks_like_path(&text) {
+                style.fg(Color::Cyan)
+            } else {
+                style
+            };
+            line.push(Span::styled(text, style));
+            line_width += word_width;
+        }
+        self.push_word_line(&prefix, line);
+        if blank_after {
+            self.push_blank();
+        }
+    }
+
+    fn push_word_line(&mut self, prefix: &str, spans: Vec<Span<'static>>) {
+        let mut line = vec![Span::raw(prefix.to_owned())];
+        line.extend(spans);
+        self.lines.push(Line::from(line));
+    }
+
+    fn push_blank(&mut self) {
+        let blank = match self.lines.last() {
+            Some(line) => line.spans.is_empty(),
+            None => false,
+        };
+        if !blank {
+            self.lines.push(Line::default());
+        }
+    }
+
+    fn set_item_prefix(&mut self) {
+        let depth = self.lists.len().max(1);
+        let indentation = "  ".repeat(depth);
+        let marker = match self.lists.last_mut() {
+            Some(Some(number)) => {
+                let marker = format!("{number}. ");
+                *number += 1;
+                marker
+            }
+            Some(None) | None => "• ".to_owned(),
+        };
+        self.first_prefix = format!("{indentation}{marker}");
+        self.continuation_prefix = " ".repeat(UnicodeWidthStr::width(self.first_prefix.as_str()));
+    }
+
+    fn set_quote_prefix(&mut self) {
+        let indentation = "  ".repeat(self.quote_depth);
+        self.first_prefix = format!("{indentation}› ");
+        self.continuation_prefix = " ".repeat(UnicodeWidthStr::width(self.first_prefix.as_str()));
+    }
+
+    fn reset_prefix(&mut self) {
+        if self.quote_depth > 0 {
+            self.set_quote_prefix();
+            return;
+        }
+        self.first_prefix = "  ".to_owned();
+        self.continuation_prefix = "  ".to_owned();
+    }
+}
+
+fn wrap_literal(text: &str, width: usize) -> Vec<String> {
+    let width = width.max(1);
+    let mut lines = Vec::new();
+    let mut line = String::new();
+    let mut line_width = 0;
+    for character in text.chars() {
+        let character_width = character.width().unwrap_or(0);
+        if line_width > 0 && line_width + character_width > width {
+            lines.push(line);
+            line = String::new();
+            line_width = 0;
+        }
+        line.push(character);
+        line_width += character_width;
+    }
+    lines.push(line);
+    lines
+}
+
+fn styled_words(fragments: &[StyledFragment]) -> Vec<StyledWord> {
+    let mut words = Vec::new();
+    let mut leading_space = false;
+    for StyledFragment { text, style } in fragments {
+        let mut word = String::new();
+        for character in text.chars() {
+            if character.is_whitespace() {
+                if !word.is_empty() {
+                    words.push(StyledWord {
+                        text: word,
+                        style: *style,
+                        leading_space,
+                    });
+                    word = String::new();
+                }
+                leading_space = true;
+                continue;
+            }
+            word.push(character);
+        }
+        if !word.is_empty() {
+            words.push(StyledWord {
+                text: word,
+                style: *style,
+                leading_space,
+            });
+            leading_space = false;
+        }
+    }
+    words
+}
+
+fn looks_like_path(text: &str) -> bool {
+    let text = text.trim_matches(|character: char| {
+        character == ','
+            || character == '.'
+            || character == ';'
+            || character == '('
+            || character == ')'
+            || character == '['
+            || character == ']'
+    });
+    if text.starts_with("./") || text.starts_with("../") {
+        return true;
+    }
+    if !text.contains('/') || text.contains("://") {
+        return false;
+    }
+    let Some((_, line)) = text.rsplit_once(':') else {
+        return text
+            .rsplit('/')
+            .next()
+            .is_some_and(|name| name.contains('.'));
+    };
+    !line.is_empty() && line.chars().all(|character| character.is_ascii_digit())
 }
 
 impl App {
@@ -1964,12 +2406,7 @@ fn speaker_heading(speaker: &'static str) -> Vec<Line<'static>> {
 }
 
 fn agent_lines(content: String, width: usize) -> Vec<Line<'static>> {
-    let mut lines = Vec::new();
-    for line in wrap_text(&content, width.saturating_sub(2).max(1)) {
-        lines.push(Line::from(format!("  {line}")));
-    }
-    lines.push(Line::default());
-    lines
+    MarkdownRenderer::new(width).render(&content)
 }
 
 fn activity_lines(glyph: String, text: String, color: Color, width: usize) -> Vec<Line<'static>> {
@@ -2107,7 +2544,7 @@ mod tests {
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
     use ratatui::layout::Rect;
-    use ratatui::style::Modifier;
+    use ratatui::style::{Color, Modifier};
 
     use super::{App, AppAction, draw};
     use crate::wire::{Cursor, Event, Session};
@@ -2358,6 +2795,85 @@ mod tests {
             terminal.backend().buffer()[(zeta_column, zeta_row)]
                 .modifier
                 .contains(Modifier::BOLD)
+        );
+    }
+
+    #[test]
+    fn markdown_agent_output_has_scanable_hierarchy_and_preserves_code() {
+        let request = event(
+            "session.message.requested",
+            serde_json::json!({"message": "Summarize the implementation"}),
+            "session_1",
+            "run_1",
+            1,
+        );
+        let model = event(
+            "zeta.model_call.completed",
+            serde_json::json!({
+                "content": concat!(
+                    "## Result\n\n",
+                    "Use **carefully**, inspect *before changing*, and open `src/main.rs:42`.\n\n",
+                    "- This list item is deliberately long enough to wrap beneath its content rather than beneath the bullet.\n\n",
+                    "```rust\n",
+                    "fn main() {\n",
+                    "    println!(\"ready\");\n",
+                    "}\n",
+                    "```\n\n",
+                    "Malformed **markup remains readable"
+                )
+            }),
+            "session_1",
+            "run_1",
+            2,
+        );
+        let mut app = App::connected(
+            "0.1".to_owned(),
+            vec![session("session_1", "zeta.master", "completed")],
+            vec![request, model],
+            Some(Cursor(2)),
+        );
+        let enter = TerminalEvent::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(app.handle_event(&enter), AppAction::None);
+        let backend = TestBackend::new(80, 32);
+        let mut terminal = Terminal::new(backend).expect("terminal should initialize");
+
+        terminal
+            .draw(|frame| draw(frame, &mut app))
+            .expect("Markdown timeline should draw");
+        let screen = terminal.backend().to_string();
+
+        assert!(screen.contains("Result"));
+        assert!(!screen.contains("## Result"));
+        assert!(screen.contains("• This list item"));
+        assert!(screen.contains("fn main() {"));
+        assert!(screen.contains("    println!(\"ready\");"));
+        assert!(
+            screen.contains("Malformed **markup remains readable"),
+            "{screen}"
+        );
+
+        let (heading_column, heading_row) = text_position(&screen, "Result");
+        let (strong_column, strong_row) = text_position(&screen, "carefully");
+        let (emphasis_column, emphasis_row) = text_position(&screen, "before changing");
+        let (path_column, path_row) = text_position(&screen, "src/main.rs:42");
+        assert!(
+            terminal.backend().buffer()[(heading_column, heading_row)]
+                .modifier
+                .contains(Modifier::BOLD)
+        );
+        assert!(
+            terminal.backend().buffer()[(strong_column, strong_row)]
+                .modifier
+                .contains(Modifier::BOLD)
+        );
+        assert!(
+            terminal.backend().buffer()[(emphasis_column, emphasis_row)]
+                .modifier
+                .contains(Modifier::ITALIC)
+        );
+        assert_eq!(
+            terminal.backend().buffer()[(path_column, path_row)].fg,
+            Color::Cyan
         );
     }
 

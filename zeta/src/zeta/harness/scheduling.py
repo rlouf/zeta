@@ -237,10 +237,14 @@ def schedule_event_draft(
     schedule: ScheduleEntry,
     scheduled_time: datetime,
 ) -> DraftEvent:
+    scheduled_time = scheduled_time.replace(second=0, microsecond=0)
     return DraftEvent(
         scheduled_event_type(spec.slug),
         "zeta:scheduler",
-        {},
+        {
+            "date": scheduled_time.date().isoformat(),
+            "timestamp": scheduled_time.isoformat(),
+        },
         idempotency_key=schedule_idempotency_key(
             spec.slug,
             schedule,

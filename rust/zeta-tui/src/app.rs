@@ -3148,11 +3148,15 @@ fn render_sessions(frame: &mut Frame<'_>, area: Rect, app: &App) {
             ),
             None => "No activity yet".to_owned(),
         };
-        rows.push(ListItem::new(vec![
+        let mut lines = vec![
             Line::from(Span::styled(title, title_style)),
             Line::from(metadata),
             Line::from(Span::styled(activity, Style::default().fg(Color::DarkGray))),
-        ]));
+        ];
+        if index + 1 < app.sessions.len() {
+            lines.push(Line::default());
+        }
+        rows.push(ListItem::new(lines));
     }
     let sessions = List::new(rows)
         .highlight_symbol("› ")
@@ -3751,6 +3755,53 @@ mod tests {
         assert!(!screen.contains("cursor 1"));
         assert!(screen.contains("enter attach"));
         assert!(screen.contains("n new"));
+    }
+
+    #[test]
+    fn session_rows_have_vertical_space_between_them() {
+        let first = event(
+            "session.message.requested",
+            serde_json::json!({"message": "First session task"}),
+            "session_1",
+            "run_1",
+            1,
+        );
+        let second = event(
+            "session.message.requested",
+            serde_json::json!({"message": "Second session task"}),
+            "session_2",
+            "run_2",
+            2,
+        );
+        let mut app = App::connected(
+            "0.1".to_owned(),
+            vec![
+                session("session_1", "zeta.master", "idle"),
+                session("session_2", "zeta.master", "idle"),
+            ],
+            vec![first, second],
+            Some(Cursor(2)),
+        );
+        let backend = TestBackend::new(80, 18);
+        let mut terminal = Terminal::new(backend).expect("terminal should initialize");
+
+        terminal
+            .draw(|frame| draw(frame, &mut app))
+            .expect("session list should draw");
+        let screen = terminal.backend().to_string();
+        let (_, first_row) = text_position(&screen, "First session task");
+        let (_, second_row) = text_position(&screen, "Second session task");
+
+        assert_eq!(second_row, first_row + 4);
+        let spacing = screen
+            .lines()
+            .nth(usize::from(first_row + 3))
+            .expect("spacing row should render");
+        assert!(
+            spacing
+                .trim_matches(|character| character == ' ' || character == '"')
+                .is_empty()
+        );
     }
 
     #[test]

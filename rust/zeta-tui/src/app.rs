@@ -3141,17 +3141,21 @@ fn render_sessions(frame: &mut Frame<'_>, area: Rect, app: &App) {
             Span::raw("  "),
         ];
         metadata.extend(status_spans(session.status()));
-        let activity = match app.session_activity(session.session_id()) {
-            Some(activity) => ellipsize(
-                &activity,
-                usize::from(sessions_area.width.saturating_sub(4)),
-            ),
-            None => "No activity yet".to_owned(),
-        };
+        if let Some(activity) = app.session_activity(session.session_id()) {
+            let row_width = usize::from(sessions_area.width.saturating_sub(4));
+            let metadata_width = Line::from(metadata.clone()).width();
+            let activity_width = row_width.saturating_sub(metadata_width + 3);
+            if activity_width > 0 {
+                metadata.push(Span::styled(" · ", Style::default().fg(Color::DarkGray)));
+                metadata.push(Span::styled(
+                    ellipsize(&activity, activity_width),
+                    Style::default().fg(Color::DarkGray),
+                ));
+            }
+        }
         let mut lines = vec![
             Line::from(Span::styled(title, title_style)),
             Line::from(metadata),
-            Line::from(Span::styled(activity, Style::default().fg(Color::DarkGray))),
         ];
         if index + 1 < app.sessions.len() {
             lines.push(Line::default());
@@ -3758,7 +3762,7 @@ mod tests {
     }
 
     #[test]
-    fn session_rows_have_vertical_space_between_them() {
+    fn session_rows_use_a_quiet_two_line_rhythm() {
         let first = event(
             "session.message.requested",
             serde_json::json!({"message": "First session task"}),
@@ -3791,11 +3795,16 @@ mod tests {
         let screen = terminal.backend().to_string();
         let (_, first_row) = text_position(&screen, "First session task");
         let (_, second_row) = text_position(&screen, "Second session task");
+        let (_, agent_row) = text_position(&screen, "zeta.master");
+        let (_, status_row) = text_position(&screen, "Idle");
 
-        assert_eq!(second_row, first_row + 4);
+        assert_eq!(agent_row, first_row + 1);
+        assert_eq!(status_row, first_row + 1);
+        assert_eq!(second_row, first_row + 3);
+        assert!(!screen.contains("No activity yet"));
         let spacing = screen
             .lines()
-            .nth(usize::from(first_row + 3))
+            .nth(usize::from(first_row + 2))
             .expect("spacing row should render");
         assert!(
             spacing

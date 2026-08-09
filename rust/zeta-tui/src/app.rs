@@ -163,10 +163,40 @@ struct Submission {
     event_id: Option<String>,
 }
 
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
+struct RunKey(String);
+
 #[derive(Clone, Debug, PartialEq, Eq)]
-enum ToolOutcome {
-    Completed { timestamp_ms: i64 },
-    Failed { message: String, timestamp_ms: i64 },
+struct ActiveProgress {
+    index: usize,
+    event_id: String,
+    text: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum RunTerminal {
+    Completed { event_id: String },
+    Failed { event_id: String, message: String },
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct RunProgress {
+    active: Option<ActiveProgress>,
+    completed_tools: Vec<String>,
+    completed_started_at_ms: Option<i64>,
+    completed_at_ms: Option<i64>,
+    last_completion: Option<(usize, String)>,
+    failed_tools: Vec<String>,
+    last_failure: Option<(usize, String)>,
+    terminal: Option<RunTerminal>,
+    has_model_output: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ProgressProjection {
+    glyph: String,
+    text: String,
+    color: Color,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -1524,10 +1554,8 @@ fn raw_timeline_items(events: &[&Event]) -> Vec<TimelineItem> {
 }
 
 fn semantic_timeline_items(events: &[&Event], animation_frame: usize) -> Vec<TimelineItem> {
-    let outcomes = tool_outcomes(events);
     let completed_runs = completed_model_runs(events);
-    let terminal_runs = terminal_runs(events);
-    let mut seen_tool_calls = HashSet::new();
+    let progress = progress_projections(events, animation_frame);
     let mut items = Vec::new();
     let mut agent_started = false;
 
@@ -1562,27 +1590,7 @@ fn semantic_timeline_items(events: &[&Event], animation_frame: usize) -> Vec<Tim
             continue;
         }
         if event_type == "runtime.status.update" {
-            let status = payload_string(event, "status").unwrap_or("working");
-            let text = if status == "reasoning_delta" {
-                "Thinking".to_owned()
-            } else {
-                match payload_string(event, "text") {
-                    Some(text) => single_line(text),
-                    None => humanize(status),
-                }
-            };
-            start_agent_timeline(&mut items, &mut agent_started);
-            let active = status == "reasoning_delta"
-                && match event.run_id() {
-                    Some(run_id) => !terminal_runs.contains(run_id),
-                    None => true,
-                };
-            let glyph = if active {
-                active_glyph(animation_frame)
-            } else {
-                "·"
-            };
-            push_activity(&mut items, glyph, text, Color::DarkGray);
+            push_progress_projection(event, &progress, &mut items, &mut agent_started);
             continue;
         }
         if event_type == "zeta.model_call.completed" {
@@ -1596,73 +1604,19 @@ fn semantic_timeline_items(events: &[&Event], animation_frame: usize) -> Vec<Tim
             continue;
         }
         if event_type == "zeta.tool_call.started" {
-            let description = tool_description(event);
-            start_agent_timeline(&mut items, &mut agent_started);
-            let Some(tool_call_id) = payload_string(event, "tool_call_id") else {
-                push_activity(&mut items, "↳", description, Color::DarkGray);
-                continue;
-            };
-            seen_tool_calls.insert(tool_call_id.to_owned());
-            match outcomes.get(tool_call_id) {
-                Some(ToolOutcome::Completed { timestamp_ms }) => {
-                    let text = with_duration(description, event.timestamp_ms(), *timestamp_ms);
-                    push_activity(&mut items, "✓", text, Color::Green);
-                }
-                Some(ToolOutcome::Failed {
-                    message,
-                    timestamp_ms,
-                }) => {
-                    let text = with_duration(
-                        format!("{description} failed: {message}"),
-                        event.timestamp_ms(),
-                        *timestamp_ms,
-                    );
-                    push_activity(&mut items, "×", text, Color::Red);
-                }
-                None => push_activity(
-                    &mut items,
-                    active_glyph(animation_frame),
-                    description,
-                    Color::DarkGray,
-                ),
-            }
+            push_progress_projection(event, &progress, &mut items, &mut agent_started);
             continue;
         }
         if event_type == "zeta.tool_call.completed" || event_type == "zeta.tool_call.failed" {
-            let tool_call_id = payload_string(event, "tool_call_id");
-            let already_rendered = match tool_call_id {
-                Some(tool_call_id) => seen_tool_calls.contains(tool_call_id),
-                None => false,
-            };
-            if already_rendered {
-                continue;
-            }
-            let description = tool_description(event);
-            start_agent_timeline(&mut items, &mut agent_started);
-            if event_type == "zeta.tool_call.failed" {
-                let message = event_error(event).unwrap_or_else(|| "unknown error".to_owned());
-                push_activity(
-                    &mut items,
-                    "×",
-                    format!("{description} failed: {message}"),
-                    Color::Red,
-                );
-            } else {
-                push_activity(&mut items, "✓", description, Color::Green);
-            }
+            push_progress_projection(event, &progress, &mut items, &mut agent_started);
             continue;
         }
         if event_type == "zeta.turn.completed" {
-            start_agent_timeline(&mut items, &mut agent_started);
-            push_activity(&mut items, "✓", "Completed".to_owned(), Color::Green);
+            push_progress_projection(event, &progress, &mut items, &mut agent_started);
             continue;
         }
         if event_type == "zeta.turn.failed" {
-            let message = payload_string(event, "content")
-                .or_else(|| payload_string(event, "reason"))
-                .unwrap_or("Turn failed");
-            start_agent_timeline(&mut items, &mut agent_started);
-            push_activity(&mut items, "×", single_line(message), Color::Red);
+            push_progress_projection(event, &progress, &mut items, &mut agent_started);
             continue;
         }
         if event_type.starts_with("runtime.")
@@ -1676,6 +1630,321 @@ fn semantic_timeline_items(events: &[&Event], animation_frame: usize) -> Vec<Tim
         push_activity(&mut items, "•", humanize(event_type), Color::DarkGray);
     }
     items
+}
+
+fn push_progress_projection(
+    event: &Event,
+    progress: &HashMap<String, ProgressProjection>,
+    items: &mut Vec<TimelineItem>,
+    agent_started: &mut bool,
+) {
+    let Some(projection) = progress.get(event.id()) else {
+        return;
+    };
+    start_agent_timeline(items, agent_started);
+    push_activity(
+        items,
+        &projection.glyph,
+        projection.text.clone(),
+        projection.color,
+    );
+}
+
+fn progress_projections(
+    events: &[&Event],
+    animation_frame: usize,
+) -> HashMap<String, ProgressProjection> {
+    let mut outcomes = HashMap::new();
+    for (index, event) in events.iter().enumerate() {
+        if event.event_type() != "zeta.tool_call.completed"
+            && event.event_type() != "zeta.tool_call.failed"
+        {
+            continue;
+        }
+        let Some(tool_call_id) = payload_string(event, "tool_call_id") else {
+            continue;
+        };
+        outcomes.insert(tool_call_id.to_owned(), (index, *event));
+    }
+
+    let mut runs = HashMap::<RunKey, RunProgress>::new();
+    let mut paired_tool_calls = HashSet::new();
+    for (index, event) in events.iter().enumerate() {
+        let key = run_key(event);
+        let run = runs.entry(key).or_default();
+        let event_type = event.event_type();
+        if event_type == "runtime.status.update" {
+            let status = payload_string(event, "status").unwrap_or("working");
+            let text = if status == "reasoning_delta" {
+                "Thinking…".to_owned()
+            } else {
+                match payload_string(event, "text") {
+                    Some(text) => format!("{}…", single_line(text).trim_end_matches('…')),
+                    None => format!("{}…", humanize(status)),
+                }
+            };
+            run.active = Some(ActiveProgress {
+                index,
+                event_id: event.id().to_owned(),
+                text,
+            });
+            continue;
+        }
+        if event_type == "zeta.tool_call.started" {
+            let description = tool_description(event);
+            let Some(tool_call_id) = payload_string(event, "tool_call_id") else {
+                run.active = Some(ActiveProgress {
+                    index,
+                    event_id: event.id().to_owned(),
+                    text: active_tool_description(&description),
+                });
+                continue;
+            };
+            let Some((outcome_index, outcome)) = outcomes.get(tool_call_id) else {
+                run.active = Some(ActiveProgress {
+                    index,
+                    event_id: event.id().to_owned(),
+                    text: active_tool_description(&description),
+                });
+                continue;
+            };
+            paired_tool_calls.insert(tool_call_id.to_owned());
+            if outcome.event_type() == "zeta.tool_call.failed" {
+                record_tool_failure(run, *outcome_index, outcome, &description);
+            } else {
+                record_tool_completion(run, *outcome_index, event, outcome, description);
+            }
+            continue;
+        }
+        if event_type == "zeta.tool_call.completed" || event_type == "zeta.tool_call.failed" {
+            let paired = match payload_string(event, "tool_call_id") {
+                Some(tool_call_id) => paired_tool_calls.contains(tool_call_id),
+                None => false,
+            };
+            if paired {
+                continue;
+            }
+            let description = tool_description(event);
+            if event_type == "zeta.tool_call.failed" {
+                record_tool_failure(run, index, event, &description);
+            } else {
+                run.completed_tools.push(description);
+                run.completed_at_ms = Some(event.timestamp_ms());
+                run.last_completion = Some((index, event.id().to_owned()));
+            }
+            continue;
+        }
+        if event_type == "zeta.model_call.completed" {
+            let has_content = match payload_string(event, "content") {
+                Some(content) => !content.trim().is_empty(),
+                None => false,
+            };
+            run.has_model_output |= has_content;
+            continue;
+        }
+        if event_type == "zeta.turn.completed" {
+            run.terminal = Some(RunTerminal::Completed {
+                event_id: event.id().to_owned(),
+            });
+            continue;
+        }
+        if event_type == "zeta.turn.failed" {
+            let message = payload_string(event, "content")
+                .or_else(|| payload_string(event, "reason"))
+                .unwrap_or("Turn failed");
+            run.terminal = Some(RunTerminal::Failed {
+                event_id: event.id().to_owned(),
+                message: single_line(message),
+            });
+        }
+    }
+
+    let mut projections = HashMap::new();
+    for (_, run) in runs {
+        let projection = run_progress_projection(&run, animation_frame);
+        let Some((event_id, projection)) = projection else {
+            continue;
+        };
+        projections.insert(event_id, projection);
+    }
+    projections
+}
+
+fn run_progress_projection(
+    run: &RunProgress,
+    animation_frame: usize,
+) -> Option<(String, ProgressProjection)> {
+    if let Some(terminal) = &run.terminal {
+        match terminal {
+            RunTerminal::Failed { event_id, message } => {
+                return Some((
+                    event_id.clone(),
+                    ProgressProjection {
+                        glyph: "×".to_owned(),
+                        text: message.clone(),
+                        color: Color::Red,
+                    },
+                ));
+            }
+            RunTerminal::Completed { .. } => {}
+        }
+    }
+    if let Some((_, event_id)) = &run.last_failure {
+        let failure_count = run.failed_tools.len();
+        let text = if failure_count == 1 {
+            run.failed_tools[0].clone()
+        } else {
+            format!(
+                "{failure_count} tools failed: {}",
+                run.failed_tools[failure_count - 1]
+            )
+        };
+        return Some((
+            event_id.clone(),
+            ProgressProjection {
+                glyph: "×".to_owned(),
+                text,
+                color: Color::Red,
+            },
+        ));
+    }
+    let completion_index = run.last_completion.as_ref().map(|(index, _)| *index);
+    if run.terminal.is_none()
+        && !run.has_model_output
+        && let Some(active) = &run.active
+    {
+        let is_latest = match completion_index {
+            Some(index) => active.index > index,
+            None => true,
+        };
+        if is_latest {
+            return Some((
+                active.event_id.clone(),
+                ProgressProjection {
+                    glyph: active_glyph(animation_frame).to_owned(),
+                    text: active.text.clone(),
+                    color: Color::DarkGray,
+                },
+            ));
+        }
+    }
+    if let Some((_, event_id)) = &run.last_completion {
+        let mut text = completed_tools_summary(&run.completed_tools);
+        if let (Some(started_at_ms), Some(completed_at_ms)) =
+            (run.completed_started_at_ms, run.completed_at_ms)
+        {
+            text = with_duration(text, started_at_ms, completed_at_ms);
+        }
+        return Some((
+            event_id.clone(),
+            ProgressProjection {
+                glyph: "✓".to_owned(),
+                text,
+                color: Color::Green,
+            },
+        ));
+    }
+    if let Some(RunTerminal::Completed { event_id }) = &run.terminal
+        && !run.has_model_output
+    {
+        return Some((
+            event_id.clone(),
+            ProgressProjection {
+                glyph: "✓".to_owned(),
+                text: "Completed".to_owned(),
+                color: Color::Green,
+            },
+        ));
+    }
+    None
+}
+
+fn record_tool_completion(
+    run: &mut RunProgress,
+    outcome_index: usize,
+    started: &Event,
+    completed: &Event,
+    description: String,
+) {
+    run.completed_tools.push(description);
+    run.completed_started_at_ms = match run.completed_started_at_ms {
+        Some(timestamp_ms) => Some(timestamp_ms.min(started.timestamp_ms())),
+        None => Some(started.timestamp_ms()),
+    };
+    run.completed_at_ms = match run.completed_at_ms {
+        Some(timestamp_ms) => Some(timestamp_ms.max(completed.timestamp_ms())),
+        None => Some(completed.timestamp_ms()),
+    };
+    let is_latest = match &run.last_completion {
+        Some((index, _)) => outcome_index > *index,
+        None => true,
+    };
+    if is_latest {
+        run.last_completion = Some((outcome_index, completed.id().to_owned()));
+    }
+}
+
+fn record_tool_failure(
+    run: &mut RunProgress,
+    outcome_index: usize,
+    event: &Event,
+    description: &str,
+) {
+    let message = event_error(event).unwrap_or_else(|| "unknown error".to_owned());
+    run.failed_tools
+        .push(format!("{description} failed: {message}"));
+    let is_latest = match &run.last_failure {
+        Some((index, _)) => outcome_index > *index,
+        None => true,
+    };
+    if is_latest {
+        run.last_failure = Some((outcome_index, event.id().to_owned()));
+    }
+}
+
+fn run_key(event: &Event) -> RunKey {
+    match event.run_id() {
+        Some(run_id) => RunKey(run_id.to_owned()),
+        None => RunKey(event.id().to_owned()),
+    }
+}
+
+fn active_tool_description(description: &str) -> String {
+    let Some((verb, detail)) = description.split_once(' ') else {
+        return "Working…".to_owned();
+    };
+    let action = match verb.to_ascii_lowercase().as_str() {
+        "read" => "Reading",
+        "search" => "Searching",
+        "run" => "Running",
+        "write" => "Writing",
+        "edit" => "Editing",
+        "list" => "Listing",
+        _ => "Using",
+    };
+    format!("{action} {detail}…")
+}
+
+fn completed_tools_summary(descriptions: &[String]) -> String {
+    if descriptions.len() > 1
+        && descriptions
+            .iter()
+            .all(|description| description.to_ascii_lowercase().starts_with("read "))
+    {
+        return format!("Inspected {} files", descriptions.len());
+    }
+    if descriptions.len() == 1 {
+        return capitalize_first(&descriptions[0]);
+    }
+    format!("Completed {} tools", descriptions.len())
+}
+
+fn capitalize_first(text: &str) -> String {
+    let mut characters = text.chars();
+    let Some(first) = characters.next() else {
+        return String::new();
+    };
+    format!("{}{}", first.to_uppercase(), characters.as_str())
 }
 
 fn start_agent_timeline(items: &mut Vec<TimelineItem>, agent_started: &mut bool) {
@@ -1703,45 +1972,6 @@ fn completed_model_runs(events: &[&Event]) -> HashSet<String> {
         }
     }
     runs
-}
-
-fn terminal_runs(events: &[&Event]) -> HashSet<String> {
-    let mut runs = HashSet::new();
-    for event in events {
-        if event.event_type() != "zeta.turn.completed" && event.event_type() != "zeta.turn.failed" {
-            continue;
-        }
-        if let Some(run_id) = event.run_id() {
-            runs.insert(run_id.to_owned());
-        }
-    }
-    runs
-}
-
-fn tool_outcomes(events: &[&Event]) -> HashMap<String, ToolOutcome> {
-    let mut outcomes = HashMap::new();
-    for event in events {
-        let event_type = event.event_type();
-        if event_type != "zeta.tool_call.completed" && event_type != "zeta.tool_call.failed" {
-            continue;
-        }
-        let Some(tool_call_id) = payload_string(event, "tool_call_id") else {
-            continue;
-        };
-        let outcome = if event_type == "zeta.tool_call.failed" {
-            let message = event_error(event).unwrap_or_else(|| "unknown error".to_owned());
-            ToolOutcome::Failed {
-                message,
-                timestamp_ms: event.timestamp_ms(),
-            }
-        } else {
-            ToolOutcome::Completed {
-                timestamp_ms: event.timestamp_ms(),
-            }
-        };
-        outcomes.insert(tool_call_id.to_owned(), outcome);
-    }
-    outcomes
 }
 
 fn payload_string<'a>(event: &'a Event, key: &str) -> Option<&'a str> {
@@ -2771,8 +3001,9 @@ mod tests {
         assert!(screen.contains("Inspect the project"));
         assert!(screen.contains("Zeta"));
         assert!(screen.contains("The project is ready for the next step."));
-        assert!(screen.contains("read README.md"));
-        assert!(screen.contains("Completed"));
+        assert!(screen.contains("Read README.md"));
+        assert!(!screen.contains("Thinking"));
+        assert!(!screen.contains("Completed"));
         assert!(!screen.contains("runtime.queue_item.available"));
         assert!(!screen.contains("queue_item_id"));
         assert!(screen.contains("v raw"));
@@ -2780,11 +3011,9 @@ mod tests {
         let (_, metadata_row) = text_position(&screen, "zeta.master");
         let (you_column, you_row) = text_position(&screen, "You");
         let (zeta_column, zeta_row) = text_position(&screen, "Zeta");
-        let (_, thinking_row) = text_position(&screen, "Thinking");
-        let (_, tool_row) = text_position(&screen, "read README.md");
+        let (_, tool_row) = text_position(&screen, "Read README.md");
 
         assert!(you_row > metadata_row + 1);
-        assert!(zeta_row < thinking_row);
         assert!(zeta_row < tool_row);
         assert!(
             terminal.backend().buffer()[(you_column, you_row)]
@@ -2928,8 +3157,8 @@ mod tests {
         assert!(screen.contains("row-11-xxxxxxxxxxxxxxxxxxxxxxxx"));
 
         let completed = event(
-            "zeta.turn.completed",
-            serde_json::json!({"content": "done"}),
+            "zeta.tool_call.completed",
+            serde_json::json!({"tool_call_id": "call_1", "name": "verify"}),
             "session_1",
             "run_1",
             3,
@@ -2940,7 +3169,7 @@ mod tests {
             .expect("screen should draw");
         let screen = terminal.backend().to_string();
         assert!(screen.contains("row-04-xxxxxxxxxxxxxxxxxxxxxxxx"));
-        assert!(!screen.contains("Completed"));
+        assert!(!screen.contains("Verify"));
 
         let down = TerminalEvent::Key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
         assert_eq!(app.handle_event(&down), AppAction::None);
@@ -2949,13 +3178,13 @@ mod tests {
             .draw(|frame| draw(frame, &mut app))
             .expect("screen should draw");
         let screen = terminal.backend().to_string();
-        assert!(screen.contains("Completed"));
+        assert!(screen.contains("Verify"));
 
         let waiting = event(
             "runtime.status.update",
             serde_json::json!({"status": "waiting", "text": "Waiting for approval"}),
             "session_1",
-            "run_1",
+            "run_2",
             4,
         );
         app.append_events(vec![waiting], Some(Cursor(4)));
@@ -3083,8 +3312,8 @@ mod tests {
         assert_eq!(app.handle_event(&up), AppAction::None);
 
         let completed = event(
-            "zeta.turn.completed",
-            serde_json::json!({"content": "done"}),
+            "zeta.turn.failed",
+            serde_json::json!({"reason": "Review failed"}),
             "session_1",
             "run_1",
             3,
@@ -3096,7 +3325,7 @@ mod tests {
         let screen = terminal.backend().to_string();
         assert!(screen.contains("1 new"));
         assert!(screen.contains("G return to live"));
-        assert!(!screen.contains("Completed"));
+        assert!(!screen.contains("Review failed"));
 
         assert_eq!(app.handle_event(&live), AppAction::None);
         terminal
@@ -3104,7 +3333,7 @@ mod tests {
             .expect("live timeline should draw");
         let screen = terminal.backend().to_string();
         assert!(screen.contains("↓ live"));
-        assert!(screen.contains("Completed"));
+        assert!(screen.contains("Review failed"));
         assert!(!screen.contains("1 new"));
     }
 
@@ -3345,10 +3574,10 @@ mod tests {
         assert_eq!(app.handle_event(&escape), AppAction::None);
         app.append_events(
             vec![event(
-                "zeta.turn.completed",
-                serde_json::json!({"content": "new first output"}),
+                "zeta.turn.failed",
+                serde_json::json!({"reason": "New first output failed"}),
                 "session_1",
-                "run_1",
+                "run_3",
                 3,
             )],
             Some(Cursor(3)),
@@ -3859,7 +4088,7 @@ mod tests {
         let screen = terminal.backend().to_string();
 
         assert!(screen.contains("● Running"));
-        assert!(screen.contains("read README.md"));
+        assert!(screen.contains("Reading README.md…"));
         assert!(!screen.contains("RUNNING"));
     }
 
@@ -3901,7 +4130,7 @@ mod tests {
             .draw(|frame| draw(frame, &mut app))
             .expect("completed activity should draw");
         let before = terminal.backend().to_string();
-        assert!(before.contains("✓ read README.md · 1.5s"));
+        assert!(before.contains("✓ Read README.md · 1.5s"));
 
         app.advance_animation();
         terminal
@@ -3909,6 +4138,105 @@ mod tests {
             .expect("completed activity should redraw");
         let after = terminal.backend().to_string();
         assert_eq!(before, after);
+    }
+
+    #[test]
+    fn progress_projection_collapses_a_turn_into_one_stable_summary() {
+        let request = event(
+            "session.message.requested",
+            serde_json::json!({"message": "Inspect the release"}),
+            "session_1",
+            "run_1",
+            1,
+        );
+        let thinking = event(
+            "runtime.status.update",
+            serde_json::json!({"status": "reasoning_delta"}),
+            "session_1",
+            "run_1",
+            2,
+        );
+        let first_started = event(
+            "zeta.tool_call.started",
+            serde_json::json!({
+                "tool_call_id": "call_1",
+                "name": "read",
+                "input": {"path": "README.md"}
+            }),
+            "session_1",
+            "run_1",
+            100,
+        );
+        let first_completed = event(
+            "zeta.tool_call.completed",
+            serde_json::json!({"tool_call_id": "call_1", "name": "read"}),
+            "session_1",
+            "run_1",
+            500,
+        );
+        let second_started = event(
+            "zeta.tool_call.started",
+            serde_json::json!({
+                "tool_call_id": "call_2",
+                "name": "read",
+                "input": {"path": "CHANGELOG.md"}
+            }),
+            "session_1",
+            "run_1",
+            700,
+        );
+        let second_completed = event(
+            "zeta.tool_call.completed",
+            serde_json::json!({"tool_call_id": "call_2", "name": "read"}),
+            "session_1",
+            "run_1",
+            1_500,
+        );
+        let model = event(
+            "zeta.model_call.completed",
+            serde_json::json!({"content": "The release is ready."}),
+            "session_1",
+            "run_1",
+            1_501,
+        );
+        let completed = event(
+            "zeta.turn.completed",
+            serde_json::json!({"content": "done"}),
+            "session_1",
+            "run_1",
+            1_502,
+        );
+        let mut app = App::connected(
+            "0.1".to_owned(),
+            vec![session("session_1", "zeta.master", "completed")],
+            vec![
+                request,
+                thinking,
+                first_started,
+                first_completed,
+                second_started,
+                second_completed,
+                model,
+                completed,
+            ],
+            Some(Cursor(1_502)),
+        );
+        let enter = TerminalEvent::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(app.handle_event(&enter), AppAction::None);
+
+        assert_eq!(
+            app.timeline_items(),
+            vec![
+                super::TimelineItem::User("Inspect the release".to_owned()),
+                super::TimelineItem::AgentHeading,
+                super::TimelineItem::Activity {
+                    glyph: "✓".to_owned(),
+                    text: "Inspected 2 files · 1.4s".to_owned(),
+                    color: Color::Green,
+                },
+                super::TimelineItem::Agent("The release is ready.".to_owned()),
+            ]
+        );
     }
 
     #[test]
@@ -3938,14 +4266,14 @@ mod tests {
             .draw(|frame| draw(frame, &mut app))
             .expect("active activity should draw");
         let before = terminal.backend().to_string();
-        assert!(before.contains("· read README.md"));
+        assert!(before.contains("· Reading README.md…"));
 
         app.advance_animation();
         terminal
             .draw(|frame| draw(frame, &mut app))
             .expect("active activity should redraw");
         let after = terminal.backend().to_string();
-        assert!(after.contains("∙ read README.md"));
+        assert!(after.contains("∙ Reading README.md…"));
         assert_ne!(before, after);
     }
 

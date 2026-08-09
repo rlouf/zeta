@@ -186,6 +186,7 @@ async fn run() -> Result<(), BoxError> {
     let mut app = App::connected("unknown".to_owned(), Vec::new(), Vec::new(), None);
     let mut terminal = TerminalSession::start()?;
     app.set_keyboard_enhancement(terminal.keyboard_enhancement());
+    app.set_terminal_capabilities(terminal.capabilities());
     app.set_reconnecting(1, 0, "Starting zeta RPC".to_owned());
     let mut terminal_events = EventStream::new();
     let mut refresh_interval = tokio::time::interval(REFRESH_INTERVAL);
@@ -222,6 +223,10 @@ async fn run() -> Result<(), BoxError> {
                             let (submission_id, _, _) = begin_submission(&mut app, objective);
                             add_replay_submission(&mut replay_submissions, submission_id);
                         }
+                        AppAction::Copy(content) => match terminal.copy_to_clipboard(&content) {
+                            Ok(()) => app.copy_succeeded(),
+                            Err(error) => app.copy_failed(error),
+                        },
                     }
                 }
                 _ = &mut reconnect => {
@@ -329,6 +334,10 @@ async fn run() -> Result<(), BoxError> {
                             debug_assert!(replaced.is_none());
                         }
                     }
+                    AppAction::Copy(content) => match terminal.copy_to_clipboard(&content) {
+                        Ok(()) => app.copy_succeeded(),
+                        Err(error) => app.copy_failed(error),
+                    },
                 }
             }
             LoopEvent::Rpc(line) => {

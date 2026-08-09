@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+base64.workspace = true
 crossterm.workspace = true
 futures-util.workspace = true
 nucleo-matcher.workspace = true
@@ -12,6 +13,7 @@ pulldown-cmark.workspace = true
 ratatui.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+supports-color.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
 unicode-width.workspace = true

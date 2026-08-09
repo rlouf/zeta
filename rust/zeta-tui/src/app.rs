@@ -1,14 +1,19 @@
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
-use std::io;
+use std::env;
+use std::io::{self, Write};
+use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD as BASE64;
 use crossterm::event::{
     DisableBracketedPaste, EnableBracketedPaste, Event as TerminalEvent, KeyCode, KeyEventKind,
     KeyModifiers, KeyboardEnhancementFlags, PopKeyboardEnhancementFlags,
     PushKeyboardEnhancementFlags,
 };
 use crossterm::execute;
+use crossterm::style::Print;
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
     supports_keyboard_enhancement,
@@ -19,6 +24,7 @@ use pulldown_cmark::{Event as MarkdownEvent, Options, Parser, Tag, TagEnd};
 use ratatui::Frame;
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
+use ratatui::buffer::Buffer;
 use ratatui::layout::{Alignment, Constraint, Layout, Margin, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -27,6 +33,8 @@ use serde_json::Value;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::wire::{Cursor, Event, Session};
+
+const MAX_CLIPBOARD_BYTES: usize = 100 * 1024;
 
 pub(super) struct App {
     protocol: String,
@@ -46,6 +54,7 @@ pub(super) struct App {
     connection: ConnectionStatus,
     help: bool,
     feedback: Option<Feedback>,
+    terminal_capabilities: TerminalCapabilities,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -159,6 +168,7 @@ struct SessionViewState {
     history_position: Option<usize>,
     history_draft: Option<Draft>,
     yank: String,
+    focused_timeline_item: Option<usize>,
 }
 
 impl Default for SessionViewState {
@@ -175,8 +185,33 @@ impl Default for SessionViewState {
             history_position: None,
             history_draft: None,
             yank: String::new(),
+            focused_timeline_item: None,
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct TerminalCapabilities {
+    color: bool,
+    osc8: bool,
+    osc52: bool,
+}
+
+impl Default for TerminalCapabilities {
+    fn default() -> Self {
+        Self {
+            color: true,
+            osc8: false,
+            osc52: false,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum ClipboardError {
+    Unsupported,
+    TooLarge,
+    WriteFailed,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -256,17 +291,30 @@ enum TimelineItem {
     },
 }
 
+impl TimelineItem {
+    fn copy_text(&self) -> Option<&str> {
+        match self {
+            Self::User(content) | Self::Agent(content) => Some(content),
+            Self::Activity { text, .. } => Some(text),
+            Self::Raw { payload, .. } => Some(payload),
+            Self::AgentHeading => None,
+        }
+    }
+}
+
 #[derive(Debug, PartialEq, Eq)]
 pub(super) enum AppAction {
     None,
     Quit,
     Submit(String),
+    Copy(String),
 }
 
 pub(super) struct TerminalSession {
     terminal: Terminal<CrosstermBackend<io::Stdout>>,
     active: bool,
     keyboard_enhancement: bool,
+    capabilities: TerminalCapabilities,
 }
 
 impl Draft {
@@ -883,6 +931,38 @@ fn looks_like_path(text: &str) -> bool {
     !line.is_empty() && line.chars().all(|character| character.is_ascii_digit())
 }
 
+impl TerminalCapabilities {
+    fn detect() -> Self {
+        let color = env::var_os("NO_COLOR").is_none()
+            && env::var("TERM").map_or(true, |term| term != "dumb")
+            && supports_color::on(supports_color::Stream::Stdout)
+                .is_some_and(|support| support.has_basic);
+        let term_program = env::var("TERM_PROGRAM").unwrap_or_default();
+        let term = env::var("TERM").unwrap_or_default();
+        let modern_terminal = term_program == "WezTerm"
+            || term_program == "iTerm.app"
+            || term_program == "ghostty"
+            || term.contains("kitty")
+            || env::var_os("WT_SESSION").is_some()
+            || env::var_os("VTE_VERSION").is_some();
+        Self {
+            color,
+            osc8: modern_terminal,
+            osc52: modern_terminal,
+        }
+    }
+}
+
+fn osc52_sequence(text: &str, supported: bool) -> Result<String, ClipboardError> {
+    if !supported {
+        return Err(ClipboardError::Unsupported);
+    }
+    if text.len() > MAX_CLIPBOARD_BYTES {
+        return Err(ClipboardError::TooLarge);
+    }
+    Ok(format!("\u{1b}]52;c;{}\u{7}", BASE64.encode(text)))
+}
+
 impl App {
     pub(super) fn connected(
         protocol: String,
@@ -913,7 +993,35 @@ impl App {
             connection: ConnectionStatus::Connected,
             help: false,
             feedback: None,
+            terminal_capabilities: TerminalCapabilities::default(),
         }
+    }
+
+    pub(super) fn set_terminal_capabilities(&mut self, capabilities: TerminalCapabilities) {
+        self.terminal_capabilities = capabilities;
+    }
+
+    pub(super) fn copy_succeeded(&mut self) {
+        self.feedback = Some(Feedback {
+            glyph: "✓",
+            text: "Copied".to_owned(),
+            color: Color::Green,
+            remaining_ticks: 4,
+        });
+    }
+
+    pub(super) fn copy_failed(&mut self, error: ClipboardError) {
+        let text = match error {
+            ClipboardError::Unsupported => "Clipboard unavailable",
+            ClipboardError::TooLarge => "Selection is too large to copy",
+            ClipboardError::WriteFailed => "Could not write to the clipboard",
+        };
+        self.feedback = Some(Feedback {
+            glyph: "×",
+            text: text.to_owned(),
+            color: Color::Red,
+            remaining_ticks: 6,
+        });
     }
 
     pub(super) fn handle_event(&mut self, event: &TerminalEvent) -> AppAction {
@@ -1003,6 +1111,20 @@ impl App {
                             self.view_state_mut().timeline_mode = timeline_mode;
                             self.follow_timeline();
                             return AppAction::None;
+                        }
+                        if key.code == KeyCode::Tab {
+                            self.focus_next_timeline_item();
+                            return AppAction::None;
+                        }
+                        if key.code == KeyCode::BackTab {
+                            self.focus_previous_timeline_item();
+                            return AppAction::None;
+                        }
+                        if key.code == KeyCode::Char('y') {
+                            let Some(content) = self.focused_timeline_content() else {
+                                return AppAction::None;
+                            };
+                            return AppAction::Copy(content);
                         }
                         if key.code == KeyCode::Char('g') {
                             self.view_state_mut().timeline_position = TimelinePosition::Offset(0);
@@ -1648,6 +1770,63 @@ impl App {
             }
         }
         items
+    }
+
+    fn focus_next_timeline_item(&mut self) {
+        self.move_timeline_focus(false);
+    }
+
+    fn focus_previous_timeline_item(&mut self) {
+        self.move_timeline_focus(true);
+    }
+
+    fn move_timeline_focus(&mut self, backwards: bool) {
+        let items = self.timeline_items();
+        let mut copyable = Vec::new();
+        for (index, item) in items.iter().enumerate() {
+            if item.copy_text().is_some() {
+                copyable.push(index);
+            }
+        }
+        if copyable.is_empty() {
+            self.view_state_mut().focused_timeline_item = None;
+            return;
+        }
+        let current = self.view_state().focused_timeline_item;
+        let selected = match current
+            .and_then(|current| copyable.iter().position(|candidate| *candidate == current))
+        {
+            Some(position) if backwards && position == 0 => copyable.len() - 1,
+            Some(position) if backwards => position - 1,
+            Some(position) => (position + 1) % copyable.len(),
+            None if backwards => copyable.len() - 1,
+            None => 0,
+        };
+        self.view_state_mut().focused_timeline_item = Some(copyable[selected]);
+    }
+
+    fn focused_timeline_content(&mut self) -> Option<String> {
+        let items = self.timeline_items();
+        let focused = match self.view_state().focused_timeline_item {
+            Some(focused)
+                if items
+                    .get(focused)
+                    .and_then(TimelineItem::copy_text)
+                    .is_some() =>
+            {
+                focused
+            }
+            Some(_) | None => {
+                let focused = items
+                    .iter()
+                    .enumerate()
+                    .rev()
+                    .find_map(|(index, item)| item.copy_text().map(|_| index))?;
+                self.view_state_mut().focused_timeline_item = Some(focused);
+                focused
+            }
+        };
+        items[focused].copy_text().map(str::to_owned)
     }
 
     fn new_session_submission(&self) -> Option<&Submission> {
@@ -2407,6 +2586,7 @@ fn relative_activity(timestamp_ms: i64) -> String {
 
 impl TerminalSession {
     pub(super) fn start() -> io::Result<Self> {
+        let capabilities = TerminalCapabilities::detect();
         enable_raw_mode()?;
         let keyboard_enhancement = match supports_keyboard_enhancement() {
             Ok(supported) => supported,
@@ -2482,11 +2662,26 @@ impl TerminalSession {
             terminal,
             active: true,
             keyboard_enhancement,
+            capabilities,
         })
     }
 
     pub(super) fn keyboard_enhancement(&self) -> bool {
         self.keyboard_enhancement
+    }
+
+    pub(super) fn capabilities(&self) -> TerminalCapabilities {
+        self.capabilities
+    }
+
+    pub(super) fn copy_to_clipboard(&mut self, text: &str) -> Result<(), ClipboardError> {
+        let sequence = osc52_sequence(text, self.capabilities.osc52)?;
+        execute!(self.terminal.backend_mut(), Print(sequence))
+            .map_err(|_error| ClipboardError::WriteFailed)?;
+        self.terminal
+            .backend_mut()
+            .flush()
+            .map_err(|_error| ClipboardError::WriteFailed)
     }
 
     pub(super) fn draw(&mut self, app: &mut App) -> io::Result<()> {
@@ -2557,6 +2752,105 @@ pub(super) fn draw(frame: &mut Frame<'_>, app: &mut App) {
     }
 
     frame.render_widget(Paragraph::new(footer_line(app)), areas[3]);
+    apply_terminal_capabilities(frame.buffer_mut(), app.terminal_capabilities);
+}
+
+fn apply_terminal_capabilities(buffer: &mut Buffer, capabilities: TerminalCapabilities) {
+    if capabilities.osc8 {
+        apply_local_file_links(buffer);
+    }
+    if !capabilities.color {
+        for cell in &mut buffer.content {
+            cell.set_fg(Color::Reset);
+            cell.set_bg(Color::Reset);
+        }
+    }
+}
+
+fn apply_local_file_links(buffer: &mut Buffer) {
+    let area = buffer.area;
+    for y in area.top()..area.bottom() {
+        let mut start = None;
+        for x in area.left()..=area.right() {
+            let character = if x == area.right() {
+                ' '
+            } else {
+                buffer[(x, y)].symbol().chars().next().unwrap_or(' ')
+            };
+            if character.is_ascii_whitespace() {
+                if let Some(token_start) = start.take() {
+                    link_local_file_token(buffer, token_start, x, y);
+                }
+            } else if start.is_none() {
+                start = Some(x);
+            }
+        }
+    }
+}
+
+fn link_local_file_token(buffer: &mut Buffer, start: u16, end: u16, y: u16) {
+    let mut token = String::new();
+    for x in start..end {
+        token.push_str(buffer[(x, y)].symbol());
+    }
+    if !token.is_ascii() || token.chars().any(char::is_control) {
+        return;
+    }
+    let trimmed_start = token.trim_start_matches(['`', '(', '[']);
+    let prefix_width = token.len().saturating_sub(trimmed_start.len());
+    let token = trimmed_start.trim_end_matches(|character| {
+        character == '`'
+            || character == ','
+            || character == ';'
+            || character == ')'
+            || character == ']'
+    });
+    let Some(path) = local_file_path(token) else {
+        return;
+    };
+    let Ok(path) = path.canonicalize() else {
+        return;
+    };
+    let url = format!("file://{}", escape_file_url(&path));
+    let visible = token.as_bytes();
+    let token_start = start.saturating_add(u16::try_from(prefix_width).unwrap_or(u16::MAX));
+    for (index, chunk) in visible.chunks(2).enumerate() {
+        let Ok(offset) = u16::try_from(index.saturating_mul(2)) else {
+            break;
+        };
+        let x = token_start.saturating_add(offset);
+        if x >= end {
+            break;
+        }
+        let Ok(text) = std::str::from_utf8(chunk) else {
+            return;
+        };
+        let hyperlink = format!("\u{1b}]8;;{url}\u{7}{text}\u{1b}]8;;\u{7}");
+        buffer[(x, y)].set_symbol(&hyperlink);
+    }
+}
+
+fn local_file_path(token: &str) -> Option<PathBuf> {
+    let path_text = match token.rsplit_once(':') {
+        Some((path, line)) if line.chars().all(|character| character.is_ascii_digit()) => path,
+        Some(_) | None => token,
+    };
+    if !looks_like_path(path_text) {
+        return None;
+    }
+    let path = Path::new(path_text);
+    if path.is_file() {
+        return Some(path.to_owned());
+    }
+    None
+}
+
+fn escape_file_url(path: &Path) -> String {
+    path.to_string_lossy()
+        .replace('%', "%25")
+        .replace(' ', "%20")
+        .replace('#', "%23")
+        .replace('?', "%3F")
 }
 
 fn render_help(frame: &mut Frame<'_>, area: Rect, app: &App) {
@@ -2581,6 +2875,8 @@ fn render_help(frame: &mut Frame<'_>, area: Rect, app: &App) {
             push_help_key(&mut lines, "↑/↓ or j/k", "Scroll one line");
             push_help_key(&mut lines, "pgup/pgdn", "Scroll one page");
             push_help_key(&mut lines, "g / G", "Jump to top / live output");
+            push_help_key(&mut lines, "tab / shift-tab", "Focus transcript item");
+            push_help_key(&mut lines, "y", "Copy focused item");
             push_help_key(&mut lines, "i", "Message Zeta");
             push_help_key(&mut lines, "/", "Switch sessions");
             push_help_key(&mut lines, "v", "Toggle raw events");
@@ -2826,8 +3122,19 @@ fn render_timeline(frame: &mut Frame<'_>, area: Rect, app: &mut App) {
 
     let mut lines = Vec::new();
     let width = usize::from(area.width.saturating_sub(2)).max(1);
-    for item in items {
-        for line in timeline_item_lines(item, width) {
+    let focused = app.view_state().focused_timeline_item;
+    for (index, item) in items.into_iter().enumerate() {
+        let selected = focused == Some(index);
+        let item_width = if selected {
+            width.saturating_sub(2).max(1)
+        } else {
+            width
+        };
+        for mut line in timeline_item_lines(item, item_width) {
+            if selected {
+                line.spans
+                    .insert(0, Span::styled("▌ ", Style::default().fg(Color::Cyan)));
+            }
             lines.push(line);
         }
     }
@@ -3284,10 +3591,14 @@ mod tests {
     use crossterm::event::{Event as TerminalEvent, KeyCode, KeyEvent, KeyModifiers};
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
+    use ratatui::buffer::Buffer;
     use ratatui::layout::Rect;
     use ratatui::style::{Color, Modifier};
 
-    use super::{App, AppAction, draw};
+    use super::{
+        App, AppAction, ClipboardError, MAX_CLIPBOARD_BYTES, TerminalCapabilities,
+        apply_terminal_capabilities, draw, osc52_sequence,
+    };
     use crate::wire::{Cursor, Event, Session};
 
     fn event(
@@ -5089,5 +5400,134 @@ mod tests {
         let screen = terminal.backend().to_string();
         assert!(screen.contains("No conversation yet"));
         assert!(screen.contains("Press i to message Zeta."));
+    }
+
+    #[test]
+    fn transcript_focus_copies_semantic_items_without_losing_wrapped_content() {
+        let request = event(
+            "session.message.requested",
+            serde_json::json!({"message": "Inspect every relevant file before answering"}),
+            "session_1",
+            "run_1",
+            1,
+        );
+        let response = event(
+            "zeta.model_call.completed",
+            serde_json::json!({"content": "The implementation is ready for review."}),
+            "session_1",
+            "run_1",
+            2,
+        );
+        let mut app = App::connected(
+            "0.1".to_owned(),
+            vec![session("session_1", "zeta.master", "idle")],
+            vec![request, response],
+            Some(Cursor(2)),
+        );
+        let enter = TerminalEvent::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(app.handle_event(&enter), AppAction::None);
+
+        let copy = TerminalEvent::Key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE));
+        assert_eq!(
+            app.handle_event(&copy),
+            AppAction::Copy("The implementation is ready for review.".to_owned())
+        );
+        let previous = TerminalEvent::Key(KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT));
+        assert_eq!(app.handle_event(&previous), AppAction::None);
+        assert_eq!(
+            app.handle_event(&copy),
+            AppAction::Copy("Inspect every relevant file before answering".to_owned())
+        );
+
+        let backend = TestBackend::new(36, 22);
+        let mut terminal = Terminal::new(backend).expect("terminal should initialize");
+        terminal
+            .draw(|frame| draw(frame, &mut app))
+            .expect("focused transcript should draw");
+        let screen = terminal.backend().to_string();
+        assert!(screen.contains('▌'));
+        assert!(screen.contains("Inspect every relevant"), "{screen}");
+        assert!(screen.contains("before answering"), "{screen}");
+    }
+
+    #[test]
+    fn osc52_clipboard_is_bounded_and_keeps_hostile_controls_encoded() {
+        assert_eq!(
+            osc52_sequence("hello", false),
+            Err(ClipboardError::Unsupported)
+        );
+        assert_eq!(
+            osc52_sequence(&"a".repeat(MAX_CLIPBOARD_BYTES + 1), true),
+            Err(ClipboardError::TooLarge)
+        );
+
+        let sequence = osc52_sequence("safe\u{1b}]52;c;hostile\u{7}", true)
+            .expect("supported, bounded text should encode");
+        assert!(sequence.starts_with("\u{1b}]52;c;"));
+        assert!(sequence.ends_with('\u{7}'));
+        assert_eq!(sequence.matches("\u{1b}]52").count(), 1);
+        assert_eq!(sequence.matches('\u{7}').count(), 1);
+    }
+
+    #[test]
+    fn no_color_rendering_preserves_text_and_modifiers() {
+        let mut app = App::connected(
+            "0.1".to_owned(),
+            vec![session("session_1", "zeta.master", "running")],
+            Vec::new(),
+            None,
+        );
+        app.set_terminal_capabilities(TerminalCapabilities {
+            color: false,
+            osc8: false,
+            osc52: false,
+        });
+        let backend = TestBackend::new(80, 18);
+        let mut terminal = Terminal::new(backend).expect("terminal should initialize");
+        terminal
+            .draw(|frame| draw(frame, &mut app))
+            .expect("no-color screen should draw");
+
+        assert!(terminal.backend().to_string().contains("zeta"));
+        for cell in terminal.backend().buffer().content() {
+            assert_eq!(cell.fg, Color::Reset);
+            assert_eq!(cell.bg, Color::Reset);
+        }
+    }
+
+    #[test]
+    fn osc8_links_only_existing_local_files_and_preserves_plain_labels() {
+        let area = Rect::new(0, 0, 40, 1);
+        let mut unsupported = Buffer::with_lines(["Open ./Cargo.toml and missing/file.rs"]);
+        let plain = unsupported.clone();
+        apply_terminal_capabilities(
+            &mut unsupported,
+            TerminalCapabilities {
+                color: true,
+                osc8: false,
+                osc52: false,
+            },
+        );
+        assert_eq!(unsupported, plain);
+
+        let mut supported = Buffer::with_lines(["Open ./Cargo.toml and missing/file.rs"]);
+        supported.resize(area);
+        apply_terminal_capabilities(
+            &mut supported,
+            TerminalCapabilities {
+                color: true,
+                osc8: true,
+                osc52: false,
+            },
+        );
+        let symbols = supported
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+        assert!(symbols.contains("\u{1b}]8;;file://"));
+        assert!(symbols.contains("Cargo"));
+        assert!(symbols.contains("missing/file"));
+        assert_eq!(symbols.matches("\u{1b}]8;;file://").count(), 6);
     }
 }

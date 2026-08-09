@@ -122,6 +122,7 @@ async fn run() -> Result<(), BoxError> {
     );
     let mut next_request_id = 4;
     let mut terminal = TerminalSession::start()?;
+    app.set_keyboard_enhancement(terminal.keyboard_enhancement());
     let mut terminal_events = EventStream::new();
     let mut refresh_interval = tokio::time::interval(REFRESH_INTERVAL);
     refresh_interval.set_missed_tick_behavior(MissedTickBehavior::Skip);

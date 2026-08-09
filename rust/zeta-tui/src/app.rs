@@ -1,10 +1,15 @@
 use std::collections::{HashMap, HashSet};
 use std::io;
 
-use crossterm::event::{Event as TerminalEvent, KeyCode, KeyEventKind, KeyModifiers};
+use crossterm::event::{
+    DisableBracketedPaste, EnableBracketedPaste, Event as TerminalEvent, KeyCode, KeyEventKind,
+    KeyModifiers, KeyboardEnhancementFlags, PopKeyboardEnhancementFlags,
+    PushKeyboardEnhancementFlags,
+};
 use crossterm::execute;
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
+    supports_keyboard_enhancement,
 };
 use ratatui::Frame;
 use ratatui::Terminal;
@@ -28,6 +33,7 @@ pub(super) struct App {
     mode: Mode,
     session_views: HashMap<String, SessionViewState>,
     new_session_view: SessionViewState,
+    keyboard_enhancement: bool,
     animation_frame: usize,
     submissions: Vec<Submission>,
 }
@@ -56,7 +62,7 @@ enum TimelinePosition {
     Offset(usize),
 }
 
-#[derive(Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct Draft {
     text: String,
     cursor: usize,
@@ -78,6 +84,10 @@ struct SessionViewState {
     timeline_viewport_height: usize,
     timeline_unseen_rows: usize,
     timeline_changed: bool,
+    submitted_history: Vec<String>,
+    history_position: Option<usize>,
+    history_draft: Option<Draft>,
+    yank: String,
 }
 
 impl Default for SessionViewState {
@@ -90,6 +100,10 @@ impl Default for SessionViewState {
             timeline_viewport_height: 1,
             timeline_unseen_rows: 0,
             timeline_changed: false,
+            submitted_history: Vec::new(),
+            history_position: None,
+            history_draft: None,
+            yank: String::new(),
         }
     }
 }
@@ -151,6 +165,7 @@ pub(super) enum AppAction {
 pub(super) struct TerminalSession {
     terminal: Terminal<CrosstermBackend<io::Stdout>>,
     active: bool,
+    keyboard_enhancement: bool,
 }
 
 impl Draft {
@@ -232,6 +247,19 @@ impl Draft {
         self.cursor = start;
     }
 
+    fn delete_to_end(&mut self) -> String {
+        let deleted = self.text[self.cursor..].to_owned();
+        self.text.truncate(self.cursor);
+        deleted
+    }
+
+    fn delete_to_start(&mut self) -> String {
+        let deleted = self.text[..self.cursor].to_owned();
+        self.text.replace_range(..self.cursor, "");
+        self.cursor = 0;
+        deleted
+    }
+
     fn trimmed(&self) -> &str {
         self.text.trim()
     }
@@ -298,6 +326,50 @@ impl Draft {
     }
 }
 
+impl SessionViewState {
+    fn finish_history_navigation(&mut self) {
+        self.history_position = None;
+        self.history_draft = None;
+    }
+
+    fn remember_submission(&mut self, message: String) {
+        if self.submitted_history.last() != Some(&message) {
+            self.submitted_history.push(message);
+        }
+        self.finish_history_navigation();
+    }
+
+    fn previous_submission(&mut self) {
+        if self.submitted_history.is_empty() {
+            return;
+        }
+        let position = match self.history_position {
+            Some(position) => position.saturating_sub(1),
+            None => {
+                self.history_draft = Some(self.draft.clone());
+                self.submitted_history.len() - 1
+            }
+        };
+        self.history_position = Some(position);
+        self.draft.replace(self.submitted_history[position].clone());
+    }
+
+    fn next_submission(&mut self) {
+        let Some(position) = self.history_position else {
+            return;
+        };
+        if position + 1 < self.submitted_history.len() {
+            let position = position + 1;
+            self.history_position = Some(position);
+            self.draft.replace(self.submitted_history[position].clone());
+            return;
+        }
+        let draft = self.history_draft.take().unwrap_or_default();
+        self.draft = draft;
+        self.history_position = None;
+    }
+}
+
 impl App {
     pub(super) fn connected(
         protocol: String,
@@ -320,6 +392,7 @@ impl App {
             mode: Mode::Browse,
             session_views,
             new_session_view: SessionViewState::default(),
+            keyboard_enhancement: false,
             animation_frame: 0,
             submissions: Vec::new(),
         }
@@ -329,7 +402,9 @@ impl App {
         if self.mode == Mode::Compose
             && let TerminalEvent::Paste(text) = event
         {
-            self.view_state_mut().draft.insert(text);
+            let state = self.view_state_mut();
+            state.finish_history_navigation();
+            state.draft.insert(text);
             return AppAction::None;
         }
         let TerminalEvent::Key(key) = event else {
@@ -415,15 +490,64 @@ impl App {
                     self.mode = Mode::Browse;
                     return AppAction::None;
                 }
+                if key.code == KeyCode::Enter && key.modifiers.contains(KeyModifiers::SHIFT) {
+                    let state = self.view_state_mut();
+                    state.finish_history_navigation();
+                    state.draft.insert("\n");
+                    return AppAction::None;
+                }
+                if key.code == KeyCode::Char('j') && key.modifiers.contains(KeyModifiers::CONTROL) {
+                    let state = self.view_state_mut();
+                    state.finish_history_navigation();
+                    state.draft.insert("\n");
+                    return AppAction::None;
+                }
                 if key.code == KeyCode::Enter {
                     let message = self.view_state().draft.trimmed();
                     if message.is_empty() {
                         return AppAction::None;
                     }
                     let message = message.to_owned();
-                    self.view_state_mut().draft.clear();
+                    let state = self.view_state_mut();
+                    state.remember_submission(message.clone());
+                    state.draft.clear();
                     self.mode = Mode::Browse;
                     return AppAction::Submit(message);
+                }
+                if key.code == KeyCode::Char('a') && key.modifiers.contains(KeyModifiers::CONTROL) {
+                    self.view_state_mut().draft.move_to_start();
+                    return AppAction::None;
+                }
+                if key.code == KeyCode::Char('e') && key.modifiers.contains(KeyModifiers::CONTROL) {
+                    self.view_state_mut().draft.move_to_end();
+                    return AppAction::None;
+                }
+                if key.code == KeyCode::Char('k') && key.modifiers.contains(KeyModifiers::CONTROL) {
+                    let state = self.view_state_mut();
+                    state.finish_history_navigation();
+                    state.yank = state.draft.delete_to_end();
+                    return AppAction::None;
+                }
+                if key.code == KeyCode::Char('u') && key.modifiers.contains(KeyModifiers::CONTROL) {
+                    let state = self.view_state_mut();
+                    state.finish_history_navigation();
+                    state.yank = state.draft.delete_to_start();
+                    return AppAction::None;
+                }
+                if key.code == KeyCode::Char('y') && key.modifiers.contains(KeyModifiers::CONTROL) {
+                    let state = self.view_state_mut();
+                    state.finish_history_navigation();
+                    let yank = state.yank.clone();
+                    state.draft.insert(&yank);
+                    return AppAction::None;
+                }
+                if key.code == KeyCode::Char('p') && key.modifiers.contains(KeyModifiers::CONTROL) {
+                    self.view_state_mut().previous_submission();
+                    return AppAction::None;
+                }
+                if key.code == KeyCode::Char('n') && key.modifiers.contains(KeyModifiers::CONTROL) {
+                    self.view_state_mut().next_submission();
+                    return AppAction::None;
                 }
                 if key.code == KeyCode::Left {
                     self.view_state_mut().draft.move_left();
@@ -442,6 +566,7 @@ impl App {
                     return AppAction::None;
                 }
                 if key.code == KeyCode::Backspace {
+                    self.view_state_mut().finish_history_navigation();
                     if key.modifiers.contains(KeyModifiers::ALT) {
                         self.view_state_mut().draft.delete_word_backward();
                     } else {
@@ -450,18 +575,23 @@ impl App {
                     return AppAction::None;
                 }
                 if key.code == KeyCode::Delete {
+                    self.view_state_mut().finish_history_navigation();
                     self.view_state_mut().draft.delete_forward();
                     return AppAction::None;
                 }
                 if key.code == KeyCode::Char('w') && key.modifiers.contains(KeyModifiers::CONTROL) {
-                    self.view_state_mut().draft.delete_word_backward();
+                    let state = self.view_state_mut();
+                    state.finish_history_navigation();
+                    state.draft.delete_word_backward();
                     return AppAction::None;
                 }
                 if let KeyCode::Char(character) = key.code
                     && !key.modifiers.contains(KeyModifiers::CONTROL)
                     && !key.modifiers.contains(KeyModifiers::SUPER)
                 {
-                    self.view_state_mut().draft.insert_char(character);
+                    let state = self.view_state_mut();
+                    state.finish_history_navigation();
+                    state.draft.insert_char(character);
                 }
                 AppAction::None
             }
@@ -477,6 +607,10 @@ impl App {
 
     pub(super) fn advance_animation(&mut self) {
         self.animation_frame = (self.animation_frame + 1) % 4;
+    }
+
+    pub(super) fn set_keyboard_enhancement(&mut self, supported: bool) {
+        self.keyboard_enhancement = supported;
     }
 
     pub(super) fn append_events(&mut self, events: Vec<Event>, cursor: Option<Cursor>) {
@@ -905,8 +1039,8 @@ impl App {
             .layout(input_width)
             .lines
             .len()
-            .clamp(1, 4);
-        u16::try_from(line_count + 1).unwrap_or(5)
+            .clamp(1, 8);
+        u16::try_from(line_count + 1).unwrap_or(9)
     }
 
     fn select_next_session(&mut self) {
@@ -1295,6 +1429,13 @@ fn abbreviated_id(value: &str) -> String {
 impl TerminalSession {
     pub(super) fn start() -> io::Result<Self> {
         enable_raw_mode()?;
+        let keyboard_enhancement = match supports_keyboard_enhancement() {
+            Ok(supported) => supported,
+            Err(error) => {
+                drop(error);
+                false
+            }
+        };
         let mut output = io::stdout();
         if let Err(error) = execute!(output, EnterAlternateScreen) {
             let restore_result = disable_raw_mode();
@@ -1305,6 +1446,29 @@ impl TerminalSession {
             }
             return Err(error);
         }
+        if keyboard_enhancement
+            && let Err(error) = execute!(
+                output,
+                PushKeyboardEnhancementFlags(
+                    KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
+                        | KeyboardEnhancementFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES
+                        | KeyboardEnhancementFlags::REPORT_ALTERNATE_KEYS
+                        | KeyboardEnhancementFlags::REPORT_EVENT_TYPES
+                )
+            )
+        {
+            let _ = execute!(output, LeaveAlternateScreen);
+            let _ = disable_raw_mode();
+            return Err(error);
+        }
+        if let Err(error) = execute!(output, EnableBracketedPaste) {
+            if keyboard_enhancement {
+                let _ = execute!(output, PopKeyboardEnhancementFlags);
+            }
+            let _ = execute!(output, LeaveAlternateScreen);
+            let _ = disable_raw_mode();
+            return Err(error);
+        }
 
         let backend = CrosstermBackend::new(output);
         let terminal = match Terminal::new(backend) {
@@ -1312,13 +1476,22 @@ impl TerminalSession {
             Err(error) => {
                 let raw_result = disable_raw_mode();
                 let mut output = io::stdout();
-                let screen_result = execute!(output, LeaveAlternateScreen);
+                let feature_result = if keyboard_enhancement {
+                    execute!(
+                        output,
+                        DisableBracketedPaste,
+                        PopKeyboardEnhancementFlags,
+                        LeaveAlternateScreen
+                    )
+                } else {
+                    execute!(output, DisableBracketedPaste, LeaveAlternateScreen)
+                };
                 if let Err(restore_error) = raw_result {
                     return Err(io::Error::other(format!(
                         "{error}; raw-mode restoration failed: {restore_error}"
                     )));
                 }
-                if let Err(restore_error) = screen_result {
+                if let Err(restore_error) = feature_result {
                     return Err(io::Error::other(format!(
                         "{error}; screen restoration failed: {restore_error}"
                     )));
@@ -1329,7 +1502,12 @@ impl TerminalSession {
         Ok(Self {
             terminal,
             active: true,
+            keyboard_enhancement,
         })
+    }
+
+    pub(super) fn keyboard_enhancement(&self) -> bool {
+        self.keyboard_enhancement
     }
 
     pub(super) fn draw(&mut self, app: &mut App) -> io::Result<()> {
@@ -1343,7 +1521,20 @@ impl TerminalSession {
         }
         self.active = false;
         let raw_result = disable_raw_mode();
-        let screen_result = execute!(self.terminal.backend_mut(), LeaveAlternateScreen);
+        let screen_result = if self.keyboard_enhancement {
+            execute!(
+                self.terminal.backend_mut(),
+                DisableBracketedPaste,
+                PopKeyboardEnhancementFlags,
+                LeaveAlternateScreen
+            )
+        } else {
+            execute!(
+                self.terminal.backend_mut(),
+                DisableBracketedPaste,
+                LeaveAlternateScreen
+            )
+        };
         let cursor_result = self.terminal.show_cursor();
         raw_result?;
         screen_result?;
@@ -1607,11 +1798,23 @@ fn connected_line() -> Line<'static> {
 }
 
 fn render_composer(frame: &mut Frame<'_>, area: Rect, app: &App) {
-    let title = match &app.view {
-        View::Sessions => " New session ",
-        View::Attached(_) => " Message ",
+    let label = match &app.view {
+        View::Sessions => "New session",
+        View::Attached(_) => "Message",
     };
     let composing = app.mode == Mode::Compose;
+    let input_width = usize::from(area.width.saturating_sub(2));
+    let layout = app.view_state().draft.layout(input_width);
+    let visible_height = usize::from(area.height.saturating_sub(1)).max(1);
+    let title = if composing && layout.lines.len() > visible_height {
+        format!(
+            " {label} · line {}/{} ",
+            layout.cursor_row + 1,
+            layout.lines.len()
+        )
+    } else {
+        format!(" {label} ")
+    };
     let border_style = if composing {
         Style::default().fg(Color::Cyan)
     } else {
@@ -1686,6 +1889,11 @@ fn footer_line(app: &App) -> Line<'static> {
         }
         (View::Sessions, Mode::Compose) => {
             push_key_hint(&mut spans, "enter", "start");
+            if app.keyboard_enhancement {
+                push_key_hint(&mut spans, "shift-enter", "newline");
+            } else {
+                push_key_hint(&mut spans, "ctrl-j", "newline");
+            }
             push_key_hint(&mut spans, "esc", "cancel");
         }
         (View::Attached(_), Mode::Browse) => {
@@ -1698,6 +1906,11 @@ fn footer_line(app: &App) -> Line<'static> {
         }
         (View::Attached(_), Mode::Compose) => {
             push_key_hint(&mut spans, "enter", "send");
+            if app.keyboard_enhancement {
+                push_key_hint(&mut spans, "shift-enter", "newline");
+            } else {
+                push_key_hint(&mut spans, "ctrl-j", "newline");
+            }
             push_key_hint(&mut spans, "esc", "cancel");
         }
     }
@@ -2702,6 +2915,124 @@ mod tests {
         assert!(screen.contains("first line wraps"));
         assert!(screen.contains("second"));
         assert!(terminal.get_cursor_position().is_ok());
+    }
+
+    #[test]
+    fn composer_supports_kill_yank_and_modified_enter_newlines() {
+        let mut app = App::connected("0.1".to_owned(), Vec::new(), Vec::new(), None);
+        let new = TerminalEvent::Key(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE));
+        let control_a =
+            TerminalEvent::Key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::CONTROL));
+        let control_e =
+            TerminalEvent::Key(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::CONTROL));
+        let control_k =
+            TerminalEvent::Key(KeyEvent::new(KeyCode::Char('k'), KeyModifiers::CONTROL));
+        let control_u =
+            TerminalEvent::Key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL));
+        let control_y =
+            TerminalEvent::Key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::CONTROL));
+        let control_j =
+            TerminalEvent::Key(KeyEvent::new(KeyCode::Char('j'), KeyModifiers::CONTROL));
+        let newline = TerminalEvent::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::SHIFT));
+        let enter = TerminalEvent::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        assert_eq!(app.handle_event(&new), AppAction::None);
+        assert_eq!(
+            app.handle_event(&TerminalEvent::Paste("alpha beta".to_owned())),
+            AppAction::None
+        );
+        assert_eq!(app.handle_event(&control_a), AppAction::None);
+        assert_eq!(app.handle_event(&control_k), AppAction::None);
+        assert_eq!(app.handle_event(&control_y), AppAction::None);
+        assert_eq!(app.handle_event(&control_e), AppAction::None);
+        assert_eq!(app.handle_event(&control_u), AppAction::None);
+        assert_eq!(app.handle_event(&control_y), AppAction::None);
+        assert_eq!(app.handle_event(&newline), AppAction::None);
+        assert_eq!(
+            app.handle_event(&TerminalEvent::Paste("tail".to_owned())),
+            AppAction::None
+        );
+        assert_eq!(app.handle_event(&control_j), AppAction::None);
+        assert_eq!(
+            app.handle_event(&TerminalEvent::Paste("last".to_owned())),
+            AppAction::None
+        );
+        assert_eq!(
+            app.handle_event(&enter),
+            AppAction::Submit("alpha beta\ntail\nlast".to_owned())
+        );
+    }
+
+    #[test]
+    fn submitted_message_history_restores_the_unsubmitted_draft_per_session() {
+        let mut app = App::connected(
+            "0.1".to_owned(),
+            vec![
+                session("session_1", "zeta.master", "idle"),
+                session("session_2", "zeta.master", "idle"),
+            ],
+            Vec::new(),
+            None,
+        );
+        let enter = TerminalEvent::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        let compose = TerminalEvent::Key(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE));
+        let previous = TerminalEvent::Key(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL));
+        let next = TerminalEvent::Key(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::CONTROL));
+        let escape = TerminalEvent::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        let down = TerminalEvent::Key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+
+        assert_eq!(app.handle_event(&enter), AppAction::None);
+        assert_eq!(app.handle_event(&compose), AppAction::None);
+        assert_eq!(
+            app.handle_event(&TerminalEvent::Paste("first command".to_owned())),
+            AppAction::None
+        );
+        assert_eq!(
+            app.handle_event(&enter),
+            AppAction::Submit("first command".to_owned())
+        );
+        assert_eq!(app.handle_event(&compose), AppAction::None);
+        assert_eq!(
+            app.handle_event(&TerminalEvent::Paste("working draft".to_owned())),
+            AppAction::None
+        );
+        assert_eq!(app.handle_event(&previous), AppAction::None);
+        assert_eq!(app.handle_event(&next), AppAction::None);
+        assert_eq!(
+            app.handle_event(&enter),
+            AppAction::Submit("working draft".to_owned())
+        );
+
+        assert_eq!(app.handle_event(&escape), AppAction::None);
+        assert_eq!(app.handle_event(&down), AppAction::None);
+        assert_eq!(app.handle_event(&enter), AppAction::None);
+        assert_eq!(app.handle_event(&compose), AppAction::None);
+        assert_eq!(app.handle_event(&previous), AppAction::None);
+        assert_eq!(app.handle_event(&enter), AppAction::None);
+    }
+
+    #[test]
+    fn long_composer_shows_position_and_keyboard_specific_newline_hint() {
+        let mut app = App::connected("0.1".to_owned(), Vec::new(), Vec::new(), None);
+        let new = TerminalEvent::Key(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE));
+        assert_eq!(app.handle_event(&new), AppAction::None);
+        assert_eq!(
+            app.handle_event(&TerminalEvent::Paste(
+                "one\ntwo\nthree\nfour\nfive\nsix\nseven\neight\nnine".to_owned()
+            )),
+            AppAction::None
+        );
+        app.set_keyboard_enhancement(true);
+        let backend = TestBackend::new(60, 18);
+        let mut terminal = Terminal::new(backend).expect("terminal should initialize");
+        terminal
+            .draw(|frame| draw(frame, &mut app))
+            .expect("long composer should draw");
+        let screen = terminal.backend().to_string();
+
+        assert!(screen.contains("line 9/9"));
+        assert!(screen.contains("shift-enter newline"));
+        assert!(!screen.contains("ctrl-j newline"));
     }
 
     #[test]

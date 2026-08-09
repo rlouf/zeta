@@ -301,6 +301,24 @@ Schedules automatically add `agent.<slug>.scheduled` to `accepts`. For example,
 `agents/release-manager.md` with a schedule accepts
 `agent.release-manager.scheduled`.
 
+Each scheduled event carries the intended occurrence in the schedule's
+timezone:
+
+```json
+{
+  "date": "2026-08-09",
+  "timestamp": "2026-08-09T07:00:00-06:00"
+}
+```
+
+These values describe the cron occurrence, including backfills and catch-up,
+not the later time when a worker processes it. Schedules without a timezone
+use UTC. This also makes the occurrence available to session templates:
+
+```yaml
+session: "morning-briefing-{date}"
+```
+
 Zeta applies the same selection rule to `tools` and `skills`:
 
 - Omit the field to select all available entries.
@@ -351,6 +369,7 @@ so payload fields appear as top-level names and the event is available as
 session: "{chat_id}"                  # one timeline per Telegram chat
 session: "{channel_id}:{thread_ts}"   # one timeline per Slack thread
 session: "{event.id}"                 # the same as per-event
+session: "morning-briefing-{date}"    # one timeline per scheduled date
 ```
 
 A template that names a field the event lacks raises. It never falls back,

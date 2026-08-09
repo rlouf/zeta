@@ -58,6 +58,7 @@ from zeta.harness import retry as harness_retry
 from zeta.harness import routing as harness_routing
 from zeta.harness import scheduling as harness_scheduling
 from zeta.harness import session_turn as harness_session_turn
+from zeta.harness import templates as harness_templates
 from zeta.harness import worker as harness_worker
 from zeta.harness.queue import QueueItem
 from zeta.harness.sessions import submit_session_message
@@ -9230,10 +9231,54 @@ Summarize the repo.
     assert [event.event_type for event in events] == ["agent.scheduled.scheduled"]
     scheduled_event = first[0]
     assert scheduled_event.source == "zeta:scheduler"
-    assert scheduled_event.payload == {}
+    assert scheduled_event.payload == {
+        "date": "2026-06-22",
+        "timestamp": "2026-06-22T12:34:00+00:00",
+    }
     assert (
         scheduled_event.idempotency_key
         == "schedule:scheduled:* * * * *:2026-06-22T12:34:00+00:00"
+    )
+
+
+def test_zeta_scheduler_payload_uses_the_intended_local_occurrence(
+    tmp_path: Path,
+) -> None:
+    agents_dir = tmp_path / "agents"
+    agents_dir.mkdir()
+    (agents_dir / "morning-briefing.md").write_text(
+        """---
+name: Morning briefing
+description: Prepares the morning briefing.
+schedules:
+  - cron: "0 7 * * *"
+    timezone: America/Denver
+session: "morning-briefing-{date}"
+---
+Prepare the briefing.
+""",
+        encoding="utf-8",
+    )
+    event_store = zeta_events.MemoryEventStore()
+    spec = zeta_agent_spec.load_specs(agents_dir)[0]
+
+    scheduled_event = harness_scheduling.request_due_schedules(
+        event_store,
+        [spec],
+        now=datetime(2026, 8, 9, 13, 42, tzinfo=UTC),
+    )[0]
+
+    assert scheduled_event.payload == {
+        "date": "2026-08-09",
+        "timestamp": "2026-08-09T07:00:00-06:00",
+    }
+    assert (
+        harness_templates.agent_session_id(
+            spec.slug,
+            spec.session,
+            scheduled_event,
+        )
+        == "agent/morning-briefing/morning-briefing-2026-08-09"
     )
 
 
@@ -9290,6 +9335,10 @@ Summarize the repo.
     assert repeated == []
     assert [event.event_type for event in late] == ["agent.scheduled.scheduled"]
     assert [event.event_type for event in events] == ["agent.scheduled.scheduled"]
+    assert late[0].payload == {
+        "date": "2026-06-22",
+        "timestamp": "2026-06-22T08:00:00+00:00",
+    }
     assert [event.event_type for event in decisions] == [
         "scheduler.tick.published",
         "scheduler.tick.skipped",
@@ -9402,6 +9451,10 @@ Summarize the repo.
     assert before_due == []
     assert [event.event_type for event in after_wake] == ["agent.scheduled.scheduled"]
     assert repeated == []
+    assert after_wake[0].payload == {
+        "date": "2026-06-21",
+        "timestamp": "2026-06-21T18:00:00+00:00",
+    }
     assert after_wake[0].idempotency_key == (
         "schedule:scheduled:0 18 * * 0:2026-06-21T18:00:00+00:00"
     )
@@ -9646,12 +9699,16 @@ Summarize the repo.
         finally:
             runner.run(runtime.aclose())
 
-    assert [event.payload for event in scheduled_events] == [{}]
+    expected_payload = {
+        "date": "2026-06-22",
+        "timestamp": "2026-06-22T12:34:00+00:00",
+    }
+    assert [event.payload for event in scheduled_events] == [expected_payload]
     assert message == f"ran qi_{scheduled_events[0].id}"
     assert [call.triggering_event.event_type for call in calls] == [
         "agent.scheduled.scheduled"
     ]
-    assert [call.triggering_event.payload for call in calls] == [{}]
+    assert [call.triggering_event.payload for call in calls] == [expected_payload]
     assert [item.status for item in items] == ["completed"]
 
 

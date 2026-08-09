@@ -9,8 +9,8 @@ permissions:
   contents: read
 
 jobs:
-  build:
-    name: Build distributions
+  validate:
+    name: Validate release
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -46,14 +46,45 @@ jobs:
       - name: Run tests
         run: uv run pytest
 
-      - name: Build distributions
-        run: uv build --package zeta-os
+  build:
+    name: Build wheels on ${{ matrix.os }}
+    needs: validate
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-15-intel
+          - macos-14
 
-      - name: Upload distributions
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Build wheels
+        uses: pypa/cibuildwheel@v4.1.1
+        with:
+          package-dir: zeta
+          output-dir: wheelhouse
+        env:
+          CIBW_BUILD: "cp311-* cp312-* cp313-*"
+          CIBW_SKIP: "*-musllinux_*"
+          CIBW_ARCHS_LINUX: x86_64
+          CIBW_ARCHS_MACOS: native
+          CIBW_BEFORE_ALL_LINUX: curl -sSf https://sh.rustup.rs | sh -s -- -y
+          CIBW_ENVIRONMENT_LINUX: "PATH=$HOME/.cargo/bin:$PATH"
+          CIBW_TEST_COMMAND: >-
+            zeta --help && python -c "import shutil; assert shutil.which('zeta-tui')"
+
+      - name: Upload wheels
         uses: actions/upload-artifact@v4
         with:
-          name: dist
-          path: dist/
+          name: wheels-${{ matrix.os }}
+          path: wheelhouse/*.whl
 
   publish:
     name: Publish to PyPI
@@ -65,11 +96,12 @@ jobs:
       id-token: write
 
     steps:
-      - name: Download distributions
+      - name: Download wheels
         uses: actions/download-artifact@v4
         with:
-          name: dist
+          pattern: wheels-*
           path: dist/
+          merge-multiple: true
 
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1

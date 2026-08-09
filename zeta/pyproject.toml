@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=69", "setuptools-scm>=8"]
+requires = ["setuptools>=69", "setuptools-rust", "setuptools-scm>=8"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -69,3 +69,7 @@ fallback_version = "0.1.0"
 local_scheme = "no-local-version"
 root = ".."
 version_file = "src/zeta/_version.py"
+
+[[tool.setuptools-rust.bins]]
+target = "zeta-tui"
+path = "../rust/zeta-tui/Cargo.toml"

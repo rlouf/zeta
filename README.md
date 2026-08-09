@@ -222,6 +222,31 @@ zeta traces replay PROMPT_ID \
 Replay is not the reason to use Zeta. It is how you can trust an ambient agent
 after it acts.
 
+## Work with sessions interactively
+
+Run `zeta` without a subcommand to open the terminal interface. It lists the
+project's sessions on startup. Press `n` to start a session, `Enter` to attach,
+and `Esc` to detach without stopping the agent. Attached sessions continue to
+update as the agent works, and you can send another message with `Enter`.
+
+The interface keeps one pane and preserves each session's draft, history,
+selection, and scroll position while you switch. Use `/` to find another
+session, `1` through `9` to attach directly from the session list, and `?` for
+the complete contextual key map.
+
+In the composer, `Enter` sends and `Shift-Enter` inserts a newline. Terminals
+that cannot distinguish modified Enter use `Ctrl-J` for a newline instead.
+Standard terminal selection remains available; focus transcript items with
+`Tab` and press `y` to copy through OSC 52 when the terminal supports it.
+Colors, clickable local paths, and copying degrade to plain, readable text when
+unsupported, and `NO_COLOR` is respected.
+
+If the local RPC child exits, the interface reconnects automatically. Drafts
+and reading positions stay in place, durable events are reconciled first, and
+only unresolved messages are retried with their original idempotency keys.
+`Ctrl-C` exits, while `q` exits from browse mode. `Ctrl-Z` suspends cleanly on
+Unix and redraws after resume.
+
 ## Learn more
 
 [Concepts](docs/concepts.md) covers agent files, events, schemas, connectors,

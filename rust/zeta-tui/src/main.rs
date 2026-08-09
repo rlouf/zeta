@@ -4,17 +4,18 @@ mod wire;
 use std::collections::HashMap;
 use std::env;
 use std::error::Error;
+use std::ffi::{OsStr, OsString};
 use std::io;
 use std::process::Stdio;
 use std::time::Duration;
 
-use crossterm::event::EventStream;
+use crossterm::event::{Event as TerminalEvent, EventStream};
 use futures_util::StreamExt;
 use serde_json::{Value, json};
 use tokio::io::AsyncWriteExt;
 use tokio::process::{ChildStdin, ChildStdout, Command};
-use tokio::time::MissedTickBehavior;
-use tokio_util::codec::{FramedRead, LinesCodec};
+use tokio::time::{Instant, MissedTickBehavior};
+use tokio_util::codec::{FramedRead, LinesCodec, LinesCodecError};
 use uuid::Uuid;
 
 use crate::app::{App, AppAction, TerminalSession};
@@ -35,12 +36,131 @@ enum RequestPurpose {
     Submit(String),
 }
 
+struct RpcTransport {
+    child: tokio::process::Child,
+    input: ChildStdin,
+    output: FramedRead<ChildStdout, LinesCodec>,
+}
+
+struct Bootstrap {
+    initialized: InitializeResult,
+    sessions: SessionsListResult,
+    events: EventsListResult,
+}
+
+#[derive(Debug, Default, PartialEq, Eq)]
+struct ReconnectBackoff {
+    failures: usize,
+}
+
+enum LoopEvent {
+    Terminal(Option<Result<TerminalEvent, io::Error>>),
+    Rpc(Option<Result<String, LinesCodecError>>),
+    Refresh,
+}
+
 impl RequestPurpose {
     fn is_refresh(&self) -> bool {
         match self {
             Self::RefreshSessions | Self::RefreshEvents => true,
             Self::Submit(_) => false,
         }
+    }
+}
+
+impl RpcTransport {
+    async fn connect(zeta: &OsStr, cursor: Option<u64>) -> Result<(Self, Bootstrap), BoxError> {
+        let mut child = Command::new(zeta)
+            .args(["rpc", "stdio"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::inherit())
+            .kill_on_drop(true)
+            .spawn()?;
+        let Some(input) = child.stdin.take() else {
+            return Err(io::Error::other("zeta RPC stdin is unavailable").into());
+        };
+        let Some(output) = child.stdout.take() else {
+            return Err(io::Error::other("zeta RPC stdout is unavailable").into());
+        };
+        let mut transport = Self {
+            child,
+            input,
+            output: FramedRead::new(
+                output,
+                LinesCodec::new_with_max_length(MAX_JSONRPC_LINE_BYTES),
+            ),
+        };
+
+        let initialize_id = RequestId(1);
+        send_request(
+            &mut transport.input,
+            &RpcRequest::new(initialize_id, "initialize", json!({})),
+        )
+        .await?;
+        let result = receive_response(&mut transport.output, initialize_id).await?;
+        let initialized: InitializeResult = serde_json::from_value(result)?;
+        if initialized.server != "zeta" {
+            return Err(io::Error::other(format!(
+                "expected zeta server, received {}",
+                initialized.server
+            ))
+            .into());
+        }
+
+        let sessions_id = RequestId(2);
+        send_request(
+            &mut transport.input,
+            &RpcRequest::new(sessions_id, "session.list", json!({})),
+        )
+        .await?;
+        let result = receive_response(&mut transport.output, sessions_id).await?;
+        let sessions: SessionsListResult = serde_json::from_value(result)?;
+
+        let events_id = RequestId(3);
+        send_request(
+            &mut transport.input,
+            &RpcRequest::new(events_id, "events.list", events_list_params(cursor)),
+        )
+        .await?;
+        let result = receive_response(&mut transport.output, events_id).await?;
+        let events: EventsListResult = serde_json::from_value(result)?;
+        Ok((
+            transport,
+            Bootstrap {
+                initialized,
+                sessions,
+                events,
+            },
+        ))
+    }
+
+    async fn close(self) -> Result<(), BoxError> {
+        let Self {
+            mut child,
+            input,
+            output,
+        } = self;
+        drop(output);
+        drop(input);
+        let status = child.wait().await?;
+        if !status.success() {
+            return Err(io::Error::other(format!("zeta RPC exited with {status}")).into());
+        }
+        Ok(())
+    }
+}
+
+impl ReconnectBackoff {
+    fn next_failure(&mut self) -> (usize, Duration) {
+        self.failures += 1;
+        let exponent = self.failures.saturating_sub(1).min(4);
+        let delay_ms = 250_u64.saturating_mul(1_u64 << exponent);
+        (self.failures, Duration::from_millis(delay_ms.min(4_000)))
+    }
+
+    fn reset(&mut self) {
+        self.failures = 0;
     }
 }
 
@@ -55,7 +175,7 @@ async fn main() {
 async fn run() -> Result<(), BoxError> {
     let mut args = env::args_os();
     args.next();
-    let zeta = match args.next() {
+    let zeta: OsString = match args.next() {
         Some(zeta) => zeta,
         None => "zeta".into(),
     };
@@ -63,82 +183,119 @@ async fn run() -> Result<(), BoxError> {
         return Err(io::Error::other("usage: zeta-tui [PATH_TO_ZETA]").into());
     }
 
-    let mut child = Command::new(zeta)
-        .args(["rpc", "stdio"])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::inherit())
-        .kill_on_drop(true)
-        .spawn()?;
-    let Some(mut input) = child.stdin.take() else {
-        return Err(io::Error::other("zeta RPC stdin is unavailable").into());
-    };
-    let Some(output) = child.stdout.take() else {
-        return Err(io::Error::other("zeta RPC stdout is unavailable").into());
-    };
-    let mut output = FramedRead::new(
-        output,
-        LinesCodec::new_with_max_length(MAX_JSONRPC_LINE_BYTES),
-    );
-
-    let initialize_id = RequestId(1);
-    send_request(
-        &mut input,
-        &RpcRequest::new(initialize_id, "initialize", json!({})),
-    )
-    .await?;
-    let result = receive_response(&mut output, initialize_id).await?;
-    let initialized: InitializeResult = serde_json::from_value(result)?;
-    if initialized.server != "zeta" {
-        return Err(io::Error::other(format!(
-            "expected zeta server, received {}",
-            initialized.server
-        ))
-        .into());
-    }
-
-    let list_id = RequestId(2);
-    send_request(
-        &mut input,
-        &RpcRequest::new(list_id, "session.list", json!({})),
-    )
-    .await?;
-    let result = receive_response(&mut output, list_id).await?;
-    let sessions: SessionsListResult = serde_json::from_value(result)?;
-
-    let list_id = RequestId(3);
-    send_request(
-        &mut input,
-        &RpcRequest::new(list_id, "events.list", json!({"limit": 200})),
-    )
-    .await?;
-    let result = receive_response(&mut output, list_id).await?;
-    let listed: EventsListResult = serde_json::from_value(result)?;
-    let mut app = App::connected(
-        initialized.protocol,
-        sessions.sessions,
-        listed.events,
-        listed.next_cursor,
-    );
-    let mut next_request_id = 4;
+    let mut app = App::connected("unknown".to_owned(), Vec::new(), Vec::new(), None);
     let mut terminal = TerminalSession::start()?;
     app.set_keyboard_enhancement(terminal.keyboard_enhancement());
+    app.set_reconnecting(1, 0, "Starting zeta RPC".to_owned());
     let mut terminal_events = EventStream::new();
     let mut refresh_interval = tokio::time::interval(REFRESH_INTERVAL);
     refresh_interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
     refresh_interval.tick().await;
-    let mut pending = HashMap::new();
+    let mut transport = None;
+    let mut pending = HashMap::<RequestId, RequestPurpose>::new();
     let mut pending_refreshes = 0;
-    let mut dirty = true;
+    let mut replay_submissions = Vec::new();
+    let mut next_request_id = 4;
+    let mut backoff = ReconnectBackoff::default();
+    let mut reconnect_at = Instant::now();
 
     loop {
-        if dirty {
-            terminal.draw(&mut app)?;
-            dirty = false;
+        terminal.draw(&mut app)?;
+
+        if transport.is_none() {
+            let reconnect = tokio::time::sleep_until(reconnect_at);
+            tokio::pin!(reconnect);
+            tokio::select! {
+                terminal_event = terminal_events.next() => {
+                    let Some(terminal_event) = terminal_event else {
+                        return Err(io::Error::new(
+                            io::ErrorKind::UnexpectedEof,
+                            "terminal event stream closed",
+                        )
+                        .into());
+                    };
+                    let terminal_event = terminal_event?;
+                    match app.handle_event(&terminal_event) {
+                        AppAction::None => {}
+                        AppAction::Quit => break,
+                        AppAction::Submit(objective) => {
+                            let (submission_id, _, _) = begin_submission(&mut app, objective);
+                            add_replay_submission(&mut replay_submissions, submission_id);
+                        }
+                    }
+                }
+                _ = &mut reconnect => {
+                    match RpcTransport::connect(&zeta, app.cursor()).await {
+                        Ok((new_transport, bootstrap)) => {
+                            app.set_protocol(bootstrap.initialized.protocol);
+                            app.replace_sessions(bootstrap.sessions.sessions);
+                            app.append_events(
+                                bootstrap.events.events,
+                                bootstrap.events.next_cursor,
+                            );
+                            next_request_id = 4;
+                            pending.clear();
+                            pending_refreshes = 0;
+                            transport = Some(new_transport);
+                            let replay_result = replay_pending_submissions(
+                                &app,
+                                transport
+                                    .as_mut()
+                                    .expect("connected state owns a transport"),
+                                &mut replay_submissions,
+                                &mut pending,
+                                &mut next_request_id,
+                            )
+                            .await;
+                            match replay_result {
+                                Ok(()) => {
+                                    app.set_connected();
+                                    backoff.reset();
+                                    refresh_interval.reset();
+                                }
+                                Err(error) => {
+                                    reconnect_at = begin_reconnect(
+                                        &mut app,
+                                        error.to_string(),
+                                        &mut transport,
+                                        &mut pending,
+                                        &mut pending_refreshes,
+                                        &mut replay_submissions,
+                                        &mut backoff,
+                                    );
+                                }
+                            }
+                        }
+                        Err(error) => {
+                            reconnect_at = begin_reconnect(
+                                &mut app,
+                                error.to_string(),
+                                &mut transport,
+                                &mut pending,
+                                &mut pending_refreshes,
+                                &mut replay_submissions,
+                                &mut backoff,
+                            );
+                        }
+                    }
+                }
+            }
+            continue;
         }
 
-        tokio::select! {
-            terminal_event = terminal_events.next() => {
+        let loop_event = {
+            let current_transport = transport
+                .as_mut()
+                .expect("connected state owns a transport");
+            tokio::select! {
+                terminal_event = terminal_events.next() => LoopEvent::Terminal(terminal_event),
+                line = current_transport.output.next() => LoopEvent::Rpc(line),
+                _ = refresh_interval.tick(), if pending_refreshes == 0 => LoopEvent::Refresh,
+            }
+        };
+        let mut transport_error = None;
+        match loop_event {
+            LoopEvent::Terminal(terminal_event) => {
                 let Some(terminal_event) = terminal_event else {
                     return Err(io::Error::new(
                         io::ErrorKind::UnexpectedEof,
@@ -147,133 +304,254 @@ async fn run() -> Result<(), BoxError> {
                     .into());
                 };
                 let terminal_event = terminal_event?;
-                dirty = true;
                 match app.handle_event(&terminal_event) {
                     AppAction::None => {}
                     AppAction::Quit => break,
                     AppAction::Submit(objective) => {
+                        let (idempotency_key, method, params) =
+                            begin_submission(&mut app, objective);
                         let request_id = RequestId(next_request_id);
                         next_request_id += 1;
-                        let idempotency_key = Uuid::new_v4().to_string();
-                        let attached_session_id = app.attached_session_id().map(str::to_owned);
-                        app.submission_started(idempotency_key.clone(), objective.clone());
-                        let (method, params) = session_message_request(
-                            attached_session_id.as_deref(),
-                            &objective,
-                            &idempotency_key,
-                        );
                         if let Err(error) = send_request(
-                            &mut input,
+                            &mut transport
+                                .as_mut()
+                                .expect("connected state owns a transport")
+                                .input,
                             &RpcRequest::new(request_id, method, params),
                         )
                         .await
                         {
-                            app.submission_failed(&idempotency_key, &error.to_string());
-                            dirty = true;
-                            continue;
+                            add_replay_submission(&mut replay_submissions, idempotency_key.clone());
+                            transport_error = Some(error.to_string());
+                        } else {
+                            let replaced =
+                                pending.insert(request_id, RequestPurpose::Submit(idempotency_key));
+                            debug_assert!(replaced.is_none());
                         }
-                        let replaced = pending.insert(
-                            request_id,
-                            RequestPurpose::Submit(idempotency_key),
-                        );
-                        debug_assert!(replaced.is_none());
                     }
                 }
             }
-            line = output.next() => {
+            LoopEvent::Rpc(line) => {
                 let Some(line) = line else {
-                    return Err(io::Error::new(
-                        io::ErrorKind::UnexpectedEof,
-                        "zeta RPC closed",
-                    )
-                    .into());
-                };
-                let line = line?;
-                let message: IncomingMessage = serde_json::from_str(&line)?;
-                match message {
-                    IncomingMessage::Success(response) => {
-                        validate_jsonrpc_version(&response.jsonrpc)?;
-                        let Some(purpose) = pending.remove(&response.id) else {
-                            return Err(io::Error::other(format!(
-                                "received response for unknown request {}",
-                                response.id.0
-                            ))
-                            .into());
-                        };
-                        if purpose.is_refresh() {
-                            pending_refreshes -= 1;
-                        }
-                        if let Err(error) = apply_response(&mut app, &purpose, response.result) {
-                            match &purpose {
-                                RequestPurpose::Submit(submission_id) => {
-                                    app.submission_failed(submission_id, &error.to_string());
-                                }
-                                RequestPurpose::RefreshSessions | RequestPurpose::RefreshEvents => {
-                                    return Err(error);
-                                }
-                            }
-                        }
-                        dirty = true;
-                    }
-                    IncomingMessage::Failure(response) => {
-                        validate_jsonrpc_version(&response.jsonrpc)?;
-                        let Some(purpose) = pending.remove(&response.id) else {
-                            return Err(io::Error::other(format!(
-                                "received error for unknown request {}",
-                                response.id.0
-                            ))
-                            .into());
-                        };
-                        apply_failure(
+                    transport_error = Some("zeta RPC closed".to_owned());
+                    if let Some(error) = transport_error {
+                        reconnect_at = begin_reconnect(
                             &mut app,
-                            purpose,
-                            response.error.code,
-                            &response.error.message,
-                            response.error.data,
-                        )?;
-                        dirty = true;
+                            error,
+                            &mut transport,
+                            &mut pending,
+                            &mut pending_refreshes,
+                            &mut replay_submissions,
+                            &mut backoff,
+                        );
                     }
-                    IncomingMessage::Notification(notification) => {
-                        validate_jsonrpc_version(&notification.jsonrpc)?;
+                    continue;
+                };
+                match line {
+                    Ok(line) => {
+                        if let Err(error) = apply_incoming_line(
+                            &mut app,
+                            &line,
+                            &mut pending,
+                            &mut pending_refreshes,
+                        ) {
+                            transport_error = Some(error.to_string());
+                        }
                     }
+                    Err(error) => transport_error = Some(error.to_string()),
                 }
             }
-            _ = refresh_interval.tick(), if pending_refreshes == 0 => {
+            LoopEvent::Refresh => {
                 app.advance_animation();
-                dirty = true;
                 let request_id = RequestId(next_request_id);
                 next_request_id += 1;
-                send_request(
-                    &mut input,
+                let sessions_result = send_request(
+                    &mut transport
+                        .as_mut()
+                        .expect("connected state owns a transport")
+                        .input,
                     &RpcRequest::new(request_id, "session.list", json!({})),
                 )
-                .await?;
-                let replaced = pending.insert(request_id, RequestPurpose::RefreshSessions);
-                debug_assert!(replaced.is_none());
+                .await;
+                match sessions_result {
+                    Ok(()) => {
+                        let replaced = pending.insert(request_id, RequestPurpose::RefreshSessions);
+                        debug_assert!(replaced.is_none());
+                        pending_refreshes = 1;
 
-                let request_id = RequestId(next_request_id);
-                next_request_id += 1;
-                send_request(
-                    &mut input,
-                    &RpcRequest::new(
-                        request_id,
-                        "events.list",
-                        events_list_params(app.cursor()),
-                    ),
-                )
-                .await?;
-                let replaced = pending.insert(request_id, RequestPurpose::RefreshEvents);
-                debug_assert!(replaced.is_none());
-                pending_refreshes = 2;
+                        let request_id = RequestId(next_request_id);
+                        next_request_id += 1;
+                        let events_result = send_request(
+                            &mut transport
+                                .as_mut()
+                                .expect("connected state owns a transport")
+                                .input,
+                            &RpcRequest::new(
+                                request_id,
+                                "events.list",
+                                events_list_params(app.cursor()),
+                            ),
+                        )
+                        .await;
+                        match events_result {
+                            Ok(()) => {
+                                let replaced =
+                                    pending.insert(request_id, RequestPurpose::RefreshEvents);
+                                debug_assert!(replaced.is_none());
+                                pending_refreshes = 2;
+                            }
+                            Err(error) => transport_error = Some(error.to_string()),
+                        }
+                    }
+                    Err(error) => transport_error = Some(error.to_string()),
+                }
             }
+        }
+        if let Some(error) = transport_error {
+            reconnect_at = begin_reconnect(
+                &mut app,
+                error,
+                &mut transport,
+                &mut pending,
+                &mut pending_refreshes,
+                &mut replay_submissions,
+                &mut backoff,
+            );
         }
     }
 
     terminal.restore()?;
-    drop(input);
-    let status = child.wait().await?;
-    if !status.success() {
-        return Err(io::Error::other(format!("zeta RPC exited with {status}")).into());
+    if let Some(transport) = transport {
+        transport.close().await?;
+    }
+    Ok(())
+}
+
+fn begin_submission(app: &mut App, objective: String) -> (String, &'static str, Value) {
+    let idempotency_key = Uuid::new_v4().to_string();
+    let attached_session_id = app.attached_session_id().map(str::to_owned);
+    app.submission_started(idempotency_key.clone(), objective.clone());
+    let (method, params) =
+        session_message_request(attached_session_id.as_deref(), &objective, &idempotency_key);
+    (idempotency_key, method, params)
+}
+
+async fn replay_pending_submissions(
+    app: &App,
+    transport: &mut RpcTransport,
+    replay_submissions: &mut Vec<String>,
+    pending: &mut HashMap<RequestId, RequestPurpose>,
+    next_request_id: &mut u64,
+) -> Result<(), BoxError> {
+    while let Some(submission_id) = replay_submissions.first().cloned() {
+        let request = app.submission_for_replay(&submission_id);
+        let Some((session_id, message)) = request else {
+            replay_submissions.remove(0);
+            continue;
+        };
+        let (method, params) =
+            session_message_request(session_id.as_deref(), &message, &submission_id);
+        let request_id = RequestId(*next_request_id);
+        *next_request_id += 1;
+        send_request(
+            &mut transport.input,
+            &RpcRequest::new(request_id, method, params),
+        )
+        .await?;
+        let replaced = pending.insert(request_id, RequestPurpose::Submit(submission_id));
+        debug_assert!(replaced.is_none());
+        replay_submissions.remove(0);
+    }
+    Ok(())
+}
+
+fn begin_reconnect(
+    app: &mut App,
+    error: String,
+    transport: &mut Option<RpcTransport>,
+    pending: &mut HashMap<RequestId, RequestPurpose>,
+    pending_refreshes: &mut usize,
+    replay_submissions: &mut Vec<String>,
+    backoff: &mut ReconnectBackoff,
+) -> Instant {
+    for (_, purpose) in pending.drain() {
+        match purpose {
+            RequestPurpose::Submit(submission_id) => {
+                add_replay_submission(replay_submissions, submission_id);
+            }
+            RequestPurpose::RefreshSessions | RequestPurpose::RefreshEvents => {}
+        }
+    }
+    *pending_refreshes = 0;
+    transport.take();
+    let (attempt, delay) = backoff.next_failure();
+    let retry_delay_ms = u64::try_from(delay.as_millis()).unwrap_or(u64::MAX);
+    app.set_reconnecting(attempt, retry_delay_ms, error);
+    Instant::now() + delay
+}
+
+fn add_replay_submission(replay_submissions: &mut Vec<String>, submission_id: String) {
+    if replay_submissions.contains(&submission_id) {
+        return;
+    }
+    replay_submissions.push(submission_id);
+}
+
+fn apply_incoming_line(
+    app: &mut App,
+    line: &str,
+    pending: &mut HashMap<RequestId, RequestPurpose>,
+    pending_refreshes: &mut usize,
+) -> Result<(), BoxError> {
+    let message: IncomingMessage = serde_json::from_str(line)?;
+    match message {
+        IncomingMessage::Success(response) => {
+            validate_jsonrpc_version(&response.jsonrpc)?;
+            let Some(purpose) = pending.remove(&response.id) else {
+                return Err(io::Error::other(format!(
+                    "received response for unknown request {}",
+                    response.id.0
+                ))
+                .into());
+            };
+            if purpose.is_refresh() {
+                *pending_refreshes = pending_refreshes.saturating_sub(1);
+            }
+            if let Err(error) = apply_response(app, &purpose, response.result) {
+                match &purpose {
+                    RequestPurpose::Submit(submission_id) => {
+                        app.submission_failed(submission_id, &error.to_string());
+                    }
+                    RequestPurpose::RefreshSessions | RequestPurpose::RefreshEvents => {
+                        return Err(error);
+                    }
+                }
+            }
+        }
+        IncomingMessage::Failure(response) => {
+            validate_jsonrpc_version(&response.jsonrpc)?;
+            let Some(purpose) = pending.remove(&response.id) else {
+                return Err(io::Error::other(format!(
+                    "received error for unknown request {}",
+                    response.id.0
+                ))
+                .into());
+            };
+            if purpose.is_refresh() {
+                *pending_refreshes = pending_refreshes.saturating_sub(1);
+            }
+            apply_failure(
+                app,
+                purpose,
+                response.error.code,
+                &response.error.message,
+                response.error.data,
+            )?;
+        }
+        IncomingMessage::Notification(notification) => {
+            validate_jsonrpc_version(&notification.jsonrpc)?;
+            let _notification = (notification.method, notification.params);
+        }
     }
     Ok(())
 }
@@ -454,9 +732,11 @@ mod tests {
     use crossterm::event::{Event as TerminalEvent, KeyCode, KeyEvent, KeyModifiers};
 
     use super::{
-        RequestPurpose, apply_failure, apply_response, events_list_params, session_message_request,
+        ReconnectBackoff, RequestPurpose, apply_failure, apply_incoming_line, apply_response,
+        begin_reconnect, events_list_params, session_message_request,
     };
     use crate::app::{App, AppAction};
+    use crate::wire::{Cursor, Event, RequestId};
 
     #[test]
     fn events_list_continues_after_the_latest_cursor() {
@@ -587,5 +867,119 @@ mod tests {
                 "idempotency_key": "message-2"
             })
         );
+    }
+
+    #[test]
+    fn reconnect_backoff_is_bounded_and_resets_after_success() {
+        let mut backoff = ReconnectBackoff::default();
+        let mut attempts = Vec::new();
+        for _ in 0..8 {
+            attempts.push(backoff.next_failure());
+        }
+        assert_eq!(attempts[0], (1, std::time::Duration::from_millis(250)));
+        assert_eq!(attempts[1], (2, std::time::Duration::from_millis(500)));
+        assert_eq!(attempts[4], (5, std::time::Duration::from_secs(4)));
+        assert_eq!(attempts[7], (8, std::time::Duration::from_secs(4)));
+
+        backoff.reset();
+        assert_eq!(
+            backoff.next_failure(),
+            (1, std::time::Duration::from_millis(250))
+        );
+    }
+
+    #[test]
+    fn transport_failure_retains_each_in_flight_submission_for_replay() {
+        let mut app = App::connected("0.1".to_owned(), Vec::new(), Vec::new(), None);
+        app.submission_started("message-1".to_owned(), "first".to_owned());
+        app.submission_started("message-2".to_owned(), "second".to_owned());
+        let mut pending = std::collections::HashMap::from([
+            (
+                RequestId(10),
+                RequestPurpose::Submit("message-1".to_owned()),
+            ),
+            (
+                RequestId(11),
+                RequestPurpose::Submit("message-2".to_owned()),
+            ),
+            (RequestId(12), RequestPurpose::RefreshEvents),
+        ]);
+        let mut transport = None;
+        let mut pending_refreshes = 1;
+        let mut replay = vec!["message-1".to_owned()];
+        let mut backoff = ReconnectBackoff::default();
+
+        let reconnect_at = begin_reconnect(
+            &mut app,
+            "broken pipe".to_owned(),
+            &mut transport,
+            &mut pending,
+            &mut pending_refreshes,
+            &mut replay,
+            &mut backoff,
+        );
+
+        assert!(reconnect_at > tokio::time::Instant::now());
+        replay.sort();
+        assert_eq!(replay, vec!["message-1", "message-2"]);
+        assert!(pending.is_empty());
+        assert_eq!(pending_refreshes, 0);
+    }
+
+    #[test]
+    fn durable_event_reconciliation_suppresses_submission_replay() {
+        let mut app = App::connected("0.1".to_owned(), Vec::new(), Vec::new(), None);
+        app.submission_started("message-1".to_owned(), "hello".to_owned());
+        assert_eq!(
+            app.submission_for_replay("message-1"),
+            Some((None, "hello".to_owned()))
+        );
+        let event: Event = serde_json::from_value(json!({
+            "id": "evt_1",
+            "event_type": "session.message.requested",
+            "source": "user",
+            "payload": {"message": "hello"},
+            "idempotency_key": "session.start:message-1",
+            "caused_by": null,
+            "session_id": "session_1",
+            "run_id": "run_1",
+            "turn_id": null,
+            "timestamp_ms": 1,
+            "cursor": 1
+        }))
+        .expect("event should parse");
+
+        app.append_events(vec![event], Some(Cursor(1)));
+
+        assert_eq!(app.submission_for_replay("message-1"), None);
+    }
+
+    #[test]
+    fn malformed_and_failed_refresh_responses_enter_the_recovery_path() {
+        let mut app = App::connected("0.1".to_owned(), Vec::new(), Vec::new(), None);
+        let mut pending = std::collections::HashMap::new();
+        let mut pending_refreshes = 0;
+        assert!(
+            apply_incoming_line(&mut app, "not json", &mut pending, &mut pending_refreshes,)
+                .is_err()
+        );
+
+        pending.insert(RequestId(20), RequestPurpose::RefreshSessions);
+        pending_refreshes = 1;
+        let failure = json!({
+            "jsonrpc": "2.0",
+            "id": 20,
+            "error": {"code": -32603, "message": "restart me"}
+        });
+        assert!(
+            apply_incoming_line(
+                &mut app,
+                &failure.to_string(),
+                &mut pending,
+                &mut pending_refreshes,
+            )
+            .is_err()
+        );
+        assert_eq!(pending_refreshes, 0);
     }
 }

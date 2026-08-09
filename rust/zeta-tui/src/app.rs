@@ -43,6 +43,7 @@ pub(super) struct App {
     submissions: Vec<Submission>,
     switcher: Option<SwitcherState>,
     fuzzy_matcher: RefCell<Matcher>,
+    connection: ConnectionStatus,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -69,6 +70,16 @@ struct SessionMatch {
     score: u32,
     running: bool,
     latest_activity_ms: i64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum ConnectionStatus {
+    Connected,
+    Reconnecting {
+        attempt: usize,
+        retry_delay_ms: u64,
+        error: String,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -889,6 +900,7 @@ impl App {
             submissions: Vec::new(),
             switcher: None,
             fuzzy_matcher: RefCell::new(Matcher::new(MatcherConfig::DEFAULT)),
+            connection: ConnectionStatus::Connected,
         }
     }
 
@@ -1198,6 +1210,22 @@ impl App {
         self.keyboard_enhancement = supported;
     }
 
+    pub(super) fn set_connected(&mut self) {
+        self.connection = ConnectionStatus::Connected;
+    }
+
+    pub(super) fn set_protocol(&mut self, protocol: String) {
+        self.protocol = protocol;
+    }
+
+    pub(super) fn set_reconnecting(&mut self, attempt: usize, retry_delay_ms: u64, error: String) {
+        self.connection = ConnectionStatus::Reconnecting {
+            attempt,
+            retry_delay_ms,
+            error: single_line(&error),
+        };
+    }
+
     pub(super) fn append_events(&mut self, events: Vec<Event>, cursor: Option<Cursor>) {
         for event in events {
             for (session_id, state) in &mut self.session_views {
@@ -1290,6 +1318,18 @@ impl App {
         if self.current_submission_target() == target {
             self.mode = Mode::Compose;
         }
+    }
+
+    pub(super) fn submission_for_replay(&self, id: &str) -> Option<(Option<String>, String)> {
+        let submission = self
+            .submissions
+            .iter()
+            .find(|submission| submission.id.0 == id)?;
+        let session_id = match &submission.target {
+            SubmissionTarget::NewSession => None,
+            SubmissionTarget::Session(session_id) => Some(session_id.clone()),
+        };
+        Some((session_id, submission.message.clone()))
     }
 
     #[allow(clippy::question_mark)]
@@ -2738,8 +2778,13 @@ fn render_timeline_position(frame: &mut Frame<'_>, area: Rect, app: &App) {
 }
 
 fn render_header(frame: &mut Frame<'_>, area: Rect, app: &App) {
-    let areas =
-        Layout::horizontal([Constraint::Percentage(70), Constraint::Percentage(30)]).split(area);
+    let constraints = match &app.connection {
+        ConnectionStatus::Connected => [Constraint::Percentage(70), Constraint::Percentage(30)],
+        ConnectionStatus::Reconnecting { .. } => {
+            [Constraint::Percentage(40), Constraint::Percentage(60)]
+        }
+    };
+    let areas = Layout::horizontal(constraints).split(area);
     let mut left = vec![Line::from(Span::styled(
         "zeta",
         Style::default()
@@ -2769,35 +2814,54 @@ fn render_header(frame: &mut Frame<'_>, area: Rect, app: &App) {
     }
     frame.render_widget(Paragraph::new(left), areas[0]);
 
-    let right = match app.view_state().timeline_mode {
-        TimelineMode::Semantic => vec![connected_line()],
-        TimelineMode::Raw => {
+    let right = match (&app.connection, app.view_state().timeline_mode) {
+        (ConnectionStatus::Connected, TimelineMode::Semantic) => Vec::new(),
+        (ConnectionStatus::Connected, TimelineMode::Raw) => {
             let cursor = match app.cursor {
                 Some(cursor) => cursor.0.to_string(),
                 None => "none".to_owned(),
             };
             vec![
-                Line::from(vec![
-                    Span::styled("raw events", Style::default().fg(Color::Yellow)),
-                    Span::styled("  ", Style::default()),
-                    Span::styled("● ", Style::default().fg(Color::Green)),
-                    Span::styled("connected", Style::default().fg(Color::DarkGray)),
-                ]),
+                Line::from(Span::styled(
+                    "raw events",
+                    Style::default().fg(Color::Yellow),
+                )),
                 Line::from(Span::styled(
                     format!("protocol {} · cursor {cursor}", app.protocol),
                     Style::default().fg(Color::DarkGray),
                 )),
             ]
         }
+        (
+            ConnectionStatus::Reconnecting {
+                attempt,
+                retry_delay_ms,
+                error,
+            },
+            TimelineMode::Semantic | TimelineMode::Raw,
+        ) => vec![
+            Line::from(Span::styled(
+                format!(
+                    "reconnecting · attempt {attempt} · retry in {}",
+                    compact_duration(*retry_delay_ms)
+                ),
+                Style::default().fg(Color::Yellow),
+            )),
+            Line::from(Span::styled(
+                ellipsize(error, usize::from(areas[1].width)),
+                Style::default().fg(Color::DarkGray),
+            )),
+        ],
     };
     frame.render_widget(Paragraph::new(right).alignment(Alignment::Right), areas[1]);
 }
 
-fn connected_line() -> Line<'static> {
-    Line::from(vec![
-        Span::styled("● ", Style::default().fg(Color::Green)),
-        Span::styled("connected", Style::default().fg(Color::DarkGray)),
-    ])
+fn compact_duration(duration_ms: u64) -> String {
+    if duration_ms < 1_000 {
+        return format!("{duration_ms}ms");
+    }
+    let seconds = duration_ms / 1_000;
+    format!("{seconds}s")
 }
 
 fn render_composer(frame: &mut Frame<'_>, area: Rect, app: &App) {
@@ -4787,5 +4851,36 @@ mod tests {
         assert!(screen.contains("second line"));
         assert!(screen.contains("enter send"));
         assert!(terminal.get_cursor_position().is_ok());
+    }
+
+    #[test]
+    fn reconnecting_chrome_is_actionable_without_disturbing_local_work() {
+        let mut app = App::connected("0.1".to_owned(), Vec::new(), Vec::new(), None);
+        let new = TerminalEvent::Key(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE));
+        assert_eq!(app.handle_event(&new), AppAction::None);
+        assert_eq!(
+            app.handle_event(&TerminalEvent::Paste("Preserve this draft".to_owned())),
+            AppAction::None
+        );
+        app.set_reconnecting(3, 2_000, "zeta RPC closed".to_owned());
+        let backend = TestBackend::new(80, 18);
+        let mut terminal = Terminal::new(backend).expect("terminal should initialize");
+
+        terminal
+            .draw(|frame| draw(frame, &mut app))
+            .expect("reconnecting state should draw");
+        let screen = terminal.backend().to_string();
+        assert!(screen.contains("reconnecting · attempt 3 · retry in 2s"));
+        assert!(screen.contains("Preserve this draft"));
+        assert!(!screen.contains("● connected"));
+
+        app.set_connected();
+        terminal
+            .draw(|frame| draw(frame, &mut app))
+            .expect("connected state should draw");
+        let screen = terminal.backend().to_string();
+        assert!(!screen.contains("reconnecting"));
+        assert!(!screen.contains("● connected"));
+        assert!(screen.contains("Preserve this draft"));
     }
 }

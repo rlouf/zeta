@@ -1,5 +1,7 @@
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::io;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use crossterm::event::{
     DisableBracketedPaste, EnableBracketedPaste, Event as TerminalEvent, KeyCode, KeyEventKind,
@@ -11,6 +13,8 @@ use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
     supports_keyboard_enhancement,
 };
+use nucleo_matcher::pattern::{AtomKind, CaseMatching, Normalization, Pattern};
+use nucleo_matcher::{Config as MatcherConfig, Matcher, Utf32Str};
 use pulldown_cmark::{Event as MarkdownEvent, Options, Parser, Tag, TagEnd};
 use ratatui::Frame;
 use ratatui::Terminal;
@@ -37,6 +41,8 @@ pub(super) struct App {
     keyboard_enhancement: bool,
     animation_frame: usize,
     submissions: Vec<Submission>,
+    switcher: Option<SwitcherState>,
+    fuzzy_matcher: RefCell<Matcher>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -49,6 +55,20 @@ enum View {
 enum Mode {
     Browse,
     Compose,
+}
+
+#[derive(Debug, Default, PartialEq, Eq)]
+struct SwitcherState {
+    query: String,
+    selected: usize,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct SessionMatch {
+    index: usize,
+    score: u32,
+    running: bool,
+    latest_activity_ms: i64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -867,10 +887,15 @@ impl App {
             keyboard_enhancement: false,
             animation_frame: 0,
             submissions: Vec::new(),
+            switcher: None,
+            fuzzy_matcher: RefCell::new(Matcher::new(MatcherConfig::DEFAULT)),
         }
     }
 
     pub(super) fn handle_event(&mut self, event: &TerminalEvent) -> AppAction {
+        if self.switcher.is_some() {
+            return self.handle_switcher_event(event);
+        }
         if self.mode == Mode::Compose
             && let TerminalEvent::Paste(text) = event
         {
@@ -891,6 +916,10 @@ impl App {
                 if key.code == KeyCode::Char('q') {
                     return AppAction::Quit;
                 }
+                if key.code == KeyCode::Char('/') {
+                    self.switcher = Some(SwitcherState::default());
+                    return AppAction::None;
+                }
                 match &self.view {
                     View::Sessions => {
                         if key.code == KeyCode::Down || key.code == KeyCode::Char('j') {
@@ -903,6 +932,12 @@ impl App {
                         }
                         if key.code == KeyCode::Char('n') {
                             self.mode = Mode::Compose;
+                            return AppAction::None;
+                        }
+                        if let KeyCode::Char(character) = key.code
+                            && let Some(position) = numbered_position(character)
+                        {
+                            self.attach_session_at(position);
                             return AppAction::None;
                         }
                         if key.code == KeyCode::Enter {
@@ -1070,6 +1105,84 @@ impl App {
         }
     }
 
+    fn handle_switcher_event(&mut self, event: &TerminalEvent) -> AppAction {
+        if let TerminalEvent::Paste(text) = event {
+            let Some(switcher) = &mut self.switcher else {
+                return AppAction::None;
+            };
+            switcher.query.push_str(text);
+            switcher.selected = 0;
+            return AppAction::None;
+        }
+        let TerminalEvent::Key(key) = event else {
+            return AppAction::None;
+        };
+        if key.kind != KeyEventKind::Press {
+            return AppAction::None;
+        }
+        if key.code == KeyCode::Esc {
+            self.switcher = None;
+            return AppAction::None;
+        }
+        if key.code == KeyCode::Enter {
+            let session_id = self.switcher_selected_session_id();
+            let Some(session_id) = session_id else {
+                return AppAction::None;
+            };
+            self.switcher = None;
+            self.attach_session(session_id);
+            return AppAction::None;
+        }
+        if key.code == KeyCode::Down || key.code == KeyCode::Tab {
+            let match_count = self.switcher_matches().len();
+            let Some(switcher) = &mut self.switcher else {
+                return AppAction::None;
+            };
+            if match_count > 0 {
+                switcher.selected = (switcher.selected + 1).min(match_count - 1);
+            }
+            return AppAction::None;
+        }
+        if key.code == KeyCode::Up || key.code == KeyCode::BackTab {
+            let Some(switcher) = &mut self.switcher else {
+                return AppAction::None;
+            };
+            switcher.selected = switcher.selected.saturating_sub(1);
+            return AppAction::None;
+        }
+        if key.code == KeyCode::Backspace {
+            let Some(switcher) = &mut self.switcher else {
+                return AppAction::None;
+            };
+            switcher.query.pop();
+            switcher.selected = 0;
+            return AppAction::None;
+        }
+        if let KeyCode::Char(character) = key.code
+            && let Some(position) = numbered_position(character)
+        {
+            let matches = self.switcher_matches();
+            let Some(session_match) = matches.get(position) else {
+                return AppAction::None;
+            };
+            let session_id = self.sessions[session_match.index].session_id().to_owned();
+            self.switcher = None;
+            self.attach_session(session_id);
+            return AppAction::None;
+        }
+        if let KeyCode::Char(character) = key.code
+            && !key.modifiers.contains(KeyModifiers::CONTROL)
+            && !key.modifiers.contains(KeyModifiers::SUPER)
+        {
+            let Some(switcher) = &mut self.switcher else {
+                return AppAction::None;
+            };
+            switcher.query.push(character);
+            switcher.selected = 0;
+        }
+        AppAction::None
+    }
+
     pub(super) fn cursor(&self) -> Option<u64> {
         if let Some(cursor) = self.cursor {
             return Some(cursor.0);
@@ -1207,6 +1320,77 @@ impl App {
     fn attach_session(&mut self, session_id: String) {
         self.session_views.entry(session_id.clone()).or_default();
         self.view = View::Attached(session_id);
+    }
+
+    fn attach_session_at(&mut self, position: usize) {
+        let Some(session) = self.sessions.get(position) else {
+            return;
+        };
+        self.selected_session = Some(position);
+        self.attach_session(session.session_id().to_owned());
+    }
+
+    fn switcher_selected_session_id(&self) -> Option<String> {
+        let switcher = self.switcher.as_ref()?;
+        let matches = self.switcher_matches();
+        let session_match = matches.get(switcher.selected)?;
+        Some(self.sessions[session_match.index].session_id().to_owned())
+    }
+
+    fn switcher_matches(&self) -> Vec<SessionMatch> {
+        let query = match &self.switcher {
+            Some(switcher) => switcher.query.as_str(),
+            None => "",
+        };
+        let pattern = Pattern::new(
+            query,
+            CaseMatching::Ignore,
+            Normalization::Smart,
+            AtomKind::Fuzzy,
+        );
+        let mut matcher = self.fuzzy_matcher.borrow_mut();
+        let mut buffer = Vec::new();
+        let mut matches = Vec::new();
+        for (index, session) in self.sessions.iter().enumerate() {
+            let title = self.session_title(session.session_id());
+            let activity = self
+                .session_activity(session.session_id())
+                .unwrap_or_default();
+            let haystack = format!(
+                "{title} {} {} {activity}",
+                session.agent_id(),
+                session.status()
+            );
+            let Some(score) = pattern.score(Utf32Str::new(&haystack, &mut buffer), &mut matcher)
+            else {
+                continue;
+            };
+            matches.push(SessionMatch {
+                index,
+                score,
+                running: session.status() == "running",
+                latest_activity_ms: self.latest_session_activity_ms(session.session_id()),
+            });
+        }
+        matches.sort_by(|left, right| {
+            right
+                .running
+                .cmp(&left.running)
+                .then_with(|| right.score.cmp(&left.score))
+                .then_with(|| right.latest_activity_ms.cmp(&left.latest_activity_ms))
+                .then_with(|| left.index.cmp(&right.index))
+        });
+        matches
+    }
+
+    fn latest_session_activity_ms(&self, session_id: &str) -> i64 {
+        let mut latest = 0;
+        for event in &self.events {
+            if event.belongs_to_session(session_id) {
+                latest = latest.max(event.timestamp_ms());
+            }
+        }
+        latest
     }
 
     fn view_state(&self) -> &SessionViewState {
@@ -1489,6 +1673,9 @@ impl App {
     }
 
     fn shows_composer(&self) -> bool {
+        if self.switcher.is_some() {
+            return false;
+        }
         match (&self.view, &self.mode) {
             (View::Sessions, Mode::Browse) => false,
             (View::Sessions, Mode::Compose)
@@ -2098,6 +2285,40 @@ fn abbreviated_id(value: &str) -> String {
     output
 }
 
+fn numbered_position(character: char) -> Option<usize> {
+    let number = character.to_digit(10)?;
+    if number == 0 {
+        return None;
+    }
+    usize::try_from(number - 1).ok()
+}
+
+fn relative_activity(timestamp_ms: i64) -> String {
+    if timestamp_ms <= 0 {
+        return "no activity".to_owned();
+    }
+    let now_ms = match SystemTime::now().duration_since(UNIX_EPOCH) {
+        Ok(duration) => i64::try_from(duration.as_millis()).unwrap_or(i64::MAX),
+        Err(_error) => timestamp_ms,
+    };
+    let seconds = now_ms.saturating_sub(timestamp_ms) / 1_000;
+    if seconds == 0 {
+        return "now".to_owned();
+    }
+    if seconds < 60 {
+        return format!("{seconds}s");
+    }
+    let minutes = seconds / 60;
+    if minutes < 60 {
+        return format!("{minutes}m");
+    }
+    let hours = minutes / 60;
+    if hours < 24 {
+        return format!("{hours}h");
+    }
+    format!("{}d", hours / 24)
+}
+
 impl TerminalSession {
     pub(super) fn start() -> io::Result<Self> {
         enable_raw_mode()?;
@@ -2234,9 +2455,13 @@ pub(super) fn draw(frame: &mut Frame<'_>, app: &mut App) {
 
     render_header(frame, areas[0], app);
 
-    match &app.view {
-        View::Sessions => render_sessions(frame, areas[1], app),
-        View::Attached(_) => render_timeline(frame, areas[1], app),
+    if app.switcher.is_some() {
+        render_switcher(frame, areas[1], app);
+    } else {
+        match &app.view {
+            View::Sessions => render_sessions(frame, areas[1], app),
+            View::Attached(_) => render_timeline(frame, areas[1], app),
+        }
     }
 
     if app.shows_composer() {
@@ -2244,6 +2469,112 @@ pub(super) fn draw(frame: &mut Frame<'_>, app: &mut App) {
     }
 
     frame.render_widget(Paragraph::new(footer_line(app)), areas[3]);
+}
+
+fn render_switcher(frame: &mut Frame<'_>, area: Rect, app: &App) {
+    let areas = Layout::vertical([Constraint::Length(3), Constraint::Min(1)]).split(area);
+    let switcher = app
+        .switcher
+        .as_ref()
+        .expect("switcher view owns switcher state");
+    let input = Paragraph::new(vec![
+        Line::from(Span::styled(
+            "Switch sessions",
+            Style::default().add_modifier(Modifier::BOLD),
+        )),
+        Line::from(vec![
+            Span::styled("/ ", Style::default().fg(Color::Cyan)),
+            Span::raw(switcher.query.clone()),
+        ]),
+    ]);
+    frame.render_widget(input, areas[0]);
+    let cursor_column = 2_u16.saturating_add(
+        u16::try_from(UnicodeWidthStr::width(switcher.query.as_str())).unwrap_or(u16::MAX),
+    );
+    frame.set_cursor_position((
+        areas[0]
+            .x
+            .saturating_add(cursor_column)
+            .min(areas[0].right().saturating_sub(1)),
+        areas[0].y.saturating_add(1),
+    ));
+
+    let matches = app.switcher_matches();
+    if matches.is_empty() {
+        frame.render_widget(
+            Paragraph::new(vec![
+                Line::from(Span::styled(
+                    "No matching sessions",
+                    Style::default().add_modifier(Modifier::BOLD),
+                )),
+                Line::from(Span::styled(
+                    "Try a title, status, agent, or recent activity.",
+                    Style::default().fg(Color::DarkGray),
+                )),
+            ]),
+            areas[1],
+        );
+        return;
+    }
+
+    let mut rows = Vec::new();
+    for (position, session_match) in matches.iter().enumerate() {
+        let session = &app.sessions[session_match.index];
+        let selected = position == switcher.selected;
+        let title_style = if selected {
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().add_modifier(Modifier::BOLD)
+        };
+        let key = if position < 9 {
+            format!("{}  ", position + 1)
+        } else {
+            "   ".to_owned()
+        };
+        let title_width = usize::from(areas[1].width.saturating_sub(5));
+        let mut metadata = status_spans(session.status());
+        metadata.push(Span::styled(" · ", Style::default().fg(Color::DarkGray)));
+        metadata.push(Span::styled(
+            relative_activity(session_match.latest_activity_ms),
+            Style::default().fg(Color::DarkGray),
+        ));
+        metadata.push(Span::styled("  ", Style::default().fg(Color::DarkGray)));
+        metadata.push(Span::styled(
+            session.agent_id().to_owned(),
+            Style::default().fg(Color::DarkGray),
+        ));
+        let activity = match app.session_activity(session.session_id()) {
+            Some(activity) => ellipsize(&activity, title_width),
+            None => "No activity yet".to_owned(),
+        };
+        let title = Line::from(vec![
+            Span::styled(key, Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                ellipsize(&app.session_title(session.session_id()), title_width),
+                title_style,
+            ),
+        ]);
+        if areas[1].height < 6 {
+            rows.push(ListItem::new(title));
+        } else {
+            rows.push(ListItem::new(vec![
+                title,
+                Line::from(metadata),
+                Line::from(Span::styled(
+                    format!("   {activity}"),
+                    Style::default().fg(Color::DarkGray),
+                )),
+            ]));
+        }
+    }
+    let sessions = List::new(rows)
+        .highlight_symbol("› ")
+        .highlight_style(Style::default().add_modifier(Modifier::BOLD));
+    let mut state = ListState::default();
+    state.select(Some(switcher.selected.min(matches.len() - 1)));
+    frame.render_stateful_widget(sessions, areas[1], &mut state);
 }
 
 fn render_sessions(frame: &mut Frame<'_>, area: Rect, app: &App) {
@@ -2552,11 +2883,18 @@ fn render_composer(frame: &mut Frame<'_>, area: Rect, app: &App) {
 
 fn footer_line(app: &App) -> Line<'static> {
     let mut spans = Vec::new();
+    if app.switcher.is_some() {
+        push_key_hint(&mut spans, "↑/↓", "choose");
+        push_key_hint(&mut spans, "enter", "attach");
+        push_key_hint(&mut spans, "esc", "cancel");
+        return Line::from(spans);
+    }
     match (&app.view, &app.mode) {
         (View::Sessions, Mode::Browse) => {
             push_key_hint(&mut spans, "↑/↓", "sessions");
             push_key_hint(&mut spans, "enter", "attach");
             push_key_hint(&mut spans, "n", "new");
+            push_key_hint(&mut spans, "/", "switch");
             push_key_hint(&mut spans, "q", "quit");
         }
         (View::Sessions, Mode::Compose) => {
@@ -2572,6 +2910,7 @@ fn footer_line(app: &App) -> Line<'static> {
             push_key_hint(&mut spans, "↑/↓ pgup/pgdn", "scroll");
             push_key_hint(&mut spans, "g/G", "top/live");
             push_key_hint(&mut spans, "i", "message");
+            push_key_hint(&mut spans, "/", "switch");
             push_key_hint(&mut spans, "esc", "detach");
             push_key_hint(&mut spans, "v", "raw");
             push_key_hint(&mut spans, "q", "quit");
@@ -4052,6 +4391,132 @@ mod tests {
         assert_eq!(app.handle_event(&up), AppAction::None);
         assert_eq!(app.selected_session_id(), Some("session_first"));
         assert_eq!(app.attached_session_id(), None);
+    }
+
+    #[test]
+    fn fuzzy_switcher_ranks_running_matches_and_attaches_without_losing_list_selection() {
+        let release_idle = event(
+            "session.message.requested",
+            serde_json::json!({"message": "Prepare the release notes"}),
+            "session_idle",
+            "run_1",
+            1,
+        );
+        let docs = event(
+            "session.message.requested",
+            serde_json::json!({"message": "Review the documentation"}),
+            "session_docs",
+            "run_2",
+            2,
+        );
+        let release_running = event(
+            "session.message.requested",
+            serde_json::json!({"message": "Verify release packaging"}),
+            "session_running",
+            "run_3",
+            3,
+        );
+        let mut app = App::connected(
+            "0.1".to_owned(),
+            vec![
+                session("session_idle", "zeta.master", "idle"),
+                session("session_docs", "zeta.master", "idle"),
+                session("session_running", "zeta.master", "running"),
+            ],
+            vec![release_idle, docs, release_running],
+            Some(Cursor(3)),
+        );
+        let down = TerminalEvent::Key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        let switcher = TerminalEvent::Key(KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE));
+        assert_eq!(app.handle_event(&down), AppAction::None);
+        assert_eq!(app.selected_session_id(), Some("session_docs"));
+        assert_eq!(app.handle_event(&switcher), AppAction::None);
+        for character in "release".chars() {
+            let input =
+                TerminalEvent::Key(KeyEvent::new(KeyCode::Char(character), KeyModifiers::NONE));
+            assert_eq!(app.handle_event(&input), AppAction::None);
+        }
+
+        let backend = TestBackend::new(80, 18);
+        let mut terminal = Terminal::new(backend).expect("terminal should initialize");
+        terminal
+            .draw(|frame| draw(frame, &mut app))
+            .expect("switcher should draw");
+        let screen = terminal.backend().to_string();
+        assert!(screen.contains("Switch sessions"));
+        assert!(screen.contains("/ release"));
+        assert!(!screen.contains("Review the documentation"));
+        let (_, running_row) = text_position(&screen, "Verify release packaging");
+        let (_, idle_row) = text_position(&screen, "Prepare the release notes");
+        assert!(running_row < idle_row);
+
+        let escape = TerminalEvent::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert_eq!(app.handle_event(&escape), AppAction::None);
+        assert_eq!(app.selected_session_id(), Some("session_docs"));
+        assert_eq!(app.attached_session_id(), None);
+
+        assert_eq!(app.handle_event(&switcher), AppAction::None);
+        let enter = TerminalEvent::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(app.handle_event(&enter), AppAction::None);
+        assert_eq!(app.attached_session_id(), Some("session_running"));
+    }
+
+    #[test]
+    fn switcher_handles_unicode_empty_results_resize_and_numbered_attachment() {
+        let unicode = event(
+            "session.message.requested",
+            serde_json::json!({"message": "Inspect 🦀 release behavior"}),
+            "session_crab",
+            "run_1",
+            1,
+        );
+        let other = event(
+            "session.message.requested",
+            serde_json::json!({"message": "Check the changelog"}),
+            "session_other",
+            "run_2",
+            2,
+        );
+        let mut app = App::connected(
+            "0.1".to_owned(),
+            vec![
+                session("session_crab", "zeta.master", "idle"),
+                session("session_other", "zeta.master", "idle"),
+            ],
+            vec![unicode, other],
+            Some(Cursor(2)),
+        );
+        let switcher = TerminalEvent::Key(KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE));
+        assert_eq!(app.handle_event(&switcher), AppAction::None);
+        let crab = TerminalEvent::Key(KeyEvent::new(KeyCode::Char('🦀'), KeyModifiers::NONE));
+        assert_eq!(app.handle_event(&crab), AppAction::None);
+        let backend = TestBackend::new(38, 10);
+        let mut terminal = Terminal::new(backend).expect("terminal should initialize");
+        terminal
+            .draw(|frame| draw(frame, &mut app))
+            .expect("unicode switcher should draw narrowly");
+        let screen = terminal.backend().to_string();
+        assert!(screen.contains("Inspect 🦀 release"), "{screen}");
+
+        let impossible = TerminalEvent::Key(KeyEvent::new(KeyCode::Char('z'), KeyModifiers::NONE));
+        for _ in 0..4 {
+            assert_eq!(app.handle_event(&impossible), AppAction::None);
+        }
+        terminal
+            .draw(|frame| draw(frame, &mut app))
+            .expect("empty switcher should draw");
+        assert!(
+            terminal
+                .backend()
+                .to_string()
+                .contains("No matching sessions")
+        );
+
+        let escape = TerminalEvent::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert_eq!(app.handle_event(&escape), AppAction::None);
+        let second = TerminalEvent::Key(KeyEvent::new(KeyCode::Char('2'), KeyModifiers::NONE));
+        assert_eq!(app.handle_event(&second), AppAction::None);
+        assert_eq!(app.attached_session_id(), Some("session_other"));
     }
 
     #[test]

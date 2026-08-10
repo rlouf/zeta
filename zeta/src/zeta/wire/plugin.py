@@ -74,7 +74,7 @@ class OperationError(RuntimeError):
 OperationHandler = Callable[[dict[str, Any], str], Any]
 Source = (
     AsyncIterable[SourceEvent]
-    | Callable[[dict[str, Any]], AsyncIterable[SourceEvent]]
+    | Callable[[dict[str, Any]], "AsyncIterable[SourceEvent] | None"]
     | None
 )
 
@@ -199,7 +199,9 @@ def _resolve_source(
         return None
     if isinstance(events, AsyncIterable):
         return cast(AsyncIterable[SourceEvent], events)
-    factory = cast(Callable[[dict[str, Any]], AsyncIterable[SourceEvent]], events)
+    factory = cast(
+        Callable[[dict[str, Any]], AsyncIterable[SourceEvent] | None], events
+    )
     return factory(config)
 
 

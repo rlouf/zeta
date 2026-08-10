@@ -49,12 +49,6 @@ Issues = "https://github.com/rlouf/zeta/issues"
 [project.scripts]
 zeta = "zeta.cli.main:main"
 
-[project.entry-points."zeta.event_connectors"]
-slack = "connectors.slack:slack_event_connector"
-filesystem = "connectors.filesystem:filesystem_event_connector"
-telegram = "connectors.telegram:telegram_event_connector"
-pushover = "connectors.pushover:pushover_event_connector"
-
 [tool.setuptools]
 package-dir = { "" = "src" }
 

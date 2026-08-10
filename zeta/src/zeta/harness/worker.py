@@ -27,14 +27,11 @@ from zeta.capabilities.executors import (
 from zeta.capabilities.registry import CapabilityRegistry
 from zeta.events import Event
 from zeta.harness.connector_bridge import (
-    handle_push_ingress_request,
-    ipc_ingress_connector_ids,
+    ConnectorCalls,
     project_egress_executors,
-    run_ingress_forever,
     run_ipc_ingress_forever,
 )
 from zeta.harness.dispatch import QueueingDispatcher
-from zeta.harness.ingress import run_push_ingress_forever
 from zeta.harness.project import (
     ProjectSnapshot,
     ProjectSnapshotUnavailable,
@@ -97,6 +94,7 @@ class WorkerServices:
     # Filled by whoever composes the worker, so the harness never names a
     # transport. `zeta.rpc.eventlog.eventlog_rpc_step` is the bundled filler.
     rpc_step: RpcStep | None = None
+    connector_calls: ConnectorCalls = field(default_factory=ConnectorCalls)
     executor_cache: dict[ToolExecutorCacheKey, ToolExecutor] = field(
         default_factory=dict,
         init=False,
@@ -155,6 +153,10 @@ class WorkerServices:
 
     async def _shutdown(self) -> None:
         errors: list[BaseException] = []
+        try:
+            await self.connector_calls.aclose()
+        except Exception as error:
+            errors.append(error)
         try:
             for lock in tuple(self.executor_locks.values()):
                 async with lock:
@@ -362,6 +364,7 @@ def compile_snapshot_executors(
                 project,
                 project_generation=snapshot.generation_id,
                 execution_manifests=execution_manifests,
+                connector_calls=runtime.connector_calls,
             ),
         ]
     )
@@ -514,30 +517,12 @@ async def run_forever(
     runtime: WorkerServices,
     *,
     poll_interval_seconds: float = 1.0,
-    push_host: str = "127.0.0.1",
-    push_port: int = 8080,
-    push_route_prefix: str = "/connectors",
     stop_event: asyncio.Event | None = None,
 ) -> None:
     running: set[asyncio.Task[str]] = set()
-    ipc_connector_ids = ipc_ingress_connector_ids(runtime)
-    ingress_task = start_ingress_task(
+    ingress_task = start_ipc_ingress_task(
         runtime,
         poll_interval_seconds=poll_interval_seconds,
-        stop_event=stop_event,
-        skip_connector_ids=ipc_connector_ids,
-    )
-    ipc_ingress_task = start_ipc_ingress_task(
-        runtime,
-        connector_ids=ipc_connector_ids,
-        poll_interval_seconds=poll_interval_seconds,
-        stop_event=stop_event,
-    )
-    push_ingress_task = start_push_ingress_task(
-        runtime,
-        host=push_host,
-        port=push_port,
-        route_prefix=push_route_prefix,
         stop_event=stop_event,
     )
     try:
@@ -549,69 +534,21 @@ async def run_forever(
         )
     finally:
         await stop_ingress_task(ingress_task)
-        await stop_ingress_task(ipc_ingress_task)
-        await stop_ingress_task(push_ingress_task)
         await log_worker_results(running)
-
-
-def start_ingress_task(
-    runtime: WorkerServices,
-    *,
-    poll_interval_seconds: float,
-    stop_event: asyncio.Event | None,
-    skip_connector_ids: frozenset[str] = frozenset(),
-) -> asyncio.Task[None] | None:
-    if runtime.registry is None or not runtime.registry.has_ingress_connectors():
-        return None
-    return asyncio.create_task(
-        run_ingress_forever(
-            runtime,
-            poll_interval_seconds=poll_interval_seconds,
-            stop_event=stop_event,
-            skip_connector_ids=skip_connector_ids,
-        )
-    )
 
 
 def start_ipc_ingress_task(
     runtime: WorkerServices,
     *,
-    connector_ids: frozenset[str],
     poll_interval_seconds: float,
     stop_event: asyncio.Event | None,
 ) -> asyncio.Task[None] | None:
-    if not connector_ids:
+    if runtime.registry is None or not runtime.registry.has_ingress_connectors():
         return None
     return asyncio.create_task(
         run_ipc_ingress_forever(
             runtime,
-            connector_ids=connector_ids,
             poll_interval_seconds=poll_interval_seconds,
-            stop_event=stop_event,
-        )
-    )
-
-
-def start_push_ingress_task(
-    runtime: WorkerServices,
-    *,
-    host: str,
-    port: int,
-    route_prefix: str,
-    stop_event: asyncio.Event | None,
-) -> asyncio.Task[None] | None:
-    if runtime.registry is None or not runtime.registry.push_ingress_connectors():
-        return None
-    return asyncio.create_task(
-        run_push_ingress_forever(
-            lambda connector_id, request: handle_push_ingress_request(
-                runtime,
-                connector_id,
-                request,
-            ),
-            host=host,
-            port=port,
-            route_prefix=route_prefix,
             stop_event=stop_event,
         )
     )

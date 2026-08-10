@@ -5,8 +5,8 @@ from dataclasses import dataclass
 from typing import Any, Protocol, runtime_checkable
 
 from connectors import (
+    ConnectorManifest,
     EgressBinding,
-    EventConnector,
     EventConnectorRegistry,
     IngressBinding,
 )
@@ -195,7 +195,7 @@ def validate_egress_binding(
 def connector_for_event(
     connectors: EventConnectorRegistry | None,
     event_type: str,
-) -> EventConnector | None:
+) -> ConnectorManifest | None:
     if connectors is None:
         return None
     return connectors.connector_for_event(event_type)

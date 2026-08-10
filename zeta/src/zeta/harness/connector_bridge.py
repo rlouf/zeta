@@ -1,34 +1,25 @@
-"""Bridge connector ingress and egress to the durable event queue.
+"""Bridge connector children to the durable event queue.
 
-Ingress turns connector input (polled or pushed) into accepted events; egress
-turns matching events into connector side effects via one-shot agents. Both
-sides share idempotency-key rendering and event-payload validation. The worker
-loop owns scheduling; this module owns the connector-to-event translation.
+Every connector is a wire-v0 executable (spec §13). Ingress spawns one
+supervised child per binding and journals its events; egress delivers
+matching events as `call`s against the connector's declared
+operations, through one lazily spawned operations child per connector.
+The worker loop owns scheduling; this module owns the wire-to-event
+translation.
 """
 
 from __future__ import annotations
 
 import asyncio
-import inspect
-import json
 import logging
-import sys
-from collections.abc import Iterable, Mapping
-from typing import TYPE_CHECKING, Any, cast
+from collections.abc import Mapping
+from typing import TYPE_CHECKING, Any
 
-from connectors import (
-    EgressBinding,
-    InboundRequest,
-    InboundResponse,
-    IngressBinding,
-)
+from connectors import ConnectorManifest, EgressBinding, IngressBinding
 from jsonschema import Draft202012Validator
 
 from zeta._version import __version__
 from zeta.authoring.manifest import egress_bindings, ingress_bindings
-from zeta.authoring.resources import (
-    AgentProject,
-)
 from zeta.effects import DeliverySemantics, EffectDeliveryError
 from zeta.events import DraftEvent, Event
 from zeta.harness.routing import (
@@ -45,23 +36,101 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+RUNTIME_ID = f"zeta-os/{__version__}"
+
+
+class ConnectorCalls:
+    """Lazily spawned operations children, one per connector.
+
+    An operations child gets no binding in its config, so a connector
+    that also sources events does not double-ingest; its ingress runs
+    in separate per-binding children.
+    """
+
+    def __init__(self) -> None:
+        self._sources: dict[str, SubprocessSource] = {}
+        self._drains: dict[str, asyncio.Task[None]] = {}
+
+    async def call(
+        self,
+        connector: ConnectorManifest,
+        *,
+        operation: str,
+        payload: dict[str, Any],
+        options: dict[str, Any],
+        effect_key: str,
+    ) -> dict[str, Any]:
+        source = await self._source_for(connector)
+        return await source.call(
+            operation,
+            {"payload": payload, "options": options},
+            effect_key,
+        )
+
+    async def _source_for(self, connector: ConnectorManifest) -> SubprocessSource:
+        source = self._sources.get(connector.id)
+        if source is not None:
+            return source
+        source = SubprocessSource(
+            SourceCommand(connector.command),
+            runtime_id=RUNTIME_ID,
+            config={},
+        )
+        self._sources[connector.id] = source
+        self._drains[connector.id] = asyncio.create_task(
+            _drain_operations_child(connector.id, source)
+        )
+        await _wait_for_handshake(source)
+        return source
+
+    async def aclose(self) -> None:
+        for task in self._drains.values():
+            task.cancel()
+        await asyncio.gather(*self._drains.values(), return_exceptions=True)
+        self._drains.clear()
+        sources, self._sources = self._sources, {}
+        await asyncio.gather(
+            *(source.aclose() for source in sources.values()),
+            return_exceptions=True,
+        )
+
+
+async def _drain_operations_child(connector_id: str, source: SubprocessSource) -> None:
+    async for event in source.events():
+        logger.warning(
+            "operations child for %r emitted event %s; it has no binding, dropping",
+            connector_id,
+            event.id,
+        )
+
+
+async def _wait_for_handshake(
+    source: SubprocessSource, *, timeout: float = 15.0
+) -> None:
+    deadline = asyncio.get_running_loop().time() + timeout
+    while source.hello is None:
+        if asyncio.get_running_loop().time() > deadline:
+            return  # let the call itself fail with a retryable error
+        await asyncio.sleep(0.05)
+
 
 def project_egress_executors(
-    project: AgentProject,
+    project,
     *,
     project_generation: str | None = None,
     execution_manifests: Mapping[str, Mapping[str, Any]] | None = None,
+    connector_calls: ConnectorCalls | None = None,
 ) -> tuple[ExecutableAgent, ...]:
+    calls = connector_calls or ConnectorCalls()
     executors: list[ExecutableAgent] = []
     for spec in project.specs:
         for index, binding in enumerate(egress_bindings(spec)):
             connector = project.connectors.connector_for_event(binding.event)
             if connector is None:
                 continue
-            handler = connector.egress.get(binding.event)
-            if handler is None:
+            operation = connector.operations.get(binding.event)
+            if operation is None:
                 continue
-            semantics = connector.egress_semantics[binding.event]
             agent_id = f"egress:{spec.slug}:{index}:{connector.id}:{binding.event}"
             executors.append(
                 ExecutableAgent(
@@ -72,7 +141,12 @@ def project_egress_executors(
                         project_generation=project_generation,
                         execution_manifest=(execution_manifests or {}).get(spec.slug),
                     ),
-                    run=egress_runner(binding, handler, connector.id, semantics),
+                    run=egress_runner(
+                        binding,
+                        connector,
+                        operation.semantics,
+                        calls,
+                    ),
                 )
             )
     return tuple(executors)
@@ -80,10 +154,12 @@ def project_egress_executors(
 
 def egress_runner(
     binding: EgressBinding,
-    handler,
-    connector_id: str,
+    connector: ConnectorManifest,
     semantics: DeliverySemantics,
+    calls: ConnectorCalls,
 ):
+    connector_id = connector.id
+
     async def run(invocation: AgentInvocation) -> dict[str, Any]:
         event = invocation.triggering_event
         idempotency_key = egress_idempotency_key(binding, event, connector_id)
@@ -121,10 +197,15 @@ def egress_runner(
             )
         )
         try:
-            result = handler(event, binding, idempotency_key)
-            if inspect.isawaitable(result):
-                result = await result
-            result_payload = dict(result or {})
+            result_payload = dict(
+                await calls.call(
+                    connector,
+                    operation=binding.event,
+                    payload=dict(event.payload),
+                    options=dict(binding.options),
+                    effect_key=idempotency_key,
+                )
+            )
         except Exception as exc:
             await invocation.publish(
                 DraftEvent(
@@ -228,116 +309,71 @@ def effect_event_draft(
     )
 
 
-async def run_ingress_once(
-    runtime: WorkerServices,
-    *,
-    skip_connector_ids: frozenset[str] = frozenset(),
-) -> int:
-    project = runtime.project_snapshot.project
-    inserted = 0
+def ingress_waves(project) -> list[tuple[ConnectorManifest, dict[str, IngressBinding]]]:
+    """Partition ingress bindings into one child's worth each.
+
+    A wave holds at most one binding per event type, so a child can be
+    handed several event types (Telegram's messages and reactions share
+    one upstream cursor) while several bindings of the same type (two
+    watched directories) each get their own child.
+    """
+    per_connector: dict[str, list[IngressBinding]] = {}
+    manifests: dict[str, ConnectorManifest] = {}
     for spec in project.specs:
         for binding in ingress_bindings(spec):
             connector = project.connectors.connector_for_event(binding.event)
-            if connector is None or connector.id in skip_connector_ids:
+            if connector is None or binding.event not in connector.ingress_event_types:
                 continue
-            handler = connector.ingress.get(binding.event)
-            if handler is None:
-                continue
-            drafts = handler(binding, None)
-            if inspect.isawaitable(drafts):
-                drafts = await drafts
-            for draft in cast(Iterable[DraftEvent], drafts):
-                if draft.event_type != binding.event:
-                    raise RuntimeError(
-                        f"ingress event {binding.event!r} produced {draft.event_type!r}"
-                    )
-                validate_event_payload(project.events, draft)
-                outcome = runtime.events.accept(
-                    DraftEvent(
-                        draft.event_type,
-                        draft.source,
-                        draft.payload,
-                        idempotency_key=ingress_idempotency_key(binding, draft),
-                        caused_by=draft.caused_by,
-                        session_id=draft.session_id,
-                        run_id=draft.run_id,
-                        turn_id=draft.turn_id,
-                    )
-                )
-                if outcome.inserted:
-                    inserted += 1
-    return inserted
+            manifests[connector.id] = connector
+            per_connector.setdefault(connector.id, []).append(binding)
+    waves: list[tuple[ConnectorManifest, dict[str, IngressBinding]]] = []
+    for connector_id, bindings in per_connector.items():
+        pending = list(bindings)
+        while pending:
+            wave: dict[str, IngressBinding] = {}
+            leftover: list[IngressBinding] = []
+            for binding in pending:
+                if binding.event in wave:
+                    leftover.append(binding)
+                else:
+                    wave[binding.event] = binding
+            waves.append((manifests[connector_id], wave))
+            pending = leftover
+    return waves
 
 
-async def run_ingress_forever(
-    runtime: WorkerServices,
-    *,
-    poll_interval_seconds: float = 1.0,
-    stop_event: asyncio.Event | None = None,
-    skip_connector_ids: frozenset[str] = frozenset(),
-) -> None:
-    while stop_event is None or not stop_event.is_set():
-        try:
-            await run_ingress_once(runtime, skip_connector_ids=skip_connector_ids)
-        except Exception:
-            logger.exception("ingress polling failed")
-        await asyncio.sleep(poll_interval_seconds)
-
-
-IPC_SOURCE_CONNECTOR_IDS = frozenset({"filesystem"})
-
-
-def ipc_ingress_connector_ids(runtime: WorkerServices) -> frozenset[str]:
-    """Return the connectors whose ingress runs as a wire-v0 subprocess.
-
-    Connectors with a subprocess implementation always run over IPC;
-    everything else stays on the in-process path until it grows a
-    wire-v0 child.
-    """
-    if runtime.registry is None:
-        return frozenset()
-    return IPC_SOURCE_CONNECTOR_IDS & set(runtime.registry.connectors)
-
-
-def fs_child_command(
-    binding: IngressBinding,
+def ingress_child_config(
+    wave: dict[str, IngressBinding],
     *,
     poll_interval_seconds: float,
-) -> SourceCommand:
-    config = {
-        "watches": [dict(binding.filter)],
+) -> dict[str, Any]:
+    return {
+        "bindings": [
+            {"event": binding.event, "filter": dict(binding.filter)}
+            for binding in wave.values()
+        ],
         "poll_interval": poll_interval_seconds,
     }
-    return SourceCommand(
-        (sys.executable, "-m", "zeta.wire.fs_inbox", json.dumps(config))
-    )
 
 
 async def run_ipc_ingress_forever(
     runtime: WorkerServices,
     *,
-    connector_ids: frozenset[str],
     poll_interval_seconds: float = 1.0,
     stop_event: asyncio.Event | None = None,
 ) -> None:
-    """Supervise one wire-v0 child per IPC ingress binding."""
-    project = runtime.project_snapshot.project
-    tasks = []
-    for spec in project.specs:
-        for binding in ingress_bindings(spec):
-            connector = project.connectors.connector_for_event(binding.event)
-            if connector is None or connector.id not in connector_ids:
-                continue
-            tasks.append(
-                asyncio.create_task(
-                    run_ipc_binding_forever(
-                        runtime,
-                        binding,
-                        connector_id=connector.id,
-                        poll_interval_seconds=poll_interval_seconds,
-                    )
-                )
+    """Supervise one wire-v0 child per ingress wave."""
+    tasks = [
+        asyncio.create_task(
+            run_ipc_wave_forever(
+                runtime,
+                wave,
+                connector=connector,
+                poll_interval_seconds=poll_interval_seconds,
             )
+        )
+        for connector, wave in ingress_waves(runtime.project_snapshot.project)
+    ]
     if not tasks:
         return
     try:
@@ -351,23 +387,36 @@ async def run_ipc_ingress_forever(
         await asyncio.gather(*tasks, return_exceptions=True)
 
 
-async def run_ipc_binding_forever(
+async def run_ipc_wave_forever(
     runtime: WorkerServices,
-    binding: IngressBinding,
+    wave: dict[str, IngressBinding],
     *,
-    connector_id: str,
+    connector: ConnectorManifest,
     poll_interval_seconds: float,
 ) -> None:
-    command = fs_child_command(binding, poll_interval_seconds=poll_interval_seconds)
-    async with SubprocessSource(command, runtime_id=f"zeta-os/{__version__}") as source:
+    async with SubprocessSource(
+        SourceCommand(connector.command),
+        runtime_id=RUNTIME_ID,
+        config=ingress_child_config(wave, poll_interval_seconds=poll_interval_seconds),
+    ) as source:
         async for wire_event in source.events():
+            binding = wave.get(wire_event.type)
+            if binding is None:
+                logger.warning(
+                    "connector %r emitted unbound event type %r",
+                    connector.id,
+                    wire_event.type,
+                )
+                continue
             try:
-                accepted = accept_ipc_event(runtime, binding, wire_event)
+                accepted = accept_ipc_event(
+                    runtime, binding, wire_event, connector_id=connector.id
+                )
             except Exception:
                 logger.exception(
                     "rejecting event %s from connector %r",
                     wire_event.id,
-                    connector_id,
+                    connector.id,
                 )
                 continue
             if accepted:
@@ -378,8 +427,10 @@ def accept_ipc_event(
     runtime: WorkerServices,
     binding: IngressBinding,
     wire_event: WireEvent,
+    *,
+    connector_id: str,
 ) -> bool:
-    """Journal one subprocess event exactly like the in-process path."""
+    """Journal one connector event under the binding's idempotency key."""
     if wire_event.type != binding.event:
         logger.warning(
             "ipc ingress event %r does not match binding %r",
@@ -390,7 +441,7 @@ def accept_ipc_event(
     project = runtime.project_snapshot.project
     draft = DraftEvent(
         wire_event.type,
-        "filesystem",
+        connector_id,
         wire_event.payload,
         caused_by=wire_event.caused_by,
         session_id=wire_event.session_id,
@@ -407,31 +458,6 @@ def accept_ipc_event(
         )
     )
     return True
-
-
-async def handle_push_ingress_request(
-    runtime: WorkerServices,
-    connector_id: str,
-    request: InboundRequest,
-) -> InboundResponse:
-    project = runtime.project_snapshot.project
-    connector = project.connectors.resolve(connector_id)
-    if connector is None:
-        return InboundResponse(status_code=404, body=b"unknown connector")
-    if connector.push_ingress is None:
-        return InboundResponse(status_code=405, body=b"push ingress not supported")
-
-    result = connector.push_ingress(request)
-    if inspect.isawaitable(result):
-        result = await result
-    response, drafts = cast(
-        tuple[InboundResponse, Iterable[DraftEvent]],
-        result,
-    )
-    for draft in drafts:
-        validate_event_payload(project.events, draft)
-        runtime.events.accept(draft)
-    return response
 
 
 def validate_event_payload(events, draft: DraftEvent) -> None:

@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "zeta-connectors"
+version = "0.1.0"
+description = "The bundled Zeta event connectors, as wire-v0 executables."
+readme = "README.md"
+requires-python = ">=3.11"
+license = "Apache-2.0"
+authors = [
+  { name = "Rémi Louf" }
+]
+dependencies = [
+  "httpx",
+  "zeta-os",
+]
+
+[project.optional-dependencies]
+slack = ["websockets>=12"]
+
+[project.scripts]
+zeta-connector-filesystem = "zeta_connectors.filesystem:main"
+zeta-connector-slack = "zeta_connectors.slack:main"
+zeta-connector-telegram = "zeta_connectors.telegram:main"
+zeta-connector-pushover = "zeta_connectors.pushover:main"
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]

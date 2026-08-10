@@ -10,7 +10,7 @@ from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
-from connectors import EventConnector, EventConnectorRegistry
+from connectors import ConnectorManifest, EventConnectorRegistry
 
 from zeta import addresses
 from zeta._version import __version__
@@ -615,19 +615,28 @@ def agent_manifest(spec: AgentSpec) -> dict[str, Any]:
     return manifest
 
 
-def connector_manifest(connector: EventConnector) -> dict[str, Any]:
-    handlers = [
-        *connector.ingress.values(),
-        *connector.egress.values(),
-        *((connector.push_ingress,) if connector.push_ingress is not None else ()),
-    ]
+def connector_manifest(connector: ConnectorManifest) -> dict[str, Any]:
+    """Record a connector's describe manifest, not its spawn command.
+
+    The command is machine-local (an absolute PATH entry), so it stays
+    out of the generation identity; the schemas and semantics are what
+    a recorded generation must be able to re-validate against.
+    """
     return {
         "id": connector.id,
-        "source": [callable_manifest(handler) for handler in handlers],
         "events": {name: schema for name, schema in sorted(connector.events.items())},
-        "ingress": sorted(connector.ingress),
-        "egress": sorted(connector.egress),
-        "egress_semantics": dict(sorted(connector.egress_semantics.items())),
+        "ingress": sorted(connector.ingress_event_types),
+        "operations": {
+            name: {
+                "semantics": operation.semantics,
+                "options_schema": (
+                    dict(operation.options_schema)
+                    if operation.options_schema is not None
+                    else None
+                ),
+            }
+            for name, operation in sorted(connector.operations.items())
+        },
         "filters": {name: schema for name, schema in sorted(connector.filters.items())},
     }
 

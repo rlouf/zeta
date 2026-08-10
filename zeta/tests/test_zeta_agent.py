@@ -9962,18 +9962,9 @@ def test_zeta_cli_serve_invokes_runtime_loop(
     loops: dict[str, asyncio.AbstractEventLoop] = {}
     original_aclose = harness_worker.WorkerServices.aclose
 
-    async def run_forever(
-        runtime: harness_worker.WorkerServices,
-        *,
-        push_host: str,
-        push_port: int,
-        push_route_prefix: str,
-    ) -> None:
+    async def run_forever(runtime: harness_worker.WorkerServices) -> None:
         loops["run"] = asyncio.get_running_loop()
         captured["project_root"] = runtime.project_root
-        captured["push_host"] = push_host
-        captured["push_port"] = push_port
-        captured["push_route_prefix"] = push_route_prefix
 
     async def aclose(runtime: harness_worker.WorkerServices) -> None:
         loops["close"] = asyncio.get_running_loop()
@@ -9989,12 +9980,7 @@ def test_zeta_cli_serve_invokes_runtime_loop(
 
     assert result.exit_code == 0
     assert loops["run"] is loops["close"]
-    assert captured == {
-        "project_root": tmp_path.resolve(),
-        "push_host": "127.0.0.1",
-        "push_port": 8080,
-        "push_route_prefix": "/connectors",
-    }
+    assert captured == {"project_root": tmp_path.resolve()}
 
 
 def test_zeta_cli_run_drains_available_queue_item(

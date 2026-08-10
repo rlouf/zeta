@@ -569,23 +569,31 @@ is the skill name, and agents opt in with `skills:`.
 
 ## Connectors
 
-Connectors contribute event schemas, ingress, push ingress, egress, and filter
-schemas. Installation is enablement: every connector discovered through the
-`zeta.event_connectors` entry point group registers in every project, as do
-modules dropped under `agents/connectors/`. An installed connector that cannot
-construct itself (usually missing credentials) is skipped with a warning
-instead of failing the project. `zeta serve --connectors` narrows one runtime
-process to an explicit allowlist.
+A connector is an executable that speaks the wire protocol in
+`spec/wire-v0.md`, and discovery is the shell's: any `zeta-connector-<id>`
+command on `PATH` is a connector, as is any executable file under
+`agents/connectors/` (a project-local executable overrides a `PATH` connector
+with the same id). Installing `zeta-connectors` — with extras like
+`zeta-connectors[slack]` for optional dependencies — is what registers the
+bundled four; a third-party connector in any language joins by dropping an
+executable on `PATH`. Zeta reads each executable's `--describe` manifest for
+its event schemas, filter schemas, and delivery semantics; a connector whose
+describe fails is skipped with a warning instead of failing the project.
+`zeta serve --connectors` narrows one runtime process to an explicit
+allowlist.
 
 Connector-provided event schemas are merged with `agents/events/`. Duplicate
 schemas must be identical.
 
-Connectors with a wire-v0 implementation — the filesystem connector, in this
-phase — run their ingress as supervised subprocesses speaking the protocol in
-`spec/wire-v0.md`: the runtime spawns one child per ingress binding, validates
-and journals its events, and restarts it with capped backoff when it dies.
-Connectors without a subprocess implementation keep their in-process ingress
-until they grow a wire-v0 child.
+Ingress runs as supervised subprocesses: the runtime spawns children speaking
+wire-v0 (grouping bindings so event types that share an upstream cursor, like
+Telegram's, share one child), validates and journals their events, acks them,
+and restarts dead children with capped backoff. Connectors hold no reconnect
+logic of their own — losing an upstream connection exits the child, and the
+supervisor respawn is the reconnect (crash-only). Egress delivers matching
+events as wire-v0 `call`s against the connector's declared operations.
+Non-secret settings reach a child in the handshake's `config`; secrets travel
+only in the spawn environment.
 
 Connector options live on the event entries they configure:
 
@@ -607,27 +615,26 @@ avoid duplicate ingests. `publishes[*].with` is validated against the connector'
 egress options schema. Egress defaults to a connector/event idempotency key when
 one is not supplied.
 
-Each connector egress handler also declares delivery semantics in its connector
-definition. Zeta records planned, started, completed, failed, or ambiguous
+Each connector operation declares delivery semantics in its describe
+manifest. Zeta records planned, started, completed, failed, or ambiguous
 effect facts using the stable egress idempotency key. Retry-safe delivery
 failures enter the normal queue retry policy. An unsafe ambiguous delivery is
 dead-lettered for inspection instead of being sent again automatically.
 
-The bundled Slack connector uses:
+The bundled Slack connector ingests over Socket Mode and uses:
 
-- `SLACK_BOT_TOKEN` for `chat.postMessage`
-- `SLACK_SIGNING_SECRET` for push ingress request verification
+- `SLACK_APP_TOKEN` (xapp-) for the Socket Mode websocket
+- `SLACK_BOT_TOKEN` (xoxb-) for `chat.postMessage`
 
-The bundled Telegram connector uses:
+The bundled Telegram connector long-polls `getUpdates` — no webhook, no
+public endpoint — and confirms offsets only after Zeta journals the event, so
+nothing is lost between Telegram and the journal. It uses:
 
-- `TELEGRAM_BOT_TOKEN` for `sendMessage` and media download
-- `TELEGRAM_WEBHOOK_SECRET` for webhook request verification
+- `TELEGRAM_BOT_TOKEN` for polling, `sendMessage`, and media download
 - `TELEGRAM_ALLOWED_SENDERS` for a comma-separated user allowlist
 - `TELEGRAM_MEDIA_DIR` for an optional private media cache path
 - `TELEGRAM_MEDIA_MAX_BYTES` for an optional media size limit
 
-Set the Telegram webhook to Zeta's `/connectors/telegram` endpoint. Include
-`message` and `message_reaction` in the webhook `allowed_updates` list.
 Telegram sends named user reactions only when the bot is a chat administrator.
 Anonymous reactions have no user identity, so Zeta ignores them.
 
@@ -646,8 +653,8 @@ Zeta returns a retryable failure when a media download fails.
 The bundled Pushover connector sends notifications to the Pushover app. The
 app can show a notification on an iPhone and a paired Apple Watch.
 
-The connector registers automatically once the package is installed. Set
-these environment variables:
+The connector registers automatically once `zeta-connectors` is
+installed. Set these environment variables:
 
 - `PUSHOVER_API_TOKEN` is the application API token.
 - `PUSHOVER_USER_KEY` is the user or group key.
@@ -787,17 +794,10 @@ Both `zeta run` and `zeta serve` fire due schedules before processing work.
 Schedule publication belongs to workers; no separate scheduler process is
 required.
 
-`zeta serve` also serves push ingress. If enabled connectors expose it, the
-worker listens for HTTP requests at:
-
-```text
-http://127.0.0.1:8080/connectors/<connector-id>
-```
-
-Change the host, port, route prefix, or connector allowlist:
+Narrow the connector allowlist for one runtime process:
 
 ```sh
-zeta serve --host 0.0.0.0 --port 8090 --route-prefix /webhooks --connectors slack
+zeta serve --connectors slack
 ```
 
 Inspect schedule backfill and next-fire state without publishing anything:

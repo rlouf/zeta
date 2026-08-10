@@ -1,31 +1,24 @@
-"""Send Pushover messages and Apple Watch Glance updates.
+"""The Pushover connector: pure egress to the Pushover app.
 
-Credentials come from the environment instead of event payloads because Zeta
-stores event payloads in its journal.
+Credentials come from the environment because event payloads and
+envelopes are journaled.
 """
 
 from __future__ import annotations
 
 import os
+import sys
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
 import httpx
-from zeta.effects import DeliverySemantics
-from zeta.events import Event
+from zeta.wire.plugin import OperationError, run_source
 
-from connectors import EgressBinding, EventConnector
+from zeta_connectors import connector_main
 
 PUSHOVER_MESSAGE_SEND = "pushover.message.send"
 PUSHOVER_GLANCE_UPDATE = "pushover.glance.update"
-PUSHOVER_MESSAGE_SEND_SEMANTICS: DeliverySemantics = "at_least_once"
-PUSHOVER_GLANCE_UPDATE_SEMANTICS: DeliverySemantics = "unsafe_to_retry"
-
-PUSHOVER_EGRESS_SEMANTICS: Mapping[str, DeliverySemantics] = {
-    PUSHOVER_MESSAGE_SEND: PUSHOVER_MESSAGE_SEND_SEMANTICS,
-    PUSHOVER_GLANCE_UPDATE: PUSHOVER_GLANCE_UPDATE_SEMANTICS,
-}
 
 _MESSAGE_FIELDS = (
     "message",
@@ -125,72 +118,36 @@ class HttpPushoverClient:
         return detail
 
 
-def pushover_event_connector(client: Any | None = None) -> EventConnector:
-    client = client if client is not None else pushover_client_from_env()
-    return EventConnector(
-        id="pushover",
-        events={
-            PUSHOVER_MESSAGE_SEND: pushover_message_send_schema(),
-            PUSHOVER_GLANCE_UPDATE: pushover_glance_update_schema(),
-        },
-        egress={
-            PUSHOVER_MESSAGE_SEND: lambda event, binding, key: send_pushover_message(
-                client,
-                event,
-                binding,
-                key,
-            ),
-            PUSHOVER_GLANCE_UPDATE: lambda event, binding, key: update_pushover_glance(
-                client,
-                event,
-                binding,
-                key,
-            ),
-        },
-        egress_semantics=PUSHOVER_EGRESS_SEMANTICS,
-        filters={
-            PUSHOVER_MESSAGE_SEND: pushover_egress_options_schema(),
-            PUSHOVER_GLANCE_UPDATE: pushover_egress_options_schema(),
-        },
-    )
-
-
 async def send_pushover_message(
-    client: Any,
-    event: Event,
-    binding: EgressBinding,
-    idempotency_key: str,
-) -> Mapping[str, Any]:
+    client: HttpPushoverClient,
+    payload: Mapping[str, Any],
+) -> dict[str, Any]:
     """Send one message that can be duplicated after an ambiguous failure."""
-    del binding, idempotency_key
-    message = event.payload.get("message")
+    message = payload.get("message")
     if not isinstance(message, str) or not message:
-        raise RuntimeError("pushover.message.send requires a non-empty message")
-    payload = {
-        field: event.payload[field]
-        for field in _MESSAGE_FIELDS
-        if field in event.payload
-    }
-    data = await client.send_message(payload)
+        raise OperationError(
+            "schema",
+            "pushover.message.send requires a non-empty message",
+            retryable=False,
+        )
+    form = {field: payload[field] for field in _MESSAGE_FIELDS if field in payload}
+    data = await client.send_message(form)
     return _delivery_result(data, include_receipt=True)
 
 
 async def update_pushover_glance(
-    client: Any,
-    event: Event,
-    binding: EgressBinding,
-    idempotency_key: str,
-) -> Mapping[str, Any]:
+    client: HttpPushoverClient,
+    payload: Mapping[str, Any],
+) -> dict[str, Any]:
     """Update only supplied fields so Pushover keeps the other Glance state."""
-    del binding, idempotency_key
-    payload = {
-        field: event.payload[field]
-        for field in _GLANCE_FIELDS
-        if field in event.payload
-    }
-    if not payload:
-        raise RuntimeError("pushover.glance.update requires at least one field")
-    data = await client.update_glance(payload)
+    form = {field: payload[field] for field in _GLANCE_FIELDS if field in payload}
+    if not form:
+        raise OperationError(
+            "schema",
+            "pushover.glance.update requires at least one field",
+            retryable=False,
+        )
+    data = await client.update_glance(form)
     return _delivery_result(data)
 
 
@@ -198,7 +155,7 @@ def _delivery_result(
     data: Mapping[str, Any],
     *,
     include_receipt: bool = False,
-) -> Mapping[str, Any]:
+) -> dict[str, Any]:
     request_id = data.get("request")
     if not isinstance(request_id, str) or not request_id:
         raise RuntimeError("Pushover returned no request ID")
@@ -212,12 +169,12 @@ def _delivery_result(
 def pushover_client_from_env() -> HttpPushoverClient:
     token = os.environ.get("PUSHOVER_API_TOKEN")
     if not token:
-        raise RuntimeError(
+        raise SystemExit(
             "PUSHOVER_API_TOKEN is required for the Pushover event connector"
         )
     user = os.environ.get("PUSHOVER_USER_KEY")
     if not user:
-        raise RuntimeError(
+        raise SystemExit(
             "PUSHOVER_USER_KEY is required for the Pushover event connector"
         )
     return HttpPushoverClient(
@@ -227,7 +184,7 @@ def pushover_client_from_env() -> HttpPushoverClient:
     )
 
 
-def pushover_message_send_schema() -> Mapping[str, Any]:
+def pushover_message_send_schema() -> dict[str, Any]:
     return {
         "type": "object",
         "required": ["message"],
@@ -255,22 +212,21 @@ def pushover_message_send_schema() -> Mapping[str, Any]:
     }
 
 
-def pushover_glance_update_schema() -> Mapping[str, Any]:
+def pushover_glance_update_schema() -> dict[str, Any]:
     clearable_count = {
         "oneOf": [
             {"type": "integer"},
-            {"const": ""},
+            {"type": "null"},
         ]
     }
     clearable_percent = {
         "oneOf": [
             {"type": "integer", "minimum": 0, "maximum": 100},
-            {"const": ""},
+            {"type": "null"},
         ]
     }
     return {
         "type": "object",
-        "minProperties": 1,
         "properties": {
             "title": {"type": "string", "maxLength": 100},
             "text": {"type": "string", "maxLength": 100},
@@ -279,12 +235,68 @@ def pushover_glance_update_schema() -> Mapping[str, Any]:
             "percent": clearable_percent,
         },
         "additionalProperties": False,
+        "minProperties": 1,
     }
 
 
-def pushover_egress_options_schema() -> Mapping[str, Any]:
-    return {
-        "type": "object",
-        "properties": {},
-        "additionalProperties": False,
-    }
+def empty_options_schema() -> dict[str, Any]:
+    return {"type": "object", "properties": {}, "additionalProperties": False}
+
+
+MANIFEST: dict[str, Any] = {
+    "id": "pushover",
+    "protocol_versions": [0],
+    "events": {
+        PUSHOVER_MESSAGE_SEND: pushover_message_send_schema(),
+        PUSHOVER_GLANCE_UPDATE: pushover_glance_update_schema(),
+    },
+    "filters": {},
+    "operations": [
+        {
+            "name": PUSHOVER_MESSAGE_SEND,
+            "semantics": "at_least_once",
+            "options_schema": empty_options_schema(),
+        },
+        {
+            "name": PUSHOVER_GLANCE_UPDATE,
+            "semantics": "unsafe_to_retry",
+            "options_schema": empty_options_schema(),
+        },
+    ],
+    "settings": [],
+}
+
+
+def run() -> None:
+    client = pushover_client_from_env()
+
+    async def send(payload: dict[str, Any], effect_key: str) -> dict[str, Any]:
+        del effect_key  # Pushover offers no dedup key; semantics say so.
+        return await send_pushover_message(client, payload.get("payload", {}))
+
+    async def glance(payload: dict[str, Any], effect_key: str) -> dict[str, Any]:
+        del effect_key
+        return await update_pushover_glance(client, payload.get("payload", {}))
+
+    run_source(
+        None,
+        name="pushover",
+        plugin_version="0.1.0",
+        event_types=[],
+        operations={
+            PUSHOVER_MESSAGE_SEND: send,
+            PUSHOVER_GLANCE_UPDATE: glance,
+        },
+    )
+
+
+def main(argv: list[str] | None = None) -> None:
+    connector_main(
+        sys.argv[1:] if argv is None else argv,
+        manifest=MANIFEST,
+        run=run,
+    )
+
+
+if __name__ == "__main__":
+    main()

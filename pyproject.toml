@@ -4,6 +4,7 @@ version = "0.0.0"
 requires-python = ">=3.11"
 dependencies = [
   "zeta-os",
+  "zeta-connectors",
 ]
 
 [tool.uv]
@@ -11,10 +12,12 @@ package = false
 
 [tool.uv.sources]
 zeta-os = { workspace = true }
+zeta-connectors = { workspace = true }
 
 [tool.uv.workspace]
 members = [
   "zeta",
+  "zeta-connectors",
 ]
 
 [dependency-groups]
@@ -44,9 +47,9 @@ extend-exclude = ["docs/demos"]
 extend-select = ["B", "I", "UP"]
 
 [tool.vulture]
-paths = ["zeta/src", "zeta/tests"]
+paths = ["zeta/src", "zeta/tests", "zeta-connectors/src"]
 min_confidence = 80
 
 [tool.deptry]
-known_first_party = ["connectors", "zeta"]
+known_first_party = ["connectors", "zeta", "zeta_connectors"]
 package_module_name_map = { PyYAML = "yaml" }

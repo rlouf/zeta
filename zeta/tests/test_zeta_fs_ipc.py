@@ -8,18 +8,16 @@ import time
 from pathlib import Path
 
 import pytest
-from wire_test_support import complete_handshake, finished, frame_reader, send
+from wire_test_support import finished, frame_reader, read_envelope, send
 from zeta.authoring.starter import scaffold_inbox_summarizer_project
 from zeta.harness import worker
 from zeta.harness.connector_bridge import (
     accept_ipc_event,
-    ipc_ingress_connector_ids,
-    run_ingress_once,
+    ingress_waves,
     run_ipc_ingress_forever,
 )
 from zeta.journal.store import Filter
 from zeta.wire.envelopes import envelope, mint_event_id
-from zeta.wire.framing import FrameViolation
 from zeta.wire.host import WireEvent
 
 
@@ -31,17 +29,24 @@ def scaffolded_runtime(tmp_path: Path, name: str) -> worker.WorkerServices:
     )
 
 
-def test_scaffolded_project_selects_ipc_for_the_filesystem_connector(
-    tmp_path: Path,
-) -> None:
+def test_scaffolded_project_waves_the_filesystem_connector(tmp_path: Path) -> None:
     runtime = scaffolded_runtime(tmp_path, "demo")
     try:
-        assert ipc_ingress_connector_ids(runtime) == frozenset({"filesystem"})
+        waves = ingress_waves(runtime.project_snapshot.project)
+        assert len(waves) == 1
+        connector, wave = waves[0]
+        assert connector.id == "filesystem"
+        assert set(wave) == {"file.created"}
     finally:
         runtime.events.close()
 
 
-def test_process_allowlist_disables_subprocess_ingress(tmp_path: Path) -> None:
+def test_process_allowlist_excluding_a_bound_connector_fails_loudly(
+    tmp_path: Path,
+) -> None:
+    """An allowlist that hides a connector the project binds is an error."""
+    from zeta.authoring.manifest import ManifestError
+
     root = scaffold_inbox_summarizer_project(tmp_path / "demo")
     runtime = worker.build_worker_services(
         project_root=root,
@@ -49,41 +54,50 @@ def test_process_allowlist_disables_subprocess_ingress(tmp_path: Path) -> None:
         connector_names=("slack",),
     )
     try:
-        assert ipc_ingress_connector_ids(runtime) == frozenset()
+        with pytest.raises(ManifestError, match="unknown ingress event"):
+            _ = runtime.project_snapshot
     finally:
         runtime.events.close()
 
 
-async def test_fs_inbox_child_speaks_wire_v0(tmp_path: Path) -> None:
+async def test_fs_connector_executable_speaks_wire_v0(tmp_path: Path) -> None:
     inbox = tmp_path / "inbox"
     inbox.mkdir()
-    config = {
-        "watches": [{"dir": str(inbox)}],
-        "poll_interval": 0.05,
-        "debounce": 0,
-    }
     process = await asyncio.create_subprocess_exec(
         sys.executable,
         "-m",
-        "zeta.wire.fs_inbox",
-        json.dumps(config),
+        "zeta_connectors.filesystem",
         stdin=asyncio.subprocess.PIPE,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )
     reader = frame_reader(process)
-    hello = await complete_handshake(process, reader)
-    assert hello["name"] == "fs-inbox"
+    hello = await read_envelope(reader)
+    assert hello["kind"] == "hello"
+    assert hello["name"] == "filesystem"
     assert hello["event_types"] == [
         {"type": "file.created", "schema": "file.created@1"}
     ]
+    await send(
+        process,
+        envelope(
+            "hello_ack",
+            "m-t-1",
+            protocol_version=0,
+            runtime="zeta-test/0",
+            config={
+                "bindings": [{"event": "file.created", "filter": {"dir": str(inbox)}}],
+                "poll_interval": 0.05,
+                "debounce": 0,
+            },
+        ),
+    )
     await asyncio.sleep(0.3)
     target = inbox / "todo.txt"
     target.write_text("Buy milk.\n", encoding="utf-8")
     now = time.time()
     os.utime(target, (now, now))
-    event = await asyncio.wait_for(reader.read_frame(), timeout=10)
-    assert event is not None and not isinstance(event, FrameViolation)
+    event = await read_envelope(reader, timeout=10)
     assert event["kind"] == "event"
     assert event["type"] == "file.created"
     assert event["payload"] == {
@@ -110,37 +124,15 @@ def accepted_file_events(runtime: worker.WorkerServices) -> list[dict]:
     ]
 
 
-def normalized(events: list[dict], root: Path) -> list[dict]:
-    text = json.dumps(events, sort_keys=True)
-    return json.loads(text.replace(str(root), "<root>"))
-
-
-async def collect_inproc_golden(tmp_path: Path) -> list[dict]:
-    runtime = scaffolded_runtime(tmp_path, "inproc-project")
-    try:
-        await run_ingress_once(runtime)
-        inbox = runtime.project_root / "inbox"
-        target = inbox / "todo.txt"
-        target.write_text("Buy milk.\n", encoding="utf-8")
-        deadline = time.time() + 10
-        while not accepted_file_events(runtime) and time.time() < deadline:
-            now = time.time()
-            os.utime(target, (now, now))
-            await run_ingress_once(runtime)
-            await asyncio.sleep(0.05)
-        return normalized(accepted_file_events(runtime), runtime.project_root)
-    finally:
-        runtime.events.close()
-
-
-async def collect_ipc_golden(tmp_path: Path) -> list[dict]:
+async def test_ipc_ingress_reaches_the_journal(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """End to end: discovered executable child → wire → journal row."""
+    monkeypatch.setenv("FILESYSTEM_DEBOUNCE_SECONDS", "0")
     runtime = scaffolded_runtime(tmp_path, "ipc-project")
     ingress = asyncio.create_task(
-        run_ipc_ingress_forever(
-            runtime,
-            connector_ids=frozenset({"filesystem"}),
-            poll_interval_seconds=0.05,
-        )
+        run_ipc_ingress_forever(runtime, poll_interval_seconds=0.05)
     )
     try:
         await asyncio.sleep(0.5)
@@ -152,24 +144,23 @@ async def collect_ipc_golden(tmp_path: Path) -> list[dict]:
             now = time.time()
             os.utime(target, (now, now))
             await asyncio.sleep(0.5)
-        return normalized(accepted_file_events(runtime), runtime.project_root)
+        events = accepted_file_events(runtime)
+        assert events, "the subprocess path journaled no event"
+        event = events[0]
+        assert event["event_type"] == "file.created"
+        assert event["source"] == "filesystem"
+        assert event["payload"]["name"] == "todo.txt"
+        assert event["payload"]["path"] == str(target)
+        assert event["idempotency_key"] == f"file:{target}"
     finally:
         ingress.cancel()
         await asyncio.gather(ingress, return_exceptions=True)
         runtime.events.close()
 
 
-async def test_ipc_ingress_reaches_the_journal_identically_to_inproc(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Golden comparison: same file, same journaled event on both transports."""
-    monkeypatch.setenv("FILESYSTEM_DEBOUNCE_SECONDS", "0")
-    inproc_events = await collect_inproc_golden(tmp_path)
-    ipc_events = await collect_ipc_golden(tmp_path)
-    assert inproc_events, "the in-process path journaled no event"
-    assert ipc_events, "the subprocess path journaled no event"
-    assert ipc_events == inproc_events
+def demo_binding(runtime: worker.WorkerServices):
+    spec = next(spec for spec in runtime.project_snapshot.project.specs if spec.ingress)
+    return spec.ingress[0]
 
 
 def test_ipc_event_redelivery_is_deduplicated_by_idempotency_key(
@@ -178,10 +169,7 @@ def test_ipc_event_redelivery_is_deduplicated_by_idempotency_key(
     """A restarted child redelivers events; the journal keeps one row."""
     runtime = scaffolded_runtime(tmp_path, "dedupe-project")
     try:
-        spec = next(
-            spec for spec in runtime.project_snapshot.project.specs if spec.ingress
-        )
-        binding = spec.ingress[0]
+        binding = demo_binding(runtime)
         inbox = str(runtime.project_root / "inbox")
         payload = {
             "path": f"{inbox}/todo.txt",
@@ -197,8 +185,8 @@ def test_ipc_event_redelivery_is_deduplicated_by_idempotency_key(
             session_id=None,
             ts="2026-08-10T12:00:00Z",
         )
-        assert accept_ipc_event(runtime, binding, wire_event)
-        assert accept_ipc_event(runtime, binding, wire_event)
+        assert accept_ipc_event(runtime, binding, wire_event, connector_id="filesystem")
+        assert accept_ipc_event(runtime, binding, wire_event, connector_id="filesystem")
         assert len(accepted_file_events(runtime)) == 1
     finally:
         runtime.events.close()
@@ -209,10 +197,7 @@ def test_ipc_events_of_the_wrong_type_are_refused_without_crashing(
 ) -> None:
     runtime = scaffolded_runtime(tmp_path, "wrong-type-project")
     try:
-        spec = next(
-            spec for spec in runtime.project_snapshot.project.specs if spec.ingress
-        )
-        binding = spec.ingress[0]
+        binding = demo_binding(runtime)
         wire_event = WireEvent(
             id=mint_event_id("file.deleted", {}),
             type="file.deleted",
@@ -222,7 +207,40 @@ def test_ipc_events_of_the_wrong_type_are_refused_without_crashing(
             session_id=None,
             ts="2026-08-10T12:00:00Z",
         )
-        assert not accept_ipc_event(runtime, binding, wire_event)
+        assert not accept_ipc_event(
+            runtime, binding, wire_event, connector_id="filesystem"
+        )
         assert accepted_file_events(runtime) == []
     finally:
         runtime.events.close()
+
+
+def test_wave_partition_reuses_one_child_per_event_type(tmp_path: Path) -> None:
+    """Two same-type bindings split into waves; distinct types share one."""
+    from connectors import ConnectorManifest, EventConnectorRegistry, IngressBinding
+
+    manifest = ConnectorManifest(
+        id="multi",
+        command=("multi",),
+        events={"a.created": None, "b.created": None},
+    )
+    registry = EventConnectorRegistry()
+    registry.register(manifest)
+
+    class Spec:
+        ingress = (
+            IngressBinding("a.created", filter={"dir": "/one"}, idempotency_key="k"),
+            IngressBinding("a.created", filter={"dir": "/two"}, idempotency_key="k"),
+            IngressBinding("b.created", idempotency_key="k"),
+        )
+
+    class Project:
+        connectors = registry
+        specs = (Spec(),)
+
+    waves = ingress_waves(Project())
+    assert [sorted(wave) for _connector, wave in waves] == [
+        ["a.created", "b.created"],
+        ["a.created"],
+    ]
+    assert json.loads(json.dumps(waves[0][1]["a.created"].filter)) == {"dir": "/one"}

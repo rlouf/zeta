@@ -1,50 +1,40 @@
-"""Telegram event connector.
+"""The Telegram connector: long-poll ingress and message egress.
 
-Telegram delivers updates to a webhook and accepts replies over plain HTTP, so
-this connector needs no SDK and no second runtime.
+Ingress long-polls `getUpdates` and confirms offsets only when the
+runtime acknowledges the corresponding event (spec §7): the offset
+sent to Telegram is the largest prefix of acked updates, so a crash
+between reading an update and journaling it redelivers instead of
+losing. Updates Zeta will not act on are confirmed immediately.
 
-Ingress is push only. Telegram retries a webhook until it receives a 200, and
-Zeta appends a draft before it responds, so no cursor is needed and no message
-is lost. Polling exists in the Bot API but is not used here: a confirmed
-`getUpdates` offset is forgotten by Telegram, which would put a loss window
-between reading an update and appending it.
+Reconnection is crash-only: a transport failure exits the process and
+the runtime's supervisor respawn is the retry.
 """
 
 from __future__ import annotations
 
-import hmac
-import json
 import os
+import sys
 import tempfile
-from collections.abc import Mapping
+from collections.abc import AsyncIterator, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
-from zeta.effects import DeliverySemantics
-from zeta.events import DraftEvent, Event
+import httpx
 from zeta.paths import resolve_state_dir
+from zeta.wire.plugin import EventType, SourceEvent, run_source
 
-from connectors import (
-    EgressBinding,
-    EventConnector,
-    InboundRequest,
-    InboundResponse,
-)
+from zeta_connectors import connector_main
 
 TELEGRAM_MESSAGE_RECEIVED = "telegram.message.received"
 TELEGRAM_MESSAGE_REACTION = "telegram.message.reaction"
 TELEGRAM_MESSAGE_SEND = "telegram.message.send"
-TELEGRAM_SEND_SEMANTICS: DeliverySemantics = "at_least_once"
-TELEGRAM_EGRESS_SEMANTICS: Mapping[str, DeliverySemantics] = {
-    TELEGRAM_MESSAGE_SEND: TELEGRAM_SEND_SEMANTICS
-}
 
 # Telegram rejects a message longer than this, so long replies are split.
 MAX_MESSAGE_CHARS = 4096
-SECRET_TOKEN_HEADER = "x-telegram-bot-api-secret-token"
 DEFAULT_MEDIA_MAX_BYTES = 20 * 1024 * 1024
+LONG_POLL_SECONDS = 25
 
 
 class TelegramMediaDownloadError(RuntimeError):
@@ -64,9 +54,10 @@ class HttpTelegramClient:
     timeout_seconds: float = 10.0
 
     async def call(self, method: str, payload: Mapping[str, Any]) -> Mapping[str, Any]:
-        import httpx
-
-        async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
+        timeout = self.timeout_seconds
+        if method == "getUpdates":
+            timeout = LONG_POLL_SECONDS + self.timeout_seconds
+        async with httpx.AsyncClient(timeout=timeout) as client:
             response = await client.post(
                 f"{self.base_url.rstrip('/')}/bot{self.token}/{method}",
                 json=dict(payload),
@@ -103,8 +94,6 @@ class HttpTelegramClient:
         max_bytes: int,
     ) -> Path:
         """Download one Telegram file atomically to a private local path."""
-        import httpx
-
         if max_bytes <= 0:
             raise ValueError("Telegram media size limit must be positive")
         file_path = _remote_file_path(await self.call("getFile", {"file_id": file_id}))
@@ -173,8 +162,8 @@ async def _write_stream_atomically(
 ) -> None:
     """Write a stream to a private temporary file, then move it into place.
 
-    The size is checked while writing, because a server may under-report or
-    omit its content length.
+    The size is checked while writing, because a server may under-report
+    or omit its content length.
     """
     descriptor, raw_temporary_path = tempfile.mkstemp(
         prefix=f".{destination.name}.",
@@ -199,235 +188,42 @@ async def _write_stream_atomically(
             temporary_path.unlink(missing_ok=True)
 
 
-def telegram_event_connector(
-    client: Any | None = None,
-    *,
-    webhook_secret: str | None = None,
-    allowed_senders: frozenset[int] | None = None,
-    media_dir: Path | None = None,
-    media_max_bytes: int | None = None,
-) -> EventConnector:
-    client = client if client is not None else telegram_client_from_env()
-    webhook_secret = webhook_secret or os.environ.get("TELEGRAM_WEBHOOK_SECRET")
-    senders = (
-        allowed_senders if allowed_senders is not None else allowed_senders_from_env()
-    )
-    stored_media_dir = media_dir or telegram_media_dir_from_env()
-    max_media_bytes = (
-        media_max_bytes
-        if media_max_bytes is not None
-        else telegram_media_max_bytes_from_env()
-    )
-    return EventConnector(
-        id="telegram",
-        events={
-            TELEGRAM_MESSAGE_RECEIVED: telegram_message_received_schema(),
-            TELEGRAM_MESSAGE_REACTION: telegram_message_reaction_schema(),
-            TELEGRAM_MESSAGE_SEND: telegram_message_send_schema(),
-        },
-        push_ingress=lambda request: handle_telegram_push_ingress(
-            request,
-            webhook_secret=webhook_secret,
-            allowed_senders=senders,
-            client=client,
-            media_dir=stored_media_dir,
-            media_max_bytes=max_media_bytes,
-        ),
-        egress={
-            TELEGRAM_MESSAGE_SEND: lambda event, binding, key: send_telegram_message(
-                client,
-                event,
-                binding,
-                key,
-            ),
-        },
-        egress_semantics=TELEGRAM_EGRESS_SEMANTICS,
-        filters={TELEGRAM_MESSAGE_SEND: telegram_egress_options_schema()},
-    )
-
-
-async def handle_telegram_push_ingress(
-    request: InboundRequest,
-    *,
-    webhook_secret: str | None,
-    allowed_senders: frozenset[int],
-    client: Any | None = None,
-    media_dir: Path | None = None,
-    media_max_bytes: int = DEFAULT_MEDIA_MAX_BYTES,
-) -> tuple[InboundResponse, tuple[DraftEvent, ...]]:
-    """Verify one webhook request and turn it into at most one draft.
-
-    An update Zeta will not act on is still answered with 200. Telegram retries
-    any other status forever, and a rejected sender is not a transport failure.
-    """
-    if request.method != "POST":
-        return InboundResponse(status_code=405, body=b"method not allowed"), ()
-    if not valid_secret_token(request, webhook_secret=webhook_secret):
-        return InboundResponse(status_code=401, body=b"invalid secret token"), ()
-    try:
-        update = json.loads(request.body.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError):
-        return InboundResponse(status_code=400, body=b"invalid payload"), ()
-    if not isinstance(update, dict):
-        return InboundResponse(status_code=400, body=b"invalid payload"), ()
-
-    draft = telegram_draft_from_update(update, allowed_senders=allowed_senders)
-    if draft is None:
-        return InboundResponse(status_code=200, body=b"ignored"), ()
-    if client is not None and media_dir is not None:
-        try:
-            draft = await materialize_telegram_draft(
-                draft,
-                client,
-                media_dir=media_dir,
-                max_bytes=media_max_bytes,
-            )
-        except TelegramMediaTooLargeError as exc:
-            return InboundResponse(status_code=200, body=str(exc).encode("utf-8")), ()
-        except TelegramMediaDownloadError:
-            return InboundResponse(status_code=500, body=b"media download failed"), ()
-    return InboundResponse(status_code=200, body=b"accepted"), (draft,)
-
-
-async def materialize_telegram_draft(
-    draft: DraftEvent,
-    client: Any,
-    *,
-    media_dir: Path,
-    max_bytes: int,
-) -> DraftEvent:
-    """Copy Telegram attachments to local storage before event acceptance."""
-    raw_attachments = draft.payload.get("attachments")
-    if not isinstance(raw_attachments, list):
-        return draft
-    update_id = draft.payload.get("update_id")
-    if not isinstance(update_id, int):
-        raise TelegramMediaDownloadError("Telegram message has no update id")
-
-    attachments: list[dict[str, Any]] = []
-    for index, raw_attachment in enumerate(raw_attachments):
-        if not isinstance(raw_attachment, Mapping):
-            raise TelegramMediaDownloadError("Telegram attachment is invalid")
-        attachment = dict(raw_attachment)
-        file_id = attachment.get("file_id")
-        if not isinstance(file_id, str) or not file_id:
-            raise TelegramMediaDownloadError("Telegram attachment has no file id")
-        declared_size = attachment.get("file_size")
-        if isinstance(declared_size, int) and declared_size > max_bytes:
-            raise TelegramMediaTooLargeError(
-                f"Telegram attachment exceeds the {max_bytes}-byte limit"
-            )
-        destination = telegram_attachment_path(
-            media_dir,
-            update_id=update_id,
-            index=index,
-            attachment=attachment,
-        )
-        if not destination.is_file():
-            await client.download_file(file_id, destination, max_bytes=max_bytes)
-        attachment["path"] = str(destination)
-        attachments.append(attachment)
-
-    return DraftEvent(
-        draft.event_type,
-        draft.source,
-        {**draft.payload, "attachments": attachments},
-        idempotency_key=draft.idempotency_key,
-        caused_by=draft.caused_by,
-        session_id=draft.session_id,
-        run_id=draft.run_id,
-        turn_id=draft.turn_id,
-    )
-
-
-def telegram_attachment_path(
-    media_dir: Path,
-    *,
-    update_id: int,
-    index: int,
-    attachment: Mapping[str, Any],
-) -> Path:
-    """Return the stable private path for one Telegram attachment."""
-    kind = attachment.get("type")
-    if not isinstance(kind, str) or not kind:
-        raise TelegramMediaDownloadError("Telegram attachment has no type")
-    return (
-        media_dir.expanduser().resolve()
-        / str(update_id)
-        / (f"{index}-{kind}{telegram_attachment_suffix(attachment)}")
-    )
-
-
-def telegram_attachment_suffix(attachment: Mapping[str, Any]) -> str:
-    """Return a safe useful suffix for a materialized Telegram attachment."""
-    file_name = attachment.get("file_name")
-    if isinstance(file_name, str):
-        suffix = Path(file_name).suffix.lower()
-        if suffix and suffix[1:].isalnum() and len(suffix) <= 10:
-            return suffix
-    kind = attachment.get("type")
-    if not isinstance(kind, str):
-        return ".bin"
-    return {"voice": ".ogg", "photo": ".jpg", "audio": ".audio"}.get(
-        kind,
-        ".bin",
-    )
-
-
-def valid_secret_token(
-    request: InboundRequest,
-    *,
-    webhook_secret: str | None,
-) -> bool:
-    """Compare the webhook secret in constant time.
-
-    An absent secret rejects every request. Tailscale Funnel makes the endpoint
-    publicly reachable, so this check is what separates Telegram from a
-    stranger.
-    """
-    if not webhook_secret:
-        return False
-    presented = request.headers.get(SECRET_TOKEN_HEADER)
-    if not presented:
-        return False
-    return hmac.compare_digest(presented, webhook_secret)
-
-
-def telegram_draft_from_update(
+def telegram_event_from_update(
     update: Mapping[str, Any],
     *,
     allowed_senders: frozenset[int],
-) -> DraftEvent | None:
-    """Return a draft for an allowed text message or reaction, else None."""
+) -> tuple[str, dict[str, Any]] | None:
+    """Return (event type, payload) for an allowed update, else None."""
     update_id = update.get("update_id")
     message = update.get("message")
     if not isinstance(update_id, int):
         return None
     if isinstance(message, Mapping):
-        return telegram_message_draft(
+        payload = telegram_message_payload(
             update_id,
             message,
             allowed_senders=allowed_senders,
         )
+        return (TELEGRAM_MESSAGE_RECEIVED, payload) if payload else None
 
     message_reaction = update.get("message_reaction")
     if isinstance(message_reaction, Mapping):
-        return telegram_message_reaction_draft(
+        payload = telegram_message_reaction_payload(
             update_id,
             message_reaction,
             allowed_senders=allowed_senders,
         )
+        return (TELEGRAM_MESSAGE_REACTION, payload) if payload else None
     return None
 
 
-def telegram_message_draft(
+def telegram_message_payload(
     update_id: int,
     message: Mapping[str, Any],
     *,
     allowed_senders: frozenset[int],
-) -> DraftEvent | None:
-    """Return a draft for an allowed text or media message, else None."""
-
+) -> dict[str, Any] | None:
+    """Return the payload for an allowed text or media message, else None."""
     raw_text = message.get("text")
     caption = message.get("caption")
     chat = message.get("chat")
@@ -468,12 +264,7 @@ def telegram_message_draft(
     }
     if attachments:
         payload["attachments"] = attachments
-    return DraftEvent(
-        TELEGRAM_MESSAGE_RECEIVED,
-        "telegram",
-        payload,
-        idempotency_key=f"telegram:{update_id}",
-    )
+    return payload
 
 
 def telegram_message_attachments(message: Mapping[str, Any]) -> list[dict[str, Any]]:
@@ -534,16 +325,17 @@ def telegram_file_attachment(kind: str, value: Any) -> dict[str, Any] | None:
     return attachment
 
 
-def telegram_message_reaction_draft(
+def telegram_message_reaction_payload(
     update_id: int,
     message_reaction: Mapping[str, Any],
     *,
     allowed_senders: frozenset[int],
-) -> DraftEvent | None:
-    """Return a draft for a known user's reaction, else None.
+) -> dict[str, Any] | None:
+    """Return the payload for a known user's reaction, else None.
 
-    Telegram omits ``user`` for anonymous reactions. Those updates do not prove
-    a particular user confirmed an action, so the connector ignores them.
+    Telegram omits ``user`` for anonymous reactions. Those updates do
+    not prove a particular user confirmed an action, so the connector
+    ignores them.
     """
     chat = message_reaction.get("chat")
     sender = message_reaction.get("user")
@@ -567,7 +359,7 @@ def telegram_message_reaction_draft(
         return None
 
     username = sender.get("username")
-    payload: dict[str, Any] = {
+    return {
         "update_id": update_id,
         "message_id": message_id,
         "chat_id": chat_id,
@@ -578,12 +370,6 @@ def telegram_message_reaction_draft(
         "new_reaction": new_reaction,
         "date": date,
     }
-    return DraftEvent(
-        TELEGRAM_MESSAGE_REACTION,
-        "telegram",
-        payload,
-        idempotency_key=f"telegram:{update_id}",
-    )
 
 
 def telegram_reaction_types(value: Any) -> list[dict[str, str]] | None:
@@ -613,26 +399,206 @@ def telegram_reaction_types(value: Any) -> list[dict[str, str]] | None:
     return reactions
 
 
+async def materialize_attachments(
+    payload: dict[str, Any],
+    client: HttpTelegramClient,
+    *,
+    media_dir: Path,
+    max_bytes: int,
+) -> dict[str, Any]:
+    """Copy Telegram attachments to local storage before emission."""
+    raw_attachments = payload.get("attachments")
+    if not isinstance(raw_attachments, list):
+        return payload
+    update_id = payload["update_id"]
+
+    attachments: list[dict[str, Any]] = []
+    for index, raw_attachment in enumerate(raw_attachments):
+        if not isinstance(raw_attachment, Mapping):
+            raise TelegramMediaDownloadError("Telegram attachment is invalid")
+        attachment = dict(raw_attachment)
+        file_id = attachment.get("file_id")
+        if not isinstance(file_id, str) or not file_id:
+            raise TelegramMediaDownloadError("Telegram attachment has no file id")
+        declared_size = attachment.get("file_size")
+        if isinstance(declared_size, int) and declared_size > max_bytes:
+            raise TelegramMediaTooLargeError(
+                f"Telegram attachment exceeds the {max_bytes}-byte limit"
+            )
+        destination = telegram_attachment_path(
+            media_dir,
+            update_id=update_id,
+            index=index,
+            attachment=attachment,
+        )
+        if not destination.is_file():
+            await client.download_file(file_id, destination, max_bytes=max_bytes)
+        attachment["path"] = str(destination)
+        attachments.append(attachment)
+    return {**payload, "attachments": attachments}
+
+
+def telegram_attachment_path(
+    media_dir: Path,
+    *,
+    update_id: int,
+    index: int,
+    attachment: Mapping[str, Any],
+) -> Path:
+    """Return the stable private path for one Telegram attachment."""
+    kind = attachment.get("type")
+    if not isinstance(kind, str) or not kind:
+        raise TelegramMediaDownloadError("Telegram attachment has no type")
+    return (
+        media_dir.expanduser().resolve()
+        / str(update_id)
+        / (f"{index}-{kind}{telegram_attachment_suffix(attachment)}")
+    )
+
+
+def telegram_attachment_suffix(attachment: Mapping[str, Any]) -> str:
+    """Return a safe useful suffix for a materialized Telegram attachment."""
+    file_name = attachment.get("file_name")
+    if isinstance(file_name, str):
+        suffix = Path(file_name).suffix.lower()
+        if suffix and suffix[1:].isalnum() and len(suffix) <= 10:
+            return suffix
+    kind = attachment.get("type")
+    if not isinstance(kind, str):
+        return ".bin"
+    return {"voice": ".ogg", "photo": ".jpg", "audio": ".audio"}.get(
+        kind,
+        ".bin",
+    )
+
+
+class OffsetLedger:
+    """Confirm getUpdates offsets only up to the acked prefix (spec §7)."""
+
+    def __init__(self) -> None:
+        self._pending: dict[int, bool] = {}
+        self._confirmed: int | None = None
+
+    def observe(self, update_id: int, *, needs_ack: bool) -> None:
+        self._pending[update_id] = not needs_ack
+        self._advance()
+
+    def acked(self, update_id: int) -> None:
+        if update_id in self._pending:
+            self._pending[update_id] = True
+            self._advance()
+
+    def _advance(self) -> None:
+        for update_id in sorted(self._pending):
+            if not self._pending[update_id]:
+                return
+            del self._pending[update_id]
+            self._confirmed = update_id
+
+    @property
+    def next_offset(self) -> int | None:
+        return None if self._confirmed is None else self._confirmed + 1
+
+
+async def _prepare_update(
+    update: Mapping[str, Any],
+    *,
+    client: HttpTelegramClient,
+    allowed: frozenset[int],
+    bound_types: set[str],
+    media_dir: Path,
+    max_bytes: int,
+) -> tuple[int, str, dict[str, Any]] | None:
+    """Return one emittable event; an empty type means confirm-and-skip."""
+    update_id = update.get("update_id")
+    if not isinstance(update_id, int):
+        return None
+    parsed = telegram_event_from_update(update, allowed_senders=allowed)
+    if parsed is None or parsed[0] not in bound_types:
+        return (update_id, "", {})
+    event_type, payload = parsed
+    try:
+        payload = await materialize_attachments(
+            payload, client, media_dir=media_dir, max_bytes=max_bytes
+        )
+    except TelegramMediaTooLargeError:
+        return (update_id, "", {})
+    return (update_id, event_type, payload)
+
+
+def poll_events(config: dict[str, Any]) -> AsyncIterator[SourceEvent] | None:
+    bound_types = {
+        binding.get("event")
+        for binding in config.get("bindings", [])
+        if binding.get("event")
+        in {TELEGRAM_MESSAGE_RECEIVED, TELEGRAM_MESSAGE_REACTION}
+    }
+    if not bound_types:
+        return None  # an operations-only incarnation must not long-poll
+    client = telegram_client_from_env()
+    allowed = allowed_senders_from_env()
+    media_dir = telegram_media_dir_from_env()
+    max_bytes = telegram_media_max_bytes_from_env()
+
+    async def events() -> AsyncIterator[SourceEvent]:
+        ledger = OffsetLedger()
+        emitted: set[int] = set()
+        while True:
+            request: dict[str, Any] = {
+                "timeout": LONG_POLL_SECONDS,
+                "allowed_updates": ["message", "message_reaction"],
+            }
+            if ledger.next_offset is not None:
+                request["offset"] = ledger.next_offset
+            data = await client.call("getUpdates", request)
+            updates = data.get("result")
+            if not isinstance(updates, list):
+                raise RuntimeError("Telegram getUpdates returned no result list")
+            for update in updates:
+                prepared = await _prepare_update(
+                    update,
+                    client=client,
+                    allowed=allowed,
+                    bound_types=bound_types,
+                    media_dir=media_dir,
+                    max_bytes=max_bytes,
+                )
+                if prepared is None:
+                    continue
+                update_id, event_type, payload = prepared
+                if update_id in emitted:
+                    continue
+                emitted.add(update_id)
+                if not event_type:
+                    ledger.observe(update_id, needs_ack=False)
+                    continue
+                ledger.observe(update_id, needs_ack=True)
+                yield SourceEvent(
+                    event_type,
+                    payload,
+                    on_ack=lambda update_id=update_id: ledger.acked(update_id),
+                )
+
+    return events()
+
+
 async def send_telegram_message(
-    client: Any,
-    event: Event,
-    binding: EgressBinding,
-    idempotency_key: str,
-) -> Mapping[str, Any] | None:
+    client: HttpTelegramClient,
+    payload: Mapping[str, Any],
+) -> dict[str, Any]:
     """Deliver one reply, split into as many messages as Telegram allows.
 
-    `sendMessage` takes no idempotency key, so a retry sends the text again.
-    The declared `at_least_once` contract states that.
+    `sendMessage` takes no idempotency key, so a retry sends the text
+    again. The declared `at_least_once` contract states that.
     """
-    del binding, idempotency_key
-    chat_id = event.payload.get("chat_id")
-    text = event.payload.get("text")
+    chat_id = payload.get("chat_id")
+    text = payload.get("text")
     if not isinstance(chat_id, int) or not isinstance(text, str):
         raise RuntimeError("telegram.message.send requires chat_id and text")
 
-    raw_reply_to = event.payload.get("reply_to_message_id")
+    raw_reply_to = payload.get("reply_to_message_id")
     reply_to = raw_reply_to if isinstance(raw_reply_to, int) else None
-    raw_parse_mode = event.payload.get("parse_mode")
+    raw_parse_mode = payload.get("parse_mode")
     parse_mode = raw_parse_mode if isinstance(raw_parse_mode, str) else None
 
     message_ids: list[int] = []
@@ -672,7 +638,7 @@ def split_message(text: str, limit: int = MAX_MESSAGE_CHARS) -> list[str]:
 def telegram_client_from_env() -> HttpTelegramClient:
     token = os.environ.get("TELEGRAM_BOT_TOKEN")
     if not token:
-        raise RuntimeError(
+        raise SystemExit(
             "TELEGRAM_BOT_TOKEN is required for the Telegram event connector"
         )
     return HttpTelegramClient(token=token)
@@ -681,8 +647,8 @@ def telegram_client_from_env() -> HttpTelegramClient:
 def allowed_senders_from_env() -> frozenset[int]:
     """Return the sender allowlist.
 
-    An unset or empty list allows nobody. The bot endpoint is public, so a
-    permissive default would expose the agent's tools to anyone who finds it.
+    An unset or empty list allows nobody: a permissive default would
+    expose the agent's tools to anyone who finds the bot.
     """
     raw = os.environ.get("TELEGRAM_ALLOWED_SENDERS", "")
     senders: set[int] = set()
@@ -693,7 +659,7 @@ def allowed_senders_from_env() -> frozenset[int]:
         try:
             senders.add(int(candidate))
         except ValueError as exc:
-            raise RuntimeError(
+            raise SystemExit(
                 f"TELEGRAM_ALLOWED_SENDERS contains a non-numeric id: {candidate!r}"
             ) from exc
     return frozenset(senders)
@@ -715,14 +681,14 @@ def telegram_media_max_bytes_from_env() -> int:
     try:
         value = int(raw)
     except ValueError as exc:
-        raise RuntimeError("TELEGRAM_MEDIA_MAX_BYTES must be an integer") from exc
+        raise SystemExit("TELEGRAM_MEDIA_MAX_BYTES must be an integer") from exc
     if value <= 0:
-        raise RuntimeError("TELEGRAM_MEDIA_MAX_BYTES must be positive")
+        raise SystemExit("TELEGRAM_MEDIA_MAX_BYTES must be positive")
     return value
 
 
-def telegram_message_received_schema() -> Mapping[str, Any]:
-    attachment_schema: Mapping[str, Any] = {
+def telegram_message_received_schema() -> dict[str, Any]:
+    attachment_schema: dict[str, Any] = {
         "type": "object",
         "required": ["type", "file_id"],
         "properties": {
@@ -769,8 +735,8 @@ def telegram_message_received_schema() -> Mapping[str, Any]:
     }
 
 
-def telegram_message_reaction_schema() -> Mapping[str, Any]:
-    reaction_type_schema: Mapping[str, Any] = {
+def telegram_message_reaction_schema() -> dict[str, Any]:
+    reaction_type_schema: dict[str, Any] = {
         "type": "object",
         "required": ["type"],
         "properties": {
@@ -807,7 +773,7 @@ def telegram_message_reaction_schema() -> Mapping[str, Any]:
     }
 
 
-def telegram_message_send_schema() -> Mapping[str, Any]:
+def telegram_message_send_schema() -> dict[str, Any]:
     return {
         "type": "object",
         "required": ["chat_id", "text"],
@@ -821,9 +787,56 @@ def telegram_message_send_schema() -> Mapping[str, Any]:
     }
 
 
-def telegram_egress_options_schema() -> Mapping[str, Any]:
-    return {
-        "type": "object",
-        "properties": {},
-        "additionalProperties": False,
-    }
+def empty_options_schema() -> dict[str, Any]:
+    return {"type": "object", "properties": {}, "additionalProperties": False}
+
+
+MANIFEST: dict[str, Any] = {
+    "id": "telegram",
+    "protocol_versions": [0],
+    "events": {
+        TELEGRAM_MESSAGE_RECEIVED: telegram_message_received_schema(),
+        TELEGRAM_MESSAGE_REACTION: telegram_message_reaction_schema(),
+        TELEGRAM_MESSAGE_SEND: telegram_message_send_schema(),
+    },
+    "filters": {},
+    "operations": [
+        {
+            "name": TELEGRAM_MESSAGE_SEND,
+            "semantics": "at_least_once",
+            "options_schema": empty_options_schema(),
+        }
+    ],
+    "settings": ["bindings"],
+}
+
+
+def run() -> None:
+    client = telegram_client_from_env()
+
+    async def send(payload: dict[str, Any], effect_key: str) -> dict[str, Any]:
+        del effect_key  # sendMessage has no dedup key; semantics say so.
+        return await send_telegram_message(client, payload.get("payload", {}))
+
+    run_source(
+        poll_events,
+        name="telegram",
+        plugin_version="0.1.0",
+        event_types=[
+            EventType(TELEGRAM_MESSAGE_RECEIVED, f"{TELEGRAM_MESSAGE_RECEIVED}@1"),
+            EventType(TELEGRAM_MESSAGE_REACTION, f"{TELEGRAM_MESSAGE_REACTION}@1"),
+        ],
+        operations={TELEGRAM_MESSAGE_SEND: send},
+    )
+
+
+def main(argv: list[str] | None = None) -> None:
+    connector_main(
+        sys.argv[1:] if argv is None else argv,
+        manifest=MANIFEST,
+        run=run,
+    )
+
+
+if __name__ == "__main__":
+    main()

@@ -2,18 +2,23 @@
 
 from __future__ import annotations
 
-import importlib.util
 import json
 import logging
+import os
+import subprocess
 import sys
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field, replace
-from importlib import metadata as importlib_metadata
 from importlib.resources import as_file, files
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
-from connectors import EventConnector, EventConnectorRegistry
+from connectors import (
+    ConnectorManifest,
+    ConnectorManifestError,
+    EventConnectorRegistry,
+    connector_manifest_from_describe,
+)
 
 from zeta.addresses import skill_address
 from zeta.authoring.manifest import Manifest
@@ -71,14 +76,12 @@ def load_agent_project(
     agents_dir: Path,
     *,
     registry: EventConnectorRegistry | None = None,
-    entry_points: Iterable[Any] | None = None,
     connector_names: Iterable[str] | None = None,
 ) -> AgentProject:
     """Load flat authored agents and their shared validation resources."""
     specs = (*load_specs(agents_dir), load_packaged_master_spec())
     connectors = registry or load_connector_registry(
         agents_dir,
-        entry_points=entry_points,
         connector_names=connector_names,
     )
     events = load_event_registry(
@@ -156,136 +159,123 @@ def load_connector_registry(
     agents_dir: Path,
     *,
     connector_names: Iterable[str] | None = None,
-    entry_points: Iterable[Any] | None = None,
+    executables: Iterable[tuple[str, tuple[str, ...]]] | None = None,
 ) -> EventConnectorRegistry:
-    """Register every installed connector, plus the project's own modules.
+    """Register every connector executable the shell can see.
 
-    Installation is enablement: an entry point in the environment or a
-    module under ``agents/connectors/`` registers without any further
-    configuration. `connector_names` is the process-level allowlist
-    (``zeta serve --connectors``) for narrowing one runtime.
+    Discovery is the shell's (spec/wire-v0.md §13): `zeta-connector-<id>`
+    on PATH, plus executable files under ``agents/connectors/`` — a
+    project-local executable overrides a PATH connector with the same
+    id. `connector_names` is the process-level allowlist
+    (``zeta serve --connectors``); `executables` injects commands
+    directly for tests.
     """
     allowed = set(connector_names) if connector_names is not None else None
     registry = EventConnectorRegistry()
-
-    for entry_point in event_connector_entry_points(entry_points):
-        if allowed is not None and entry_point.name not in allowed:
+    for connector_id, command in discover_connector_commands(
+        agents_dir, executables=executables
+    ):
+        if allowed is not None and connector_id not in allowed:
             continue
         try:
-            connector = load_entry_point_event_connector(entry_point)
-            if connector.id != entry_point.name:
-                raise ResourceError(
-                    f"event connector entry point {entry_point.name!r} returned "
-                    f"connector id {connector.id!r}"
-                )
+            manifest = describe_connector(command, expected_id=connector_id)
         except Exception as exc:
-            # An installed connector that cannot construct itself (usually
-            # missing credentials) must not poison unrelated projects.
-            logger.warning("skipping event connector %r: %s", entry_point.name, exc)
+            # A connector that cannot describe itself must not poison
+            # unrelated projects; the warning names the casualty.
+            logger.warning("skipping event connector %r: %s", connector_id, exc)
             continue
-        register_event_connector(registry, connector)
-
-    for connector in load_directory_event_connectors(agents_dir):
-        if allowed is not None and connector.id not in allowed:
-            continue
-        register_event_connector(registry, connector)
-
+        register_event_connector(registry, manifest)
     return registry
 
 
+CONNECTOR_COMMAND_PREFIX = "zeta-connector-"
+DESCRIBE_TIMEOUT_SECONDS = 10.0
+
+_describe_cache: dict[tuple[tuple[str, ...], float], ConnectorManifest] = {}
+
+
+def discover_connector_commands(
+    agents_dir: Path,
+    *,
+    executables: Iterable[tuple[str, tuple[str, ...]]] | None = None,
+) -> list[tuple[str, tuple[str, ...]]]:
+    if executables is not None:
+        return list(executables)
+    commands: dict[str, tuple[str, ...]] = {}
+    # The running interpreter's script directory comes first: connectors
+    # installed beside zeta-os (one venv, one uv tool) must be found even
+    # when `zeta` was invoked by absolute path with a bare PATH.
+    for directory in (str(Path(sys.executable).parent), *os.get_exec_path()):
+        try:
+            entries = sorted(Path(directory).iterdir())
+        except OSError:
+            continue
+        for entry in entries:
+            if not entry.name.startswith(CONNECTOR_COMMAND_PREFIX):
+                continue
+            connector_id = entry.name.removeprefix(CONNECTOR_COMMAND_PREFIX)
+            if connector_id in commands:
+                continue  # first PATH hit wins, like the shell
+            if entry.is_file() and os.access(entry, os.X_OK):
+                commands[connector_id] = (str(entry),)
+    connectors_dir = agents_dir / "connectors"
+    if connectors_dir.is_dir():
+        for entry in sorted(connectors_dir.iterdir()):
+            if not entry.is_file() or not os.access(entry, os.X_OK):
+                continue
+            commands[entry.stem] = (str(entry),)
+    return sorted(commands.items())
+
+
+def describe_connector(
+    command: tuple[str, ...],
+    *,
+    expected_id: str | None = None,
+) -> ConnectorManifest:
+    """Run one `--describe` invocation, cached by executable mtime."""
+    try:
+        mtime = Path(command[0]).stat().st_mtime
+    except OSError:
+        mtime = 0.0
+    cache_key = (command, mtime)
+    cached = _describe_cache.get(cache_key)
+    if cached is not None:
+        return cached
+    completed = subprocess.run(
+        [*command, "--describe"],
+        capture_output=True,
+        timeout=DESCRIBE_TIMEOUT_SECONDS,
+        text=True,
+    )
+    if completed.returncode != 0:
+        detail = completed.stderr.strip().splitlines()
+        raise ResourceError(
+            f"connector {command[0]} --describe failed"
+            + (f": {detail[-1]}" if detail else "")
+        )
+    try:
+        raw = json.loads(completed.stdout)
+    except json.JSONDecodeError as exc:
+        raise ResourceError(
+            f"connector {command[0]} --describe printed invalid JSON: {exc}"
+        ) from exc
+    try:
+        manifest = connector_manifest_from_describe(
+            raw, command=command, expected_id=expected_id
+        )
+    except ConnectorManifestError as exc:
+        raise ResourceError(f"connector {command[0]}: {exc}") from exc
+    _describe_cache[cache_key] = manifest
+    return manifest
+
+
 def register_event_connector(
-    registry: EventConnectorRegistry, connector: EventConnector
+    registry: EventConnectorRegistry, connector: ConnectorManifest
 ) -> None:
     try:
         registry.register(connector)
     except ValueError as exc:
         raise ResourceError(str(exc)) from exc
-
-
-def load_directory_event_connectors(agents_dir: Path) -> tuple[EventConnector, ...]:
-    """Discover connectors dropped as ``agents/connectors/*.py`` (auto-enabled)."""
-    connectors_dir = agents_dir / "connectors"
-    if not connectors_dir.exists():
-        return ()
-    connectors: list[EventConnector] = []
-    for path in sorted(connectors_dir.glob("*.py")):
-        if path.name.startswith("_"):
-            continue
-        connectors.append(load_file_event_connector(path))
-    return tuple(connectors)
-
-
-def load_file_event_connector(path: Path) -> EventConnector:
-    module_spec = importlib.util.spec_from_file_location(
-        f"zeta_connector_{path.stem}", path
-    )
-    if module_spec is None or module_spec.loader is None:
-        raise ResourceError(f"cannot load connector module {path}")
-    module = importlib.util.module_from_spec(module_spec)
-    # Register before exec so module-level dataclasses (which look their module up
-    # in sys.modules) and similar introspection work inside the connector file.
-    sys.modules[module_spec.name] = module
-    try:
-        module_spec.loader.exec_module(module)
-    except Exception as exc:
-        sys.modules.pop(module_spec.name, None)
-        raise ResourceError(f"error importing connector {path}: {exc}") from exc
-    return resolve_module_event_connector(module, path)
-
-
-def resolve_module_event_connector(module: Any, path: Path) -> EventConnector:
-    instances = [
-        value for value in vars(module).values() if isinstance(value, EventConnector)
-    ]
-    if len(instances) == 1:
-        return instances[0]
-    if len(instances) > 1:
-        raise ResourceError(
-            f"connector module {path} defines multiple EventConnector instances"
-        )
-    factory_names = ("connector", f"{path.stem.replace('-', '_')}_event_connector")
-    for factory_name in factory_names:
-        factory = getattr(module, factory_name, None)
-        if callable(factory):
-            connector = factory()
-            if isinstance(connector, EventConnector):
-                return connector
-            raise ResourceError(
-                f"connector factory {factory_name!r} in {path} "
-                "did not return an EventConnector"
-            )
-    raise ResourceError(
-        f"connector module {path} exposes no EventConnector instance or factory"
-    )
-
-
-def event_connector_entry_points(
-    entry_points: Iterable[Any] | None = None,
-) -> tuple[Any, ...]:
-    discovered = (
-        importlib_metadata.entry_points() if entry_points is None else entry_points
-    )
-    select = getattr(discovered, "select", None)
-    if callable(select):
-        return tuple(select(group=EVENT_CONNECTOR_ENTRY_POINT_GROUP))
-    if isinstance(discovered, Mapping):
-        grouped = cast(Mapping[str, Iterable[Any]], discovered)
-        return tuple(grouped.get(EVENT_CONNECTOR_ENTRY_POINT_GROUP, ()))
-    return tuple(
-        entry_point
-        for entry_point in discovered
-        if getattr(entry_point, "group", None) == EVENT_CONNECTOR_ENTRY_POINT_GROUP
-    )
-
-
-def load_entry_point_event_connector(entry_point: Any) -> EventConnector:
-    loaded = entry_point.load()
-    connector = loaded() if callable(loaded) else loaded
-    if not isinstance(connector, EventConnector):
-        raise ResourceError(
-            f"event connector entry point {entry_point.name!r} did not return EventConnector"
-        )
-    return connector
 
 
 def load_skill_registry(agents_dir: Path) -> SkillRegistry:
@@ -316,7 +306,7 @@ def load_skill_registry(agents_dir: Path) -> SkillRegistry:
 def load_event_registry(
     agents_dir: Path,
     *,
-    connectors: Iterable[EventConnector] = (),
+    connectors: Iterable[ConnectorManifest] = (),
 ) -> EventRegistry:
     """Load flat event payload JSON Schemas from ``agents/events``."""
     events_dir = agents_dir / "events"

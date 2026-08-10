@@ -301,49 +301,58 @@ class SubprocessSource:
                 if strikes >= self.protocol_strike_limit:
                     raise _ChildFailed(f"{strikes} protocol violations; killing child")
                 continue
-            kind = frame["kind"]
-            if kind == "heartbeat":
-                continue
-            if kind == "call_result":
-                self._resolve_call(frame)
-                continue
-            if kind == "error":
-                logger.warning(
-                    "source child reported %s (retryable=%s): %s",
-                    frame.get("code"),
-                    frame.get("retryable"),
-                    frame.get("message"),
-                )
-                continue
-            if kind == "event":
-                if "payload" not in frame:
-                    await self._send_error(
-                        process,
-                        "unsupported",
-                        "this runtime stores payloads inline; "
-                        "payload_hash events are not accepted in v0",
-                    )
-                    continue
-                self._unacked.add(frame["id"])
-                if len(self._unacked) > ack_window:
-                    raise _ChildFailed(
-                        f"ack window exceeded: {len(self._unacked)} unacked "
-                        f"events for a window of {ack_window}"
-                    )
-                yield WireEvent(
-                    id=frame["id"],
-                    type=frame["type"],
-                    schema=frame["schema"],
-                    payload=frame["payload"],
-                    caused_by=frame.get("caused_by"),
-                    session_id=frame.get("session_id"),
-                    ts=frame["ts"],
-                )
-                continue
-            await self._send_error(
-                process, "protocol", f"unexpected kind {kind!r} after handshake"
+            event = await self._dispatch_frame(process, frame, ack_window)
+            if event is not None:
+                yield event
+
+    async def _dispatch_frame(
+        self,
+        process: asyncio.subprocess.Process,
+        frame: dict[str, Any],
+        ack_window: int,
+    ) -> WireEvent | None:
+        kind = frame["kind"]
+        if kind == "heartbeat":
+            return None
+        if kind == "call_result":
+            self._resolve_call(frame)
+            return None
+        if kind == "error":
+            logger.warning(
+                "source child reported %s (retryable=%s): %s",
+                frame.get("code"),
+                frame.get("retryable"),
+                frame.get("message"),
             )
-            raise _ChildFailed(f"child sent unexpected kind {kind!r}")
+            return None
+        if kind == "event":
+            if "payload" not in frame:
+                await self._send_error(
+                    process,
+                    "unsupported",
+                    "this runtime stores payloads inline; "
+                    "payload_hash events are not accepted in v0",
+                )
+                return None
+            self._unacked.add(frame["id"])
+            if len(self._unacked) > ack_window:
+                raise _ChildFailed(
+                    f"ack window exceeded: {len(self._unacked)} unacked "
+                    f"events for a window of {ack_window}"
+                )
+            return WireEvent(
+                id=frame["id"],
+                type=frame["type"],
+                schema=frame["schema"],
+                payload=frame["payload"],
+                caused_by=frame.get("caused_by"),
+                session_id=frame.get("session_id"),
+                ts=frame["ts"],
+            )
+        await self._send_error(
+            process, "protocol", f"unexpected kind {kind!r} after handshake"
+        )
+        raise _ChildFailed(f"child sent unexpected kind {kind!r}")
 
     async def _handshake(
         self,

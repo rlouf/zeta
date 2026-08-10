@@ -1,0 +1,2 @@
+bad_role
+`role` must be one of `source`, `tool`, `provider` (spec §5.2).

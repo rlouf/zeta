@@ -1,0 +1,2 @@
+bad_heartbeat_secs
+`heartbeat_secs` must be a number in [1, 300] (spec §5.1).

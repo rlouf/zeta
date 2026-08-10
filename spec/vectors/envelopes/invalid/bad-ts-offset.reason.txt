@@ -1,0 +1,2 @@
+bad_timestamp
+`ts` must be RFC 3339 UTC with the `Z` designator; numeric offsets are invalid in v0 (spec §3).

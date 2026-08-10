@@ -1,0 +1,2 @@
+missing_field:kind
+Every envelope must carry `kind` (spec §3).

@@ -1,0 +1,2 @@
+bad_payload_hash
+`payload_hash` must be `b3:` plus exactly 64 lowercase hex characters (spec §6, §11).

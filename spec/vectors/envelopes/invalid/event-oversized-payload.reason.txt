@@ -1,0 +1,2 @@
+payload_too_large
+The canonical serialization of `payload` exceeds 65536 bytes, so the event must use `payload_hash` (spec §6).

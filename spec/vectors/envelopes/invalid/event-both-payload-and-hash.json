@@ -1,0 +1,1 @@
+{"caused_by":null,"id":"b3:ab9c49c6c7e692289013425f630a73a37c058f9466ed8d794f0521536d01155e","kind":"event","payload":{"dir":"/p/inbox","name":"todo.txt","path":"/p/inbox/todo.txt"},"payload_hash":"b3:4efe98c33adb809184390876e3000446e40748e3cb7493a0688497a25f434bc4","schema":"file.created@1","session_id":null,"ts":"2026-08-10T12:00:01Z","type":"file.created","v":0}

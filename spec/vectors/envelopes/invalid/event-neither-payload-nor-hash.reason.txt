@@ -1,0 +1,2 @@
+payload_choice
+An event must carry exactly one of `payload` and `payload_hash`; this one carries neither (spec §6).

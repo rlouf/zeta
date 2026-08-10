@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import importlib.util
 import json
+import logging
 import sys
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field, replace
@@ -13,7 +14,6 @@ from importlib.resources import as_file, files
 from pathlib import Path
 from typing import Any, cast
 
-import yaml
 from connectors import EventConnector, EventConnectorRegistry
 
 from zeta.authoring.manifest import Manifest
@@ -28,13 +28,14 @@ from zeta.authoring.spec import (
 )
 from zeta.capabilities.executors import ToolExecutorProviderRegistry
 
+logger = logging.getLogger(__name__)
+
 
 class ResourceError(ValueError):
     """Raised when a flat authored-agent resource is invalid."""
 
 
 EVENT_CONNECTOR_ENTRY_POINT_GROUP = "zeta.event_connectors"
-EVENT_CONNECTOR_CONFIG_FILE = "connectors.yaml"
 
 
 @dataclass(frozen=True)
@@ -157,21 +158,31 @@ def load_connector_registry(
     connector_names: Iterable[str] | None = None,
     entry_points: Iterable[Any] | None = None,
 ) -> EventConnectorRegistry:
+    """Register every installed connector, plus the project's own modules.
+
+    Installation is enablement: an entry point in the environment or a
+    module under ``agents/connectors/`` registers without any further
+    configuration. `connector_names` is the process-level allowlist
+    (``zeta serve --connectors``) for narrowing one runtime.
+    """
     allowed = set(connector_names) if connector_names is not None else None
     registry = EventConnectorRegistry()
 
-    enabled = enabled_event_connector_ids(agents_dir)
-    if allowed is not None:
-        enabled = tuple(name for name in enabled if name in allowed)
     for entry_point in event_connector_entry_points(entry_points):
-        if entry_point.name not in enabled:
+        if allowed is not None and entry_point.name not in allowed:
             continue
-        connector = load_entry_point_event_connector(entry_point)
-        if connector.id != entry_point.name:
-            raise ResourceError(
-                f"event connector entry point {entry_point.name!r} returned "
-                f"connector id {connector.id!r}"
-            )
+        try:
+            connector = load_entry_point_event_connector(entry_point)
+            if connector.id != entry_point.name:
+                raise ResourceError(
+                    f"event connector entry point {entry_point.name!r} returned "
+                    f"connector id {connector.id!r}"
+                )
+        except Exception as exc:
+            # An installed connector that cannot construct itself (usually
+            # missing credentials) must not poison unrelated projects.
+            logger.warning("skipping event connector %r: %s", entry_point.name, exc)
+            continue
         register_event_connector(registry, connector)
 
     for connector in load_directory_event_connectors(agents_dir):
@@ -246,37 +257,6 @@ def resolve_module_event_connector(module: Any, path: Path) -> EventConnector:
     raise ResourceError(
         f"connector module {path} exposes no EventConnector instance or factory"
     )
-
-
-def enabled_event_connector_ids(agents_dir: Path) -> tuple[str, ...]:
-    path = agents_dir / EVENT_CONNECTOR_CONFIG_FILE
-    if not path.exists():
-        return ()
-    try:
-        raw = yaml.safe_load(path.read_text(encoding="utf-8"))
-    except yaml.YAMLError as exc:
-        raise ResourceError(f"invalid event connector config {path}: {exc}") from exc
-    except OSError as exc:
-        raise ResourceError(f"I/O error reading {path}: {exc}") from exc
-    if not isinstance(raw, Mapping):
-        raise ResourceError(f"invalid event connector config {path}: expected object")
-    unknown = sorted(set(raw) - {"event_connectors"})
-    if unknown:
-        raise ResourceError(
-            f"invalid event connector config {path}: unsupported field {unknown[0]!r}"
-        )
-    connectors = raw.get("event_connectors")
-    if connectors is None:
-        raise ResourceError(
-            f"invalid event connector config {path}: event_connectors is required"
-        )
-    if not isinstance(connectors, list | tuple) or not all(
-        isinstance(connector, str) and connector for connector in connectors
-    ):
-        raise ResourceError(
-            f"invalid event connector config {path}: event_connectors must be a list of strings"
-        )
-    return tuple(connectors)
 
 
 def event_connector_entry_points(

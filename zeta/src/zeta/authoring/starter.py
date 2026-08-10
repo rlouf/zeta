@@ -9,11 +9,6 @@ import yaml
 
 from zeta.authoring.spec import SpecError, load_spec
 
-CONNECTORS_CONFIG = """\
-event_connectors:
-  - filesystem
-"""
-
 GITIGNORE = ".zeta/\n"
 
 INBOX_SUMMARIZER_BODY = """\
@@ -41,10 +36,6 @@ def scaffold_inbox_summarizer_project(project_root: Path) -> Path:
         (root / "agents").mkdir(parents=True)
         (root / "inbox").mkdir()
         (root / "summaries").mkdir()
-        (root / "agents" / "connectors.yaml").write_text(
-            CONNECTORS_CONFIG,
-            encoding="utf-8",
-        )
         agent.write_text(content, encoding="utf-8")
         (root / ".gitignore").write_text(GITIGNORE, encoding="utf-8")
     except OSError as exc:

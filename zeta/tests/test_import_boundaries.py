@@ -43,6 +43,19 @@ FORBIDDEN_DEPENDENCIES = {
         "rpc",
     },
     "tools": {"authoring", "cli", "harness", "loop", "rpc"},
+    "wire": {
+        "authoring",
+        "capabilities",
+        "cli",
+        "context",
+        "harness",
+        "journal",
+        "loop",
+        "models",
+        "rpc",
+        "tools",
+        "trace",
+    },
 }
 
 # Leaf modules derive values and hold no state. They import nothing from Zeta,

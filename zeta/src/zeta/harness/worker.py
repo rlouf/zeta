@@ -28,8 +28,10 @@ from zeta.capabilities.registry import CapabilityRegistry
 from zeta.events import Event
 from zeta.harness.connector_bridge import (
     handle_push_ingress_request,
+    ipc_ingress_connector_ids,
     project_egress_executors,
     run_ingress_forever,
+    run_ipc_ingress_forever,
 )
 from zeta.harness.dispatch import QueueingDispatcher
 from zeta.harness.ingress import run_push_ingress_forever
@@ -518,8 +520,16 @@ async def run_forever(
     stop_event: asyncio.Event | None = None,
 ) -> None:
     running: set[asyncio.Task[str]] = set()
+    ipc_connector_ids = ipc_ingress_connector_ids(runtime)
     ingress_task = start_ingress_task(
         runtime,
+        poll_interval_seconds=poll_interval_seconds,
+        stop_event=stop_event,
+        skip_connector_ids=ipc_connector_ids,
+    )
+    ipc_ingress_task = start_ipc_ingress_task(
+        runtime,
+        connector_ids=ipc_connector_ids,
         poll_interval_seconds=poll_interval_seconds,
         stop_event=stop_event,
     )
@@ -539,6 +549,7 @@ async def run_forever(
         )
     finally:
         await stop_ingress_task(ingress_task)
+        await stop_ingress_task(ipc_ingress_task)
         await stop_ingress_task(push_ingress_task)
         await log_worker_results(running)
 
@@ -548,12 +559,33 @@ def start_ingress_task(
     *,
     poll_interval_seconds: float,
     stop_event: asyncio.Event | None,
+    skip_connector_ids: frozenset[str] = frozenset(),
 ) -> asyncio.Task[None] | None:
     if runtime.registry is None or not runtime.registry.has_ingress_connectors():
         return None
     return asyncio.create_task(
         run_ingress_forever(
             runtime,
+            poll_interval_seconds=poll_interval_seconds,
+            stop_event=stop_event,
+            skip_connector_ids=skip_connector_ids,
+        )
+    )
+
+
+def start_ipc_ingress_task(
+    runtime: WorkerServices,
+    *,
+    connector_ids: frozenset[str],
+    poll_interval_seconds: float,
+    stop_event: asyncio.Event | None,
+) -> asyncio.Task[None] | None:
+    if not connector_ids:
+        return None
+    return asyncio.create_task(
+        run_ipc_ingress_forever(
+            runtime,
+            connector_ids=connector_ids,
             poll_interval_seconds=poll_interval_seconds,
             stop_event=stop_event,
         )

@@ -214,7 +214,6 @@ Zeta reads agent definitions from a flat `agents/` directory in the project root
 agents/
   release-manager.md
   support-triage.md
-  connectors.yaml
   events/
     github.pr.opened.json
     release.summary.ready.json
@@ -398,8 +397,8 @@ sessions can run at the same time.
 ### Scaffolding
 
 `zeta new <path>` creates an empty project with the default Inbox Summarizer.
-It creates the agent, its inbox, its summary folder, the filesystem connector,
-and a `.gitignore` file for runtime state:
+It creates the agent, its inbox, its summary folder, and a `.gitignore` file
+for runtime state; the bundled filesystem connector registers automatically:
 
 ```sh
 zeta new ~/zeta-demo
@@ -569,17 +568,22 @@ is the skill name, and agents opt in with `skills:`.
 ## Connectors
 
 Connectors contribute event schemas, ingress, push ingress, egress, and filter
-schemas. Installed connector packages are discovered through the
-`zeta.event_connectors` entry point group, but a project must enable them in
-`agents/connectors.yaml`:
-
-```yaml
-event_connectors:
-  - slack
-```
+schemas. Installation is enablement: every connector discovered through the
+`zeta.event_connectors` entry point group registers in every project, as do
+modules dropped under `agents/connectors/`. An installed connector that cannot
+construct itself (usually missing credentials) is skipped with a warning
+instead of failing the project. `zeta serve --connectors` narrows one runtime
+process to an explicit allowlist.
 
 Connector-provided event schemas are merged with `agents/events/`. Duplicate
 schemas must be identical.
+
+Connectors with a wire-v0 implementation — the filesystem connector, in this
+phase — run their ingress as supervised subprocesses speaking the protocol in
+`spec/wire-v0.md`: the runtime spawns one child per ingress binding, validates
+and journals its events, and restarts it with capped backoff when it dies.
+Connectors without a subprocess implementation keep their in-process ingress
+until they grow a wire-v0 child.
 
 Connector options live on the event entries they configure:
 
@@ -640,14 +644,8 @@ Zeta returns a retryable failure when a media download fails.
 The bundled Pushover connector sends notifications to the Pushover app. The
 app can show a notification on an iPhone and a paired Apple Watch.
 
-Enable the connector in `agents/connectors.yaml`:
-
-```yaml
-event_connectors:
-  - pushover
-```
-
-Set these environment variables:
+The connector registers automatically once the package is installed. Set
+these environment variables:
 
 - `PUSHOVER_API_TOKEN` is the application API token.
 - `PUSHOVER_USER_KEY` is the user or group key.

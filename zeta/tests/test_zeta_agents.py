@@ -34,7 +34,6 @@ from zeta.authoring.manifest import (
 from zeta.authoring.prompts import TemplateError, render_prompt, validate_prompt
 from zeta.authoring.resources import (
     ResourceError,
-    enabled_event_connector_ids,
     event_connector_entry_points,
     load_agent_project,
     load_connector_registry,
@@ -121,7 +120,6 @@ zeta_agents = SimpleNamespace(
     compile_agent_definition=compile_agent_definition,
     compile_agent_definitions=compile_agent_definitions,
     config_for_spec=config_for_spec,
-    enabled_event_connector_ids=enabled_event_connector_ids,
     event_connector_entry_points=event_connector_entry_points,
     load_connector_registry=load_connector_registry,
     load_agent_project=load_agent_project,
@@ -1237,38 +1235,6 @@ def test_zeta_agent_resource_loaders_read_flat_skills_and_events(
     }
 
 
-def test_zeta_agent_project_reads_enabled_event_connector_ids(tmp_path: Path) -> None:
-    agents_dir = tmp_path / "agents"
-    agents_dir.mkdir()
-    (agents_dir / "connectors.yaml").write_text(
-        "event_connectors:\n  - slack\n  - github\n",
-        encoding="utf-8",
-    )
-
-    assert zeta_agents.enabled_event_connector_ids(agents_dir) == ("slack", "github")
-
-
-@pytest.mark.parametrize(
-    ("content", "message"),
-    [
-        ("event_connectors: slack\n", "event_connectors"),
-        ("event_connectors:\n  - slack\n  - 1\n", "event_connectors"),
-        ("connectors:\n  - slack\n", "unsupported field 'connectors'"),
-    ],
-)
-def test_zeta_agent_project_rejects_invalid_event_connector_config(
-    tmp_path: Path,
-    content: str,
-    message: str,
-) -> None:
-    agents_dir = tmp_path / "agents"
-    agents_dir.mkdir()
-    (agents_dir / "connectors.yaml").write_text(content, encoding="utf-8")
-
-    with pytest.raises(zeta_agents.ResourceError, match=message):
-        zeta_agents.enabled_event_connector_ids(agents_dir)
-
-
 def test_zeta_event_connector_registry_registers_and_resolves_connectors() -> None:
     slack = _slack_connector()
     github = zeta_agents.EventConnector(
@@ -1337,15 +1303,11 @@ def test_zeta_event_connector_registry_lists_push_ingress_connectors() -> None:
     assert registry.push_ingress_connectors() == {"slack": slack}
 
 
-def test_zeta_load_connector_registry_loads_only_enabled_entry_points(
+def test_zeta_load_connector_registry_loads_every_installed_entry_point(
     tmp_path: Path,
 ) -> None:
     agents_dir = tmp_path / "agents"
     agents_dir.mkdir()
-    (agents_dir / "connectors.yaml").write_text(
-        "event_connectors:\n  - slack\n",
-        encoding="utf-8",
-    )
     slack = _slack_connector()
     github = zeta_agents.EventConnector(
         id="github",
@@ -1358,7 +1320,7 @@ def test_zeta_load_connector_registry_loads_only_enabled_entry_points(
     )
 
     assert registry.resolve("slack") == slack
-    assert registry.resolve("github") is None
+    assert registry.resolve("github") == github
 
 
 def test_zeta_load_connector_registry_honors_process_allowlist(
@@ -1366,10 +1328,6 @@ def test_zeta_load_connector_registry_honors_process_allowlist(
 ) -> None:
     agents_dir = tmp_path / "agents"
     agents_dir.mkdir()
-    (agents_dir / "connectors.yaml").write_text(
-        "event_connectors:\n  - slack\n  - github\n",
-        encoding="utf-8",
-    )
     slack = _slack_connector()
     github = zeta_agents.EventConnector(
         id="github",
@@ -1670,10 +1628,6 @@ def test_zeta_agent_project_uses_enabled_event_connector_entry_points(
 ) -> None:
     agents_dir = tmp_path / "agents"
     agents_dir.mkdir()
-    (agents_dir / "connectors.yaml").write_text(
-        "event_connectors:\n  - slack\n",
-        encoding="utf-8",
-    )
     _write_spec(
         agents_dir / "support.md",
         """---
@@ -3300,9 +3254,6 @@ def test_zeta_entry_point_and_directory_connectors_load_together(
 ) -> None:
     agents = tmp_path / "agents"
     agents.mkdir()
-    (agents / "connectors.yaml").write_text(
-        "event_connectors:\n  - ep\n", encoding="utf-8"
-    )
     _write_connector_module(agents, "myfs.py", _CONNECTOR_FACTORY_MODULE)
     ep_connector = EventConnector(
         id="ep",

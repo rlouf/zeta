@@ -137,7 +137,6 @@ Put project event schemas in `agents/events/`.
 
 ```text
 agents/
-  connectors.yaml
   release-digest.md
   announcer.md
   events/

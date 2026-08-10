@@ -10,7 +10,9 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import json
 import logging
+import sys
 from collections.abc import Iterable, Mapping
 from typing import TYPE_CHECKING, Any, cast
 
@@ -22,6 +24,7 @@ from connectors import (
 )
 from jsonschema import Draft202012Validator
 
+from zeta._version import __version__
 from zeta.authoring.manifest import egress_bindings, ingress_bindings
 from zeta.authoring.resources import (
     AgentProject,
@@ -35,6 +38,7 @@ from zeta.harness.routing import (
     ExecutableAgent,
 )
 from zeta.harness.templates import render_template
+from zeta.wire.host import SourceCommand, SubprocessSource, WireEvent
 
 if TYPE_CHECKING:
     from zeta.harness.worker import WorkerServices
@@ -224,13 +228,17 @@ def effect_event_draft(
     )
 
 
-async def run_ingress_once(runtime: WorkerServices) -> int:
+async def run_ingress_once(
+    runtime: WorkerServices,
+    *,
+    skip_connector_ids: frozenset[str] = frozenset(),
+) -> int:
     project = runtime.project_snapshot.project
     inserted = 0
     for spec in project.specs:
         for binding in ingress_bindings(spec):
             connector = project.connectors.connector_for_event(binding.event)
-            if connector is None:
+            if connector is None or connector.id in skip_connector_ids:
                 continue
             handler = connector.ingress.get(binding.event)
             if handler is None:
@@ -266,13 +274,139 @@ async def run_ingress_forever(
     *,
     poll_interval_seconds: float = 1.0,
     stop_event: asyncio.Event | None = None,
+    skip_connector_ids: frozenset[str] = frozenset(),
 ) -> None:
     while stop_event is None or not stop_event.is_set():
         try:
-            await run_ingress_once(runtime)
+            await run_ingress_once(runtime, skip_connector_ids=skip_connector_ids)
         except Exception:
             logger.exception("ingress polling failed")
         await asyncio.sleep(poll_interval_seconds)
+
+
+IPC_SOURCE_CONNECTOR_IDS = frozenset({"filesystem"})
+
+
+def ipc_ingress_connector_ids(runtime: WorkerServices) -> frozenset[str]:
+    """Return the connectors whose ingress runs as a wire-v0 subprocess.
+
+    Connectors with a subprocess implementation always run over IPC;
+    everything else stays on the in-process path until it grows a
+    wire-v0 child.
+    """
+    if runtime.registry is None:
+        return frozenset()
+    return IPC_SOURCE_CONNECTOR_IDS & set(runtime.registry.connectors)
+
+
+def fs_child_command(
+    binding: IngressBinding,
+    *,
+    poll_interval_seconds: float,
+) -> SourceCommand:
+    config = {
+        "watches": [dict(binding.filter)],
+        "poll_interval": poll_interval_seconds,
+    }
+    return SourceCommand(
+        (sys.executable, "-m", "zeta.wire.fs_inbox", json.dumps(config))
+    )
+
+
+async def run_ipc_ingress_forever(
+    runtime: WorkerServices,
+    *,
+    connector_ids: frozenset[str],
+    poll_interval_seconds: float = 1.0,
+    stop_event: asyncio.Event | None = None,
+) -> None:
+    """Supervise one wire-v0 child per IPC ingress binding."""
+    project = runtime.project_snapshot.project
+    tasks = []
+    for spec in project.specs:
+        for binding in ingress_bindings(spec):
+            connector = project.connectors.connector_for_event(binding.event)
+            if connector is None or connector.id not in connector_ids:
+                continue
+            tasks.append(
+                asyncio.create_task(
+                    run_ipc_binding_forever(
+                        runtime,
+                        binding,
+                        connector_id=connector.id,
+                        poll_interval_seconds=poll_interval_seconds,
+                    )
+                )
+            )
+    if not tasks:
+        return
+    try:
+        if stop_event is None:
+            await asyncio.gather(*tasks)
+        else:
+            await stop_event.wait()
+    finally:
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+
+async def run_ipc_binding_forever(
+    runtime: WorkerServices,
+    binding: IngressBinding,
+    *,
+    connector_id: str,
+    poll_interval_seconds: float,
+) -> None:
+    command = fs_child_command(binding, poll_interval_seconds=poll_interval_seconds)
+    async with SubprocessSource(command, runtime_id=f"zeta-os/{__version__}") as source:
+        async for wire_event in source.events():
+            try:
+                accepted = accept_ipc_event(runtime, binding, wire_event)
+            except Exception:
+                logger.exception(
+                    "rejecting event %s from connector %r",
+                    wire_event.id,
+                    connector_id,
+                )
+                continue
+            if accepted:
+                await source.ack(wire_event.id)
+
+
+def accept_ipc_event(
+    runtime: WorkerServices,
+    binding: IngressBinding,
+    wire_event: WireEvent,
+) -> bool:
+    """Journal one subprocess event exactly like the in-process path."""
+    if wire_event.type != binding.event:
+        logger.warning(
+            "ipc ingress event %r does not match binding %r",
+            wire_event.type,
+            binding.event,
+        )
+        return False
+    project = runtime.project_snapshot.project
+    draft = DraftEvent(
+        wire_event.type,
+        "filesystem",
+        wire_event.payload,
+        caused_by=wire_event.caused_by,
+        session_id=wire_event.session_id,
+    )
+    validate_event_payload(project.events, draft)
+    runtime.events.accept(
+        DraftEvent(
+            draft.event_type,
+            draft.source,
+            draft.payload,
+            idempotency_key=ingress_idempotency_key(binding, draft),
+            caused_by=draft.caused_by,
+            session_id=draft.session_id,
+        )
+    )
+    return True
 
 
 async def handle_push_ingress_request(

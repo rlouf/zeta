@@ -82,9 +82,7 @@ def test_zeta_new_scaffolds_inbox_summarizer_project(tmp_path: Path) -> None:
     assert spec.base_dir == root
     assert spec.accepts == ("file.created",)
     assert spec.tools == ("read", "write")
-    assert (root / "agents" / "connectors.yaml").read_text() == (
-        "event_connectors:\n  - filesystem\n"
-    )
+    assert not (root / "agents" / "connectors.yaml").exists()
     assert (root / "inbox").is_dir()
     assert (root / "summaries").is_dir()
     assert (root / ".gitignore").read_text() == ".zeta/\n"

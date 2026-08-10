@@ -5,10 +5,15 @@ import json
 from pathlib import Path
 
 import pytest
+
 from zeta import addresses
 
 VECTORS_PATH = (
-    Path(__file__).resolve().parents[2] / "spec" / "vectors" / "addresses" / "vectors.json"
+    Path(__file__).resolve().parents[2]
+    / "spec"
+    / "vectors"
+    / "addresses"
+    / "vectors.json"
 )
 
 

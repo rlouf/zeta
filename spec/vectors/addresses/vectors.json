@@ -1,0 +1,133 @@
+{
+  "format": "b3-derive-key-v0",
+  "description": "BLAKE3 derive_key(context, input) -> 'b3:' + 64 lowercase hex. Input bytes are given as UTF-8 text (input_utf8) or base64 (input_base64).",
+  "contexts": {
+    "event": "zeta-os 2026-08 cas event",
+    "blob": "zeta-os 2026-08 cas blob",
+    "chain": "zeta-os 2026-08 cas chain",
+    "prompt": "zeta-os 2026-08 cas prompt",
+    "skill": "zeta-os 2026-08 cas skill"
+  },
+  "vectors": [
+    {
+      "domain": "event",
+      "name": "empty",
+      "input_utf8": "",
+      "address": "b3:3006237aab45b8fdb54db23f100e83617d7e7647cb593b07e6ab23b2a96acd59"
+    },
+    {
+      "domain": "event",
+      "name": "ascii",
+      "input_utf8": "hello wire",
+      "address": "b3:58f13d27b86b4f2a4c91f2fb57a3be96d7fe08e4f57c63ae1fb8997a83071fce"
+    },
+    {
+      "domain": "event",
+      "name": "utf8",
+      "input_utf8": "héllo wörld ✓",
+      "address": "b3:710dcf65e7b7059c4ef0fbcc0164c6c8a53e15ac51b3b0a25ff96e5e710f3ecd"
+    },
+    {
+      "domain": "event",
+      "name": "binary",
+      "input_base64": "AAcOFRwjKjE4P0ZNVFtiaXB3foWMk5qhqK+2vcTL0tng5+71/A==",
+      "address": "b3:8ff4eae77476dc8a5ae7824e9acee734a34033ddf6c6eb5023871e79dc904778"
+    },
+    {
+      "domain": "blob",
+      "name": "empty",
+      "input_utf8": "",
+      "address": "b3:c496a6800619f120c7328937265c0015abcd2ef109cbc626c22d562442e7939d"
+    },
+    {
+      "domain": "blob",
+      "name": "ascii",
+      "input_utf8": "hello wire",
+      "address": "b3:2088cca19d9709fefea33eb9e0d590c33567df2ed4c162020ae6f93db71217e8"
+    },
+    {
+      "domain": "blob",
+      "name": "utf8",
+      "input_utf8": "héllo wörld ✓",
+      "address": "b3:517332d274f54d6324c640174499bb34f3ba03682c04ce6ba709dce3ed4ecf69"
+    },
+    {
+      "domain": "blob",
+      "name": "binary",
+      "input_base64": "AAcOFRwjKjE4P0ZNVFtiaXB3foWMk5qhqK+2vcTL0tng5+71/A==",
+      "address": "b3:5f10d1f3292161880e7ff11007955ea9b8a6fe27c81ea7ad483b173f09c9732a"
+    },
+    {
+      "domain": "chain",
+      "name": "empty",
+      "input_utf8": "",
+      "address": "b3:e456f6a721485d35c57a6819c418be11b91de448f5dad5ced77fe936fbb3fa07"
+    },
+    {
+      "domain": "chain",
+      "name": "ascii",
+      "input_utf8": "hello wire",
+      "address": "b3:e03e60693ffa4a45e78b42e9e14bc757bee74a92724354d3484e1287123680e5"
+    },
+    {
+      "domain": "chain",
+      "name": "utf8",
+      "input_utf8": "héllo wörld ✓",
+      "address": "b3:19e4756499cad13361dbaa37a9ff54010d3f75929ca13a0589685d0d71ecf48c"
+    },
+    {
+      "domain": "chain",
+      "name": "binary",
+      "input_base64": "AAcOFRwjKjE4P0ZNVFtiaXB3foWMk5qhqK+2vcTL0tng5+71/A==",
+      "address": "b3:855adacaa5f5de5b70696af7a293d90d5f23d1b2c957162dd871c0f98ba2aa8f"
+    },
+    {
+      "domain": "prompt",
+      "name": "empty",
+      "input_utf8": "",
+      "address": "b3:4d64c6bc5b57f295c5f0c349efa2375b9495529be504b61a406db7ef262795a1"
+    },
+    {
+      "domain": "prompt",
+      "name": "ascii",
+      "input_utf8": "hello wire",
+      "address": "b3:d238ebb8f3f8533d66997c5b93e250ad3511f58518fe683af87bcee5a1564ee4"
+    },
+    {
+      "domain": "prompt",
+      "name": "utf8",
+      "input_utf8": "héllo wörld ✓",
+      "address": "b3:1ddd546fd96bc0366b4291b74cea26b9a7caa759403992f2b8c4b301c5ebe290"
+    },
+    {
+      "domain": "prompt",
+      "name": "binary",
+      "input_base64": "AAcOFRwjKjE4P0ZNVFtiaXB3foWMk5qhqK+2vcTL0tng5+71/A==",
+      "address": "b3:5187922ec6089842bfe0cab1b5be2bc8bb94185cd900ec5300a39dc077363d78"
+    },
+    {
+      "domain": "skill",
+      "name": "empty",
+      "input_utf8": "",
+      "address": "b3:8672ab77421b00153cf6e4157d1af16e7e8d003b4d4708a879c2c97dd150c010"
+    },
+    {
+      "domain": "skill",
+      "name": "ascii",
+      "input_utf8": "hello wire",
+      "address": "b3:bc2a1eb20c08d97bb794e77e13c639b0942e19d4f72b017260815b22363a7533"
+    },
+    {
+      "domain": "skill",
+      "name": "utf8",
+      "input_utf8": "héllo wörld ✓",
+      "address": "b3:ac87def2cb6dcdbfd496e80fdcc21541ea9483b080371c1dba957200d483015d"
+    },
+    {
+      "domain": "skill",
+      "name": "binary",
+      "input_base64": "AAcOFRwjKjE4P0ZNVFtiaXB3foWMk5qhqK+2vcTL0tng5+71/A==",
+      "address": "b3:497c1fd35530e2a8431df1bf4a0a9d31df262bdf598b9321c11556733ae95806"
+    }
+  ]
+}

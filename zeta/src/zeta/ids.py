@@ -27,14 +27,17 @@ either **claimed in advance** or **derived** from the attempt:
 `run_id_for_attempt` states the rule that joins them. The harness adopts a
 claimed id when the triggering event carries one, and derives one otherwise.
 
-This module holds string derivation only. It imports nothing from Zeta, so any
-layer may use it.
+This module holds string derivation only. It imports only `zeta.addresses`
+(itself a leaf), so any layer may use it. Handles minted before the `b3:` epoch
+carry a bare truncated sha256 digest; they stay valid wherever handles are
+compared.
 """
 
 from __future__ import annotations
 
 import uuid
-from hashlib import sha256
+
+from zeta.addresses import chain_address
 
 QUEUE_ITEM_PREFIX = "qi_"
 ATTEMPT_PREFIX = "att_"
@@ -99,7 +102,7 @@ def publish_event_handle(queue_item_id_value: str, position: int) -> str:
     the same requested event.
     """
     identity = f"{queue_item_id_value}:{position}".encode()
-    return f"{PUBLISH_EVENT_PREFIX}{sha256(identity).hexdigest()[:24]}"
+    return f"{PUBLISH_EVENT_PREFIX}{chain_address(identity)}"
 
 
 def wait_handle(queue_item_id_value: str, position: int) -> str:
@@ -108,7 +111,7 @@ def wait_handle(queue_item_id_value: str, position: int) -> str:
     The queue item and call position keep the handle stable across retries.
     """
     identity = f"{queue_item_id_value}:{position}".encode()
-    return f"{WAIT_PREFIX}{sha256(identity).hexdigest()[:24]}"
+    return f"{WAIT_PREFIX}{chain_address(identity)}"
 
 
 def agent_session_id(agent_id: str, suffix: str | None) -> str:

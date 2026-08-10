@@ -605,7 +605,7 @@ def test_zeta_trace_read_only_inspection_sees_live_wal(tmp_path: Path) -> None:
         trace_store.close()
 
     assert result.exit_code == 0
-    assert prompt_id.removeprefix("sha256:")[:8] in result.output
+    assert prompt_id.split(":", 1)[1][:8] in result.output
     assert sessions == ["default"]
 
 

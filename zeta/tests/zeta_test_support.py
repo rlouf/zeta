@@ -324,7 +324,7 @@ def assert_structural_trim_payload(
     assert payload["trimmed"] is True
     assert payload["trim_method"] == "structural"
     assert payload["tool_call_id"] == call_id
-    assert payload["source_object_id"].startswith("sha256:")
+    assert payload["source_object_id"].startswith(("b3:", "sha256:"))
     assert payload["tool_result"]["metadata"] == metadata
     assert payload["tool_result"]["content"][0]["text_lines"] == text_lines
 

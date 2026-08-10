@@ -12,6 +12,7 @@ from typing import Any
 
 from connectors import EventConnector, EventConnectorRegistry
 
+from zeta import addresses
 from zeta._version import __version__
 from zeta.authoring.resources import (
     AgentProject,
@@ -554,10 +555,15 @@ def skill_from_manifest(name: str, value: Any) -> SkillResource:
     if not isinstance(value, Mapping):
         raise ProjectSnapshotUnavailable("project snapshot has invalid skill")
     body = str(value["body"])
-    sha256 = str(value["sha256"])
-    if hashlib.sha256(body.encode()).hexdigest() != sha256:
+    recorded = str(value["sha256"])
+    minted = (
+        addresses.skill_address(body.encode())
+        if not addresses.is_legacy(recorded)
+        else hashlib.sha256(body.encode()).hexdigest()
+    )
+    if minted != recorded:
         raise ProjectSnapshotUnavailable(f"recorded skill {name!r} failed verification")
-    return SkillResource(name, Path(str(value["path"])), body, sha256)
+    return SkillResource(name, Path(str(value["path"])), body, recorded)
 
 
 def agent_manifest(spec: AgentSpec) -> dict[str, Any]:

@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 from dataclasses import dataclass, field
 from typing import Any
+
+from zeta.addresses import prompt_address
 
 ObjectId = str
 RefName = str
@@ -40,8 +41,7 @@ class Object:
             separators=(",", ":"),
             allow_nan=False,
         )
-        digest = hashlib.sha256(content.encode()).hexdigest()
-        return f"sha256:{digest}"
+        return prompt_address(content.encode())
 
 
 @dataclass(frozen=True)
@@ -73,7 +73,7 @@ class Derivation:
             separators=(",", ":"),
             allow_nan=False,
         )
-        digest = hashlib.sha256(content.encode()).hexdigest()
+        digest = prompt_address(content.encode()).removeprefix("b3:")
         return f"derivation:{digest}"
 
 

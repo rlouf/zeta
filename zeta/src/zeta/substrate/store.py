@@ -91,9 +91,9 @@ class Store(Protocol):
 def resolve_object_id(store: Store, token: str) -> ObjectId:
     """Resolve a ref name, full object id, or unique id prefix to an object id.
 
-    A bare hex token matches the digest part, so `sha256:` never needs
-    typing. Refs win over prefixes; an ambiguous prefix raises with the
-    candidate ids.
+    A bare hex token matches the digest part of both address epochs, so
+    `b3:` and `sha256:` never need typing. Refs win over prefixes; an
+    ambiguous prefix raises with the candidate ids.
     """
     if not token:
         raise UnknownIdError(token)
@@ -102,8 +102,15 @@ def resolve_object_id(store: Store, token: str) -> ObjectId:
         return ref_target.object_id
     if store.get_object(token) is not None:
         return token
-    prefix = token if token.startswith("sha256:") else f"sha256:{token}"
-    candidates = store.object_ids_with_prefix(prefix)
+    if token.startswith(("b3:", "sha256:")):
+        prefixes = [token]
+    else:
+        prefixes = [f"b3:{token}", f"sha256:{token}"]
+    candidates = [
+        candidate
+        for prefix in prefixes
+        for candidate in store.object_ids_with_prefix(prefix)
+    ]
     if len(candidates) == 1:
         return candidates[0]
     if candidates:

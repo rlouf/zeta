@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import importlib.util
 import json
 import logging
@@ -16,6 +15,7 @@ from typing import Any, cast
 
 from connectors import EventConnector, EventConnectorRegistry
 
+from zeta.addresses import skill_address
 from zeta.authoring.manifest import Manifest
 from zeta.authoring.schemas import EventRegistry, EventRegistryError
 from zeta.authoring.spec import (
@@ -308,7 +308,7 @@ def load_skill_registry(agents_dir: Path) -> SkillRegistry:
             name,
             path,
             body,
-            hashlib.sha256(body.encode()).hexdigest(),
+            skill_address(body.encode()),
         )
     return SkillRegistry(skills)
 

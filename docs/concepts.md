@@ -93,6 +93,7 @@ depends downward only.
 src/zeta/
   events.py       Event and DraftEvent, the core vocabulary
   effects.py      delivery contracts for external work
+  addresses.py    b3: content addresses, one frozen context per domain
   ids.py          the derived id rules: queue item, attempt, run, session
   paths.py        the user configuration root
 
@@ -115,8 +116,9 @@ src/connectors/   ingress and egress, the third-party extension surface
 
 Two rules hold the shape, and `test_import_boundaries.py` asserts both:
 
-- `substrate`, `ids`, and `paths` are leaves. They import nothing from Zeta, so
-  any layer may use them.
+- `substrate`, `addresses`, `ids`, and `paths` are leaves. They import only
+  the standard library, the blake3 address hash, and each other, so any layer
+  may use them.
 - `connectors` sees `zeta.events` and `zeta.effects` and nothing else, so an
   installed connector cannot reach into the runtime.
 

@@ -70,7 +70,7 @@ def _project_one_trace_model_event(
     projection: PromptTraceProjection,
 ) -> ObjectId | None:
     prompt_id = event.payload.get("prompt_object_id")
-    if not isinstance(prompt_id, str) or not prompt_id.startswith("sha256:"):
+    if not isinstance(prompt_id, str) or not prompt_id.startswith(("b3:", "sha256:")):
         return None
     assistant_id = store.put_object(
         Object(

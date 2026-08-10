@@ -58,9 +58,13 @@ FORBIDDEN_DEPENDENCIES = {
     },
 }
 
-# Leaf modules derive values and hold no state. They import nothing from Zeta,
-# so any layer may use them without creating a cycle.
-LEAF_MODULES = ("ids.py", "paths.py")
+# Leaf modules derive values and hold no state. They import only the standard
+# library, blake3 (the address hash), and each other, so any layer may use
+# them without creating a cycle.
+LEAF_MODULES = ("addresses.py", "ids.py", "paths.py")
+LEAF_ALLOWED = {"blake3"} | {
+    f"zeta.{name.removesuffix('.py')}" for name in LEAF_MODULES
+}
 
 # connectors is the third-party extension surface. It sees the event
 # vocabulary and the path leaves, so an installed connector can write a
@@ -99,6 +103,8 @@ def test_substrate_source_does_not_import_higher_layers() -> None:
     offenders: list[str] = []
     for path in python_files("zeta", "substrate"):
         for module, lineno in imported_modules(path):
+            if module in LEAF_ALLOWED:
+                continue
             root_module = module.split(".", 1)[0]
             if root_module == "zeta" and not module.startswith("zeta.substrate"):
                 offenders.append(f"{path}:{lineno} imports {module}")
@@ -131,12 +137,14 @@ def test_connectors_see_only_the_event_vocabulary() -> None:
     assert offenders == []
 
 
-def test_leaf_modules_import_nothing_from_zeta() -> None:
-    """`zeta.ids` and `zeta.paths` derive values, so every layer may use them."""
+def test_leaf_modules_import_only_leaves() -> None:
+    """Leaf modules derive values, so every layer may use them."""
     stdlib = sys.stdlib_module_names | {"__future__"}
     offenders: list[str] = []
     for name in LEAF_MODULES:
         for module, lineno in imported_modules(SRC / "zeta" / name):
+            if module in LEAF_ALLOWED:
+                continue
             if module.split(".", 1)[0] not in stdlib:
                 offenders.append(f"{name}:{lineno} imports {module}")
     assert offenders == []

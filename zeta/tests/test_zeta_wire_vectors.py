@@ -81,6 +81,18 @@ def test_session_vector_envelopes_validate_after_direction_strip() -> None:
         validate_envelope(envelope_value)
 
 
+@pytest.mark.parametrize(
+    "path",
+    sorted((VECTORS_DIR / "handshake").glob("*.jsonl")),
+    ids=lambda p: p.stem,
+)
+def test_every_session_vector_validates_after_direction_strip(path) -> None:
+    for line in path.read_text(encoding="utf-8").splitlines():
+        parsed = json.loads(line)
+        assert parsed.pop("_dir") in {"c2p", "p2c"}
+        validate_envelope(parsed)
+
+
 def test_session_vector_event_ids_follow_the_minting_rule() -> None:
     for _direction, envelope_value in session_lines():
         if envelope_value["kind"] == "event":

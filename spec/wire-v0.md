@@ -98,14 +98,14 @@ Version 0 defines exactly these kinds:
 | `heartbeat` | child → parent   | liveness, §8 |
 | `error`     | either direction | error report, §10 |
 | `shutdown`  | parent → child   | orderly stop, §9 |
+| `call`      | parent → child   | invoke one declared operation, §7.1 |
+| `call_result` | child → parent | answer one `call`, §7.1 |
 
-**Reserved kinds.** The kind names `event_batch`, `call`, and
-`call_result` are reserved for future versions. A v0 implementation
-MUST NOT emit them, and MUST treat receiving one exactly like an
-unknown kind (protocol error). Their intended future meanings, for
-context only: `event_batch` carries several events in one envelope
-under the length-prefixed framing; `call` / `call_result` carry
-request/response invocations for the `tool` and `provider` roles.
+**Reserved kinds.** The kind name `event_batch` is reserved for a
+future version. A v0 implementation MUST NOT emit it, and MUST treat
+receiving it exactly like an unknown kind (protocol error). Its
+intended future meaning, for context only: several events in one
+envelope under the length-prefixed framing.
 
 ## 5. Handshake
 
@@ -123,22 +123,25 @@ Kind-specific fields:
 | `plugin_version`    | string        | yes      | plugin's own version string |
 | `role`              | string        | yes      | `source` \| `tool` \| `provider`, §5.2 |
 | `protocol_versions` | array of int  | yes      | protocol versions the plugin speaks, non-empty |
-| `event_types`       | array         | for `source` | event types it may emit, §5.3 |
-| `capabilities`      | object        | no       | capability flags, §5.4 |
+| `event_types`       | array         | for `source` | event types it may emit, §5.3; may be empty |
+| `operations`        | array         | no       | operations it serves via `call`, §5.4 |
+| `capabilities`      | object        | no       | capability flags, §5.5 |
 | `heartbeat_secs`    | number        | no       | heartbeat interval, default `10`, range [1, 300] |
 | `ack_window`        | int           | no       | max unacknowledged events, default `64`, range [1, 1024] |
 
 ### 5.2 Roles
 
 - `source`: the plugin produces events (`event` envelopes) and the
-  parent acknowledges them. **Only `source` is implemented in v0.**
-- `tool`: reserved. The plugin will execute `call` requests from the
-  parent and answer with `call_result`. A v0 parent MUST reject a
-  `tool` hello with `error` code `unsupported_version`-class handling
-  (see §10; the code is `protocol` since the version negotiated fine
-  but the role is unavailable — parents SHOULD use code `protocol`
-  with a message naming the role) and terminate the child.
-- `provider`: reserved. The plugin will serve model or capability
+  parent acknowledges them. A source MAY additionally declare
+  `operations` (§5.4) and serve `call`s; a source with an empty
+  `event_types` array is a pure operations plugin (e.g. a
+  notification connector with no ingress). **Only `source` is
+  implemented in v0.**
+- `tool`: reserved. The plugin executes `call` requests initiated by
+  a running agent, with no journal side of its own. A v0 parent MUST
+  reject a `tool` hello with an `error` of code `protocol` naming the
+  role, and terminate the child.
+- `provider`: reserved. The plugin serves model or capability
   invocations initiated by the parent, also over `call` /
   `call_result`. Same v0 rejection rule as `tool`.
 
@@ -158,7 +161,18 @@ Each entry is an object `{"type": <string>, "schema": <string>}`.
   treat the field as an opaque string and MUST NOT parse meaning out
   of it beyond the `name@version` split.
 
-### 5.4 `capabilities`
+### 5.4 `operations`
+
+Each entry is an object `{"name": <string>}`. `name` is the
+operation the plugin will execute when the parent sends a `call`
+envelope (§7.1) — for a connector, the egress event type it delivers
+(e.g. `slack.message.post`). The authoritative metadata for an
+operation (its payload schema, options schema, and delivery
+semantics) lives in the plugin's describe manifest (§13); the
+`hello` list states which of those operations this incarnation is
+prepared to serve.
+
+### 5.5 `capabilities`
 
 An object of named boolean or scalar flags. Unknown capabilities MUST
 be ignored. Version 0 defines and reserves:
@@ -171,12 +185,13 @@ be ignored. Version 0 defines and reserves:
   before the runtime treats the effect as performed. In v0 the flag
   is carried and recorded but has no behavioral effect.
 
-### 5.5 `hello_ack` (parent → child)
+### 5.6 `hello_ack` (parent → child)
 
 | field              | type   | required | meaning |
 |--------------------|--------|----------|---------|
 | `protocol_version` | int    | yes      | the version chosen by the parent |
 | `runtime`          | string | yes      | runtime identification, e.g. `zeta-os/0.10.2` |
+| `config`           | object | no       | non-secret settings for this child, §5.7 |
 
 The parent chooses the highest protocol version present in both its
 own supported set and the child's `protocol_versions`. If the
@@ -189,6 +204,23 @@ error.
 The parent MUST apply a handshake timeout: a child that has not
 delivered a valid `hello` within the timeout (implementation-chosen;
 the Zeta runtime uses 10 s) is killed.
+
+### 5.7 Configuration and secrets
+
+Twelve-factor at the boundary:
+
+- **Non-secret settings** — watch directories, filters, poll
+  intervals, feature switches — travel in `hello_ack.config`, an
+  arbitrary JSON object the parent composes for this child. An
+  absent `config` means `{}`. A child MUST NOT require settings from
+  any other channel; argv and config files are the parent's private
+  business, not part of this protocol.
+- **Secrets** — tokens, signing keys — reach the child through its
+  spawn-time **environment**, never through an envelope. Envelopes
+  are journaled, logged, and replayed; the environment is not. A
+  plugin that finds a required secret missing SHOULD report an
+  `error` (code `internal`, `retryable: false`) naming the variable
+  on stderr-visible terms (never echoing values) and exit non-zero.
 
 ## 6. Events
 
@@ -242,6 +274,50 @@ for downstream consumers.
   are backpressure, not an error.
 - An `ack` whose `event_id` matches nothing outstanding MUST be
   ignored by the child (it can happen after a child-side retry).
+- An ack is the durability boundary. A source holding an upstream
+  cursor (a Telegram `getUpdates` offset, a Slack Socket Mode
+  envelope, a queue lease) MUST confirm or advance that cursor only
+  when the corresponding event is acked — never on emit. This closes
+  the loss window between reading an upstream item and journaling
+  it: an unacked item is redelivered after a restart, and the
+  parent's idempotency keys absorb the duplicate.
+
+### 7.1 Calls
+
+A `call` invokes one operation the child declared in its `hello`
+(§5.4). Kind-specific fields:
+
+| field        | type   | required | meaning |
+|--------------|--------|----------|---------|
+| `name`       | string | yes      | the declared operation |
+| `payload`    | object | yes      | operation input |
+| `effect_key` | string | yes      | stable identity of the logical effect |
+
+The child MUST answer every `call` with exactly one `call_result`:
+
+| field       | type   | required | meaning |
+|-------------|--------|----------|---------|
+| `call_id`   | string | yes      | the `id` of the `call` envelope |
+| `ok`        | bool   | yes      | whether the operation succeeded |
+| `result`    | object | when `ok` | operation output |
+| `error`     | object | when not `ok` | `{code, message, retryable}`, codes as §10 |
+
+Rules:
+
+- A `call` naming an undeclared operation is answered with
+  `call_result` `ok: false`, error code `protocol`.
+- `effect_key` identifies the logical effect across retries and
+  respawns. The parent MAY re-issue a call with the same
+  `effect_key` after a child death; a child whose provider supports
+  deduplication SHOULD pass the key through (the declared delivery
+  semantics in the describe manifest, §13, tell the parent what a
+  retry may do).
+- Calls and events multiplex freely on the same channel; a child
+  may interleave `call_result`s with `event`s in any order. The
+  parent correlates by `call_id`.
+- The parent applies its own per-call timeout; a child death fails
+  all outstanding calls (`internal`, retryable per the operation's
+  declared semantics).
 
 ## 8. Liveness
 
@@ -255,6 +331,17 @@ for downstream consumers.
 - Parents SHOULD respawn dead or killed children with exponential
   backoff, capped (the Zeta runtime doubles from 0.5 s, capped at
   30 s, and resets after a healthy period).
+
+### 8.1 Crash-only reconnection
+
+There is exactly one retry mechanism in this system, and it is the
+supervisor's respawn. A plugin that holds a connection to the
+outside world — a websocket, a long-poll, a subscription — MUST NOT
+implement its own reconnect loop. When the connection is lost, the
+child exits (non-zero); the supervisor's backoff-respawn IS the
+reconnect logic, and the ack-gated cursors of §7 plus the parent's
+idempotency keys make any redelivery harmless. One mechanism, one
+backoff policy, one place to observe failures.
 
 ## 9. Shutdown
 
@@ -290,7 +377,7 @@ Enumerated codes (v0):
 | `protocol`            | framing violation, handshake violation, unknown or reserved kind, ack-window overflow, stdout pollution, wrong `v` after handshake |
 | `schema`              | an event failed payload-schema validation, or an envelope failed shape validation |
 | `internal`            | the sender hit an internal failure unrelated to the peer's input |
-| `unsupported_version` | protocol version negotiation failed (§5.5) |
+| `unsupported_version` | protocol version negotiation failed (§5.6) |
 | `unsupported`         | the envelope is valid but uses a feature this implementation does not support (e.g. `payload_hash` in Phase 0) |
 
 Receivers MUST accept unknown codes (treat as `internal`) so the set
@@ -345,10 +432,75 @@ New identifiers MUST be minted as full-width `b3:` addresses.
 
 - Unknown envelope fields: ignore (§3).
 - Unknown `kind`: `error` code `protocol` (§3, §4).
-- Version negotiation happens once, at handshake (§5.5); an empty
+- Version negotiation happens once, at handshake (§5.6); an empty
   intersection fails with `unsupported_version`.
 - After the handshake, an envelope whose `v` differs from the chosen
   version is a protocol error.
+
+## 13. Connector executables
+
+A **connector** is any executable that speaks wire-v0. Discovery is
+the shell's:
+
+- an executable named `zeta-connector-<id>` on `PATH` is the
+  connector `<id>`;
+- an executable file in a project's `agents/connectors/` directory is
+  a project-local connector; its `<id>` is the file name (minus any
+  extension).
+
+There is no plugin registry, no entry points, and no enable list:
+installing a package that provides `zeta-connector-slack` is what
+registers the Slack connector, and a third-party connector in Go or
+TypeScript joins by dropping an executable on `PATH`. A runtime MAY
+offer a process-level allowlist (the Zeta runtime:
+`zeta serve --connectors`).
+
+### 13.1 The describe invocation
+
+Invoked with the single argument `--describe`, a connector executable
+MUST print exactly one JSON object to stdout and exit 0, without
+requiring any credentials or network access:
+
+```json
+{
+  "id": "slack",
+  "protocol_versions": [0],
+  "events": {"slack.message.received": { …json schema… },
+             "slack.message.post": { …json schema… }},
+  "filters": {"slack.message.received": { …json schema… }},
+  "operations": [{"name": "slack.message.post",
+                  "semantics": "connector_deduplicated",
+                  "options_schema": { …json schema… }}],
+  "settings": ["poll_interval"]
+}
+```
+
+- `id` MUST equal the `<id>` under which the executable was found,
+  and MUST equal the `name` in the connector's later `hello`.
+- `events` maps every event type the connector can emit **or**
+  deliver to its payload JSON Schema (or `null` for schemaless).
+- `filters` maps ingress event types to the JSON Schema for the
+  `filter` object an agent binding may carry.
+- `operations` lists every operation the connector serves, each with
+  its delivery `semantics` — one of `idempotent_with_key`,
+  `connector_deduplicated`, `at_least_once`, `unsafe_to_retry` — and
+  the JSON Schema for binding options.
+- `settings` (informative) names the `hello_ack.config` keys the
+  connector understands.
+
+The runtime uses the manifest at project load for schema
+registration and binding validation, records it in the project
+snapshot, and compares manifests when re-executing a recorded
+generation. The manifest is static metadata: `--describe` MUST NOT
+read secrets, open connections, or touch project state.
+
+### 13.2 The run invocation
+
+Invoked with no arguments, the executable speaks wire-v0 on stdio as
+a `source` child: settings arrive in `hello_ack.config`, secrets via
+the environment (§5.7), ingress flows as `event`s, egress as `call`s
+against its declared operations, and reconnection is crash-only
+(§8.1).
 
 ## Appendix A — example session (informative)
 

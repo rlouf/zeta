@@ -20,9 +20,19 @@ PROTOCOL_VERSION = 0
 MAX_INLINE_PAYLOAD_BYTES = 64 * 1024
 
 KINDS = frozenset(
-    {"hello", "hello_ack", "event", "ack", "heartbeat", "error", "shutdown"}
+    {
+        "hello",
+        "hello_ack",
+        "event",
+        "ack",
+        "heartbeat",
+        "error",
+        "shutdown",
+        "call",
+        "call_result",
+    }
 )
-RESERVED_KINDS = frozenset({"event_batch", "call", "call_result"})
+RESERVED_KINDS = frozenset({"event_batch"})
 ROLES = frozenset({"source", "tool", "provider"})
 ERROR_CODES = frozenset(
     {"protocol", "schema", "internal", "unsupported_version", "unsupported"}
@@ -140,6 +150,20 @@ def _validate_hello(value: dict) -> None:
         )
     if role == "source":
         _validate_event_types(value)
+    operations = value.get("operations")
+    if operations is not None and (
+        not isinstance(operations, list)
+        or not all(
+            isinstance(entry, dict)
+            and isinstance(entry.get("name"), str)
+            and entry["name"]
+            for entry in operations
+        )
+    ):
+        raise EnvelopeError(
+            "bad_operations",
+            "`operations` must be an array of {name} objects",
+        )
     capabilities = value.get("capabilities")
     if capabilities is not None and not isinstance(capabilities, dict):
         raise EnvelopeError("bad_capabilities", "`capabilities` must be an object")
@@ -192,6 +216,48 @@ def _validate_hello_ack(value: dict) -> None:
             "`protocol_version` must be a non-negative integer",
         )
     _required_string(value, "runtime")
+    config = value.get("config")
+    if config is not None and not isinstance(config, dict):
+        raise EnvelopeError("bad_config", "`config` must be an object")
+
+
+def _validate_call(value: dict) -> None:
+    _required_string(value, "name")
+    _required_string(value, "effect_key")
+    payload = value.get("payload")
+    if payload is None:
+        raise EnvelopeError("missing_field:payload", "a call must carry `payload`")
+    if not isinstance(payload, dict):
+        raise EnvelopeError("bad_payload", "`payload` must be an object")
+
+
+def _validate_call_result(value: dict) -> None:
+    _required_string(value, "call_id")
+    ok = value.get("ok")
+    if ok is None:
+        raise EnvelopeError("missing_field:ok", "a call_result must carry `ok`")
+    if not isinstance(ok, bool):
+        raise EnvelopeError("bad_ok", "`ok` must be a boolean")
+    has_result = isinstance(value.get("result"), dict)
+    has_error = isinstance(value.get("error"), dict)
+    if ok and not has_result:
+        raise EnvelopeError(
+            "result_choice", "a successful call_result must carry a `result` object"
+        )
+    if not ok:
+        error = value.get("error")
+        if not has_error:
+            raise EnvelopeError(
+                "result_choice", "a failed call_result must carry an `error` object"
+            )
+        if (
+            not isinstance(error.get("code"), str)
+            or not isinstance(error.get("message"), str)
+            or not isinstance(error.get("retryable"), bool)
+        ):
+            raise EnvelopeError(
+                "bad_error", "`error` must carry {code, message, retryable}"
+            )
 
 
 def _validate_event(value: dict) -> None:
@@ -284,4 +350,6 @@ _KIND_VALIDATORS = {
     "heartbeat": _validate_heartbeat,
     "error": _validate_error,
     "shutdown": _validate_shutdown,
+    "call": _validate_call,
+    "call_result": _validate_call_result,
 }

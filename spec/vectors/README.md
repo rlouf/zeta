@@ -29,11 +29,14 @@ One envelope per `.json` file that a conforming implementation must
   its own documented mapping of it);
 - the remaining lines are prose citing the violated spec section.
 
-## `handshake/session-01.jsonl`
+## `handshake/session-01.jsonl` and `session-02.jsonl`
 
-A complete scripted session: hello → hello_ack → two events with acks
-→ heartbeat → shutdown. Each line is a canonical envelope with **one
-extra field**, `_dir`, the direction marker:
+Complete scripted sessions. `session-01` exercises the source path:
+hello → hello_ack → two events with acks → heartbeat → shutdown.
+`session-02` exercises operations: hello declaring an operation →
+hello_ack with `config` → call → call_result → heartbeat →
+shutdown. Each line is a canonical envelope with **one extra
+field**, `_dir`, the direction marker:
 
 - `"c2p"` — child (plugin) to parent (runtime);
 - `"p2c"` — parent to child.

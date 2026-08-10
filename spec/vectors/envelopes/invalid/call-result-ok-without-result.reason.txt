@@ -1,0 +1,2 @@
+result_choice
+A successful call_result must carry a `result` object (spec §7.1).

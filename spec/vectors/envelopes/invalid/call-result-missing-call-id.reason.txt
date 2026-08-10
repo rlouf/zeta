@@ -1,0 +1,2 @@
+missing_field:call_id
+A call_result must carry `call_id` (spec §7.1).

@@ -1,2 +1,0 @@
-reserved_kind
-`call` is reserved for a future version and must be treated like an unknown kind (spec §4).

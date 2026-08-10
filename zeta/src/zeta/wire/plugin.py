@@ -14,12 +14,13 @@ stderr, so a stray `print` or log call cannot corrupt the channel.
 from __future__ import annotations
 
 import asyncio
+import inspect
 import itertools
 import logging
 import sys
-from collections.abc import AsyncIterable, AsyncIterator
+from collections.abc import AsyncIterable, AsyncIterator, Callable
 from dataclasses import dataclass, field
-from typing import Any, BinaryIO
+from typing import Any, BinaryIO, cast
 
 from zeta.wire.envelopes import (
     MAX_INLINE_PAYLOAD_BYTES,
@@ -47,19 +48,42 @@ class EventType:
 
 @dataclass(frozen=True)
 class SourceEvent:
-    """One event a source hands to the SDK for delivery."""
+    """One event a source hands to the SDK for delivery.
+
+    `on_ack` runs when the runtime acknowledges the event as durably
+    journaled. A source holding an upstream cursor advances it there
+    and only there (spec §7), so a crash before the ack redelivers.
+    """
 
     type: str
     payload: dict[str, Any]
     caused_by: str | None = None
     session_id: str | None = None
+    on_ack: Callable[[], Any] | None = None
+
+
+class OperationError(RuntimeError):
+    """A served operation failed in a way the runtime should see."""
+
+    def __init__(self, code: str, message: str, *, retryable: bool) -> None:
+        super().__init__(message)
+        self.code = code
+        self.retryable = retryable
+
+
+OperationHandler = Callable[[dict[str, Any], str], Any]
+Source = (
+    AsyncIterable[SourceEvent]
+    | Callable[[dict[str, Any]], AsyncIterable[SourceEvent]]
+    | None
+)
 
 
 @dataclass
 class _Session:
     writer: asyncio.StreamWriter
     ack_window: int
-    unacked: set[str] = field(default_factory=set)
+    unacked: dict[str, SourceEvent] = field(default_factory=dict)
     acked: asyncio.Condition = field(default_factory=asyncio.Condition)
     stop: asyncio.Event = field(default_factory=asyncio.Event)
 
@@ -68,16 +92,23 @@ class _Session:
 
 
 def run_source(
-    events: AsyncIterable[SourceEvent],
+    events: Source,
     *,
     name: str,
     plugin_version: str,
     event_types: list[EventType],
+    operations: dict[str, OperationHandler] | None = None,
     capabilities: dict[str, Any] | None = None,
     heartbeat_secs: float = DEFAULT_HEARTBEAT_SECS,
     ack_window: int = DEFAULT_ACK_WINDOW,
 ) -> None:
-    """Speak wire-v0 as a source plugin until shutdown or end of events."""
+    """Speak wire-v0 as a source plugin until shutdown or end of events.
+
+    `events` may be an async iterable, a callable that receives the
+    `hello_ack.config` object and returns one, or None for a pure
+    operations plugin. `operations` maps operation names to async
+    handlers `(payload, effect_key) -> result dict`.
+    """
     proto_stdout = sys.stdout.buffer
     sys.stdout = sys.stderr
     logging.basicConfig(stream=sys.stderr, level=logging.INFO)
@@ -88,6 +119,7 @@ def run_source(
             name=name,
             plugin_version=plugin_version,
             event_types=event_types,
+            operations=operations or {},
             capabilities=capabilities,
             heartbeat_secs=heartbeat_secs,
             ack_window=ack_window,
@@ -96,12 +128,13 @@ def run_source(
 
 
 async def _run_source(
-    events: AsyncIterable[SourceEvent],
+    events: Source,
     proto_stdout: BinaryIO,
     *,
     name: str,
     plugin_version: str,
     event_types: list[EventType],
+    operations: dict[str, OperationHandler],
     capabilities: dict[str, Any] | None,
     heartbeat_secs: float,
     ack_window: int,
@@ -116,6 +149,7 @@ async def _run_source(
             name=name,
             plugin_version=plugin_version,
             role="source",
+            operations=[{"name": operation} for operation in sorted(operations)],
             protocol_versions=[PROTOCOL_VERSION],
             event_types=[
                 {"type": entry.type, "schema": entry.schema} for entry in event_types
@@ -137,17 +171,36 @@ async def _run_source(
         raise SystemExit(
             f"handshake failed: unsupported protocol {ack.get('protocol_version')!r}"
         )
+    config = ack.get("config")
+    resolved_events = _resolve_source(
+        events, config if isinstance(config, dict) else {}
+    )
 
     tasks = [
-        asyncio.create_task(_read_parent(frame_reader, session)),
+        asyncio.create_task(
+            _read_parent(frame_reader, session, operations, message_ids)
+        ),
         asyncio.create_task(_heartbeat(session, message_ids, heartbeat_secs)),
-        asyncio.create_task(_emit(events, session, schemas)),
     ]
+    if resolved_events is not None:
+        tasks.append(asyncio.create_task(_emit(resolved_events, session, schemas)))
     await session.stop.wait()
     for task in tasks:
         task.cancel()
     await asyncio.gather(*tasks, return_exceptions=True)
     writer.close()
+
+
+def _resolve_source(
+    events: Source,
+    config: dict[str, Any],
+) -> AsyncIterable[SourceEvent] | None:
+    if events is None:
+        return None
+    if isinstance(events, AsyncIterable):
+        return cast(AsyncIterable[SourceEvent], events)
+    factory = cast(Callable[[dict[str, Any]], AsyncIterable[SourceEvent]], events)
+    return factory(config)
 
 
 async def _emit(
@@ -188,7 +241,7 @@ async def _send_event(
         )
         if session.stop.is_set():
             return
-        session.unacked.add(event_id)
+        session.unacked[event_id] = event
     session.send(
         envelope(
             "event",
@@ -203,7 +256,12 @@ async def _send_event(
     await session.writer.drain()
 
 
-async def _read_parent(frame_reader: FrameReader, session: _Session) -> None:
+async def _read_parent(
+    frame_reader: FrameReader,
+    session: _Session,
+    operations: dict[str, OperationHandler],
+    message_ids: Any,
+) -> None:
     while True:
         frame = await frame_reader.read_frame()
         if frame is None:
@@ -217,8 +275,12 @@ async def _read_parent(frame_reader: FrameReader, session: _Session) -> None:
         kind = frame["kind"]
         if kind == "ack":
             async with session.acked:
-                session.unacked.discard(frame["event_id"])
+                acked_event = session.unacked.pop(frame["event_id"], None)
                 session.acked.notify_all()
+            if acked_event is not None and acked_event.on_ack is not None:
+                await _run_ack_callback(acked_event)
+        elif kind == "call":
+            asyncio.ensure_future(_serve_call(frame, session, operations, message_ids))
         elif kind == "shutdown":
             logger.info("shutdown requested: %s", frame.get("reason", ""))
             session.stop.set()
@@ -234,6 +296,79 @@ async def _read_parent(frame_reader: FrameReader, session: _Session) -> None:
             )
         else:
             logger.warning("ignoring unexpected parent kind %r", kind)
+
+
+async def _run_ack_callback(event: SourceEvent) -> None:
+    if event.on_ack is None:
+        return
+    try:
+        outcome = event.on_ack()
+        if inspect.isawaitable(outcome):
+            await outcome
+    except Exception:
+        logger.exception("on_ack callback failed for %r", event.type)
+
+
+async def _serve_call(
+    frame: dict[str, Any],
+    session: _Session,
+    operations: dict[str, OperationHandler],
+    message_ids: Any,
+) -> None:
+    handler = operations.get(frame["name"])
+    if handler is None:
+        await _send_call_result(
+            session,
+            next(message_ids),
+            frame["id"],
+            error=("protocol", f"operation {frame['name']!r} was not declared", False),
+        )
+        return
+    try:
+        result = await handler(frame["payload"], frame["effect_key"])
+        await _send_call_result(
+            session, next(message_ids), frame["id"], result=dict(result or {})
+        )
+    except OperationError as exc:
+        await _send_call_result(
+            session,
+            next(message_ids),
+            frame["id"],
+            error=(exc.code, str(exc), exc.retryable),
+        )
+    except Exception as exc:
+        logger.exception("operation %r failed", frame["name"])
+        await _send_call_result(
+            session,
+            next(message_ids),
+            frame["id"],
+            error=("internal", str(exc), False),
+        )
+
+
+async def _send_call_result(
+    session: _Session,
+    message_id: str,
+    call_id: str,
+    *,
+    result: dict[str, Any] | None = None,
+    error: tuple[str, str, bool] | None = None,
+) -> None:
+    if error is None:
+        message = envelope(
+            "call_result", message_id, call_id=call_id, ok=True, result=result or {}
+        )
+    else:
+        code, detail, retryable = error
+        message = envelope(
+            "call_result",
+            message_id,
+            call_id=call_id,
+            ok=False,
+            error={"code": code, "message": detail, "retryable": retryable},
+        )
+    session.send(message)
+    await session.writer.drain()
 
 
 async def _heartbeat(

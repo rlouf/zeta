@@ -246,7 +246,7 @@ def _validate_call_result(value: dict) -> None:
         )
     if not ok:
         error = value.get("error")
-        if not has_error:
+        if not has_error or not isinstance(error, dict):
             raise EnvelopeError(
                 "result_choice", "a failed call_result must carry an `error` object"
             )

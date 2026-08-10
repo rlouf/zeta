@@ -13,7 +13,8 @@ import asyncio
 import contextlib
 import itertools
 import logging
-from collections.abc import AsyncGenerator, AsyncIterator
+import os
+from collections.abc import AsyncGenerator, AsyncIterator, Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -33,10 +34,24 @@ HEALTHY_UPTIME_SECS = 30.0
 
 @dataclass(frozen=True)
 class SourceCommand:
-    """How to spawn one source plugin child."""
+    """How to spawn one source plugin child.
+
+    `env` adds to (never replaces) the inherited environment; it is
+    the channel for secrets, which never travel in envelopes.
+    """
 
     argv: tuple[str, ...]
     cwd: str | None = None
+    env: Mapping[str, str] | None = None
+
+
+class CallError(RuntimeError):
+    """A call to a plugin operation failed."""
+
+    def __init__(self, code: str, message: str, *, retryable: bool) -> None:
+        super().__init__(message)
+        self.code = code
+        self.retryable = retryable
 
 
 @dataclass(frozen=True)
@@ -60,6 +75,7 @@ class SubprocessSource:
         command: SourceCommand,
         *,
         runtime_id: str,
+        config: dict[str, Any] | None = None,
         handshake_timeout: float = DEFAULT_HANDSHAKE_TIMEOUT_SECS,
         grace_seconds: float = DEFAULT_GRACE_SECS,
         heartbeat_miss_limit: int = DEFAULT_HEARTBEAT_MISS_LIMIT,
@@ -70,6 +86,7 @@ class SubprocessSource:
     ) -> None:
         self.command = command
         self.runtime_id = runtime_id
+        self.config = config
         self.handshake_timeout = handshake_timeout
         self.grace_seconds = grace_seconds
         self.heartbeat_miss_limit = heartbeat_miss_limit
@@ -83,6 +100,7 @@ class SubprocessSource:
         self._closing = False
         self._message_ids = (f"m-host-{count}" for count in itertools.count(1))
         self._unacked: set[str] = set()
+        self._pending_calls: dict[str, asyncio.Future[dict[str, Any]]] = {}
 
     async def __aenter__(self) -> SubprocessSource:
         return self
@@ -100,6 +118,7 @@ class SubprocessSource:
                     yield event
             except _ChildFailed as failure:
                 logger.warning("source child failed: %s", failure)
+            self._fail_pending_calls("connector child died")
             if self._closing:
                 return
             await self._kill_current_child()
@@ -113,6 +132,85 @@ class SubprocessSource:
             logger.info("respawning source child in %.1fs", backoff)
             await _interruptible_sleep(backoff, lambda: self._closing)
             backoff = min(self.backoff_cap, backoff * 2)
+
+    async def call(
+        self,
+        name: str,
+        payload: dict[str, Any],
+        effect_key: str,
+        *,
+        timeout: float = 30.0,
+    ) -> dict[str, Any]:
+        """Invoke one declared operation on the current child.
+
+        Raises CallError when the operation fails, the child is not
+        running, or the call times out. The caller owns retry policy;
+        `effect_key` keeps the logical effect identity stable across
+        retries and respawns.
+        """
+        process = self._process
+        hello = self.hello or {}
+        operations = {entry.get("name") for entry in hello.get("operations", [])}
+        if process is None or process.stdin is None or process.stdin.is_closing():
+            raise CallError(
+                "internal", "connector child is not running", retryable=True
+            )
+        if name not in operations:
+            raise CallError(
+                "protocol",
+                f"operation {name!r} was not declared by the child",
+                retryable=False,
+            )
+        call_id = next(self._message_ids)
+        future: asyncio.Future[dict[str, Any]] = (
+            asyncio.get_running_loop().create_future()
+        )
+        self._pending_calls[call_id] = future
+        try:
+            process.stdin.write(
+                encode_frame(
+                    envelope(
+                        "call",
+                        call_id,
+                        name=name,
+                        payload=payload,
+                        effect_key=effect_key,
+                    )
+                )
+            )
+            await process.stdin.drain()
+            return await asyncio.wait_for(future, timeout=timeout)
+        except TimeoutError:
+            raise CallError(
+                "internal", f"call {name!r} timed out", retryable=True
+            ) from None
+        except ConnectionError as exc:
+            raise CallError("internal", str(exc), retryable=True) from exc
+        finally:
+            self._pending_calls.pop(call_id, None)
+
+    def _resolve_call(self, frame: dict[str, Any]) -> None:
+        future = self._pending_calls.pop(frame["call_id"], None)
+        if future is None or future.done():
+            logger.warning("dropping stray call_result %r", frame["call_id"])
+            return
+        if frame["ok"]:
+            future.set_result(frame["result"])
+        else:
+            error = frame["error"]
+            future.set_exception(
+                CallError(
+                    error["code"],
+                    error["message"],
+                    retryable=bool(error["retryable"]),
+                )
+            )
+
+    def _fail_pending_calls(self, reason: str) -> None:
+        pending, self._pending_calls = self._pending_calls, {}
+        for future in pending.values():
+            if not future.done():
+                future.set_exception(CallError("internal", reason, retryable=True))
 
     async def ack(self, event_id: str) -> None:
         """Acknowledge one event as durably accepted."""
@@ -155,9 +253,13 @@ class SubprocessSource:
         self._process = None
 
     async def _run_one_child(self) -> AsyncIterator[WireEvent]:
+        env = None
+        if self.command.env is not None:
+            env = {**os.environ, **dict(self.command.env)}
         process = await asyncio.create_subprocess_exec(
             *self.command.argv,
             cwd=self.command.cwd,
+            env=env,
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=None,
@@ -201,6 +303,9 @@ class SubprocessSource:
                 continue
             kind = frame["kind"]
             if kind == "heartbeat":
+                continue
+            if kind == "call_result":
+                self._resolve_call(frame)
                 continue
             if kind == "error":
                 logger.warning(
@@ -279,15 +384,14 @@ class SubprocessSource:
                 f"no common protocol version in {frame['protocol_versions']!r}"
             )
         assert process.stdin is not None
+        ack_fields: dict[str, Any] = {
+            "protocol_version": PROTOCOL_VERSION,
+            "runtime": self.runtime_id,
+        }
+        if self.config is not None:
+            ack_fields["config"] = self.config
         process.stdin.write(
-            encode_frame(
-                envelope(
-                    "hello_ack",
-                    next(self._message_ids),
-                    protocol_version=PROTOCOL_VERSION,
-                    runtime=self.runtime_id,
-                )
-            )
+            encode_frame(envelope("hello_ack", next(self._message_ids), **ack_fields))
         )
         await process.stdin.drain()
         return frame

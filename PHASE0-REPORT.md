@@ -1,209 +1,210 @@
 # Phase 0 report — proving the IPC boundary
 
-Everything in the Phase 0 brief is done, with two mid-flight changes
-Remi requested while the work was in progress: the `transport`
-configuration flag was removed (IPC is the only transport for
-connectors that have a wire-v0 child), and connectors now auto-enable
-from the registry (the `agents/connectors.yaml` enable list is gone).
-The commits, in order:
+Phase 0 grew twice while in flight, both times at Remi's direction:
+first the transport flag and the connectors.yaml enable list were
+removed, then the whole connector subsystem was cut over — spec
+amendments (config/secrets, crash-only reconnection, calls), a
+sibling `zeta-connectors` package, shell-based discovery, and
+deletion of every legacy path (entry points, in-process polled
+ingress, the push-ingress HTTP server, webhooks). The commits, in
+order:
 
 1. `Mint content addresses with domain-separated blake3`
 2. `Specify wire-v0 and its conformance vectors`
 3. `Implement wire-v0 in zeta.wire`
 4. `Run the filesystem connector as a wire-v0 subprocess`
 5. `Mint new identifiers as b3 addresses, dual-read the sha256 epoch`
-6. this report
+6. `Amend wire-v0 while it is soft: config, calls, crash-only doctrine`
+7. `Teach the SDK and supervisor config, ack cursors, and calls`
+8. `Connectors become wire-v0 executables; legacy paths deleted`
+9. this report
 
 ## What exists now
 
-- `spec/wire-v0.md` — the normative protocol: ndjson child-stdio
-  framing, versioned envelopes, `hello`/`hello_ack` handshake with the
-  full `role` definition and the reserved `effects_are_proposals`
-  capability, ack-window flow control, heartbeat liveness, shutdown
-  escalation, enumerated error codes, `b3:` address domains with the
-  legacy dual-read rule.
-- `spec/vectors/` — golden vectors consumed directly by the test
-  suite: 11 valid envelopes (byte-exact canonical form), 21 invalid
-  envelopes with rule-token `.reason.txt` files, a scripted handshake
-  session with `_dir` direction markers, and 20 address vectors
-  covering all five domains.
-- `zeta/src/zeta/wire/` — `envelopes` (hand-rolled validation whose
-  rule tokens match the vector reason files), `framing` (junk-tolerant
-  buffered reader), `plugin.run_source` (child SDK: handshake,
-  deterministic event ids, ack window, heartbeats, shutdown, stdout
-  redirected so prints/logging land on stderr), `host.SubprocessSource`
-  (supervision: handshake timeout, heartbeat monitoring, protocol
-  strikes, capped exponential respawn backoff, SIGTERM→SIGKILL
-  escalation), `fs_inbox` (the filesystem connector as a child).
-- The demo's fs connector runs as a supervised subprocess wired
-  through `harness/connector_bridge.py`; payloads, event types, and
-  idempotency keys are identical to the in-process path (golden
-  comparison test).
-- `zeta/src/zeta/addresses.py` — the single minting point for `b3:`
-  addresses with the five frozen `derive_key` contexts, plus
-  `is_legacy`/`is_b3`.
+- **`spec/wire-v0.md`** — the normative protocol: ndjson child-stdio
+  framing, versioned envelopes, `hello`/`hello_ack` handshake (with
+  `operations` declarations and runtime-composed `config`),
+  ack-window flow control with ack-gated upstream cursors, heartbeat
+  liveness, crash-only reconnection doctrine, shutdown escalation,
+  `call`/`call_result` operations with per-operation delivery
+  semantics, enumerated error codes, `b3:` address domains with
+  legacy sha256 dual-read, and §13: connector executables with
+  `--describe` manifests, discovered the shell's way.
+- **`spec/vectors/`** — golden vectors the suite consumes directly:
+  16 valid envelopes (byte-exact canonical form), 25 annotated
+  invalid envelopes with stable rule tokens, two scripted handshake
+  sessions (source flow; operations flow with a call exchange), and
+  20 address vectors covering all five blake3 domains.
+- **`zeta/src/zeta/wire/`** — both protocol sides. `plugin.run_source`
+  is the child SDK (~20 lines for an author): handshake, config
+  delivery, deterministic `b3:` event ids, ack window, `on_ack`
+  cursor callbacks, operation serving, heartbeats, stdout redirected
+  so prints and logging land on stderr. `host.SubprocessSource`
+  supervises: handshake timeout, heartbeat monitoring, protocol
+  strikes for junk, capped exponential respawn backoff,
+  SIGTERM→SIGKILL escalation, and `call()` with pending futures that
+  fail retryably when a child dies.
+- **`zeta-connectors/`** — sibling workspace package; installing it
+  puts `zeta-connector-{filesystem,slack,telegram,pushover}` on
+  PATH, which is all the registration a runtime needs
+  (`zeta-connectors[slack]` pulls the websocket extra). Filesystem
+  polls watches from its bindings config; Slack ingests over Socket
+  Mode and posts via a `connector_deduplicated` operation; Telegram
+  long-polls `getUpdates` — no webhook, no public endpoint —
+  advancing its offset only on runtime acks; Pushover is pure
+  operations. All are crash-only: losing an upstream connection
+  exits the child.
+- **The runtime** discovers connectors by probing `zeta-connector-*`
+  on PATH (plus the interpreter's own script directory, so absolute-
+  path invocations of `zeta` still find sibling scripts) and
+  executable files under `agents/connectors/`; each is described
+  once (`--describe`, cached by mtime), validated, and recorded in
+  project snapshots. Ingress spawns one child per **wave** — at most
+  one binding per event type per child, so Telegram's two event
+  types share one upstream cursor while two watched directories get
+  two children. Egress runs as `call` envelopes against declared
+  operations via one lazy operations child per connector, with the
+  effect lifecycle events (`runtime.effect.*`, `runtime.egress.*`)
+  unchanged.
+- **`zeta/src/zeta/addresses.py`** — the single minting point for
+  `b3:` addresses (five frozen `derive_key` contexts), with
+  `is_legacy`/`is_b3`; new mints switched for publish/wait handles
+  (chain), skill bodies (skill), and prompt-trace objects (prompt),
+  dual-reading the sha256 epoch everywhere those ids are compared or
+  resolved.
 
-## Recon findings and corrections to the brief's §1
+## Recon findings and corrections to the original brief's §1
 
-- **Event ids are random, not hash-derived.** `Event.from_draft`
-  assigns `evt_<uuid4hex>` (`zeta/src/zeta/events.py`). The
-  truncated-sha256 (24-hex) ids in `ids.py` are the `pub_`/`wait_`
-  *handles* for publish/wait requests. Those handles are what moved to
-  `b3:` chain-domain addresses; journal event ids are untouched (the
-  journal schema is out of scope).
-- **`provenance.py` checks prompt ids; it does not mint them.** The
-  mint is `Object.content_address()` in `substrate/objects.py`, which
-  addresses every prompt-trace object. That mint moved to the prompt
-  domain; `provenance.py` and `substrate/store.py` dual-read.
-- **`skill.sha256` is minted in `authoring/resources.py`**
-  (`load_skill_registry`); `harness/project.py` records and verifies
-  it. The mint moved to the skill domain; verification dual-reads by
-  epoch.
-- **Connectors are a first-class package**, not just entry points:
-  `src/connectors/` defines `EventConnector`/`EventConnectorRegistry`
-  with polled ingress, push ingress, and egress; `zeta serve` polls
-  ingress bindings once per second via
-  `harness/connector_bridge.run_ingress_forever`, and events land via
-  `RuntimeEventStore.accept(DraftEvent)` →
-  `EventJournal.append_in_transaction` (idempotency-key `ON CONFLICT
-  DO NOTHING`).
-- The event path an agent sees: connector `DraftEvent` → payload
-  validated against the project event registry → idempotency key
-  rendered from the binding template (`file:{path}` in the demo) →
-  journal insert → routing → queue item → attempt → run.
-- Tests: single flat suite under `zeta/tests/`, pytest with
-  `asyncio_mode=auto`, run from the repo root; CI runs pre-commit
-  (ruff check/format, ty, vulture, complexipy ≤ 25) and pytest with
-  coverage ≥ 85% on Python 3.11–3.13.
+- **Event ids are random, not hash-derived**: `Event.from_draft`
+  assigns `evt_<uuid4hex>`; the truncated-sha256 ids in `ids.py` are
+  the `pub_`/`wait_` *handles*. Those moved to `b3:`; journal event
+  ids are untouched (journal schema frozen).
+- **`provenance.py` checks prompt ids; the mint** is
+  `Object.content_address()` in `substrate/objects.py` — that moved
+  to the prompt domain, with dual-read in `provenance.py` and
+  `substrate/store.py`.
+- **`skill.sha256` is minted in `authoring/resources.py`**;
+  `harness/project.py` records and verifies it — verification now
+  dual-reads by epoch.
+- Connectors were a first-class handler package (`src/connectors/`)
+  polled in-process once per second, with a push-ingress HTTP server
+  for webhooks — the planning map's "entry points only" was an
+  under-description. All of that is now gone; `src/connectors/`
+  survives as the vocabulary layer (bindings, `ConnectorManifest`,
+  registry).
+- Tests: flat suite under `zeta/tests/`, pytest `asyncio_mode=auto`;
+  CI runs ruff/ty/vulture/complexipy and pytest with coverage ≥ 85%
+  on Python 3.11–3.13 (currently 87%).
 
 ## Discretionary decisions
 
-- **Envelope conformance is keyed by rule tokens.** Each invalid
-  vector's `.reason.txt` line 1 is a stable token
-  (`payload_choice`, `bad_timestamp`, …) that `EnvelopeError.rule`
-  reports; third-party SDKs map them however they like.
-- **Event-id minting rule (spec §6.1).** An event id SHOULD be the
-  event-domain address of the canonical JSON of
-  `{"payload": …, "type": …}`; uniqueness among unacked events is the
-  hard requirement. This preserves "same inputs, same id" for
-  deterministic sources.
-- **Schema refs are `name@major`** (`file.created@1`); the spec notes
-  they become content addresses in a later version.
-- **One child per ingress binding.** Simplest supervision and
-  idempotency mapping; the demo has exactly one binding. A
-  multi-watch child config exists (`fs_inbox` accepts a watch list)
-  if consolidation is wanted later.
-- **`payload_hash` events are refused with error code `unsupported`**
-  (v0 defines no blob transfer; payload storage stays inline this
-  phase). `run_source` raises on >64 KiB payloads so a plugin author
-  finds out immediately.
-- **Unacked-invalid events**: an event that fails payload-schema
-  validation gets an `error` envelope and no ack (acking would claim
-  durable acceptance). Persistent offenders eventually stall on their
-  own window.
-- **Watermark semantics on restart** match the in-process behavior:
-  a respawned child starts a fresh watermark, so files that appear
-  while the child is down are missed — exactly as an in-process
-  `zeta serve` restart behaves today. Idempotency keys make
-  redelivery safe.
-- **Derivation ids** keep their `derivation:` prefix with the digest
-  now taken from the prompt-domain blake3 (they are internal dedup
-  keys, never dual-read).
-- **Import boundaries evolved, not bypassed**: `addresses.py` joined
-  `ids.py`/`paths.py` as a named leaf; leaves and `substrate` may now
-  import `blake3` and each other. The layering intent (no upward
-  imports) is unchanged, and `wire` was added to the
-  forbidden-dependencies map as a low-level layer.
-- **A failing entry-point connector is skipped with a warning** —
-  required by auto-enablement, since pushover/telegram/slack
-  hard-fail construction without credentials and must not poison
-  unrelated projects.
+- Envelope conformance is keyed by stable rule tokens
+  (`.reason.txt` line 1 = `EnvelopeError.rule`).
+- Event ids SHOULD be the event-domain address of canonical
+  `{"payload": …, "type": …}` (uniqueness among unacked events is
+  the hard rule) — deterministic sources mint the same id every run.
+- Schema refs are `name@major` (`file.created@1`); the spec notes
+  they become content addresses later.
+- Call payloads carry `{"payload": …, "options": …}` — the event
+  payload plus the binding's options — and the binding's rendered
+  idempotency key as `effect_key`.
+- An event failing payload-schema validation gets an `error`
+  envelope and **no ack** (an ack claims durable acceptance).
+- A connector whose `--describe` fails is skipped with a warning —
+  one broken or unconfigured executable must not poison unrelated
+  projects. Delivery-credential checks happen at run time, never at
+  describe time.
+- Snapshot manifests record the describe document, not the spawn
+  command (machine-local paths stay out of generation identity) and
+  not handler source hashes (there are no handlers).
+- Telegram's old webhook rationale ("a confirmed getUpdates offset
+  is forgotten, leaving a loss window") is solved by the wire ack:
+  the child confirms offsets only up to the acked prefix
+  (`OffsetLedger`), so long-polling is now loss-free and the public
+  endpoint requirement disappears.
+- Derivation ids keep their `derivation:` prefix over the
+  prompt-domain digest; import-boundary tests evolved (leaves may
+  import blake3 and each other; `wire` registered as a layer) rather
+  than being bypassed.
 
-## Deviations from the brief
+## Deviations from the original Phase 0 brief (all Remi-directed)
 
-- **`transport: ipc | inproc` flag: removed** at Remi's request
-  mid-phase. IPC is unconditional for connectors with a wire-v0 child
-  (only `filesystem` this phase); the in-process polled path survives
-  only for connectors without a child (Slack). Rollback lever is
-  `git revert`, not config.
-- **`agents/connectors.yaml`: removed entirely** at Remi's request.
-  Installation is enablement; `zeta serve --connectors` remains the
-  process-level allowlist. `zeta new` no longer writes the file;
-  existing projects' files are ignored.
-- **Test-side edits.** The brief said "without breaking a single
-  existing test"; the suite is green, but a handful of existing tests
-  were *edited* where they pinned behavior this phase deliberately
-  changed: the scaffold test (no `connectors.yaml`), the connector
-  enable-list tests (auto-enable), one trace-CLI assertion that
-  hardcoded the `sha256:` prefix of a *newly minted* object id, one
-  helper in `zeta_test_support.py` (accepts both address epochs), and
-  the import-boundary test (leaf/`wire` registration, as above).
-- **Not switched to `b3:`** (out of the five frozen domains, or
-  legacy-adjacent): journal `evt_` ids (random, journal schema frozen),
-  `spec.sha256` (agent markdown hash), `harness/project.content_id`
-  (generation ids, `project:sha256:` — self-verifying manifest hashes
-  whose migration needs its own dual-read pass),
-  `capabilities/delivery.content_hash`, `effects.py` effect keys, and
-  the context payload/integrity hashes. All are recorded here as
-  follow-up candidates; every one of them still resolves and verifies.
+- No `connectors.transport` flag and no `inproc` rollback lever —
+  IPC is the only transport; rollback is `git revert`.
+- No `agents/connectors.yaml` — installation/PATH is enablement;
+  `zeta serve --connectors` remains the process allowlist, and an
+  allowlist that hides a connector the project binds fails loudly at
+  validation.
+- The brief said Slack "stays entry-point-loaded this phase" — it
+  was instead converted (Socket Mode) as a spec-stressing
+  instrument, and entry points were deleted rather than migrated.
+- Webhook push ingress (and the HTTP server, Slack signature
+  verification, `TELEGRAM_WEBHOOK_SECRET`) removed outright in favor
+  of connector-owned transports.
+- Existing tests were edited or deleted where they pinned removed
+  mechanisms (enable lists, entry points, webhooks, in-process
+  ingress, handler-based egress); their preserved intents moved to
+  `test_zeta_connector_modules.py`, `test_zeta_fs_ipc.py`, and the
+  wire fault drills. The suite is fully green (1102 passed).
 
 ## Known gaps
 
+- Slack Socket Mode and Telegram long-polling are implemented from
+  API knowledge and unit-tested at the parsing/protocol layer;
+  neither has run against live credentials yet. First live runs
+  should watch the serve log for their children.
 - No runtime code mints blob-domain addresses yet (payloads stay
   inline until the Phase 2 blob store); the domain is specified and
   vectored.
-- The IPC ingress task builds its child list from the project
-  snapshot at `zeta serve` startup; binding changes on disk need a
-  serve restart (the in-process poller re-reads every poll).
-- `import_derivation` on a pre-b3 store can produce a duplicate
-  derivation row (old sha256-keyed row plus a new b3-keyed one) for
-  the same logical derivation.
-- Auto-enablement means every `zeta serve` with a push-capable
-  connector installed (slack/telegram, when their tokens are set)
-  binds the push-ingress port; previously only projects that enabled
-  them did.
-- Local-only environment note: the repo's editable build compiles the
-  Rust TUI, and the local default rustc (1.85) is older than its
-  dependencies require (≥ 1.88), so `uv sync` fails locally;
-  everything here ran via the existing venv with `uv run --no-sync`.
-  CI runners are unaffected. Pre-existing, not introduced by this
-  phase.
+- Ingress waves are computed at `zeta serve` startup; binding
+  changes on disk need a restart.
+- A connector serving both ingress and egress runs two children
+  (one per role); Slack therefore opens its socket only in the
+  ingress child, and Telegram polls only there.
+- The `zeta.wire` SDK (`plugin.py` + `envelopes` + `framing`) is
+  still inside zeta-os; extraction into a standalone SDK package is
+  future work (its imports are already self-contained).
+- Local-only: `uv sync` fails on this machine because the editable
+  zeta-os build compiles the Rust TUI and local rustc (1.85) is
+  older than its dependencies need (≥ 1.88); everything here ran
+  with `uv run --no-sync` against the existing venv. CI runners are
+  unaffected.
 
 ## Verifying the exit criteria
 
-All commands from the repo root (drop `--no-sync` when the local
-rustc issue is fixed):
+All commands from the repo root (drop `--no-sync` once local rustc
+is updated):
 
 ```sh
-# 1. Spec and vectors exist and the suite consumes them directly
+# Spec, vectors, and both protocol sides
 ls spec/wire-v0.md spec/vectors/README.md
-uv run --no-sync pytest zeta/tests/test_zeta_wire_vectors.py -q
+uv run --no-sync pytest zeta/tests/test_zeta_wire_vectors.py zeta/tests/test_zeta_wire_plugin.py \
+  zeta/tests/test_zeta_wire_host.py zeta/tests/test_zeta_wire_calls.py -q
 
-# 2. Protocol implementation, fault drills, stdout purity, ack window
-uv run --no-sync pytest zeta/tests/test_zeta_wire_plugin.py zeta/tests/test_zeta_wire_host.py -q
+# Connector executables: describe manifests, module logic, discovery
+zeta-connector-filesystem --describe | python3 -m json.tool | head
+uv run --no-sync pytest zeta/tests/test_zeta_connector_modules.py -q
 
-# 3. fs connector over IPC: child conformance, golden journal
-#    comparison vs the in-process path, dedupe, containment
-uv run --no-sync pytest zeta/tests/test_zeta_fs_ipc.py -q
+# Runtime integration: discovery, waves, journal, dedupe, allowlist
+uv run --no-sync pytest zeta/tests/test_zeta_fs_ipc.py zeta/tests/test_zeta_agents.py -q
 
-# 4. Addresses: vector match, determinism, legacy dual-read
+# Addresses: vector match, determinism, legacy dual-read
 uv run --no-sync pytest zeta/tests/test_zeta_addresses.py -q
 
-# 5. Entire suite (1111 passed, 2 skipped at time of writing)
+# Entire suite (1102 passed, 2 skipped at time of writing; coverage 87%)
 uv run --no-sync pytest -q
 
-# 6. Demo smoke (needs Codex credentials; verified end-to-end on
-#    2026-08-10 — summary produced, one fs_inbox child process
-#    observed, clean shutdown on SIGTERM):
+# Demo smoke (needs Codex credentials; verified end-to-end on
+# 2026-08-11 after the cutover: one zeta-connector-filesystem child
+# observed, summary produced, clean shutdown):
 uv run --no-sync zeta new /tmp/zeta-demo
-cd /tmp/zeta-demo && uv run --no-sync zeta serve &   # from the repo venv
+cd /tmp/zeta-demo && uv run --no-sync zeta serve &
 echo 'Buy milk.' > /tmp/zeta-demo/inbox/todo.txt
 sleep 60 && cat /tmp/zeta-demo/summaries/todo.txt.md
 kill %1
 ```
 
-The demo's LLM step cannot run in CI (no model credentials there);
-the ingress-to-journal half is covered by
-`test_zeta_fs_ipc.py::test_ipc_ingress_reaches_the_journal_identically_to_inproc`,
-and the agent-execution half by the existing worker tests with model
-stubs.
+The demo's LLM step cannot run in CI (no model credentials); the
+ingress-to-journal half is covered by
+`test_zeta_fs_ipc.py::test_ipc_ingress_reaches_the_journal` and the
+agent-execution half by the worker tests with model stubs.

@@ -20,6 +20,7 @@ const READ_CHUNK: usize = 64 * 1024;
 const PREVIEW_BYTES: usize = 200;
 
 /// One line read from the peer.
+#[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug, PartialEq)]
 pub enum Frame {
     /// A validated envelope.

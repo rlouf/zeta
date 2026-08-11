@@ -396,23 +396,23 @@ accepting new work, responds with `{}`, and exits. Only the process supervisor
 may send it. Process respawn, backoff, and signal escalation are outside the
 protocol.
 
-## 11. Executable peers
+## 11. Launched peers
 
-A connector is an executable that initializes with `source`, `provider`, or
-both roles. Discovery uses the shell:
+A frontend gives the runtime an explicit launch spec for each managed peer.
+The spec contains a non-empty peer id and a non-empty argument vector. How a
+frontend obtains that launch spec is outside this protocol.
 
-- `zeta-connector-<id>` on `PATH` identifies connector `<id>`;
-- an executable in a project's `agents/connectors/` directory is local to that
-  project and uses its file name, without an extension, as `<id>`.
+The runtime first invokes the argument vector with `--describe`. The peer
+prints one JSON manifest to stdout and exits successfully without credentials,
+network access, or project-state changes. Its manifest id must match the launch
+spec id. The manifest declares event schemas, filters, provider operations,
+delivery semantics, option schemas, and setting names.
 
-Invoked with `--describe`, the executable prints one JSON manifest to stdout
-and exits successfully without credentials, network access, or project-state
-changes. The manifest declares connector identity, event schemas, filters,
-provider operations, delivery semantics, option schemas, and setting names.
-
-Invoked with no arguments, the executable uses this protocol on stdin and
-stdout. It writes diagnostics only to stderr. Any non-protocol stdout data is a
-framing violation.
+For a live connection, the runtime invokes the argument vector with no added
+arguments. The peer initializes with `source`, `provider`, or both roles and
+uses this protocol on stdin and stdout. It writes diagnostics only to stderr.
+Any non-protocol stdout data is a framing violation. The runtime owns process
+supervision, restart policy, and the IPC connection.
 
 ## 12. Versioning
 

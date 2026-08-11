@@ -111,7 +111,7 @@ src/zeta/
   harness/        routing, queue, attempts, runs, sessions, dispatch, worker
   cli/  ipc/      local command and process interfaces
 
-src/connectors/   ingress and egress, the third-party extension surface
+src/connectors/   connector bindings and self-described manifest vocabulary
 ```
 
 Two rules hold the shape, and `test_import_boundaries.py` asserts both:
@@ -119,8 +119,9 @@ Two rules hold the shape, and `test_import_boundaries.py` asserts both:
 - `substrate`, `addresses`, `ids`, and `paths` are leaves. They import only
   the standard library, the blake3 address hash, and each other, so any layer
   may use them.
-- `connectors` sees `zeta.events` and `zeta.effects` and nothing else, so an
-  installed connector cannot reach into the runtime.
+- `connectors` holds the small vocabulary used to validate connector manifests.
+  Installed connector code runs in a child process and communicates through
+  IPC.
 
 The harness and the loop meet at one seam. See
 [Runtime Semantics](runtime-semantics.md#harness-and-agent-loop).
@@ -400,7 +401,7 @@ sessions can run at the same time.
 
 `zeta new <path>` creates an empty project with the default Inbox Summarizer.
 It creates the agent, its inbox, its summary folder, and a `.gitignore` file
-for runtime state; the bundled filesystem connector registers automatically:
+for runtime state. The installed filesystem connector registers automatically:
 
 ```sh
 zeta new ~/zeta-demo
@@ -569,18 +570,28 @@ is the skill name, and agents opt in with `skills:`.
 
 ## Connectors
 
-A connector is an executable that speaks the IPC protocol in
-`spec/ipc-v0.md`, and discovery is the shell's: any `zeta-connector-<id>`
-command on `PATH` is a connector, as is any executable file under
-`agents/connectors/` (a project-local executable overrides a `PATH` connector
-with the same id). Installing `zeta-connectors` — with extras like
-`zeta-connectors[slack]` for optional dependencies — is what registers the
-bundled four; a third-party connector in any language joins by dropping an
-executable on `PATH`. Zeta reads each executable's `--describe` manifest for
-its event schemas, filter schemas, and delivery semantics; a connector whose
-describe fails is skipped with a warning instead of failing the project.
-`zeta serve --connectors` narrows one runtime process to an explicit
-allowlist.
+A connector is a child program that speaks the IPC protocol in
+`spec/ipc-v0.md`. A Python package registers one under the
+`zeta.event_connectors` entry-point group. The entry-point name is the
+connector id, and its target starts the connector. Installing the package in
+Zeta's active Python environment registers it. For example:
+
+```sh
+uv pip install zeta-connectors
+```
+
+The Python frontend reads the installed metadata and turns each registration
+into an explicit launch spec containing the connector id and argument vector.
+It passes those launch specs to the runtime without importing connector code.
+The runtime reads each child's `--describe` manifest for its event schemas,
+filter schemas, and delivery semantics, then supervises its IPC process. A
+connector whose describe step fails is skipped with a warning instead of
+failing an unrelated project. `zeta serve --connectors` narrows one runtime
+process to an explicit allowlist.
+
+Another ecosystem can use its native registration system in its frontend and
+produce the same id-and-argument-vector launch specs. The runtime behavior and
+IPC protocol stay the same.
 
 Connector-provided event schemas are merged with `agents/events/`. Duplicate
 schemas must be identical.

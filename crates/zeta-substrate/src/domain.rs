@@ -23,7 +23,7 @@ pub enum Domain {
     Derivation,
     /// Wire event envelope ids (spec §6.1).
     Event,
-    /// Links in the idempotent id chain (publish and wait handles).
+    /// Journal entries and deterministic runtime chain links.
     Chain,
 }
 

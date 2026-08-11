@@ -1169,6 +1169,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "zeta-journal"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "zeta-substrate",
+]
+
+[[package]]
 name = "zeta-substrate"
 version = "0.1.0"
 dependencies = [

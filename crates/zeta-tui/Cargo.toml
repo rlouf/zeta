@@ -1,0 +1,21 @@
+[package]
+name = "zeta-tui"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+
+[dependencies]
+base64.workspace = true
+crossterm = { version = "0.28", features = ["event-stream"] }
+futures-util = "0.3"
+nucleo-matcher = "0.3"
+pulldown-cmark = "0.13"
+ratatui = "0.29"
+serde.workspace = true
+serde_json.workspace = true
+signal-hook = "0.3"
+supports-color = "3"
+tokio = { version = "1", features = ["io-util", "macros", "process", "rt", "time"] }
+tokio-util = { version = "0.7", features = ["codec"] }
+unicode-width = "0.2"
+uuid = { version = "1", features = ["v4"] }

@@ -67,4 +67,4 @@ version_file = "src/zeta/_version.py"
 
 [[tool.setuptools-rust.bins]]
 target = "zeta-tui"
-path = "../rust/zeta-tui/Cargo.toml"
+path = "../crates/zeta-tui/Cargo.toml"

@@ -1,9 +1,6 @@
-# The zeta Rust workspace holds the foundation crates only. The TUI in
-# rust/ keeps its own workspace until a later phase joins it here, so
-# its dependency set cannot move these pins. Exact pins keep hash and
-# wire behavior reproducible; blake3 is pinned because hash stability
-# is the ecosystem contract shared (by specification, not by code)
-# with sibling tools such as stagefs.
+# Exact pins keep the foundation crates' hash and wire behavior reproducible;
+# blake3 is pinned because hash stability is the ecosystem contract shared
+# (by specification, not by code) with sibling tools such as stagefs.
 [workspace]
 members = ["crates/*"]
 resolver = "2"

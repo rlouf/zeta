@@ -14,7 +14,7 @@ commas/src/commas/_version.py
 commas/src/commas.egg-info/
 zeta/src/zeta/_version.py
 node_modules/
-rust/target/
+target/
 package-lock.json
 .claude/
 notes.md

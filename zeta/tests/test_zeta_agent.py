@@ -485,7 +485,7 @@ def test_zeta_console_script_is_declared() -> None:
     assert pyproject["tool"]["setuptools-rust"]["bins"] == [
         {
             "target": "zeta-tui",
-            "path": "../rust/zeta-tui/Cargo.toml",
+            "path": "../crates/zeta-tui/Cargo.toml",
         }
     ]
 

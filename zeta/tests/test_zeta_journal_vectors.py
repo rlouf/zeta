@@ -6,6 +6,7 @@ import pytest
 from zeta.events import Event, json_native_payload
 from zeta.journal import types as journal_types
 from zeta.journal.memory import MemoryEventStore
+from zeta.journal.sqlite import SqliteEventStore
 from zeta.journal.store import Filter
 
 from zeta import addresses
@@ -285,8 +286,15 @@ def test_filter_rejects_invalid_limits(limit: int) -> None:
         Filter(limit=limit)
 
 
-def test_memory_store_validates_new_events_but_ignores_duplicate_content() -> None:
-    store = MemoryEventStore()
+@pytest.mark.parametrize(
+    "store_factory",
+    [
+        pytest.param(MemoryEventStore, id="memory"),
+        pytest.param(lambda: SqliteEventStore(":memory:"), id="sqlite"),
+    ],
+)
+def test_stores_validate_new_events_but_ignore_duplicate_content(store_factory) -> None:
+    store = store_factory()
     event = Event(
         id="evt_valid",
         event_type="valid.event",
@@ -315,3 +323,4 @@ def test_memory_store_validates_new_events_but_ignores_duplicate_content() -> No
         )
     with pytest.raises(ValueError, match="id"):
         store.append(replace(event, id="", idempotency_key=None))
+    store.close()

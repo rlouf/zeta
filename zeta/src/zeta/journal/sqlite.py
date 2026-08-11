@@ -16,7 +16,7 @@ from typing import Any, Protocol
 
 from zeta.events import DraftEvent, Event, json_native_payload
 from zeta.journal.store import Filter
-from zeta.journal.types import AppendOutcome
+from zeta.journal.types import AppendOutcome, validate_event
 from zeta.paths import resolve_state_dir
 from zeta.substrate.objects import Derivation, Object
 from zeta.substrate.sqlite import SqliteObjectStore, sqlite_read_only_uri
@@ -431,6 +431,10 @@ class SqliteEventStore:
         """
         if not self.connection.in_transaction:
             raise RuntimeError("transaction-local append requires a transaction")
+        duplicate = self._duplicate_for(event)
+        if duplicate is not None:
+            return AppendOutcome(event=duplicate, inserted=False)
+        validate_event(event)
         payload = json.dumps(
             json_native_payload(event.payload),
             ensure_ascii=False,
@@ -458,7 +462,10 @@ class SqliteEventStore:
             ),
         )
         if cursor.rowcount != 1:
-            return AppendOutcome(event=self._duplicate_for(event), inserted=False)
+            duplicate = self._duplicate_for(event)
+            if duplicate is None:
+                raise sqlite3.IntegrityError(f"append conflict for event {event.id}")
+            return AppendOutcome(event=duplicate, inserted=False)
         inserted = self.get(event.id)
         if inserted is None:
             raise sqlite3.IntegrityError(f"append failed for event {event.id}")
@@ -596,7 +603,7 @@ class SqliteEventStore:
             self.connection.commit()
         return int(cursor.rowcount)
 
-    def _duplicate_for(self, event: Event) -> Event:
+    def _duplicate_for(self, event: Event) -> Event | None:
         with self._write_lock:
             if event.idempotency_key is not None:
                 row = self.connection.execute(
@@ -620,9 +627,7 @@ class SqliteEventStore:
                     """,
                     (event.id,),
                 ).fetchone()
-        if row is None:
-            raise sqlite3.IntegrityError(f"append conflict for event {event.id}")
-        return _row_to_event(row)
+        return _row_to_event(row) if row is not None else None
 
 
 def event_store_path(root: Path | None = None) -> Path:

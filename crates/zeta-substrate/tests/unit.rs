@@ -2,7 +2,7 @@
 
 use std::path::Path;
 
-use serde_json::{json, Map};
+use serde_json::{json, Map, Number, Value};
 use zeta_substrate::{BlobStore, Derivation, Domain, Hash, HashParseError, Object, Ref, RefUpdate};
 
 fn fields(value: serde_json::Value) -> Map<String, serde_json::Value> {
@@ -156,6 +156,25 @@ fn object_content_address_rejects_float_outside_binary64() {
             "1e400".to_owned()
         ))
     );
+}
+
+#[test]
+fn programmatic_floats_match_python_spelling() {
+    for (number, expected) in [
+        (1.0, "1.0"),
+        (0.1, "0.1"),
+        (1e30, "1e+30"),
+        (-0.0, "-0.0"),
+        (1e-5, "1e-05"),
+        (1e-6, "1e-06"),
+        (333333333.3333333, "333333333.3333333"),
+    ] {
+        let value = Value::Number(Number::from_f64(number).unwrap());
+        assert_eq!(
+            zeta_substrate::canonical_json(&value).unwrap(),
+            expected.as_bytes()
+        );
+    }
 }
 
 #[test]

@@ -166,6 +166,7 @@ async def run_capability_step(
         base_dir=config.base_dir,
         effect_scope=config.effect_scope,
         internal_tool_executor=run_internal_tool,
+        event_id_factory=ctx.event_id_factory,
     )
     handled = handle_tool_call(
         tool_call,

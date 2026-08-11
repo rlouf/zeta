@@ -16,6 +16,7 @@ from zeta.capabilities.registry import registry as _runtime_tool_registry
 from zeta.context.builder import (
     PreparedPrompt,
     PromptBuilder,
+    PromptEnvironment,
     prepared_prompt_from,
     render_model_input,
 )
@@ -85,6 +86,7 @@ async def build_prompt_step(
     tools: list[dict[str, Any]],
     state: RunState,
     builder: PromptBuilder,
+    environment: PromptEnvironment,
 ) -> tuple[PreparedPrompt, ModelInput]:
     state.note_step("build_prompt")
     prompt_plan = builder.plan_prompt(
@@ -102,6 +104,7 @@ async def build_prompt_step(
         tool_choice="auto",
         selected_model=config.model_name,
         thinking=config.thinking,
+        environment=environment,
     )
     stored_prompt = await builder.commit_prompt_plan(prompt_plan)
     model_input = render_model_input(stored_prompt)

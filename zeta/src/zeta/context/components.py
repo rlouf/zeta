@@ -4,6 +4,7 @@ import json
 import os
 from collections.abc import Iterable
 from dataclasses import dataclass, field
+from datetime import date
 from typing import Any, Literal
 
 from zeta.capabilities.delivery import content_hash
@@ -17,6 +18,21 @@ Representation = Literal["full", "summary", "stub"]
 
 # How much of the (unbounded) timeline projection the prompt carries.
 TIMELINE_TAIL_LIMIT = 50
+
+
+@dataclass(frozen=True)
+class PromptEnvironment:
+    """Carries ambient prompt inputs so traced prompts can be reproduced."""
+
+    working_directory: str
+    calendar_date: str
+
+    @classmethod
+    def current(cls) -> "PromptEnvironment":
+        return cls(
+            working_directory=os.getcwd(),
+            calendar_date=date.today().isoformat(),
+        )
 
 
 @dataclass(frozen=True)
@@ -76,10 +92,12 @@ def zeta_context_message(
     objective: str,
     *,
     context: str = "",
+    environment: PromptEnvironment | None = None,
 ) -> str:
+    environment = environment or PromptEnvironment.current()
     sections = [
         objective,
-        f"cwd:\n{os.getcwd()}",
+        f"cwd:\n{environment.working_directory}",
     ]
     if context.strip():
         sections.append(context.strip())
@@ -331,12 +349,14 @@ def prompt_components(
     content_components: Iterable[PromptComponent] = (),
     tools: list[dict[str, Any]] | None = None,
     include_non_message_components: bool = True,
+    environment: PromptEnvironment | None = None,
 ) -> list[PromptComponent]:
     """Return prompt components in stable prefix-cache-friendly order.
 
     Public ordering contract: system_prompt, tool descriptors, project context,
     then volatile timeline/objective/current-turn components.
     """
+    environment = environment or PromptEnvironment.current()
     enabled_capabilities = (
         tuple(allowed_capabilities or ())
         if tools is not None
@@ -346,6 +366,7 @@ def prompt_components(
         system,
         allowed_capabilities=enabled_capabilities,
         tool_descriptors=tools,
+        calendar_date=environment.calendar_date,
     )
     components = [
         PromptComponent(
@@ -374,7 +395,11 @@ def prompt_components(
             historical=True,
         )
     )
-    objective_message = zeta_context_message(objective, context=context)
+    objective_message = zeta_context_message(
+        objective,
+        context=context,
+        environment=environment,
+    )
     components.append(
         PromptComponent(
             kind="user_message",

@@ -1,7 +1,7 @@
 """System prompt construction for Zeta."""
 
-import time
 from collections.abc import Iterable
+from datetime import date
 from typing import Any
 
 from jinja2 import Environment, StrictUndefined
@@ -56,6 +56,7 @@ def system_prompt(
     *,
     allowed_capabilities: Iterable[str] | None = None,
     tool_descriptors: Iterable[dict[str, Any]] | None = None,
+    calendar_date: str | None = None,
 ) -> str:
     """Assemble the system prompt around the caller's base prompt.
 
@@ -75,6 +76,7 @@ def system_prompt(
         base_prompt,
         allowed_capabilities=active_capabilities,
         tool_descriptors=active_descriptors,
+        calendar_date=calendar_date,
     )
 
 
@@ -83,6 +85,7 @@ def render_system_prompt(
     *,
     allowed_capabilities: Iterable[str] | None = None,
     tool_descriptors: Iterable[dict[str, Any]] | None = None,
+    calendar_date: str | None = None,
 ) -> str:
     """Render the system prompt from already-resolved prompt inputs."""
     active_capabilities = (
@@ -96,7 +99,11 @@ def render_system_prompt(
     return render_prompt_template(
         SYSTEM_PROMPT_TEMPLATE,
         base_prompt=clean_prompt(base_prompt),
-        date_line=current_date_line(),
+        date_line=(
+            current_date_line()
+            if calendar_date is None
+            else _calendar_date_line(calendar_date)
+        ),
         tool_protocol=TOOL_PROTOCOL_PROMPT.strip(),
         grep_tool_policy=GREP_TOOL_POLICY
         if capability_available("grep", tool_descriptors=active_descriptors)
@@ -111,7 +118,12 @@ def current_date_line() -> str:
     Date only, never time of day: the system prompt is a content-addressed
     trace component, and a finer stamp would defeat its deduplication.
     """
-    return time.strftime("Today is %Y-%m-%d (%A).", time.localtime())
+    return _calendar_date_line(date.today().isoformat())
+
+
+def _calendar_date_line(calendar_date: str) -> str:
+    parsed_date = date.fromisoformat(calendar_date)
+    return parsed_date.strftime("Today is %Y-%m-%d (%A).")
 
 
 def capability_available(

@@ -7,7 +7,7 @@ idempotency key that makes a retry a duplicate rather than a new fact.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import Any
 from uuid import uuid4
 
@@ -20,11 +20,17 @@ from zeta.journal.types import (
 )
 
 
-def ensure_runtime_event_id(event: dict[str, Any]) -> str:
+def ensure_runtime_event_id(
+    event: dict[str, Any],
+    *,
+    event_id_factory: Callable[[], str] | None = None,
+) -> str:
     event_id = event.get("id")
     if isinstance(event_id, str) and event_id:
         return event_id
-    event_id = str(uuid4())
+    event_id = event_id_factory() if event_id_factory is not None else str(uuid4())
+    if not event_id:
+        raise ValueError("event id factory returned an empty id")
     event["id"] = event_id
     return event_id
 

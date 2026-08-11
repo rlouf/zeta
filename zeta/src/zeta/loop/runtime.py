@@ -24,6 +24,7 @@ from zeta.capabilities.registry import registry as _runtime_tool_registry
 from zeta.context import prompt_transform_from_policy
 from zeta.context.builder import (
     PromptBuilder,
+    PromptEnvironment,
 )
 from zeta.context.transforms import ContentWorkspace
 from zeta.events import DraftEvent, Event
@@ -175,13 +176,16 @@ async def run_agent_loop(
     source_agent_id: str | None = None,
     source_session_id: str | None = None,
     content_workspace: ContentWorkspace | None = None,
+    environment: PromptEnvironment | None = None,
+    event_id_factory: Callable[[], str] | None = None,
+    clock: Callable[[], float] | None = None,
 ) -> AgentRunResult:
     """Run an assistant/tool loop without mutating session state."""
     gateway = model_gateway or DefaultModelGateway()
     if not gateway.available(model_request_from(config)):
         raise RuntimeError("model endpoint is not reachable")
-    clock = time_monotonic
-    deadline = agent_deadline(config.max_wall_seconds, deadline, clock=clock)
+    active_clock = clock or time_monotonic
+    deadline = agent_deadline(config.max_wall_seconds, deadline, clock=active_clock)
     active_tool_registry = tool_registry or _runtime_tool_registry
     allowed_capabilities = agent_allowed_capabilities(
         config,
@@ -199,7 +203,13 @@ async def run_agent_loop(
         tool_executor=tool_executor,
         builder=builder,
         model_gateway=gateway,
-        abort_reason=run_abort_reason(cancellation_event, deadline, clock=clock),
+        abort_reason=run_abort_reason(
+            cancellation_event,
+            deadline,
+            clock=active_clock,
+        ),
+        environment=environment or PromptEnvironment.current(),
+        event_id_factory=event_id_factory,
         query_log_reader=query_log_reader,
         publishable_events=publishable_events or {},
         source_queue_item_id=source_queue_item_id,

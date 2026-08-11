@@ -6,7 +6,7 @@ carries queue state or retry authority.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, replace
 from typing import Any
 
@@ -16,6 +16,7 @@ from zeta.capabilities.registry import (
 )
 from zeta.context.builder import (
     PromptBuilder,
+    PromptEnvironment,
 )
 from zeta.context.transforms import ContentValidationError, ContentWorkspace
 from zeta.events import DraftEvent
@@ -57,6 +58,8 @@ class RunDependencies:
     builder: PromptBuilder
     abort_reason: AbortReason
     model_gateway: ModelGateway = field(default_factory=DefaultModelGateway)
+    environment: PromptEnvironment = field(default_factory=PromptEnvironment.current)
+    event_id_factory: Callable[[], str] | None = None
     query_log_reader: QueryLogReader | None = None
     publishable_events: Mapping[str, dict[str, Any] | None] = field(
         default_factory=dict

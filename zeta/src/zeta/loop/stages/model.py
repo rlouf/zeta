@@ -111,7 +111,11 @@ def record_model_event(
         event["caused_by"] = caused_by
     if prompt_trace is not None:
         event["prompt_object_id"] = prompt_trace.prompt_object_id
-    event_id = ensure_runtime_event_id(event) if event else None
+    event_id = (
+        ensure_runtime_event_id(event, event_id_factory=ctx.event_id_factory)
+        if event
+        else None
+    )
     tool_calls = assistant_tool_calls(assistant)
     if event:
         record_runtime_event(
@@ -217,6 +221,7 @@ async def request_model_turn(
         tools=tools,
         state=state,
         builder=ctx.builder,
+        environment=ctx.environment,
     )
     try:
         model_output, streamed_content, model_telemetry = await call_model_step(

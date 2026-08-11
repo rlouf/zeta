@@ -13,6 +13,7 @@ from typing import Any
 from zeta.capabilities.delivery import content_hash
 from zeta.context.components import (
     PromptComponent,
+    PromptEnvironment,
     component_messages,
     prompt_component_object,
     prompt_components,
@@ -88,6 +89,7 @@ class PromptBuilder:
         max_tokens: int = DEFAULT_MAX_COMPLETION_TOKENS,
         selected_model: str | None = None,
         thinking: str | None = None,
+        environment: PromptEnvironment | None = None,
     ) -> PromptPlan:
         return plan_prompt(
             objective,
@@ -102,6 +104,7 @@ class PromptBuilder:
             max_tokens=max_tokens,
             selected_model=selected_model,
             thinking=thinking,
+            environment=environment,
         )
 
     async def commit_prompt_plan(self, plan: PromptPlan) -> StoredPrompt:
@@ -129,6 +132,7 @@ def plan_prompt(
     max_tokens: int = DEFAULT_MAX_COMPLETION_TOKENS,
     selected_model: str | None = None,
     thinking: str | None = None,
+    environment: PromptEnvironment | None = None,
 ) -> PromptPlan:
     components = prompt_components(
         objective,
@@ -139,6 +143,7 @@ def plan_prompt(
         current_events=current_events,
         content_components=content_components,
         tools=tools,
+        environment=environment,
     )
     return PromptPlan(
         components=tuple(components),

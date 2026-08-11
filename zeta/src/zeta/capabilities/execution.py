@@ -50,6 +50,7 @@ class CapabilityExecutionContext:
     effect_scope: str | None = None
     effect_key: str | None = None
     internal_tool_executor: InternalToolExecutor | None = None
+    event_id_factory: Callable[[], str] | None = None
 
 
 @dataclass(frozen=True)
@@ -394,6 +395,7 @@ async def run_valid_tool_call(
         result,
         capability_id=capability_id,
         model_telemetry=model_telemetry,
+        event_id_factory=ctx.event_id_factory,
     )
     if isinstance(call_event.get("caused_by"), str):
         result_event["caused_by"] = call_event["caused_by"]
@@ -501,6 +503,7 @@ def invalid_tool_result(
         name,
         tool_error(code, message),
         model_telemetry=model_telemetry,
+        event_id_factory=ctx.event_id_factory,
     )
     if isinstance(event.get("caused_by"), str):
         result_event["caused_by"] = event["caused_by"]
@@ -524,6 +527,7 @@ def tool_result_event_payload(
     *,
     capability_id: str = "",
     model_telemetry: dict[str, Any] | None = None,
+    event_id_factory: Callable[[], str] | None = None,
 ) -> dict[str, Any]:
     event: dict[str, Any] = {
         "type": "tool_result",
@@ -532,7 +536,7 @@ def tool_result_event_payload(
         "name": name,
         "result": normalized_tool_result(name, result),
     }
-    ensure_runtime_event_id(event)
+    ensure_runtime_event_id(event, event_id_factory=event_id_factory)
     if capability_id:
         event["capability_id"] = capability_id
     if model_telemetry:

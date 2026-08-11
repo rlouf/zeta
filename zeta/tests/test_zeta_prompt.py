@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+from dataclasses import asdict
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -68,6 +69,12 @@ from zeta_test_support import (
 
 ensure_builtin_tools_registered()
 
+AGENT_VECTORS_DIR = Path(__file__).resolve().parents[2] / "spec" / "vectors" / "agent"
+PROMPT_VECTOR_ENVIRONMENT = context_builder.PromptEnvironment(
+    working_directory="/workspace/zeta",
+    calendar_date="2026-08-12",
+)
+
 zeta_trace = SimpleNamespace(
     Derivation=Derivation,
     InMemoryStore=InMemoryStore,
@@ -100,6 +107,170 @@ zeta_context = SimpleNamespace(
     transforms=context_transforms,
     zeta_context_message=zeta_context_message,
 )
+
+
+def prompt_vector_inputs() -> list[dict[str, Any]]:
+    lookup_tool = {
+        "type": "function",
+        "function": {
+            "name": "lookup",
+            "description": "Look up a value.",
+            "parameters": {
+                "type": "object",
+                "properties": {"key": {"type": "string"}},
+                "required": ["key"],
+                "additionalProperties": False,
+            },
+        },
+    }
+    return [
+        {
+            "name": "minimal",
+            "objective": "Say hello.",
+            "timeline": [],
+            "system": "Answer plainly.",
+            "allowed_capabilities": [],
+            "context": "",
+            "tools": [],
+            "tool_choice": "auto",
+            "max_tokens": 64,
+            "selected_model": "unit-model",
+            "thinking": None,
+        },
+        {
+            "name": "tool_history",
+            "objective": "Summarize the result.",
+            "timeline": [
+                {"type": "user_message", "content": "Find the version."},
+                {
+                    "type": "model",
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "id": "call-lookup-1",
+                            "type": "function",
+                            "function": {
+                                "name": "lookup",
+                                "arguments": '{"key":"version"}',
+                            },
+                        }
+                    ],
+                },
+                {
+                    "type": "tool_result",
+                    "tool_call_id": "call-lookup-1",
+                    "name": "lookup",
+                    "result": {"ok": True, "value": "1.0"},
+                },
+            ],
+            "system": "Answer plainly.",
+            "allowed_capabilities": ["test.lookup"],
+            "context": "Repository: zeta",
+            "tools": [lookup_tool],
+            "tool_choice": "auto",
+            "max_tokens": 64,
+            "selected_model": "unit-model",
+            "thinking": "low",
+        },
+        {
+            "name": "repaired_tool_history",
+            "objective": "Recover from the recorded tool call.",
+            "timeline": [
+                {
+                    "type": "model",
+                    "tool_calls": [
+                        {
+                            "id": "call-broken-1",
+                            "type": "function",
+                            "function": {
+                                "name": "lookup",
+                                "arguments": '{"key":"broken"',
+                            },
+                        }
+                    ],
+                },
+                {
+                    "type": "tool_result",
+                    "tool_call_id": "call-broken-1",
+                    "name": "lookup",
+                    "result": {"ok": False, "error": {"code": "broken"}},
+                },
+            ],
+            "system": "Answer plainly.",
+            "allowed_capabilities": ["test.lookup"],
+            "context": "",
+            "tools": [lookup_tool],
+            "tool_choice": "auto",
+            "max_tokens": 64,
+            "selected_model": "unit-model",
+            "thinking": None,
+        },
+    ]
+
+
+async def python_prompt_vectors() -> dict[str, Any]:
+    cases = []
+    for inputs in prompt_vector_inputs():
+        store = InMemoryStore()
+        builder = PromptBuilder(store=store)
+        plan = builder.plan_prompt(
+            inputs["objective"],
+            inputs["timeline"],
+            system=inputs["system"],
+            allowed_capabilities=inputs["allowed_capabilities"],
+            context=inputs["context"],
+            tools=inputs["tools"],
+            tool_choice=inputs["tool_choice"],
+            max_tokens=inputs["max_tokens"],
+            selected_model=inputs["selected_model"],
+            thinking=inputs["thinking"],
+            environment=PROMPT_VECTOR_ENVIRONMENT,
+        )
+        stored = await builder.commit_prompt_plan(plan)
+        model_input = render_model_input(stored)
+        prepared = context_builder.prepared_prompt_from(
+            stored,
+            model_input=model_input,
+        )
+        objects = [
+            {"id": object_id, **asdict(obj)}
+            for object_id, obj in sorted(store.objects(), key=lambda row: row[0])
+        ]
+        derivations = [
+            {"id": derivation_id, **asdict(derivation)}
+            for derivation_id, derivation in sorted(store.derivations.items())
+        ]
+        cases.append(
+            {
+                "name": inputs["name"],
+                "input": {key: value for key, value in inputs.items() if key != "name"},
+                "expected": {
+                    "components": [
+                        asdict(component) for component in stored.components
+                    ],
+                    "model_input": asdict(model_input),
+                    "request_payload": prepared.payload,
+                    "prompt_object_id": stored.prompt_object_id,
+                    "component_object_ids": list(stored.component_object_ids),
+                    "objects": objects,
+                    "derivations": derivations,
+                },
+            }
+        )
+    document = {
+        "version": 1,
+        "environment": asdict(PROMPT_VECTOR_ENVIRONMENT),
+        "cases": cases,
+    }
+    return json.loads(json.dumps(document, ensure_ascii=False))
+
+
+async def test_agent_prompt_vectors_match_python_ground_truth() -> None:
+    expected = json.loads(
+        (AGENT_VECTORS_DIR / "prompts.json").read_text(encoding="utf-8")
+    )
+
+    assert await python_prompt_vectors() == expected
 
 
 @pytest.mark.parametrize(
@@ -1296,6 +1467,33 @@ def test_zeta_prompt_request_reconstructs_and_verifies() -> None:
         max_tokens=zeta_model.DEFAULT_MAX_COMPLETION_TOKENS,
         selected_model="unit-model",
     )
+
+
+def test_prompt_plan_uses_explicit_environment_instead_of_process_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "zeta.context.system.current_date_line",
+        lambda: "Today is 1999-01-01 (Friday).",
+    )
+    monkeypatch.setattr("zeta.context.components.os.getcwd", lambda: "/ambient/cwd")
+    environment = context_builder.PromptEnvironment(
+        working_directory="/workspace/zeta",
+        calendar_date="2026-08-12",
+    )
+
+    plan = PromptBuilder().plan_prompt(
+        "Inspect the repository.",
+        [],
+        environment=environment,
+        tools=[],
+    )
+    rendered = json.dumps(render_model_input(plan).messages)
+
+    assert "/workspace/zeta" in rendered
+    assert "2026-08-12" in rendered
+    assert "/ambient/cwd" not in rendered
+    assert "1999-01-01" not in rendered
 
 
 def test_zeta_prompt_plan_is_pure_and_repeatable() -> None:

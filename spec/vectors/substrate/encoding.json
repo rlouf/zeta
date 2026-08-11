@@ -1,0 +1,132 @@
+{
+  "format": "zeta-substrate-encoding-v0",
+  "description": "Python 3.11 json.dumps ground truth: UTF-8 JSON, sorted keys, compact separators, literal non-ASCII, finite binary64 floats, integers in the i64/u64 union, and no trailing newline.",
+  "vectors": [
+    {
+      "name": "null",
+      "value": null,
+      "canonical_utf8": "null"
+    },
+    {
+      "name": "boolean",
+      "value": true,
+      "canonical_utf8": "true"
+    },
+    {
+      "name": "simple-object",
+      "value": {
+        "z": 2,
+        "a": 1
+      },
+      "canonical_utf8": "{\"a\":1,\"z\":2}"
+    },
+    {
+      "name": "nested",
+      "value": {
+        "outer": {
+          "z": [
+            3,
+            2,
+            1
+          ],
+          "a": {
+            "enabled": true
+          }
+        },
+        "empty": []
+      },
+      "canonical_utf8": "{\"empty\":[],\"outer\":{\"a\":{\"enabled\":true},\"z\":[3,2,1]}}"
+    },
+    {
+      "name": "unicode-keys-values",
+      "value": {
+        "😀": "astral",
+        "é": "café ✓",
+        "z": "latin",
+        "中": "漢字"
+      },
+      "canonical_utf8": "{\"z\":\"latin\",\"é\":\"café ✓\",\"中\":\"漢字\",\"😀\":\"astral\"}"
+    },
+    {
+      "name": "null-heavy",
+      "value": {
+        "a": null,
+        "b": [
+          null,
+          {
+            "c": null
+          }
+        ],
+        "d": {}
+      },
+      "canonical_utf8": "{\"a\":null,\"b\":[null,{\"c\":null}],\"d\":{}}"
+    },
+    {
+      "name": "escaping",
+      "value": {
+        "text": "line 1\nline 2\t\"quoted\" / \\ \u2028"
+      },
+      "canonical_utf8": "{\"text\":\"line 1\\nline 2\\t\\\"quoted\\\" / \\\\ \u2028\"}"
+    },
+    {
+      "name": "empty-object",
+      "value": {},
+      "canonical_utf8": "{}"
+    },
+    {
+      "name": "empty-array",
+      "value": [],
+      "canonical_utf8": "[]"
+    },
+    {
+      "name": "float-one",
+      "value": 1.0,
+      "canonical_utf8": "1.0"
+    },
+    {
+      "name": "float-tenth",
+      "value": 0.1,
+      "canonical_utf8": "0.1"
+    },
+    {
+      "name": "float-positive-exponent",
+      "value": 1e+30,
+      "canonical_utf8": "1e+30"
+    },
+    {
+      "name": "float-negative-zero",
+      "value": -0.0,
+      "canonical_utf8": "-0.0"
+    },
+    {
+      "name": "float-fixed-scientific-boundary",
+      "value": 1e-05,
+      "canonical_utf8": "1e-05"
+    },
+    {
+      "name": "float-small-exponent",
+      "value": 1e-06,
+      "canonical_utf8": "1e-06"
+    },
+    {
+      "name": "float-precision-edge",
+      "value": 333333333.3333333,
+      "canonical_utf8": "333333333.3333333"
+    },
+    {
+      "name": "i64-min",
+      "value": -9223372036854775808,
+      "canonical_utf8": "-9223372036854775808"
+    },
+    {
+      "name": "i64-max",
+      "value": 9223372036854775807,
+      "canonical_utf8": "9223372036854775807"
+    },
+    {
+      "name": "u64-max",
+      "value": 18446744073709551615,
+      "canonical_utf8": "18446744073709551615"
+    }
+  ]
+}

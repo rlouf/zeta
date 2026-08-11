@@ -1,9 +1,9 @@
-# wire-v0 conformance vectors
+# Zeta conformance vectors
 
-Golden test data for `spec/wire-v0.md`. A third-party SDK (Go,
-TypeScript, Rust, …) consumes these files directly to prove it speaks
-the same protocol byte-for-byte. Zeta's own Python test suite reads
-these exact files — there are no copies.
+Golden test data for `spec/wire-v0.md` and `spec/substrate-v0.md`. A
+third-party SDK (Go, TypeScript, Rust, …) consumes these files directly
+to prove it speaks the same protocols byte-for-byte. Zeta's own Python
+and Rust test suites read these exact files — there are no copies.
 
 ## `envelopes/valid/*.json`
 
@@ -57,3 +57,25 @@ the input bytes. Each vector gives the input bytes as UTF-8 text
 (`input_utf8`) or base64 (`input_base64`) and the expected address.
 An implementation's output must match byte-for-byte — including for
 the empty input.
+
+## `substrate/encoding.json`
+
+Identity-bearing JSON values with their exact canonical UTF-8 text.
+Python 3.11 generated this file before the Phase 1.5 mint changed. The
+vectors include Unicode ordering, nested and null-heavy values, float
+notation boundaries, and the accepted i64/u64 integer edges.
+
+## `substrate/legacy-addresses.json`
+
+Objects and derivations from the unchanged pre-Phase 1.5 Python
+substrate. Each entry pins the canonical bytes, the pre-Phase 0
+SHA-256 address, and the live Phase 0 prompt-domain BLAKE3 micro-epoch.
+The linked root deliberately points to SHA-era leaves to prove mixed
+epochs are part of the permanent model.
+
+## `substrate/b3-addresses.json`
+
+The active object-domain and derivation-domain BLAKE3 addresses for the
+same immutable entities. This file is generated only after Python's
+Phase 1.5 mint changes; it never replaces or rewrites the historical
+oracle.

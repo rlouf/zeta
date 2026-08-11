@@ -1,6 +1,7 @@
 """Trace store and run-timeline tests."""
 
 import asyncio
+import hashlib
 import json
 import sqlite3
 from pathlib import Path
@@ -389,6 +390,62 @@ def test_zeta_trace_object_ids_change_for_schema_data_and_links() -> None:
             links=("right", "left"),
         ).content_address()
     )
+
+
+def test_zeta_trace_encoding_vectors_match_python_bytes() -> None:
+    path = (
+        Path(__file__).resolve().parents[2]
+        / "spec"
+        / "vectors"
+        / "substrate"
+        / "encoding.json"
+    )
+    document = json.loads(path.read_text(encoding="utf-8"))
+
+    for vector in document["vectors"]:
+        encoded = json.dumps(
+            vector["value"],
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+        assert encoded == vector["canonical_utf8"], vector["name"]
+
+
+def test_zeta_trace_legacy_address_vectors_match_current_python_mint() -> None:
+    path = (
+        Path(__file__).resolve().parents[2]
+        / "spec"
+        / "vectors"
+        / "substrate"
+        / "legacy-addresses.json"
+    )
+    document = json.loads(path.read_text(encoding="utf-8"))
+
+    for vector in document["objects"]:
+        fields = vector["object"]
+        obj = zeta_trace.Object(
+            kind=fields["kind"],
+            schema=fields["schema"],
+            data=fields["data"],
+            links=tuple(fields["links"]),
+        )
+        digest = hashlib.sha256(vector["canonical_utf8"].encode()).hexdigest()
+        assert f"sha256:{digest}" == vector["sha256_address"], vector["name"]
+        assert obj.content_address() == vector["phase0_address"], vector["name"]
+
+    for vector in document["derivations"]:
+        fields = vector["derivation"]
+        derivation = zeta_trace.Derivation(
+            producer=fields["producer"],
+            output_id=fields["output_id"],
+            input_ids=tuple(fields["input_ids"]),
+            params=fields["params"],
+        )
+        digest = hashlib.sha256(vector["canonical_utf8"].encode()).hexdigest()
+        assert f"derivation:{digest}" == vector["sha256_address"], vector["name"]
+        assert derivation.content_address() == vector["phase0_address"], vector["name"]
 
 
 def test_zeta_trace_sqlite_persists_objects_refs_derivations_and_closure(

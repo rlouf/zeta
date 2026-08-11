@@ -1,7 +1,7 @@
 # zeta
 
 `zeta` defines content identities and event-journal rules.
-It does not select or connect to a database.
+It keeps content addresses stable and makes event history verifiable.
 
 ## Contents
 

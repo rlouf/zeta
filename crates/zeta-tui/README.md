@@ -1,6 +1,7 @@
 # zeta-tui
 
 `zeta-tui` is an interactive terminal program for agent sessions.
+It makes session activity easy to follow and control from a terminal.
 It shows sessions, conversation output, and run progress.
 It can send messages to new or existing sessions.
 

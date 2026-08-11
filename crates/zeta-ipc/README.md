@@ -1,7 +1,7 @@
 # zeta-ipc
 
 `zeta-ipc` implements the wire-v0 plugin protocol.
-It does not open sockets, start processes, or read a clock.
+It gives connected processes one message format and one set of session rules.
 
 ## Contents
 

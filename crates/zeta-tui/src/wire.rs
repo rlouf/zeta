@@ -1,65 +1,6 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-#[derive(Clone, Copy, Debug, Deserialize, Hash, PartialEq, Eq, Serialize)]
-#[serde(transparent)]
-pub(super) struct RequestId(pub(super) u64);
-
-#[derive(Debug, Serialize)]
-pub(super) struct RpcRequest<'a> {
-    jsonrpc: &'static str,
-    id: RequestId,
-    method: &'a str,
-    params: Value,
-}
-
-impl<'a> RpcRequest<'a> {
-    pub(super) fn new(id: RequestId, method: &'a str, params: Value) -> Self {
-        Self {
-            jsonrpc: "2.0",
-            id,
-            method,
-            params,
-        }
-    }
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(untagged)]
-pub(super) enum IncomingMessage {
-    Success(RpcSuccess),
-    Failure(RpcFailure),
-    Notification(RpcNotification),
-}
-
-#[derive(Debug, Deserialize)]
-pub(super) struct RpcSuccess {
-    pub(super) jsonrpc: String,
-    pub(super) id: RequestId,
-    pub(super) result: Value,
-}
-
-#[derive(Debug, Deserialize)]
-pub(super) struct RpcFailure {
-    pub(super) jsonrpc: String,
-    pub(super) id: RequestId,
-    pub(super) error: RpcError,
-}
-
-#[derive(Debug, Deserialize)]
-pub(super) struct RpcError {
-    pub(super) code: i64,
-    pub(super) message: String,
-    pub(super) data: Option<Value>,
-}
-
-#[derive(Debug, Deserialize)]
-pub(super) struct RpcNotification {
-    pub(super) jsonrpc: String,
-    pub(super) method: String,
-    pub(super) params: Value,
-}
-
 #[derive(Debug, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(transparent)]
 struct EventId(String);
@@ -83,6 +24,7 @@ pub(super) struct Cursor(pub(super) u64);
 #[derive(Debug, Deserialize, Serialize)]
 pub(super) struct Event {
     id: EventId,
+    #[serde(rename = "type")]
     event_type: String,
     source: String,
     payload: Value,
@@ -110,6 +52,10 @@ impl Event {
 
     pub(super) fn event_type(&self) -> &str {
         &self.event_type
+    }
+
+    pub(super) fn cursor(&self) -> Option<Cursor> {
+        self.cursor
     }
 
     pub(super) fn timeline_text(&self) -> String {
@@ -161,15 +107,14 @@ impl Event {
 }
 
 #[derive(Debug, Deserialize)]
-pub(super) struct EventsListResult {
-    pub(super) events: Vec<Event>,
-    pub(super) next_cursor: Option<Cursor>,
+pub(super) struct EventNotification {
+    pub(super) event: Event,
 }
 
 #[derive(Debug, Deserialize)]
-pub(super) struct InitializeResult {
-    pub(super) server: String,
-    pub(super) protocol: String,
+pub(super) struct EventsListResult {
+    pub(super) events: Vec<Event>,
+    pub(super) next_cursor: Option<Cursor>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -211,18 +156,19 @@ pub(super) struct SubmitResult {
 #[cfg(test)]
 mod tests {
     use serde_json::json;
+    use zeta_ipc::{Message, Request, RequestId};
 
     use super::{
-        Cursor, Event, EventId, EventsListResult, IncomingMessage, InitializeResult, RequestId,
-        RpcRequest, RunId, SessionId, SessionsListResult, SubmitResult,
+        Cursor, Event, EventId, EventNotification, EventsListResult, RunId, SessionId,
+        SessionsListResult, SubmitResult,
     };
 
     #[test]
-    fn event_accepts_current_wire_shape_and_unknown_fields() {
+    fn event_accepts_current_durable_shape_and_unknown_fields() {
         let message = r#"
         {
           "id": "evt_123",
-          "event_type": "future.event.type",
+          "type": "future.event.type",
           "source": "test",
           "payload": {"message": "hello", "future": {"value": 1}},
           "idempotency_key": null,
@@ -252,10 +198,15 @@ mod tests {
     }
 
     #[test]
-    fn request_serializes_current_json_rpc_shape() {
-        let request = RpcRequest::new(RequestId(7), "events.list", json!({"limit": 20}));
+    fn shared_request_serializes_the_ipc_shape() {
+        let request = Message::Request(Request::new(
+            RequestId::from(7_u64),
+            "events.list",
+            json!({"limit": 20}).as_object().unwrap().clone(),
+        ));
 
-        let value = serde_json::to_value(request).expect("request should serialize");
+        let value: serde_json::Value =
+            serde_json::from_str(&request.to_json()).expect("request should serialize");
 
         assert_eq!(
             value,
@@ -277,7 +228,7 @@ mod tests {
           "result": {
             "events": [{
               "id": "evt_123",
-              "event_type": "zeta.user_message",
+              "type": "zeta.user_message",
               "source": "user",
               "payload": {"message": "hello"},
               "idempotency_key": "message-123",
@@ -293,30 +244,41 @@ mod tests {
         }
         "#;
 
-        let message: IncomingMessage =
-            serde_json::from_str(message).expect("response should parse");
-        let IncomingMessage::Success(response) = message else {
+        let message = Message::parse_str(message).expect("response should parse");
+        let Message::Success(response) = message else {
             panic!("expected success response");
         };
         let result: EventsListResult =
             serde_json::from_value(response.result).expect("result should parse");
 
-        assert_eq!(response.id, RequestId(2));
+        assert_eq!(response.id, RequestId::from(2_u64));
         assert_eq!(result.events.len(), 1);
         assert_eq!(result.events[0].event_type, "zeta.user_message");
         assert_eq!(result.next_cursor, Some(Cursor(42)));
     }
 
     #[test]
-    fn initialize_result_parses_current_protocol_identity() {
-        let result: InitializeResult = serde_json::from_value(json!({
-            "server": "zeta",
-            "protocol": "0.1"
+    fn event_notification_parses_the_durable_event() {
+        let notification: EventNotification = serde_json::from_value(json!({
+            "event": {
+                "id": "evt_123",
+                "type": "zeta.user_message",
+                "source": "user",
+                "payload": {"content": "hello"},
+                "idempotency_key": null,
+                "caused_by": null,
+                "session_id": "session_123",
+                "run_id": "run_123",
+                "turn_id": null,
+                "timestamp_ms": 1754438400000_u64,
+                "cursor": 42
+            }
         }))
-        .expect("initialize result should parse");
+        .expect("notification should parse");
 
-        assert_eq!(result.server, "zeta");
-        assert_eq!(result.protocol, "0.1");
+        assert_eq!(notification.event.id(), "evt_123");
+        assert_eq!(notification.event.event_type(), "zeta.user_message");
+        assert_eq!(notification.event.cursor(), Some(Cursor(42)));
     }
 
     #[test]

@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import os
+import subprocess
 import sys
 import sysconfig
 import threading
@@ -18,7 +19,7 @@ from typing import Any, cast
 import pytest
 import zeta.capabilities.execution as zeta_capability_execution
 import zeta.capabilities.executors as zeta_capability_executors
-import zeta.cli.commands.rpc as cli_rpc
+import zeta.cli.commands.ipc as cli_ipc
 import zeta.context.transforms as zeta_content_transforms
 import zeta.loop.cancellation as zeta_loop_cancellation
 import zeta.loop.gateway as zeta_loop_gateway
@@ -31,6 +32,7 @@ import zeta.models.chat_completions as zeta_model
 import zeta.models.endpoint as zeta_model_endpoint
 import zeta.models.sse as zeta_model_sse
 import zeta.models.types as zeta_model_shapes
+from click import Group
 from click.testing import CliRunner
 from zeta.authoring import spec as zeta_agent_spec
 from zeta.authoring.manifest import ManifestError
@@ -62,6 +64,9 @@ from zeta.harness import worker as harness_worker
 from zeta.harness.queue import QueueItem
 from zeta.harness.sessions import submit_session_message
 from zeta.harness.store import RuntimeEventStore
+from zeta.ipc import connection as ipc_connection
+from zeta.ipc import framing as ipc_framing
+from zeta.ipc import routes as ipc_routes
 from zeta.journal import drafts as zeta_event_drafts
 from zeta.journal import views as zeta_event_views
 from zeta.journal import wire as zeta_event_wire
@@ -75,8 +80,6 @@ from zeta.loop import thread_run as zeta_requests
 from zeta.loop.request import ContentTransformBudget
 from zeta.loop.runtime import AgentRunResult
 from zeta.models.profiles import ModelSelection
-from zeta.rpc import jsonrpc as rpc_jsonrpc
-from zeta.rpc import routes as rpc_routes
 from zeta.substrate import InMemoryStore
 from zeta.tools import ensure_builtin_tools_registered, register_builtin_tools
 from zeta_test_support import (
@@ -161,7 +164,7 @@ def test_zeta_agent_run_result_payload_serializes_result_boundary() -> None:
     }
 
 
-def rpc_event(
+def ipc_event(
     content: str,
     *,
     cursor: int,
@@ -3256,7 +3259,7 @@ def test_zeta_run_capability_step_reconciles_existing_terminal_result(
     ]
 
 
-class RpcMemoryTransport(asyncio.Transport):
+class IpcMemoryTransport(asyncio.Transport):
     def __init__(self) -> None:
         self.buffer = bytearray()
         self.closed = False
@@ -3274,52 +3277,57 @@ class RpcMemoryTransport(asyncio.Transport):
         return self.buffer.decode()
 
 
-class RpcImmediateDrainProtocol(asyncio.Protocol):
+class IpcImmediateDrainProtocol(asyncio.Protocol):
     async def _drain_helper(self) -> None:
         return None
 
 
-_RPC_STREAM_LOOP = asyncio.new_event_loop()
+_IPC_STREAM_LOOP = asyncio.new_event_loop()
 
 
-def rpc_streams(
+def ipc_streams(
     input_text: str = "",
-    output: RpcMemoryTransport | None = None,
-) -> tuple[asyncio.StreamReader, asyncio.StreamWriter, RpcMemoryTransport]:
+    output: IpcMemoryTransport | None = None,
+) -> tuple[asyncio.StreamReader, asyncio.StreamWriter, IpcMemoryTransport]:
     reader = asyncio.StreamReader(
-        limit=rpc_jsonrpc.MAX_JSONRPC_LINE_BYTES,
-        loop=_RPC_STREAM_LOOP,
+        limit=ipc_framing.MAX_FRAME_BYTES,
+        loop=_IPC_STREAM_LOOP,
     )
     if input_text:
         reader.feed_data(input_text.encode())
     reader.feed_eof()
-    output = output or RpcMemoryTransport()
+    output = output or IpcMemoryTransport()
     writer = asyncio.StreamWriter(
         output,
-        RpcImmediateDrainProtocol(),
+        IpcImmediateDrainProtocol(),
         None,
-        _RPC_STREAM_LOOP,
+        _IPC_STREAM_LOOP,
     )
     return reader, writer, output
 
 
-def rpc_messages(output: RpcMemoryTransport) -> list[dict[str, Any]]:
+def ipc_messages(output: IpcMemoryTransport) -> list[dict[str, Any]]:
     return [json.loads(line) for line in output.getvalue().splitlines()]
 
 
-def rpc_client(
+def ipc_client(
     input_stream: asyncio.StreamReader | None = None,
-    output: RpcMemoryTransport | None = None,
+    output: IpcMemoryTransport | None = None,
     *,
     session: zeta_runtime_context.RuntimeContext | None = None,
     dispatcher: harness_dispatch.QueueingDispatcher | None = None,
+    initialized: bool = True,
 ) -> tuple[
-    rpc_jsonrpc.JsonRpcConnection,
-    rpc_routes.RpcClient,
-    rpc_jsonrpc.JsonRpcRouter,
+    ipc_connection.JsonRpcConnection,
+    ipc_routes.IpcClient,
+    ipc_connection.JsonRpcRouter,
 ]:
-    reader, writer, output = rpc_streams(output=output)
-    connection = rpc_jsonrpc.JsonRpcConnection(input_stream or reader, writer)
+    reader, writer, output = ipc_streams(output=output)
+    connection = ipc_connection.JsonRpcConnection(input_stream or reader, writer)
+    if initialized:
+        connection.initialized = True
+        connection.peer_name = "test"
+        connection.roles = frozenset({"client"})
     if session is None:
         event_store = zeta_events.MemoryEventStore()
         session = zeta_runtime_context.RuntimeContext(
@@ -3333,9 +3341,7 @@ def rpc_client(
 
     def notify_event(event: Event) -> None:
         asyncio.create_task(
-            connection.notify(
-                "events.notify", {"event": zeta_event_wire.event_to_wire(event)}
-            )
+            connection.notify("event", {"event": zeta_event_wire.event_to_wire(event)})
         )
 
     if dispatcher is None:
@@ -3343,19 +3349,19 @@ def rpc_client(
             session.event_sink,
             publish_event=notify_event,
         )
-    client = rpc_routes.RpcClient(
+    client = ipc_routes.IpcClient(
         connection=connection,
         session=session,
         dispatcher=dispatcher,
     )
-    router = rpc_routes.build_rpc_router(client)
+    router = ipc_routes.build_ipc_router(client)
     return connection, client, router
 
 
-def rpc_client_without_connection(
+def ipc_client_without_connection(
     *,
     session: zeta_runtime_context.RuntimeContext | None = None,
-) -> rpc_routes.RpcClient:
+) -> ipc_routes.IpcClient:
     if session is None:
         event_store = zeta_events.MemoryEventStore()
         session = zeta_runtime_context.RuntimeContext(
@@ -3366,45 +3372,63 @@ def rpc_client_without_connection(
             state_dir=Path("/tmp"),
             session_dir=Path("/tmp") / "sessions" / "ctx-session",
         )
-    return rpc_routes.RpcClient(
+    return ipc_routes.IpcClient(
         connection=None,
         session=session,
         dispatcher=harness_dispatch.QueueingDispatcher(session.event_sink),
     )
 
 
-def run_rpc_messages(
+def run_ipc_messages(
     input_text: str,
-    output: RpcMemoryTransport,
+    output: IpcMemoryTransport,
     *,
     session: zeta_runtime_context.RuntimeContext | None = None,
     dispatcher: harness_dispatch.QueueingDispatcher | None = None,
-) -> rpc_routes.RpcClient:
-    input_stream, _, _ = rpc_streams(input_text)
-    connection, client, router = rpc_client(
+) -> ipc_routes.IpcClient:
+    input_stream, _, _ = ipc_streams(input_text)
+    connection, client, router = ipc_client(
         input_stream,
         output,
         session=session,
         dispatcher=dispatcher,
+        initialized=False,
     )
     asyncio.run(connection.serve(router))
     return client
 
 
-def test_zeta_rpc_route_event_logs_dispatch_failure(
+def ipc_client_transcript(
+    *messages: dict[str, Any],
+    initialize_id: str | int = "initialize",
+) -> str:
+    initialize = {
+        "jsonrpc": "2.0",
+        "id": initialize_id,
+        "method": "initialize",
+        "params": {
+            "protocol_versions": [0],
+            "peer": {"name": "test-client", "version": "1"},
+            "roles": ["client"],
+        },
+    }
+    return "".join(f"{json.dumps(message)}\n" for message in (initialize, *messages))
+
+
+def test_zeta_ipc_route_event_logs_dispatch_failure(
     caplog: pytest.LogCaptureFixture,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    client = rpc_client_without_connection()
+    client = ipc_client_without_connection()
 
     async def failing_drain() -> list[Event]:
         raise RuntimeError("dispatch boom")
 
     monkeypatch.setattr(client.dispatcher, "drain", failing_drain)
-    event = rpc_event("hi", cursor=1)
+    event = ipc_event("hi", cursor=1)
 
-    with caplog.at_level(logging.ERROR, logger="zeta.rpc.routes"):
-        asyncio.run(rpc_routes.route_event(client, event))
+    with caplog.at_level(logging.ERROR, logger="zeta.ipc.routes"):
+        asyncio.run(ipc_routes.route_event(client, event))
 
     assert any(
         "Background event routing failed" in record.getMessage()
@@ -3413,26 +3437,230 @@ def test_zeta_rpc_route_event_logs_dispatch_failure(
     assert any(record.exc_info for record in caplog.records)
 
 
-def test_zeta_rpc_initialize_returns_server_metadata() -> None:
-    input_text = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "initialize"}) + "\n"
-    output = RpcMemoryTransport()
+def test_zeta_ipc_initialize_returns_server_metadata() -> None:
+    input_text = ipc_client_transcript(initialize_id=1)
+    output = IpcMemoryTransport()
 
-    run_rpc_messages(input_text, output)
+    run_ipc_messages(input_text, output)
 
-    assert rpc_messages(output) == [
+    assert ipc_messages(output) == [
         {
             "jsonrpc": "2.0",
             "id": 1,
-            "result": {"server": "zeta", "protocol": "0.1"},
+            "result": {
+                "protocol_version": 0,
+                "runtime": {"name": "zeta", "version": "unknown"},
+                "roles": ["client"],
+                "config": {},
+                "heartbeat_seconds": 10,
+                "max_in_flight": 64,
+            },
         }
     ]
 
 
-def test_zeta_rpc_router_registers_only_retained_methods() -> None:
-    _, _, router = rpc_client()
+def test_zeta_cli_exposes_ipc_stdio_without_rpc_alias() -> None:
+    assert "ipc" in cli_main.cli.commands
+    assert "rpc" not in cli_main.cli.commands
+    ipc_command = cli_main.cli.commands["ipc"]
+    assert isinstance(ipc_command, Group)
+    assert set(ipc_command.commands) == {"stdio"}
+
+
+def test_zeta_ipc_stdio_accepts_a_tui_shaped_transcript(tmp_path: Path) -> None:
+    process = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            "from zeta.cli.main import main; raise SystemExit(main())",
+            "ipc",
+            "stdio",
+        ],
+        cwd=tmp_path,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    input_stream = process.stdin
+    output_stream = process.stdout
+    error_stream = process.stderr
+    assert input_stream is not None
+    assert output_stream is not None
+    assert error_stream is not None
+
+    def request(message: dict[str, Any]) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+        input_stream.write(json.dumps(message) + "\n")
+        input_stream.flush()
+        notifications: list[dict[str, Any]] = []
+        while True:
+            line = output_stream.readline()
+            assert line
+            response = json.loads(line)
+            if response.get("method") == "event":
+                notifications.append(response)
+                continue
+            if response.get("id") == message["id"]:
+                return response, notifications
+
+    initialized, notifications = request(
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocol_versions": [0],
+                "peer": {"name": "zeta-tui", "version": "0.1.0"},
+                "roles": ["client"],
+                "heartbeat_seconds": 10,
+                "max_in_flight": 64,
+            },
+        }
+    )
+    assert notifications == []
+    assert initialized["result"] == {
+        "protocol_version": 0,
+        "runtime": {
+            "name": "zeta",
+            "version": initialized["result"]["runtime"]["version"],
+        },
+        "roles": ["client"],
+        "config": {},
+        "heartbeat_seconds": 10,
+        "max_in_flight": 64,
+    }
+
+    sessions, notifications = request(
+        {"jsonrpc": "2.0", "id": 2, "method": "session.list", "params": {}}
+    )
+    assert sessions["result"] == {"sessions": []}
+    assert notifications == []
+
+    started, notifications = request(
+        {
+            "jsonrpc": "2.0",
+            "id": 3,
+            "method": "session.start",
+            "params": {"message": "hello", "idempotency_key": "message-1"},
+        }
+    )
+    listed, later_notifications = request(
+        {
+            "jsonrpc": "2.0",
+            "id": 4,
+            "method": "events.list",
+            "params": {"limit": 200},
+        }
+    )
+    notifications.extend(later_notifications)
+    assert started["result"]["status"] == "queued"
+    assert notifications
+    notification_cursors = [
+        notification["params"]["event"]["cursor"] for notification in notifications
+    ]
+    assert notification_cursors == sorted(notification_cursors)
+    stored_ids = {event["id"] for event in listed["result"]["events"]}
+    assert all(
+        notification["params"]["event"]["id"] in stored_ids
+        for notification in notifications
+    )
+    assert all("type" in event for event in listed["result"]["events"])
+
+    ping, notifications = request(
+        {"jsonrpc": "2.0", "id": 5, "method": "ping", "params": {}}
+    )
+    assert ping["result"] == {}
+    assert notifications == []
+    shutdown, _ = request(
+        {
+            "jsonrpc": "2.0",
+            "id": "zeta-tui-shutdown",
+            "method": "shutdown",
+            "params": {"reason": "test complete"},
+        }
+    )
+    assert shutdown["result"] == {}
+    input_stream.close()
+    assert process.wait(timeout=10) == 0
+    output_stream.close()
+    error_stream.close()
+
+
+def test_zeta_ipc_stdio_requires_initialization_and_client_role(tmp_path: Path) -> None:
+    command = [
+        sys.executable,
+        "-c",
+        "from zeta.cli.main import main; raise SystemExit(main())",
+        "ipc",
+        "stdio",
+    ]
+    before_initialize = subprocess.run(
+        command,
+        cwd=tmp_path,
+        input=(
+            json.dumps(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "events.list",
+                    "params": {},
+                }
+            )
+            + "\n"
+        ),
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    response = json.loads(before_initialize.stdout)
+    assert response["error"]["code"] == -32600
+    assert response["error"]["data"]["code"] == "not_initialized"
+
+    transcript = "\n".join(
+        json.dumps(message)
+        for message in (
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "initialize",
+                "params": {
+                    "protocol_versions": [0],
+                    "peer": {"name": "client", "version": "1"},
+                    "roles": ["client"],
+                },
+            },
+            {
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "events.publish",
+                "params": {"type": "note.created", "payload": {}},
+            },
+            {
+                "jsonrpc": "2.0",
+                "id": 3,
+                "method": "shutdown",
+                "params": {},
+            },
+        )
+    )
+    initialized = subprocess.run(
+        command,
+        cwd=tmp_path,
+        input=transcript + "\n",
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    responses = [json.loads(line) for line in initialized.stdout.splitlines()]
+    denied = next(response for response in responses if response.get("id") == 2)
+    assert denied["error"]["code"] == -32601
+    assert denied["error"]["data"]["code"] == "method_not_found"
+
+
+def test_zeta_ipc_router_registers_only_retained_methods() -> None:
+    _, _, router = ipc_client()
 
     assert set(router.routes) == {
-        "initialize",
         "events.publish",
         "events.list",
         "session.start",
@@ -3443,7 +3671,7 @@ def test_zeta_rpc_router_registers_only_retained_methods() -> None:
     }
 
 
-def test_zeta_rpc_queues_and_queries_authored_sessions(tmp_path: Path) -> None:
+def test_zeta_ipc_queues_and_queries_authored_sessions(tmp_path: Path) -> None:
     event_store = RuntimeEventStore.open(tmp_path / "events.sqlite3")
     session = zeta_runtime_context.RuntimeContext(
         session_id="rpc-control",
@@ -3466,13 +3694,13 @@ def test_zeta_rpc_queues_and_queries_authored_sessions(tmp_path: Path) -> None:
         project=SimpleNamespace(specs=(master,)),
         manifest={"generation": 1},
     )
-    client = rpc_routes.RpcClient(
+    client = ipc_routes.IpcClient(
         connection=None,
         session=session,
         dispatcher=harness_dispatch.QueueingDispatcher(event_store),
         project_snapshot=cast(Any, snapshot),
     )
-    router = rpc_routes.build_rpc_router(client)
+    router = ipc_routes.build_ipc_router(client)
 
     async def request(method: str, params: dict[str, Any]) -> dict[str, Any]:
         response = await router.response_for_message(
@@ -3519,7 +3747,7 @@ def test_zeta_rpc_queues_and_queries_authored_sessions(tmp_path: Path) -> None:
     assert event_store.list_attempts() == []
 
 
-def test_zeta_rpc_reports_unknown_and_conflicting_sessions(tmp_path: Path) -> None:
+def test_zeta_ipc_reports_unknown_and_conflicting_sessions(tmp_path: Path) -> None:
     event_store = RuntimeEventStore.open(tmp_path / "events.sqlite3")
     session = zeta_runtime_context.RuntimeContext(
         session_id="rpc-control",
@@ -3574,13 +3802,13 @@ def test_zeta_rpc_reports_unknown_and_conflicting_sessions(tmp_path: Path) -> No
             session_id="session-unavailable",
         )
     )
-    client = rpc_routes.RpcClient(
+    client = ipc_routes.IpcClient(
         connection=None,
         session=session,
         dispatcher=harness_dispatch.QueueingDispatcher(event_store),
         project_snapshot=cast(Any, snapshot),
     )
-    router = rpc_routes.build_rpc_router(client)
+    router = ipc_routes.build_ipc_router(client)
 
     unknown = asyncio.run(
         router.response_for_message(
@@ -3627,9 +3855,7 @@ def test_zeta_rpc_reports_unknown_and_conflicting_sessions(tmp_path: Path) -> No
     assert unavailable["error"]["data"]["code"] == "session_owner_unavailable"
 
 
-def test_zeta_rpc_oversized_line_returns_parse_error_and_continues(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_zeta_ipc_oversized_line_returns_parse_error_and_continues() -> None:
     class FakeWriter:
         def __init__(self) -> None:
             self.buffer = bytearray()
@@ -3644,52 +3870,56 @@ def test_zeta_rpc_oversized_line_returns_parse_error_and_continues(
         def close(self) -> None:
             self.closed = True
 
-    async def initialize(
-        params: dict[str, Any],
-        client: object,
-    ) -> dict[str, Any]:
-        del params, client
-        return {"server": "zeta", "protocol": "0.1"}
-
     async def run_case() -> list[dict[str, Any]]:
         reader = asyncio.StreamReader(limit=32)
         reader.feed_data(
-            ('{"jsonrpc":"2.0","id":1,"method":"' + ("x" * 128) + '"}\n').encode()
+            ('{"jsonrpc":"2.0","id":1,"method":"' + ("x" * 512) + '"}\n').encode()
         )
-        reader.feed_data(
-            (
-                json.dumps({"jsonrpc": "2.0", "id": 2, "method": "initialize"}) + "\n"
-            ).encode()
-        )
+        reader.feed_data(ipc_client_transcript(initialize_id=2).encode())
         reader.feed_eof()
         writer = FakeWriter()
-        connection = rpc_jsonrpc.JsonRpcConnection(reader, cast(Any, writer))
+        connection = ipc_connection.JsonRpcConnection(
+            reader,
+            cast(Any, writer),
+            max_frame_bytes=256,
+        )
         client = SimpleNamespace(connection=connection)
-        router = rpc_jsonrpc.JsonRpcRouter(cast(Any, client))
-        router.route("initialize", initialize)
+        router = ipc_connection.JsonRpcRouter(cast(Any, client))
 
         await connection.serve(router)
         return [json.loads(line) for line in writer.buffer.decode().splitlines()]
 
-    monkeypatch.setattr(rpc_jsonrpc, "MAX_JSONRPC_LINE_BYTES", 64)
     messages = asyncio.run(run_case())
     assert messages[0]["error"]["code"] == -32700
     assert {
         "jsonrpc": "2.0",
         "id": 2,
-        "result": {"server": "zeta", "protocol": "0.1"},
+        "result": {
+            "protocol_version": 0,
+            "runtime": {"name": "zeta", "version": "unknown"},
+            "roles": ["client"],
+            "config": {},
+            "heartbeat_seconds": 10,
+            "max_in_flight": 64,
+        },
     } in messages
 
 
-def test_zeta_rpc_unknown_method_returns_structured_error() -> None:
-    input_text = (
-        json.dumps({"jsonrpc": "2.0", "id": 1, "method": "events.subscribe"}) + "\n"
+def test_zeta_ipc_unknown_method_returns_structured_error() -> None:
+    input_text = ipc_client_transcript(
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "events.subscribe",
+            "params": {"input": {}, "effect_key": "test"},
+        }
     )
-    output = RpcMemoryTransport()
+    output = IpcMemoryTransport()
 
-    run_rpc_messages(input_text, output)
+    run_ipc_messages(input_text, output)
 
-    assert rpc_messages(output) == [
+    messages = [message for message in ipc_messages(output) if message.get("id") == 1]
+    assert messages == [
         {
             "jsonrpc": "2.0",
             "id": 1,
@@ -3702,23 +3932,30 @@ def test_zeta_rpc_unknown_method_returns_structured_error() -> None:
     ]
 
 
-def test_zeta_rpc_router_response_for_message_does_not_write_to_connection() -> None:
-    output = RpcMemoryTransport()
-    _, _, router = rpc_client(output=output)
+def test_zeta_ipc_router_response_for_message_does_not_write_to_connection() -> None:
+    output = IpcMemoryTransport()
+    _, _, router = ipc_client(output=output)
 
     response = asyncio.run(
-        router.response_for_message({"jsonrpc": "2.0", "id": 1, "method": "initialize"})
+        router.response_for_message(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "events.list",
+                "params": {},
+            }
+        )
     )
 
     assert response == {
         "jsonrpc": "2.0",
         "id": 1,
-        "result": {"server": "zeta", "protocol": "0.1"},
+        "result": {"events": [], "next_cursor": None},
     }
     assert output.getvalue() == ""
 
 
-def test_zeta_rpc_events_publish_uses_constructor_shaped_event(
+def test_zeta_ipc_events_publish_uses_protocol_event_shape(
     tmp_path: Path,
 ) -> None:
     event_store = zeta_events.SqliteEventStore(tmp_path / "events.sqlite3")
@@ -3730,41 +3967,34 @@ def test_zeta_rpc_events_publish_uses_constructor_shaped_event(
         state_dir=tmp_path,
         session_dir=tmp_path / "sessions" / "ctx-session",
     )
-    input_text = (
-        json.dumps(
+    output = IpcMemoryTransport()
+    _, _, router = ipc_client(output=output, session=session)
+
+    message = asyncio.run(
+        router.response_for_message(
             {
                 "jsonrpc": "2.0",
                 "id": 1,
                 "method": "events.publish",
                 "params": {
-                    "event_type": "zeta.user_message",
-                    "source": "test",
+                    "type": "zeta.user_message",
                     "payload": {"content": "hello"},
                     "session_id": "ctx-session",
                     "run_id": "run_1",
                 },
             }
         )
-        + "\n"
     )
-    output = RpcMemoryTransport()
-
-    run_rpc_messages(input_text, output, session=session)
-
-    messages = rpc_messages(output)
-    message = next(message for message in messages if message.get("id") == 1)
-    notification = next(
-        message for message in messages if message.get("method") == "events.notify"
-    )
+    assert message is not None
     assert message["result"]["inserted"] is True
-    assert message["result"]["event"]["event_type"] == "zeta.user_message"
+    assert message["result"]["event"]["type"] == "zeta.user_message"
+    assert message["result"]["event"]["source"] == "test"
     assert message["result"]["event"]["payload"] == {"content": "hello"}
     assert message["result"]["event"]["cursor"] == 1
-    assert message["result"]["lifecycle_events"] == []
-    assert notification["params"]["event"] == message["result"]["event"]
+    assert set(message["result"]) == {"inserted", "event"}
 
 
-def test_zeta_rpc_events_publish_returns_before_routing_finishes(
+def test_zeta_ipc_events_publish_returns_before_routing_finishes(
     tmp_path: Path,
 ) -> None:
     async def run() -> None:
@@ -3802,8 +4032,8 @@ def test_zeta_rpc_events_publish_returns_before_routing_finishes(
                 )
             ],
         )
-        output = RpcMemoryTransport()
-        _, _, router = rpc_client(output=output, session=session, dispatcher=dispatcher)
+        output = IpcMemoryTransport()
+        _, _, router = ipc_client(output=output, session=session, dispatcher=dispatcher)
 
         await router.handle_message(
             {
@@ -3811,8 +4041,7 @@ def test_zeta_rpc_events_publish_returns_before_routing_finishes(
                 "id": 1,
                 "method": "events.publish",
                 "params": {
-                    "event_type": "zeta.user_message",
-                    "source": "test",
+                    "type": "zeta.user_message",
                     "payload": {"content": "hello"},
                     "session_id": "ctx-session",
                 },
@@ -3820,10 +4049,10 @@ def test_zeta_rpc_events_publish_returns_before_routing_finishes(
         )
 
         message = next(
-            message for message in rpc_messages(output) if message.get("id") == 1
+            message for message in ipc_messages(output) if message.get("id") == 1
         )
         assert message["result"]["inserted"] is True
-        assert message["result"]["lifecycle_events"] == []
+        assert set(message["result"]) == {"inserted", "event"}
         assert not release.is_set()
 
         await asyncio.wait_for(started.wait(), timeout=1)
@@ -3842,7 +4071,7 @@ def test_zeta_ingress_render_template_reports_missing_field() -> None:
         harness_connector_bridge.render_template("{absent}", draft)
 
 
-def test_zeta_rpc_events_publish_rejects_lifecycle_event_ingress(
+def test_zeta_ipc_events_publish_rejects_lifecycle_event_ingress(
     tmp_path: Path,
 ) -> None:
     event_store = zeta_events.SqliteEventStore(tmp_path / "events.sqlite3")
@@ -3854,35 +4083,28 @@ def test_zeta_rpc_events_publish_rejects_lifecycle_event_ingress(
         state_dir=tmp_path,
         session_dir=tmp_path / "sessions" / "ctx-session",
     )
-    input_text = (
-        json.dumps(
+    _, _, router = ipc_client(session=session)
+    message = asyncio.run(
+        router.response_for_message(
             {
                 "jsonrpc": "2.0",
                 "id": 1,
                 "method": "events.publish",
                 "params": {
-                    "event_type": "runtime.attempt.started",
-                    "source": "test",
+                    "type": "runtime.attempt.started",
                     "payload": {"attempt_id": "att_1"},
                     "session_id": "ctx-session",
                 },
             }
         )
-        + "\n"
     )
-    output = RpcMemoryTransport()
-
-    run_rpc_messages(input_text, output, session=session)
-
-    message = next(
-        message for message in rpc_messages(output) if message.get("id") == 1
-    )
+    assert message is not None
     assert message["error"]["code"] == -32602
     assert message["error"]["data"]["code"] == "reserved_runtime_event"
     assert event_store.list_events(zeta_events.Filter()) == []
 
 
-def test_zeta_rpc_events_publish_reports_invalid_journal_values(tmp_path: Path) -> None:
+def test_zeta_ipc_events_publish_reports_invalid_journal_values(tmp_path: Path) -> None:
     event_store = zeta_events.SqliteEventStore(tmp_path / "events.sqlite3")
     session = zeta_runtime_context.RuntimeContext(
         session_id="ctx-session",
@@ -3898,8 +4120,7 @@ def test_zeta_rpc_events_publish_reports_invalid_journal_values(tmp_path: Path) 
             "id": 1,
             "method": "events.publish",
             "params": {
-                "event_type": "invalid.payload",
-                "source": "test",
+                "type": "invalid.payload",
                 "payload": {"value": float("nan")},
             },
         },
@@ -3908,21 +4129,17 @@ def test_zeta_rpc_events_publish_reports_invalid_journal_values(tmp_path: Path) 
             "id": 2,
             "method": "events.publish",
             "params": {
-                "event_type": "invalid.source",
-                "source": "",
+                "type": "invalid.session",
                 "payload": {},
+                "session_id": "",
             },
         },
     ]
-    output = RpcMemoryTransport()
-
-    run_rpc_messages(
-        "".join(f"{json.dumps(request)}\n" for request in requests),
-        output,
-        session=session,
-    )
-
-    messages = {message["id"]: message for message in rpc_messages(output)}
+    _, _, router = ipc_client(session=session)
+    responses = [
+        asyncio.run(router.response_for_message(request)) for request in requests
+    ]
+    messages = {message["id"]: message for message in responses if message is not None}
     for request_id in (1, 2):
         assert messages[request_id]["error"]["code"] == -32602
         assert messages[request_id]["error"]["data"]["code"] == "invalid_event"
@@ -3958,7 +4175,7 @@ def test_zeta_runtime_store_resolves_duplicate_drafts_before_payload_validation(
     assert duplicate.event == inserted.event
 
 
-def test_zeta_rpc_events_list_uses_event_store_filter_names(tmp_path: Path) -> None:
+def test_zeta_ipc_events_list_uses_event_store_filter_names(tmp_path: Path) -> None:
     event_store = zeta_events.SqliteEventStore(tmp_path / "events.sqlite3")
     for content in ("one", "two", "three"):
         event_store.accept(
@@ -3978,8 +4195,9 @@ def test_zeta_rpc_events_list_uses_event_store_filter_names(tmp_path: Path) -> N
         state_dir=tmp_path,
         session_dir=tmp_path / "sessions" / "ctx-session",
     )
-    input_text = (
-        json.dumps(
+    _, _, router = ipc_client(session=session)
+    message = asyncio.run(
+        router.response_for_message(
             {
                 "jsonrpc": "2.0",
                 "id": 1,
@@ -3992,15 +4210,8 @@ def test_zeta_rpc_events_list_uses_event_store_filter_names(tmp_path: Path) -> N
                 },
             }
         )
-        + "\n"
     )
-    output = RpcMemoryTransport()
-
-    run_rpc_messages(input_text, output, session=session)
-
-    message = next(
-        message for message in rpc_messages(output) if message.get("id") == 1
-    )
+    assert message is not None
     assert [event["payload"]["content"] for event in message["result"]["events"]] == [
         "two",
         "three",
@@ -4008,7 +4219,7 @@ def test_zeta_rpc_events_list_uses_event_store_filter_names(tmp_path: Path) -> N
     assert message["result"]["next_cursor"] == 3
 
 
-def test_zeta_rpc_events_list_accepts_zero_and_rejects_invalid_limits(
+def test_zeta_ipc_events_list_accepts_zero_and_rejects_invalid_limits(
     tmp_path: Path,
 ) -> None:
     event_store = zeta_events.SqliteEventStore(tmp_path / "events.sqlite3")
@@ -4047,15 +4258,11 @@ def test_zeta_rpc_events_list_accepts_zero_and_rejects_invalid_limits(
             "params": {"limit": True},
         },
     ]
-    output = RpcMemoryTransport()
-
-    run_rpc_messages(
-        "".join(f"{json.dumps(request)}\n" for request in requests),
-        output,
-        session=session,
-    )
-
-    messages = {message["id"]: message for message in rpc_messages(output)}
+    _, _, router = ipc_client(session=session)
+    responses = [
+        asyncio.run(router.response_for_message(request)) for request in requests
+    ]
+    messages = {message["id"]: message for message in responses if message is not None}
     assert messages[1]["result"] == {"events": [], "next_cursor": None}
     for request_id in (2, 3):
         assert messages[request_id]["error"]["code"] == -32602
@@ -4216,7 +4423,7 @@ def test_zeta_session_agent_request_preserves_explicit_model_override(
     assert request.config.model_url == "http://127.0.0.1:9999/v1/chat/completions"
 
 
-def test_zeta_rpc_session_cancel_records_a_durable_request(tmp_path: Path) -> None:
+def test_zeta_ipc_session_cancel_records_a_durable_request(tmp_path: Path) -> None:
     event_store = RuntimeEventStore.open(tmp_path / "events.sqlite3")
     queued = submit_session_message(
         event_store,
@@ -4243,10 +4450,10 @@ def test_zeta_rpc_session_cancel_records_a_durable_request(tmp_path: Path) -> No
         state_dir=tmp_path,
         session_dir=tmp_path / "sessions" / "rpc-control",
     )
-    client = rpc_client_without_connection(session=session)
+    client = ipc_client_without_connection(session=session)
 
     result = asyncio.run(
-        rpc_routes.session_cancel(
+        ipc_routes.session_cancel(
             {"run_id": queued["run_id"], "reason": "user changed direction"},
             client,
         )
@@ -4265,7 +4472,7 @@ def test_zeta_rpc_session_cancel_records_a_durable_request(tmp_path: Path) -> No
     event_store.close()
 
 
-def test_zeta_rpc_session_cancel_survives_a_new_client(tmp_path: Path) -> None:
+def test_zeta_ipc_session_cancel_survives_a_new_client(tmp_path: Path) -> None:
     event_store = RuntimeEventStore.open(tmp_path / "events.sqlite3")
     queued = submit_session_message(
         event_store,
@@ -4282,15 +4489,15 @@ def test_zeta_rpc_session_cancel_survives_a_new_client(tmp_path: Path) -> None:
         state_dir=tmp_path,
         session_dir=tmp_path / "sessions" / "new-client",
     )
-    client = rpc_client_without_connection(session=session)
+    client = ipc_client_without_connection(session=session)
 
     cancelled = asyncio.run(
-        rpc_routes.session_cancel({"run_id": queued["run_id"]}, client)
+        ipc_routes.session_cancel({"run_id": queued["run_id"]}, client)
     )
     repeated = asyncio.run(
-        rpc_routes.session_cancel({"run_id": queued["run_id"]}, client)
+        ipc_routes.session_cancel({"run_id": queued["run_id"]}, client)
     )
-    unknown = asyncio.run(rpc_routes.session_cancel({"run_id": "run_unknown"}, client))
+    unknown = asyncio.run(ipc_routes.session_cancel({"run_id": "run_unknown"}, client))
 
     assert cancelled["status"] == "cancelled"
     assert cancelled["changed"] is True
@@ -6583,7 +6790,7 @@ def test_zeta_cli_resource_groups_reject_state_dir(
                 "prompts",
             ),
         ),
-        ("rpc", ("stdio",)),
+        ("ipc", ("stdio",)),
     ],
 )
 def test_zeta_cli_resource_namespaces_only_show_help(
@@ -6612,7 +6819,7 @@ def test_zeta_cli_resource_namespaces_only_show_help(
         ["agent", "--help"],
         ["model", "--help"],
         ["run", "show", "run_missing"],
-        ["rpc", "--stdio"],
+        ["rpc", "stdio"],
         ["schedules", "run"],
         ["schedules", "--once"],
     ],
@@ -6627,7 +6834,7 @@ def test_zeta_cli_removed_spellings_fail(
         nonlocal stdio_calls
         stdio_calls += 1
 
-    monkeypatch.setattr(cli_rpc, "run_stdio", run_stdio)
+    monkeypatch.setattr(cli_ipc, "run_stdio", run_stdio)
 
     result = CliRunner().invoke(cli_main.cli, command)
 
@@ -6635,7 +6842,7 @@ def test_zeta_cli_removed_spellings_fail(
     assert stdio_calls == 0
 
 
-def test_zeta_cli_rpc_stdio_runs_the_stdio_transport(
+def test_zeta_cli_ipc_stdio_runs_the_stdio_transport(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     captured: list[tuple[object, object]] = []
@@ -6643,9 +6850,9 @@ def test_zeta_cli_rpc_stdio_runs_the_stdio_transport(
     def run_stdio(input_stream: object, output_stream: object) -> None:
         captured.append((input_stream, output_stream))
 
-    monkeypatch.setattr(cli_rpc, "run_stdio", run_stdio)
+    monkeypatch.setattr(cli_ipc, "run_stdio", run_stdio)
 
-    result = CliRunner().invoke(cli_main.cli, ["rpc", "stdio"])
+    result = CliRunner().invoke(cli_main.cli, ["ipc", "stdio"])
 
     assert result.exit_code == 0
     assert len(captured) == 1
@@ -6858,7 +7065,7 @@ def test_zeta_cli_subcommand_does_not_launch_the_tui(
 
     monkeypatch.setattr(os, "execv", execv)
 
-    result = CliRunner().invoke(cli_main.cli, ["rpc", "--help"])
+    result = CliRunner().invoke(cli_main.cli, ["ipc", "--help"])
 
     assert result.exit_code == 0
 

@@ -1,6 +1,7 @@
 """JSON-RPC messages, framing, peer support, and process supervision."""
 
 from zeta.ipc.client import EventType, ProviderError, SourceEvent, run_peer
+from zeta.ipc.connection import JsonRpcConnection, JsonRpcRouter, RpcError
 from zeta.ipc.framing import FrameReader, FrameViolation, decode_frame, encode_frame
 from zeta.ipc.messages import (
     PROTOCOL_VERSION,
@@ -22,12 +23,15 @@ __all__ = [
     "EventType",
     "FrameReader",
     "FrameViolation",
+    "JsonRpcConnection",
+    "JsonRpcRouter",
     "MessageError",
     "PROTOCOL_VERSION",
     "PeerCommand",
     "ProviderCallError",
     "ProviderError",
     "PublishRequest",
+    "RpcError",
     "SourceEvent",
     "SubprocessPeer",
     "decode_frame",

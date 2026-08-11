@@ -1,4 +1,4 @@
-"""Zeta route adapters for the JSON-RPC boundary."""
+"""Runtime method adapters for the unified IPC boundary."""
 
 from __future__ import annotations
 
@@ -21,23 +21,30 @@ from zeta.harness.sessions import (
     submit_session_message,
 )
 from zeta.harness.store import RuntimeEventStore
+from zeta.ipc.connection import JsonRpcConnection, JsonRpcRouter, RpcError
 from zeta.journal.store import EventReader, Filter
 from zeta.journal.wire import event_to_wire
 from zeta.loop.runtime_context import RuntimeContext
-from zeta.rpc.jsonrpc import JsonRpcConnection, JsonRpcRouter, RpcError
 
 logger = logging.getLogger(__name__)
 
 
 @dataclass
-class RpcClient:
-    """Per-RPC peer context shared by route adapters for stdio runtime calls."""
+class IpcClient:
+    """Hold runtime resources used by one initialized IPC client."""
 
     connection: JsonRpcConnection | None
     session: RuntimeContext
     dispatcher: QueueingDispatcher
     background_tasks: set[asyncio.Task[Any]] = field(default_factory=set)
     project_snapshot: ProjectSnapshot | None = None
+
+    @property
+    def peer_name(self) -> str:
+        connection = self.connection
+        if connection is None or connection.peer_name is None:
+            return "ipc-client"
+        return connection.peer_name
 
     def create_background_task(self, awaitable: Any) -> asyncio.Task[Any]:
         """Start background work and keep it alive until it completes."""
@@ -59,30 +66,63 @@ def invalid_params(code: str, message: str, **extra: Any) -> RpcError:
     return RpcError(-32602, code, "Invalid params", {"message": message, **extra})
 
 
-async def initialize(_params: dict[str, Any], _client: RpcClient) -> dict[str, Any]:
-    """Return static protocol identity for the JSON-RPC `initialize` route."""
-
-    return {"server": "zeta", "protocol": "0.1"}
-
-
 async def events_publish(
     params: dict[str, Any],
-    client: RpcClient,
+    client: IpcClient,
 ) -> dict[str, Any]:
-    """Publish a client-authored draft event through the runtime dispatcher."""
+    """Publish a source event and return only after its durable insertion."""
 
-    try:
-        draft = DraftEvent(**params)
-    except TypeError as exc:
+    supported = {
+        "type",
+        "payload",
+        "idempotency_key",
+        "caused_by",
+        "session_id",
+        "run_id",
+        "turn_id",
+    }
+    unknown = sorted(set(params) - supported)
+    if unknown:
         raise invalid_params(
             "invalid_params",
-            f"DraftEvent parameters are invalid: {exc}",
-        ) from exc
-
-    if not draft.event_type:
-        raise invalid_params("invalid_event_type", "event_type must be non-empty")
-    if not isinstance(draft.payload, dict):
+            f"events.publish contains unsupported fields: {', '.join(unknown)}",
+            fields=unknown,
+        )
+    event_type = params.get("type")
+    if not isinstance(event_type, str) or not event_type:
+        raise invalid_params("invalid_event_type", "type must be non-empty")
+    payload = params.get("payload")
+    if not isinstance(payload, dict):
         raise invalid_params("invalid_payload", "payload must be an object")
+    for field_name in (
+        "idempotency_key",
+        "caused_by",
+        "session_id",
+        "run_id",
+        "turn_id",
+    ):
+        value = params.get(field_name)
+        if value is not None and (not isinstance(value, str) or not value):
+            raise invalid_params(
+                "invalid_event",
+                f"{field_name} must be null or a non-empty string",
+            )
+    try:
+        draft = DraftEvent(
+            event_type=event_type,
+            source=client.peer_name,
+            payload=payload,
+            idempotency_key=params.get("idempotency_key"),
+            caused_by=params.get("caused_by"),
+            session_id=params.get("session_id"),
+            run_id=params.get("run_id"),
+            turn_id=params.get("turn_id"),
+        )
+    except (TypeError, ValueError) as exc:
+        raise invalid_params(
+            "invalid_event",
+            f"Event values are invalid: {exc}",
+        ) from exc
 
     try:
         outcome = await client.dispatcher.publish_event(draft)
@@ -104,12 +144,11 @@ async def events_publish(
     return {
         "inserted": outcome.inserted,
         "event": event_to_wire(outcome.event),
-        "lifecycle_events": [],
     }
 
 
-async def route_event(client: RpcClient, event: Event) -> None:
-    """Let RPC ingress return before the durable queue is drained."""
+async def route_event(client: IpcClient, event: Event) -> None:
+    """Let IPC ingress return before the durable queue is drained."""
 
     event_id = event.id
 
@@ -121,7 +160,7 @@ async def route_event(client: RpcClient, event: Event) -> None:
         logger.exception("Background event routing failed for event %s", event_id)
 
 
-async def events_list(params: dict[str, Any], client: RpcClient) -> dict[str, Any]:
+async def events_list(params: dict[str, Any], client: IpcClient) -> dict[str, Any]:
     """List durable events using the event store's constructor-shaped filter."""
 
     try:
@@ -168,13 +207,14 @@ async def events_list(params: dict[str, Any], client: RpcClient) -> dict[str, An
     }
 
 
-async def session_start(params: dict[str, Any], client: RpcClient) -> dict[str, Any]:
+async def session_start(params: dict[str, Any], client: IpcClient) -> dict[str, Any]:
     """Queue a master turn without giving the submitting client worker ownership."""
     message, idempotency_key = session_message_params(
         params,
         supported={"message", "idempotency_key"},
     )
     store, snapshot = session_submission_resources(client)
+    after_cursor = latest_event_cursor(store)
     try:
         session_owner_for_submission(
             {"agent_id": MASTER_AGENT_ID},
@@ -183,15 +223,17 @@ async def session_start(params: dict[str, Any], client: RpcClient) -> dict[str, 
     except SessionOwnerUnavailable as exc:
         raise session_route_error(exc, None) from exc
     record_project_snapshot(store, snapshot)
-    return start_master_session(
+    result = start_master_session(
         store,
         message=message,
         project_generation=snapshot.generation_id,
         idempotency_key=idempotency_key,
     )
+    notify_committed_events(client, store, after_cursor)
+    return result
 
 
-async def session_send(params: dict[str, Any], client: RpcClient) -> dict[str, Any]:
+async def session_send(params: dict[str, Any], client: IpcClient) -> dict[str, Any]:
     """Queue one message for the existing session owner in the current generation."""
     message, idempotency_key = session_message_params(
         params,
@@ -199,13 +241,14 @@ async def session_send(params: dict[str, Any], client: RpcClient) -> dict[str, A
     )
     session_id = required_session_id(params)
     store, snapshot = session_submission_resources(client)
+    after_cursor = latest_event_cursor(store)
     try:
         session = store.session_status(session_id)
         agent_id = session_owner_for_submission(session, snapshot.project.specs)
     except (SessionNotFound, SessionOwnerConflict, SessionOwnerUnavailable) as exc:
         raise session_route_error(exc, session_id) from exc
     record_project_snapshot(store, snapshot)
-    return submit_session_message(
+    result = submit_session_message(
         store,
         message=message,
         agent_id=agent_id,
@@ -213,9 +256,11 @@ async def session_send(params: dict[str, Any], client: RpcClient) -> dict[str, A
         project_generation=snapshot.generation_id,
         idempotency_key=idempotency_key,
     )
+    notify_committed_events(client, store, after_cursor)
+    return result
 
 
-async def session_status(params: dict[str, Any], client: RpcClient) -> dict[str, Any]:
+async def session_status(params: dict[str, Any], client: IpcClient) -> dict[str, Any]:
     """Return one session activity record from durable runtime state."""
     reject_unknown_params(params, {"session_id"})
     session_id = required_session_id(params)
@@ -226,7 +271,7 @@ async def session_status(params: dict[str, Any], client: RpcClient) -> dict[str,
         raise session_route_error(exc, session_id) from exc
 
 
-async def session_list(params: dict[str, Any], client: RpcClient) -> dict[str, Any]:
+async def session_list(params: dict[str, Any], client: IpcClient) -> dict[str, Any]:
     """Return the derived authored-session catalog."""
     reject_unknown_params(params, set())
     store = session_runtime_store(client)
@@ -237,7 +282,7 @@ async def session_list(params: dict[str, Any], client: RpcClient) -> dict[str, A
 
 
 def session_submission_resources(
-    client: RpcClient,
+    client: IpcClient,
 ) -> tuple[RuntimeEventStore, ProjectSnapshot]:
     store = session_runtime_store(client)
     snapshot = client.project_snapshot
@@ -251,7 +296,7 @@ def session_submission_resources(
     return store, snapshot
 
 
-def session_runtime_store(client: RpcClient) -> RuntimeEventStore:
+def session_runtime_store(client: IpcClient) -> RuntimeEventStore:
     store = client.session.event_sink
     if not isinstance(store, RuntimeEventStore):
         raise RpcError(
@@ -319,8 +364,8 @@ def session_route_error(
     return RpcError(jsonrpc_code, code, "Session error", data)
 
 
-async def session_cancel(params: dict[str, Any], client: RpcClient) -> dict[str, Any]:
-    """Use durable state so cancellation does not depend on this RPC peer."""
+async def session_cancel(params: dict[str, Any], client: IpcClient) -> dict[str, Any]:
+    """Use durable state so cancellation does not depend on this IPC peer."""
 
     reject_unknown_params(params, {"run_id", "session_id", "reason"})
     run_id = params.get("run_id")
@@ -335,6 +380,7 @@ async def session_cancel(params: dict[str, Any], client: RpcClient) -> dict[str,
     if reason is not None and (not isinstance(reason, str) or not reason):
         raise invalid_params("invalid_reason", "reason must be non-empty")
     store = session_runtime_store(client)
+    after_cursor = latest_event_cursor(store)
     try:
         result = store.cancel_run(
             run_id,
@@ -348,6 +394,7 @@ async def session_cancel(params: dict[str, Any], client: RpcClient) -> dict[str,
             "Session error",
             {"message": str(exc), "run_id": run_id},
         ) from exc
+    notify_committed_events(client, store, after_cursor)
     return {
         "cancelled": result.status in {"cancelling", "cancelled", "already_cancelled"},
         "changed": result.changed,
@@ -359,10 +406,35 @@ async def session_cancel(params: dict[str, Any], client: RpcClient) -> dict[str,
     }
 
 
-def build_rpc_router(client: RpcClient) -> JsonRpcRouter:
-    """Wire the standard Zeta JSON-RPC method handlers onto a router."""
+def latest_event_cursor(store: RuntimeEventStore) -> int | None:
+    events = store.list_events(Filter(limit=1, newest_first=True))
+    return events[0].cursor if events else None
+
+
+def notify_committed_events(
+    client: IpcClient,
+    store: RuntimeEventStore,
+    after_cursor: int | None,
+) -> None:
+    connection = client.connection
+    if connection is None:
+        return
+    events = store.list_events(Filter(after_cursor=after_cursor))
+    if events:
+        client.create_background_task(send_event_notifications(connection, events))
+
+
+async def send_event_notifications(
+    connection: JsonRpcConnection,
+    events: list[Event],
+) -> None:
+    for event in events:
+        await connection.notify("event", {"event": event_to_wire(event)})
+
+
+def build_ipc_router(client: IpcClient) -> JsonRpcRouter:
+    """Wire the fixed application methods onto the IPC router."""
     router = JsonRpcRouter(client)
-    router.route("initialize", initialize)
     router.route("events.publish", events_publish)
     router.route("events.list", events_list)
     router.route("session.start", session_start)

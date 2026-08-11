@@ -537,7 +537,7 @@ def test_zeta_event_wire_schema_round_trips_durable_event() -> None:
 
     assert wire == {
         "id": "evt_wire",
-        "event_type": "runtime.queue_item.completed",
+        "type": "runtime.queue_item.completed",
         "source": "zeta",
         "payload": {"queue_item_id": "qi_1", "nested": {"values": [1, 2]}},
         "idempotency_key": "queue_item:evt_parent:agent:completed",
@@ -554,7 +554,7 @@ def test_zeta_event_wire_schema_round_trips_durable_event() -> None:
 def test_zeta_event_wire_schema_rejects_invalid_payload() -> None:
     wire = {
         "id": "evt_wire",
-        "event_type": "runtime.queue_item.completed",
+        "type": "runtime.queue_item.completed",
         "source": "zeta",
         "payload": [],
         "idempotency_key": None,

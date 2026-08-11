@@ -1391,7 +1391,21 @@ impl App {
     }
 
     pub(super) fn append_events(&mut self, events: Vec<Event>, cursor: Option<Cursor>) {
+        let mut highest_cursor = self.cursor;
         for event in events {
+            let mut already_seen = false;
+            for known in &self.events {
+                if known.id() == event.id() {
+                    already_seen = true;
+                    break;
+                }
+            }
+            if already_seen {
+                continue;
+            }
+            if let Some(event_cursor) = event.cursor() {
+                highest_cursor = later_cursor(highest_cursor, event_cursor);
+            }
             for (session_id, state) in &mut self.session_views {
                 if event.belongs_to_session(session_id) {
                     state.timeline_changed = true;
@@ -1411,7 +1425,10 @@ impl App {
             });
             self.events.push(event);
         }
-        self.cursor = cursor;
+        if let Some(cursor) = cursor {
+            highest_cursor = later_cursor(highest_cursor, cursor);
+        }
+        self.cursor = highest_cursor;
     }
 
     pub(super) fn submission_started(&mut self, id: String, message: String) {
@@ -2005,6 +2022,16 @@ impl App {
     }
 }
 
+fn later_cursor(current: Option<Cursor>, candidate: Cursor) -> Option<Cursor> {
+    let Some(current) = current else {
+        return Some(candidate);
+    };
+    if candidate.0 > current.0 {
+        return Some(candidate);
+    }
+    Some(current)
+}
+
 fn raw_timeline_items(events: &[&Event]) -> Vec<TimelineItem> {
     let mut items = Vec::new();
     for event in events {
@@ -2085,7 +2112,6 @@ fn semantic_timeline_items(events: &[&Event], animation_frame: usize) -> Vec<Tim
         if event_type.starts_with("runtime.")
             || event_type.starts_with("session.")
             || event_type.starts_with("zeta.")
-            || event_type.starts_with("rpc.")
         {
             continue;
         }
@@ -3694,7 +3720,7 @@ mod tests {
     ) -> Event {
         serde_json::from_value(serde_json::json!({
             "id": format!("evt_{cursor}"),
-            "event_type": event_type,
+            "type": event_type,
             "source": "user",
             "payload": payload,
             "idempotency_key": idempotency_key,
@@ -3759,6 +3785,31 @@ mod tests {
         assert!(!screen.contains("cursor 1"));
         assert!(screen.contains("enter attach"));
         assert!(screen.contains("n new"));
+    }
+
+    #[test]
+    fn appending_events_ignores_an_already_seen_durable_event() {
+        let first = event(
+            "zeta.user_message",
+            serde_json::json!({"content": "hello"}),
+            "session_1",
+            "run_1",
+            1,
+        );
+        let duplicate = event(
+            "zeta.user_message",
+            serde_json::json!({"content": "hello"}),
+            "session_1",
+            "run_1",
+            1,
+        );
+        let mut app = App::connected("0".to_owned(), Vec::new(), Vec::new(), None);
+
+        app.append_events(vec![first], Some(Cursor(1)));
+        app.append_events(vec![duplicate], Some(Cursor(1)));
+
+        assert_eq!(app.events.len(), 1);
+        assert_eq!(app.cursor(), Some(1));
     }
 
     #[test]
@@ -3857,7 +3908,7 @@ mod tests {
     }
 
     #[test]
-    fn attached_timeline_renders_conversation_and_activity_instead_of_wire_events() {
+    fn attached_timeline_renders_conversation_and_activity_instead_of_durable_events() {
         let request = event(
             "session.message.requested",
             serde_json::json!({"message": "Inspect the project"}),
@@ -5406,7 +5457,7 @@ mod tests {
             app.handle_event(&TerminalEvent::Paste("Preserve this draft".to_owned())),
             AppAction::None
         );
-        app.set_reconnecting(3, 2_000, "zeta RPC closed".to_owned());
+        app.set_reconnecting(3, 2_000, "zeta IPC closed".to_owned());
         let backend = TestBackend::new(80, 18);
         let mut terminal = Terminal::new(backend).expect("terminal should initialize");
 

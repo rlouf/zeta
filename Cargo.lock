@@ -1196,4 +1196,5 @@ dependencies = [
  "tokio-util",
  "unicode-width 0.2.0",
  "uuid",
+ "zeta-ipc",
 ]

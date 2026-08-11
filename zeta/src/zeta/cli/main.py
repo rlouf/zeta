@@ -13,10 +13,10 @@ import click
 from zeta.cli.commands.agents import agents
 from zeta.cli.commands.attempts import attempts
 from zeta.cli.commands.events import cancel, events, sessions, waits
+from zeta.cli.commands.ipc import ipc
 from zeta.cli.commands.new import new
 from zeta.cli.commands.ps import ps
 from zeta.cli.commands.queue import queue
-from zeta.cli.commands.rpc import rpc
 from zeta.cli.commands.run import run
 from zeta.cli.commands.schedules import schedules
 from zeta.cli.commands.serve import serve
@@ -54,7 +54,7 @@ cli.add_command(run)
 cli.add_command(serve)
 cli.add_command(schedules)
 cli.add_command(agents)
-cli.add_command(rpc)
+cli.add_command(ipc)
 cli.add_command(traces_group)
 cli.add_command(models_group)
 

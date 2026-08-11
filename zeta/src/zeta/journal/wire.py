@@ -1,7 +1,7 @@
-"""Wire encoding for durable events.
+"""External encoding for durable events.
 
-RPC clients and other external readers exchange events as JSON objects. These
-helpers convert between that wire object and the durable `Event` record.
+IPC peers and other external readers exchange events as JSON objects. These
+helpers convert between that object and the durable `Event` record.
 """
 
 from __future__ import annotations
@@ -13,11 +13,11 @@ from zeta.events import Event, json_native_payload
 
 
 def event_to_wire(event: Event) -> dict[str, Any]:
-    """Serialize a durable event for RPC and other external readers."""
+    """Serialize a durable event for IPC and other external readers."""
 
     return {
         "id": event.id,
-        "event_type": event.event_type,
+        "type": event.event_type,
         "source": event.source,
         "payload": json_native_payload(event.payload),
         "idempotency_key": event.idempotency_key,
@@ -38,7 +38,7 @@ def event_from_wire(value: Mapping[str, Any]) -> Event:
         raise ValueError("payload must be an object")
     return Event(
         id=required_wire_string(value, "id"),
-        event_type=required_wire_string(value, "event_type"),
+        event_type=required_wire_string(value, "type"),
         source=required_wire_string(value, "source"),
         payload=json_native_payload(payload),
         idempotency_key=optional_wire_string(value, "idempotency_key"),

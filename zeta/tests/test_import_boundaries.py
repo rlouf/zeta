@@ -43,19 +43,27 @@ FORBIDDEN_DEPENDENCIES = {
         "rpc",
     },
     "tools": {"authoring", "cli", "harness", "loop", "rpc"},
-    "ipc": {
-        "authoring",
-        "capabilities",
-        "cli",
-        "context",
-        "harness",
-        "journal",
-        "loop",
-        "models",
-        "rpc",
-        "tools",
-        "trace",
-    },
+}
+
+IPC_PROTOCOL_MODULES = {
+    "client.py",
+    "connection.py",
+    "framing.py",
+    "messages.py",
+    "supervisor.py",
+}
+IPC_PROTOCOL_FORBIDDEN = {
+    "authoring",
+    "capabilities",
+    "cli",
+    "context",
+    "harness",
+    "journal",
+    "loop",
+    "models",
+    "rpc",
+    "tools",
+    "trace",
 }
 
 # Leaf modules derive values and hold no state. They import only the standard
@@ -123,6 +131,24 @@ def test_layers_depend_downward_only() -> None:
                     continue
                 if parts[1] in forbidden:
                     offenders.append(f"{layer}: {path.name}:{lineno} imports {module}")
+    assert offenders == []
+
+
+def test_ipc_protocol_modules_stay_below_runtime_adapters() -> None:
+    ipc_files = {path.name for path in python_files("zeta", "ipc")}
+    assert IPC_PROTOCOL_MODULES <= ipc_files
+    offenders: list[str] = []
+    for path in python_files("zeta", "ipc"):
+        if path.name not in IPC_PROTOCOL_MODULES:
+            continue
+        for module, lineno in imported_modules(path):
+            parts = module.split(".")
+            if (
+                len(parts) >= 2
+                and parts[0] == "zeta"
+                and parts[1] in IPC_PROTOCOL_FORBIDDEN
+            ):
+                offenders.append(f"ipc: {path.name}:{lineno} imports {module}")
     assert offenders == []
 
 

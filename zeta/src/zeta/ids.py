@@ -17,7 +17,7 @@ with the first instead of creating parallel work.
 Run ids are the one exception, and the exception is deliberate. A run id is
 either **claimed in advance** or **derived** from the attempt:
 
-- An RPC client must address a run before the run exists, so that it can cancel
+- A client must address a run before the run exists, so that it can cancel
   the run and correlate streamed events. No derived id is available that early,
   because the attempt appears only after the event is published, routed, and
   claimed. Such a caller claims an id with `claimed_run_id`.

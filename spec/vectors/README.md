@@ -25,7 +25,7 @@ Each `.json` file contains a value that the profile or one fixed protocol
 method must reject. Its sibling reason file has this format:
 
 1. The JSON-RPC error code that applies when a response is permitted.
-2. A stable detail code for `error.data.code` or local diagnostics.
+2. A stable fixture rule name for local diagnostics.
 3. A short explanation with the relevant specification section.
 
 An invalid response or notification produces a local violation and no reply,

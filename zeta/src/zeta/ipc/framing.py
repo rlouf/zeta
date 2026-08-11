@@ -11,6 +11,7 @@ from zeta.ipc.messages import (
     INVALID_REQUEST,
     PARSE_ERROR,
     MessageError,
+    RequestId,
     compact_json_bytes,
     validate_message,
 )
@@ -27,6 +28,7 @@ class FrameViolation:
     code: int
     detail: str
     line: bytes
+    request_id: RequestId | None = None
 
     def preview(self, limit: int = 200) -> str:
         text = self.line[:limit].decode("utf-8", errors="replace")
@@ -54,7 +56,13 @@ def decode_frame(line: bytes) -> dict[str, Any] | FrameViolation:
         return validate_message(parsed)
     except MessageError as exc:
         rule = "invalid_request" if exc.code == INVALID_REQUEST else "invalid_params"
-        return FrameViolation(rule, exc.code, str(exc), line)
+        return FrameViolation(
+            rule,
+            exc.code,
+            str(exc),
+            line,
+            _recover_request_id(parsed),
+        )
 
 
 class FrameReader:
@@ -121,3 +129,23 @@ class FrameReader:
 
 def _reject_json_constant(value: str) -> None:
     raise ValueError(f"{value} is not valid JSON")
+
+
+def _recover_request_id(value: Any) -> RequestId | None:
+    if (
+        not isinstance(value, dict)
+        or "method" not in value
+        or "result" in value
+        or "error" in value
+    ):
+        return None
+    message_id = value.get("id")
+    if isinstance(message_id, str):
+        return message_id
+    if (
+        isinstance(message_id, bool)
+        or not isinstance(message_id, int)
+        or not -(2**63) <= message_id <= 2**64 - 1
+    ):
+        return None
+    return message_id

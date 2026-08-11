@@ -43,7 +43,8 @@ Messages use UTF-8 newline-delimited JSON:
 A receiver MUST bound memory while reading malformed or oversized input. It
 MUST surface a bounded violation and MUST NOT crash. It MAY send a JSON-RPC
 error. The process supervisor decides whether repeated violations terminate a
-process.
+process. When a parsed invalid value is unambiguously a request, the receiver
+retains any valid request id for that error response.
 
 JSON serialization is not identity-bearing. Readers accept ordinary valid
 JSON. Writers emit compact JSON without insignificant whitespace. Object key
@@ -329,14 +330,14 @@ Version 0 has no subscription method.
 
 The client methods have these strict parameter objects:
 
-- `session.start`: required non-empty `message`; optional non-empty
-  `idempotency_key`.
+- `session.start`: required non-empty `message`; optional `idempotency_key`,
+  which is a non-empty string or `null`.
 - `session.send`: required non-empty `session_id` and `message`; optional
-  non-empty `idempotency_key`.
+  `idempotency_key`, which is a non-empty string or `null`.
 - `session.status`: required non-empty `session_id`.
 - `session.list`: empty object.
-- `session.cancel`: required non-empty `run_id`; optional non-empty
-  `session_id` and `reason`.
+- `session.cancel`: required non-empty `run_id`; optional `session_id` and
+  `reason`, each a non-empty string or `null`.
 
 Unknown members are invalid.
 

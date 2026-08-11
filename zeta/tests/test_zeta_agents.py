@@ -1269,6 +1269,14 @@ def test_zeta_event_connector_requires_egress_delivery_semantics() -> None:
         connector_manifest_from_describe(document, command=("unsafe",))
 
 
+def test_zeta_connector_manifest_rejects_an_unsupported_ipc_version() -> None:
+    document = _describe_document("future", {"future.event": None})
+    document["protocol_versions"] = [1]
+
+    with pytest.raises(ConnectorManifestError, match="does not speak IPC protocol 0"):
+        connector_manifest_from_describe(document, command=("future",))
+
+
 def test_zeta_load_connector_registry_loads_every_discovered_executable(
     tmp_path: Path,
 ) -> None:

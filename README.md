@@ -240,7 +240,7 @@ Standard terminal selection remains available; focus transcript items with
 Colors, clickable local paths, and copying degrade to plain, readable text when
 unsupported, and `NO_COLOR` is respected.
 
-If the local RPC child exits, the interface reconnects automatically. Drafts
+If the local IPC process exits, the interface reconnects automatically. Drafts
 and reading positions stay in place, durable events are reconciled first, and
 only unresolved messages are retried with their original idempotency keys.
 `Ctrl-C` exits, while `q` exits from browse mode. `Ctrl-Z` suspends cleanly on

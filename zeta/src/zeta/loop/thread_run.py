@@ -62,7 +62,7 @@ class SessionRunParams:
     def run_payload(self, run_id: str) -> dict[str, Any]:
         payload: dict[str, Any] = {
             "objective": self.objective,
-            "runtime": "zeta-rpc",
+            "runtime": "zeta-session",
             "run_id": run_id,
             "tools": list(self.tools or ()),
             "context": self.context,
@@ -123,7 +123,7 @@ def session_agent_request(params: dict[str, Any]) -> AgentRunRequest:
     request = session_run_params(params)
     return AgentRunRequest(
         objective=request.objective,
-        runtime="zeta-rpc",
+        runtime="zeta-session",
         tools=tuple(request.tools or ()),
         context=request.context,
         fresh=request.fresh,

@@ -97,7 +97,7 @@ def connector_manifest_from_describe(
         raise ConnectorManifestError("describe output must carry protocol_versions")
     if 0 not in versions:
         raise ConnectorManifestError(
-            f"connector {connector_id!r} does not speak wire protocol 0"
+            f"connector {connector_id!r} does not speak IPC protocol 0"
         )
     events = _schema_map(raw.get("events"), "events")
     filters = dict(_schema_map(raw.get("filters", {}), "filters"))

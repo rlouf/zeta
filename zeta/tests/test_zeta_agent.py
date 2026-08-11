@@ -402,30 +402,6 @@ def test_zeta_agent_loop_requires_an_executor() -> None:
         incomplete_call("answer", [], zeta_agent.AgentConfig())
 
 
-def run_rpc_session(*args: Any, **kwargs: Any) -> dict[str, Any]:
-    params = args[0] if args else kwargs.pop("params")
-    runtime_context = kwargs["runtime_context"]
-    event_dispatcher = kwargs.get("event_dispatcher")
-    if event_dispatcher is None:
-        event_dispatcher = harness_dispatch.QueueingDispatcher(
-            runtime_context.event_sink,
-            executors=[
-                harness_session_turn.session_turn_agent(
-                    runtime_context,
-                    publish_event=kwargs["publish_event"],
-                )
-            ],
-            publish_event=kwargs["publish_event"],
-        )
-    return asyncio.run(
-        harness_session_turn.submit_session_turn(
-            params,
-            runtime_context=runtime_context,
-            event_dispatcher=event_dispatcher,
-        )
-    )
-
-
 def dispatch_event(
     dispatcher: harness_dispatch.QueueingDispatcher,
     draft: DraftEvent,
@@ -3459,6 +3435,29 @@ def test_zeta_ipc_initialize_returns_server_metadata() -> None:
     ]
 
 
+def test_zeta_ipc_parameter_errors_keep_the_request_id() -> None:
+    input_text = ipc_client_transcript(
+        {
+            "jsonrpc": "2.0",
+            "id": "bad-params",
+            "method": "session.list",
+            "params": {"unexpected": True},
+        }
+    )
+    output = IpcMemoryTransport()
+
+    run_ipc_messages(input_text, output)
+
+    assert ipc_messages(output)[1] == {
+        "jsonrpc": "2.0",
+        "id": "bad-params",
+        "error": {
+            "code": -32602,
+            "message": "unsupported parameter 'unexpected'",
+        },
+    }
+
+
 def test_zeta_cli_exposes_ipc_stdio_without_rpc_alias() -> None:
     assert "ipc" in cli_main.cli.commands
     assert "rpc" not in cli_main.cli.commands
@@ -3674,12 +3673,12 @@ def test_zeta_ipc_router_registers_only_retained_methods() -> None:
 def test_zeta_ipc_queues_and_queries_authored_sessions(tmp_path: Path) -> None:
     event_store = RuntimeEventStore.open(tmp_path / "events.sqlite3")
     session = zeta_runtime_context.RuntimeContext(
-        session_id="rpc-control",
+        session_id="ipc-control",
         event_sink=event_store,
         trace_store=InMemoryStore(),
         tool_registry=CapabilityRegistry(),
         state_dir=tmp_path,
-        session_dir=tmp_path / "sessions" / "rpc-control",
+        session_dir=tmp_path / "sessions" / "ipc-control",
     )
     master = zeta_agent_spec.AgentSpec(
         slug="zeta.master",
@@ -3750,12 +3749,12 @@ def test_zeta_ipc_queues_and_queries_authored_sessions(tmp_path: Path) -> None:
 def test_zeta_ipc_reports_unknown_and_conflicting_sessions(tmp_path: Path) -> None:
     event_store = RuntimeEventStore.open(tmp_path / "events.sqlite3")
     session = zeta_runtime_context.RuntimeContext(
-        session_id="rpc-control",
+        session_id="ipc-control",
         event_sink=event_store,
         trace_store=InMemoryStore(),
         tool_registry=CapabilityRegistry(),
         state_dir=tmp_path,
-        session_dir=tmp_path / "sessions" / "rpc-control",
+        session_dir=tmp_path / "sessions" / "ipc-control",
     )
     specs = tuple(
         zeta_agent_spec.AgentSpec(
@@ -4443,12 +4442,12 @@ def test_zeta_ipc_session_cancel_records_a_durable_request(tmp_path: Path) -> No
         is not None
     )
     session = zeta_runtime_context.RuntimeContext(
-        session_id="rpc-control",
+        session_id="ipc-control",
         event_sink=event_store,
         trace_store=InMemoryStore(),
         tool_registry=CapabilityRegistry(),
         state_dir=tmp_path,
-        session_dir=tmp_path / "sessions" / "rpc-control",
+        session_dir=tmp_path / "sessions" / "ipc-control",
     )
     client = ipc_client_without_connection(session=session)
 
@@ -4667,7 +4666,7 @@ def test_zeta_run_agent_records_user_message_and_returns_result(
         zeta_agent.run_agent(
             zeta_agent.AgentRunRequest(
                 objective="answer",
-                runtime="zeta-rpc",
+                runtime="zeta-test",
                 tools=(),
                 context="",
                 config=zeta_agent.AgentConfig(
@@ -4786,7 +4785,7 @@ def test_zeta_run_agent_exposes_query_log_and_returns_prior_session_history(
         zeta_agent.run_agent(
             zeta_agent.AgentRunRequest(
                 objective="inspect prior work",
-                runtime="zeta-rpc",
+                runtime="zeta-test",
                 tools=("query_log",),
                 context="",
                 config=zeta_agent.AgentConfig(max_turns=2),
@@ -4896,7 +4895,7 @@ def test_zeta_run_agent_queries_the_active_context_budget(tmp_path: Path) -> Non
         zeta_agent.run_agent(
             zeta_agent.AgentRunRequest(
                 objective="inspect the active context",
-                runtime="zeta-rpc",
+                runtime="zeta-test",
                 tools=("query_context_budget",),
                 context="",
                 config=zeta_agent.AgentConfig(
@@ -4956,6 +4955,16 @@ def test_zeta_session_run_params_capture_defaults_and_options() -> None:
     assert params.model == "gpt-test"
     assert params.max_steps == 3
     assert params.max_wall_seconds == 1
+
+
+def test_zeta_session_turns_use_a_protocol_neutral_runtime_name() -> None:
+    params = zeta_requests.SessionRunParams(objective="answer")
+
+    assert params.run_payload("run-1")["runtime"] == "zeta-session"
+    assert (
+        zeta_requests.session_agent_request({"objective": "answer"}).runtime
+        == "zeta-session"
+    )
 
 
 def test_zeta_session_run_params_preserve_boundary_values() -> None:

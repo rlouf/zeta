@@ -128,7 +128,9 @@ class JsonRpcConnection:
         frame: dict[str, Any] | FrameViolation,
     ) -> None:
         if isinstance(frame, FrameViolation):
-            await self.write_message(error_response(None, frame.code, frame.detail))
+            await self.write_message(
+                error_response(frame.request_id, frame.code, frame.detail)
+            )
             return
         if message_kind(frame) != "request":
             if not self.initialized:

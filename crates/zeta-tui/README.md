@@ -15,20 +15,20 @@ It can send messages to new or existing sessions.
 
 ## Run
 
-Run the program with the default RPC executable:
+Run the program with the default `zeta` executable:
 
 ```sh
 cargo run -p zeta-tui
 ```
 
-Or provide the path to an RPC executable:
+Or provide the path to the `zeta` executable:
 
 ```sh
-cargo run -p zeta-tui -- /absolute/path/to/rpc-program
+cargo run -p zeta-tui -- /absolute/path/to/zeta
 ```
 
-The RPC executable must accept `rpc stdio`.
-When no path is present, the program uses the default RPC executable from `PATH`.
+The executable must accept `ipc stdio`. When no path is present, the program
+uses `zeta` from `PATH`.
 
 ## Main keys
 

@@ -123,6 +123,17 @@ def test_decode_frame_reports_parse_and_request_failures() -> None:
     assert invalid.code == -32600
 
 
+def test_invalid_request_frame_recovers_a_valid_request_id() -> None:
+    invalid = decode_frame(
+        b'{"jsonrpc":"2.0","id":"bad-params","method":"session.list",'
+        b'"params":{"unexpected":true}}\n'
+    )
+
+    assert isinstance(invalid, FrameViolation)
+    assert invalid.code == -32602
+    assert invalid.request_id == "bad-params"
+
+
 async def test_frame_reader_accepts_a_complete_final_object_at_eof() -> None:
     reader = asyncio.StreamReader()
     reader.feed_data(b'{"jsonrpc":"2.0","id":1,"method":"ping","params":{}}')

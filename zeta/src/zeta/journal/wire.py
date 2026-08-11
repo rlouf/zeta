@@ -31,7 +31,7 @@ def event_to_wire(event: Event) -> dict[str, Any]:
 
 
 def event_from_wire(value: Mapping[str, Any]) -> Event:
-    """Parse the authoritative durable event wire object."""
+    """Parse the authoritative external durable-event object."""
 
     payload = value.get("payload")
     if not isinstance(payload, Mapping):

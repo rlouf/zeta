@@ -71,11 +71,11 @@ This is a strong voice seam: a voice transcript can be a normal durable user
 message in an existing session. It does **not** require a separate voice
 conversation store.
 
-The CLI and RPC path use `session.message.requested` to queue a native run.
+The CLI and IPC client path use `session.message.requested` to queue a native run.
 `session.start` and `session.send` return its public run ID. `session.cancel`
 stores a durable queue cancellation request. The worker creates the local
 cancellation token and passes it to the run loop
-([routes.py](../zeta/src/zeta/rpc/routes.py),
+([routes.py](../zeta/src/zeta/ipc/routes.py),
 [coordinator.py](../zeta/src/zeta/harness/coordinator.py)).
 
 ### Complete CLI trace: `zeta sessions start`
@@ -148,9 +148,9 @@ Zeta already streams model text. Both adapters feed `content_delta()` and
 content as it arrives.
 
 Those stream chunks are deliberately **UI events**, not durable timeline facts:
-`is_runtime_ui_event()` excludes them from prompt projection and the RPC
-`run_agent()` sink drops them. The completed normalized assistant/model event
-is durable. A voice client needs a new transient-progress subscription; it
+`is_runtime_ui_event()` excludes them from prompt projection. The IPC `event`
+notification carries committed events only, so it does not deliver these
+transient chunks. A voice client needs a transient-progress subscription; it
 must not make every token a durable message simply to play speech.
 
 ### Cancellation, text coupling, and reusable seams
@@ -323,7 +323,7 @@ a provider integration, not another agent.
 
 | Integration shape | Examples | Dedicated lifecycle component? |
 | --- | --- | --- |
-| Turn ingress | CLI, HTTP chat, a Slack message | Normally no: append a message, publish `session.turn.requested`, and render the result. |
+| Turn ingress | CLI, HTTP chat, a Slack message | Normally no: append `session.message.requested` and let the durable worker run it. |
 | Model turn gateway | Chat Completions, Responses, Codex | Existing Zeta shape: normalize one model request/stream. |
 | Live model session | OpenAI Realtime; a future equivalent | Yes: a provider-native live session owns the bidirectional protocol and native interruption/function events. |
 | Voice channel | Browser microphone/speaker, SIP/phone | Sometimes: owns media/call lifecycle and delegates semantic work to a turn path or live model session. |
@@ -513,16 +513,15 @@ use whichever model Zeta is already configured to use.
 
 | Component | Responsibility | Existing integration point |
 | --- | --- | --- |
-| `zeta.voice` gateway (new) | Session selection, token mint endpoint, browser control WebSocket, run registry, TTS proxy, event persistence. | `RuntimeContext` / `session_for_id()` and `run_session_request()`; do not fork a new agent loop. |
+| `zeta.voice` gateway (new) | Session selection, token mint endpoint, browser control WebSocket, run registry, TTS proxy, event persistence. | Existing durable session submission; do not fork a new agent loop. |
 | Local web harness (new) | WebRTC microphone track, ASR event handling, partial transcript UI, PCM playback, immediate stop, control WebSocket. | Uses gateway protocol only. |
-| Progress subscription (new/refactor) | Delivers `runtime.stream.chunk`, tool-start/result, final/aborted notifications per `run_id`; remains transient. | `ModelTurnStreamSink` in `zeta.loop.streaming`, `run_agent()` and `zeta.rpc.routes.route_run()`. |
+| Progress subscription (new/refactor) | Delivers `runtime.stream.chunk`, tool-start/result, final/aborted notifications per `run_id`; remains transient. | `ModelTurnStreamSink` in `zeta.loop.streaming` and `run_agent()`. |
 | Abortable model transport (new/refactor) | Makes `session.cancel` close the active provider stream and establishes a cancellation barrier before new tools/calls. | `ModelGateway.generate`, `chat_completions.py`, `responses.py`, and `zeta.loop.runtime`. |
 | Voice event projection (new) | Makes final transcript and conservatively audible partial assistant text visible to a following prompt. | `zeta.journal.drafts`, `MODEL_TIMELINE_TYPES`, and `zeta.context.components`. |
 
-The current RPC `RunState` is held per `RpcClient`; a browser gateway must not
-depend on a short-lived stdio peer to cancel a run. Extract a server-owned
-`RunRegistry` from [routes.py](../zeta/src/zeta/rpc/routes.py), then share it
-between RPC and the voice gateway.
+Cancellation is already durable and independent of a short-lived stdio peer.
+A browser gateway should own only a transient subscriber registry keyed by
+durable `run_id` values and feed it from a shared progress sink.
 
 ### Minimal control protocol
 
@@ -598,9 +597,8 @@ development. Do not mock VAD, cancellation, or real TTS in the acceptance run.
 1. For the recommended chained v0, add a voice gateway and authenticated
    browser control transport; reuse `RuntimeContext` and session-turn requests
    rather than creating a voice-only conversation implementation.
-2. Extract RPC's run registry and add a transient progress sink. Forward model
-   text deltas to subscribed clients without persisting chunks as timeline
-   messages.
+2. Add a gateway-owned transient subscriber registry and shared progress sink.
+   Forward model text deltas without persisting chunks as timeline messages.
 3. Make model generation and compatible capability execution abortable. Today
    `CancellationToken` is cooperative; realtime barge-in requires cancellation
    to propagate into the HTTP stream and a clear policy for uncancellable tools.
@@ -615,7 +613,7 @@ development. Do not mock VAD, cancellation, or real TTS in the acceptance run.
    unsafe-to-retry effects.
 7. If Architecture A is deliberately offered later, add a provider-native
    `RealtimeLiveModelSession` that writes canonical timeline projections but
-   never publishes `session.turn.requested`. It exchanges Realtime function
+   never publishes `session.message.requested`. It exchanges Realtime function
    calls with the capability executor and results back to Realtime; it does not
    start a second configured-model run.
 

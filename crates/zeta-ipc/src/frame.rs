@@ -5,8 +5,10 @@
 
 use std::io::{Read, Write};
 
+use serde_json::Value;
+
 use crate::error::{INVALID_REQUEST, PARSE_ERROR};
-use crate::message::Message;
+use crate::message::{Message, RequestId};
 
 /// Contains the maximum size of one JSON line.
 pub const MAX_FRAME_BYTES: usize = 8 * 1024 * 1024;
@@ -32,6 +34,8 @@ pub struct Violation {
     pub code: i64,
     /// Contains a human-readable description.
     pub detail: String,
+    /// Contains the valid identifier recovered from an invalid request.
+    pub request_id: Option<RequestId>,
     /// Contains a bounded, lossy preview of the line.
     pub preview: String,
 }
@@ -143,6 +147,7 @@ fn overlong_frame(line: &[u8], max_frame_bytes: usize) -> Frame {
         rule: "frame_too_long".to_string(),
         code: PARSE_ERROR,
         detail: format!("line exceeded the {max_frame_bytes}-byte frame limit"),
+        request_id: None,
         preview: preview(line),
     })
 }
@@ -157,6 +162,7 @@ fn decode_line(line: &[u8]) -> Frame {
             rule: "empty_line".to_string(),
             code: PARSE_ERROR,
             detail: "empty line".to_string(),
+            request_id: None,
             preview: String::new(),
         });
     }
@@ -165,10 +171,20 @@ fn decode_line(line: &[u8]) -> Frame {
             rule: "parse_error".to_string(),
             code: PARSE_ERROR,
             detail: "the line is not valid UTF-8".to_string(),
+            request_id: None,
             preview: preview(line),
         });
     };
-    match Message::parse_str(text) {
+    let Ok(value) = serde_json::from_str::<Value>(text) else {
+        return Frame::Violation(Violation {
+            rule: "parse_error".to_string(),
+            code: PARSE_ERROR,
+            detail: "the line is not valid JSON".to_string(),
+            request_id: None,
+            preview: preview(line),
+        });
+    };
+    match Message::parse_value(&value) {
         Ok(message) => Frame::Message(message),
         Err(error) => {
             let rule = if error.code == PARSE_ERROR {
@@ -182,10 +198,22 @@ fn decode_line(line: &[u8]) -> Frame {
                 rule: rule.to_string(),
                 code: error.code,
                 detail: error.message,
+                request_id: recover_request_id(&value),
                 preview: preview(line),
             })
         }
     }
+}
+
+fn recover_request_id(value: &Value) -> Option<RequestId> {
+    let fields = value.as_object()?;
+    if !fields.contains_key("method")
+        || fields.contains_key("result")
+        || fields.contains_key("error")
+    {
+        return None;
+    }
+    RequestId::parse(fields.get("id")?).ok()
 }
 
 fn preview(line: &[u8]) -> String {

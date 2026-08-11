@@ -153,7 +153,7 @@ async def test_ipc_ingress_reaches_the_journal(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """End to end: discovered executable child → wire → journal row."""
+    """End to end: discovered executable child → IPC → journal row."""
     monkeypatch.setenv("FILESYSTEM_DEBOUNCE_SECONDS", "0")
     runtime = scaffolded_runtime(tmp_path, "ipc-project")
     ingress = asyncio.create_task(

@@ -109,7 +109,7 @@ src/zeta/
 
   loop/           one invocation: gateway, request, steps, orchestration
   harness/        routing, queue, attempts, runs, sessions, dispatch, worker
-  cli/  rpc/      the interfaces
+  cli/  ipc/      local command and process interfaces
 
 src/connectors/   ingress and egress, the third-party extension surface
 ```
@@ -569,8 +569,8 @@ is the skill name, and agents opt in with `skills:`.
 
 ## Connectors
 
-A connector is an executable that speaks the wire protocol in
-`spec/wire-v0.md`, and discovery is the shell's: any `zeta-connector-<id>`
+A connector is an executable that speaks the IPC protocol in
+`spec/ipc-v0.md`, and discovery is the shell's: any `zeta-connector-<id>`
 command on `PATH` is a connector, as is any executable file under
 `agents/connectors/` (a project-local executable overrides a `PATH` connector
 with the same id). Installing `zeta-connectors` — with extras like
@@ -585,15 +585,15 @@ allowlist.
 Connector-provided event schemas are merged with `agents/events/`. Duplicate
 schemas must be identical.
 
-Ingress runs as supervised subprocesses: the runtime spawns children speaking
-wire-v0 (grouping bindings so event types that share an upstream cursor, like
-Telegram's, share one child), validates and journals their events, acks them,
-and restarts dead children with capped backoff. Connectors hold no reconnect
-logic of their own — losing an upstream connection exits the child, and the
-supervisor respawn is the reconnect (crash-only). Egress delivers matching
-events as wire-v0 `call`s against the connector's declared operations.
-Non-secret settings reach a child in the handshake's `config`; secrets travel
-only in the spawn environment.
+Ingress runs as supervised subprocesses. The runtime groups bindings that
+share an upstream cursor, such as Telegram bindings, into one child. That child
+initializes with the `source` role and calls `events.publish`. A successful
+response means the event was durably inserted or resolved as a duplicate, so
+the connector may advance its upstream cursor. The supervisor restarts dead
+children with capped backoff; connectors hold no reconnect loop of their own.
+For egress, the runtime calls the direct methods declared by a child with the
+`provider` role. Non-secret settings arrive in the initialization `config`;
+secrets travel only in the spawn environment.
 
 Connector options live on the event entries they configure:
 
@@ -915,7 +915,6 @@ Runtime events use the following prefixes:
 - `runtime.attempt.*` for worker attempts
 - `runtime.egress.*` for connector delivery
 - `zeta.*` for model, prompt, tool, and turn records
-- `rpc.*` for event-log JSON-RPC work
 
 ## Prompt And Tool Traces
 
@@ -970,24 +969,31 @@ accepts only `--state-dir`.
 A worked walkthrough lives in
 [demos/trace-replay.md](demos/trace-replay.md).
 
-## JSON-RPC
+## IPC
 
-`zeta rpc stdio` serves newline-delimited JSON-RPC 2.0. Each line is one JSON
-object. Requests include `jsonrpc: "2.0"`, an `id`, a `method`, and optional
-object `params`; notifications omit `id`.
+Zeta uses the newline-delimited JSON-RPC 2.0 profile in
+[`spec/ipc-v0.md`](../spec/ipc-v0.md) for every process boundary. Each peer
+must call `initialize` first and declare its role. `zeta ipc stdio` opens the
+`client` endpoint used by the terminal interface.
 
-Supported methods:
+The fixed methods are:
 
-| Method | Purpose |
+| Method | Role and purpose |
 | --- | --- |
-| `initialize` | Return server and protocol metadata. |
-| `session.start` | Queue a new session with the packaged master agent. |
-| `session.send` | Queue a message for an existing session owner. |
-| `session.status` | Return one derived session activity record. |
-| `session.list` | Return the derived session catalog. |
-| `session.cancel` | Cancel queued or running work by `run_id`. |
-| `events.list` | List durable events by cursor, session, turn, and limit. |
-| `events.publish` | Append a client-authored durable event. |
+| `initialize` | Establish the peer, roles, limits, and protocol version. |
+| `events.publish` | A `source` durably publishes one event. |
+| `events.list` | A `client` lists durable events by cursor and scope. |
+| `event` | The runtime notifies a `client` about one committed event. |
+| `session.start` | A `client` queues a new session with the packaged master agent. |
+| `session.send` | A `client` queues a message for an existing session owner. |
+| `session.status` | A `client` reads one durable session activity record. |
+| `session.list` | A `client` reads the durable session catalog. |
+| `session.cancel` | A `client` records cancellation by `run_id`. |
+| `ping` | Either initialized side proves liveness. |
+| `shutdown` | A supervising process requests an orderly stop. |
+
+A provider declares direct method names during initialization. The runtime
+calls those names without an operation wrapper.
 
 `session.start` and `session.send` return `queued` after Zeta stores the queue
 binding. They do not run the model and do not wait for a worker. Both methods
@@ -996,13 +1002,7 @@ accept an optional non-empty `idempotency_key`.
 `session.cancel` accepts `run_id` and optional `session_id` and `reason`
 fields. The session ID checks ownership when a caller supplies it. The request
 is durable. It can cancel a run created by `session.start` or `session.send`,
-even after the first RPC client disconnects.
+even after the first IPC client disconnects.
 
-Server notifications:
-
-| Notification | Purpose |
-| --- | --- |
-| `events.notify` | Carries a persisted runtime event. |
-
-Protocol `0.1` is additive. Clients should ignore unknown result fields and
-unknown notification params.
+The `event` notification is best effort and has no acknowledgment. Its cursor
+lets a client ignore duplicates, detect gaps, and recover with `events.list`.

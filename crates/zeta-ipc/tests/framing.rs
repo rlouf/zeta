@@ -41,6 +41,19 @@ fn junk_lines_surface_between_valid_messages() {
 }
 
 #[test]
+fn an_invalid_request_preserves_its_valid_request_id() {
+    let frames = frames(
+        br#"{"jsonrpc":"2.0","id":"bad-request","method":"","params":{}}
+"#,
+    );
+
+    assert_eq!(
+        violation(&frames[0]).request_id,
+        Some(RequestId::from("bad-request"))
+    );
+}
+
+#[test]
 fn an_empty_line_is_a_parse_violation() {
     let stream = format!("\n{PING}\n");
     let frames = frames(stream.as_bytes());

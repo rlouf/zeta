@@ -4830,7 +4830,7 @@ mod tests {
     }
 
     #[test]
-    fn durable_submission_reconciles_even_when_its_event_arrives_before_the_rpc_response() {
+    fn durable_submission_reconciles_even_when_its_event_arrives_before_the_ipc_response() {
         let mut app = App::connected(
             "0.1".to_owned(),
             vec![session("session_1", "zeta.master", "idle")],

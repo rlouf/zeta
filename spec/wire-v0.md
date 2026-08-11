@@ -46,14 +46,15 @@ Version 0 frames messages as **newline-delimited JSON**:
 ### 2.1 Canonical serialization
 
 Writers SHOULD emit the canonical form; readers MUST accept any valid
-JSON serialization of a valid envelope. The canonical form is:
+JSON serialization of a valid envelope. The canonical form is the
+representation in `spec/substrate-v0.md` §2:
 
-- object keys sorted lexicographically (byte order of the UTF-8 key),
+- object keys sorted in Unicode code-point order,
 - no insignificant whitespace (`,` and `:` as the only separators),
 - non-ASCII characters emitted literally as UTF-8 (no `\uXXXX`
   escaping of characters above U+007F),
-- no floating-point representations of integral numbers (`0`, not
-  `0.0`),
+- integers restricted to the union of `i64` and `u64`,
+- finite binary64 floats in Python's shortest round-trip spelling,
 - optional fields that are absent are omitted; fields whose value is
   `null` and that are defined as nullable are emitted as `null`.
 
@@ -393,76 +394,21 @@ terminate the session. Termination is the supervisor's decision.
 
 ## 11. Addresses
 
-Every address has the string form `b3:` followed by exactly 64
-lowercase hex characters — 32 bytes of BLAKE3 output. **No
-truncation is permitted.** There are two kinds of address, and the
-distinction is normative:
+`spec/substrate-v0.md` §3 defines the address syntax and hashing
+operations for the whole system. Every address is `b3:` followed by
+exactly 64 lowercase hexadecimal characters. No other address syntax
+is valid in wire-v0.
 
-- **Content addresses** identify exact bytes — file contents, event
-  payloads, pack blobs. A content address is the **plain, undomained
-  BLAKE3** of the bytes:
+An event `payload_hash` is the plain, undomained BLAKE3 address of
+the canonical payload bytes. An event id SHOULD use the event-domain
+context from substrate-v0 and the identity bytes in §6.1. The protocol
+otherwise carries addresses as data. A protocol implementation MUST
+NOT depend on a substrate hashing implementation to parse an envelope.
 
-  ```
-  content_address = "b3:" + lowercase_hex( BLAKE3(bytes) )
-  ```
-
-  Content hashing is deliberately domainless so that one hash
-  universe is real: a staged-filesystem pre-image hash (stagefs), a
-  pack blob name, and an event's `payload_hash` (§6) are the *same
-  string* for the same bytes. Plain BLAKE3 is a fixed function, so
-  independent implementations agree by mathematical necessity — the
-  ecosystem couples through this specification and its vectors, not
-  through shared code. That decoupling is deliberate: sibling tools
-  carry their own conformance fixtures, and no dependency edge
-  exists or should be added between them.
-
-- **Derived identifiers** are hashes of *structured identity* —
-  event ids, chain links, prompt ids, skill ids — where confusing
-  one namespace with another is the actual risk. These use BLAKE3
-  in **derive-key mode**, with one frozen context string per
-  domain. For a domain with context string `C` and identity bytes
-  `B`:
-
-  ```
-  derived_id = "b3:" + lowercase_hex( BLAKE3_derive_key(context = C, key_material = B) )
-  ```
-
-  where `BLAKE3_derive_key` is the standard BLAKE3 `derive_key`
-  mode producing the default 32-byte output.
-
-The domain context strings are frozen forever, verbatim. They are
-opaque byte strings; a product rename never changes them:
-
-| domain | context string |
-|--------|----------------|
-| event  | `zeta-os 2026-08 cas event` |
-| chain  | `zeta-os 2026-08 cas chain` |
-| prompt | `zeta-os 2026-08 cas prompt` |
-| skill  | `zeta-os 2026-08 cas skill` |
-
-Domains in wire-v0: **event** addresses identify `event` envelopes
-(§6.1). The **chain**, **prompt**, and **skill** domains identify
-runtime-internal derived records and do not appear on the wire in
-v0; they share the same address format and vectors.
-
-**Retired before use:** an earlier draft of this section defined a
-fifth context, `zeta-os 2026-08 cas blob`, for payload bytes. It was
-withdrawn before any implementation minted with it — content bytes
-are plain-hashed per the rule above. The string stays reserved here
-so nothing else ever claims it; implementations MUST NOT use it.
-
-### 11.1 Legacy identifiers
-
-Before `b3:` addresses, Zeta minted identifiers from SHA-256. Those
-identifiers remain valid forever; implementations that look
-identifiers up or compare them MUST dual-read:
-
-- a value prefixed `sha256:` is a legacy SHA-256 content address;
-- a value that contains no `:` and consists of exactly 24 or exactly
-  64 lowercase hex characters is a legacy bare (possibly truncated)
-  SHA-256 digest.
-
-New identifiers MUST be minted as full-width `b3:` addresses.
+The active derived domains are event, chain, object, and derivation.
+Only event addresses have wire-v0 behavior. Chain, object, and
+derivation identities are runtime-internal and are defined by
+substrate-v0.
 
 ## 12. Versioning summary
 

@@ -597,12 +597,12 @@ A result has this form:
 ```json
 {
   "ok": true,
-  "head": "sha256:0123456789abcdef",
+  "head": "b3:2d063d1b1cbb14278839d182222ff0928212eb462a2d256f16f67a508b83ef29",
   "items": [
     {
       "key": "release/check-manifest",
       "kind": "procedure",
-      "object_id": "sha256:abcdef0123456789",
+      "object_id": "b3:3ec88844d91cc5ff131c16e533b6702a7c3858b99815422f21bd93ddbff0e417",
       "source_scope": "agent",
       "chars": 48,
       "preview": "Check the release manifest before publication."
@@ -661,7 +661,7 @@ This call stores a procedure for later runs of the same agent:
 
 ```json
 {
-  "expected_head": "sha256:0123456789abcdef",
+  "expected_head": "b3:2d063d1b1cbb14278839d182222ff0928212eb462a2d256f16f67a508b83ef29",
   "reason": "The release failed because this check was absent.",
   "inputs": {},
   "transformation": {
@@ -687,7 +687,7 @@ This call extracts one finding from each selected document:
 
 ```json
 {
-  "expected_head": "sha256:0123456789abcdef",
+  "expected_head": "b3:2d063d1b1cbb14278839d182222ff0928212eb462a2d256f16f67a508b83ef29",
   "reason": "Extract evidence from each document.",
   "inputs": {
     "kind": "document"
@@ -757,8 +757,8 @@ A successful call returns object references and the new run head:
   "ok": true,
   "status": "applied",
   "active_scope": "run",
-  "head": "sha256:fedcba9876543210",
-  "object_ids": ["sha256:abcdef0123456789"],
+  "head": "b3:ee4deb261bd45e0c54a65f1490aa94edd20230f3ef0b43cf96747f6fc40757a4",
+  "object_ids": ["b3:3ec88844d91cc5ff131c16e533b6702a7c3858b99815422f21bd93ddbff0e417"],
   "promotions": [
     {
       "scope": "agent",
@@ -776,7 +776,7 @@ root model does not have to copy a large value into another message.
 
 ```json
 {
-  "object_id": "sha256:abcdef0123456789"
+  "object_id": "b3:3ec88844d91cc5ff131c16e533b6702a7c3858b99815422f21bd93ddbff0e417"
 }
 ```
 
@@ -786,7 +786,7 @@ A valid call returns this result and stops the run:
 {
   "ok": true,
   "stop": true,
-  "object_id": "sha256:abcdef0123456789"
+  "object_id": "b3:3ec88844d91cc5ff131c16e533b6702a7c3858b99815422f21bd93ddbff0e417"
 }
 ```
 
@@ -818,7 +818,7 @@ Use `transform_content` with an agent destination:
 
 ```json
 {
-  "expected_head": "sha256:0123456789abcdef",
+  "expected_head": "b3:2d063d1b1cbb14278839d182222ff0928212eb462a2d256f16f67a508b83ef29",
   "reason": "Use the release check in later runs.",
   "inputs": {},
   "transformation": {

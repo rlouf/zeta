@@ -62,7 +62,8 @@ byte-for-byte, including for the empty input.
 Identity-bearing JSON values with their exact canonical UTF-8 text.
 Python 3.11 generated this file before the Phase 1.5 mint changed. The
 vectors include Unicode ordering, nested and null-heavy values, float
-notation boundaries, and the accepted i64/u64 integer edges.
+notation boundaries, and the accepted i64/u64 integer edges. The rules
+are normative in `spec/substrate-v0.md` §2.
 
 ## `substrate/b3-addresses.json`
 

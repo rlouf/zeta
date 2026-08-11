@@ -1,0 +1,16 @@
+[package]
+name = "zeta-wire"
+description = "Sans-IO implementation of the zeta wire-v0 plugin protocol."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+zeta-cas.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true

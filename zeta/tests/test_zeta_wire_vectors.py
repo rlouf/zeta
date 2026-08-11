@@ -56,6 +56,88 @@ def test_invalid_vector_is_rejected_for_the_documented_rule(path) -> None:
     assert failure.value.rule == documented_rule
 
 
+RULE_INVENTORY = frozenset(
+    {
+        "not_an_object",
+        "missing_field:v",
+        "bad_version",
+        "missing_field:kind",
+        "bad_kind",
+        "missing_field:id",
+        "bad_id",
+        "missing_field:ts",
+        "bad_timestamp",
+        "reserved_kind",
+        "unknown_kind",
+        "missing_field:name",
+        "bad_name",
+        "missing_field:plugin_version",
+        "bad_plugin_version",
+        "missing_field:role",
+        "bad_role",
+        "missing_field:protocol_versions",
+        "bad_protocol_versions",
+        "missing_field:event_types",
+        "bad_event_types",
+        "bad_operations",
+        "bad_capabilities",
+        "bad_heartbeat_secs",
+        "bad_ack_window",
+        "missing_field:protocol_version",
+        "bad_protocol_version",
+        "missing_field:runtime",
+        "bad_runtime",
+        "bad_config",
+        "missing_field:type",
+        "bad_type",
+        "missing_field:schema",
+        "bad_schema",
+        "missing_field:caused_by",
+        "bad_caused_by",
+        "missing_field:session_id",
+        "bad_session_id",
+        "payload_choice",
+        "bad_payload",
+        "payload_too_large",
+        "bad_payload_hash",
+        "missing_field:event_id",
+        "bad_event_id",
+        "missing_field:code",
+        "bad_code",
+        "missing_field:message",
+        "bad_message",
+        "missing_field:retryable",
+        "bad_retryable",
+        "bad_reason",
+        "missing_field:payload",
+        "missing_field:effect_key",
+        "bad_effect_key",
+        "missing_field:call_id",
+        "bad_call_id",
+        "missing_field:ok",
+        "bad_ok",
+        "result_choice",
+        "bad_error",
+    }
+)
+
+
+def test_every_validator_rule_has_an_invalid_vector() -> None:
+    """The exhaustiveness tripwire.
+
+    The inventory mirrors every rule token the envelope validator can
+    emit. A rule added to the validator without a golden vector — or a
+    vector whose token the validator cannot produce — fails here, so
+    the two language implementations cannot drift on a rule the
+    vectors never exercise.
+    """
+    covered = set()
+    for path in invalid_vector_paths():
+        reason_path = path.with_name(path.stem + ".reason.txt")
+        covered.add(reason_path.read_text(encoding="utf-8").splitlines()[0])
+    assert covered == RULE_INVENTORY
+
+
 def session_lines() -> list[tuple[str, dict]]:
     lines = []
     for line in SESSION_PATH.read_text(encoding="utf-8").splitlines():

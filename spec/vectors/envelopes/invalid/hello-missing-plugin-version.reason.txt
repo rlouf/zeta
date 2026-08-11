@@ -1,0 +1,2 @@
+missing_field:plugin_version
+A hello must carry `plugin_version` (spec §5.1).

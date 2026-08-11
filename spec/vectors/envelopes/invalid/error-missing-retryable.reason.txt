@@ -1,0 +1,2 @@
+missing_field:retryable
+An error must carry `retryable` (spec §10).

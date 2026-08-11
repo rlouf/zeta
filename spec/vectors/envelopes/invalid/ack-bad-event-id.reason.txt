@@ -1,0 +1,2 @@
+bad_event_id
+`event_id` must be a non-empty string (spec §7).

@@ -12,6 +12,14 @@ use crate::error::WireError;
 use crate::timestamp::is_valid_utc_timestamp;
 use crate::MAX_INLINE_PAYLOAD_BYTES;
 
+fn present<'a>(fields: &'a Map<String, Value>, name: &str) -> Option<&'a Value> {
+    let value = fields.get(name)?;
+    if value.is_null() {
+        return None;
+    }
+    Some(value)
+}
+
 const KINDS: [&str; 9] = [
     "hello",
     "hello_ack",
@@ -47,7 +55,7 @@ pub fn validate_envelope(value: &Value) -> Result<(), WireError> {
             "an envelope must be a JSON object",
         ));
     };
-    let Some(version) = fields.get("v") else {
+    let Some(version) = present(fields, "v") else {
         return Err(WireError::new(
             "missing_field:v",
             "an envelope must carry `v`",
@@ -59,7 +67,7 @@ pub fn validate_envelope(value: &Value) -> Result<(), WireError> {
             "`v` must be a non-negative integer",
         ));
     }
-    let Some(kind) = fields.get("kind") else {
+    let Some(kind) = present(fields, "kind") else {
         return Err(WireError::new(
             "missing_field:kind",
             "an envelope must carry `kind`",
@@ -68,7 +76,7 @@ pub fn validate_envelope(value: &Value) -> Result<(), WireError> {
     let Some(kind) = kind.as_str() else {
         return Err(WireError::new("bad_kind", "`kind` must be a string"));
     };
-    let Some(id) = fields.get("id") else {
+    let Some(id) = present(fields, "id") else {
         return Err(WireError::new(
             "missing_field:id",
             "an envelope must carry `id`",
@@ -81,7 +89,7 @@ pub fn validate_envelope(value: &Value) -> Result<(), WireError> {
             "`id` must be a non-empty string",
         ));
     }
-    let Some(ts) = fields.get("ts") else {
+    let Some(ts) = present(fields, "ts") else {
         return Err(WireError::new(
             "missing_field:ts",
             "an envelope must carry `ts`",
@@ -131,7 +139,7 @@ fn required_string(
     field: &str,
     envelope_kind: &str,
 ) -> Result<String, WireError> {
-    let Some(value) = fields.get(field) else {
+    let Some(value) = present(fields, field) else {
         return Err(WireError::missing(field, envelope_kind));
     };
     let text = value.as_str();
@@ -157,7 +165,7 @@ fn validate_hello(fields: &Map<String, Value>) -> Result<(), WireError> {
     if !ROLES.contains(&role.as_str()) {
         return Err(WireError::new("bad_role", format!("unknown role {role:?}")));
     }
-    let Some(versions) = fields.get("protocol_versions") else {
+    let Some(versions) = present(fields, "protocol_versions") else {
         return Err(WireError::missing("protocol_versions", "hello"));
     };
     let versions_valid = match versions.as_array() {
@@ -182,7 +190,7 @@ fn validate_hello(fields: &Map<String, Value>) -> Result<(), WireError> {
     if role == "source" {
         validate_event_types(fields)?;
     }
-    if let Some(operations) = fields.get("operations") {
+    if let Some(operations) = present(fields, "operations") {
         let operations_valid = match operations.as_array() {
             Some(entries) => {
                 let mut valid = true;
@@ -208,7 +216,7 @@ fn validate_hello(fields: &Map<String, Value>) -> Result<(), WireError> {
             ));
         }
     }
-    if let Some(capabilities) = fields.get("capabilities") {
+    if let Some(capabilities) = present(fields, "capabilities") {
         if !capabilities.is_object() {
             return Err(WireError::new(
                 "bad_capabilities",
@@ -216,7 +224,7 @@ fn validate_hello(fields: &Map<String, Value>) -> Result<(), WireError> {
             ));
         }
     }
-    if let Some(heartbeat) = fields.get("heartbeat_secs") {
+    if let Some(heartbeat) = present(fields, "heartbeat_secs") {
         let in_range = match heartbeat.as_f64() {
             Some(seconds) => (1.0..=300.0).contains(&seconds),
             None => false,
@@ -228,7 +236,7 @@ fn validate_hello(fields: &Map<String, Value>) -> Result<(), WireError> {
             ));
         }
     }
-    if let Some(window) = fields.get("ack_window") {
+    if let Some(window) = present(fields, "ack_window") {
         let in_range = match window.as_u64() {
             Some(size) => (1..=1024).contains(&size),
             None => false,
@@ -244,7 +252,7 @@ fn validate_hello(fields: &Map<String, Value>) -> Result<(), WireError> {
 }
 
 fn validate_event_types(fields: &Map<String, Value>) -> Result<(), WireError> {
-    let Some(event_types) = fields.get("event_types") else {
+    let Some(event_types) = present(fields, "event_types") else {
         return Err(WireError::new(
             "missing_field:event_types",
             "a source hello must carry `event_types`",
@@ -281,7 +289,7 @@ fn validate_event_types(fields: &Map<String, Value>) -> Result<(), WireError> {
 }
 
 fn validate_hello_ack(fields: &Map<String, Value>) -> Result<(), WireError> {
-    let Some(version) = fields.get("protocol_version") else {
+    let Some(version) = present(fields, "protocol_version") else {
         return Err(WireError::new(
             "missing_field:protocol_version",
             "a hello_ack must carry `protocol_version`",
@@ -294,7 +302,7 @@ fn validate_hello_ack(fields: &Map<String, Value>) -> Result<(), WireError> {
         ));
     }
     required_string(fields, "runtime", "hello_ack")?;
-    if let Some(config) = fields.get("config") {
+    if let Some(config) = present(fields, "config") {
         if !config.is_object() {
             return Err(WireError::new("bad_config", "`config` must be an object"));
         }
@@ -320,8 +328,8 @@ fn validate_event(fields: &Map<String, Value>) -> Result<(), WireError> {
             ));
         }
     }
-    let payload = fields.get("payload");
-    let payload_hash = fields.get("payload_hash");
+    let payload = present(fields, "payload");
+    let payload_hash = present(fields, "payload_hash");
     let has_payload = payload.is_some();
     let has_hash = payload_hash.is_some();
     if has_payload == has_hash {
@@ -358,7 +366,7 @@ fn validate_event(fields: &Map<String, Value>) -> Result<(), WireError> {
 }
 
 fn validate_ack(fields: &Map<String, Value>) -> Result<(), WireError> {
-    let Some(event_id) = fields.get("event_id") else {
+    let Some(event_id) = present(fields, "event_id") else {
         return Err(WireError::new(
             "missing_field:event_id",
             "an ack must carry `event_id`",
@@ -380,7 +388,7 @@ fn validate_ack(fields: &Map<String, Value>) -> Result<(), WireError> {
 fn validate_error(fields: &Map<String, Value>) -> Result<(), WireError> {
     required_string(fields, "code", "error")?;
     required_string(fields, "message", "error")?;
-    let Some(retryable) = fields.get("retryable") else {
+    let Some(retryable) = present(fields, "retryable") else {
         return Err(WireError::new(
             "missing_field:retryable",
             "an error must carry `retryable`",
@@ -396,7 +404,7 @@ fn validate_error(fields: &Map<String, Value>) -> Result<(), WireError> {
 }
 
 fn validate_shutdown(fields: &Map<String, Value>) -> Result<(), WireError> {
-    if let Some(reason) = fields.get("reason") {
+    if let Some(reason) = present(fields, "reason") {
         if !reason.is_string() {
             return Err(WireError::new("bad_reason", "`reason` must be a string"));
         }
@@ -407,7 +415,7 @@ fn validate_shutdown(fields: &Map<String, Value>) -> Result<(), WireError> {
 fn validate_call(fields: &Map<String, Value>) -> Result<(), WireError> {
     required_string(fields, "name", "call")?;
     required_string(fields, "effect_key", "call")?;
-    let Some(payload) = fields.get("payload") else {
+    let Some(payload) = present(fields, "payload") else {
         return Err(WireError::new(
             "missing_field:payload",
             "a call must carry `payload`",
@@ -421,7 +429,7 @@ fn validate_call(fields: &Map<String, Value>) -> Result<(), WireError> {
 
 fn validate_call_result(fields: &Map<String, Value>) -> Result<(), WireError> {
     required_string(fields, "call_id", "call_result")?;
-    let Some(ok) = fields.get("ok") else {
+    let Some(ok) = present(fields, "ok") else {
         return Err(WireError::new(
             "missing_field:ok",
             "a call_result must carry `ok`",
@@ -430,7 +438,7 @@ fn validate_call_result(fields: &Map<String, Value>) -> Result<(), WireError> {
     let Some(ok) = ok.as_bool() else {
         return Err(WireError::new("bad_ok", "`ok` must be a boolean"));
     };
-    let has_result = match fields.get("result") {
+    let has_result = match present(fields, "result") {
         Some(result) => result.is_object(),
         None => false,
     };
@@ -441,7 +449,7 @@ fn validate_call_result(fields: &Map<String, Value>) -> Result<(), WireError> {
         ));
     }
     if !ok {
-        let Some(error) = fields.get("error").and_then(Value::as_object) else {
+        let Some(error) = present(fields, "error").and_then(Value::as_object) else {
             return Err(WireError::new(
                 "result_choice",
                 "a failed call_result must carry an `error` object",

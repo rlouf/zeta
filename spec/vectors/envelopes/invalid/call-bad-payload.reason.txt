@@ -1,0 +1,2 @@
+bad_payload
+A call's `payload` must be an object (spec §7.1).

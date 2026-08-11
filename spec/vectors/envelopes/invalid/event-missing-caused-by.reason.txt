@@ -1,0 +1,2 @@
+missing_field:caused_by
+An event must carry `caused_by`; null is allowed (spec §6).

@@ -1,0 +1,2 @@
+payload_choice
+A null value is treated as absent (spec §3), so a null `payload` with no `payload_hash` carries neither (spec §6).

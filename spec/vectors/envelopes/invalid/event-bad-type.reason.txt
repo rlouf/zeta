@@ -1,0 +1,2 @@
+bad_type
+`type` must be a non-empty string (spec §6).

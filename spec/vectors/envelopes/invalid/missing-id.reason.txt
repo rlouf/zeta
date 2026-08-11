@@ -1,0 +1,2 @@
+missing_field:id
+Every envelope must carry `id` (spec §3).

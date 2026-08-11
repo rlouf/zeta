@@ -1,0 +1,2 @@
+missing_field:session_id
+An event must carry `session_id`; null is allowed (spec §6).

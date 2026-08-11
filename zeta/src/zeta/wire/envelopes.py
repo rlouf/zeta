@@ -271,15 +271,16 @@ def _validate_event(value: dict) -> None:
             )
         if value[field] is not None and not isinstance(value[field], str):
             raise EnvelopeError(f"bad_{field}", f"`{field}` must be a string or null")
-    has_payload = "payload" in value
-    has_hash = "payload_hash" in value
+    payload = value.get("payload")
+    payload_hash = value.get("payload_hash")
+    has_payload = payload is not None
+    has_hash = payload_hash is not None
     if has_payload == has_hash:
         raise EnvelopeError(
             "payload_choice",
             "an event must carry exactly one of `payload` and `payload_hash`",
         )
     if has_payload:
-        payload = value["payload"]
         if not isinstance(payload, dict):
             raise EnvelopeError("bad_payload", "`payload` must be an object")
         if len(canonical_json(payload).encode()) > MAX_INLINE_PAYLOAD_BYTES:
@@ -288,7 +289,6 @@ def _validate_event(value: dict) -> None:
                 "inline payloads are limited to 64 KiB; use `payload_hash`",
             )
     else:
-        payload_hash = value["payload_hash"]
         if not isinstance(payload_hash, str) or not addresses.is_b3(payload_hash):
             raise EnvelopeError(
                 "bad_payload_hash",

@@ -1,0 +1,2 @@
+bad_operations
+`operations` must be an array of {name} objects (spec §5.4).

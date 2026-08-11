@@ -1,0 +1,2 @@
+bad_message
+`message` must be a non-empty string (spec §10).

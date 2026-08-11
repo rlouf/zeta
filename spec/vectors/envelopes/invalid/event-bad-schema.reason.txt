@@ -1,0 +1,2 @@
+bad_schema
+`schema` must be a non-empty string (spec §6).

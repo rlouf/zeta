@@ -1,0 +1,1 @@
+{"caused_by":null,"id":"m-c-2","kind":"event","payload":{"dir":"/p","name":"a.txt","path":"/p/a.txt"},"schema":"file.created@1","ts":"2026-08-10T12:00:00Z","type":"file.created","v":0}

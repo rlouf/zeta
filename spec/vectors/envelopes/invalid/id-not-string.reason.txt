@@ -1,0 +1,2 @@
+bad_id
+`id` must be a non-empty string (spec §3).

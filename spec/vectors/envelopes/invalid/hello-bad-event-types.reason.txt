@@ -1,0 +1,2 @@
+bad_event_types
+`event_types` entries must carry `type` and `schema` strings (spec §5.3).

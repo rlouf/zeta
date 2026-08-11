@@ -1,0 +1,2 @@
+bad_capabilities
+`capabilities` must be an object (spec §5.5).

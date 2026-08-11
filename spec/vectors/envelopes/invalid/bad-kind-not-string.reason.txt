@@ -1,0 +1,2 @@
+bad_kind
+`kind` must be a string (spec §3).

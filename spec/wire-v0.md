@@ -82,6 +82,12 @@ Rules:
   Timestamps carrying a numeric offset (`+02:00`) are invalid in v0.
 - **Unknown envelope fields MUST be ignored.** This is the v0 forward
   compatibility rule.
+- **A field whose value is JSON `null` is treated as absent**, both
+  for required fields (the failure is `missing_field:<name>`, not a
+  bad-value error) and for optional ones (readers skip them; the
+  canonical form omits them). The only exceptions are the fields §6
+  defines as required-but-nullable (`caused_by`, `session_id`),
+  where `null` is a meaningful value.
 - An unknown `kind` is an error: the receiver responds with an
   `error` envelope, code `protocol`, and MAY terminate the peer.
 

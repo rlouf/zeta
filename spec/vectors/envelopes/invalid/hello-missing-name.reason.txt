@@ -1,0 +1,2 @@
+missing_field:name
+A hello must carry `name` (spec §5.1).

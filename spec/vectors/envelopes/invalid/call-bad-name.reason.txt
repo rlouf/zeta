@@ -1,0 +1,2 @@
+bad_name
+`name` must be a non-empty string (spec §7.1).

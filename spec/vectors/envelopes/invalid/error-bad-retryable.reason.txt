@@ -1,0 +1,2 @@
+bad_retryable
+`retryable` must be a boolean (spec §10).

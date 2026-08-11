@@ -1,0 +1,2 @@
+bad_code
+`code` must be a non-empty string (spec §10).

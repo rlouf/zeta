@@ -66,7 +66,7 @@ fn every_invalid_vector_fails_for_its_documented_rule() {
         assert_eq!(error.rule, documented_rule, "{path:?}");
         checked += 1;
     }
-    assert!(checked >= 25, "expected the full invalid set, saw {checked}");
+    assert!(checked >= 69, "expected the full invalid set, saw {checked}");
 }
 
 struct SessionLine {

@@ -1,0 +1,2 @@
+missing_field:role
+A hello must carry `role` (spec §5.2).

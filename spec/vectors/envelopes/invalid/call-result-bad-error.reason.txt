@@ -1,0 +1,2 @@
+bad_error
+A failed call_result's `error` must carry {code, message, retryable} (spec §7.1).

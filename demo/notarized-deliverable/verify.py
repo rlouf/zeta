@@ -148,9 +148,7 @@ def verify_derivations(report, manifest, objects):
             "input_ids": derivation["input_ids"],
             "params": derivation["params"],
         }
-        recomputed = derived_address(
-            DERIVATION_CONTEXT, canonical_json_bytes(payload)
-        )
+        recomputed = derived_address(DERIVATION_CONTEXT, canonical_json_bytes(payload))
         if recomputed != derivation["id"]:
             bad.append(f"{derivation['id']} recomputes to {recomputed}")
         for endpoint in [derivation["output_id"], *derivation["input_ids"]]:
@@ -204,9 +202,7 @@ def verify_lineage(report, manifest, objects):
     ):
         response_derivations = by_output.get(response_id, [])
         prompt_ids = [
-            input_id
-            for d in response_derivations
-            for input_id in d["input_ids"]
+            input_id for d in response_derivations for input_id in d["input_ids"]
         ]
         report.check(
             bool(prompt_ids),
@@ -215,10 +211,8 @@ def verify_lineage(report, manifest, objects):
             " (the exact request the model saw)",
         )
         print(
-            "        lineage: report {r} <- ModelTransform <- source {s}"
-            " + response {m}".format(
-                r=short(report_id), s=short(source_id), m=short(response_id)
-            )
+            f"        lineage: report {short(report_id)} <- ModelTransform"
+            f" <- source {short(source_id)} + response {short(response_id)}"
         )
 
 
@@ -267,7 +261,9 @@ def verify_journal(report, manifest, expected_head):
         seen_ids.add(event["id"])
         if key is not None:
             seen_keys.add(key)
-    report.check(problem is None, f"{len(events)} chained events well-formed", problem or "")
+    report.check(
+        problem is None, f"{len(events)} chained events well-formed", problem or ""
+    )
     if problem is None:
         report.check(
             previous_address == journal["head_address"],
@@ -292,8 +288,7 @@ def verify_journal(report, manifest, expected_head):
         report.check(
             committed == deliverable["report_object_id"],
             "the chain-committed finish call names the shipped report object",
-            f"chain says {committed}, bundle ships"
-            f" {deliverable['report_object_id']}",
+            f"chain says {committed}, bundle ships {deliverable['report_object_id']}",
         )
 
 
@@ -316,8 +311,10 @@ def main():
     verify_lineage(report, manifest, objects)
     verify_journal(report, manifest, args.expected_head)
 
-    print(f"\nRESULT: {'PASS' if report.failed == 0 else 'FAIL'}"
-          f" ({report.passed} checks passed, {report.failed} failed)")
+    print(
+        f"\nRESULT: {'PASS' if report.failed == 0 else 'FAIL'}"
+        f" ({report.passed} checks passed, {report.failed} failed)"
+    )
     sys.exit(0 if report.failed == 0 else 1)
 
 

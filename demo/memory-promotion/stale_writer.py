@@ -95,7 +95,7 @@ def main() -> None:
     final_node = content_node_from_object(store.get_object(final_revision.nodes[KEY]))
     print()
     print(f"final durable head: {final_ref.object_id}")
-    print(f"final {KEY} content: \"{final_node.content}\"")
+    print(f'final {KEY} content: "{final_node.content}"')
     store.close()
 
 

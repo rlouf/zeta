@@ -90,7 +90,7 @@ def verify(state_dir: Path, chain_file: Path, anchor_file: Path | None) -> int:
             previous_address=record["previous_address"],
             entry_address=record["entry_address"],
         )
-        for event, record in zip(events, records)
+        for event, record in zip(events, records, strict=False)
     ]
     expected_head = _UNANCHORED
     if anchor_file is not None:

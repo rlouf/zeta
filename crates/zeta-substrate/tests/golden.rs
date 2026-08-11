@@ -26,7 +26,10 @@ fn golden_file_digest_is_pinned_and_matches_hash_bytes() {
     assert_eq!(hash.to_hex(), GOLDEN_FILE_HEX);
     let bytes = std::fs::read(&path).unwrap();
     assert_eq!(zeta_substrate::hash_bytes(&bytes), hash);
-    assert!(bytes.len() > 16 * 1024, "fixture must exercise the mmap path");
+    assert!(
+        bytes.len() > 16 * 1024,
+        "fixture must exercise the mmap path"
+    );
 }
 
 #[test]

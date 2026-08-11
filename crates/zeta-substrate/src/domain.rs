@@ -1,46 +1,48 @@
 //! Derived-identifier domains and their frozen derive-key contexts.
 //!
-//! Domain separation exists because derived identifiers name
-//! structured identity, and confusing one namespace with another is
-//! the real risk. The context strings are frozen forever, verbatim;
-//! they are opaque bytes, and a product rename never changes them,
-//! because changing one would silently re-address every stored
-//! record in its domain. A fifth context, `zeta-os 2026-08 cas blob`,
-//! was retired before use (spec §11): content bytes are plain-hashed,
-//! never domain-separated, and that string stays reserved so nothing
-//! else ever claims it.
+//! Objects and derivations separate their structured identities, while event
+//! and chain domains retain their live protocol meanings. Content bytes stay
+//! outside this enum because plain BLAKE3 makes equal bytes share one address.
 
 use crate::hash::Hash;
 
-/// One derived-identifier domain from spec §11.
+/// Selects one active derived-identifier namespace.
+///
+/// # Examples
+///
+/// ```
+/// use zeta_substrate::Domain;
+///
+/// assert_ne!(Domain::Object.context(), Domain::Derivation.context());
+/// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Domain {
+    /// Immutable substrate objects.
+    Object,
+    /// Substrate provenance edges.
+    Derivation,
     /// Wire event envelope ids (spec §6.1).
     Event,
     /// Links in the idempotent id chain (publish and wait handles).
     Chain,
-    /// Records in the prompt-trace substrate.
-    Prompt,
-    /// Skill body identifiers.
-    Skill,
 }
 
 impl Domain {
-    /// Returns the frozen derive-key context string, verbatim.
+    /// Returns the domain's frozen derive-key context string.
     ///
     /// # Examples
     ///
     /// ```
     /// use zeta_substrate::Domain;
     ///
-    /// assert_eq!(Domain::Event.context(), "zeta-os 2026-08 cas event");
+    /// assert_eq!(Domain::Object.context(), "zeta-os 2026-08 cas object");
     /// ```
     pub fn context(self) -> &'static str {
         match self {
+            Domain::Object => "zeta-os 2026-08 cas object",
+            Domain::Derivation => "zeta-os 2026-08 cas derivation",
             Domain::Event => "zeta-os 2026-08 cas event",
             Domain::Chain => "zeta-os 2026-08 cas chain",
-            Domain::Prompt => "zeta-os 2026-08 cas prompt",
-            Domain::Skill => "zeta-os 2026-08 cas skill",
         }
     }
 }

@@ -152,9 +152,7 @@ impl<'de> Deserialize<'de> for Hash {
         let text = String::deserialize(deserializer)?;
         let hash = text.parse::<Hash>();
         let Ok(hash) = hash else {
-            return Err(D::Error::custom(format!(
-                "invalid b3 address {text:?}"
-            )));
+            return Err(D::Error::custom(format!("invalid b3 address {text:?}")));
         };
         Ok(hash)
     }

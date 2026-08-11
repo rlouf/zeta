@@ -1172,7 +1172,6 @@ dependencies = [
 name = "zeta-substrate"
 version = "0.1.0"
 dependencies = [
- "base64",
  "blake3",
  "serde",
  "serde_json",

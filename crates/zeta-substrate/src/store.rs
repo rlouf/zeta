@@ -4,8 +4,8 @@
 //! leaves a half-written blob under a valid name. Reads can verify
 //! the hash on every byte returned, because a store that silently
 //! serves corrupted content defeats the point of content addressing.
-//! The flat layout is byte-identical to the stagefs pack layout on
-//! purpose: future pack interop is a file copy, not a conversion.
+//! Blob paths use two digest characters as a fanout directory so directory
+//! listing and synchronization costs stay bounded as a store grows.
 
 use std::fs;
 use std::io;
@@ -13,33 +13,20 @@ use std::path::{Path, PathBuf};
 
 use crate::hash::{hash_bytes, Hash};
 
-/// How blob paths spread under the store root.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Layout {
-    /// `blobs/<hex>` — the stagefs pack layout, kept identical so a
-    /// pack and a store exchange blobs by copying files.
-    Flat,
-    /// `blobs/<first two hex>/<remaining hex>` — for the runtime
-    /// store, where one directory holding every blob would degrade
-    /// listing and sync tools.
-    Fanout2,
-}
-
 /// A content-addressed blob store rooted at one directory.
 ///
 /// # Examples
 ///
 /// ```
-/// use zeta_substrate::{BlobStore, Layout};
+/// use zeta_substrate::BlobStore;
 ///
 /// let root = tempfile::tempdir().unwrap();
-/// let store = BlobStore::new(root.path(), Layout::Flat);
+/// let store = BlobStore::new(root.path());
 /// let hash = store.put(b"payload bytes").unwrap();
 /// assert_eq!(store.read_verified(&hash).unwrap(), b"payload bytes");
 /// ```
 pub struct BlobStore {
     root: PathBuf,
-    layout: Layout,
 }
 
 impl BlobStore {
@@ -47,10 +34,18 @@ impl BlobStore {
     ///
     /// Directories appear on first write, so constructing a store is
     /// free and read-only stores need no permissions they do not use.
-    pub fn new(root: &Path, layout: Layout) -> Self {
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let root = tempfile::tempdir().unwrap();
+    /// let store = zeta_substrate::BlobStore::new(root.path());
+    /// let hash = zeta_substrate::hash_bytes(b"payload");
+    /// assert!(store.path_of(&hash).starts_with(root.path()));
+    /// ```
+    pub fn new(root: &Path) -> Self {
         BlobStore {
             root: root.to_path_buf(),
-            layout,
         }
     }
 
@@ -60,22 +55,17 @@ impl BlobStore {
     ///
     /// ```
     /// use std::path::Path;
-    /// use zeta_substrate::{BlobStore, Layout};
+    /// use zeta_substrate::BlobStore;
     ///
-    /// let store = BlobStore::new(Path::new("/store"), Layout::Fanout2);
+    /// let store = BlobStore::new(Path::new("/store"));
     /// let hash = zeta_substrate::hash_bytes(b"x");
     /// let path = store.path_of(&hash);
     /// assert!(path.starts_with("/store/blobs"));
     /// ```
     pub fn path_of(&self, hash: &Hash) -> PathBuf {
         let hex = hash.to_hex();
-        match self.layout {
-            Layout::Flat => self.root.join("blobs").join(hex),
-            Layout::Fanout2 => {
-                let (fanout, rest) = hex.split_at(2);
-                self.root.join("blobs").join(fanout).join(rest)
-            }
-        }
+        let (fanout, rest) = hex.split_at(2);
+        self.root.join("blobs").join(fanout).join(rest)
     }
 
     /// Stores bytes under their content address and returns it.

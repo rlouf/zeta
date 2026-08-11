@@ -1,8 +1,13 @@
-//! Behavior tests for hashes, epoch recognition, and the blob store.
+//! Behavior tests for hashes, substrate values, domains, and blob storage.
 
 use std::path::Path;
 
-use zeta_substrate::{parse_id, BlobStore, Hash, HashParseError, Id, Layout};
+use serde_json::{json, Map};
+use zeta_substrate::{BlobStore, Derivation, Domain, Hash, HashParseError, Object, Ref, RefUpdate};
+
+fn fields(value: serde_json::Value) -> Map<String, serde_json::Value> {
+    value.as_object().unwrap().clone()
+}
 
 #[test]
 fn hash_display_and_from_str_round_trip() {
@@ -15,14 +20,8 @@ fn hash_display_and_from_str_round_trip() {
 
 #[test]
 fn hash_from_str_rejects_malformed_input() {
-    assert_eq!(
-        "af1349".parse::<Hash>(),
-        Err(HashParseError::MissingPrefix)
-    );
-    assert_eq!(
-        "b3:abc".parse::<Hash>(),
-        Err(HashParseError::BadLength(3))
-    );
+    assert_eq!("af1349".parse::<Hash>(), Err(HashParseError::MissingPrefix));
+    assert_eq!("b3:abc".parse::<Hash>(), Err(HashParseError::BadLength(3)));
     let uppercase = format!("b3:{}", "A".repeat(64));
     assert_eq!(
         uppercase.parse::<Hash>(),
@@ -53,32 +52,135 @@ fn hash_file_matches_hash_bytes_for_small_files() {
 }
 
 #[test]
-fn parse_id_recognizes_every_epoch() {
-    let modern = zeta_substrate::hash_bytes(b"modern");
-    assert_eq!(parse_id(&modern.to_string()), Id::Modern(modern));
-    assert_eq!(parse_id(&"a1".repeat(12)), Id::LegacySha24);
-    assert_eq!(parse_id(&"a1".repeat(32)), Id::LegacySha64);
-    assert_eq!(parse_id("sha256:whatever"), Id::LegacySha256Prefixed);
-    assert_eq!(parse_id("evt_0af3"), Id::Opaque);
-    assert_eq!(parse_id("qi_evt_1_agent"), Id::Opaque);
-    assert_eq!(parse_id(""), Id::Opaque);
-    assert_eq!(parse_id(&"A1".repeat(12)), Id::Opaque);
-    assert_eq!(parse_id(&"b3:".repeat(1)), Id::Opaque);
+fn active_domains_have_distinct_frozen_contexts() {
+    assert_eq!(Domain::Object.context(), "zeta-os 2026-08 cas object");
+    assert_eq!(
+        Domain::Derivation.context(),
+        "zeta-os 2026-08 cas derivation"
+    );
+    assert_eq!(Domain::Event.context(), "zeta-os 2026-08 cas event");
+    assert_eq!(Domain::Chain.context(), "zeta-os 2026-08 cas chain");
+
+    let input = b"same identity";
+    let domains = [
+        Domain::Object,
+        Domain::Derivation,
+        Domain::Event,
+        Domain::Chain,
+    ];
+    for (index, domain) in domains.iter().enumerate() {
+        for other in &domains[index + 1..] {
+            assert_ne!(
+                zeta_substrate::derive(*domain, input),
+                zeta_substrate::derive(*other, input)
+            );
+        }
+    }
 }
 
 #[test]
-fn parse_id_legacy_flag_matches_the_python_contract() {
-    assert!(parse_id(&"f".repeat(24)).is_legacy());
-    assert!(parse_id(&"f".repeat(64)).is_legacy());
-    assert!(parse_id("sha256:abc").is_legacy());
-    assert!(!parse_id(&zeta_substrate::hash_bytes(b"x").to_string()).is_legacy());
-    assert!(!parse_id(&"f".repeat(32)).is_legacy());
+fn object_content_address_uses_canonical_fields_and_object_domain() {
+    let object = Object {
+        kind: "example.message".to_owned(),
+        schema: "zeta.example.v1".to_owned(),
+        data: fields(json!({"z": 2, "a": "héllo"})),
+        links: vec![zeta_substrate::hash_bytes(b"child").to_string()],
+    };
+    let canonical = concat!(
+        "{\"data\":{\"a\":\"héllo\",\"z\":2},",
+        "\"kind\":\"example.message\",",
+        "\"links\":[\"b3:9e3f17c9899155024d1487a756b761dc424fa5e6a32bf164f289f4f00a442205\"],",
+        "\"schema\":\"zeta.example.v1\"}"
+    );
+    assert_eq!(object.canonical_bytes().unwrap(), canonical.as_bytes());
+    assert_eq!(
+        object.content_address().unwrap(),
+        zeta_substrate::derive(Domain::Object, canonical.as_bytes())
+    );
+}
+
+#[test]
+fn derivation_content_address_uses_canonical_fields_and_derivation_domain() {
+    let output_id = zeta_substrate::hash_bytes(b"output").to_string();
+    let input_id = zeta_substrate::hash_bytes(b"input").to_string();
+    let derivation = Derivation {
+        producer: "example:combine@1".to_owned(),
+        output_id,
+        input_ids: vec![input_id],
+        params: fields(json!({"temperature": 0.1, "optional": null})),
+    };
+    let canonical = derivation.canonical_bytes().unwrap();
+    assert_eq!(
+        derivation.content_address().unwrap(),
+        zeta_substrate::derive(Domain::Derivation, &canonical)
+    );
+    assert_eq!(canonical.first(), Some(&b'{'));
+    assert_eq!(canonical.last(), Some(&b'}'));
+    assert!(!canonical.ends_with(b"\n"));
+}
+
+#[test]
+fn canonical_json_rejects_integer_above_u64() {
+    let value = serde_json::from_str("18446744073709551616").unwrap();
+    assert_eq!(
+        zeta_substrate::canonical_json(&value),
+        Err(zeta_substrate::CanonicalJsonError::IntegerOutOfRange(
+            "18446744073709551616".to_owned()
+        ))
+    );
+}
+
+#[test]
+fn canonical_json_rejects_integer_below_i64() {
+    let value = serde_json::from_str("-9223372036854775809").unwrap();
+    assert_eq!(
+        zeta_substrate::canonical_json(&value),
+        Err(zeta_substrate::CanonicalJsonError::IntegerOutOfRange(
+            "-9223372036854775809".to_owned()
+        ))
+    );
+}
+
+#[test]
+fn object_content_address_rejects_float_outside_binary64() {
+    let data = serde_json::from_str("{\"value\":1e400}").unwrap();
+    let object = Object {
+        kind: "example.number".to_owned(),
+        schema: "zeta.example.v1".to_owned(),
+        data,
+        links: Vec::new(),
+    };
+    assert_eq!(
+        object.content_address(),
+        Err(zeta_substrate::CanonicalJsonError::FloatOutOfRange(
+            "1e400".to_owned()
+        ))
+    );
+}
+
+#[test]
+fn refs_preserve_named_pointer_and_conditional_update_fields() {
+    let old_object_id = zeta_substrate::hash_bytes(b"old").to_string();
+    let new_object_id = zeta_substrate::hash_bytes(b"new").to_string();
+    let reference = Ref {
+        name: "session/head".to_owned(),
+        object_id: old_object_id.clone(),
+    };
+    let update = RefUpdate {
+        name: reference.name.clone(),
+        old_object_id: Some(reference.object_id),
+        new_object_id,
+        updated: true,
+    };
+    assert_eq!(update.name, "session/head");
+    assert!(update.old_object_id.is_some());
+    assert!(update.updated);
 }
 
 #[test]
 fn blob_store_put_get_and_verify_round_trip() {
     let directory = tempfile::tempdir().unwrap();
-    let store = BlobStore::new(directory.path(), Layout::Fanout2);
+    let store = BlobStore::new(directory.path());
     let hash = store.put(b"the exact payload bytes").unwrap();
     assert_eq!(store.get(&hash).unwrap(), b"the exact payload bytes");
     assert_eq!(
@@ -90,14 +192,12 @@ fn blob_store_put_get_and_verify_round_trip() {
 }
 
 #[test]
-fn blob_store_layouts_shape_paths_as_documented() {
+fn blob_store_uses_two_character_fanout() {
     let hash = zeta_substrate::hash_bytes(b"layout");
     let hex = hash.to_hex();
-    let flat = BlobStore::new(Path::new("/store"), Layout::Flat);
-    assert_eq!(flat.path_of(&hash), Path::new("/store/blobs").join(&hex));
-    let fanout = BlobStore::new(Path::new("/store"), Layout::Fanout2);
+    let store = BlobStore::new(Path::new("/store"));
     assert_eq!(
-        fanout.path_of(&hash),
+        store.path_of(&hash),
         Path::new("/store/blobs").join(&hex[..2]).join(&hex[2..])
     );
 }
@@ -105,20 +205,11 @@ fn blob_store_layouts_shape_paths_as_documented() {
 #[test]
 fn blob_store_read_verified_names_a_corrupt_blob() {
     let directory = tempfile::tempdir().unwrap();
-    let store = BlobStore::new(directory.path(), Layout::Flat);
+    let store = BlobStore::new(directory.path());
     let hash = store.put(b"pristine").unwrap();
     std::fs::write(store.path_of(&hash), b"tampered").unwrap();
     assert_eq!(store.get(&hash).unwrap(), b"tampered");
     let error = store.read_verified(&hash).unwrap_err();
     assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
     assert!(error.to_string().contains(&hash.to_string()));
-}
-
-#[test]
-fn blob_store_flat_layout_matches_the_pack_contract() {
-    let directory = tempfile::tempdir().unwrap();
-    let store = BlobStore::new(directory.path(), Layout::Flat);
-    let hash = store.put(b"pack blob").unwrap();
-    let expected = directory.path().join("blobs").join(hash.to_hex());
-    assert!(expected.is_file());
 }

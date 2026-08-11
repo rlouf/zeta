@@ -1,0 +1,1 @@
+{"id":1,"jsonrpc":"2.0","method":"initialize","params":{"heartbeat_seconds":10,"max_in_flight":64,"peer":{"name":"zeta-tui","version":"0.1.0"},"protocol_versions":[0],"roles":["client"]}}

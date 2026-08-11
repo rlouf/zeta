@@ -1,59 +1,55 @@
 # Zeta conformance vectors
 
-Golden test data for `spec/wire-v0.md`, `spec/substrate-v0.md`, and
-`spec/journal-v0.md`. A third-party SDK (Go, TypeScript, Rust, …) consumes
-these files directly to prove it speaks the same protocols byte-for-byte.
-Zeta's own Python and Rust test suites read these exact files — there are no
-copies.
+Golden test data for `spec/ipc-v0.md`, `spec/substrate-v0.md`, and
+`spec/journal-v0.md`. Third-party implementations can consume these files
+directly. The Python and Rust suites read the same files.
 
-## `envelopes/valid/*.json`
+## `ipc/messages/valid/*.json`
 
-One envelope per file, stated in **canonical form** (spec §2.1: sorted
-keys, compact separators, literal UTF-8) plus a trailing newline. A
-conforming implementation must:
+Each file contains one valid JSON-RPC message and a trailing newline. A
+conforming implementation must accept every file. Parsing, serializing, and
+parsing the typed message again must produce the same typed value. Serialized
+output must be compact valid JSON. Readers may discard unknown members and
+normalize absent `params` to `{}`, so exact source-value preservation is not a
+conformance requirement.
 
-1. parse each file into its envelope model without error;
-2. re-serialize the parsed JSON canonically and reproduce the file's
-   bytes exactly, minus the trailing newline.
+The set covers requests, notifications, success responses, error responses,
+string and integer ids, absent and object parameters, `null` results, Unicode,
+initialization, fixed methods, direct provider methods, and unknown top-level
+members. Syntactic validity does not grant method authority; the session
+vectors exercise role and connection-state rules.
 
-`heartbeat-unknown-field.json` carries a field no v0 kind defines; it
-is valid because unknown envelope fields must be ignored (spec §3).
+## `ipc/messages/invalid/*.json` and `*.reason.txt`
 
-## `envelopes/invalid/*.json` and `*.reason.txt`
+Each `.json` file contains a value that the profile or one fixed protocol
+method must reject. Its sibling reason file has this format:
 
-One envelope per `.json` file that a conforming implementation must
-**reject**. The sibling `<name>.reason.txt` documents why:
+1. The JSON-RPC error code that applies when a response is permitted.
+2. A stable detail code for `error.data.code` or local diagnostics.
+3. A short explanation with the relevant specification section.
 
-- line 1 is a stable machine-checkable rule token (e.g.
-  `payload_choice`, `bad_timestamp`, `missing_field:kind`). A
-  conformance test should assert its validator reports this rule (or
-  its own documented mapping of it);
-- the remaining lines are prose citing the violated spec section.
+An invalid response or notification produces a local violation and no reply,
+but its reason file still records the error code for consistent validation.
 
-## `handshake/session-01.jsonl` and `session-02.jsonl`
+## `ipc/sessions/*.jsonl`
 
-Complete scripted sessions. `session-01` exercises the source path:
-hello → hello_ack → two events with acks → heartbeat → shutdown.
-`session-02` exercises operations: hello declaring an operation →
-hello_ack with `config` → call → call_result → heartbeat →
-shutdown. Each line is a canonical envelope with **one extra
-field**, `_dir`, the direction marker:
+Each file is one scripted connection. Every line is a JSON-RPC message with an
+extra `_dir` member:
 
-- `"c2p"` — child (plugin) to parent (runtime);
-- `"p2c"` — parent to child.
+- `"peer_to_runtime"` means that the peer sends the message.
+- `"runtime_to_peer"` means that the runtime sends the message.
 
-Strip `_dir` before validation; the remainder must validate as the
-appropriate envelope. A plugin-side implementation must be able to
-replay the session as the child (emitting the `c2p` lines, given the
-`p2c` lines as input); a runtime-side implementation must replay it as
-the parent. Event ids in the session are true `b3:` event-domain
-addresses of the identity described in spec §6.1.
+Strip `_dir` before message validation. `source-provider.jsonl` covers durable
+event publication, a direct provider request, equal ids open in opposite
+directions, source responses resolved out of order, ping, and orderly shutdown.
+`client.jsonl` covers queries, session submission, a committed-event
+notification, cancellation, and shutdown.
 
 ## `addresses/vectors.json`
 
-Inputs with their expected `b3:` addresses for every active identity
-domain: event, chain, object, and derivation. The `content` set uses
-plain, undomained BLAKE3 of the input bytes. Each vector gives the
+Inputs with their expected `b3:` addresses for identity domains defined by the
+substrate specification. The `content` set uses plain, undomained BLAKE3 of the
+input bytes. Each vector gives the
 input bytes as UTF-8 text (`input_utf8`) or base64 (`input_base64`)
 and the expected address. An implementation's output must match
 byte-for-byte, including for the empty input.

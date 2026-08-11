@@ -1,0 +1,3 @@
+-32602
+invalid_event_payload
+`events.publish.payload` must be an object (§6.1).

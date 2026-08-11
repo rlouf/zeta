@@ -1,0 +1,3 @@
+-32602
+event_payload_too_large
+The compact UTF-8 encoding of `events.publish.payload` exceeds 65536 bytes (§6.1).

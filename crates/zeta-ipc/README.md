@@ -1,34 +1,33 @@
 # zeta-ipc
 
-`zeta-ipc` implements the wire-v0 plugin protocol.
-It gives connected processes one message format and one set of session rules.
+`zeta-ipc` gives connected processes one language for requests, events, and
+lifecycle control. Shared rules keep every connection predictable when calls
+overlap, arrive out of order, or cross in both directions.
 
 ## Contents
 
-- Typed envelopes for each protocol message.
-- Parsing and validation for envelopes.
-- Canonical JSON that preserves unknown fields.
-- Blocking NDJSON readers and writers.
-- Session state machines for each end of a connection.
-- Stable rule tokens for protocol violations.
-- Limits for inline payloads and frames.
-
-The caller supplies the byte transport and all clock values.
+- Typed JSON-RPC requests, notifications, results, and errors.
+- Initialization with `source`, `client`, and `provider` roles.
+- Request correlation and flow control in both directions.
+- Bounded NDJSON readers and writers.
+- Validation for event, session, provider, ping, and shutdown messages.
 
 ## Example
 
-Parse a heartbeat envelope:
+Parse a request:
 
 ```rust
-use zeta_ipc::{Envelope, Kind};
+use zeta_ipc::{Message, RequestId};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let line =
-        r#"{"id":"m-1","kind":"heartbeat","ts":"2026-08-10T12:00:00Z","v":0}"#;
-    let envelope = Envelope::parse_str(line)?;
+    let line = r#"{"jsonrpc":"2.0","id":1,"method":"ping","params":{}}"#;
+    let message = Message::parse_str(line)?;
 
-    assert_eq!(envelope.kind(), Kind::Heartbeat);
-    assert_eq!(envelope.to_canonical_json(), line);
+    let Message::Request(request) = message else {
+        unreachable!();
+    };
+    assert_eq!(request.id, RequestId::from(1_u64));
+    assert_eq!(request.method, "ping");
     Ok(())
 }
 ```

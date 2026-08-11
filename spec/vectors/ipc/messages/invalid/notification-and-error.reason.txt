@@ -1,0 +1,3 @@
+-32600
+mixed_message_shape
+A notification cannot carry `error` (§3.3).

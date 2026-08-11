@@ -1,0 +1,3 @@
+-32600
+mixed_message_shape
+A request cannot carry `result` (§3.2).

@@ -1,0 +1,3 @@
+-32602
+missing_session_id
+`session.send` requires `session_id` (§7).

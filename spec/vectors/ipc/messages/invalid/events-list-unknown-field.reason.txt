@@ -1,0 +1,3 @@
+-32602
+unknown_filter_field
+`events.list` filter parameters are strict (§6.2).

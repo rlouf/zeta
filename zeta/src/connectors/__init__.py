@@ -1,6 +1,6 @@
 """Connector vocabulary: bindings and self-described manifests.
 
-A connector is an executable that speaks wire-v0 (spec §13). The
+A connector is an executable that speaks IPC. The
 runtime never imports connector code; it reads the executable's
 `--describe` manifest for schemas and delivery semantics, spawns it
 for ingress, and calls it for egress. This module holds the shapes
@@ -35,7 +35,7 @@ class EgressBinding:
 
 @dataclass(frozen=True)
 class OperationSpec:
-    """One operation a connector serves via wire-v0 calls."""
+    """One operation a connector serves as a direct provider method."""
 
     name: str
     semantics: DeliverySemantics

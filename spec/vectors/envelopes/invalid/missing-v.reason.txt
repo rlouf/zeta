@@ -1,2 +1,0 @@
-missing_field:v
-Every envelope must carry `v` (spec §3).

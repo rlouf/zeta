@@ -1,4 +1,4 @@
-"""Tests for the wire-v0 connector child processes in zeta-connectors."""
+"""Tests for the IPC connector child processes in zeta-connectors."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ from urllib.parse import parse_qs
 import httpx
 import pytest
 from jsonschema import Draft202012Validator
-from zeta.wire.plugin import OperationError
+from zeta.ipc.client import ProviderError
 from zeta_connectors.filesystem import (
     FILE_CREATED,
     collect_file_created,
@@ -913,7 +913,7 @@ async def test_slack_post_message_delivers_with_the_effect_key() -> None:
 async def test_slack_post_message_rejects_a_disallowed_channel() -> None:
     client = _FakeSlackClient()
 
-    with pytest.raises(OperationError, match="not allowed") as error:
+    with pytest.raises(ProviderError, match="not allowed") as error:
         await post_slack_message(
             cast(HttpSlackClient, client),
             {"channel_id": "C999", "text": "hello"},
@@ -926,7 +926,7 @@ async def test_slack_post_message_rejects_a_disallowed_channel() -> None:
 
 
 async def test_slack_post_message_requires_channel_and_text() -> None:
-    with pytest.raises(OperationError, match="requires channel_id and text"):
+    with pytest.raises(ProviderError, match="requires channel_id and text"):
         await post_slack_message(
             cast(HttpSlackClient, _FakeSlackClient()),
             {"text": "hello"},
@@ -1006,7 +1006,7 @@ async def test_pushover_send_message_requires_a_message() -> None:
         lambda _request: httpx.Response(200, json={"status": 1, "request": "r"})
     )
 
-    with pytest.raises(OperationError, match="requires a non-empty message") as error:
+    with pytest.raises(ProviderError, match="requires a non-empty message") as error:
         await send_pushover_message(client, {})
 
     assert error.value.retryable is False
@@ -1037,7 +1037,7 @@ async def test_pushover_glance_requires_a_field() -> None:
         lambda _request: httpx.Response(200, json={"status": 1, "request": "r"})
     )
 
-    with pytest.raises(OperationError, match="requires at least one field"):
+    with pytest.raises(ProviderError, match="requires at least one field"):
         await update_pushover_glance(client, {})
 
 

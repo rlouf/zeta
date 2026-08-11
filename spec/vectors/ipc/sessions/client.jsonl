@@ -1,0 +1,13 @@
+{"_dir":"peer_to_runtime","id":1,"jsonrpc":"2.0","method":"initialize","params":{"heartbeat_seconds":10,"max_in_flight":64,"peer":{"name":"zeta-tui","version":"0.1.0"},"protocol_versions":[0],"roles":["client"]}}
+{"_dir":"runtime_to_peer","id":1,"jsonrpc":"2.0","result":{"config":{},"heartbeat_seconds":10,"max_in_flight":64,"protocol_version":0,"roles":["client"],"runtime":{"name":"zeta","version":"0.1.0"}}}
+{"_dir":"peer_to_runtime","id":2,"jsonrpc":"2.0","method":"session.list","params":{}}
+{"_dir":"runtime_to_peer","id":2,"jsonrpc":"2.0","result":{"sessions":[]}}
+{"_dir":"peer_to_runtime","id":3,"jsonrpc":"2.0","method":"events.list","params":{"limit":200}}
+{"_dir":"runtime_to_peer","id":3,"jsonrpc":"2.0","result":{"events":[],"next_cursor":null}}
+{"_dir":"peer_to_runtime","id":4,"jsonrpc":"2.0","method":"session.start","params":{"idempotency_key":"message-1","message":"Summarize the inbox"}}
+{"_dir":"runtime_to_peer","id":4,"jsonrpc":"2.0","result":{"agent_id":"zeta.master","event_id":"evt_101","queue_item_id":"queue_101","run_id":"run_101","session_id":"session_101","status":"queued"}}
+{"_dir":"runtime_to_peer","jsonrpc":"2.0","method":"event","params":{"event":{"caused_by":null,"cursor":42,"id":"evt_101","idempotency_key":"message-1","payload":{"message":"Summarize the inbox"},"run_id":"run_101","session_id":"session_101","source":"user","timestamp_ms":1786400001000,"turn_id":null,"type":"session.message.requested"}}}
+{"_dir":"peer_to_runtime","id":5,"jsonrpc":"2.0","method":"session.cancel","params":{"reason":"user request","run_id":"run_101","session_id":"session_101"}}
+{"_dir":"runtime_to_peer","id":5,"jsonrpc":"2.0","result":{"cancelled":true,"changed":true,"queue_item_id":"queue_101","run_id":"run_101","session_id":"session_101","status":"cancelling","terminal_status":null}}
+{"_dir":"peer_to_runtime","id":6,"jsonrpc":"2.0","method":"shutdown","params":{"reason":"client exiting"}}
+{"_dir":"runtime_to_peer","id":6,"jsonrpc":"2.0","result":{}}

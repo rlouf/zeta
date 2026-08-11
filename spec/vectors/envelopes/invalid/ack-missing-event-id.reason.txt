@@ -1,2 +1,0 @@
-missing_field:event_id
-An ack must carry `event_id` (spec §7).

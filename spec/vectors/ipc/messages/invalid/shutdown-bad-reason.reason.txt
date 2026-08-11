@@ -1,0 +1,3 @@
+-32602
+invalid_shutdown_reason
+`shutdown.reason` must be a non-empty string or null (§10).

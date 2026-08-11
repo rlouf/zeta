@@ -1,0 +1,3 @@
+-32600
+missing_error_message
+An error object must carry `message` (§3.5).

@@ -1,0 +1,1 @@
+{"id":1,"jsonrpc":"2.0","method":"initialize","params":{"event_types":[{"schema":"file.created@1","type":"file.created"},{"schema":"file.created@1","type":"file.created"}],"peer":{"name":"filesystem","version":"0.1.0"},"protocol_versions":[0],"roles":["source"]}}

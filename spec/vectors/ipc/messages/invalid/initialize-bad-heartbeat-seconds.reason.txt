@@ -1,0 +1,3 @@
+-32602
+invalid_heartbeat_seconds
+`heartbeat_seconds` must be in `[1, 300]` (§4.1).

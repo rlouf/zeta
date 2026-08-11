@@ -1,0 +1,3 @@
+-32602
+missing_roles
+Initialization requires `roles` (§4.1).

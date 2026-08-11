@@ -1,0 +1,3 @@
+-32600
+invalid_request_id
+An outgoing request id cannot be null (§3.1).

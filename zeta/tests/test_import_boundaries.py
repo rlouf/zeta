@@ -43,7 +43,7 @@ FORBIDDEN_DEPENDENCIES = {
         "rpc",
     },
     "tools": {"authoring", "cli", "harness", "loop", "rpc"},
-    "wire": {
+    "ipc": {
         "authoring",
         "capabilities",
         "cli",

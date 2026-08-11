@@ -1,2 +1,0 @@
-bad_protocol_version
-`protocol_version` must be a non-negative integer (spec §5.6).

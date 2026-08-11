@@ -1,4 +1,4 @@
-"""Bundled Zeta connectors as wire-v0 executables."""
+"""Bundled Zeta connectors as IPC executables."""
 
 from __future__ import annotations
 

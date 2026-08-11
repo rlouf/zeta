@@ -1,0 +1,1 @@
+{"id":6,"jsonrpc":"2.0","method":"session.status","params":{"include_events":true,"session_id":"session_123"}}

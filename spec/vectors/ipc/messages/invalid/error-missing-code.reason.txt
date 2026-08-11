@@ -1,0 +1,3 @@
+-32600
+missing_error_code
+An error object must carry `code` (§3.5).

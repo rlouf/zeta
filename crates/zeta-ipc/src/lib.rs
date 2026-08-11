@@ -1,29 +1,40 @@
-//! Sans-IO implementation of the wire-v0 plugin protocol.
+//! Implements the Zeta IPC protocol.
 //!
-//! The crate provides validated envelopes (`spec/wire-v0.md`), canonical JSON,
-//! per-side [`Session`] machines fed with parsed envelopes and clock instants,
-//! and blocking line framing over [`Read`]/[`Write`]. Sans-IO lets golden
-//! vectors exercise the same state-machine paths as live IO and leaves
-//! transport choices to callers.
+//! The crate provides typed JSON-RPC 2.0 messages, bounded NDJSON framing,
+//! initialization roles, and one bidirectional [`Session`] state machine.
+//! The session turns incoming messages and clock ticks into explicit actions.
 //!
-//! [`Read`]: std::io::Read
-//! [`Write`]: std::io::Write
-//! [`Session`]: crate::session
+//! # Examples
+//!
+//! ```
+//! use zeta_ipc::{Message, RequestId};
+//!
+//! let message = Message::parse_str(
+//!     r#"{"jsonrpc":"2.0","id":1,"method":"ping","params":{}}"#,
+//! )?;
+//! let Message::Request(request) = message else {
+//!     panic!("expected a request");
+//! };
+//! assert_eq!(request.id, RequestId::from(1_u64));
+//! assert_eq!(request.method, "ping");
+//! # Ok::<(), zeta_ipc::IpcError>(())
+//! ```
 
-mod canonical;
-mod envelope;
 mod error;
 mod frame;
-pub mod session;
-mod timestamp;
+mod message;
+mod session;
 mod validate;
 
-pub use canonical::canonical_json;
-pub use envelope::{
-    Ack, Call, CallInfo, CallResult, Common, Envelope, ErrorEnvelope, ErrorInfo, EventEnvelope,
-    EventTypeDecl, Heartbeat, Hello, HelloAck, Kind, OperationDecl, Shutdown,
+pub use error::{
+    ErrorObject, IpcError, Retryability, INTERNAL_ERROR, INVALID_PARAMS, INVALID_REQUEST,
+    METHOD_NOT_FOUND, PARSE_ERROR, SERVER_ERROR,
+};
+pub use frame::{Frame, FrameReader, FrameWriter, Violation, MAX_FRAME_BYTES};
+pub use message::{
+    ErrorResponse, EventTypeDecl, InitializeParams, InitializeResult, Message, MethodDecl,
+    Notification, PeerIdentity, Request, RequestId, Role, SuccessResponse, JSONRPC_VERSION,
     MAX_INLINE_PAYLOAD_BYTES, PROTOCOL_VERSION,
 };
-pub use error::WireError;
-pub use frame::{Frame, FrameReader, FrameWriter, Violation, MAX_FRAME_BYTES};
-pub use validate::validate_envelope;
+pub use session::{Action, ResolvedRequest, RuntimeConfig, Session, ShutdownDirection};
+pub use validate::validate_message;

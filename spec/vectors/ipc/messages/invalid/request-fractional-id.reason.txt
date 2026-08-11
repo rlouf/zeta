@@ -1,0 +1,3 @@
+-32600
+invalid_request_id
+A numeric request id must be integral (§3.1).

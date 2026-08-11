@@ -1,0 +1,3 @@
+-32600
+invalid_error_message
+An error message must be a string (§3.5).

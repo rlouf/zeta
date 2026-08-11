@@ -1,1 +1,0 @@
-{"caused_by":null,"id":"b3:ab9c49c6c7e692289013425f630a73a37c058f9466ed8d794f0521536d01155e","kind":"event","payload":{"dir":"/p/inbox","name":"todo.txt","path":"/p/inbox/todo.txt"},"schema":"file.created@1","session_id":null,"ts":"2026-08-10T12:00:01Z","type":"file.created","v":"0"}

@@ -1,6 +1,0 @@
-{"_dir":"c2p","event_types":[{"schema":"slack.message.received@1","type":"slack.message.received"}],"id":"m-c-1","kind":"hello","name":"slack","operations":[{"name":"slack.message.post"}],"plugin_version":"0.1.0","protocol_versions":[0],"role":"source","ts":"2026-08-10T12:00:00Z","v":0}
-{"_dir":"p2c","config":{},"id":"m-p-1","kind":"hello_ack","protocol_version":0,"runtime":"zeta-os/0.10.2","ts":"2026-08-10T12:00:00Z","v":0}
-{"_dir":"p2c","effect_key":"slack:evt_1:post","id":"m-p-7","kind":"call","name":"slack.message.post","payload":{"channel_id":"C123","text":"release is out"},"ts":"2026-08-10T12:00:00Z","v":0}
-{"_dir":"c2p","call_id":"m-p-7","id":"m-c-7","kind":"call_result","ok":true,"result":{"channel_id":"C123","message_ts":"1754818800.000100"},"ts":"2026-08-10T12:00:00Z","v":0}
-{"_dir":"c2p","id":"m-c-9","kind":"heartbeat","ts":"2026-08-10T12:00:10Z","v":0}
-{"_dir":"p2c","id":"m-p-9","kind":"shutdown","reason":"runtime stopping","ts":"2026-08-10T12:00:12Z","v":0}

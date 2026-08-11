@@ -1,0 +1,3 @@
+-32602
+missing_run_id
+`session.cancel` requires `run_id` (§7).

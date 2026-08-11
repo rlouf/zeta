@@ -1,0 +1,1 @@
+{"id":7,"jsonrpc":"2.0","method":"session.cancel","params":{"reason":"stop"}}

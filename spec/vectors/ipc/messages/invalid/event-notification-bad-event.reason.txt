@@ -1,0 +1,3 @@
+-32602
+invalid_durable_event
+The `event` notification must carry one durable event object (§6.3).

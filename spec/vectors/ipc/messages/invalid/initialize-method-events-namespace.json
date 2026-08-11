@@ -1,0 +1,1 @@
+{"id":1,"jsonrpc":"2.0","method":"initialize","params":{"methods":[{"name":"events.publish"}],"peer":{"name":"provider","version":"0.1.0"},"protocol_versions":[0],"roles":["provider"]}}

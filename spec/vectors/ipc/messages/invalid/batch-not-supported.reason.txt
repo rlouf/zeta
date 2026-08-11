@@ -1,0 +1,3 @@
+-32600
+batch_not_supported
+The profile accepts one JSON object per line and does not accept batches (§2).

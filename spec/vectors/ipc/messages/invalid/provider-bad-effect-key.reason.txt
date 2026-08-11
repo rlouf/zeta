@@ -1,0 +1,3 @@
+-32602
+invalid_effect_key
+Provider `effect_key` must be a non-empty string (§8).

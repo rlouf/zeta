@@ -1,0 +1,3 @@
+-32602
+invalid_protocol_versions
+`protocol_versions` must be a non-empty array of non-negative integers (§4.1).

@@ -1,2 +1,0 @@
-bad_plugin_version
-`plugin_version` must be a non-empty string (spec §5.1).

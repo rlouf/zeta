@@ -1,2 +1,0 @@
-result_choice
-A failed call_result must carry an `error` object (spec §7.1).

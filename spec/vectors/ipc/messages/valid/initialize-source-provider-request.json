@@ -1,0 +1,1 @@
+{"id":"source-1","jsonrpc":"2.0","method":"initialize","params":{"event_types":[{"schema":"file.created@1","type":"file.created"}],"heartbeat_seconds":10,"max_in_flight":64,"methods":[{"name":"file.archive"}],"peer":{"name":"filesystem","version":"0.1.0"},"protocol_versions":[0],"roles":["source","provider"]}}

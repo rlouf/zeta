@@ -1,2 +1,0 @@
-missing_field:schema
-An event must carry `schema` (spec §6).

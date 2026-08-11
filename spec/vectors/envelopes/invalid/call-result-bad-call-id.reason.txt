@@ -1,2 +1,0 @@
-bad_call_id
-`call_id` must be a non-empty string (spec §7.1).

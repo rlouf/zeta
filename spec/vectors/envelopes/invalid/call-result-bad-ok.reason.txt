@@ -1,2 +1,0 @@
-bad_ok
-`ok` must be a boolean (spec §7.1).

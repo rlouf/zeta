@@ -1,0 +1,3 @@
+-32602
+missing_protocol_versions
+Initialization requires `protocol_versions` (§4.1).

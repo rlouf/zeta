@@ -1,4 +1,4 @@
-"""The filesystem connector as a supervised wire-v0 subprocess."""
+"""The filesystem connector as a supervised IPC subprocess."""
 
 import asyncio
 import json
@@ -8,7 +8,7 @@ import time
 from pathlib import Path
 
 import pytest
-from wire_test_support import finished, frame_reader, read_envelope, send
+from ipc_test_support import finished, frame_reader, read_message, send
 from zeta.authoring.starter import scaffold_inbox_summarizer_project
 from zeta.harness import worker
 from zeta.harness.connector_bridge import (
@@ -16,9 +16,9 @@ from zeta.harness.connector_bridge import (
     ingress_waves,
     run_ipc_ingress_forever,
 )
+from zeta.ipc.messages import request, success_response
+from zeta.ipc.supervisor import PublishRequest
 from zeta.journal.store import Filter
-from zeta.wire.envelopes import envelope, mint_event_id
-from zeta.wire.host import WireEvent
 
 
 def scaffolded_runtime(tmp_path: Path, name: str) -> worker.WorkerServices:
@@ -60,7 +60,7 @@ def test_process_allowlist_excluding_a_bound_connector_fails_loudly(
         runtime.events.close()
 
 
-async def test_fs_connector_executable_speaks_wire_v0(tmp_path: Path) -> None:
+async def test_fs_connector_executable_speaks_ipc_v0(tmp_path: Path) -> None:
     inbox = tmp_path / "inbox"
     inbox.mkdir()
     process = await asyncio.create_subprocess_exec(
@@ -72,23 +72,31 @@ async def test_fs_connector_executable_speaks_wire_v0(tmp_path: Path) -> None:
         stderr=asyncio.subprocess.PIPE,
     )
     reader = frame_reader(process)
-    hello = await read_envelope(reader)
-    assert hello["kind"] == "hello"
-    assert hello["name"] == "filesystem"
-    assert hello["event_types"] == [
+    initialize = await read_message(reader)
+    assert initialize["method"] == "initialize"
+    params = initialize["params"]
+    assert params["peer"]["name"] == "filesystem"
+    assert params["roles"] == ["source"]
+    assert params["event_types"] == [
         {"type": "file.created", "schema": "file.created@1"}
     ]
     await send(
         process,
-        envelope(
-            "hello_ack",
-            "m-t-1",
-            protocol_version=0,
-            runtime="zeta-test/0",
-            config={
-                "bindings": [{"event": "file.created", "filter": {"dir": str(inbox)}}],
-                "poll_interval": 0.05,
-                "debounce": 0,
+        success_response(
+            initialize["id"],
+            {
+                "protocol_version": 0,
+                "runtime": {"name": "zeta-test", "version": "0"},
+                "roles": ["source"],
+                "config": {
+                    "bindings": [
+                        {"event": "file.created", "filter": {"dir": str(inbox)}}
+                    ],
+                    "poll_interval": 0.05,
+                    "debounce": 0,
+                },
+                "heartbeat_seconds": 10,
+                "max_in_flight": 64,
             },
         ),
     )
@@ -97,16 +105,33 @@ async def test_fs_connector_executable_speaks_wire_v0(tmp_path: Path) -> None:
     target.write_text("Buy milk.\n", encoding="utf-8")
     now = time.time()
     os.utime(target, (now, now))
-    event = await read_envelope(reader, timeout=10)
-    assert event["kind"] == "event"
-    assert event["type"] == "file.created"
-    assert event["payload"] == {
+    publish = await read_message(reader, timeout=10)
+    assert publish["method"] == "events.publish"
+    assert publish["params"]["type"] == "file.created"
+    assert publish["params"]["payload"] == {
         "path": str(target),
         "name": "todo.txt",
         "dir": str(inbox),
     }
-    await send(process, envelope("ack", "m-t-2", event_id=event["id"]))
-    await send(process, envelope("shutdown", "m-t-3"))
+    durable_event = {
+        "id": "evt_1",
+        "type": "file.created",
+        "source": "filesystem",
+        "payload": publish["params"]["payload"],
+        "idempotency_key": None,
+        "caused_by": None,
+        "session_id": None,
+        "run_id": None,
+        "turn_id": None,
+        "timestamp_ms": 1,
+        "cursor": 1,
+    }
+    await send(
+        process,
+        success_response(publish["id"], {"inserted": True, "event": durable_event}),
+    )
+    await send(process, request("runtime-stop", "shutdown", {}))
+    assert await read_message(reader) == success_response("runtime-stop", {})
     assert await finished(process) == 0
 
 
@@ -176,17 +201,25 @@ def test_ipc_event_redelivery_is_deduplicated_by_idempotency_key(
             "name": "todo.txt",
             "dir": inbox,
         }
-        wire_event = WireEvent(
-            id=mint_event_id("file.created", payload),
+        publication = PublishRequest(
+            request_id=1,
             type="file.created",
-            schema="file.created@1",
             payload=payload,
+            idempotency_key=None,
             caused_by=None,
             session_id=None,
-            ts="2026-08-10T12:00:00Z",
+            run_id=None,
+            turn_id=None,
         )
-        assert accept_ipc_event(runtime, binding, wire_event, connector_id="filesystem")
-        assert accept_ipc_event(runtime, binding, wire_event, connector_id="filesystem")
+        first = accept_ipc_event(
+            runtime, binding, publication, connector_id="filesystem"
+        )
+        duplicate = accept_ipc_event(
+            runtime, binding, publication, connector_id="filesystem"
+        )
+        assert first is not None and first.inserted
+        assert duplicate is not None and not duplicate.inserted
+        assert duplicate.event.id == first.event.id
         assert len(accepted_file_events(runtime)) == 1
     finally:
         runtime.events.close()
@@ -198,17 +231,19 @@ def test_ipc_events_of_the_wrong_type_are_refused_without_crashing(
     runtime = scaffolded_runtime(tmp_path, "wrong-type-project")
     try:
         binding = demo_binding(runtime)
-        wire_event = WireEvent(
-            id=mint_event_id("file.deleted", {}),
+        publication = PublishRequest(
+            request_id=1,
             type="file.deleted",
-            schema="file.deleted@1",
             payload={},
+            idempotency_key=None,
             caused_by=None,
             session_id=None,
-            ts="2026-08-10T12:00:00Z",
+            run_id=None,
+            turn_id=None,
         )
-        assert not accept_ipc_event(
-            runtime, binding, wire_event, connector_id="filesystem"
+        assert (
+            accept_ipc_event(runtime, binding, publication, connector_id="filesystem")
+            is None
         )
         assert accepted_file_events(runtime) == []
     finally:

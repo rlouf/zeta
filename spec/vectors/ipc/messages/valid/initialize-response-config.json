@@ -1,0 +1,1 @@
+{"id":1,"jsonrpc":"2.0","result":{"config":{"poll_interval":1.0,"watches":[{"dir":"/p/inbox"}]},"heartbeat_seconds":10,"max_in_flight":64,"protocol_version":0,"roles":["source","provider"],"runtime":{"name":"zeta","version":"0.1.0"}}}

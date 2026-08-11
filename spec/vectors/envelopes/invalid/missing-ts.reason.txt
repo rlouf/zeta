@@ -1,2 +1,0 @@
-missing_field:ts
-Every envelope must carry `ts` (spec §3).

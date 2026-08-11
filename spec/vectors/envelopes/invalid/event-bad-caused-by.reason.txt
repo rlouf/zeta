@@ -1,2 +1,0 @@
-bad_caused_by
-`caused_by` must be a string or null (spec §6).

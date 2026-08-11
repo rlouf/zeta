@@ -1,2 +1,0 @@
-missing_field:code
-An error must carry `code` (spec §10).

@@ -1,0 +1,3 @@
+-32602
+unknown_initialize_field
+Initialization parameters are strict (§4.1).

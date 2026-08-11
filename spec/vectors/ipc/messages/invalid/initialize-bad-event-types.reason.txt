@@ -1,0 +1,3 @@
+-32602
+invalid_event_types
+Each event declaration requires non-empty string `type` and `schema` members (§4.1).

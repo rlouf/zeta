@@ -1,0 +1,1 @@
+{"id":1,"jsonrpc":"2.0","method":"initialize","params":{"peer":{"name":"client","version":1},"protocol_versions":[0],"roles":["client"]}}

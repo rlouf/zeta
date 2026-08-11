@@ -1,2 +1,0 @@
-missing_field:message
-An error must carry `message` (spec §10).

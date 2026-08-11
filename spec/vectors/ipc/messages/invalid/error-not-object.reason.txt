@@ -1,0 +1,3 @@
+-32600
+invalid_error_object
+The `error` member must be an object (§3.5).

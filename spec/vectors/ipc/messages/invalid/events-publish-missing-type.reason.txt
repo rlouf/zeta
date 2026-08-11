@@ -1,0 +1,3 @@
+-32602
+missing_event_type
+`events.publish` requires `type` (§6.1).

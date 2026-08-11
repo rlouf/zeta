@@ -1,0 +1,3 @@
+-32602
+missing_provider_input
+A direct provider request requires `input` (§8).

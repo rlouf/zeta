@@ -1,2 +1,0 @@
-bad_session_id
-`session_id` must be a string or null (spec §6).

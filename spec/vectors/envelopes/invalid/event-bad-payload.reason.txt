@@ -1,2 +1,0 @@
-bad_payload
-`payload` must be an object (spec §6).

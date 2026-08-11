@@ -163,7 +163,7 @@ def load_connector_registry(
 ) -> EventConnectorRegistry:
     """Register every connector executable the shell can see.
 
-    Discovery is the shell's (spec/wire-v0.md §13): `zeta-connector-<id>`
+    Discovery is the shell's: `zeta-connector-<id>`
     on PATH, plus executable files under ``agents/connectors/`` — a
     project-local executable overrides a PATH connector with the same
     id. `connector_names` is the process-level allowlist

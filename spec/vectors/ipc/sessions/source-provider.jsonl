@@ -1,0 +1,12 @@
+{"_dir":"peer_to_runtime","id":"peer-1","jsonrpc":"2.0","method":"initialize","params":{"event_types":[{"schema":"file.created@1","type":"file.created"}],"heartbeat_seconds":10,"max_in_flight":64,"methods":[{"name":"file.archive"}],"peer":{"name":"filesystem","version":"0.1.0"},"protocol_versions":[0],"roles":["source","provider"]}}
+{"_dir":"runtime_to_peer","id":"peer-1","jsonrpc":"2.0","result":{"config":{"watches":[{"dir":"/p/inbox"}]},"heartbeat_seconds":10,"max_in_flight":64,"protocol_version":0,"roles":["source","provider"],"runtime":{"name":"zeta","version":"0.1.0"}}}
+{"_dir":"peer_to_runtime","id":1,"jsonrpc":"2.0","method":"events.publish","params":{"caused_by":null,"idempotency_key":"filesystem:first.txt","payload":{"path":"/p/inbox/first.txt"},"run_id":null,"session_id":null,"turn_id":null,"type":"file.created"}}
+{"_dir":"runtime_to_peer","id":1,"jsonrpc":"2.0","method":"file.archive","params":{"effect_key":"archive:first","input":{"path":"/p/inbox/first.txt"}}}
+{"_dir":"peer_to_runtime","id":2,"jsonrpc":"2.0","method":"events.publish","params":{"caused_by":null,"idempotency_key":"filesystem:second.txt","payload":{"path":"/p/inbox/second.txt"},"run_id":null,"session_id":null,"turn_id":null,"type":"file.created"}}
+{"_dir":"peer_to_runtime","id":1,"jsonrpc":"2.0","result":{"archived":true}}
+{"_dir":"runtime_to_peer","id":2,"jsonrpc":"2.0","result":{"event":{"caused_by":null,"cursor":2,"id":"evt_002","idempotency_key":"filesystem:second.txt","payload":{"path":"/p/inbox/second.txt"},"run_id":null,"session_id":null,"source":"filesystem","timestamp_ms":1786400000200,"turn_id":null,"type":"file.created"},"inserted":true}}
+{"_dir":"runtime_to_peer","id":1,"jsonrpc":"2.0","result":{"event":{"caused_by":null,"cursor":1,"id":"evt_001","idempotency_key":"filesystem:first.txt","payload":{"path":"/p/inbox/first.txt"},"run_id":null,"session_id":null,"source":"filesystem","timestamp_ms":1786400000100,"turn_id":null,"type":"file.created"},"inserted":true}}
+{"_dir":"runtime_to_peer","id":"runtime-2","jsonrpc":"2.0","method":"ping","params":{}}
+{"_dir":"peer_to_runtime","id":"runtime-2","jsonrpc":"2.0","result":{}}
+{"_dir":"runtime_to_peer","id":"runtime-3","jsonrpc":"2.0","method":"shutdown","params":{"reason":"runtime stopping"}}
+{"_dir":"peer_to_runtime","id":"runtime-3","jsonrpc":"2.0","result":{}}

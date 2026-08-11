@@ -1,2 +1,0 @@
-missing_field:event_types
-A source hello must carry `event_types` (spec §5.3).

@@ -1,0 +1,3 @@
+-32602
+unknown_shutdown_field
+`shutdown` parameters are strict (§10).

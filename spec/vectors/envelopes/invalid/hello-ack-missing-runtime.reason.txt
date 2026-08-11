@@ -1,2 +1,0 @@
-missing_field:runtime
-A hello_ack must carry `runtime` (spec §5.6).

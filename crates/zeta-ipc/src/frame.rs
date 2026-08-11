@@ -1,61 +1,42 @@
-//! Blocking ndjson framing over `Read`/`Write` (spec §2).
+//! Blocking NDJSON framing over [`Read`] and [`Write`].
 //!
-//! The reader owns its buffer and never panics on peer garbage:
-//! every line comes back as either a validated envelope or a
-//! [`Violation`] the caller decides about. Overlong lines discard to
-//! the next newline so input cannot grow memory without bound.
+//! [`Read`]: std::io::Read
+//! [`Write`]: std::io::Write
 
 use std::io::{Read, Write};
 
-use crate::envelope::Envelope;
-use crate::error::WireError;
+use crate::error::{INVALID_REQUEST, PARSE_ERROR};
+use crate::message::Message;
 
-/// The frame-size ceiling defined by spec §2.
+/// Contains the maximum size of one JSON line.
 pub const MAX_FRAME_BYTES: usize = 8 * 1024 * 1024;
 
 const READ_CHUNK: usize = 64 * 1024;
-const PREVIEW_BYTES: usize = 200;
+const PREVIEW_CHARACTERS: usize = 200;
 
-/// One line read from the peer.
-#[allow(clippy::large_enum_variant)]
+/// Contains one decoded message or bounded framing violation.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Frame {
-    /// A validated envelope.
-    Envelope(Envelope),
-    /// A line that was not a valid envelope.
+    /// Contains a valid JSON-RPC message.
+    Message(Message),
+    /// Contains an invalid input line.
     Violation(Violation),
 }
 
-/// One stream line that was not a valid envelope.
-#[derive(Clone, Debug, PartialEq)]
+/// Describes one input line that did not contain a valid message.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Violation {
-    /// The violated rule token (`bad_json`, `empty_line`,
-    /// `frame_too_long`, or an envelope rule).
+    /// Contains a stable framing rule name.
     pub rule: String,
-    /// A human-readable description.
+    /// Contains the corresponding JSON-RPC error code.
+    pub code: i64,
+    /// Contains a human-readable description.
     pub detail: String,
-    /// A bounded, lossy preview of the offending line.
+    /// Contains a bounded, lossy preview of the line.
     pub preview: String,
 }
 
-/// A buffered line reader that yields envelopes and violations.
-///
-/// # Examples
-///
-/// ```
-/// use zeta_ipc::{Frame, FrameReader};
-///
-/// let lines = b"junk\n{\"id\":\"m-1\",\"kind\":\"heartbeat\",\"ts\":\"2026-08-10T12:00:00Z\",\"v\":0}\n";
-/// let mut reader = FrameReader::new(&lines[..]);
-/// let Some(Frame::Violation(violation)) = reader.read_frame().unwrap() else {
-///     panic!("junk must surface as a violation");
-/// };
-/// assert_eq!(violation.rule, "bad_json");
-/// let Some(Frame::Envelope(_)) = reader.read_frame().unwrap() else {
-///     panic!("the envelope must parse");
-/// };
-/// assert_eq!(reader.read_frame().unwrap(), None);
-/// ```
+/// Reads bounded newline-delimited JSON-RPC messages.
 pub struct FrameReader<R: Read> {
     inner: R,
     buffer: Vec<u8>,
@@ -64,9 +45,9 @@ pub struct FrameReader<R: Read> {
 }
 
 impl<R: Read> FrameReader<R> {
-    /// Creates a reader with the default frame ceiling.
+    /// Creates a reader with the protocol frame limit.
     pub fn new(inner: R) -> Self {
-        FrameReader {
+        Self {
             inner,
             buffer: Vec::new(),
             eof: false,
@@ -74,9 +55,11 @@ impl<R: Read> FrameReader<R> {
         }
     }
 
-    /// Creates a reader with an explicit frame ceiling, for tests.
+    /// Creates a reader with an explicit frame limit.
+    ///
+    /// This constructor supports bounded tests and constrained transports.
     pub fn with_max_frame_bytes(inner: R, max_frame_bytes: usize) -> Self {
-        FrameReader {
+        Self {
             inner,
             buffer: Vec::new(),
             eof: false,
@@ -84,18 +67,14 @@ impl<R: Read> FrameReader<R> {
         }
     }
 
-    /// Reads one frame; `None` at end-of-stream.
+    /// Reads one frame and accepts a complete final object at EOF.
     ///
     /// # Errors
     ///
-    /// Returns [`io::Error`] only for transport failures; peer
-    /// garbage surfaces as [`Frame::Violation`], never as an error.
-    ///
-    /// [`io::Error`]: std::io::Error
+    /// Returns [`std::io::Error`] only when the underlying reader fails.
     pub fn read_frame(&mut self) -> std::io::Result<Option<Frame>> {
         loop {
-            let newline = position_of_newline(&self.buffer);
-            if let Some(newline) = newline {
+            if let Some(newline) = position_of_newline(&self.buffer) {
                 let mut line: Vec<u8> = self.buffer.drain(..=newline).collect();
                 line.pop();
                 if line.len() > self.max_frame_bytes {
@@ -116,7 +95,7 @@ impl<R: Read> FrameReader<R> {
             if self.buffer.len() > self.max_frame_bytes {
                 return self.discard_until_newline();
             }
-            let mut chunk = [0u8; READ_CHUNK];
+            let mut chunk = [0_u8; READ_CHUNK];
             let count = self.inner.read(&mut chunk)?;
             if count == 0 {
                 self.eof = true;
@@ -127,65 +106,85 @@ impl<R: Read> FrameReader<R> {
     }
 
     fn discard_until_newline(&mut self) -> std::io::Result<Option<Frame>> {
-        let head: Vec<u8> = self.buffer.iter().take(PREVIEW_BYTES).copied().collect();
+        let preview_length = self.buffer.len().min(PREVIEW_CHARACTERS);
+        let mut head = Vec::with_capacity(preview_length);
+        for byte in &self.buffer[..preview_length] {
+            head.push(*byte);
+        }
         self.buffer.clear();
         loop {
-            let mut chunk = [0u8; READ_CHUNK];
+            let mut chunk = [0_u8; READ_CHUNK];
             let count = self.inner.read(&mut chunk)?;
             if count == 0 {
                 self.eof = true;
                 break;
             }
-            let newline = position_of_newline(&chunk[..count]);
-            if let Some(newline) = newline {
-                self.buffer.extend_from_slice(&chunk[newline + 1..count]);
-                break;
-            }
+            let Some(newline) = position_of_newline(&chunk[..count]) else {
+                continue;
+            };
+            self.buffer.extend_from_slice(&chunk[newline + 1..count]);
+            break;
         }
         Ok(Some(overlong_frame(&head, self.max_frame_bytes)))
     }
 }
 
 fn position_of_newline(bytes: &[u8]) -> Option<usize> {
-    let mut position = None;
     for (index, byte) in bytes.iter().enumerate() {
         if *byte == b'\n' {
-            position = Some(index);
-            break;
+            return Some(index);
         }
     }
-    position
+    None
 }
 
 fn overlong_frame(line: &[u8], max_frame_bytes: usize) -> Frame {
     Frame::Violation(Violation {
         rule: "frame_too_long".to_string(),
+        code: PARSE_ERROR,
         detail: format!("line exceeded the {max_frame_bytes}-byte frame limit"),
         preview: preview(line),
     })
 }
 
 fn decode_line(line: &[u8]) -> Frame {
-    let mut trimmed = line;
-    while let [head @ .., b'\r'] = trimmed {
-        trimmed = head;
+    let mut line = line;
+    while let [head @ .., b'\r'] = line {
+        line = head;
     }
-    if trimmed.is_empty() {
+    if line.is_empty() {
         return Frame::Violation(Violation {
             rule: "empty_line".to_string(),
+            code: PARSE_ERROR,
             detail: "empty line".to_string(),
             preview: String::new(),
         });
     }
-    let text = String::from_utf8_lossy(trimmed);
-    let envelope = Envelope::parse_str(&text);
-    match envelope {
-        Ok(envelope) => Frame::Envelope(envelope),
-        Err(WireError { rule, message }) => Frame::Violation(Violation {
-            rule,
-            detail: message,
-            preview: preview(trimmed),
-        }),
+    let Ok(text) = std::str::from_utf8(line) else {
+        return Frame::Violation(Violation {
+            rule: "parse_error".to_string(),
+            code: PARSE_ERROR,
+            detail: "the line is not valid UTF-8".to_string(),
+            preview: preview(line),
+        });
+    };
+    match Message::parse_str(text) {
+        Ok(message) => Frame::Message(message),
+        Err(error) => {
+            let rule = if error.code == PARSE_ERROR {
+                "parse_error"
+            } else if error.code == INVALID_REQUEST {
+                "invalid_request"
+            } else {
+                "invalid_params"
+            };
+            Frame::Violation(Violation {
+                rule: rule.to_string(),
+                code: error.code,
+                detail: error.message,
+                preview: preview(line),
+            })
+        }
     }
 }
 
@@ -193,7 +192,7 @@ fn preview(line: &[u8]) -> String {
     let text = String::from_utf8_lossy(line);
     let mut preview = String::new();
     for (index, character) in text.chars().enumerate() {
-        if index >= PREVIEW_BYTES {
+        if index >= PREVIEW_CHARACTERS {
             preview.push('…');
             break;
         }
@@ -202,29 +201,24 @@ fn preview(line: &[u8]) -> String {
     preview
 }
 
-/// A writer that frames envelopes as canonical lines.
+/// Writes compact newline-delimited JSON-RPC messages.
 pub struct FrameWriter<W: Write> {
     inner: W,
 }
 
 impl<W: Write> FrameWriter<W> {
-    /// Creates a writer over any byte sink.
+    /// Creates a writer over a byte sink.
     pub fn new(inner: W) -> Self {
-        FrameWriter { inner }
+        Self { inner }
     }
 
-    /// Writes one envelope as a canonical JSON line and flushes.
-    ///
-    /// Flushing per frame keeps latency bounded: a protocol message
-    /// held in a buffer is indistinguishable from a dead peer.
+    /// Writes one compact message, a newline, and flushes the sink.
     ///
     /// # Errors
     ///
-    /// Returns [`io::Error`] if the transport fails.
-    ///
-    /// [`io::Error`]: std::io::Error
-    pub fn write_envelope(&mut self, envelope: &Envelope) -> std::io::Result<()> {
-        let line = envelope.to_canonical_json();
+    /// Returns [`std::io::Error`] when the underlying writer fails.
+    pub fn write_message(&mut self, message: &Message) -> std::io::Result<()> {
+        let line = message.to_json();
         self.inner.write_all(line.as_bytes())?;
         self.inner.write_all(b"\n")?;
         self.inner.flush()

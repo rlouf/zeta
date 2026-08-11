@@ -1,0 +1,1 @@
+{"id":"source-2","jsonrpc":"2.0","method":"events.publish","params":{"caused_by":null,"idempotency_key":"filesystem:todo.txt","payload":{"path":"/p/inbox/todo.txt"},"run_id":null,"session_id":null,"turn_id":null,"type":"file.created"}}

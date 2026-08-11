@@ -1,2 +1,0 @@
-missing_field:message
-A null value is treated as absent (spec §3): a required field set to null fails as missing, not as a bad value.

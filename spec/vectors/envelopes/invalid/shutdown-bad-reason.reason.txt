@@ -1,2 +1,0 @@
-bad_reason
-`reason` must be a string when present (spec §9).

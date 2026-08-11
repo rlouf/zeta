@@ -1,2 +1,0 @@
-missing_field:protocol_versions
-A hello must carry `protocol_versions` (spec §5.1).

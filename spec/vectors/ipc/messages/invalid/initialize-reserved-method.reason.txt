@@ -1,0 +1,3 @@
+-32602
+reserved_method
+A provider cannot declare a fixed protocol method (§4.1).

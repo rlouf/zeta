@@ -1,2 +1,0 @@
-unknown_kind
-`telemetry` is not a v0 kind; the receiver answers with an error of code `protocol` (spec §3, §4).

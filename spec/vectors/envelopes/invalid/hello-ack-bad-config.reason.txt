@@ -1,2 +1,0 @@
-bad_config
-`config` must be an object (spec §5.7).

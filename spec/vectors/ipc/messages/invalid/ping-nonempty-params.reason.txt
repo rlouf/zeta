@@ -1,0 +1,3 @@
+-32602
+invalid_ping_params
+`ping` requires an empty parameter object (§10).

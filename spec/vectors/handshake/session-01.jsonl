@@ -1,8 +1,0 @@
-{"_dir":"c2p","ack_window":64,"capabilities":{"effects_are_proposals":false},"event_types":[{"schema":"file.created@1","type":"file.created"}],"heartbeat_secs":10,"id":"m-c-1","kind":"hello","name":"fs-inbox","plugin_version":"0.1.0","protocol_versions":[0],"role":"source","ts":"2026-08-10T12:00:00Z","v":0}
-{"_dir":"p2c","id":"m-p-1","kind":"hello_ack","protocol_version":0,"runtime":"zeta-os/0.10.2","ts":"2026-08-10T12:00:00Z","v":0}
-{"_dir":"c2p","caused_by":null,"id":"b3:ab9c49c6c7e692289013425f630a73a37c058f9466ed8d794f0521536d01155e","kind":"event","payload":{"dir":"/p/inbox","name":"todo.txt","path":"/p/inbox/todo.txt"},"schema":"file.created@1","session_id":null,"ts":"2026-08-10T12:00:01Z","type":"file.created","v":0}
-{"_dir":"p2c","event_id":"b3:ab9c49c6c7e692289013425f630a73a37c058f9466ed8d794f0521536d01155e","id":"m-p-2","kind":"ack","ts":"2026-08-10T12:00:01Z","v":0}
-{"_dir":"c2p","caused_by":null,"id":"b3:11a0f9b34273ff74594d31dc84a0eeb5f4489e9e5fe7585ee32255a25cb41b25","kind":"event","payload":{"dir":"/p/inbox","name":"notes.md","path":"/p/inbox/notes.md"},"schema":"file.created@1","session_id":null,"ts":"2026-08-10T12:00:04Z","type":"file.created","v":0}
-{"_dir":"p2c","event_id":"b3:11a0f9b34273ff74594d31dc84a0eeb5f4489e9e5fe7585ee32255a25cb41b25","id":"m-p-4","kind":"ack","ts":"2026-08-10T12:00:04Z","v":0}
-{"_dir":"c2p","id":"m-c-5","kind":"heartbeat","ts":"2026-08-10T12:00:10Z","v":0}
-{"_dir":"p2c","id":"m-p-5","kind":"shutdown","reason":"runtime stopping","ts":"2026-08-10T12:00:12Z","v":0}

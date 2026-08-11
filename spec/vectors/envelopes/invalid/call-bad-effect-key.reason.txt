@@ -1,2 +1,0 @@
-bad_effect_key
-`effect_key` must be a non-empty string (spec §7.1).

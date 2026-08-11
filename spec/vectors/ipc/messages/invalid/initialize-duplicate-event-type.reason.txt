@@ -1,0 +1,3 @@
+-32602
+duplicate_event_type
+Declared event type names must be unique (§4.1).

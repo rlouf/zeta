@@ -1,0 +1,3 @@
+-32600
+missing_jsonrpc
+Every message must carry `jsonrpc` (§3).

@@ -1,2 +1,0 @@
-missing_field:payload
-A call must carry `payload` (spec §7.1).

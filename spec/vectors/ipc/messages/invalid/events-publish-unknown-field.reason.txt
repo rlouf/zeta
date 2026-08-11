@@ -1,0 +1,3 @@
+-32602
+unknown_event_field
+`events.publish` parameters are strict and a peer cannot claim `source` (§6.1).

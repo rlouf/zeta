@@ -1,0 +1,1 @@
+{"id":"source-2","jsonrpc":"2.0","method":"events.publish","params":{"caused_by":7,"payload":{},"type":"file.created"}}

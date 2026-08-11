@@ -1,2 +1,0 @@
-bad_ack_window
-`ack_window` must be an integer in [1, 1024] (spec §5.1).

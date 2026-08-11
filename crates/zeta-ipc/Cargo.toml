@@ -1,6 +1,6 @@
 [package]
 name = "zeta-ipc"
-description = "Sans-IO implementation of the zeta wire-v0 plugin protocol."
+description = "Zeta JSON-RPC IPC messages, framing, and session state."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

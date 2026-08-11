@@ -1,0 +1,1 @@
+{"jsonrpc":"2.0","method":"event","params":{"event":{"caused_by":null,"cursor":7,"id":"evt_123","idempotency_key":null,"payload":{"name":"résumé ✓.txt"},"run_id":null,"session_id":null,"source":"filesystem","timestamp_ms":1786400000000,"turn_id":null,"type":"file.created"}}}

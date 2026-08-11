@@ -1,0 +1,3 @@
+-32602
+unknown_role
+Each role must be `source`, `client`, or `provider` (§4.1).

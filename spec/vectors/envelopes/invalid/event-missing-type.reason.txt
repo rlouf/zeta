@@ -1,2 +1,0 @@
-missing_field:type
-An event must carry `type` (spec §6).

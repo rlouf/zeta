@@ -1,0 +1,3 @@
+-32602
+invalid_provider_input
+Provider `input` must be an object (§8).

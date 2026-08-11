@@ -1,2 +1,0 @@
-bad_protocol_versions
-`protocol_versions` must be a non-empty array of non-negative integers (spec §5.1).

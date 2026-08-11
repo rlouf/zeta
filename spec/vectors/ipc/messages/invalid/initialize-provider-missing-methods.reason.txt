@@ -1,0 +1,3 @@
+-32602
+missing_methods
+A provider must declare `methods` (§4.1).

@@ -1,0 +1,3 @@
+-32600
+mixed_message_shape
+A request cannot carry `error` (§3.2).

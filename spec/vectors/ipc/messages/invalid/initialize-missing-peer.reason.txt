@@ -1,0 +1,3 @@
+-32602
+missing_peer
+Initialization requires a `peer` object (§4.1).

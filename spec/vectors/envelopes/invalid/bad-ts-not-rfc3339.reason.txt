@@ -1,2 +1,0 @@
-bad_timestamp
-`ts` must be an RFC 3339 date-time (spec §3).

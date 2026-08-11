@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import httpx
-from zeta.wire.plugin import OperationError, run_source
+from zeta.ipc.client import ProviderError, run_peer
 
 from zeta_connectors import connector_main
 
@@ -125,7 +125,7 @@ async def send_pushover_message(
     """Send one message that can be duplicated after an ambiguous failure."""
     message = payload.get("message")
     if not isinstance(message, str) or not message:
-        raise OperationError(
+        raise ProviderError(
             "schema",
             "pushover.message.send requires a non-empty message",
             retryable=False,
@@ -142,7 +142,7 @@ async def update_pushover_glance(
     """Update only supplied fields so Pushover keeps the other Glance state."""
     form = {field: payload[field] for field in _GLANCE_FIELDS if field in payload}
     if not form:
-        raise OperationError(
+        raise ProviderError(
             "schema",
             "pushover.glance.update requires at least one field",
             retryable=False,
@@ -278,12 +278,11 @@ def run() -> None:
         del effect_key
         return await update_pushover_glance(client, payload.get("payload", {}))
 
-    run_source(
+    run_peer(
         None,
         name="pushover",
-        plugin_version="0.1.0",
-        event_types=[],
-        operations={
+        peer_version="0.1.0",
+        methods={
             PUSHOVER_MESSAGE_SEND: send,
             PUSHOVER_GLANCE_UPDATE: glance,
         },

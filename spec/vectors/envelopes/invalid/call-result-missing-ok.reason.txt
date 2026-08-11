@@ -1,2 +1,0 @@
-missing_field:ok
-A call_result must carry `ok` (spec §7.1).

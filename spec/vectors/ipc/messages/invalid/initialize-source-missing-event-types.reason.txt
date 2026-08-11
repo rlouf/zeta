@@ -1,0 +1,3 @@
+-32602
+missing_event_types
+A source must declare `event_types` (§4.1).

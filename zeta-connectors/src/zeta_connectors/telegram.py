@@ -22,8 +22,8 @@ from typing import Any
 from urllib.parse import quote
 
 import httpx
+from zeta.ipc.client import EventType, SourceEvent, run_peer
 from zeta.paths import resolve_state_dir
-from zeta.wire.plugin import EventType, SourceEvent, run_source
 
 from zeta_connectors import connector_main
 
@@ -534,7 +534,7 @@ def poll_events(config: dict[str, Any]) -> AsyncIterator[SourceEvent] | None:
         in {TELEGRAM_MESSAGE_RECEIVED, TELEGRAM_MESSAGE_REACTION}
     }
     if not bound_types:
-        return None  # an operations-only incarnation must not long-poll
+        return None  # a provider-only incarnation must not long-poll
     client = telegram_client_from_env()
     allowed = allowed_senders_from_env()
     media_dir = telegram_media_dir_from_env()
@@ -818,15 +818,15 @@ def run() -> None:
         del effect_key  # sendMessage has no dedup key; semantics say so.
         return await send_telegram_message(client, payload.get("payload", {}))
 
-    run_source(
+    run_peer(
         poll_events,
         name="telegram",
-        plugin_version="0.1.0",
+        peer_version="0.1.0",
         event_types=[
             EventType(TELEGRAM_MESSAGE_RECEIVED, f"{TELEGRAM_MESSAGE_RECEIVED}@1"),
             EventType(TELEGRAM_MESSAGE_REACTION, f"{TELEGRAM_MESSAGE_REACTION}@1"),
         ],
-        operations={TELEGRAM_MESSAGE_SEND: send},
+        methods={TELEGRAM_MESSAGE_SEND: send},
     )
 
 

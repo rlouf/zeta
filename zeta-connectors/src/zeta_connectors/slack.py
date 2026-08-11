@@ -21,7 +21,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import httpx
-from zeta.wire.plugin import EventType, OperationError, SourceEvent, run_source
+from zeta.ipc.client import EventType, ProviderError, SourceEvent, run_peer
 
 from zeta_connectors import connector_main
 
@@ -149,7 +149,7 @@ def socket_events(config: dict[str, Any]) -> AsyncIterator[SourceEvent] | None:
         if binding.get("event") == SLACK_MESSAGE_RECEIVED
     ]
     if not bindings:
-        return None  # an operations-only incarnation opens no socket
+        return None  # a provider-only incarnation opens no socket
     app_token = os.environ.get("SLACK_APP_TOKEN")
     if not app_token:
         raise SystemExit("SLACK_APP_TOKEN is required for Slack Socket Mode ingress")
@@ -221,14 +221,14 @@ async def post_slack_message(
     channel_id = payload.get("channel_id")
     text = payload.get("text")
     if not isinstance(channel_id, str) or not isinstance(text, str):
-        raise OperationError(
+        raise ProviderError(
             "schema",
             "slack.message.post requires channel_id and text",
             retryable=False,
         )
     channels = slack_channel_ids(options)
     if channels and channel_id not in channels:
-        raise OperationError(
+        raise ProviderError(
             "schema",
             f"Slack channel {channel_id!r} is not allowed by binding options",
             retryable=False,
@@ -351,12 +351,12 @@ def run() -> None:
             effect_key,
         )
 
-    run_source(
+    run_peer(
         socket_events,
         name="slack",
-        plugin_version="0.1.0",
+        peer_version="0.1.0",
         event_types=[EventType(SLACK_MESSAGE_RECEIVED, f"{SLACK_MESSAGE_RECEIVED}@1")],
-        operations={SLACK_MESSAGE_POST: post},
+        methods={SLACK_MESSAGE_POST: post},
     )
 
 

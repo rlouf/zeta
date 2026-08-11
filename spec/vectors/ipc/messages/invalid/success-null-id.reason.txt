@@ -1,0 +1,3 @@
+-32600
+invalid_response_id
+A success response must carry the non-null id of its request (§3.4).

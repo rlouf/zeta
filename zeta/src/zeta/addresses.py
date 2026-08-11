@@ -6,9 +6,8 @@ domains cannot collide semantically. The canonical encoder lives with
 these leaf primitives so wire and substrate mints cannot drift or invert
 the import graph.
 
-The wire protocol (`spec/wire-v0.md` §11) and the conformance vectors
-in `spec/vectors/addresses/vectors.json` pin this module's outputs
-byte-for-byte for other implementations.
+The substrate protocol and its conformance vectors pin this module's
+outputs byte-for-byte for other implementations.
 
 This module derives values and holds no state. It imports nothing from
 Zeta, so any layer may use it.

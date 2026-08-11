@@ -1,0 +1,3 @@
+-32602
+missing_effect_key
+A direct provider request requires `effect_key` (§8).

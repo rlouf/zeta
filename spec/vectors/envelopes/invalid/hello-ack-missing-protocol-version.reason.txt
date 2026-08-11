@@ -1,2 +1,0 @@
-missing_field:protocol_version
-A hello_ack must carry `protocol_version` (spec §5.6).

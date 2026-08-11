@@ -1,12 +1,4 @@
-"""Bridge connector children to the durable event queue.
-
-Every connector is a wire-v0 executable (spec §13). Ingress spawns one
-supervised child per binding and journals its events; egress delivers
-matching events as `call`s against the connector's declared
-operations, through one lazily spawned operations child per connector.
-The worker loop owns scheduling; this module owns the wire-to-event
-translation.
-"""
+"""Bridge executable connector peers to the durable event queue."""
 
 from __future__ import annotations
 
@@ -29,26 +21,28 @@ from zeta.harness.routing import (
     ExecutableAgent,
 )
 from zeta.harness.templates import render_template
-from zeta.wire.host import SourceCommand, SubprocessSource, WireEvent
+from zeta.ipc.supervisor import PeerCommand, PublishRequest, SubprocessPeer
+from zeta.journal.types import AppendOutcome
 
 if TYPE_CHECKING:
     from zeta.harness.worker import WorkerServices
 
 logger = logging.getLogger(__name__)
 
-RUNTIME_ID = f"zeta-os/{__version__}"
+RUNTIME_NAME = "zeta"
+RUNTIME_VERSION = __version__
 
 
 class ConnectorCalls:
-    """Lazily spawned operations children, one per connector.
+    """Lazily spawn one provider peer per connector.
 
-    An operations child gets no binding in its config, so a connector
+    A provider peer gets no binding in its config, so a connector
     that also sources events does not double-ingest; its ingress runs
     in separate per-binding children.
     """
 
     def __init__(self) -> None:
-        self._sources: dict[str, SubprocessSource] = {}
+        self._peers: dict[str, SubprocessPeer] = {}
         self._drains: dict[str, asyncio.Task[None]] = {}
 
     async def call(
@@ -60,55 +54,61 @@ class ConnectorCalls:
         options: dict[str, Any],
         effect_key: str,
     ) -> dict[str, Any]:
-        source = await self._source_for(connector)
-        return await source.call(
+        peer = await self._peer_for(connector)
+        return await peer.call(
             operation,
             {"payload": payload, "options": options},
             effect_key,
         )
 
-    async def _source_for(self, connector: ConnectorManifest) -> SubprocessSource:
-        source = self._sources.get(connector.id)
-        if source is not None:
-            return source
-        source = SubprocessSource(
-            SourceCommand(connector.command),
-            runtime_id=RUNTIME_ID,
+    async def _peer_for(self, connector: ConnectorManifest) -> SubprocessPeer:
+        peer = self._peers.get(connector.id)
+        if peer is not None:
+            return peer
+        peer = SubprocessPeer(
+            PeerCommand(connector.command),
+            runtime_name=RUNTIME_NAME,
+            runtime_version=RUNTIME_VERSION,
             config={},
         )
-        self._sources[connector.id] = source
+        self._peers[connector.id] = peer
         self._drains[connector.id] = asyncio.create_task(
-            _drain_operations_child(connector.id, source)
+            _drain_provider_peer(connector.id, peer)
         )
-        await _wait_for_handshake(source)
-        return source
+        await _wait_for_initialization(peer)
+        return peer
 
     async def aclose(self) -> None:
         for task in self._drains.values():
             task.cancel()
         await asyncio.gather(*self._drains.values(), return_exceptions=True)
         self._drains.clear()
-        sources, self._sources = self._sources, {}
+        peers, self._peers = self._peers, {}
         await asyncio.gather(
-            *(source.aclose() for source in sources.values()),
+            *(peer.aclose() for peer in peers.values()),
             return_exceptions=True,
         )
 
 
-async def _drain_operations_child(connector_id: str, source: SubprocessSource) -> None:
-    async for event in source.events():
+async def _drain_provider_peer(connector_id: str, peer: SubprocessPeer) -> None:
+    async for publication in peer.publications():
         logger.warning(
-            "operations child for %r emitted event %s; it has no binding, dropping",
+            "provider peer for %r published %s without a binding",
             connector_id,
-            event.id,
+            publication.type,
+        )
+        await peer.fail_publish(
+            publication,
+            "unbound_event_type",
+            "the provider peer has no ingress binding",
         )
 
 
-async def _wait_for_handshake(
-    source: SubprocessSource, *, timeout: float = 15.0
+async def _wait_for_initialization(
+    peer: SubprocessPeer, *, timeout: float = 15.0
 ) -> None:
     deadline = asyncio.get_running_loop().time() + timeout
-    while source.hello is None:
+    while peer.initialization is None:
         if asyncio.get_running_loop().time() > deadline:
             return  # let the call itself fail with a retryable error
         await asyncio.sleep(0.05)
@@ -362,7 +362,7 @@ async def run_ipc_ingress_forever(
     poll_interval_seconds: float = 1.0,
     stop_event: asyncio.Event | None = None,
 ) -> None:
-    """Supervise one wire-v0 child per ingress wave."""
+    """Supervise one IPC peer per ingress wave."""
     tasks = [
         asyncio.create_task(
             run_ipc_wave_forever(
@@ -394,60 +394,85 @@ async def run_ipc_wave_forever(
     connector: ConnectorManifest,
     poll_interval_seconds: float,
 ) -> None:
-    async with SubprocessSource(
-        SourceCommand(connector.command),
-        runtime_id=RUNTIME_ID,
+    async with SubprocessPeer(
+        PeerCommand(connector.command),
+        runtime_name=RUNTIME_NAME,
+        runtime_version=RUNTIME_VERSION,
         config=ingress_child_config(wave, poll_interval_seconds=poll_interval_seconds),
-    ) as source:
-        async for wire_event in source.events():
-            binding = wave.get(wire_event.type)
+    ) as peer:
+        async for publication in peer.publications():
+            binding = wave.get(publication.type)
             if binding is None:
                 logger.warning(
                     "connector %r emitted unbound event type %r",
                     connector.id,
-                    wire_event.type,
+                    publication.type,
+                )
+                await peer.fail_publish(
+                    publication,
+                    "unbound_event_type",
+                    f"event type {publication.type!r} has no binding",
                 )
                 continue
             try:
-                accepted = accept_ipc_event(
-                    runtime, binding, wire_event, connector_id=connector.id
+                outcome = accept_ipc_event(
+                    runtime, binding, publication, connector_id=connector.id
                 )
-            except Exception:
+            except Exception as exc:
                 logger.exception(
-                    "rejecting event %s from connector %r",
-                    wire_event.id,
+                    "rejecting %s publication from connector %r",
+                    publication.type,
                     connector.id,
                 )
+                await peer.fail_publish(
+                    publication,
+                    "event_rejected",
+                    str(exc),
+                )
                 continue
-            if accepted:
-                await source.ack(wire_event.id)
+            if outcome is None:
+                await peer.fail_publish(
+                    publication,
+                    "event_type_mismatch",
+                    "the publication does not match its ingress binding",
+                )
+                continue
+            await peer.complete_publish(
+                publication,
+                {
+                    "inserted": outcome.inserted,
+                    "event": ipc_event_record(outcome.event),
+                },
+            )
 
 
 def accept_ipc_event(
     runtime: WorkerServices,
     binding: IngressBinding,
-    wire_event: WireEvent,
+    publication: PublishRequest,
     *,
     connector_id: str,
-) -> bool:
+) -> AppendOutcome | None:
     """Journal one connector event under the binding's idempotency key."""
-    if wire_event.type != binding.event:
+    if publication.type != binding.event:
         logger.warning(
             "ipc ingress event %r does not match binding %r",
-            wire_event.type,
+            publication.type,
             binding.event,
         )
-        return False
+        return None
     project = runtime.project_snapshot.project
     draft = DraftEvent(
-        wire_event.type,
+        publication.type,
         connector_id,
-        wire_event.payload,
-        caused_by=wire_event.caused_by,
-        session_id=wire_event.session_id,
+        publication.payload,
+        caused_by=publication.caused_by,
+        session_id=publication.session_id,
+        run_id=publication.run_id,
+        turn_id=publication.turn_id,
     )
     validate_event_payload(project.events, draft)
-    runtime.events.accept(
+    return runtime.events.accept(
         DraftEvent(
             draft.event_type,
             draft.source,
@@ -455,9 +480,27 @@ def accept_ipc_event(
             idempotency_key=ingress_idempotency_key(binding, draft),
             caused_by=draft.caused_by,
             session_id=draft.session_id,
+            run_id=draft.run_id,
+            turn_id=draft.turn_id,
         )
     )
-    return True
+
+
+def ipc_event_record(event: Event) -> dict[str, Any]:
+    """Return the durable event shape used by IPC publish results."""
+    return {
+        "id": event.id,
+        "type": event.event_type,
+        "source": event.source,
+        "payload": dict(event.payload),
+        "idempotency_key": event.idempotency_key,
+        "caused_by": event.caused_by,
+        "session_id": event.session_id,
+        "run_id": event.run_id,
+        "turn_id": event.turn_id,
+        "timestamp_ms": event.timestamp_ms,
+        "cursor": event.cursor,
+    }
 
 
 def validate_event_payload(events, draft: DraftEvent) -> None:

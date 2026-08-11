@@ -1,0 +1,3 @@
+-32602
+invalid_limit
+`events.list.limit` must be a non-negative integer (§6.2).

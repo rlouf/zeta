@@ -1,0 +1,1 @@
+{"future":{"ignored":true},"jsonrpc":"2.0","method":"event","params":{"event":{"caused_by":null,"cursor":8,"id":"evt_124","idempotency_key":null,"payload":{},"run_id":null,"session_id":null,"source":"filesystem","timestamp_ms":1786400000100,"turn_id":null,"type":"file.created"}}}

@@ -1,8 +1,11 @@
-//! Framing behavior: junk tolerance, partial lines, bounded frames.
+//! NDJSON framing behavior.
 
-use zeta_ipc::{Envelope, Frame, FrameReader, FrameWriter};
+use serde_json::json;
+use zeta_ipc::{
+    Frame, FrameReader, FrameWriter, Message, Notification, Request, RequestId, PARSE_ERROR,
+};
 
-const HEARTBEAT: &str = r#"{"id":"m-1","kind":"heartbeat","ts":"2026-08-10T12:00:00Z","v":0}"#;
+const PING: &str = r#"{"jsonrpc":"2.0","id":1,"method":"ping","params":{}}"#;
 
 fn frames(bytes: &[u8]) -> Vec<Frame> {
     let mut reader = FrameReader::new(bytes);
@@ -16,66 +19,120 @@ fn frames(bytes: &[u8]) -> Vec<Frame> {
     }
 }
 
-fn rule_of(frame: &Frame) -> String {
-    match frame {
-        Frame::Envelope(envelope) => panic!("expected a violation, got {envelope:?}"),
-        Frame::Violation(violation) => violation.rule.clone(),
-    }
-}
-
-#[test]
-fn junk_lines_surface_as_violations_between_valid_envelopes() {
-    let stream = format!("not json\n{HEARTBEAT}\n{{\"v\":0}}\n");
-    let frames = frames(stream.as_bytes());
-    assert_eq!(frames.len(), 3);
-    assert_eq!(rule_of(&frames[0]), "bad_json");
-    let Frame::Envelope(_) = &frames[1] else {
-        panic!("the valid envelope must survive its neighbors");
+fn violation(frame: &Frame) -> &zeta_ipc::Violation {
+    let Frame::Violation(violation) = frame else {
+        panic!("expected a violation, got {frame:?}");
     };
-    assert_eq!(rule_of(&frames[2]), "missing_field:kind");
+    violation
 }
 
 #[test]
-fn an_empty_line_is_a_violation() {
-    let stream = format!("\n{HEARTBEAT}\n");
+fn junk_lines_surface_between_valid_messages() {
+    let stream = format!("not json\n{PING}\n{{\"jsonrpc\":\"2.0\"}}\n");
     let frames = frames(stream.as_bytes());
-    assert_eq!(rule_of(&frames[0]), "empty_line");
+
+    assert_eq!(frames.len(), 3);
+    assert_eq!(violation(&frames[0]).code, PARSE_ERROR);
+    let Frame::Message(Message::Request(request)) = &frames[1] else {
+        panic!("the request must survive its neighbors");
+    };
+    assert_eq!(request.method, "ping");
+    assert_eq!(violation(&frames[2]).code, zeta_ipc::INVALID_REQUEST);
+}
+
+#[test]
+fn an_empty_line_is_a_parse_violation() {
+    let stream = format!("\n{PING}\n");
+    let frames = frames(stream.as_bytes());
+
+    assert_eq!(violation(&frames[0]).rule, "empty_line");
+    assert_eq!(violation(&frames[0]).code, PARSE_ERROR);
     assert_eq!(frames.len(), 2);
 }
 
 #[test]
-fn a_partial_line_at_eof_still_decodes() {
-    let frames = frames(HEARTBEAT.as_bytes());
-    assert_eq!(frames.len(), 1);
-    let Frame::Envelope(envelope) = &frames[0] else {
-        panic!("the unterminated final line must decode");
+fn invalid_utf8_is_a_parse_violation_and_the_reader_recovers() {
+    let mut stream = br#"{"jsonrpc":"2.0","method":""#.to_vec();
+    stream.push(0xff);
+    stream.extend_from_slice(b"\"}\n");
+    stream.extend_from_slice(PING.as_bytes());
+    stream.push(b'\n');
+
+    let frames = frames(&stream);
+
+    assert_eq!(frames.len(), 2);
+    assert_eq!(violation(&frames[0]).rule, "parse_error");
+    assert_eq!(violation(&frames[0]).code, PARSE_ERROR);
+    let Frame::Message(Message::Request(request)) = &frames[1] else {
+        panic!("the request after invalid UTF-8 must decode");
     };
-    assert_eq!(envelope.id(), "m-1");
+    assert_eq!(request.method, "ping");
 }
 
 #[test]
-fn an_overlong_line_is_discarded_without_growing_the_buffer() {
-    let mut stream = Vec::new();
-    stream.extend_from_slice(&vec![b'x'; 4096]);
+fn a_complete_final_object_at_eof_decodes() {
+    let frames = frames(PING.as_bytes());
+
+    assert_eq!(frames.len(), 1);
+    let Frame::Message(Message::Request(request)) = &frames[0] else {
+        panic!("the final object must decode without a newline");
+    };
+    assert_eq!(request.id, RequestId::from(1_u64));
+}
+
+#[test]
+fn an_overlong_line_is_discarded_and_the_reader_recovers() {
+    let mut stream = vec![b'x'; 4096];
     stream.push(b'\n');
-    stream.extend_from_slice(HEARTBEAT.as_bytes());
+    stream.extend_from_slice(PING.as_bytes());
     stream.push(b'\n');
     let mut reader = FrameReader::with_max_frame_bytes(&stream[..], 1024);
+
     let first = reader.read_frame().unwrap().unwrap();
-    assert_eq!(rule_of(&first), "frame_too_long");
+    assert_eq!(violation(&first).rule, "frame_too_long");
     let second = reader.read_frame().unwrap().unwrap();
-    let Frame::Envelope(envelope) = second else {
-        panic!("the stream must recover after the discard");
+    let Frame::Message(Message::Request(request)) = second else {
+        panic!("the request after the discarded line must decode");
     };
-    assert_eq!(envelope.id(), "m-1");
+    assert_eq!(request.method, "ping");
     assert_eq!(reader.read_frame().unwrap(), None);
 }
 
 #[test]
-fn the_writer_frames_canonical_lines() {
-    let envelope = Envelope::parse_str(HEARTBEAT).unwrap();
+fn the_writer_emits_compact_json_and_a_newline() {
+    let message = Message::Notification(Notification::new(
+        "event",
+        json!({"event": {"type": "test.event"}})
+            .as_object()
+            .unwrap()
+            .clone(),
+    ));
     let mut sink = Vec::new();
     let mut writer = FrameWriter::new(&mut sink);
-    writer.write_envelope(&envelope).unwrap();
-    assert_eq!(sink, format!("{HEARTBEAT}\n").into_bytes());
+
+    writer.write_message(&message).unwrap();
+
+    assert_eq!(
+        sink,
+        b"{\"jsonrpc\":\"2.0\",\"method\":\"event\",\"params\":{\"event\":{\"type\":\"test.event\"}}}\n"
+    );
+}
+
+#[test]
+fn the_writer_preserves_numeric_request_ids() {
+    let message = Message::Request(Request::new(
+        RequestId::from(-7_i64),
+        "ping",
+        Default::default(),
+    ));
+    let mut sink = Vec::new();
+    let mut writer = FrameWriter::new(&mut sink);
+
+    writer.write_message(&message).unwrap();
+
+    let parsed = frames(&sink);
+    let Frame::Message(Message::Request(request)) = &parsed[0] else {
+        panic!("the written request must parse");
+    };
+    assert_eq!(request.id, RequestId::from(-7_i64));
 }

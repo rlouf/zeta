@@ -1,0 +1,3 @@
+-32600
+missing_method
+An object with a request id and no response member must carry `method` (§3.2).

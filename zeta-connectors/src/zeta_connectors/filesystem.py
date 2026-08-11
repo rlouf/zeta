@@ -16,7 +16,7 @@ from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
 
-from zeta.wire.plugin import EventType, SourceEvent, run_source
+from zeta.ipc.client import EventType, SourceEvent, run_peer
 
 from zeta_connectors import connector_main
 
@@ -129,10 +129,10 @@ def watch_events(config: dict[str, Any]) -> AsyncIterator[SourceEvent] | None:
 
 
 def run() -> None:
-    run_source(
+    run_peer(
         watch_events,
         name="filesystem",
-        plugin_version=MANIFEST_VERSION,
+        peer_version=MANIFEST_VERSION,
         event_types=[EventType(FILE_CREATED, f"{FILE_CREATED}@1")],
     )
 

@@ -10,6 +10,7 @@ import logging
 import sys
 from collections.abc import AsyncIterable, AsyncIterator, Callable
 from dataclasses import dataclass, field
+from importlib.metadata import EntryPoint
 from typing import Any, BinaryIO, cast
 
 from zeta.ipc.framing import FrameReader, FrameViolation, encode_frame
@@ -34,6 +35,19 @@ logger = logging.getLogger(__name__)
 DEFAULT_HEARTBEAT_SECONDS = 10.0
 DEFAULT_MAX_IN_FLIGHT = 64
 INITIALIZE_TIMEOUT_SECONDS = 30.0
+
+
+def _run_entry_point(argv: list[str]) -> None:
+    """Load connector code only after execution enters its child process."""
+    if len(argv) < 3 or not all(argv[:3]):
+        raise SystemExit(
+            "usage: python -m zeta.ipc.client GROUP NAME VALUE [PLUGIN_ARG ...]"
+        )
+    group, name, value, *plugin_argv = argv
+    target = EntryPoint(name=name, value=value, group=group).load()
+    if not callable(target):
+        raise SystemExit(f"entry point {name} is not callable: {value}")
+    target(plugin_argv)
 
 
 @dataclass(frozen=True)
@@ -412,3 +426,7 @@ async def _stdio_streams(
     )
     writer = asyncio.StreamWriter(transport, protocol, None, loop)
     return reader, writer
+
+
+if __name__ == "__main__":
+    _run_entry_point(sys.argv[1:])

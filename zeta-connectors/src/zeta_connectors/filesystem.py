@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import asyncio
 import os
-import sys
 import time
 from collections.abc import AsyncIterator
 from pathlib import Path
@@ -140,13 +139,5 @@ def run() -> None:
 MANIFEST_VERSION = "0.1.0"
 
 
-def main(argv: list[str] | None = None) -> None:
-    connector_main(
-        sys.argv[1:] if argv is None else argv,
-        manifest=MANIFEST,
-        run=run,
-    )
-
-
-if __name__ == "__main__":
-    main()
+def main(argv: list[str]) -> None:
+    connector_main(argv, manifest=MANIFEST, run=run)

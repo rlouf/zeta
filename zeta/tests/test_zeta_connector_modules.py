@@ -6,6 +6,9 @@ import json
 import os
 import subprocess
 import sys
+import tomllib
+from collections.abc import Callable
+from inspect import Parameter, signature
 from pathlib import Path
 from typing import Any, cast
 from urllib.parse import parse_qs
@@ -21,6 +24,9 @@ from zeta_connectors.filesystem import (
 from zeta_connectors.filesystem import (
     MANIFEST as FILESYSTEM_MANIFEST,
 )
+from zeta_connectors.filesystem import (
+    main as filesystem_main,
+)
 from zeta_connectors.pushover import (
     PUSHOVER_GLANCE_UPDATE,
     PUSHOVER_MESSAGE_SEND,
@@ -29,6 +35,7 @@ from zeta_connectors.pushover import (
     send_pushover_message,
     update_pushover_glance,
 )
+from zeta_connectors.pushover import main as pushover_main
 from zeta_connectors.slack import (
     SLACK_MESSAGE_POST,
     SLACK_MESSAGE_RECEIVED,
@@ -36,6 +43,7 @@ from zeta_connectors.slack import (
     post_slack_message,
     slack_event_from_callback,
 )
+from zeta_connectors.slack import main as slack_main
 from zeta_connectors.telegram import (
     MAX_MESSAGE_CHARS,
     TELEGRAM_MESSAGE_REACTION,
@@ -54,13 +62,48 @@ from zeta_connectors.telegram import (
     telegram_message_reaction_schema,
     telegram_message_received_schema,
 )
+from zeta_connectors.telegram import main as telegram_main
 
 ALLOWED = frozenset({4242})
 
 
-def _describe(module: str) -> dict[str, Any]:
+def test_connector_package_registers_exact_event_connector_entry_points() -> None:
+    package_metadata = tomllib.loads(
+        (Path(__file__).parents[2] / "zeta-connectors" / "pyproject.toml").read_text()
+    )["project"]
+
+    assert "scripts" not in package_metadata
+    assert package_metadata["entry-points"]["zeta.event_connectors"] == {
+        "filesystem": "zeta_connectors.filesystem:main",
+        "pushover": "zeta_connectors.pushover:main",
+        "slack": "zeta_connectors.slack:main",
+        "telegram": "zeta_connectors.telegram:main",
+    }
+
+
+@pytest.mark.parametrize(
+    "entry_point",
+    [filesystem_main, pushover_main, slack_main, telegram_main],
+)
+def test_connector_entry_point_requires_argv(
+    entry_point: Callable[[list[str]], None],
+) -> None:
+    argv = signature(entry_point).parameters["argv"]
+
+    assert argv.default is Parameter.empty
+
+
+def _describe(connector_id: str) -> dict[str, Any]:
     completed = subprocess.run(
-        [sys.executable, "-m", f"zeta_connectors.{module}", "--describe"],
+        [
+            sys.executable,
+            "-m",
+            "zeta.ipc.client",
+            "zeta.event_connectors",
+            connector_id,
+            f"zeta_connectors.{connector_id}:main",
+            "--describe",
+        ],
         capture_output=True,
         text=True,
         check=True,

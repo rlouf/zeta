@@ -2,6 +2,8 @@
 
 import asyncio
 import json
+import sys
+from importlib.metadata import EntryPoint
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -171,7 +173,7 @@ def _slack_connector(
     }
     return ConnectorManifest(
         id="slack",
-        command=("zeta-connector-slack",),
+        command=("test-peer", "slack"),
         events={
             "slack.message.received": message_schema
             or {
@@ -223,22 +225,6 @@ def _describe_document(
         "operations": [],
         "settings": [],
     }
-
-
-def _write_connector_executable(path: Path, source: str) -> Path:
-    path.write_text(source, encoding="utf-8")
-    path.chmod(0o755)
-    return path
-
-
-def _write_describe_executable(
-    path: Path,
-    manifest: dict[str, Any],
-) -> Path:
-    return _write_connector_executable(
-        path,
-        f"#!/usr/bin/env python3\nimport json\nprint(json.dumps({manifest!r}))\n",
-    )
 
 
 def _slack_publish_agent_spec(tmp_path: Path) -> AgentSpec:
@@ -1219,7 +1205,7 @@ def test_zeta_event_connector_registry_registers_and_resolves_connectors() -> No
     slack = _slack_connector()
     github = ConnectorManifest(
         id="github",
-        command=("zeta-connector-github",),
+        command=("test-peer", "github"),
         events={"github.issue.opened": None},
     )
     registry = zeta_agents.EventConnectorRegistry()
@@ -1277,64 +1263,126 @@ def test_zeta_connector_manifest_rejects_an_unsupported_ipc_version() -> None:
         connector_manifest_from_describe(document, command=("future",))
 
 
-def test_zeta_load_connector_registry_loads_every_discovered_executable(
-    tmp_path: Path,
+def test_zeta_load_connector_registry_uses_metadata_without_loading_in_parent(
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    agents_dir = tmp_path / "agents"
-    agents_dir.mkdir()
-    slack_script = _write_describe_executable(
-        tmp_path / "slack-stub",
-        _describe_document("slack", {"slack.message.received": None}),
-    )
-    github_script = _write_describe_executable(
-        tmp_path / "github-stub",
-        _describe_document("github", {"github.issue.opened": None}),
+    entry_point = EntryPoint(
+        name="filesystem",
+        value="zeta_connectors.filesystem:main",
+        group="zeta.event_connectors",
     )
 
-    registry = zeta_agents.load_connector_registry(
-        agents_dir,
-        executables=[
-            ("slack", (str(slack_script),)),
-            ("github", (str(github_script),)),
-        ],
-    )
+    def unexpected_load(self: EntryPoint) -> Any:
+        raise AssertionError(f"loaded {self.name} in the runtime process")
 
-    assert registry.resolve("slack").command == (str(slack_script),)
-    assert registry.resolve("github").command == (str(github_script),)
-    assert registry.connector_for_event("slack.message.received").id == "slack"
+    monkeypatch.setattr(EntryPoint, "load", unexpected_load)
+
+    registry = zeta_agents.load_connector_registry(entry_points=(entry_point,))
+
+    manifest = registry.resolve("filesystem")
+    assert manifest is not None
+    assert manifest.command == (
+        sys.executable,
+        "-m",
+        "zeta.ipc.client",
+        "zeta.event_connectors",
+        "filesystem",
+        "zeta_connectors.filesystem:main",
+    )
+    assert manifest.ingress_event_types == ("file.created",)
 
 
 def test_zeta_load_connector_registry_honors_process_allowlist(
-    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
-    agents_dir = tmp_path / "agents"
-    agents_dir.mkdir()
-    slack_script = _write_describe_executable(
-        tmp_path / "slack-stub",
-        _describe_document("slack", {"slack.message.received": None}),
-    )
-    github_script = _write_describe_executable(
-        tmp_path / "github-stub",
-        _describe_document("github", {"github.issue.opened": None}),
-    )
-
-    registry = zeta_agents.load_connector_registry(
-        agents_dir,
-        executables=[
-            ("slack", (str(slack_script),)),
-            ("github", (str(github_script),)),
-        ],
-        connector_names=("github",),
+    entry_points = (
+        EntryPoint(
+            name="broken",
+            value="missing_connector_package:main",
+            group="zeta.event_connectors",
+        ),
+        EntryPoint(
+            name="filesystem",
+            value="zeta_connectors.filesystem:main",
+            group="zeta.event_connectors",
+        ),
     )
 
-    assert registry.resolve("slack") is None
-    assert registry.resolve("github").command == (str(github_script),)
+    with caplog.at_level("WARNING", logger="zeta.authoring.resources"):
+        registry = zeta_agents.load_connector_registry(
+            entry_points=entry_points,
+            connector_names=("filesystem",),
+        )
+
+    assert registry.resolve("broken") is None
+    assert registry.resolve("filesystem") is not None
+    assert not any("broken" in record.message for record in caplog.records)
 
 
-def test_zeta_bundled_connectors_are_discoverable_on_path(tmp_path: Path) -> None:
-    registry = zeta_agents.load_connector_registry(tmp_path)
+def test_zeta_load_connector_registry_rejects_duplicate_entry_point_names() -> None:
+    entry_points = (
+        EntryPoint(
+            name="filesystem",
+            value="zeta_connectors.filesystem:main",
+            group="zeta.event_connectors",
+        ),
+        EntryPoint(
+            name="filesystem",
+            value="zeta_connectors.slack:main",
+            group="zeta.event_connectors",
+        ),
+    )
 
-    assert {"filesystem", "slack", "telegram", "pushover"} <= set(registry.connectors)
+    with pytest.raises(
+        ResourceError, match="duplicate connector entry point.*filesystem"
+    ):
+        zeta_agents.load_connector_registry(entry_points=entry_points)
+
+
+def test_zeta_load_connector_registry_skips_a_broken_entry_point(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    entry_point = EntryPoint(
+        name="broken",
+        value="missing_connector_package:main",
+        group="zeta.event_connectors",
+    )
+
+    with caplog.at_level("WARNING", logger="zeta.authoring.resources"):
+        registry = zeta_agents.load_connector_registry(entry_points=(entry_point,))
+
+    assert registry.resolve("broken") is None
+    assert any("broken" in record.message for record in caplog.records)
+
+
+def test_zeta_load_connector_registry_requires_manifest_id_to_match_entry_point(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    entry_point = EntryPoint(
+        name="wrong-name",
+        value="zeta_connectors.filesystem:main",
+        group="zeta.event_connectors",
+    )
+
+    with caplog.at_level("WARNING", logger="zeta.authoring.resources"):
+        registry = zeta_agents.load_connector_registry(entry_points=(entry_point,))
+
+    assert registry.resolve("wrong-name") is None
+    assert any(
+        "does not match the entry-point name 'wrong-name'" in record.message
+        for record in caplog.records
+    )
+
+
+def test_zeta_bundled_connectors_are_registered_as_entry_points() -> None:
+    registry = zeta_agents.load_connector_registry()
+
+    assert set(registry.connectors) == {
+        "filesystem",
+        "slack",
+        "telegram",
+        "pushover",
+    }
 
 
 def test_zeta_agent_project_binds_events_declared_by_registered_connectors(
@@ -2534,77 +2582,3 @@ Triage the issue.
     compiled = zeta_agents.compile_agent_definition(spec)
 
     assert compiled.definition.lock_keys == ("context:repo", "branch:main")
-
-
-def _connectors_dir(agents_dir: Path) -> Path:
-    connectors_dir = agents_dir / "connectors"
-    connectors_dir.mkdir(parents=True, exist_ok=True)
-    return connectors_dir
-
-
-def test_zeta_directory_connector_executable_is_discovered(tmp_path: Path) -> None:
-    agents = tmp_path / "agents"
-    agents.mkdir()
-    script = _write_describe_executable(
-        _connectors_dir(agents) / "myfs",
-        _describe_document("myfs", {"myfs.file": None}),
-    )
-
-    registry = load_connector_registry(agents)
-
-    manifest = registry.resolve("myfs")
-    assert manifest is not None
-    assert manifest.command == (str(script),)
-
-
-def test_zeta_directory_non_executable_file_is_ignored(tmp_path: Path) -> None:
-    agents = tmp_path / "agents"
-    agents.mkdir()
-    (_connectors_dir(agents) / "ghost").write_text(
-        "#!/usr/bin/env python3\nprint('{}')\n",
-        encoding="utf-8",
-    )
-
-    registry = load_connector_registry(agents)
-
-    assert registry.resolve("ghost") is None
-
-
-def test_zeta_directory_connector_with_failing_describe_is_skipped(
-    tmp_path: Path,
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    agents = tmp_path / "agents"
-    agents.mkdir()
-    _write_connector_executable(
-        _connectors_dir(agents) / "broken",
-        "#!/usr/bin/env python3\nimport sys\nsys.exit(1)\n",
-    )
-    _write_describe_executable(
-        _connectors_dir(agents) / "healthy",
-        _describe_document("healthy", {"healthy.file": None}),
-    )
-
-    with caplog.at_level("WARNING", logger="zeta.authoring.resources"):
-        registry = load_connector_registry(agents)
-
-    assert registry.resolve("broken") is None
-    assert registry.resolve("healthy") is not None
-    assert any("broken" in record.message for record in caplog.records)
-
-
-def test_zeta_directory_connector_overrides_path_connector_with_same_id(
-    tmp_path: Path,
-) -> None:
-    agents = tmp_path / "agents"
-    agents.mkdir()
-    local_script = _write_describe_executable(
-        _connectors_dir(agents) / "filesystem",
-        _describe_document("filesystem", {"filesystem.stub.file": None}),
-    )
-
-    registry = load_connector_registry(agents)
-
-    manifest = registry.resolve("filesystem")
-    assert manifest is not None
-    assert manifest.command == (str(local_script),)

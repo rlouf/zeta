@@ -617,9 +617,9 @@ def agent_manifest(spec: AgentSpec) -> dict[str, Any]:
 def connector_manifest(connector: ConnectorManifest) -> dict[str, Any]:
     """Record a connector's describe manifest, not its spawn command.
 
-    The command is machine-local (an absolute PATH entry), so it stays
-    out of the generation identity; the schemas and semantics are what
-    a recorded generation must be able to re-validate against.
+    The launch vector is machine-local, so it stays out of the generation
+    identity; the schemas and semantics are what a recorded generation must
+    be able to re-validate against.
     """
     return {
         "id": connector.id,

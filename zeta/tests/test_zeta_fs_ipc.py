@@ -3,12 +3,12 @@
 import asyncio
 import json
 import os
-import sys
 import time
 from pathlib import Path
 
 import pytest
 from ipc_test_support import finished, frame_reader, read_message, send
+from zeta.authoring.resources import load_connector_registry
 from zeta.authoring.starter import scaffold_inbox_summarizer_project
 from zeta.harness import worker
 from zeta.harness.connector_bridge import (
@@ -60,13 +60,15 @@ def test_process_allowlist_excluding_a_bound_connector_fails_loudly(
         runtime.events.close()
 
 
-async def test_fs_connector_executable_speaks_ipc_v0(tmp_path: Path) -> None:
+async def test_fs_connector_entry_point_speaks_ipc_v0(tmp_path: Path) -> None:
     inbox = tmp_path / "inbox"
     inbox.mkdir()
+    manifest = load_connector_registry(connector_names=("filesystem",)).resolve(
+        "filesystem"
+    )
+    assert manifest is not None
     process = await asyncio.create_subprocess_exec(
-        sys.executable,
-        "-m",
-        "zeta_connectors.filesystem",
+        *manifest.command,
         stdin=asyncio.subprocess.PIPE,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
@@ -153,7 +155,7 @@ async def test_ipc_ingress_reaches_the_journal(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """End to end: discovered executable child → IPC → journal row."""
+    """End to end: installed entry point → isolated child → journal row."""
     monkeypatch.setenv("FILESYSTEM_DEBOUNCE_SECONDS", "0")
     runtime = scaffolded_runtime(tmp_path, "ipc-project")
     ingress = asyncio.create_task(

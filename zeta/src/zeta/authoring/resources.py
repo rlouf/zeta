@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import subprocess
 import sys
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field, replace
+from importlib import metadata as importlib_metadata
 from importlib.resources import as_file, files
 from pathlib import Path
 from typing import Any
@@ -81,7 +81,6 @@ def load_agent_project(
     """Load flat authored agents and their shared validation resources."""
     specs = (*load_specs(agents_dir), load_packaged_master_spec())
     connectors = registry or load_connector_registry(
-        agents_dir,
         connector_names=connector_names,
     )
     events = load_event_registry(
@@ -156,75 +155,75 @@ def empty_payload_schema() -> dict[str, object]:
 
 
 def load_connector_registry(
-    agents_dir: Path,
     *,
     connector_names: Iterable[str] | None = None,
-    executables: Iterable[tuple[str, tuple[str, ...]]] | None = None,
+    entry_points: Iterable[Any] | None = None,
 ) -> EventConnectorRegistry:
-    """Register every connector executable the shell can see.
-
-    Discovery is the shell's: `zeta-connector-<id>`
-    on PATH, plus executable files under ``agents/connectors/`` — a
-    project-local executable overrides a PATH connector with the same
-    id. `connector_names` is the process-level allowlist
-    (``zeta serve --connectors``); `executables` injects commands
-    directly for tests.
-    """
+    """Register installed Python connectors without importing their code."""
     allowed = set(connector_names) if connector_names is not None else None
+    selected = [
+        entry_point
+        for entry_point in event_connector_entry_points(entry_points)
+        if allowed is None or entry_point.name in allowed
+    ]
+    names: set[str] = set()
+    for entry_point in selected:
+        if entry_point.name in names:
+            raise ResourceError(f"duplicate connector entry point {entry_point.name!r}")
+        names.add(entry_point.name)
+
     registry = EventConnectorRegistry()
-    for connector_id, command in discover_connector_commands(
-        agents_dir, executables=executables
-    ):
-        if allowed is not None and connector_id not in allowed:
-            continue
+    for entry_point in selected:
+        command = connector_entry_point_command(entry_point)
         try:
-            manifest = describe_connector(command, expected_id=connector_id)
+            manifest = describe_connector(command, expected_id=entry_point.name)
         except Exception as exc:
-            # A connector that cannot describe itself must not poison
-            # unrelated projects; the warning names the casualty.
-            logger.warning("skipping event connector %r: %s", connector_id, exc)
+            logger.warning("skipping event connector %r: %s", entry_point.name, exc)
             continue
         register_event_connector(registry, manifest)
     return registry
 
 
-CONNECTOR_COMMAND_PREFIX = "zeta-connector-"
 DESCRIBE_TIMEOUT_SECONDS = 10.0
 
-_describe_cache: dict[tuple[tuple[str, ...], float], ConnectorManifest] = {}
+
+def event_connector_entry_points(
+    entry_points: Iterable[Any] | None = None,
+) -> tuple[Any, ...]:
+    """Return connector metadata in deterministic launch order."""
+    discovered = (
+        importlib_metadata.entry_points(group=EVENT_CONNECTOR_ENTRY_POINT_GROUP)
+        if entry_points is None
+        else entry_points
+    )
+    return tuple(
+        sorted(
+            (
+                entry_point
+                for entry_point in discovered
+                if entry_point.group == EVENT_CONNECTOR_ENTRY_POINT_GROUP
+            ),
+            key=lambda entry_point: (entry_point.name, entry_point.value),
+        )
+    )
 
 
-def discover_connector_commands(
-    agents_dir: Path,
-    *,
-    executables: Iterable[tuple[str, tuple[str, ...]]] | None = None,
-) -> list[tuple[str, tuple[str, ...]]]:
-    if executables is not None:
-        return list(executables)
-    commands: dict[str, tuple[str, ...]] = {}
-    # The running interpreter's script directory comes first: connectors
-    # installed beside zeta-os (one venv, one uv tool) must be found even
-    # when `zeta` was invoked by absolute path with a bare PATH.
-    for directory in (str(Path(sys.executable).parent), *os.get_exec_path()):
-        try:
-            entries = sorted(Path(directory).iterdir())
-        except OSError:
-            continue
-        for entry in entries:
-            if not entry.name.startswith(CONNECTOR_COMMAND_PREFIX):
-                continue
-            connector_id = entry.name.removeprefix(CONNECTOR_COMMAND_PREFIX)
-            if connector_id in commands:
-                continue  # first PATH hit wins, like the shell
-            if entry.is_file() and os.access(entry, os.X_OK):
-                commands[connector_id] = (str(entry),)
-    connectors_dir = agents_dir / "connectors"
-    if connectors_dir.is_dir():
-        for entry in sorted(connectors_dir.iterdir()):
-            if not entry.is_file() or not os.access(entry, os.X_OK):
-                continue
-            commands[entry.stem] = (str(entry),)
-    return sorted(commands.items())
+def connector_entry_point_command(entry_point: Any) -> tuple[str, ...]:
+    """Turn Python package metadata into an isolated child launch command."""
+    if not isinstance(entry_point.name, str) or not entry_point.name:
+        raise ResourceError("connector entry point must have a non-empty name")
+    if not isinstance(entry_point.value, str) or not entry_point.value:
+        raise ResourceError(
+            f"connector entry point {entry_point.name!r} must have a target"
+        )
+    return (
+        sys.executable,
+        "-m",
+        "zeta.ipc.client",
+        EVENT_CONNECTOR_ENTRY_POINT_GROUP,
+        entry_point.name,
+        entry_point.value,
+    )
 
 
 def describe_connector(
@@ -232,15 +231,7 @@ def describe_connector(
     *,
     expected_id: str | None = None,
 ) -> ConnectorManifest:
-    """Run one `--describe` invocation, cached by executable mtime."""
-    try:
-        mtime = Path(command[0]).stat().st_mtime
-    except OSError:
-        mtime = 0.0
-    cache_key = (command, mtime)
-    cached = _describe_cache.get(cache_key)
-    if cached is not None:
-        return cached
+    """Read one connector manifest from an isolated child process."""
     completed = subprocess.run(
         [*command, "--describe"],
         capture_output=True,
@@ -265,7 +256,6 @@ def describe_connector(
         )
     except ConnectorManifestError as exc:
         raise ResourceError(f"connector {command[0]}: {exc}") from exc
-    _describe_cache[cache_key] = manifest
     return manifest
 
 

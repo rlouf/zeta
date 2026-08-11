@@ -1,4 +1,4 @@
-"""Bundled Zeta connectors as IPC executables."""
+"""Bundled Zeta connector entry points."""
 
 from __future__ import annotations
 
@@ -13,11 +13,7 @@ def connector_main(
     manifest: dict[str, Any],
     run: Any,
 ) -> None:
-    """Serve `--describe` or hand off to the connector's run function.
-
-    The manifest is static metadata (spec §13.1): printing it must not
-    need credentials, network access, or project state.
-    """
+    """Keep manifest discovery free of credentials, network, and project state."""
     if argv == ["--describe"]:
         json.dump(manifest, sys.stdout, ensure_ascii=False, sort_keys=True)
         sys.stdout.write("\n")

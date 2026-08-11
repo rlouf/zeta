@@ -7,7 +7,6 @@ envelopes are journaled.
 from __future__ import annotations
 
 import os
-import sys
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any
@@ -289,13 +288,5 @@ def run() -> None:
     )
 
 
-def main(argv: list[str] | None = None) -> None:
-    connector_main(
-        sys.argv[1:] if argv is None else argv,
-        manifest=MANIFEST,
-        run=run,
-    )
-
-
-if __name__ == "__main__":
-    main()
+def main(argv: list[str]) -> None:
+    connector_main(argv, manifest=MANIFEST, run=run)

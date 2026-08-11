@@ -1,10 +1,8 @@
-"""Connector vocabulary: bindings and self-described manifests.
+"""Connector vocabulary: bindings, manifests, and child launch commands.
 
-A connector is an executable that speaks IPC. The
-runtime never imports connector code; it reads the executable's
-`--describe` manifest for schemas and delivery semantics, spawns it
-for ingress, and calls it for egress. This module holds the shapes
-that flow between authoring, validation, and the harness.
+The package frontend resolves installed connector metadata into a child
+command. The runtime reads that child's `--describe` manifest, supervises it
+for ingress, and calls it for egress without importing connector code.
 """
 
 from collections.abc import Mapping
@@ -44,7 +42,7 @@ class OperationSpec:
 
 @dataclass(frozen=True)
 class ConnectorManifest:
-    """One connector executable's self-description plus how to spawn it.
+    """One connector's self-description and isolated child command.
 
     `filters` maps ingress event types to their binding-filter schemas
     and operation names to their binding-options schemas, which is the
@@ -86,7 +84,7 @@ def connector_manifest_from_describe(
     if expected_id is not None and connector_id != expected_id:
         raise ConnectorManifestError(
             f"describe output id {connector_id!r} does not match "
-            f"the executable name {expected_id!r}"
+            f"the entry-point name {expected_id!r}"
         )
     versions = raw.get("protocol_versions")
     if (

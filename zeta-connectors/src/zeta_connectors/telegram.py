@@ -13,7 +13,6 @@ the runtime's supervisor respawn is the retry.
 from __future__ import annotations
 
 import os
-import sys
 import tempfile
 from collections.abc import AsyncIterator, Mapping
 from dataclasses import dataclass
@@ -830,13 +829,5 @@ def run() -> None:
     )
 
 
-def main(argv: list[str] | None = None) -> None:
-    connector_main(
-        sys.argv[1:] if argv is None else argv,
-        manifest=MANIFEST,
-        run=run,
-    )
-
-
-if __name__ == "__main__":
-    main()
+def main(argv: list[str]) -> None:
+    connector_main(argv, manifest=MANIFEST, run=run)

@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import json
 import os
-import sys
 from collections.abc import AsyncIterator, Mapping
 from dataclasses import dataclass
 from typing import Any
@@ -360,13 +359,5 @@ def run() -> None:
     )
 
 
-def main(argv: list[str] | None = None) -> None:
-    connector_main(
-        sys.argv[1:] if argv is None else argv,
-        manifest=MANIFEST,
-        run=run,
-    )
-
-
-if __name__ == "__main__":
-    main()
+def main(argv: list[str]) -> None:
+    connector_main(argv, manifest=MANIFEST, run=run)

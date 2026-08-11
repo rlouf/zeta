@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import subprocess
+import sys
 
+import pytest
 from ipc_test_support import (
     child_stderr,
     complete_initialize,
@@ -15,9 +18,107 @@ from ipc_test_support import (
     spawn,
     write_child,
 )
+from zeta.ipc import client as ipc_client
 from zeta.ipc.messages import request, success_response
 
 PAYLOAD = {"dir": "/p/inbox", "name": "a.txt", "path": "/p/inbox/a.txt"}
+
+
+def test_module_runner_invokes_target_without_runpy_warning() -> None:
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "zeta.ipc.client",
+            "test.entry_points",
+            "print",
+            "builtins:print",
+            "--describe",
+        ],
+        capture_output=True,
+        check=False,
+        text=True,
+        timeout=10,
+    )
+
+    assert result.returncode == 0
+    assert result.stdout == "['--describe']\n"
+    assert result.stderr == ""
+
+
+def test_entry_point_runner_loads_exact_target_and_forwards_plugin_argv(
+    monkeypatch,
+) -> None:
+    observed = {}
+
+    class StubEntryPoint:
+        def __init__(self, *, name: str, value: str, group: str) -> None:
+            observed["metadata"] = (group, name, value)
+
+        def load(self):
+            observed["loaded"] = True
+
+            def target(argv: list[str]) -> None:
+                observed["argv"] = argv
+
+            return target
+
+    monkeypatch.setattr(ipc_client, "EntryPoint", StubEntryPoint)
+
+    ipc_client._run_entry_point(
+        [
+            "zeta.event_connectors",
+            "filesystem",
+            "zeta_connectors.filesystem:main",
+            "--describe",
+        ]
+    )
+
+    assert observed == {
+        "metadata": (
+            "zeta.event_connectors",
+            "filesystem",
+            "zeta_connectors.filesystem:main",
+        ),
+        "loaded": True,
+        "argv": ["--describe"],
+    }
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        [],
+        ["zeta.event_connectors"],
+        ["zeta.event_connectors", "filesystem"],
+        ["", "filesystem", "zeta_connectors.filesystem:main"],
+        ["zeta.event_connectors", "", "zeta_connectors.filesystem:main"],
+        ["zeta.event_connectors", "filesystem", ""],
+    ],
+)
+def test_entry_point_runner_rejects_malformed_arguments(argv) -> None:
+    with pytest.raises(SystemExit, match="usage: python -m zeta.ipc.client"):
+        ipc_client._run_entry_point(argv)
+
+
+def test_entry_point_runner_rejects_noncallable_target(monkeypatch) -> None:
+    class StubEntryPoint:
+        def __init__(self, *, name: str, value: str, group: str) -> None:
+            pass
+
+        def load(self):
+            return object()
+
+    monkeypatch.setattr(ipc_client, "EntryPoint", StubEntryPoint)
+
+    with pytest.raises(SystemExit, match="entry point filesystem is not callable"):
+        ipc_client._run_entry_point(
+            [
+                "zeta.event_connectors",
+                "filesystem",
+                "zeta_connectors.filesystem:main",
+            ]
+        )
 
 
 def one_event_body(payload: dict, *, on_ack: str = "None") -> str:

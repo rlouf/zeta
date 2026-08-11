@@ -1,4 +1,4 @@
-"""Bridge executable connector peers to the durable event queue."""
+"""Bridge isolated connector peers to the durable event queue."""
 
 from __future__ import annotations
 

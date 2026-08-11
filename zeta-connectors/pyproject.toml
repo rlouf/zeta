@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "zeta-connectors"
 version = "0.1.0"
-description = "The bundled Zeta event connectors, as IPC executables."
+description = "The bundled Zeta event connectors."
 readme = "README.md"
 requires-python = ">=3.11"
 license = "Apache-2.0"
@@ -20,11 +20,11 @@ dependencies = [
 [project.optional-dependencies]
 slack = ["websockets>=12"]
 
-[project.scripts]
-zeta-connector-filesystem = "zeta_connectors.filesystem:main"
-zeta-connector-slack = "zeta_connectors.slack:main"
-zeta-connector-telegram = "zeta_connectors.telegram:main"
-zeta-connector-pushover = "zeta_connectors.pushover:main"
+[project.entry-points."zeta.event_connectors"]
+filesystem = "zeta_connectors.filesystem:main"
+slack = "zeta_connectors.slack:main"
+telegram = "zeta_connectors.telegram:main"
+pushover = "zeta_connectors.pushover:main"
 
 [tool.setuptools]
 package-dir = { "" = "src" }

@@ -179,7 +179,7 @@ def load_recorded_project_snapshot(
         if not isinstance(manifest, Mapping):
             break
         parsed_manifest = dict(manifest)
-        if content_id("project", parsed_manifest) != generation_id:
+        if not content_id_matches("project", parsed_manifest, generation_id):
             raise ProjectSnapshotUnavailable(
                 f"recorded project snapshot {generation_id!r} failed verification"
             )
@@ -655,7 +655,7 @@ def callable_manifest(handler: Any) -> dict[str, Any]:
     return {
         "module": module.__name__ if module is not None else None,
         "qualname": getattr(target, "__qualname__", type(handler).__qualname__),
-        "source_sha256": file_sha256(Path(path)) if path is not None else None,
+        "source_sha256": file_content_hash(Path(path)) if path is not None else None,
     }
 
 
@@ -691,18 +691,35 @@ def model_manifest(selection: ModelSelection | None) -> dict[str, Any] | None:
 
 
 def content_id(prefix: str, value: Mapping[str, Any]) -> str:
-    encoded = json.dumps(
+    """Return the prefixed content address of one canonical manifest.
+
+    The prefix is the namespace; the hash part is the plain content
+    address of the canonical JSON bytes, per the content-vs-derived
+    rule in spec §11.
+    """
+    return f"{prefix}:{addresses.content_address(canonical_manifest_bytes(value))}"
+
+
+def content_id_matches(prefix: str, value: Mapping[str, Any], recorded: str) -> bool:
+    """Verify a manifest against whichever epoch minted its recorded id."""
+    if recorded.startswith(f"{prefix}:sha256:"):
+        digest = hashlib.sha256(canonical_manifest_bytes(value)).hexdigest()
+        return f"{prefix}:sha256:{digest}" == recorded
+    return content_id(prefix, value) == recorded
+
+
+def canonical_manifest_bytes(value: Mapping[str, Any]) -> bytes:
+    return json.dumps(
         value,
         sort_keys=True,
         ensure_ascii=False,
         separators=(",", ":"),
     ).encode()
-    return f"{prefix}:sha256:{hashlib.sha256(encoded).hexdigest()}"
 
 
-def file_sha256(path: Path) -> str | None:
+def file_content_hash(path: Path) -> str | None:
     try:
-        return hashlib.sha256(path.read_bytes()).hexdigest()
+        return addresses.content_address(path.read_bytes())
     except OSError:
         return None
 

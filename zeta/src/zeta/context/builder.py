@@ -4,6 +4,7 @@ Prompt component order is a public contract for prefix-cache friendliness:
 system_prompt, tool descriptors, project context, then volatile components.
 """
 
+import hashlib
 import json
 from collections.abc import Iterable
 from contextlib import nullcontext
@@ -325,15 +326,30 @@ def stored_component_ids(components: Iterable[PromptComponent]) -> tuple[ObjectI
 
 def payload_sha256(payload: dict[str, Any]) -> str:
     """Return the content address of a model request payload."""
-    return content_hash(
-        json.dumps(
-            payload,
-            ensure_ascii=False,
-            sort_keys=True,
-            separators=(",", ":"),
-            allow_nan=False,
-        )
+    return content_hash(canonical_payload_text(payload))
+
+
+def canonical_payload_text(payload: dict[str, Any]) -> str:
+    return json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
     )
+
+
+def payload_matches(payload: dict[str, Any], recorded: str) -> bool:
+    """Verify a payload against whichever epoch minted its recorded hash.
+
+    Prompts recorded before the b3 epoch carry `sha256:` hashes; they
+    must keep verifying forever, so the epoch is sniffed from the
+    recorded value instead of re-hashing history.
+    """
+    if recorded.startswith("sha256:"):
+        digest = hashlib.sha256(canonical_payload_text(payload).encode()).hexdigest()
+        return f"sha256:{digest}" == recorded
+    return payload_sha256(payload) == recorded
 
 
 @dataclass(frozen=True)
@@ -421,7 +437,7 @@ def reconstructed_prompt_request(
     return ReconstructedPrompt(
         plan=plan,
         model_input=model_input,
-        payload_verified=bool(expected) and payload_sha256(payload) == expected,
+        payload_verified=bool(expected) and payload_matches(payload, expected),
     )
 
 

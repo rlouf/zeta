@@ -452,7 +452,8 @@ User asked: {{ event.payload.text }}
     )
     assert spec.manifest == {"writes": {"paths": ["docs/**.md"]}}
     assert spec.instructions == "User asked: {{ event.payload.text }}\n"
-    assert len(spec.sha256) == 64
+    assert spec.sha256.startswith("b3:")
+    assert len(spec.sha256) == 67
 
 
 def test_zeta_agent_spec_selects_tool_executor_from_frontmatter(

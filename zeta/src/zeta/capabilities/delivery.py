@@ -7,17 +7,18 @@ retry is safe. They hold no runtime state.
 
 from __future__ import annotations
 
-import hashlib
 import os
 import tempfile
 from pathlib import Path
 
+from zeta.addresses import content_address
+
 
 def content_hash(data: bytes | str) -> str:
-    """Return the sha256 content address of file bytes or UTF-8 text."""
+    """Return the plain-blake3 content address of file bytes or UTF-8 text."""
     if isinstance(data, str):
         data = data.encode("utf-8")
-    return "sha256:" + hashlib.sha256(data).hexdigest()
+    return content_address(data)
 
 
 def short_tag(content_address: str) -> str:

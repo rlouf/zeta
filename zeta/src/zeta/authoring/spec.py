@@ -1,6 +1,5 @@
 """Authored agent spec data structures and frontmatter parsing."""
 
-import hashlib
 import math
 import re
 from collections.abc import Mapping
@@ -10,6 +9,8 @@ from typing import Any
 
 import yaml
 from connectors import EgressBinding, IngressBinding
+
+from zeta.addresses import content_address
 
 SLUG_PATTERN = re.compile(r"^[a-z0-9_-]+$")
 MASTER_AGENT_ID = "zeta.master"
@@ -131,7 +132,7 @@ def load_spec(path: str | Path) -> AgentSpec:
             description=required_string(frontmatter, "description", path),
             instructions=instructions,
             path=relative_to_cwd(path),
-            sha256=hashlib.sha256(raw_bytes).hexdigest(),
+            sha256=content_address(raw_bytes),
             enabled=bool_field(frontmatter.get("enabled", True), "enabled", path),
             session=session_field(frontmatter.get("session"), path),
             model=model_spec(frontmatter.get("model"), path),

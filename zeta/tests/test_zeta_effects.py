@@ -14,7 +14,7 @@ def test_effect_key_is_canonical_across_mapping_order() -> None:
     )
 
     assert first == second
-    assert first.startswith("effect:sha256:")
+    assert first.startswith("effect:b3:")
 
 
 def test_effect_key_separates_scope_operation_and_parameters() -> None:

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import inspect
 import json
 import sys
@@ -12,6 +11,7 @@ from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from typing import Any, Protocol
 
+from zeta.addresses import chain_address
 from zeta.capabilities.types import Capability, CapabilityId
 from zeta.context.builder import PromptBuilder, render_model_input
 from zeta.context.components import PromptComponent
@@ -736,7 +736,7 @@ def _content_transform_retry_seed(
         separators=(",", ":"),
         allow_nan=False,
     ).encode()
-    return hashlib.sha256(encoded).hexdigest()
+    return chain_address(encoded)
 
 
 def _child_model_cache_ref(retry_seed: str, position: int) -> str:

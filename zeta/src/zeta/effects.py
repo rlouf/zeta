@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Literal
+
+from zeta.addresses import chain_address
 
 DeliverySemantics = Literal[
     "idempotent_with_key",
@@ -55,4 +56,4 @@ def effect_key(
         ensure_ascii=False,
         separators=(",", ":"),
     ).encode()
-    return f"effect:sha256:{hashlib.sha256(encoded).hexdigest()}"
+    return f"effect:{chain_address(encoded)}"

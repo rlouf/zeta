@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import ast
 import asyncio
-import hashlib
 import shutil
 from collections.abc import Mapping
 from datetime import UTC, datetime
@@ -12,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from zeta.capabilities.delivery import content_hash
 from zeta.capabilities.execution import tool_args_schema_error
 from zeta.capabilities.executors import (
     InProcessCapabilityExecutor,
@@ -577,7 +577,7 @@ def test_zeta_tool_read_schema_and_run(tmp_path: Path) -> None:
     assert data["ok"] is True
     tag = data["metadata"]["tag"]
     assert data["content"][0]["text"] == f"[{target}#{tag}]\n1:hello zeta\n"
-    assert data["metadata"]["content_hash"].startswith("sha256:")
+    assert data["metadata"]["content_hash"].startswith("b3:")
     assert data["metadata"]["line_start"] == 1
     assert data["metadata"]["line_end"] == 1
 
@@ -1812,8 +1812,8 @@ def test_zeta_tool_write_records_content_hashes(tmp_path: Path) -> None:
     )
 
     metadata = data["metadata"]
-    assert metadata["before_hash"] == "sha256:" + hashlib.sha256(b"old\n").hexdigest()
-    assert metadata["after_hash"] == "sha256:" + hashlib.sha256(b"hello\n").hexdigest()
+    assert metadata["before_hash"] == content_hash(b"old\n")
+    assert metadata["after_hash"] == content_hash(b"hello\n")
 
 
 def test_zeta_tool_write_omits_before_hash_for_new_file(tmp_path: Path) -> None:
@@ -1826,7 +1826,7 @@ def test_zeta_tool_write_omits_before_hash_for_new_file(tmp_path: Path) -> None:
 
     metadata = data["metadata"]
     assert "before_hash" not in metadata
-    assert metadata["after_hash"] == "sha256:" + hashlib.sha256(b"hello\n").hexdigest()
+    assert metadata["after_hash"] == content_hash(b"hello\n")
 
 
 def test_zeta_tool_edit_records_content_hashes(tmp_path: Path) -> None:
@@ -1839,8 +1839,8 @@ def test_zeta_tool_edit_records_content_hashes(tmp_path: Path) -> None:
     )
 
     metadata = data["metadata"]
-    before = "sha256:" + hashlib.sha256(b"hello\nold\nbye\n").hexdigest()
-    after = "sha256:" + hashlib.sha256(b"hello\nnew\nbye\n").hexdigest()
+    before = content_hash(b"hello\nold\nbye\n")
+    after = content_hash(b"hello\nnew\nbye\n")
     assert metadata["before_hash"] == before
     assert metadata["after_hash"] == after
 

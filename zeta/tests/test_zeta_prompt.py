@@ -2378,7 +2378,7 @@ def test_zeta_measure_counts_project_context_once() -> None:
     project = next(c for c in components if c.kind == "project_context")
     assert "content" not in project.data
     assert project.data["chars"] == 4000
-    assert str(project.data["sha256"]).startswith("sha256:")
+    assert str(project.data["sha256"]).startswith("b3:")
     usage = zeta_context.measure(components)
     project_usage = next(c for c in usage.components if c.kind == "project_context")
     assert project_usage.tokens < 50
@@ -2451,7 +2451,7 @@ def test_zeta_structural_trim_embeds_trim_payload_in_component_data() -> None:
     assert trim["source_object_id"] == "sha256:source"
     assert trim["tool_call_id"] == "call-read"
     assert trim["raw_content_chars"] == len(raw_text)
-    assert str(trim["raw_content_sha256"]).startswith("sha256:")
+    assert str(trim["raw_content_sha256"]).startswith("b3:")
     assert trim["tool_result"]["ok"] is True
     assert trim["tool_result"]["metadata"] == {"path": "big.txt"}
     assert trim["tool_result"]["content"][0]["text_chars"] == len(raw_text)

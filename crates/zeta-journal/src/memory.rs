@@ -254,10 +254,7 @@ impl MemoryJournal {
         let mut chain = Vec::new();
         let mut seen = HashSet::new();
         let mut current = self.get(event_id);
-        loop {
-            let Some(event) = current else {
-                break;
-            };
+        while let Some(event) = current {
             if !seen.insert(event.id.clone()) {
                 break;
             }

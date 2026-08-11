@@ -379,10 +379,7 @@ pub fn verify(
         }
         let expected_entry_address =
             entry_address(event, &expected_payload_address, previous_address.as_ref());
-        let expected_entry_address = match expected_entry_address {
-            Ok(expected_entry_address) => Some(expected_entry_address),
-            Err(_error) => None,
-        };
+        let expected_entry_address = expected_entry_address.ok();
         if expected_entry_address != Some(*stored_entry_address) {
             return Err(verification_error(
                 entries_checked,

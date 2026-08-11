@@ -652,6 +652,17 @@ def test_project_snapshot_preserves_executor_config(tmp_path: Path) -> None:
     )
 
 
+def test_project_snapshot_preserves_home_relative_base_dir(tmp_path: Path) -> None:
+    spec = load_snapshot(write_snapshot_project(tmp_path)).project.specs[0]
+    spec = replace(spec, base_dir=Path("~/vaults/CEO"))
+
+    manifest = agent_manifest(spec)
+    restored = agent_from_manifest(manifest)
+
+    assert manifest["base_dir"] == "~/vaults/CEO"
+    assert restored.base_dir == Path("~/vaults/CEO")
+
+
 def test_project_snapshot_rejects_non_json_executor_config(tmp_path: Path) -> None:
     spec = load_snapshot(write_snapshot_project(tmp_path)).project.specs[0]
     manifest = agent_manifest(spec)

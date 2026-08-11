@@ -33,6 +33,96 @@ BUILT_IN_FRONTMATTER_KEYS = frozenset(
         "base_dir",
     }
 )
+_JSON_INTEGER_MIN = -(1 << 63)
+_JSON_INTEGER_MAX = (1 << 64) - 1
+_YAML_BOOL_PATTERN = re.compile(r"^(?:true|True|TRUE|false|False|FALSE)$")
+_YAML_INT_PATTERN = re.compile(
+    r"^(?:[-+]?0b[0-1]+|[-+]?0o[0-7]+|[-+]?0x[0-9a-fA-F]+|[-+]?(?:0|[1-9][0-9]*))$"
+)
+_YAML_FLOAT_PATTERN = re.compile(
+    r"^(?:"
+    r"[-+]?(?:[0-9]+\.[0-9]*|\.[0-9]+)(?:[eE][-+]?[0-9]+)?"
+    r"|[-+]?[0-9]+[eE][-+]?[0-9]+"
+    r"|[-+]?\.(?:inf|Inf|INF)"
+    r"|\.(?:nan|NaN|NAN)"
+    r")$"
+)
+
+
+class _AuthoringLoader(yaml.SafeLoader):
+    """Keep authored scalar semantics independent of PyYAML's YAML 1.1 defaults."""
+
+    def construct_mapping(self, node: Any, deep: bool = False) -> dict[Any, Any]:
+        seen: set[Any] = set()
+        for key_node, _ in node.value:
+            key = self.construct_object(key_node, deep=deep)
+            try:
+                duplicate = key in seen
+                seen.add(key)
+            except TypeError as exc:
+                raise yaml.constructor.ConstructorError(
+                    None,
+                    None,
+                    "found an unhashable object key",
+                    key_node.start_mark,
+                ) from exc
+            if duplicate:
+                raise yaml.constructor.ConstructorError(
+                    None,
+                    None,
+                    f"found duplicate key {key!r}",
+                    key_node.start_mark,
+                )
+        return super().construct_mapping(node, deep=deep)
+
+
+_REMOVED_YAML_TAGS = {
+    "tag:yaml.org,2002:bool",
+    "tag:yaml.org,2002:float",
+    "tag:yaml.org,2002:int",
+    "tag:yaml.org,2002:merge",
+    "tag:yaml.org,2002:timestamp",
+}
+_AuthoringLoader.yaml_implicit_resolvers = {
+    first: [
+        (tag, pattern) for tag, pattern in resolvers if tag not in _REMOVED_YAML_TAGS
+    ]
+    for first, resolvers in yaml.SafeLoader.yaml_implicit_resolvers.items()
+}
+
+
+def _construct_yaml_int(loader: _AuthoringLoader, node: Any) -> int:
+    return int(loader.construct_scalar(node), 0)
+
+
+def _construct_yaml_float(loader: _AuthoringLoader, node: Any) -> float | str:
+    source = loader.construct_scalar(node)
+    value = yaml.constructor.SafeConstructor.construct_yaml_float(loader, node)
+    if not math.isfinite(value) and source.lower().lstrip("+-") not in {
+        ".inf",
+        ".nan",
+    }:
+        return source
+    return value
+
+
+_AuthoringLoader.add_implicit_resolver(
+    "tag:yaml.org,2002:bool",
+    _YAML_BOOL_PATTERN,
+    list("tTfF"),
+)
+_AuthoringLoader.add_implicit_resolver(
+    "tag:yaml.org,2002:int",
+    _YAML_INT_PATTERN,
+    list("-+0123456789"),
+)
+_AuthoringLoader.add_implicit_resolver(
+    "tag:yaml.org,2002:float",
+    _YAML_FLOAT_PATTERN,
+    list("-+0123456789."),
+)
+_AuthoringLoader.add_constructor("tag:yaml.org,2002:int", _construct_yaml_int)
+_AuthoringLoader.add_constructor("tag:yaml.org,2002:float", _construct_yaml_float)
 
 
 @dataclass(frozen=True)
@@ -189,14 +279,20 @@ def split_frontmatter(content: str, path: Path) -> tuple[dict[str, Any], str]:
         frontmatter_text = "".join(lines[1:index])
         body = "".join(lines[index + 1 :])
         try:
-            raw = yaml.safe_load(frontmatter_text)
+            raw = yaml.load(frontmatter_text, Loader=_AuthoringLoader)
         except yaml.YAMLError as exc:
             raise SpecError(f"invalid YAML frontmatter in {path}: {exc}") from exc
         if raw is None:
             raw = {}
         if not isinstance(raw, dict):
             raise SpecError(f"invalid YAML frontmatter in {path}: expected object")
-        return dict(raw), body
+        try:
+            normalized = _json_value(raw, set())
+        except ValueError as exc:
+            raise SpecError(f"invalid YAML frontmatter in {path}: {exc}") from exc
+        if not isinstance(normalized, dict):
+            raise SpecError(f"invalid YAML frontmatter in {path}: expected object")
+        return normalized, body
     raise SpecError(f"missing closing frontmatter delimiter in {path}")
 
 
@@ -264,58 +360,63 @@ def executor_config(value: Any) -> dict[str, Any]:
     """Normalize config for stable snapshots and executor cache keys."""
     if not isinstance(value, Mapping):
         raise ValueError("executor config must be an object")
-    normalized = _executor_config_value(value, set())
+    normalized = _json_value(value, set())
     if not isinstance(normalized, dict):
         raise ValueError("executor config must be an object")
     return normalized
 
 
-def _executor_config_value(value: Any, active: set[int]) -> Any:
-    if value is None or isinstance(value, str | bool | int):
+def _json_value(value: Any, active: set[int]) -> Any:
+    if value is None or isinstance(value, str | bool):
+        return value
+    if isinstance(value, int):
+        if not _JSON_INTEGER_MIN <= value <= _JSON_INTEGER_MAX:
+            raise ValueError("integers must fit i64 or u64")
         return value
     if isinstance(value, float):
         if not math.isfinite(value):
-            raise ValueError("executor config numbers must be finite")
+            raise ValueError("numbers must be finite")
         return value
     if isinstance(value, Mapping):
         identity = id(value)
         if identity in active:
-            raise ValueError("executor config must not contain cycles")
+            raise ValueError("values must not contain cycles")
         if not all(isinstance(key, str) for key in value):
-            raise ValueError("executor config object keys must be strings")
+            raise ValueError("object keys must be strings")
+        if "<<" in value:
+            raise ValueError("merge keys are not supported")
         active.add(identity)
         try:
-            return {
-                key: _executor_config_value(item, active) for key, item in value.items()
-            }
+            return {key: _json_value(item, active) for key, item in value.items()}
         finally:
             active.remove(identity)
     if isinstance(value, list):
         identity = id(value)
         if identity in active:
-            raise ValueError("executor config must not contain cycles")
+            raise ValueError("values must not contain cycles")
         active.add(identity)
         try:
-            return [_executor_config_value(item, active) for item in value]
+            return [_json_value(item, active) for item in value]
         finally:
             active.remove(identity)
-    raise ValueError("executor config contains a non-JSON value")
+    raise ValueError("frontmatter contains a non-JSON value")
 
 
 def base_dir_field(value: Any, path: Path) -> Path | None:
+    """Preserve authored paths so declarations stay portable across machines."""
     if value is None:
         return None
     if not isinstance(value, str) or value.strip() == "":
         raise SpecError(
             f"invalid value for 'base_dir' in {path}: expected a path string"
         )
-    expanded = Path(value).expanduser()
-    if not expanded.is_absolute():
+    base_dir = Path(value)
+    if not base_dir.is_absolute() and value != "~" and not value.startswith("~/"):
         raise SpecError(
             f"invalid value for 'base_dir' in {path}: "
-            f"{value!r} must resolve to an absolute path"
+            f"{value!r} must be absolute or home-relative"
         )
-    return expanded
+    return base_dir
 
 
 def retry_spec(value: Any, path: Path) -> RetrySpec | None:

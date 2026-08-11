@@ -38,6 +38,7 @@ from zeta.authoring.spec import (
     AgentSpec,
     ExecutorSpec,
     ModelSpec,
+    RetrySpec,
     ScheduleEntry,
     SpecError,
     load_spec,
@@ -71,6 +72,7 @@ from zeta.harness.routing import (
 from zeta.harness.sessions import agent_session_id, invocation_session_id
 from zeta.harness.store import RuntimeEventStore
 from zeta.journal.store import Filter
+from zeta.loop.config import AgentConfig
 from zeta.loop.outcomes import PublishEventRequest
 from zeta.loop.runtime import AgentRunResult
 from zeta.substrate import Object
@@ -132,6 +134,68 @@ zeta_events = SimpleNamespace(
 def _write_spec(path: Path, content: str) -> Path:
     path.write_text(content, encoding="utf-8")
     return path
+
+
+def _agent_vector_value(spec: AgentSpec) -> dict[str, Any]:
+    return {
+        "slug": spec.slug,
+        "name": spec.name,
+        "description": spec.description,
+        "instructions": spec.instructions,
+        "content_address": spec.content_address,
+        "enabled": spec.enabled,
+        "session": spec.session,
+        "model": (
+            None
+            if spec.model is None
+            else {"name": spec.model.name, "url": spec.model.url}
+        ),
+        "executor": {
+            "provider": spec.executor.provider,
+            "config": spec.executor.config,
+        },
+        "accepts": list(spec.accepts),
+        "publishes": list(spec.publishes),
+        "returns": list(spec.returns),
+        "skills": list(spec.skills),
+        "skills_inherit": spec.skills_inherit,
+        "tools": list(spec.tools),
+        "tools_inherit": spec.tools_inherit,
+        "schedules": [
+            {
+                "cron": entry.cron,
+                "timezone": entry.timezone,
+                "catchup": entry.catchup,
+            }
+            for entry in spec.schedules
+        ],
+        "retry": (
+            None
+            if spec.retry is None
+            else {
+                "max_attempts": spec.retry.max_attempts,
+                "backoff_seconds": spec.retry.backoff_seconds,
+            }
+        ),
+        "base_dir": None if spec.base_dir is None else str(spec.base_dir),
+        "ingress": [
+            {
+                "event": entry.event,
+                "filter": entry.filter,
+                "idempotency_key": entry.idempotency_key,
+            }
+            for entry in spec.ingress
+        ],
+        "egress": [
+            {
+                "event": entry.event,
+                "options": entry.options,
+                "idempotency_key": entry.idempotency_key,
+            }
+            for entry in spec.egress
+        ],
+        "extensions": spec.manifest,
+    }
 
 
 def _read_capability() -> RegisteredCapability:
@@ -488,6 +552,88 @@ Triage the issue.
     assert "executor" not in spec.manifest
 
 
+def test_zeta_agent_frontmatter_uses_portable_yaml_scalars(tmp_path: Path) -> None:
+    spec = load_spec(
+        _write_spec(
+            tmp_path / "worker.md",
+            """---
+name: yes
+description: 2026-08-11
+enabled: true
+retry:
+  max_attempts: 0o12
+  backoff_seconds: 1e3
+metadata:
+  affirmative: yes
+  disabled: off
+  leading_zero: 012
+  sexagesimal: 1:20
+  separated: 1_000
+  date: 2026-08-11
+  overflow: 1e400
+---
+Work.
+""",
+        )
+    )
+
+    assert spec.name == "yes"
+    assert spec.description == "2026-08-11"
+    assert spec.retry == RetrySpec(max_attempts=10, backoff_seconds=1000.0)
+    assert spec.manifest == {
+        "metadata": {
+            "affirmative": "yes",
+            "disabled": "off",
+            "leading_zero": "012",
+            "sexagesimal": "1:20",
+            "separated": "1_000",
+            "date": "2026-08-11",
+            "overflow": "1e400",
+        }
+    }
+
+
+@pytest.mark.parametrize(
+    "declaration",
+    [
+        "metadata:\n  key: first\n  key: second\n",
+        "defaults: &defaults\n  value: one\nmetadata:\n  <<: *defaults\n",
+        "metadata:\n  1: value\n",
+        "metadata:\n  score: .nan\n",
+        "metadata:\n  number: 18446744073709551616\n",
+        "metadata: &metadata\n  self: *metadata\n",
+    ],
+)
+def test_zeta_agent_frontmatter_rejects_non_json_yaml(
+    tmp_path: Path,
+    declaration: str,
+) -> None:
+    source = f"---\nname: Worker\ndescription: Works.\n{declaration}---\nWork.\n"
+
+    with pytest.raises(SpecError):
+        load_spec(_write_spec(tmp_path / "worker.md", source))
+
+
+def test_zeta_agent_conformance_vectors(tmp_path: Path) -> None:
+    vectors_path = (
+        Path(__file__).resolve().parents[2] / "spec/vectors/authoring/agents.json"
+    )
+    vectors = json.loads(vectors_path.read_text(encoding="utf-8"))
+
+    assert vectors["format"] == "zeta-authoring-agent-v0"
+    for vector in vectors["valid"]:
+        path = tmp_path / vector["path"]
+        path.parent.mkdir(parents=True, exist_ok=True)
+        spec = load_spec(_write_spec(path, vector["source_utf8"]))
+        assert _agent_vector_value(spec) == vector["expected"], vector["name"]
+
+    for vector in vectors["invalid"]:
+        path = tmp_path / vector["path"]
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with pytest.raises(SpecError):
+            load_spec(_write_spec(path, vector["source_utf8"]))
+
+
 def test_zeta_agent_project_rejects_unknown_tool_executor_provider(
     tmp_path: Path,
 ) -> None:
@@ -521,7 +667,12 @@ Triage the issue.
         )
 
 
-def test_zeta_agent_spec_parses_base_dir_as_absolute_path(tmp_path: Path) -> None:
+def test_zeta_agent_spec_preserves_home_relative_base_dir(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    home = tmp_path / "home"
+    monkeypatch.setenv("HOME", str(home))
     spec = load_spec(
         _write_spec(
             tmp_path / "filer.md",
@@ -539,7 +690,13 @@ tools:
         )
     )
 
-    assert spec.base_dir == Path.home() / "vaults" / "CEO"
+    assert spec.base_dir == Path("~/vaults/CEO")
+    assert zeta_agents.config_for_spec(spec, None).base_dir == home / "vaults" / "CEO"
+    override = zeta_agents.config_for_spec(
+        spec,
+        AgentConfig(base_dir=Path("~/other-vault")),
+    )
+    assert override.base_dir == home / "other-vault"
     assert "base_dir" not in spec.manifest
 
 
@@ -845,23 +1002,18 @@ Summarize the repo.
         (
             "name: Worker\ndescription: Worker\nexecutor:\n"
             "  provider: remote\n  config:\n    1: value\n",
-            "config",
-        ),
-        (
-            "name: Worker\ndescription: Worker\nexecutor:\n"
-            "  provider: remote\n  config:\n    created: 2026-07-29\n",
-            "config",
+            "object keys",
         ),
         (
             "name: Worker\ndescription: Worker\nexecutor:\n"
             "  provider: remote\n  config:\n    threshold: .nan\n",
-            "config",
+            "numbers",
         ),
         (
             "name: Worker\ndescription: Worker\nexecutor:\n"
             "  provider: remote\n  config: &config\n"
             "    nested: *config\n",
-            "config",
+            "cycles",
         ),
         ("name: Worker\ndescription: Worker\nschedules: hourly\n", "schedules"),
         (

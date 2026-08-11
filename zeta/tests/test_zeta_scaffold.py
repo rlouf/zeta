@@ -38,7 +38,7 @@ def test_zeta_scaffold_honors_options(tmp_path: Path) -> None:
     assert spec.accepts == ("file.created",)
     assert spec.tools == ("read", "write")
     assert spec.skills == ("entity-matching",)
-    assert spec.base_dir == Path.home() / "vaults" / "CEO"
+    assert spec.base_dir == Path("~/vaults/CEO")
 
 
 def test_zeta_scaffold_refuses_existing_agent(tmp_path: Path) -> None:

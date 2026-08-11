@@ -1,8 +1,7 @@
 # Zeta conformance vectors
 
-Golden test data for `spec/ipc-v0.md`, `spec/substrate-v0.md`, and
-`spec/journal-v0.md`. Third-party implementations can consume these files
-directly. The Python and Rust suites read the same files.
+Golden test data for shared Zeta formats. Third-party implementations can
+consume these files directly. The Python and Rust suites read the same files.
 
 ## `ipc/messages/valid/*.json`
 
@@ -83,3 +82,19 @@ memory store. It pins successful appends, id-first and idempotency-key
 deduplication, cursor-ordered filters, literal prefix behavior, missing causal
 parents, cycle termination, and the final journal head. It contains no storage
 schema or payload-placement assumptions.
+
+## `authoring/agents.json`
+
+Agent Markdown inputs with their complete parsed declaration values. Python
+generated the expected values and exact source-byte addresses; Python and Rust
+verify the same frozen file. The valid cases cover defaults, every declaration
+field, connector bindings, capability inheritance, schedules, Unicode, CRLF,
+home-relative paths, and the portable YAML scalar profile. The invalid cases
+cover delimiters, YAML shape, slugs, required fields, relative and named-home
+paths, duplicate and merge keys, non-JSON values, integer bounds, tags, and
+cycles.
+
+The expected declaration omits its source path because one implementation
+loads a filesystem path while another accepts a logical path with source
+bytes. Each vector still supplies the path used to derive and validate the
+agent slug.

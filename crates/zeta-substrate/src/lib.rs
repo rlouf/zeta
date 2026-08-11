@@ -15,10 +15,10 @@
 
 mod domain;
 mod hash;
-mod id;
+mod objects;
 mod store;
 
 pub use domain::{derive, Domain};
 pub use hash::{hash_bytes, hash_file, Hash, HashParseError};
-pub use id::{parse_id, Id};
+pub use objects::{parse_id, Id};
 pub use store::{BlobStore, Layout};

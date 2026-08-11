@@ -186,6 +186,26 @@ used `git mv`; focused searches and `apply_patch` handled the implementation.
 A requested Claude CLI planning review did not return, and Gemini CLI was not
 installed. Repository tests and vectors remained the authority.
 
+## Verification results
+
+The final local matrix passed:
+
+- Python: 1,164 passed and 2 skipped; full statement coverage is 90%.
+- Focused Python address, import-boundary, trace, and wire tests: 226 passed.
+- Rust IPC: 22 tests and 5 doctests passed.
+- Rust substrate: 20 tests and 20 doctests passed.
+- Full Rust workspace: the substrate, IPC, and 62 TUI tests passed with
+  warnings denied on `nightly-2026-03-25`.
+- Rustfmt and Clippy passed with warnings denied.
+- Ruff, Ruff format, ty, vulture, complexipy, and full pre-commit passed.
+- Radon reports the shared recursive identity validator at C(12), below the
+  configured complexity limit of 25.
+- The fixture database reports `ok` from `PRAGMA integrity_check` and contains
+  14 active events.
+- The IPC runtime dependency tree contains only `serde` and `serde_json`.
+- The active tree contains no removed algorithm vocabulary. No `target/`,
+  removed vector, or `zeta-cas` path is tracked.
+
 ## Reviewer commands
 
 Run these commands from the repository root:
@@ -198,8 +218,8 @@ uv run pytest zeta/tests/test_zeta_addresses.py \
 
 # Full Python suite and coverage gate
 uv run pytest -q
-uvx --with coverage coverage run -m pytest
-uvx --with coverage coverage report
+uv run coverage run -m pytest
+uv run coverage report
 
 # Rust conformance and warning gates
 cargo fmt --all -- --check
@@ -209,6 +229,16 @@ RUSTFLAGS="-D warnings" cargo clippy -p zeta-substrate -p zeta-ipc \
 
 # Protocol dependency boundary
 cargo tree -p zeta-ipc --edges normal
+
+# Move history, fixture, and clean-break audits
+git log --follow --oneline -- crates/zeta-substrate
+sqlite3 'file:zeta/tests/fixtures/phase2-journal/journal.sqlite3?immutable=1' \
+  'PRAGMA integrity_check; SELECT count(*) FROM events;'
+! git ls-files | rg '(^|/)target/|zeta-cas|zeta_cas|legacy-address'
+! rg -a -n -i --hidden --glob '!.git/**' --glob '!notes.md' \
+  --glob '!PHASE0-REPORT.md' --glob '!PHASE1-REPORT.md' \
+  --glob '!PHASE1.5-REPORT.md' --glob '!spec/journal-v0.md' \
+  --glob '!uv.lock' 'sha256|sha-256' .
 
 # Workspace and repository gates (the TUI needs the repository's newer toolchain)
 RUSTFLAGS="-D warnings" cargo +nightly-2026-03-25 test --workspace --locked

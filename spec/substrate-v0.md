@@ -121,15 +121,17 @@ The active contexts are frozen verbatim:
 | object | `zeta-os 2026-08 cas object` |
 | derivation | `zeta-os 2026-08 cas derivation` |
 | source event identity | `zeta-os 2026-08 cas event` |
-| idempotent chain link | `zeta-os 2026-08 cas chain` |
+| journal entry or deterministic chain link | `zeta-os 2026-08 cas chain` |
 
 The event domain identifies a source event across retransmission and
 acknowledgment. Changing this mint would let an existing logical event pass
 deduplication again. Durable runtime ids such as `evt_`, `qi_`, `att_`,
 `run_`, `pub_`, and `wait_` are semantic identifiers, not address epochs.
 
-The chain domain identifies deterministic publish and wait handles. The wire
-protocol defines the event identity bytes in `spec/wire-v0.md` §6.1.
+The chain domain identifies journal entries and deterministic runtime links
+such as publish and wait handles. `spec/journal-v0.md` §4 defines journal entry
+bytes. The wire protocol defines event identity bytes in `spec/wire-v0.md`
+§6.1.
 
 This version defines one address epoch. It defines no compatibility parser,
 fallback mint, dual-read rule, or data migration. Data from another epoch MUST

@@ -1,6 +1,6 @@
 //! Framing behavior: junk tolerance, partial lines, bounded frames.
 
-use zeta_wire::{Envelope, Frame, FrameReader, FrameWriter};
+use zeta_ipc::{Envelope, Frame, FrameReader, FrameWriter};
 
 const HEARTBEAT: &str = r#"{"id":"m-1","kind":"heartbeat","ts":"2026-08-10T12:00:00Z","v":0}"#;
 

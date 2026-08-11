@@ -45,7 +45,7 @@ pub struct Violation {
 /// # Examples
 ///
 /// ```
-/// use zeta_wire::{Frame, FrameReader};
+/// use zeta_ipc::{Frame, FrameReader};
 ///
 /// let lines = b"junk\n{\"id\":\"m-1\",\"kind\":\"heartbeat\",\"ts\":\"2026-08-10T12:00:00Z\",\"v\":0}\n";
 /// let mut reader = FrameReader::new(&lines[..]);

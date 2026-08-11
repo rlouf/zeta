@@ -1,5 +1,5 @@
 [package]
-name = "zeta-wire"
+name = "zeta-ipc"
 description = "Sans-IO implementation of the zeta wire-v0 plugin protocol."
 version.workspace = true
 edition.workspace = true

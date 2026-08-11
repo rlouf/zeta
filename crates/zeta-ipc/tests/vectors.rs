@@ -9,10 +9,10 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use serde_json::{Map, Value};
-use zeta_wire::session::{
+use zeta_ipc::session::{
     Action, PluginConfig, PluginSession, RuntimeConfig, RuntimeSession,
 };
-use zeta_wire::{validate_envelope, Envelope, EventTypeDecl};
+use zeta_ipc::{validate_envelope, Envelope, EventTypeDecl};
 
 fn vectors_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../spec/vectors")
@@ -21,6 +21,11 @@ fn vectors_root() -> PathBuf {
 fn read_json(path: &PathBuf) -> Value {
     let text = std::fs::read_to_string(path).unwrap();
     serde_json::from_str(&text).unwrap()
+}
+
+#[test]
+fn runtime_config_default_identifies_zeta_ipc() {
+    assert_eq!(RuntimeConfig::default().runtime_id, "zeta-ipc/0");
 }
 
 #[test]

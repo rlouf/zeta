@@ -45,7 +45,7 @@ const ROLES: [&str; 3] = ["source", "tool", "provider"];
 ///
 /// ```
 /// let value = serde_json::json!({"v": 0, "kind": "nope", "id": "m", "ts": "2026-08-10T12:00:00Z"});
-/// let error = zeta_wire::validate_envelope(&value).unwrap_err();
+/// let error = zeta_ipc::validate_envelope(&value).unwrap_err();
 /// assert_eq!(error.rule, "unknown_kind");
 /// ```
 pub fn validate_envelope(value: &Value) -> Result<(), WireError> {

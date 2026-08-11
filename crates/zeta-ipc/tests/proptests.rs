@@ -4,8 +4,8 @@ use std::time::Instant;
 
 use proptest::prelude::*;
 use serde_json::{Map, Number, Value};
-use zeta_wire::session::{Action, PluginConfig, PluginSession, RuntimeConfig, RuntimeSession};
-use zeta_wire::{Envelope, EventTypeDecl};
+use zeta_ipc::session::{Action, PluginConfig, PluginSession, RuntimeConfig, RuntimeSession};
+use zeta_ipc::{Envelope, EventTypeDecl};
 
 fn identifier() -> impl Strategy<Value = String> {
     "[a-z][a-z0-9-]{0,19}".prop_map(|text| text)

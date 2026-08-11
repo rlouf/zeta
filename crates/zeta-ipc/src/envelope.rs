@@ -204,11 +204,11 @@ pub enum Kind {
 /// # Examples
 ///
 /// ```
-/// use zeta_wire::Envelope;
+/// use zeta_ipc::Envelope;
 ///
 /// let line = r#"{"id":"m-1","kind":"heartbeat","ts":"2026-08-10T12:00:00Z","v":0}"#;
 /// let envelope = Envelope::parse_str(line).unwrap();
-/// assert_eq!(zeta_wire::canonical_json(&envelope.to_value()), line);
+/// assert_eq!(zeta_ipc::canonical_json(&envelope.to_value()), line);
 /// ```
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]

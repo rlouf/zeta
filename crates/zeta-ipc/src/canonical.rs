@@ -17,7 +17,7 @@ use serde_json::Value;
 /// ```
 /// let value = serde_json::json!({"b": 1, "a": {"z": true, "y": "é"}});
 /// assert_eq!(
-///     zeta_wire::canonical_json(&value),
+///     zeta_ipc::canonical_json(&value),
 ///     r#"{"a":{"y":"é","z":true},"b":1}"#
 /// );
 /// ```

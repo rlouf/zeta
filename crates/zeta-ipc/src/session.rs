@@ -72,7 +72,7 @@ pub struct RuntimeConfig {
 impl Default for RuntimeConfig {
     fn default() -> Self {
         RuntimeConfig {
-            runtime_id: "zeta-wire/0".to_string(),
+            runtime_id: "zeta-ipc/0".to_string(),
             config: None,
             handshake_timeout: Duration::from_secs(10),
             heartbeat_miss_limit: 3,
@@ -103,8 +103,8 @@ struct Established {
 ///
 /// ```
 /// use std::time::Instant;
-/// use zeta_wire::session::{Action, RuntimeConfig, RuntimeSession};
-/// use zeta_wire::Envelope;
+/// use zeta_ipc::session::{Action, RuntimeConfig, RuntimeSession};
+/// use zeta_ipc::Envelope;
 ///
 /// let now = Instant::now();
 /// let mut session = RuntimeSession::new(RuntimeConfig::default(), now);

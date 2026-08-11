@@ -37,13 +37,25 @@ pub fn is_valid_utc_timestamp(text: &str) -> bool {
     if base[13] != b':' || base[16] != b':' {
         return false;
     }
-    let Some(year) = digits(&base[0..4]) else { return false };
-    let Some(month) = digits(&base[5..7]) else { return false };
-    let Some(day) = digits(&base[8..10]) else { return false };
-    let Some(hour) = digits(&base[11..13]) else { return false };
-    let Some(minute) = digits(&base[14..16]) else { return false };
-    let Some(second) = digits(&base[17..19]) else { return false };
-    if month < 1 || month > 12 {
+    let Some(year) = digits(&base[0..4]) else {
+        return false;
+    };
+    let Some(month) = digits(&base[5..7]) else {
+        return false;
+    };
+    let Some(day) = digits(&base[8..10]) else {
+        return false;
+    };
+    let Some(hour) = digits(&base[11..13]) else {
+        return false;
+    };
+    let Some(minute) = digits(&base[14..16]) else {
+        return false;
+    };
+    let Some(second) = digits(&base[17..19]) else {
+        return false;
+    };
+    if !(1..=12).contains(&month) {
         return false;
     }
     if day < 1 || day > days_in_month(year, month) {

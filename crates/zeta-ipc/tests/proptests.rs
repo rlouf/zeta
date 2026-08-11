@@ -20,15 +20,13 @@ fn payload_value() -> impl Strategy<Value = Value> {
 }
 
 fn payload() -> impl Strategy<Value = Map<String, Value>> {
-    proptest::collection::btree_map("[a-z_]{1,12}", payload_value(), 0..6).prop_map(
-        |entries| {
-            let mut map = Map::new();
-            for (key, value) in entries {
-                map.insert(key, value);
-            }
-            map
-        },
-    )
+    proptest::collection::btree_map("[a-z_]{1,12}", payload_value(), 0..6).prop_map(|entries| {
+        let mut map = Map::new();
+        for (key, value) in entries {
+            map.insert(key, value);
+        }
+        map
+    })
 }
 
 fn envelope_json() -> impl Strategy<Value = Value> {
@@ -61,19 +59,17 @@ fn envelope_json() -> impl Strategy<Value = Value> {
                 "event_id": event_id,
             })
         }),
-        (identifier(), ts.clone(), payload(), identifier()).prop_map(
-            |(id, ts, payload, name)| {
-                serde_json::json!({
-                    "v": 0,
-                    "kind": "call",
-                    "id": id,
-                    "ts": ts,
-                    "name": name,
-                    "payload": Value::Object(payload),
-                    "effect_key": format!("effect-{id}"),
-                })
-            }
-        ),
+        (identifier(), ts.clone(), payload(), identifier()).prop_map(|(id, ts, payload, name)| {
+            serde_json::json!({
+                "v": 0,
+                "kind": "call",
+                "id": id,
+                "ts": ts,
+                "name": name,
+                "payload": Value::Object(payload),
+                "effect_key": format!("effect-{id}"),
+            })
+        }),
         (identifier(), ts, "[a-zA-Z0-9 ]{1,40}").prop_map(|(id, ts, message)| {
             serde_json::json!({
                 "v": 0,
@@ -146,18 +142,33 @@ proptest! {
         for index in 0..window {
             let mut payload = Map::new();
             payload.insert("index".to_string(), Value::Number(Number::from(index)));
+            let event_id = format!("evt_{index}");
             let actions = session
-                .send_event("prop.event", payload, None, None, "2026-08-10T12:00:01Z")
+                .send_event(
+                    &event_id,
+                    "prop.event",
+                    payload,
+                    None,
+                    None,
+                    "2026-08-10T12:00:01Z",
+                )
                 .unwrap();
             let [Action::Send(envelope)] = actions.as_slice() else {
                 panic!("send_event emits one envelope");
             };
+            prop_assert_eq!(envelope.id(), event_id);
             sent_ids.push(envelope.id().to_string());
         }
         let mut payload = Map::new();
         payload.insert("index".to_string(), Value::Number(Number::from(window)));
-        let overflow =
-            session.send_event("prop.event", payload, None, None, "2026-08-10T12:00:01Z");
+        let overflow = session.send_event(
+            "evt_overflow",
+            "prop.event",
+            payload,
+            None,
+            None,
+            "2026-08-10T12:00:01Z",
+        );
         prop_assert!(overflow.is_err(), "the window must be a hard bound");
 
         let ack = Envelope::parse_str(&format!(
@@ -171,8 +182,14 @@ proptest! {
         session.on_envelope(&ack, now);
         let mut payload = Map::new();
         payload.insert("index".to_string(), Value::Number(Number::from(window + 1)));
-        let freed =
-            session.send_event("prop.event", payload, None, None, "2026-08-10T12:00:03Z");
+        let freed = session.send_event(
+            "evt_freed",
+            "prop.event",
+            payload,
+            None,
+            None,
+            "2026-08-10T12:00:03Z",
+        );
         prop_assert!(freed.is_ok(), "an ack must free one window slot");
     }
 }

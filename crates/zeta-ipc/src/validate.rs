@@ -20,6 +20,22 @@ fn present<'a>(fields: &'a Map<String, Value>, name: &str) -> Option<&'a Value> 
     Some(value)
 }
 
+fn is_b3_address(text: &str) -> bool {
+    let Some(digest) = text.strip_prefix("b3:") else {
+        return false;
+    };
+    if digest.len() != 64 {
+        return false;
+    }
+    for byte in digest.bytes() {
+        let lowercase_hex = byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte);
+        if !lowercase_hex {
+            return false;
+        }
+    }
+    true
+}
+
 const KINDS: [&str; 9] = [
     "hello",
     "hello_ack",
@@ -84,10 +100,7 @@ pub fn validate_envelope(value: &Value) -> Result<(), WireError> {
     };
     let id_text = id.as_str();
     if id_text.is_none() || id_text == Some("") {
-        return Err(WireError::new(
-            "bad_id",
-            "`id` must be a non-empty string",
-        ));
+        return Err(WireError::new("bad_id", "`id` must be a non-empty string"));
     }
     let Some(ts) = present(fields, "ts") else {
         return Err(WireError::new(
@@ -352,7 +365,7 @@ fn validate_event(fields: &Map<String, Value>) -> Result<(), WireError> {
     }
     if let Some(payload_hash) = payload_hash {
         let well_formed = match payload_hash.as_str() {
-            Some(text) => text.parse::<zeta_substrate::Hash>().is_ok(),
+            Some(text) => is_b3_address(text),
             None => false,
         };
         if !well_formed {

@@ -18,9 +18,9 @@ use serde_json::{Map, Number, Value};
 
 use crate::canonical::canonical_json;
 use crate::envelope::{
-    Ack, Call, CallInfo, CallResult, Common, Envelope, ErrorEnvelope, ErrorInfo,
-    EventEnvelope, EventTypeDecl, Heartbeat, Hello, HelloAck, OperationDecl, Shutdown,
-    MAX_INLINE_PAYLOAD_BYTES, PROTOCOL_VERSION,
+    Ack, Call, CallInfo, CallResult, Common, Envelope, ErrorEnvelope, ErrorInfo, EventEnvelope,
+    EventTypeDecl, Heartbeat, Hello, HelloAck, OperationDecl, Shutdown, MAX_INLINE_PAYLOAD_BYTES,
+    PROTOCOL_VERSION,
 };
 use crate::error::WireError;
 
@@ -360,8 +360,8 @@ impl RuntimeSession {
                 Vec::new()
             }
             RuntimeState::Established(established) => {
-                let limit = established.heartbeat_secs
-                    * f64::from(self.config.heartbeat_miss_limit);
+                let limit =
+                    established.heartbeat_secs * f64::from(self.config.heartbeat_miss_limit);
                 let silent = now.duration_since(established.last_seen).as_secs_f64();
                 if silent > limit {
                     self.state = RuntimeState::Dead;
@@ -543,10 +543,7 @@ impl PluginSession {
                 if ack.protocol_version != PROTOCOL_VERSION {
                     self.state = PluginState::Exited;
                     return vec![Action::Exit {
-                        reason: format!(
-                            "unsupported protocol version {}",
-                            ack.protocol_version
-                        ),
+                        reason: format!("unsupported protocol version {}", ack.protocol_version),
                     }];
                 }
                 let config = match &ack.config {
@@ -591,21 +588,25 @@ impl PluginSession {
         }
     }
 
-    /// Emits one event, minting its deterministic id (spec §6.1).
+    /// Emits one event using the caller-supplied id (spec §6.1).
     ///
     /// # Errors
     ///
     /// Returns [`WireError`] before the handshake, when the ack
     /// window is full (the caller waits for acks), for an undeclared
-    /// event type, or for an oversized inline payload.
+    /// event type, an empty event id, or an oversized inline payload.
     pub fn send_event(
         &mut self,
+        event_id: &str,
         event_type: &str,
         payload: Map<String, Value>,
         caused_by: Option<String>,
         session_id: Option<String>,
         wall: &str,
     ) -> Result<Vec<Action>, WireError> {
+        if event_id.is_empty() {
+            return Err(WireError::new("bad_id", "`id` must be a non-empty string"));
+        }
         let mut schema = None;
         for declared in &self.config.event_types {
             if declared.event_type == event_type {
@@ -632,19 +633,14 @@ impl PluginSession {
                 format!("the ack window of {window} is full; wait for acks"),
             ));
         }
-        let mut identity = Map::new();
-        identity.insert("payload".to_string(), Value::Object(payload.clone()));
-        identity.insert("type".to_string(), Value::String(event_type.to_string()));
-        let identity = canonical_json(&Value::Object(identity));
-        if identity.len() > MAX_INLINE_PAYLOAD_BYTES {
+        let serialized = canonical_json(&Value::Object(payload.clone()));
+        if serialized.len() > MAX_INLINE_PAYLOAD_BYTES {
             return Err(WireError::new(
                 "payload_too_large",
                 "inline payloads are limited to 64 KiB",
             ));
         }
-        let event_id = zeta_substrate::derive(zeta_substrate::Domain::Event, identity.as_bytes());
-        let event_id = event_id.to_string();
-        established.unacked.insert(event_id.clone());
+        established.unacked.insert(event_id.to_string());
         let event = EventEnvelope {
             common: Common::new(event_id, wall),
             event_type: event_type.to_string(),

@@ -10,7 +10,6 @@ publish = false
 [dependencies]
 serde.workspace = true
 serde_json.workspace = true
-zeta-substrate.workspace = true
 
 [dev-dependencies]
 proptest.workspace = true

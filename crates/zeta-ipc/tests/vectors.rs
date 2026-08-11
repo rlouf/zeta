@@ -9,9 +9,7 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use serde_json::{Map, Value};
-use zeta_ipc::session::{
-    Action, PluginConfig, PluginSession, RuntimeConfig, RuntimeSession,
-};
+use zeta_ipc::session::{Action, PluginConfig, PluginSession, RuntimeConfig, RuntimeSession};
 use zeta_ipc::{validate_envelope, Envelope, EventTypeDecl};
 
 fn vectors_root() -> PathBuf {
@@ -71,7 +69,68 @@ fn every_invalid_vector_fails_for_its_documented_rule() {
         assert_eq!(error.rule, documented_rule, "{path:?}");
         checked += 1;
     }
-    assert!(checked >= 69, "expected the full invalid set, saw {checked}");
+    assert!(
+        checked >= 69,
+        "expected the full invalid set, saw {checked}"
+    );
+}
+
+#[test]
+fn payload_hash_rejects_malformed_b3_addresses() {
+    for payload_hash in [
+        format!("x3:{}", "a".repeat(64)),
+        "b3:abc".to_string(),
+        format!("b3:{}", "A".repeat(64)),
+        format!("b3:{}g", "a".repeat(63)),
+    ] {
+        let value = serde_json::json!({
+            "v": 0,
+            "kind": "event",
+            "id": "evt_external",
+            "ts": "2026-08-10T12:00:00Z",
+            "type": "doc.imported",
+            "schema": "doc.imported@1",
+            "caused_by": null,
+            "session_id": null,
+            "payload_hash": payload_hash,
+        });
+        let error = validate_envelope(&value).unwrap_err();
+        assert_eq!(error.rule, "bad_payload_hash");
+    }
+}
+
+#[test]
+fn plugin_session_rejects_an_empty_caller_event_id() {
+    let mut session = PluginSession::new(PluginConfig::source(
+        "test",
+        "0",
+        vec![EventTypeDecl {
+            event_type: "test.event".to_string(),
+            schema: "test.event@1".to_string(),
+            extra: Map::new(),
+        }],
+    ));
+    let now = Instant::now();
+    session.start(now, "2026-08-10T12:00:00Z");
+    let hello_ack = Envelope::parse_str(concat!(
+        r#"{"id":"m-r-1","kind":"hello_ack","protocol_version":0,"#,
+        r#""runtime":"test/0","ts":"2026-08-10T12:00:00Z","v":0}"#,
+    ))
+    .unwrap();
+    session.on_envelope(&hello_ack, now);
+
+    let error = session
+        .send_event(
+            "",
+            "test.event",
+            Map::new(),
+            None,
+            None,
+            "2026-08-10T12:00:01Z",
+        )
+        .unwrap_err();
+
+    assert_eq!(error.rule, "bad_id");
 }
 
 struct SessionLine {
@@ -208,9 +267,7 @@ fn session_01_replays_through_the_plugin_side() {
         field(hello, "plugin_version").as_str().unwrap(),
         event_types,
     );
-    config.capabilities = Some(
-        field(hello, "capabilities").as_object().unwrap().clone(),
-    );
+    config.capabilities = Some(field(hello, "capabilities").as_object().unwrap().clone());
     let mut session = PluginSession::new(config);
     let now = Instant::now();
 
@@ -262,6 +319,7 @@ fn session_01_replays_through_the_plugin_side() {
             Envelope::Event(event) => {
                 let sends = session
                     .send_event(
+                        &event.common.id,
                         &event.event_type,
                         event.payload.clone().unwrap(),
                         event.caused_by.clone(),
@@ -282,8 +340,7 @@ fn session_01_replays_through_the_plugin_side() {
                 }
             }
             Envelope::Heartbeat(_) => {
-                let ticked =
-                    session.on_tick(now + Duration::from_secs(11), "2026-08-10T12:00:10Z");
+                let ticked = session.on_tick(now + Duration::from_secs(11), "2026-08-10T12:00:10Z");
                 let [Action::Send(Envelope::Heartbeat(_))] = ticked.as_slice() else {
                     panic!("a due tick emits a heartbeat");
                 };

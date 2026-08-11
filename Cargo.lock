@@ -1166,7 +1166,6 @@ dependencies = [
  "proptest",
  "serde",
  "serde_json",
- "zeta-substrate",
 ]
 
 [[package]]

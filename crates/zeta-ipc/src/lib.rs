@@ -23,9 +23,9 @@ mod validate;
 
 pub use canonical::canonical_json;
 pub use envelope::{
-    Ack, Call, CallInfo, CallResult, Common, Envelope, ErrorEnvelope, ErrorInfo,
-    EventEnvelope, EventTypeDecl, Heartbeat, Hello, HelloAck, Kind, OperationDecl,
-    Shutdown, MAX_INLINE_PAYLOAD_BYTES, PROTOCOL_VERSION,
+    Ack, Call, CallInfo, CallResult, Common, Envelope, ErrorEnvelope, ErrorInfo, EventEnvelope,
+    EventTypeDecl, Heartbeat, Hello, HelloAck, Kind, OperationDecl, Shutdown,
+    MAX_INLINE_PAYLOAD_BYTES, PROTOCOL_VERSION,
 };
 pub use error::WireError;
 pub use frame::{Frame, FrameReader, FrameWriter, Violation, MAX_FRAME_BYTES};

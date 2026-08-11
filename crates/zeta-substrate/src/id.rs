@@ -29,7 +29,7 @@ impl Id {
     /// # Examples
     ///
     /// ```
-    /// use zeta_cas::parse_id;
+    /// use zeta_substrate::parse_id;
     ///
     /// assert!(parse_id(&"a".repeat(24)).is_legacy());
     /// assert!(!parse_id("evt_0123").is_legacy());
@@ -55,9 +55,9 @@ impl Id {
 /// # Examples
 ///
 /// ```
-/// use zeta_cas::{parse_id, Id};
+/// use zeta_substrate::{parse_id, Id};
 ///
-/// let hash = zeta_cas::hash_bytes(b"x");
+/// let hash = zeta_substrate::hash_bytes(b"x");
 /// assert_eq!(parse_id(&hash.to_string()), Id::Modern(hash));
 /// assert_eq!(parse_id("sha256:deadbeef"), Id::LegacySha256Prefixed);
 /// assert_eq!(parse_id("qi_evt_1_agent"), Id::Opaque);

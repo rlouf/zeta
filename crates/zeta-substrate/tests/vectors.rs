@@ -8,7 +8,7 @@
 use std::path::PathBuf;
 
 use serde_json::Value;
-use zeta_cas::Domain;
+use zeta_substrate::Domain;
 
 fn vectors_document() -> Value {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -62,10 +62,10 @@ fn every_address_vector_matches_byte_for_byte() {
         let bytes = input_bytes(vector);
         let expected = vector["address"].as_str().unwrap();
         let minted = match domain_for(vector["domain"].as_str().unwrap()) {
-            Some(domain) => zeta_cas::derive(domain, &bytes),
+            Some(domain) => zeta_substrate::derive(domain, &bytes),
             None => {
                 content_vectors += 1;
-                zeta_cas::hash_bytes(&bytes)
+                zeta_substrate::hash_bytes(&bytes)
             }
         };
         assert_eq!(minted.to_string(), expected, "{vector}");

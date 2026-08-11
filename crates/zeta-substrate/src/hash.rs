@@ -21,9 +21,9 @@ pub const PREFIX: &str = "b3:";
 /// # Examples
 ///
 /// ```
-/// use zeta_cas::Hash;
+/// use zeta_substrate::Hash;
 ///
-/// let hash = zeta_cas::hash_bytes(b"hello wire");
+/// let hash = zeta_substrate::hash_bytes(b"hello wire");
 /// let text = hash.to_string();
 /// assert!(text.starts_with("b3:"));
 /// assert_eq!(text.parse::<Hash>().unwrap(), hash);
@@ -51,7 +51,7 @@ impl Hash {
     /// # Examples
     ///
     /// ```
-    /// let hash = zeta_cas::hash_bytes(b"");
+    /// let hash = zeta_substrate::hash_bytes(b"");
     /// assert_eq!(hash.to_hex().len(), 64);
     /// ```
     pub fn to_hex(&self) -> String {
@@ -169,8 +169,8 @@ impl<'de> Deserialize<'de> for Hash {
 /// # Examples
 ///
 /// ```
-/// let hash = zeta_cas::hash_bytes(b"hello wire");
-/// assert_eq!(hash, zeta_cas::hash_bytes(b"hello wire"));
+/// let hash = zeta_substrate::hash_bytes(b"hello wire");
+/// assert_eq!(hash, zeta_substrate::hash_bytes(b"hello wire"));
 /// ```
 pub fn hash_bytes(bytes: &[u8]) -> Hash {
     Hash(*blake3::hash(bytes).as_bytes())
@@ -194,7 +194,7 @@ pub fn hash_bytes(bytes: &[u8]) -> Hash {
 /// ```no_run
 /// use std::path::Path;
 ///
-/// let hash = zeta_cas::hash_file(Path::new("data.bin")).unwrap();
+/// let hash = zeta_substrate::hash_file(Path::new("data.bin")).unwrap();
 /// println!("{hash}");
 /// ```
 pub fn hash_file(path: &Path) -> io::Result<Hash> {

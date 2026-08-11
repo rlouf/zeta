@@ -2,11 +2,11 @@
 
 use std::path::Path;
 
-use zeta_cas::{parse_id, BlobStore, Hash, HashParseError, Id, Layout};
+use zeta_substrate::{parse_id, BlobStore, Hash, HashParseError, Id, Layout};
 
 #[test]
 fn hash_display_and_from_str_round_trip() {
-    let hash = zeta_cas::hash_bytes(b"round trip");
+    let hash = zeta_substrate::hash_bytes(b"round trip");
     let text = hash.to_string();
     assert!(text.starts_with("b3:"));
     assert_eq!(text.len(), 3 + 64);
@@ -32,7 +32,7 @@ fn hash_from_str_rejects_malformed_input() {
 
 #[test]
 fn hash_serde_uses_the_prefixed_string_form() {
-    let hash = zeta_cas::hash_bytes(b"serde");
+    let hash = zeta_substrate::hash_bytes(b"serde");
     let json = serde_json::to_string(&hash).unwrap();
     assert_eq!(json, format!("\"{hash}\""));
     let parsed: Hash = serde_json::from_str(&json).unwrap();
@@ -47,14 +47,14 @@ fn hash_file_matches_hash_bytes_for_small_files() {
     let path = directory.path().join("small.txt");
     std::fs::write(&path, b"small file, read path").unwrap();
     assert_eq!(
-        zeta_cas::hash_file(&path).unwrap(),
-        zeta_cas::hash_bytes(b"small file, read path")
+        zeta_substrate::hash_file(&path).unwrap(),
+        zeta_substrate::hash_bytes(b"small file, read path")
     );
 }
 
 #[test]
 fn parse_id_recognizes_every_epoch() {
-    let modern = zeta_cas::hash_bytes(b"modern");
+    let modern = zeta_substrate::hash_bytes(b"modern");
     assert_eq!(parse_id(&modern.to_string()), Id::Modern(modern));
     assert_eq!(parse_id(&"a1".repeat(12)), Id::LegacySha24);
     assert_eq!(parse_id(&"a1".repeat(32)), Id::LegacySha64);
@@ -71,7 +71,7 @@ fn parse_id_legacy_flag_matches_the_python_contract() {
     assert!(parse_id(&"f".repeat(24)).is_legacy());
     assert!(parse_id(&"f".repeat(64)).is_legacy());
     assert!(parse_id("sha256:abc").is_legacy());
-    assert!(!parse_id(&zeta_cas::hash_bytes(b"x").to_string()).is_legacy());
+    assert!(!parse_id(&zeta_substrate::hash_bytes(b"x").to_string()).is_legacy());
     assert!(!parse_id(&"f".repeat(32)).is_legacy());
 }
 
@@ -91,7 +91,7 @@ fn blob_store_put_get_and_verify_round_trip() {
 
 #[test]
 fn blob_store_layouts_shape_paths_as_documented() {
-    let hash = zeta_cas::hash_bytes(b"layout");
+    let hash = zeta_substrate::hash_bytes(b"layout");
     let hex = hash.to_hex();
     let flat = BlobStore::new(Path::new("/store"), Layout::Flat);
     assert_eq!(flat.path_of(&hash), Path::new("/store/blobs").join(&hex));

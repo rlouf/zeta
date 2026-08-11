@@ -1,6 +1,6 @@
 [package]
-name = "zeta-cas"
-description = "Content addresses and derived identifiers for the zeta ecosystem."
+name = "zeta-substrate"
+description = "Content-addressed values and blob storage for the zeta ecosystem."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

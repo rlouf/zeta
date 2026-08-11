@@ -31,7 +31,7 @@ impl Domain {
     /// # Examples
     ///
     /// ```
-    /// use zeta_cas::Domain;
+    /// use zeta_substrate::Domain;
     ///
     /// assert_eq!(Domain::Event.context(), "zeta-os 2026-08 cas event");
     /// ```
@@ -54,7 +54,7 @@ impl Domain {
 /// # Examples
 ///
 /// ```
-/// use zeta_cas::{derive, Domain};
+/// use zeta_substrate::{derive, Domain};
 ///
 /// let event_id = derive(Domain::Event, b"identity");
 /// let chain_id = derive(Domain::Chain, b"identity");

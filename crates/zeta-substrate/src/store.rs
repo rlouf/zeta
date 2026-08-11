@@ -30,7 +30,7 @@ pub enum Layout {
 /// # Examples
 ///
 /// ```
-/// use zeta_cas::{BlobStore, Layout};
+/// use zeta_substrate::{BlobStore, Layout};
 ///
 /// let root = tempfile::tempdir().unwrap();
 /// let store = BlobStore::new(root.path(), Layout::Flat);
@@ -60,10 +60,10 @@ impl BlobStore {
     ///
     /// ```
     /// use std::path::Path;
-    /// use zeta_cas::{BlobStore, Layout};
+    /// use zeta_substrate::{BlobStore, Layout};
     ///
     /// let store = BlobStore::new(Path::new("/store"), Layout::Fanout2);
-    /// let hash = zeta_cas::hash_bytes(b"x");
+    /// let hash = zeta_substrate::hash_bytes(b"x");
     /// let path = store.path_of(&hash);
     /// assert!(path.starts_with("/store/blobs"));
     /// ```

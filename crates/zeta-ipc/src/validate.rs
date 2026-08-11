@@ -352,7 +352,7 @@ fn validate_event(fields: &Map<String, Value>) -> Result<(), WireError> {
     }
     if let Some(payload_hash) = payload_hash {
         let well_formed = match payload_hash.as_str() {
-            Some(text) => text.parse::<zeta_cas::Hash>().is_ok(),
+            Some(text) => text.parse::<zeta_substrate::Hash>().is_ok(),
             None => false,
         };
         if !well_formed {

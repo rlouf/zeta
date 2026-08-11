@@ -642,7 +642,7 @@ impl PluginSession {
                 "inline payloads are limited to 64 KiB",
             ));
         }
-        let event_id = zeta_cas::derive(zeta_cas::Domain::Event, identity.as_bytes());
+        let event_id = zeta_substrate::derive(zeta_substrate::Domain::Event, identity.as_bytes());
         let event_id = event_id.to_string();
         established.unacked.insert(event_id.clone());
         let event = EventEnvelope {

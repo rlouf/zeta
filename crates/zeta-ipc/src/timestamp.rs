@@ -1,9 +1,7 @@
 //! RFC 3339 UTC timestamp validation (spec §3).
 //!
-//! Hand-rolled instead of pulling a date crate: the accepted grammar
-//! is one fixed shape (`YYYY-MM-DDThh:mm:ss[.frac]Z`), and a small
-//! validator keeps the dependency tree — and therefore the pinned
-//! hash-stability surface — minimal.
+//! The accepted grammar has one fixed shape:
+//! `YYYY-MM-DDThh:mm:ss[.frac]Z`.
 
 pub fn is_valid_utc_timestamp(text: &str) -> bool {
     let bytes = text.as_bytes();

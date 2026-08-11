@@ -2,8 +2,8 @@
 //!
 //! Objects are Merkle-DAG values, derivations are provenance edges, and refs
 //! are named pointers whose conditional updates leave immutable values alone.
-//! Identity-bearing JSON follows Python's compact, sorted-key encoding so both
-//! implementations mint the same address from the same value.
+//! Identity-bearing JSON uses the shared compact, sorted-key encoding. The same
+//! value therefore produces the same address in every implementation.
 
 use std::fmt;
 

@@ -1,11 +1,9 @@
 //! Canonical JSON serialization (spec §2.1).
 //!
-//! Sorted keys, compact separators, literal UTF-8, and Python-compatible
-//! finite-number spelling make the same value byte-identical across the wire
-//! implementations. The writer is explicit because serde_json and Python use
-//! different exponent notation for some binary64 values.
-//!
-//! [`Value`]: serde_json::Value
+//! Sorted keys, compact separators, literal UTF-8, and the specified
+//! finite-number spelling make the same value byte-identical. The writer is
+//! explicit so serializer-specific exponent notation cannot change the
+//! encoded bytes.
 
 use serde_json::{Number, Value};
 

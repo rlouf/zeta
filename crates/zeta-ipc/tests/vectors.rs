@@ -1,9 +1,7 @@
 //! Conformance against the shared golden vectors, read in place.
 //!
-//! The same files drive the Python implementation. Reading them from
-//! the repo — never copying — is what keeps two implementations one
-//! protocol: a vector change breaks whichever side stopped
-//! conforming.
+//! Tests read the repository's golden vectors in place so copied fixtures
+//! cannot drift from the protocol authority.
 
 use std::path::PathBuf;
 use std::time::{Duration, Instant};

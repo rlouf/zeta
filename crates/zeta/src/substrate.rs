@@ -2,7 +2,7 @@
 //!
 //! Exact content bytes use plain BLAKE3. Structured object, derivation, event,
 //! and chain identities use BLAKE3 derive-key mode with one frozen context per
-//! domain. Substrate values share Python's canonical JSON representation so
+//! domain. Substrate values use the shared canonical JSON representation so
 //! independently implemented mints remain byte-identical.
 
 mod domain;

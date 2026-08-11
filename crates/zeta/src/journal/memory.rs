@@ -10,8 +10,7 @@ use super::event::{AppendOutcome, Event, Filter};
 
 /// Stores complete journal entries in process memory.
 ///
-/// This is a conformance reference, not a persistence abstraction. Dispatch
-/// will define an adapter when it chooses a durable storage backend.
+/// It provides the reference append and query behavior for journal-v0.
 ///
 /// # Examples
 ///

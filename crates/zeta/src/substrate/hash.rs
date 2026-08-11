@@ -45,8 +45,8 @@ impl Hash {
 
     /// Returns the bare 64-character lowercase hex digest.
     ///
-    /// This is the form written on disk by blob stores and by the
-    /// stagefs pack layout; the wire form adds the `b3:` prefix.
+    /// Blob stores use this form for paths. Address strings add the `b3:`
+    /// prefix.
     ///
     /// # Examples
     ///
@@ -160,9 +160,8 @@ impl<'de> Deserialize<'de> for Hash {
 
 /// Returns the plain, undomained BLAKE3 content address of bytes.
 ///
-/// Content hashing carries no domain context on purpose: the same
-/// bytes hash to the same address in every tool, which is what makes
-/// pack interop a file copy instead of a conversion.
+/// Content hashing carries no domain context. Equal bytes always have the
+/// same address.
 ///
 /// # Examples
 ///

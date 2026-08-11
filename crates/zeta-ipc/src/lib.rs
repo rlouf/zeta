@@ -1,13 +1,10 @@
 //! Sans-IO implementation of the wire-v0 plugin protocol.
 //!
-//! The crate holds pure functions and state machines: envelopes with
-//! validation (`spec/wire-v0.md`), canonical JSON, a per-side
-//! [`Session`] machine fed with parsed envelopes and clock instants,
-//! and a thin blocking line framer over [`Read`]/[`Write`]. No
-//! sockets, no async runtime. Sans-IO keeps conformance testing
-//! trivial — the golden vectors drive the same code paths production
-//! IO does — and it leaves transport choices to callers. A tokio
-//! adapter is deferred to Phase 3 on purpose.
+//! The crate provides validated envelopes (`spec/wire-v0.md`), canonical JSON,
+//! per-side [`Session`] machines fed with parsed envelopes and clock instants,
+//! and blocking line framing over [`Read`]/[`Write`]. Sans-IO lets golden
+//! vectors exercise the same state-machine paths as live IO and leaves
+//! transport choices to callers.
 //!
 //! [`Read`]: std::io::Read
 //! [`Write`]: std::io::Write

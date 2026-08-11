@@ -3,17 +3,14 @@
 //! The reader owns its buffer and never panics on peer garbage:
 //! every line comes back as either a validated envelope or a
 //! [`Violation`] the caller decides about. Overlong lines discard to
-//! the next newline instead of growing the buffer without bound,
-//! because a misbehaving peer must not exhaust the supervisor's
-//! memory. This is the whole IO surface of the crate; the async
-//! adapter is deferred to Phase 3.
+//! the next newline so input cannot grow memory without bound.
 
 use std::io::{Read, Write};
 
 use crate::envelope::Envelope;
 use crate::error::WireError;
 
-/// The frame-size ceiling, matching the Python implementation.
+/// The frame-size ceiling defined by spec §2.
 pub const MAX_FRAME_BYTES: usize = 8 * 1024 * 1024;
 
 const READ_CHUNK: usize = 64 * 1024;

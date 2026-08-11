@@ -94,7 +94,7 @@ impl Event {
     /// Creates an event with caller-supplied identity and time.
     ///
     /// Leading and trailing whitespace is removed from an idempotency key;
-    /// an empty result becomes `None`, matching the Python event boundary.
+    /// an empty result becomes `None`.
     ///
     /// # Examples
     ///

@@ -1,4 +1,4 @@
-//! Conformance against the Python-generated journal vectors.
+//! Conformance against the canonical journal vectors.
 
 use std::path::PathBuf;
 

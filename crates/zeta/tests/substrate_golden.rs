@@ -1,10 +1,7 @@
 //! Pinned golden digests: the drift tripwire.
 //!
-//! The expected hex strings are hardcoded on purpose. A dependency
-//! bump that changes any output must fail here loudly, because hash
-//! stability is the contract this crate exists to keep. stagefs
-//! carries its own equivalent pins through its format fixtures — two
-//! independent alarms, no shared wiring.
+//! The expected hex strings are hardcoded. A dependency bump that changes any
+//! output must fail because hash stability is part of the data format.
 
 use std::path::Path;
 

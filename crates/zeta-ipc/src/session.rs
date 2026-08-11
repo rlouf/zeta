@@ -59,7 +59,7 @@ fn error_envelope(id: String, wall: &str, code: &str, message: &str) -> Envelope
 /// Settings for the parent side of one session.
 #[derive(Clone, Debug)]
 pub struct RuntimeConfig {
-    /// Runtime identification for `hello_ack`, e.g. `zeta-os/0.1.0`.
+    /// Runtime identification for `hello_ack`, e.g. `runtime/0.1.0`.
     pub runtime_id: String,
     /// Non-secret settings for the child (`hello_ack.config`).
     pub config: Option<Map<String, Value>>,
@@ -283,7 +283,7 @@ impl RuntimeSession {
 
     /// Marks one delivered event as durably accepted and acks it.
     ///
-    /// Acks are application-driven because an ack means "journaled",
+    /// Acks are application-driven because an ack means "durably recorded",
     /// not "received"; the machine only bookkeeps the window.
     pub fn acknowledge(&mut self, event_id: &str, wall: &str) -> Vec<Action> {
         let RuntimeState::Established(established) = &mut self.state else {

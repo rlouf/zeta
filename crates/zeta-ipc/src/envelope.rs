@@ -5,8 +5,8 @@
 //! ignored per spec but preserved in `extra`, so an envelope that
 //! parses re-serializes to its exact canonical bytes — the vectors
 //! test that property directly. Nullable-but-required fields
-//! (`caused_by`, `session_id`) are plain [`Option`]s: serde emits
-//! `null` for `None`, which is exactly the canonical form.
+//! (`caused_by`, `session_id`) are plain [`Option`]s. `None` serializes as
+//! `null`, which is the canonical form.
 //!
 //! [`validate_envelope`]: crate::validate_envelope
 

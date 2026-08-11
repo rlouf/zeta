@@ -1,10 +1,8 @@
 //! Envelope shape validation with stable rule tokens (spec §3–§10).
 //!
-//! This is a field-for-field port of the Python validator, in the
-//! same check order, because the golden vectors pin the rule token
-//! each invalid envelope must fail with. Two implementations that
-//! disagree on ordering would disagree on tokens; keeping the order
-//! identical is what makes the `.reason.txt` files a shared oracle.
+//! Checks run in the order pinned by the golden vectors because each invalid
+//! envelope must fail with a stable rule token. Different check orders can
+//! select different tokens for the same envelope.
 
 use serde_json::{Map, Value};
 

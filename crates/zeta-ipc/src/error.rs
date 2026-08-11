@@ -3,10 +3,8 @@
 //! Every rejection names the rule it enforces. The tokens are the
 //! same strings the golden vectors document in their `.reason.txt`
 //! files, so a conformance test compares tokens instead of guessing
-//! at prose. Tokens are data shared across implementations, which is
-//! why they are strings and not an enum: the vector files are the
-//! authority, and both languages must agree with them, not with a
-//! private type.
+//! at prose. Rule tokens are protocol data, so they remain strings instead of
+//! a private enum. The vector files define the accepted values.
 
 use std::fmt;
 

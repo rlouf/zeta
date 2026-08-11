@@ -1,6 +1,5 @@
-# Exact pins keep the foundation crates' hash and wire behavior reproducible;
-# blake3 is pinned because hash stability is the ecosystem contract shared
-# (by specification, not by code) with sibling tools such as stagefs.
+# Exact pins keep hash and protocol behavior reproducible.
+# BLAKE3 is pinned because hash stability is part of the data format.
 [workspace]
 members = ["crates/*"]
 resolver = "2"

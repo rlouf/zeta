@@ -1,8 +1,7 @@
 //! Backend-neutral event journal semantics for the zeta ecosystem.
 //!
 //! The module defines event values, canonical payload and chain identities,
-//! verification, and an in-memory conformance reference. Durable storage,
-//! transactions, projections, and retention belong to Dispatch.
+//! verification, and an in-memory conformance reference.
 
 mod chain;
 mod error;

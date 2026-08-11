@@ -2,36 +2,11 @@
   "format": "b3-addresses-v1",
   "description": "Two address kinds (spec §11). Derived identifiers: BLAKE3 derive_key(context, input) -> 'b3:' + 64 lowercase hex, one frozen context per domain. Content addresses (domain 'content'): plain undomained BLAKE3 of the exact bytes, same prefix and width. Input bytes are given as UTF-8 text (input_utf8) or base64 (input_base64).",
   "contexts": {
-    "event": "zeta-os 2026-08 cas event",
     "chain": "zeta-os 2026-08 cas chain",
     "object": "zeta-os 2026-08 cas object",
     "derivation": "zeta-os 2026-08 cas derivation"
   },
   "vectors": [
-    {
-      "domain": "event",
-      "name": "empty",
-      "input_utf8": "",
-      "address": "b3:3006237aab45b8fdb54db23f100e83617d7e7647cb593b07e6ab23b2a96acd59"
-    },
-    {
-      "domain": "event",
-      "name": "ascii",
-      "input_utf8": "hello wire",
-      "address": "b3:58f13d27b86b4f2a4c91f2fb57a3be96d7fe08e4f57c63ae1fb8997a83071fce"
-    },
-    {
-      "domain": "event",
-      "name": "utf8",
-      "input_utf8": "héllo wörld ✓",
-      "address": "b3:710dcf65e7b7059c4ef0fbcc0164c6c8a53e15ac51b3b0a25ff96e5e710f3ecd"
-    },
-    {
-      "domain": "event",
-      "name": "binary",
-      "input_base64": "AAcOFRwjKjE4P0ZNVFtiaXB3foWMk5qhqK+2vcTL0tng5+71/A==",
-      "address": "b3:8ff4eae77476dc8a5ae7824e9acee734a34033ddf6c6eb5023871e79dc904778"
-    },
     {
       "domain": "chain",
       "name": "empty",

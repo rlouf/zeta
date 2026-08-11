@@ -3,8 +3,8 @@
 Plain content bytes share one undomained hash universe. Structured
 identities use frozen derive-key contexts so values from different
 domains cannot collide semantically. The canonical encoder lives with
-these leaf primitives so wire and substrate mints cannot drift or invert
-the import graph.
+these leaf primitives so identity mints cannot drift or invert the import
+graph.
 
 The substrate protocol and its conformance vectors pin this module's
 outputs byte-for-byte for other implementations.
@@ -24,13 +24,11 @@ from blake3 import blake3
 
 B3_PREFIX = "b3:"
 
-EVENT_CONTEXT = "zeta-os 2026-08 cas event"
 CHAIN_CONTEXT = "zeta-os 2026-08 cas chain"
 OBJECT_CONTEXT = "zeta-os 2026-08 cas object"
 DERIVATION_CONTEXT = "zeta-os 2026-08 cas derivation"
 
 CONTEXTS = {
-    "event": EVENT_CONTEXT,
     "chain": CHAIN_CONTEXT,
     "object": OBJECT_CONTEXT,
     "derivation": DERIVATION_CONTEXT,
@@ -89,17 +87,11 @@ def address(domain: str, data: bytes) -> str:
     return B3_PREFIX + blake3(data, derive_key_context=context).hexdigest()
 
 
-def event_address(data: bytes) -> str:
-    """Return the address that identifies one wire event envelope."""
-    return address("event", data)
-
-
 def content_address(data: bytes) -> str:
     """Return the plain-BLAKE3 address of exact bytes.
 
-    Content hashing is deliberately domainless: a file's bytes, a
-    pack blob, and an event's `payload_hash` are the same string for
-    the same bytes, in every implementation.
+    Content hashing is deliberately domainless, so equal bytes have the same
+    string in every implementation.
     """
     return B3_PREFIX + blake3(data).hexdigest()
 

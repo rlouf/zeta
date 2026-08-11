@@ -51,7 +51,6 @@ def test_address_vectors_cover_every_domain_and_content() -> None:
 
 def test_active_domains_have_no_retired_vocabulary() -> None:
     assert addresses.CONTEXTS == {
-        "event": "zeta-os 2026-08 cas event",
         "chain": "zeta-os 2026-08 cas chain",
         "object": "zeta-os 2026-08 cas object",
         "derivation": "zeta-os 2026-08 cas derivation",
@@ -71,7 +70,7 @@ def test_content_address_is_plain_undomained_blake3() -> None:
 
 
 def test_address_is_full_width_lowercase_hex() -> None:
-    value = addresses.event_address(b"payload")
+    value = addresses.object_address(b"payload")
     assert value.startswith("b3:")
     digest = value.removeprefix("b3:")
     assert len(digest) == 64

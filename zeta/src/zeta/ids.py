@@ -34,25 +34,14 @@ This module owns runtime string identities. It imports only `zeta.addresses`
 from __future__ import annotations
 
 import uuid
-from typing import Any
 
-from zeta.addresses import canonical_json_bytes, chain_address, event_address
+from zeta.addresses import chain_address
 
 QUEUE_ITEM_PREFIX = "qi_"
 ATTEMPT_PREFIX = "att_"
 RUN_PREFIX = "run_"
 PUBLISH_EVENT_PREFIX = "pub_"
 WAIT_PREFIX = "wait_"
-
-
-def event_idempotency_id(event_type: str, payload: dict[str, Any]) -> str:
-    """Return the stable retransmission identity for one wire event.
-
-    This identity remains separate from durable random ``evt_`` ids because a
-    source must reproduce it before the runtime accepts the event.
-    """
-    identity = canonical_json_bytes({"payload": payload, "type": event_type})
-    return event_address(identity)
 
 
 def safe_agent_id(agent_id: str) -> str:

@@ -60,16 +60,10 @@ fn active_domains_have_distinct_frozen_contexts() {
         Domain::Derivation.context(),
         "zeta-os 2026-08 cas derivation"
     );
-    assert_eq!(Domain::Event.context(), "zeta-os 2026-08 cas event");
     assert_eq!(Domain::Chain.context(), "zeta-os 2026-08 cas chain");
 
     let input = b"same identity";
-    let domains = [
-        Domain::Object,
-        Domain::Derivation,
-        Domain::Event,
-        Domain::Chain,
-    ];
+    let domains = [Domain::Object, Domain::Derivation, Domain::Chain];
     for (index, domain) in domains.iter().enumerate() {
         for other in &domains[index + 1..] {
             assert_ne!(

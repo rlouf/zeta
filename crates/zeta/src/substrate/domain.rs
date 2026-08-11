@@ -1,8 +1,9 @@
 //! Derived-identifier domains and their frozen derive-key contexts.
 //!
-//! Objects and derivations separate their structured identities, while event
-//! and chain domains retain their live protocol meanings. Content bytes stay
-//! outside this enum because plain BLAKE3 makes equal bytes share one address.
+//! Objects and derivations separate their structured identities. The chain
+//! domain identifies journal entries and deterministic runtime links. Content
+//! bytes stay outside this enum because plain BLAKE3 makes equal bytes share
+//! one address.
 
 use super::hash::Hash;
 
@@ -21,8 +22,6 @@ pub enum Domain {
     Object,
     /// Substrate provenance edges.
     Derivation,
-    /// Wire event envelope ids (spec §6.1).
-    Event,
     /// Journal entries and deterministic runtime chain links.
     Chain,
 }
@@ -41,7 +40,6 @@ impl Domain {
         match self {
             Domain::Object => "zeta-os 2026-08 cas object",
             Domain::Derivation => "zeta-os 2026-08 cas derivation",
-            Domain::Event => "zeta-os 2026-08 cas event",
             Domain::Chain => "zeta-os 2026-08 cas chain",
         }
     }
@@ -58,9 +56,9 @@ impl Domain {
 /// ```
 /// use zeta::substrate::{derive, Domain};
 ///
-/// let event_id = derive(Domain::Event, b"identity");
+/// let object_id = derive(Domain::Object, b"identity");
 /// let chain_id = derive(Domain::Chain, b"identity");
-/// assert_ne!(event_id, chain_id);
+/// assert_ne!(object_id, chain_id);
 /// ```
 pub fn derive(domain: Domain, input: &[u8]) -> Hash {
     let mut hasher = blake3::Hasher::new_derive_key(domain.context());

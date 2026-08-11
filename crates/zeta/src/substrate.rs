@@ -1,7 +1,7 @@
 //! Defines content-addressed values and blob storage for zeta.
 //!
-//! Exact content bytes use plain BLAKE3. Structured object, derivation, event,
-//! and chain identities use BLAKE3 derive-key mode with one frozen context per
+//! Exact content bytes use plain BLAKE3. Structured object, derivation, and
+//! chain identities use BLAKE3 derive-key mode with one frozen context per
 //! domain. Substrate values use the shared canonical JSON representation so
 //! independently implemented mints remain byte-identical.
 

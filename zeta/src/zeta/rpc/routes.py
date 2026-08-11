@@ -4,26 +4,14 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import uuid
 from dataclasses import dataclass, field
 from typing import Any
 
-from jsonschema import Draft202012Validator
-from jsonschema.exceptions import SchemaError
-
 from zeta.authoring.spec import MASTER_AGENT_ID
-from zeta.capabilities.registry import RegisteredCapability, error_result
-from zeta.capabilities.types import Capability, CapabilityId
-from zeta.effects import DELIVERY_SEMANTICS, DeliverySemantics
 from zeta.events import DraftEvent, Event
 from zeta.harness.dispatch import QueueingDispatcher, ReservedRuntimeEventError
 from zeta.harness.project import ProjectSnapshot, record_project_snapshot
 from zeta.harness.protocols import UnauthorizedCancellation
-from zeta.harness.runs import RunStatus
-from zeta.harness.session_turn import (
-    SESSION_TURN_AGENT_ID,
-    terminal_session_turn_result,
-)
 from zeta.harness.sessions import (
     SessionNotFound,
     SessionOwnerConflict,
@@ -33,50 +21,12 @@ from zeta.harness.sessions import (
     submit_session_message,
 )
 from zeta.harness.store import RuntimeEventStore
-from zeta.journal.store import EventReader, EventStoreProtocol, Filter
+from zeta.journal.store import EventReader, Filter
 from zeta.journal.wire import event_to_wire
 from zeta.loop.runtime_context import RuntimeContext
-from zeta.loop.thread_run import (
-    SessionRequestError,
-    session_run_id,
-    session_turn_requested_draft,
-)
 from zeta.rpc.jsonrpc import JsonRpcConnection, JsonRpcRouter, RpcError
 
 logger = logging.getLogger(__name__)
-
-RPC_REQUESTED = "rpc.requested"
-RPC_RESPONDED = "rpc.responded"
-RPC_FAILED = "rpc.failed"
-
-
-@dataclass
-class RunState:
-    """RPC-visible session run state used for cancellation and status responses."""
-
-    run_id: str
-    task: asyncio.Task[None] | None = None
-    status: RunStatus = "running"
-
-
-@dataclass(frozen=True)
-class CapabilityRegistration:
-    """Client `tools.register` payload shaped to construct a Zeta capability."""
-
-    name: str
-    provider: str = "rpc"
-    description: str = ""
-    schema: dict[str, Any] = field(default_factory=dict)
-    timeout_sec: int | float | None = None
-    delivery_semantics: DeliverySemantics | None = None
-
-
-@dataclass(frozen=True)
-class ToolResponse:
-    """Client `tools.respond` payload used to resolve a pending tool call."""
-
-    id: str
-    result: dict[str, Any]
 
 
 @dataclass
@@ -86,14 +36,8 @@ class RpcClient:
     connection: JsonRpcConnection | None
     session: RuntimeContext
     dispatcher: QueueingDispatcher
-    pending_runs: dict[str, RunState]
-    pending_tool_calls: dict[str, asyncio.Future[dict[str, Any]]]
     background_tasks: set[asyncio.Task[Any]] = field(default_factory=set)
     project_snapshot: ProjectSnapshot | None = None
-
-    async def notify(self, method: str, params: dict[str, Any]) -> None:
-        if self.connection is not None:
-            await self.connection.notify(method, params)
 
     def create_background_task(self, awaitable: Any) -> asyncio.Task[Any]:
         """Start background work and keep it alive until it completes."""
@@ -108,251 +52,11 @@ class RpcClient:
         if not task.cancelled():
             task.exception()
 
-    async def call_tool(
-        self,
-        name: str,
-        params: dict[str, Any],
-        *,
-        timeout_seconds: int | float | None,
-    ) -> dict[str, Any]:
-        call_id = str(uuid.uuid4())
-        future: asyncio.Future[dict[str, Any]] = (
-            asyncio.get_running_loop().create_future()
-        )
-        self.pending_tool_calls[call_id] = future
-        notification_params: dict[str, Any] = {
-            "id": call_id,
-            "name": name,
-            "arguments": params,
-            "status": "requested",
-        }
-        if timeout_seconds is not None:
-            notification_params["timeout_sec"] = timeout_seconds
-        await self.notify("tools.call", notification_params)
-        try:
-            if timeout_seconds is None:
-                return await future
-            return await asyncio.wait_for(future, timeout=timeout_seconds)
-        except TimeoutError:
-            return error_result(
-                "client-tool-timeout",
-                f"client tool {name} timed out after {timeout_seconds:g}s",
-            )
-        finally:
-            if self.pending_tool_calls.get(call_id) is future:
-                self.pending_tool_calls.pop(call_id, None)
-
 
 def invalid_params(code: str, message: str, **extra: Any) -> RpcError:
     """Build a stable JSON-RPC invalid-params error for route validation failures."""
 
     return RpcError(-32602, code, "Invalid params", {"message": message, **extra})
-
-
-def parse_capability_registration(value: dict[str, Any]) -> CapabilityRegistration:
-    """Validate and normalize one client-hosted RPC tool declaration."""
-
-    supported = {
-        "name",
-        "provider",
-        "description",
-        "schema",
-        "timeout_sec",
-        "delivery_semantics",
-    }
-    unknown = sorted(set(value) - supported)
-    if unknown:
-        raise invalid_params(
-            "unknown_tool_fields",
-            f"tool contains unsupported fields: {', '.join(unknown)}",
-            fields=unknown,
-        )
-
-    provider = value.get("provider", "rpc")
-    if provider != "rpc":
-        raise invalid_params(
-            "invalid_tool_provider",
-            "client tools must use the rpc provider",
-        )
-
-    name = value.get("name")
-    if not isinstance(name, str) or not name:
-        raise invalid_params(
-            "invalid_tool_name",
-            "tool name must be a non-empty string",
-        )
-
-    description = value.get("description", "")
-    if not isinstance(description, str):
-        raise invalid_params(
-            "invalid_tool_description",
-            "tool description must be a string",
-        )
-
-    if "schema" not in value:
-        raise invalid_params("missing_tool_schema", "tool schema is required")
-    schema = value["schema"]
-    if not isinstance(schema, dict):
-        raise invalid_params("invalid_tool_schema", "tool schema must be an object")
-    try:
-        Draft202012Validator.check_schema(schema)
-    except SchemaError as exc:
-        raise invalid_params(
-            "invalid_tool_schema",
-            f"tool schema is invalid: {exc.message}",
-        ) from exc
-
-    timeout_sec = value.get("timeout_sec")
-    if timeout_sec is not None:
-        if (
-            not isinstance(timeout_sec, int | float)
-            or isinstance(timeout_sec, bool)
-            or timeout_sec <= 0
-        ):
-            raise invalid_params(
-                "invalid_timeout_sec",
-                "timeout_sec must be positive",
-            )
-
-    delivery_semantics = value.get("delivery_semantics")
-    if delivery_semantics is not None and delivery_semantics not in DELIVERY_SEMANTICS:
-        raise invalid_params(
-            "invalid_delivery_semantics",
-            "delivery_semantics must be a supported effect contract",
-        )
-
-    return CapabilityRegistration(
-        name=name,
-        provider=provider,
-        description=description,
-        schema=schema,
-        timeout_sec=timeout_sec,
-        delivery_semantics=delivery_semantics,
-    )
-
-
-def rpc_requested_draft(
-    method: str,
-    params: dict[str, Any],
-    *,
-    request_id: str | None = None,
-    source: str = "zeta",
-    session_id: str | None = None,
-    run_id: str | None = None,
-) -> DraftEvent:
-    request_id = request_id or f"req_{uuid.uuid4().hex}"
-    return DraftEvent(
-        RPC_REQUESTED,
-        source,
-        {"request_id": request_id, "method": method, "params": params},
-        idempotency_key=f"{RPC_REQUESTED}:{request_id}",
-        session_id=session_id,
-        run_id=run_id,
-    )
-
-
-def rpc_responded_draft(request: Event, result: Any) -> DraftEvent:
-    request_id = rpc_request_id(request)
-    return DraftEvent(
-        RPC_RESPONDED,
-        "zeta",
-        {"request_id": request_id, "result": result},
-        idempotency_key=f"{RPC_RESPONDED}:{request.id}",
-        caused_by=request.id,
-        session_id=request.session_id,
-        run_id=request.run_id,
-    )
-
-
-def rpc_failed_draft(request: Event, error: dict[str, Any]) -> DraftEvent:
-    request_id = rpc_request_id(request)
-    return DraftEvent(
-        RPC_FAILED,
-        "zeta",
-        {"request_id": request_id, "error": error},
-        idempotency_key=f"{RPC_FAILED}:{request.id}",
-        caused_by=request.id,
-        session_id=request.session_id,
-        run_id=request.run_id,
-    )
-
-
-def rpc_request_id(request: Event) -> str:
-    request_id = request.payload.get("request_id")
-    return request_id if isinstance(request_id, str) and request_id else request.id
-
-
-async def run_eventlog_rpc_once(
-    router: JsonRpcRouter,
-    *,
-    after_cursor: int | None = None,
-) -> Event | None:
-    store = router.client.session.event_sink
-    if not isinstance(store, EventStoreProtocol):
-        raise RpcError(
-            -32000,
-            "events_unavailable",
-            "Server error",
-            {"message": "event-log RPC requires a full event store"},
-        )
-    for request in store.list_events(
-        Filter(event_type=RPC_REQUESTED, after_cursor=after_cursor)
-    ):
-        if rpc_request_has_terminal_response(store, request):
-            continue
-        response = await router.response_for_message(rpc_message_from_event(request))
-        if response is None:
-            draft = rpc_responded_draft(request, None)
-        elif "error" in response:
-            draft = rpc_failed_draft(request, response["error"])
-        else:
-            draft = rpc_responded_draft(request, response.get("result"))
-        return store.accept(draft).event
-    return None
-
-
-def rpc_request_has_terminal_response(
-    store: EventStoreProtocol,
-    request: Event,
-) -> bool:
-    return any(
-        child.event_type in {RPC_RESPONDED, RPC_FAILED}
-        for child in store.children(request.id)
-    )
-
-
-def rpc_message_from_event(request: Event) -> dict[str, Any]:
-    payload = request.payload
-    method = payload.get("method")
-    params = payload.get("params")
-    if params is None:
-        params = {}
-    return {
-        "jsonrpc": "2.0",
-        "id": rpc_request_id(request),
-        "method": method,
-        "params": params,
-    }
-
-
-def capability_to_wire(
-    capability: RegisteredCapability,
-    *,
-    timeout_sec: int | float | None = None,
-) -> dict[str, Any]:
-    """Convert a registered capability to the RPC tool declaration response."""
-
-    payload = {
-        "id": capability.declaration.id.canonical(),
-        "provider": capability.declaration.id.provider,
-        "name": capability.declaration.id.name,
-        "description": capability.declaration.description,
-        "schema": capability.declaration.input_schema,
-        "timeout_sec": timeout_sec,
-    }
-    if capability.declaration.delivery_semantics is not None:
-        payload["delivery_semantics"] = capability.declaration.delivery_semantics
-    return payload
 
 
 async def initialize(_params: dict[str, Any], _client: RpcClient) -> dict[str, Any]:
@@ -461,52 +165,6 @@ async def events_list(params: dict[str, Any], client: RpcClient) -> dict[str, An
     return {
         "events": [event_to_wire(event) for event in events],
         "next_cursor": events[-1].cursor if events else filter.after_cursor,
-    }
-
-
-async def session_run(params: dict[str, Any], client: RpcClient) -> dict[str, Any]:
-    """Start a session run by publishing the requested-turn event and routing it."""
-
-    run_id = session_run_id()
-    try:
-        draft = session_turn_requested_draft(
-            params,
-            run_id=run_id,
-            runtime_context=client.session,
-        )
-    except SessionRequestError as exc:
-        raise invalid_params(
-            exc.code,
-            exc.message,
-            **{key: value for key, value in exc.data.items() if key != "message"},
-        ) from exc
-
-    outcome = await client.dispatcher.publish_event(draft)
-    requested_event = outcome.event
-    requested_run_id = requested_event.run_id or run_id
-    result = terminal_session_turn_result(
-        requested_event,
-        runtime_context=client.session,
-    )
-    if result is not None:
-        return {
-            "run_id": requested_run_id,
-            "session_id": client.session.session_id,
-            "status": session_result_status(result),
-            "event": event_to_wire(requested_event),
-            "result": result,
-        }
-
-    if outcome.inserted:
-        state = RunState(run_id=requested_run_id)
-        client.pending_runs[requested_run_id] = state
-        state.task = asyncio.create_task(route_run(client, state, requested_event))
-
-    return {
-        "run_id": requested_run_id,
-        "session_id": client.session.session_id,
-        "status": "started",
-        "event": event_to_wire(requested_event),
     }
 
 
@@ -661,59 +319,6 @@ def session_route_error(
     return RpcError(jsonrpc_code, code, "Session error", data)
 
 
-def session_result_status(result: dict[str, Any]) -> RunStatus:
-    """Map a durable session result back to the RPC-visible run status."""
-
-    outcome = result.get("outcome")
-    if outcome in {"aborted", "cancelled"}:
-        return "cancelled"
-    if outcome in {"failed", "dead_lettered", "unhandled"}:
-        return "failed"
-    return "completed"
-
-
-async def route_run(client: RpcClient, state: RunState, event: Event) -> None:
-    """Drain the requested turn from the durable queue in the background."""
-
-    del event
-
-    try:
-        lifecycle_events = await client.dispatcher.drain()
-    except asyncio.CancelledError:
-        state.status = "cancelled"
-        raise
-    except Exception:
-        logger.exception("Session run %s failed while routing", state.run_id)
-        state.status = "failed"
-        return
-    state.status = run_status_from_lifecycle(state, lifecycle_events)
-
-
-def run_status_from_lifecycle(
-    state: RunState,
-    lifecycle_events: list[Event],
-) -> RunStatus:
-    """Map runtime lifecycle events to the RPC status exposed by `session.cancel`."""
-
-    for event in reversed(lifecycle_events):
-        if (
-            event.event_type == "runtime.queue_item.cancelled"
-            and event.payload.get("target_agent") == SESSION_TURN_AGENT_ID
-        ):
-            return "cancelled"
-        if (
-            event.event_type == "runtime.queue_item.failed"
-            and event.payload.get("target_agent") == SESSION_TURN_AGENT_ID
-        ):
-            return "failed"
-        if (
-            event.event_type == "runtime.queue_item.completed"
-            and event.payload.get("target_agent") == SESSION_TURN_AGENT_ID
-        ):
-            return "completed"
-    return "cancelled" if state.status == "cancelling" else "completed"
-
-
 async def session_cancel(params: dict[str, Any], client: RpcClient) -> dict[str, Any]:
     """Use durable state so cancellation does not depend on this RPC peer."""
 
@@ -743,16 +348,6 @@ async def session_cancel(params: dict[str, Any], client: RpcClient) -> dict[str,
             "Session error",
             {"message": str(exc), "run_id": run_id},
         ) from exc
-    state = client.pending_runs.get(run_id)
-    if state is not None:
-        if result.status == "cancelling":
-            state.status = "cancelling"
-        elif result.status in {"cancelled", "already_cancelled"}:
-            state.status = "cancelled"
-        elif result.status == "already_terminal":
-            state.status = (
-                "completed" if result.terminal_status == "completed" else "failed"
-            )
     return {
         "cancelled": result.status in {"cancelling", "cancelled", "already_cancelled"},
         "changed": result.changed,
@@ -762,99 +357,6 @@ async def session_cancel(params: dict[str, Any], client: RpcClient) -> dict[str,
         "status": result.status,
         "terminal_status": result.terminal_status,
     }
-
-
-async def tools_register(params: dict[str, Any], client: RpcClient) -> dict[str, Any]:
-    """Register RPC client tools as Zeta capabilities for later agent calls."""
-
-    raw_tools = params.get("tools")
-    if not isinstance(raw_tools, list):
-        raise invalid_params("invalid_tools", "tools must be a list")
-    registered = []
-    for item in raw_tools:
-        if not isinstance(item, dict):
-            raise invalid_params(
-                "invalid_tool",
-                "each tool must be an object",
-            )
-        registration = parse_capability_registration(item)
-
-        async def execute_client_tool(
-            params: dict[str, Any],
-            *,
-            name: str = registration.name,
-            timeout_seconds: int | float | None = registration.timeout_sec,
-            **_ignored: Any,
-        ) -> dict[str, Any]:
-            return await client.call_tool(
-                name,
-                params,
-                timeout_seconds=timeout_seconds,
-            )
-
-        capability = RegisteredCapability(
-            Capability(
-                CapabilityId(registration.provider, registration.name),
-                registration.description,
-                registration.schema,
-                delivery_semantics=registration.delivery_semantics,
-            ),
-            execute_client_tool,
-        )
-        capability_id = capability.declaration.id.canonical()
-        if client.session.tool_registry.get(capability_id) is not None:
-            raise invalid_params(
-                "duplicate_tool",
-                f"tool {registration.name!r} is already registered",
-                tool=registration.name,
-            )
-        try:
-            client.session.tool_registry.register(capability)
-        except ValueError as exc:
-            raise invalid_params(
-                "invalid_tool_capability",
-                str(exc),
-                tool=registration.name,
-            ) from exc
-        registered.append(
-            capability_to_wire(
-                capability,
-                timeout_sec=registration.timeout_sec,
-            )
-        )
-    return {"registered": registered}
-
-
-async def tools_respond(params: dict[str, Any], client: RpcClient) -> None:
-    """Resolve a pending RPC client tool call with a `tools.respond` payload."""
-
-    supported = {"id", "result"}
-    unknown = sorted(set(params) - supported)
-    if unknown:
-        raise invalid_params(
-            "unknown_tool_response_fields",
-            f"tool response contains unsupported fields: {', '.join(unknown)}",
-            fields=unknown,
-        )
-
-    raw_id = params.get("id")
-    if not isinstance(raw_id, str) or not raw_id:
-        raise invalid_params("invalid_tool_call_id", "id must be non-empty")
-    raw_result = params.get("result")
-    if not isinstance(raw_result, dict):
-        raise invalid_params("invalid_result", "result must be an object")
-
-    response = ToolResponse(id=raw_id, result=raw_result)
-    if not isinstance(response.result.get("ok"), bool):
-        raise invalid_params("invalid_result", "result.ok must be a boolean")
-
-    future = client.pending_tool_calls.get(response.id)
-    if future is None or future.done():
-        return None
-
-    future.set_result(response.result)
-
-    return None
 
 
 def build_rpc_router(client: RpcClient) -> JsonRpcRouter:
@@ -867,8 +369,5 @@ def build_rpc_router(client: RpcClient) -> JsonRpcRouter:
     router.route("session.send", session_send)
     router.route("session.status", session_status)
     router.route("session.list", session_list)
-    router.route("session.run", session_run)
     router.route("session.cancel", session_cancel)
-    router.route("tools.register", tools_register)
-    router.route("tools.respond", tools_respond)
     return router

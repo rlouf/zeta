@@ -7,7 +7,6 @@ execution path. The session request has no client execution selector.
 
 - `Capability` declares `delivery_semantics` when retry behavior needs it.
 - The agent or host selects its allowed tool set.
-- `tools.register` transfers tool declarations to the runtime.
 - A tool result can set `stop: true`. The run then ends with `tool_stop`.
 - Effect records use the declared delivery semantics.
 - The runtime validates tool arguments before it calls an executor.

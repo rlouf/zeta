@@ -97,8 +97,8 @@ def session_run_params(params: dict[str, Any]) -> SessionRunParams:
     if not request.objective:
         raise SessionRequestError(
             "missing_objective",
-            "session.run requires objective",
-            {"message": "session.run requires objective"},
+            "session request requires objective",
+            {"message": "session request requires objective"},
         )
     if request.idempotency_key is not None and (
         not isinstance(request.idempotency_key, str) or not request.idempotency_key

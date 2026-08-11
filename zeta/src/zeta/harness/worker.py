@@ -6,7 +6,7 @@ import asyncio
 import json
 import logging
 import time
-from collections.abc import Awaitable, Callable, Iterable
+from collections.abc import Iterable
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
@@ -71,10 +71,6 @@ ATTEMPT_HEARTBEAT_INTERVAL_SECONDS = 15.0
 ToolExecutorCacheKey = tuple[str, str, str, str]
 
 
-RpcStep = Callable[["WorkerServices"], Awaitable[str | None]]
-"""Serve one pending transport request, or return None when there is none."""
-
-
 @dataclass
 class WorkerServices:
     """Project-local resources consumed by the queue worker."""
@@ -91,9 +87,6 @@ class WorkerServices:
     tool_executors: ToolExecutorProviderRegistry = field(
         default_factory=load_tool_executor_provider_registry
     )
-    # Filled by whoever composes the worker, so the harness never names a
-    # transport. `zeta.rpc.eventlog.eventlog_rpc_step` is the bundled filler.
-    rpc_step: RpcStep | None = None
     connector_calls: ConnectorCalls = field(default_factory=ConnectorCalls)
     executor_cache: dict[ToolExecutorCacheKey, ToolExecutor] = field(
         default_factory=dict,
@@ -241,7 +234,6 @@ def build_worker_services(
     registry: EventConnectorRegistry | None = None,
     connector_names: Iterable[str] | None = None,
     tool_executors: ToolExecutorProviderRegistry | None = None,
-    rpc_step: RpcStep | None = None,
 ) -> WorkerServices:
     resolved_project_root = project_root.expanduser().resolve()
     resolved_state_dir = resolve_state_dir(
@@ -262,15 +254,10 @@ def build_worker_services(
             session_dir=resolved_state_dir / "sessions" / "default"
         ),
         tool_executors=tool_executor_providers_with_local(tool_executors),
-        rpc_step=rpc_step,
     )
 
 
 async def run_once(runtime: WorkerServices) -> str:
-    if runtime.rpc_step is not None:
-        serviced = await runtime.rpc_step(runtime)
-        if serviced is not None:
-            return serviced
     record_project_snapshot(runtime.events, runtime.project_snapshot)
     publish_due_schedules(runtime)
     runtime.events.publish_next_due_scheduled_event()

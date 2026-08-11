@@ -71,18 +71,20 @@ This is a strong voice seam: a voice transcript can be a normal durable user
 message in an existing session. It does **not** require a separate voice
 conversation store.
 
-The CLI and RPC path use `session.turn.requested` to start the native run loop.
-`session.run` creates a public run ID. `session.cancel` stores a durable queue
-cancellation request. The worker creates the local cancellation token and
-passes it to the run loop
+The CLI and RPC path use `session.message.requested` to queue a native run.
+`session.start` and `session.send` return its public run ID. `session.cancel`
+stores a durable queue cancellation request. The worker creates the local
+cancellation token and passes it to the run loop
 ([routes.py](../zeta/src/zeta/rpc/routes.py),
 [coordinator.py](../zeta/src/zeta/harness/coordinator.py)).
 
-### Complete CLI trace: `zeta session.run`
+### Complete CLI trace: `zeta sessions start`
 
 ```text
-zeta session.run
-  -> session.turn.requested
+zeta sessions start
+  -> session.message.requested
+  -> runtime.queue_item.available
+  -> worker claims the queue item
       -> RuntimeContext                           # selects the durable session
       -> active_model_selection(session_dir=…)    # selects a provider/profile
       -> run_agent(...)
@@ -266,12 +268,13 @@ deltas, raw Realtime protocol events, and unplayed output are transport state,
 not conversation history.
 
 Critically, the current daemon's text-model run is started by the
-`session.turn.requested` event, not by a `zeta.user_message` timeline event.
-The Realtime live session must therefore **not** call `session.run`, publish
-`session.turn.requested`, or invoke `run_agent_loop()`. It directly returns
-Zeta capability results as Realtime `function_call_output` items and lets the
-Realtime model continue. This preserves CLI continuity without accidentally
-starting a second (for example, Codex) run.
+`session.message.requested` event, not by a `zeta.user_message` timeline event.
+The Realtime live session must therefore **not** call `session.start` or
+`session.send`, publish `session.message.requested`, or invoke
+`run_agent_loop()`. It directly returns Zeta capability results as Realtime
+`function_call_output` items and lets the Realtime model continue. This
+preserves CLI continuity without accidentally starting a second (for example,
+Codex) run.
 
 This needs one provider-native `RealtimeLiveModelSession` service/module, not
 a second semantic agent and not one agent file per voice conversation. It

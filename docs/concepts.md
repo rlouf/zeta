@@ -985,18 +985,9 @@ Supported methods:
 | `session.send` | Queue a message for an existing session owner. |
 | `session.status` | Return one derived session activity record. |
 | `session.list` | Return the derived session catalog. |
-| `session.run` | Start a session run. |
 | `session.cancel` | Cancel queued or running work by `run_id`. |
 | `events.list` | List durable events by cursor, session, turn, and limit. |
 | `events.publish` | Append a client-authored durable event. |
-| `tools.register` | Register client-hosted capabilities. |
-| `tools.respond` | Respond to a `tools.call` notification. |
-
-`session.run` accepts an optional non-empty `idempotency_key`. Reuse that key
-only when retrying the same logical request. Zeta scopes the key to the
-session, so a retry never starts a second run or repeats its effects. While the
-original run is still active, the retry returns its existing started event;
-after it finishes, the retry returns the original terminal result.
 
 `session.start` and `session.send` return `queued` after Zeta stores the queue
 binding. They do not run the model and do not wait for a worker. Both methods
@@ -1004,15 +995,14 @@ accept an optional non-empty `idempotency_key`.
 
 `session.cancel` accepts `run_id` and optional `session_id` and `reason`
 fields. The session ID checks ownership when a caller supplies it. The request
-is durable. It can cancel a run created by `session.start`, `session.send`, or
-`session.run`, even after the first RPC client disconnects.
+is durable. It can cancel a run created by `session.start` or `session.send`,
+even after the first RPC client disconnects.
 
 Server notifications:
 
 | Notification | Purpose |
 | --- | --- |
 | `events.notify` | Carries a persisted runtime event. |
-| `tools.call` | Asks the client to execute a registered capability. |
 
 Protocol `0.1` is additive. Clients should ignore unknown result fields and
 unknown notification params.

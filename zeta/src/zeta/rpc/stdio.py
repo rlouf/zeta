@@ -18,7 +18,6 @@ from zeta.rpc.jsonrpc import (
 )
 from zeta.rpc.routes import (
     RpcClient,
-    RunState,
     build_rpc_router,
     event_to_wire,
 )
@@ -45,8 +44,6 @@ async def run_stdio_async(input: TextIO, output: TextIO) -> None:
         session,
         event_sink=event_store,
     )
-    pending_runs: dict[str, RunState] = {}
-    pending_tool_calls: dict[str, asyncio.Future[dict[str, Any]]] = {}
     background_tasks: set[asyncio.Task[Any]] = set()
 
     def retain_background_task(awaitable: Any) -> None:
@@ -80,8 +77,6 @@ async def run_stdio_async(input: TextIO, output: TextIO) -> None:
         connection=connection,
         session=session,
         dispatcher=dispatcher,
-        pending_runs=pending_runs,
-        pending_tool_calls=pending_tool_calls,
         project_snapshot=runtime.project_snapshot,
     )
     router = build_rpc_router(client)

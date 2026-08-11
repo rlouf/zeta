@@ -1,6 +1,7 @@
 """Conformance tests that consume spec/vectors directly."""
 
 import json
+from typing import Any, cast
 
 import pytest
 from wire_test_support import (
@@ -18,6 +19,7 @@ from zeta.ids import event_idempotency_id
 from zeta.wire.envelopes import (
     EnvelopeError,
     canonical_json,
+    envelope,
     mint_event_id,
     validate_envelope,
 )
@@ -32,6 +34,72 @@ def test_wire_event_ids_delegate_to_runtime_identity_ownership() -> None:
     assert mint_event_id("file.created", payload) == event_idempotency_id(
         "file.created", payload
     )
+
+
+@pytest.mark.parametrize(
+    "value",
+    [pytest.param(2**64, id="above-u64"), pytest.param(-(2**63) - 1, id="below-i64")],
+)
+def test_wire_event_identity_rejects_integers_outside_the_canonical_domain(
+    value: int,
+) -> None:
+    with pytest.raises(ValueError, match="integers must fit i64 or u64"):
+        mint_event_id("file.created", {"value": value})
+
+    event = envelope(
+        "event",
+        "m-domain-int",
+        type="file.created",
+        schema="zeta.file.created.v1",
+        caused_by=None,
+        session_id=None,
+        payload={"value": value},
+    )
+    with pytest.raises(EnvelopeError, match="bad_canonical_value"):
+        validate_envelope(event)
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        pytest.param(float("nan"), id="nan"),
+        pytest.param(float("inf"), id="positive-infinity"),
+        pytest.param(float("-inf"), id="negative-infinity"),
+    ],
+)
+def test_wire_event_identity_rejects_nonfinite_floats(value: float) -> None:
+    with pytest.raises(ValueError, match="floats must be finite"):
+        event_idempotency_id("file.created", {"value": value})
+
+    event = envelope(
+        "event",
+        "m-domain-float",
+        type="file.created",
+        schema="zeta.file.created.v1",
+        caused_by=None,
+        session_id=None,
+        payload={"value": value},
+    )
+    with pytest.raises(EnvelopeError, match="bad_canonical_value"):
+        validate_envelope(event)
+
+
+def test_wire_event_identity_rejects_non_string_object_keys() -> None:
+    payload = cast(dict[str, Any], {1: "value"})
+    with pytest.raises(TypeError, match="object keys must be strings"):
+        mint_event_id("file.created", payload)
+
+    event = envelope(
+        "event",
+        "m-domain-key",
+        type="file.created",
+        schema="zeta.file.created.v1",
+        caused_by=None,
+        session_id=None,
+        payload=payload,
+    )
+    with pytest.raises(EnvelopeError, match="bad_canonical_value"):
+        validate_envelope(event)
 
 
 def valid_vector_paths() -> list:

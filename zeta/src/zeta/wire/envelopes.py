@@ -9,7 +9,6 @@ registry; this module validates envelope shape only.
 
 from __future__ import annotations
 
-import json
 import re
 from datetime import UTC, datetime
 from typing import Any
@@ -52,13 +51,7 @@ class EnvelopeError(ValueError):
 
 def canonical_json(value: Any) -> str:
     """Serialize per spec §2.1: sorted keys, compact, literal UTF-8."""
-    return json.dumps(
-        value,
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=False,
-        allow_nan=False,
-    )
+    return addresses.canonical_json_bytes(value).decode("utf-8")
 
 
 def now_ts() -> str:
@@ -87,6 +80,13 @@ def validate_envelope(value: Any) -> dict[str, Any]:
     """Validate one parsed envelope; raise EnvelopeError on violation."""
     if not isinstance(value, dict):
         raise EnvelopeError("not_an_object", "an envelope must be a JSON object")
+    try:
+        canonical_json(value)
+    except (TypeError, ValueError, UnicodeError) as exc:
+        raise EnvelopeError(
+            "bad_canonical_value",
+            "an envelope must contain only canonical identity values",
+        ) from exc
     if "v" not in value:
         raise EnvelopeError("missing_field:v", "an envelope must carry `v`")
     if not _is_int(value["v"]) or value["v"] < 0:

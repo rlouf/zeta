@@ -33,11 +33,10 @@ This module owns runtime string identities. It imports only `zeta.addresses`
 
 from __future__ import annotations
 
-import json
 import uuid
 from typing import Any
 
-from zeta.addresses import chain_address, event_address
+from zeta.addresses import canonical_json_bytes, chain_address, event_address
 
 QUEUE_ITEM_PREFIX = "qi_"
 ATTEMPT_PREFIX = "att_"
@@ -52,13 +51,7 @@ def event_idempotency_id(event_type: str, payload: dict[str, Any]) -> str:
     This identity remains separate from durable random ``evt_`` ids because a
     source must reproduce it before the runtime accepts the event.
     """
-    identity = json.dumps(
-        {"payload": payload, "type": event_type},
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=False,
-        allow_nan=False,
-    ).encode()
+    identity = canonical_json_bytes({"payload": payload, "type": event_type})
     return event_address(identity)
 
 

@@ -1,11 +1,17 @@
-"""Content addresses for durable identifiers.
+"""Content addresses and derived identifiers.
 
-Every identifier minted from content goes through this module, so the
-address format has one owner. Addresses use BLAKE3 in derive-key mode
-with one frozen context string per domain. The context strings are
-opaque and stay verbatim forever: a product rename never changes them,
-because changing one would silently re-address every stored record in
-its domain.
+Every address minted from bytes goes through this module, so the
+format has one owner. Two kinds exist, and the distinction is
+normative (spec §11): **content addresses** — file bytes, event
+payloads, pack blobs — are the plain, undomained BLAKE3 of the exact
+bytes, so one hash universe holds across every tool that hashes the
+same bytes. **Derived identifiers** — event ids, chain links, prompt
+ids, skill ids — hash structured identity through BLAKE3 derive-key
+mode with one frozen context string per domain, because cross-domain
+confusion is a real risk there. The context strings are opaque and
+stay verbatim forever: a product rename never changes them, because
+changing one would silently re-address every stored record in its
+domain.
 
 Legacy identifiers minted from SHA-256 (`sha256:`-prefixed, or bare
 24- or 64-hex digests) remain valid forever. `is_legacy` names them so
@@ -29,14 +35,17 @@ from blake3 import blake3
 B3_PREFIX = "b3:"
 
 EVENT_CONTEXT = "zeta-os 2026-08 cas event"
-BLOB_CONTEXT = "zeta-os 2026-08 cas blob"
 CHAIN_CONTEXT = "zeta-os 2026-08 cas chain"
 PROMPT_CONTEXT = "zeta-os 2026-08 cas prompt"
 SKILL_CONTEXT = "zeta-os 2026-08 cas skill"
 
+# Retired before use (spec §11): content bytes are plain-hashed, never
+# domain-separated. The string stays reserved so nothing else ever
+# claims it; minting with it is forbidden.
+RETIRED_BLOB_CONTEXT = "zeta-os 2026-08 cas blob"
+
 CONTEXTS = {
     "event": EVENT_CONTEXT,
-    "blob": BLOB_CONTEXT,
     "chain": CHAIN_CONTEXT,
     "prompt": PROMPT_CONTEXT,
     "skill": SKILL_CONTEXT,
@@ -58,9 +67,14 @@ def event_address(data: bytes) -> str:
     return address("event", data)
 
 
-def blob_address(data: bytes) -> str:
-    """Return the address that identifies one payload's exact bytes."""
-    return address("blob", data)
+def content_address(data: bytes) -> str:
+    """Return the plain-BLAKE3 address of exact bytes.
+
+    Content hashing is deliberately domainless: a file's bytes, a
+    pack blob, and an event's `payload_hash` are the same string for
+    the same bytes, in every implementation.
+    """
+    return B3_PREFIX + blake3(data).hexdigest()
 
 
 def chain_address(data: bytes) -> str:

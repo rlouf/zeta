@@ -50,8 +50,10 @@ addresses of the identity described in spec §6.1.
 
 ## `addresses/vectors.json`
 
-Inputs with their expected `b3:` addresses for every domain context in
-spec §11. Each vector gives the input bytes as UTF-8 text
-(`input_utf8`) or base64 (`input_base64`) and the expected address. An
-implementation's `derive_key` output must match byte-for-byte —
-including for the empty input.
+Inputs with their expected `b3:` addresses for both address kinds in
+spec §11: one set per derived-identifier domain context, plus a
+`content` set whose expectations are the plain, undomained BLAKE3 of
+the input bytes. Each vector gives the input bytes as UTF-8 text
+(`input_utf8`) or base64 (`input_base64`) and the expected address.
+An implementation's output must match byte-for-byte — including for
+the empty input.

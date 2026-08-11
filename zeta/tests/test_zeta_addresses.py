@@ -27,20 +27,43 @@ def vector_input_bytes(vector: dict) -> bytes:
     return base64.b64decode(vector["input_base64"])
 
 
+def minted(vector: dict) -> str:
+    data = vector_input_bytes(vector)
+    if vector["domain"] == "content":
+        return addresses.content_address(data)
+    return addresses.address(vector["domain"], data)
+
+
 def test_address_vectors_match_byte_for_byte() -> None:
     document = load_vectors()
     assert document["contexts"] == addresses.CONTEXTS
     assert document["vectors"], "vector file must not be empty"
     for vector in document["vectors"]:
-        computed = addresses.address(vector["domain"], vector_input_bytes(vector))
-        assert computed == vector["address"], vector["name"]
+        assert minted(vector) == vector["address"], vector["name"]
 
 
-def test_address_vectors_cover_every_domain() -> None:
+def test_address_vectors_cover_every_domain_and_content() -> None:
     document = load_vectors()
     assert {vector["domain"] for vector in document["vectors"]} == set(
         addresses.CONTEXTS
-    )
+    ) | {"content"}
+
+
+def test_content_address_is_plain_undomained_blake3() -> None:
+    from blake3 import blake3
+
+    data = b"the exact payload bytes"
+    assert addresses.content_address(data) == "b3:" + blake3(data).hexdigest()
+    minted_addresses = {
+        addresses.content_address(data),
+        *(addresses.address(domain, data) for domain in addresses.CONTEXTS),
+    }
+    assert len(minted_addresses) == len(addresses.CONTEXTS) + 1
+
+
+def test_retired_blob_context_stays_reserved() -> None:
+    assert addresses.RETIRED_BLOB_CONTEXT == "zeta-os 2026-08 cas blob"
+    assert "blob" not in addresses.CONTEXTS
 
 
 def test_address_is_full_width_lowercase_hex() -> None:

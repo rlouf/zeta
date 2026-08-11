@@ -1,9 +1,8 @@
 {
-  "format": "b3-derive-key-v0",
-  "description": "BLAKE3 derive_key(context, input) -> 'b3:' + 64 lowercase hex. Input bytes are given as UTF-8 text (input_utf8) or base64 (input_base64).",
+  "format": "b3-addresses-v1",
+  "description": "Two address kinds (spec §11). Derived identifiers: BLAKE3 derive_key(context, input) -> 'b3:' + 64 lowercase hex, one frozen context per domain. Content addresses (domain 'content'): plain undomained BLAKE3 of the exact bytes, same prefix and width. Input bytes are given as UTF-8 text (input_utf8) or base64 (input_base64).",
   "contexts": {
     "event": "zeta-os 2026-08 cas event",
-    "blob": "zeta-os 2026-08 cas blob",
     "chain": "zeta-os 2026-08 cas chain",
     "prompt": "zeta-os 2026-08 cas prompt",
     "skill": "zeta-os 2026-08 cas skill"
@@ -32,30 +31,6 @@
       "name": "binary",
       "input_base64": "AAcOFRwjKjE4P0ZNVFtiaXB3foWMk5qhqK+2vcTL0tng5+71/A==",
       "address": "b3:8ff4eae77476dc8a5ae7824e9acee734a34033ddf6c6eb5023871e79dc904778"
-    },
-    {
-      "domain": "blob",
-      "name": "empty",
-      "input_utf8": "",
-      "address": "b3:c496a6800619f120c7328937265c0015abcd2ef109cbc626c22d562442e7939d"
-    },
-    {
-      "domain": "blob",
-      "name": "ascii",
-      "input_utf8": "hello wire",
-      "address": "b3:2088cca19d9709fefea33eb9e0d590c33567df2ed4c162020ae6f93db71217e8"
-    },
-    {
-      "domain": "blob",
-      "name": "utf8",
-      "input_utf8": "héllo wörld ✓",
-      "address": "b3:517332d274f54d6324c640174499bb34f3ba03682c04ce6ba709dce3ed4ecf69"
-    },
-    {
-      "domain": "blob",
-      "name": "binary",
-      "input_base64": "AAcOFRwjKjE4P0ZNVFtiaXB3foWMk5qhqK+2vcTL0tng5+71/A==",
-      "address": "b3:5f10d1f3292161880e7ff11007955ea9b8a6fe27c81ea7ad483b173f09c9732a"
     },
     {
       "domain": "chain",
@@ -128,6 +103,30 @@
       "name": "binary",
       "input_base64": "AAcOFRwjKjE4P0ZNVFtiaXB3foWMk5qhqK+2vcTL0tng5+71/A==",
       "address": "b3:497c1fd35530e2a8431df1bf4a0a9d31df262bdf598b9321c11556733ae95806"
+    },
+    {
+      "domain": "content",
+      "name": "empty",
+      "input_utf8": "",
+      "address": "b3:af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262"
+    },
+    {
+      "domain": "content",
+      "name": "ascii",
+      "input_utf8": "hello wire",
+      "address": "b3:405e6ca617f518f202898eaa387c450fafc920d23ca23d16acf6ab1c1aff6595"
+    },
+    {
+      "domain": "content",
+      "name": "utf8",
+      "input_utf8": "héllo wörld ✓",
+      "address": "b3:0c2b694a91f635a9eaeb79bed504384a2b41b26fd3d04bb3c0aa52bb2b2582a6"
+    },
+    {
+      "domain": "content",
+      "name": "binary",
+      "input_base64": "AAcOFRwjKjE4P0ZNVFtiaXB3foWMk5qhqK+2vcTL0tng5+71/A==",
+      "address": "b3:30eb134cd42bb856a634c82a40ea82ed4bf95f0d849f276d2425666fbe7235e9"
     }
   ]
 }

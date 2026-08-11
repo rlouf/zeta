@@ -3,9 +3,9 @@
 Status: normative.
 
 This specification defines the identity model shared by the Python substrate
-and the Rust `zeta::substrate` module. It defines immutable values, canonical
-JSON, BLAKE3 addresses, and mutable refs. It does not define a journal schema
-or a durable substrate-store format.
+and the Rust `zeta-substrate` package (`zeta_substrate` in Rust code). It
+defines immutable values, canonical JSON, BLAKE3 addresses, and mutable refs.
+It does not define a journal schema or a durable substrate-store format.
 
 The key words MUST, MUST NOT, SHOULD, SHOULD NOT, and MAY are interpreted as
 described in RFC 2119.
@@ -162,16 +162,15 @@ The Python substrate stores Objects, Derivations, and Refs. It resolves only
 the address syntax in §3. Prefix resolution applies to the 64-character BLAKE3
 digest.
 
-The Rust `zeta::substrate` module contains the value types and a content
+The Rust `zeta-substrate` package contains the value types and a content
 `BlobStore`. The blob store uses the `Fanout2` layout under its configured
-root. The module does not yet persist Objects, Derivations, or Refs.
+root. The package does not yet persist Objects, Derivations, or Refs.
 Backend-neutral journal values, chaining, verification, and in-memory
-conformance live in the sibling `zeta::journal` module; neither module owns a
+conformance live in the sibling `zeta-journal` package; neither package owns a
 database or durable journal adapter.
 
 The `zeta-ipc` crate carries addresses as protocol data. It validates address
-syntax locally and does not depend on the Rust `zeta` crate or a hashing
-library.
+syntax locally and does not depend on `zeta-substrate` or a hashing library.
 
 ## 6. Conformance vectors
 

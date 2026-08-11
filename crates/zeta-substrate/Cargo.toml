@@ -1,6 +1,6 @@
 [package]
-name = "zeta-authoring"
-description = "Authored declarations and validation for Zeta agent systems."
+name = "zeta-substrate"
+description = "Content-addressed values and blob storage for the zeta ecosystem."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -8,7 +8,7 @@ license.workspace = true
 publish = false
 
 [dependencies]
+blake3.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-yaml_serde.workspace = true
-zeta-substrate = { path = "../zeta-substrate" }
+tempfile.workspace = true

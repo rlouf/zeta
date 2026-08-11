@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 use serde::Serialize;
 use serde_json::{Map, Value};
-use zeta::substrate::Hash;
+use zeta_substrate::Hash;
 
 /// Declares one schedule attached to an agent.
 ///

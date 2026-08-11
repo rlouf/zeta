@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::{Map, Number, Value};
 use yaml_serde::Value as YamlValue;
-use zeta::substrate::hash_bytes;
+use zeta_substrate::hash_bytes;
 
 use crate::error::{SpecError, SpecErrorKind};
 use crate::spec::{

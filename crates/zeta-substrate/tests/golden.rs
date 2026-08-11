@@ -11,7 +11,7 @@ const GOLDEN_FILE_HEX: &str = "49e23e8f078ffc54755d6b1136c4247a6cf2bbb2013af2cc0
 
 #[test]
 fn golden_bytes_digest_is_pinned() {
-    let hash = zeta::substrate::hash_bytes(GOLDEN_BYTES);
+    let hash = zeta_substrate::hash_bytes(GOLDEN_BYTES);
     assert_eq!(hash.to_hex(), GOLDEN_BYTES_HEX);
     assert_eq!(hash.to_string(), format!("b3:{GOLDEN_BYTES_HEX}"));
 }
@@ -19,10 +19,10 @@ fn golden_bytes_digest_is_pinned() {
 #[test]
 fn golden_file_digest_is_pinned_and_matches_hash_bytes() {
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/golden.bin");
-    let hash = zeta::substrate::hash_file(&path).unwrap();
+    let hash = zeta_substrate::hash_file(&path).unwrap();
     assert_eq!(hash.to_hex(), GOLDEN_FILE_HEX);
     let bytes = std::fs::read(&path).unwrap();
-    assert_eq!(zeta::substrate::hash_bytes(&bytes), hash);
+    assert_eq!(zeta_substrate::hash_bytes(&bytes), hash);
     assert!(
         bytes.len() > 16 * 1024,
         "fixture must exercise the mmap path"
@@ -32,7 +32,7 @@ fn golden_file_digest_is_pinned_and_matches_hash_bytes() {
 #[test]
 fn empty_input_digest_is_pinned() {
     assert_eq!(
-        zeta::substrate::hash_bytes(b"").to_hex(),
+        zeta_substrate::hash_bytes(b"").to_hex(),
         "af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262"
     );
 }

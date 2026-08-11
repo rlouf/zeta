@@ -2,14 +2,14 @@
 
 use std::fmt;
 
-use crate::substrate::{CanonicalJsonError, Hash};
+use zeta_substrate::{CanonicalJsonError, Hash};
 
 /// Reports why a new event cannot be appended.
 ///
 /// # Examples
 ///
 /// ```
-/// let error = zeta::journal::AppendError::EmptyId;
+/// let error = zeta_journal::AppendError::EmptyId;
 /// assert_eq!(error.reason(), "empty_id");
 /// ```
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -34,7 +34,7 @@ impl AppendError {
     /// # Examples
     ///
     /// ```
-    /// assert_eq!(zeta::journal::AppendError::EmptySource.reason(), "empty_source");
+    /// assert_eq!(zeta_journal::AppendError::EmptySource.reason(), "empty_source");
     /// ```
     pub fn reason(&self) -> &'static str {
         match self {
@@ -87,7 +87,7 @@ impl From<CanonicalJsonError> for AppendError {
 /// # Examples
 ///
 /// ```
-/// let kind = zeta::journal::VerificationErrorKind::DuplicateId;
+/// let kind = zeta_journal::VerificationErrorKind::DuplicateId;
 /// assert_eq!(kind.reason(), "duplicate_id");
 /// ```
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -144,7 +144,7 @@ impl VerificationErrorKind {
     /// # Examples
     ///
     /// ```
-    /// let kind = zeta::journal::VerificationErrorKind::PayloadEncoding;
+    /// let kind = zeta_journal::VerificationErrorKind::PayloadEncoding;
     /// assert_eq!(kind.reason(), "payload_encoding");
     /// ```
     pub fn reason(&self) -> &'static str {
@@ -183,11 +183,11 @@ impl VerificationErrorKind {
 /// # Examples
 ///
 /// ```
-/// let error = zeta::journal::VerificationError {
+/// let error = zeta_journal::VerificationError {
 ///     entries_checked: 0,
 ///     event_id: Some("evt_example".to_owned()),
 ///     cursor: Some(1),
-///     kind: zeta::journal::VerificationErrorKind::DuplicateId,
+///     kind: zeta_journal::VerificationErrorKind::DuplicateId,
 /// };
 /// assert_eq!(error.reason(), "duplicate_id");
 /// ```
@@ -209,11 +209,11 @@ impl VerificationError {
     /// # Examples
     ///
     /// ```
-    /// let error = zeta::journal::VerificationError {
+    /// let error = zeta_journal::VerificationError {
     ///     entries_checked: 0,
     ///     event_id: None,
     ///     cursor: None,
-    ///     kind: zeta::journal::VerificationErrorKind::PayloadEncoding,
+    ///     kind: zeta_journal::VerificationErrorKind::PayloadEncoding,
     /// };
     /// assert_eq!(error.reason(), "payload_encoding");
     /// ```
@@ -239,7 +239,7 @@ impl std::error::Error for VerificationError {}
 /// # Examples
 ///
 /// ```
-/// let report = zeta::journal::VerificationReport {
+/// let report = zeta_journal::VerificationReport {
 ///     entries_checked: 0,
 ///     head: None,
 /// };

@@ -11,14 +11,14 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
-use super::hash::{hash_bytes, Hash};
+use crate::hash::{hash_bytes, Hash};
 
 /// A content-addressed blob store rooted at one directory.
 ///
 /// # Examples
 ///
 /// ```
-/// use zeta::substrate::BlobStore;
+/// use zeta_substrate::BlobStore;
 ///
 /// let root = tempfile::tempdir().unwrap();
 /// let store = BlobStore::new(root.path());
@@ -39,8 +39,8 @@ impl BlobStore {
     ///
     /// ```
     /// let root = tempfile::tempdir().unwrap();
-    /// let store = zeta::substrate::BlobStore::new(root.path());
-    /// let hash = zeta::substrate::hash_bytes(b"payload");
+    /// let store = zeta_substrate::BlobStore::new(root.path());
+    /// let hash = zeta_substrate::hash_bytes(b"payload");
     /// assert!(store.path_of(&hash).starts_with(root.path()));
     /// ```
     pub fn new(root: &Path) -> Self {
@@ -55,10 +55,10 @@ impl BlobStore {
     ///
     /// ```
     /// use std::path::Path;
-    /// use zeta::substrate::BlobStore;
+    /// use zeta_substrate::BlobStore;
     ///
     /// let store = BlobStore::new(Path::new("/store"));
-    /// let hash = zeta::substrate::hash_bytes(b"x");
+    /// let hash = zeta_substrate::hash_bytes(b"x");
     /// let path = store.path_of(&hash);
     /// assert!(path.starts_with("/store/blobs"));
     /// ```

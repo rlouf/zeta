@@ -284,7 +284,7 @@ fn parser_uses_supplied_bytes_and_logical_path_without_reading_the_filesystem() 
 
     assert_eq!(spec.path, path);
     assert_eq!(spec.instructions, "Keep CRLF.\r\n");
-    assert_eq!(spec.content_address, zeta::substrate::hash_bytes(source));
+    assert_eq!(spec.content_address, zeta_substrate::hash_bytes(source));
 }
 
 #[test]

@@ -1,11 +1,11 @@
 //! Unit behavior for journal values, chain coverage, and verification.
 
 use serde_json::{json, Map, Value};
-use zeta::journal::{
+use zeta_journal::{
     canonical_payload, entry_address, payload_address, verify, AppendError, DraftEvent, Event,
     HeadExpectation, JournalEntry, MemoryJournal, VerificationError, VerificationErrorKind,
 };
-use zeta::substrate::Hash;
+use zeta_substrate::Hash;
 
 fn fields(value: Value) -> Map<String, Value> {
     value.as_object().unwrap().clone()

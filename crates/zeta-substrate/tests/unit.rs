@@ -3,9 +3,7 @@
 use std::path::Path;
 
 use serde_json::{json, Map, Number, Value};
-use zeta::substrate::{
-    BlobStore, Derivation, Domain, Hash, HashParseError, Object, Ref, RefUpdate,
-};
+use zeta_substrate::{BlobStore, Derivation, Domain, Hash, HashParseError, Object, Ref, RefUpdate};
 
 fn fields(value: serde_json::Value) -> Map<String, serde_json::Value> {
     value.as_object().unwrap().clone()
@@ -13,7 +11,7 @@ fn fields(value: serde_json::Value) -> Map<String, serde_json::Value> {
 
 #[test]
 fn hash_display_and_from_str_round_trip() {
-    let hash = zeta::substrate::hash_bytes(b"round trip");
+    let hash = zeta_substrate::hash_bytes(b"round trip");
     let text = hash.to_string();
     assert!(text.starts_with("b3:"));
     assert_eq!(text.len(), 3 + 64);
@@ -33,7 +31,7 @@ fn hash_from_str_rejects_malformed_input() {
 
 #[test]
 fn hash_serde_uses_the_prefixed_string_form() {
-    let hash = zeta::substrate::hash_bytes(b"serde");
+    let hash = zeta_substrate::hash_bytes(b"serde");
     let json = serde_json::to_string(&hash).unwrap();
     assert_eq!(json, format!("\"{hash}\""));
     let parsed: Hash = serde_json::from_str(&json).unwrap();
@@ -48,8 +46,8 @@ fn hash_file_matches_hash_bytes_for_small_files() {
     let path = directory.path().join("small.txt");
     std::fs::write(&path, b"small file, read path").unwrap();
     assert_eq!(
-        zeta::substrate::hash_file(&path).unwrap(),
-        zeta::substrate::hash_bytes(b"small file, read path")
+        zeta_substrate::hash_file(&path).unwrap(),
+        zeta_substrate::hash_bytes(b"small file, read path")
     );
 }
 
@@ -67,8 +65,8 @@ fn active_domains_have_distinct_frozen_contexts() {
     for (index, domain) in domains.iter().enumerate() {
         for other in &domains[index + 1..] {
             assert_ne!(
-                zeta::substrate::derive(*domain, input),
-                zeta::substrate::derive(*other, input)
+                zeta_substrate::derive(*domain, input),
+                zeta_substrate::derive(*other, input)
             );
         }
     }
@@ -80,7 +78,7 @@ fn object_content_address_uses_canonical_fields_and_object_domain() {
         kind: "example.message".to_owned(),
         schema: "zeta.example.v1".to_owned(),
         data: fields(json!({"z": 2, "a": "héllo"})),
-        links: vec![zeta::substrate::hash_bytes(b"child").to_string()],
+        links: vec![zeta_substrate::hash_bytes(b"child").to_string()],
     };
     let canonical = concat!(
         "{\"data\":{\"a\":\"héllo\",\"z\":2},",
@@ -91,14 +89,14 @@ fn object_content_address_uses_canonical_fields_and_object_domain() {
     assert_eq!(object.canonical_bytes().unwrap(), canonical.as_bytes());
     assert_eq!(
         object.content_address().unwrap(),
-        zeta::substrate::derive(Domain::Object, canonical.as_bytes())
+        zeta_substrate::derive(Domain::Object, canonical.as_bytes())
     );
 }
 
 #[test]
 fn derivation_content_address_uses_canonical_fields_and_derivation_domain() {
-    let output_id = zeta::substrate::hash_bytes(b"output").to_string();
-    let input_id = zeta::substrate::hash_bytes(b"input").to_string();
+    let output_id = zeta_substrate::hash_bytes(b"output").to_string();
+    let input_id = zeta_substrate::hash_bytes(b"input").to_string();
     let derivation = Derivation {
         producer: "example:combine@1".to_owned(),
         output_id,
@@ -108,7 +106,7 @@ fn derivation_content_address_uses_canonical_fields_and_derivation_domain() {
     let canonical = derivation.canonical_bytes().unwrap();
     assert_eq!(
         derivation.content_address().unwrap(),
-        zeta::substrate::derive(Domain::Derivation, &canonical)
+        zeta_substrate::derive(Domain::Derivation, &canonical)
     );
     assert_eq!(canonical.first(), Some(&b'{'));
     assert_eq!(canonical.last(), Some(&b'}'));
@@ -119,8 +117,8 @@ fn derivation_content_address_uses_canonical_fields_and_derivation_domain() {
 fn canonical_json_rejects_integer_above_u64() {
     let value = serde_json::from_str("18446744073709551616").unwrap();
     assert_eq!(
-        zeta::substrate::canonical_json(&value),
-        Err(zeta::substrate::CanonicalJsonError::IntegerOutOfRange(
+        zeta_substrate::canonical_json(&value),
+        Err(zeta_substrate::CanonicalJsonError::IntegerOutOfRange(
             "18446744073709551616".to_owned()
         ))
     );
@@ -130,8 +128,8 @@ fn canonical_json_rejects_integer_above_u64() {
 fn canonical_json_rejects_integer_below_i64() {
     let value = serde_json::from_str("-9223372036854775809").unwrap();
     assert_eq!(
-        zeta::substrate::canonical_json(&value),
-        Err(zeta::substrate::CanonicalJsonError::IntegerOutOfRange(
+        zeta_substrate::canonical_json(&value),
+        Err(zeta_substrate::CanonicalJsonError::IntegerOutOfRange(
             "-9223372036854775809".to_owned()
         ))
     );
@@ -148,7 +146,7 @@ fn object_content_address_rejects_float_outside_binary64() {
     };
     assert_eq!(
         object.content_address(),
-        Err(zeta::substrate::CanonicalJsonError::FloatOutOfRange(
+        Err(zeta_substrate::CanonicalJsonError::FloatOutOfRange(
             "1e400".to_owned()
         ))
     );
@@ -167,7 +165,7 @@ fn programmatic_floats_match_python_spelling() {
     ] {
         let value = Value::Number(Number::from_f64(number).unwrap());
         assert_eq!(
-            zeta::substrate::canonical_json(&value).unwrap(),
+            zeta_substrate::canonical_json(&value).unwrap(),
             expected.as_bytes()
         );
     }
@@ -175,8 +173,8 @@ fn programmatic_floats_match_python_spelling() {
 
 #[test]
 fn refs_preserve_named_pointer_and_conditional_update_fields() {
-    let old_object_id = zeta::substrate::hash_bytes(b"old").to_string();
-    let new_object_id = zeta::substrate::hash_bytes(b"new").to_string();
+    let old_object_id = zeta_substrate::hash_bytes(b"old").to_string();
+    let new_object_id = zeta_substrate::hash_bytes(b"new").to_string();
     let reference = Ref {
         name: "session/head".to_owned(),
         object_id: old_object_id.clone(),
@@ -208,7 +206,7 @@ fn blob_store_put_get_and_verify_round_trip() {
 
 #[test]
 fn blob_store_uses_two_character_fanout() {
-    let hash = zeta::substrate::hash_bytes(b"layout");
+    let hash = zeta_substrate::hash_bytes(b"layout");
     let hex = hash.to_hex();
     let store = BlobStore::new(Path::new("/store"));
     assert_eq!(

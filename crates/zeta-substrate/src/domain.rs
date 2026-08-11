@@ -5,14 +5,14 @@
 //! bytes stay outside this enum because plain BLAKE3 makes equal bytes share
 //! one address.
 
-use super::hash::Hash;
+use crate::hash::Hash;
 
 /// Selects one active derived-identifier namespace.
 ///
 /// # Examples
 ///
 /// ```
-/// use zeta::substrate::Domain;
+/// use zeta_substrate::Domain;
 ///
 /// assert_ne!(Domain::Object.context(), Domain::Derivation.context());
 /// ```
@@ -32,7 +32,7 @@ impl Domain {
     /// # Examples
     ///
     /// ```
-    /// use zeta::substrate::Domain;
+    /// use zeta_substrate::Domain;
     ///
     /// assert_eq!(Domain::Object.context(), "zeta-os 2026-08 cas object");
     /// ```
@@ -54,7 +54,7 @@ impl Domain {
 /// # Examples
 ///
 /// ```
-/// use zeta::substrate::{derive, Domain};
+/// use zeta_substrate::{derive, Domain};
 ///
 /// let object_id = derive(Domain::Object, b"identity");
 /// let chain_id = derive(Domain::Chain, b"identity");

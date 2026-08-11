@@ -1,46 +1,25 @@
 # zeta
 
-`zeta` defines content identities and event-journal rules.
-It keeps content addresses stable and makes event history verifiable.
+`zeta` is the native application package and executable for the Zeta product.
+It sits at the top of the Rust dependency graph and will compose the runtime
+domains into installed commands.
 
-## Contents
+## Current boundary
 
-The `substrate` module provides these items:
+The package is binary-only. It currently reserves the application and
+executable name while the agent and Dispatch application layers are ported.
+It intentionally exposes no library facade and has no command behavior yet.
 
-- Full `b3:` addresses.
-- BLAKE3 hashing for bytes and files.
-- Canonical JSON for identity data.
-- `Object`, `Derivation`, `Ref`, and `RefUpdate` values.
-- A file blob store with two-character directory fanout.
+Foundation code now has explicit owners:
 
-The `journal` module provides these items:
+- `zeta-substrate` owns content identity and blob primitives.
+- `zeta-journal` owns event values, chaining, and verification.
 
-- Draft and durable event values.
-- Canonical payload and chain addresses.
-- Linked journal entries.
-- Journal verification.
-- `MemoryJournal` for in-memory use and conformance tests.
+Domain crates depend on those packages directly. They do not depend on this
+application package.
 
-## Example
+## Build
 
-Create a content address for an object:
-
-```rust
-use zeta::substrate::Object;
-
-let object = Object {
-    kind: "example.message".to_owned(),
-    schema: "example.v1".to_owned(),
-    data: Default::default(),
-    links: Vec::new(),
-};
-
-let address = object.content_address().expect("valid object");
-assert!(address.to_string().starts_with("b3:"));
-```
-
-## Test
-
-```sh
-cargo test -p zeta
+```console
+$ cargo build -p zeta
 ```

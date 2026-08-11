@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 
 use serde_json::{Map, Value};
-use zeta::substrate::{Derivation, Object};
+use zeta_substrate::{Derivation, Object};
 
 fn encoding_document() -> Value {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -32,7 +32,7 @@ fn every_python_encoding_vector_matches_byte_for_byte() {
         let value = &vector["value"];
         let expected = vector["canonical_utf8"].as_str().unwrap().as_bytes();
         assert_eq!(
-            zeta::substrate::canonical_json(value).unwrap(),
+            zeta_substrate::canonical_json(value).unwrap(),
             expected,
             "{}",
             vector["name"]

@@ -9,6 +9,8 @@ from dataclasses import KW_ONLY, dataclass
 from typing import Any
 from uuid import uuid4
 
+from zeta.addresses import canonical_json_bytes
+
 
 @dataclass(frozen=True)
 class DraftEvent:
@@ -63,6 +65,13 @@ class Event:
 
 
 def json_native_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
+    native = dict(payload)
+    canonical_json_bytes(native)
     return json.loads(
-        json.dumps(dict(payload), ensure_ascii=False, separators=(",", ":"))
+        json.dumps(
+            native,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
     )

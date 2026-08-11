@@ -21,6 +21,16 @@ class Filter:
     limit: int | None = None
     newest_first: bool = False
 
+    def __post_init__(self) -> None:
+        if self.limit is None:
+            return
+        if (
+            isinstance(self.limit, bool)
+            or not isinstance(self.limit, int)
+            or self.limit < 0
+        ):
+            raise ValueError("event filter limit must be a non-negative integer")
+
 
 @runtime_checkable
 class EventReader(Protocol):

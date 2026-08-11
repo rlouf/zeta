@@ -106,7 +106,7 @@ def content_address(data: bytes) -> str:
 
 
 def chain_address(data: bytes) -> str:
-    """Return the address for one derived link in the idempotent id chain."""
+    """Return the address for one journal entry or deterministic chain link."""
     return address("chain", data)
 
 

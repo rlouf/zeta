@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from zeta.events import DraftEvent, Event, json_native_payload
 from zeta.journal.store import Filter
-from zeta.journal.types import AppendOutcome
+from zeta.journal.types import AppendOutcome, validate_event
 from zeta.substrate.memory import InMemoryStore
 
 __all__ = ["InMemoryStore", "MemoryEventStore"]
@@ -30,6 +30,7 @@ class MemoryEventStore:
         duplicate = self._duplicate_for(event)
         if duplicate is not None:
             return AppendOutcome(event=duplicate, inserted=False)
+        validate_event(event)
         inserted = Event(
             id=event.id,
             event_type=event.event_type,

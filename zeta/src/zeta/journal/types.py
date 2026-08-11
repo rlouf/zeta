@@ -116,8 +116,8 @@ class VerificationError(ValueError):
         super().__init__(f"{reason.value} at {location}")
 
 
-def validate_event(event: Event) -> None:
-    """Reject fields that cannot form the language-neutral journal identity."""
+def validate_event_identity(event: Event) -> None:
+    """Enforce fields every append attempt must carry before deduplication."""
     for name, value in (
         ("id", event.id),
         ("type", event.event_type),
@@ -125,6 +125,11 @@ def validate_event(event: Event) -> None:
     ):
         if not isinstance(value, str) or not value:
             raise ValueError(f"event {name} must be a non-empty string")
+
+
+def validate_event(event: Event) -> None:
+    """Reject fields that cannot form the language-neutral journal identity."""
+    validate_event_identity(event)
     if (
         isinstance(event.timestamp_ms, bool)
         or not isinstance(event.timestamp_ms, int)
@@ -156,6 +161,10 @@ def canonical_chain_bytes(
 ) -> bytes:
     """Return the versioned bytes that commit every semantic event field."""
     validate_event(event)
+    if not addresses.is_b3(payload_address):
+        raise ValueError("event payload_address must be a full b3 address")
+    if previous_address is not None and not addresses.is_b3(previous_address):
+        raise ValueError("event previous_address must be null or a full b3 address")
     value = [
         0,
         event.id,
@@ -176,6 +185,12 @@ def canonical_chain_bytes(
 def journal_entry(event: Event, previous_address: str | None) -> JournalEntry:
     """Mint one complete logical entry without choosing its physical storage."""
     validate_event(event)
+    if (
+        isinstance(event.cursor, bool)
+        or not isinstance(event.cursor, int)
+        or event.cursor <= 0
+    ):
+        raise ValueError("event cursor must be a positive integer")
     payload_bytes = canonical_payload_bytes(event.payload)
     payload_address = addresses.content_address(payload_bytes)
     chain_bytes = canonical_chain_bytes(event, payload_address, previous_address)
@@ -188,12 +203,21 @@ def journal_entry(event: Event, previous_address: str | None) -> JournalEntry:
     )
 
 
+_UNANCHORED = object()
+
+
 def verify_entries(
     entries: Iterable[JournalEntry],
     *,
-    expected_head: str | None = None,
+    expected_head: str | None | object = _UNANCHORED,
 ) -> VerificationReport:
-    """Verify a retained chain while distinguishing it from an external anchor."""
+    """Verify a chain; omitted head is unanchored while explicit null anchors empty."""
+    if (
+        expected_head is not _UNANCHORED
+        and expected_head is not None
+        and (not isinstance(expected_head, str) or not addresses.is_b3(expected_head))
+    ):
+        raise ValueError("expected_head must be null or a full b3 address")
     previous_address = None
     previous_cursor = None
     seen_ids: set[str] = set()
@@ -202,18 +226,8 @@ def verify_entries(
     last_entry = None
     for entry in entries:
         event = entry.event
-        cursor = event.cursor
-        if (
-            isinstance(cursor, bool)
-            or not isinstance(cursor, int)
-            or cursor <= 0
-            or (previous_cursor is not None and cursor <= previous_cursor)
-        ):
-            raise _verification_error(
-                VerificationReason.CURSOR_ORDER,
-                entry,
-                entries_checked,
-            )
+        cursor = _verified_cursor(entry, previous_cursor, entries_checked)
+        _validate_verifiable_event(entry, entries_checked)
         if event.id in seen_ids:
             raise _verification_error(
                 VerificationReason.DUPLICATE_ID,
@@ -229,50 +243,19 @@ def verify_entries(
                 entry,
                 entries_checked,
             )
-        try:
-            payload_bytes = canonical_payload_bytes(event.payload)
-        except (TypeError, ValueError) as error:
-            raise _verification_error(
-                VerificationReason.PAYLOAD_ENCODING,
-                entry,
-                entries_checked,
-            ) from error
-        if entry.payload_bytes != payload_bytes:
-            raise _verification_error(
-                VerificationReason.PAYLOAD_ENCODING,
-                entry,
-                entries_checked,
-            )
-        payload_address = addresses.content_address(payload_bytes)
-        if entry.payload_address != payload_address:
-            raise _verification_error(
-                VerificationReason.PAYLOAD_ADDRESS,
-                entry,
-                entries_checked,
-            )
+        payload_address = _verified_payload_address(entry, entries_checked)
         if entry.previous_address != previous_address:
             raise _verification_error(
                 VerificationReason.PREVIOUS_ADDRESS,
                 entry,
                 entries_checked,
             )
-        try:
-            chain_bytes = canonical_chain_bytes(
-                event, payload_address, previous_address
-            )
-        except (TypeError, ValueError) as error:
-            raise _verification_error(
-                VerificationReason.ENTRY_ADDRESS,
-                entry,
-                entries_checked,
-            ) from error
-        entry_address = addresses.chain_address(chain_bytes)
-        if entry.entry_address != entry_address:
-            raise _verification_error(
-                VerificationReason.ENTRY_ADDRESS,
-                entry,
-                entries_checked,
-            )
+        entry_address = _verified_entry_address(
+            entry,
+            payload_address,
+            previous_address,
+            entries_checked,
+        )
         seen_ids.add(event.id)
         if event.idempotency_key is not None:
             seen_idempotency_keys.add(event.idempotency_key)
@@ -280,7 +263,7 @@ def verify_entries(
         previous_cursor = cursor
         previous_address = entry_address
         last_entry = entry
-    if expected_head is not None and previous_address != expected_head:
+    if expected_head is not _UNANCHORED and previous_address != expected_head:
         raise VerificationError(
             VerificationReason.EXPECTED_HEAD,
             event_id=last_entry.event.id if last_entry is not None else None,
@@ -293,15 +276,104 @@ def verify_entries(
     )
 
 
+def _verified_cursor(
+    entry: JournalEntry,
+    previous_cursor: int | None,
+    entries_checked: int,
+) -> int:
+    cursor = entry.event.cursor
+    if (
+        isinstance(cursor, bool)
+        or not isinstance(cursor, int)
+        or cursor <= 0
+        or (previous_cursor is not None and cursor <= previous_cursor)
+    ):
+        raise _verification_error(
+            VerificationReason.CURSOR_ORDER,
+            entry,
+            entries_checked,
+        )
+    return cursor
+
+
+def _validate_verifiable_event(entry: JournalEntry, entries_checked: int) -> None:
+    try:
+        validate_event(entry.event)
+    except (TypeError, ValueError) as error:
+        raise _verification_error(
+            VerificationReason.ENTRY_ADDRESS,
+            entry,
+            entries_checked,
+        ) from error
+
+
+def _verified_payload_address(entry: JournalEntry, entries_checked: int) -> str:
+    try:
+        payload_bytes = canonical_payload_bytes(entry.event.payload)
+    except (TypeError, ValueError) as error:
+        raise _verification_error(
+            VerificationReason.PAYLOAD_ENCODING,
+            entry,
+            entries_checked,
+        ) from error
+    if entry.payload_bytes != payload_bytes:
+        raise _verification_error(
+            VerificationReason.PAYLOAD_ENCODING,
+            entry,
+            entries_checked,
+        )
+    payload_address = addresses.content_address(payload_bytes)
+    if entry.payload_address != payload_address:
+        raise _verification_error(
+            VerificationReason.PAYLOAD_ADDRESS,
+            entry,
+            entries_checked,
+        )
+    return payload_address
+
+
+def _verified_entry_address(
+    entry: JournalEntry,
+    payload_address: str,
+    previous_address: str | None,
+    entries_checked: int,
+) -> str:
+    try:
+        chain_bytes = canonical_chain_bytes(
+            entry.event,
+            payload_address,
+            previous_address,
+        )
+    except (TypeError, ValueError) as error:
+        raise _verification_error(
+            VerificationReason.ENTRY_ADDRESS,
+            entry,
+            entries_checked,
+        ) from error
+    entry_address = addresses.chain_address(chain_bytes)
+    if entry.entry_address != entry_address:
+        raise _verification_error(
+            VerificationReason.ENTRY_ADDRESS,
+            entry,
+            entries_checked,
+        )
+    return entry_address
+
+
 def _verification_error(
     reason: VerificationReason,
     entry: JournalEntry,
     entries_checked: int,
 ) -> VerificationError:
+    event_id = entry.event.id if isinstance(entry.event.id, str) else None
+    cursor = entry.event.cursor
+    cursor = (
+        cursor if isinstance(cursor, int) and not isinstance(cursor, bool) else None
+    )
     return VerificationError(
         reason,
-        event_id=entry.event.id,
-        cursor=entry.event.cursor,
+        event_id=event_id,
+        cursor=cursor,
         entries_checked=entries_checked,
     )
 

@@ -1,9 +1,10 @@
 import json
 from dataclasses import replace
 from pathlib import Path
+from typing import cast
 
 import pytest
-from zeta.events import Event, json_native_payload
+from zeta.events import DraftEvent, Event, json_native_payload
 from zeta.journal import types as journal_types
 from zeta.journal.memory import MemoryEventStore
 from zeta.journal.sqlite import SqliteEventStore
@@ -280,6 +281,37 @@ def test_trusted_head_detects_tail_truncation() -> None:
     assert raised.value.entries_checked == len(entries) - 1
 
 
+def test_trusted_empty_head_detects_an_unexpected_entry() -> None:
+    report = journal_types.verify_entries([], expected_head=None)
+    assert report.head_address is None
+    with pytest.raises(journal_types.VerificationError) as raised:
+        journal_types.verify_entries(_vector_entries()[:1], expected_head=None)
+    assert raised.value.reason is journal_types.VerificationReason.EXPECTED_HEAD
+
+
+def test_verification_structures_invalid_event_fields() -> None:
+    entry = _vector_entries()[0]
+    corrupted = replace(
+        entry,
+        event=replace(entry.event, id=cast(str, [])),
+    )
+    with pytest.raises(journal_types.VerificationError) as raised:
+        journal_types.verify_entries([corrupted])
+    assert raised.value.reason is journal_types.VerificationReason.ENTRY_ADDRESS
+
+
+def test_entry_mint_requires_a_durable_cursor_and_b3_addresses() -> None:
+    entry = _vector_entries()[0]
+    with pytest.raises(ValueError, match="cursor"):
+        journal_types.journal_entry(replace(entry.event, cursor=None), None)
+    with pytest.raises(ValueError, match="payload_address"):
+        journal_types.canonical_chain_bytes(entry.event, "not-an-address", None)
+    with pytest.raises(ValueError, match="previous_address"):
+        journal_types.journal_entry(entry.event, "not-an-address")
+    with pytest.raises(ValueError, match="expected_head"):
+        journal_types.verify_entries([entry], expected_head="not-an-address")
+
+
 @pytest.mark.parametrize("limit", [-1, True])
 def test_filter_rejects_invalid_limits(limit: int) -> None:
     with pytest.raises(ValueError, match="limit"):
@@ -312,6 +344,23 @@ def test_stores_validate_new_events_but_ignore_duplicate_content(store_factory) 
     assert inserted.inserted
     assert not duplicate.inserted
     assert duplicate.event == inserted.event
+    accepted_duplicate = store.accept(
+        DraftEvent(
+            event_type="valid.event",
+            source="fixture",
+            payload={"value": float("nan")},
+            idempotency_key="valid-key",
+        )
+    )
+    assert not accepted_duplicate.inserted
+    assert accepted_duplicate.event == inserted.event
+    for invalid in (
+        replace(event, id="", idempotency_key="valid-key"),
+        replace(event, id="evt_retry", event_type="", idempotency_key="valid-key"),
+        replace(event, id="evt_retry", source="", idempotency_key="valid-key"),
+    ):
+        with pytest.raises(ValueError):
+            store.append(invalid)
     with pytest.raises(ValueError):
         store.append(
             replace(

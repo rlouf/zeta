@@ -102,7 +102,9 @@ integer `0` is the chain format version.
 Every semantic Event field participates. `cursor` is excluded because it is a
 backend ordering token; the predecessor link already commits append order.
 Payload bytes participate through `payload_address`, not by being embedded
-again.
+again. A public entry mint nevertheless requires the Event's assigned positive
+cursor because it produces a durable JournalEntry rather than a pre-append
+chain preview.
 
 ### 4.2 Entry address and linkage
 
@@ -116,6 +118,8 @@ entry_address = derived_address(
 The first successful append has `previous_address = null`. Every later
 successful append names the immediately preceding successful entry address.
 A duplicate attempt creates no entry and leaves the head unchanged.
+Mint APIs MUST reject payload or predecessor inputs that are not full-width
+lowercase `b3:` addresses.
 
 The Chain context also serves deterministic runtime chain links. The
 version-framed JSON array distinguishes journal bytes from those raw inputs.
@@ -130,7 +134,8 @@ A conforming implementation MUST:
 3. If no id matches and `idempotency_key` is non-null, look it up globally.
 4. On a match, return the existing event with `inserted = false`. An id match
    takes precedence when the candidate id and key name different events. The
-   candidate payload and metadata are not compared.
+   candidate payload and remaining metadata are not compared. Step 1 still
+   applies to every attempt before duplicate resolution.
 5. For a new event, validate and canonicalize the payload, read the current
    head, assign a cursor greater than every prior cursor, and compute §3–4.
 6. Publish the Event, identity values, and new head atomically, then return the
@@ -188,9 +193,10 @@ already checked. Stable reasons in v0 are `cursor_order`, `duplicate_id`,
 Successful verification returns the number of checked entries and the current
 head, which is null for an empty journal. Unanchored verification proves only
 internal consistency of the retained sequence. A caller MAY supply an
-externally trusted expected head; matching it also detects deletion of the
-final suffix. “Tamper-evident” applies only relative to such an external
-anchor.
+externally trusted expected head; an explicitly supplied null value anchors an
+empty journal, while omitting the argument requests unanchored verification.
+Matching the anchor also detects deletion of the final suffix.
+“Tamper-evident” applies only relative to such an external anchor.
 
 ## 8. Storage exclusions
 

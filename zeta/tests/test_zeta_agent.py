@@ -3876,6 +3876,82 @@ def test_zeta_rpc_events_publish_rejects_lifecycle_event_ingress(
     assert event_store.list_events(zeta_events.Filter()) == []
 
 
+def test_zeta_rpc_events_publish_reports_invalid_journal_values(tmp_path: Path) -> None:
+    event_store = zeta_events.SqliteEventStore(tmp_path / "events.sqlite3")
+    session = zeta_runtime_context.RuntimeContext(
+        session_id="ctx-session",
+        event_sink=event_store,
+        trace_store=zeta_trace.InMemoryStore(),
+        tool_registry=CapabilityRegistry(),
+        state_dir=tmp_path,
+        session_dir=tmp_path / "sessions" / "ctx-session",
+    )
+    requests = [
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "events.publish",
+            "params": {
+                "event_type": "invalid.payload",
+                "source": "test",
+                "payload": {"value": float("nan")},
+            },
+        },
+        {
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "events.publish",
+            "params": {
+                "event_type": "invalid.source",
+                "source": "",
+                "payload": {},
+            },
+        },
+    ]
+    output = RpcMemoryTransport()
+
+    run_rpc_messages(
+        "".join(f"{json.dumps(request)}\n" for request in requests),
+        output,
+        session=session,
+    )
+
+    messages = {message["id"]: message for message in rpc_messages(output)}
+    for request_id in (1, 2):
+        assert messages[request_id]["error"]["code"] == -32602
+        assert messages[request_id]["error"]["data"]["code"] == "invalid_event"
+    assert event_store.list_events(zeta_events.Filter()) == []
+
+
+def test_zeta_runtime_store_resolves_duplicate_drafts_before_payload_validation(
+    tmp_path: Path,
+) -> None:
+    event_store = RuntimeEventStore.open(tmp_path / "events.sqlite3")
+    try:
+        inserted = event_store.accept(
+            DraftEvent(
+                event_type="example.created",
+                source="test",
+                payload={"value": 1},
+                idempotency_key="example:1",
+            )
+        )
+        duplicate = event_store.accept(
+            DraftEvent(
+                event_type="example.changed",
+                source="test",
+                payload={"value": float("nan")},
+                idempotency_key="example:1",
+            )
+        )
+    finally:
+        event_store.close()
+
+    assert inserted.inserted
+    assert not duplicate.inserted
+    assert duplicate.event == inserted.event
+
+
 def test_zeta_rpc_events_list_uses_event_store_filter_names(tmp_path: Path) -> None:
     event_store = zeta_events.SqliteEventStore(tmp_path / "events.sqlite3")
     for content in ("one", "two", "three"):
@@ -3924,6 +4000,60 @@ def test_zeta_rpc_events_list_uses_event_store_filter_names(tmp_path: Path) -> N
         "three",
     ]
     assert message["result"]["next_cursor"] == 3
+
+
+def test_zeta_rpc_events_list_accepts_zero_and_rejects_invalid_limits(
+    tmp_path: Path,
+) -> None:
+    event_store = zeta_events.SqliteEventStore(tmp_path / "events.sqlite3")
+    event_store.accept(
+        DraftEvent(
+            event_type="zeta.user_message",
+            source="test",
+            payload={"content": "hello"},
+        )
+    )
+    session = zeta_runtime_context.RuntimeContext(
+        session_id="ctx-session",
+        event_sink=event_store,
+        trace_store=zeta_trace.InMemoryStore(),
+        tool_registry=CapabilityRegistry(),
+        state_dir=tmp_path,
+        session_dir=tmp_path / "sessions" / "ctx-session",
+    )
+    requests = [
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "events.list",
+            "params": {"limit": 0},
+        },
+        {
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "events.list",
+            "params": {"limit": -1},
+        },
+        {
+            "jsonrpc": "2.0",
+            "id": 3,
+            "method": "events.list",
+            "params": {"limit": True},
+        },
+    ]
+    output = RpcMemoryTransport()
+
+    run_rpc_messages(
+        "".join(f"{json.dumps(request)}\n" for request in requests),
+        output,
+        session=session,
+    )
+
+    messages = {message["id"]: message for message in rpc_messages(output)}
+    assert messages[1]["result"] == {"events": [], "next_cursor": None}
+    for request_id in (2, 3):
+        assert messages[request_id]["error"]["code"] == -32602
+        assert messages[request_id]["error"]["data"]["code"] == "invalid_limit"
 
 
 def test_zeta_rpc_eventlog_events_list_request_produces_response() -> None:
@@ -7421,6 +7551,26 @@ def test_zeta_cli_events_publish_rejects_non_object_payload(tmp_path: Path) -> N
 
     assert result.exit_code != 0
     assert "payload JSON must be an object" in result.output
+
+
+def test_zeta_cli_events_publish_reports_invalid_identity_payload(
+    tmp_path: Path,
+) -> None:
+    result = CliRunner().invoke(
+        cli_main.cli,
+        [
+            "events",
+            "publish",
+            "laptop.resumed",
+            "--state-dir",
+            str(tmp_path / ".zeta"),
+            "--payload-json",
+            '{"value":NaN}',
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "invalid event" in result.output
 
 
 def test_zeta_agent_spec_parses_retry_policy(tmp_path: Path) -> None:

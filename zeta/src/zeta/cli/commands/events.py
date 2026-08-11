@@ -459,6 +459,8 @@ def events_publish(
                 turn_id=turn_id,
             )
         )
+    except (TypeError, ValueError) as error:
+        raise click.ClickException(f"invalid event: {error}") from error
     finally:
         event_store.close()
 

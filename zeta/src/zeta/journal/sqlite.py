@@ -16,7 +16,7 @@ from typing import Any, Protocol
 
 from zeta.events import DraftEvent, Event, json_native_payload
 from zeta.journal.store import Filter
-from zeta.journal.types import AppendOutcome, validate_event
+from zeta.journal.types import AppendOutcome, validate_event, validate_event_identity
 from zeta.paths import resolve_state_dir
 from zeta.substrate.objects import Derivation, Object
 from zeta.substrate.sqlite import SqliteObjectStore, sqlite_read_only_uri
@@ -431,6 +431,7 @@ class SqliteEventStore:
         """
         if not self.connection.in_transaction:
             raise RuntimeError("transaction-local append requires a transaction")
+        validate_event_identity(event)
         duplicate = self._duplicate_for(event)
         if duplicate is not None:
             return AppendOutcome(event=duplicate, inserted=False)

@@ -45,6 +45,7 @@ class Event:
 
     @classmethod
     def from_draft(cls, draft: DraftEvent) -> Event:
+        """Build a candidate while deferring payload validation until after dedupe."""
         idempotency_key = (
             draft.idempotency_key.strip() or None
             if draft.idempotency_key is not None
@@ -54,7 +55,7 @@ class Event:
             id=f"evt_{uuid4().hex}",
             event_type=draft.event_type,
             source=draft.source,
-            payload=json_native_payload(draft.payload),
+            payload=dict(draft.payload),
             idempotency_key=idempotency_key,
             caused_by=draft.caused_by,
             session_id=draft.session_id,

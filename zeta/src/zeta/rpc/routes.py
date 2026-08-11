@@ -388,6 +388,11 @@ async def events_publish(
             "events.publish cannot accept runtime lifecycle events",
             event_type=exc.event_type,
         ) from exc
+    except (TypeError, ValueError) as exc:
+        raise invalid_params(
+            "invalid_event",
+            f"Event values are invalid: {exc}",
+        ) from exc
 
     if outcome.inserted and client.connection is not None:
         client.create_background_task(route_event(client, outcome.event))
@@ -417,6 +422,11 @@ async def events_list(params: dict[str, Any], client: RpcClient) -> dict[str, An
 
     try:
         filter = Filter(**params)
+    except ValueError as exc:
+        raise invalid_params(
+            "invalid_limit",
+            str(exc),
+        ) from exc
     except TypeError as exc:
         raise invalid_params(
             "invalid_params",
@@ -435,9 +445,9 @@ async def events_list(params: dict[str, Any], client: RpcClient) -> dict[str, An
     if filter.limit is not None and (
         isinstance(filter.limit, bool)
         or not isinstance(filter.limit, int)
-        or filter.limit <= 0
+        or filter.limit < 0
     ):
-        raise invalid_params("invalid_limit", "limit must be a positive integer")
+        raise invalid_params("invalid_limit", "limit must be a non-negative integer")
     if not isinstance(client.session.event_sink, EventReader):
         raise RpcError(
             -32000,

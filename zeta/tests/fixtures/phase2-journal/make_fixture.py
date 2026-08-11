@@ -22,7 +22,7 @@ import sqlite3
 import tempfile
 from pathlib import Path
 
-from zeta.events import DraftEvent, Event
+from zeta.events import DraftEvent
 from zeta.harness.dispatch import QueueingDispatcher
 from zeta.harness.routing import AgentDefinition, EventPattern, ExecutableAgent
 from zeta.harness.store import RuntimeEventStore
@@ -74,7 +74,7 @@ def main() -> None:
     db_path = event_store_path(scratch)
     store = RuntimeEventStore.open(db_path)
 
-    inbox_a = store.accept(
+    store.accept(
         DraftEvent(
             "file.created",
             "filesystem",
@@ -123,31 +123,6 @@ def main() -> None:
         )
     )
 
-    store.append(
-        Event(
-            id="0123456789abcdef01234567",
-            event_type="legacy.handle_migrated",
-            source="fixture",
-            payload={"note": "a bare 24-hex legacy id"},
-            idempotency_key="legacy:24hex",
-            caused_by=None,
-            session_id=None,
-            timestamp_ms=1754800000000,
-        )
-    )
-    store.append(
-        Event(
-            id="sha256:" + "ab" * 32,
-            event_type="legacy.prefixed_migrated",
-            source="fixture",
-            payload={"note": "a sha256-prefixed legacy id"},
-            idempotency_key=None,
-            caused_by="0123456789abcdef01234567",
-            session_id=None,
-            timestamp_ms=1754800001000,
-        )
-    )
-
     big = "".join(BIG_TEXT.format(index=index) for index in range(4000))
     assert len(big.encode()) > 64 * 1024
     store.accept(
@@ -177,9 +152,7 @@ def dump_events(db_path: Path) -> None:
     connection.row_factory = sqlite3.Row
     rows = connection.execute("SELECT * FROM events ORDER BY seq").fetchall()
     lines = [canonical({key: row[key] for key in row.keys()}) for row in rows]
-    (FIXTURE_DIR / "events.jsonl").write_text(
-        "\n".join(lines) + "\n", encoding="utf-8"
-    )
+    (FIXTURE_DIR / "events.jsonl").write_text("\n".join(lines) + "\n", encoding="utf-8")
     connection.close()
     print("events:", len(lines))
 

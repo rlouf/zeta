@@ -416,6 +416,43 @@ def test_zeta_trace_encoding_vectors_match_python_bytes() -> None:
         assert encoded == vector["canonical_utf8"].encode(), vector["name"]
 
 
+def test_zeta_trace_active_address_vectors_match_python_mint() -> None:
+    path = (
+        Path(__file__).resolve().parents[2]
+        / "spec"
+        / "vectors"
+        / "substrate"
+        / "b3-addresses.json"
+    )
+    document = json.loads(path.read_text(encoding="utf-8"))
+
+    for vector in document["objects"]:
+        fields = vector["object"]
+        obj = zeta_trace.Object(
+            kind=fields["kind"],
+            schema=fields["schema"],
+            data=fields["data"],
+            links=tuple(fields["links"]),
+        )
+        assert (
+            zeta_trace.canonical_json_bytes(fields) == vector["canonical_utf8"].encode()
+        ), vector["name"]
+        assert obj.content_address() == vector["address"], vector["name"]
+
+    for vector in document["derivations"]:
+        fields = vector["derivation"]
+        derivation = zeta_trace.Derivation(
+            producer=fields["producer"],
+            output_id=fields["output_id"],
+            input_ids=tuple(fields["input_ids"]),
+            params=fields["params"],
+        )
+        assert (
+            zeta_trace.canonical_json_bytes(fields) == vector["canonical_utf8"].encode()
+        ), vector["name"]
+        assert derivation.content_address() == vector["address"], vector["name"]
+
+
 def test_zeta_trace_object_and_derivation_use_active_domains() -> None:
     from blake3 import blake3
 

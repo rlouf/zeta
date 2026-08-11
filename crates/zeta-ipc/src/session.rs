@@ -16,7 +16,7 @@ use std::time::{Duration, Instant};
 
 use serde_json::{Map, Number, Value};
 
-use crate::canonical::canonical_json;
+use crate::canonical::{canonical_json, identity_numbers_are_valid};
 use crate::envelope::{
     Ack, Call, CallInfo, CallResult, Common, Envelope, ErrorEnvelope, ErrorInfo, EventEnvelope,
     EventTypeDecl, Heartbeat, Hello, HelloAck, OperationDecl, Shutdown, MAX_INLINE_PAYLOAD_BYTES,
@@ -633,7 +633,14 @@ impl PluginSession {
                 format!("the ack window of {window} is full; wait for acks"),
             ));
         }
-        let serialized = canonical_json(&Value::Object(payload.clone()));
+        let payload_value = Value::Object(payload.clone());
+        if !identity_numbers_are_valid(&payload_value) {
+            return Err(WireError::new(
+                "bad_payload_number",
+                "identity-bearing payload numbers must fit i64, u64, or finite f64",
+            ));
+        }
+        let serialized = canonical_json(&payload_value);
         if serialized.len() > MAX_INLINE_PAYLOAD_BYTES {
             return Err(WireError::new(
                 "payload_too_large",

@@ -8,9 +8,9 @@
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use serde_json::{Map, Value};
+use serde_json::{Map, Number, Value};
 use zeta_ipc::session::{Action, PluginConfig, PluginSession, RuntimeConfig, RuntimeSession};
-use zeta_ipc::{validate_envelope, Envelope, EventTypeDecl};
+use zeta_ipc::{canonical_json, validate_envelope, Envelope, EventTypeDecl};
 
 fn vectors_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../spec/vectors")
@@ -19,6 +19,41 @@ fn vectors_root() -> PathBuf {
 fn read_json(path: &PathBuf) -> Value {
     let text = std::fs::read_to_string(path).unwrap();
     serde_json::from_str(&text).unwrap()
+}
+
+#[test]
+fn substrate_encoding_vectors_are_byte_exact() {
+    let document = read_json(&vectors_root().join("substrate/encoding.json"));
+    let vectors = document["vectors"].as_array().unwrap();
+    assert!(!vectors.is_empty());
+    for vector in vectors {
+        let expected = vector["canonical_utf8"].as_str().unwrap();
+        let actual = canonical_json(&vector["value"]);
+        assert_eq!(actual, expected, "{}", vector["name"]);
+    }
+}
+
+#[test]
+fn programmatic_floats_match_the_encoding_vectors() {
+    for (value, expected) in [
+        (1.0, "1.0"),
+        (0.1, "0.1"),
+        (1e30, "1e+30"),
+        (-0.0, "-0.0"),
+        (1e-5, "1e-05"),
+        (1e-6, "1e-06"),
+        (333333333.3333333, "333333333.3333333"),
+    ] {
+        let value = Value::Number(Number::from_f64(value).unwrap());
+        assert_eq!(canonical_json(&value), expected, "{value}");
+    }
+}
+
+#[test]
+#[should_panic(expected = "identity-bearing numbers must fit i64, u64, or finite f64")]
+fn canonical_json_rejects_an_out_of_range_integer() {
+    let value = serde_json::from_str("18446744073709551616").unwrap();
+    canonical_json(&value);
 }
 
 #[test]
@@ -100,6 +135,23 @@ fn payload_hash_rejects_malformed_b3_addresses() {
 }
 
 #[test]
+fn event_payload_rejects_out_of_range_numbers() {
+    for number in ["18446744073709551616", "-9223372036854775809", "1e400"] {
+        let text = format!(
+            concat!(
+                r#"{{"caused_by":null,"id":"evt_external","kind":"event","payload":{{"value":{}}},"#,
+                r#""schema":"test.event@1","session_id":null,"ts":"2026-08-10T12:00:00Z","#,
+                r#""type":"test.event","v":0}}"#,
+            ),
+            number,
+        );
+        let value = serde_json::from_str(&text).unwrap();
+        let error = validate_envelope(&value).unwrap_err();
+        assert_eq!(error.rule, "bad_payload_number");
+    }
+}
+
+#[test]
 fn plugin_session_rejects_an_empty_caller_event_id() {
     let mut session = PluginSession::new(PluginConfig::source(
         "test",
@@ -131,6 +183,22 @@ fn plugin_session_rejects_an_empty_caller_event_id() {
         .unwrap_err();
 
     assert_eq!(error.rule, "bad_id");
+
+    let value = serde_json::from_str("18446744073709551616").unwrap();
+    let mut payload = Map::new();
+    payload.insert("value".to_string(), value);
+    let error = session
+        .send_event(
+            "evt_bad_number",
+            "test.event",
+            payload,
+            None,
+            None,
+            "2026-08-10T12:00:01Z",
+        )
+        .unwrap_err();
+
+    assert_eq!(error.rule, "bad_payload_number");
 }
 
 struct SessionLine {

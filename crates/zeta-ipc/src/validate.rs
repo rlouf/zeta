@@ -355,6 +355,12 @@ fn validate_event(fields: &Map<String, Value>) -> Result<(), WireError> {
         if !payload.is_object() {
             return Err(WireError::new("bad_payload", "`payload` must be an object"));
         }
+        if !crate::canonical::identity_numbers_are_valid(payload) {
+            return Err(WireError::new(
+                "bad_payload_number",
+                "identity-bearing payload numbers must fit i64, u64, or finite f64",
+            ));
+        }
         let serialized = crate::canonical::canonical_json(payload);
         if serialized.len() > MAX_INLINE_PAYLOAD_BYTES {
             return Err(WireError::new(

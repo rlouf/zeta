@@ -31,6 +31,22 @@ jobs:
       - name: Run pre-commit
         run: uv run pre-commit run --all-files
 
+  rust:
+    name: Rust workspace
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      RUSTFLAGS: -D warnings
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Build
+        run: cargo build --workspace --locked
+
+      - name: Test
+        run: cargo test --workspace --locked
+
   test:
     name: Tests / Python ${{ matrix.python-version }}
     runs-on: ubuntu-latest

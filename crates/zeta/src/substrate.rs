@@ -1,4 +1,4 @@
-//! Content-addressed values and blob storage for the zeta ecosystem.
+//! Defines content-addressed values and blob storage for zeta.
 //!
 //! Exact content bytes use plain BLAKE3. Structured object, derivation, event,
 //! and chain identities use BLAKE3 derive-key mode with one frozen context per

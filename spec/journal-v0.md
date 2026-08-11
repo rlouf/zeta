@@ -3,10 +3,10 @@
 Status: normative.
 
 This specification defines the logical journal shared by Python and the Rust
-`zeta-journal` crate. It depends on `spec/substrate-v0.md` for canonical JSON
-and BLAKE3 addressing. It does not define a database schema, file layout,
-payload placement policy, migration procedure, projection, or coordination
-state.
+`zeta::journal` module. Its canonical JSON and BLAKE3 addressing come from the
+sibling `zeta::substrate` module as defined by `spec/substrate-v0.md`. It does
+not define a database schema, file layout, payload placement policy, migration
+procedure, projection, or coordination state.
 
 The key words MUST, MUST NOT, SHOULD, SHOULD NOT, and MAY are interpreted as
 described in RFC 2119.

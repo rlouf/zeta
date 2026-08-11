@@ -1,0 +1,15 @@
+[package]
+name = "zeta-agent"
+description = "Provider-neutral execution of one resolved Zeta agent invocation."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+jsonschema = { version = "0.33", default-features = false }
+serde.workspace = true
+serde_json = { workspace = true, features = ["preserve_order"] }
+zeta-journal = { path = "../zeta-journal" }
+zeta-substrate = { path = "../zeta-substrate" }

@@ -1,0 +1,9 @@
+{
+  "type": "object",
+  "required": ["id", "priority"],
+  "properties": {
+    "id": { "type": "string" },
+    "priority": { "enum": ["critical", "high", "medium", "low"] }
+  },
+  "additionalProperties": false
+}

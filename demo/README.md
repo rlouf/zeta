@@ -1,6 +1,6 @@
 # Zeta demos
 
-Twelve self-contained demonstrations of what Zeta's durable runtime makes
+Sixteen self-contained demonstrations of what Zeta's durable runtime makes
 possible. Each demo is one directory with one entry point: its `run.sh` builds
 an isolated project under `work/`, drives real agents against the live model,
 and prints a narrated transcript that ends with commands you can run to inspect
@@ -36,6 +36,8 @@ which is recreated on every run and ignored by Git.
 | [`incident-forensics`](incident-forensics/) | Root-cause a wrong agent output from durable state: causal chain → exact stored prompt → the bad skill rule; fix it and a component diff proves the skill was the only delta. | 20 s |
 | [`content-provenance`](content-provenance/) | Transcript → summary → note, every step a content-addressed object linked by derivations. "Which model call produced this sentence, from what input?" is answered by reading stored objects. | 35 s |
 | [`durable-approval`](durable-approval/) | A human-in-the-loop wait that survives with no process alive, and an approval that joins the same causal record as the agent's own steps. | 20 s |
+| [`verified-audit-trail`](verified-audit-trail/) | The journal as evidence: hash-chain verification over an approvals clerk's history. A one-byte tamper and a deleted tail are each caught with the exact structured divergence; "tamper-evident" is claimed only relative to an external anchor. | 30 s |
+| [`notarized-deliverable`](notarized-deliverable/) | Ship a report with a provenance bundle a client verifies offline — a standalone script (stdlib + `blake3`, no zeta) recomputes every content, object, derivation, and chain address down to the anchored head. | 25 s |
 
 ### Replay
 
@@ -43,6 +45,7 @@ which is recreated on every run and ignored by Git.
 |---|---|---|
 | [`model-replay-diff`](model-replay-diff/) | Rebuild a stored production prompt byte-for-byte (`payload verified`), resend it, and diff the results component by component — the mechanism behind migrating models on your own workload. | 20 s |
 | [`shadow-eval`](shadow-eval/) | Replay the day's real traffic as a free eval set and file a schema-validated `model.eval.report` event, without touching production behavior. | 20 s |
+| [`agent-ci`](agent-ci/) | CI for agent definitions: replay a frozen corpus of real triggers through a candidate definition. A cosmetic edit replays green; a rules change replays red with a per-ticket outcome diff as the review artifact. | 60 s |
 
 ### Durable computation
 
@@ -60,6 +63,7 @@ which is recreated on every run and ignored by Git.
 | [`catchup-schedules`](catchup-schedules/) | A genuinely missed weekly occurrence fires exactly once under `catchup: latest`; under the default policy the miss itself is journaled. Missed work is data, not a silent gap. | 10 s |
 | [`fleet-sre`](fleet-sre/) | Dead-letters, retries, and unhandled events diagnosed by a meta-agent querying the same durable state the operator sees; its incident report is itself on the record. | 25 s |
 | [`self-bootstrapping`](self-bootstrapping/) | An agent authors a new standing agent from a request event; the creation is reviewable, revertable, and on the causal chain like everything else. | 25 s |
+| [`skill-evolution`](skill-evolution/) | A self-tuning agent amends its own policy skill after a confirmed mistake. Every revision is content-addressed and pinned by the runs that used it, and any historical revision is restored — hash-verified — from the prompt store alone. | 50 s |
 
 ## Honesty notes
 

@@ -1,0 +1,31 @@
+---
+name: Policy Editor
+description: Amends the triage policy skill when a correction is confirmed.
+base_dir: __BASE_DIR__
+accepts:
+  - triage.correction
+publishes:
+  - triage.policy.amended
+tools:
+  - read
+  - write
+---
+Case {{ event.payload.case_id }} was triaged as
+{{ event.payload.wrong_category }}, but human review confirmed it should have
+been {{ event.payload.correct_category }}. The policy rule that caused the
+mistake must be amended.
+
+Do exactly this:
+
+1. Use the read tool to read agents/skills/triage-policy.md.
+2. Use the write tool to write agents/skills/triage-policy.md again, changing
+   ONLY rule 1: delete the current rule 1 (the list item that begins "Any case
+   that mentions a password") and put this exact text in its place, verbatim:
+
+{{ event.payload.new_rule }}
+
+   Reproduce every other line of the file byte-for-byte, including the title,
+   the introduction, and rules 2-4.
+3. Publish exactly one triage.policy.amended event whose payload has
+   "case_id" set to "{{ event.payload.case_id }}" and "summary" set to one
+   sentence describing the rule change.

@@ -1,0 +1,11 @@
+{
+  "type": "object",
+  "required": ["case_id", "wrong_category", "correct_category", "new_rule"],
+  "properties": {
+    "case_id": {"type": "string"},
+    "wrong_category": {"type": "string"},
+    "correct_category": {"type": "string"},
+    "new_rule": {"type": "string"}
+  },
+  "additionalProperties": false
+}

@@ -1,0 +1,13 @@
+{
+  "type": "object",
+  "required": ["case_id", "category", "reason"],
+  "properties": {
+    "case_id": {"type": "string"},
+    "category": {
+      "type": "string",
+      "enum": ["security_incident", "account_request", "bug_report", "other"]
+    },
+    "reason": {"type": "string"}
+  },
+  "additionalProperties": false
+}

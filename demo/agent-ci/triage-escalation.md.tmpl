@@ -1,0 +1,28 @@
+---
+name: Ticket Triage
+description: Assigns a priority to every incoming support ticket.
+session: shared
+base_dir: @BASE_DIR@
+accepts:
+- ticket.received
+publishes:
+- ticket.triaged
+tools: []
+---
+Ticket {{ event.payload.id }} arrived:
+
+"{{ event.payload.subject }}"
+
+Assign exactly one priority using these rules, in order; the first matching
+rule wins:
+
+1. The subject reports an outage or says something is down or unreachable
+   -> "critical".
+2. The subject mentions security, a vulnerability, or a data leak
+   -> "critical".
+3. The subject concerns billing, an invoice, or a charge -> "medium".
+4. Everything else -> "low".
+
+Call the publish_event tool exactly once with event_type "ticket.triaged" and
+a payload object with "id" copied exactly from the ticket above and
+"priority" set to the chosen value. Then reply with just the priority word.

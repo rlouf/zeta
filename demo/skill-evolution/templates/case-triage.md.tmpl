@@ -1,0 +1,27 @@
+---
+name: Case Triage
+description: Classifies inbound support cases for the operations queue.
+base_dir: __BASE_DIR__
+accepts:
+  - case.opened
+publishes:
+  - case.triaged
+tools:
+  - read
+skills:
+  - triage-policy
+---
+A new support case {{ event.payload.case_id }} arrived:
+
+"{{ event.payload.text }}"
+
+Do exactly this:
+
+1. Use the read tool to read the triage policy skill at
+   agents/skills/triage-policy.md.
+2. Classify the case into exactly one category, following the skill rules
+   exactly; the skill rules override your own judgment.
+3. Publish exactly one case.triaged event whose payload has "case_id" set to
+   "{{ event.payload.case_id }}", "category" set to the chosen category, and
+   "reason" set to a one-sentence justification that quotes the rule you
+   applied.

@@ -1,0 +1,11 @@
+Client: Northwind Retail
+Engagement: Support operations review, Q2 2026
+Metric, April, May, June
+Tickets opened, 1210, 1385, 1642
+Tickets resolved, 1198, 1301, 1410
+Median first response (hours), 5.1, 6.8, 9.4
+CSAT (%), 91, 87, 79
+Refunds issued, 14, 22, 41
+Top category April: billing errors
+Top category May: delivery delays
+Top category June: delivery delays

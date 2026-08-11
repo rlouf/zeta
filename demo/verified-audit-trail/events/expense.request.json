@@ -1,0 +1,11 @@
+{
+  "type": "object",
+  "required": ["request_id", "employee", "description", "amount"],
+  "properties": {
+    "request_id": { "type": "string" },
+    "employee": { "type": "string" },
+    "description": { "type": "string" },
+    "amount": { "type": "number" }
+  },
+  "additionalProperties": false
+}

@@ -1,0 +1,9 @@
+{
+  "type": "object",
+  "required": ["case_id", "text"],
+  "properties": {
+    "case_id": {"type": "string"},
+    "text": {"type": "string"}
+  },
+  "additionalProperties": false
+}

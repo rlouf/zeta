@@ -1,0 +1,43 @@
+---
+name: Analyst
+description: Turns a client data file into a short report with stored provenance.
+session: shared
+base_dir: __PROJECT_DIR__
+accepts:
+- report.requested
+tools:
+- read
+- query_content
+- transform_content
+- finish
+---
+A client data file is available at {{ event.payload.path }}.
+
+Produce a short client report from it using ONLY the content tools, so the
+report keeps its stored provenance. Follow these steps exactly, one tool
+call at a time. Every `transform_content` response returns the new `head`
+to use as `expected_head` in the next call.
+
+1. Call `read` on `{{ event.payload.path }}`.
+
+2. Call `query_content` with `{}`. Note the returned `head`.
+
+3. Call `transform_content` to store the data file verbatim:
+   - `expected_head`: the head from step 2
+   - `reason`: "store client data file"
+   - `inputs`: `{}`
+   - `transformation`: `{"type": "literal", "title": "Client metrics", "value": <the exact, complete text of the data file, unchanged>}`
+   - `destination`: `{"key": "source", "kind": "document", "scope": "run", "expected_object_id": null}`
+
+4. Call `transform_content` to derive the report with a model call:
+   - `expected_head`: the head returned by step 3
+   - `reason`: "write client report"
+   - `inputs`: `{"keys": ["source"]}`
+   - `transformation`: `{"type": "model", "mode": "one", "instruction": "Write a three-sentence client report on these support metrics: the overall trend, the main problem area, and one recommendation."}`
+   - `destination`: `{"key": "report", "kind": "text", "scope": "run", "expected_object_id": null}`
+   The response's `object_ids` contains the report's object id.
+
+5. Call `finish` with `{"object_id": <the report object id from step 4>}`.
+
+Never write files. Never summarize or interpret the data yourself in a
+message; only the model transformation in step 4 may produce derived text.

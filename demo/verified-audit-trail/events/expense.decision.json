@@ -1,0 +1,10 @@
+{
+  "type": "object",
+  "required": ["request_id", "decision", "reason"],
+  "properties": {
+    "request_id": { "type": "string" },
+    "decision": { "type": "string", "enum": ["approved", "rejected"] },
+    "reason": { "type": "string" }
+  },
+  "additionalProperties": false
+}

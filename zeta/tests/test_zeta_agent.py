@@ -111,6 +111,11 @@ zeta_trace = SimpleNamespace(InMemoryStore=InMemoryStore)
 
 ensure_builtin_tools_registered()
 
+OBJECT_ID_A = "b3:" + "a" * 64
+OBJECT_ID_B = "b3:" + "b" * 64
+OBJECT_ID_C = "b3:" + "c" * 64
+OBJECT_ID_D = "b3:" + "d" * 64
+
 
 def runtime_sqlite_event_store(path: Path) -> RuntimeEventStore:
     return RuntimeEventStore.open(path)
@@ -717,11 +722,11 @@ def test_zeta_durable_model_event_payload_keeps_domain_fields() -> None:
             "id": "model-1",
             "content": "done",
             "prompt_trace": {
-                "prompt_object_id": "sha256:prompt",
-                "assistant_message_object_id": "sha256:assistant",
+                "prompt_object_id": OBJECT_ID_A,
+                "assistant_message_object_id": OBJECT_ID_B,
             },
-            "tool_call_object_ids": ["sha256:call-1"],
-            "tool_call_object_id": "sha256:call-2",
+            "tool_call_object_ids": [OBJECT_ID_C],
+            "tool_call_object_id": OBJECT_ID_D,
         }
     )
 
@@ -729,11 +734,11 @@ def test_zeta_durable_model_event_payload_keeps_domain_fields() -> None:
         "_timeline_type": "model",
         "content": "done",
         "prompt_trace": {
-            "prompt_object_id": "sha256:prompt",
-            "assistant_message_object_id": "sha256:assistant",
+            "prompt_object_id": OBJECT_ID_A,
+            "assistant_message_object_id": OBJECT_ID_B,
         },
-        "tool_call_object_ids": ["sha256:call-1"],
-        "tool_call_object_id": "sha256:call-2",
+        "tool_call_object_ids": [OBJECT_ID_C],
+        "tool_call_object_id": OBJECT_ID_D,
     }
 
 
@@ -781,16 +786,16 @@ def test_zeta_durable_tool_result_event_payload_keeps_domain_fields() -> None:
             "type": "tool_result",
             "id": "result-1",
             "result": {"ok": True},
-            "tool_call_object_id": "sha256:call",
-            "tool_result_object_id": "sha256:result",
+            "tool_call_object_id": OBJECT_ID_A,
+            "tool_result_object_id": OBJECT_ID_B,
         }
     )
 
     assert payload == {
         "_timeline_type": "tool_result",
         "result": {"ok": True},
-        "tool_call_object_id": "sha256:call",
-        "tool_result_object_id": "sha256:result",
+        "tool_call_object_id": OBJECT_ID_A,
+        "tool_result_object_id": OBJECT_ID_B,
     }
 
 
@@ -800,14 +805,14 @@ def test_zeta_durable_tool_call_event_payload_keeps_domain_fields() -> None:
             "type": "tool_call",
             "id": "call-1",
             "name": "read",
-            "tool_call_object_id": "sha256:call",
+            "tool_call_object_id": OBJECT_ID_A,
         }
     )
 
     assert payload == {
         "_timeline_type": "tool_call",
         "name": "read",
-        "tool_call_object_id": "sha256:call",
+        "tool_call_object_id": OBJECT_ID_A,
     }
 
 
@@ -2327,7 +2332,7 @@ def test_zeta_transform_content_returns_stale_head_errors() -> None:
                         "call-transform",
                         "transform_content",
                         {
-                            "expected_head": "sha256:stale",
+                            "expected_head": OBJECT_ID_A,
                             "reason": "Apply stale content.",
                             "inputs": {},
                             "transformation": {"type": "literal", "value": "bad"},
@@ -3444,7 +3449,7 @@ def test_zeta_rpc_queues_and_queries_authored_sessions(tmp_path: Path) -> None:
         description="Work with the user.",
         instructions="{{ event.payload.message }}",
         path=tmp_path / "master.md",
-        sha256="master",
+        content_address="master",
     )
     snapshot = SimpleNamespace(
         generation_id="generation-1",
@@ -3523,7 +3528,7 @@ def test_zeta_rpc_reports_unknown_and_conflicting_sessions(tmp_path: Path) -> No
             description="Handles work.",
             instructions="Handle work.",
             path=tmp_path / f"{agent_id}.md",
-            sha256=agent_id,
+            content_address=agent_id,
         )
         for agent_id in ("agent-a", "agent-b", "zeta.master")
     )
@@ -10364,7 +10369,7 @@ def test_zeta_agent_turn_stores_prompt_and_assistant_trace(monkeypatch) -> None:
     prompt = store.get_object(trace.prompt_object_id)
     assert prompt is not None
     kwargs = cast(dict[str, Any], captured["kwargs"])
-    assert prompt.data["payload_sha256"] == zeta_context.payload_sha256(
+    assert prompt.data["payload_address"] == zeta_context.payload_address(
         zeta_model.chat_completion_request_body(
             cast(list[dict[str, Any]], captured["messages"]),
             tools=cast(list[dict[str, Any]], kwargs["tools"]),

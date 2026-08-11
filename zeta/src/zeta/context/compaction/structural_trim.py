@@ -143,7 +143,7 @@ def structural_trim_payload(component: PromptComponent) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "trimmed": True,
         "trim_method": "structural",
-        "raw_content_sha256": content_hash(content),
+        "raw_content_address": content_hash(content),
         "raw_content_chars": len(content),
         "raw_content_bytes": len(content.encode("utf-8")),
     }
@@ -183,7 +183,7 @@ def trimmed_content_item(item: dict[str, Any]) -> dict[str, Any]:
     if isinstance(text, str):
         return {
             "type": str(item.get("type") or "text"),
-            "text_sha256": content_hash(text),
+            "text_address": content_hash(text),
             "text_chars": len(text),
             "text_lines": line_count(text),
         }

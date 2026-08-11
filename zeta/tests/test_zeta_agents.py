@@ -71,6 +71,7 @@ from zeta.harness.store import RuntimeEventStore
 from zeta.journal.store import Filter
 from zeta.loop.outcomes import PublishEventRequest
 from zeta.loop.runtime import AgentRunResult
+from zeta.substrate import Object
 
 
 def runtime_sqlite_event_store(path: Path) -> RuntimeEventStore:
@@ -452,8 +453,8 @@ User asked: {{ event.payload.text }}
     )
     assert spec.manifest == {"writes": {"paths": ["docs/**.md"]}}
     assert spec.instructions == "User asked: {{ event.payload.text }}\n"
-    assert spec.sha256.startswith("b3:")
-    assert len(spec.sha256) == 67
+    assert spec.content_address.startswith("b3:")
+    assert len(spec.content_address) == 67
 
 
 def test_zeta_agent_spec_selects_tool_executor_from_frontmatter(
@@ -1194,6 +1195,14 @@ def test_zeta_agent_resource_loaders_read_flat_skills_and_events(
     events = zeta_agents.load_event_registry(agents_dir)
 
     assert skills.knows("code-review")
+    assert (
+        skills.skills["code-review"].object_id
+        == Object(
+            kind="skill",
+            schema="zeta.skill.v1",
+            data={"body": "Review for correctness.\n"},
+        ).content_address()
+    )
     assert events.knows("github.pr.opened")
     assert events.schema("github.pr.opened") == {
         "type": "object",

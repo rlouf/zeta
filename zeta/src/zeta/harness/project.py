@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import inspect
 import json
 from collections.abc import Mapping
@@ -50,13 +49,13 @@ from zeta.events import DraftEvent, Event
 from zeta.harness.store import RuntimeEventStore
 from zeta.journal.store import Filter
 from zeta.models.profiles import ModelSelection
-from zeta.substrate import Store
+from zeta.substrate import Object, Store
 
 PROJECT_SNAPSHOT_RECORDED = "runtime.project_snapshot.recorded"
 PROJECT_SNAPSHOT_SCHEMA = "zeta.project_snapshot"
-PROJECT_SNAPSHOT_VERSION = 4
+PROJECT_SNAPSHOT_VERSION = 5
 EXECUTION_MANIFEST_SCHEMA = "zeta.execution_manifest"
-EXECUTION_MANIFEST_VERSION = 3
+EXECUTION_MANIFEST_VERSION = 4
 
 
 class ProjectSnapshotUnavailable(RuntimeError):
@@ -218,7 +217,7 @@ def project_manifest(
         "events": {event_type: schema for event_type, schema in project.events.items()},
         "skills": {
             name: {
-                "sha256": skill.sha256,
+                "object_id": skill.object_id,
                 "body": skill.body,
                 "path": str(skill.path),
             }
@@ -530,7 +529,7 @@ def agent_from_manifest(value: Any) -> AgentSpec:
         description=str(value["description"]),
         instructions=str(value["instructions"]),
         path=Path(str(value["path"])),
-        sha256=str(value["sha256"]),
+        content_address=str(value["content_address"]),
         enabled=bool(value.get("enabled", True)),
         session=str(value.get("session", "per-event")),
         model=model,
@@ -555,13 +554,13 @@ def skill_from_manifest(name: str, value: Any) -> SkillResource:
     if not isinstance(value, Mapping):
         raise ProjectSnapshotUnavailable("project snapshot has invalid skill")
     body = str(value["body"])
-    recorded = str(value["sha256"])
-    minted = (
-        addresses.skill_address(body.encode())
-        if not addresses.is_legacy(recorded)
-        else hashlib.sha256(body.encode()).hexdigest()
+    recorded = str(value["object_id"])
+    minted = Object(
+        kind="skill",
+        schema="zeta.skill.v1",
+        data={"body": body},
     )
-    if minted != recorded:
+    if minted.content_address() != recorded:
         raise ProjectSnapshotUnavailable(f"recorded skill {name!r} failed verification")
     return SkillResource(name, Path(str(value["path"])), body, recorded)
 
@@ -573,7 +572,7 @@ def agent_manifest(spec: AgentSpec) -> dict[str, Any]:
         "description": spec.description,
         "instructions": spec.instructions,
         "path": str(spec.path),
-        "sha256": spec.sha256,
+        "content_address": spec.content_address,
         "enabled": spec.enabled,
         "session": spec.session,
         "model": (
@@ -655,7 +654,7 @@ def callable_manifest(handler: Any) -> dict[str, Any]:
     return {
         "module": module.__name__ if module is not None else None,
         "qualname": getattr(target, "__qualname__", type(handler).__qualname__),
-        "source_sha256": file_content_hash(Path(path)) if path is not None else None,
+        "source_address": file_content_hash(Path(path)) if path is not None else None,
     }
 
 
@@ -701,10 +700,7 @@ def content_id(prefix: str, value: Mapping[str, Any]) -> str:
 
 
 def content_id_matches(prefix: str, value: Mapping[str, Any], recorded: str) -> bool:
-    """Verify a manifest against whichever epoch minted its recorded id."""
-    if recorded.startswith(f"{prefix}:sha256:"):
-        digest = hashlib.sha256(canonical_manifest_bytes(value)).hexdigest()
-        return f"{prefix}:sha256:{digest}" == recorded
+    """Verify a manifest against its current content identity."""
     return content_id(prefix, value) == recorded
 
 

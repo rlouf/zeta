@@ -546,7 +546,7 @@ def non_message_components(
             PromptComponent(
                 kind="project_context",
                 data={
-                    "sha256": content_hash(content),
+                    "content_address": content_hash(content),
                     "chars": len(content),
                 },
             )
@@ -571,7 +571,7 @@ def prompt_component_object(component: PromptComponent) -> Object:
         data["source_object_id"] = component.source_object_id
     return Object(
         kind=component.kind,
-        schema="zeta.prompt_component.v1",
+        schema="zeta.prompt_component.v2",
         data=data,
         links=component.links,
     )

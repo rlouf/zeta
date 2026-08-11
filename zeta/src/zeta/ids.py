@@ -27,23 +27,39 @@ either **claimed in advance** or **derived** from the attempt:
 `run_id_for_attempt` states the rule that joins them. The harness adopts a
 claimed id when the triggering event carries one, and derives one otherwise.
 
-This module holds string derivation only. It imports only `zeta.addresses`
-(itself a leaf), so any layer may use it. Handles minted before the `b3:` epoch
-carry a bare truncated sha256 digest; they stay valid wherever handles are
-compared.
+This module owns runtime string identities. It imports only `zeta.addresses`
+(itself a leaf), so any layer may use it.
 """
 
 from __future__ import annotations
 
+import json
 import uuid
+from typing import Any
 
-from zeta.addresses import chain_address
+from zeta.addresses import chain_address, event_address
 
 QUEUE_ITEM_PREFIX = "qi_"
 ATTEMPT_PREFIX = "att_"
 RUN_PREFIX = "run_"
 PUBLISH_EVENT_PREFIX = "pub_"
 WAIT_PREFIX = "wait_"
+
+
+def event_idempotency_id(event_type: str, payload: dict[str, Any]) -> str:
+    """Return the stable retransmission identity for one wire event.
+
+    This identity remains separate from durable random ``evt_`` ids because a
+    source must reproduce it before the runtime accepts the event.
+    """
+    identity = json.dumps(
+        {"payload": payload, "type": event_type},
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        allow_nan=False,
+    ).encode()
+    return event_address(identity)
 
 
 def safe_agent_id(agent_id: str) -> str:

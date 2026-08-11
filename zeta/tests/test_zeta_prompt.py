@@ -24,7 +24,7 @@ from zeta.context.budget import estimated_tokens, measure, render_stub
 from zeta.context.builder import (
     PreparedPrompt,
     PromptBuilder,
-    payload_sha256,
+    payload_address,
     reconstructed_prompt_request,
     render_model_input,
 )
@@ -87,7 +87,7 @@ zeta_context = SimpleNamespace(
     component_messages=component_messages,
     estimated_tokens=estimated_tokens,
     measure=measure,
-    payload_sha256=payload_sha256,
+    payload_address=payload_address,
     project_prompt_trace_projection=project_prompt_trace_projection,
     prompt_component_object=prompt_component_object,
     prompt_components=prompt_components,
@@ -304,7 +304,7 @@ def test_content_node_validation_rejects_invalid_values(node: Any) -> None:
 def test_content_revision_requires_complete_projection_metadata() -> None:
     revision = context_transforms.ContentRevision(
         owner="writer",
-        nodes={"one": "sha256:one", "two": "sha256:two"},
+        nodes={"one": "b3:" + "1" * 64, "two": "b3:" + "2" * 64},
         projection_order=("one",),
         source_scopes={"one": "run", "two": "run"},
     )
@@ -1438,7 +1438,7 @@ def test_zeta_prompt_reconstruction_does_not_infer_missing_thinking() -> None:
     component_id = store.put_object(
         zeta_trace.Object(
             kind="user_message",
-            schema="zeta.prompt_component.v1",
+            schema="zeta.prompt_component.v2",
             data={"message": message},
         )
     )
@@ -1450,8 +1450,8 @@ def test_zeta_prompt_reconstruction_does_not_infer_missing_thinking() -> None:
     prompt_id = store.put_object(
         zeta_trace.Object(
             kind="prompt",
-            schema="zeta.prompt.v1",
-            data={"payload_sha256": zeta_context.payload_sha256(no_thinking_payload)},
+            schema="zeta.prompt.v2",
+            data={"payload_address": zeta_context.payload_address(no_thinking_payload)},
             links=(component_id,),
         )
     )
@@ -1479,15 +1479,15 @@ def test_zeta_prompt_request_reconstruction_flags_a_changed_component() -> None:
     component_id = store.put_object(
         zeta_trace.Object(
             kind="user_message",
-            schema="zeta.prompt_component.v1",
+            schema="zeta.prompt_component.v2",
             data={"message": {"role": "user", "content": "objective"}},
         )
     )
     prompt_id = store.put_object(
         zeta_trace.Object(
             kind="prompt",
-            schema="zeta.prompt.v1",
-            data={"payload_sha256": "sha256:not-the-payload"},
+            schema="zeta.prompt.v2",
+            data={"payload_address": "b3:" + "0" * 64},
             links=(component_id,),
         )
     )
@@ -1510,18 +1510,18 @@ def test_zeta_prompt_request_reconstruction_requires_a_prompt() -> None:
     )
 
     assert zeta_context.reconstructed_prompt_request(store, other_id) is None
-    assert zeta_context.reconstructed_prompt_request(store, "sha256:missing") is None
+    assert zeta_context.reconstructed_prompt_request(store, "b3:" + "0" * 64) is None
 
 
 def test_zeta_prompt_components_have_representation_and_token_cost() -> None:
     component = zeta_context.PromptComponent(
         kind="example",
         message={"role": "user", "content": "abcdefgh"},
-        source_object_id="sha256:source",
+        source_object_id="b3:" + "a" * 64,
     )
 
     assert component.representation == "full"
-    assert component.source_object_id == "sha256:source"
+    assert component.source_object_id == "b3:" + "a" * 64
     assert zeta_context.estimated_tokens(component) == 2
 
 
@@ -1531,13 +1531,13 @@ def test_zeta_budget_measure_returns_total_and_breakdown() -> None:
             zeta_context.PromptComponent(
                 kind="one",
                 message={"role": "user", "content": "abcd"},
-                object_id="sha256:one",
+                object_id="b3:" + "1" * 64,
             ),
             zeta_context.PromptComponent(
                 kind="two",
                 message={"role": "user", "content": "abcdefgh"},
                 representation="summary",
-                object_id="sha256:two",
+                object_id="b3:" + "2" * 64,
             ),
         ]
     )
@@ -1561,15 +1561,16 @@ def test_zeta_prompt_transform_factory_from_env() -> None:
 
 
 def test_zeta_render_stub_contract() -> None:
+    object_id = "b3:" + "a" * 64
     component = zeta_context.PromptComponent(
         kind="tool_result",
         message={"role": "tool", "content": "abcd"},
-        object_id="sha256:abc",
+        object_id=object_id,
     )
 
     assert (
         zeta_context.render_stub(component)
-        == "[elided tool_result 1~tok id=sha256:abc — re-run the original tool call to recover this content]"
+        == f"[elided tool_result 1~tok id={object_id} — re-run the original tool call to recover this content]"
     )
 
 
@@ -1895,7 +1896,7 @@ def test_zeta_structural_trim_default_is_late_safety_valve() -> None:
             "tool_call_id": "call-below",
             "content": "x" * 119_999,
         },
-        object_id="sha256:below",
+        object_id="b3:" + "1" * 64,
     )
     above = zeta_context.PromptComponent(
         kind="tool_result",
@@ -1910,7 +1911,7 @@ def test_zeta_structural_trim_default_is_late_safety_valve() -> None:
             "tool_call_id": "call-above",
             "content": "x" * 120_001,
         },
-        object_id="sha256:above",
+        object_id="b3:" + "2" * 64,
     )
 
     trimmed = asyncio.run(transform.apply([below, above]))
@@ -1961,6 +1962,7 @@ def test_zeta_structural_trim_preserves_current_tool_results_by_default() -> Non
 
 
 def test_zeta_structural_trim_uses_source_result_without_message_json() -> None:
+    object_id = "b3:" + "a" * 64
     raw_text = "invalid json but still bulky " * 20
     component = zeta_context.PromptComponent(
         kind="tool_result",
@@ -1980,7 +1982,7 @@ def test_zeta_structural_trim_uses_source_result_without_message_json() -> None:
             "tool_call_id": "call-structured",
             "content": raw_text,
         },
-        object_id="sha256:source",
+        object_id=object_id,
     )
 
     trimmed = asyncio.run(
@@ -1993,7 +1995,7 @@ def test_zeta_structural_trim_uses_source_result_without_message_json() -> None:
     assert trimmed.representation == "stub"
     assert trimmed.message is not None
     assert str(trimmed.message["content"]) == (
-        "[elided tool_result 145~tok id=sha256:source "
+        f"[elided tool_result 145~tok id={object_id} "
         "— re-run the original tool call to recover this content]"
     )
 
@@ -2378,7 +2380,7 @@ def test_zeta_measure_counts_project_context_once() -> None:
     project = next(c for c in components if c.kind == "project_context")
     assert "content" not in project.data
     assert project.data["chars"] == 4000
-    assert str(project.data["sha256"]).startswith("b3:")
+    assert str(project.data["content_address"]).startswith("b3:")
     usage = zeta_context.measure(components)
     project_usage = next(c for c in usage.components if c.kind == "project_context")
     assert project_usage.tokens < 50
@@ -2436,7 +2438,7 @@ def test_zeta_structural_trim_embeds_trim_payload_in_component_data() -> None:
             },
         },
         message={"role": "tool", "tool_call_id": "call-read", "content": raw_text},
-        object_id="sha256:source",
+        object_id="b3:" + "a" * 64,
     )
 
     trimmed = asyncio.run(
@@ -2448,10 +2450,10 @@ def test_zeta_structural_trim_embeds_trim_payload_in_component_data() -> None:
     trim = trimmed.data["trim"]
     assert trim["trimmed"] is True
     assert trim["trim_method"] == "structural"
-    assert trim["source_object_id"] == "sha256:source"
+    assert trim["source_object_id"] == "b3:" + "a" * 64
     assert trim["tool_call_id"] == "call-read"
     assert trim["raw_content_chars"] == len(raw_text)
-    assert str(trim["raw_content_sha256"]).startswith("b3:")
+    assert str(trim["raw_content_address"]).startswith("b3:")
     assert trim["tool_result"]["ok"] is True
     assert trim["tool_result"]["metadata"] == {"path": "big.txt"}
     assert trim["tool_result"]["content"][0]["text_chars"] == len(raw_text)
@@ -2807,7 +2809,7 @@ def test_zeta_prompt_commit_writes_in_a_single_batch() -> None:
     assert store.batches == 1
 
 
-def test_zeta_prompt_object_stores_payload_hash_not_payload() -> None:
+def test_zeta_prompt_object_stores_payload_address_not_payload() -> None:
     store = zeta_trace.InMemoryStore()
 
     prepared = prepare_prompt(
@@ -2822,7 +2824,8 @@ def test_zeta_prompt_object_stores_payload_hash_not_payload() -> None:
     prompt = store.get_object(prepared.prompt_object_id)
     assert prompt is not None
     assert "payload" not in prompt.data
-    assert prompt.data["payload_sha256"] == zeta_context.builder.payload_sha256(
+    assert prompt.schema == "zeta.prompt.v2"
+    assert prompt.data["payload_address"] == zeta_context.builder.payload_address(
         prepared.payload
     )
     linked = [store.get_object(component_id) for component_id in prompt.links]

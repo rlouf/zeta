@@ -460,12 +460,9 @@ class SqliteObjectStore(StoreBase):
         ]
 
     def import_object(self, object_id_value: ObjectId, obj: Object) -> None:
-        """Insert an object under an exported id instead of recomputing it.
-
-        Trusting the exported id keeps links and refs exact even if
-        hashing rules ever differ between the exporting and importing
-        versions.
-        """
+        """Insert an object whose supplied address matches its current mint."""
+        if object_id_value != obj.content_address():
+            raise ValueError("imported object address does not match its content")
         self._ensure_writable()
         with self._write_lock:
             self.connection.execute(
@@ -490,11 +487,11 @@ class SqliteObjectStore(StoreBase):
         derivation: Derivation,
         created_at: float,
     ) -> None:
-        """Insert an exported derivation, preserving its original timestamp."""
-        self._ensure_writable()
+        """Insert a verified derivation while preserving its timestamp."""
         stored_id = derivation.content_address()
-        if self.session_id is None:
-            stored_id = derivation_id_value
+        if derivation_id_value != stored_id:
+            raise ValueError("imported derivation address does not match its content")
+        self._ensure_writable()
         with self._write_lock:
             self.connection.execute(
                 """

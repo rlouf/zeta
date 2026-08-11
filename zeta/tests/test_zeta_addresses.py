@@ -1,4 +1,4 @@
-"""Content-address minting and legacy dual-read tests."""
+"""Content-address minting tests."""
 
 import base64
 import json
@@ -49,6 +49,15 @@ def test_address_vectors_cover_every_domain_and_content() -> None:
     ) | {"content"}
 
 
+def test_active_domains_have_no_retired_vocabulary() -> None:
+    assert addresses.CONTEXTS == {
+        "event": "zeta-os 2026-08 cas event",
+        "chain": "zeta-os 2026-08 cas chain",
+        "object": "zeta-os 2026-08 cas object",
+        "derivation": "zeta-os 2026-08 cas derivation",
+    }
+
+
 def test_content_address_is_plain_undomained_blake3() -> None:
     from blake3 import blake3
 
@@ -59,11 +68,6 @@ def test_content_address_is_plain_undomained_blake3() -> None:
         *(addresses.address(domain, data) for domain in addresses.CONTEXTS),
     }
     assert len(minted_addresses) == len(addresses.CONTEXTS) + 1
-
-
-def test_retired_blob_context_stays_reserved() -> None:
-    assert addresses.RETIRED_BLOB_CONTEXT == "zeta-os 2026-08 cas blob"
-    assert "blob" not in addresses.CONTEXTS
 
 
 def test_address_is_full_width_lowercase_hex() -> None:
@@ -93,24 +97,11 @@ def test_address_rejects_unknown_domain() -> None:
 
 
 def test_is_b3_accepts_minted_addresses() -> None:
-    assert addresses.is_b3(addresses.skill_address(b"body"))
+    assert addresses.is_b3(addresses.object_address(b"body"))
 
 
-def test_is_b3_rejects_legacy_and_malformed_values() -> None:
-    assert not addresses.is_b3("sha256:" + "a" * 64)
+def test_is_b3_rejects_malformed_values() -> None:
+    assert not addresses.is_b3("old:" + "a" * 64)
     assert not addresses.is_b3("b3:" + "a" * 24)
     assert not addresses.is_b3("b3:" + "G" * 64)
     assert not addresses.is_b3("a" * 64)
-
-
-def test_is_legacy_accepts_sha256_epoch_values() -> None:
-    assert addresses.is_legacy("sha256:" + "a" * 64)
-    assert addresses.is_legacy("a" * 24)
-    assert addresses.is_legacy("f" * 64)
-
-
-def test_is_legacy_rejects_b3_and_non_hash_values() -> None:
-    assert not addresses.is_legacy(addresses.event_address(b"x"))
-    assert not addresses.is_legacy("evt_" + "a" * 32)
-    assert not addresses.is_legacy("a" * 32)
-    assert not addresses.is_legacy("file:inbox/todo.txt")

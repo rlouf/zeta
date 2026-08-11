@@ -575,8 +575,8 @@ def test_zeta_pure_runtime_events_project_to_trace_graph() -> None:
     prompt_id = store.put_object(
         Object(
             kind="prompt",
-            schema="zeta.prompt.v1",
-            data={"payload_sha256": "test"},
+            schema="zeta.prompt.v2",
+            data={"payload_address": "b3:" + "a" * 64},
         )
     )
     model = event_from_draft(

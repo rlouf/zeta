@@ -20,7 +20,6 @@ from connectors import (
     connector_manifest_from_describe,
 )
 
-from zeta.addresses import skill_address
 from zeta.authoring.manifest import Manifest
 from zeta.authoring.schemas import EventRegistry, EventRegistryError
 from zeta.authoring.spec import (
@@ -32,6 +31,7 @@ from zeta.authoring.spec import (
     scheduled_event_type,
 )
 from zeta.capabilities.executors import ToolExecutorProviderRegistry
+from zeta.substrate import Object
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +48,7 @@ class SkillResource:
     name: str
     path: Path
     body: str
-    sha256: str
+    object_id: str
 
 
 @dataclass(frozen=True)
@@ -294,12 +294,12 @@ def load_skill_registry(agents_dir: Path) -> SkillRegistry:
             body = path.read_text(encoding="utf-8")
         except OSError as exc:
             raise ResourceError(f"I/O error reading {path}: {exc}") from exc
-        skills[name] = SkillResource(
-            name,
-            path,
-            body,
-            skill_address(body.encode()),
+        skill_object = Object(
+            kind="skill",
+            schema="zeta.skill.v1",
+            data={"body": body},
         )
+        skills[name] = SkillResource(name, path, body, skill_object.content_address())
     return SkillRegistry(skills)
 
 

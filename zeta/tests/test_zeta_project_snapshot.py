@@ -555,7 +555,8 @@ def test_project_snapshot_round_trips_publishes(tmp_path: Path) -> None:
     )
 
     agent = snapshot.manifest["agents"][0]
-    assert snapshot.manifest["version"] == 4
+    assert snapshot.manifest["version"] == 5
+    assert "content_address" in agent
     assert agent["publishes"] == ["work.completed"]
     assert "returns" not in agent
     assert restored.project.specs[0].publishes == ("work.completed",)
@@ -596,7 +597,7 @@ def test_execution_manifest_contains_publishes_and_relevant_schemas(
 
     execution_manifest = snapshot.execution_manifest(snapshot.project.specs[0])
 
-    assert execution_manifest["version"] == 3
+    assert execution_manifest["version"] == 4
     assert execution_manifest["agent"]["publishes"] == ["work.completed"]
     assert "returns" not in execution_manifest["agent"]
     assert set(execution_manifest["events"]) == {"work.requested", "work.completed"}

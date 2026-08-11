@@ -1,7 +1,6 @@
 """Trace store and run-timeline tests."""
 
 import asyncio
-import hashlib
 import json
 import sqlite3
 from pathlib import Path
@@ -43,6 +42,7 @@ from zeta.substrate import (
     SqliteObjectStore,
     Store,
     UnknownIdError,
+    canonical_json_bytes,
     resolve_object_id,
 )
 from zeta.trace.replay import latest_model_answer
@@ -77,10 +77,19 @@ zeta_trace = SimpleNamespace(
     SqliteObjectStore=SqliteObjectStore,
     Store=Store,
     UnknownIdError=UnknownIdError,
+    canonical_json_bytes=canonical_json_bytes,
     available_session_ids=available_session_ids,
     resolve_object_id=resolve_object_id,
     zeta_sqlite_path=zeta_sqlite_path,
 )
+
+OBJECT_ID_A = "b3:" + "a" * 64
+OBJECT_ID_B = "b3:" + "b" * 64
+OBJECT_ID_C = "b3:" + "c" * 64
+OBJECT_ID_D = "b3:" + "d" * 64
+PREFIX_ID_A1 = "b3:aaaa1111" + "0" * 56
+PREFIX_ID_A2 = "b3:aaaa2222" + "0" * 56
+PREFIX_ID_B = "b3:bbbb2222" + "0" * 56
 
 
 def timeline_messages(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -172,35 +181,35 @@ def test_zeta_trace_move_ref_compares_expected_value(
     store: zeta_trace.Store | None,
 ) -> None:
     trace_store = store or zeta_trace.SqliteObjectStore(tmp_path / "trace.sqlite3")
-    created = trace_store.move_ref("run/test/head", None, "sha256:first")
+    created = trace_store.move_ref("run/test/head", None, OBJECT_ID_A)
 
     assert created == zeta_trace.RefUpdate(
         name="run/test/head",
         old_object_id=None,
-        new_object_id="sha256:first",
+        new_object_id=OBJECT_ID_A,
         updated=True,
     )
-    updated = trace_store.move_ref("run/test/head", "sha256:first", "sha256:second")
+    updated = trace_store.move_ref("run/test/head", OBJECT_ID_A, OBJECT_ID_B)
 
     assert updated == zeta_trace.RefUpdate(
         name="run/test/head",
-        old_object_id="sha256:first",
-        new_object_id="sha256:second",
+        old_object_id=OBJECT_ID_A,
+        new_object_id=OBJECT_ID_B,
         updated=True,
     )
     assert trace_store.get_ref("run/test/head") == zeta_trace.Ref(
-        name="run/test/head", object_id="sha256:second"
+        name="run/test/head", object_id=OBJECT_ID_B
     )
-    stale = trace_store.move_ref("run/test/head", "sha256:first", "sha256:third")
+    stale = trace_store.move_ref("run/test/head", OBJECT_ID_A, OBJECT_ID_C)
 
     assert stale == zeta_trace.RefUpdate(
         name="run/test/head",
-        old_object_id="sha256:second",
-        new_object_id="sha256:third",
+        old_object_id=OBJECT_ID_B,
+        new_object_id=OBJECT_ID_C,
         updated=False,
     )
     assert trace_store.get_ref("run/test/head") == zeta_trace.Ref(
-        name="run/test/head", object_id="sha256:second"
+        name="run/test/head", object_id=OBJECT_ID_B
     )
 
 
@@ -217,21 +226,21 @@ def test_zeta_trace_move_ref_expected_none_creates_only_when_absent(
 ) -> None:
     trace_store = store or zeta_trace.SqliteObjectStore(tmp_path / "trace.sqlite3")
 
-    trace_store.move_ref("run/test/head", None, "sha256:first")
+    trace_store.move_ref("run/test/head", None, OBJECT_ID_A)
 
     assert trace_store.get_ref("run/test/head") == zeta_trace.Ref(
-        name="run/test/head", object_id="sha256:first"
+        name="run/test/head", object_id=OBJECT_ID_A
     )
-    stale = trace_store.move_ref("run/test/head", None, "sha256:second")
+    stale = trace_store.move_ref("run/test/head", None, OBJECT_ID_B)
 
     assert stale == zeta_trace.RefUpdate(
         name="run/test/head",
-        old_object_id="sha256:first",
-        new_object_id="sha256:second",
+        old_object_id=OBJECT_ID_A,
+        new_object_id=OBJECT_ID_B,
         updated=False,
     )
     assert trace_store.get_ref("run/test/head") == zeta_trace.Ref(
-        name="run/test/head", object_id="sha256:first"
+        name="run/test/head", object_id=OBJECT_ID_A
     )
 
 
@@ -247,15 +256,15 @@ def test_zeta_trace_move_ref_reports_false_when_row_changed_after_read(
     the move must be reported as failed rather than a false success.
     """
     trace_store = zeta_trace.SqliteObjectStore(tmp_path / "trace.sqlite3")
-    trace_store.move_ref("run/test/head", None, "sha256:actual")
+    trace_store.move_ref("run/test/head", None, OBJECT_ID_A)
 
-    monkeypatch.setattr(trace_store, "_ref_object_id", lambda name: "sha256:stale")
-    result = trace_store.move_ref("run/test/head", "sha256:stale", "sha256:new")
+    monkeypatch.setattr(trace_store, "_ref_object_id", lambda name: OBJECT_ID_B)
+    result = trace_store.move_ref("run/test/head", OBJECT_ID_B, OBJECT_ID_C)
     monkeypatch.undo()
 
     assert result.updated is False
     assert trace_store.get_ref("run/test/head") == zeta_trace.Ref(
-        name="run/test/head", object_id="sha256:actual"
+        name="run/test/head", object_id=OBJECT_ID_A
     )
 
 
@@ -403,49 +412,58 @@ def test_zeta_trace_encoding_vectors_match_python_bytes() -> None:
     document = json.loads(path.read_text(encoding="utf-8"))
 
     for vector in document["vectors"]:
-        encoded = json.dumps(
-            vector["value"],
-            ensure_ascii=False,
-            sort_keys=True,
-            separators=(",", ":"),
-            allow_nan=False,
-        )
-        assert encoded == vector["canonical_utf8"], vector["name"]
+        encoded = zeta_trace.canonical_json_bytes(vector["value"])
+        assert encoded == vector["canonical_utf8"].encode(), vector["name"]
 
 
-def test_zeta_trace_legacy_address_vectors_match_current_python_mint() -> None:
-    path = (
-        Path(__file__).resolve().parents[2]
-        / "spec"
-        / "vectors"
-        / "substrate"
-        / "legacy-addresses.json"
+def test_zeta_trace_object_and_derivation_use_active_domains() -> None:
+    from blake3 import blake3
+
+    obj = zeta_trace.Object(kind="example", schema="v1", data={"value": 1})
+    object_bytes = b'{"data":{"value":1},"kind":"example","links":[],"schema":"v1"}'
+    expected_object = (
+        "b3:"
+        + blake3(
+            object_bytes,
+            derive_key_context="zeta-os 2026-08 cas object",
+        ).hexdigest()
     )
-    document = json.loads(path.read_text(encoding="utf-8"))
+    assert obj.content_address() == expected_object
 
-    for vector in document["objects"]:
-        fields = vector["object"]
-        obj = zeta_trace.Object(
-            kind=fields["kind"],
-            schema=fields["schema"],
-            data=fields["data"],
-            links=tuple(fields["links"]),
-        )
-        digest = hashlib.sha256(vector["canonical_utf8"].encode()).hexdigest()
-        assert f"sha256:{digest}" == vector["sha256_address"], vector["name"]
-        assert obj.content_address() == vector["phase0_address"], vector["name"]
+    derivation = zeta_trace.Derivation(
+        producer="test",
+        output_id=expected_object,
+        params={"stable": True},
+    )
+    derivation_bytes = zeta_trace.canonical_json_bytes(
+        {
+            "producer": "test",
+            "output_id": expected_object,
+            "input_ids": (),
+            "params": {"stable": True},
+        }
+    )
+    expected_derivation = (
+        "b3:"
+        + blake3(
+            derivation_bytes,
+            derive_key_context="zeta-os 2026-08 cas derivation",
+        ).hexdigest()
+    )
+    assert derivation.content_address() == expected_derivation
 
-    for vector in document["derivations"]:
-        fields = vector["derivation"]
-        derivation = zeta_trace.Derivation(
-            producer=fields["producer"],
-            output_id=fields["output_id"],
-            input_ids=tuple(fields["input_ids"]),
-            params=fields["params"],
-        )
-        digest = hashlib.sha256(vector["canonical_utf8"].encode()).hexdigest()
-        assert f"derivation:{digest}" == vector["sha256_address"], vector["name"]
-        assert derivation.content_address() == vector["phase0_address"], vector["name"]
+
+@pytest.mark.parametrize("value", [-(2**63) - 1, 2**64, float("nan"), float("inf")])
+def test_zeta_trace_canonical_json_rejects_values_outside_the_identity_domain(
+    value: object,
+) -> None:
+    with pytest.raises(ValueError):
+        zeta_trace.canonical_json_bytes({"nested": [value]})
+
+
+def test_zeta_trace_canonical_json_rejects_non_string_keys() -> None:
+    with pytest.raises(TypeError):
+        zeta_trace.canonical_json_bytes({1: "not a JSON object key"})
 
 
 def test_zeta_trace_sqlite_persists_objects_refs_derivations_and_closure(
@@ -486,6 +504,39 @@ def test_zeta_trace_sqlite_persists_objects_refs_derivations_and_closure(
     assert set(reopened.graph_closure([child_id])) == {parent_id, child_id}
     assert reopened.stats().object_count == 2
     reopened.close()
+
+
+def test_zeta_trace_import_requires_the_current_object_address(tmp_path: Path) -> None:
+    store = zeta_trace.SqliteObjectStore(tmp_path / "trace.sqlite3")
+    obj = zeta_trace.Object(kind="note", schema="v1", data={"text": "hello"})
+
+    with pytest.raises(ValueError, match="object address"):
+        store.import_object("old:" + "a" * 64, obj)
+    with pytest.raises(ValueError, match="object address"):
+        store.import_object("b3:" + "a" * 64, obj)
+
+    store.import_object(obj.content_address(), obj)
+    assert store.get_object(obj.content_address()) == obj
+    store.close()
+
+
+def test_zeta_trace_import_requires_the_current_derivation_address(
+    tmp_path: Path,
+) -> None:
+    store = zeta_trace.SqliteObjectStore(tmp_path / "trace.sqlite3")
+    derivation = zeta_trace.Derivation(
+        producer="test",
+        output_id="b3:" + "a" * 64,
+    )
+
+    with pytest.raises(ValueError, match="derivation address"):
+        store.import_derivation("old:" + "b" * 64, derivation, 1.0)
+    with pytest.raises(ValueError, match="derivation address"):
+        store.import_derivation("b3:" + "b" * 64, derivation, 1.0)
+
+    store.import_derivation(derivation.content_address(), derivation, 1.0)
+    assert store.derivations_for_output(derivation.output_id) == [derivation]
+    store.close()
 
 
 def test_zeta_trace_sqlite_reports_incompatible_substrate_schema(
@@ -576,7 +627,7 @@ def test_zeta_cli_event_inspection_treats_trace_only_database_as_empty(
 ) -> None:
     state_dir = tmp_path / ".zeta"
     trace_store = SqliteObjectStore(zeta_sqlite_path(state_dir))
-    trace_store.put_object(Object(kind="prompt", schema="zeta.prompt.v1", data={}))
+    trace_store.put_object(Object(kind="prompt", schema="zeta.prompt.v2", data={}))
     trace_store.close()
 
     result = CliRunner().invoke(
@@ -646,7 +697,7 @@ def test_zeta_trace_read_only_inspection_sees_live_wal(tmp_path: Path) -> None:
     prompt_id = trace_store.put_object(
         Object(
             kind="prompt",
-            schema="zeta.prompt.v1",
+            schema="zeta.prompt.v2",
             data={"payload": {"text": "live"}},
         )
     )
@@ -715,7 +766,7 @@ def seed_trace_store(path: Path, text: str, *, session_id: str | None = None) ->
     prompt_id = store.put_object(
         zeta_trace.Object(
             kind="prompt",
-            schema="zeta.prompt.v1",
+            schema="zeta.prompt.v2",
             data={"payload": {"text": text}},
         )
     )
@@ -730,7 +781,7 @@ def test_zeta_sqlite_store_read_only_rejects_writes(tmp_path: Path) -> None:
     path = tmp_path / "trace.sqlite3"
     writer = zeta_trace.SqliteObjectStore(path)
     stored_id = writer.put_object(
-        zeta_trace.Object(kind="prompt", schema="zeta.prompt.v1", data={})
+        zeta_trace.Object(kind="prompt", schema="zeta.prompt.v2", data={})
     )
     writer.close()
 
@@ -739,7 +790,7 @@ def test_zeta_sqlite_store_read_only_rejects_writes(tmp_path: Path) -> None:
     assert reader.get_object(stored_id) is not None
     with pytest.raises(sqlite3.OperationalError):
         reader.put_object(
-            zeta_trace.Object(kind="prompt", schema="zeta.prompt.v1", data={"x": 1})
+            zeta_trace.Object(kind="prompt", schema="zeta.prompt.v2", data={"x": 1})
         )
     reader.close()
 
@@ -940,7 +991,7 @@ def test_zeta_trace_cli_smoke_with_in_memory_store(monkeypatch) -> None:
     prompt_id = store.put_object(
         zeta_trace.Object(
             kind="prompt",
-            schema="zeta.prompt.v1",
+            schema="zeta.prompt.v2",
             data={"payload": {"messages": []}},
             links=(parent_id,),
         )
@@ -977,7 +1028,7 @@ def test_zeta_trace_cli_smoke_with_sqlite_store(
 ) -> None:
     store = zeta_trace.SqliteObjectStore(tmp_path / "trace.sqlite3")
     prompt_id = store.put_object(
-        zeta_trace.Object(kind="prompt", schema="zeta.prompt.v1", data={})
+        zeta_trace.Object(kind="prompt", schema="zeta.prompt.v2", data={})
     )
     store.record_derivation(
         zeta_trace.Derivation(producer="unit:test", output_id=prompt_id)
@@ -1144,8 +1195,8 @@ def test_zeta_model_called_keeps_trace_links_out_of_payload(
     prompt_id = store.put_object(
         zeta_trace.Object(
             kind="prompt",
-            schema="zeta.prompt.v1",
-            data={"payload_sha256": "sha256:payload"},
+            schema="zeta.prompt.v2",
+            data={"payload_address": OBJECT_ID_A},
         )
     )
     record_zeta_event(
@@ -1179,8 +1230,8 @@ def test_zeta_tool_called_keeps_trace_links_out_of_payload(
             "tool_call_id": "call-1",
             "name": "read",
             "result": {"ok": True},
-            "tool_call_object_id": "sha256:call",
-            "tool_result_object_id": "sha256:result",
+            "tool_call_object_id": OBJECT_ID_A,
+            "tool_result_object_id": OBJECT_ID_B,
             "caused_by": "model-event-1",
         }
     )
@@ -1374,15 +1425,15 @@ def test_zeta_record_event_stores_prompt_link_not_components(
     component_id = store.put_object(
         zeta_trace.Object(
             kind="user_message",
-            schema="zeta.prompt_component.v1",
+            schema="zeta.prompt_component.v2",
             data={"message": {"role": "user", "content": "objective"}},
         )
     )
     prompt_id = store.put_object(
         zeta_trace.Object(
             kind="prompt",
-            schema="zeta.prompt.v1",
-            data={"payload_sha256": "sha256:payload"},
+            schema="zeta.prompt.v2",
+            data={"payload_address": OBJECT_ID_A},
             links=(component_id,),
         )
     )
@@ -1416,8 +1467,8 @@ def test_zeta_timeline_rehydrates_assistant_content_from_the_graph(
     prompt_id = store.put_object(
         zeta_trace.Object(
             kind="prompt",
-            schema="zeta.prompt.v1",
-            data={"payload_sha256": "sha256:payload"},
+            schema="zeta.prompt.v2",
+            data={"payload_address": OBJECT_ID_A},
         )
     )
     tool_calls = [
@@ -1473,8 +1524,8 @@ def test_zeta_timeline_rehydrates_assistant_reasoning_from_the_graph(
     prompt_id = store.put_object(
         zeta_trace.Object(
             kind="prompt",
-            schema="zeta.prompt.v1",
-            data={"payload_sha256": "sha256:payload"},
+            schema="zeta.prompt.v2",
+            data={"payload_address": OBJECT_ID_A},
         )
     )
     assistant_id = store.put_object(
@@ -1538,15 +1589,15 @@ def test_zeta_inmemory_store_dedupes_repeated_derivations() -> None:
     store = zeta_trace.InMemoryStore()
     derivation = zeta_trace.Derivation(
         producer="Producer:v1",
-        output_id="sha256:out",
-        input_ids=("sha256:in",),
+        output_id=OBJECT_ID_A,
+        input_ids=(OBJECT_ID_B,),
     )
 
     first = store.record_derivation(derivation)
     second = store.record_derivation(derivation)
 
     assert first == second
-    assert len(store.derivations_for_output("sha256:out")) == 1
+    assert len(store.derivations_for_output(OBJECT_ID_A)) == 1
 
 
 def test_zeta_orphan_tool_result_rendering_strips_trace_fields() -> None:
@@ -1555,10 +1606,10 @@ def test_zeta_orphan_tool_result_rendering_strips_trace_fields() -> None:
         "tool_call_id": "call-orphan",
         "name": "read",
         "result": {"ok": True, "content": [{"type": "text", "text": "data"}]},
-        "tool_result_object_id": "sha256:result",
-        "tool_call_object_id": "sha256:call",
+        "tool_result_object_id": OBJECT_ID_A,
+        "tool_call_object_id": OBJECT_ID_B,
         "model_telemetry": {"usage": {"prompt_tokens": 10}},
-        "prompt_trace": {"prompt_object_id": "sha256:prompt"},
+        "prompt_trace": {"prompt_object_id": OBJECT_ID_C},
     }
 
     messages = timeline_messages([event])
@@ -1567,7 +1618,7 @@ def test_zeta_orphan_tool_result_rendering_strips_trace_fields() -> None:
     assert messages[0]["role"] == "user"
     content = str(messages[0]["content"])
     assert "data" in content
-    assert "sha256:" not in content
+    assert OBJECT_ID_A not in content
     assert "model_telemetry" not in content
     assert "prompt_trace" not in content
 
@@ -1729,15 +1780,15 @@ def test_zeta_inmemory_store_answers_forward_derivation_queries() -> None:
     store.record_derivation(
         zeta_trace.Derivation(
             producer="test:v1",
-            output_id="sha256:out",
-            input_ids=("sha256:in",),
+            output_id=OBJECT_ID_A,
+            input_ids=(OBJECT_ID_B,),
         )
     )
 
-    (derivation,) = store.derivations_for_input("sha256:in")
+    (derivation,) = store.derivations_for_input(OBJECT_ID_B)
 
-    assert derivation.output_id == "sha256:out"
-    assert store.derivations_for_input("sha256:out") == []
+    assert derivation.output_id == OBJECT_ID_A
+    assert store.derivations_for_input(OBJECT_ID_A) == []
 
 
 def test_zeta_trace_dedupes_forward_rows_for_repeated_derivations(
@@ -1746,14 +1797,14 @@ def test_zeta_trace_dedupes_forward_rows_for_repeated_derivations(
     store = zeta_trace.SqliteObjectStore(tmp_path / "trace.sqlite3")
     derivation = zeta_trace.Derivation(
         producer="test:v1",
-        output_id="sha256:out",
-        input_ids=("sha256:in", "sha256:in"),
+        output_id=OBJECT_ID_A,
+        input_ids=(OBJECT_ID_B, OBJECT_ID_B),
     )
 
     store.record_derivation(derivation)
     store.record_derivation(derivation)
 
-    assert len(store.derivations_for_input("sha256:in")) == 1
+    assert len(store.derivations_for_input(OBJECT_ID_B)) == 1
     store.close()
 
 
@@ -1765,21 +1816,21 @@ def test_zeta_trace_derivation_ids_are_content_scoped_across_sessions(
     second = zeta_trace.SqliteObjectStore(path, session_id="second")
     derivation = zeta_trace.Derivation(
         producer="test:v1",
-        output_id="sha256:out",
-        input_ids=("sha256:in",),
+        output_id=OBJECT_ID_A,
+        input_ids=(OBJECT_ID_B,),
     )
 
     first_id = first.record_derivation(derivation)
     second_id = second.record_derivation(derivation)
 
     assert first_id == second_id == derivation.content_address()
-    assert first.derivations_for_input("sha256:in") == [derivation]
-    assert second.derivations_for_input("sha256:in") == [derivation]
+    assert first.derivations_for_input(OBJECT_ID_B) == [derivation]
+    assert second.derivations_for_input(OBJECT_ID_B) == [derivation]
 
     first.clear_session()
 
-    assert first.derivations_for_input("sha256:in") == []
-    assert second.derivations_for_input("sha256:in") == [derivation]
+    assert first.derivations_for_input(OBJECT_ID_B) == []
+    assert second.derivations_for_input(OBJECT_ID_B) == [derivation]
     first.close()
     second.close()
 
@@ -1790,7 +1841,7 @@ def test_zeta_trace_resolves_refs_full_ids_and_prefixes(tmp_path: Path) -> None:
         zeta_trace.Object(kind="prompt", schema="v1", data={"text": "target"})
     )
     store.move_ref("prompt/current", None, object_id)
-    digest = object_id.removeprefix("sha256:")
+    digest = object_id.removeprefix("b3:")
 
     assert zeta_trace.resolve_object_id(store, "prompt/current") == object_id
     assert zeta_trace.resolve_object_id(store, object_id) == object_id
@@ -1802,23 +1853,23 @@ def test_zeta_trace_resolves_refs_full_ids_and_prefixes(tmp_path: Path) -> None:
 def test_zeta_trace_resolver_prefers_refs_over_prefixes() -> None:
     store = zeta_trace.InMemoryStore()
     obj = zeta_trace.Object(kind="prompt", schema="v1", data={"text": "x"})
-    store._objects["sha256:aaaa1111"] = obj
-    store._objects["sha256:bbbb2222"] = obj
-    store.move_ref("aaaa", None, "sha256:bbbb2222")
+    store._objects[PREFIX_ID_A1] = obj
+    store._objects[PREFIX_ID_B] = obj
+    store.move_ref("aaaa", None, PREFIX_ID_B)
 
-    assert zeta_trace.resolve_object_id(store, "aaaa") == "sha256:bbbb2222"
+    assert zeta_trace.resolve_object_id(store, "aaaa") == PREFIX_ID_B
 
 
 def test_zeta_trace_resolver_rejects_ambiguous_prefixes() -> None:
     store = zeta_trace.InMemoryStore()
     obj = zeta_trace.Object(kind="prompt", schema="v1", data={"text": "x"})
-    store._objects["sha256:aaaa1111"] = obj
-    store._objects["sha256:aaaa2222"] = obj
+    store._objects[PREFIX_ID_A1] = obj
+    store._objects[PREFIX_ID_A2] = obj
 
     with pytest.raises(zeta_trace.AmbiguousIdError) as excinfo:
         zeta_trace.resolve_object_id(store, "aaaa")
 
-    assert set(excinfo.value.candidates) == {"sha256:aaaa1111", "sha256:aaaa2222"}
+    assert set(excinfo.value.candidates) == {PREFIX_ID_A1, PREFIX_ID_A2}
 
 
 def test_zeta_trace_resolver_raises_for_unknown_tokens() -> None:
@@ -1836,8 +1887,8 @@ def test_zeta_trace_prefix_matching_treats_like_wildcards_literally(
     store = zeta_trace.SqliteObjectStore(tmp_path / "trace.sqlite3")
     store.put_object(zeta_trace.Object(kind="prompt", schema="v1", data={"n": 1}))
 
-    assert store.object_ids_with_prefix("sha256:%") == []
-    assert store.object_ids_with_prefix("sha256:_") == []
+    assert store.object_ids_with_prefix("b3:%") == []
+    assert store.object_ids_with_prefix("b3:_") == []
     store.close()
 
 
@@ -1928,15 +1979,15 @@ def narrative_log_store() -> tuple[zeta_trace.InMemoryStore, str, str, str]:
     component_id = store.put_object(
         zeta_trace.Object(
             kind="user_message",
-            schema="zeta.prompt_component.v1",
+            schema="zeta.prompt_component.v2",
             data={"message": {"role": "user", "content": "why did it fail?"}},
         )
     )
     prompt_id = store.put_object(
         zeta_trace.Object(
             kind="prompt",
-            schema="zeta.prompt.v1",
-            data={"payload_sha256": "sha256:feed"},
+            schema="zeta.prompt.v2",
+            data={"payload_address": OBJECT_ID_A},
             links=(component_id,),
         )
     )
@@ -1977,7 +2028,7 @@ def prompt_diff_store() -> tuple[zeta_trace.InMemoryStore, dict[str, str]]:
         return store.put_object(
             zeta_trace.Object(
                 kind=kind,
-                schema="zeta.prompt_component.v1",
+                schema="zeta.prompt_component.v2",
                 data={"message": {"role": role, "content": content}},
             )
         )
@@ -1991,16 +2042,16 @@ def prompt_diff_store() -> tuple[zeta_trace.InMemoryStore, dict[str, str]]:
     ids["prompt_a"] = store.put_object(
         zeta_trace.Object(
             kind="prompt",
-            schema="zeta.prompt.v1",
-            data={"payload_sha256": "sha256:a"},
+            schema="zeta.prompt.v2",
+            data={"payload_address": OBJECT_ID_A},
             links=(ids["system"], ids["transcript"], ids["old_objective"]),
         )
     )
     ids["prompt_b"] = store.put_object(
         zeta_trace.Object(
             kind="prompt",
-            schema="zeta.prompt.v1",
-            data={"payload_sha256": "sha256:b"},
+            schema="zeta.prompt.v2",
+            data={"payload_address": OBJECT_ID_B},
             links=(ids["system"], ids["new_objective"]),
         )
     )
@@ -2012,8 +2063,8 @@ def test_zeta_trace_helpers_read_provider_neutral_model_output() -> None:
     prompt_id = store.put_object(
         zeta_trace.Object(
             kind="prompt",
-            schema="zeta.prompt.v1",
-            data={"payload_sha256": "sha256:prompt"},
+            schema="zeta.prompt.v2",
+            data={"payload_address": OBJECT_ID_A},
         )
     )
     answer_id = store.put_object(
@@ -2603,13 +2654,14 @@ def test_zeta_trace_tools_all_sessions_sorts_by_trace_time(
                 links=(call_object_id,),
             )
         )
+        derivation = zeta_trace.Derivation(
+            producer="unit:test",
+            output_id=result_object_id,
+            input_ids=(call_object_id,),
+        )
         store.import_derivation(
-            f"derivation:{call_id}",
-            zeta_trace.Derivation(
-                producer="unit:test",
-                output_id=result_object_id,
-                input_ids=(call_object_id,),
-            ),
+            derivation.content_address(),
+            derivation,
             created_at,
         )
         store.close()
@@ -2696,7 +2748,7 @@ def test_zeta_trace_show_renders_humans_first(monkeypatch) -> None:
     assert lines[0].startswith(zeta_trace_short(prompt_id))
     assert "prompt" in lines[0]
     assert f"id      {prompt_id}" in result.output
-    assert "schema  zeta.prompt.v1" in result.output
+    assert "schema  zeta.prompt.v2" in result.output
     assert "components" in result.output
     assert zeta_trace_short(component_id) in result.output
     assert "why did it fail?" in result.output
@@ -2722,10 +2774,10 @@ def test_zeta_trace_show_renders_message_bodies(monkeypatch) -> None:
 def test_zeta_trace_cli_resolves_refs_and_prefixes(monkeypatch) -> None:
     store = zeta_trace.InMemoryStore()
     prompt_id = store.put_object(
-        zeta_trace.Object(kind="prompt", schema="zeta.prompt.v1", data={"n": 1})
+        zeta_trace.Object(kind="prompt", schema="zeta.prompt.v2", data={"n": 1})
     )
     store.move_ref("prompt/current", None, prompt_id)
-    digest_prefix = prompt_id.removeprefix("sha256:")[:8]
+    digest_prefix = prompt_id.removeprefix("b3:")[:8]
     monkeypatch.setattr("zeta.cli.traces.scoped_store", lambda *_args, **_kwargs: store)
 
     runner = CliRunner()
@@ -2745,8 +2797,8 @@ def test_zeta_trace_cli_reports_ambiguous_and_unknown_ids(
 ) -> None:
     store = zeta_trace.InMemoryStore()
     obj = zeta_trace.Object(kind="prompt", schema="v1", data={"n": 1})
-    store._objects["sha256:aaaa1111"] = obj
-    store._objects["sha256:aaaa2222"] = obj
+    store._objects[PREFIX_ID_A1] = obj
+    store._objects[PREFIX_ID_A2] = obj
     monkeypatch.setattr("zeta.cli.traces.scoped_store", lambda *_args, **_kwargs: store)
 
     runner = CliRunner()
@@ -2754,7 +2806,7 @@ def test_zeta_trace_cli_reports_ambiguous_and_unknown_ids(
     unknown = runner.invoke(zeta_cli, ["traces", "show", "ffff"])
 
     assert ambiguous.exit_code != 0
-    assert "sha256:aaaa1111" in ambiguous.output
-    assert "sha256:aaaa2222" in ambiguous.output
+    assert PREFIX_ID_A1 in ambiguous.output
+    assert PREFIX_ID_A2 in ambiguous.output
     assert unknown.exit_code != 0
     assert "ffff" in unknown.output

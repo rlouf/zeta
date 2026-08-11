@@ -4,8 +4,8 @@
   "contexts": {
     "event": "zeta-os 2026-08 cas event",
     "chain": "zeta-os 2026-08 cas chain",
-    "prompt": "zeta-os 2026-08 cas prompt",
-    "skill": "zeta-os 2026-08 cas skill"
+    "object": "zeta-os 2026-08 cas object",
+    "derivation": "zeta-os 2026-08 cas derivation"
   },
   "vectors": [
     {
@@ -57,52 +57,52 @@
       "address": "b3:855adacaa5f5de5b70696af7a293d90d5f23d1b2c957162dd871c0f98ba2aa8f"
     },
     {
-      "domain": "prompt",
+      "domain": "object",
       "name": "empty",
       "input_utf8": "",
-      "address": "b3:4d64c6bc5b57f295c5f0c349efa2375b9495529be504b61a406db7ef262795a1"
+      "address": "b3:4ddc95bc461c5550e54af8cee73cec85047579918003d7ef2f3d7d1b79645efd"
     },
     {
-      "domain": "prompt",
+      "domain": "object",
       "name": "ascii",
       "input_utf8": "hello wire",
-      "address": "b3:d238ebb8f3f8533d66997c5b93e250ad3511f58518fe683af87bcee5a1564ee4"
+      "address": "b3:ae62e4161e68a9eebb6b7136c3d2e9edbe40e73035c203e0783627bd0698cd4a"
     },
     {
-      "domain": "prompt",
+      "domain": "object",
       "name": "utf8",
       "input_utf8": "héllo wörld ✓",
-      "address": "b3:1ddd546fd96bc0366b4291b74cea26b9a7caa759403992f2b8c4b301c5ebe290"
+      "address": "b3:448d4e7eb2236bdf34213cfaa1189e8b1bf73f356f64b283705cf557e4bde7a0"
     },
     {
-      "domain": "prompt",
+      "domain": "object",
       "name": "binary",
       "input_base64": "AAcOFRwjKjE4P0ZNVFtiaXB3foWMk5qhqK+2vcTL0tng5+71/A==",
-      "address": "b3:5187922ec6089842bfe0cab1b5be2bc8bb94185cd900ec5300a39dc077363d78"
+      "address": "b3:6beb1ee99518927c9f6e9746c06961d15ea544bebf9de817f70236c1574a0dd4"
     },
     {
-      "domain": "skill",
+      "domain": "derivation",
       "name": "empty",
       "input_utf8": "",
-      "address": "b3:8672ab77421b00153cf6e4157d1af16e7e8d003b4d4708a879c2c97dd150c010"
+      "address": "b3:dfd75105bad2ee0d133f115baad2bca03da8307c63771ece7a48f575c6a9ebb5"
     },
     {
-      "domain": "skill",
+      "domain": "derivation",
       "name": "ascii",
       "input_utf8": "hello wire",
-      "address": "b3:bc2a1eb20c08d97bb794e77e13c639b0942e19d4f72b017260815b22363a7533"
+      "address": "b3:894695f84e671081148608246529f47e664b30efe5e787f284ddf64fe5a6277e"
     },
     {
-      "domain": "skill",
+      "domain": "derivation",
       "name": "utf8",
       "input_utf8": "héllo wörld ✓",
-      "address": "b3:ac87def2cb6dcdbfd496e80fdcc21541ea9483b080371c1dba957200d483015d"
+      "address": "b3:6ee04d0d3459c75238488f832875d57309a55081a5cdb416b9e3e355272c0379"
     },
     {
-      "domain": "skill",
+      "domain": "derivation",
       "name": "binary",
       "input_base64": "AAcOFRwjKjE4P0ZNVFtiaXB3foWMk5qhqK+2vcTL0tng5+71/A==",
-      "address": "b3:497c1fd35530e2a8431df1bf4a0a9d31df262bdf598b9321c11556733ae95806"
+      "address": "b3:6a5ea91fb8300b5d7fd41ba9b1ac751318d8ac2fcc1b2f4a8648f97bb24e0953"
     },
     {
       "domain": "content",

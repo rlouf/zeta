@@ -14,6 +14,7 @@ from wire_test_support import (
     spawn,
     write_child,
 )
+from zeta.ids import event_idempotency_id
 from zeta.wire.envelopes import (
     EnvelopeError,
     canonical_json,
@@ -24,6 +25,13 @@ from zeta.wire.envelopes import (
 VALID_DIR = VECTORS_DIR / "envelopes" / "valid"
 INVALID_DIR = VECTORS_DIR / "envelopes" / "invalid"
 SESSION_PATH = VECTORS_DIR / "handshake" / "session-01.jsonl"
+
+
+def test_wire_event_ids_delegate_to_runtime_identity_ownership() -> None:
+    payload = {"path": "inbox/todo.txt", "size": 12}
+    assert mint_event_id("file.created", payload) == event_idempotency_id(
+        "file.created", payload
+    )
 
 
 def valid_vector_paths() -> list:

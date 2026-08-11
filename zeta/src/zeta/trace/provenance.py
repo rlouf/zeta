@@ -4,6 +4,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any
 
+from zeta.addresses import is_b3
 from zeta.events import DraftEvent, Event
 from zeta.journal.views import draft_event_id, event_timeline_type
 from zeta.substrate import Derivation, Object, ObjectId, Store
@@ -70,7 +71,7 @@ def _project_one_trace_model_event(
     projection: PromptTraceProjection,
 ) -> ObjectId | None:
     prompt_id = event.payload.get("prompt_object_id")
-    if not isinstance(prompt_id, str) or not prompt_id.startswith(("b3:", "sha256:")):
+    if not isinstance(prompt_id, str) or not is_b3(prompt_id):
         return None
     assistant_id = store.put_object(
         Object(

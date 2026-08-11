@@ -15,6 +15,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from zeta import addresses
+from zeta.ids import event_idempotency_id
 
 PROTOCOL_VERSION = 0
 MAX_INLINE_PAYLOAD_BYTES = 64 * 1024
@@ -77,13 +78,9 @@ def envelope(
     }
 
 
-def event_identity(event_type: str, payload: dict[str, Any]) -> bytes:
-    """Return the identity bytes an event id is minted from (spec §6.1)."""
-    return canonical_json({"payload": payload, "type": event_type}).encode()
-
-
 def mint_event_id(event_type: str, payload: dict[str, Any]) -> str:
-    return addresses.event_address(event_identity(event_type, payload))
+    """Return the runtime-owned idempotency identity for a wire event."""
+    return event_idempotency_id(event_type, payload)
 
 
 def validate_envelope(value: Any) -> dict[str, Any]:

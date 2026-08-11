@@ -3,13 +3,57 @@
 from __future__ import annotations
 
 import json
+import math
 from dataclasses import dataclass, field
 from typing import Any
 
-from zeta.addresses import prompt_address
+from zeta.addresses import derivation_address, object_address
 
 ObjectId = str
 RefName = str
+
+_MIN_IDENTITY_INTEGER = -(2**63)
+_MAX_IDENTITY_INTEGER = 2**64 - 1
+
+
+def canonical_json_bytes(value: Any) -> bytes:
+    """Encode a value with the canonical substrate identity rules.
+
+    The explicit value check keeps Python's broader numeric and object model
+    from minting identities that another implementation cannot reproduce.
+    """
+    _validate_identity_value(value)
+    return json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode("utf-8")
+
+
+def _validate_identity_value(value: Any) -> None:
+    if value is None or isinstance(value, (bool, str)):
+        return
+    if isinstance(value, int):
+        if not _MIN_IDENTITY_INTEGER <= value <= _MAX_IDENTITY_INTEGER:
+            raise ValueError("identity-bearing integers must fit i64 or u64")
+        return
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            raise ValueError("identity-bearing floats must be finite")
+        return
+    if isinstance(value, (list, tuple)):
+        for item in value:
+            _validate_identity_value(item)
+        return
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if not isinstance(key, str):
+                raise TypeError("identity-bearing object keys must be strings")
+            _validate_identity_value(item)
+        return
+    raise TypeError(f"unsupported identity-bearing value: {type(value).__name__}")
 
 
 @dataclass(frozen=True)
@@ -34,14 +78,7 @@ class Object:
             "data": self.data,
             "links": self.links,
         }
-        content = json.dumps(
-            payload,
-            ensure_ascii=False,
-            sort_keys=True,
-            separators=(",", ":"),
-            allow_nan=False,
-        )
-        return prompt_address(content.encode())
+        return object_address(canonical_json_bytes(payload))
 
 
 @dataclass(frozen=True)
@@ -66,15 +103,7 @@ class Derivation:
             "input_ids": self.input_ids,
             "params": self.params,
         }
-        content = json.dumps(
-            payload,
-            ensure_ascii=False,
-            sort_keys=True,
-            separators=(",", ":"),
-            allow_nan=False,
-        )
-        digest = prompt_address(content.encode()).removeprefix("b3:")
-        return f"derivation:{digest}"
+        return derivation_address(canonical_json_bytes(payload))
 
 
 @dataclass(frozen=True)

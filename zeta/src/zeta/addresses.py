@@ -1,22 +1,8 @@
-"""Content addresses and derived identifiers.
+"""BLAKE3 content addresses and domain-separated identifiers.
 
-Every address minted from bytes goes through this module, so the
-format has one owner. Two kinds exist, and the distinction is
-normative (spec §11): **content addresses** — file bytes, event
-payloads, pack blobs — are the plain, undomained BLAKE3 of the exact
-bytes, so one hash universe holds across every tool that hashes the
-same bytes. **Derived identifiers** — event ids, chain links, prompt
-ids, skill ids — hash structured identity through BLAKE3 derive-key
-mode with one frozen context string per domain, because cross-domain
-confusion is a real risk there. The context strings are opaque and
-stay verbatim forever: a product rename never changes them, because
-changing one would silently re-address every stored record in its
-domain.
-
-Legacy identifiers minted from SHA-256 (`sha256:`-prefixed, or bare
-24- or 64-hex digests) remain valid forever. `is_legacy` names them so
-call sites that compare or look identifiers up can dual-read instead
-of re-hashing history.
+Plain content bytes share one undomained hash universe. Structured
+identities use frozen derive-key contexts so values from different
+domains cannot collide semantically.
 
 The wire protocol (`spec/wire-v0.md` §11) and the conformance vectors
 in `spec/vectors/addresses/vectors.json` pin this module's outputs
@@ -36,19 +22,14 @@ B3_PREFIX = "b3:"
 
 EVENT_CONTEXT = "zeta-os 2026-08 cas event"
 CHAIN_CONTEXT = "zeta-os 2026-08 cas chain"
-PROMPT_CONTEXT = "zeta-os 2026-08 cas prompt"
-SKILL_CONTEXT = "zeta-os 2026-08 cas skill"
-
-# Retired before use (spec §11): content bytes are plain-hashed, never
-# domain-separated. The string stays reserved so nothing else ever
-# claims it; minting with it is forbidden.
-RETIRED_BLOB_CONTEXT = "zeta-os 2026-08 cas blob"
+OBJECT_CONTEXT = "zeta-os 2026-08 cas object"
+DERIVATION_CONTEXT = "zeta-os 2026-08 cas derivation"
 
 CONTEXTS = {
     "event": EVENT_CONTEXT,
     "chain": CHAIN_CONTEXT,
-    "prompt": PROMPT_CONTEXT,
-    "skill": SKILL_CONTEXT,
+    "object": OBJECT_CONTEXT,
+    "derivation": DERIVATION_CONTEXT,
 }
 
 _HEX_DIGITS = frozenset(string.hexdigits.lower())
@@ -82,14 +63,14 @@ def chain_address(data: bytes) -> str:
     return address("chain", data)
 
 
-def prompt_address(data: bytes) -> str:
-    """Return the address for one record in the prompt-trace substrate."""
-    return address("prompt", data)
+def object_address(data: bytes) -> str:
+    """Return the address for one immutable substrate object."""
+    return address("object", data)
 
 
-def skill_address(data: bytes) -> str:
-    """Return the address that identifies one skill body."""
-    return address("skill", data)
+def derivation_address(data: bytes) -> str:
+    """Return the address for one substrate provenance edge."""
+    return address("derivation", data)
 
 
 def is_b3(identifier: str) -> bool:
@@ -98,20 +79,6 @@ def is_b3(identifier: str) -> bool:
         return False
     digest = identifier[len(B3_PREFIX) :]
     return len(digest) == 64 and _is_hex(digest)
-
-
-def is_legacy(identifier: str) -> bool:
-    """Return whether `identifier` belongs to the SHA-256 epoch.
-
-    Legacy shapes stay valid forever: a `sha256:`-prefixed content
-    address, or a bare digest of exactly 24 hex characters (the old
-    truncated handles) or 64 hex characters (the old full digests).
-    """
-    if identifier.startswith("sha256:"):
-        return True
-    if ":" in identifier:
-        return False
-    return len(identifier) in (24, 64) and _is_hex(identifier)
 
 
 def _is_hex(value: str) -> bool:

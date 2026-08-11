@@ -1171,6 +1171,9 @@ def query_log_event(
     )
 
 
+QUERY_PROMPT_ID = "b3:" + "a" * 64
+
+
 def seed_query_log_runs() -> MemoryEventStore:
     store = MemoryEventStore()
     events = [
@@ -1189,7 +1192,7 @@ def seed_query_log_runs() -> MemoryEventStore:
             payload={
                 "_timeline_type": "model",
                 "content": "parser fixed",
-                "prompt_object_id": "sha256:prompt",
+                "prompt_object_id": QUERY_PROMPT_ID,
             },
         ),
         query_log_event(
@@ -1358,7 +1361,7 @@ def test_zeta_query_context_budget_estimates_stored_prompt(monkeypatch) -> None:
     component_id = store.put_object(
         Object(
             kind="user_message",
-            schema="zeta.prompt_component.v1",
+            schema="zeta.prompt_component.v2",
             data={
                 "message": {
                     "role": "user",
@@ -1370,7 +1373,7 @@ def test_zeta_query_context_budget_estimates_stored_prompt(monkeypatch) -> None:
     prompt_id = store.put_object(
         Object(
             kind="prompt",
-            schema="zeta.prompt.v1",
+            schema="zeta.prompt.v2",
             links=(component_id,),
         )
     )
@@ -1583,7 +1586,7 @@ def test_zeta_query_log_expands_one_run_by_prefix() -> None:
     assert "edit: ok · parser.py" in text
     assert "updated parser.py" not in text
     assert "answer   parser fixed" in text
-    assert "sha256:prompt" in text
+    assert QUERY_PROMPT_ID in text
     assert result["metadata"]["run_id"] == "run-old-1111"
 
 

@@ -77,7 +77,7 @@ class AgentSpec:
     description: str
     instructions: str
     path: Path
-    sha256: str
+    content_address: str
     enabled: bool = True
     session: str = "per-event"
     model: ModelSpec | None = None
@@ -132,7 +132,7 @@ def load_spec(path: str | Path) -> AgentSpec:
             description=required_string(frontmatter, "description", path),
             instructions=instructions,
             path=relative_to_cwd(path),
-            sha256=content_address(raw_bytes),
+            content_address=content_address(raw_bytes),
             enabled=bool_field(frontmatter.get("enabled", True), "enabled", path),
             session=session_field(frontmatter.get("session"), path),
             model=model_spec(frontmatter.get("model"), path),

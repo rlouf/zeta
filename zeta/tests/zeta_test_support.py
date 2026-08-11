@@ -17,6 +17,7 @@ from types import SimpleNamespace
 from typing import Any, cast
 
 import zeta.models.sse as zeta_model_sse
+from zeta.addresses import is_b3
 from zeta.context.builder import (
     PreparedPrompt,
     ReconstructedPrompt,
@@ -324,7 +325,7 @@ def assert_structural_trim_payload(
     assert payload["trimmed"] is True
     assert payload["trim_method"] == "structural"
     assert payload["tool_call_id"] == call_id
-    assert payload["source_object_id"].startswith(("b3:", "sha256:"))
+    assert is_b3(payload["source_object_id"])
     assert payload["tool_result"]["metadata"] == metadata
     assert payload["tool_result"]["content"][0]["text_lines"] == text_lines
 

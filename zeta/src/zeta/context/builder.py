@@ -4,7 +4,6 @@ Prompt component order is a public contract for prefix-cache friendliness:
 system_prompt, tool descriptors, project context, then volatile components.
 """
 
-import hashlib
 import json
 from collections.abc import Iterable
 from contextlib import nullcontext
@@ -292,8 +291,8 @@ def store_prompt_object(
     prompt_id = store.put_object(
         Object(
             kind="prompt",
-            schema="zeta.prompt.v1",
-            data={"payload_sha256": payload_sha256(payload)},
+            schema="zeta.prompt.v2",
+            data={"payload_address": payload_address(payload)},
             links=component_ids,
         )
     )
@@ -324,7 +323,7 @@ def stored_component_ids(components: Iterable[PromptComponent]) -> tuple[ObjectI
     )
 
 
-def payload_sha256(payload: dict[str, Any]) -> str:
+def payload_address(payload: dict[str, Any]) -> str:
     """Return the content address of a model request payload."""
     return content_hash(canonical_payload_text(payload))
 
@@ -340,16 +339,8 @@ def canonical_payload_text(payload: dict[str, Any]) -> str:
 
 
 def payload_matches(payload: dict[str, Any], recorded: str) -> bool:
-    """Verify a payload against whichever epoch minted its recorded hash.
-
-    Prompts recorded before the b3 epoch carry `sha256:` hashes; they
-    must keep verifying forever, so the epoch is sniffed from the
-    recorded value instead of re-hashing history.
-    """
-    if recorded.startswith("sha256:"):
-        digest = hashlib.sha256(canonical_payload_text(payload).encode()).hexdigest()
-        return f"sha256:{digest}" == recorded
-    return payload_sha256(payload) == recorded
+    """Verify a payload against its current content address."""
+    return payload_address(payload) == recorded
 
 
 @dataclass(frozen=True)
@@ -390,7 +381,7 @@ def reconstructed_prompt_request(
     Messages come from the linked components in order, tool descriptors
     from the `tool_descriptor_set` component, and `max_tokens`/model from
     the prompt's builder derivation. `payload_verified` says whether the
-    rebuilt payload hashes to the stored `payload_sha256`.
+    rebuilt payload hashes to the stored `payload_address`.
     """
     prompt = store.get_object(prompt_id)
     if prompt is None or prompt.kind != "prompt":
@@ -433,7 +424,7 @@ def reconstructed_prompt_request(
         selected_model=model_input.selected_model,
         thinking=model_input.thinking,
     )
-    expected = str(prompt.data.get("payload_sha256") or "")
+    expected = str(prompt.data.get("payload_address") or "")
     return ReconstructedPrompt(
         plan=plan,
         model_input=model_input,

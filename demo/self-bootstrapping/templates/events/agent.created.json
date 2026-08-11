@@ -1,0 +1,8 @@
+{
+  "type": "object",
+  "required": ["slug", "path"],
+  "properties": {
+    "slug": { "type": "string" },
+    "path": { "type": "string" }
+  }
+}

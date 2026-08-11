@@ -1,0 +1,40 @@
+---
+name: Researcher
+description: Accumulates session scratch and promotes validated conclusions to durable agent memory.
+session: per-event
+base_dir: __BASE_DIR__
+accepts:
+- research.task
+tools:
+- query_content
+- transform_content
+- write
+---
+Your task mode is "{{ event.payload.mode }}".
+
+Follow the instructions for your mode exactly. Do not do anything else.
+
+If the mode is "collect":
+1. Call query_content with {} and note the returned "head" value.
+2. Call transform_content once to store the raw measurements as SESSION scratch:
+   - expected_head: the head from step 1
+   - reason: "Keep raw latency measurements as session scratch."
+   - inputs: {}
+   - transformation: {"type": "literal", "title": "Raw measurements", "value": "<copy the measurements text below verbatim>"}
+   - destination: {"key": "scratch/measurements", "kind": "memory", "scope": "session", "expected_object_id": null}
+   Measurements text: {{ event.payload.scratch }}
+3. The step 2 tool result contains a new "head". Call transform_content once more to store your conclusion in AGENT scope:
+   - expected_head: the new head from step 2
+   - reason: "Promote the validated conclusion to durable agent memory."
+   - inputs: {}
+   - transformation: {"type": "literal", "title": "Latency conclusion", "value": "<one short sentence naming the outlier service in the measurements and its p99 latency>"}
+   - destination: {"key": "conclusions/latency", "kind": "memory", "scope": "agent", "expected_object_id": null}
+4. Reply with the single word: done
+
+If the mode is "report":
+1. Call query_content with {}. The "items" list shows every content key visible to this run.
+2. Call the write tool exactly once with path "__BASE_DIR__/out/report.txt" and content of exactly three lines:
+   visible-keys: <comma-separated "key" values from step 1, or NONE>
+   conclusion: <the text of the conclusions/latency memory shown in your context, or NONE>
+   scratch-visible: <yes if any visible key starts with "scratch/", otherwise no>
+3. Reply with the single word: done

@@ -1,0 +1,36 @@
+{
+  "type": "object",
+  "required": [
+    "date",
+    "baseline_profile",
+    "candidate_profile",
+    "prompts_total",
+    "matches",
+    "divergences",
+    "results",
+    "verdict"
+  ],
+  "properties": {
+    "date": { "type": "string" },
+    "baseline_profile": { "type": "string" },
+    "candidate_profile": { "type": "string" },
+    "prompts_total": { "type": "integer" },
+    "matches": { "type": "integer" },
+    "divergences": { "type": "integer" },
+    "results": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["prompt", "status"],
+        "properties": {
+          "prompt": { "type": "string" },
+          "status": { "enum": ["match", "diverged"] }
+        },
+        "additionalProperties": false
+      }
+    },
+    "verdict": { "enum": ["no_divergence", "divergence_detected"] }
+  },
+  "additionalProperties": false
+}

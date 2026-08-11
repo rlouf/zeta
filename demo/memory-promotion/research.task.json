@@ -1,0 +1,9 @@
+{
+  "type": "object",
+  "required": ["mode"],
+  "properties": {
+    "mode": { "type": "string", "enum": ["collect", "report"] },
+    "scratch": { "type": "string" }
+  },
+  "additionalProperties": false
+}

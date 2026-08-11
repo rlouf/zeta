@@ -1,0 +1,13 @@
+{
+  "type": "object",
+  "required": ["version", "changes"],
+  "properties": {
+    "version": { "type": "string" },
+    "changes": {
+      "type": "array",
+      "items": { "type": "string" },
+      "minItems": 1
+    }
+  },
+  "additionalProperties": false
+}

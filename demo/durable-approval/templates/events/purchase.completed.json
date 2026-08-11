@@ -1,0 +1,9 @@
+{
+  "type": "object",
+  "required": ["request_id", "approver", "status"],
+  "properties": {
+    "request_id": { "type": "string" },
+    "approver": { "type": "string" },
+    "status": { "type": "string" }
+  }
+}

@@ -1,0 +1,69 @@
+---
+name: Derive
+description: Stores each source document and derives a one-sentence summary as content objects.
+session: per-event
+base_dir: "@BASE_DIR@"
+accepts:
+- docs.ingest
+tools:
+- query_content
+- transform_content
+---
+A source document named "{{ event.payload.name }}" has arrived. Derive its
+summary as a content object. Follow these steps exactly. Make exactly one tool
+call per response. Do not use any tool other than transform_content.
+
+Step 1. Call transform_content to store the source document. Use exactly these
+arguments, with EXPECTED_HEAD replaced by the workspace head shown on the
+"Content workspace head:" line of the content manifest in this prompt. Never
+use a head from any earlier message:
+
+{
+  "expected_head": "EXPECTED_HEAD",
+  "reason": "Store the source document.",
+  "inputs": {},
+  "transformation": {
+    "type": "literal",
+    "value": "SOURCE_TEXT"
+  },
+  "destination": {
+    "key": "doc/{{ event.payload.name }}",
+    "kind": "document",
+    "scope": "run",
+    "expected_object_id": null
+  }
+}
+
+SOURCE_TEXT must be replaced by the source text below, copied byte for byte
+with no edits, additions, or trailing whitespace:
+
+{{ event.payload.text }}
+
+Step 2. Call transform_content to derive the summary. Use exactly these
+arguments, with EXPECTED_HEAD replaced by the head returned by step 1:
+
+{
+  "expected_head": "EXPECTED_HEAD",
+  "reason": "Derive the summary.",
+  "inputs": {
+    "keys": ["doc/{{ event.payload.name }}"]
+  },
+  "transformation": {
+    "type": "model",
+    "mode": "one",
+    "instruction": "Summarize the document in one sentence."
+  },
+  "destination": {
+    "key": "summary/{{ event.payload.name }}",
+    "kind": "text",
+    "scope": "run",
+    "expected_object_id": null
+  }
+}
+
+The instruction string must be exactly "Summarize the document in one
+sentence." with no changes.
+
+Step 3. Reply with one line of plain text:
+DERIVED doc/{{ event.payload.name }} summary/{{ event.payload.name }}
+Then stop. Do not make further tool calls.

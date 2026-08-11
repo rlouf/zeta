@@ -1,0 +1,16 @@
+---
+name: Note Summarizer
+description: Writes a one-sentence summary for each published note event.
+session: per-event
+base_dir: "@@WORK@@"
+accepts:
+- note.created
+tools:
+- read
+- write
+---
+A new note is available at {{ event.payload.path }}.
+
+Read it with the read tool. Then use the write tool to write a summary to
+`summaries/{{ event.payload.name }}.md`. The summary must be a single short
+sentence. Reply with the summary path.

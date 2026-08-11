@@ -1,0 +1,10 @@
+Meeting: Q3 launch planning sync
+Date: 2026-08-10
+Attendees: Ana (product), Bo (engineering), Cyd (marketing)
+
+Ana: The beta waitlist crossed 4,000 signups, so we move the launch to September 9.
+Bo: The export bug in the reporting module is fixed; load tests pass at twice the expected traffic.
+Cyd: Pricing page copy is done. We still need two customer quotes for the launch post.
+Ana: Bo owns the rollback plan, Cyd owns the quotes, both due August 22.
+Bo: Agreed.
+Cyd: Agreed.

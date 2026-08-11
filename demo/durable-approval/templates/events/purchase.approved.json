@@ -1,0 +1,9 @@
+{
+  "type": "object",
+  "required": ["request_id", "approver"],
+  "properties": {
+    "request_id": { "type": "string" },
+    "approver": { "type": "string" },
+    "note": { "type": "string" }
+  }
+}

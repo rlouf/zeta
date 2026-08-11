@@ -1,0 +1,28 @@
+---
+name: Shadow Evaluator
+description: Turns finished shadow-replay batches into typed evaluation report events.
+session: shared
+base_dir: @BASE_DIR@
+accepts:
+- shadow.eval.requested
+publishes:
+- model.eval.report
+tools: []
+---
+A shadow evaluation batch has finished. Raw results:
+
+date: {{ event.payload.date }}
+baseline_profile: {{ event.payload.baseline_profile }}
+candidate_profile: {{ event.payload.candidate_profile }}
+prompts_total: {{ event.payload.prompts_total }}
+matches: {{ event.payload.matches }}
+divergences: {{ event.payload.divergences }}
+results: {{ event.payload.results | tojson }}
+
+Call the publish_event tool exactly once with event_type "model.eval.report"
+and a payload object containing date, baseline_profile, candidate_profile,
+prompts_total, matches, divergences, and results copied exactly from the
+values above, plus a verdict field set to "no_divergence" if divergences is
+0, otherwise "divergence_detected".
+
+Then reply with just the verdict value.

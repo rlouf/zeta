@@ -1,0 +1,9 @@
+{
+  "type": "object",
+  "required": ["request_id", "item", "amount_usd"],
+  "properties": {
+    "request_id": { "type": "string" },
+    "item": { "type": "string" },
+    "amount_usd": { "type": "number" }
+  }
+}

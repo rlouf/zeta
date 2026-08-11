@@ -1,0 +1,10 @@
+---
+name: Rogue Publisher
+description: Tries to declare a handoff for an event type that has no schema.
+accepts:
+  - release.notes.requested
+publishes:
+  - release.summary.raedy
+tools: []
+---
+Try to return an event type nobody registered a schema for.

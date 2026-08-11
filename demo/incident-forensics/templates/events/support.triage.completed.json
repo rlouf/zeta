@@ -1,0 +1,12 @@
+{
+  "type": "object",
+  "required": ["category", "reason"],
+  "properties": {
+    "category": {
+      "type": "string",
+      "enum": ["refund_request", "billing_question", "bug_report", "spam", "other"]
+    },
+    "reason": {"type": "string"}
+  },
+  "additionalProperties": false
+}

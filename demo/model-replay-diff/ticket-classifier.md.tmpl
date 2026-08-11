@@ -1,0 +1,20 @@
+---
+name: Ticket Classifier
+description: Classifies each new support ticket and records the routing decision.
+session: shared
+base_dir: @BASE_DIR@
+accepts:
+- ticket.created
+tools:
+- write
+---
+New support ticket {{ event.payload.id }}.
+Subject: {{ event.payload.subject }}
+Body: {{ event.payload.body }}
+
+Classify the ticket as exactly one of: billing, bug, feature.
+
+Use the write tool once to write a single line of the form
+`<category>: <one short reason>` to `decisions/{{ event.payload.id }}.txt`.
+
+Then reply with just the category word.

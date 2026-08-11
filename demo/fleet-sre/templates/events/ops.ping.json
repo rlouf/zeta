@@ -1,0 +1,7 @@
+{
+  "type": "object",
+  "properties": {
+    "source_name": { "type": "string" }
+  },
+  "additionalProperties": true
+}

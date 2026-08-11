@@ -1,0 +1,16 @@
+{
+  "type": "object",
+  "required": [
+    "summary",
+    "failed_attempts",
+    "dead_lettered_queue_items",
+    "unhandled_events"
+  ],
+  "properties": {
+    "summary": { "type": "string" },
+    "failed_attempts": { "type": "integer", "minimum": 0 },
+    "dead_lettered_queue_items": { "type": "integer", "minimum": 0 },
+    "unhandled_events": { "type": "integer", "minimum": 0 }
+  },
+  "additionalProperties": false
+}

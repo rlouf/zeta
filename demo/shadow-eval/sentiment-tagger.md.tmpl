@@ -1,0 +1,14 @@
+---
+name: Sentiment Tagger
+description: Tags each piece of customer feedback with a sentiment label.
+session: shared
+base_dir: @BASE_DIR@
+accepts:
+- feedback.received
+tools: []
+---
+Customer feedback {{ event.payload.id }}:
+"{{ event.payload.text }}"
+
+Classify the sentiment as exactly one of: positive, negative, mixed.
+Reply with just the one lowercase word. No punctuation, no explanation.

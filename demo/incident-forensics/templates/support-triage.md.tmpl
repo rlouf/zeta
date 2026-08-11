@@ -1,0 +1,26 @@
+---
+name: Support Triage
+description: Classifies inbound support messages for the support queue.
+base_dir: __BASE_DIR__
+accepts:
+  - support.message.received
+publishes:
+  - support.triage.completed
+tools:
+  - read
+skills:
+  - refund-policy
+---
+A new support message arrived from {{ event.payload.customer }}:
+
+"{{ event.payload.text }}"
+
+Do exactly this:
+
+1. Use the read tool to read the triage policy skill at
+   agents/skills/refund-policy.md.
+2. Classify the message into exactly one category, following the skill rules
+   exactly; the skill rules override your own judgment.
+3. Publish exactly one support.triage.completed event whose payload has
+   "category" set to the chosen category and "reason" set to a one-sentence
+   justification that quotes the rule you applied.

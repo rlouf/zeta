@@ -1,0 +1,14 @@
+{
+  "type": "object",
+  "required": ["title", "highlights", "audience"],
+  "properties": {
+    "title": { "type": "string" },
+    "highlights": {
+      "type": "array",
+      "items": { "type": "string" },
+      "minItems": 1
+    },
+    "audience": { "enum": ["customers", "internal"] }
+  },
+  "additionalProperties": false
+}

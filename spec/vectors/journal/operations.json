@@ -1,0 +1,394 @@
+{
+  "format": "zeta-journal-operations-v0",
+  "appends": [
+    {
+      "name": "root",
+      "event": {
+        "id": "evt_00000000000000000000000000000101",
+        "type": "agent.task.started",
+        "source": "scheduler",
+        "payload": {
+          "z": 1,
+          "a": "root"
+        },
+        "idempotency_key": "task:α",
+        "caused_by": null,
+        "session_id": "session/shared",
+        "run_id": "run_1",
+        "turn_id": "turn_1",
+        "timestamp_ms": 1786422001000
+      },
+      "expected": {
+        "inserted": true,
+        "returned_id": "evt_00000000000000000000000000000101",
+        "cursor": 1,
+        "head": "b3:dff0674984ec1e40b4fb8aa75fcae254a3c39199e688d4703845aa9435a8b32c"
+      }
+    },
+    {
+      "name": "child",
+      "event": {
+        "id": "evt_00000000000000000000000000000102",
+        "type": "agent.task.completed",
+        "source": "worker",
+        "payload": {
+          "ok": true
+        },
+        "idempotency_key": "task:α:done",
+        "caused_by": "evt_00000000000000000000000000000101",
+        "session_id": "session/shared",
+        "run_id": "run_1",
+        "turn_id": "turn_1",
+        "timestamp_ms": 1786422001001
+      },
+      "expected": {
+        "inserted": true,
+        "returned_id": "evt_00000000000000000000000000000102",
+        "cursor": 2,
+        "head": "b3:dcaffc8f527aec30657c5be385802616ac54008232d7afd0c3ebc6eea0c2dbd0"
+      }
+    },
+    {
+      "name": "literal-prefix",
+      "event": {
+        "id": "evt_00000000000000000000000000000103",
+        "type": "agent%literal._done",
+        "source": "worker",
+        "payload": {
+          "message": "literal prefix"
+        },
+        "idempotency_key": null,
+        "caused_by": "evt_00000000000000000000000000000102",
+        "session_id": "session/shared",
+        "run_id": "run_1",
+        "turn_id": "turn_1",
+        "timestamp_ms": 1786422001004
+      },
+      "expected": {
+        "inserted": true,
+        "returned_id": "evt_00000000000000000000000000000103",
+        "cursor": 3,
+        "head": "b3:6106dbf9ed1f117c20130f8cd870d5e68318e1e2f5570ed272c65a49bad2f62f"
+      }
+    },
+    {
+      "name": "missing-parent",
+      "event": {
+        "id": "evt_00000000000000000000000000000104",
+        "type": "orphan.event",
+        "source": "fixture",
+        "payload": {
+          "handled": false
+        },
+        "idempotency_key": null,
+        "caused_by": "evt_ffffffffffffffffffffffffffffffff",
+        "session_id": null,
+        "run_id": null,
+        "turn_id": null,
+        "timestamp_ms": 1786422001005
+      },
+      "expected": {
+        "inserted": true,
+        "returned_id": "evt_00000000000000000000000000000104",
+        "cursor": 4,
+        "head": "b3:359b74535d73c09407d81696f83846d19fce286254c8c71929c2376123bd48db"
+      }
+    },
+    {
+      "name": "cycle-a",
+      "event": {
+        "id": "evt_00000000000000000000000000000105",
+        "type": "cycle.a",
+        "source": "fixture",
+        "payload": {
+          "node": "a"
+        },
+        "idempotency_key": null,
+        "caused_by": "evt_00000000000000000000000000000106",
+        "session_id": null,
+        "run_id": null,
+        "turn_id": null,
+        "timestamp_ms": 1786422001006
+      },
+      "expected": {
+        "inserted": true,
+        "returned_id": "evt_00000000000000000000000000000105",
+        "cursor": 5,
+        "head": "b3:f6be2c06a19dcdedeb39910a9db75329cbb57a7f4b3cda465346ecfae367f9ea"
+      }
+    },
+    {
+      "name": "cycle-b",
+      "event": {
+        "id": "evt_00000000000000000000000000000106",
+        "type": "cycle.b",
+        "source": "fixture",
+        "payload": {
+          "node": "b"
+        },
+        "idempotency_key": null,
+        "caused_by": "evt_00000000000000000000000000000105",
+        "session_id": null,
+        "run_id": null,
+        "turn_id": null,
+        "timestamp_ms": 1786422001007
+      },
+      "expected": {
+        "inserted": true,
+        "returned_id": "evt_00000000000000000000000000000106",
+        "cursor": 6,
+        "head": "b3:341a6a0345ba2a188b0514305210b0ec8717ff9bb38cb0609e411ce6fe9b8f42"
+      }
+    },
+    {
+      "name": "wildcard-lookalike",
+      "event": {
+        "id": "evt_00000000000000000000000000000107",
+        "type": "agentXliteralZdone",
+        "source": "fixture",
+        "payload": {
+          "matches": false
+        },
+        "idempotency_key": null,
+        "caused_by": null,
+        "session_id": null,
+        "run_id": null,
+        "turn_id": null,
+        "timestamp_ms": 1786422001008
+      },
+      "expected": {
+        "inserted": true,
+        "returned_id": "evt_00000000000000000000000000000107",
+        "cursor": 7,
+        "head": "b3:f39124ca14348f894fa445a7dfa5ed15223f37bcda6c64634ef207b03eb47871"
+      }
+    },
+    {
+      "name": "duplicate-id-wins-over-key",
+      "event": {
+        "id": "evt_00000000000000000000000000000101",
+        "type": "conflicting.event",
+        "source": "retry",
+        "payload": {
+          "different": true
+        },
+        "idempotency_key": "task:α:done",
+        "caused_by": null,
+        "session_id": null,
+        "run_id": null,
+        "turn_id": null,
+        "timestamp_ms": 1786422001002
+      },
+      "expected": {
+        "inserted": false,
+        "returned_id": "evt_00000000000000000000000000000101",
+        "cursor": 1,
+        "head": "b3:f39124ca14348f894fa445a7dfa5ed15223f37bcda6c64634ef207b03eb47871"
+      }
+    },
+    {
+      "name": "duplicate-idempotency-key",
+      "event": {
+        "id": "evt_00000000000000000000000000000199",
+        "type": "another.conflict",
+        "source": "retry",
+        "payload": {
+          "different": "again"
+        },
+        "idempotency_key": "task:α:done",
+        "caused_by": null,
+        "session_id": null,
+        "run_id": null,
+        "turn_id": null,
+        "timestamp_ms": 1786422001003
+      },
+      "expected": {
+        "inserted": false,
+        "returned_id": "evt_00000000000000000000000000000102",
+        "cursor": 2,
+        "head": "b3:f39124ca14348f894fa445a7dfa5ed15223f37bcda6c64634ef207b03eb47871"
+      }
+    }
+  ],
+  "queries": [
+    {
+      "name": "all",
+      "filter": {
+        "event_type": null,
+        "event_type_prefix": null,
+        "session_id": null,
+        "run_id": null,
+        "turn_id": null,
+        "caused_by": null,
+        "after_cursor": null,
+        "limit": null,
+        "newest_first": false
+      },
+      "expected_ids": [
+        "evt_00000000000000000000000000000101",
+        "evt_00000000000000000000000000000102",
+        "evt_00000000000000000000000000000103",
+        "evt_00000000000000000000000000000104",
+        "evt_00000000000000000000000000000105",
+        "evt_00000000000000000000000000000106",
+        "evt_00000000000000000000000000000107"
+      ]
+    },
+    {
+      "name": "after-cursor",
+      "filter": {
+        "event_type": null,
+        "event_type_prefix": null,
+        "session_id": null,
+        "run_id": null,
+        "turn_id": null,
+        "caused_by": null,
+        "after_cursor": 2,
+        "limit": null,
+        "newest_first": false
+      },
+      "expected_ids": [
+        "evt_00000000000000000000000000000103",
+        "evt_00000000000000000000000000000104",
+        "evt_00000000000000000000000000000105",
+        "evt_00000000000000000000000000000106",
+        "evt_00000000000000000000000000000107"
+      ]
+    },
+    {
+      "name": "newest-limit",
+      "filter": {
+        "event_type": null,
+        "event_type_prefix": null,
+        "session_id": null,
+        "run_id": null,
+        "turn_id": null,
+        "caused_by": null,
+        "after_cursor": null,
+        "limit": 2,
+        "newest_first": true
+      },
+      "expected_ids": [
+        "evt_00000000000000000000000000000107",
+        "evt_00000000000000000000000000000106"
+      ]
+    },
+    {
+      "name": "exact-type",
+      "filter": {
+        "event_type": "orphan.event",
+        "event_type_prefix": null,
+        "session_id": null,
+        "run_id": null,
+        "turn_id": null,
+        "caused_by": null,
+        "after_cursor": null,
+        "limit": null,
+        "newest_first": false
+      },
+      "expected_ids": [
+        "evt_00000000000000000000000000000104"
+      ]
+    },
+    {
+      "name": "literal-prefix",
+      "filter": {
+        "event_type": null,
+        "event_type_prefix": "agent%literal._",
+        "session_id": null,
+        "run_id": null,
+        "turn_id": null,
+        "caused_by": null,
+        "after_cursor": null,
+        "limit": null,
+        "newest_first": false
+      },
+      "expected_ids": [
+        "evt_00000000000000000000000000000103"
+      ]
+    },
+    {
+      "name": "combined-session-run-turn",
+      "filter": {
+        "event_type": null,
+        "event_type_prefix": null,
+        "session_id": "session/shared",
+        "run_id": "run_1",
+        "turn_id": "turn_1",
+        "caused_by": null,
+        "after_cursor": null,
+        "limit": null,
+        "newest_first": false
+      },
+      "expected_ids": [
+        "evt_00000000000000000000000000000101",
+        "evt_00000000000000000000000000000102",
+        "evt_00000000000000000000000000000103"
+      ]
+    },
+    {
+      "name": "children",
+      "filter": {
+        "event_type": null,
+        "event_type_prefix": null,
+        "session_id": null,
+        "run_id": null,
+        "turn_id": null,
+        "caused_by": "evt_00000000000000000000000000000101",
+        "after_cursor": null,
+        "limit": null,
+        "newest_first": false
+      },
+      "expected_ids": [
+        "evt_00000000000000000000000000000102"
+      ]
+    },
+    {
+      "name": "zero-limit",
+      "filter": {
+        "event_type": null,
+        "event_type_prefix": null,
+        "session_id": null,
+        "run_id": null,
+        "turn_id": null,
+        "caused_by": null,
+        "after_cursor": null,
+        "limit": 0,
+        "newest_first": false
+      },
+      "expected_ids": []
+    }
+  ],
+  "causal_chains": [
+    {
+      "name": "normal",
+      "event_id": "evt_00000000000000000000000000000103",
+      "expected_ids": [
+        "evt_00000000000000000000000000000101",
+        "evt_00000000000000000000000000000102",
+        "evt_00000000000000000000000000000103"
+      ]
+    },
+    {
+      "name": "missing-parent",
+      "event_id": "evt_00000000000000000000000000000104",
+      "expected_ids": [
+        "evt_00000000000000000000000000000104"
+      ]
+    },
+    {
+      "name": "cycle",
+      "event_id": "evt_00000000000000000000000000000106",
+      "expected_ids": [
+        "evt_00000000000000000000000000000105",
+        "evt_00000000000000000000000000000106"
+      ]
+    },
+    {
+      "name": "missing-target",
+      "event_id": "evt_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "expected_ids": []
+    }
+  ],
+  "final_head": "b3:f39124ca14348f894fa445a7dfa5ed15223f37bcda6c64634ef207b03eb47871"
+}

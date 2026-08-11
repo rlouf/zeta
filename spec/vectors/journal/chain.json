@@ -1,0 +1,143 @@
+{
+  "format": "zeta-journal-chain-v0",
+  "context": "zeta-os 2026-08 cas chain",
+  "chain_fields": [
+    "chain_v",
+    "id",
+    "type",
+    "source",
+    "payload_address",
+    "idempotency_key",
+    "caused_by",
+    "session_id",
+    "run_id",
+    "turn_id",
+    "timestamp_ms",
+    "previous_address"
+  ],
+  "vectors": [
+    {
+      "name": "genesis-null-heavy",
+      "event": {
+        "id": "evt_00000000000000000000000000000001",
+        "type": "file.created",
+        "source": "filesystem",
+        "payload": {
+          "z": null,
+          "a": {
+            "items": [
+              null,
+              true
+            ]
+          },
+          "empty": {}
+        },
+        "idempotency_key": null,
+        "caused_by": null,
+        "session_id": null,
+        "run_id": null,
+        "turn_id": null,
+        "timestamp_ms": 1786422000000
+      },
+      "payload_utf8": "{\"a\":{\"items\":[null,true]},\"empty\":{},\"z\":null}",
+      "payload_address": "b3:e6f85c39881646c08db93ce004fc1b2bfdec5d320dbbfd0dd21ef1223c0b9f19",
+      "previous_address": null,
+      "chain_input": [
+        0,
+        "evt_00000000000000000000000000000001",
+        "file.created",
+        "filesystem",
+        "b3:e6f85c39881646c08db93ce004fc1b2bfdec5d320dbbfd0dd21ef1223c0b9f19",
+        null,
+        null,
+        null,
+        null,
+        null,
+        1786422000000,
+        null
+      ],
+      "canonical_utf8": "[0,\"evt_00000000000000000000000000000001\",\"file.created\",\"filesystem\",\"b3:e6f85c39881646c08db93ce004fc1b2bfdec5d320dbbfd0dd21ef1223c0b9f19\",null,null,null,null,null,1786422000000,null]",
+      "entry_address": "b3:f7d14f392258995096266df4d449c5836876578c06ca48e8a4fd4f6932b1c2f5"
+    },
+    {
+      "name": "unicode-all-fields",
+      "event": {
+        "id": "evt_00000000000000000000000000000002",
+        "type": "message.écrit",
+        "source": "agent/日本",
+        "payload": {
+          "😀": "astral",
+          "é": "café ✓",
+          "nested": {
+            "z": -0.0,
+            "a": 0.1
+          }
+        },
+        "idempotency_key": "clé:✓",
+        "caused_by": "evt_00000000000000000000000000000001",
+        "session_id": "session/é",
+        "run_id": "run_β",
+        "turn_id": "turn_中",
+        "timestamp_ms": 1786422000001
+      },
+      "payload_utf8": "{\"nested\":{\"a\":0.1,\"z\":-0.0},\"é\":\"café ✓\",\"😀\":\"astral\"}",
+      "payload_address": "b3:4c2ac1d1631193d166947ad3dfaca23c7bc47ba6a63cb49f52e2a25fd8383255",
+      "previous_address": "b3:f7d14f392258995096266df4d449c5836876578c06ca48e8a4fd4f6932b1c2f5",
+      "chain_input": [
+        0,
+        "evt_00000000000000000000000000000002",
+        "message.écrit",
+        "agent/日本",
+        "b3:4c2ac1d1631193d166947ad3dfaca23c7bc47ba6a63cb49f52e2a25fd8383255",
+        "clé:✓",
+        "evt_00000000000000000000000000000001",
+        "session/é",
+        "run_β",
+        "turn_中",
+        1786422000001,
+        "b3:f7d14f392258995096266df4d449c5836876578c06ca48e8a4fd4f6932b1c2f5"
+      ],
+      "canonical_utf8": "[0,\"evt_00000000000000000000000000000002\",\"message.écrit\",\"agent/日本\",\"b3:4c2ac1d1631193d166947ad3dfaca23c7bc47ba6a63cb49f52e2a25fd8383255\",\"clé:✓\",\"evt_00000000000000000000000000000001\",\"session/é\",\"run_β\",\"turn_中\",1786422000001,\"b3:f7d14f392258995096266df4d449c5836876578c06ca48e8a4fd4f6932b1c2f5\"]",
+      "entry_address": "b3:b7e7bf2b5d5f47a8d9a0432db78a5a813adfa9eb7573a0f583de787bcd03c656"
+    },
+    {
+      "name": "numeric-edges",
+      "event": {
+        "id": "evt_00000000000000000000000000000003",
+        "type": "numbers.recorded",
+        "source": "fixture",
+        "payload": {
+          "u64_max": 18446744073709551615,
+          "i64_min": -9223372036854775808,
+          "positive_exponent": 1e+30,
+          "one": 1.0
+        },
+        "idempotency_key": null,
+        "caused_by": "evt_00000000000000000000000000000002",
+        "session_id": null,
+        "run_id": "run_β",
+        "turn_id": null,
+        "timestamp_ms": 1786422000002
+      },
+      "payload_utf8": "{\"i64_min\":-9223372036854775808,\"one\":1.0,\"positive_exponent\":1e+30,\"u64_max\":18446744073709551615}",
+      "payload_address": "b3:8524eacd2ebb8ca3e48c87fecc82cc7cefd05168dd7ca7ea5905970873c699bd",
+      "previous_address": "b3:b7e7bf2b5d5f47a8d9a0432db78a5a813adfa9eb7573a0f583de787bcd03c656",
+      "chain_input": [
+        0,
+        "evt_00000000000000000000000000000003",
+        "numbers.recorded",
+        "fixture",
+        "b3:8524eacd2ebb8ca3e48c87fecc82cc7cefd05168dd7ca7ea5905970873c699bd",
+        null,
+        "evt_00000000000000000000000000000002",
+        null,
+        "run_β",
+        null,
+        1786422000002,
+        "b3:b7e7bf2b5d5f47a8d9a0432db78a5a813adfa9eb7573a0f583de787bcd03c656"
+      ],
+      "canonical_utf8": "[0,\"evt_00000000000000000000000000000003\",\"numbers.recorded\",\"fixture\",\"b3:8524eacd2ebb8ca3e48c87fecc82cc7cefd05168dd7ca7ea5905970873c699bd\",null,\"evt_00000000000000000000000000000002\",null,\"run_β\",null,1786422000002,\"b3:b7e7bf2b5d5f47a8d9a0432db78a5a813adfa9eb7573a0f583de787bcd03c656\"]",
+      "entry_address": "b3:0fb4e5bb71242d6c9a8fb75dc0dd8b7f1d0d4fac0ccd828465f4d19f812b008c"
+    }
+  ]
+}

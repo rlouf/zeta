@@ -1,0 +1,17 @@
+[package]
+name = "zeta-cas"
+description = "Content addresses and derived identifiers for the zeta ecosystem."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+blake3.workspace = true
+serde.workspace = true
+tempfile.workspace = true
+
+[dev-dependencies]
+base64.workspace = true
+serde_json.workspace = true

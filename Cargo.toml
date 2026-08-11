@@ -1,0 +1,24 @@
+# The zeta Rust workspace holds the foundation crates only. The TUI in
+# rust/ keeps its own workspace until a later phase joins it here, so
+# its dependency set cannot move these pins. Exact pins keep hash and
+# wire behavior reproducible; blake3 is pinned because hash stability
+# is the ecosystem contract shared (by specification, not by code)
+# with sibling tools such as stagefs.
+[workspace]
+members = ["crates/*"]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+license = "Apache-2.0"
+
+[workspace.dependencies]
+base64 = "=0.22.1"
+blake3 = { version = "=1.5.5", features = ["mmap"] }
+serde = { version = "=1.0.219", features = ["derive"] }
+serde_json = "=1.0.140"
+proptest = "=1.6.0"
+tempfile = "=3.15.0"
+zeta-cas = { path = "crates/zeta-cas" }

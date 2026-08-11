@@ -8,7 +8,7 @@ use serde_json::{Map, Value};
 /// # Examples
 ///
 /// ```
-/// let draft = zeta_journal::DraftEvent {
+/// let draft = zeta::journal::DraftEvent {
 ///     event_type: "example.created".to_owned(),
 ///     source: "example".to_owned(),
 ///     payload: serde_json::Map::new(),
@@ -49,7 +49,7 @@ pub struct DraftEvent {
 /// # Examples
 ///
 /// ```
-/// let draft = zeta_journal::DraftEvent {
+/// let draft = zeta::journal::DraftEvent {
 ///     event_type: "example.created".to_owned(),
 ///     source: "example".to_owned(),
 ///     payload: serde_json::Map::new(),
@@ -59,7 +59,7 @@ pub struct DraftEvent {
 ///     run_id: None,
 ///     turn_id: None,
 /// };
-/// let event = zeta_journal::Event::from_draft("evt_example", 1, draft);
+/// let event = zeta::journal::Event::from_draft("evt_example", 1, draft);
 /// assert_eq!(event.cursor, None);
 /// ```
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -99,7 +99,7 @@ impl Event {
     /// # Examples
     ///
     /// ```
-    /// let draft = zeta_journal::DraftEvent {
+    /// let draft = zeta::journal::DraftEvent {
     ///     event_type: "example.created".to_owned(),
     ///     source: "example".to_owned(),
     ///     payload: serde_json::Map::new(),
@@ -109,7 +109,7 @@ impl Event {
     ///     run_id: None,
     ///     turn_id: None,
     /// };
-    /// let event = zeta_journal::Event::from_draft("evt_example", 42, draft);
+    /// let event = zeta::journal::Event::from_draft("evt_example", 42, draft);
     /// assert_eq!(event.idempotency_key.as_deref(), Some("retry:1"));
     /// ```
     pub fn from_draft(id: &str, timestamp_ms: i64, draft: DraftEvent) -> Self {
@@ -155,8 +155,8 @@ impl Event {
 /// # Examples
 ///
 /// ```
-/// let mut journal = zeta_journal::MemoryJournal::new();
-/// let event = zeta_journal::Event {
+/// let mut journal = zeta::journal::MemoryJournal::new();
+/// let event = zeta::journal::Event {
 ///     id: "evt_example".to_owned(),
 ///     event_type: "example.created".to_owned(),
 ///     source: "example".to_owned(),
@@ -188,10 +188,10 @@ pub struct AppendOutcome {
 /// # Examples
 ///
 /// ```
-/// let filter = zeta_journal::Filter {
+/// let filter = zeta::journal::Filter {
 ///     event_type_prefix: Some("example.".to_owned()),
 ///     limit: Some(10),
-///     ..zeta_journal::Filter::default()
+///     ..zeta::journal::Filter::default()
 /// };
 /// assert_eq!(filter.limit, Some(10));
 /// ```

@@ -2,11 +2,11 @@
 
 use std::collections::{HashMap, HashSet};
 
-use zeta_substrate::Hash;
+use crate::substrate::Hash;
 
-use crate::chain::{validate_identity_fields, JournalEntry};
-use crate::error::AppendError;
-use crate::event::{AppendOutcome, Event, Filter};
+use super::chain::{validate_identity_fields, JournalEntry};
+use super::error::AppendError;
+use super::event::{AppendOutcome, Event, Filter};
 
 /// Stores complete journal entries in process memory.
 ///
@@ -16,7 +16,7 @@ use crate::event::{AppendOutcome, Event, Filter};
 /// # Examples
 ///
 /// ```
-/// let journal = zeta_journal::MemoryJournal::new();
+/// let journal = zeta::journal::MemoryJournal::new();
 /// assert!(journal.entries().is_empty());
 /// assert_eq!(journal.head(), None);
 /// ```
@@ -35,7 +35,7 @@ impl MemoryJournal {
     /// # Examples
     ///
     /// ```
-    /// let journal = zeta_journal::MemoryJournal::new();
+    /// let journal = zeta::journal::MemoryJournal::new();
     /// assert_eq!(journal.head(), None);
     /// ```
     pub fn new() -> Self {
@@ -57,8 +57,8 @@ impl MemoryJournal {
     /// # Examples
     ///
     /// ```
-    /// let mut journal = zeta_journal::MemoryJournal::new();
-    /// let event = zeta_journal::Event {
+    /// let mut journal = zeta::journal::MemoryJournal::new();
+    /// let event = zeta::journal::Event {
     ///     id: "evt_example".to_owned(),
     ///     event_type: "example.created".to_owned(),
     ///     source: "example".to_owned(),
@@ -147,7 +147,7 @@ impl MemoryJournal {
     /// # Examples
     ///
     /// ```
-    /// let journal = zeta_journal::MemoryJournal::new();
+    /// let journal = zeta::journal::MemoryJournal::new();
     /// assert_eq!(journal.entries().len(), 0);
     /// ```
     pub fn entries(&self) -> &[JournalEntry] {
@@ -159,7 +159,7 @@ impl MemoryJournal {
     /// # Examples
     ///
     /// ```
-    /// let journal = zeta_journal::MemoryJournal::new();
+    /// let journal = zeta::journal::MemoryJournal::new();
     /// assert_eq!(journal.head(), None);
     /// ```
     pub fn head(&self) -> Option<Hash> {
@@ -171,7 +171,7 @@ impl MemoryJournal {
     /// # Examples
     ///
     /// ```
-    /// let journal = zeta_journal::MemoryJournal::new();
+    /// let journal = zeta::journal::MemoryJournal::new();
     /// assert_eq!(journal.get("evt_missing"), None);
     /// ```
     pub fn get(&self, event_id: &str) -> Option<&Event> {
@@ -184,8 +184,8 @@ impl MemoryJournal {
     /// # Examples
     ///
     /// ```
-    /// let journal = zeta_journal::MemoryJournal::new();
-    /// let events = journal.list_events(&zeta_journal::Filter::default());
+    /// let journal = zeta::journal::MemoryJournal::new();
+    /// let events = journal.list_events(&zeta::journal::Filter::default());
     /// assert!(events.is_empty());
     /// ```
     pub fn list_events(&self, filter: &Filter) -> Vec<&Event> {
@@ -228,7 +228,7 @@ impl MemoryJournal {
     /// # Examples
     ///
     /// ```
-    /// let journal = zeta_journal::MemoryJournal::new();
+    /// let journal = zeta::journal::MemoryJournal::new();
     /// assert!(journal.children("evt_parent", None).is_empty());
     /// ```
     pub fn children(&self, event_id: &str, limit: Option<usize>) -> Vec<&Event> {
@@ -247,7 +247,7 @@ impl MemoryJournal {
     /// # Examples
     ///
     /// ```
-    /// let journal = zeta_journal::MemoryJournal::new();
+    /// let journal = zeta::journal::MemoryJournal::new();
     /// assert!(journal.causal_chain("evt_missing").is_empty());
     /// ```
     pub fn causal_chain(&self, event_id: &str) -> Vec<&Event> {
@@ -273,7 +273,7 @@ impl MemoryJournal {
     /// # Examples
     ///
     /// ```
-    /// let journal = zeta_journal::MemoryJournal::new();
+    /// let journal = zeta::journal::MemoryJournal::new();
     /// assert!(journal.events_for_turn("turn_1").is_empty());
     /// ```
     pub fn events_for_turn(&self, turn_id: &str) -> Vec<&Event> {
@@ -289,7 +289,7 @@ impl MemoryJournal {
     /// # Examples
     ///
     /// ```
-    /// let journal = zeta_journal::MemoryJournal::new();
+    /// let journal = zeta::journal::MemoryJournal::new();
     /// assert!(journal.events_for_run("run_1").is_empty());
     /// ```
     pub fn events_for_run(&self, run_id: &str) -> Vec<&Event> {

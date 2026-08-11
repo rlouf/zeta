@@ -1160,31 +1160,22 @@ dependencies = [
 ]
 
 [[package]]
-name = "zeta-ipc"
-version = "0.1.0"
-dependencies = [
- "proptest",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "zeta-journal"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
- "zeta-substrate",
-]
-
-[[package]]
-name = "zeta-substrate"
+name = "zeta"
 version = "0.1.0"
 dependencies = [
  "blake3",
  "serde",
  "serde_json",
  "tempfile",
+]
+
+[[package]]
+name = "zeta-ipc"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

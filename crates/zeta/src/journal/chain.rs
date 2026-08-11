@@ -2,11 +2,11 @@
 
 use std::collections::HashSet;
 
+use crate::substrate::{derive, hash_bytes, CanonicalJsonError, Domain, Hash};
 use serde_json::{Map, Value};
-use zeta_substrate::{derive, hash_bytes, CanonicalJsonError, Domain, Hash};
 
-use crate::error::{AppendError, VerificationError, VerificationErrorKind, VerificationReport};
-use crate::event::Event;
+use super::error::{AppendError, VerificationError, VerificationErrorKind, VerificationReport};
+use super::event::Event;
 
 /// Encodes an event payload with the shared canonical JSON rules.
 ///
@@ -15,7 +15,7 @@ use crate::event::Event;
 /// ```
 /// let payload = serde_json::from_value(serde_json::json!({"z": 2, "a": 1})).unwrap();
 /// assert_eq!(
-///     zeta_journal::canonical_payload(&payload).unwrap(),
+///     zeta::journal::canonical_payload(&payload).unwrap(),
 ///     br#"{"a":1,"z":2}"#,
 /// );
 /// ```
@@ -25,7 +25,7 @@ use crate::event::Event;
 /// Returns [`CanonicalJsonError`] when a number falls outside the canonical
 /// identity value domain.
 pub fn canonical_payload(payload: &Map<String, Value>) -> Result<Vec<u8>, CanonicalJsonError> {
-    zeta_substrate::canonical_json(&Value::Object(payload.clone()))
+    crate::substrate::canonical_json(&Value::Object(payload.clone()))
 }
 
 /// Returns the domainless content address of exact payload bytes.
@@ -33,8 +33,8 @@ pub fn canonical_payload(payload: &Map<String, Value>) -> Result<Vec<u8>, Canoni
 /// # Examples
 ///
 /// ```
-/// let address = zeta_journal::payload_address(br#"{"value":1}"#);
-/// assert_eq!(address, zeta_substrate::hash_bytes(br#"{"value":1}"#));
+/// let address = zeta::journal::payload_address(br#"{"value":1}"#);
+/// assert_eq!(address, zeta::substrate::hash_bytes(br#"{"value":1}"#));
 /// ```
 pub fn payload_address(payload_bytes: &[u8]) -> Hash {
     hash_bytes(payload_bytes)
@@ -45,7 +45,7 @@ pub fn payload_address(payload_bytes: &[u8]) -> Hash {
 /// # Examples
 ///
 /// ```
-/// let event = zeta_journal::Event {
+/// let event = zeta::journal::Event {
 ///     id: "evt_example".to_owned(),
 ///     event_type: "example.created".to_owned(),
 ///     source: "example".to_owned(),
@@ -58,8 +58,8 @@ pub fn payload_address(payload_bytes: &[u8]) -> Hash {
 ///     timestamp_ms: 1,
 ///     cursor: None,
 /// };
-/// let payload_address = zeta_substrate::hash_bytes(b"{}");
-/// let bytes = zeta_journal::canonical_chain_bytes(&event, &payload_address, None).unwrap();
+/// let payload_address = zeta::substrate::hash_bytes(b"{}");
+/// let bytes = zeta::journal::canonical_chain_bytes(&event, &payload_address, None).unwrap();
 /// assert!(bytes.starts_with(b"[0,"));
 /// ```
 ///
@@ -99,7 +99,7 @@ pub fn canonical_chain_bytes(
         Value::from(*timestamp_ms),
         optional_hash(previous_address),
     ];
-    zeta_substrate::canonical_json(&Value::Array(value)).map_err(AppendError::from)
+    crate::substrate::canonical_json(&Value::Array(value)).map_err(AppendError::from)
 }
 
 /// Returns the Chain-domain address of one canonical journal entry.
@@ -107,7 +107,7 @@ pub fn canonical_chain_bytes(
 /// # Examples
 ///
 /// ```
-/// let event = zeta_journal::Event {
+/// let event = zeta::journal::Event {
 ///     id: "evt_example".to_owned(),
 ///     event_type: "example.created".to_owned(),
 ///     source: "example".to_owned(),
@@ -120,8 +120,8 @@ pub fn canonical_chain_bytes(
 ///     timestamp_ms: 1,
 ///     cursor: None,
 /// };
-/// let payload_address = zeta_substrate::hash_bytes(b"{}");
-/// let address = zeta_journal::entry_address(&event, &payload_address, None).unwrap();
+/// let payload_address = zeta::substrate::hash_bytes(b"{}");
+/// let address = zeta::journal::entry_address(&event, &payload_address, None).unwrap();
 /// assert!(address.to_string().starts_with("b3:"));
 /// ```
 ///
@@ -142,7 +142,7 @@ pub fn entry_address(
 /// # Examples
 ///
 /// ```
-/// let event = zeta_journal::Event {
+/// let event = zeta::journal::Event {
 ///     id: "evt_example".to_owned(),
 ///     event_type: "example.created".to_owned(),
 ///     source: "example".to_owned(),
@@ -155,7 +155,7 @@ pub fn entry_address(
 ///     timestamp_ms: 1,
 ///     cursor: None,
 /// };
-/// let entry = zeta_journal::JournalEntry::new(event, 1, None).unwrap();
+/// let entry = zeta::journal::JournalEntry::new(event, 1, None).unwrap();
 /// assert_eq!(entry.event.cursor, Some(1));
 /// ```
 #[derive(Clone, Debug, PartialEq)]
@@ -178,7 +178,7 @@ impl JournalEntry {
     /// # Examples
     ///
     /// ```
-    /// let event = zeta_journal::Event {
+    /// let event = zeta::journal::Event {
     ///     id: "evt_example".to_owned(),
     ///     event_type: "example.created".to_owned(),
     ///     source: "example".to_owned(),
@@ -191,7 +191,7 @@ impl JournalEntry {
     ///     timestamp_ms: 1,
     ///     cursor: None,
     /// };
-    /// let entry = zeta_journal::JournalEntry::new(event, 1, None).unwrap();
+    /// let entry = zeta::journal::JournalEntry::new(event, 1, None).unwrap();
     /// assert_eq!(entry.previous_address, None);
     /// ```
     ///
@@ -230,9 +230,9 @@ impl JournalEntry {
 /// # Examples
 ///
 /// ```
-/// let expectation = zeta_journal::HeadExpectation::Exact(None);
-/// let entries: Vec<zeta_journal::JournalEntry> = Vec::new();
-/// assert!(zeta_journal::verify(&entries, expectation).is_ok());
+/// let expectation = zeta::journal::HeadExpectation::Exact(None);
+/// let entries: Vec<zeta::journal::JournalEntry> = Vec::new();
+/// assert!(zeta::journal::verify(&entries, expectation).is_ok());
 /// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HeadExpectation<'a> {
@@ -247,10 +247,10 @@ pub enum HeadExpectation<'a> {
 /// # Examples
 ///
 /// ```
-/// let entries: Vec<zeta_journal::JournalEntry> = Vec::new();
-/// let report = zeta_journal::verify(
+/// let entries: Vec<zeta::journal::JournalEntry> = Vec::new();
+/// let report = zeta::journal::verify(
 ///     &entries,
-///     zeta_journal::HeadExpectation::Unanchored,
+///     zeta::journal::HeadExpectation::Unanchored,
 /// )
 /// .unwrap();
 /// assert_eq!(report.entries_checked, 0);
@@ -354,7 +354,7 @@ pub fn verify(
                 VerificationErrorKind::PayloadEncoding,
             ));
         }
-        let expected_payload_address = crate::chain::payload_address(&payload);
+        let expected_payload_address = super::chain::payload_address(&payload);
         if payload_address != &expected_payload_address {
             return Err(verification_error(
                 entries_checked,

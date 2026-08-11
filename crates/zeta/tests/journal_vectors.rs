@@ -3,11 +3,11 @@
 use std::path::PathBuf;
 
 use serde_json::Value;
-use zeta_journal::{
+use zeta::journal::{
     canonical_chain_bytes, canonical_payload, entry_address, payload_address, verify, Event,
     Filter, HeadExpectation, MemoryJournal,
 };
-use zeta_substrate::Hash;
+use zeta::substrate::Hash;
 
 fn vectors_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../spec/vectors/journal")

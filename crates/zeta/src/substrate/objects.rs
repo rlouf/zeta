@@ -10,8 +10,8 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Number, Value};
 
-use crate::domain::{derive, Domain};
-use crate::hash::Hash;
+use super::domain::{derive, Domain};
+use super::hash::Hash;
 
 /// Identifies one immutable substrate object.
 pub type ObjectId = String;
@@ -25,7 +25,7 @@ pub type RefName = String;
 ///
 /// ```
 /// let value = serde_json::from_str("18446744073709551616").unwrap();
-/// let error = zeta_substrate::canonical_json(&value).unwrap_err();
+/// let error = zeta::substrate::canonical_json(&value).unwrap_err();
 /// assert!(error.to_string().contains("i64 or u64"));
 /// ```
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -61,7 +61,7 @@ impl std::error::Error for CanonicalJsonError {}
 ///
 /// ```
 /// use serde_json::json;
-/// use zeta_substrate::Object;
+/// use zeta::substrate::Object;
 ///
 /// let object = Object {
 ///     kind: "example.message".to_owned(),
@@ -90,7 +90,7 @@ impl Object {
     ///
     /// ```
     /// use serde_json::json;
-    /// use zeta_substrate::Object;
+    /// use zeta::substrate::Object;
     ///
     /// let object = Object {
     ///     kind: "example".to_owned(),
@@ -120,7 +120,7 @@ impl Object {
     ///
     /// ```
     /// use serde_json::json;
-    /// use zeta_substrate::{Domain, Object};
+    /// use zeta::substrate::{Domain, Object};
     ///
     /// let object = Object {
     ///     kind: "example".to_owned(),
@@ -130,7 +130,7 @@ impl Object {
     /// };
     /// assert_eq!(
     ///     object.content_address().unwrap(),
-    ///     zeta_substrate::derive(Domain::Object, &object.canonical_bytes().unwrap()),
+    ///     zeta::substrate::derive(Domain::Object, &object.canonical_bytes().unwrap()),
     /// );
     /// ```
     ///
@@ -150,12 +150,12 @@ impl Object {
 ///
 /// ```
 /// use serde_json::json;
-/// use zeta_substrate::Derivation;
+/// use zeta::substrate::Derivation;
 ///
 /// let derivation = Derivation {
 ///     producer: "example:copy@1".to_owned(),
-///     output_id: zeta_substrate::hash_bytes(b"output").to_string(),
-///     input_ids: vec![zeta_substrate::hash_bytes(b"input").to_string()],
+///     output_id: zeta::substrate::hash_bytes(b"output").to_string(),
+///     input_ids: vec![zeta::substrate::hash_bytes(b"input").to_string()],
 ///     params: serde_json::from_value(json!({})).unwrap(),
 /// };
 /// assert!(derivation
@@ -183,11 +183,11 @@ impl Derivation {
     ///
     /// ```
     /// use serde_json::json;
-    /// use zeta_substrate::Derivation;
+    /// use zeta::substrate::Derivation;
     ///
     /// let derivation = Derivation {
     ///     producer: "example:copy@1".to_owned(),
-    ///     output_id: zeta_substrate::hash_bytes(b"output").to_string(),
+    ///     output_id: zeta::substrate::hash_bytes(b"output").to_string(),
     ///     input_ids: Vec::new(),
     ///     params: serde_json::from_value(json!({})).unwrap(),
     /// };
@@ -210,17 +210,17 @@ impl Derivation {
     ///
     /// ```
     /// use serde_json::json;
-    /// use zeta_substrate::{Derivation, Domain};
+    /// use zeta::substrate::{Derivation, Domain};
     ///
     /// let derivation = Derivation {
     ///     producer: "example:copy@1".to_owned(),
-    ///     output_id: zeta_substrate::hash_bytes(b"output").to_string(),
+    ///     output_id: zeta::substrate::hash_bytes(b"output").to_string(),
     ///     input_ids: Vec::new(),
     ///     params: serde_json::from_value(json!({})).unwrap(),
     /// };
     /// assert_eq!(
     ///     derivation.content_address().unwrap(),
-    ///     zeta_substrate::derive(Domain::Derivation, &derivation.canonical_bytes().unwrap()),
+    ///     zeta::substrate::derive(Domain::Derivation, &derivation.canonical_bytes().unwrap()),
     /// );
     /// ```
     ///
@@ -239,9 +239,9 @@ impl Derivation {
 /// # Examples
 ///
 /// ```
-/// let reference = zeta_substrate::Ref {
+/// let reference = zeta::substrate::Ref {
 ///     name: "session/head".to_owned(),
-///     object_id: zeta_substrate::hash_bytes(b"head").to_string(),
+///     object_id: zeta::substrate::hash_bytes(b"head").to_string(),
 /// };
 /// assert_eq!(reference.name, "session/head");
 /// ```
@@ -258,10 +258,10 @@ pub struct Ref {
 /// # Examples
 ///
 /// ```
-/// let update = zeta_substrate::RefUpdate {
+/// let update = zeta::substrate::RefUpdate {
 ///     name: "session/head".to_owned(),
 ///     old_object_id: None,
-///     new_object_id: zeta_substrate::hash_bytes(b"head").to_string(),
+///     new_object_id: zeta::substrate::hash_bytes(b"head").to_string(),
 ///     updated: true,
 /// };
 /// assert!(update.updated);
@@ -292,7 +292,7 @@ pub struct RefUpdate {
 ///
 /// let value = json!({"z": 2, "é": "café", "a": 1});
 /// assert_eq!(
-///     zeta_substrate::canonical_json(&value).unwrap(),
+///     zeta::substrate::canonical_json(&value).unwrap(),
 ///     "{\"a\":1,\"z\":2,\"é\":\"café\"}".as_bytes(),
 /// );
 /// ```

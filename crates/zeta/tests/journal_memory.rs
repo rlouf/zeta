@@ -1,7 +1,7 @@
 //! In-memory reference behavior independent of a storage backend.
 
 use serde_json::{json, Map, Value};
-use zeta_journal::{Event, Filter, MemoryJournal};
+use zeta::journal::{Event, Filter, MemoryJournal};
 
 fn fields(value: Value) -> Map<String, Value> {
     value.as_object().unwrap().clone()

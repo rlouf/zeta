@@ -4,14 +4,14 @@
 //! and chain domains retain their live protocol meanings. Content bytes stay
 //! outside this enum because plain BLAKE3 makes equal bytes share one address.
 
-use crate::hash::Hash;
+use super::hash::Hash;
 
 /// Selects one active derived-identifier namespace.
 ///
 /// # Examples
 ///
 /// ```
-/// use zeta_substrate::Domain;
+/// use zeta::substrate::Domain;
 ///
 /// assert_ne!(Domain::Object.context(), Domain::Derivation.context());
 /// ```
@@ -33,7 +33,7 @@ impl Domain {
     /// # Examples
     ///
     /// ```
-    /// use zeta_substrate::Domain;
+    /// use zeta::substrate::Domain;
     ///
     /// assert_eq!(Domain::Object.context(), "zeta-os 2026-08 cas object");
     /// ```
@@ -56,7 +56,7 @@ impl Domain {
 /// # Examples
 ///
 /// ```
-/// use zeta_substrate::{derive, Domain};
+/// use zeta::substrate::{derive, Domain};
 ///
 /// let event_id = derive(Domain::Event, b"identity");
 /// let chain_id = derive(Domain::Chain, b"identity");

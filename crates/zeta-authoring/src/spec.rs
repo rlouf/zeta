@@ -138,16 +138,14 @@ pub struct EgressBinding {
 
 /// Holds one validated authored agent declaration.
 ///
-/// The content address identifies the exact source bytes. The path is a
-/// caller-supplied logical label and is not opened by this crate.
+/// The content address identifies the exact source bytes independently of
+/// where they were loaded.
 ///
 /// # Examples
 ///
 /// ```
-/// use std::path::Path;
-///
 /// let spec = zeta_authoring::parse_agent(
-///     Path::new("worker.md"),
+///     "worker",
 ///     b"---\nname: Worker\ndescription: Does work.\n---\nWork.\n",
 /// )?;
 /// assert_eq!(spec.slug, "worker");
@@ -155,7 +153,7 @@ pub struct EgressBinding {
 /// ```
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct AgentSpec {
-    /// Carries the lowercase identifier derived from the logical filename.
+    /// Carries the validated lowercase agent identifier.
     pub slug: String,
     /// Carries the authored display name.
     pub name: String,
@@ -163,8 +161,6 @@ pub struct AgentSpec {
     pub description: String,
     /// Preserves the Markdown body after frontmatter.
     pub instructions: String,
-    /// Preserves the caller-supplied logical source path.
-    pub path: PathBuf,
     /// Identifies the exact source bytes with plain BLAKE3.
     pub content_address: Hash,
     /// Controls whether the agent may receive events.
@@ -208,10 +204,8 @@ pub struct AgentSpec {
 /// # Examples
 ///
 /// ```
-/// use std::path::Path;
-///
 /// let spec = zeta_authoring::parse_agent(
-///     Path::new("worker.md"),
+///     "worker",
 ///     b"---\nname: Worker\ndescription: Does work.\naccepts: [work.requested]\n---\n",
 /// )?;
 /// assert!(zeta_authoring::matches(&spec, "work.requested"));

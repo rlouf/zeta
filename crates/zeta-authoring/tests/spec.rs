@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::{json, Map, Value};
 use zeta_authoring::{
-    matches, parse_agent, scheduled_event_type, AgentSpec, EgressBinding, ExecutorSpec,
+    load_agent, matches, parse_agent, scheduled_event_type, AgentSpec, EgressBinding, ExecutorSpec,
     IngressBinding, ModelSpec, RetrySpec, ScheduleEntry, SpecErrorKind,
 };
 
@@ -70,13 +70,12 @@ fn authoring_vectors() -> Value {
 
 #[test]
 fn complete_agent_matches_python_declaration_behavior() {
-    let spec = parse_agent(Path::new("agents/slack-qa.md"), COMPLETE_AGENT).unwrap();
+    let spec = parse_agent("slack-qa", COMPLETE_AGENT).unwrap();
     let AgentSpec {
         slug,
         name,
         description,
         instructions,
-        path,
         content_address,
         enabled,
         session,
@@ -101,7 +100,6 @@ fn complete_agent_matches_python_declaration_behavior() {
     assert_eq!(name, "Slack Q&A");
     assert_eq!(description, "Answers workspace questions.");
     assert_eq!(instructions, "User asked: {{ event.payload.text }}\n");
-    assert_eq!(path, PathBuf::from("agents/slack-qa.md"));
     assert_eq!(
         content_address.to_string(),
         "b3:3b11502a246625eee17b4262ef24f46d85e0d8cafe0167adc281058b64d131dc"
@@ -182,12 +180,12 @@ fn complete_agent_matches_python_declaration_behavior() {
 #[test]
 fn omitted_and_explicit_empty_capabilities_keep_inheritance_distinct() {
     let omitted = parse_agent(
-        Path::new("worker.md"),
+        "worker",
         b"---\nname: Worker\ndescription: Works.\n---\nWork.\n",
     )
     .unwrap();
     let explicit = parse_agent(
-        Path::new("worker.md"),
+        "worker",
         b"---\nname: Worker\ndescription: Works.\nskills: null\ntools: []\n---\nWork.\n",
     )
     .unwrap();
@@ -205,7 +203,7 @@ fn omitted_and_explicit_empty_capabilities_keep_inheritance_distinct() {
 #[test]
 fn portable_yaml_profile_matches_json_scalars() {
     let spec = parse_agent(
-        Path::new("worker.md"),
+        "worker",
         b"---\nname: yes\ndescription: 2026-08-11\nenabled: true\nretry:\n  max_attempts: 0o12\n  backoff_seconds: 1e3\nmetadata:\n  affirmative: yes\n  disabled: off\n  leading_zero: 012\n  sexagesimal: 1:20\n  separated: 1_000\n  date: 2026-08-11\n  overflow: 1e400\n---\nWork.\n",
     )
     .unwrap();
@@ -248,7 +246,7 @@ fn non_json_yaml_constructs_are_rejected() {
 
     for declaration in declarations {
         let source = format!("---\nname: Worker\ndescription: Works.\n{declaration}---\nWork.\n");
-        assert!(parse_agent(Path::new("worker.md"), source.as_bytes()).is_err());
+        assert!(parse_agent("worker", source.as_bytes()).is_err());
     }
 }
 
@@ -260,37 +258,106 @@ fn shared_authoring_vectors_match_parser() {
     for vector in vectors["valid"].as_array().unwrap() {
         let name = vector["name"].as_str().unwrap();
         let path = Path::new(vector["path"].as_str().unwrap());
+        let slug = path.file_stem().unwrap().to_str().unwrap();
         let source = vector["source_utf8"].as_str().unwrap().as_bytes();
-        let spec = parse_agent(path, source).unwrap_or_else(|error| panic!("{name}: {error}"));
-        let mut actual = serde_json::to_value(spec).unwrap();
-        actual.as_object_mut().unwrap().remove("path");
+        let spec = parse_agent(slug, source).unwrap_or_else(|error| panic!("{name}: {error}"));
+        let actual = serde_json::to_value(spec).unwrap();
         assert_eq!(actual, vector["expected"], "{name}");
     }
 
     for vector in vectors["invalid"].as_array().unwrap() {
         let name = vector["name"].as_str().unwrap();
         let path = Path::new(vector["path"].as_str().unwrap());
+        let slug = path.file_stem().unwrap().to_str().unwrap();
         let source = vector["source_utf8"].as_str().unwrap().as_bytes();
-        assert!(parse_agent(path, source).is_err(), "{name}");
+        assert!(parse_agent(slug, source).is_err(), "{name}");
     }
 }
 
 #[test]
-fn parser_uses_supplied_bytes_and_logical_path_without_reading_the_filesystem() {
-    let path = Path::new("/this/path/does/not/exist/worker.md");
+fn parser_uses_supplied_bytes_without_reading_the_filesystem() {
     let source = b"---\r\nname: Worker\r\ndescription: Works.\r\n---\r\nKeep CRLF.\r\n";
 
-    let spec = parse_agent(path, source).unwrap();
+    let spec = parse_agent("worker", source).unwrap();
 
-    assert_eq!(spec.path, path);
     assert_eq!(spec.instructions, "Keep CRLF.\r\n");
     assert_eq!(spec.content_address, zeta_substrate::hash_bytes(source));
 }
 
 #[test]
+fn loader_reads_exact_bytes_and_derives_the_filename_slug() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("worker.md");
+    let source = b"---\r\nname: Worker\r\ndescription: Works.\r\n---\r\nKeep CRLF.\r\n";
+    fs::write(&path, source).unwrap();
+
+    let loaded = load_agent(&path).unwrap();
+    let parsed = parse_agent("worker", source).unwrap();
+
+    assert_eq!(loaded, parsed);
+    assert_eq!(loaded.slug, "worker");
+}
+
+#[test]
+fn loader_attaches_the_real_path_to_parse_failures() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("worker.md");
+    fs::write(&path, b"no frontmatter").unwrap();
+
+    let error = load_agent(&path).unwrap_err();
+
+    assert_eq!(error.kind(), SpecErrorKind::MissingFrontmatterDelimiter);
+    assert_eq!(error.path(), Some(path.as_path()));
+    assert_eq!(
+        error.to_string(),
+        format!(
+            "missing_frontmatter_delimiter in {}: the first line must be ---",
+            path.display()
+        )
+    );
+}
+
+#[test]
+fn parser_errors_render_without_a_path() {
+    let error = parse_agent("worker", b"no frontmatter").unwrap_err();
+
+    assert_eq!(
+        error.to_string(),
+        "missing_frontmatter_delimiter: the first line must be ---"
+    );
+}
+
+#[test]
+fn loader_reports_missing_files_with_the_real_path() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("missing.md");
+
+    let error = load_agent(&path).unwrap_err();
+
+    assert_eq!(error.kind(), SpecErrorKind::Io);
+    assert_eq!(error.path(), Some(path.as_path()));
+}
+
+#[test]
+fn loader_validates_the_filename_slug() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("Bad Worker.md");
+    fs::write(
+        &path,
+        b"---\nname: Worker\ndescription: Works.\n---\nWork.\n",
+    )
+    .unwrap();
+
+    let error = load_agent(&path).unwrap_err();
+
+    assert_eq!(error.kind(), SpecErrorKind::InvalidSlug);
+    assert_eq!(error.path(), Some(path.as_path()));
+}
+
+#[test]
 fn schedules_add_one_synthetic_accept_type() {
     let spec = parse_agent(
-        Path::new("digest.md"),
+        "digest",
         b"---\nname: Digest\ndescription: Summarizes.\naccepts: [repo.changed]\nschedules:\n  - cron: '* * * * *'\n  - cron: '0 18 * * 0'\n---\nSummarize.\n",
     )
     .unwrap();
@@ -310,7 +377,7 @@ fn schedules_add_one_synthetic_accept_type() {
 #[test]
 fn disabled_agents_never_match_events() {
     let spec = parse_agent(
-        Path::new("worker.md"),
+        "worker",
         b"---\nname: Worker\ndescription: Works.\nenabled: false\naccepts: [work.requested]\n---\nWork.\n",
     )
     .unwrap();
@@ -322,55 +389,57 @@ fn disabled_agents_never_match_events() {
 fn malformed_source_reports_stable_error_kinds() {
     let cases: &[(&str, &[u8], SpecErrorKind, Option<&str>)] = &[
         (
-            "missing.md",
+            "missing",
             b"name: Missing\n",
             SpecErrorKind::MissingFrontmatterDelimiter,
             None,
         ),
         (
-            "unclosed.md",
+            "unclosed",
             b"---\nname: Missing\n",
             SpecErrorKind::MissingClosingFrontmatterDelimiter,
             None,
         ),
         (
-            "bad slug.md",
+            "bad slug",
             b"---\nname: Bad\ndescription: Bad.\n---\n",
             SpecErrorKind::InvalidSlug,
             None,
         ),
         (
-            "missing.md",
+            "missing",
             b"---\ndescription: Missing name.\n---\n",
             SpecErrorKind::MissingRequiredField,
             Some("name"),
         ),
         (
-            "worker.md",
+            "worker",
             b"---\nname: Worker\ndescription: Works.\nenabled: maybe\n---\n",
             SpecErrorKind::InvalidField,
             Some("enabled"),
         ),
         (
-            "worker.md",
+            "worker",
             b"---\nname: Worker\ndescription: Works.\nexecutor:\n  provider: local\n  config:\n    1: value\n---\n",
             SpecErrorKind::InvalidField,
             Some("executor"),
         ),
     ];
 
-    for (path, source, expected_kind, expected_field) in cases {
-        let error = parse_agent(Path::new(path), source).unwrap_err();
+    for (slug, source, expected_kind, expected_field) in cases {
+        let error = parse_agent(slug, source).unwrap_err();
         assert_eq!(error.kind(), *expected_kind);
         assert_eq!(error.field(), *expected_field);
+        assert_eq!(error.path(), None);
     }
 }
 
 #[test]
 fn malformed_utf8_is_rejected_before_frontmatter_parsing() {
-    let error = parse_agent(Path::new("worker.md"), b"---\n\xff\n---\n").unwrap_err();
+    let error = parse_agent("worker", b"---\n\xff\n---\n").unwrap_err();
 
     assert_eq!(error.kind(), SpecErrorKind::InvalidUtf8);
+    assert_eq!(error.path(), None);
 }
 
 #[test]
@@ -399,7 +468,7 @@ fn nested_declarations_reject_unsupported_fields_and_values() {
     ];
 
     for (source, expected_field) in cases {
-        let error = parse_agent(Path::new("worker.md"), source).unwrap_err();
+        let error = parse_agent("worker", source).unwrap_err();
         assert_eq!(error.kind(), SpecErrorKind::InvalidField);
         assert_eq!(error.field(), Some(*expected_field));
     }
@@ -432,7 +501,7 @@ fn frontmatter_shape_failures_keep_distinct_diagnostics() {
     ];
 
     for (source, expected_kind, expected_field) in cases {
-        let error = parse_agent(Path::new("worker.md"), source).unwrap_err();
+        let error = parse_agent("worker", source).unwrap_err();
         assert_eq!(error.kind(), *expected_kind);
         assert_eq!(error.field(), *expected_field);
     }
@@ -487,7 +556,7 @@ fn every_core_declaration_rejects_the_wrong_shape() {
 
     for (declaration, expected_field) in cases {
         let source = format!("---\nname: Worker\ndescription: Works.\n{declaration}---\nWork.\n");
-        let error = parse_agent(Path::new("worker.md"), source.as_bytes()).unwrap_err();
+        let error = parse_agent("worker", source.as_bytes()).unwrap_err();
         assert_eq!(error.kind(), SpecErrorKind::InvalidField);
         assert_eq!(error.field(), Some(*expected_field));
     }
@@ -496,7 +565,7 @@ fn every_core_declaration_rejects_the_wrong_shape() {
 #[test]
 fn session_templates_and_home_relative_base_directories_are_preserved() {
     let spec = parse_agent(
-        Path::new("support.md"),
+        "support",
         b"---\nname: Support\ndescription: Helps.\nsession: 'chat:{chat_id}'\nbase_dir: ~/vaults/CEO\n---\nHelp.\n",
     )
     .unwrap();
@@ -508,7 +577,7 @@ fn session_templates_and_home_relative_base_directories_are_preserved() {
 #[test]
 fn authored_accepts_do_not_duplicate_the_synthetic_schedule_event() {
     let spec = parse_agent(
-        Path::new("digest.md"),
+        "digest",
         b"---\nname: Digest\ndescription: Summarizes.\naccepts: [agent.digest.scheduled]\nschedules:\n  - cron: '* * * * *'\n---\n",
     )
     .unwrap();

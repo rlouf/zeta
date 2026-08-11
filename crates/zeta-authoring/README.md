@@ -28,20 +28,32 @@ Frontmatter uses a portable YAML profile. Values must also be valid JSON:
 - Base directories are preserved as absolute paths, `~`, or `~/...`. Resolving
   a home directory is left to the caller that executes the declaration.
 
-## Example
+## Parsing and loading
 
-Parse an agent from bytes supplied by a host:
+Parse exact bytes without filesystem access:
 
 ```rust
-use std::path::Path;
-
 let source = b"---\nname: Worker\ndescription: Does work.\n---\nDo the work.\n";
-let spec = zeta_authoring::parse_agent(Path::new("worker.md"), source)?;
+let spec = zeta_authoring::parse_agent("worker", source)?;
 
 assert_eq!(spec.slug, "worker");
 assert_eq!(spec.instructions, "Do the work.\n");
 # Ok::<(), zeta_authoring::SpecError>(())
 ```
+
+Load an authored file and derive its slug from the filename:
+
+```rust,no_run
+use std::path::Path;
+
+let spec = zeta_authoring::load_agent(Path::new("agents/worker.md"))?;
+
+assert_eq!(spec.slug, "worker");
+# Ok::<(), zeta_authoring::SpecError>(())
+```
+
+Direct parse errors have no path. Loading attaches the supplied filesystem
+path to parse and I/O errors.
 
 ## Test
 

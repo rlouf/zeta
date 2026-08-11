@@ -94,7 +94,7 @@ cover delimiters, YAML shape, slugs, required fields, relative and named-home
 paths, duplicate and merge keys, non-JSON values, integer bounds, tags, and
 cycles.
 
-The expected declaration omits its source path because one implementation
-loads a filesystem path while another accepts a logical path with source
-bytes. Each vector still supplies the path used to derive and validate the
-agent slug.
+The expected declaration contains no source path because source provenance is
+not part of the parsed value. Each vector still supplies a path: Python loads
+it from the filesystem, while Rust derives its slug before parsing the source
+bytes directly.

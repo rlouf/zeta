@@ -1,6 +1,9 @@
-//! Parses authored agent Markdown into declaration values.
+//! Loads and parses authored agent Markdown into declaration values.
 
-use std::path::{Path, PathBuf};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
 
 use serde_json::{Map, Number, Value};
 use yaml_serde::Value as YamlValue;
@@ -12,14 +15,43 @@ use crate::spec::{
     RetrySpec, ScheduleEntry,
 };
 
-/// Parses one authored agent from exact UTF-8 Markdown bytes.
+/// Loads one authored agent from a Markdown file.
 ///
-/// The function performs no filesystem access. `path` supplies the logical
-/// filename used for the slug and diagnostics.
+/// The filename stem supplies the agent slug. The file is read exactly once,
+/// and failures retain the supplied path for diagnostics.
 ///
 /// # Errors
 ///
-/// Returns [`SpecError`] when the source, frontmatter, slug, or declaration
+/// Returns [`SpecError`] when the path cannot be read, its filename does not
+/// produce a valid slug, or its contents are invalid.
+///
+/// [`SpecError`]: crate::SpecError
+///
+/// # Examples
+///
+/// ```no_run
+/// use std::path::Path;
+///
+/// let spec = zeta_authoring::load_agent(Path::new("agents/worker.md"))?;
+/// assert_eq!(spec.slug, "worker");
+/// # Ok::<(), zeta_authoring::SpecError>(())
+/// ```
+pub fn load_agent(path: &Path) -> Result<AgentSpec, SpecError> {
+    let source = fs::read(path).map_err(|error| {
+        SpecError::new(SpecErrorKind::Io, None, error.to_string()).with_path(path)
+    })?;
+    let slug = slug_from_path(path).map_err(|error| error.with_path(path))?;
+    parse_agent(slug, &source).map_err(|error| error.with_path(path))
+}
+
+/// Parses one authored agent from exact UTF-8 Markdown bytes.
+///
+/// The function performs no filesystem access. `slug` supplies the agent
+/// identity used by schedule events.
+///
+/// # Errors
+///
+/// Returns [`SpecError`] when the slug, source, frontmatter, or declaration
 /// values are invalid.
 ///
 /// [`SpecError`]: crate::SpecError
@@ -27,39 +59,36 @@ use crate::spec::{
 /// # Examples
 ///
 /// ```
-/// use std::path::Path;
-///
 /// let spec = zeta_authoring::parse_agent(
-///     Path::new("worker.md"),
+///     "worker",
 ///     b"---\nname: Worker\ndescription: Does work.\n---\nWork.\n",
 /// )?;
 /// assert_eq!(spec.instructions, "Work.\n");
 /// # Ok::<(), zeta_authoring::SpecError>(())
 /// ```
-pub fn parse_agent(path: &Path, source: &[u8]) -> Result<AgentSpec, SpecError> {
-    let content = std::str::from_utf8(source).map_err(|error| {
-        SpecError::new(SpecErrorKind::InvalidUtf8, None, path, error.to_string())
-    })?;
-    let (frontmatter, instructions) = split_frontmatter(content, path)?;
-    let mut frontmatter = parse_frontmatter(frontmatter, path)?;
-    let slug = slug_from_path(path)?;
+pub fn parse_agent(slug: &str, source: &[u8]) -> Result<AgentSpec, SpecError> {
+    let slug = validate_slug(slug)?;
+    let content = std::str::from_utf8(source)
+        .map_err(|error| SpecError::new(SpecErrorKind::InvalidUtf8, None, error.to_string()))?;
+    let (frontmatter, instructions) = split_frontmatter(content)?;
+    let mut frontmatter = parse_frontmatter(frontmatter)?;
 
     let skills_inherit = !frontmatter.contains_key("skills");
     let tools_inherit = !frontmatter.contains_key("tools");
-    let name = take_required_string(&mut frontmatter, "name", path)?;
-    let description = take_required_string(&mut frontmatter, "description", path)?;
-    let enabled = take_bool(&mut frontmatter, "enabled", true, path)?;
-    let session = take_session(&mut frontmatter, path)?;
-    let model = take_model(&mut frontmatter, path)?;
-    let executor = take_executor(&mut frontmatter, path)?;
-    let (mut accepts, ingress) = take_accepts(&mut frontmatter, path)?;
-    let (publishes, egress) = take_publishes(&mut frontmatter, path)?;
-    let returns = take_string_list(&mut frontmatter, "returns", path)?;
-    let skills = take_string_list(&mut frontmatter, "skills", path)?;
-    let tools = take_string_list(&mut frontmatter, "tools", path)?;
-    let schedules = take_schedules(&mut frontmatter, path)?;
-    let retry = take_retry(&mut frontmatter, path)?;
-    let base_dir = take_base_dir(&mut frontmatter, path)?;
+    let name = take_required_string(&mut frontmatter, "name")?;
+    let description = take_required_string(&mut frontmatter, "description")?;
+    let enabled = take_bool(&mut frontmatter, "enabled", true)?;
+    let session = take_session(&mut frontmatter)?;
+    let model = take_model(&mut frontmatter)?;
+    let executor = take_executor(&mut frontmatter)?;
+    let (mut accepts, ingress) = take_accepts(&mut frontmatter)?;
+    let (publishes, egress) = take_publishes(&mut frontmatter)?;
+    let returns = take_string_list(&mut frontmatter, "returns")?;
+    let skills = take_string_list(&mut frontmatter, "skills")?;
+    let tools = take_string_list(&mut frontmatter, "tools")?;
+    let schedules = take_schedules(&mut frontmatter)?;
+    let retry = take_retry(&mut frontmatter)?;
+    let base_dir = take_base_dir(&mut frontmatter)?;
 
     if !schedules.is_empty() {
         let scheduled = scheduled_event_type(&slug);
@@ -73,7 +102,6 @@ pub fn parse_agent(path: &Path, source: &[u8]) -> Result<AgentSpec, SpecError> {
         name,
         description,
         instructions: instructions.to_owned(),
-        path: path.to_path_buf(),
         content_address: hash_bytes(source),
         enabled,
         session,
@@ -95,13 +123,12 @@ pub fn parse_agent(path: &Path, source: &[u8]) -> Result<AgentSpec, SpecError> {
     })
 }
 
-fn split_frontmatter<'a>(content: &'a str, path: &Path) -> Result<(&'a str, &'a str), SpecError> {
+fn split_frontmatter(content: &str) -> Result<(&str, &str), SpecError> {
     let mut lines = content.split_inclusive('\n');
     let Some(first) = lines.next() else {
         return Err(SpecError::new(
             SpecErrorKind::MissingFrontmatterDelimiter,
             None,
-            path,
             "the first line must be ---",
         ));
     };
@@ -109,7 +136,6 @@ fn split_frontmatter<'a>(content: &'a str, path: &Path) -> Result<(&'a str, &'a 
         return Err(SpecError::new(
             SpecErrorKind::MissingFrontmatterDelimiter,
             None,
-            path,
             "the first line must be ---",
         ));
     }
@@ -127,15 +153,13 @@ fn split_frontmatter<'a>(content: &'a str, path: &Path) -> Result<(&'a str, &'a 
     Err(SpecError::new(
         SpecErrorKind::MissingClosingFrontmatterDelimiter,
         None,
-        path,
         "frontmatter must end with ---",
     ))
 }
 
-fn parse_frontmatter(source: &str, path: &Path) -> Result<Map<String, Value>, SpecError> {
-    let source = yaml_serde::from_str::<YamlValue>(source).map_err(|error| {
-        SpecError::new(SpecErrorKind::InvalidYaml, None, path, error.to_string())
-    })?;
+fn parse_frontmatter(source: &str) -> Result<Map<String, Value>, SpecError> {
+    let source = yaml_serde::from_str::<YamlValue>(source)
+        .map_err(|error| SpecError::new(SpecErrorKind::InvalidYaml, None, error.to_string()))?;
     let mapping = match source {
         YamlValue::Null => return Ok(Map::new()),
         YamlValue::Mapping(mapping) => mapping,
@@ -147,7 +171,6 @@ fn parse_frontmatter(source: &str, path: &Path) -> Result<Map<String, Value>, Sp
             return Err(SpecError::new(
                 SpecErrorKind::ExpectedFrontmatterObject,
                 None,
-                path,
                 "frontmatter must be an object",
             ));
         }
@@ -159,7 +182,6 @@ fn parse_frontmatter(source: &str, path: &Path) -> Result<Map<String, Value>, Sp
             return Err(SpecError::new(
                 SpecErrorKind::ExpectedFrontmatterObject,
                 None,
-                path,
                 "frontmatter keys must be strings",
             ));
         };
@@ -167,13 +189,11 @@ fn parse_frontmatter(source: &str, path: &Path) -> Result<Map<String, Value>, Sp
             return Err(SpecError::new(
                 SpecErrorKind::InvalidField,
                 Some(&key),
-                path,
                 "merge keys are not supported",
             ));
         }
-        let value = yaml_to_json(value).map_err(|detail| {
-            SpecError::new(SpecErrorKind::InvalidField, Some(&key), path, detail)
-        })?;
+        let value = yaml_to_json(value)
+            .map_err(|detail| SpecError::new(SpecErrorKind::InvalidField, Some(&key), detail))?;
         output.insert(key, value);
     }
     Ok(output)
@@ -228,49 +248,48 @@ fn yaml_number_to_json(value: &yaml_serde::Number) -> Result<Value, &'static str
     Ok(Value::Number(value))
 }
 
-fn slug_from_path(path: &Path) -> Result<String, SpecError> {
+fn slug_from_path(path: &Path) -> Result<&str, SpecError> {
     let Some(stem) = path.file_stem().and_then(|stem| stem.to_str()) else {
         return Err(SpecError::new(
             SpecErrorKind::InvalidSlug,
             None,
-            path,
-            "the logical filename must have a UTF-8 stem",
+            "the filename must have a UTF-8 stem",
         ));
     };
-    if stem.is_empty() {
+    Ok(stem)
+}
+
+fn validate_slug(slug: &str) -> Result<String, SpecError> {
+    if slug.is_empty() {
         return Err(SpecError::new(
             SpecErrorKind::InvalidSlug,
             None,
-            path,
-            "the filename stem must match [a-z0-9_-]+",
+            "the slug must match [a-z0-9_-]+",
         ));
     }
-    for byte in stem.bytes() {
+    for byte in slug.bytes() {
         let valid =
             byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_' || byte == b'-';
         if !valid {
             return Err(SpecError::new(
                 SpecErrorKind::InvalidSlug,
                 None,
-                path,
-                "the filename stem must match [a-z0-9_-]+",
+                "the slug must match [a-z0-9_-]+",
             ));
         }
     }
-    Ok(stem.to_owned())
+    Ok(slug.to_owned())
 }
 
 fn take_required_string(
     values: &mut Map<String, Value>,
     field: &'static str,
-    path: &Path,
 ) -> Result<String, SpecError> {
     let value = values.remove(field);
     let Some(Value::String(value)) = value else {
         return Err(SpecError::new(
             SpecErrorKind::MissingRequiredField,
             Some(field),
-            path,
             "a non-empty string is required",
         ));
     };
@@ -278,7 +297,6 @@ fn take_required_string(
         return Err(SpecError::new(
             SpecErrorKind::MissingRequiredField,
             Some(field),
-            path,
             "a non-empty string is required",
         ));
     }
@@ -289,18 +307,17 @@ fn take_bool(
     values: &mut Map<String, Value>,
     field: &'static str,
     default: bool,
-    path: &Path,
 ) -> Result<bool, SpecError> {
     match values.remove(field) {
         None => Ok(default),
         Some(Value::Bool(value)) => Ok(value),
         Some(
             Value::Null | Value::Number(_) | Value::String(_) | Value::Array(_) | Value::Object(_),
-        ) => Err(invalid_field(path, field, "expected a boolean")),
+        ) => Err(invalid_field(field, "expected a boolean")),
     }
 }
 
-fn take_session(values: &mut Map<String, Value>, path: &Path) -> Result<String, SpecError> {
+fn take_session(values: &mut Map<String, Value>) -> Result<String, SpecError> {
     match values.remove("session") {
         None | Some(Value::Null) => Ok("per-event".to_owned()),
         Some(Value::String(value)) => {
@@ -308,22 +325,18 @@ fn take_session(values: &mut Map<String, Value>, path: &Path) -> Result<String, 
                 Ok(value)
             } else {
                 Err(invalid_field(
-                    path,
                     "session",
                     "expected shared, per-event, or a template",
                 ))
             }
         }
         Some(Value::Bool(_) | Value::Number(_) | Value::Array(_) | Value::Object(_)) => {
-            Err(invalid_field(path, "session", "expected a string"))
+            Err(invalid_field("session", "expected a string"))
         }
     }
 }
 
-fn take_model(
-    values: &mut Map<String, Value>,
-    path: &Path,
-) -> Result<Option<ModelSpec>, SpecError> {
+fn take_model(values: &mut Map<String, Value>) -> Result<Option<ModelSpec>, SpecError> {
     let value = values.remove("model");
     let Some(value) = value else {
         return Ok(None);
@@ -332,15 +345,15 @@ fn take_model(
         return Ok(None);
     }
     let Value::Object(mut value) = value else {
-        return Err(invalid_field(path, "model", "expected an object"));
+        return Err(invalid_field("model", "expected an object"));
     };
-    reject_unknown_fields(&value, &["name", "url"], "model", path)?;
-    let name = take_nested_required_string(&mut value, "name", "model", path)?;
-    let url = take_nested_required_string(&mut value, "url", "model", path)?;
+    reject_unknown_fields(&value, &["name", "url"], "model")?;
+    let name = take_nested_required_string(&mut value, "name", "model")?;
+    let url = take_nested_required_string(&mut value, "url", "model")?;
     Ok(Some(ModelSpec { name, url }))
 }
 
-fn take_executor(values: &mut Map<String, Value>, path: &Path) -> Result<ExecutorSpec, SpecError> {
+fn take_executor(values: &mut Map<String, Value>) -> Result<ExecutorSpec, SpecError> {
     let value = values.remove("executor");
     let Some(value) = value else {
         return Ok(ExecutorSpec::default());
@@ -349,16 +362,16 @@ fn take_executor(values: &mut Map<String, Value>, path: &Path) -> Result<Executo
         return Ok(ExecutorSpec::default());
     }
     let Value::Object(mut value) = value else {
-        return Err(invalid_field(path, "executor", "expected an object"));
+        return Err(invalid_field("executor", "expected an object"));
     };
-    reject_unknown_fields(&value, &["provider", "config"], "executor", path)?;
-    let provider = take_nested_required_string(&mut value, "provider", "executor", path)?;
+    reject_unknown_fields(&value, &["provider", "config"], "executor")?;
+    let provider = take_nested_required_string(&mut value, "provider", "executor")?;
     let config = match value.remove("config") {
         None => Map::new(),
         Some(Value::Object(config)) => config,
         Some(
             Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) | Value::Array(_),
-        ) => return Err(invalid_field(path, "executor", "config must be an object")),
+        ) => return Err(invalid_field("executor", "config must be an object")),
     };
     Ok(ExecutorSpec { provider, config })
 }
@@ -367,19 +380,16 @@ fn take_nested_required_string(
     values: &mut Map<String, Value>,
     name: &str,
     parent: &'static str,
-    path: &Path,
 ) -> Result<String, SpecError> {
     let value = values.remove(name);
     let Some(Value::String(value)) = value else {
         return Err(invalid_field(
-            path,
             parent,
             format!("{name} must be a non-empty string"),
         ));
     };
     if value.is_empty() {
         return Err(invalid_field(
-            path,
             parent,
             format!("{name} must be a non-empty string"),
         ));
@@ -390,7 +400,6 @@ fn take_nested_required_string(
 fn take_string_list(
     values: &mut Map<String, Value>,
     field: &'static str,
-    path: &Path,
 ) -> Result<Vec<String>, SpecError> {
     let value = values.remove(field);
     let Some(value) = value else {
@@ -400,23 +409,15 @@ fn take_string_list(
         return Ok(Vec::new());
     }
     let Value::Array(values) = value else {
-        return Err(invalid_field(path, field, "expected an array"));
+        return Err(invalid_field(field, "expected an array"));
     };
     let mut output = Vec::with_capacity(values.len());
     for value in values {
         let Value::String(value) = value else {
-            return Err(invalid_field(
-                path,
-                field,
-                "items must be non-empty strings",
-            ));
+            return Err(invalid_field(field, "items must be non-empty strings"));
         };
         if value.is_empty() {
-            return Err(invalid_field(
-                path,
-                field,
-                "items must be non-empty strings",
-            ));
+            return Err(invalid_field(field, "items must be non-empty strings"));
         }
         output.push(value);
     }
@@ -425,25 +426,19 @@ fn take_string_list(
 
 fn take_accepts(
     values: &mut Map<String, Value>,
-    path: &Path,
 ) -> Result<(Vec<String>, Vec<IngressBinding>), SpecError> {
-    let entries = take_event_entries(values, "accepts", path)?;
+    let entries = take_event_entries(values, "accepts")?;
     let mut events = Vec::with_capacity(entries.len());
     let mut bindings = Vec::new();
     for entry in entries {
         match entry {
             Value::String(event) if !event.is_empty() => events.push(event),
             Value::Object(mut entry) => {
-                reject_unknown_fields(
-                    &entry,
-                    &["event", "filter", "idempotency_key"],
-                    "accepts",
-                    path,
-                )?;
-                let event = take_nested_required_string(&mut entry, "event", "accepts", path)?;
-                let filter = take_object(&mut entry, "filter", "accepts", path)?;
+                reject_unknown_fields(&entry, &["event", "filter", "idempotency_key"], "accepts")?;
+                let event = take_nested_required_string(&mut entry, "event", "accepts")?;
+                let filter = take_object(&mut entry, "filter", "accepts")?;
                 let idempotency_key =
-                    take_optional_string(&mut entry, "idempotency_key", "accepts", path)?;
+                    take_optional_string(&mut entry, "idempotency_key", "accepts")?;
                 events.push(event.clone());
                 bindings.push(IngressBinding {
                     event,
@@ -457,7 +452,6 @@ fn take_accepts(
             | Value::String(_)
             | Value::Array(_) => {
                 return Err(invalid_field(
-                    path,
                     "accepts",
                     "items must be non-empty strings or objects",
                 ));
@@ -469,9 +463,8 @@ fn take_accepts(
 
 fn take_publishes(
     values: &mut Map<String, Value>,
-    path: &Path,
 ) -> Result<(Vec<String>, Vec<EgressBinding>), SpecError> {
-    let entries = take_event_entries(values, "publishes", path)?;
+    let entries = take_event_entries(values, "publishes")?;
     let mut events = Vec::with_capacity(entries.len());
     let mut bindings = Vec::new();
     for entry in entries {
@@ -480,21 +473,15 @@ fn take_publishes(
             Value::Object(mut entry) => {
                 if entry.contains_key("filter") {
                     return Err(invalid_field(
-                        path,
                         "publishes",
                         "published event options use 'with'",
                     ));
                 }
-                reject_unknown_fields(
-                    &entry,
-                    &["event", "with", "idempotency_key"],
-                    "publishes",
-                    path,
-                )?;
-                let event = take_nested_required_string(&mut entry, "event", "publishes", path)?;
-                let options = take_object(&mut entry, "with", "publishes", path)?;
+                reject_unknown_fields(&entry, &["event", "with", "idempotency_key"], "publishes")?;
+                let event = take_nested_required_string(&mut entry, "event", "publishes")?;
+                let options = take_object(&mut entry, "with", "publishes")?;
                 let idempotency_key =
-                    take_optional_string(&mut entry, "idempotency_key", "publishes", path)?;
+                    take_optional_string(&mut entry, "idempotency_key", "publishes")?;
                 events.push(event.clone());
                 bindings.push(EgressBinding {
                     event,
@@ -508,7 +495,6 @@ fn take_publishes(
             | Value::String(_)
             | Value::Array(_) => {
                 return Err(invalid_field(
-                    path,
                     "publishes",
                     "items must be non-empty strings or objects",
                 ));
@@ -521,7 +507,6 @@ fn take_publishes(
 fn take_event_entries(
     values: &mut Map<String, Value>,
     field: &'static str,
-    path: &Path,
 ) -> Result<Vec<Value>, SpecError> {
     let value = values.remove(field);
     let Some(value) = value else {
@@ -531,7 +516,7 @@ fn take_event_entries(
         return Ok(Vec::new());
     }
     let Value::Array(value) = value else {
-        return Err(invalid_field(path, field, "expected an array"));
+        return Err(invalid_field(field, "expected an array"));
     };
     Ok(value)
 }
@@ -540,18 +525,13 @@ fn take_object(
     values: &mut Map<String, Value>,
     name: &str,
     parent: &'static str,
-    path: &Path,
 ) -> Result<Map<String, Value>, SpecError> {
     match values.remove(name) {
         None => Ok(Map::new()),
         Some(Value::Object(value)) => Ok(value),
         Some(
             Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) | Value::Array(_),
-        ) => Err(invalid_field(
-            path,
-            parent,
-            format!("{name} must be an object"),
-        )),
+        ) => Err(invalid_field(parent, format!("{name} must be an object"))),
     }
 }
 
@@ -559,7 +539,6 @@ fn take_optional_string(
     values: &mut Map<String, Value>,
     name: &str,
     parent: &'static str,
-    path: &Path,
 ) -> Result<Option<String>, SpecError> {
     match values.remove(name) {
         None | Some(Value::Null) => Ok(None),
@@ -571,17 +550,13 @@ fn take_optional_string(
             | Value::Array(_)
             | Value::Object(_),
         ) => Err(invalid_field(
-            path,
             parent,
             format!("{name} must be a non-empty string"),
         )),
     }
 }
 
-fn take_schedules(
-    values: &mut Map<String, Value>,
-    path: &Path,
-) -> Result<Vec<ScheduleEntry>, SpecError> {
+fn take_schedules(values: &mut Map<String, Value>) -> Result<Vec<ScheduleEntry>, SpecError> {
     let value = values.remove("schedules");
     let Some(value) = value else {
         return Ok(Vec::new());
@@ -590,25 +565,25 @@ fn take_schedules(
         return Ok(Vec::new());
     }
     let Value::Array(values) = value else {
-        return Err(invalid_field(path, "schedules", "expected an array"));
+        return Err(invalid_field("schedules", "expected an array"));
     };
     let mut schedules = Vec::with_capacity(values.len());
     for value in values {
         let Value::Object(mut value) = value else {
-            return Err(invalid_field(path, "schedules", "items must be objects"));
+            return Err(invalid_field("schedules", "items must be objects"));
         };
         if value.contains_key("event") {
-            return Err(invalid_field(path, "schedules", "event is not supported"));
+            return Err(invalid_field("schedules", "event is not supported"));
         }
         if value.contains_key("payload") {
-            return Err(invalid_field(path, "schedules", "payload is not supported"));
+            return Err(invalid_field("schedules", "payload is not supported"));
         }
-        let cron = take_nested_required_string(&mut value, "cron", "schedules", path)?;
-        let timezone = take_optional_string(&mut value, "timezone", "schedules", path)?;
-        let catchup = take_optional_string(&mut value, "catchup", "schedules", path)?;
+        let cron = take_nested_required_string(&mut value, "cron", "schedules")?;
+        let timezone = take_optional_string(&mut value, "timezone", "schedules")?;
+        let catchup = take_optional_string(&mut value, "catchup", "schedules")?;
         if let Some(catchup) = &catchup {
             if catchup != "latest" {
-                return Err(invalid_field(path, "schedules", "catchup must be latest"));
+                return Err(invalid_field("schedules", "catchup must be latest"));
             }
         }
         schedules.push(ScheduleEntry {
@@ -620,10 +595,7 @@ fn take_schedules(
     Ok(schedules)
 }
 
-fn take_retry(
-    values: &mut Map<String, Value>,
-    path: &Path,
-) -> Result<Option<RetrySpec>, SpecError> {
+fn take_retry(values: &mut Map<String, Value>) -> Result<Option<RetrySpec>, SpecError> {
     let value = values.remove("retry");
     let Some(value) = value else {
         return Ok(None);
@@ -632,22 +604,20 @@ fn take_retry(
         return Ok(None);
     }
     let Value::Object(mut value) = value else {
-        return Err(invalid_field(path, "retry", "expected an object"));
+        return Err(invalid_field("retry", "expected an object"));
     };
-    reject_unknown_fields(&value, &["max_attempts", "backoff_seconds"], "retry", path)?;
+    reject_unknown_fields(&value, &["max_attempts", "backoff_seconds"], "retry")?;
     let max_attempts = match value.remove("max_attempts") {
         None | Some(Value::Null) => None,
         Some(Value::Number(number)) => {
             let Some(number) = number.as_u64() else {
                 return Err(invalid_field(
-                    path,
                     "retry",
                     "max_attempts must be a positive integer",
                 ));
             };
             if number == 0 {
                 return Err(invalid_field(
-                    path,
                     "retry",
                     "max_attempts must be a positive integer",
                 ));
@@ -656,7 +626,6 @@ fn take_retry(
         }
         Some(Value::Bool(_) | Value::String(_) | Value::Array(_) | Value::Object(_)) => {
             return Err(invalid_field(
-                path,
                 "retry",
                 "max_attempts must be a positive integer",
             ));
@@ -667,14 +636,12 @@ fn take_retry(
         Some(Value::Number(number)) => {
             let Some(number) = number.as_f64() else {
                 return Err(invalid_field(
-                    path,
                     "retry",
                     "backoff_seconds must be a non-negative number",
                 ));
             };
             if !number.is_finite() || number < 0.0 {
                 return Err(invalid_field(
-                    path,
                     "retry",
                     "backoff_seconds must be a non-negative number",
                 ));
@@ -683,7 +650,6 @@ fn take_retry(
         }
         Some(Value::Bool(_) | Value::String(_) | Value::Array(_) | Value::Object(_)) => {
             return Err(invalid_field(
-                path,
                 "retry",
                 "backoff_seconds must be a non-negative number",
             ));
@@ -695,20 +661,16 @@ fn take_retry(
     }))
 }
 
-fn take_base_dir(
-    values: &mut Map<String, Value>,
-    path: &Path,
-) -> Result<Option<PathBuf>, SpecError> {
+fn take_base_dir(values: &mut Map<String, Value>) -> Result<Option<PathBuf>, SpecError> {
     match values.remove("base_dir") {
         None | Some(Value::Null) => Ok(None),
         Some(Value::String(value)) => {
             if value.trim().is_empty() {
-                return Err(invalid_field(path, "base_dir", "expected a path string"));
+                return Err(invalid_field("base_dir", "expected a path string"));
             }
             let base_dir = PathBuf::from(&value);
             if !base_dir.is_absolute() && value != "~" && !value.starts_with("~/") {
                 return Err(invalid_field(
-                    path,
                     "base_dir",
                     "expected an absolute or home-relative path",
                 ));
@@ -716,7 +678,7 @@ fn take_base_dir(
             Ok(Some(base_dir))
         }
         Some(Value::Bool(_) | Value::Number(_) | Value::Array(_) | Value::Object(_)) => {
-            Err(invalid_field(path, "base_dir", "expected a path string"))
+            Err(invalid_field("base_dir", "expected a path string"))
         }
     }
 }
@@ -725,20 +687,15 @@ fn reject_unknown_fields(
     values: &Map<String, Value>,
     allowed: &[&str],
     field: &'static str,
-    path: &Path,
 ) -> Result<(), SpecError> {
     for key in values.keys() {
         if !allowed.contains(&key.as_str()) {
-            return Err(invalid_field(
-                path,
-                field,
-                format!("unsupported field {key:?}"),
-            ));
+            return Err(invalid_field(field, format!("unsupported field {key:?}")));
         }
     }
     Ok(())
 }
 
-fn invalid_field(path: &Path, field: &'static str, detail: impl Into<String>) -> SpecError {
-    SpecError::new(SpecErrorKind::InvalidField, Some(field), path, detail)
+fn invalid_field(field: &'static str, detail: impl Into<String>) -> SpecError {
+    SpecError::new(SpecErrorKind::InvalidField, Some(field), detail)
 }

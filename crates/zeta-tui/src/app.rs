@@ -3731,7 +3731,7 @@ mod tests {
             "timestamp_ms": 1_754_438_400_000_i64 + cursor as i64,
             "cursor": cursor
         }))
-        .expect("event should parse")
+        .unwrap()
     }
 
     fn session(session_id: &str, agent_id: &str, status: &str) -> Session {
@@ -3740,7 +3740,7 @@ mod tests {
             "agent_id": agent_id,
             "status": status
         }))
-        .expect("session should parse")
+        .unwrap()
     }
 
     fn text_position(screen: &str, text: &str) -> (u16, u16) {
@@ -5032,13 +5032,13 @@ mod tests {
             "agent_id": "zeta.master",
             "status": "idle"
         }))
-        .expect("session should parse");
+        .unwrap();
         let second: Session = serde_json::from_value(serde_json::json!({
             "session_id": "session_second",
             "agent_id": "reviewer",
             "status": "waiting"
         }))
-        .expect("session should parse");
+        .unwrap();
         let mut app = App::connected("0.1".to_owned(), vec![first, second], Vec::new(), None);
         let down = TerminalEvent::Key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
         let up = TerminalEvent::Key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));

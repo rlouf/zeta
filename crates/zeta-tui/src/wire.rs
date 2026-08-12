@@ -248,8 +248,7 @@ mod tests {
         let Message::Success(response) = message else {
             panic!("expected success response");
         };
-        let result: EventsListResult =
-            serde_json::from_value(response.result).expect("result should parse");
+        let result: EventsListResult = serde_json::from_value(response.result).unwrap();
 
         assert_eq!(response.id, RequestId::from(2_u64));
         assert_eq!(result.events.len(), 1);
@@ -274,7 +273,7 @@ mod tests {
                 "cursor": 42
             }
         }))
-        .expect("notification should parse");
+        .unwrap();
 
         assert_eq!(notification.event.id(), "evt_123");
         assert_eq!(notification.event.event_type(), "zeta.user_message");
@@ -297,7 +296,7 @@ mod tests {
                 "future_field": true
             }]
         }))
-        .expect("session list should parse");
+        .unwrap();
 
         assert_eq!(result.sessions.len(), 1);
         assert_eq!(result.sessions[0].session_id(), "session_123");
@@ -315,7 +314,7 @@ mod tests {
             "run_id": "run_123",
             "status": "queued"
         }))
-        .expect("submit result should parse");
+        .unwrap();
 
         assert_eq!(result.event_id, "evt_123");
         assert_eq!(result.session_id, "session_123");

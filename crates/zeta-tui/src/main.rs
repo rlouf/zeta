@@ -1165,7 +1165,7 @@ mod tests {
             "timestamp_ms": cursor,
             "cursor": cursor
         }))
-        .expect("notification event should parse")
+        .unwrap()
     }
 
     #[test]
@@ -1181,8 +1181,7 @@ mod tests {
         };
         assert_eq!(request.method, "initialize");
         let params: InitializeParams =
-            serde_json::from_value(serde_json::Value::Object(request.params.clone()))
-                .expect("initialization parameters should parse");
+            serde_json::from_value(serde_json::Value::Object(request.params.clone())).unwrap();
         assert_eq!(params.roles, vec![Role::Client]);
         assert_eq!(params.peer.name, "zeta-tui");
     }
@@ -1521,7 +1520,7 @@ mod tests {
             "timestamp_ms": 1,
             "cursor": 1
         }))
-        .expect("event should parse");
+        .unwrap();
 
         app.append_events(vec![event], Some(Cursor(1)));
 

@@ -6,3 +6,16 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 publish = false
+
+[dependencies]
+serde_json.workspace = true
+uuid = { version = "1", features = ["v4"] }
+zeta-agent = { path = "../zeta-agent" }
+zeta-authoring = { path = "../zeta-authoring" }
+zeta-dispatch = { path = "../zeta-dispatch" }
+zeta-ipc = { path = "../zeta-ipc" }
+zeta-journal = { path = "../zeta-journal" }
+
+[dev-dependencies]
+tempfile.workspace = true
+tokio = { version = "1", features = ["io-util", "macros", "net", "rt-multi-thread", "time"] }

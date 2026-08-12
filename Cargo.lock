@@ -2587,6 +2587,17 @@ dependencies = [
 [[package]]
 name = "zeta"
 version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "uuid",
+ "zeta-agent",
+ "zeta-authoring",
+ "zeta-dispatch",
+ "zeta-ipc",
+ "zeta-journal",
+]
 
 [[package]]
 name = "zeta-agent"

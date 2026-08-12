@@ -7,32 +7,37 @@
 
 ## Correctness
 
-- [ ] **Effect-key fallback scope is not retry-stable.** `effect_identity`
-  (`crates/zeta-agent/src/runner.rs:1814`) falls back to the model-minted
-  `parsed.call_id` as scope when `invocation.effect_scope` is unset, so a
-  retried attempt mints a fresh `effect_key` and the provider re-executes the
-  side effect — defeating `IdempotentWithKey`. Either make `effect_scope`
-  mandatory when any effectful capability is granted, or derive the fallback
-  from retry-stable coordinates (`{queue_item_id}:{position}`, like
-  `control_handle`).
-- [ ] **Draft idempotency keys are not retry-stable.** `model_draft` /
-  `tool_draft` (`crates/zeta-agent/src/runner.rs:1377,1405`) embed the UUID
-  event id, so journal idempotency never dedupes across attempts: a crashed
-  attempt leaves `zeta.tool_call.completed` events for publishes whose
-  `AgentRequest` was never committed, and the next attempt's timeline can claim
-  work happened that didn't. Decide explicitly which drafts are retry-stable
-  and which are per-attempt; make the timeline projection attempt-aware.
-- [ ] **Unrouted events block the whole queue with no recovery path.** The
-  claim-eligibility SQL (`crates/zeta-dispatch/src/sqlite.rs:2590-2595`) lets
-  any earlier `pending` unbound item block every later claim globally. A crash
-  between `ingest_event` and `route_ingress_event` stalls the queue forever.
-  Either merge ingest+route into one operation or add a recovery sweep that
-  re-drives routing for stale pending items.
-- [ ] **Duplicate journal appends don't compare payloads.** `MemoryJournal::append`
-  (`crates/zeta-journal/src/memory.rs:80-142`) and the SQLite twin return the
-  stored event with `inserted: false` without checking the candidate matches —
-  divergent payloads under one id are silently dropped. Compare
-  `payload_address` on the duplicate path and fail loudly on mismatch.
+- [x] **Effect-key fallback scope is retry-stable.** Both runtimes now fall
+  back from `effect_scope` to `source_queue_item_id` before the model-minted
+  call id, and the `effect_scope_falls_back_to_queue_item` invocation vector
+  pins the derived scope and key (f846a4f).
+- [ ] **Uncommitted control requests survive as misleading timeline events.**
+  Sharpened from "draft idempotency keys are not retry-stable": per-attempt
+  model/tool drafts are semantically correct (each attempt is a distinct
+  execution), and effect drafts are already durable and retry-stable. The
+  actual hole is control intent: `publish_event`/`wait_for`/`cancel` record a
+  durable `zeta.tool_call.completed` draft immediately, but the corresponding
+  `AgentRequest` lives only in `AgentRunResult` and commits at
+  `complete_claimed_attempt`. A crash between run end and completion loses the
+  request while the "completed" tool call stays in the session timeline, so
+  the retry's model believes it already published and never re-proposes —
+  silent event loss. Options: (A) record control intent as durable drafts and
+  have attempt completion re-propose uncommitted controls from failed attempts
+  of the same queue item (handles are `{qi}:{position}`-stable, so re-commit
+  dedupes safely); (B) make the timeline projection attempt-aware so
+  failed-attempt control calls are annotated or filtered; (C) both.
+  Recommendation: A, since it restores the propose→commit invariant rather
+  than teaching the prompt to distrust the journal. Related: the deferred
+  recorder-contract defect in notes.md (draft-only recorder cannot return
+  retained durable ids) should be fixed in the same slice. Requires
+  attempt-recovery policy design — deliberately not implemented ad hoc.
+- [x] **Unrouted events are discoverable for recovery.**
+  `Dispatch::unrouted_ingress_events` returns stale pending unbound items in
+  input order so restart recovery re-drives `route_ingress_event` (ee528ba).
+- [x] **Divergent id-duplicate appends fail loudly.** Both runtimes and both
+  stores now compare the canonical payload address on id duplicates and fail
+  with `duplicate_id_payload_mismatch`; key duplicates keep silent retry
+  absorption. journal-v0 §5 amended, operations vectors pin it (bb42aa2).
 
 ## Design decisions to make explicit
 

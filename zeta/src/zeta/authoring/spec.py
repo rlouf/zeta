@@ -410,13 +410,7 @@ def base_dir_field(value: Any, path: Path) -> Path | None:
         raise SpecError(
             f"invalid value for 'base_dir' in {path}: expected a path string"
         )
-    base_dir = Path(value)
-    if not base_dir.is_absolute() and value != "~" and not value.startswith("~/"):
-        raise SpecError(
-            f"invalid value for 'base_dir' in {path}: "
-            f"{value!r} must be absolute or home-relative"
-        )
-    return base_dir
+    return Path(value)
 
 
 def retry_spec(value: Any, path: Path) -> RetrySpec | None:

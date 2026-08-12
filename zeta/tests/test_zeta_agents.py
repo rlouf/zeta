@@ -795,20 +795,21 @@ body
     assert spec.base_dir is None
 
 
-def test_zeta_agent_spec_rejects_relative_base_dir(tmp_path: Path) -> None:
-    with pytest.raises(SpecError):
-        load_spec(
-            _write_spec(
-                tmp_path / "filer.md",
-                """---
+def test_zeta_agent_spec_accepts_relative_base_dir(tmp_path: Path) -> None:
+    spec = load_spec(
+        _write_spec(
+            tmp_path / "filer.md",
+            """---
 name: Filer
 description: Files notes.
 base_dir: notes/vault
 ---
 body
 """,
-            )
         )
+    )
+
+    assert spec.base_dir == Path("notes/vault")
 
 
 def test_zeta_authored_agent_config_sets_tools(tmp_path: Path) -> None:

@@ -1296,6 +1296,2721 @@
           }
         ]
       }
+    },
+    {
+      "name": "timeline_tail_boundary",
+      "input": {
+        "objective": "Use only retained history.",
+        "timeline": [
+          {
+            "type": "user_message",
+            "content": "Outside retained history."
+          },
+          {
+            "type": "model",
+            "tool_calls": [
+              {
+                "id": "call-outside-tail",
+                "type": "function",
+                "function": {
+                  "name": "lookup",
+                  "arguments": "{\"key\":\"outside\"}"
+                }
+              }
+            ]
+          },
+          {
+            "type": "tool_result",
+            "tool_call_id": "call-outside-tail",
+            "name": "lookup",
+            "result": {
+              "ok": true,
+              "value": "outside"
+            }
+          },
+          {
+            "type": "observation",
+            "sequence": 0
+          },
+          {
+            "type": "observation",
+            "sequence": 1
+          },
+          {
+            "type": "observation",
+            "sequence": 2
+          },
+          {
+            "type": "observation",
+            "sequence": 3
+          },
+          {
+            "type": "observation",
+            "sequence": 4
+          },
+          {
+            "type": "observation",
+            "sequence": 5
+          },
+          {
+            "type": "observation",
+            "sequence": 6
+          },
+          {
+            "type": "observation",
+            "sequence": 7
+          },
+          {
+            "type": "observation",
+            "sequence": 8
+          },
+          {
+            "type": "observation",
+            "sequence": 9
+          },
+          {
+            "type": "observation",
+            "sequence": 10
+          },
+          {
+            "type": "observation",
+            "sequence": 11
+          },
+          {
+            "type": "observation",
+            "sequence": 12
+          },
+          {
+            "type": "observation",
+            "sequence": 13
+          },
+          {
+            "type": "observation",
+            "sequence": 14
+          },
+          {
+            "type": "observation",
+            "sequence": 15
+          },
+          {
+            "type": "observation",
+            "sequence": 16
+          },
+          {
+            "type": "observation",
+            "sequence": 17
+          },
+          {
+            "type": "observation",
+            "sequence": 18
+          },
+          {
+            "type": "observation",
+            "sequence": 19
+          },
+          {
+            "type": "observation",
+            "sequence": 20
+          },
+          {
+            "type": "observation",
+            "sequence": 21
+          },
+          {
+            "type": "observation",
+            "sequence": 22
+          },
+          {
+            "type": "observation",
+            "sequence": 23
+          },
+          {
+            "type": "observation",
+            "sequence": 24
+          },
+          {
+            "type": "observation",
+            "sequence": 25
+          },
+          {
+            "type": "observation",
+            "sequence": 26
+          },
+          {
+            "type": "observation",
+            "sequence": 27
+          },
+          {
+            "type": "observation",
+            "sequence": 28
+          },
+          {
+            "type": "observation",
+            "sequence": 29
+          },
+          {
+            "type": "observation",
+            "sequence": 30
+          },
+          {
+            "type": "observation",
+            "sequence": 31
+          },
+          {
+            "type": "observation",
+            "sequence": 32
+          },
+          {
+            "type": "observation",
+            "sequence": 33
+          },
+          {
+            "type": "observation",
+            "sequence": 34
+          },
+          {
+            "type": "observation",
+            "sequence": 35
+          },
+          {
+            "type": "observation",
+            "sequence": 36
+          },
+          {
+            "type": "observation",
+            "sequence": 37
+          },
+          {
+            "type": "observation",
+            "sequence": 38
+          },
+          {
+            "type": "observation",
+            "sequence": 39
+          },
+          {
+            "type": "observation",
+            "sequence": 40
+          },
+          {
+            "type": "observation",
+            "sequence": 41
+          },
+          {
+            "type": "observation",
+            "sequence": 42
+          },
+          {
+            "type": "observation",
+            "sequence": 43
+          },
+          {
+            "type": "observation",
+            "sequence": 44
+          },
+          {
+            "type": "observation",
+            "sequence": 45
+          },
+          {
+            "type": "observation",
+            "sequence": 46
+          },
+          {
+            "type": "observation",
+            "sequence": 47
+          },
+          {
+            "type": "user_message",
+            "content": "Retained tail message."
+          }
+        ],
+        "system": "Answer plainly.",
+        "allowed_capabilities": [
+          "test.lookup"
+        ],
+        "context": "",
+        "tools": [
+          {
+            "type": "function",
+            "function": {
+              "name": "lookup",
+              "description": "Look up a value.",
+              "parameters": {
+                "type": "object",
+                "properties": {
+                  "key": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "key"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        ],
+        "tool_choice": "auto",
+        "max_tokens": 64,
+        "selected_model": "unit-model",
+        "thinking": null
+      },
+      "expected": {
+        "components": [
+          {
+            "kind": "system_prompt",
+            "data": {
+              "content": "Answer plainly.\n\nToday is 2026-08-12 (Wednesday).\n\nTool protocol:\n\n- Tools are native Chat Completions function tools exposed by the runtime.\n- You may request multiple read-only tool calls in one turn when useful.\n- Mutating tools apply their effects when you call them.\n- Use a tool only when its schema matches the needed action.\n- Do not mention unavailable tools.\n- If no tool is needed, return a final answer.\n\nAvailable tools:\n- lookup(key): Look up a value.",
+              "base_prompt": "Answer plainly.",
+              "allowed_tools": [
+                "test.lookup"
+              ]
+            },
+            "message": {
+              "role": "system",
+              "content": "Answer plainly.\n\nToday is 2026-08-12 (Wednesday).\n\nTool protocol:\n\n- Tools are native Chat Completions function tools exposed by the runtime.\n- You may request multiple read-only tool calls in one turn when useful.\n- Mutating tools apply their effects when you call them.\n- Use a tool only when its schema matches the needed action.\n- Do not mention unavailable tools.\n- If no tool is needed, return a final answer.\n\nAvailable tools:\n- lookup(key): Look up a value."
+            },
+            "representation": "full",
+            "source_object_id": null,
+            "links": [],
+            "object_id": "b3:f510e823051f61578ace2a810de5166a1c4e82e767ae916953290db85071b013"
+          },
+          {
+            "kind": "tool_descriptor_set",
+            "data": {
+              "allowed_tools": [
+                "test.lookup"
+              ],
+              "tools": [
+                {
+                  "type": "function",
+                  "function": {
+                    "name": "lookup",
+                    "description": "Look up a value.",
+                    "parameters": {
+                      "type": "object",
+                      "properties": {
+                        "key": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "key"
+                      ],
+                      "additionalProperties": false
+                    }
+                  }
+                }
+              ]
+            },
+            "message": null,
+            "representation": "full",
+            "source_object_id": null,
+            "links": [],
+            "object_id": "b3:cc65231d53af0471c6bb054c9918429a1147dc7a42a6be04297808e6c4e16c91"
+          },
+          {
+            "kind": "user_message",
+            "data": {
+              "index": 0,
+              "event_index": 48,
+              "message": {
+                "role": "user",
+                "content": "Retained tail message."
+              },
+              "source_event_type": "user_message",
+              "source_event_role": "",
+              "historical": true
+            },
+            "message": {
+              "role": "user",
+              "content": "Retained tail message."
+            },
+            "representation": "full",
+            "source_object_id": null,
+            "links": [],
+            "object_id": "b3:ec34345eb23b5208cbef1ce2176601d81485e0d8ab28f9d65c88e8ecd96bfabb"
+          },
+          {
+            "kind": "user_message",
+            "data": {
+              "objective": "Use only retained history.",
+              "expanded_objective": "Use only retained history.",
+              "context": "",
+              "message": {
+                "role": "user",
+                "content": "Use only retained history.\n\ncwd:\n/workspace/zeta"
+              }
+            },
+            "message": {
+              "role": "user",
+              "content": "Use only retained history.\n\ncwd:\n/workspace/zeta"
+            },
+            "representation": "full",
+            "source_object_id": null,
+            "links": [],
+            "object_id": "b3:d24c95f1935a7766bb9e7c1a6f18922543bcdc9df9cefe1be0f8871c7621471d"
+          }
+        ],
+        "model_input": {
+          "messages": [
+            {
+              "role": "system",
+              "content": "Answer plainly.\n\nToday is 2026-08-12 (Wednesday).\n\nTool protocol:\n\n- Tools are native Chat Completions function tools exposed by the runtime.\n- You may request multiple read-only tool calls in one turn when useful.\n- Mutating tools apply their effects when you call them.\n- Use a tool only when its schema matches the needed action.\n- Do not mention unavailable tools.\n- If no tool is needed, return a final answer.\n\nAvailable tools:\n- lookup(key): Look up a value."
+            },
+            {
+              "role": "user",
+              "content": "Retained tail message."
+            },
+            {
+              "role": "user",
+              "content": "Use only retained history.\n\ncwd:\n/workspace/zeta"
+            }
+          ],
+          "tools": [
+            {
+              "type": "function",
+              "function": {
+                "name": "lookup",
+                "description": "Look up a value.",
+                "parameters": {
+                  "type": "object",
+                  "properties": {
+                    "key": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "key"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          ],
+          "tool_choice": "auto",
+          "max_tokens": 64,
+          "selected_model": "unit-model",
+          "selected_url": null,
+          "session_id": null,
+          "thinking": null
+        },
+        "request_payload": {
+          "model": "unit-model",
+          "messages": [
+            {
+              "role": "system",
+              "content": "Answer plainly.\n\nToday is 2026-08-12 (Wednesday).\n\nTool protocol:\n\n- Tools are native Chat Completions function tools exposed by the runtime.\n- You may request multiple read-only tool calls in one turn when useful.\n- Mutating tools apply their effects when you call them.\n- Use a tool only when its schema matches the needed action.\n- Do not mention unavailable tools.\n- If no tool is needed, return a final answer.\n\nAvailable tools:\n- lookup(key): Look up a value."
+            },
+            {
+              "role": "user",
+              "content": "Retained tail message."
+            },
+            {
+              "role": "user",
+              "content": "Use only retained history.\n\ncwd:\n/workspace/zeta"
+            }
+          ],
+          "temperature": 0.2,
+          "max_tokens": 64,
+          "stream_options": {
+            "include_usage": true
+          },
+          "tools": [
+            {
+              "type": "function",
+              "function": {
+                "name": "lookup",
+                "description": "Look up a value.",
+                "parameters": {
+                  "type": "object",
+                  "properties": {
+                    "key": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "key"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          ],
+          "tool_choice": "auto"
+        },
+        "prompt_object_id": "b3:612ef663a37f6442a925a719046650f6a4d3ef8fcccb213e83fcfea1616417a0",
+        "component_object_ids": [
+          "b3:f510e823051f61578ace2a810de5166a1c4e82e767ae916953290db85071b013",
+          "b3:cc65231d53af0471c6bb054c9918429a1147dc7a42a6be04297808e6c4e16c91",
+          "b3:ec34345eb23b5208cbef1ce2176601d81485e0d8ab28f9d65c88e8ecd96bfabb",
+          "b3:d24c95f1935a7766bb9e7c1a6f18922543bcdc9df9cefe1be0f8871c7621471d"
+        ],
+        "objects": [
+          {
+            "id": "b3:612ef663a37f6442a925a719046650f6a4d3ef8fcccb213e83fcfea1616417a0",
+            "kind": "prompt",
+            "schema": "zeta.prompt.v2",
+            "data": {
+              "payload_address": "b3:aec2a638061a7d7bc88bc28116dd0bf353eabbd0737df8f58020bd9777f88134"
+            },
+            "links": [
+              "b3:f510e823051f61578ace2a810de5166a1c4e82e767ae916953290db85071b013",
+              "b3:cc65231d53af0471c6bb054c9918429a1147dc7a42a6be04297808e6c4e16c91",
+              "b3:ec34345eb23b5208cbef1ce2176601d81485e0d8ab28f9d65c88e8ecd96bfabb",
+              "b3:d24c95f1935a7766bb9e7c1a6f18922543bcdc9df9cefe1be0f8871c7621471d"
+            ]
+          },
+          {
+            "id": "b3:cc65231d53af0471c6bb054c9918429a1147dc7a42a6be04297808e6c4e16c91",
+            "kind": "tool_descriptor_set",
+            "schema": "zeta.prompt_component.v2",
+            "data": {
+              "allowed_tools": [
+                "test.lookup"
+              ],
+              "tools": [
+                {
+                  "type": "function",
+                  "function": {
+                    "name": "lookup",
+                    "description": "Look up a value.",
+                    "parameters": {
+                      "type": "object",
+                      "properties": {
+                        "key": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "key"
+                      ],
+                      "additionalProperties": false
+                    }
+                  }
+                }
+              ],
+              "representation": "full"
+            },
+            "links": []
+          },
+          {
+            "id": "b3:d24c95f1935a7766bb9e7c1a6f18922543bcdc9df9cefe1be0f8871c7621471d",
+            "kind": "user_message",
+            "schema": "zeta.prompt_component.v2",
+            "data": {
+              "objective": "Use only retained history.",
+              "expanded_objective": "Use only retained history.",
+              "context": "",
+              "message": {
+                "role": "user",
+                "content": "Use only retained history.\n\ncwd:\n/workspace/zeta"
+              },
+              "representation": "full"
+            },
+            "links": []
+          },
+          {
+            "id": "b3:ec34345eb23b5208cbef1ce2176601d81485e0d8ab28f9d65c88e8ecd96bfabb",
+            "kind": "user_message",
+            "schema": "zeta.prompt_component.v2",
+            "data": {
+              "index": 0,
+              "event_index": 48,
+              "message": {
+                "role": "user",
+                "content": "Retained tail message."
+              },
+              "source_event_type": "user_message",
+              "source_event_role": "",
+              "historical": true,
+              "representation": "full"
+            },
+            "links": []
+          },
+          {
+            "id": "b3:f510e823051f61578ace2a810de5166a1c4e82e767ae916953290db85071b013",
+            "kind": "system_prompt",
+            "schema": "zeta.prompt_component.v2",
+            "data": {
+              "content": "Answer plainly.\n\nToday is 2026-08-12 (Wednesday).\n\nTool protocol:\n\n- Tools are native Chat Completions function tools exposed by the runtime.\n- You may request multiple read-only tool calls in one turn when useful.\n- Mutating tools apply their effects when you call them.\n- Use a tool only when its schema matches the needed action.\n- Do not mention unavailable tools.\n- If no tool is needed, return a final answer.\n\nAvailable tools:\n- lookup(key): Look up a value.",
+              "base_prompt": "Answer plainly.",
+              "allowed_tools": [
+                "test.lookup"
+              ],
+              "message": {
+                "role": "system",
+                "content": "Answer plainly.\n\nToday is 2026-08-12 (Wednesday).\n\nTool protocol:\n\n- Tools are native Chat Completions function tools exposed by the runtime.\n- You may request multiple read-only tool calls in one turn when useful.\n- Mutating tools apply their effects when you call them.\n- Use a tool only when its schema matches the needed action.\n- Do not mention unavailable tools.\n- If no tool is needed, return a final answer.\n\nAvailable tools:\n- lookup(key): Look up a value."
+              },
+              "representation": "full"
+            },
+            "links": []
+          }
+        ],
+        "derivations": [
+          {
+            "id": "b3:7658ab25cf7a6988f02199b090d406585b3f018cba1738aadc5fa8df5a885b66",
+            "producer": "PromptBuilder",
+            "output_id": "b3:612ef663a37f6442a925a719046650f6a4d3ef8fcccb213e83fcfea1616417a0",
+            "input_ids": [
+              "b3:f510e823051f61578ace2a810de5166a1c4e82e767ae916953290db85071b013",
+              "b3:cc65231d53af0471c6bb054c9918429a1147dc7a42a6be04297808e6c4e16c91",
+              "b3:ec34345eb23b5208cbef1ce2176601d81485e0d8ab28f9d65c88e8ecd96bfabb",
+              "b3:d24c95f1935a7766bb9e7c1a6f18922543bcdc9df9cefe1be0f8871c7621471d"
+            ],
+            "params": {
+              "max_tokens": 64,
+              "selected_model": "unit-model",
+              "thinking": null
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "filtered_private_history",
+      "input": {
+        "objective": "Describe the retained evidence.",
+        "timeline": [
+          {
+            "type": "user_message",
+            "content": "Keep this message."
+          },
+          {
+            "type": "model",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "call-incomplete",
+                "type": "function",
+                "function": {
+                  "name": "lookup",
+                  "arguments": "{\"key\":\"missing\"}"
+                }
+              }
+            ]
+          },
+          {
+            "type": "tool_result",
+            "tool_call_id": "call-orphan",
+            "name": "lookup",
+            "result": {
+              "ok": false,
+              "error": {
+                "code": "orphaned"
+              }
+            },
+            "prompt_trace": {
+              "prompt_object_id": "b3:1111111111111111111111111111111111111111111111111111111111111111",
+              "assistant_message_object_id": "b3:2222222222222222222222222222222222222222222222222222222222222222"
+            },
+            "tool_call_object_id": "b3:3333333333333333333333333333333333333333333333333333333333333333",
+            "tool_result_object_id": "b3:4444444444444444444444444444444444444444444444444444444444444444",
+            "prompt_component_object_id": "b3:5555555555555555555555555555555555555555555555555555555555555555",
+            "source_object_id": "b3:6666666666666666666666666666666666666666666666666666666666666666",
+            "model_telemetry": {
+              "provider_request_id": "private-request"
+            }
+          }
+        ],
+        "system": "Answer plainly.",
+        "allowed_capabilities": [
+          "test.lookup"
+        ],
+        "context": "",
+        "tools": [
+          {
+            "type": "function",
+            "function": {
+              "name": "lookup",
+              "description": "Look up a value.",
+              "parameters": {
+                "type": "object",
+                "properties": {
+                  "key": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "key"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        ],
+        "tool_choice": "auto",
+        "max_tokens": 64,
+        "selected_model": "unit-model",
+        "thinking": null
+      },
+      "expected": {
+        "components": [
+          {
+            "kind": "system_prompt",
+            "data": {
+              "content": "Answer plainly.\n\nToday is 2026-08-12 (Wednesday).\n\nTool protocol:\n\n- Tools are native Chat Completions function tools exposed by the runtime.\n- You may request multiple read-only tool calls in one turn when useful.\n- Mutating tools apply their effects when you call them.\n- Use a tool only when its schema matches the needed action.\n- Do not mention unavailable tools.\n- If no tool is needed, return a final answer.\n\nAvailable tools:\n- lookup(key): Look up a value.",
+              "base_prompt": "Answer plainly.",
+              "allowed_tools": [
+                "test.lookup"
+              ]
+            },
+            "message": {
+              "role": "system",
+              "content": "Answer plainly.\n\nToday is 2026-08-12 (Wednesday).\n\nTool protocol:\n\n- Tools are native Chat Completions function tools exposed by the runtime.\n- You may request multiple read-only tool calls in one turn when useful.\n- Mutating tools apply their effects when you call them.\n- Use a tool only when its schema matches the needed action.\n- Do not mention unavailable tools.\n- If no tool is needed, return a final answer.\n\nAvailable tools:\n- lookup(key): Look up a value."
+            },
+            "representation": "full",
+            "source_object_id": null,
+            "links": [],
+            "object_id": "b3:f510e823051f61578ace2a810de5166a1c4e82e767ae916953290db85071b013"
+          },
+          {
+            "kind": "tool_descriptor_set",
+            "data": {
+              "allowed_tools": [
+                "test.lookup"
+              ],
+              "tools": [
+                {
+                  "type": "function",
+                  "function": {
+                    "name": "lookup",
+                    "description": "Look up a value.",
+                    "parameters": {
+                      "type": "object",
+                      "properties": {
+                        "key": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "key"
+                      ],
+                      "additionalProperties": false
+                    }
+                  }
+                }
+              ]
+            },
+            "message": null,
+            "representation": "full",
+            "source_object_id": null,
+            "links": [],
+            "object_id": "b3:cc65231d53af0471c6bb054c9918429a1147dc7a42a6be04297808e6c4e16c91"
+          },
+          {
+            "kind": "user_message",
+            "data": {
+              "index": 0,
+              "event_index": 0,
+              "message": {
+                "role": "user",
+                "content": "Keep this message."
+              },
+              "source_event_type": "user_message",
+              "source_event_role": "",
+              "historical": true
+            },
+            "message": {
+              "role": "user",
+              "content": "Keep this message."
+            },
+            "representation": "full",
+            "source_object_id": null,
+            "links": [],
+            "object_id": "b3:557070fa74569af692458d1e78c7c855a2b6a932fc598d6435f90158c6efafcf"
+          },
+          {
+            "kind": "user_message",
+            "data": {
+              "index": 1,
+              "event_index": 2,
+              "message": {
+                "role": "user",
+                "content": "Tool result JSON:\n{\"type\":\"tool_result\",\"tool_call_id\":\"call-orphan\",\"name\":\"lookup\",\"result\":{\"ok\":false,\"error\":{\"code\":\"orphaned\"}}}"
+              },
+              "source_event_type": "tool_result",
+              "source_event_role": "",
+              "historical": true,
+              "source_tool_call_id": "call-orphan",
+              "source_tool_result": {
+                "ok": false,
+                "error": {
+                  "code": "orphaned"
+                }
+              },
+              "source_tool_result_object_id": "b3:4444444444444444444444444444444444444444444444444444444444444444",
+              "source_tool_call_object_id": "b3:3333333333333333333333333333333333333333333333333333333333333333"
+            },
+            "message": {
+              "role": "user",
+              "content": "Tool result JSON:\n{\"type\":\"tool_result\",\"tool_call_id\":\"call-orphan\",\"name\":\"lookup\",\"result\":{\"ok\":false,\"error\":{\"code\":\"orphaned\"}}}"
+            },
+            "representation": "full",
+            "source_object_id": null,
+            "links": [
+              "b3:2222222222222222222222222222222222222222222222222222222222222222",
+              "b3:4444444444444444444444444444444444444444444444444444444444444444",
+              "b3:3333333333333333333333333333333333333333333333333333333333333333"
+            ],
+            "object_id": "b3:db0542f27408f144bf467eb7a1e79c84f3adff81a57b07d30bff03c1b758ea92"
+          },
+          {
+            "kind": "user_message",
+            "data": {
+              "objective": "Describe the retained evidence.",
+              "expanded_objective": "Describe the retained evidence.",
+              "context": "",
+              "message": {
+                "role": "user",
+                "content": "Describe the retained evidence.\n\ncwd:\n/workspace/zeta"
+              }
+            },
+            "message": {
+              "role": "user",
+              "content": "Describe the retained evidence.\n\ncwd:\n/workspace/zeta"
+            },
+            "representation": "full",
+            "source_object_id": null,
+            "links": [],
+            "object_id": "b3:e60bf35f86bfa3d056a8f248a34496f63f4ea54a0f2fbb2ae58f316f9a5e476d"
+          }
+        ],
+        "model_input": {
+          "messages": [
+            {
+              "role": "system",
+              "content": "Answer plainly.\n\nToday is 2026-08-12 (Wednesday).\n\nTool protocol:\n\n- Tools are native Chat Completions function tools exposed by the runtime.\n- You may request multiple read-only tool calls in one turn when useful.\n- Mutating tools apply their effects when you call them.\n- Use a tool only when its schema matches the needed action.\n- Do not mention unavailable tools.\n- If no tool is needed, return a final answer.\n\nAvailable tools:\n- lookup(key): Look up a value."
+            },
+            {
+              "role": "user",
+              "content": "Keep this message."
+            },
+            {
+              "role": "user",
+              "content": "Tool result JSON:\n{\"type\":\"tool_result\",\"tool_call_id\":\"call-orphan\",\"name\":\"lookup\",\"result\":{\"ok\":false,\"error\":{\"code\":\"orphaned\"}}}"
+            },
+            {
+              "role": "user",
+              "content": "Describe the retained evidence.\n\ncwd:\n/workspace/zeta"
+            }
+          ],
+          "tools": [
+            {
+              "type": "function",
+              "function": {
+                "name": "lookup",
+                "description": "Look up a value.",
+                "parameters": {
+                  "type": "object",
+                  "properties": {
+                    "key": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "key"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          ],
+          "tool_choice": "auto",
+          "max_tokens": 64,
+          "selected_model": "unit-model",
+          "selected_url": null,
+          "session_id": null,
+          "thinking": null
+        },
+        "request_payload": {
+          "model": "unit-model",
+          "messages": [
+            {
+              "role": "system",
+              "content": "Answer plainly.\n\nToday is 2026-08-12 (Wednesday).\n\nTool protocol:\n\n- Tools are native Chat Completions function tools exposed by the runtime.\n- You may request multiple read-only tool calls in one turn when useful.\n- Mutating tools apply their effects when you call them.\n- Use a tool only when its schema matches the needed action.\n- Do not mention unavailable tools.\n- If no tool is needed, return a final answer.\n\nAvailable tools:\n- lookup(key): Look up a value."
+            },
+            {
+              "role": "user",
+              "content": "Keep this message."
+            },
+            {
+              "role": "user",
+              "content": "Tool result JSON:\n{\"type\":\"tool_result\",\"tool_call_id\":\"call-orphan\",\"name\":\"lookup\",\"result\":{\"ok\":false,\"error\":{\"code\":\"orphaned\"}}}"
+            },
+            {
+              "role": "user",
+              "content": "Describe the retained evidence.\n\ncwd:\n/workspace/zeta"
+            }
+          ],
+          "temperature": 0.2,
+          "max_tokens": 64,
+          "stream_options": {
+            "include_usage": true
+          },
+          "tools": [
+            {
+              "type": "function",
+              "function": {
+                "name": "lookup",
+                "description": "Look up a value.",
+                "parameters": {
+                  "type": "object",
+                  "properties": {
+                    "key": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "key"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          ],
+          "tool_choice": "auto"
+        },
+        "prompt_object_id": "b3:abbafaebeaa207ecaece6e9eb06748544ab30dad75d2ab54af34cfd849074a7d",
+        "component_object_ids": [
+          "b3:f510e823051f61578ace2a810de5166a1c4e82e767ae916953290db85071b013",
+          "b3:cc65231d53af0471c6bb054c9918429a1147dc7a42a6be04297808e6c4e16c91",
+          "b3:557070fa74569af692458d1e78c7c855a2b6a932fc598d6435f90158c6efafcf",
+          "b3:db0542f27408f144bf467eb7a1e79c84f3adff81a57b07d30bff03c1b758ea92",
+          "b3:e60bf35f86bfa3d056a8f248a34496f63f4ea54a0f2fbb2ae58f316f9a5e476d"
+        ],
+        "objects": [
+          {
+            "id": "b3:557070fa74569af692458d1e78c7c855a2b6a932fc598d6435f90158c6efafcf",
+            "kind": "user_message",
+            "schema": "zeta.prompt_component.v2",
+            "data": {
+              "index": 0,
+              "event_index": 0,
+              "message": {
+                "role": "user",
+                "content": "Keep this message."
+              },
+              "source_event_type": "user_message",
+              "source_event_role": "",
+              "historical": true,
+              "representation": "full"
+            },
+            "links": []
+          },
+          {
+            "id": "b3:abbafaebeaa207ecaece6e9eb06748544ab30dad75d2ab54af34cfd849074a7d",
+            "kind": "prompt",
+            "schema": "zeta.prompt.v2",
+            "data": {
+              "payload_address": "b3:44a5ec95fe8691e34d8777182d200df49526bc1e1c567f03c4e1f02e4b8f9edd"
+            },
+            "links": [
+              "b3:f510e823051f61578ace2a810de5166a1c4e82e767ae916953290db85071b013",
+              "b3:cc65231d53af0471c6bb054c9918429a1147dc7a42a6be04297808e6c4e16c91",
+              "b3:557070fa74569af692458d1e78c7c855a2b6a932fc598d6435f90158c6efafcf",
+              "b3:db0542f27408f144bf467eb7a1e79c84f3adff81a57b07d30bff03c1b758ea92",
+              "b3:e60bf35f86bfa3d056a8f248a34496f63f4ea54a0f2fbb2ae58f316f9a5e476d"
+            ]
+          },
+          {
+            "id": "b3:cc65231d53af0471c6bb054c9918429a1147dc7a42a6be04297808e6c4e16c91",
+            "kind": "tool_descriptor_set",
+            "schema": "zeta.prompt_component.v2",
+            "data": {
+              "allowed_tools": [
+                "test.lookup"
+              ],
+              "tools": [
+                {
+                  "type": "function",
+                  "function": {
+                    "name": "lookup",
+                    "description": "Look up a value.",
+                    "parameters": {
+                      "type": "object",
+                      "properties": {
+                        "key": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "key"
+                      ],
+                      "additionalProperties": false
+                    }
+                  }
+                }
+              ],
+              "representation": "full"
+            },
+            "links": []
+          },
+          {
+            "id": "b3:db0542f27408f144bf467eb7a1e79c84f3adff81a57b07d30bff03c1b758ea92",
+            "kind": "user_message",
+            "schema": "zeta.prompt_component.v2",
+            "data": {
+              "index": 1,
+              "event_index": 2,
+              "message": {
+                "role": "user",
+                "content": "Tool result JSON:\n{\"type\":\"tool_result\",\"tool_call_id\":\"call-orphan\",\"name\":\"lookup\",\"result\":{\"ok\":false,\"error\":{\"code\":\"orphaned\"}}}"
+              },
+              "source_event_type": "tool_result",
+              "source_event_role": "",
+              "historical": true,
+              "source_tool_call_id": "call-orphan",
+              "source_tool_result": {
+                "ok": false,
+                "error": {
+                  "code": "orphaned"
+                }
+              },
+              "source_tool_result_object_id": "b3:4444444444444444444444444444444444444444444444444444444444444444",
+              "source_tool_call_object_id": "b3:3333333333333333333333333333333333333333333333333333333333333333",
+              "representation": "full"
+            },
+            "links": [
+              "b3:2222222222222222222222222222222222222222222222222222222222222222",
+              "b3:4444444444444444444444444444444444444444444444444444444444444444",
+              "b3:3333333333333333333333333333333333333333333333333333333333333333"
+            ]
+          },
+          {
+            "id": "b3:e60bf35f86bfa3d056a8f248a34496f63f4ea54a0f2fbb2ae58f316f9a5e476d",
+            "kind": "user_message",
+            "schema": "zeta.prompt_component.v2",
+            "data": {
+              "objective": "Describe the retained evidence.",
+              "expanded_objective": "Describe the retained evidence.",
+              "context": "",
+              "message": {
+                "role": "user",
+                "content": "Describe the retained evidence.\n\ncwd:\n/workspace/zeta"
+              },
+              "representation": "full"
+            },
+            "links": []
+          },
+          {
+            "id": "b3:f510e823051f61578ace2a810de5166a1c4e82e767ae916953290db85071b013",
+            "kind": "system_prompt",
+            "schema": "zeta.prompt_component.v2",
+            "data": {
+              "content": "Answer plainly.\n\nToday is 2026-08-12 (Wednesday).\n\nTool protocol:\n\n- Tools are native Chat Completions function tools exposed by the runtime.\n- You may request multiple read-only tool calls in one turn when useful.\n- Mutating tools apply their effects when you call them.\n- Use a tool only when its schema matches the needed action.\n- Do not mention unavailable tools.\n- If no tool is needed, return a final answer.\n\nAvailable tools:\n- lookup(key): Look up a value.",
+              "base_prompt": "Answer plainly.",
+              "allowed_tools": [
+                "test.lookup"
+              ],
+              "message": {
+                "role": "system",
+                "content": "Answer plainly.\n\nToday is 2026-08-12 (Wednesday).\n\nTool protocol:\n\n- Tools are native Chat Completions function tools exposed by the runtime.\n- You may request multiple read-only tool calls in one turn when useful.\n- Mutating tools apply their effects when you call them.\n- Use a tool only when its schema matches the needed action.\n- Do not mention unavailable tools.\n- If no tool is needed, return a final answer.\n\nAvailable tools:\n- lookup(key): Look up a value."
+              },
+              "representation": "full"
+            },
+            "links": []
+          }
+        ],
+        "derivations": [
+          {
+            "id": "b3:ccfc52e67b6365f0a1eaa4158bec50dd104756580105fc57cee5b0e9850e48b3",
+            "producer": "PromptBuilder",
+            "output_id": "b3:abbafaebeaa207ecaece6e9eb06748544ab30dad75d2ab54af34cfd849074a7d",
+            "input_ids": [
+              "b3:f510e823051f61578ace2a810de5166a1c4e82e767ae916953290db85071b013",
+              "b3:cc65231d53af0471c6bb054c9918429a1147dc7a42a6be04297808e6c4e16c91",
+              "b3:557070fa74569af692458d1e78c7c855a2b6a932fc598d6435f90158c6efafcf",
+              "b3:db0542f27408f144bf467eb7a1e79c84f3adff81a57b07d30bff03c1b758ea92",
+              "b3:e60bf35f86bfa3d056a8f248a34496f63f4ea54a0f2fbb2ae58f316f9a5e476d"
+            ],
+            "params": {
+              "max_tokens": 64,
+              "selected_model": "unit-model",
+              "thinking": null
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "authorized_content_components",
+      "input": {
+        "objective": "Prepare the release.",
+        "timeline": [
+          {
+            "type": "user_message",
+            "content": "The release is tomorrow."
+          }
+        ],
+        "system": "Answer plainly.",
+        "allowed_capabilities": [],
+        "context": "Repository: zeta",
+        "content_components": [
+          {
+            "kind": "content_manifest",
+            "data": {
+              "head": "b3:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "items": [
+                {
+                  "key": "release/rules",
+                  "kind": "instruction",
+                  "source_scope": "agent",
+                  "object_id": "b3:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+                },
+                {
+                  "key": "release/check",
+                  "kind": "procedure",
+                  "source_scope": "run",
+                  "object_id": "b3:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+                }
+              ],
+              "total": 2,
+              "projected_keys": [
+                "release/rules",
+                "release/check"
+              ],
+              "omitted_keys": []
+            },
+            "message": {
+              "role": "system",
+              "content": "Authorized content manifest:\n- release/rules (instruction, agent)\n- release/check (procedure, run)"
+            },
+            "representation": "full",
+            "source_object_id": "b3:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "links": [
+              "b3:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            ]
+          },
+          {
+            "kind": "content_instruction",
+            "data": {
+              "key": "release/rules",
+              "kind": "instruction",
+              "title": "Release rules",
+              "source_scope": "agent"
+            },
+            "message": {
+              "role": "system",
+              "content": "Release rules:\nAlways run the release checks."
+            },
+            "representation": "full",
+            "source_object_id": "b3:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "links": [
+              "b3:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+            ]
+          },
+          {
+            "kind": "content_procedure",
+            "data": {
+              "key": "release/check",
+              "kind": "procedure",
+              "title": "Release check",
+              "source_scope": "run"
+            },
+            "message": {
+              "role": "system",
+              "content": "Release check:\nRun the focused tests first."
+            },
+            "representation": "full",
+            "source_object_id": "b3:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+            "links": [
+              "b3:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+            ]
+          }
+        ],
+        "tools": [],
+        "tool_choice": "auto",
+        "max_tokens": 64,
+        "selected_model": "unit-model",
+        "thinking": null
+      },
+      "expected": {
+        "components": [
+          {
+            "kind": "system_prompt",
+            "data": {
+              "content": "Answer plainly.\n\nToday is 2026-08-12 (Wednesday).\n\nTool protocol:\n\n- Tools are native Chat Completions function tools exposed by the runtime.\n- You may request multiple read-only tool calls in one turn when useful.\n- Mutating tools apply their effects when you call them.\n- Use a tool only when its schema matches the needed action.\n- Do not mention unavailable tools.\n- If no tool is needed, return a final answer.\n\nAvailable tools:\n(none)",
+              "base_prompt": "Answer plainly.",
+              "allowed_tools": []
+            },
+            "message": {
+              "role": "system",
+              "content": "Answer plainly.\n\nToday is 2026-08-12 (Wednesday).\n\nTool protocol:\n\n- Tools are native Chat Completions function tools exposed by the runtime.\n- You may request multiple read-only tool calls in one turn when useful.\n- Mutating tools apply their effects when you call them.\n- Use a tool only when its schema matches the needed action.\n- Do not mention unavailable tools.\n- If no tool is needed, return a final answer.\n\nAvailable tools:\n(none)"
+            },
+            "representation": "full",
+            "source_object_id": null,
+            "links": [],
+            "object_id": "b3:836635ef9164484efd259330b8b1d9578b3894f506c80908aa29c46899f53971"
+          },
+          {
+            "kind": "tool_descriptor_set",
+            "data": {
+              "allowed_tools": [],
+              "tools": []
+            },
+            "message": null,
+            "representation": "full",
+            "source_object_id": null,
+            "links": [],
+            "object_id": "b3:429b58b0f2ff2126537013e92f711c7a77b5eb6e25ccd2a6574c5a7b4da0fad3"
+          },
+          {
+            "kind": "project_context",
+            "data": {
+              "content_address": "b3:8b88f5be3aade737cdf2d5fb065b2228c763a67843f49048e1a60d72ddcd7dfb",
+              "chars": 16
+            },
+            "message": null,
+            "representation": "full",
+            "source_object_id": null,
+            "links": [],
+            "object_id": "b3:9f2bf93e73a7c393d781f504f9653716e016d1f82d4bdbc442b89f1d2e9ce330"
+          },
+          {
+            "kind": "content_manifest",
+            "data": {
+              "head": "b3:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "items": [
+                {
+                  "key": "release/rules",
+                  "kind": "instruction",
+                  "source_scope": "agent",
+                  "object_id": "b3:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+                },
+                {
+                  "key": "release/check",
+                  "kind": "procedure",
+                  "source_scope": "run",
+                  "object_id": "b3:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+                }
+              ],
+              "total": 2,
+              "projected_keys": [
+                "release/rules",
+                "release/check"
+              ],
+              "omitted_keys": []
+            },
+            "message": {
+              "role": "system",
+              "content": "Authorized content manifest:\n- release/rules (instruction, agent)\n- release/check (procedure, run)"
+            },
+            "representation": "full",
+            "source_object_id": "b3:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "links": [
+              "b3:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            ],
+            "object_id": "b3:2f18d9819bb0c0753e4683a46d7009e3590c8ccc0779a8fdf02cf84bee1e4df0"
+          },
+          {
+            "kind": "content_instruction",
+            "data": {
+              "key": "release/rules",
+              "kind": "instruction",
+              "title": "Release rules",
+              "source_scope": "agent"
+            },
+            "message": {
+              "role": "system",
+              "content": "Release rules:\nAlways run the release checks."
+            },
+            "representation": "full",
+            "source_object_id": "b3:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "links": [
+              "b3:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+            ],
+            "object_id": "b3:23057264d6da2efb2c98ac9cc8b988fdb180f03b582c5189a98218ab65faf9e7"
+          },
+          {
+            "kind": "content_procedure",
+            "data": {
+              "key": "release/check",
+              "kind": "procedure",
+              "title": "Release check",
+              "source_scope": "run"
+            },
+            "message": {
+              "role": "system",
+              "content": "Release check:\nRun the focused tests first."
+            },
+            "representation": "full",
+            "source_object_id": "b3:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+            "links": [
+              "b3:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+            ],
+            "object_id": "b3:c0fb49ec325b6fe5b158d66ca9fbc2da3cc393edb5486ce9ba20130848aa200b"
+          },
+          {
+            "kind": "user_message",
+            "data": {
+              "index": 0,
+              "event_index": 0,
+              "message": {
+                "role": "user",
+                "content": "The release is tomorrow."
+              },
+              "source_event_type": "user_message",
+              "source_event_role": "",
+              "historical": true
+            },
+            "message": {
+              "role": "user",
+              "content": "The release is tomorrow."
+            },
+            "representation": "full",
+            "source_object_id": null,
+            "links": [],
+            "object_id": "b3:cd94325855506c70de58ed99550a6d8ae9c3388427b20ff5342449c5de96e9a1"
+          },
+          {
+            "kind": "user_message",
+            "data": {
+              "objective": "Prepare the release.",
+              "expanded_objective": "Prepare the release.",
+              "context": "Repository: zeta",
+              "message": {
+                "role": "user",
+                "content": "Prepare the release.\n\ncwd:\n/workspace/zeta\n\nRepository: zeta"
+              }
+            },
+            "message": {
+              "role": "user",
+              "content": "Prepare the release.\n\ncwd:\n/workspace/zeta\n\nRepository: zeta"
+            },
+            "representation": "full",
+            "source_object_id": null,
+            "links": [],
+            "object_id": "b3:4b789fa84713c7bfff20b467a251f22dbce4a94bea1214bd1115642da23e8f04"
+          }
+        ],
+        "model_input": {
+          "messages": [
+            {
+              "role": "system",
+              "content": "Answer plainly.\n\nToday is 2026-08-12 (Wednesday).\n\nTool protocol:\n\n- Tools are native Chat Completions function tools exposed by the runtime.\n- You may request multiple read-only tool calls in one turn when useful.\n- Mutating tools apply their effects when you call them.\n- Use a tool only when its schema matches the needed action.\n- Do not mention unavailable tools.\n- If no tool is needed, return a final answer.\n\nAvailable tools:\n(none)"
+            },
+            {
+              "role": "system",
+              "content": "Authorized content manifest:\n- release/rules (instruction, agent)\n- release/check (procedure, run)"
+            },
+            {
+              "role": "system",
+              "content": "Release rules:\nAlways run the release checks."
+            },
+            {
+              "role": "system",
+              "content": "Release check:\nRun the focused tests first."
+            },
+            {
+              "role": "user",
+              "content": "The release is tomorrow."
+            },
+            {
+              "role": "user",
+              "content": "Prepare the release.\n\ncwd:\n/workspace/zeta\n\nRepository: zeta"
+            }
+          ],
+          "tools": [],
+          "tool_choice": "auto",
+          "max_tokens": 64,
+          "selected_model": "unit-model",
+          "selected_url": null,
+          "session_id": null,
+          "thinking": null
+        },
+        "request_payload": {
+          "model": "unit-model",
+          "messages": [
+            {
+              "role": "system",
+              "content": "Answer plainly.\n\nToday is 2026-08-12 (Wednesday).\n\nTool protocol:\n\n- Tools are native Chat Completions function tools exposed by the runtime.\n- You may request multiple read-only tool calls in one turn when useful.\n- Mutating tools apply their effects when you call them.\n- Use a tool only when its schema matches the needed action.\n- Do not mention unavailable tools.\n- If no tool is needed, return a final answer.\n\nAvailable tools:\n(none)"
+            },
+            {
+              "role": "system",
+              "content": "Authorized content manifest:\n- release/rules (instruction, agent)\n- release/check (procedure, run)"
+            },
+            {
+              "role": "system",
+              "content": "Release rules:\nAlways run the release checks."
+            },
+            {
+              "role": "system",
+              "content": "Release check:\nRun the focused tests first."
+            },
+            {
+              "role": "user",
+              "content": "The release is tomorrow."
+            },
+            {
+              "role": "user",
+              "content": "Prepare the release.\n\ncwd:\n/workspace/zeta\n\nRepository: zeta"
+            }
+          ],
+          "temperature": 0.2,
+          "max_tokens": 64,
+          "stream_options": {
+            "include_usage": true
+          }
+        },
+        "prompt_object_id": "b3:08babe3ed2a491cf17bbb2f9e974c5cfd71206704710d67d55a60304ef155f50",
+        "component_object_ids": [
+          "b3:836635ef9164484efd259330b8b1d9578b3894f506c80908aa29c46899f53971",
+          "b3:429b58b0f2ff2126537013e92f711c7a77b5eb6e25ccd2a6574c5a7b4da0fad3",
+          "b3:9f2bf93e73a7c393d781f504f9653716e016d1f82d4bdbc442b89f1d2e9ce330",
+          "b3:2f18d9819bb0c0753e4683a46d7009e3590c8ccc0779a8fdf02cf84bee1e4df0",
+          "b3:23057264d6da2efb2c98ac9cc8b988fdb180f03b582c5189a98218ab65faf9e7",
+          "b3:c0fb49ec325b6fe5b158d66ca9fbc2da3cc393edb5486ce9ba20130848aa200b",
+          "b3:cd94325855506c70de58ed99550a6d8ae9c3388427b20ff5342449c5de96e9a1",
+          "b3:4b789fa84713c7bfff20b467a251f22dbce4a94bea1214bd1115642da23e8f04"
+        ],
+        "objects": [
+          {
+            "id": "b3:08babe3ed2a491cf17bbb2f9e974c5cfd71206704710d67d55a60304ef155f50",
+            "kind": "prompt",
+            "schema": "zeta.prompt.v2",
+            "data": {
+              "payload_address": "b3:f581053579669d7f0beff2edf7afb89ff54686b677e40d52432283c16a8a8099"
+            },
+            "links": [
+              "b3:836635ef9164484efd259330b8b1d9578b3894f506c80908aa29c46899f53971",
+              "b3:429b58b0f2ff2126537013e92f711c7a77b5eb6e25ccd2a6574c5a7b4da0fad3",
+              "b3:9f2bf93e73a7c393d781f504f9653716e016d1f82d4bdbc442b89f1d2e9ce330",
+              "b3:2f18d9819bb0c0753e4683a46d7009e3590c8ccc0779a8fdf02cf84bee1e4df0",
+              "b3:23057264d6da2efb2c98ac9cc8b988fdb180f03b582c5189a98218ab65faf9e7",
+              "b3:c0fb49ec325b6fe5b158d66ca9fbc2da3cc393edb5486ce9ba20130848aa200b",
+              "b3:cd94325855506c70de58ed99550a6d8ae9c3388427b20ff5342449c5de96e9a1",
+              "b3:4b789fa84713c7bfff20b467a251f22dbce4a94bea1214bd1115642da23e8f04"
+            ]
+          },
+          {
+            "id": "b3:23057264d6da2efb2c98ac9cc8b988fdb180f03b582c5189a98218ab65faf9e7",
+            "kind": "content_instruction",
+            "schema": "zeta.prompt_component.v2",
+            "data": {
+              "key": "release/rules",
+              "kind": "instruction",
+              "title": "Release rules",
+              "source_scope": "agent",
+              "message": {
+                "role": "system",
+                "content": "Release rules:\nAlways run the release checks."
+              },
+              "representation": "full",
+              "source_object_id": "b3:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+            },
+            "links": [
+              "b3:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+            ]
+          },
+          {
+            "id": "b3:2f18d9819bb0c0753e4683a46d7009e3590c8ccc0779a8fdf02cf84bee1e4df0",
+            "kind": "content_manifest",
+            "schema": "zeta.prompt_component.v2",
+            "data": {
+              "head": "b3:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "items": [
+                {
+                  "key": "release/rules",
+                  "kind": "instruction",
+                  "source_scope": "agent",
+                  "object_id": "b3:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+                },
+                {
+                  "key": "release/check",
+                  "kind": "procedure",
+                  "source_scope": "run",
+                  "object_id": "b3:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+                }
+              ],
+              "total": 2,
+              "projected_keys": [
+                "release/rules",
+                "release/check"
+              ],
+              "omitted_keys": [],
+              "message": {
+                "role": "system",
+                "content": "Authorized content manifest:\n- release/rules (instruction, agent)\n- release/check (procedure, run)"
+              },
+              "representation": "full",
+              "source_object_id": "b3:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            },
+            "links": [
+              "b3:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            ]
+          },
+          {
+            "id": "b3:429b58b0f2ff2126537013e92f711c7a77b5eb6e25ccd2a6574c5a7b4da0fad3",
+            "kind": "tool_descriptor_set",
+            "schema": "zeta.prompt_component.v2",
+            "data": {
+              "allowed_tools": [],
+              "tools": [],
+              "representation": "full"
+            },
+            "links": []
+          },
+          {
+            "id": "b3:4b789fa84713c7bfff20b467a251f22dbce4a94bea1214bd1115642da23e8f04",
+            "kind": "user_message",
+            "schema": "zeta.prompt_component.v2",
+            "data": {
+              "objective": "Prepare the release.",
+              "expanded_objective": "Prepare the release.",
+              "context": "Repository: zeta",
+              "message": {
+                "role": "user",
+                "content": "Prepare the release.\n\ncwd:\n/workspace/zeta\n\nRepository: zeta"
+              },
+              "representation": "full"
+            },
+            "links": []
+          },
+          {
+            "id": "b3:836635ef9164484efd259330b8b1d9578b3894f506c80908aa29c46899f53971",
+            "kind": "system_prompt",
+            "schema": "zeta.prompt_component.v2",
+            "data": {
+              "content": "Answer plainly.\n\nToday is 2026-08-12 (Wednesday).\n\nTool protocol:\n\n- Tools are native Chat Completions function tools exposed by the runtime.\n- You may request multiple read-only tool calls in one turn when useful.\n- Mutating tools apply their effects when you call them.\n- Use a tool only when its schema matches the needed action.\n- Do not mention unavailable tools.\n- If no tool is needed, return a final answer.\n\nAvailable tools:\n(none)",
+              "base_prompt": "Answer plainly.",
+              "allowed_tools": [],
+              "message": {
+                "role": "system",
+                "content": "Answer plainly.\n\nToday is 2026-08-12 (Wednesday).\n\nTool protocol:\n\n- Tools are native Chat Completions function tools exposed by the runtime.\n- You may request multiple read-only tool calls in one turn when useful.\n- Mutating tools apply their effects when you call them.\n- Use a tool only when its schema matches the needed action.\n- Do not mention unavailable tools.\n- If no tool is needed, return a final answer.\n\nAvailable tools:\n(none)"
+              },
+              "representation": "full"
+            },
+            "links": []
+          },
+          {
+            "id": "b3:9f2bf93e73a7c393d781f504f9653716e016d1f82d4bdbc442b89f1d2e9ce330",
+            "kind": "project_context",
+            "schema": "zeta.prompt_component.v2",
+            "data": {
+              "content_address": "b3:8b88f5be3aade737cdf2d5fb065b2228c763a67843f49048e1a60d72ddcd7dfb",
+              "chars": 16,
+              "representation": "full"
+            },
+            "links": []
+          },
+          {
+            "id": "b3:c0fb49ec325b6fe5b158d66ca9fbc2da3cc393edb5486ce9ba20130848aa200b",
+            "kind": "content_procedure",
+            "schema": "zeta.prompt_component.v2",
+            "data": {
+              "key": "release/check",
+              "kind": "procedure",
+              "title": "Release check",
+              "source_scope": "run",
+              "message": {
+                "role": "system",
+                "content": "Release check:\nRun the focused tests first."
+              },
+              "representation": "full",
+              "source_object_id": "b3:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+            },
+            "links": [
+              "b3:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+            ]
+          },
+          {
+            "id": "b3:cd94325855506c70de58ed99550a6d8ae9c3388427b20ff5342449c5de96e9a1",
+            "kind": "user_message",
+            "schema": "zeta.prompt_component.v2",
+            "data": {
+              "index": 0,
+              "event_index": 0,
+              "message": {
+                "role": "user",
+                "content": "The release is tomorrow."
+              },
+              "source_event_type": "user_message",
+              "source_event_role": "",
+              "historical": true,
+              "representation": "full"
+            },
+            "links": []
+          }
+        ],
+        "derivations": [
+          {
+            "id": "b3:07b62756d41d541c12656dfaa5ab6906c60072c64ca66346e9f4bee933a75de3",
+            "producer": "PromptBuilder",
+            "output_id": "b3:08babe3ed2a491cf17bbb2f9e974c5cfd71206704710d67d55a60304ef155f50",
+            "input_ids": [
+              "b3:836635ef9164484efd259330b8b1d9578b3894f506c80908aa29c46899f53971",
+              "b3:429b58b0f2ff2126537013e92f711c7a77b5eb6e25ccd2a6574c5a7b4da0fad3",
+              "b3:9f2bf93e73a7c393d781f504f9653716e016d1f82d4bdbc442b89f1d2e9ce330",
+              "b3:2f18d9819bb0c0753e4683a46d7009e3590c8ccc0779a8fdf02cf84bee1e4df0",
+              "b3:23057264d6da2efb2c98ac9cc8b988fdb180f03b582c5189a98218ab65faf9e7",
+              "b3:c0fb49ec325b6fe5b158d66ca9fbc2da3cc393edb5486ce9ba20130848aa200b",
+              "b3:cd94325855506c70de58ed99550a6d8ae9c3388427b20ff5342449c5de96e9a1",
+              "b3:4b789fa84713c7bfff20b467a251f22dbce4a94bea1214bd1115642da23e8f04"
+            ],
+            "params": {
+              "max_tokens": 64,
+              "selected_model": "unit-model",
+              "thinking": null
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "structural_trim_boundary",
+      "input": {
+        "objective": "Use the compacted read results.",
+        "timeline": [
+          {
+            "type": "model",
+            "tool_calls": [
+              {
+                "id": "call-at-limit",
+                "type": "function",
+                "function": {
+                  "name": "read",
+                  "arguments": "{\"path\":\"big.txt\"}"
+                }
+              }
+            ]
+          },
+          {
+            "type": "tool_result",
+            "tool_call_id": "call-at-limit",
+            "name": "read",
+            "result": {
+              "ok": true,
+              "content": [
+                {
+                  "type": "text",
+                  "text": "xxxxxxxxxxxxxxxxxxxxx"
+                }
+              ],
+              "metadata": {
+                "path": "big.txt"
+              }
+            }
+          },
+          {
+            "type": "model",
+            "tool_calls": [
+              {
+                "id": "call-over-limit",
+                "type": "function",
+                "function": {
+                  "name": "read",
+                  "arguments": "{\"path\":\"big.txt\"}"
+                }
+              }
+            ]
+          },
+          {
+            "type": "tool_result",
+            "tool_call_id": "call-over-limit",
+            "name": "read",
+            "result": {
+              "ok": true,
+              "content": [
+                {
+                  "type": "text",
+                  "text": "yyyyyyyyyyyyyyyyyyyyyy"
+                }
+              ],
+              "metadata": {
+                "path": "big.txt"
+              }
+            }
+          }
+        ],
+        "system": "Answer plainly.",
+        "allowed_capabilities": [
+          "native.read"
+        ],
+        "context": "",
+        "transform": {
+          "type": "structural_trim",
+          "max_content_chars": 100
+        },
+        "tools": [
+          {
+            "type": "function",
+            "function": {
+              "name": "read",
+              "description": "Read a file.",
+              "parameters": {
+                "type": "object",
+                "properties": {
+                  "path": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "path"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        ],
+        "tool_choice": "auto",
+        "max_tokens": 64,
+        "selected_model": "unit-model",
+        "thinking": null
+      },
+      "expected": {
+        "components": [
+          {
+            "kind": "system_prompt",
+            "data": {
+              "content": "Answer plainly.\n\nToday is 2026-08-12 (Wednesday).\n\nTool protocol:\n\n- Tools are native Chat Completions function tools exposed by the runtime.\n- You may request multiple read-only tool calls in one turn when useful.\n- Mutating tools apply their effects when you call them.\n- Use a tool only when its schema matches the needed action.\n- Do not mention unavailable tools.\n- If no tool is needed, return a final answer.\n\nAvailable tools:\n- read(path): Read a file.",
+              "base_prompt": "Answer plainly.",
+              "allowed_tools": [
+                "native.read"
+              ]
+            },
+            "message": {
+              "role": "system",
+              "content": "Answer plainly.\n\nToday is 2026-08-12 (Wednesday).\n\nTool protocol:\n\n- Tools are native Chat Completions function tools exposed by the runtime.\n- You may request multiple read-only tool calls in one turn when useful.\n- Mutating tools apply their effects when you call them.\n- Use a tool only when its schema matches the needed action.\n- Do not mention unavailable tools.\n- If no tool is needed, return a final answer.\n\nAvailable tools:\n- read(path): Read a file."
+            },
+            "representation": "full",
+            "source_object_id": null,
+            "links": [],
+            "object_id": "b3:efb2f467ce66c153c428c9e93e438ddb216953b62f036e2056554807eac8ef22"
+          },
+          {
+            "kind": "tool_descriptor_set",
+            "data": {
+              "allowed_tools": [
+                "native.read"
+              ],
+              "tools": [
+                {
+                  "type": "function",
+                  "function": {
+                    "name": "read",
+                    "description": "Read a file.",
+                    "parameters": {
+                      "type": "object",
+                      "properties": {
+                        "path": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "path"
+                      ],
+                      "additionalProperties": false
+                    }
+                  }
+                }
+              ]
+            },
+            "message": null,
+            "representation": "full",
+            "source_object_id": null,
+            "links": [],
+            "object_id": "b3:71f5bbfc5d1cf5ec023b2444127934f15df0435723045a16f0a2b77a0d2729f3"
+          },
+          {
+            "kind": "assistant_message",
+            "data": {
+              "index": 0,
+              "event_index": 0,
+              "message": {
+                "role": "assistant",
+                "content": null,
+                "tool_calls": [
+                  {
+                    "id": "call-at-limit",
+                    "type": "function",
+                    "function": {
+                      "name": "read",
+                      "arguments": "{\"path\":\"big.txt\"}"
+                    }
+                  }
+                ]
+              },
+              "source_event_type": "model",
+              "source_event_role": "",
+              "historical": true,
+              "source_model_tool_calls": [
+                {
+                  "id": "call-at-limit",
+                  "type": "function",
+                  "function": {
+                    "name": "read",
+                    "arguments": "{\"path\":\"big.txt\"}"
+                  }
+                }
+              ]
+            },
+            "message": {
+              "role": "assistant",
+              "content": null,
+              "tool_calls": [
+                {
+                  "id": "call-at-limit",
+                  "type": "function",
+                  "function": {
+                    "name": "read",
+                    "arguments": "{\"path\":\"big.txt\"}"
+                  }
+                }
+              ]
+            },
+            "representation": "full",
+            "source_object_id": null,
+            "links": [],
+            "object_id": "b3:3257832959e149d55378bafabf9d84c5db2dda45a0c79c813fea0d84dac4324d"
+          },
+          {
+            "kind": "tool_result",
+            "data": {
+              "index": 1,
+              "event_index": 1,
+              "message": {
+                "role": "tool",
+                "tool_call_id": "call-at-limit",
+                "content": "{\"ok\":true,\"content\":[{\"type\":\"text\",\"text\":\"xxxxxxxxxxxxxxxxxxxxx\"}],\"metadata\":{\"path\":\"big.txt\"}}"
+              },
+              "source_event_type": "tool_result",
+              "source_event_role": "",
+              "historical": true,
+              "source_tool_name": "read",
+              "source_tool_call_id": "call-at-limit",
+              "source_tool_result": {
+                "ok": true,
+                "content": [
+                  {
+                    "type": "text",
+                    "text": "xxxxxxxxxxxxxxxxxxxxx"
+                  }
+                ],
+                "metadata": {
+                  "path": "big.txt"
+                }
+              }
+            },
+            "message": {
+              "role": "tool",
+              "tool_call_id": "call-at-limit",
+              "content": "{\"ok\":true,\"content\":[{\"type\":\"text\",\"text\":\"xxxxxxxxxxxxxxxxxxxxx\"}],\"metadata\":{\"path\":\"big.txt\"}}"
+            },
+            "representation": "full",
+            "source_object_id": null,
+            "links": [],
+            "object_id": "b3:aec48db3325c5eb4a31d7360a726e13ac642a19671a25589c084ae55d4d55c7c"
+          },
+          {
+            "kind": "assistant_message",
+            "data": {
+              "index": 2,
+              "event_index": 2,
+              "message": {
+                "role": "assistant",
+                "content": null,
+                "tool_calls": [
+                  {
+                    "id": "call-over-limit",
+                    "type": "function",
+                    "function": {
+                      "name": "read",
+                      "arguments": "{\"path\":\"big.txt\"}"
+                    }
+                  }
+                ]
+              },
+              "source_event_type": "model",
+              "source_event_role": "",
+              "historical": true,
+              "source_model_tool_calls": [
+                {
+                  "id": "call-over-limit",
+                  "type": "function",
+                  "function": {
+                    "name": "read",
+                    "arguments": "{\"path\":\"big.txt\"}"
+                  }
+                }
+              ]
+            },
+            "message": {
+              "role": "assistant",
+              "content": null,
+              "tool_calls": [
+                {
+                  "id": "call-over-limit",
+                  "type": "function",
+                  "function": {
+                    "name": "read",
+                    "arguments": "{\"path\":\"big.txt\"}"
+                  }
+                }
+              ]
+            },
+            "representation": "full",
+            "source_object_id": null,
+            "links": [],
+            "object_id": "b3:d0a5c182e23e82af701401ec808b997d9f352ba0c90316e501fb4c2d41fe3485"
+          },
+          {
+            "kind": "compacted_context",
+            "data": {
+              "method": "structural_trim",
+              "source_kind": "tool_result",
+              "trim": {
+                "trimmed": true,
+                "trim_method": "structural",
+                "raw_content_address": "b3:4a68a5e3d0880e4cd8664381d46d18c6bf39ee4226203945c05786471fcb26ce",
+                "raw_content_chars": 101,
+                "raw_content_bytes": 101,
+                "source_object_id": "b3:07946f9d905cae5269bb9e2a7da4f1f23c1ebf24946b4b921a962bf9e1ba1222",
+                "tool_call_id": "call-over-limit",
+                "tool_result": {
+                  "ok": true,
+                  "metadata": {
+                    "path": "big.txt"
+                  },
+                  "content": [
+                    {
+                      "type": "text",
+                      "text_address": "b3:85f902bf2da2e4edd015fb9c6a984872f291e2a1ed791b3002112396c485502d",
+                      "text_chars": 22,
+                      "text_lines": 1
+                    }
+                  ]
+                }
+              },
+              "message": {
+                "role": "tool",
+                "tool_call_id": "call-over-limit",
+                "content": "[elided tool_result 26~tok id=b3:07946f9d905cae5269bb9e2a7da4f1f23c1ebf24946b4b921a962bf9e1ba1222 — re-run the original tool call to recover this content]"
+              },
+              "source_object_id": "b3:07946f9d905cae5269bb9e2a7da4f1f23c1ebf24946b4b921a962bf9e1ba1222"
+            },
+            "message": {
+              "role": "tool",
+              "tool_call_id": "call-over-limit",
+              "content": "[elided tool_result 26~tok id=b3:07946f9d905cae5269bb9e2a7da4f1f23c1ebf24946b4b921a962bf9e1ba1222 — re-run the original tool call to recover this content]"
+            },
+            "representation": "stub",
+            "source_object_id": "b3:07946f9d905cae5269bb9e2a7da4f1f23c1ebf24946b4b921a962bf9e1ba1222",
+            "links": [
+              "b3:07946f9d905cae5269bb9e2a7da4f1f23c1ebf24946b4b921a962bf9e1ba1222"
+            ],
+            "object_id": "b3:d5d0f094519b36f50db99a4d1245c38eabffcf3bc2762125d09cab0e3d81ab93"
+          },
+          {
+            "kind": "user_message",
+            "data": {
+              "objective": "Use the compacted read results.",
+              "expanded_objective": "Use the compacted read results.",
+              "context": "",
+              "message": {
+                "role": "user",
+                "content": "Use the compacted read results.\n\ncwd:\n/workspace/zeta"
+              }
+            },
+            "message": {
+              "role": "user",
+              "content": "Use the compacted read results.\n\ncwd:\n/workspace/zeta"
+            },
+            "representation": "full",
+            "source_object_id": null,
+            "links": [],
+            "object_id": "b3:bf6d5c0d44edd79dc23f9f6ba501082977de6d1a1831e39f51d0ce8b95d0fce3"
+          }
+        ],
+        "model_input": {
+          "messages": [
+            {
+              "role": "system",
+              "content": "Answer plainly.\n\nToday is 2026-08-12 (Wednesday).\n\nTool protocol:\n\n- Tools are native Chat Completions function tools exposed by the runtime.\n- You may request multiple read-only tool calls in one turn when useful.\n- Mutating tools apply their effects when you call them.\n- Use a tool only when its schema matches the needed action.\n- Do not mention unavailable tools.\n- If no tool is needed, return a final answer.\n\nAvailable tools:\n- read(path): Read a file."
+            },
+            {
+              "role": "assistant",
+              "content": null,
+              "tool_calls": [
+                {
+                  "id": "call-at-limit",
+                  "type": "function",
+                  "function": {
+                    "name": "read",
+                    "arguments": "{\"path\":\"big.txt\"}"
+                  }
+                }
+              ]
+            },
+            {
+              "role": "tool",
+              "tool_call_id": "call-at-limit",
+              "content": "{\"ok\":true,\"content\":[{\"type\":\"text\",\"text\":\"xxxxxxxxxxxxxxxxxxxxx\"}],\"metadata\":{\"path\":\"big.txt\"}}"
+            },
+            {
+              "role": "assistant",
+              "content": null,
+              "tool_calls": [
+                {
+                  "id": "call-over-limit",
+                  "type": "function",
+                  "function": {
+                    "name": "read",
+                    "arguments": "{\"path\":\"big.txt\"}"
+                  }
+                }
+              ]
+            },
+            {
+              "role": "tool",
+              "tool_call_id": "call-over-limit",
+              "content": "[elided tool_result 26~tok id=b3:07946f9d905cae5269bb9e2a7da4f1f23c1ebf24946b4b921a962bf9e1ba1222 — re-run the original tool call to recover this content]"
+            },
+            {
+              "role": "user",
+              "content": "Use the compacted read results.\n\ncwd:\n/workspace/zeta"
+            }
+          ],
+          "tools": [
+            {
+              "type": "function",
+              "function": {
+                "name": "read",
+                "description": "Read a file.",
+                "parameters": {
+                  "type": "object",
+                  "properties": {
+                    "path": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "path"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          ],
+          "tool_choice": "auto",
+          "max_tokens": 64,
+          "selected_model": "unit-model",
+          "selected_url": null,
+          "session_id": null,
+          "thinking": null
+        },
+        "request_payload": {
+          "model": "unit-model",
+          "messages": [
+            {
+              "role": "system",
+              "content": "Answer plainly.\n\nToday is 2026-08-12 (Wednesday).\n\nTool protocol:\n\n- Tools are native Chat Completions function tools exposed by the runtime.\n- You may request multiple read-only tool calls in one turn when useful.\n- Mutating tools apply their effects when you call them.\n- Use a tool only when its schema matches the needed action.\n- Do not mention unavailable tools.\n- If no tool is needed, return a final answer.\n\nAvailable tools:\n- read(path): Read a file."
+            },
+            {
+              "role": "assistant",
+              "content": null,
+              "tool_calls": [
+                {
+                  "id": "call-at-limit",
+                  "type": "function",
+                  "function": {
+                    "name": "read",
+                    "arguments": "{\"path\":\"big.txt\"}"
+                  }
+                }
+              ]
+            },
+            {
+              "role": "tool",
+              "tool_call_id": "call-at-limit",
+              "content": "{\"ok\":true,\"content\":[{\"type\":\"text\",\"text\":\"xxxxxxxxxxxxxxxxxxxxx\"}],\"metadata\":{\"path\":\"big.txt\"}}"
+            },
+            {
+              "role": "assistant",
+              "content": null,
+              "tool_calls": [
+                {
+                  "id": "call-over-limit",
+                  "type": "function",
+                  "function": {
+                    "name": "read",
+                    "arguments": "{\"path\":\"big.txt\"}"
+                  }
+                }
+              ]
+            },
+            {
+              "role": "tool",
+              "tool_call_id": "call-over-limit",
+              "content": "[elided tool_result 26~tok id=b3:07946f9d905cae5269bb9e2a7da4f1f23c1ebf24946b4b921a962bf9e1ba1222 — re-run the original tool call to recover this content]"
+            },
+            {
+              "role": "user",
+              "content": "Use the compacted read results.\n\ncwd:\n/workspace/zeta"
+            }
+          ],
+          "temperature": 0.2,
+          "max_tokens": 64,
+          "stream_options": {
+            "include_usage": true
+          },
+          "tools": [
+            {
+              "type": "function",
+              "function": {
+                "name": "read",
+                "description": "Read a file.",
+                "parameters": {
+                  "type": "object",
+                  "properties": {
+                    "path": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "path"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          ],
+          "tool_choice": "auto"
+        },
+        "prompt_object_id": "b3:511905deccd52d1e917baa4af44c1d371fac6b3da653457805dee05759a8a0e1",
+        "component_object_ids": [
+          "b3:efb2f467ce66c153c428c9e93e438ddb216953b62f036e2056554807eac8ef22",
+          "b3:71f5bbfc5d1cf5ec023b2444127934f15df0435723045a16f0a2b77a0d2729f3",
+          "b3:3257832959e149d55378bafabf9d84c5db2dda45a0c79c813fea0d84dac4324d",
+          "b3:aec48db3325c5eb4a31d7360a726e13ac642a19671a25589c084ae55d4d55c7c",
+          "b3:d0a5c182e23e82af701401ec808b997d9f352ba0c90316e501fb4c2d41fe3485",
+          "b3:d5d0f094519b36f50db99a4d1245c38eabffcf3bc2762125d09cab0e3d81ab93",
+          "b3:bf6d5c0d44edd79dc23f9f6ba501082977de6d1a1831e39f51d0ce8b95d0fce3"
+        ],
+        "objects": [
+          {
+            "id": "b3:07946f9d905cae5269bb9e2a7da4f1f23c1ebf24946b4b921a962bf9e1ba1222",
+            "kind": "tool_result",
+            "schema": "zeta.prompt_component.v2",
+            "data": {
+              "index": 3,
+              "event_index": 3,
+              "message": {
+                "role": "tool",
+                "tool_call_id": "call-over-limit",
+                "content": "{\"ok\":true,\"content\":[{\"type\":\"text\",\"text\":\"yyyyyyyyyyyyyyyyyyyyyy\"}],\"metadata\":{\"path\":\"big.txt\"}}"
+              },
+              "source_event_type": "tool_result",
+              "source_event_role": "",
+              "historical": true,
+              "source_tool_name": "read",
+              "source_tool_call_id": "call-over-limit",
+              "source_tool_result": {
+                "ok": true,
+                "content": [
+                  {
+                    "type": "text",
+                    "text": "yyyyyyyyyyyyyyyyyyyyyy"
+                  }
+                ],
+                "metadata": {
+                  "path": "big.txt"
+                }
+              },
+              "representation": "full"
+            },
+            "links": []
+          },
+          {
+            "id": "b3:3257832959e149d55378bafabf9d84c5db2dda45a0c79c813fea0d84dac4324d",
+            "kind": "assistant_message",
+            "schema": "zeta.prompt_component.v2",
+            "data": {
+              "index": 0,
+              "event_index": 0,
+              "message": {
+                "role": "assistant",
+                "content": null,
+                "tool_calls": [
+                  {
+                    "id": "call-at-limit",
+                    "type": "function",
+                    "function": {
+                      "name": "read",
+                      "arguments": "{\"path\":\"big.txt\"}"
+                    }
+                  }
+                ]
+              },
+              "source_event_type": "model",
+              "source_event_role": "",
+              "historical": true,
+              "source_model_tool_calls": [
+                {
+                  "id": "call-at-limit",
+                  "type": "function",
+                  "function": {
+                    "name": "read",
+                    "arguments": "{\"path\":\"big.txt\"}"
+                  }
+                }
+              ],
+              "representation": "full"
+            },
+            "links": []
+          },
+          {
+            "id": "b3:511905deccd52d1e917baa4af44c1d371fac6b3da653457805dee05759a8a0e1",
+            "kind": "prompt",
+            "schema": "zeta.prompt.v2",
+            "data": {
+              "payload_address": "b3:09b9ea9603fc5bfc8b912c6e96200c4d3f9b87b485c3fea5a6a69833c7181020"
+            },
+            "links": [
+              "b3:efb2f467ce66c153c428c9e93e438ddb216953b62f036e2056554807eac8ef22",
+              "b3:71f5bbfc5d1cf5ec023b2444127934f15df0435723045a16f0a2b77a0d2729f3",
+              "b3:3257832959e149d55378bafabf9d84c5db2dda45a0c79c813fea0d84dac4324d",
+              "b3:aec48db3325c5eb4a31d7360a726e13ac642a19671a25589c084ae55d4d55c7c",
+              "b3:d0a5c182e23e82af701401ec808b997d9f352ba0c90316e501fb4c2d41fe3485",
+              "b3:d5d0f094519b36f50db99a4d1245c38eabffcf3bc2762125d09cab0e3d81ab93",
+              "b3:bf6d5c0d44edd79dc23f9f6ba501082977de6d1a1831e39f51d0ce8b95d0fce3"
+            ]
+          },
+          {
+            "id": "b3:71f5bbfc5d1cf5ec023b2444127934f15df0435723045a16f0a2b77a0d2729f3",
+            "kind": "tool_descriptor_set",
+            "schema": "zeta.prompt_component.v2",
+            "data": {
+              "allowed_tools": [
+                "native.read"
+              ],
+              "tools": [
+                {
+                  "type": "function",
+                  "function": {
+                    "name": "read",
+                    "description": "Read a file.",
+                    "parameters": {
+                      "type": "object",
+                      "properties": {
+                        "path": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "path"
+                      ],
+                      "additionalProperties": false
+                    }
+                  }
+                }
+              ],
+              "representation": "full"
+            },
+            "links": []
+          },
+          {
+            "id": "b3:aec48db3325c5eb4a31d7360a726e13ac642a19671a25589c084ae55d4d55c7c",
+            "kind": "tool_result",
+            "schema": "zeta.prompt_component.v2",
+            "data": {
+              "index": 1,
+              "event_index": 1,
+              "message": {
+                "role": "tool",
+                "tool_call_id": "call-at-limit",
+                "content": "{\"ok\":true,\"content\":[{\"type\":\"text\",\"text\":\"xxxxxxxxxxxxxxxxxxxxx\"}],\"metadata\":{\"path\":\"big.txt\"}}"
+              },
+              "source_event_type": "tool_result",
+              "source_event_role": "",
+              "historical": true,
+              "source_tool_name": "read",
+              "source_tool_call_id": "call-at-limit",
+              "source_tool_result": {
+                "ok": true,
+                "content": [
+                  {
+                    "type": "text",
+                    "text": "xxxxxxxxxxxxxxxxxxxxx"
+                  }
+                ],
+                "metadata": {
+                  "path": "big.txt"
+                }
+              },
+              "representation": "full"
+            },
+            "links": []
+          },
+          {
+            "id": "b3:bf6d5c0d44edd79dc23f9f6ba501082977de6d1a1831e39f51d0ce8b95d0fce3",
+            "kind": "user_message",
+            "schema": "zeta.prompt_component.v2",
+            "data": {
+              "objective": "Use the compacted read results.",
+              "expanded_objective": "Use the compacted read results.",
+              "context": "",
+              "message": {
+                "role": "user",
+                "content": "Use the compacted read results.\n\ncwd:\n/workspace/zeta"
+              },
+              "representation": "full"
+            },
+            "links": []
+          },
+          {
+            "id": "b3:d0a5c182e23e82af701401ec808b997d9f352ba0c90316e501fb4c2d41fe3485",
+            "kind": "assistant_message",
+            "schema": "zeta.prompt_component.v2",
+            "data": {
+              "index": 2,
+              "event_index": 2,
+              "message": {
+                "role": "assistant",
+                "content": null,
+                "tool_calls": [
+                  {
+                    "id": "call-over-limit",
+                    "type": "function",
+                    "function": {
+                      "name": "read",
+                      "arguments": "{\"path\":\"big.txt\"}"
+                    }
+                  }
+                ]
+              },
+              "source_event_type": "model",
+              "source_event_role": "",
+              "historical": true,
+              "source_model_tool_calls": [
+                {
+                  "id": "call-over-limit",
+                  "type": "function",
+                  "function": {
+                    "name": "read",
+                    "arguments": "{\"path\":\"big.txt\"}"
+                  }
+                }
+              ],
+              "representation": "full"
+            },
+            "links": []
+          },
+          {
+            "id": "b3:d5d0f094519b36f50db99a4d1245c38eabffcf3bc2762125d09cab0e3d81ab93",
+            "kind": "compacted_context",
+            "schema": "zeta.prompt_component.v2",
+            "data": {
+              "method": "structural_trim",
+              "source_kind": "tool_result",
+              "trim": {
+                "trimmed": true,
+                "trim_method": "structural",
+                "raw_content_address": "b3:4a68a5e3d0880e4cd8664381d46d18c6bf39ee4226203945c05786471fcb26ce",
+                "raw_content_chars": 101,
+                "raw_content_bytes": 101,
+                "source_object_id": "b3:07946f9d905cae5269bb9e2a7da4f1f23c1ebf24946b4b921a962bf9e1ba1222",
+                "tool_call_id": "call-over-limit",
+                "tool_result": {
+                  "ok": true,
+                  "metadata": {
+                    "path": "big.txt"
+                  },
+                  "content": [
+                    {
+                      "type": "text",
+                      "text_address": "b3:85f902bf2da2e4edd015fb9c6a984872f291e2a1ed791b3002112396c485502d",
+                      "text_chars": 22,
+                      "text_lines": 1
+                    }
+                  ]
+                }
+              },
+              "message": {
+                "role": "tool",
+                "tool_call_id": "call-over-limit",
+                "content": "[elided tool_result 26~tok id=b3:07946f9d905cae5269bb9e2a7da4f1f23c1ebf24946b4b921a962bf9e1ba1222 — re-run the original tool call to recover this content]"
+              },
+              "source_object_id": "b3:07946f9d905cae5269bb9e2a7da4f1f23c1ebf24946b4b921a962bf9e1ba1222",
+              "representation": "stub"
+            },
+            "links": [
+              "b3:07946f9d905cae5269bb9e2a7da4f1f23c1ebf24946b4b921a962bf9e1ba1222"
+            ]
+          },
+          {
+            "id": "b3:efb2f467ce66c153c428c9e93e438ddb216953b62f036e2056554807eac8ef22",
+            "kind": "system_prompt",
+            "schema": "zeta.prompt_component.v2",
+            "data": {
+              "content": "Answer plainly.\n\nToday is 2026-08-12 (Wednesday).\n\nTool protocol:\n\n- Tools are native Chat Completions function tools exposed by the runtime.\n- You may request multiple read-only tool calls in one turn when useful.\n- Mutating tools apply their effects when you call them.\n- Use a tool only when its schema matches the needed action.\n- Do not mention unavailable tools.\n- If no tool is needed, return a final answer.\n\nAvailable tools:\n- read(path): Read a file.",
+              "base_prompt": "Answer plainly.",
+              "allowed_tools": [
+                "native.read"
+              ],
+              "message": {
+                "role": "system",
+                "content": "Answer plainly.\n\nToday is 2026-08-12 (Wednesday).\n\nTool protocol:\n\n- Tools are native Chat Completions function tools exposed by the runtime.\n- You may request multiple read-only tool calls in one turn when useful.\n- Mutating tools apply their effects when you call them.\n- Use a tool only when its schema matches the needed action.\n- Do not mention unavailable tools.\n- If no tool is needed, return a final answer.\n\nAvailable tools:\n- read(path): Read a file."
+              },
+              "representation": "full"
+            },
+            "links": []
+          }
+        ],
+        "derivations": [
+          {
+            "id": "b3:0fef12b7bb6bd65ab41da330d3615e6aeb55a65d7e89d80b46108d51269b8194",
+            "producer": "PromptStructuralTrim:v1",
+            "output_id": "b3:d5d0f094519b36f50db99a4d1245c38eabffcf3bc2762125d09cab0e3d81ab93",
+            "input_ids": [
+              "b3:07946f9d905cae5269bb9e2a7da4f1f23c1ebf24946b4b921a962bf9e1ba1222"
+            ],
+            "params": {}
+          },
+          {
+            "id": "b3:e004372623e967cdbcfd713292afd4c45adb2504300a35869ded3a402f2531f7",
+            "producer": "PromptBuilder",
+            "output_id": "b3:511905deccd52d1e917baa4af44c1d371fac6b3da653457805dee05759a8a0e1",
+            "input_ids": [
+              "b3:efb2f467ce66c153c428c9e93e438ddb216953b62f036e2056554807eac8ef22",
+              "b3:71f5bbfc5d1cf5ec023b2444127934f15df0435723045a16f0a2b77a0d2729f3",
+              "b3:3257832959e149d55378bafabf9d84c5db2dda45a0c79c813fea0d84dac4324d",
+              "b3:aec48db3325c5eb4a31d7360a726e13ac642a19671a25589c084ae55d4d55c7c",
+              "b3:d0a5c182e23e82af701401ec808b997d9f352ba0c90316e501fb4c2d41fe3485",
+              "b3:d5d0f094519b36f50db99a4d1245c38eabffcf3bc2762125d09cab0e3d81ab93",
+              "b3:bf6d5c0d44edd79dc23f9f6ba501082977de6d1a1831e39f51d0ce8b95d0fce3"
+            ],
+            "params": {
+              "max_tokens": 64,
+              "selected_model": "unit-model",
+              "thinking": null
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "drop_oldest_threshold",
+      "input": {
+        "objective": "Continue with recent context.",
+        "timeline": [
+          {
+            "type": "user_message",
+            "content": "oldest aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          {
+            "type": "model",
+            "content": "middle bbbbbbbbbbbbbbbb"
+          },
+          {
+            "type": "user_message",
+            "content": "newest cccccccc"
+          }
+        ],
+        "system": "Answer plainly.",
+        "allowed_capabilities": [],
+        "context": "",
+        "transform": {
+          "type": "drop_oldest",
+          "max_tokens": 141
+        },
+        "tools": [],
+        "tool_choice": "auto",
+        "max_tokens": 64,
+        "selected_model": "unit-model",
+        "thinking": null
+      },
+      "expected": {
+        "components": [
+          {
+            "kind": "system_prompt",
+            "data": {
+              "content": "Answer plainly.\n\nToday is 2026-08-12 (Wednesday).\n\nTool protocol:\n\n- Tools are native Chat Completions function tools exposed by the runtime.\n- You may request multiple read-only tool calls in one turn when useful.\n- Mutating tools apply their effects when you call them.\n- Use a tool only when its schema matches the needed action.\n- Do not mention unavailable tools.\n- If no tool is needed, return a final answer.\n\nAvailable tools:\n(none)",
+              "base_prompt": "Answer plainly.",
+              "allowed_tools": []
+            },
+            "message": {
+              "role": "system",
+              "content": "Answer plainly.\n\nToday is 2026-08-12 (Wednesday).\n\nTool protocol:\n\n- Tools are native Chat Completions function tools exposed by the runtime.\n- You may request multiple read-only tool calls in one turn when useful.\n- Mutating tools apply their effects when you call them.\n- Use a tool only when its schema matches the needed action.\n- Do not mention unavailable tools.\n- If no tool is needed, return a final answer.\n\nAvailable tools:\n(none)"
+            },
+            "representation": "full",
+            "source_object_id": null,
+            "links": [],
+            "object_id": "b3:836635ef9164484efd259330b8b1d9578b3894f506c80908aa29c46899f53971"
+          },
+          {
+            "kind": "tool_descriptor_set",
+            "data": {
+              "allowed_tools": [],
+              "tools": []
+            },
+            "message": null,
+            "representation": "full",
+            "source_object_id": null,
+            "links": [],
+            "object_id": "b3:429b58b0f2ff2126537013e92f711c7a77b5eb6e25ccd2a6574c5a7b4da0fad3"
+          },
+          {
+            "kind": "assistant_message",
+            "data": {
+              "index": 1,
+              "event_index": 1,
+              "message": {
+                "role": "assistant",
+                "content": "middle bbbbbbbbbbbbbbbb"
+              },
+              "source_event_type": "model",
+              "source_event_role": "",
+              "historical": true
+            },
+            "message": {
+              "role": "assistant",
+              "content": "middle bbbbbbbbbbbbbbbb"
+            },
+            "representation": "full",
+            "source_object_id": null,
+            "links": [],
+            "object_id": "b3:38261cf308a99074c221704024535b45396d23ae6d1e6fdb8d4793a6b8df8419"
+          },
+          {
+            "kind": "user_message",
+            "data": {
+              "index": 2,
+              "event_index": 2,
+              "message": {
+                "role": "user",
+                "content": "newest cccccccc"
+              },
+              "source_event_type": "user_message",
+              "source_event_role": "",
+              "historical": true
+            },
+            "message": {
+              "role": "user",
+              "content": "newest cccccccc"
+            },
+            "representation": "full",
+            "source_object_id": null,
+            "links": [],
+            "object_id": "b3:8bbc728f36ea16b0fe8e6e165f29833618d98841e7eed76fc5dabd538d398033"
+          },
+          {
+            "kind": "user_message",
+            "data": {
+              "objective": "Continue with recent context.",
+              "expanded_objective": "Continue with recent context.",
+              "context": "",
+              "message": {
+                "role": "user",
+                "content": "Continue with recent context.\n\ncwd:\n/workspace/zeta"
+              }
+            },
+            "message": {
+              "role": "user",
+              "content": "Continue with recent context.\n\ncwd:\n/workspace/zeta"
+            },
+            "representation": "full",
+            "source_object_id": null,
+            "links": [],
+            "object_id": "b3:81f07723f295826c6b38ddd07dea54f563f7937118e11f5836860fe6e5425962"
+          }
+        ],
+        "model_input": {
+          "messages": [
+            {
+              "role": "system",
+              "content": "Answer plainly.\n\nToday is 2026-08-12 (Wednesday).\n\nTool protocol:\n\n- Tools are native Chat Completions function tools exposed by the runtime.\n- You may request multiple read-only tool calls in one turn when useful.\n- Mutating tools apply their effects when you call them.\n- Use a tool only when its schema matches the needed action.\n- Do not mention unavailable tools.\n- If no tool is needed, return a final answer.\n\nAvailable tools:\n(none)"
+            },
+            {
+              "role": "assistant",
+              "content": "middle bbbbbbbbbbbbbbbb"
+            },
+            {
+              "role": "user",
+              "content": "newest cccccccc"
+            },
+            {
+              "role": "user",
+              "content": "Continue with recent context.\n\ncwd:\n/workspace/zeta"
+            }
+          ],
+          "tools": [],
+          "tool_choice": "auto",
+          "max_tokens": 64,
+          "selected_model": "unit-model",
+          "selected_url": null,
+          "session_id": null,
+          "thinking": null
+        },
+        "request_payload": {
+          "model": "unit-model",
+          "messages": [
+            {
+              "role": "system",
+              "content": "Answer plainly.\n\nToday is 2026-08-12 (Wednesday).\n\nTool protocol:\n\n- Tools are native Chat Completions function tools exposed by the runtime.\n- You may request multiple read-only tool calls in one turn when useful.\n- Mutating tools apply their effects when you call them.\n- Use a tool only when its schema matches the needed action.\n- Do not mention unavailable tools.\n- If no tool is needed, return a final answer.\n\nAvailable tools:\n(none)"
+            },
+            {
+              "role": "assistant",
+              "content": "middle bbbbbbbbbbbbbbbb"
+            },
+            {
+              "role": "user",
+              "content": "newest cccccccc"
+            },
+            {
+              "role": "user",
+              "content": "Continue with recent context.\n\ncwd:\n/workspace/zeta"
+            }
+          ],
+          "temperature": 0.2,
+          "max_tokens": 64,
+          "stream_options": {
+            "include_usage": true
+          }
+        },
+        "prompt_object_id": "b3:c124968047a2049574a287ce0408d1e25fcab156051cf243d83718e5d0b22e35",
+        "component_object_ids": [
+          "b3:836635ef9164484efd259330b8b1d9578b3894f506c80908aa29c46899f53971",
+          "b3:429b58b0f2ff2126537013e92f711c7a77b5eb6e25ccd2a6574c5a7b4da0fad3",
+          "b3:38261cf308a99074c221704024535b45396d23ae6d1e6fdb8d4793a6b8df8419",
+          "b3:8bbc728f36ea16b0fe8e6e165f29833618d98841e7eed76fc5dabd538d398033",
+          "b3:81f07723f295826c6b38ddd07dea54f563f7937118e11f5836860fe6e5425962"
+        ],
+        "objects": [
+          {
+            "id": "b3:13b715c67618a67e9c7638f4d746a02d587fb41ee5c81064a224a85d0dc346d0",
+            "kind": "user_message",
+            "schema": "zeta.prompt_component.v2",
+            "data": {
+              "index": 0,
+              "event_index": 0,
+              "message": {
+                "role": "user",
+                "content": "oldest aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+              },
+              "source_event_type": "user_message",
+              "source_event_role": "",
+              "historical": true,
+              "representation": "full"
+            },
+            "links": []
+          },
+          {
+            "id": "b3:38261cf308a99074c221704024535b45396d23ae6d1e6fdb8d4793a6b8df8419",
+            "kind": "assistant_message",
+            "schema": "zeta.prompt_component.v2",
+            "data": {
+              "index": 1,
+              "event_index": 1,
+              "message": {
+                "role": "assistant",
+                "content": "middle bbbbbbbbbbbbbbbb"
+              },
+              "source_event_type": "model",
+              "source_event_role": "",
+              "historical": true,
+              "representation": "full"
+            },
+            "links": []
+          },
+          {
+            "id": "b3:429b58b0f2ff2126537013e92f711c7a77b5eb6e25ccd2a6574c5a7b4da0fad3",
+            "kind": "tool_descriptor_set",
+            "schema": "zeta.prompt_component.v2",
+            "data": {
+              "allowed_tools": [],
+              "tools": [],
+              "representation": "full"
+            },
+            "links": []
+          },
+          {
+            "id": "b3:81f07723f295826c6b38ddd07dea54f563f7937118e11f5836860fe6e5425962",
+            "kind": "user_message",
+            "schema": "zeta.prompt_component.v2",
+            "data": {
+              "objective": "Continue with recent context.",
+              "expanded_objective": "Continue with recent context.",
+              "context": "",
+              "message": {
+                "role": "user",
+                "content": "Continue with recent context.\n\ncwd:\n/workspace/zeta"
+              },
+              "representation": "full"
+            },
+            "links": []
+          },
+          {
+            "id": "b3:836635ef9164484efd259330b8b1d9578b3894f506c80908aa29c46899f53971",
+            "kind": "system_prompt",
+            "schema": "zeta.prompt_component.v2",
+            "data": {
+              "content": "Answer plainly.\n\nToday is 2026-08-12 (Wednesday).\n\nTool protocol:\n\n- Tools are native Chat Completions function tools exposed by the runtime.\n- You may request multiple read-only tool calls in one turn when useful.\n- Mutating tools apply their effects when you call them.\n- Use a tool only when its schema matches the needed action.\n- Do not mention unavailable tools.\n- If no tool is needed, return a final answer.\n\nAvailable tools:\n(none)",
+              "base_prompt": "Answer plainly.",
+              "allowed_tools": [],
+              "message": {
+                "role": "system",
+                "content": "Answer plainly.\n\nToday is 2026-08-12 (Wednesday).\n\nTool protocol:\n\n- Tools are native Chat Completions function tools exposed by the runtime.\n- You may request multiple read-only tool calls in one turn when useful.\n- Mutating tools apply their effects when you call them.\n- Use a tool only when its schema matches the needed action.\n- Do not mention unavailable tools.\n- If no tool is needed, return a final answer.\n\nAvailable tools:\n(none)"
+              },
+              "representation": "full"
+            },
+            "links": []
+          },
+          {
+            "id": "b3:8bbc728f36ea16b0fe8e6e165f29833618d98841e7eed76fc5dabd538d398033",
+            "kind": "user_message",
+            "schema": "zeta.prompt_component.v2",
+            "data": {
+              "index": 2,
+              "event_index": 2,
+              "message": {
+                "role": "user",
+                "content": "newest cccccccc"
+              },
+              "source_event_type": "user_message",
+              "source_event_role": "",
+              "historical": true,
+              "representation": "full"
+            },
+            "links": []
+          },
+          {
+            "id": "b3:c124968047a2049574a287ce0408d1e25fcab156051cf243d83718e5d0b22e35",
+            "kind": "prompt",
+            "schema": "zeta.prompt.v2",
+            "data": {
+              "payload_address": "b3:17b840a0826f6a746bfdc5bf49a30192a26d7e62565726a85244d667f31d0a39"
+            },
+            "links": [
+              "b3:836635ef9164484efd259330b8b1d9578b3894f506c80908aa29c46899f53971",
+              "b3:429b58b0f2ff2126537013e92f711c7a77b5eb6e25ccd2a6574c5a7b4da0fad3",
+              "b3:38261cf308a99074c221704024535b45396d23ae6d1e6fdb8d4793a6b8df8419",
+              "b3:8bbc728f36ea16b0fe8e6e165f29833618d98841e7eed76fc5dabd538d398033",
+              "b3:81f07723f295826c6b38ddd07dea54f563f7937118e11f5836860fe6e5425962"
+            ]
+          }
+        ],
+        "derivations": [
+          {
+            "id": "b3:4de9cb910762166a3d9d7ae5aafc6a72438a17fdc43e22f73ad6809f9c749621",
+            "producer": "PromptBuilder",
+            "output_id": "b3:c124968047a2049574a287ce0408d1e25fcab156051cf243d83718e5d0b22e35",
+            "input_ids": [
+              "b3:836635ef9164484efd259330b8b1d9578b3894f506c80908aa29c46899f53971",
+              "b3:429b58b0f2ff2126537013e92f711c7a77b5eb6e25ccd2a6574c5a7b4da0fad3",
+              "b3:38261cf308a99074c221704024535b45396d23ae6d1e6fdb8d4793a6b8df8419",
+              "b3:8bbc728f36ea16b0fe8e6e165f29833618d98841e7eed76fc5dabd538d398033",
+              "b3:81f07723f295826c6b38ddd07dea54f563f7937118e11f5836860fe6e5425962"
+            ],
+            "params": {
+              "max_tokens": 64,
+              "selected_model": "unit-model",
+              "thinking": null
+            }
+          }
+        ]
+      }
     }
   ]
 }

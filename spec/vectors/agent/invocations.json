@@ -1759,6 +1759,4213 @@
           "derivations": []
         }
       }
+    },
+    {
+      "name": "malformed_json_and_canonical_schema_failures",
+      "invocation": {
+        "objective": "Try invalid tool arguments.",
+        "timeline": [],
+        "context": "",
+        "system_prompt": "Answer plainly.",
+        "allowed_capabilities": [
+          "test.lookup",
+          "zeta.bash"
+        ],
+        "max_model_calls": 2,
+        "model_name": "unit-model",
+        "tool_profile": "codex",
+        "base_directory": "/workspace/zeta",
+        "source_queue_item_id": null
+      },
+      "capabilities": [
+        {
+          "id": "test.lookup",
+          "description": "Look up a value.",
+          "input_schema": {
+            "type": "object",
+            "properties": {
+              "key": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "key"
+            ],
+            "additionalProperties": false
+          }
+        },
+        {
+          "id": "zeta.bash",
+          "description": "Execute a shell command.",
+          "input_schema": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "command",
+              "timeout"
+            ],
+            "properties": {
+              "command": {
+                "type": "string"
+              },
+              "timeout": {
+                "type": "number"
+              }
+            }
+          }
+        }
+      ],
+      "model_script": [
+        {
+          "message": {
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "call-malformed-1",
+                "type": "function",
+                "function": {
+                  "name": "lookup",
+                  "arguments": "{\"key\":"
+                }
+              },
+              {
+                "id": "call-canonical-1",
+                "type": "function",
+                "function": {
+                  "name": "exec_command",
+                  "arguments": "{\"cmd\":\"pytest\"}"
+                }
+              }
+            ]
+          },
+          "stream": [],
+          "telemetry": {}
+        },
+        {
+          "message": {
+            "content": "Invalid arguments were rejected."
+          },
+          "stream": [],
+          "telemetry": {}
+        }
+      ],
+      "tool_results": {},
+      "event_ids": [
+        "model-malformed-1",
+        "result-malformed-1",
+        "result-canonical-1",
+        "model-malformed-2"
+      ],
+      "cancelled": false,
+      "expected": {
+        "aborted": false,
+        "abort_reason": null,
+        "final_answer": "Invalid arguments were rejected.",
+        "final_object_id": null,
+        "stop_reason": "finished",
+        "answer_streamed": false,
+        "telemetry": {},
+        "model_telemetry_calls": [],
+        "events": [
+          {
+            "type": "zeta.model_call.completed",
+            "source": "zeta",
+            "payload": {
+              "tool_calls": [
+                {
+                  "id": "call-malformed-1",
+                  "type": "function",
+                  "function": {
+                    "name": "lookup",
+                    "arguments": "{\"key\":"
+                  }
+                },
+                {
+                  "id": "call-canonical-1",
+                  "type": "function",
+                  "function": {
+                    "name": "exec_command",
+                    "arguments": "{\"cmd\":\"pytest\"}"
+                  }
+                }
+              ],
+              "prompt_object_id": "b3:1231dd2cedcf5e718d4944cc729aaa70260bc5e3ba984681579351abee6cbbb7",
+              "_timeline_type": "model"
+            },
+            "idempotency_key": "zeta.model_call.completed:model-malformed-1",
+            "caused_by": null,
+            "session_id": null,
+            "run_id": null,
+            "turn_id": null
+          },
+          {
+            "type": "zeta.tool_call.started",
+            "source": "zeta",
+            "payload": {
+              "tool_call_id": "call-malformed-1",
+              "status": "pending",
+              "name": "lookup",
+              "input": {},
+              "arguments": "{\"key\":",
+              "_timeline_type": "tool_call"
+            },
+            "idempotency_key": "zeta.tool_call.started:call-malformed-1",
+            "caused_by": "model-malformed-1",
+            "session_id": null,
+            "run_id": null,
+            "turn_id": null
+          },
+          {
+            "type": "zeta.tool_call.failed",
+            "source": "zeta",
+            "payload": {
+              "tool_call_id": "call-malformed-1",
+              "status": "refused",
+              "name": "lookup",
+              "result": {
+                "ok": false,
+                "error": {
+                  "code": "invalid-json-args",
+                  "message": "Expecting value: line 1 column 8 (char 7)"
+                }
+              },
+              "_timeline_type": "tool_result"
+            },
+            "idempotency_key": "zeta.tool_call.failed:result-malformed-1",
+            "caused_by": "model-malformed-1",
+            "session_id": null,
+            "run_id": null,
+            "turn_id": null
+          },
+          {
+            "type": "zeta.tool_call.started",
+            "source": "zeta",
+            "payload": {
+              "tool_call_id": "call-canonical-1",
+              "status": "pending",
+              "name": "exec_command",
+              "input": {
+                "cmd": "pytest"
+              },
+              "arguments": "{\"cmd\":\"pytest\"}",
+              "_timeline_type": "tool_call"
+            },
+            "idempotency_key": "zeta.tool_call.started:call-canonical-1",
+            "caused_by": "model-malformed-1",
+            "session_id": null,
+            "run_id": null,
+            "turn_id": null
+          },
+          {
+            "type": "zeta.tool_call.failed",
+            "source": "zeta",
+            "payload": {
+              "tool_call_id": "call-canonical-1",
+              "status": "failed",
+              "name": "exec_command",
+              "result": {
+                "ok": false,
+                "error": {
+                  "code": "invalid-tool-args",
+                  "message": "canonical arguments: 'timeout' is a required property"
+                }
+              },
+              "_timeline_type": "tool_result"
+            },
+            "idempotency_key": "zeta.tool_call.failed:result-canonical-1",
+            "caused_by": "model-malformed-1",
+            "session_id": null,
+            "run_id": null,
+            "turn_id": null
+          },
+          {
+            "type": "zeta.model_call.completed",
+            "source": "zeta",
+            "payload": {
+              "content": "Invalid arguments were rejected.",
+              "prompt_object_id": "b3:47f0265dd15a2b1bee772a9982f0d39082f28bc4edd04153d47d722344217943",
+              "_timeline_type": "model"
+            },
+            "idempotency_key": "zeta.model_call.completed:model-malformed-2",
+            "caused_by": "result-canonical-1",
+            "session_id": null,
+            "run_id": null,
+            "turn_id": null
+          }
+        ],
+        "observations": [],
+        "requests": [],
+        "prompt_traces": [
+          {
+            "prompt_object_id": "b3:1231dd2cedcf5e718d4944cc729aaa70260bc5e3ba984681579351abee6cbbb7",
+            "assistant_message_object_id": "b3:001ec80f2fbfad6296864e762864ffe46225998134e36bf5e0f7a3c8aa32185f"
+          },
+          {
+            "prompt_object_id": "b3:47f0265dd15a2b1bee772a9982f0d39082f28bc4edd04153d47d722344217943",
+            "assistant_message_object_id": "b3:2a90d5b2fc71f4554255844b70904c5ef09038170b2cc61d87f3ab400de8e752"
+          }
+        ],
+        "steps": [
+          "check_budget",
+          "build_prompt",
+          "call_model",
+          "record_assistant",
+          "check_budget",
+          "record_capability_call",
+          "execute_capability",
+          "record_capability_result",
+          "check_budget",
+          "record_capability_call",
+          "execute_capability",
+          "record_capability_result",
+          "check_budget",
+          "build_prompt",
+          "call_model",
+          "record_assistant",
+          "finish_run"
+        ],
+        "model_call_count": 2,
+        "executor_calls": [],
+        "trace": {
+          "objects": [
+            {
+              "id": "b3:001ec80f2fbfad6296864e762864ffe46225998134e36bf5e0f7a3c8aa32185f",
+              "kind": "assistant_message",
+              "schema": "zeta.model_output.v1",
+              "data": {
+                "message": {
+                  "tool_calls": [
+                    {
+                      "id": "call-malformed-1",
+                      "type": "function",
+                      "function": {
+                        "name": "lookup",
+                        "arguments": "{\"key\":"
+                      }
+                    },
+                    {
+                      "id": "call-canonical-1",
+                      "type": "function",
+                      "function": {
+                        "name": "exec_command",
+                        "arguments": "{\"cmd\":\"pytest\"}"
+                      }
+                    }
+                  ]
+                },
+                "model_output": {
+                  "message": {
+                    "tool_calls": [
+                      {
+                        "id": "call-malformed-1",
+                        "type": "function",
+                        "function": {
+                          "name": "lookup",
+                          "arguments": "{\"key\":"
+                        }
+                      },
+                      {
+                        "id": "call-canonical-1",
+                        "type": "function",
+                        "function": {
+                          "name": "exec_command",
+                          "arguments": "{\"cmd\":\"pytest\"}"
+                        }
+                      }
+                    ]
+                  }
+                }
+              },
+              "links": [
+                "b3:1231dd2cedcf5e718d4944cc729aaa70260bc5e3ba984681579351abee6cbbb7"
+              ]
+            },
+            {
+              "id": "b3:0c78f893cdbec6989470bd6474684bc3a632cd3ffeab8d62af31b80df5fd95d2",
+              "kind": "tool_result",
+              "schema": "zeta.prompt_component.v2",
+              "data": {
+                "index": 2,
+                "event_index": 4,
+                "message": {
+                  "role": "tool",
+                  "tool_call_id": "call-canonical-1",
+                  "content": "{\"ok\":false,\"error\":{\"code\":\"invalid-tool-args\",\"message\":\"canonical arguments: 'timeout' is a required property\"}}"
+                },
+                "source_event_type": "tool_result",
+                "source_event_role": "",
+                "source_tool_name": "exec_command",
+                "source_tool_call_id": "call-canonical-1",
+                "source_tool_result": {
+                  "ok": false,
+                  "error": {
+                    "code": "invalid-tool-args",
+                    "message": "canonical arguments: 'timeout' is a required property"
+                  }
+                },
+                "source_tool_result_object_id": "b3:74d69fb604b08044ee66d83f21b4bf9062a6005fbe7f0f8c45fb9c5d2cc850d1",
+                "source_tool_call_object_id": "b3:a695e813a5681522d70b8ccbc74e4b120d05cf8414169dca9d1b8d2a2335c09e",
+                "representation": "full"
+              },
+              "links": [
+                "b3:74d69fb604b08044ee66d83f21b4bf9062a6005fbe7f0f8c45fb9c5d2cc850d1",
+                "b3:a695e813a5681522d70b8ccbc74e4b120d05cf8414169dca9d1b8d2a2335c09e"
+              ]
+            },
+            {
+              "id": "b3:1231dd2cedcf5e718d4944cc729aaa70260bc5e3ba984681579351abee6cbbb7",
+              "kind": "prompt",
+              "schema": "zeta.prompt.v2",
+              "data": {
+                "payload_address": "b3:c10a55dcf0e186aaccbf8ad28eab9ee4b958bdad62ed26f6b88a65d1c35af53e"
+              },
+              "links": [
+                "b3:61019b62efe71577ff986f52c181d123c143bb1263875545238a1167d5dd395a",
+                "b3:bdb823956fdc31d9c42938442060bf210bd538476e2171651180737fcc0eb346",
+                "b3:5f93059c1c71c2ccf8114a3457f548236501c3a6883322bb6db2c171067b5684"
+              ]
+            },
+            {
+              "id": "b3:2a90d5b2fc71f4554255844b70904c5ef09038170b2cc61d87f3ab400de8e752",
+              "kind": "assistant_message",
+              "schema": "zeta.model_output.v1",
+              "data": {
+                "message": {
+                  "content": "Invalid arguments were rejected."
+                },
+                "model_output": {
+                  "message": {
+                    "content": "Invalid arguments were rejected."
+                  }
+                }
+              },
+              "links": [
+                "b3:47f0265dd15a2b1bee772a9982f0d39082f28bc4edd04153d47d722344217943"
+              ]
+            },
+            {
+              "id": "b3:306c00cdca74b1f3334c88094eab4788db4eb9815f0e0276f77a7811e6009ebe",
+              "kind": "tool_call",
+              "schema": "zeta.tool_call.v1",
+              "data": {
+                "tool_call_id": "call-malformed-1",
+                "name": "lookup",
+                "input": {},
+                "arguments": "{\"key\":"
+              },
+              "links": [
+                "b3:001ec80f2fbfad6296864e762864ffe46225998134e36bf5e0f7a3c8aa32185f"
+              ]
+            },
+            {
+              "id": "b3:47f0265dd15a2b1bee772a9982f0d39082f28bc4edd04153d47d722344217943",
+              "kind": "prompt",
+              "schema": "zeta.prompt.v2",
+              "data": {
+                "payload_address": "b3:c37c3e04c323513d3e8805e3e06738987a97202ffca7ee99a08588b3ad87397f"
+              },
+              "links": [
+                "b3:61019b62efe71577ff986f52c181d123c143bb1263875545238a1167d5dd395a",
+                "b3:bdb823956fdc31d9c42938442060bf210bd538476e2171651180737fcc0eb346",
+                "b3:5f93059c1c71c2ccf8114a3457f548236501c3a6883322bb6db2c171067b5684",
+                "b3:6d3204499660bd329af95f950482b80354f79bdba85ef9feb238ebb3cf8575bd",
+                "b3:708146c152f9a4b1e6ae0ff752a309cb0a87bb6263e7271bbdb6b5eed68dace8",
+                "b3:0c78f893cdbec6989470bd6474684bc3a632cd3ffeab8d62af31b80df5fd95d2"
+              ]
+            },
+            {
+              "id": "b3:5f93059c1c71c2ccf8114a3457f548236501c3a6883322bb6db2c171067b5684",
+              "kind": "user_message",
+              "schema": "zeta.prompt_component.v2",
+              "data": {
+                "objective": "Try invalid tool arguments.",
+                "expanded_objective": "Try invalid tool arguments.",
+                "context": "",
+                "message": {
+                  "role": "user",
+                  "content": "Try invalid tool arguments.\n\ncwd:\n/workspace/zeta"
+                },
+                "representation": "full"
+              },
+              "links": []
+            },
+            {
+              "id": "b3:61019b62efe71577ff986f52c181d123c143bb1263875545238a1167d5dd395a",
+              "kind": "system_prompt",
+              "schema": "zeta.prompt_component.v2",
+              "data": {
+                "content": "Answer plainly.\n\nToday is 2026-08-12 (Wednesday).\n\nTool protocol:\n\n- Tools are native Chat Completions function tools exposed by the runtime.\n- You may request multiple read-only tool calls in one turn when useful.\n- Mutating tools apply their effects when you call them.\n- Use a tool only when its schema matches the needed action.\n- Do not mention unavailable tools.\n- If no tool is needed, return a final answer.\n\nAvailable tools:\n- lookup(key): Look up a value.\n- exec_command(cmd): Run a shell command.",
+                "base_prompt": "Answer plainly.",
+                "allowed_tools": [
+                  "test.lookup",
+                  "zeta.bash"
+                ],
+                "message": {
+                  "role": "system",
+                  "content": "Answer plainly.\n\nToday is 2026-08-12 (Wednesday).\n\nTool protocol:\n\n- Tools are native Chat Completions function tools exposed by the runtime.\n- You may request multiple read-only tool calls in one turn when useful.\n- Mutating tools apply their effects when you call them.\n- Use a tool only when its schema matches the needed action.\n- Do not mention unavailable tools.\n- If no tool is needed, return a final answer.\n\nAvailable tools:\n- lookup(key): Look up a value.\n- exec_command(cmd): Run a shell command."
+                },
+                "representation": "full"
+              },
+              "links": []
+            },
+            {
+              "id": "b3:6d3204499660bd329af95f950482b80354f79bdba85ef9feb238ebb3cf8575bd",
+              "kind": "assistant_message",
+              "schema": "zeta.prompt_component.v2",
+              "data": {
+                "index": 0,
+                "event_index": 0,
+                "message": {
+                  "role": "assistant",
+                  "content": null,
+                  "tool_calls": [
+                    {
+                      "id": "call-malformed-1",
+                      "type": "function",
+                      "function": {
+                        "name": "lookup",
+                        "arguments": "{\"truncated_arguments\": \"{\\\"key\\\":\"}"
+                      }
+                    },
+                    {
+                      "id": "call-canonical-1",
+                      "type": "function",
+                      "function": {
+                        "name": "exec_command",
+                        "arguments": "{\"cmd\":\"pytest\"}"
+                      }
+                    }
+                  ]
+                },
+                "source_event_type": "model",
+                "source_event_role": "",
+                "source_model_tool_calls": [
+                  {
+                    "id": "call-malformed-1",
+                    "type": "function",
+                    "function": {
+                      "name": "lookup",
+                      "arguments": "{\"key\":"
+                    }
+                  },
+                  {
+                    "id": "call-canonical-1",
+                    "type": "function",
+                    "function": {
+                      "name": "exec_command",
+                      "arguments": "{\"cmd\":\"pytest\"}"
+                    }
+                  }
+                ],
+                "source_assistant_message_object_id": "b3:001ec80f2fbfad6296864e762864ffe46225998134e36bf5e0f7a3c8aa32185f",
+                "representation": "full"
+              },
+              "links": [
+                "b3:001ec80f2fbfad6296864e762864ffe46225998134e36bf5e0f7a3c8aa32185f"
+              ]
+            },
+            {
+              "id": "b3:708146c152f9a4b1e6ae0ff752a309cb0a87bb6263e7271bbdb6b5eed68dace8",
+              "kind": "tool_result",
+              "schema": "zeta.prompt_component.v2",
+              "data": {
+                "index": 1,
+                "event_index": 2,
+                "message": {
+                  "role": "tool",
+                  "tool_call_id": "call-malformed-1",
+                  "content": "{\"ok\":false,\"error\":{\"code\":\"invalid-json-args\",\"message\":\"Expecting value: line 1 column 8 (char 7)\"}}"
+                },
+                "source_event_type": "tool_result",
+                "source_event_role": "",
+                "source_tool_name": "lookup",
+                "source_tool_call_id": "call-malformed-1",
+                "source_tool_result": {
+                  "ok": false,
+                  "error": {
+                    "code": "invalid-json-args",
+                    "message": "Expecting value: line 1 column 8 (char 7)"
+                  }
+                },
+                "source_tool_result_object_id": "b3:d3199a8494e4fbd905365103555100ccf3864918db050b1a5fd8c002f1921f83",
+                "source_tool_call_object_id": "b3:306c00cdca74b1f3334c88094eab4788db4eb9815f0e0276f77a7811e6009ebe",
+                "representation": "full"
+              },
+              "links": [
+                "b3:d3199a8494e4fbd905365103555100ccf3864918db050b1a5fd8c002f1921f83",
+                "b3:306c00cdca74b1f3334c88094eab4788db4eb9815f0e0276f77a7811e6009ebe"
+              ]
+            },
+            {
+              "id": "b3:74d69fb604b08044ee66d83f21b4bf9062a6005fbe7f0f8c45fb9c5d2cc850d1",
+              "kind": "tool_result",
+              "schema": "zeta.tool_result.v1",
+              "data": {
+                "tool_call_id": "call-canonical-1",
+                "name": "exec_command",
+                "result": {
+                  "ok": false,
+                  "error": {
+                    "code": "invalid-tool-args",
+                    "message": "canonical arguments: 'timeout' is a required property"
+                  }
+                }
+              },
+              "links": [
+                "b3:a695e813a5681522d70b8ccbc74e4b120d05cf8414169dca9d1b8d2a2335c09e"
+              ]
+            },
+            {
+              "id": "b3:a695e813a5681522d70b8ccbc74e4b120d05cf8414169dca9d1b8d2a2335c09e",
+              "kind": "tool_call",
+              "schema": "zeta.tool_call.v1",
+              "data": {
+                "tool_call_id": "call-canonical-1",
+                "name": "exec_command",
+                "input": {
+                  "cmd": "pytest"
+                },
+                "arguments": "{\"cmd\":\"pytest\"}"
+              },
+              "links": [
+                "b3:001ec80f2fbfad6296864e762864ffe46225998134e36bf5e0f7a3c8aa32185f"
+              ]
+            },
+            {
+              "id": "b3:bdb823956fdc31d9c42938442060bf210bd538476e2171651180737fcc0eb346",
+              "kind": "tool_descriptor_set",
+              "schema": "zeta.prompt_component.v2",
+              "data": {
+                "allowed_tools": [
+                  "test.lookup",
+                  "zeta.bash"
+                ],
+                "tools": [
+                  {
+                    "type": "function",
+                    "function": {
+                      "name": "lookup",
+                      "description": "Look up a value.",
+                      "parameters": {
+                        "type": "object",
+                        "properties": {
+                          "key": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "key"
+                        ],
+                        "additionalProperties": false
+                      }
+                    }
+                  },
+                  {
+                    "type": "function",
+                    "function": {
+                      "name": "exec_command",
+                      "description": "Run a shell command.",
+                      "parameters": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "cmd"
+                        ],
+                        "properties": {
+                          "cmd": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    }
+                  }
+                ],
+                "representation": "full"
+              },
+              "links": []
+            },
+            {
+              "id": "b3:d3199a8494e4fbd905365103555100ccf3864918db050b1a5fd8c002f1921f83",
+              "kind": "tool_result",
+              "schema": "zeta.tool_result.v1",
+              "data": {
+                "tool_call_id": "call-malformed-1",
+                "name": "lookup",
+                "result": {
+                  "ok": false,
+                  "error": {
+                    "code": "invalid-json-args",
+                    "message": "Expecting value: line 1 column 8 (char 7)"
+                  }
+                }
+              },
+              "links": [
+                "b3:306c00cdca74b1f3334c88094eab4788db4eb9815f0e0276f77a7811e6009ebe"
+              ]
+            }
+          ],
+          "derivations": [
+            {
+              "id": "b3:05fc4d6cfc20f3a0d98bb0d72b534dce5bd3089b2f1713bd6a6088836f5f8e9f",
+              "producer": "ModelResponse",
+              "output_id": "b3:001ec80f2fbfad6296864e762864ffe46225998134e36bf5e0f7a3c8aa32185f",
+              "input_ids": [
+                "b3:1231dd2cedcf5e718d4944cc729aaa70260bc5e3ba984681579351abee6cbbb7"
+              ],
+              "params": {}
+            },
+            {
+              "id": "b3:178979728e77671e467a9bfe155fd86a29111fa9773c3f0c56c310a18db3492a",
+              "producer": "PromptBuilder",
+              "output_id": "b3:47f0265dd15a2b1bee772a9982f0d39082f28bc4edd04153d47d722344217943",
+              "input_ids": [
+                "b3:61019b62efe71577ff986f52c181d123c143bb1263875545238a1167d5dd395a",
+                "b3:bdb823956fdc31d9c42938442060bf210bd538476e2171651180737fcc0eb346",
+                "b3:5f93059c1c71c2ccf8114a3457f548236501c3a6883322bb6db2c171067b5684",
+                "b3:6d3204499660bd329af95f950482b80354f79bdba85ef9feb238ebb3cf8575bd",
+                "b3:708146c152f9a4b1e6ae0ff752a309cb0a87bb6263e7271bbdb6b5eed68dace8",
+                "b3:0c78f893cdbec6989470bd6474684bc3a632cd3ffeab8d62af31b80df5fd95d2"
+              ],
+              "params": {
+                "max_tokens": 8192,
+                "selected_model": "unit-model",
+                "thinking": null
+              }
+            },
+            {
+              "id": "b3:61ac5d5465cdc3c062bf187af2251e0397fd2bbbf24038ac23b76edb53072481",
+              "producer": "ToolExecution",
+              "output_id": "b3:d3199a8494e4fbd905365103555100ccf3864918db050b1a5fd8c002f1921f83",
+              "input_ids": [
+                "b3:306c00cdca74b1f3334c88094eab4788db4eb9815f0e0276f77a7811e6009ebe"
+              ],
+              "params": {
+                "tool_call_id": "call-malformed-1",
+                "name": "lookup"
+              }
+            },
+            {
+              "id": "b3:64a65b88b09eb0ba5436c722e9102fad2b20412664bd1c4a768eff2b7961081f",
+              "producer": "ToolCallProjection",
+              "output_id": "b3:306c00cdca74b1f3334c88094eab4788db4eb9815f0e0276f77a7811e6009ebe",
+              "input_ids": [
+                "b3:001ec80f2fbfad6296864e762864ffe46225998134e36bf5e0f7a3c8aa32185f"
+              ],
+              "params": {
+                "tool_call_id": "call-malformed-1",
+                "name": "lookup"
+              }
+            },
+            {
+              "id": "b3:7a7972682692add7b6b70505e1a669401088a20773c2e1f3068d2c292a3c20fb",
+              "producer": "ToolCallProjection",
+              "output_id": "b3:a695e813a5681522d70b8ccbc74e4b120d05cf8414169dca9d1b8d2a2335c09e",
+              "input_ids": [
+                "b3:001ec80f2fbfad6296864e762864ffe46225998134e36bf5e0f7a3c8aa32185f"
+              ],
+              "params": {
+                "tool_call_id": "call-canonical-1",
+                "name": "exec_command"
+              }
+            },
+            {
+              "id": "b3:7da7c08749e1c235c51aa95e23adfd7115d2edb5648ed1c7a63f8975664094ff",
+              "producer": "ModelResponse",
+              "output_id": "b3:2a90d5b2fc71f4554255844b70904c5ef09038170b2cc61d87f3ab400de8e752",
+              "input_ids": [
+                "b3:47f0265dd15a2b1bee772a9982f0d39082f28bc4edd04153d47d722344217943"
+              ],
+              "params": {}
+            },
+            {
+              "id": "b3:ca450df36094d1f6cf7a8895cf5f59f0277a93cae2cdf89640b90399bacbfcaa",
+              "producer": "PromptBuilder",
+              "output_id": "b3:1231dd2cedcf5e718d4944cc729aaa70260bc5e3ba984681579351abee6cbbb7",
+              "input_ids": [
+                "b3:61019b62efe71577ff986f52c181d123c143bb1263875545238a1167d5dd395a",
+                "b3:bdb823956fdc31d9c42938442060bf210bd538476e2171651180737fcc0eb346",
+                "b3:5f93059c1c71c2ccf8114a3457f548236501c3a6883322bb6db2c171067b5684"
+              ],
+              "params": {
+                "max_tokens": 8192,
+                "selected_model": "unit-model",
+                "thinking": null
+              }
+            },
+            {
+              "id": "b3:db189eb9e56f224998d466dfc53be9d4ce7962f1c449d988066097f1b60c5903",
+              "producer": "ToolExecution",
+              "output_id": "b3:74d69fb604b08044ee66d83f21b4bf9062a6005fbe7f0f8c45fb9c5d2cc850d1",
+              "input_ids": [
+                "b3:a695e813a5681522d70b8ccbc74e4b120d05cf8414169dca9d1b8d2a2335c09e"
+              ],
+              "params": {
+                "tool_call_id": "call-canonical-1",
+                "name": "exec_command"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "codex_profile_effect_and_duplicate_call",
+      "invocation": {
+        "objective": "Run a command.",
+        "timeline": [],
+        "context": "",
+        "system_prompt": "Answer plainly.",
+        "allowed_capabilities": [
+          "zeta.bash"
+        ],
+        "max_model_calls": 3,
+        "model_name": "unit-model",
+        "tool_profile": "codex",
+        "base_directory": "/workspace/zeta",
+        "effect_scope": "qi_effect_1",
+        "source_queue_item_id": null
+      },
+      "capabilities": [
+        {
+          "id": "zeta.bash",
+          "description": "Execute a shell command.",
+          "input_schema": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "command"
+            ],
+            "properties": {
+              "command": {
+                "type": "string"
+              }
+            }
+          },
+          "delivery_semantics": "unsafe_to_retry"
+        }
+      ],
+      "model_script": [
+        {
+          "message": {
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "call-codex-1",
+                "type": "function",
+                "function": {
+                  "name": "exec_command",
+                  "arguments": "{\"cmd\":\"pytest\"}"
+                }
+              }
+            ]
+          },
+          "stream": [],
+          "telemetry": {}
+        },
+        {
+          "message": {
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "call-codex-1",
+                "type": "function",
+                "function": {
+                  "name": "exec_command",
+                  "arguments": "{\"cmd\":\"pytest\"}"
+                }
+              }
+            ]
+          },
+          "stream": [],
+          "telemetry": {}
+        },
+        {
+          "message": {
+            "content": "The command passed."
+          },
+          "stream": [],
+          "telemetry": {}
+        }
+      ],
+      "tool_results": {
+        "zeta.bash": [
+          {
+            "ok": true,
+            "content": [
+              {
+                "type": "text",
+                "text": "tests passed"
+              }
+            ]
+          }
+        ]
+      },
+      "event_ids": [
+        "model-codex-1",
+        "result-codex-1",
+        "model-codex-2",
+        "model-codex-3"
+      ],
+      "cancelled": false,
+      "capture_recorded_events": true,
+      "expected": {
+        "aborted": false,
+        "abort_reason": null,
+        "final_answer": "The command passed.",
+        "final_object_id": null,
+        "stop_reason": "finished",
+        "answer_streamed": false,
+        "telemetry": {},
+        "model_telemetry_calls": [],
+        "events": [
+          {
+            "type": "zeta.model_call.completed",
+            "source": "zeta",
+            "payload": {
+              "tool_calls": [
+                {
+                  "id": "call-codex-1",
+                  "type": "function",
+                  "function": {
+                    "name": "exec_command",
+                    "arguments": "{\"cmd\":\"pytest\"}"
+                  }
+                }
+              ],
+              "prompt_object_id": "b3:5465fb16e85d7f2e7d2235bdbd708c6ce7af5185cec1860a39c4c807c7cd7aa3",
+              "_timeline_type": "model"
+            },
+            "idempotency_key": "zeta.model_call.completed:model-codex-1",
+            "caused_by": null,
+            "session_id": null,
+            "run_id": null,
+            "turn_id": null
+          },
+          {
+            "type": "zeta.tool_call.started",
+            "source": "zeta",
+            "payload": {
+              "tool_call_id": "call-codex-1",
+              "status": "pending",
+              "name": "exec_command",
+              "input": {
+                "cmd": "pytest"
+              },
+              "arguments": "{\"cmd\":\"pytest\"}",
+              "capability_id": "zeta.bash",
+              "_timeline_type": "tool_call"
+            },
+            "idempotency_key": "zeta.tool_call.started:call-codex-1",
+            "caused_by": "model-codex-1",
+            "session_id": null,
+            "run_id": null,
+            "turn_id": null
+          },
+          {
+            "type": "runtime.effect.planned",
+            "source": "capability:zeta.bash",
+            "payload": {
+              "effect_key": "effect:b3:56aae4932aff0b97d98ab320bf64ed9e31a398f1c192997acb9295a2f2a47661",
+              "operation": "zeta.bash",
+              "semantics": "unsafe_to_retry",
+              "scope": "qi_effect_1",
+              "queue_item_id": "qi_effect_1",
+              "params": {
+                "command": "pytest"
+              },
+              "status": "planned"
+            },
+            "idempotency_key": "runtime.effect.planned:effect:b3:56aae4932aff0b97d98ab320bf64ed9e31a398f1c192997acb9295a2f2a47661",
+            "caused_by": "call-codex-1",
+            "session_id": null,
+            "run_id": null,
+            "turn_id": null
+          },
+          {
+            "type": "runtime.effect.started",
+            "source": "capability:zeta.bash",
+            "payload": {
+              "effect_key": "effect:b3:56aae4932aff0b97d98ab320bf64ed9e31a398f1c192997acb9295a2f2a47661",
+              "operation": "zeta.bash",
+              "semantics": "unsafe_to_retry",
+              "scope": "qi_effect_1",
+              "queue_item_id": "qi_effect_1",
+              "params": {
+                "command": "pytest"
+              },
+              "status": "started"
+            },
+            "idempotency_key": "runtime.effect.started:effect:b3:56aae4932aff0b97d98ab320bf64ed9e31a398f1c192997acb9295a2f2a47661",
+            "caused_by": "call-codex-1",
+            "session_id": null,
+            "run_id": null,
+            "turn_id": null
+          },
+          {
+            "type": "zeta.tool_call.completed",
+            "source": "zeta",
+            "payload": {
+              "tool_call_id": "call-codex-1",
+              "status": "completed",
+              "name": "exec_command",
+              "result": {
+                "ok": true,
+                "content": [
+                  {
+                    "type": "text",
+                    "text": "tests passed"
+                  }
+                ]
+              },
+              "capability_id": "zeta.bash",
+              "_timeline_type": "tool_result"
+            },
+            "idempotency_key": "zeta.tool_call.completed:result-codex-1",
+            "caused_by": "model-codex-1",
+            "session_id": null,
+            "run_id": null,
+            "turn_id": null
+          },
+          {
+            "type": "runtime.effect.completed",
+            "source": "capability:zeta.bash",
+            "payload": {
+              "effect_key": "effect:b3:56aae4932aff0b97d98ab320bf64ed9e31a398f1c192997acb9295a2f2a47661",
+              "operation": "zeta.bash",
+              "semantics": "unsafe_to_retry",
+              "scope": "qi_effect_1",
+              "queue_item_id": "qi_effect_1",
+              "params": {
+                "command": "pytest"
+              },
+              "status": "completed",
+              "result": {
+                "ok": true,
+                "content": [
+                  {
+                    "type": "text",
+                    "text": "tests passed"
+                  }
+                ]
+              }
+            },
+            "idempotency_key": "runtime.effect.completed:effect:b3:56aae4932aff0b97d98ab320bf64ed9e31a398f1c192997acb9295a2f2a47661",
+            "caused_by": "call-codex-1",
+            "session_id": null,
+            "run_id": null,
+            "turn_id": null
+          },
+          {
+            "type": "zeta.model_call.completed",
+            "source": "zeta",
+            "payload": {
+              "tool_calls": [
+                {
+                  "id": "call-codex-1",
+                  "type": "function",
+                  "function": {
+                    "name": "exec_command",
+                    "arguments": "{\"cmd\":\"pytest\"}"
+                  }
+                }
+              ],
+              "prompt_object_id": "b3:4c9e58b69d295e0161a50d937346a82b5a67cd2f9f204a82d3328d9b64f86cac",
+              "_timeline_type": "model"
+            },
+            "idempotency_key": "zeta.model_call.completed:model-codex-2",
+            "caused_by": "result-codex-1",
+            "session_id": null,
+            "run_id": null,
+            "turn_id": null
+          },
+          {
+            "type": "zeta.model_call.completed",
+            "source": "zeta",
+            "payload": {
+              "content": "The command passed.",
+              "prompt_object_id": "b3:b33839061d14ff3a47e0f8039ff7618c7e92cc28b1dbe106475eab67e0c33217",
+              "_timeline_type": "model"
+            },
+            "idempotency_key": "zeta.model_call.completed:model-codex-3",
+            "caused_by": null,
+            "session_id": null,
+            "run_id": null,
+            "turn_id": null
+          }
+        ],
+        "observations": [],
+        "requests": [],
+        "prompt_traces": [
+          {
+            "prompt_object_id": "b3:5465fb16e85d7f2e7d2235bdbd708c6ce7af5185cec1860a39c4c807c7cd7aa3",
+            "assistant_message_object_id": "b3:e77142d372afd0642dc638bd70429eb9698f91e780df6e53ce72df92d0be0887"
+          },
+          {
+            "prompt_object_id": "b3:4c9e58b69d295e0161a50d937346a82b5a67cd2f9f204a82d3328d9b64f86cac",
+            "assistant_message_object_id": "b3:d8e6a285be485367a65efaf2ec3993d179096cfbb827b6c2926a0931870cc648"
+          },
+          {
+            "prompt_object_id": "b3:b33839061d14ff3a47e0f8039ff7618c7e92cc28b1dbe106475eab67e0c33217",
+            "assistant_message_object_id": "b3:678e312b7f785f2a28dafae49ce509375baa873f5b151983b1d5bd1ac2808024"
+          }
+        ],
+        "steps": [
+          "check_budget",
+          "build_prompt",
+          "call_model",
+          "record_assistant",
+          "check_budget",
+          "record_capability_call",
+          "execute_capability",
+          "record_capability_result",
+          "check_budget",
+          "build_prompt",
+          "call_model",
+          "record_assistant",
+          "check_budget",
+          "record_capability_result",
+          "check_budget",
+          "build_prompt",
+          "call_model",
+          "record_assistant",
+          "finish_run"
+        ],
+        "model_call_count": 3,
+        "executor_calls": [
+          {
+            "capability_id": "zeta.bash",
+            "params": {
+              "command": "pytest"
+            },
+            "base_directory": "/workspace/zeta",
+            "effect_key": "effect:b3:56aae4932aff0b97d98ab320bf64ed9e31a398f1c192997acb9295a2f2a47661",
+            "recorded_event_types": [
+              "zeta.model_call.completed",
+              "zeta.tool_call.started",
+              "runtime.effect.planned",
+              "runtime.effect.started"
+            ]
+          }
+        ],
+        "trace": {
+          "objects": [
+            {
+              "id": "b3:46a45ac5e91f07288105143b667e116338548a7a7a227797618b5921c6659551",
+              "kind": "tool_result",
+              "schema": "zeta.prompt_component.v2",
+              "data": {
+                "index": 1,
+                "event_index": 4,
+                "message": {
+                  "role": "tool",
+                  "tool_call_id": "call-codex-1",
+                  "content": "{\"ok\":true,\"content\":[{\"type\":\"text\",\"text\":\"tests passed\"}]}"
+                },
+                "source_event_type": "tool_result",
+                "source_event_role": "",
+                "source_tool_name": "exec_command",
+                "source_tool_call_id": "call-codex-1",
+                "source_tool_result": {
+                  "ok": true,
+                  "content": [
+                    {
+                      "type": "text",
+                      "text": "tests passed"
+                    }
+                  ]
+                },
+                "source_tool_result_object_id": "b3:e997205570ccf8043436a30f718e3e2a590321887dad986d7e4cf8e811a87228",
+                "source_tool_call_object_id": "b3:c1a88d68314377f94121a3260bbed0d996e5224c0f18a6fc361ecf5db96baa4e",
+                "representation": "full"
+              },
+              "links": [
+                "b3:e997205570ccf8043436a30f718e3e2a590321887dad986d7e4cf8e811a87228",
+                "b3:c1a88d68314377f94121a3260bbed0d996e5224c0f18a6fc361ecf5db96baa4e"
+              ]
+            },
+            {
+              "id": "b3:485948b739479bfd06bec064a8e1827304f7db88dc63956568ae27bc1274c891",
+              "kind": "tool_descriptor_set",
+              "schema": "zeta.prompt_component.v2",
+              "data": {
+                "allowed_tools": [
+                  "zeta.bash"
+                ],
+                "tools": [
+                  {
+                    "type": "function",
+                    "function": {
+                      "name": "exec_command",
+                      "description": "Run a shell command.",
+                      "parameters": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "cmd"
+                        ],
+                        "properties": {
+                          "cmd": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    }
+                  }
+                ],
+                "representation": "full"
+              },
+              "links": []
+            },
+            {
+              "id": "b3:4c9e58b69d295e0161a50d937346a82b5a67cd2f9f204a82d3328d9b64f86cac",
+              "kind": "prompt",
+              "schema": "zeta.prompt.v2",
+              "data": {
+                "payload_address": "b3:343540685990049c2221871cbfc6716150bf1b48ad755e623cf12de2862afaba"
+              },
+              "links": [
+                "b3:c796275c5b8cbcd5654b58666c1d199fe0c06f92e9748d5a01700b77fa721767",
+                "b3:485948b739479bfd06bec064a8e1827304f7db88dc63956568ae27bc1274c891",
+                "b3:58ea1f925bbfdf2da317ffff096055c68d26264c2ffd636579a08e5762121174",
+                "b3:70e850c07dd370ed0018a04da7abf0892998e5cd4f2385d1ec6c960a694c11d1",
+                "b3:46a45ac5e91f07288105143b667e116338548a7a7a227797618b5921c6659551"
+              ]
+            },
+            {
+              "id": "b3:5465fb16e85d7f2e7d2235bdbd708c6ce7af5185cec1860a39c4c807c7cd7aa3",
+              "kind": "prompt",
+              "schema": "zeta.prompt.v2",
+              "data": {
+                "payload_address": "b3:5ee0a0024476f304bb2698ca4b653868a720e16ebf09c32ce2ac96927c1deecd"
+              },
+              "links": [
+                "b3:c796275c5b8cbcd5654b58666c1d199fe0c06f92e9748d5a01700b77fa721767",
+                "b3:485948b739479bfd06bec064a8e1827304f7db88dc63956568ae27bc1274c891",
+                "b3:58ea1f925bbfdf2da317ffff096055c68d26264c2ffd636579a08e5762121174"
+              ]
+            },
+            {
+              "id": "b3:58ea1f925bbfdf2da317ffff096055c68d26264c2ffd636579a08e5762121174",
+              "kind": "user_message",
+              "schema": "zeta.prompt_component.v2",
+              "data": {
+                "objective": "Run a command.",
+                "expanded_objective": "Run a command.",
+                "context": "",
+                "message": {
+                  "role": "user",
+                  "content": "Run a command.\n\ncwd:\n/workspace/zeta"
+                },
+                "representation": "full"
+              },
+              "links": []
+            },
+            {
+              "id": "b3:673e9659572614d489070a437ec90aaedc76632046291222022c5e1aeff912e6",
+              "kind": "assistant_message",
+              "schema": "zeta.prompt_component.v2",
+              "data": {
+                "index": 2,
+                "event_index": 6,
+                "message": {
+                  "role": "assistant",
+                  "content": null,
+                  "tool_calls": [
+                    {
+                      "id": "call-codex-1",
+                      "type": "function",
+                      "function": {
+                        "name": "exec_command",
+                        "arguments": "{\"cmd\":\"pytest\"}"
+                      }
+                    }
+                  ]
+                },
+                "source_event_type": "model",
+                "source_event_role": "",
+                "source_model_tool_calls": [
+                  {
+                    "id": "call-codex-1",
+                    "type": "function",
+                    "function": {
+                      "name": "exec_command",
+                      "arguments": "{\"cmd\":\"pytest\"}"
+                    }
+                  }
+                ],
+                "source_assistant_message_object_id": "b3:d8e6a285be485367a65efaf2ec3993d179096cfbb827b6c2926a0931870cc648",
+                "representation": "full"
+              },
+              "links": [
+                "b3:d8e6a285be485367a65efaf2ec3993d179096cfbb827b6c2926a0931870cc648"
+              ]
+            },
+            {
+              "id": "b3:678e312b7f785f2a28dafae49ce509375baa873f5b151983b1d5bd1ac2808024",
+              "kind": "assistant_message",
+              "schema": "zeta.model_output.v1",
+              "data": {
+                "message": {
+                  "content": "The command passed."
+                },
+                "model_output": {
+                  "message": {
+                    "content": "The command passed."
+                  }
+                }
+              },
+              "links": [
+                "b3:b33839061d14ff3a47e0f8039ff7618c7e92cc28b1dbe106475eab67e0c33217"
+              ]
+            },
+            {
+              "id": "b3:70e850c07dd370ed0018a04da7abf0892998e5cd4f2385d1ec6c960a694c11d1",
+              "kind": "assistant_message",
+              "schema": "zeta.prompt_component.v2",
+              "data": {
+                "index": 0,
+                "event_index": 0,
+                "message": {
+                  "role": "assistant",
+                  "content": null,
+                  "tool_calls": [
+                    {
+                      "id": "call-codex-1",
+                      "type": "function",
+                      "function": {
+                        "name": "exec_command",
+                        "arguments": "{\"cmd\":\"pytest\"}"
+                      }
+                    }
+                  ]
+                },
+                "source_event_type": "model",
+                "source_event_role": "",
+                "source_model_tool_calls": [
+                  {
+                    "id": "call-codex-1",
+                    "type": "function",
+                    "function": {
+                      "name": "exec_command",
+                      "arguments": "{\"cmd\":\"pytest\"}"
+                    }
+                  }
+                ],
+                "source_assistant_message_object_id": "b3:e77142d372afd0642dc638bd70429eb9698f91e780df6e53ce72df92d0be0887",
+                "representation": "full"
+              },
+              "links": [
+                "b3:e77142d372afd0642dc638bd70429eb9698f91e780df6e53ce72df92d0be0887"
+              ]
+            },
+            {
+              "id": "b3:b33839061d14ff3a47e0f8039ff7618c7e92cc28b1dbe106475eab67e0c33217",
+              "kind": "prompt",
+              "schema": "zeta.prompt.v2",
+              "data": {
+                "payload_address": "b3:f86c6c0b2841757b08c2e1995d44acbd6662bbcb2810f208797ce66d9d78cca2"
+              },
+              "links": [
+                "b3:c796275c5b8cbcd5654b58666c1d199fe0c06f92e9748d5a01700b77fa721767",
+                "b3:485948b739479bfd06bec064a8e1827304f7db88dc63956568ae27bc1274c891",
+                "b3:58ea1f925bbfdf2da317ffff096055c68d26264c2ffd636579a08e5762121174",
+                "b3:70e850c07dd370ed0018a04da7abf0892998e5cd4f2385d1ec6c960a694c11d1",
+                "b3:46a45ac5e91f07288105143b667e116338548a7a7a227797618b5921c6659551",
+                "b3:673e9659572614d489070a437ec90aaedc76632046291222022c5e1aeff912e6"
+              ]
+            },
+            {
+              "id": "b3:c1a88d68314377f94121a3260bbed0d996e5224c0f18a6fc361ecf5db96baa4e",
+              "kind": "tool_call",
+              "schema": "zeta.tool_call.v1",
+              "data": {
+                "tool_call_id": "call-codex-1",
+                "name": "exec_command",
+                "input": {
+                  "cmd": "pytest"
+                },
+                "arguments": "{\"cmd\":\"pytest\"}"
+              },
+              "links": [
+                "b3:e77142d372afd0642dc638bd70429eb9698f91e780df6e53ce72df92d0be0887"
+              ]
+            },
+            {
+              "id": "b3:c796275c5b8cbcd5654b58666c1d199fe0c06f92e9748d5a01700b77fa721767",
+              "kind": "system_prompt",
+              "schema": "zeta.prompt_component.v2",
+              "data": {
+                "content": "Answer plainly.\n\nToday is 2026-08-12 (Wednesday).\n\nTool protocol:\n\n- Tools are native Chat Completions function tools exposed by the runtime.\n- You may request multiple read-only tool calls in one turn when useful.\n- Mutating tools apply their effects when you call them.\n- Use a tool only when its schema matches the needed action.\n- Do not mention unavailable tools.\n- If no tool is needed, return a final answer.\n\nAvailable tools:\n- exec_command(cmd): Run a shell command.",
+                "base_prompt": "Answer plainly.",
+                "allowed_tools": [
+                  "zeta.bash"
+                ],
+                "message": {
+                  "role": "system",
+                  "content": "Answer plainly.\n\nToday is 2026-08-12 (Wednesday).\n\nTool protocol:\n\n- Tools are native Chat Completions function tools exposed by the runtime.\n- You may request multiple read-only tool calls in one turn when useful.\n- Mutating tools apply their effects when you call them.\n- Use a tool only when its schema matches the needed action.\n- Do not mention unavailable tools.\n- If no tool is needed, return a final answer.\n\nAvailable tools:\n- exec_command(cmd): Run a shell command."
+                },
+                "representation": "full"
+              },
+              "links": []
+            },
+            {
+              "id": "b3:d8e6a285be485367a65efaf2ec3993d179096cfbb827b6c2926a0931870cc648",
+              "kind": "assistant_message",
+              "schema": "zeta.model_output.v1",
+              "data": {
+                "message": {
+                  "tool_calls": [
+                    {
+                      "id": "call-codex-1",
+                      "type": "function",
+                      "function": {
+                        "name": "exec_command",
+                        "arguments": "{\"cmd\":\"pytest\"}"
+                      }
+                    }
+                  ]
+                },
+                "model_output": {
+                  "message": {
+                    "tool_calls": [
+                      {
+                        "id": "call-codex-1",
+                        "type": "function",
+                        "function": {
+                          "name": "exec_command",
+                          "arguments": "{\"cmd\":\"pytest\"}"
+                        }
+                      }
+                    ]
+                  }
+                }
+              },
+              "links": [
+                "b3:4c9e58b69d295e0161a50d937346a82b5a67cd2f9f204a82d3328d9b64f86cac"
+              ]
+            },
+            {
+              "id": "b3:e77142d372afd0642dc638bd70429eb9698f91e780df6e53ce72df92d0be0887",
+              "kind": "assistant_message",
+              "schema": "zeta.model_output.v1",
+              "data": {
+                "message": {
+                  "tool_calls": [
+                    {
+                      "id": "call-codex-1",
+                      "type": "function",
+                      "function": {
+                        "name": "exec_command",
+                        "arguments": "{\"cmd\":\"pytest\"}"
+                      }
+                    }
+                  ]
+                },
+                "model_output": {
+                  "message": {
+                    "tool_calls": [
+                      {
+                        "id": "call-codex-1",
+                        "type": "function",
+                        "function": {
+                          "name": "exec_command",
+                          "arguments": "{\"cmd\":\"pytest\"}"
+                        }
+                      }
+                    ]
+                  }
+                }
+              },
+              "links": [
+                "b3:5465fb16e85d7f2e7d2235bdbd708c6ce7af5185cec1860a39c4c807c7cd7aa3"
+              ]
+            },
+            {
+              "id": "b3:e997205570ccf8043436a30f718e3e2a590321887dad986d7e4cf8e811a87228",
+              "kind": "tool_result",
+              "schema": "zeta.tool_result.v1",
+              "data": {
+                "tool_call_id": "call-codex-1",
+                "name": "exec_command",
+                "result": {
+                  "ok": true,
+                  "content": [
+                    {
+                      "type": "text",
+                      "text": "tests passed"
+                    }
+                  ]
+                }
+              },
+              "links": [
+                "b3:c1a88d68314377f94121a3260bbed0d996e5224c0f18a6fc361ecf5db96baa4e"
+              ]
+            }
+          ],
+          "derivations": [
+            {
+              "id": "b3:033d18ac59c0de90c31eb7adba787f17b2b1503a0813606af002d2635c11c3b6",
+              "producer": "ToolExecution",
+              "output_id": "b3:e997205570ccf8043436a30f718e3e2a590321887dad986d7e4cf8e811a87228",
+              "input_ids": [
+                "b3:c1a88d68314377f94121a3260bbed0d996e5224c0f18a6fc361ecf5db96baa4e"
+              ],
+              "params": {
+                "tool_call_id": "call-codex-1",
+                "name": "exec_command"
+              }
+            },
+            {
+              "id": "b3:4ca38027571c12f6565cea901bd04b529df35697522f4ac48bf9f816966bba2c",
+              "producer": "PromptBuilder",
+              "output_id": "b3:4c9e58b69d295e0161a50d937346a82b5a67cd2f9f204a82d3328d9b64f86cac",
+              "input_ids": [
+                "b3:c796275c5b8cbcd5654b58666c1d199fe0c06f92e9748d5a01700b77fa721767",
+                "b3:485948b739479bfd06bec064a8e1827304f7db88dc63956568ae27bc1274c891",
+                "b3:58ea1f925bbfdf2da317ffff096055c68d26264c2ffd636579a08e5762121174",
+                "b3:70e850c07dd370ed0018a04da7abf0892998e5cd4f2385d1ec6c960a694c11d1",
+                "b3:46a45ac5e91f07288105143b667e116338548a7a7a227797618b5921c6659551"
+              ],
+              "params": {
+                "max_tokens": 8192,
+                "selected_model": "unit-model",
+                "thinking": null
+              }
+            },
+            {
+              "id": "b3:5102380fa9256439dfebdc8cddb7c5ab677cfcfc4dad32388b9470b779784f6a",
+              "producer": "ModelResponse",
+              "output_id": "b3:d8e6a285be485367a65efaf2ec3993d179096cfbb827b6c2926a0931870cc648",
+              "input_ids": [
+                "b3:4c9e58b69d295e0161a50d937346a82b5a67cd2f9f204a82d3328d9b64f86cac"
+              ],
+              "params": {}
+            },
+            {
+              "id": "b3:681c16e47ef83f51c7903e351e9cdbc38305ae48b5757d69f311ad7a1c6fbceb",
+              "producer": "ToolCallProjection",
+              "output_id": "b3:c1a88d68314377f94121a3260bbed0d996e5224c0f18a6fc361ecf5db96baa4e",
+              "input_ids": [
+                "b3:e77142d372afd0642dc638bd70429eb9698f91e780df6e53ce72df92d0be0887"
+              ],
+              "params": {
+                "tool_call_id": "call-codex-1",
+                "name": "exec_command"
+              }
+            },
+            {
+              "id": "b3:96203008ae21d9671b5f2042fb9f6106ea49ccbf655a8ee3f5cb23c79a26c444",
+              "producer": "ModelResponse",
+              "output_id": "b3:e77142d372afd0642dc638bd70429eb9698f91e780df6e53ce72df92d0be0887",
+              "input_ids": [
+                "b3:5465fb16e85d7f2e7d2235bdbd708c6ce7af5185cec1860a39c4c807c7cd7aa3"
+              ],
+              "params": {}
+            },
+            {
+              "id": "b3:c477ad15c98512df5a03ff25c3f95e9ffac1c69efce6ec6bc7fa2c1ee4482962",
+              "producer": "PromptBuilder",
+              "output_id": "b3:b33839061d14ff3a47e0f8039ff7618c7e92cc28b1dbe106475eab67e0c33217",
+              "input_ids": [
+                "b3:c796275c5b8cbcd5654b58666c1d199fe0c06f92e9748d5a01700b77fa721767",
+                "b3:485948b739479bfd06bec064a8e1827304f7db88dc63956568ae27bc1274c891",
+                "b3:58ea1f925bbfdf2da317ffff096055c68d26264c2ffd636579a08e5762121174",
+                "b3:70e850c07dd370ed0018a04da7abf0892998e5cd4f2385d1ec6c960a694c11d1",
+                "b3:46a45ac5e91f07288105143b667e116338548a7a7a227797618b5921c6659551",
+                "b3:673e9659572614d489070a437ec90aaedc76632046291222022c5e1aeff912e6"
+              ],
+              "params": {
+                "max_tokens": 8192,
+                "selected_model": "unit-model",
+                "thinking": null
+              }
+            },
+            {
+              "id": "b3:e26125b6ba6c13ae726a293250387060fad55096475169af10e3d52f007997bc",
+              "producer": "PromptBuilder",
+              "output_id": "b3:5465fb16e85d7f2e7d2235bdbd708c6ce7af5185cec1860a39c4c807c7cd7aa3",
+              "input_ids": [
+                "b3:c796275c5b8cbcd5654b58666c1d199fe0c06f92e9748d5a01700b77fa721767",
+                "b3:485948b739479bfd06bec064a8e1827304f7db88dc63956568ae27bc1274c891",
+                "b3:58ea1f925bbfdf2da317ffff096055c68d26264c2ffd636579a08e5762121174"
+              ],
+              "params": {
+                "max_tokens": 8192,
+                "selected_model": "unit-model",
+                "thinking": null
+              }
+            },
+            {
+              "id": "b3:e3ba189734e5836759debe6fcff07a3ddad2ae284f401915e7688054d907fce4",
+              "producer": "ModelResponse",
+              "output_id": "b3:678e312b7f785f2a28dafae49ce509375baa873f5b151983b1d5bd1ac2808024",
+              "input_ids": [
+                "b3:b33839061d14ff3a47e0f8039ff7618c7e92cc28b1dbe106475eab67e0c33217"
+              ],
+              "params": {}
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "control_timestamp_validation",
+      "invocation": {
+        "objective": "Schedule updates and wait.",
+        "timeline": [],
+        "context": "",
+        "system_prompt": "Answer plainly.",
+        "allowed_capabilities": [],
+        "max_model_calls": 2,
+        "model_name": "unit-model",
+        "base_directory": "/workspace/zeta",
+        "source_queue_item_id": "qi-control-times",
+        "source_agent_id": "issue-agent",
+        "source_session_id": "agent/issue-agent/session-1",
+        "publishable_events": {
+          "issue.triaged": {
+            "type": "object",
+            "required": [
+              "status"
+            ],
+            "properties": {
+              "status": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "capabilities": [],
+      "model_script": [
+        {
+          "message": {
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "call-publish-malformed",
+                "type": "function",
+                "function": {
+                  "name": "publish_event",
+                  "arguments": "{\"event_type\": \"issue.triaged\", \"payload\": {\"status\": \"ready\"}, \"at\": \"not-a-date\"}"
+                }
+              },
+              {
+                "id": "call-publish-naive",
+                "type": "function",
+                "function": {
+                  "name": "publish_event",
+                  "arguments": "{\"event_type\": \"issue.triaged\", \"payload\": {\"status\": \"ready\"}, \"at\": \"2030-01-02T03:04:05\"}"
+                }
+              },
+              {
+                "id": "call-publish-aware",
+                "type": "function",
+                "function": {
+                  "name": "publish_event",
+                  "arguments": "{\"event_type\": \"issue.triaged\", \"payload\": {\"status\": \"ready\"}, \"at\": \"2030-01-02T05:04:05+02:00\"}"
+                }
+              },
+              {
+                "id": "call-cancel-1",
+                "type": "function",
+                "function": {
+                  "name": "cancel",
+                  "arguments": "{\"handle\": \"wait_0123456789abcdef01234567\", \"reason\": \"No longer needed.\"}"
+                }
+              },
+              {
+                "id": "call-wait-malformed",
+                "type": "function",
+                "function": {
+                  "name": "wait_for",
+                  "arguments": "{\"event_type\": \"issue.updated\", \"deadline\": \"not-a-date\"}"
+                }
+              },
+              {
+                "id": "call-wait-naive",
+                "type": "function",
+                "function": {
+                  "name": "wait_for",
+                  "arguments": "{\"event_type\": \"issue.updated\", \"deadline\": \"2030-01-02T03:04:05\"}"
+                }
+              },
+              {
+                "id": "call-wait-aware",
+                "type": "function",
+                "function": {
+                  "name": "wait_for",
+                  "arguments": "{\"event_type\": \"issue.updated\", \"deadline\": \"2030-01-02T05:04:05+02:00\"}"
+                }
+              }
+            ]
+          },
+          "stream": [],
+          "telemetry": {}
+        }
+      ],
+      "tool_results": {},
+      "event_ids": [
+        "model-control-times-1",
+        "result-publish-malformed",
+        "result-publish-naive",
+        "result-publish-aware",
+        "result-cancel-1",
+        "result-wait-malformed",
+        "result-wait-naive",
+        "result-wait-aware"
+      ],
+      "cancelled": false,
+      "expected": {
+        "aborted": false,
+        "abort_reason": null,
+        "final_answer": "",
+        "final_object_id": null,
+        "stop_reason": "tool_stop",
+        "answer_streamed": false,
+        "telemetry": {},
+        "model_telemetry_calls": [],
+        "events": [
+          {
+            "type": "zeta.model_call.completed",
+            "source": "zeta",
+            "payload": {
+              "tool_calls": [
+                {
+                  "id": "call-publish-malformed",
+                  "type": "function",
+                  "function": {
+                    "name": "publish_event",
+                    "arguments": "{\"event_type\": \"issue.triaged\", \"payload\": {\"status\": \"ready\"}, \"at\": \"not-a-date\"}"
+                  }
+                },
+                {
+                  "id": "call-publish-naive",
+                  "type": "function",
+                  "function": {
+                    "name": "publish_event",
+                    "arguments": "{\"event_type\": \"issue.triaged\", \"payload\": {\"status\": \"ready\"}, \"at\": \"2030-01-02T03:04:05\"}"
+                  }
+                },
+                {
+                  "id": "call-publish-aware",
+                  "type": "function",
+                  "function": {
+                    "name": "publish_event",
+                    "arguments": "{\"event_type\": \"issue.triaged\", \"payload\": {\"status\": \"ready\"}, \"at\": \"2030-01-02T05:04:05+02:00\"}"
+                  }
+                },
+                {
+                  "id": "call-cancel-1",
+                  "type": "function",
+                  "function": {
+                    "name": "cancel",
+                    "arguments": "{\"handle\": \"wait_0123456789abcdef01234567\", \"reason\": \"No longer needed.\"}"
+                  }
+                },
+                {
+                  "id": "call-wait-malformed",
+                  "type": "function",
+                  "function": {
+                    "name": "wait_for",
+                    "arguments": "{\"event_type\": \"issue.updated\", \"deadline\": \"not-a-date\"}"
+                  }
+                },
+                {
+                  "id": "call-wait-naive",
+                  "type": "function",
+                  "function": {
+                    "name": "wait_for",
+                    "arguments": "{\"event_type\": \"issue.updated\", \"deadline\": \"2030-01-02T03:04:05\"}"
+                  }
+                },
+                {
+                  "id": "call-wait-aware",
+                  "type": "function",
+                  "function": {
+                    "name": "wait_for",
+                    "arguments": "{\"event_type\": \"issue.updated\", \"deadline\": \"2030-01-02T05:04:05+02:00\"}"
+                  }
+                }
+              ],
+              "prompt_object_id": "b3:769c25c67a89f81dabf65a4e3a21ddfc800fb439695df991ea238c155d87dd4a",
+              "_timeline_type": "model"
+            },
+            "idempotency_key": "zeta.model_call.completed:model-control-times-1",
+            "caused_by": null,
+            "session_id": null,
+            "run_id": null,
+            "turn_id": null
+          },
+          {
+            "type": "zeta.tool_call.started",
+            "source": "zeta",
+            "payload": {
+              "tool_call_id": "call-publish-malformed",
+              "status": "pending",
+              "name": "publish_event",
+              "input": {
+                "event_type": "issue.triaged",
+                "payload": {
+                  "status": "ready"
+                },
+                "at": "not-a-date"
+              },
+              "arguments": "{\"event_type\": \"issue.triaged\", \"payload\": {\"status\": \"ready\"}, \"at\": \"not-a-date\"}",
+              "capability_id": "zeta.publish_event",
+              "_timeline_type": "tool_call"
+            },
+            "idempotency_key": "zeta.tool_call.started:call-publish-malformed",
+            "caused_by": "model-control-times-1",
+            "session_id": null,
+            "run_id": null,
+            "turn_id": null
+          },
+          {
+            "type": "zeta.tool_call.failed",
+            "source": "zeta",
+            "payload": {
+              "tool_call_id": "call-publish-malformed",
+              "status": "failed",
+              "name": "publish_event",
+              "result": {
+                "ok": false,
+                "error": {
+                  "code": "invalid-publish-time",
+                  "message": "at must be an ISO 8601 date-time with a UTC offset"
+                }
+              },
+              "capability_id": "zeta.publish_event",
+              "_timeline_type": "tool_result"
+            },
+            "idempotency_key": "zeta.tool_call.failed:result-publish-malformed",
+            "caused_by": "model-control-times-1",
+            "session_id": null,
+            "run_id": null,
+            "turn_id": null
+          },
+          {
+            "type": "zeta.tool_call.started",
+            "source": "zeta",
+            "payload": {
+              "tool_call_id": "call-publish-naive",
+              "status": "pending",
+              "name": "publish_event",
+              "input": {
+                "event_type": "issue.triaged",
+                "payload": {
+                  "status": "ready"
+                },
+                "at": "2030-01-02T03:04:05"
+              },
+              "arguments": "{\"event_type\": \"issue.triaged\", \"payload\": {\"status\": \"ready\"}, \"at\": \"2030-01-02T03:04:05\"}",
+              "capability_id": "zeta.publish_event",
+              "_timeline_type": "tool_call"
+            },
+            "idempotency_key": "zeta.tool_call.started:call-publish-naive",
+            "caused_by": "model-control-times-1",
+            "session_id": null,
+            "run_id": null,
+            "turn_id": null
+          },
+          {
+            "type": "zeta.tool_call.failed",
+            "source": "zeta",
+            "payload": {
+              "tool_call_id": "call-publish-naive",
+              "status": "failed",
+              "name": "publish_event",
+              "result": {
+                "ok": false,
+                "error": {
+                  "code": "invalid-publish-time",
+                  "message": "at must include a UTC offset"
+                }
+              },
+              "capability_id": "zeta.publish_event",
+              "_timeline_type": "tool_result"
+            },
+            "idempotency_key": "zeta.tool_call.failed:result-publish-naive",
+            "caused_by": "model-control-times-1",
+            "session_id": null,
+            "run_id": null,
+            "turn_id": null
+          },
+          {
+            "type": "zeta.tool_call.started",
+            "source": "zeta",
+            "payload": {
+              "tool_call_id": "call-publish-aware",
+              "status": "pending",
+              "name": "publish_event",
+              "input": {
+                "event_type": "issue.triaged",
+                "payload": {
+                  "status": "ready"
+                },
+                "at": "2030-01-02T05:04:05+02:00"
+              },
+              "arguments": "{\"event_type\": \"issue.triaged\", \"payload\": {\"status\": \"ready\"}, \"at\": \"2030-01-02T05:04:05+02:00\"}",
+              "capability_id": "zeta.publish_event",
+              "_timeline_type": "tool_call"
+            },
+            "idempotency_key": "zeta.tool_call.started:call-publish-aware",
+            "caused_by": "model-control-times-1",
+            "session_id": null,
+            "run_id": null,
+            "turn_id": null
+          },
+          {
+            "type": "zeta.tool_call.completed",
+            "source": "zeta",
+            "payload": {
+              "tool_call_id": "call-publish-aware",
+              "status": "completed",
+              "name": "publish_event",
+              "result": {
+                "ok": true,
+                "handle": "pub_b3:f91a68b93dd0ff628d2a35e52f0ebccf35b7c688aa62a48c317040e6739af65d"
+              },
+              "capability_id": "zeta.publish_event",
+              "_timeline_type": "tool_result"
+            },
+            "idempotency_key": "zeta.tool_call.completed:result-publish-aware",
+            "caused_by": "model-control-times-1",
+            "session_id": null,
+            "run_id": null,
+            "turn_id": null
+          },
+          {
+            "type": "zeta.tool_call.started",
+            "source": "zeta",
+            "payload": {
+              "tool_call_id": "call-cancel-1",
+              "status": "pending",
+              "name": "cancel",
+              "input": {
+                "handle": "wait_0123456789abcdef01234567",
+                "reason": "No longer needed."
+              },
+              "arguments": "{\"handle\": \"wait_0123456789abcdef01234567\", \"reason\": \"No longer needed.\"}",
+              "capability_id": "zeta.cancel",
+              "_timeline_type": "tool_call"
+            },
+            "idempotency_key": "zeta.tool_call.started:call-cancel-1",
+            "caused_by": "model-control-times-1",
+            "session_id": null,
+            "run_id": null,
+            "turn_id": null
+          },
+          {
+            "type": "zeta.tool_call.completed",
+            "source": "zeta",
+            "payload": {
+              "tool_call_id": "call-cancel-1",
+              "status": "completed",
+              "name": "cancel",
+              "result": {
+                "ok": true,
+                "handle": "wait_0123456789abcdef01234567",
+                "status": "requested"
+              },
+              "capability_id": "zeta.cancel",
+              "_timeline_type": "tool_result"
+            },
+            "idempotency_key": "zeta.tool_call.completed:result-cancel-1",
+            "caused_by": "model-control-times-1",
+            "session_id": null,
+            "run_id": null,
+            "turn_id": null
+          },
+          {
+            "type": "zeta.tool_call.started",
+            "source": "zeta",
+            "payload": {
+              "tool_call_id": "call-wait-malformed",
+              "status": "pending",
+              "name": "wait_for",
+              "input": {
+                "event_type": "issue.updated",
+                "deadline": "not-a-date"
+              },
+              "arguments": "{\"event_type\": \"issue.updated\", \"deadline\": \"not-a-date\"}",
+              "capability_id": "zeta.wait_for",
+              "_timeline_type": "tool_call"
+            },
+            "idempotency_key": "zeta.tool_call.started:call-wait-malformed",
+            "caused_by": "model-control-times-1",
+            "session_id": null,
+            "run_id": null,
+            "turn_id": null
+          },
+          {
+            "type": "zeta.tool_call.failed",
+            "source": "zeta",
+            "payload": {
+              "tool_call_id": "call-wait-malformed",
+              "status": "failed",
+              "name": "wait_for",
+              "result": {
+                "ok": false,
+                "error": {
+                  "code": "invalid-wait-deadline",
+                  "message": "deadline must be an ISO 8601 date-time with a UTC offset"
+                }
+              },
+              "capability_id": "zeta.wait_for",
+              "_timeline_type": "tool_result"
+            },
+            "idempotency_key": "zeta.tool_call.failed:result-wait-malformed",
+            "caused_by": "model-control-times-1",
+            "session_id": null,
+            "run_id": null,
+            "turn_id": null
+          },
+          {
+            "type": "zeta.tool_call.started",
+            "source": "zeta",
+            "payload": {
+              "tool_call_id": "call-wait-naive",
+              "status": "pending",
+              "name": "wait_for",
+              "input": {
+                "event_type": "issue.updated",
+                "deadline": "2030-01-02T03:04:05"
+              },
+              "arguments": "{\"event_type\": \"issue.updated\", \"deadline\": \"2030-01-02T03:04:05\"}",
+              "capability_id": "zeta.wait_for",
+              "_timeline_type": "tool_call"
+            },
+            "idempotency_key": "zeta.tool_call.started:call-wait-naive",
+            "caused_by": "model-control-times-1",
+            "session_id": null,
+            "run_id": null,
+            "turn_id": null
+          },
+          {
+            "type": "zeta.tool_call.failed",
+            "source": "zeta",
+            "payload": {
+              "tool_call_id": "call-wait-naive",
+              "status": "failed",
+              "name": "wait_for",
+              "result": {
+                "ok": false,
+                "error": {
+                  "code": "invalid-wait-deadline",
+                  "message": "deadline must include a UTC offset"
+                }
+              },
+              "capability_id": "zeta.wait_for",
+              "_timeline_type": "tool_result"
+            },
+            "idempotency_key": "zeta.tool_call.failed:result-wait-naive",
+            "caused_by": "model-control-times-1",
+            "session_id": null,
+            "run_id": null,
+            "turn_id": null
+          },
+          {
+            "type": "zeta.tool_call.started",
+            "source": "zeta",
+            "payload": {
+              "tool_call_id": "call-wait-aware",
+              "status": "pending",
+              "name": "wait_for",
+              "input": {
+                "event_type": "issue.updated",
+                "deadline": "2030-01-02T05:04:05+02:00"
+              },
+              "arguments": "{\"event_type\": \"issue.updated\", \"deadline\": \"2030-01-02T05:04:05+02:00\"}",
+              "capability_id": "zeta.wait_for",
+              "_timeline_type": "tool_call"
+            },
+            "idempotency_key": "zeta.tool_call.started:call-wait-aware",
+            "caused_by": "model-control-times-1",
+            "session_id": null,
+            "run_id": null,
+            "turn_id": null
+          },
+          {
+            "type": "zeta.tool_call.completed",
+            "source": "zeta",
+            "payload": {
+              "tool_call_id": "call-wait-aware",
+              "status": "completed",
+              "name": "wait_for",
+              "result": {
+                "ok": true,
+                "handle": "wait_b3:280abafa8485622f5a541539dc7d7ea41787115e5a5c53f52d2253aa7597babd",
+                "stop": true
+              },
+              "capability_id": "zeta.wait_for",
+              "_timeline_type": "tool_result"
+            },
+            "idempotency_key": "zeta.tool_call.completed:result-wait-aware",
+            "caused_by": "model-control-times-1",
+            "session_id": null,
+            "run_id": null,
+            "turn_id": null
+          }
+        ],
+        "observations": [],
+        "requests": [
+          {
+            "type": "publish",
+            "handle": "pub_b3:f91a68b93dd0ff628d2a35e52f0ebccf35b7c688aa62a48c317040e6739af65d",
+            "event_type": "issue.triaged",
+            "payload": {
+              "status": "ready"
+            },
+            "at": "2030-01-02T03:04:05+00:00",
+            "position": 2
+          },
+          {
+            "type": "cancel",
+            "handle": "wait_0123456789abcdef01234567",
+            "reason": "No longer needed.",
+            "source_agent_id": "issue-agent",
+            "source_session_id": "agent/issue-agent/session-1",
+            "position": 3
+          },
+          {
+            "type": "wait",
+            "handle": "wait_b3:280abafa8485622f5a541539dc7d7ea41787115e5a5c53f52d2253aa7597babd",
+            "event_type": "issue.updated",
+            "fields": {},
+            "deadline": "2030-01-02T03:04:05+00:00",
+            "position": 6
+          }
+        ],
+        "prompt_traces": [
+          {
+            "prompt_object_id": "b3:769c25c67a89f81dabf65a4e3a21ddfc800fb439695df991ea238c155d87dd4a",
+            "assistant_message_object_id": "b3:05d47ec88d8f8944da60a91ed48a4c41adeef3c58aeebb3c61951be4eb390da7"
+          }
+        ],
+        "steps": [
+          "check_budget",
+          "build_prompt",
+          "call_model",
+          "record_assistant",
+          "check_budget",
+          "record_capability_call",
+          "execute_capability",
+          "record_capability_result",
+          "check_budget",
+          "record_capability_call",
+          "execute_capability",
+          "record_capability_result",
+          "check_budget",
+          "record_capability_call",
+          "execute_capability",
+          "record_capability_result",
+          "check_budget",
+          "record_capability_call",
+          "execute_capability",
+          "record_capability_result",
+          "check_budget",
+          "record_capability_call",
+          "execute_capability",
+          "record_capability_result",
+          "check_budget",
+          "record_capability_call",
+          "execute_capability",
+          "record_capability_result",
+          "check_budget",
+          "record_capability_call",
+          "execute_capability",
+          "record_capability_result",
+          "finish_run"
+        ],
+        "model_call_count": 1,
+        "executor_calls": [],
+        "trace": {
+          "objects": [
+            {
+              "id": "b3:01ee2db9050baf634441dabc4201d9ab53b46b51cedb648322b82afd70bce269",
+              "kind": "tool_descriptor_set",
+              "schema": "zeta.prompt_component.v2",
+              "data": {
+                "allowed_tools": [
+                  "zeta.publish_event",
+                  "zeta.wait_for",
+                  "zeta.cancel"
+                ],
+                "tools": [
+                  {
+                    "type": "function",
+                    "function": {
+                      "name": "publish_event",
+                      "description": "Request an event when this agent attempt completes successfully.",
+                      "parameters": {
+                        "type": "object",
+                        "required": [
+                          "event_type",
+                          "payload"
+                        ],
+                        "properties": {
+                          "event_type": {
+                            "type": "string"
+                          },
+                          "payload": {
+                            "type": "object"
+                          },
+                          "at": {
+                            "type": "string"
+                          }
+                        },
+                        "additionalProperties": false
+                      }
+                    }
+                  },
+                  {
+                    "type": "function",
+                    "function": {
+                      "name": "wait_for",
+                      "description": "End this run and resume when a matching event arrives.",
+                      "parameters": {
+                        "type": "object",
+                        "required": [
+                          "event_type"
+                        ],
+                        "properties": {
+                          "event_type": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "fields": {
+                            "type": "object"
+                          },
+                          "deadline": {
+                            "type": "string"
+                          }
+                        },
+                        "additionalProperties": false
+                      }
+                    }
+                  },
+                  {
+                    "type": "function",
+                    "function": {
+                      "name": "cancel",
+                      "description": "Cancel an active wait or pending scheduled event from this session.",
+                      "parameters": {
+                        "type": "object",
+                        "required": [
+                          "handle"
+                        ],
+                        "properties": {
+                          "handle": {
+                            "type": "string",
+                            "pattern": "^(?:wait|pub)_.+$"
+                          },
+                          "reason": {
+                            "type": "string",
+                            "minLength": 1
+                          }
+                        },
+                        "additionalProperties": false
+                      }
+                    }
+                  }
+                ],
+                "representation": "full"
+              },
+              "links": []
+            },
+            {
+              "id": "b3:05d47ec88d8f8944da60a91ed48a4c41adeef3c58aeebb3c61951be4eb390da7",
+              "kind": "assistant_message",
+              "schema": "zeta.model_output.v1",
+              "data": {
+                "message": {
+                  "tool_calls": [
+                    {
+                      "id": "call-publish-malformed",
+                      "type": "function",
+                      "function": {
+                        "name": "publish_event",
+                        "arguments": "{\"event_type\": \"issue.triaged\", \"payload\": {\"status\": \"ready\"}, \"at\": \"not-a-date\"}"
+                      }
+                    },
+                    {
+                      "id": "call-publish-naive",
+                      "type": "function",
+                      "function": {
+                        "name": "publish_event",
+                        "arguments": "{\"event_type\": \"issue.triaged\", \"payload\": {\"status\": \"ready\"}, \"at\": \"2030-01-02T03:04:05\"}"
+                      }
+                    },
+                    {
+                      "id": "call-publish-aware",
+                      "type": "function",
+                      "function": {
+                        "name": "publish_event",
+                        "arguments": "{\"event_type\": \"issue.triaged\", \"payload\": {\"status\": \"ready\"}, \"at\": \"2030-01-02T05:04:05+02:00\"}"
+                      }
+                    },
+                    {
+                      "id": "call-cancel-1",
+                      "type": "function",
+                      "function": {
+                        "name": "cancel",
+                        "arguments": "{\"handle\": \"wait_0123456789abcdef01234567\", \"reason\": \"No longer needed.\"}"
+                      }
+                    },
+                    {
+                      "id": "call-wait-malformed",
+                      "type": "function",
+                      "function": {
+                        "name": "wait_for",
+                        "arguments": "{\"event_type\": \"issue.updated\", \"deadline\": \"not-a-date\"}"
+                      }
+                    },
+                    {
+                      "id": "call-wait-naive",
+                      "type": "function",
+                      "function": {
+                        "name": "wait_for",
+                        "arguments": "{\"event_type\": \"issue.updated\", \"deadline\": \"2030-01-02T03:04:05\"}"
+                      }
+                    },
+                    {
+                      "id": "call-wait-aware",
+                      "type": "function",
+                      "function": {
+                        "name": "wait_for",
+                        "arguments": "{\"event_type\": \"issue.updated\", \"deadline\": \"2030-01-02T05:04:05+02:00\"}"
+                      }
+                    }
+                  ]
+                },
+                "model_output": {
+                  "message": {
+                    "tool_calls": [
+                      {
+                        "id": "call-publish-malformed",
+                        "type": "function",
+                        "function": {
+                          "name": "publish_event",
+                          "arguments": "{\"event_type\": \"issue.triaged\", \"payload\": {\"status\": \"ready\"}, \"at\": \"not-a-date\"}"
+                        }
+                      },
+                      {
+                        "id": "call-publish-naive",
+                        "type": "function",
+                        "function": {
+                          "name": "publish_event",
+                          "arguments": "{\"event_type\": \"issue.triaged\", \"payload\": {\"status\": \"ready\"}, \"at\": \"2030-01-02T03:04:05\"}"
+                        }
+                      },
+                      {
+                        "id": "call-publish-aware",
+                        "type": "function",
+                        "function": {
+                          "name": "publish_event",
+                          "arguments": "{\"event_type\": \"issue.triaged\", \"payload\": {\"status\": \"ready\"}, \"at\": \"2030-01-02T05:04:05+02:00\"}"
+                        }
+                      },
+                      {
+                        "id": "call-cancel-1",
+                        "type": "function",
+                        "function": {
+                          "name": "cancel",
+                          "arguments": "{\"handle\": \"wait_0123456789abcdef01234567\", \"reason\": \"No longer needed.\"}"
+                        }
+                      },
+                      {
+                        "id": "call-wait-malformed",
+                        "type": "function",
+                        "function": {
+                          "name": "wait_for",
+                          "arguments": "{\"event_type\": \"issue.updated\", \"deadline\": \"not-a-date\"}"
+                        }
+                      },
+                      {
+                        "id": "call-wait-naive",
+                        "type": "function",
+                        "function": {
+                          "name": "wait_for",
+                          "arguments": "{\"event_type\": \"issue.updated\", \"deadline\": \"2030-01-02T03:04:05\"}"
+                        }
+                      },
+                      {
+                        "id": "call-wait-aware",
+                        "type": "function",
+                        "function": {
+                          "name": "wait_for",
+                          "arguments": "{\"event_type\": \"issue.updated\", \"deadline\": \"2030-01-02T05:04:05+02:00\"}"
+                        }
+                      }
+                    ]
+                  }
+                }
+              },
+              "links": [
+                "b3:769c25c67a89f81dabf65a4e3a21ddfc800fb439695df991ea238c155d87dd4a"
+              ]
+            },
+            {
+              "id": "b3:05e19a4a1f60619811076401897d93179a35aec4d592ef19d32e1b4329de75df",
+              "kind": "tool_call",
+              "schema": "zeta.tool_call.v1",
+              "data": {
+                "tool_call_id": "call-wait-aware",
+                "name": "wait_for",
+                "input": {
+                  "event_type": "issue.updated",
+                  "deadline": "2030-01-02T05:04:05+02:00"
+                },
+                "arguments": "{\"event_type\": \"issue.updated\", \"deadline\": \"2030-01-02T05:04:05+02:00\"}"
+              },
+              "links": [
+                "b3:05d47ec88d8f8944da60a91ed48a4c41adeef3c58aeebb3c61951be4eb390da7"
+              ]
+            },
+            {
+              "id": "b3:0adea728a8aca27251f1b168524d7636021bdfd385aeb18b9f96ad755a343dfb",
+              "kind": "tool_call",
+              "schema": "zeta.tool_call.v1",
+              "data": {
+                "tool_call_id": "call-wait-malformed",
+                "name": "wait_for",
+                "input": {
+                  "event_type": "issue.updated",
+                  "deadline": "not-a-date"
+                },
+                "arguments": "{\"event_type\": \"issue.updated\", \"deadline\": \"not-a-date\"}"
+              },
+              "links": [
+                "b3:05d47ec88d8f8944da60a91ed48a4c41adeef3c58aeebb3c61951be4eb390da7"
+              ]
+            },
+            {
+              "id": "b3:0b6e1acf63dfd4f408f6109fa153d585ff64d136c1d3550d6b496f172da1f366",
+              "kind": "tool_result",
+              "schema": "zeta.tool_result.v1",
+              "data": {
+                "tool_call_id": "call-cancel-1",
+                "name": "cancel",
+                "result": {
+                  "ok": true,
+                  "handle": "wait_0123456789abcdef01234567",
+                  "status": "requested"
+                }
+              },
+              "links": [
+                "b3:5e1e65f12bd63f1ad8df26fe584966ff07e972f31a9cf6350c58dcdc1b20f1a2"
+              ]
+            },
+            {
+              "id": "b3:3eade3319a40868cc218047da8eb859427fd53f00aa8f8b906297b277ab6a41f",
+              "kind": "tool_call",
+              "schema": "zeta.tool_call.v1",
+              "data": {
+                "tool_call_id": "call-publish-aware",
+                "name": "publish_event",
+                "input": {
+                  "event_type": "issue.triaged",
+                  "payload": {
+                    "status": "ready"
+                  },
+                  "at": "2030-01-02T05:04:05+02:00"
+                },
+                "arguments": "{\"event_type\": \"issue.triaged\", \"payload\": {\"status\": \"ready\"}, \"at\": \"2030-01-02T05:04:05+02:00\"}"
+              },
+              "links": [
+                "b3:05d47ec88d8f8944da60a91ed48a4c41adeef3c58aeebb3c61951be4eb390da7"
+              ]
+            },
+            {
+              "id": "b3:4c17f1456121487f91aa7f019f9f8b06f0f3679ebf549291113406ebeec407f6",
+              "kind": "tool_result",
+              "schema": "zeta.tool_result.v1",
+              "data": {
+                "tool_call_id": "call-wait-aware",
+                "name": "wait_for",
+                "result": {
+                  "ok": true,
+                  "handle": "wait_b3:280abafa8485622f5a541539dc7d7ea41787115e5a5c53f52d2253aa7597babd",
+                  "stop": true
+                }
+              },
+              "links": [
+                "b3:05e19a4a1f60619811076401897d93179a35aec4d592ef19d32e1b4329de75df"
+              ]
+            },
+            {
+              "id": "b3:5857e69f3e84a9819b7d664c6f3021778fa5a13e3f953a52c179405e8b850e49",
+              "kind": "tool_result",
+              "schema": "zeta.tool_result.v1",
+              "data": {
+                "tool_call_id": "call-publish-malformed",
+                "name": "publish_event",
+                "result": {
+                  "ok": false,
+                  "error": {
+                    "code": "invalid-publish-time",
+                    "message": "at must be an ISO 8601 date-time with a UTC offset"
+                  }
+                }
+              },
+              "links": [
+                "b3:fa62c88885c2d9a2e0d7a370c1140793176c7ff322fef3bb5aa6256f72ad34ad"
+              ]
+            },
+            {
+              "id": "b3:5e1e65f12bd63f1ad8df26fe584966ff07e972f31a9cf6350c58dcdc1b20f1a2",
+              "kind": "tool_call",
+              "schema": "zeta.tool_call.v1",
+              "data": {
+                "tool_call_id": "call-cancel-1",
+                "name": "cancel",
+                "input": {
+                  "handle": "wait_0123456789abcdef01234567",
+                  "reason": "No longer needed."
+                },
+                "arguments": "{\"handle\": \"wait_0123456789abcdef01234567\", \"reason\": \"No longer needed.\"}"
+              },
+              "links": [
+                "b3:05d47ec88d8f8944da60a91ed48a4c41adeef3c58aeebb3c61951be4eb390da7"
+              ]
+            },
+            {
+              "id": "b3:7089992326eda51f70ce533065a920b333d8c8961f8287ce74ba094c4c0be34e",
+              "kind": "tool_result",
+              "schema": "zeta.tool_result.v1",
+              "data": {
+                "tool_call_id": "call-publish-naive",
+                "name": "publish_event",
+                "result": {
+                  "ok": false,
+                  "error": {
+                    "code": "invalid-publish-time",
+                    "message": "at must include a UTC offset"
+                  }
+                }
+              },
+              "links": [
+                "b3:83670ffc1171ba85b2f901d9b332d63692412dc325fa5cc13fd00f9b69d3a61a"
+              ]
+            },
+            {
+              "id": "b3:769c25c67a89f81dabf65a4e3a21ddfc800fb439695df991ea238c155d87dd4a",
+              "kind": "prompt",
+              "schema": "zeta.prompt.v2",
+              "data": {
+                "payload_address": "b3:d3b4409c683f359ed5cc695fd6b11835ecc11cea5d443594aa803ea241e00b53"
+              },
+              "links": [
+                "b3:dae6576adfa1ee2361e2102ef12eb8fdf7381de683fb25f373d4c8d62f0f7391",
+                "b3:01ee2db9050baf634441dabc4201d9ab53b46b51cedb648322b82afd70bce269",
+                "b3:a81163cf467dfc627a4deb8075dc3f4829e1112893e2b26fa8428e5110c8393f"
+              ]
+            },
+            {
+              "id": "b3:80ac08f5b37a2df1947542bca834633afa68e54c2186c6806702dba13ecab3a8",
+              "kind": "tool_result",
+              "schema": "zeta.tool_result.v1",
+              "data": {
+                "tool_call_id": "call-wait-naive",
+                "name": "wait_for",
+                "result": {
+                  "ok": false,
+                  "error": {
+                    "code": "invalid-wait-deadline",
+                    "message": "deadline must include a UTC offset"
+                  }
+                }
+              },
+              "links": [
+                "b3:9d7beef81f468cc25b69dc6d8ecfe6d22e5781d87b3fe6b9e1b0c0d5299e41d6"
+              ]
+            },
+            {
+              "id": "b3:83670ffc1171ba85b2f901d9b332d63692412dc325fa5cc13fd00f9b69d3a61a",
+              "kind": "tool_call",
+              "schema": "zeta.tool_call.v1",
+              "data": {
+                "tool_call_id": "call-publish-naive",
+                "name": "publish_event",
+                "input": {
+                  "event_type": "issue.triaged",
+                  "payload": {
+                    "status": "ready"
+                  },
+                  "at": "2030-01-02T03:04:05"
+                },
+                "arguments": "{\"event_type\": \"issue.triaged\", \"payload\": {\"status\": \"ready\"}, \"at\": \"2030-01-02T03:04:05\"}"
+              },
+              "links": [
+                "b3:05d47ec88d8f8944da60a91ed48a4c41adeef3c58aeebb3c61951be4eb390da7"
+              ]
+            },
+            {
+              "id": "b3:85065144b81dc24a0d16badd4ffc0f14007f55249bd26c31b408f358553c2b65",
+              "kind": "tool_result",
+              "schema": "zeta.tool_result.v1",
+              "data": {
+                "tool_call_id": "call-wait-malformed",
+                "name": "wait_for",
+                "result": {
+                  "ok": false,
+                  "error": {
+                    "code": "invalid-wait-deadline",
+                    "message": "deadline must be an ISO 8601 date-time with a UTC offset"
+                  }
+                }
+              },
+              "links": [
+                "b3:0adea728a8aca27251f1b168524d7636021bdfd385aeb18b9f96ad755a343dfb"
+              ]
+            },
+            {
+              "id": "b3:88ca0b394e155a0b0727c65483a64cecc61fda0767cced9dc2484c9abd841b02",
+              "kind": "tool_result",
+              "schema": "zeta.tool_result.v1",
+              "data": {
+                "tool_call_id": "call-publish-aware",
+                "name": "publish_event",
+                "result": {
+                  "ok": true,
+                  "handle": "pub_b3:f91a68b93dd0ff628d2a35e52f0ebccf35b7c688aa62a48c317040e6739af65d"
+                }
+              },
+              "links": [
+                "b3:3eade3319a40868cc218047da8eb859427fd53f00aa8f8b906297b277ab6a41f"
+              ]
+            },
+            {
+              "id": "b3:9d7beef81f468cc25b69dc6d8ecfe6d22e5781d87b3fe6b9e1b0c0d5299e41d6",
+              "kind": "tool_call",
+              "schema": "zeta.tool_call.v1",
+              "data": {
+                "tool_call_id": "call-wait-naive",
+                "name": "wait_for",
+                "input": {
+                  "event_type": "issue.updated",
+                  "deadline": "2030-01-02T03:04:05"
+                },
+                "arguments": "{\"event_type\": \"issue.updated\", \"deadline\": \"2030-01-02T03:04:05\"}"
+              },
+              "links": [
+                "b3:05d47ec88d8f8944da60a91ed48a4c41adeef3c58aeebb3c61951be4eb390da7"
+              ]
+            },
+            {
+              "id": "b3:a81163cf467dfc627a4deb8075dc3f4829e1112893e2b26fa8428e5110c8393f",
+              "kind": "user_message",
+              "schema": "zeta.prompt_component.v2",
+              "data": {
+                "objective": "Schedule updates and wait.",
+                "expanded_objective": "Schedule updates and wait.",
+                "context": "",
+                "message": {
+                  "role": "user",
+                  "content": "Schedule updates and wait.\n\ncwd:\n/workspace/zeta"
+                },
+                "representation": "full"
+              },
+              "links": []
+            },
+            {
+              "id": "b3:dae6576adfa1ee2361e2102ef12eb8fdf7381de683fb25f373d4c8d62f0f7391",
+              "kind": "system_prompt",
+              "schema": "zeta.prompt_component.v2",
+              "data": {
+                "content": "Answer plainly.\n\nToday is 2026-08-12 (Wednesday).\n\nTool protocol:\n\n- Tools are native Chat Completions function tools exposed by the runtime.\n- You may request multiple read-only tool calls in one turn when useful.\n- Mutating tools apply their effects when you call them.\n- Use a tool only when its schema matches the needed action.\n- Do not mention unavailable tools.\n- If no tool is needed, return a final answer.\n\nAvailable tools:\n- publish_event(event_type, payload, at?): Request an event when this agent attempt completes successfully.\n- wait_for(event_type, fields?, deadline?): End this run and resume when a matching event arrives.\n- cancel(handle, reason?): Cancel an active wait or pending scheduled event from this session.",
+                "base_prompt": "Answer plainly.",
+                "allowed_tools": [
+                  "zeta.publish_event",
+                  "zeta.wait_for",
+                  "zeta.cancel"
+                ],
+                "message": {
+                  "role": "system",
+                  "content": "Answer plainly.\n\nToday is 2026-08-12 (Wednesday).\n\nTool protocol:\n\n- Tools are native Chat Completions function tools exposed by the runtime.\n- You may request multiple read-only tool calls in one turn when useful.\n- Mutating tools apply their effects when you call them.\n- Use a tool only when its schema matches the needed action.\n- Do not mention unavailable tools.\n- If no tool is needed, return a final answer.\n\nAvailable tools:\n- publish_event(event_type, payload, at?): Request an event when this agent attempt completes successfully.\n- wait_for(event_type, fields?, deadline?): End this run and resume when a matching event arrives.\n- cancel(handle, reason?): Cancel an active wait or pending scheduled event from this session."
+                },
+                "representation": "full"
+              },
+              "links": []
+            },
+            {
+              "id": "b3:fa62c88885c2d9a2e0d7a370c1140793176c7ff322fef3bb5aa6256f72ad34ad",
+              "kind": "tool_call",
+              "schema": "zeta.tool_call.v1",
+              "data": {
+                "tool_call_id": "call-publish-malformed",
+                "name": "publish_event",
+                "input": {
+                  "event_type": "issue.triaged",
+                  "payload": {
+                    "status": "ready"
+                  },
+                  "at": "not-a-date"
+                },
+                "arguments": "{\"event_type\": \"issue.triaged\", \"payload\": {\"status\": \"ready\"}, \"at\": \"not-a-date\"}"
+              },
+              "links": [
+                "b3:05d47ec88d8f8944da60a91ed48a4c41adeef3c58aeebb3c61951be4eb390da7"
+              ]
+            }
+          ],
+          "derivations": [
+            {
+              "id": "b3:0d21a20b4d4eee265dc284f3dbdcb49afdec48a7e01d6fb20f8188015ac51b1d",
+              "producer": "ToolExecution",
+              "output_id": "b3:4c17f1456121487f91aa7f019f9f8b06f0f3679ebf549291113406ebeec407f6",
+              "input_ids": [
+                "b3:05e19a4a1f60619811076401897d93179a35aec4d592ef19d32e1b4329de75df"
+              ],
+              "params": {
+                "tool_call_id": "call-wait-aware",
+                "name": "wait_for"
+              }
+            },
+            {
+              "id": "b3:0da3e209d75a9b3277aa4e404d3f4868a0b2b5f5b9dcc0ff4ad06c41c16bf724",
+              "producer": "ToolCallProjection",
+              "output_id": "b3:fa62c88885c2d9a2e0d7a370c1140793176c7ff322fef3bb5aa6256f72ad34ad",
+              "input_ids": [
+                "b3:05d47ec88d8f8944da60a91ed48a4c41adeef3c58aeebb3c61951be4eb390da7"
+              ],
+              "params": {
+                "tool_call_id": "call-publish-malformed",
+                "name": "publish_event"
+              }
+            },
+            {
+              "id": "b3:224c2e4e395cce34fcf2ee4c041e042ee3c6d03d3106f63dd094c37c7ba680ff",
+              "producer": "ToolCallProjection",
+              "output_id": "b3:3eade3319a40868cc218047da8eb859427fd53f00aa8f8b906297b277ab6a41f",
+              "input_ids": [
+                "b3:05d47ec88d8f8944da60a91ed48a4c41adeef3c58aeebb3c61951be4eb390da7"
+              ],
+              "params": {
+                "tool_call_id": "call-publish-aware",
+                "name": "publish_event"
+              }
+            },
+            {
+              "id": "b3:2705451b77d250b6fbcb799dae864ef9fddf7904ae4d419d1e75ee2438ff6f5c",
+              "producer": "ToolExecution",
+              "output_id": "b3:85065144b81dc24a0d16badd4ffc0f14007f55249bd26c31b408f358553c2b65",
+              "input_ids": [
+                "b3:0adea728a8aca27251f1b168524d7636021bdfd385aeb18b9f96ad755a343dfb"
+              ],
+              "params": {
+                "tool_call_id": "call-wait-malformed",
+                "name": "wait_for"
+              }
+            },
+            {
+              "id": "b3:3de56b9809efded32c5c434a1f57fe81fd7df99a86145dab972f690b17fd5c1f",
+              "producer": "ToolCallProjection",
+              "output_id": "b3:83670ffc1171ba85b2f901d9b332d63692412dc325fa5cc13fd00f9b69d3a61a",
+              "input_ids": [
+                "b3:05d47ec88d8f8944da60a91ed48a4c41adeef3c58aeebb3c61951be4eb390da7"
+              ],
+              "params": {
+                "tool_call_id": "call-publish-naive",
+                "name": "publish_event"
+              }
+            },
+            {
+              "id": "b3:4160d5d01dd71af9170ccef2da744bceb89e5f7b0d12d2c7f5e4df60ddf12308",
+              "producer": "ToolExecution",
+              "output_id": "b3:5857e69f3e84a9819b7d664c6f3021778fa5a13e3f953a52c179405e8b850e49",
+              "input_ids": [
+                "b3:fa62c88885c2d9a2e0d7a370c1140793176c7ff322fef3bb5aa6256f72ad34ad"
+              ],
+              "params": {
+                "tool_call_id": "call-publish-malformed",
+                "name": "publish_event"
+              }
+            },
+            {
+              "id": "b3:5e3337ed647ecfde8ab6cf6c4e45faa5c67811e52a041d98b1b39351a5f9e35b",
+              "producer": "PromptBuilder",
+              "output_id": "b3:769c25c67a89f81dabf65a4e3a21ddfc800fb439695df991ea238c155d87dd4a",
+              "input_ids": [
+                "b3:dae6576adfa1ee2361e2102ef12eb8fdf7381de683fb25f373d4c8d62f0f7391",
+                "b3:01ee2db9050baf634441dabc4201d9ab53b46b51cedb648322b82afd70bce269",
+                "b3:a81163cf467dfc627a4deb8075dc3f4829e1112893e2b26fa8428e5110c8393f"
+              ],
+              "params": {
+                "max_tokens": 8192,
+                "selected_model": "unit-model",
+                "thinking": null
+              }
+            },
+            {
+              "id": "b3:7257fbd2a76f0d5e579e27e86bac3b3f67ce765047f5e2382532b38b300644b1",
+              "producer": "ToolExecution",
+              "output_id": "b3:88ca0b394e155a0b0727c65483a64cecc61fda0767cced9dc2484c9abd841b02",
+              "input_ids": [
+                "b3:3eade3319a40868cc218047da8eb859427fd53f00aa8f8b906297b277ab6a41f"
+              ],
+              "params": {
+                "tool_call_id": "call-publish-aware",
+                "name": "publish_event"
+              }
+            },
+            {
+              "id": "b3:77875dd66f672b9d878f9ca550b285f3944cabe77256cbd39d98a8b876b6cf19",
+              "producer": "ToolCallProjection",
+              "output_id": "b3:5e1e65f12bd63f1ad8df26fe584966ff07e972f31a9cf6350c58dcdc1b20f1a2",
+              "input_ids": [
+                "b3:05d47ec88d8f8944da60a91ed48a4c41adeef3c58aeebb3c61951be4eb390da7"
+              ],
+              "params": {
+                "tool_call_id": "call-cancel-1",
+                "name": "cancel"
+              }
+            },
+            {
+              "id": "b3:c9c5c9b28f35efd30e98335f83311fa86c44ea1f31a9832019c55d61aae46561",
+              "producer": "ToolExecution",
+              "output_id": "b3:80ac08f5b37a2df1947542bca834633afa68e54c2186c6806702dba13ecab3a8",
+              "input_ids": [
+                "b3:9d7beef81f468cc25b69dc6d8ecfe6d22e5781d87b3fe6b9e1b0c0d5299e41d6"
+              ],
+              "params": {
+                "tool_call_id": "call-wait-naive",
+                "name": "wait_for"
+              }
+            },
+            {
+              "id": "b3:cfe10b969fad2be843f780556c4e6f38c52f004cdb7e772cc91c7c11b587b74a",
+              "producer": "ToolExecution",
+              "output_id": "b3:0b6e1acf63dfd4f408f6109fa153d585ff64d136c1d3550d6b496f172da1f366",
+              "input_ids": [
+                "b3:5e1e65f12bd63f1ad8df26fe584966ff07e972f31a9cf6350c58dcdc1b20f1a2"
+              ],
+              "params": {
+                "tool_call_id": "call-cancel-1",
+                "name": "cancel"
+              }
+            },
+            {
+              "id": "b3:d26af07dc482546efbe1d2924a0cd803dba0078e0b5d66a9188faf907aa99898",
+              "producer": "ToolCallProjection",
+              "output_id": "b3:0adea728a8aca27251f1b168524d7636021bdfd385aeb18b9f96ad755a343dfb",
+              "input_ids": [
+                "b3:05d47ec88d8f8944da60a91ed48a4c41adeef3c58aeebb3c61951be4eb390da7"
+              ],
+              "params": {
+                "tool_call_id": "call-wait-malformed",
+                "name": "wait_for"
+              }
+            },
+            {
+              "id": "b3:dfa7048cada58dcb8ab8c6a27bf548fa787be32bc3324156b49a8f826562572c",
+              "producer": "ToolCallProjection",
+              "output_id": "b3:05e19a4a1f60619811076401897d93179a35aec4d592ef19d32e1b4329de75df",
+              "input_ids": [
+                "b3:05d47ec88d8f8944da60a91ed48a4c41adeef3c58aeebb3c61951be4eb390da7"
+              ],
+              "params": {
+                "tool_call_id": "call-wait-aware",
+                "name": "wait_for"
+              }
+            },
+            {
+              "id": "b3:e057e9c3f644c633232b9f5824d65cc8c9cc69cdef249b5c044a0210f22a7565",
+              "producer": "ToolCallProjection",
+              "output_id": "b3:9d7beef81f468cc25b69dc6d8ecfe6d22e5781d87b3fe6b9e1b0c0d5299e41d6",
+              "input_ids": [
+                "b3:05d47ec88d8f8944da60a91ed48a4c41adeef3c58aeebb3c61951be4eb390da7"
+              ],
+              "params": {
+                "tool_call_id": "call-wait-naive",
+                "name": "wait_for"
+              }
+            },
+            {
+              "id": "b3:e65f9f479ef5789ca0749375771d513bf4e92b6b3b8bbb7bac6e9b7f53f06124",
+              "producer": "ModelResponse",
+              "output_id": "b3:05d47ec88d8f8944da60a91ed48a4c41adeef3c58aeebb3c61951be4eb390da7",
+              "input_ids": [
+                "b3:769c25c67a89f81dabf65a4e3a21ddfc800fb439695df991ea238c155d87dd4a"
+              ],
+              "params": {}
+            },
+            {
+              "id": "b3:e6817d9742c04d6db35f0c0c9f94013c24105488916a426b87d52eeed472bd89",
+              "producer": "ToolExecution",
+              "output_id": "b3:7089992326eda51f70ce533065a920b333d8c8961f8287ce74ba094c4c0be34e",
+              "input_ids": [
+                "b3:83670ffc1171ba85b2f901d9b332d63692412dc325fa5cc13fd00f9b69d3a61a"
+              ],
+              "params": {
+                "tool_call_id": "call-publish-naive",
+                "name": "publish_event"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "cancelled_after_model_return",
+      "invocation": {
+        "objective": "Stop after the model returns.",
+        "timeline": [],
+        "context": "",
+        "system_prompt": "Answer plainly.",
+        "allowed_capabilities": [],
+        "max_model_calls": 1,
+        "model_name": "unit-model",
+        "base_directory": "/workspace/zeta",
+        "source_queue_item_id": null
+      },
+      "capabilities": [],
+      "model_script": [
+        {
+          "message": {
+            "content": "This answer must not become durable."
+          },
+          "stream": [],
+          "telemetry": {
+            "usage": {
+              "completion_tokens": 7
+            }
+          },
+          "cancel_after_return": true
+        }
+      ],
+      "tool_results": {},
+      "event_ids": [],
+      "cancelled": false,
+      "expected": {
+        "aborted": true,
+        "abort_reason": "cancelled",
+        "final_answer": "",
+        "final_object_id": null,
+        "stop_reason": null,
+        "answer_streamed": false,
+        "telemetry": {
+          "usage": {
+            "completion_tokens": 7
+          }
+        },
+        "model_telemetry_calls": [
+          {
+            "usage": {
+              "completion_tokens": 7
+            }
+          }
+        ],
+        "events": [
+          {
+            "type": "zeta.turn.failed",
+            "source": "zeta",
+            "payload": {
+              "_timeline_type": "turn_aborted",
+              "reason": "cancelled",
+              "content": "(turn aborted: cancelled)"
+            },
+            "idempotency_key": null,
+            "caused_by": null,
+            "session_id": null,
+            "run_id": null,
+            "turn_id": null
+          }
+        ],
+        "observations": [],
+        "requests": [],
+        "prompt_traces": [
+          {
+            "prompt_object_id": "b3:7d842ba67007f210aeb55f257f7f9a07a321c845e297fa76033f17c24dc22072",
+            "assistant_message_object_id": null
+          }
+        ],
+        "steps": [
+          "check_budget",
+          "build_prompt",
+          "call_model",
+          "record_assistant",
+          "abort_run"
+        ],
+        "model_call_count": 1,
+        "executor_calls": [],
+        "trace": {
+          "objects": [
+            {
+              "id": "b3:429b58b0f2ff2126537013e92f711c7a77b5eb6e25ccd2a6574c5a7b4da0fad3",
+              "kind": "tool_descriptor_set",
+              "schema": "zeta.prompt_component.v2",
+              "data": {
+                "allowed_tools": [],
+                "tools": [],
+                "representation": "full"
+              },
+              "links": []
+            },
+            {
+              "id": "b3:7d842ba67007f210aeb55f257f7f9a07a321c845e297fa76033f17c24dc22072",
+              "kind": "prompt",
+              "schema": "zeta.prompt.v2",
+              "data": {
+                "payload_address": "b3:454d8cafd288cebcbfc54dba929baddb036921cae0867a80aac8b12488196d22"
+              },
+              "links": [
+                "b3:836635ef9164484efd259330b8b1d9578b3894f506c80908aa29c46899f53971",
+                "b3:429b58b0f2ff2126537013e92f711c7a77b5eb6e25ccd2a6574c5a7b4da0fad3",
+                "b3:af80d9d2f465e799a66a96fa3464e297a8960cbcac780b7e1c71f78196428433"
+              ]
+            },
+            {
+              "id": "b3:836635ef9164484efd259330b8b1d9578b3894f506c80908aa29c46899f53971",
+              "kind": "system_prompt",
+              "schema": "zeta.prompt_component.v2",
+              "data": {
+                "content": "Answer plainly.\n\nToday is 2026-08-12 (Wednesday).\n\nTool protocol:\n\n- Tools are native Chat Completions function tools exposed by the runtime.\n- You may request multiple read-only tool calls in one turn when useful.\n- Mutating tools apply their effects when you call them.\n- Use a tool only when its schema matches the needed action.\n- Do not mention unavailable tools.\n- If no tool is needed, return a final answer.\n\nAvailable tools:\n(none)",
+                "base_prompt": "Answer plainly.",
+                "allowed_tools": [],
+                "message": {
+                  "role": "system",
+                  "content": "Answer plainly.\n\nToday is 2026-08-12 (Wednesday).\n\nTool protocol:\n\n- Tools are native Chat Completions function tools exposed by the runtime.\n- You may request multiple read-only tool calls in one turn when useful.\n- Mutating tools apply their effects when you call them.\n- Use a tool only when its schema matches the needed action.\n- Do not mention unavailable tools.\n- If no tool is needed, return a final answer.\n\nAvailable tools:\n(none)"
+                },
+                "representation": "full"
+              },
+              "links": []
+            },
+            {
+              "id": "b3:af80d9d2f465e799a66a96fa3464e297a8960cbcac780b7e1c71f78196428433",
+              "kind": "user_message",
+              "schema": "zeta.prompt_component.v2",
+              "data": {
+                "objective": "Stop after the model returns.",
+                "expanded_objective": "Stop after the model returns.",
+                "context": "",
+                "message": {
+                  "role": "user",
+                  "content": "Stop after the model returns.\n\ncwd:\n/workspace/zeta"
+                },
+                "representation": "full"
+              },
+              "links": []
+            }
+          ],
+          "derivations": [
+            {
+              "id": "b3:9a44bf4332b2954d03f063c55ed6302d0eb5c6ba435d2adce57b0c7fc1680de3",
+              "producer": "PromptBuilder",
+              "output_id": "b3:7d842ba67007f210aeb55f257f7f9a07a321c845e297fa76033f17c24dc22072",
+              "input_ids": [
+                "b3:836635ef9164484efd259330b8b1d9578b3894f506c80908aa29c46899f53971",
+                "b3:429b58b0f2ff2126537013e92f711c7a77b5eb6e25ccd2a6574c5a7b4da0fad3",
+                "b3:af80d9d2f465e799a66a96fa3464e297a8960cbcac780b7e1c71f78196428433"
+              ],
+              "params": {
+                "max_tokens": 8192,
+                "selected_model": "unit-model",
+                "thinking": null
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "content_query_transform_and_finish",
+      "invocation": {
+        "objective": "Inspect, update, and finish from the content graph.",
+        "timeline": [],
+        "context": "",
+        "system_prompt": "Answer plainly.",
+        "allowed_capabilities": [
+          "zeta.query_content",
+          "zeta.transform_content",
+          "zeta.finish"
+        ],
+        "max_model_calls": 2,
+        "model_name": "unit-model",
+        "base_directory": "/workspace/zeta",
+        "source_queue_item_id": "qi-content-transform"
+      },
+      "capabilities": [
+        {
+          "id": "zeta.query_content",
+          "description": "Query the current content workspace. The result contains stable object references and bounded previews.",
+          "input_schema": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "key_prefix": {
+                "type": "string"
+              },
+              "kind": {
+                "type": "string"
+              },
+              "source_scope": {
+                "enum": [
+                  "run",
+                  "session",
+                  "agent"
+                ]
+              },
+              "limit": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 50
+              },
+              "cursor": {
+                "type": "integer",
+                "minimum": 0
+              }
+            }
+          }
+        },
+        {
+          "id": "zeta.transform_content",
+          "description": "Create a new content revision. Use an explicit run, session, or agent destination. Durable changes become active only after the run succeeds.",
+          "input_schema": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "expected_head",
+              "reason",
+              "inputs",
+              "transformation",
+              "destination"
+            ],
+            "properties": {
+              "expected_head": {
+                "type": "string",
+                "minLength": 1
+              },
+              "reason": {
+                "type": "string",
+                "minLength": 1
+              },
+              "inputs": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "keys": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    },
+                    "uniqueItems": true
+                  },
+                  "kind": {
+                    "type": "string"
+                  },
+                  "source_scope": {
+                    "enum": [
+                      "run",
+                      "session",
+                      "agent"
+                    ]
+                  }
+                }
+              },
+              "transformation": {
+                "type": "object",
+                "required": [
+                  "type"
+                ],
+                "properties": {
+                  "type": {
+                    "enum": [
+                      "literal",
+                      "patch",
+                      "drop",
+                      "identity",
+                      "model",
+                      "python"
+                    ]
+                  },
+                  "value": {},
+                  "title": {
+                    "type": "string"
+                  },
+                  "attributes": {
+                    "type": "object"
+                  },
+                  "patch": {
+                    "type": "object"
+                  },
+                  "instruction": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "mode": {
+                    "enum": [
+                      "one",
+                      "map",
+                      "reduce"
+                    ]
+                  },
+                  "max_concurrency": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 8
+                  },
+                  "source": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 131072
+                  },
+                  "timeout_seconds": {
+                    "type": "number",
+                    "exclusiveMinimum": 0,
+                    "maximum": 300
+                  }
+                }
+              },
+              "destination": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "scope",
+                  "expected_object_id"
+                ],
+                "properties": {
+                  "key": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "kind": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "scope": {
+                    "enum": [
+                      "run",
+                      "session",
+                      "agent"
+                    ]
+                  },
+                  "expected_object_id": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "id": "zeta.finish",
+          "description": "Select one object from the current content graph as the final answer. Use this when copying the complete value into a model message is wasteful.",
+          "input_schema": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "object_id"
+            ],
+            "properties": {
+              "object_id": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
+        }
+      ],
+      "content_setup": {
+        "run_id": "run-vector-content",
+        "session_id": "session-vector-content",
+        "owner": "vector-agent",
+        "initial": [
+          {
+            "alias": "answer",
+            "params": {
+              "reason": "Store the complete answer.",
+              "inputs": {},
+              "transformation": {
+                "type": "literal",
+                "value": "The complete graph-backed answer."
+              },
+              "destination": {
+                "key": "evidence/release",
+                "kind": "text",
+                "scope": "run",
+                "expected_object_id": null
+              }
+            }
+          }
+        ]
+      },
+      "model_script": [
+        {
+          "message": {
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "call-content-query",
+                "type": "function",
+                "function": {
+                  "name": "query_content",
+                  "arguments": "{\"key_prefix\": \"evidence/\"}"
+                }
+              },
+              {
+                "id": "call-content-transform",
+                "type": "function",
+                "function": {
+                  "name": "transform_content",
+                  "arguments": "{\"expected_head\": \"b3:eb537f19430f454fea4a48f8239218a9fce4a9ee423f1862107adf07100e678b\", \"reason\": \"Reuse this procedure later.\", \"inputs\": {}, \"transformation\": {\"type\": \"literal\", \"value\": \"Run focused tests first.\"}, \"destination\": {\"key\": \"testing/procedure\", \"kind\": \"procedure\", \"scope\": \"agent\", \"expected_object_id\": null}}"
+                }
+              },
+              {
+                "id": "call-content-finish",
+                "type": "function",
+                "function": {
+                  "name": "finish",
+                  "arguments": "{\"object_id\": \"b3:1a8c914636d830fdb7a46d3f71e8928fcf673688aa9883bb33a7ce758b718eea\"}"
+                }
+              }
+            ]
+          },
+          "stream": [],
+          "telemetry": {}
+        }
+      ],
+      "tool_results": {},
+      "event_ids": [
+        "model-content-1",
+        "result-content-query-1",
+        "result-content-transform-1",
+        "result-content-finish-1"
+      ],
+      "cancelled": false,
+      "expected": {
+        "aborted": false,
+        "abort_reason": null,
+        "final_answer": "The complete graph-backed answer.",
+        "final_object_id": "b3:1a8c914636d830fdb7a46d3f71e8928fcf673688aa9883bb33a7ce758b718eea",
+        "stop_reason": "tool_stop",
+        "answer_streamed": false,
+        "telemetry": {},
+        "model_telemetry_calls": [],
+        "events": [
+          {
+            "type": "zeta.model_call.completed",
+            "source": "zeta",
+            "payload": {
+              "tool_calls": [
+                {
+                  "id": "call-content-query",
+                  "type": "function",
+                  "function": {
+                    "name": "query_content",
+                    "arguments": "{\"key_prefix\": \"evidence/\"}"
+                  }
+                },
+                {
+                  "id": "call-content-transform",
+                  "type": "function",
+                  "function": {
+                    "name": "transform_content",
+                    "arguments": "{\"expected_head\": \"b3:eb537f19430f454fea4a48f8239218a9fce4a9ee423f1862107adf07100e678b\", \"reason\": \"Reuse this procedure later.\", \"inputs\": {}, \"transformation\": {\"type\": \"literal\", \"value\": \"Run focused tests first.\"}, \"destination\": {\"key\": \"testing/procedure\", \"kind\": \"procedure\", \"scope\": \"agent\", \"expected_object_id\": null}}"
+                  }
+                },
+                {
+                  "id": "call-content-finish",
+                  "type": "function",
+                  "function": {
+                    "name": "finish",
+                    "arguments": "{\"object_id\": \"b3:1a8c914636d830fdb7a46d3f71e8928fcf673688aa9883bb33a7ce758b718eea\"}"
+                  }
+                }
+              ],
+              "prompt_object_id": "b3:686528cf0222799fca90f45f3041a929e5943df5062da5a9a1cb58dd4ebfb7a0",
+              "_timeline_type": "model"
+            },
+            "idempotency_key": "zeta.model_call.completed:model-content-1",
+            "caused_by": null,
+            "session_id": null,
+            "run_id": null,
+            "turn_id": null
+          },
+          {
+            "type": "zeta.tool_call.started",
+            "source": "zeta",
+            "payload": {
+              "tool_call_id": "call-content-query",
+              "status": "pending",
+              "name": "query_content",
+              "input": {
+                "key_prefix": "evidence/"
+              },
+              "arguments": "{\"key_prefix\": \"evidence/\"}",
+              "capability_id": "zeta.query_content",
+              "_timeline_type": "tool_call"
+            },
+            "idempotency_key": "zeta.tool_call.started:call-content-query",
+            "caused_by": "model-content-1",
+            "session_id": null,
+            "run_id": null,
+            "turn_id": null
+          },
+          {
+            "type": "zeta.tool_call.completed",
+            "source": "zeta",
+            "payload": {
+              "tool_call_id": "call-content-query",
+              "status": "completed",
+              "name": "query_content",
+              "result": {
+                "ok": true,
+                "head": "b3:eb537f19430f454fea4a48f8239218a9fce4a9ee423f1862107adf07100e678b",
+                "items": [
+                  {
+                    "key": "evidence/release",
+                    "kind": "text",
+                    "title": "",
+                    "object_id": "b3:1a8c914636d830fdb7a46d3f71e8928fcf673688aa9883bb33a7ce758b718eea",
+                    "source_scope": "run",
+                    "chars": 33,
+                    "preview": "The complete graph-backed answer."
+                  }
+                ],
+                "next_cursor": null
+              },
+              "capability_id": "zeta.query_content",
+              "_timeline_type": "tool_result"
+            },
+            "idempotency_key": "zeta.tool_call.completed:result-content-query-1",
+            "caused_by": "model-content-1",
+            "session_id": null,
+            "run_id": null,
+            "turn_id": null
+          },
+          {
+            "type": "zeta.tool_call.started",
+            "source": "zeta",
+            "payload": {
+              "tool_call_id": "call-content-transform",
+              "status": "pending",
+              "name": "transform_content",
+              "input": {
+                "expected_head": "b3:eb537f19430f454fea4a48f8239218a9fce4a9ee423f1862107adf07100e678b",
+                "reason": "Reuse this procedure later.",
+                "inputs": {},
+                "transformation": {
+                  "type": "literal",
+                  "value": "Run focused tests first."
+                },
+                "destination": {
+                  "key": "testing/procedure",
+                  "kind": "procedure",
+                  "scope": "agent",
+                  "expected_object_id": null
+                }
+              },
+              "arguments": "{\"expected_head\": \"b3:eb537f19430f454fea4a48f8239218a9fce4a9ee423f1862107adf07100e678b\", \"reason\": \"Reuse this procedure later.\", \"inputs\": {}, \"transformation\": {\"type\": \"literal\", \"value\": \"Run focused tests first.\"}, \"destination\": {\"key\": \"testing/procedure\", \"kind\": \"procedure\", \"scope\": \"agent\", \"expected_object_id\": null}}",
+              "capability_id": "zeta.transform_content",
+              "_timeline_type": "tool_call"
+            },
+            "idempotency_key": "zeta.tool_call.started:call-content-transform",
+            "caused_by": "model-content-1",
+            "session_id": null,
+            "run_id": null,
+            "turn_id": null
+          },
+          {
+            "type": "zeta.tool_call.completed",
+            "source": "zeta",
+            "payload": {
+              "tool_call_id": "call-content-transform",
+              "status": "completed",
+              "name": "transform_content",
+              "result": {
+                "ok": true,
+                "status": "applied",
+                "active_scope": "run",
+                "head": "b3:7d41845c4601d6b49f3523b29a9a7354ca00f9e3dda54979d7c8fa68e1650c09",
+                "object_ids": [
+                  "b3:1e78497ab918eabf537bbce9ebb094ff92c4633f7a6549ee87ce0698bf090597"
+                ],
+                "promotions": [
+                  {
+                    "scope": "agent",
+                    "key": "testing/procedure",
+                    "status": "requested"
+                  }
+                ]
+              },
+              "capability_id": "zeta.transform_content",
+              "_timeline_type": "tool_result"
+            },
+            "idempotency_key": "zeta.tool_call.completed:result-content-transform-1",
+            "caused_by": "model-content-1",
+            "session_id": null,
+            "run_id": null,
+            "turn_id": null
+          },
+          {
+            "type": "zeta.tool_call.started",
+            "source": "zeta",
+            "payload": {
+              "tool_call_id": "call-content-finish",
+              "status": "pending",
+              "name": "finish",
+              "input": {
+                "object_id": "b3:1a8c914636d830fdb7a46d3f71e8928fcf673688aa9883bb33a7ce758b718eea"
+              },
+              "arguments": "{\"object_id\": \"b3:1a8c914636d830fdb7a46d3f71e8928fcf673688aa9883bb33a7ce758b718eea\"}",
+              "capability_id": "zeta.finish",
+              "_timeline_type": "tool_call"
+            },
+            "idempotency_key": "zeta.tool_call.started:call-content-finish",
+            "caused_by": "model-content-1",
+            "session_id": null,
+            "run_id": null,
+            "turn_id": null
+          },
+          {
+            "type": "zeta.tool_call.completed",
+            "source": "zeta",
+            "payload": {
+              "tool_call_id": "call-content-finish",
+              "status": "completed",
+              "name": "finish",
+              "result": {
+                "ok": true,
+                "stop": true,
+                "object_id": "b3:1a8c914636d830fdb7a46d3f71e8928fcf673688aa9883bb33a7ce758b718eea"
+              },
+              "capability_id": "zeta.finish",
+              "_timeline_type": "tool_result"
+            },
+            "idempotency_key": "zeta.tool_call.completed:result-content-finish-1",
+            "caused_by": "model-content-1",
+            "session_id": null,
+            "run_id": null,
+            "turn_id": null
+          }
+        ],
+        "observations": [],
+        "requests": [
+          {
+            "type": "content_promotion",
+            "scope": "agent",
+            "key": "testing/procedure",
+            "object_id": "b3:1e78497ab918eabf537bbce9ebb094ff92c4633f7a6549ee87ce0698bf090597",
+            "expected_head": null,
+            "expected_object_id": null,
+            "source_head": "b3:7d41845c4601d6b49f3523b29a9a7354ca00f9e3dda54979d7c8fa68e1650c09",
+            "reason": "Reuse this procedure later."
+          }
+        ],
+        "prompt_traces": [
+          {
+            "prompt_object_id": "b3:686528cf0222799fca90f45f3041a929e5943df5062da5a9a1cb58dd4ebfb7a0",
+            "assistant_message_object_id": "b3:679fa674bd7ba20d9aceb123baf03eb9ee6ffc443cd98f24cf5e6126cbd63d46"
+          }
+        ],
+        "steps": [
+          "check_budget",
+          "build_prompt",
+          "call_model",
+          "record_assistant",
+          "check_budget",
+          "record_capability_call",
+          "execute_capability",
+          "record_capability_result",
+          "check_budget",
+          "record_capability_call",
+          "execute_capability",
+          "record_capability_result",
+          "check_budget",
+          "record_capability_call",
+          "execute_capability",
+          "record_capability_result",
+          "finish_run"
+        ],
+        "model_call_count": 1,
+        "executor_calls": [],
+        "trace": {
+          "objects": [
+            {
+              "id": "b3:0bc6116fec1bdfc3d6e00caa21e9aaa456ea08aeec31fb1f9ca1d08cd32a1fb7",
+              "kind": "tool_result",
+              "schema": "zeta.tool_result.v1",
+              "data": {
+                "tool_call_id": "call-content-finish",
+                "name": "finish",
+                "result": {
+                  "ok": true,
+                  "stop": true,
+                  "object_id": "b3:1a8c914636d830fdb7a46d3f71e8928fcf673688aa9883bb33a7ce758b718eea"
+                }
+              },
+              "links": [
+                "b3:617573fb48f699bbd721fa358220070172aa89589b4541920ad885ffd4b6eaea"
+              ]
+            },
+            {
+              "id": "b3:0e3936b0bab7e8911539c870f720563e03b58f449580dbb616532d139b7857e4",
+              "kind": "user_message",
+              "schema": "zeta.prompt_component.v2",
+              "data": {
+                "objective": "Inspect, update, and finish from the content graph.",
+                "expanded_objective": "Inspect, update, and finish from the content graph.",
+                "context": "",
+                "message": {
+                  "role": "user",
+                  "content": "Inspect, update, and finish from the content graph.\n\ncwd:\n/workspace/zeta"
+                },
+                "representation": "full"
+              },
+              "links": []
+            },
+            {
+              "id": "b3:1e78497ab918eabf537bbce9ebb094ff92c4633f7a6549ee87ce0698bf090597",
+              "kind": "content_node",
+              "schema": "zeta.content_node.v1",
+              "data": {
+                "key": "testing/procedure",
+                "kind": "procedure",
+                "title": "",
+                "content": "Run focused tests first.",
+                "attributes": {}
+              },
+              "links": []
+            },
+            {
+              "id": "b3:2748195cd3822e750a1427c843d24b28da9fda728be047c76aad11f9283206b6",
+              "kind": "tool_result",
+              "schema": "zeta.tool_result.v1",
+              "data": {
+                "tool_call_id": "call-content-transform",
+                "name": "transform_content",
+                "result": {
+                  "ok": true,
+                  "status": "applied",
+                  "active_scope": "run",
+                  "head": "b3:7d41845c4601d6b49f3523b29a9a7354ca00f9e3dda54979d7c8fa68e1650c09",
+                  "object_ids": [
+                    "b3:1e78497ab918eabf537bbce9ebb094ff92c4633f7a6549ee87ce0698bf090597"
+                  ],
+                  "promotions": [
+                    {
+                      "scope": "agent",
+                      "key": "testing/procedure",
+                      "status": "requested"
+                    }
+                  ]
+                }
+              },
+              "links": [
+                "b3:50b602ed4b8d60cbe6f01f3a273a546fd7c269d3c1c0390349debeefefb36862"
+              ]
+            },
+            {
+              "id": "b3:29f17c6df7c2cff179d0b81093fec54490cb0746d69cf82a33e553cf55424cab",
+              "kind": "tool_descriptor_set",
+              "schema": "zeta.prompt_component.v2",
+              "data": {
+                "allowed_tools": [
+                  "zeta.query_content",
+                  "zeta.transform_content",
+                  "zeta.finish",
+                  "zeta.wait_for"
+                ],
+                "tools": [
+                  {
+                    "type": "function",
+                    "function": {
+                      "name": "query_content",
+                      "description": "Query the current content workspace. The result contains stable object references and bounded previews.",
+                      "parameters": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "properties": {
+                          "key_prefix": {
+                            "type": "string"
+                          },
+                          "kind": {
+                            "type": "string"
+                          },
+                          "source_scope": {
+                            "enum": [
+                              "run",
+                              "session",
+                              "agent"
+                            ]
+                          },
+                          "limit": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 50
+                          },
+                          "cursor": {
+                            "type": "integer",
+                            "minimum": 0
+                          }
+                        }
+                      }
+                    }
+                  },
+                  {
+                    "type": "function",
+                    "function": {
+                      "name": "transform_content",
+                      "description": "Create a new content revision. Use an explicit run, session, or agent destination. Durable changes become active only after the run succeeds.",
+                      "parameters": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "expected_head",
+                          "reason",
+                          "inputs",
+                          "transformation",
+                          "destination"
+                        ],
+                        "properties": {
+                          "expected_head": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "reason": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "inputs": {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "properties": {
+                              "keys": {
+                                "type": "array",
+                                "items": {
+                                  "type": "string"
+                                },
+                                "uniqueItems": true
+                              },
+                              "kind": {
+                                "type": "string"
+                              },
+                              "source_scope": {
+                                "enum": [
+                                  "run",
+                                  "session",
+                                  "agent"
+                                ]
+                              }
+                            }
+                          },
+                          "transformation": {
+                            "type": "object",
+                            "required": [
+                              "type"
+                            ],
+                            "properties": {
+                              "type": {
+                                "enum": [
+                                  "literal",
+                                  "patch",
+                                  "drop",
+                                  "identity",
+                                  "model",
+                                  "python"
+                                ]
+                              },
+                              "value": {},
+                              "title": {
+                                "type": "string"
+                              },
+                              "attributes": {
+                                "type": "object"
+                              },
+                              "patch": {
+                                "type": "object"
+                              },
+                              "instruction": {
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              "mode": {
+                                "enum": [
+                                  "one",
+                                  "map",
+                                  "reduce"
+                                ]
+                              },
+                              "max_concurrency": {
+                                "type": "integer",
+                                "minimum": 1,
+                                "maximum": 8
+                              },
+                              "source": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 131072
+                              },
+                              "timeout_seconds": {
+                                "type": "number",
+                                "exclusiveMinimum": 0,
+                                "maximum": 300
+                              }
+                            }
+                          },
+                          "destination": {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "required": [
+                              "scope",
+                              "expected_object_id"
+                            ],
+                            "properties": {
+                              "key": {
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              "kind": {
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              "scope": {
+                                "enum": [
+                                  "run",
+                                  "session",
+                                  "agent"
+                                ]
+                              },
+                              "expected_object_id": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  },
+                  {
+                    "type": "function",
+                    "function": {
+                      "name": "finish",
+                      "description": "Select one object from the current content graph as the final answer. Use this when copying the complete value into a model message is wasteful.",
+                      "parameters": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "object_id"
+                        ],
+                        "properties": {
+                          "object_id": {
+                            "type": "string",
+                            "minLength": 1
+                          }
+                        }
+                      }
+                    }
+                  },
+                  {
+                    "type": "function",
+                    "function": {
+                      "name": "wait_for",
+                      "description": "End this run and resume when a matching event arrives.",
+                      "parameters": {
+                        "type": "object",
+                        "required": [
+                          "event_type"
+                        ],
+                        "properties": {
+                          "event_type": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "fields": {
+                            "type": "object"
+                          },
+                          "deadline": {
+                            "type": "string"
+                          }
+                        },
+                        "additionalProperties": false
+                      }
+                    }
+                  }
+                ],
+                "representation": "full"
+              },
+              "links": []
+            },
+            {
+              "id": "b3:50b602ed4b8d60cbe6f01f3a273a546fd7c269d3c1c0390349debeefefb36862",
+              "kind": "tool_call",
+              "schema": "zeta.tool_call.v1",
+              "data": {
+                "tool_call_id": "call-content-transform",
+                "name": "transform_content",
+                "input": {
+                  "expected_head": "b3:eb537f19430f454fea4a48f8239218a9fce4a9ee423f1862107adf07100e678b",
+                  "reason": "Reuse this procedure later.",
+                  "inputs": {},
+                  "transformation": {
+                    "type": "literal",
+                    "value": "Run focused tests first."
+                  },
+                  "destination": {
+                    "key": "testing/procedure",
+                    "kind": "procedure",
+                    "scope": "agent",
+                    "expected_object_id": null
+                  }
+                },
+                "arguments": "{\"expected_head\": \"b3:eb537f19430f454fea4a48f8239218a9fce4a9ee423f1862107adf07100e678b\", \"reason\": \"Reuse this procedure later.\", \"inputs\": {}, \"transformation\": {\"type\": \"literal\", \"value\": \"Run focused tests first.\"}, \"destination\": {\"key\": \"testing/procedure\", \"kind\": \"procedure\", \"scope\": \"agent\", \"expected_object_id\": null}}"
+              },
+              "links": [
+                "b3:679fa674bd7ba20d9aceb123baf03eb9ee6ffc443cd98f24cf5e6126cbd63d46"
+              ]
+            },
+            {
+              "id": "b3:59bd08b5453ad95f144fc8404f28a69477c3ee2aeed54ec1138be284dcfa2a0c",
+              "kind": "tool_result",
+              "schema": "zeta.tool_result.v1",
+              "data": {
+                "tool_call_id": "call-content-query",
+                "name": "query_content",
+                "result": {
+                  "ok": true,
+                  "head": "b3:eb537f19430f454fea4a48f8239218a9fce4a9ee423f1862107adf07100e678b",
+                  "items": [
+                    {
+                      "key": "evidence/release",
+                      "kind": "text",
+                      "title": "",
+                      "object_id": "b3:1a8c914636d830fdb7a46d3f71e8928fcf673688aa9883bb33a7ce758b718eea",
+                      "source_scope": "run",
+                      "chars": 33,
+                      "preview": "The complete graph-backed answer."
+                    }
+                  ],
+                  "next_cursor": null
+                }
+              },
+              "links": [
+                "b3:fc2ed9fbaf9568cd7766a44abd618bdfa41b1054e01b9941205bd629fe3914b6"
+              ]
+            },
+            {
+              "id": "b3:617573fb48f699bbd721fa358220070172aa89589b4541920ad885ffd4b6eaea",
+              "kind": "tool_call",
+              "schema": "zeta.tool_call.v1",
+              "data": {
+                "tool_call_id": "call-content-finish",
+                "name": "finish",
+                "input": {
+                  "object_id": "b3:1a8c914636d830fdb7a46d3f71e8928fcf673688aa9883bb33a7ce758b718eea"
+                },
+                "arguments": "{\"object_id\": \"b3:1a8c914636d830fdb7a46d3f71e8928fcf673688aa9883bb33a7ce758b718eea\"}"
+              },
+              "links": [
+                "b3:679fa674bd7ba20d9aceb123baf03eb9ee6ffc443cd98f24cf5e6126cbd63d46"
+              ]
+            },
+            {
+              "id": "b3:679fa674bd7ba20d9aceb123baf03eb9ee6ffc443cd98f24cf5e6126cbd63d46",
+              "kind": "assistant_message",
+              "schema": "zeta.model_output.v1",
+              "data": {
+                "message": {
+                  "tool_calls": [
+                    {
+                      "id": "call-content-query",
+                      "type": "function",
+                      "function": {
+                        "name": "query_content",
+                        "arguments": "{\"key_prefix\": \"evidence/\"}"
+                      }
+                    },
+                    {
+                      "id": "call-content-transform",
+                      "type": "function",
+                      "function": {
+                        "name": "transform_content",
+                        "arguments": "{\"expected_head\": \"b3:eb537f19430f454fea4a48f8239218a9fce4a9ee423f1862107adf07100e678b\", \"reason\": \"Reuse this procedure later.\", \"inputs\": {}, \"transformation\": {\"type\": \"literal\", \"value\": \"Run focused tests first.\"}, \"destination\": {\"key\": \"testing/procedure\", \"kind\": \"procedure\", \"scope\": \"agent\", \"expected_object_id\": null}}"
+                      }
+                    },
+                    {
+                      "id": "call-content-finish",
+                      "type": "function",
+                      "function": {
+                        "name": "finish",
+                        "arguments": "{\"object_id\": \"b3:1a8c914636d830fdb7a46d3f71e8928fcf673688aa9883bb33a7ce758b718eea\"}"
+                      }
+                    }
+                  ]
+                },
+                "model_output": {
+                  "message": {
+                    "tool_calls": [
+                      {
+                        "id": "call-content-query",
+                        "type": "function",
+                        "function": {
+                          "name": "query_content",
+                          "arguments": "{\"key_prefix\": \"evidence/\"}"
+                        }
+                      },
+                      {
+                        "id": "call-content-transform",
+                        "type": "function",
+                        "function": {
+                          "name": "transform_content",
+                          "arguments": "{\"expected_head\": \"b3:eb537f19430f454fea4a48f8239218a9fce4a9ee423f1862107adf07100e678b\", \"reason\": \"Reuse this procedure later.\", \"inputs\": {}, \"transformation\": {\"type\": \"literal\", \"value\": \"Run focused tests first.\"}, \"destination\": {\"key\": \"testing/procedure\", \"kind\": \"procedure\", \"scope\": \"agent\", \"expected_object_id\": null}}"
+                        }
+                      },
+                      {
+                        "id": "call-content-finish",
+                        "type": "function",
+                        "function": {
+                          "name": "finish",
+                          "arguments": "{\"object_id\": \"b3:1a8c914636d830fdb7a46d3f71e8928fcf673688aa9883bb33a7ce758b718eea\"}"
+                        }
+                      }
+                    ]
+                  }
+                }
+              },
+              "links": [
+                "b3:686528cf0222799fca90f45f3041a929e5943df5062da5a9a1cb58dd4ebfb7a0"
+              ]
+            },
+            {
+              "id": "b3:686528cf0222799fca90f45f3041a929e5943df5062da5a9a1cb58dd4ebfb7a0",
+              "kind": "prompt",
+              "schema": "zeta.prompt.v2",
+              "data": {
+                "payload_address": "b3:5ae7b6393c34f93396bb0667cc65bda17fd95677147538a486eb0c47de688db0"
+              },
+              "links": [
+                "b3:ab1e75080c9bd10bf7dde965f2d07a14a64ad958a38e24a13ee658915bbbe923",
+                "b3:29f17c6df7c2cff179d0b81093fec54490cb0746d69cf82a33e553cf55424cab",
+                "b3:a750ce489bfe034679076a36050d51e9df7717aa419780bb0d38190eb5277321",
+                "b3:0e3936b0bab7e8911539c870f720563e03b58f449580dbb616532d139b7857e4"
+              ]
+            },
+            {
+              "id": "b3:7d41845c4601d6b49f3523b29a9a7354ca00f9e3dda54979d7c8fa68e1650c09",
+              "kind": "content_graph_revision",
+              "schema": "zeta.content_graph_revision.v1",
+              "data": {
+                "owner": "vector-agent",
+                "nodes": {
+                  "evidence/release": "b3:1a8c914636d830fdb7a46d3f71e8928fcf673688aa9883bb33a7ce758b718eea",
+                  "testing/procedure": "b3:1e78497ab918eabf537bbce9ebb094ff92c4633f7a6549ee87ce0698bf090597"
+                },
+                "projection_order": [
+                  "evidence/release",
+                  "testing/procedure"
+                ],
+                "source_scopes": {
+                  "evidence/release": "run",
+                  "testing/procedure": "run"
+                }
+              },
+              "links": [
+                "b3:1a8c914636d830fdb7a46d3f71e8928fcf673688aa9883bb33a7ce758b718eea",
+                "b3:1e78497ab918eabf537bbce9ebb094ff92c4633f7a6549ee87ce0698bf090597"
+              ]
+            },
+            {
+              "id": "b3:a750ce489bfe034679076a36050d51e9df7717aa419780bb0d38190eb5277321",
+              "kind": "content_manifest",
+              "schema": "zeta.prompt_component.v2",
+              "data": {
+                "head": "b3:eb537f19430f454fea4a48f8239218a9fce4a9ee423f1862107adf07100e678b",
+                "items": [
+                  {
+                    "key": "evidence/release",
+                    "kind": "text",
+                    "title": "",
+                    "source_scope": "run",
+                    "object_id": "b3:1a8c914636d830fdb7a46d3f71e8928fcf673688aa9883bb33a7ce758b718eea",
+                    "chars": 33
+                  }
+                ],
+                "total": 1,
+                "projected_keys": [],
+                "omitted_keys": [],
+                "message": {
+                  "role": "system",
+                  "content": "Content workspace head: b3:eb537f19430f454fea4a48f8239218a9fce4a9ee423f1862107adf07100e678b\nAvailable content:\n- evidence/release (text, run, b3:1a8c914636d830fdb7a46d3f71e8928fcf673688aa9883bb33a7ce758b718eea)"
+                },
+                "representation": "full",
+                "source_object_id": "b3:eb537f19430f454fea4a48f8239218a9fce4a9ee423f1862107adf07100e678b"
+              },
+              "links": [
+                "b3:eb537f19430f454fea4a48f8239218a9fce4a9ee423f1862107adf07100e678b"
+              ]
+            },
+            {
+              "id": "b3:ab1e75080c9bd10bf7dde965f2d07a14a64ad958a38e24a13ee658915bbbe923",
+              "kind": "system_prompt",
+              "schema": "zeta.prompt_component.v2",
+              "data": {
+                "content": "Answer plainly.\n\nToday is 2026-08-12 (Wednesday).\n\nTool protocol:\n\n- Tools are native Chat Completions function tools exposed by the runtime.\n- You may request multiple read-only tool calls in one turn when useful.\n- Mutating tools apply their effects when you call them.\n- Use a tool only when its schema matches the needed action.\n- Do not mention unavailable tools.\n- If no tool is needed, return a final answer.\n\nAvailable tools:\n- query_content(key_prefix?, kind?, source_scope?, limit?, cursor?): Query the current content workspace. The result contains stable object references and bounded previews.\n- transform_content(expected_head, reason, inputs, transformation, destination): Create a new content revision. Use an explicit run, session, or agent destination. Durable changes become active only after the run succeeds.\n- finish(object_id): Select one object from the current content graph as the final answer. Use this when copying the complete value into a model message is wasteful.\n- wait_for(event_type, fields?, deadline?): End this run and resume when a matching event arrives.",
+                "base_prompt": "Answer plainly.",
+                "allowed_tools": [
+                  "zeta.query_content",
+                  "zeta.transform_content",
+                  "zeta.finish",
+                  "zeta.wait_for"
+                ],
+                "message": {
+                  "role": "system",
+                  "content": "Answer plainly.\n\nToday is 2026-08-12 (Wednesday).\n\nTool protocol:\n\n- Tools are native Chat Completions function tools exposed by the runtime.\n- You may request multiple read-only tool calls in one turn when useful.\n- Mutating tools apply their effects when you call them.\n- Use a tool only when its schema matches the needed action.\n- Do not mention unavailable tools.\n- If no tool is needed, return a final answer.\n\nAvailable tools:\n- query_content(key_prefix?, kind?, source_scope?, limit?, cursor?): Query the current content workspace. The result contains stable object references and bounded previews.\n- transform_content(expected_head, reason, inputs, transformation, destination): Create a new content revision. Use an explicit run, session, or agent destination. Durable changes become active only after the run succeeds.\n- finish(object_id): Select one object from the current content graph as the final answer. Use this when copying the complete value into a model message is wasteful.\n- wait_for(event_type, fields?, deadline?): End this run and resume when a matching event arrives."
+                },
+                "representation": "full"
+              },
+              "links": []
+            },
+            {
+              "id": "b3:fc2ed9fbaf9568cd7766a44abd618bdfa41b1054e01b9941205bd629fe3914b6",
+              "kind": "tool_call",
+              "schema": "zeta.tool_call.v1",
+              "data": {
+                "tool_call_id": "call-content-query",
+                "name": "query_content",
+                "input": {
+                  "key_prefix": "evidence/"
+                },
+                "arguments": "{\"key_prefix\": \"evidence/\"}"
+              },
+              "links": [
+                "b3:679fa674bd7ba20d9aceb123baf03eb9ee6ffc443cd98f24cf5e6126cbd63d46"
+              ]
+            }
+          ],
+          "derivations": [
+            {
+              "id": "b3:372555290bc99665552adef3771dd6042c168f36188c284523d5a8fd51e0819e",
+              "producer": "ToolExecution",
+              "output_id": "b3:0bc6116fec1bdfc3d6e00caa21e9aaa456ea08aeec31fb1f9ca1d08cd32a1fb7",
+              "input_ids": [
+                "b3:617573fb48f699bbd721fa358220070172aa89589b4541920ad885ffd4b6eaea"
+              ],
+              "params": {
+                "tool_call_id": "call-content-finish",
+                "name": "finish"
+              }
+            },
+            {
+              "id": "b3:7a7d517b9072537461f61e15c092aeb59013cd9961983d54e8aef37df7cd25ce",
+              "producer": "ModelResponse",
+              "output_id": "b3:679fa674bd7ba20d9aceb123baf03eb9ee6ffc443cd98f24cf5e6126cbd63d46",
+              "input_ids": [
+                "b3:686528cf0222799fca90f45f3041a929e5943df5062da5a9a1cb58dd4ebfb7a0"
+              ],
+              "params": {}
+            },
+            {
+              "id": "b3:8ec0f8b18f40370eaec743efb29ded45f649e788999a7d976603f11a8d04e139",
+              "producer": "ToolCallProjection",
+              "output_id": "b3:50b602ed4b8d60cbe6f01f3a273a546fd7c269d3c1c0390349debeefefb36862",
+              "input_ids": [
+                "b3:679fa674bd7ba20d9aceb123baf03eb9ee6ffc443cd98f24cf5e6126cbd63d46"
+              ],
+              "params": {
+                "tool_call_id": "call-content-transform",
+                "name": "transform_content"
+              }
+            },
+            {
+              "id": "b3:9667af383a0fb6af305a0b831fd064344d3cc09624cec46baf3fbde23b9bd5ea",
+              "producer": "ToolExecution",
+              "output_id": "b3:59bd08b5453ad95f144fc8404f28a69477c3ee2aeed54ec1138be284dcfa2a0c",
+              "input_ids": [
+                "b3:fc2ed9fbaf9568cd7766a44abd618bdfa41b1054e01b9941205bd629fe3914b6"
+              ],
+              "params": {
+                "tool_call_id": "call-content-query",
+                "name": "query_content"
+              }
+            },
+            {
+              "id": "b3:aa3ab144de6a5475c4b077bd017bd01a462f9e7e0fc4db86c76e16ff10dd4bbc",
+              "producer": "PromptBuilder",
+              "output_id": "b3:686528cf0222799fca90f45f3041a929e5943df5062da5a9a1cb58dd4ebfb7a0",
+              "input_ids": [
+                "b3:ab1e75080c9bd10bf7dde965f2d07a14a64ad958a38e24a13ee658915bbbe923",
+                "b3:29f17c6df7c2cff179d0b81093fec54490cb0746d69cf82a33e553cf55424cab",
+                "b3:a750ce489bfe034679076a36050d51e9df7717aa419780bb0d38190eb5277321",
+                "b3:0e3936b0bab7e8911539c870f720563e03b58f449580dbb616532d139b7857e4"
+              ],
+              "params": {
+                "max_tokens": 8192,
+                "selected_model": "unit-model",
+                "thinking": null
+              }
+            },
+            {
+              "id": "b3:ad290e21e3ba8d66d5109cbcfd42e555faf23c9dd37e80c98fa6ccd933a8c268",
+              "producer": "ToolExecution",
+              "output_id": "b3:2748195cd3822e750a1427c843d24b28da9fda728be047c76aad11f9283206b6",
+              "input_ids": [
+                "b3:50b602ed4b8d60cbe6f01f3a273a546fd7c269d3c1c0390349debeefefb36862"
+              ],
+              "params": {
+                "tool_call_id": "call-content-transform",
+                "name": "transform_content"
+              }
+            },
+            {
+              "id": "b3:b66b072d60f0473b32505ec2d8dc838003c284a9252ab9293445a5e347983f18",
+              "producer": "ContentAdvance:v1",
+              "output_id": "b3:7d41845c4601d6b49f3523b29a9a7354ca00f9e3dda54979d7c8fa68e1650c09",
+              "input_ids": [
+                "b3:eb537f19430f454fea4a48f8239218a9fce4a9ee423f1862107adf07100e678b"
+              ],
+              "params": {
+                "owner": "vector-agent",
+                "prior_head": "b3:eb537f19430f454fea4a48f8239218a9fce4a9ee423f1862107adf07100e678b",
+                "reason": "Reuse this procedure later.",
+                "scope": "run",
+                "scope_id": "run-vector-content"
+              }
+            },
+            {
+              "id": "b3:d6fd2d39f8ae839f2ea96cc267d2b177f959edab70d220d4f9e74ab47b6c1541",
+              "producer": "ToolCallProjection",
+              "output_id": "b3:fc2ed9fbaf9568cd7766a44abd618bdfa41b1054e01b9941205bd629fe3914b6",
+              "input_ids": [
+                "b3:679fa674bd7ba20d9aceb123baf03eb9ee6ffc443cd98f24cf5e6126cbd63d46"
+              ],
+              "params": {
+                "tool_call_id": "call-content-query",
+                "name": "query_content"
+              }
+            },
+            {
+              "id": "b3:f00615b9f2a1b35d513e09fb779ffaf753986724af1c8c838991b8f6d79a9a43",
+              "producer": "ToolCallProjection",
+              "output_id": "b3:617573fb48f699bbd721fa358220070172aa89589b4541920ad885ffd4b6eaea",
+              "input_ids": [
+                "b3:679fa674bd7ba20d9aceb123baf03eb9ee6ffc443cd98f24cf5e6126cbd63d46"
+              ],
+              "params": {
+                "tool_call_id": "call-content-finish",
+                "name": "finish"
+              }
+            },
+            {
+              "id": "b3:f446b52b82a7292ae6d6b9260e3f7f76ba289b30236804a860adea9d997759fe",
+              "producer": "ContentLiteral:v1",
+              "output_id": "b3:1e78497ab918eabf537bbce9ebb094ff92c4633f7a6549ee87ce0698bf090597",
+              "input_ids": [],
+              "params": {
+                "type": "literal"
+              }
+            }
+          ]
+        }
+      }
     }
   ]
 }

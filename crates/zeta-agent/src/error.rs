@@ -22,8 +22,8 @@ pub enum AgentErrorKind {
     Identity,
     /// Reports a trace value that cannot be encoded.
     Trace,
-    /// Reports a failed durable effect observation.
-    Effect,
+    /// Reports a failed immediate durable-draft recording.
+    Durability,
 }
 
 /// Describes one non-abort agent failure.
@@ -66,9 +66,9 @@ impl AgentError {
         Self::new(AgentErrorKind::Trace, message)
     }
 
-    /// Creates an effect-recording error.
-    pub fn effect(message: impl Into<String>) -> Self {
-        Self::new(AgentErrorKind::Effect, message)
+    /// Creates a durable-draft recording error.
+    pub fn durability(message: impl Into<String>) -> Self {
+        Self::new(AgentErrorKind::Durability, message)
     }
 
     fn new(kind: AgentErrorKind, message: impl Into<String>) -> Self {

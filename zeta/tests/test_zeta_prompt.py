@@ -123,6 +123,22 @@ def prompt_vector_inputs() -> list[dict[str, Any]]:
             },
         },
     }
+    read_tool = {
+        "type": "function",
+        "function": {
+            "name": "read",
+            "description": "Read a file.",
+            "parameters": {
+                "type": "object",
+                "properties": {"path": {"type": "string"}},
+                "required": ["path"],
+                "additionalProperties": False,
+            },
+        },
+    }
+    head_id = "b3:" + "a" * 64
+    instruction_id = "b3:" + "b" * 64
+    procedure_id = "b3:" + "c" * 64
     return [
         {
             "name": "minimal",
@@ -205,6 +221,248 @@ def prompt_vector_inputs() -> list[dict[str, Any]]:
             "selected_model": "unit-model",
             "thinking": None,
         },
+        {
+            "name": "timeline_tail_boundary",
+            "objective": "Use only retained history.",
+            "timeline": [
+                {"type": "user_message", "content": "Outside retained history."},
+                {
+                    "type": "model",
+                    "tool_calls": [
+                        {
+                            "id": "call-outside-tail",
+                            "type": "function",
+                            "function": {
+                                "name": "lookup",
+                                "arguments": '{"key":"outside"}',
+                            },
+                        }
+                    ],
+                },
+                {
+                    "type": "tool_result",
+                    "tool_call_id": "call-outside-tail",
+                    "name": "lookup",
+                    "result": {"ok": True, "value": "outside"},
+                },
+                *[{"type": "observation", "sequence": index} for index in range(48)],
+                {"type": "user_message", "content": "Retained tail message."},
+            ],
+            "system": "Answer plainly.",
+            "allowed_capabilities": ["test.lookup"],
+            "context": "",
+            "tools": [lookup_tool],
+            "tool_choice": "auto",
+            "max_tokens": 64,
+            "selected_model": "unit-model",
+            "thinking": None,
+        },
+        {
+            "name": "filtered_private_history",
+            "objective": "Describe the retained evidence.",
+            "timeline": [
+                {"type": "user_message", "content": "Keep this message."},
+                {
+                    "type": "model",
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "id": "call-incomplete",
+                            "type": "function",
+                            "function": {
+                                "name": "lookup",
+                                "arguments": '{"key":"missing"}',
+                            },
+                        }
+                    ],
+                },
+                {
+                    "type": "tool_result",
+                    "tool_call_id": "call-orphan",
+                    "name": "lookup",
+                    "result": {"ok": False, "error": {"code": "orphaned"}},
+                    "prompt_trace": {
+                        "prompt_object_id": "b3:" + "1" * 64,
+                        "assistant_message_object_id": "b3:" + "2" * 64,
+                    },
+                    "tool_call_object_id": "b3:" + "3" * 64,
+                    "tool_result_object_id": "b3:" + "4" * 64,
+                    "prompt_component_object_id": "b3:" + "5" * 64,
+                    "source_object_id": "b3:" + "6" * 64,
+                    "model_telemetry": {"provider_request_id": "private-request"},
+                },
+            ],
+            "system": "Answer plainly.",
+            "allowed_capabilities": ["test.lookup"],
+            "context": "",
+            "tools": [lookup_tool],
+            "tool_choice": "auto",
+            "max_tokens": 64,
+            "selected_model": "unit-model",
+            "thinking": None,
+        },
+        {
+            "name": "authorized_content_components",
+            "objective": "Prepare the release.",
+            "timeline": [
+                {"type": "user_message", "content": "The release is tomorrow."}
+            ],
+            "system": "Answer plainly.",
+            "allowed_capabilities": [],
+            "context": "Repository: zeta",
+            "content_components": [
+                {
+                    "kind": "content_manifest",
+                    "data": {
+                        "head": head_id,
+                        "items": [
+                            {
+                                "key": "release/rules",
+                                "kind": "instruction",
+                                "source_scope": "agent",
+                                "object_id": instruction_id,
+                            },
+                            {
+                                "key": "release/check",
+                                "kind": "procedure",
+                                "source_scope": "run",
+                                "object_id": procedure_id,
+                            },
+                        ],
+                        "total": 2,
+                        "projected_keys": ["release/rules", "release/check"],
+                        "omitted_keys": [],
+                    },
+                    "message": {
+                        "role": "system",
+                        "content": (
+                            "Authorized content manifest:\n"
+                            "- release/rules (instruction, agent)\n"
+                            "- release/check (procedure, run)"
+                        ),
+                    },
+                    "representation": "full",
+                    "source_object_id": head_id,
+                    "links": [head_id],
+                },
+                {
+                    "kind": "content_instruction",
+                    "data": {
+                        "key": "release/rules",
+                        "kind": "instruction",
+                        "title": "Release rules",
+                        "source_scope": "agent",
+                    },
+                    "message": {
+                        "role": "system",
+                        "content": "Release rules:\nAlways run the release checks.",
+                    },
+                    "representation": "full",
+                    "source_object_id": instruction_id,
+                    "links": [instruction_id],
+                },
+                {
+                    "kind": "content_procedure",
+                    "data": {
+                        "key": "release/check",
+                        "kind": "procedure",
+                        "title": "Release check",
+                        "source_scope": "run",
+                    },
+                    "message": {
+                        "role": "system",
+                        "content": "Release check:\nRun the focused tests first.",
+                    },
+                    "representation": "full",
+                    "source_object_id": procedure_id,
+                    "links": [procedure_id],
+                },
+            ],
+            "tools": [],
+            "tool_choice": "auto",
+            "max_tokens": 64,
+            "selected_model": "unit-model",
+            "thinking": None,
+        },
+        {
+            "name": "structural_trim_boundary",
+            "objective": "Use the compacted read results.",
+            "timeline": [
+                {
+                    "type": "model",
+                    "tool_calls": [
+                        {
+                            "id": "call-at-limit",
+                            "type": "function",
+                            "function": {
+                                "name": "read",
+                                "arguments": '{"path":"big.txt"}',
+                            },
+                        }
+                    ],
+                },
+                {
+                    "type": "tool_result",
+                    "tool_call_id": "call-at-limit",
+                    "name": "read",
+                    "result": {
+                        "ok": True,
+                        "content": [{"type": "text", "text": "x" * 21}],
+                        "metadata": {"path": "big.txt"},
+                    },
+                },
+                {
+                    "type": "model",
+                    "tool_calls": [
+                        {
+                            "id": "call-over-limit",
+                            "type": "function",
+                            "function": {
+                                "name": "read",
+                                "arguments": '{"path":"big.txt"}',
+                            },
+                        }
+                    ],
+                },
+                {
+                    "type": "tool_result",
+                    "tool_call_id": "call-over-limit",
+                    "name": "read",
+                    "result": {
+                        "ok": True,
+                        "content": [{"type": "text", "text": "y" * 22}],
+                        "metadata": {"path": "big.txt"},
+                    },
+                },
+            ],
+            "system": "Answer plainly.",
+            "allowed_capabilities": ["native.read"],
+            "context": "",
+            "transform": {"type": "structural_trim", "max_content_chars": 100},
+            "tools": [read_tool],
+            "tool_choice": "auto",
+            "max_tokens": 64,
+            "selected_model": "unit-model",
+            "thinking": None,
+        },
+        {
+            "name": "drop_oldest_threshold",
+            "objective": "Continue with recent context.",
+            "timeline": [
+                {"type": "user_message", "content": "oldest " + "a" * 32},
+                {"type": "model", "content": "middle " + "b" * 16},
+                {"type": "user_message", "content": "newest " + "c" * 8},
+            ],
+            "system": "Answer plainly.",
+            "allowed_capabilities": [],
+            "context": "",
+            "transform": {"type": "drop_oldest", "max_tokens": 141},
+            "tools": [],
+            "tool_choice": "auto",
+            "max_tokens": 64,
+            "selected_model": "unit-model",
+            "thinking": None,
+        },
     ]
 
 
@@ -212,13 +470,31 @@ async def python_prompt_vectors() -> dict[str, Any]:
     cases = []
     for inputs in prompt_vector_inputs():
         store = InMemoryStore()
-        builder = PromptBuilder(store=store)
+        transform_spec = inputs.get("transform")
+        transform = None
+        if transform_spec == {"type": "structural_trim", "max_content_chars": 100}:
+            transform = StructuralTrimPromptTransform(max_content_chars=100)
+        elif transform_spec == {"type": "drop_oldest", "max_tokens": 141}:
+            transform = DropOldestPromptTransform(max_tokens=141)
+        builder = PromptBuilder(store=store, transform=transform)
+        content_components = [
+            PromptComponent(
+                kind=component["kind"],
+                data=component["data"],
+                message=component.get("message"),
+                representation=component["representation"],
+                source_object_id=component.get("source_object_id"),
+                links=tuple(component["links"]),
+            )
+            for component in inputs.get("content_components", [])
+        ]
         plan = builder.plan_prompt(
             inputs["objective"],
             inputs["timeline"],
             system=inputs["system"],
             allowed_capabilities=inputs["allowed_capabilities"],
             context=inputs["context"],
+            content_components=content_components,
             tools=inputs["tools"],
             tool_choice=inputs["tool_choice"],
             max_tokens=inputs["max_tokens"],

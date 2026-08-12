@@ -15,6 +15,8 @@ use crate::trace::{AddressedDerivation, AddressedObject, TraceBatch};
 const TOOL_PROTOCOL: &str = "Tool protocol:\n\n- Tools are native Chat Completions function tools exposed by the runtime.\n- You may request multiple read-only tool calls in one turn when useful.\n- Mutating tools apply their effects when you call them.\n- Use a tool only when its schema matches the needed action.\n- Do not mention unavailable tools.\n- If no tool is needed, return a final answer.";
 const GREP_POLICY: &str =
     "Use `grep` to locate occurrences before reading files when the target text/symbol is known.";
+const TIMELINE_TAIL_LIMIT: usize = 50;
+const DEFAULT_STRUCTURAL_TRIM_CHARS: usize = 120_000;
 
 fn default_tool_choice() -> Value {
     Value::String("auto".to_owned())
@@ -59,6 +61,12 @@ pub struct PromptInput {
     /// Carries proposals produced earlier in the same invocation.
     #[serde(default)]
     pub current_events: Vec<Map<String, Value>>,
+    /// Inserts caller-authorized content before historical messages.
+    #[serde(default)]
+    pub content_components: Vec<PromptComponent>,
+    /// Selects an authored deterministic compaction policy.
+    #[serde(default)]
+    pub transform: PromptTransform,
 }
 
 impl Default for PromptInput {
@@ -75,8 +83,34 @@ impl Default for PromptInput {
             selected_model: None,
             thinking: None,
             current_events: Vec::new(),
+            content_components: Vec::new(),
+            transform: PromptTransform::None,
         }
     }
+}
+
+/// Selects one deterministic prompt compaction strategy.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum PromptTransform {
+    /// Preserves every projected component.
+    #[default]
+    None,
+    /// Replaces large historical read and grep results with trace-linked stubs.
+    StructuralTrim {
+        /// Trims content whose character count exceeds this boundary.
+        #[serde(default = "default_structural_trim_chars")]
+        max_content_chars: usize,
+    },
+    /// Removes the oldest historical exchanges until the estimate fits.
+    DropOldest {
+        /// Bounds the deterministic approximate input-token count.
+        max_tokens: usize,
+    },
+}
+
+fn default_structural_trim_chars() -> usize {
+    DEFAULT_STRUCTURAL_TRIM_CHARS
 }
 
 /// Carries one prompt component before or after trace addressing.
@@ -163,6 +197,8 @@ pub fn build_prompt(
         selected_model,
         thinking,
         current_events,
+        content_components,
+        transform,
     } = input;
     let system_content = render_system_prompt(
         system.as_deref(),
@@ -217,7 +253,9 @@ pub fn build_prompt(
             object_id: None,
         });
     }
-    let timeline = from_message_boundary(timeline);
+    components.extend(content_components.clone());
+    let tail_start = timeline.len().saturating_sub(TIMELINE_TAIL_LIMIT);
+    let timeline = from_message_boundary(&timeline[tail_start..]);
     components.extend(project_timeline(&timeline, true)?);
     let mut objective_sections = vec![
         objective.clone(),
@@ -250,32 +288,34 @@ pub fn build_prompt(
     components.extend(project_timeline(current_events, false)?);
 
     let mut trace = TraceBatch::default();
-    let mut component_object_ids = Vec::new();
     for component in &mut components {
-        let mut data = component.data.clone();
-        if !data.contains_key("message") {
-            if let Some(message) = &component.message {
-                data.insert("message".to_owned(), Value::Object(message.clone()));
+        let object_id = insert_component(&mut trace, component)?;
+        component.object_id = Some(object_id.clone());
+    }
+    let producer = transform_producer(transform);
+    let mut components = apply_transform(components, transform)?;
+    for component in &mut components {
+        if component.object_id.is_some() {
+            continue;
+        }
+        let object_id = insert_component(&mut trace, component)?;
+        component.object_id = Some(object_id.clone());
+        if let Some(producer) = producer {
+            if !component.links.is_empty() {
+                trace.insert_derivation(Derivation {
+                    producer: producer.to_owned(),
+                    output_id: object_id,
+                    input_ids: component.links.clone(),
+                    params: Map::new(),
+                })?;
             }
         }
-        data.insert(
-            "representation".to_owned(),
-            Value::String(component.representation.clone()),
-        );
-        if let Some(source_object_id) = &component.source_object_id {
-            data.insert(
-                "source_object_id".to_owned(),
-                Value::String(source_object_id.clone()),
-            );
+    }
+    let mut component_object_ids = Vec::new();
+    for component in &components {
+        if let Some(object_id) = &component.object_id {
+            component_object_ids.push(object_id.clone());
         }
-        let object_id = trace.insert_object(Object {
-            kind: component.kind.clone(),
-            schema: "zeta.prompt_component.v2".to_owned(),
-            data,
-            links: component.links.clone(),
-        })?;
-        component.object_id = Some(object_id.clone());
-        component_object_ids.push(object_id);
     }
     let messages = component_messages(&components);
     let model_input = ModelInput {
@@ -318,6 +358,307 @@ pub fn build_prompt(
         objects: trace.objects,
         derivations: trace.derivations,
     })
+}
+
+fn insert_component(
+    trace: &mut TraceBatch,
+    component: &PromptComponent,
+) -> Result<String, AgentError> {
+    let mut data = component.data.clone();
+    if !data.contains_key("message") {
+        if let Some(message) = &component.message {
+            data.insert("message".to_owned(), Value::Object(message.clone()));
+        }
+    }
+    data.insert(
+        "representation".to_owned(),
+        Value::String(component.representation.clone()),
+    );
+    if let Some(source_object_id) = &component.source_object_id {
+        data.insert(
+            "source_object_id".to_owned(),
+            Value::String(source_object_id.clone()),
+        );
+    }
+    trace.insert_object(Object {
+        kind: component.kind.clone(),
+        schema: "zeta.prompt_component.v2".to_owned(),
+        data,
+        links: component.links.clone(),
+    })
+}
+
+fn transform_producer(transform: &PromptTransform) -> Option<&'static str> {
+    match transform {
+        PromptTransform::None | PromptTransform::DropOldest { .. } => None,
+        PromptTransform::StructuralTrim { .. } => Some("PromptStructuralTrim:v1"),
+    }
+}
+
+fn apply_transform(
+    components: Vec<PromptComponent>,
+    transform: &PromptTransform,
+) -> Result<Vec<PromptComponent>, AgentError> {
+    match transform {
+        PromptTransform::None => Ok(components),
+        PromptTransform::StructuralTrim { max_content_chars } => {
+            apply_structural_trim(components, *max_content_chars)
+        }
+        PromptTransform::DropOldest { max_tokens } => apply_drop_oldest(components, *max_tokens),
+    }
+}
+
+fn apply_structural_trim(
+    components: Vec<PromptComponent>,
+    max_content_chars: usize,
+) -> Result<Vec<PromptComponent>, AgentError> {
+    let mut transformed = Vec::with_capacity(components.len());
+    for component in components {
+        if should_structurally_trim(&component, max_content_chars) {
+            transformed.push(trimmed_component(component)?);
+        } else {
+            transformed.push(component);
+        }
+    }
+    Ok(transformed)
+}
+
+fn should_structurally_trim(component: &PromptComponent, max_content_chars: usize) -> bool {
+    if component.data.get("historical") != Some(&Value::Bool(true)) {
+        return false;
+    }
+    if component.kind != "tool_result" {
+        return false;
+    }
+    let name = event_text(&component.data, "source_tool_name");
+    if name != "read" && name != "grep" {
+        return false;
+    }
+    component_message_content(component).chars().count() > max_content_chars
+}
+
+fn trimmed_component(component: PromptComponent) -> Result<PromptComponent, AgentError> {
+    let Some(source_object_id) = component.object_id.clone() else {
+        return Err(AgentError::trace(
+            "prompt compaction source is missing its object id",
+        ));
+    };
+    let content = component_message_content(&component);
+    let call_id = event_text(&component.data, "source_tool_call_id");
+    let stub = render_stub(&component, &source_object_id)?;
+    let message = if component
+        .message
+        .as_ref()
+        .and_then(|message| message.get("role"))
+        .and_then(Value::as_str)
+        == Some("tool")
+    {
+        object(json!({
+            "role": "tool",
+            "tool_call_id": call_id,
+            "content": stub,
+        }))
+    } else {
+        object(json!({"role": "user", "content": stub}))
+    };
+    let mut trim = object(json!({
+        "trimmed": true,
+        "trim_method": "structural",
+        "raw_content_address": hash_bytes(content.as_bytes()).to_string(),
+        "raw_content_chars": content.chars().count(),
+        "raw_content_bytes": content.len(),
+        "source_object_id": source_object_id,
+    }));
+    if !call_id.is_empty() {
+        trim.insert("tool_call_id".to_owned(), Value::String(call_id.to_owned()));
+    }
+    if let Some(result) = component
+        .data
+        .get("source_tool_result")
+        .and_then(Value::as_object)
+    {
+        trim.insert(
+            "tool_result".to_owned(),
+            Value::Object(trimmed_tool_result(result)),
+        );
+    }
+    Ok(PromptComponent {
+        kind: "compacted_context".to_owned(),
+        data: object(json!({
+            "method": "structural_trim",
+            "source_kind": component.kind,
+            "trim": trim,
+            "message": message,
+            "source_object_id": source_object_id,
+        })),
+        message: Some(message),
+        representation: "stub".to_owned(),
+        source_object_id: Some(source_object_id.clone()),
+        links: vec![source_object_id],
+        object_id: None,
+    })
+}
+
+fn trimmed_tool_result(result: &Map<String, Value>) -> Map<String, Value> {
+    let mut trimmed = Map::new();
+    for key in ["ok", "metadata", "error"] {
+        if let Some(value) = result.get(key) {
+            if !value.is_null() {
+                trimmed.insert(key.to_owned(), value.clone());
+            }
+        }
+    }
+    let mut content = Vec::new();
+    if let Some(items) = result.get("content").and_then(Value::as_array) {
+        for item in items {
+            let Some(item) = item.as_object() else {
+                continue;
+            };
+            let item_type = item
+                .get("type")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown");
+            if let Some(text) = item.get("text").and_then(Value::as_str) {
+                content.push(json!({
+                    "type": if item_type.is_empty() { "text" } else { item_type },
+                    "text_address": hash_bytes(text.as_bytes()).to_string(),
+                    "text_chars": text.chars().count(),
+                    "text_lines": line_count(text),
+                }));
+            } else {
+                content.push(json!({
+                    "type": if item_type.is_empty() { "unknown" } else { item_type },
+                }));
+            }
+        }
+    }
+    if !content.is_empty() {
+        trimmed.insert("content".to_owned(), Value::Array(content));
+    }
+    trimmed
+}
+
+fn line_count(value: &str) -> usize {
+    if value.is_empty() {
+        return 0;
+    }
+    let trailing = usize::from(!value.ends_with('\n'));
+    value.matches('\n').count() + trailing
+}
+
+fn render_stub(component: &PromptComponent, source_object_id: &str) -> Result<String, AgentError> {
+    let tokens = estimated_component_tokens(component)?;
+    Ok(format!(
+        "[elided {} {tokens}~tok id={source_object_id} — re-run the original tool call to recover this content]",
+        component.kind,
+    ))
+}
+
+fn apply_drop_oldest(
+    mut components: Vec<PromptComponent>,
+    max_tokens: usize,
+) -> Result<Vec<PromptComponent>, AgentError> {
+    while estimated_prompt_tokens(&components)? > max_tokens {
+        let Some(index) = oldest_historical_message(&components) else {
+            break;
+        };
+        let call_ids = component_tool_call_ids(&components[index]);
+        let mut remaining = Vec::with_capacity(components.len() - 1);
+        for (candidate_index, component) in components.into_iter().enumerate() {
+            if candidate_index == index {
+                continue;
+            }
+            if candidate_index > index && is_result_for_calls(&component, &call_ids) {
+                continue;
+            }
+            remaining.push(component);
+        }
+        components = remaining;
+    }
+    Ok(components)
+}
+
+fn estimated_prompt_tokens(components: &[PromptComponent]) -> Result<usize, AgentError> {
+    let mut total = 0;
+    for component in components {
+        total += estimated_component_tokens(component)?;
+    }
+    Ok(total)
+}
+
+fn estimated_component_tokens(component: &PromptComponent) -> Result<usize, AgentError> {
+    let text = if let Some(message) = &component.message {
+        match message.get("content").and_then(Value::as_str) {
+            Some(content) => content.to_owned(),
+            None => compact_json(&Value::Object(message.clone()))?,
+        }
+    } else {
+        let bytes = canonical_json(&Value::Object(component.data.clone()))
+            .map_err(|error| AgentError::prompt(error.to_string()))?;
+        String::from_utf8(bytes).map_err(|error| AgentError::prompt(error.to_string()))?
+    };
+    if text.is_empty() {
+        return Ok(0);
+    }
+    Ok(text.chars().count().div_ceil(4).max(1))
+}
+
+fn component_message_content(component: &PromptComponent) -> &str {
+    component
+        .message
+        .as_ref()
+        .and_then(|message| message.get("content"))
+        .and_then(Value::as_str)
+        .unwrap_or("")
+}
+
+fn oldest_historical_message(components: &[PromptComponent]) -> Option<usize> {
+    for (index, component) in components.iter().enumerate() {
+        if component.data.get("historical") == Some(&Value::Bool(true))
+            && component.message.is_some()
+        {
+            return Some(index);
+        }
+    }
+    None
+}
+
+fn component_tool_call_ids(component: &PromptComponent) -> HashSet<String> {
+    let mut call_ids = HashSet::new();
+    let Some(calls) = component
+        .message
+        .as_ref()
+        .and_then(|message| message.get("tool_calls"))
+        .and_then(Value::as_array)
+    else {
+        return call_ids;
+    };
+    for call in calls {
+        let Some(id) = call.get("id").and_then(Value::as_str) else {
+            continue;
+        };
+        if !id.is_empty() {
+            call_ids.insert(id.to_owned());
+        }
+    }
+    call_ids
+}
+
+fn is_result_for_calls(component: &PromptComponent, call_ids: &HashSet<String>) -> bool {
+    if call_ids.is_empty() {
+        return false;
+    }
+    let Some(message) = &component.message else {
+        return false;
+    };
+    if message.get("role").and_then(Value::as_str) != Some("tool") {
+        return false;
+    }
+    let call_id = message
+        .get("tool_call_id")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    call_ids.contains(call_id)
 }
 
 fn render_system_prompt(
@@ -630,9 +971,20 @@ fn project_message(
                 "content": runtime_json_object(&result)?,
             }))));
         }
+        let mut rendered = event.clone();
+        for private_field in [
+            "prompt_trace",
+            "tool_call_object_id",
+            "tool_result_object_id",
+            "prompt_component_object_id",
+            "source_object_id",
+            "model_telemetry",
+        ] {
+            rendered.remove(private_field);
+        }
         return Ok(Some(object(json!({
             "role": "user",
-            "content": format!("Tool result JSON:\n{}", compact_json(&Value::Object(event.clone()))?),
+            "content": format!("Tool result JSON:\n{}", compact_json(&Value::Object(rendered))?),
         }))));
     }
     Ok(None)

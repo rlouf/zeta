@@ -46,22 +46,21 @@ pub enum AgentRequest {
         /// Preserves global tool-call order.
         position: usize,
     },
-    /// Proposes returning a typed event to the caller.
-    Return {
-        /// Names the returned event vocabulary entry.
-        event_type: String,
-        /// Carries the returned event payload.
-        payload: Map<String, Value>,
-        /// Preserves global tool-call order.
-        position: usize,
-    },
     /// Proposes promoting a traced content object.
     ContentPromotion {
-        /// Identifies the content object.
-        object_id: String,
-        /// Names the caller-owned destination.
-        destination: String,
-        /// Preserves global tool-call order.
-        position: usize,
+        /// Selects the durable content scope.
+        scope: String,
+        /// Names the content entry within that scope.
+        key: String,
+        /// Identifies the object to make active, or removes the entry when absent.
+        object_id: Option<String>,
+        /// Protects the destination head from a concurrent move.
+        expected_head: Option<String>,
+        /// Protects the destination entry from a concurrent replacement.
+        expected_object_id: Option<String>,
+        /// Identifies the run head that produced the proposal.
+        source_head: String,
+        /// Records why the content should become durable.
+        reason: String,
     },
 }

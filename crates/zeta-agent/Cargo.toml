@@ -8,8 +8,15 @@ license.workspace = true
 publish = false
 
 [dependencies]
+futures-util = "0.3"
 jsonschema.workspace = true
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
 serde.workspace = true
 serde_json = { workspace = true, features = ["preserve_order"] }
+time.workspace = true
+tokio = { version = "1", features = ["macros", "time"] }
 zeta-journal = { path = "../zeta-journal" }
 zeta-substrate = { path = "../zeta-substrate" }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["io-util", "macros", "net", "rt-multi-thread", "time"] }

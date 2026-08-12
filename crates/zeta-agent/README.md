@@ -1,18 +1,20 @@
 # zeta-agent
 
-`zeta-agent` runs one resolved agent invocation. It keeps prompt identity,
-tool-call behavior, event proposals, and traces deterministic while the caller
-supplies the model, tools, clock, cancellation, and IDs.
+`zeta-agent` runs one resolved agent invocation. It gives scripted and live
+runs the same prompt rules, tool behavior, event proposals, and
+content-addressed trace.
 
 ## Contents
 
-- Ordered prompt construction from an objective, history, context, and tools.
-- A provider-neutral model and tool loop.
+- Ordered prompt construction, history repair, and compaction.
+- Chat Completions and Responses model streams.
 - Capability grants and JSON Schema validation.
-- Publish, wait, cancel, and return proposals.
-- Immediate lifecycle records for side effects.
-- Content-addressed prompt and execution traces.
-- Explicit environment, time, cancellation, and identity inputs.
+- Native file, search, shell, URL, and web-search tools.
+- Content queries, transforms, and finish operations.
+- Publish, wait, and cancel proposals.
+- Durable lifecycle records for side effects.
+- Bounded streaming and cooperative cancellation.
+- Explicit environment, time, identity, network, and persistence inputs.
 
 ## Prompt example
 
@@ -40,6 +42,29 @@ assert!(prompt.prompt_object_id.starts_with("b3:"));
 
 `AgentRunner` uses the same prompt path inside a complete scripted or live
 invocation.
+
+## Capability aliases
+
+Hosts that project authored manifests resolve each capability with its authored
+model-facing name. This keeps canonical routing identity separate from the name
+shown to the model:
+
+```rust
+use zeta_agent::{native_capabilities, ToolProfile};
+
+let capabilities = native_capabilities();
+let authored = ToolProfile::Native.resolve_capability(&capabilities[0], "search_code");
+assert_eq!(authored.model_name, "search_code");
+
+let codex_builtin =
+    ToolProfile::Codex.resolve_capability(&capabilities[1], "run_shell");
+assert_eq!(codex_builtin.model_name, "exec_command");
+```
+
+Ordinary aliases also survive Codex resolution. Codex built-ins override an
+authored alias when their adapter requires a canonical model name or argument
+rewrite; for example, `zeta.bash` is exposed as `exec_command` and maps `cmd`
+back to canonical `command`.
 
 ## Test
 

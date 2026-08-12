@@ -5,9 +5,11 @@ use std::future::Future;
 use std::pin::Pin;
 
 use serde::{Deserialize, Serialize};
-use serde_json::{Map, Value};
+use serde_json::{json, Map, Value};
+use zeta_journal::DraftEvent;
 
 use crate::error::AgentError;
+use crate::model::AbortSignal;
 
 /// Resolves one capability execution at an injected runtime boundary.
 pub type ToolFuture<'a> =
@@ -93,6 +95,179 @@ pub struct Capability {
     pub delivery_semantics: Option<DeliverySemantics>,
 }
 
+/// Selects one exact model-facing presentation of canonical capabilities.
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolProfile {
+    /// Preserves each canonical declaration's native presentation.
+    #[default]
+    Native,
+    /// Presents built-in tools using the names expected by Codex models.
+    Codex,
+}
+
+impl ToolProfile {
+    /// Resolves canonical declarations using model names derived from their ids.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let capabilities = zeta_agent::native_capabilities();
+    /// let resolved = zeta_agent::ToolProfile::Native.resolve(&capabilities);
+    /// assert_eq!(resolved[0].model_name, capabilities[0].id.model_name());
+    /// ```
+    pub fn resolve(self, capabilities: &[Capability]) -> Vec<ResolvedCapability> {
+        let mut resolved = Vec::with_capacity(capabilities.len());
+        for capability in capabilities {
+            let route = self.resolve_capability(capability, capability.id.model_name());
+            resolved.push(route);
+        }
+        resolved
+    }
+
+    /// Resolves one declaration with an explicit authored model-facing name.
+    ///
+    /// The authored name is retained unless this profile defines a built-in
+    /// adapter for the declaration's canonical id.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let capabilities = zeta_agent::native_capabilities();
+    /// let resolved = zeta_agent::ToolProfile::Native.resolve_capability(
+    ///     &capabilities[0],
+    ///     "search_code",
+    /// );
+    /// assert_eq!(resolved.model_name, "search_code");
+    /// ```
+    pub fn resolve_capability(
+        self,
+        capability: &Capability,
+        model_name: &str,
+    ) -> ResolvedCapability {
+        if self == ToolProfile::Codex && capability.id.as_str() == "zeta.bash" {
+            return ResolvedCapability {
+                canonical: capability.clone(),
+                model_name: "exec_command".to_owned(),
+                model_description: "Run a shell command.".to_owned(),
+                model_input_schema: object_schema(json!({
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["cmd"],
+                    "properties": {"cmd": {"type": "string"}},
+                })),
+                argument_adapter: ArgumentAdapter::RenameField {
+                    from: "cmd".to_owned(),
+                    to: "command".to_owned(),
+                },
+            };
+        }
+        if self == ToolProfile::Codex && capability.id.as_str() == "zeta.patch" {
+            return ResolvedCapability {
+                canonical: capability.clone(),
+                model_name: "apply_patch".to_owned(),
+                model_description: "Apply a patch to files.".to_owned(),
+                model_input_schema: object_schema(json!({
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["patch"],
+                    "properties": {"patch": {"type": "string", "minLength": 1}},
+                })),
+                argument_adapter: ArgumentAdapter::Identity,
+            };
+        }
+        ResolvedCapability {
+            canonical: capability.clone(),
+            model_name: model_name.to_owned(),
+            model_description: capability.description.clone(),
+            model_input_schema: capability.input_schema.clone(),
+            argument_adapter: ArgumentAdapter::Identity,
+        }
+    }
+}
+
+/// Adapts validated model arguments into canonical capability arguments.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ArgumentAdapter {
+    /// Preserves the model arguments exactly.
+    #[default]
+    Identity,
+    /// Moves one model-facing field to its canonical name.
+    RenameField {
+        /// Names the model-facing field.
+        from: String,
+        /// Names the canonical field.
+        to: String,
+    },
+}
+
+impl ArgumentAdapter {
+    /// Returns canonical arguments after applying this explicit adaptation.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AgentError`] when a rename source is absent or its destination
+    /// would overwrite another value.
+    pub fn adapt(&self, arguments: &Map<String, Value>) -> Result<Map<String, Value>, AgentError> {
+        match self {
+            ArgumentAdapter::Identity => Ok(arguments.clone()),
+            ArgumentAdapter::RenameField { from, to } => {
+                let mut adapted = arguments.clone();
+                let Some(value) = adapted.remove(from) else {
+                    return Err(AgentError::invocation(format!(
+                        "argument adapter expected field '{from}'"
+                    )));
+                };
+                if adapted.insert(to.clone(), value).is_some() {
+                    return Err(AgentError::invocation(format!(
+                        "argument adapter would overwrite field '{to}'"
+                    )));
+                }
+                Ok(adapted)
+            }
+        }
+    }
+}
+
+/// Carries a canonical declaration and its explicit model presentation.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct ResolvedCapability {
+    /// Preserves the identity, canonical schema, and retry contract.
+    pub canonical: Capability,
+    /// Names the function exposed to the model.
+    pub model_name: String,
+    /// Explains the model-facing operation.
+    pub model_description: String,
+    /// Validates arguments before adaptation.
+    pub model_input_schema: Map<String, Value>,
+    /// Converts validated model arguments to the canonical schema.
+    pub argument_adapter: ArgumentAdapter,
+}
+
+/// Resolves canonical declarations using model names derived from their ids.
+///
+/// # Examples
+///
+/// ```
+/// let capabilities = zeta_agent::native_capabilities();
+/// let resolved = zeta_agent::resolve_capabilities(
+///     &capabilities,
+///     zeta_agent::ToolProfile::Native,
+/// );
+/// assert_eq!(resolved[0].model_name, capabilities[0].id.model_name());
+/// ```
+pub fn resolve_capabilities(
+    capabilities: &[Capability],
+    profile: ToolProfile,
+) -> Vec<ResolvedCapability> {
+    profile.resolve(capabilities)
+}
+
+fn object_schema(value: Value) -> Map<String, Value> {
+    value.as_object().cloned().unwrap_or_default()
+}
+
 /// Carries one validated call to an injected capability executor.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct CapabilityInvocation {
@@ -106,53 +281,20 @@ pub struct CapabilityInvocation {
     pub effect_key: Option<String>,
 }
 
-/// Names one durable stage in a side effect's execution.
-#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum EffectStatus {
-    /// Records intent before execution begins.
-    Planned,
-    /// Records that execution has begun.
-    Started,
-    /// Records a successful result.
-    Completed,
-    /// Records a retry-safe failure.
-    Failed,
-    /// Records an outcome that cannot safely be retried.
-    Ambiguous,
-}
-
-/// Carries one durable side-effect lifecycle observation.
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
-pub struct EffectEvent {
-    /// Names the lifecycle stage.
-    pub status: EffectStatus,
-    /// Identifies the stable logical effect.
-    pub effect_key: String,
-    /// Identifies the canonical capability.
-    pub capability_id: CapabilityId,
-    /// States the declared retry contract.
-    pub semantics: DeliverySemantics,
-    /// Identifies the caller-defined logical attempt.
-    pub scope: String,
-    /// Identifies the model tool call that requested the effect.
-    pub caused_by: String,
-    /// Carries canonical arguments.
-    pub params: Map<String, Value>,
-    /// Carries a terminal result when one exists.
-    pub result: Option<Map<String, Value>>,
-}
-
 /// Executes validated capabilities without choosing a host or plugin system.
 pub trait ToolExecutor {
     /// Executes one canonical invocation.
-    fn execute<'a>(&'a mut self, invocation: &'a CapabilityInvocation) -> ToolFuture<'a>;
+    fn execute<'a>(
+        &'a mut self,
+        invocation: &'a CapabilityInvocation,
+        abort: &'a dyn AbortSignal,
+    ) -> ToolFuture<'a>;
 }
 
-/// Persists side-effect lifecycle facts at the moment they become true.
-pub trait EffectRecorder {
-    /// Records one lifecycle fact before execution continues.
-    fn record(&mut self, event: EffectEvent) -> Result<(), AgentError>;
+/// Persists complete journal drafts at the moment they become true.
+pub trait DraftRecorder {
+    /// Records one draft before execution crosses its durability boundary.
+    fn record(&mut self, draft: &DraftEvent) -> Result<(), AgentError>;
 }
 
 /// Supplies deterministic identities without reading process-global randomness.

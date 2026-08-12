@@ -8,8 +8,10 @@ from typing import Any, cast
 import httpx
 import pytest
 import zeta.models.chat_completions as zeta_model
+import zeta.models.codex_auth as zeta_codex_auth
 import zeta.models.limits as zeta_model_limits
 import zeta.models.profiles as zeta_models
+import zeta.models.responses as zeta_responses
 import zeta.models.sse as zeta_model_sse
 import zeta.models.types as zeta_model_shapes
 import zeta.models.types as zeta_models_api
@@ -22,6 +24,8 @@ from zeta_test_support import (
     task_state_fixture,
     write_models_config,
 )
+
+AGENT_VECTORS_DIR = Path(__file__).resolve().parents[2] / "spec" / "vectors" / "agent"
 
 
 def _drain(agen: Any) -> list[Any]:
@@ -1904,3 +1908,494 @@ async def test_zeta_stream_json_sse_stops_between_frames_when_the_run_aborts(
             delivered.append(frame)
 
     assert delivered == ["a", "b"]  # stopped mid-stream, not after all four
+
+
+def compact_model_event(value: dict[str, Any]) -> str:
+    return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+
+
+def captured_runtime_error(call: Any) -> str:
+    try:
+        call()
+    except RuntimeError as exc:
+        return str(exc)
+    raise AssertionError("expected RuntimeError")
+
+
+def python_model_vectors() -> dict[str, Any]:
+    tool = {
+        "type": "function",
+        "function": {
+            "name": "read",
+            "description": "Read a file.",
+            "parameters": {
+                "type": "object",
+                "properties": {"path": {"type": "string"}},
+                "required": ["path"],
+                "additionalProperties": False,
+            },
+        },
+    }
+    forced_read = {"type": "function", "function": {"name": "read"}}
+    chat_requests = []
+    chat_request_cases: list[tuple[str, dict[str, Any]]] = [
+        (
+            "tools_and_reasoning",
+            {
+                "messages": [
+                    {"role": "system", "content": "Be exact."},
+                    {"role": "user", "content": "Read README.md."},
+                ],
+                "tools": [tool],
+                "tool_choice": forced_read,
+                "max_tokens": 512,
+                "selected_model": "unit-chat-model",
+                "thinking": "high",
+            },
+        ),
+        (
+            "thinking_disabled",
+            {
+                "messages": [{"role": "user", "content": "Answer."}],
+                "tools": None,
+                "tool_choice": "auto",
+                "max_tokens": 64,
+                "selected_model": "unit-chat-model",
+                "thinking": "none",
+            },
+        ),
+    ]
+    for name, inputs in chat_request_cases:
+        chat_requests.append(
+            {
+                "name": name,
+                "input": inputs,
+                "expected": zeta_model.chat_completion_request_body(**inputs),
+            }
+        )
+
+    chat_events = [
+        {
+            "id": "chatcmpl-vector",
+            "object": "chat.completion.chunk",
+            "created": 1786400000,
+            "model": "unit-chat-model",
+            "system_fingerprint": "fp-vector",
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {
+                        "role": "assistant",
+                        "reasoning_content": "inspect ",
+                        "content": "I will ",
+                        "tool_calls": [
+                            {
+                                "index": 0,
+                                "id": "call-read",
+                                "type": "function",
+                                "function": {
+                                    "name": "re",
+                                    "arguments": '{"path"',
+                                },
+                            }
+                        ],
+                    },
+                    "finish_reason": None,
+                }
+            ],
+        },
+        {
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {
+                        "reasoning_content": "then answer",
+                        "content": "read it.",
+                        "tool_calls": [
+                            {
+                                "index": 0,
+                                "function": {
+                                    "name": "ad",
+                                    "arguments": ':"README.md"}',
+                                },
+                            }
+                        ],
+                    },
+                    "finish_reason": "tool_calls",
+                }
+            ]
+        },
+        {
+            "choices": [],
+            "usage": {
+                "prompt_tokens": 21,
+                "completion_tokens": 8,
+                "total_tokens": 29,
+            },
+        },
+    ]
+    chat_frames = [*(compact_model_event(event) for event in chat_events), "[DONE]"]
+    chat_sink = DeltaSink()
+    chat_expected = _read_stream(
+        zeta_model_sse.read_streamed_chat_completion,
+        chat_frames,
+        stream_sink=chat_sink,
+    )
+
+    sse_lines_input = [
+        ": keepalive",
+        'data: {"part":"first",',
+        'data: "value":1}',
+        "",
+        "data: [DONE]",
+        "",
+    ]
+    sse_frames_expected = _drain(
+        zeta_model_sse.parse_sse_lines(_aiter(sse_lines_input))
+    )
+
+    chat_failures = []
+    for name, frames in (
+        ("malformed_json", ['{"choices":']),
+        (
+            "provider_error",
+            [compact_model_event({"error": {"message": "provider unavailable"}})],
+        ),
+        (
+            "missing_done",
+            [
+                compact_model_event(
+                    {
+                        "choices": [
+                            {
+                                "index": 0,
+                                "delta": {"role": "assistant", "content": "partial"},
+                                "finish_reason": None,
+                            }
+                        ]
+                    }
+                )
+            ],
+        ),
+    ):
+        chat_failures.append(
+            {
+                "name": name,
+                "sse": frames,
+                "expected_error": captured_runtime_error(
+                    lambda frames=frames: _read_stream(
+                        zeta_model_sse.read_streamed_chat_completion,
+                        frames,
+                    )
+                ),
+            }
+        )
+
+    request = httpx.Request("POST", "https://model.invalid/v1/chat/completions")
+    response = httpx.Response(
+        429,
+        request=request,
+        json={"error": {"message": "quota exceeded"}},
+    )
+    try:
+        response.raise_for_status()
+    except httpx.HTTPStatusError as error:
+        http_failure = zeta_model_sse.http_error_detail(error)
+    else:
+        raise AssertionError("expected an HTTP failure")
+
+    responses_requests = []
+    full_messages = [
+        {"role": "system", "content": "Be exact."},
+        {"role": "system", "content": "Use tools when needed."},
+        {"role": "user", "content": "Read README.md."},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call-read",
+                    "type": "function",
+                    "function": {
+                        "name": "read",
+                        "arguments": '{"path":"README.md"}',
+                    },
+                }
+            ],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "call-read",
+            "content": '{"ok":true}',
+        },
+        {"role": "assistant", "content": "The file is ready."},
+    ]
+    full_inputs: dict[str, Any] = {
+        "messages": full_messages,
+        "model": "unit-responses-model",
+        "tools": [tool],
+        "tool_choice": forced_read,
+        "max_tokens": 512,
+        "thinking": "minimal",
+        "session_id": "session-vector",
+    }
+    responses_requests.append(
+        {
+            "name": "converted_history_and_tools",
+            "input": full_inputs,
+            "expected": zeta_responses.responses_request_body(**full_inputs),
+        }
+    )
+    replay_messages = [
+        {"role": "system", "content": "Replay provider state."},
+        {"role": "user", "content": "Continue."},
+        {
+            "role": "assistant",
+            "content": "ignored when replay items exist",
+            "_responses_items": [
+                {
+                    "type": "reasoning",
+                    "id": "rs-vector",
+                    "encrypted_content": "opaque-vector",
+                },
+                {
+                    "type": "function_call",
+                    "id": "fc-vector",
+                    "call_id": "call-vector",
+                    "name": "read",
+                    "arguments": '{"path":"notes.md"}',
+                },
+            ],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "call-vector",
+            "content": '{"ok":true,"value":"ready"}',
+        },
+    ]
+    replay_inputs: dict[str, Any] = {
+        "messages": replay_messages,
+        "model": "unit-responses-model",
+        "tools": None,
+        "tool_choice": "auto",
+        "max_tokens": 128,
+        "thinking": "medium",
+        "session_id": "session-vector",
+    }
+    responses_requests.append(
+        {
+            "name": "provider_replay_items",
+            "input": replay_inputs,
+            "expected": zeta_responses.responses_request_body(**replay_inputs),
+        }
+    )
+
+    responses_events = [
+        {"type": "response.created", "response": {"id": "resp-vector"}},
+        {"type": "response.reasoning_summary_text.delta", "delta": "inspect"},
+        {"type": "response.reasoning_summary_part.done"},
+        {"type": "response.reasoning_text.delta", "delta": "choose"},
+        {"type": "response.output_text.delta", "delta": "draft"},
+        {
+            "type": "response.output_item.done",
+            "item": {
+                "type": "reasoning",
+                "id": "rs-vector",
+                "encrypted_content": "opaque-vector",
+            },
+        },
+        {
+            "type": "response.output_item.done",
+            "item": {
+                "type": "message",
+                "id": "msg-vector",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "Final."}],
+            },
+        },
+        {
+            "type": "response.output_item.done",
+            "item": {
+                "type": "function_call",
+                "id": "fc-vector",
+                "call_id": "call-vector",
+                "name": "read",
+                "arguments": '{"path":"README.md"}',
+            },
+        },
+        {
+            "type": "response.completed",
+            "response": {
+                "id": "resp-vector",
+                "status": "completed",
+                "usage": {
+                    "input_tokens": 34,
+                    "output_tokens": 13,
+                    "total_tokens": 47,
+                    "input_tokens_details": {"cached_tokens": 21},
+                },
+            },
+        },
+    ]
+    responses_frames = [
+        *(compact_model_event(event) for event in responses_events),
+        "[DONE]",
+    ]
+    responses_sink = DeltaSink()
+    responses_expected = _read_stream(
+        zeta_responses.read_streamed_responses,
+        responses_frames,
+        stream_sink=responses_sink,
+    )
+    incomplete_event = {
+        "type": "response.incomplete",
+        "response": {"id": "resp-short", "status": "incomplete"},
+    }
+    incomplete_frames = [compact_model_event(incomplete_event), "[DONE]"]
+
+    responses_failures = []
+    for name, frames in (
+        (
+            "error_event",
+            [
+                compact_model_event(
+                    {
+                        "type": "error",
+                        "code": "server_error",
+                        "message": "provider failed",
+                    }
+                )
+            ],
+        ),
+        (
+            "failed_response",
+            [
+                compact_model_event(
+                    {
+                        "type": "response.failed",
+                        "response": {
+                            "id": "resp-failed",
+                            "status": "failed",
+                            "error": {
+                                "code": "invalid_request",
+                                "message": "request rejected",
+                            },
+                        },
+                    }
+                )
+            ],
+        ),
+        (
+            "missing_terminal",
+            [
+                compact_model_event(
+                    {"type": "response.output_text.delta", "delta": "partial"}
+                ),
+                "[DONE]",
+            ],
+        ),
+    ):
+        responses_failures.append(
+            {
+                "name": name,
+                "sse": frames,
+                "expected_error": captured_runtime_error(
+                    lambda frames=frames: _read_stream(
+                        zeta_responses.read_streamed_responses,
+                        frames,
+                    )
+                ),
+            }
+        )
+
+    timeout = zeta_model_limits.model_stream_timeout(
+        first_output_timeout=10.0,
+        idle_timeout=2.5,
+    )
+    headers = zeta_responses.codex_request_headers(
+        zeta_codex_auth.CodexCredentials(
+            access_token="<redacted-access-token>",
+            account_id="<redacted-account-id>",
+        ),
+        "session-vector",
+    )
+    return {
+        "version": 0,
+        "chat_completions": {
+            "requests": chat_requests,
+            "sse_parser": {
+                "lines": sse_lines_input,
+                "expected_frames": sse_frames_expected,
+            },
+            "streams": [
+                {
+                    "name": "fragmented_content_reasoning_tool_and_usage",
+                    "sse": chat_frames,
+                    "expected": chat_expected,
+                    "expected_observations": {
+                        "content": chat_sink.deltas,
+                        "reasoning": chat_sink.reasoning_deltas,
+                    },
+                }
+            ],
+            "failures": chat_failures,
+            "http_failures": [
+                {
+                    "status": 429,
+                    "url": str(request.url),
+                    "body": {"error": {"message": "quota exceeded"}},
+                    "expected": http_failure,
+                }
+            ],
+            "timeouts": [
+                {
+                    "first_output_seconds": 10.0,
+                    "idle_seconds": 2.5,
+                    "expected": {
+                        "connect": timeout.connect,
+                        "read": timeout.read,
+                        "write": timeout.write,
+                        "pool": timeout.pool,
+                    },
+                }
+            ],
+        },
+        "responses": {
+            "requests": responses_requests,
+            "streams": [
+                {
+                    "name": "reasoning_text_tool_usage_and_replay_items",
+                    "sse": responses_frames,
+                    "expected": responses_expected,
+                    "expected_observations": {
+                        "content": responses_sink.deltas,
+                        "reasoning": responses_sink.reasoning_deltas,
+                    },
+                },
+                {
+                    "name": "incomplete_response",
+                    "sse": incomplete_frames,
+                    "expected": _read_stream(
+                        zeta_responses.read_streamed_responses,
+                        incomplete_frames,
+                    ),
+                },
+            ],
+            "failures": responses_failures,
+            "codex_headers": {
+                "credentials": {
+                    "access_token": "<redacted-access-token>",
+                    "account_id": "<redacted-account-id>",
+                },
+                "session": "session-vector",
+                "expected": headers,
+            },
+        },
+    }
+
+
+def test_agent_model_vectors_match_python_ground_truth() -> None:
+    expected = json.loads(
+        (AGENT_VECTORS_DIR / "models.json").read_text(encoding="utf-8")
+    )
+    assert python_model_vectors() == expected

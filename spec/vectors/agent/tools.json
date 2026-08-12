@@ -1,0 +1,734 @@
+{
+  "base_dir": "<workspace>",
+  "bounds": {
+    "bash_output": {
+      "expected_text": "01234\n... 6 characters truncated ...\nBCDEF",
+      "expected_truncated": true,
+      "input": "0123456789ABCDEF",
+      "limit": 10
+    }
+  },
+  "capabilities": [
+    {
+      "delivery_semantics": null,
+      "description": "Search code structurally with ast-grep. Use when looking for syntax patterns rather than plain text. Results include [path#tag] snapshot headers and numbered matched lines for grounded edits.",
+      "id": "zeta.ast_grep",
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "lang": {
+            "description": "Language for ast-grep parsing, such as python, rust, typescript, or tsx.",
+            "type": "string"
+          },
+          "limit": {
+            "description": "Maximum number of structural matches to return.",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "path": {
+            "description": "File or directory to search. Defaults to the current working directory.",
+            "type": "string"
+          },
+          "pattern": {
+            "description": "ast-grep structural pattern, such as 'subprocess.Popen($$$ARGS)'.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "pattern",
+          "lang"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "delivery_semantics": "unsafe_to_retry",
+      "description": "Execute a shell command.",
+      "id": "zeta.bash",
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "command": {
+            "type": "string"
+          },
+          "timeout": {
+            "description": "Seconds before the command is killed (default 120).",
+            "maximum": 600.0,
+            "minimum": 1,
+            "type": "number"
+          }
+        },
+        "required": [
+          "command"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "delivery_semantics": "idempotent_with_key",
+      "description": "Edit a file. Prefer tagged input from read: [path#tag] plus SWAP, DEL, INS.PRE, or INS.POST line operations.",
+      "id": "zeta.edit",
+      "input_schema": {
+        "additionalProperties": false,
+        "anyOf": [
+          {
+            "required": [
+              "input"
+            ]
+          },
+          {
+            "required": [
+              "location",
+              "old",
+              "new"
+            ]
+          }
+        ],
+        "properties": {
+          "input": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "location": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "new": {
+            "type": "string"
+          },
+          "old": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "type": "object"
+      }
+    },
+    {
+      "delivery_semantics": null,
+      "description": "Search file contents recursively. Use before read when looking for symbols, errors, strings, or definitions. Successful results include [path#tag] snapshot headers and numbered lines for grounded edits.",
+      "id": "zeta.grep",
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "limit": {
+            "description": "Maximum number of matching lines to return.",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "path": {
+            "description": "File or directory to search. Defaults to the current working directory.",
+            "type": "string"
+          },
+          "pattern": {
+            "description": "Text or regular expression to search for.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "pattern"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "delivery_semantics": null,
+      "description": "List files with type and byte sizes.",
+      "id": "zeta.ls",
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "exclude": {
+            "description": "Path/name patterns to omit, such as .git or dist.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "limit": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "min_size_bytes": {
+            "description": "Only include files at least this large. Directories are omitted when set.",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "path": {
+            "description": "Directory or file to list.",
+            "type": "string"
+          },
+          "recursive": {
+            "description": "List descendants recursively instead of only direct children.",
+            "type": "boolean"
+          }
+        },
+        "type": "object"
+      }
+    },
+    {
+      "delivery_semantics": "idempotent_with_key",
+      "description": "Apply a patch to files.",
+      "id": "zeta.patch",
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "patch": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "patch"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "delivery_semantics": null,
+      "description": "Read a UTF-8 text file or public HTTP(S) URL. Returns a [path#tag] snapshot header and numbered lines.",
+      "id": "zeta.read",
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "limit": {
+            "description": "Maximum number of lines to return.",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "offset": {
+            "description": "Number of leading lines to skip (0-based).",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "path": {
+            "description": "Local file path or public HTTP(S) URL.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "delivery_semantics": null,
+      "description": "Search public web pages using Codex hosted web search. Provide one self-contained query; use read for URLs returned by the search.",
+      "id": "zeta.web_search",
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "limit": {
+            "description": "Maximum number of source URLs to return.",
+            "maximum": 20,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "query": {
+            "description": "Self-contained public web search query.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "query"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "delivery_semantics": "idempotent_with_key",
+      "description": "Write content to a file.",
+      "id": "zeta.write",
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "content": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "content"
+        ],
+        "type": "object"
+      }
+    }
+  ],
+  "cases": [
+    {
+      "capability": "zeta.read",
+      "expected": {
+        "content": [
+          {
+            "text": "[<workspace>/read/note.txt#49cc5edb]\n2:βeta\n3:gamma\n",
+            "type": "text"
+          }
+        ],
+        "metadata": {
+          "content_hash": "b3:49cc5edb9bd31a25e79836dd5384afa1d1b35af165e8323fcce3aedfe3461944",
+          "limit": 2,
+          "line_end": 3,
+          "line_start": 2,
+          "offset": 1,
+          "path": "<workspace>/read/note.txt",
+          "tag": "49cc5edb",
+          "truncated": false
+        },
+        "ok": true
+      },
+      "fixture": {
+        "files": {
+          "read/note.txt": "alpha\nβeta\ngamma\n"
+        }
+      },
+      "input": {
+        "limit": 2,
+        "offset": 1,
+        "path": "read/note.txt"
+      },
+      "name": "read_utf8_lines"
+    },
+    {
+      "capability": "zeta.write",
+      "expected": {
+        "content": [
+          {
+            "text": "wrote <workspace>/write/note.txt",
+            "type": "text"
+          }
+        ],
+        "metadata": {
+          "after_hash": "b3:79d1d8da0b625035cdbfc9d51841030861b9f4cf7c5abbe442a8d13efc352170",
+          "before_hash": "b3:87b86a9f9e06007dc88bef0b92d8f046e2795cbdb25c211a4f2326570e2b820c",
+          "path": "<workspace>/write/note.txt"
+        },
+        "ok": true
+      },
+      "expected_files": {
+        "write/note.txt": "new\n"
+      },
+      "fixture": {
+        "files": {
+          "write/note.txt": "old\n"
+        }
+      },
+      "input": {
+        "content": "new\n",
+        "path": "write/note.txt"
+      },
+      "name": "write_existing_file"
+    },
+    {
+      "capability": "zeta.edit",
+      "expected": {
+        "content": [
+          {
+            "text": "applied exact replacement to <workspace>/edit/note.txt",
+            "type": "text"
+          }
+        ],
+        "metadata": {
+          "after_hash": "b3:c32834b7ecb81a3421e1b77c6d87e1f7837147bc7f12e1fd55c653177e83f78c",
+          "artifact": "<artifact>",
+          "before_hash": "b3:04e7ebabb17211e8264bd57067d5b6599ac3a24d2dfecc3e6cf0a8373bbc3f75",
+          "location": "<workspace>/edit/note.txt",
+          "operation": "exact_replace"
+        },
+        "ok": true
+      },
+      "expected_artifact": "--- <workspace>/edit/note.txt\n+++ <workspace>/edit/note.txt\n@@ -1,3 +1,3 @@\n hello\n-old\n+new\n bye\n",
+      "expected_files": {
+        "edit/note.txt": "hello\nnew\nbye\n"
+      },
+      "fixture": {
+        "files": {
+          "edit/note.txt": "hello\nold\nbye\n"
+        }
+      },
+      "input": {
+        "location": "edit/note.txt",
+        "new": "new\n",
+        "old": "old\n"
+      },
+      "name": "edit_exact_replacement"
+    },
+    {
+      "capability": "zeta.patch",
+      "expected": {
+        "content": [
+          {
+            "text": "applied patch",
+            "type": "text"
+          }
+        ],
+        "metadata": {
+          "artifact": "<artifact>",
+          "changes": [
+            {
+              "after_hash": "b3:79d1d8da0b625035cdbfc9d51841030861b9f4cf7c5abbe442a8d13efc352170",
+              "before_hash": "b3:87b86a9f9e06007dc88bef0b92d8f046e2795cbdb25c211a4f2326570e2b820c",
+              "operation": "update",
+              "path": "patch/note.txt"
+            }
+          ],
+          "files": [
+            "patch/note.txt"
+          ]
+        },
+        "ok": true
+      },
+      "expected_artifact": "*** Begin Patch\n*** Update File: patch/note.txt\n@@\n-old\n+new\n*** End Patch",
+      "expected_files": {
+        "patch/note.txt": "new\n"
+      },
+      "fixture": {
+        "files": {
+          "patch/note.txt": "old\n"
+        }
+      },
+      "input": {
+        "patch": "*** Begin Patch\n*** Update File: patch/note.txt\n@@\n-old\n+new\n*** End Patch"
+      },
+      "name": "patch_updates_file"
+    },
+    {
+      "capability": "zeta.ls",
+      "expected": {
+        "content": [
+          {
+            "text": "-\tdir\tsrc/\n10\tfile\tpyproject.toml",
+            "type": "text"
+          }
+        ],
+        "metadata": {
+          "entries": 2,
+          "exclude": [],
+          "limit": 200,
+          "min_size_bytes": null,
+          "path": "<workspace>/list",
+          "recursive": false
+        },
+        "ok": true
+      },
+      "fixture": {
+        "directories": [
+          "list/src"
+        ],
+        "files": {
+          "list/pyproject.toml": "[project]\n"
+        }
+      },
+      "input": {
+        "path": "list"
+      },
+      "name": "list_directory"
+    },
+    {
+      "capability": "zeta.grep",
+      "expected": {
+        "content": [
+          {
+            "text": "[<workspace>/grep/a.txt#6cdc77f9]\n1:needle one\n3:needle two",
+            "type": "text"
+          }
+        ],
+        "metadata": {
+          "content_truncated": false,
+          "files": 1,
+          "limit": 2,
+          "match_limit_reached": true,
+          "matches": 2,
+          "max_chars": 12000,
+          "path": "<workspace>/grep",
+          "pattern": "needle",
+          "status": 0,
+          "tags": {
+            "<workspace>/grep/a.txt": "6cdc77f9"
+          },
+          "truncated": true
+        },
+        "ok": true
+      },
+      "fixture": {
+        "command": "fallback",
+        "files": {
+          "grep/a.txt": "needle one\nignore\nneedle two\n",
+          "grep/b.txt": "needle three\n"
+        }
+      },
+      "input": {
+        "limit": 2,
+        "path": "grep",
+        "pattern": "needle"
+      },
+      "name": "grep_limited_matches"
+    },
+    {
+      "capability": "zeta.ast_grep",
+      "expected": {
+        "content": [
+          {
+            "text": "[<workspace>/ast/sample.py#f7a3eabe]\n4:    return subprocess.Popen(['echo', 'ok'])",
+            "type": "text"
+          }
+        ],
+        "metadata": {
+          "content_truncated": false,
+          "files": 1,
+          "lang": "python",
+          "limit": 100,
+          "match_limit_reached": false,
+          "matches": 1,
+          "max_chars": 12000,
+          "path": "<workspace>/ast/sample.py",
+          "pattern": "subprocess.Popen($$$ARGS)",
+          "status": 0,
+          "tags": {
+            "<workspace>/ast/sample.py": "f7a3eabe"
+          },
+          "truncated": false
+        },
+        "ok": true
+      },
+      "fixture": {
+        "command_output": "{\"file\":\"<workspace>/ast/sample.py\",\"range\":{\"start\":{\"line\":3}},\"lines\":\"    return subprocess.Popen(['echo', 'ok'])\"}",
+        "files": {
+          "ast/sample.py": "import subprocess\n\ndef run_it():\n    return subprocess.Popen(['echo', 'ok'])\n"
+        }
+      },
+      "input": {
+        "lang": "python",
+        "path": "ast/sample.py",
+        "pattern": "subprocess.Popen($$$ARGS)"
+      },
+      "name": "ast_grep_structural_match"
+    },
+    {
+      "capability": "zeta.bash",
+      "expected": {
+        "content": [
+          {
+            "text": "$ printf 'hello zeta\\n'\nexit 0\nstdout:\nhello zeta\n",
+            "type": "text"
+          }
+        ],
+        "metadata": {
+          "command": "printf 'hello zeta\\n'",
+          "duration_ms": "<duration-ms>",
+          "status": 0,
+          "stderr_truncated": false,
+          "stdout_truncated": false,
+          "timed_out": false
+        },
+        "ok": true
+      },
+      "fixture": {},
+      "input": {
+        "command": "printf 'hello zeta\\n'",
+        "timeout": 5
+      },
+      "name": "bash_success"
+    },
+    {
+      "capability": "zeta.read",
+      "expected": {
+        "content": [
+          {
+            "text": "[https://example.com/page#0fccd316]\n1:Example\n2:# Hello\n3:World\n",
+            "type": "text"
+          }
+        ],
+        "metadata": {
+          "content_hash": "b3:0fccd3162f1d1eda03db7704f0cc3624597ec7243d015ec63f477d82db845170",
+          "content_type": "text/html; charset=utf-8",
+          "limit": 3,
+          "line_end": 3,
+          "line_start": 1,
+          "offset": 0,
+          "path": "https://example.com/page",
+          "source": "web",
+          "tag": "0fccd316",
+          "truncated": false,
+          "url": "https://example.com/page"
+        },
+        "ok": true
+      },
+      "fixture": {
+        "resolved_addresses": [
+          "93.184.216.34"
+        ],
+        "response": {
+          "body_utf8": "<html><head><title>Example</title></head><body><h1>Hello</h1><p>World</p></body></html>",
+          "content_type": "text/html; charset=utf-8"
+        }
+      },
+      "input": {
+        "limit": 3,
+        "offset": 0,
+        "path": "https://example.com/page"
+      },
+      "name": "read_public_html_url"
+    },
+    {
+      "capability": "zeta.read",
+      "expected": {
+        "error": {
+          "code": "web-read-blocked",
+          "message": "URL host resolves to non-public address 127.0.0.1"
+        },
+        "ok": false
+      },
+      "fixture": {
+        "resolved_addresses": [
+          "127.0.0.1"
+        ]
+      },
+      "input": {
+        "path": "http://localhost/private"
+      },
+      "name": "read_blocks_private_url"
+    },
+    {
+      "capability": "zeta.web_search",
+      "expected": {
+        "content": [
+          {
+            "text": "# Web search\n\nQuery: zeta runtime boundary\n\nZeta keeps runtime boundaries explicit.\n\n## Sources\n[1] [Zeta design](https://example.com/zeta)\n    Runtime boundary overview.\n[2] [Agent protocol](https://example.com/agent)\n    Provider protocol reference.\n",
+            "type": "text"
+          }
+        ],
+        "metadata": {
+          "model": "unit-web-model",
+          "provider": "codex",
+          "query": "zeta runtime boundary",
+          "request_id": "resp-vector",
+          "result_count": 2,
+          "truncated": false,
+          "usage": {
+            "input_tokens": 12,
+            "output_tokens": 8,
+            "total_tokens": 20
+          }
+        },
+        "ok": true
+      },
+      "expected_provider_calls": [
+        {
+          "config": {
+            "credentials": {
+              "access_token": "<redacted-access-token>",
+              "account_id": "<redacted-account-id>"
+            },
+            "limit": 2,
+            "max_preview_bytes": 8192,
+            "max_preview_lines": 100,
+            "model": "unit-web-model",
+            "selected_url": null,
+            "timeout_sec": 30.0
+          },
+          "query": "zeta runtime boundary"
+        }
+      ],
+      "fixture": {
+        "provider_result": {
+          "answer": "Zeta keeps runtime boundaries explicit.",
+          "model": "unit-web-model",
+          "request_id": "resp-vector",
+          "sources": [
+            {
+              "snippet": "Runtime boundary overview.",
+              "title": "Zeta design",
+              "url": "https://example.com/zeta"
+            },
+            {
+              "snippet": "Provider protocol reference.",
+              "title": "Agent protocol",
+              "url": "https://example.com/agent"
+            }
+          ],
+          "usage": {
+            "input_tokens": 12,
+            "output_tokens": 8,
+            "total_tokens": 20
+          }
+        }
+      },
+      "input": {
+        "limit": 2,
+        "query": "zeta runtime boundary"
+      },
+      "name": "web_search_formats_provider_result"
+    }
+  ],
+  "version": 0,
+  "web_transport": {
+    "expected": {
+      "answer": "A transport-grounded answer.",
+      "model": "unit-web-transport",
+      "request_id": "resp-web-transport",
+      "sources": [
+        {
+          "snippet": "",
+          "title": "Transport source",
+          "url": "https://example.com/transport"
+        }
+      ],
+      "usage": {
+        "input_tokens": 9,
+        "output_tokens": 4,
+        "total_tokens": 13
+      }
+    },
+    "expected_request": {
+      "body": {
+        "input": [
+          {
+            "content": [
+              {
+                "text": "transport query",
+                "type": "input_text"
+              }
+            ],
+            "role": "user",
+            "type": "message"
+          }
+        ],
+        "instructions": "Search the public web and answer concisely. Cite sources with URL citations when possible.",
+        "model": "unit-web-transport",
+        "store": false,
+        "stream": true,
+        "tool_choice": {
+          "type": "web_search"
+        },
+        "tools": [
+          {
+            "search_context_size": "high",
+            "type": "web_search"
+          }
+        ]
+      },
+      "first_output_timeout": 12.0,
+      "headers": {
+        "Accept": "text/event-stream",
+        "Authorization": "Bearer <redacted-access-token>",
+        "Content-Type": "application/json",
+        "OpenAI-Beta": "responses=experimental",
+        "chatgpt-account-id": "<redacted-account-id>",
+        "originator": "zeta",
+        "session-id": "zeta-web-search"
+      },
+      "idle_timeout": 12.0,
+      "url": "https://backend.invalid/codex/responses"
+    },
+    "provider_sse": [
+      "{\"type\":\"response.output_item.done\",\"item\":{\"type\":\"message\",\"content\":[{\"type\":\"output_text\",\"text\":\"A transport-grounded answer.\",\"annotations\":[{\"type\":\"url_citation\",\"title\":\"Transport source\",\"url\":\"https://example.com/transport\"}]}]}}",
+      "{\"type\":\"response.completed\",\"response\":{\"id\":\"resp-web-transport\",\"model\":\"unit-web-transport\",\"usage\":{\"input_tokens\":9,\"output_tokens\":4,\"total_tokens\":13}}}",
+      "[DONE]"
+    ],
+    "query": "transport query"
+  }
+}

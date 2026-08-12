@@ -2,43 +2,50 @@
 
 use std::collections::{HashMap, HashSet};
 
+use jsonschema::error::ValidationErrorKind;
 use serde_json::{json, Map, Value};
+use time::format_description::well_known::Rfc3339;
+use time::{OffsetDateTime, UtcOffset};
 use zeta_journal::DraftEvent;
 use zeta_substrate::{canonical_json, derive, Derivation, Domain, Object};
 
 use crate::capability::{
-    Capability, CapabilityId, CapabilityInvocation, DeliverySemantics, EffectEvent, EffectRecorder,
-    EffectStatus, IdSource, ToolExecutor,
+    ArgumentAdapter, Capability, CapabilityId, CapabilityInvocation, DeliverySemantics,
+    DraftRecorder, IdSource, ResolvedCapability, ToolExecutor,
 };
+use crate::content::{ContentOperation, ContentService};
 use crate::control::AgentRequest;
 use crate::error::{AgentError, AgentRunAborted, AgentRunError};
+use crate::history::HistoryService;
 use crate::invocation::AgentInvocation;
 use crate::model::{AbortReason, AbortSignal, AgentObserver, Clock, ModelGateway, ModelRequest};
-use crate::prompt::{build_prompt, PromptBuild, PromptInput};
+use crate::prompt::{build_prompt, PromptBuild, PromptInput, PromptTransform};
 use crate::result::{AgentRunResult, RunStopReason, StepName};
 use crate::trace::{PromptTrace, TraceBatch};
 
 /// Owns borrowed runtime services for one provider-neutral invocation.
 pub struct AgentRunner<'a> {
-    capabilities: &'a [Capability],
+    capabilities: &'a [ResolvedCapability],
     model_gateway: &'a mut dyn ModelGateway,
     tool_executor: &'a mut dyn ToolExecutor,
     observer: &'a mut dyn AgentObserver,
-    effect_recorder: &'a mut dyn EffectRecorder,
+    draft_recorder: &'a mut dyn DraftRecorder,
     id_source: &'a mut dyn IdSource,
     abort: &'a dyn AbortSignal,
     clock: &'a dyn Clock,
+    content: Option<&'a mut dyn ContentService>,
+    history: Option<&'a mut dyn HistoryService>,
 }
 
 impl<'a> AgentRunner<'a> {
     /// Creates a runner around caller-owned runtime services.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
-        capabilities: &'a [Capability],
+        capabilities: &'a [ResolvedCapability],
         model_gateway: &'a mut dyn ModelGateway,
         tool_executor: &'a mut dyn ToolExecutor,
         observer: &'a mut dyn AgentObserver,
-        effect_recorder: &'a mut dyn EffectRecorder,
+        draft_recorder: &'a mut dyn DraftRecorder,
         id_source: &'a mut dyn IdSource,
         abort: &'a dyn AbortSignal,
         clock: &'a dyn Clock,
@@ -48,11 +55,25 @@ impl<'a> AgentRunner<'a> {
             model_gateway,
             tool_executor,
             observer,
-            effect_recorder,
+            draft_recorder,
             id_source,
             abort,
             clock,
+            content: None,
+            history: None,
         }
+    }
+
+    /// Authorizes the runner to use caller-owned content state.
+    pub fn with_content(mut self, content: &'a mut dyn ContentService) -> Self {
+        self.content = Some(content);
+        self
+    }
+
+    /// Authorizes the runner to query caller-owned invocation history.
+    pub fn with_history(mut self, history: &'a mut dyn HistoryService) -> Self {
+        self.history = Some(history);
+        self
     }
 
     /// Executes one resolved invocation.
@@ -64,7 +85,12 @@ impl<'a> AgentRunner<'a> {
         mut self,
         invocation: &AgentInvocation,
     ) -> Result<AgentRunResult, AgentRunError> {
-        let capabilities = CapabilitySet::new(invocation, self.capabilities)?;
+        let capabilities = CapabilitySet::new(
+            invocation,
+            self.capabilities,
+            self.content.is_some(),
+            self.history.is_some(),
+        )?;
         let mut result = AgentRunResult::default();
         let mut state = RunState {
             next_model_caused_by: invocation.caused_by.clone(),
@@ -78,12 +104,23 @@ impl<'a> AgentRunner<'a> {
                 for (index, tool_call) in tool_calls.into_iter().enumerate() {
                     result.steps.push(StepName::CheckBudget);
                     if let Some(reason) = self.abort_reason(invocation) {
-                        return abort_run(result, reason, state.next_model_caused_by);
+                        return self.abort_run(
+                            invocation,
+                            result,
+                            reason,
+                            state.next_model_caused_by,
+                        );
+                    }
+                    let position = state.next_tool_position;
+                    state.next_tool_position += 1;
+                    let call_id = tool_call_id(&tool_call, index);
+                    if terminal_tool_result(&result.events, &call_id).is_some() {
+                        result.steps.push(StepName::RecordCapabilityResult);
+                        state.next_model_caused_by = None;
+                        continue;
                     }
                     result.steps.push(StepName::RecordCapabilityCall);
                     result.steps.push(StepName::ExecuteCapability);
-                    let position = state.next_tool_position;
-                    state.next_tool_position += 1;
                     let telemetry = if index == 0 {
                         model_telemetry.clone()
                     } else {
@@ -103,7 +140,15 @@ impl<'a> AgentRunner<'a> {
                         )
                         .await?;
                     result.steps.push(StepName::RecordCapabilityResult);
-                    state.next_model_caused_by = Some(outcome.result_event_id);
+                    state.next_model_caused_by = Some(outcome.result_event_id.clone());
+                    if let Some(reason) = self.abort_reason(invocation) {
+                        return self.abort_run(
+                            invocation,
+                            result,
+                            reason,
+                            Some(outcome.result_event_id),
+                        );
+                    }
                     if outcome.stop {
                         result.stop_reason = Some(RunStopReason::ToolStop);
                         result.steps.push(StepName::FinishRun);
@@ -119,10 +164,14 @@ impl<'a> AgentRunner<'a> {
             }
             result.steps.push(StepName::CheckBudget);
             if let Some(reason) = self.abort_reason(invocation) {
-                return abort_run(result, reason, state.next_model_caused_by);
+                return self.abort_run(invocation, result, reason, state.next_model_caused_by);
             }
             result.steps.push(StepName::BuildPrompt);
             let current_events = current_event_views(&result.events, &state.projection);
+            let content_components = match self.content.as_deref_mut() {
+                Some(content) => content.prompt_components()?,
+                None => Vec::new(),
+            };
             let prompt = build_prompt(
                 &PromptInput {
                     objective: invocation.objective.clone(),
@@ -136,6 +185,8 @@ impl<'a> AgentRunner<'a> {
                     selected_model: invocation.model_name.clone(),
                     thinking: invocation.thinking.clone(),
                     current_events,
+                    content_components,
+                    transform: invocation.prompt_transform.clone(),
                 },
                 &invocation.environment,
             )?;
@@ -177,7 +228,12 @@ impl<'a> AgentRunner<'a> {
                 Ok(output) => output,
                 Err(error) => {
                     if let Some(reason) = active_abort.reason() {
-                        return abort_run(result, reason, state.next_model_caused_by.clone());
+                        return self.abort_run(
+                            invocation,
+                            result,
+                            reason,
+                            state.next_model_caused_by.clone(),
+                        );
                     }
                     return Err(error.into());
                 }
@@ -187,14 +243,27 @@ impl<'a> AgentRunner<'a> {
                 result.telemetry = output.telemetry.clone();
                 result.model_telemetry_calls.push(output.telemetry.clone());
             }
+            result.prompt_traces.push(PromptTrace {
+                prompt_object_id: prompt_object_id.clone(),
+                assistant_message_object_id: None,
+            });
+            if self.abort.reason() == Some(AbortReason::Cancelled) {
+                return self.abort_run(
+                    invocation,
+                    result,
+                    AbortReason::Cancelled,
+                    state.next_model_caused_by.clone(),
+                );
+            }
             let event_id = next_event_id(self.id_source)?;
             let model_payload = model_payload(&output.message, &prompt_object_id);
             let draft = model_draft(
+                invocation,
                 model_payload.clone(),
                 &event_id,
                 state.next_model_caused_by.clone(),
             );
-            result.events.push(draft);
+            self.append_draft(&mut result, draft)?;
             let assistant_object_id =
                 record_model_trace(&mut result.trace, &prompt_object_id, &model_payload)?;
             state.projection.models.insert(
@@ -202,10 +271,10 @@ impl<'a> AgentRunner<'a> {
                 (prompt_object_id.clone(), assistant_object_id.clone()),
             );
             state.projection.latest_assistant = Some(assistant_object_id.clone());
-            result.prompt_traces.push(PromptTrace {
-                prompt_object_id,
-                assistant_message_object_id: Some(assistant_object_id),
-            });
+            let Some(prompt_trace) = result.prompt_traces.last_mut() else {
+                return Err(AgentError::trace("model response is missing its prompt trace").into());
+            };
+            prompt_trace.assistant_message_object_id = Some(assistant_object_id);
             state.model_calls += 1;
             let tool_calls = assistant_tool_calls(&output.message);
             if tool_calls.is_empty() {
@@ -263,33 +332,20 @@ impl<'a> AgentRunner<'a> {
             );
         }
         let validation = capabilities.validate(&parsed);
-        let (capability_id, tool_result, stop) = match validation {
-            Ok(route) => {
-                call_payload.insert(
-                    "capability_id".to_owned(),
-                    Value::String(route.id.to_string()),
-                );
-                let (tool_result, stop) = self
-                    .run_valid_tool(invocation, route, &parsed, position, result)
-                    .await?;
-                (Some(route.id.clone()), tool_result, stop)
-            }
-            Err((code, message)) => (
-                None,
-                object(json!({
-                    "ok": false,
-                    "error": {"code": code, "message": message},
-                })),
-                false,
-            ),
-        };
+        if let Ok(validated) = &validation {
+            call_payload.insert(
+                "capability_id".to_owned(),
+                Value::String(validated.route.id.to_string()),
+            );
+        }
         let call_draft = tool_draft(
+            invocation,
             "zeta.tool_call.started",
             call_payload.clone(),
             &parsed.call_id,
             assistant_event_id,
         );
-        result.events.push(call_draft);
+        self.append_draft(result, call_draft)?;
         let call_object_id = record_tool_call_trace(
             &mut result.trace,
             &call_payload,
@@ -299,16 +355,39 @@ impl<'a> AgentRunner<'a> {
             .tool_calls
             .insert(parsed.call_id.clone(), call_object_id.clone());
 
+        let execution = match validation {
+            Ok(validated) => {
+                self.run_valid_tool(
+                    invocation,
+                    validated.route,
+                    &parsed,
+                    &validated.canonical_params,
+                    position,
+                    result,
+                )
+                .await?
+            }
+            Err((code, message)) => ToolExecution {
+                capability_id: None,
+                tool_result: object(json!({
+                    "ok": false,
+                    "error": {"code": code, "message": message},
+                })),
+                stop: false,
+                effect: None,
+            },
+        };
+
         let event_id = next_event_id(self.id_source)?;
-        let status = tool_result_status(&tool_result);
+        let status = tool_result_status(&execution.tool_result);
         let mut result_payload = object(json!({
             "tool_call_id": parsed.call_id,
             "status": status,
             "name": parsed.name,
-            "result": tool_result,
+            "result": execution.tool_result,
             "_timeline_type": "tool_result",
         }));
-        if let Some(capability_id) = capability_id {
+        if let Some(capability_id) = execution.capability_id {
             result_payload.insert(
                 "capability_id".to_owned(),
                 Value::String(capability_id.to_string()),
@@ -328,20 +407,41 @@ impl<'a> AgentRunner<'a> {
             "zeta.tool_call.completed"
         };
         let result_draft = tool_draft(
+            invocation,
             event_type,
             result_payload.clone(),
             &event_id,
             assistant_event_id,
         );
-        result.events.push(result_draft);
+        self.append_draft(result, result_draft)?;
         let result_object_id =
             record_tool_result_trace(&mut result.trace, &result_payload, &call_object_id)?;
         projection
             .tool_results
             .insert(event_id.clone(), result_object_id);
+        if let Some(effect) = execution.effect {
+            let tool_result = result_payload
+                .get("result")
+                .and_then(Value::as_object)
+                .cloned()
+                .unwrap_or_default();
+            let status = effect_terminal_status(effect.identity.semantics, &tool_result);
+            self.record_effect(
+                invocation,
+                result,
+                EffectRecord {
+                    status,
+                    identity: &effect.identity,
+                    capability: &effect.capability,
+                    caused_by: &parsed.call_id,
+                    params: &effect.params,
+                    result: Some(tool_result),
+                },
+            )?;
+        }
         Ok(ToolOutcome {
             result_event_id: event_id,
-            stop,
+            stop: execution.stop,
         })
     }
 
@@ -350,67 +450,90 @@ impl<'a> AgentRunner<'a> {
         invocation: &AgentInvocation,
         route: &Route,
         parsed: &ParsedToolCall,
+        canonical_params: &Map<String, Value>,
         position: usize,
         result: &mut AgentRunResult,
-    ) -> Result<(Map<String, Value>, bool), AgentRunError> {
+    ) -> Result<ToolExecution, AgentRunError> {
         match &route.kind {
             RouteKind::External(capability) => {
-                let effect = effect_identity(invocation, capability, parsed)?;
+                let capability = &capability.canonical;
+                let effect = effect_identity(invocation, capability, parsed, canonical_params)?;
                 if let Some(effect) = &effect {
                     self.record_effect(
-                        EffectStatus::Planned,
-                        effect,
-                        capability,
-                        &parsed.call_id,
-                        &parsed.params,
-                        None,
+                        invocation,
+                        result,
+                        EffectRecord {
+                            status: "planned",
+                            identity: effect,
+                            capability,
+                            caused_by: &parsed.call_id,
+                            params: canonical_params,
+                            result: None,
+                        },
                     )?;
                     self.record_effect(
-                        EffectStatus::Started,
-                        effect,
-                        capability,
-                        &parsed.call_id,
-                        &parsed.params,
-                        None,
+                        invocation,
+                        result,
+                        EffectRecord {
+                            status: "started",
+                            identity: effect,
+                            capability,
+                            caused_by: &parsed.call_id,
+                            params: canonical_params,
+                            result: None,
+                        },
                     )?;
                 }
                 let effect_key = effect.as_ref().map(|effect| effect.key.clone());
-                let invocation = CapabilityInvocation {
+                let tool_invocation = CapabilityInvocation {
                     capability_id: capability.id.clone(),
-                    params: parsed.params.clone(),
+                    params: canonical_params.clone(),
                     base_directory: invocation.base_directory.clone(),
                     effect_key: effect_key.clone(),
                 };
-                let tool_result = self.tool_executor.execute(&invocation).await;
+                let active_abort = RunAbort {
+                    external: self.abort,
+                    clock: self.clock,
+                    deadline_ms: invocation.deadline_ms,
+                };
+                let tool_result = self
+                    .tool_executor
+                    .execute(&tool_invocation, &active_abort)
+                    .await;
                 let tool_result = match tool_result {
                     Ok(tool_result) => validated_tool_result(tool_result, capability),
-                    Err(error) => object(json!({
-                        "ok": false,
-                        "error": {
-                            "code": "tool-crashed",
-                            "message": error.to_string(),
-                        },
-                    })),
+                    Err(error) => {
+                        let (code, message) = match active_abort.reason() {
+                            Some(reason) => {
+                                ("tool-aborted", format!("tool execution aborted: {reason}"))
+                            }
+                            None => ("tool-crashed", error.to_string()),
+                        };
+                        object(json!({
+                            "ok": false,
+                            "error": {"code": code, "message": message},
+                        }))
+                    }
                 };
                 let tool_result = normalize_tool_result(tool_result, parsed.name.as_str());
-                if let Some(effect) = &effect {
-                    let status = effect_terminal_status(effect.semantics, &tool_result);
-                    self.record_effect(
-                        status,
-                        effect,
-                        capability,
-                        &parsed.call_id,
-                        &parsed.params,
-                        Some(tool_result.clone()),
-                    )?;
-                }
                 let stop = tool_result.get("ok") == Some(&Value::Bool(true))
                     && tool_result.get("stop") == Some(&Value::Bool(true));
-                Ok((tool_result, stop))
+                let effect = effect.map(|identity| PendingEffect {
+                    identity,
+                    capability: capability.clone(),
+                    params: canonical_params.clone(),
+                });
+                Ok(ToolExecution {
+                    capability_id: Some(capability.id.clone()),
+                    tool_result,
+                    stop,
+                    effect,
+                })
             }
             RouteKind::Wait => {
                 let Some(queue_item_id) = &invocation.source_queue_item_id else {
-                    return Ok((
+                    return Ok(ToolExecution::control(
+                        &route.id,
                         tool_error(
                             "missing-wait-source",
                             "the run does not have a source queue item",
@@ -419,14 +542,20 @@ impl<'a> AgentRunner<'a> {
                     ));
                 };
                 let handle = control_handle("wait_", queue_item_id, position);
-                let event_type = text_param(&parsed.params, "event_type");
-                let fields = parsed
-                    .params
+                let event_type = text_param(canonical_params, "event_type");
+                let fields = canonical_params
                     .get("fields")
                     .and_then(Value::as_object)
                     .cloned()
                     .unwrap_or_default();
-                let deadline = optional_text_param(&parsed.params, "deadline");
+                let deadline = optional_text_param(canonical_params, "deadline");
+                let deadline =
+                    match normalize_control_time(deadline, "deadline", "invalid-wait-deadline") {
+                        Ok(deadline) => deadline,
+                        Err(error) => {
+                            return Ok(ToolExecution::control(&route.id, error, false));
+                        }
+                    };
                 result.requests.push(AgentRequest::Wait {
                     handle: handle.clone(),
                     event_type,
@@ -434,14 +563,16 @@ impl<'a> AgentRunner<'a> {
                     deadline,
                     position,
                 });
-                Ok((
+                Ok(ToolExecution::control(
+                    &route.id,
                     object(json!({"ok": true, "handle": handle, "stop": true})),
                     true,
                 ))
             }
             RouteKind::Publish => {
                 let Some(queue_item_id) = &invocation.source_queue_item_id else {
-                    return Ok((
+                    return Ok(ToolExecution::control(
+                        &route.id,
                         tool_error(
                             "missing-publish-source",
                             "the run does not have a source queue item",
@@ -449,9 +580,10 @@ impl<'a> AgentRunner<'a> {
                         false,
                     ));
                 };
-                let event_type = text_param(&parsed.params, "event_type");
+                let event_type = text_param(canonical_params, "event_type");
                 if !invocation.publishable_events.contains_key(&event_type) {
-                    return Ok((
+                    return Ok(ToolExecution::control(
+                        &route.id,
                         tool_error(
                             "undeclared-event-type",
                             &format!("the agent does not list event '{event_type}' in publishes"),
@@ -459,8 +591,7 @@ impl<'a> AgentRunner<'a> {
                         false,
                     ));
                 }
-                let payload = parsed
-                    .params
+                let payload = canonical_params
                     .get("payload")
                     .and_then(Value::as_object)
                     .cloned()
@@ -470,13 +601,20 @@ impl<'a> AgentRunner<'a> {
                     if let Some(violation) =
                         schema_violation(&Value::Object(payload.clone()), schema)
                     {
-                        return Ok((
+                        return Ok(ToolExecution::control(
+                            &route.id,
                             tool_error("invalid-event-payload", &violation.message),
                             false,
                         ));
                     }
                 }
-                let at = optional_text_param(&parsed.params, "at");
+                let at = optional_text_param(canonical_params, "at");
+                let at = match normalize_control_time(at, "at", "invalid-publish-time") {
+                    Ok(at) => at,
+                    Err(error) => {
+                        return Ok(ToolExecution::control(&route.id, error, false));
+                    }
+                };
                 let handle = control_handle("pub_", queue_item_id, position);
                 result.requests.push(AgentRequest::Publish {
                     handle: handle.clone(),
@@ -485,11 +623,16 @@ impl<'a> AgentRunner<'a> {
                     at,
                     position,
                 });
-                Ok((object(json!({"ok": true, "handle": handle})), false))
+                Ok(ToolExecution::control(
+                    &route.id,
+                    object(json!({"ok": true, "handle": handle})),
+                    false,
+                ))
             }
             RouteKind::Cancel => {
                 let Some(source_agent_id) = &invocation.source_agent_id else {
-                    return Ok((
+                    return Ok(ToolExecution::control(
+                        &route.id,
                         tool_error(
                             "missing-cancel-source",
                             "the run does not have an authored agent session",
@@ -498,7 +641,8 @@ impl<'a> AgentRunner<'a> {
                     ));
                 };
                 let Some(source_session_id) = &invocation.source_session_id else {
-                    return Ok((
+                    return Ok(ToolExecution::control(
+                        &route.id,
                         tool_error(
                             "missing-cancel-source",
                             "the run does not have an authored agent session",
@@ -506,67 +650,135 @@ impl<'a> AgentRunner<'a> {
                         false,
                     ));
                 };
-                let handle = text_param(&parsed.params, "handle");
+                let handle = text_param(canonical_params, "handle");
                 result.requests.push(AgentRequest::Cancel {
                     handle: handle.clone(),
-                    reason: optional_text_param(&parsed.params, "reason"),
+                    reason: optional_text_param(canonical_params, "reason"),
                     source_agent_id: source_agent_id.clone(),
                     source_session_id: source_session_id.clone(),
                     position,
                 });
-                Ok((
+                Ok(ToolExecution::control(
+                    &route.id,
                     object(json!({"ok": true, "handle": handle, "status": "requested"})),
                     false,
                 ))
             }
-            RouteKind::Return => {
-                let event_type = text_param(&parsed.params, "event_type");
-                if !invocation.returnable_events.contains_key(&event_type) {
-                    return Ok((
-                        tool_error(
-                            "event-not-returnable",
-                            "the event type is not returnable by this invocation",
-                        ),
-                        false,
-                    ));
-                }
-                let payload = parsed
-                    .params
-                    .get("payload")
-                    .and_then(Value::as_object)
-                    .cloned()
-                    .unwrap_or_default();
-                result.requests.push(AgentRequest::Return {
-                    event_type,
-                    payload,
-                    position,
-                });
-                Ok((object(json!({"ok": true, "stop": true})), true))
+            RouteKind::QueryContent => {
+                let Some(content) = self.content.as_deref_mut() else {
+                    return Err(AgentError::invocation("content service is unavailable").into());
+                };
+                let operation = content.query(canonical_params).await?;
+                apply_content_operation(result, &route.id, operation)
             }
+            RouteKind::TransformContent => {
+                let Some(content) = self.content.as_deref_mut() else {
+                    return Err(AgentError::invocation("content service is unavailable").into());
+                };
+                let operation = content.transform(canonical_params).await?;
+                apply_content_operation(result, &route.id, operation)
+            }
+            RouteKind::FinishContent => {
+                let Some(content) = self.content.as_deref_mut() else {
+                    return Err(AgentError::invocation("content service is unavailable").into());
+                };
+                let operation = content.finish(canonical_params).await?;
+                apply_content_operation(result, &route.id, operation)
+            }
+            RouteKind::QueryHistory => {
+                let Some(history) = self.history.as_deref_mut() else {
+                    return Err(AgentError::invocation("history service is unavailable").into());
+                };
+                let tool_result = history.query(canonical_params).await?;
+                Ok(ToolExecution::control(&route.id, tool_result, false))
+            }
+            RouteKind::QueryContextBudget => Ok(ToolExecution::control(
+                &route.id,
+                context_budget_result(invocation, result)?,
+                false,
+            )),
         }
     }
 
     fn record_effect(
         &mut self,
-        status: EffectStatus,
-        identity: &EffectIdentity,
-        capability: &Capability,
-        caused_by: &str,
-        params: &Map<String, Value>,
-        result: Option<Map<String, Value>>,
+        invocation: &AgentInvocation,
+        run_result: &mut AgentRunResult,
+        effect: EffectRecord<'_>,
     ) -> Result<(), AgentRunError> {
-        self.effect_recorder
-            .record(EffectEvent {
-                status,
-                effect_key: identity.key.clone(),
-                capability_id: capability.id.clone(),
-                semantics: identity.semantics,
-                scope: identity.scope.clone(),
-                caused_by: caused_by.to_owned(),
-                params: params.clone(),
-                result,
-            })
-            .map_err(AgentRunError::Failed)
+        let EffectRecord {
+            status,
+            identity,
+            capability,
+            caused_by,
+            params,
+            result,
+        } = effect;
+        let mut payload = object(json!({
+            "effect_key": identity.key,
+            "operation": capability.id,
+            "semantics": identity.semantics,
+            "scope": identity.scope,
+            "queue_item_id": if identity.scope.starts_with("qi_") {
+                Some(identity.scope.as_str())
+            } else {
+                None
+            },
+            "params": params,
+            "status": status,
+        }));
+        if let Some(result) = result {
+            payload.insert("result".to_owned(), Value::Object(result));
+        }
+        let event_type = format!("runtime.effect.{status}");
+        let draft = complete_draft(
+            invocation,
+            event_type.clone(),
+            format!("capability:{}", capability.id),
+            payload,
+            Some(format!("{event_type}:{}", identity.key)),
+            Some(caused_by.to_owned()),
+        );
+        self.append_draft(run_result, draft)
+    }
+
+    fn append_draft(
+        &mut self,
+        result: &mut AgentRunResult,
+        draft: DraftEvent,
+    ) -> Result<(), AgentRunError> {
+        self.draft_recorder
+            .record(&draft)
+            .map_err(AgentRunError::Failed)?;
+        result.events.push(draft);
+        Ok(())
+    }
+
+    fn abort_run(
+        &mut self,
+        invocation: &AgentInvocation,
+        mut result: AgentRunResult,
+        reason: AbortReason,
+        caused_by: Option<String>,
+    ) -> Result<AgentRunResult, AgentRunError> {
+        result.steps.push(StepName::AbortRun);
+        let draft = complete_draft(
+            invocation,
+            "zeta.turn.failed".to_owned(),
+            invocation.event_source.clone(),
+            object(json!({
+                "_timeline_type": "turn_aborted",
+                "reason": reason.to_string(),
+                "content": format!("(turn aborted: {})", reason.to_string().replace('_', " ")),
+            })),
+            None,
+            caused_by,
+        );
+        self.append_draft(&mut result, draft)?;
+        Err(AgentRunError::Aborted(Box::new(AgentRunAborted {
+            reason,
+            result,
+        })))
     }
 }
 
@@ -619,34 +831,48 @@ struct CapabilitySet {
 
 struct Route {
     id: CapabilityId,
-    schema: Map<String, Value>,
+    model_schema: Map<String, Value>,
+    canonical_schema: Map<String, Value>,
+    argument_adapter: ArgumentAdapter,
     kind: RouteKind,
 }
 
 enum RouteKind {
-    External(Capability),
+    External(Box<ResolvedCapability>),
     Publish,
     Wait,
     Cancel,
-    Return,
+    QueryContent,
+    TransformContent,
+    FinishContent,
+    QueryHistory,
+    QueryContextBudget,
 }
 
 impl CapabilitySet {
-    fn new(invocation: &AgentInvocation, declarations: &[Capability]) -> Result<Self, AgentError> {
+    fn new(
+        invocation: &AgentInvocation,
+        declarations: &[ResolvedCapability],
+        content_available: bool,
+        history_available: bool,
+    ) -> Result<Self, AgentError> {
         let mut by_id = HashMap::new();
         let mut declared_names = HashMap::new();
         let mut declared_ids = HashSet::new();
         for declaration in declarations {
-            if by_id.insert(declaration.id.as_str(), declaration).is_some() {
+            if by_id
+                .insert(declaration.canonical.id.as_str(), declaration)
+                .is_some()
+            {
                 return Err(AgentError::invocation(format!(
                     "duplicate capability id: {}",
-                    declaration.id
+                    declaration.canonical.id
                 )));
             }
-            let name = declaration.id.model_name().to_owned();
+            let name = declaration.model_name.clone();
             let count = declared_names.entry(name).or_insert(0);
             *count += 1;
-            declared_ids.insert(declaration.id.to_string());
+            declared_ids.insert(declaration.canonical.id.to_string());
         }
         let mut set = CapabilitySet {
             routes: HashMap::new(),
@@ -661,14 +887,45 @@ impl CapabilitySet {
                     "unknown capability grant: {id}"
                 )));
             };
+            let kind = match declaration.canonical.id.as_str() {
+                "zeta.query_content" => RouteKind::QueryContent,
+                "zeta.transform_content" => RouteKind::TransformContent,
+                "zeta.finish" => RouteKind::FinishContent,
+                "zeta.query_log" => RouteKind::QueryHistory,
+                "zeta.query_context_budget" => RouteKind::QueryContextBudget,
+                _ => RouteKind::External(Box::new((*declaration).clone())),
+            };
+            let content_kind = match &kind {
+                RouteKind::QueryContent
+                | RouteKind::TransformContent
+                | RouteKind::FinishContent => true,
+                RouteKind::External(_)
+                | RouteKind::Publish
+                | RouteKind::Wait
+                | RouteKind::Cancel
+                | RouteKind::QueryHistory
+                | RouteKind::QueryContextBudget => false,
+            };
+            if content_kind && !content_available {
+                return Err(AgentError::invocation(format!(
+                    "content capability requires an authorized content service: {id}"
+                )));
+            }
+            if matches!(&kind, RouteKind::QueryHistory) && !history_available {
+                return Err(AgentError::invocation(format!(
+                    "history capability requires an authorized history service: {id}"
+                )));
+            }
             set.add_route(
-                declaration.id.model_name(),
+                declaration.model_name.as_str(),
                 Route {
-                    id: declaration.id.clone(),
-                    schema: declaration.input_schema.clone(),
-                    kind: RouteKind::External((*declaration).clone()),
+                    id: declaration.canonical.id.clone(),
+                    model_schema: declaration.model_input_schema.clone(),
+                    canonical_schema: declaration.canonical.input_schema.clone(),
+                    argument_adapter: declaration.argument_adapter.clone(),
+                    kind,
                 },
-                declaration.description.as_str(),
+                declaration.model_description.as_str(),
             )?;
         }
         if !invocation.publishable_events.is_empty() && invocation.source_queue_item_id.is_some() {
@@ -727,23 +984,6 @@ impl CapabilitySet {
                 RouteKind::Cancel,
             )?;
         }
-        if !invocation.returnable_events.is_empty() {
-            set.add_internal(
-                "return_event",
-                "zeta.return_event",
-                "Return a typed event to the caller and end this run.",
-                object(json!({
-                    "type": "object",
-                    "required": ["event_type", "payload"],
-                    "properties": {
-                        "event_type": {"type": "string"},
-                        "payload": {"type": "object"},
-                    },
-                    "additionalProperties": false,
-                })),
-                RouteKind::Return,
-            )?;
-        }
         Ok(set)
     }
 
@@ -756,7 +996,17 @@ impl CapabilitySet {
         kind: RouteKind,
     ) -> Result<(), AgentError> {
         let id = id.parse::<CapabilityId>()?;
-        self.add_route(name, Route { id, schema, kind }, description)
+        self.add_route(
+            name,
+            Route {
+                id,
+                model_schema: schema.clone(),
+                canonical_schema: schema,
+                argument_adapter: ArgumentAdapter::Identity,
+                kind,
+            },
+            description,
+        )
     }
 
     fn add_route(&mut self, name: &str, route: Route, description: &str) -> Result<(), AgentError> {
@@ -768,17 +1018,20 @@ impl CapabilitySet {
         self.allowed_ids.push(route.id.clone());
         self.descriptors.push(json!({
             "type": "function",
-            "function": {
-                "name": name,
-                "description": description,
-                "parameters": route.schema,
-            },
+                "function": {
+                    "name": name,
+                    "description": description,
+                    "parameters": route.model_schema,
+                },
         }));
         self.routes.insert(name.to_owned(), route);
         Ok(())
     }
 
-    fn validate(&self, parsed: &ParsedToolCall) -> Result<&Route, (String, String)> {
+    fn validate<'a>(
+        &'a self,
+        parsed: &ParsedToolCall,
+    ) -> Result<ValidatedRoute<'a>, (String, String)> {
         if let Some(parse_error) = &parsed.parse_error {
             return Err((parsed.parse_error_code.to_owned(), parse_error.clone()));
         }
@@ -795,14 +1048,42 @@ impl CapabilitySet {
                 format!("unknown tool: {}", parsed.name),
             ));
         };
-        if let Some(message) = schema_error(&Value::Object(parsed.params.clone()), &route.schema) {
+        if let Some(message) =
+            schema_error(&Value::Object(parsed.params.clone()), &route.model_schema)
+        {
             return Err((
                 "invalid-tool-args".to_owned(),
                 format!("model arguments: {message}"),
             ));
         }
-        Ok(route)
+        let canonical_params = match route.argument_adapter.adapt(&parsed.params) {
+            Ok(params) => params,
+            Err(error) => {
+                return Err((
+                    "invalid-tool-args".to_owned(),
+                    format!("could not adapt model arguments: {error}"),
+                ));
+            }
+        };
+        if let Some(message) = schema_error(
+            &Value::Object(canonical_params.clone()),
+            &route.canonical_schema,
+        ) {
+            return Err((
+                "invalid-tool-args".to_owned(),
+                format!("canonical arguments: {message}"),
+            ));
+        }
+        Ok(ValidatedRoute {
+            route,
+            canonical_params,
+        })
     }
+}
+
+struct ValidatedRoute<'a> {
+    route: &'a Route,
+    canonical_params: Map<String, Value>,
 }
 
 struct ParsedToolCall {
@@ -871,7 +1152,7 @@ impl ParsedToolCall {
                 name,
                 arguments: arguments.to_owned(),
                 params: Map::new(),
-                parse_error: Some(error.to_string()),
+                parse_error: Some(stable_json_error(arguments, &error)),
                 parse_error_code: "invalid-json-args",
                 function_present: true,
             },
@@ -884,10 +1165,153 @@ struct ToolOutcome {
     stop: bool,
 }
 
+struct ToolExecution {
+    capability_id: Option<CapabilityId>,
+    tool_result: Map<String, Value>,
+    stop: bool,
+    effect: Option<PendingEffect>,
+}
+
+fn context_budget_result(
+    invocation: &AgentInvocation,
+    result: &AgentRunResult,
+) -> Result<Map<String, Value>, AgentError> {
+    let prompt_tokens = provider_prompt_tokens(&result.telemetry)
+        .map(|tokens| (tokens, "provider"))
+        .or_else(|| estimated_latest_prompt_tokens(result).map(|tokens| (tokens, "estimate")));
+    let context_window_tokens = result
+        .telemetry
+        .get("model_context_tokens")
+        .and_then(Value::as_u64)
+        .filter(|tokens| *tokens > 0);
+    let reserved_output_tokens = invocation.max_tokens;
+    let remaining_tokens = match (context_window_tokens, prompt_tokens) {
+        (Some(context), Some((prompt, _source))) => {
+            Some(i128::from(context) - i128::from(prompt) - i128::from(reserved_output_tokens))
+        }
+        (None, _) | (_, None) => None,
+    };
+    let usage_ratio = match (context_window_tokens, prompt_tokens) {
+        (Some(context), Some((prompt, _source))) if context > reserved_output_tokens => {
+            Some(prompt as f64 / (context - reserved_output_tokens) as f64)
+        }
+        (Some(_), Some((_, _))) | (None, _) | (_, None) => None,
+    };
+    let (compaction_strategy, default_threshold) = match &invocation.prompt_transform {
+        PromptTransform::None => ("off", None),
+        PromptTransform::StructuralTrim { .. } => ("structural_trim", None),
+        PromptTransform::DropOldest { max_tokens } => ("drop_oldest", Some(*max_tokens)),
+    };
+    let compaction_threshold_tokens = invocation.compaction_threshold_tokens.or(default_threshold);
+    Ok(object(json!({
+        "ok": true,
+        "context_window_tokens": context_window_tokens,
+        "prompt_tokens": prompt_tokens.map(|(tokens, _source)| tokens),
+        "prompt_tokens_source": prompt_tokens
+            .map(|(_tokens, source)| source)
+            .unwrap_or("unavailable"),
+        "reserved_output_tokens": reserved_output_tokens,
+        "remaining_tokens": remaining_tokens,
+        "usage_ratio": usage_ratio,
+        "compaction_strategy": compaction_strategy,
+        "compaction_threshold_tokens": compaction_threshold_tokens,
+    })))
+}
+
+fn provider_prompt_tokens(telemetry: &Map<String, Value>) -> Option<u64> {
+    let values = telemetry
+        .get("usage")
+        .and_then(Value::as_object)
+        .unwrap_or(telemetry);
+    values
+        .get("prompt_tokens")
+        .or_else(|| values.get("input_tokens"))
+        .and_then(Value::as_u64)
+}
+
+fn estimated_latest_prompt_tokens(result: &AgentRunResult) -> Option<u64> {
+    let prompt_id = &result.prompt_traces.last()?.prompt_object_id;
+    let prompt = result
+        .trace
+        .objects
+        .iter()
+        .find(|row| row.id == *prompt_id)?;
+    let mut tokens = 0_u64;
+    for link in &prompt.object.links {
+        let Some(component) = result.trace.objects.iter().find(|row| row.id == *link) else {
+            continue;
+        };
+        let bytes = canonical_json(&Value::Object(component.object.data.clone())).ok()?;
+        let text = String::from_utf8(bytes).ok()?;
+        if !text.is_empty() {
+            tokens += text.chars().count().div_ceil(4).max(1) as u64;
+        }
+    }
+    Some(tokens)
+}
+
+fn apply_content_operation(
+    result: &mut AgentRunResult,
+    capability_id: &CapabilityId,
+    operation: ContentOperation,
+) -> Result<ToolExecution, AgentRunError> {
+    let ContentOperation {
+        result: tool_result,
+        promotions,
+        final_selection,
+        trace,
+    } = operation;
+    for promotion in promotions {
+        result.requests.push(AgentRequest::ContentPromotion {
+            scope: promotion.scope,
+            key: promotion.key,
+            object_id: promotion.object_id,
+            expected_head: promotion.expected_head,
+            expected_object_id: promotion.expected_object_id,
+            source_head: promotion.source_head,
+            reason: promotion.reason,
+        });
+    }
+    result.trace.merge(trace)?;
+    if let Some(selection) = final_selection {
+        result.final_object_id = Some(selection.object_id);
+        result.final_answer = selection.content;
+    }
+    let stop = tool_result.get("ok") == Some(&Value::Bool(true))
+        && tool_result.get("stop") == Some(&Value::Bool(true));
+    Ok(ToolExecution::control(capability_id, tool_result, stop))
+}
+
+impl ToolExecution {
+    fn control(capability_id: &CapabilityId, tool_result: Map<String, Value>, stop: bool) -> Self {
+        ToolExecution {
+            capability_id: Some(capability_id.clone()),
+            tool_result,
+            stop,
+            effect: None,
+        }
+    }
+}
+
+struct PendingEffect {
+    identity: EffectIdentity,
+    capability: Capability,
+    params: Map<String, Value>,
+}
+
 struct EffectIdentity {
     key: String,
     scope: String,
     semantics: DeliverySemantics,
+}
+
+struct EffectRecord<'a> {
+    status: &'a str,
+    identity: &'a EffectIdentity,
+    capability: &'a Capability,
+    caused_by: &'a str,
+    params: &'a Map<String, Value>,
+    result: Option<Map<String, Value>>,
 }
 
 fn invalid_arguments(call_id: String, name: String, arguments: &str) -> ParsedToolCall {
@@ -900,32 +1324,6 @@ fn invalid_arguments(call_id: String, name: String, arguments: &str) -> ParsedTo
         parse_error_code: "invalid-json-args",
         function_present: true,
     }
-}
-
-fn abort_run(
-    mut result: AgentRunResult,
-    reason: AbortReason,
-    caused_by: Option<String>,
-) -> Result<AgentRunResult, AgentRunError> {
-    result.steps.push(StepName::AbortRun);
-    result.events.push(DraftEvent {
-        event_type: "zeta.turn.failed".to_owned(),
-        source: "zeta".to_owned(),
-        payload: object(json!({
-            "_timeline_type": "turn_aborted",
-            "reason": reason.to_string(),
-            "content": format!("(turn aborted: {})", reason.to_string().replace('_', " ")),
-        })),
-        idempotency_key: None,
-        caused_by,
-        session_id: None,
-        run_id: None,
-        turn_id: None,
-    });
-    Err(AgentRunError::Aborted(Box::new(AgentRunAborted {
-        reason,
-        result,
-    })))
 }
 
 fn next_event_id(source: &mut dyn IdSource) -> Result<String, AgentError> {
@@ -977,37 +1375,55 @@ fn assistant_tool_calls(message: &Map<String, Value>) -> Vec<Value> {
 }
 
 fn model_draft(
+    invocation: &AgentInvocation,
     payload: Map<String, Value>,
     event_id: &str,
     caused_by: Option<String>,
 ) -> DraftEvent {
-    DraftEvent {
-        event_type: "zeta.model_call.completed".to_owned(),
-        source: "zeta".to_owned(),
+    complete_draft(
+        invocation,
+        "zeta.model_call.completed".to_owned(),
+        invocation.event_source.clone(),
         payload,
-        idempotency_key: Some(format!("zeta.model_call.completed:{event_id}")),
+        Some(format!("zeta.model_call.completed:{event_id}")),
         caused_by,
-        session_id: None,
-        run_id: None,
-        turn_id: None,
-    }
+    )
 }
 
 fn tool_draft(
+    invocation: &AgentInvocation,
     event_type: &str,
     payload: Map<String, Value>,
     event_id: &str,
     caused_by: Option<&str>,
 ) -> DraftEvent {
-    DraftEvent {
-        event_type: event_type.to_owned(),
-        source: "zeta".to_owned(),
+    complete_draft(
+        invocation,
+        event_type.to_owned(),
+        invocation.event_source.clone(),
         payload,
-        idempotency_key: Some(format!("{event_type}:{event_id}")),
-        caused_by: caused_by.map(str::to_owned),
-        session_id: None,
-        run_id: None,
-        turn_id: None,
+        Some(format!("{event_type}:{event_id}")),
+        caused_by.map(str::to_owned),
+    )
+}
+
+fn complete_draft(
+    invocation: &AgentInvocation,
+    event_type: String,
+    source: String,
+    payload: Map<String, Value>,
+    idempotency_key: Option<String>,
+    caused_by: Option<String>,
+) -> DraftEvent {
+    DraftEvent {
+        event_type,
+        source,
+        payload,
+        idempotency_key,
+        caused_by,
+        session_id: invocation.session_id.clone(),
+        run_id: invocation.run_id.clone(),
+        turn_id: invocation.turn_id.clone(),
     }
 }
 
@@ -1191,6 +1607,40 @@ fn draft_event_id(draft: &DraftEvent) -> Option<String> {
     }
 }
 
+fn tool_call_id(value: &Value, index: usize) -> String {
+    let id = value.get("id").and_then(Value::as_str).unwrap_or("");
+    if id.is_empty() {
+        format!("call-{index}")
+    } else {
+        id.to_owned()
+    }
+}
+
+fn terminal_tool_result<'a>(drafts: &'a [DraftEvent], call_id: &str) -> Option<&'a DraftEvent> {
+    for draft in drafts.iter().rev() {
+        if draft.payload.get("_timeline_type").and_then(Value::as_str) != Some("tool_result") {
+            continue;
+        }
+        if draft.payload.get("tool_call_id").and_then(Value::as_str) != Some(call_id) {
+            continue;
+        }
+        let status = draft
+            .payload
+            .get("status")
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        if status == "completed"
+            || status == "failed"
+            || status == "refused"
+            || status == "cancelled"
+            || status == "timed_out"
+        {
+            return Some(draft);
+        }
+    }
+    None
+}
+
 struct SchemaViolation {
     location: String,
     message: String,
@@ -1224,10 +1674,14 @@ fn schema_violation(value: &Value, schema: &Map<String, Value>) -> Option<Schema
     let mut first: Option<SchemaViolation> = None;
     for error in validator.iter_errors(value) {
         let location = error.instance_path.to_string();
-        let violation = SchemaViolation {
-            location,
-            message: error.to_string(),
+        let message = match &error.kind {
+            ValidationErrorKind::Required { property } => {
+                let property = property.as_str().unwrap_or("");
+                format!("'{property}' is a required property")
+            }
+            _ => error.to_string(),
         };
+        let violation = SchemaViolation { location, message };
         let replace = match &first {
             Some(first) => violation.location < first.location,
             None => true,
@@ -1237,6 +1691,18 @@ fn schema_violation(value: &Value, schema: &Map<String, Value>) -> Option<Schema
         }
     }
     first
+}
+
+fn stable_json_error(input: &str, error: &serde_json::Error) -> String {
+    if error.classify() == serde_json::error::Category::Eof {
+        let character = input.chars().count();
+        let column = character + 1;
+        return format!(
+            "Expecting value: line {} column {column} (char {character})",
+            error.line(),
+        );
+    }
+    error.to_string()
 }
 
 fn tool_result_status(result: &Map<String, Value>) -> &'static str {
@@ -1349,6 +1815,7 @@ fn effect_identity(
     invocation: &AgentInvocation,
     capability: &Capability,
     parsed: &ParsedToolCall,
+    params: &Map<String, Value>,
 ) -> Result<Option<EffectIdentity>, AgentError> {
     let Some(semantics) = capability.delivery_semantics else {
         return Ok(None);
@@ -1360,9 +1827,9 @@ fn effect_identity(
     let value = json!({
         "scope": scope,
         "operation": capability.id.as_str(),
-        "params": parsed.params,
+        "params": params,
     });
-    let bytes = canonical_json(&value).map_err(|error| AgentError::effect(error.to_string()))?;
+    let bytes = canonical_json(&value).map_err(|error| AgentError::identity(error.to_string()))?;
     Ok(Some(EffectIdentity {
         key: format!("effect:{}", derive(Domain::Chain, &bytes)),
         scope: scope.to_owned(),
@@ -1373,14 +1840,14 @@ fn effect_identity(
 fn effect_terminal_status(
     semantics: DeliverySemantics,
     result: &Map<String, Value>,
-) -> EffectStatus {
+) -> &'static str {
     if result.get("ok") == Some(&Value::Bool(true)) {
-        return EffectStatus::Completed;
+        return "completed";
     }
     if semantics == DeliverySemantics::UnsafeToRetry {
-        EffectStatus::Ambiguous
+        "ambiguous"
     } else {
-        EffectStatus::Failed
+        "failed"
     }
 }
 
@@ -1403,6 +1870,74 @@ fn text_param(params: &Map<String, Value>, key: &str) -> String {
 
 fn optional_text_param(params: &Map<String, Value>, key: &str) -> Option<String> {
     params.get(key).and_then(Value::as_str).map(str::to_owned)
+}
+
+fn normalize_control_time(
+    value: Option<String>,
+    field: &str,
+    code: &str,
+) -> Result<Option<String>, Map<String, Value>> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    if !has_utc_offset(&value) {
+        if looks_like_offset_free_datetime(&value) {
+            return Err(tool_error(
+                code,
+                &format!("{field} must include a UTC offset"),
+            ));
+        }
+        return Err(tool_error(
+            code,
+            &format!("{field} must be an ISO 8601 date-time with a UTC offset"),
+        ));
+    }
+    let parsed = match OffsetDateTime::parse(&value, &Rfc3339) {
+        Ok(parsed) => parsed,
+        Err(_error) => {
+            return Err(tool_error(
+                code,
+                &format!("{field} must be an ISO 8601 date-time with a UTC offset"),
+            ));
+        }
+    };
+    let utc = parsed.to_offset(UtcOffset::UTC);
+    let formatted = utc
+        .format(&Rfc3339)
+        .map_err(|error| tool_error(code, &error.to_string()))?;
+    let formatted = match formatted.strip_suffix('Z') {
+        Some(prefix) => format!("{prefix}+00:00"),
+        None => formatted,
+    };
+    Ok(Some(formatted))
+}
+
+fn has_utc_offset(value: &str) -> bool {
+    if value.ends_with('Z') || value.ends_with('z') {
+        return true;
+    }
+    let Some(time_index) = value.find('T').or_else(|| value.find('t')) else {
+        return false;
+    };
+    let time = &value[time_index + 1..];
+    for character in time.chars() {
+        if character == '+' || character == '-' {
+            return true;
+        }
+    }
+    false
+}
+
+fn looks_like_offset_free_datetime(value: &str) -> bool {
+    if value.len() < 19 {
+        return false;
+    }
+    let bytes = value.as_bytes();
+    bytes.get(4) == Some(&b'-')
+        && bytes.get(7) == Some(&b'-')
+        && (bytes.get(10) == Some(&b'T') || bytes.get(10) == Some(&b't'))
+        && bytes.get(13) == Some(&b':')
+        && bytes.get(16) == Some(&b':')
 }
 
 fn text_value(value: &Map<String, Value>, key: &str) -> String {

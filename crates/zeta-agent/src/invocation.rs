@@ -3,7 +3,8 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
-use crate::capability::CapabilityId;
+use crate::capability::{CapabilityId, ToolProfile};
+use crate::prompt::PromptTransform;
 
 fn default_max_model_calls() -> usize {
     25
@@ -15,6 +16,10 @@ fn default_max_tokens() -> u64 {
 
 fn default_tool_choice() -> Value {
     Value::String("auto".to_owned())
+}
+
+fn default_event_source() -> String {
+    "zeta".to_owned()
 }
 
 /// Carries environmental values that participate in prompt identity.
@@ -54,6 +59,8 @@ pub struct AgentInvocation {
     pub system_prompt: Option<String>,
     /// Grants canonical capability ids in caller order.
     pub allowed_capabilities: Vec<CapabilityId>,
+    /// Selects the resolved model presentation of those capabilities.
+    pub tool_profile: ToolProfile,
     /// Bounds model requests while allowing a final pending tool batch.
     pub max_model_calls: usize,
     /// Selects the resolved provider model name.
@@ -82,14 +89,24 @@ pub struct AgentInvocation {
     pub source_session_id: Option<String>,
     /// Names the causal parent of the first model proposal.
     pub caused_by: Option<String>,
+    /// Names the producer on model, tool, and turn drafts.
+    pub event_source: String,
+    /// Associates every emitted draft with one session.
+    pub session_id: Option<String>,
+    /// Associates every emitted draft with one run.
+    pub run_id: Option<String>,
+    /// Associates every emitted draft with one turn.
+    pub turn_id: Option<String>,
     /// Carries prompt identity inputs that must not come from process state.
     pub environment: PromptEnvironment,
+    /// Selects the authored prompt-compaction behavior.
+    pub prompt_transform: PromptTransform,
+    /// Reports the caller's context threshold to budget queries.
+    pub compaction_threshold_tokens: Option<usize>,
     /// Stops the run at this caller-defined clock value.
     pub deadline_ms: Option<i64>,
     /// Lists schemas the publish control operation may propose.
     pub publishable_events: Map<String, Value>,
-    /// Lists schemas the return control operation may propose.
-    pub returnable_events: Map<String, Value>,
 }
 
 impl Default for AgentInvocation {
@@ -100,6 +117,7 @@ impl Default for AgentInvocation {
             context: String::new(),
             system_prompt: None,
             allowed_capabilities: Vec::new(),
+            tool_profile: ToolProfile::Native,
             max_model_calls: default_max_model_calls(),
             model_name: None,
             model_url: None,
@@ -114,13 +132,18 @@ impl Default for AgentInvocation {
             source_agent_id: None,
             source_session_id: None,
             caused_by: None,
+            event_source: default_event_source(),
+            session_id: None,
+            run_id: None,
+            turn_id: None,
             environment: PromptEnvironment {
                 working_directory: String::new(),
                 calendar_date: String::new(),
             },
+            prompt_transform: PromptTransform::None,
+            compaction_threshold_tokens: None,
             deadline_ms: None,
             publishable_events: Map::new(),
-            returnable_events: Map::new(),
         }
     }
 }

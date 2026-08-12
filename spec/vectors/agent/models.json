@@ -1,0 +1,616 @@
+{
+  "chat_completions": {
+    "failures": [
+      {
+        "expected_error": "model stream failed: invalid JSON event: Expecting value: line 1 column 12 (char 11)",
+        "name": "malformed_json",
+        "sse": [
+          "{\"choices\":"
+        ]
+      },
+      {
+        "expected_error": "model request failed: provider unavailable",
+        "name": "provider_error",
+        "sse": [
+          "{\"error\":{\"message\":\"provider unavailable\"}}"
+        ]
+      },
+      {
+        "expected_error": "model stream failed: stream ended before [DONE]",
+        "name": "missing_done",
+        "sse": [
+          "{\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"partial\"},\"finish_reason\":null}]}"
+        ]
+      }
+    ],
+    "http_failures": [
+      {
+        "body": {
+          "error": {
+            "message": "quota exceeded"
+          }
+        },
+        "expected": "Client error '429 Too Many Requests' for url 'https://model.invalid/v1/chat/completions'\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/429: quota exceeded",
+        "status": 429,
+        "url": "https://model.invalid/v1/chat/completions"
+      }
+    ],
+    "requests": [
+      {
+        "expected": {
+          "max_tokens": 512,
+          "messages": [
+            {
+              "content": "Be exact.",
+              "role": "system"
+            },
+            {
+              "content": "Read README.md.",
+              "role": "user"
+            }
+          ],
+          "model": "unit-chat-model",
+          "reasoning_effort": "high",
+          "stream_options": {
+            "include_usage": true
+          },
+          "temperature": 0.2,
+          "tool_choice": {
+            "function": {
+              "name": "read"
+            },
+            "type": "function"
+          },
+          "tools": [
+            {
+              "function": {
+                "description": "Read a file.",
+                "name": "read",
+                "parameters": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "path": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "path"
+                  ],
+                  "type": "object"
+                }
+              },
+              "type": "function"
+            }
+          ]
+        },
+        "input": {
+          "max_tokens": 512,
+          "messages": [
+            {
+              "content": "Be exact.",
+              "role": "system"
+            },
+            {
+              "content": "Read README.md.",
+              "role": "user"
+            }
+          ],
+          "selected_model": "unit-chat-model",
+          "thinking": "high",
+          "tool_choice": {
+            "function": {
+              "name": "read"
+            },
+            "type": "function"
+          },
+          "tools": [
+            {
+              "function": {
+                "description": "Read a file.",
+                "name": "read",
+                "parameters": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "path": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "path"
+                  ],
+                  "type": "object"
+                }
+              },
+              "type": "function"
+            }
+          ]
+        },
+        "name": "tools_and_reasoning"
+      },
+      {
+        "expected": {
+          "chat_template_kwargs": {
+            "enable_thinking": false
+          },
+          "max_tokens": 64,
+          "messages": [
+            {
+              "content": "Answer.",
+              "role": "user"
+            }
+          ],
+          "model": "unit-chat-model",
+          "stream_options": {
+            "include_usage": true
+          },
+          "temperature": 0.2
+        },
+        "input": {
+          "max_tokens": 64,
+          "messages": [
+            {
+              "content": "Answer.",
+              "role": "user"
+            }
+          ],
+          "selected_model": "unit-chat-model",
+          "thinking": "none",
+          "tool_choice": "auto",
+          "tools": null
+        },
+        "name": "thinking_disabled"
+      }
+    ],
+    "sse_parser": {
+      "expected_frames": [
+        "{\"part\":\"first\",\n\"value\":1}",
+        "[DONE]"
+      ],
+      "lines": [
+        ": keepalive",
+        "data: {\"part\":\"first\",",
+        "data: \"value\":1}",
+        "",
+        "data: [DONE]",
+        ""
+      ]
+    },
+    "streams": [
+      {
+        "expected": {
+          "choices": [
+            {
+              "finish_reason": "tool_calls",
+              "index": 0,
+              "message": {
+                "content": "I will read it.",
+                "reasoning_content": "inspect then answer",
+                "role": "assistant",
+                "tool_calls": [
+                  {
+                    "function": {
+                      "arguments": "{\"path\":\"README.md\"}",
+                      "name": "read"
+                    },
+                    "id": "call-read",
+                    "type": "function"
+                  }
+                ]
+              }
+            }
+          ],
+          "created": 1786400000,
+          "id": "chatcmpl-vector",
+          "model": "unit-chat-model",
+          "object": "chat.completion.chunk",
+          "system_fingerprint": "fp-vector",
+          "usage": {
+            "completion_tokens": 8,
+            "prompt_tokens": 21,
+            "total_tokens": 29
+          }
+        },
+        "expected_observations": {
+          "content": [
+            "I will ",
+            "read it."
+          ],
+          "reasoning": [
+            "inspect ",
+            "then answer"
+          ]
+        },
+        "name": "fragmented_content_reasoning_tool_and_usage",
+        "sse": [
+          "{\"id\":\"chatcmpl-vector\",\"object\":\"chat.completion.chunk\",\"created\":1786400000,\"model\":\"unit-chat-model\",\"system_fingerprint\":\"fp-vector\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\"inspect \",\"content\":\"I will \",\"tool_calls\":[{\"index\":0,\"id\":\"call-read\",\"type\":\"function\",\"function\":{\"name\":\"re\",\"arguments\":\"{\\\"path\\\"\"}}]},\"finish_reason\":null}]}",
+          "{\"choices\":[{\"index\":0,\"delta\":{\"reasoning_content\":\"then answer\",\"content\":\"read it.\",\"tool_calls\":[{\"index\":0,\"function\":{\"name\":\"ad\",\"arguments\":\":\\\"README.md\\\"}\"}}]},\"finish_reason\":\"tool_calls\"}]}",
+          "{\"choices\":[],\"usage\":{\"prompt_tokens\":21,\"completion_tokens\":8,\"total_tokens\":29}}",
+          "[DONE]"
+        ]
+      }
+    ],
+    "timeouts": [
+      {
+        "expected": {
+          "connect": 10.0,
+          "pool": 10.0,
+          "read": 2.5,
+          "write": 10.0
+        },
+        "first_output_seconds": 10.0,
+        "idle_seconds": 2.5
+      }
+    ]
+  },
+  "responses": {
+    "codex_headers": {
+      "credentials": {
+        "access_token": "<redacted-access-token>",
+        "account_id": "<redacted-account-id>"
+      },
+      "expected": {
+        "Accept": "text/event-stream",
+        "Authorization": "Bearer <redacted-access-token>",
+        "Content-Type": "application/json",
+        "OpenAI-Beta": "responses=experimental",
+        "chatgpt-account-id": "<redacted-account-id>",
+        "originator": "zeta",
+        "session-id": "session-vector"
+      },
+      "session": "session-vector"
+    },
+    "failures": [
+      {
+        "expected_error": "model request failed: provider failed",
+        "name": "error_event",
+        "sse": [
+          "{\"type\":\"error\",\"code\":\"server_error\",\"message\":\"provider failed\"}"
+        ]
+      },
+      {
+        "expected_error": "model request failed: request rejected",
+        "name": "failed_response",
+        "sse": [
+          "{\"type\":\"response.failed\",\"response\":{\"id\":\"resp-failed\",\"status\":\"failed\",\"error\":{\"code\":\"invalid_request\",\"message\":\"request rejected\"}}}"
+        ]
+      },
+      {
+        "expected_error": "model stream failed: stream ended before response.completed",
+        "name": "missing_terminal",
+        "sse": [
+          "{\"type\":\"response.output_text.delta\",\"delta\":\"partial\"}",
+          "[DONE]"
+        ]
+      }
+    ],
+    "requests": [
+      {
+        "expected": {
+          "include": [
+            "reasoning.encrypted_content"
+          ],
+          "input": [
+            {
+              "content": [
+                {
+                  "text": "Read README.md.",
+                  "type": "input_text"
+                }
+              ],
+              "role": "user",
+              "type": "message"
+            },
+            {
+              "arguments": "{\"path\":\"README.md\"}",
+              "call_id": "call-read",
+              "name": "read",
+              "type": "function_call"
+            },
+            {
+              "call_id": "call-read",
+              "output": "{\"ok\":true}",
+              "type": "function_call_output"
+            },
+            {
+              "content": [
+                {
+                  "text": "The file is ready.",
+                  "type": "output_text"
+                }
+              ],
+              "role": "assistant",
+              "type": "message"
+            }
+          ],
+          "instructions": "Be exact.\n\nUse tools when needed.",
+          "model": "unit-responses-model",
+          "parallel_tool_calls": true,
+          "prompt_cache_key": "session-vector",
+          "reasoning": {
+            "effort": "low",
+            "summary": "auto"
+          },
+          "store": false,
+          "stream": true,
+          "tool_choice": "auto",
+          "tools": [
+            {
+              "description": "Read a file.",
+              "name": "read",
+              "parameters": {
+                "additionalProperties": false,
+                "properties": {
+                  "path": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "path"
+                ],
+                "type": "object"
+              },
+              "strict": null,
+              "type": "function"
+            }
+          ]
+        },
+        "input": {
+          "max_tokens": 512,
+          "messages": [
+            {
+              "content": "Be exact.",
+              "role": "system"
+            },
+            {
+              "content": "Use tools when needed.",
+              "role": "system"
+            },
+            {
+              "content": "Read README.md.",
+              "role": "user"
+            },
+            {
+              "content": null,
+              "role": "assistant",
+              "tool_calls": [
+                {
+                  "function": {
+                    "arguments": "{\"path\":\"README.md\"}",
+                    "name": "read"
+                  },
+                  "id": "call-read",
+                  "type": "function"
+                }
+              ]
+            },
+            {
+              "content": "{\"ok\":true}",
+              "role": "tool",
+              "tool_call_id": "call-read"
+            },
+            {
+              "content": "The file is ready.",
+              "role": "assistant"
+            }
+          ],
+          "model": "unit-responses-model",
+          "session_id": "session-vector",
+          "thinking": "minimal",
+          "tool_choice": {
+            "function": {
+              "name": "read"
+            },
+            "type": "function"
+          },
+          "tools": [
+            {
+              "function": {
+                "description": "Read a file.",
+                "name": "read",
+                "parameters": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "path": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "path"
+                  ],
+                  "type": "object"
+                }
+              },
+              "type": "function"
+            }
+          ]
+        },
+        "name": "converted_history_and_tools"
+      },
+      {
+        "expected": {
+          "include": [
+            "reasoning.encrypted_content"
+          ],
+          "input": [
+            {
+              "content": [
+                {
+                  "text": "Continue.",
+                  "type": "input_text"
+                }
+              ],
+              "role": "user",
+              "type": "message"
+            },
+            {
+              "encrypted_content": "opaque-vector",
+              "id": "rs-vector",
+              "type": "reasoning"
+            },
+            {
+              "arguments": "{\"path\":\"notes.md\"}",
+              "call_id": "call-vector",
+              "id": "fc-vector",
+              "name": "read",
+              "type": "function_call"
+            },
+            {
+              "call_id": "call-vector",
+              "output": "{\"ok\":true,\"value\":\"ready\"}",
+              "type": "function_call_output"
+            }
+          ],
+          "instructions": "Replay provider state.",
+          "model": "unit-responses-model",
+          "prompt_cache_key": "session-vector",
+          "reasoning": {
+            "effort": "medium",
+            "summary": "auto"
+          },
+          "store": false,
+          "stream": true
+        },
+        "input": {
+          "max_tokens": 128,
+          "messages": [
+            {
+              "content": "Replay provider state.",
+              "role": "system"
+            },
+            {
+              "content": "Continue.",
+              "role": "user"
+            },
+            {
+              "_responses_items": [
+                {
+                  "encrypted_content": "opaque-vector",
+                  "id": "rs-vector",
+                  "type": "reasoning"
+                },
+                {
+                  "arguments": "{\"path\":\"notes.md\"}",
+                  "call_id": "call-vector",
+                  "id": "fc-vector",
+                  "name": "read",
+                  "type": "function_call"
+                }
+              ],
+              "content": "ignored when replay items exist",
+              "role": "assistant"
+            },
+            {
+              "content": "{\"ok\":true,\"value\":\"ready\"}",
+              "role": "tool",
+              "tool_call_id": "call-vector"
+            }
+          ],
+          "model": "unit-responses-model",
+          "session_id": "session-vector",
+          "thinking": "medium",
+          "tool_choice": "auto",
+          "tools": null
+        },
+        "name": "provider_replay_items"
+      }
+    ],
+    "streams": [
+      {
+        "expected": {
+          "choices": [
+            {
+              "finish_reason": "tool_calls",
+              "message": {
+                "_responses_items": [
+                  {
+                    "encrypted_content": "opaque-vector",
+                    "id": "rs-vector",
+                    "type": "reasoning"
+                  },
+                  {
+                    "content": [
+                      {
+                        "text": "Final.",
+                        "type": "output_text"
+                      }
+                    ],
+                    "id": "msg-vector",
+                    "role": "assistant",
+                    "type": "message"
+                  },
+                  {
+                    "arguments": "{\"path\":\"README.md\"}",
+                    "call_id": "call-vector",
+                    "id": "fc-vector",
+                    "name": "read",
+                    "type": "function_call"
+                  }
+                ],
+                "content": "Final.",
+                "reasoning_content": "inspect\n\nchoose",
+                "role": "assistant",
+                "tool_calls": [
+                  {
+                    "function": {
+                      "arguments": "{\"path\":\"README.md\"}",
+                      "name": "read"
+                    },
+                    "id": "call-vector",
+                    "type": "function"
+                  }
+                ]
+              }
+            }
+          ],
+          "usage": {
+            "completion_tokens": 13,
+            "prompt_tokens": 34,
+            "total_tokens": 47
+          }
+        },
+        "expected_observations": {
+          "content": [
+            "draft"
+          ],
+          "reasoning": [
+            "inspect",
+            "\n\n",
+            "choose"
+          ]
+        },
+        "name": "reasoning_text_tool_usage_and_replay_items",
+        "sse": [
+          "{\"type\":\"response.created\",\"response\":{\"id\":\"resp-vector\"}}",
+          "{\"type\":\"response.reasoning_summary_text.delta\",\"delta\":\"inspect\"}",
+          "{\"type\":\"response.reasoning_summary_part.done\"}",
+          "{\"type\":\"response.reasoning_text.delta\",\"delta\":\"choose\"}",
+          "{\"type\":\"response.output_text.delta\",\"delta\":\"draft\"}",
+          "{\"type\":\"response.output_item.done\",\"item\":{\"type\":\"reasoning\",\"id\":\"rs-vector\",\"encrypted_content\":\"opaque-vector\"}}",
+          "{\"type\":\"response.output_item.done\",\"item\":{\"type\":\"message\",\"id\":\"msg-vector\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"Final.\"}]}}",
+          "{\"type\":\"response.output_item.done\",\"item\":{\"type\":\"function_call\",\"id\":\"fc-vector\",\"call_id\":\"call-vector\",\"name\":\"read\",\"arguments\":\"{\\\"path\\\":\\\"README.md\\\"}\"}}",
+          "{\"type\":\"response.completed\",\"response\":{\"id\":\"resp-vector\",\"status\":\"completed\",\"usage\":{\"input_tokens\":34,\"output_tokens\":13,\"total_tokens\":47,\"input_tokens_details\":{\"cached_tokens\":21}}}}",
+          "[DONE]"
+        ]
+      },
+      {
+        "expected": {
+          "choices": [
+            {
+              "finish_reason": "length",
+              "message": {
+                "content": "",
+                "role": "assistant"
+              }
+            }
+          ]
+        },
+        "name": "incomplete_response",
+        "sse": [
+          "{\"type\":\"response.incomplete\",\"response\":{\"id\":\"resp-short\",\"status\":\"incomplete\"}}",
+          "[DONE]"
+        ]
+      }
+    ]
+  },
+  "version": 0
+}

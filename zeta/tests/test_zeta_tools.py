@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ast
 import asyncio
+import json
 import shutil
 from collections.abc import Mapping
 from datetime import UTC, datetime
@@ -18,6 +19,7 @@ from zeta.capabilities.executors import (
     ToolExecutorProvider,
     load_tool_executor_provider_registry,
 )
+from zeta.capabilities.paths import reset_base_dir, set_base_dir
 from zeta.capabilities.registry import (
     CapabilityRegistry,
     RegisteredCapability,
@@ -33,11 +35,14 @@ from zeta.journal.memory import MemoryEventStore
 from zeta.loop.runtime import registered_capabilities
 from zeta.substrate import Derivation, InMemoryStore, Object
 from zeta.tools import bash as bash_tool
+from zeta.tools import edit as edit_tool
 from zeta.tools import ensure_builtin_tools_registered, register_builtin_tools
 from zeta.tools import grep as grep_tool
 from zeta.tools import history as history_tool
+from zeta.tools import ls as ls_tool
 from zeta.tools import read as read_tool
 from zeta.tools import web as web_tool
+from zeta.tools import write as write_tool
 from zeta.trace.query import (
     MAX_QUERY_LOG_EVENTS,
     MAX_QUERY_LOG_OUTPUT_CHARS,
@@ -46,6 +51,8 @@ from zeta.trace.query import (
 from zeta.trace.summarize import estimated_prompt_tokens
 
 ensure_builtin_tools_registered()
+
+AGENT_VECTORS_DIR = Path(__file__).resolve().parents[2] / "spec" / "vectors" / "agent"
 
 
 def tool_metadata(name: str) -> dict[str, Any]:
@@ -1863,3 +1870,529 @@ def test_registered_capabilities_expands_only_scoped_mcp_wildcards() -> None:
         "mcp.google_calendar.list_events",
     )
     assert registered_capabilities(("mcp.*",), tool_registry=registry) == ()
+
+
+def normalize_tool_vector(value: Any, workspace: Path) -> Any:
+    marker = "<workspace>"
+    if isinstance(value, str):
+        return value.replace(str(workspace), marker)
+    if isinstance(value, list):
+        return [normalize_tool_vector(item, workspace) for item in value]
+    if isinstance(value, dict):
+        return {
+            normalize_tool_vector(key, workspace): normalize_tool_vector(
+                item, workspace
+            )
+            for key, item in value.items()
+        }
+    return value
+
+
+def normalized_artifact_result(
+    result: dict[str, Any], workspace: Path
+) -> tuple[dict[str, Any], str]:
+    artifact = Path(result["metadata"]["artifact"])
+    artifact_text = artifact.read_text(encoding="utf-8")
+    artifact.unlink()
+    normalized = {
+        **result,
+        "metadata": {**result["metadata"], "artifact": "<artifact>"},
+    }
+    return (
+        normalize_tool_vector(normalized, workspace),
+        normalize_tool_vector(artifact_text, workspace),
+    )
+
+
+def capability_vector(capability: Capability) -> dict[str, Any]:
+    return {
+        "id": capability.id.canonical(),
+        "description": capability.description,
+        "input_schema": capability.input_schema,
+        "delivery_semantics": capability.delivery_semantics,
+    }
+
+
+def python_tool_vectors(tmp_path: Path, monkeypatch) -> dict[str, Any]:
+    declarations = sorted(
+        (
+            bash_tool.SPEC,
+            edit_tool.PATCH_SPEC,
+            edit_tool.SPEC,
+            grep_tool.AST_GREP_SPEC,
+            grep_tool.SPEC,
+            ls_tool.SPEC,
+            read_tool.SPEC,
+            web_tool.SEARCH_SPEC,
+            write_tool.SPEC,
+        ),
+        key=lambda declaration: declaration.id.canonical(),
+    )
+    cases: list[dict[str, Any]] = []
+    token = set_base_dir(tmp_path)
+    try:
+        read_path = tmp_path / "read" / "note.txt"
+        read_path.parent.mkdir()
+        read_path.write_text("alpha\nβeta\ngamma\n", encoding="utf-8")
+        read_input = {"path": "read/note.txt", "offset": 1, "limit": 2}
+        cases.append(
+            {
+                "name": "read_utf8_lines",
+                "capability": "zeta.read",
+                "fixture": {"files": {"read/note.txt": "alpha\nβeta\ngamma\n"}},
+                "input": read_input,
+                "expected": normalize_tool_vector(read_tool.run(read_input), tmp_path),
+            }
+        )
+
+        write_path = tmp_path / "write" / "note.txt"
+        write_path.parent.mkdir()
+        write_path.write_text("old\n", encoding="utf-8")
+        write_input = {"path": "write/note.txt", "content": "new\n"}
+        write_result = write_tool.run(write_input)
+        cases.append(
+            {
+                "name": "write_existing_file",
+                "capability": "zeta.write",
+                "fixture": {"files": {"write/note.txt": "old\n"}},
+                "input": write_input,
+                "expected": normalize_tool_vector(write_result, tmp_path),
+                "expected_files": {
+                    "write/note.txt": write_path.read_text(encoding="utf-8")
+                },
+            }
+        )
+
+        edit_path = tmp_path / "edit" / "note.txt"
+        edit_path.parent.mkdir()
+        edit_path.write_text("hello\nold\nbye\n", encoding="utf-8")
+        edit_input = {
+            "location": "edit/note.txt",
+            "old": "old\n",
+            "new": "new\n",
+        }
+        edit_result, edit_artifact = normalized_artifact_result(
+            edit_tool.run(edit_input), tmp_path
+        )
+        cases.append(
+            {
+                "name": "edit_exact_replacement",
+                "capability": "zeta.edit",
+                "fixture": {"files": {"edit/note.txt": "hello\nold\nbye\n"}},
+                "input": edit_input,
+                "expected": edit_result,
+                "expected_artifact": edit_artifact,
+                "expected_files": {
+                    "edit/note.txt": edit_path.read_text(encoding="utf-8")
+                },
+            }
+        )
+
+        patch_path = tmp_path / "patch" / "note.txt"
+        patch_path.parent.mkdir()
+        patch_path.write_text("old\n", encoding="utf-8")
+        patch_text = (
+            "*** Begin Patch\n"
+            "*** Update File: patch/note.txt\n"
+            "@@\n"
+            "-old\n"
+            "+new\n"
+            "*** End Patch"
+        )
+        patch_input = {"patch": patch_text}
+        patch_result, patch_artifact = normalized_artifact_result(
+            edit_tool.run_patch(patch_input), tmp_path
+        )
+        cases.append(
+            {
+                "name": "patch_updates_file",
+                "capability": "zeta.patch",
+                "fixture": {"files": {"patch/note.txt": "old\n"}},
+                "input": patch_input,
+                "expected": patch_result,
+                "expected_artifact": patch_artifact,
+                "expected_files": {
+                    "patch/note.txt": patch_path.read_text(encoding="utf-8")
+                },
+            }
+        )
+
+        list_root = tmp_path / "list"
+        (list_root / "src").mkdir(parents=True)
+        (list_root / "pyproject.toml").write_text("[project]\n", encoding="utf-8")
+        list_input = {"path": "list"}
+        cases.append(
+            {
+                "name": "list_directory",
+                "capability": "zeta.ls",
+                "fixture": {
+                    "directories": ["list/src"],
+                    "files": {"list/pyproject.toml": "[project]\n"},
+                },
+                "input": list_input,
+                "expected": normalize_tool_vector(ls_tool.run(list_input), tmp_path),
+            }
+        )
+
+        grep_root = tmp_path / "grep"
+        grep_root.mkdir()
+        (grep_root / "a.txt").write_text(
+            "needle one\nignore\nneedle two\n", encoding="utf-8"
+        )
+        (grep_root / "b.txt").write_text("needle three\n", encoding="utf-8")
+
+        def deterministic_grep(pattern: str, path: str, limit: int) -> Any:
+            return grep_tool.grep_fallback(pattern, Path(path), limit)
+
+        monkeypatch.setattr(grep_tool, "run_ripgrep", deterministic_grep)
+        grep_input = {"pattern": "needle", "path": "grep", "limit": 2}
+        cases.append(
+            {
+                "name": "grep_limited_matches",
+                "capability": "zeta.grep",
+                "fixture": {
+                    "files": {
+                        "grep/a.txt": "needle one\nignore\nneedle two\n",
+                        "grep/b.txt": "needle three\n",
+                    },
+                    "command": "fallback",
+                },
+                "input": grep_input,
+                "expected": normalize_tool_vector(grep_tool.run(grep_input), tmp_path),
+            }
+        )
+
+        ast_path = tmp_path / "ast" / "sample.py"
+        ast_path.parent.mkdir()
+        ast_source = (
+            "import subprocess\n\n"
+            "def run_it():\n"
+            "    return subprocess.Popen(['echo', 'ok'])\n"
+        )
+        ast_path.write_text(ast_source, encoding="utf-8")
+        ast_command_output = json.dumps(
+            {
+                "file": str(ast_path),
+                "range": {"start": {"line": 3}},
+                "lines": "    return subprocess.Popen(['echo', 'ok'])",
+            },
+            separators=(",", ":"),
+        )
+
+        def deterministic_ast_grep(
+            pattern: str, lang: str, path: str, limit: int
+        ) -> Any:
+            del pattern, lang, path, limit
+            return grep_tool.GrepResult(
+                ast_command_output,
+                matches=1,
+                files=1,
+                truncated=False,
+            )
+
+        monkeypatch.setattr(grep_tool, "run_ast_grep_command", deterministic_ast_grep)
+        ast_input = {
+            "pattern": "subprocess.Popen($$$ARGS)",
+            "lang": "python",
+            "path": "ast/sample.py",
+        }
+        cases.append(
+            {
+                "name": "ast_grep_structural_match",
+                "capability": "zeta.ast_grep",
+                "fixture": {
+                    "files": {"ast/sample.py": ast_source},
+                    "command_output": normalize_tool_vector(
+                        ast_command_output, tmp_path
+                    ),
+                },
+                "input": ast_input,
+                "expected": normalize_tool_vector(
+                    grep_tool.run_ast_grep(ast_input), tmp_path
+                ),
+            }
+        )
+
+        bash_input = {"command": "printf 'hello zeta\\n'", "timeout": 5}
+        bash_result = bash_tool.run(bash_input)
+        bash_result["metadata"]["duration_ms"] = "<duration-ms>"
+        cases.append(
+            {
+                "name": "bash_success",
+                "capability": "zeta.bash",
+                "fixture": {},
+                "input": bash_input,
+                "expected": normalize_tool_vector(bash_result, tmp_path),
+            }
+        )
+
+        class FakeUrlResponse:
+            headers = {"content-type": "text/html; charset=utf-8"}
+
+            def __enter__(self) -> FakeUrlResponse:
+                return self
+
+            def __exit__(self, *_: object) -> None:
+                return None
+
+            def read(self) -> bytes:
+                return (
+                    b"<html><head><title>Example</title></head>"
+                    b"<body><h1>Hello</h1><p>World</p></body></html>"
+                )
+
+        monkeypatch.setattr(
+            read_tool.socket,
+            "getaddrinfo",
+            lambda *_args, **_kwargs: [(2, 1, 6, "", ("93.184.216.34", 0))],
+        )
+        monkeypatch.setattr(
+            read_tool._URL_OPENER,
+            "open",
+            lambda *_args, **_kwargs: FakeUrlResponse(),
+        )
+        url_input = {"path": "https://example.com/page", "offset": 0, "limit": 3}
+        cases.append(
+            {
+                "name": "read_public_html_url",
+                "capability": "zeta.read",
+                "fixture": {
+                    "resolved_addresses": ["93.184.216.34"],
+                    "response": {
+                        "content_type": "text/html; charset=utf-8",
+                        "body_utf8": (
+                            "<html><head><title>Example</title></head>"
+                            "<body><h1>Hello</h1><p>World</p></body></html>"
+                        ),
+                    },
+                },
+                "input": url_input,
+                "expected": read_tool.run(url_input),
+            }
+        )
+
+        monkeypatch.setattr(
+            read_tool.socket,
+            "getaddrinfo",
+            lambda *_args, **_kwargs: [(2, 1, 6, "", ("127.0.0.1", 0))],
+        )
+        blocked_input = {"path": "http://localhost/private"}
+        cases.append(
+            {
+                "name": "read_blocks_private_url",
+                "capability": "zeta.read",
+                "fixture": {"resolved_addresses": ["127.0.0.1"]},
+                "input": blocked_input,
+                "expected": read_tool.run(blocked_input),
+            }
+        )
+
+        provider_result = web_tool.CodexSearch(
+            answer="Zeta keeps runtime boundaries explicit.",
+            sources=[
+                web_tool.SearchSource(
+                    title="Zeta design",
+                    url="https://example.com/zeta",
+                    snippet="Runtime boundary overview.",
+                ),
+                web_tool.SearchSource(
+                    title="Agent protocol",
+                    url="https://example.com/agent",
+                    snippet="Provider protocol reference.",
+                ),
+            ],
+            request_id="resp-vector",
+            model="unit-web-model",
+            usage={"input_tokens": 12, "output_tokens": 8, "total_tokens": 20},
+        )
+        provider_calls: list[dict[str, Any]] = []
+        monkeypatch.setenv("ZETA_WEB_SEARCH_MODEL", "unit-web-model")
+        monkeypatch.setenv("ZETA_WEB_TIMEOUT_SEC", "30")
+        monkeypatch.setenv("ZETA_WEB_MAX_PREVIEW_BYTES", "8192")
+        monkeypatch.setenv("ZETA_WEB_MAX_PREVIEW_LINES", "100")
+        monkeypatch.delenv("ZETA_CODEX_BASE_URL", raising=False)
+        monkeypatch.setattr(
+            web_tool,
+            "load_codex_credentials",
+            lambda: web_tool.CodexCredentials(
+                access_token="<redacted-access-token>",
+                account_id="<redacted-account-id>",
+            ),
+        )
+
+        web_transport_events = [
+            {
+                "type": "response.output_item.done",
+                "item": {
+                    "type": "message",
+                    "content": [
+                        {
+                            "type": "output_text",
+                            "text": "A transport-grounded answer.",
+                            "annotations": [
+                                {
+                                    "type": "url_citation",
+                                    "title": "Transport source",
+                                    "url": "https://example.com/transport",
+                                }
+                            ],
+                        }
+                    ],
+                },
+            },
+            {
+                "type": "response.completed",
+                "response": {
+                    "id": "resp-web-transport",
+                    "model": "unit-web-transport",
+                    "usage": {
+                        "input_tokens": 9,
+                        "output_tokens": 4,
+                        "total_tokens": 13,
+                    },
+                },
+            },
+        ]
+        web_transport_request: dict[str, Any] = {}
+
+        async def deterministic_web_stream(
+            url: str,
+            body: dict[str, Any],
+            *,
+            headers: dict[str, str],
+            first_output_timeout: float,
+            idle_timeout: float,
+        ) -> Any:
+            web_transport_request.update(
+                {
+                    "url": url,
+                    "body": body,
+                    "headers": dict(headers),
+                    "first_output_timeout": first_output_timeout,
+                    "idle_timeout": idle_timeout,
+                }
+            )
+            for event in web_transport_events:
+                yield json.dumps(event, ensure_ascii=False, separators=(",", ":"))
+            yield "[DONE]"
+
+        monkeypatch.setattr(web_tool, "stream_json_sse", deterministic_web_stream)
+        transport_result = asyncio.run(
+            web_tool.codex_search(
+                "transport query",
+                web_tool.WebConfig(
+                    credentials=web_tool.CodexCredentials(
+                        access_token="<redacted-access-token>",
+                        account_id="<redacted-account-id>",
+                    ),
+                    model="unit-web-transport",
+                    timeout_sec=12.0,
+                    limit=3,
+                    selected_url="https://backend.invalid/",
+                ),
+            )
+        )
+        web_transport = {
+            "query": "transport query",
+            "provider_sse": [
+                *(
+                    json.dumps(event, ensure_ascii=False, separators=(",", ":"))
+                    for event in web_transport_events
+                ),
+                "[DONE]",
+            ],
+            "expected_request": web_transport_request,
+            "expected": {
+                "answer": transport_result.answer,
+                "sources": [
+                    {
+                        "title": source.title,
+                        "url": source.url,
+                        "snippet": source.snippet,
+                    }
+                    for source in transport_result.sources
+                ],
+                "request_id": transport_result.request_id,
+                "model": transport_result.model,
+                "usage": transport_result.usage,
+            },
+        }
+
+        async def deterministic_web_search(
+            query: str, config: web_tool.WebConfig
+        ) -> web_tool.CodexSearch:
+            provider_calls.append(
+                {
+                    "query": query,
+                    "config": {
+                        "credentials": {
+                            "access_token": config.credentials.access_token,
+                            "account_id": config.credentials.account_id,
+                        },
+                        "model": config.model,
+                        "timeout_sec": config.timeout_sec,
+                        "max_preview_bytes": config.max_preview_bytes,
+                        "max_preview_lines": config.max_preview_lines,
+                        "limit": config.limit,
+                        "selected_url": config.selected_url,
+                    },
+                }
+            )
+            return provider_result
+
+        monkeypatch.setattr(web_tool, "codex_search", deterministic_web_search)
+        web_input = {"query": "zeta runtime boundary", "limit": 2}
+        web_result = asyncio.run(web_tool.search(web_input))
+        cases.append(
+            {
+                "name": "web_search_formats_provider_result",
+                "capability": "zeta.web_search",
+                "fixture": {
+                    "provider_result": {
+                        "answer": provider_result.answer,
+                        "sources": [
+                            {
+                                "title": source.title,
+                                "url": source.url,
+                                "snippet": source.snippet,
+                            }
+                            for source in provider_result.sources
+                        ],
+                        "request_id": provider_result.request_id,
+                        "model": provider_result.model,
+                        "usage": provider_result.usage,
+                    }
+                },
+                "input": web_input,
+                "expected_provider_calls": provider_calls,
+                "expected": web_result,
+            }
+        )
+    finally:
+        reset_base_dir(token)
+
+    bounded_text, bounded = bash_tool.bounded_output("0123456789ABCDEF", limit=10)
+    return {
+        "version": 0,
+        "base_dir": "<workspace>",
+        "capabilities": [capability_vector(item) for item in declarations],
+        "cases": cases,
+        "web_transport": web_transport,
+        "bounds": {
+            "bash_output": {
+                "input": "0123456789ABCDEF",
+                "limit": 10,
+                "expected_text": bounded_text,
+                "expected_truncated": bounded,
+            }
+        },
+    }
+
+
+def test_agent_tool_vectors_match_python_ground_truth(
+    tmp_path: Path, monkeypatch
+) -> None:
+    expected = json.loads(
+        (AGENT_VECTORS_DIR / "tools.json").read_text(encoding="utf-8")
+    )
+    assert python_tool_vectors(tmp_path, monkeypatch) == expected

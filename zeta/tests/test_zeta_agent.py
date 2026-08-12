@@ -83,6 +83,7 @@ from zeta.loop.request import ContentTransformBudget
 from zeta.loop.runtime import AgentRunResult
 from zeta.models.profiles import ModelSelection
 from zeta.substrate import InMemoryStore
+from zeta.tools import content as zeta_content_tools
 from zeta.tools import ensure_builtin_tools_registered, register_builtin_tools
 from zeta_test_support import (
     assert_prompt_trace_replay_graph,
@@ -467,6 +468,70 @@ def _test_capability(
     )
 
 
+def agent_vector_capability(capability: Capability) -> dict[str, Any]:
+    row: dict[str, Any] = {
+        "id": capability.id.canonical(),
+        "description": capability.description,
+        "input_schema": capability.input_schema,
+    }
+    if capability.delivery_semantics is not None:
+        row["delivery_semantics"] = capability.delivery_semantics
+    return row
+
+
+def agent_vector_content_setup(
+    setup: Mapping[str, Any],
+    store: InMemoryStore,
+) -> tuple[
+    zeta_content_transforms.ContentWorkspace,
+    dict[str, str],
+    set[str],
+    set[str],
+]:
+    workspace = zeta_content_transforms.ContentWorkspace(
+        store,
+        run_id=str(setup["run_id"]),
+        session_id=str(setup["session_id"]),
+        owner=str(setup["owner"]),
+    )
+    head = workspace.initialize()
+    replacements = {"$content_head": head}
+    for operation in setup.get("initial", []):
+        result = workspace.transform({"expected_head": head, **operation["params"]})
+        head = result.head
+        replacements["$content_head"] = head
+        alias = operation.get("alias")
+        if alias is not None:
+            if len(result.output_ids) != 1:
+                raise AssertionError(f"content alias {alias!r} needs one output")
+            replacements[f"$content:{alias}"] = result.output_ids[0]
+    return (
+        workspace,
+        replacements,
+        {object_id for object_id, _ in store.objects()},
+        set(store.derivations),
+    )
+
+
+def resolve_agent_vector_placeholders(
+    value: Any,
+    replacements: Mapping[str, str],
+) -> Any:
+    if isinstance(value, str):
+        resolved = value
+        for placeholder, replacement in replacements.items():
+            resolved = resolved.replace(placeholder, replacement)
+        return resolved
+    if isinstance(value, list):
+        return [resolve_agent_vector_placeholders(item, replacements) for item in value]
+    if isinstance(value, dict):
+        return {
+            key: resolve_agent_vector_placeholders(item, replacements)
+            for key, item in value.items()
+        }
+    return value
+
+
 def agent_invocation_vector_inputs() -> list[dict[str, Any]]:
     lookup_capability = {
         "id": "test.lookup",
@@ -485,6 +550,23 @@ def agent_invocation_vector_inputs() -> list[dict[str, Any]]:
             "name": "lookup",
             "arguments": '{"key":"version"}',
         },
+    }
+    bash_schema = {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["command"],
+        "properties": {"command": {"type": "string"}},
+    }
+    bash_capability = {
+        "id": "zeta.bash",
+        "description": "Execute a shell command.",
+        "input_schema": bash_schema,
+    }
+    content_setup = {
+        "run_id": "run-vector-content",
+        "session_id": "session-vector-content",
+        "owner": "vector-agent",
+        "initial": [],
     }
     return [
         {
@@ -652,12 +734,345 @@ def agent_invocation_vector_inputs() -> list[dict[str, Any]]:
             "event_ids": [],
             "cancelled": True,
         },
+        {
+            "name": "malformed_json_and_canonical_schema_failures",
+            "invocation": {
+                "objective": "Try invalid tool arguments.",
+                "timeline": [],
+                "context": "",
+                "system_prompt": "Answer plainly.",
+                "allowed_capabilities": ["test.lookup", "zeta.bash"],
+                "max_model_calls": 2,
+                "model_name": "unit-model",
+                "tool_profile": "codex",
+                "base_directory": "/workspace/zeta",
+                "source_queue_item_id": None,
+            },
+            "capabilities": [
+                lookup_capability,
+                {
+                    **bash_capability,
+                    "input_schema": {
+                        **bash_schema,
+                        "required": ["command", "timeout"],
+                        "properties": {
+                            **bash_schema["properties"],
+                            "timeout": {"type": "number"},
+                        },
+                    },
+                },
+            ],
+            "model_script": [
+                {
+                    "message": {
+                        "content": "",
+                        "tool_calls": [
+                            {
+                                "id": "call-malformed-1",
+                                "type": "function",
+                                "function": {
+                                    "name": "lookup",
+                                    "arguments": '{"key":',
+                                },
+                            },
+                            {
+                                "id": "call-canonical-1",
+                                "type": "function",
+                                "function": {
+                                    "name": "exec_command",
+                                    "arguments": '{"cmd":"pytest"}',
+                                },
+                            },
+                        ],
+                    },
+                    "stream": [],
+                    "telemetry": {},
+                },
+                {
+                    "message": {"content": "Invalid arguments were rejected."},
+                    "stream": [],
+                    "telemetry": {},
+                },
+            ],
+            "tool_results": {},
+            "event_ids": [
+                "model-malformed-1",
+                "result-malformed-1",
+                "result-canonical-1",
+                "model-malformed-2",
+            ],
+            "cancelled": False,
+        },
+        {
+            "name": "codex_profile_effect_and_duplicate_call",
+            "invocation": {
+                "objective": "Run a command.",
+                "timeline": [],
+                "context": "",
+                "system_prompt": "Answer plainly.",
+                "allowed_capabilities": ["zeta.bash"],
+                "max_model_calls": 3,
+                "model_name": "unit-model",
+                "tool_profile": "codex",
+                "base_directory": "/workspace/zeta",
+                "effect_scope": "qi_effect_1",
+                "source_queue_item_id": None,
+            },
+            "capabilities": [
+                {**bash_capability, "delivery_semantics": "unsafe_to_retry"}
+            ],
+            "model_script": [
+                {
+                    "message": {
+                        "content": "",
+                        "tool_calls": [
+                            {
+                                "id": "call-codex-1",
+                                "type": "function",
+                                "function": {
+                                    "name": "exec_command",
+                                    "arguments": '{"cmd":"pytest"}',
+                                },
+                            }
+                        ],
+                    },
+                    "stream": [],
+                    "telemetry": {},
+                },
+                {
+                    "message": {
+                        "content": "",
+                        "tool_calls": [
+                            {
+                                "id": "call-codex-1",
+                                "type": "function",
+                                "function": {
+                                    "name": "exec_command",
+                                    "arguments": '{"cmd":"pytest"}',
+                                },
+                            }
+                        ],
+                    },
+                    "stream": [],
+                    "telemetry": {},
+                },
+                {
+                    "message": {"content": "The command passed."},
+                    "stream": [],
+                    "telemetry": {},
+                },
+            ],
+            "tool_results": {
+                "zeta.bash": [
+                    {
+                        "ok": True,
+                        "content": [{"type": "text", "text": "tests passed"}],
+                    }
+                ]
+            },
+            "event_ids": [
+                "model-codex-1",
+                "result-codex-1",
+                "model-codex-2",
+                "model-codex-3",
+            ],
+            "cancelled": False,
+            "capture_recorded_events": True,
+        },
+        {
+            "name": "control_timestamp_validation",
+            "invocation": {
+                "objective": "Schedule updates and wait.",
+                "timeline": [],
+                "context": "",
+                "system_prompt": "Answer plainly.",
+                "allowed_capabilities": [],
+                "max_model_calls": 2,
+                "model_name": "unit-model",
+                "base_directory": "/workspace/zeta",
+                "source_queue_item_id": "qi-control-times",
+                "source_agent_id": "issue-agent",
+                "source_session_id": "agent/issue-agent/session-1",
+                "publishable_events": PUBLISHED_EVENT_SCHEMAS,
+            },
+            "capabilities": [],
+            "model_script": [
+                {
+                    "message": {
+                        "content": "",
+                        "tool_calls": [
+                            publish_event_tool_call(
+                                "call-publish-malformed", at="not-a-date"
+                            ),
+                            publish_event_tool_call(
+                                "call-publish-naive", at="2030-01-02T03:04:05"
+                            ),
+                            publish_event_tool_call(
+                                "call-publish-aware",
+                                at="2030-01-02T05:04:05+02:00",
+                            ),
+                            cancel_tool_call(
+                                "call-cancel-1", reason="No longer needed."
+                            ),
+                            wait_for_tool_call(
+                                "call-wait-malformed", deadline="not-a-date"
+                            ),
+                            wait_for_tool_call(
+                                "call-wait-naive", deadline="2030-01-02T03:04:05"
+                            ),
+                            wait_for_tool_call(
+                                "call-wait-aware",
+                                deadline="2030-01-02T05:04:05+02:00",
+                            ),
+                        ],
+                    },
+                    "stream": [],
+                    "telemetry": {},
+                }
+            ],
+            "tool_results": {},
+            "event_ids": [
+                "model-control-times-1",
+                "result-publish-malformed",
+                "result-publish-naive",
+                "result-publish-aware",
+                "result-cancel-1",
+                "result-wait-malformed",
+                "result-wait-naive",
+                "result-wait-aware",
+            ],
+            "cancelled": False,
+        },
+        {
+            "name": "cancelled_after_model_return",
+            "invocation": {
+                "objective": "Stop after the model returns.",
+                "timeline": [],
+                "context": "",
+                "system_prompt": "Answer plainly.",
+                "allowed_capabilities": [],
+                "max_model_calls": 1,
+                "model_name": "unit-model",
+                "base_directory": "/workspace/zeta",
+                "source_queue_item_id": None,
+            },
+            "capabilities": [],
+            "model_script": [
+                {
+                    "message": {"content": "This answer must not become durable."},
+                    "stream": [],
+                    "telemetry": {"usage": {"completion_tokens": 7}},
+                    "cancel_after_return": True,
+                }
+            ],
+            "tool_results": {},
+            "event_ids": [],
+            "cancelled": False,
+        },
+        {
+            "name": "content_query_transform_and_finish",
+            "invocation": {
+                "objective": "Inspect, update, and finish from the content graph.",
+                "timeline": [],
+                "context": "",
+                "system_prompt": "Answer plainly.",
+                "allowed_capabilities": [
+                    "zeta.query_content",
+                    "zeta.transform_content",
+                    "zeta.finish",
+                ],
+                "max_model_calls": 2,
+                "model_name": "unit-model",
+                "base_directory": "/workspace/zeta",
+                "source_queue_item_id": "qi-content-transform",
+            },
+            "capabilities": [
+                agent_vector_capability(zeta_content_tools.QUERY_CONTENT_SPEC),
+                agent_vector_capability(zeta_content_tools.TRANSFORM_CONTENT_SPEC),
+                agent_vector_capability(zeta_content_tools.FINISH_SPEC),
+            ],
+            "content_setup": {
+                **content_setup,
+                "initial": [
+                    {
+                        "alias": "answer",
+                        "params": {
+                            "reason": "Store the complete answer.",
+                            "inputs": {},
+                            "transformation": {
+                                "type": "literal",
+                                "value": "The complete graph-backed answer.",
+                            },
+                            "destination": {
+                                "key": "evidence/release",
+                                "kind": "text",
+                                "scope": "run",
+                                "expected_object_id": None,
+                            },
+                        },
+                    }
+                ],
+            },
+            "model_script": [
+                {
+                    "message": {
+                        "content": "",
+                        "tool_calls": [
+                            content_tool_call(
+                                "call-content-query",
+                                "query_content",
+                                {"key_prefix": "evidence/"},
+                            ),
+                            content_tool_call(
+                                "call-content-transform",
+                                "transform_content",
+                                {
+                                    "expected_head": "$content_head",
+                                    "reason": "Reuse this procedure later.",
+                                    "inputs": {},
+                                    "transformation": {
+                                        "type": "literal",
+                                        "value": "Run focused tests first.",
+                                    },
+                                    "destination": {
+                                        "key": "testing/procedure",
+                                        "kind": "procedure",
+                                        "scope": "agent",
+                                        "expected_object_id": None,
+                                    },
+                                },
+                            ),
+                            content_tool_call(
+                                "call-content-finish",
+                                "finish",
+                                {"object_id": "$content:answer"},
+                            ),
+                        ],
+                    },
+                    "stream": [],
+                    "telemetry": {},
+                }
+            ],
+            "tool_results": {},
+            "event_ids": [
+                "model-content-1",
+                "result-content-query-1",
+                "result-content-transform-1",
+                "result-content-finish-1",
+            ],
+            "cancelled": False,
+        },
     ]
 
 
 class AgentVectorGateway:
-    def __init__(self, script: list[dict[str, Any]]) -> None:
+    def __init__(
+        self,
+        script: list[dict[str, Any]],
+        cancellation: threading.Event,
+    ) -> None:
         self.script = script
+        self.cancellation = cancellation
         self.inputs: list[zeta_model_shapes.ModelInput] = []
 
     def available(self, request: zeta_model_shapes.ModelRequest) -> bool:
@@ -685,12 +1100,20 @@ class AgentVectorGateway:
                 stream.reasoning_delta(item["text"])
         if telemetry_sink is not None:
             telemetry_sink(dict(row["telemetry"]))
+        if row.get("cancel_after_return") is True:
+            self.cancellation.set()
         return zeta_model_shapes.ModelOutput(message=dict(row["message"]))
 
 
 class AgentVectorToolExecutor:
-    def __init__(self, results: dict[str, list[dict[str, Any]]]) -> None:
+    def __init__(
+        self,
+        results: dict[str, list[dict[str, Any]]],
+        *,
+        recorded_drafts: list[DraftEvent] | None = None,
+    ) -> None:
         self.results = {key: list(values) for key, values in results.items()}
+        self.recorded_drafts = recorded_drafts
         self.calls: list[dict[str, Any]] = []
 
     async def call(
@@ -701,14 +1124,17 @@ class AgentVectorToolExecutor:
         base_dir: Path | None,
         effect_key: str | None,
     ) -> dict[str, Any]:
-        self.calls.append(
-            {
-                "capability_id": capability_id,
-                "params": dict(params),
-                "base_directory": str(base_dir) if base_dir is not None else None,
-                "effect_key": effect_key,
-            }
-        )
+        call: dict[str, Any] = {
+            "capability_id": capability_id,
+            "params": dict(params),
+            "base_directory": str(base_dir) if base_dir is not None else None,
+            "effect_key": effect_key,
+        }
+        if self.recorded_drafts is not None:
+            call["recorded_event_types"] = [
+                draft.event_type for draft in self.recorded_drafts
+            ]
+        self.calls.append(call)
         return self.results[capability_id].pop(0)
 
     async def aclose(self) -> None:
@@ -739,91 +1165,177 @@ def agent_vector_requests(result: AgentRunResult) -> list[dict[str, Any]]:
         )
         for request in values
     ]
-    return sorted(requests, key=lambda request: (request["position"], request["type"]))
+    return sorted(
+        requests,
+        key=lambda request: (request.get("position", -1), request["type"]),
+    )
+
+
+def agent_vector_registry(
+    capabilities: Iterable[Mapping[str, Any]],
+) -> CapabilityRegistry:
+    registry = CapabilityRegistry()
+    for capability in capabilities:
+        provider, name = str(capability["id"]).split(".", 1)
+        registry.register(
+            RegisteredCapability(
+                Capability(
+                    CapabilityId(provider, name),
+                    str(capability["description"]),
+                    cast(dict[str, Any], capability["input_schema"]),
+                    delivery_semantics=cast(
+                        DeliverySemantics | None,
+                        capability.get("delivery_semantics"),
+                    ),
+                ),
+                None,
+            )
+        )
+    return registry
+
+
+def agent_vector_events(
+    result: AgentRunResult,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    observations = []
+    durable_events = []
+    for draft in result.events:
+        if draft.event_type == "runtime.stream.chunk":
+            observations.append({"kind": "text_delta", "text": draft.payload["text"]})
+        elif draft.event_type == "runtime.status.update":
+            observations.append(
+                {"kind": "reasoning_delta", "text": draft.payload["text"]}
+            )
+        else:
+            durable_events.append(agent_vector_draft(draft))
+    return observations, durable_events
+
+
+def agent_vector_trace(
+    store: InMemoryStore,
+    *,
+    setup_object_ids: set[str],
+    setup_derivation_ids: set[str],
+) -> dict[str, list[dict[str, Any]]]:
+    objects = [
+        {"id": object_id, **asdict(obj)}
+        for object_id, obj in sorted(store.objects(), key=lambda row: row[0])
+        if object_id not in setup_object_ids
+    ]
+    derivations = [
+        {"id": derivation_id, **asdict(derivation)}
+        for derivation_id, derivation in sorted(store.derivations.items())
+        if derivation_id not in setup_derivation_ids
+    ]
+    return {"objects": objects, "derivations": derivations}
+
+
+async def run_python_agent_invocation(
+    vector: Mapping[str, Any],
+    *,
+    store: InMemoryStore,
+    registry: CapabilityRegistry,
+    content_workspace: zeta_content_transforms.ContentWorkspace | None,
+) -> tuple[
+    AgentRunResult,
+    bool,
+    str | None,
+    AgentVectorGateway,
+    AgentVectorToolExecutor,
+    deque[str],
+]:
+    invocation = vector["invocation"]
+    cancellation = threading.Event()
+    if vector["cancelled"]:
+        cancellation.set()
+    gateway = AgentVectorGateway(vector["model_script"], cancellation)
+    recorded_drafts = [] if vector.get("capture_recorded_events") is True else None
+    executor = AgentVectorToolExecutor(
+        vector["tool_results"],
+        recorded_drafts=recorded_drafts,
+    )
+    event_ids = deque(vector["event_ids"])
+    try:
+        result = await zeta_agent.run_agent_loop(
+            invocation["objective"],
+            invocation["timeline"],
+            zeta_agent.AgentConfig(
+                system_prompt=invocation["system_prompt"],
+                allowed_capabilities=tuple(invocation["allowed_capabilities"]),
+                max_turns=invocation["max_model_calls"],
+                model_name=invocation["model_name"],
+                tool_profile=invocation.get("tool_profile", "native"),
+                base_dir=Path(invocation["base_directory"]),
+                effect_scope=invocation.get("effect_scope"),
+            ),
+            context=invocation["context"],
+            event_sink=(
+                recorded_drafts.append if recorded_drafts is not None else None
+            ),
+            prompt_builder=zeta_context.PromptBuilder(store=store),
+            trace_store=store,
+            tool_registry=registry,
+            tool_executor=executor,
+            model_gateway=gateway,
+            cancellation_event=cancellation,
+            publishable_events=invocation.get("publishable_events"),
+            source_queue_item_id=invocation["source_queue_item_id"],
+            source_agent_id=invocation.get("source_agent_id"),
+            source_session_id=invocation.get("source_session_id"),
+            content_workspace=content_workspace,
+            environment=TEST_PROMPT_ENVIRONMENT,
+            event_id_factory=event_ids.popleft,
+            clock=lambda: 100.0,
+        )
+    except zeta_loop_cancellation.AgentRunAborted as exc:
+        return exc.result, True, exc.reason, gateway, executor, event_ids
+    return result, False, None, gateway, executor, event_ids
 
 
 async def python_agent_invocation_vectors() -> dict[str, Any]:
     cases = []
     for vector in agent_invocation_vector_inputs():
-        invocation = vector["invocation"]
-        registry = CapabilityRegistry()
-        for capability in vector["capabilities"]:
-            provider, name = capability["id"].split(".", 1)
-            registry.register(
-                RegisteredCapability(
-                    Capability(
-                        CapabilityId(provider, name),
-                        capability["description"],
-                        capability["input_schema"],
-                    ),
-                    None,
-                )
-            )
-        gateway = AgentVectorGateway(vector["model_script"])
-        executor = AgentVectorToolExecutor(vector["tool_results"])
         store = InMemoryStore()
-        event_ids = deque(vector["event_ids"])
-
-        cancellation = threading.Event()
-        if vector["cancelled"]:
-            cancellation.set()
-        aborted = False
-        abort_reason = None
-        try:
-            result = await zeta_agent.run_agent_loop(
-                invocation["objective"],
-                invocation["timeline"],
-                zeta_agent.AgentConfig(
-                    system_prompt=invocation["system_prompt"],
-                    allowed_capabilities=tuple(invocation["allowed_capabilities"]),
-                    max_turns=invocation["max_model_calls"],
-                    model_name=invocation["model_name"],
-                    base_dir=Path(invocation["base_directory"]),
-                ),
-                context=invocation["context"],
-                prompt_builder=zeta_context.PromptBuilder(store=store),
-                trace_store=store,
-                tool_registry=registry,
-                tool_executor=executor,
-                model_gateway=gateway,
-                cancellation_event=cancellation,
-                source_queue_item_id=invocation["source_queue_item_id"],
-                environment=TEST_PROMPT_ENVIRONMENT,
-                event_id_factory=event_ids.popleft,
-                clock=lambda: 100.0,
-            )
-        except zeta_loop_cancellation.AgentRunAborted as exc:
-            aborted = True
-            abort_reason = exc.reason
-            result = exc.result
-        observations = []
-        durable_events = []
-        for draft in result.events:
-            if draft.event_type == "runtime.stream.chunk":
-                observations.append(
-                    {"kind": "text_delta", "text": draft.payload["text"]}
-                )
-            elif draft.event_type == "runtime.status.update":
-                observations.append(
-                    {"kind": "reasoning_delta", "text": draft.payload["text"]}
-                )
-            else:
-                durable_events.append(agent_vector_draft(draft))
-        objects = [
-            {"id": object_id, **asdict(obj)}
-            for object_id, obj in sorted(store.objects(), key=lambda row: row[0])
-        ]
-        derivations = [
-            {"id": derivation_id, **asdict(derivation)}
-            for derivation_id, derivation in sorted(store.derivations.items())
-        ]
+        content_workspace = None
+        replacements: dict[str, str] = {}
+        setup_object_ids: set[str] = set()
+        setup_derivation_ids: set[str] = set()
+        content_setup = vector.get("content_setup")
+        if content_setup is not None:
+            (
+                content_workspace,
+                replacements,
+                setup_object_ids,
+                setup_derivation_ids,
+            ) = agent_vector_content_setup(content_setup, store)
+        resolved_vector = resolve_agent_vector_placeholders(vector, replacements)
+        registry = agent_vector_registry(resolved_vector["capabilities"])
+        (
+            result,
+            aborted,
+            abort_reason,
+            gateway,
+            executor,
+            event_ids,
+        ) = await run_python_agent_invocation(
+            resolved_vector,
+            store=store,
+            registry=registry,
+            content_workspace=content_workspace,
+        )
+        observations, durable_events = agent_vector_events(result)
         if event_ids:
             raise AssertionError(
-                f"unused event ids for {vector['name']}: {list(event_ids)}"
+                f"unused event ids for {resolved_vector['name']}: {list(event_ids)}"
             )
         cases.append(
             {
-                **vector,
+                **resolved_vector,
+                **(
+                    {"content_setup": content_setup}
+                    if content_setup is not None
+                    else {}
+                ),
                 "expected": {
                     "aborted": aborted,
                     "abort_reason": abort_reason,
@@ -840,7 +1352,11 @@ async def python_agent_invocation_vectors() -> dict[str, Any]:
                     "steps": [step.step for step in result.steps],
                     "model_call_count": len(gateway.inputs),
                     "executor_calls": executor.calls,
-                    "trace": {"objects": objects, "derivations": derivations},
+                    "trace": agent_vector_trace(
+                        store,
+                        setup_object_ids=setup_object_ids,
+                        setup_derivation_ids=setup_derivation_ids,
+                    ),
                 },
             }
         )

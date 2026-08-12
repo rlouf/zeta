@@ -9,6 +9,28 @@ use serde_json::{Map, Value};
 
 use crate::error::AgentError;
 
+mod chat_completions;
+mod http;
+mod responses;
+mod sse;
+
+#[cfg(test)]
+mod live_tests;
+
+#[cfg(test)]
+mod vector_tests;
+
+pub use chat_completions::{
+    chat_completions_request, decode_chat_completions_stream, http_error_detail,
+};
+pub use http::{
+    HttpModelGateway, HttpModelGatewayConfig, ModelHttpEndpoint, ModelTransportTimeouts,
+};
+pub use responses::{
+    codex_request_headers, decode_responses_stream, responses_request, CodexCredentials,
+};
+pub use sse::{model_stream_timeout, parse_sse_lines, ModelStreamTimeout, SseByteDecoder};
+
 /// Carries a model-ready request without provider transport details.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct ModelInput {
@@ -54,6 +76,15 @@ pub struct ModelOutput {
     pub telemetry: Map<String, Value>,
     /// Reports whether the provider emitted any text delta.
     pub streamed_content: bool,
+}
+
+/// Carries one reconstructed provider response and its transient deltas.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct DecodedModelStream {
+    /// Carries the provider response after all stream fragments are joined.
+    pub response: Map<String, Value>,
+    /// Preserves visible deltas in arrival order.
+    pub observations: Vec<Observation>,
 }
 
 /// Reports transient output without turning it into a durable event proposal.

@@ -198,6 +198,74 @@
       }
     },
     {
+      "name": "project-relative base directory",
+      "path": "agents/worker.md",
+      "source_utf8": "---\nname: Worker\ndescription: Works.\nbase_dir: notes/vault\n---\n",
+      "expected": {
+        "slug": "worker",
+        "name": "Worker",
+        "description": "Works.",
+        "instructions": "",
+        "source": "---\nname: Worker\ndescription: Works.\nbase_dir: notes/vault\n---\n",
+        "content_address": "b3:6d5ffa93e28d49d07337cc354ce702ac95b8d9fff3e6457b838ca80f1e1940da",
+        "enabled": true,
+        "session": "per-event",
+        "model": null,
+        "executor": {
+          "provider": "local",
+          "config": {}
+        },
+        "accepts": [],
+        "publishes": [],
+        "returns": [],
+        "skills": [],
+        "skills_inherit": true,
+        "tools": [],
+        "tools_inherit": true,
+        "schedules": [],
+        "retry": null,
+        "base_dir": "notes/vault",
+        "ingress": [],
+        "egress": [],
+        "locks": [],
+        "extensions": {}
+      }
+    },
+    {
+      "name": "tilde-prefixed relative base directory",
+      "path": "agents/worker.md",
+      "source_utf8": "---\nname: Worker\ndescription: Works.\nbase_dir: ~root/vault\n---\n",
+      "expected": {
+        "slug": "worker",
+        "name": "Worker",
+        "description": "Works.",
+        "instructions": "",
+        "source": "---\nname: Worker\ndescription: Works.\nbase_dir: ~root/vault\n---\n",
+        "content_address": "b3:d51668ea6e7b4f807f670eda78eed1e2bc20445c1e1913efe53b39ed355edfda",
+        "enabled": true,
+        "session": "per-event",
+        "model": null,
+        "executor": {
+          "provider": "local",
+          "config": {}
+        },
+        "accepts": [],
+        "publishes": [],
+        "returns": [],
+        "skills": [],
+        "skills_inherit": true,
+        "tools": [],
+        "tools_inherit": true,
+        "schedules": [],
+        "retry": null,
+        "base_dir": "~root/vault",
+        "ingress": [],
+        "egress": [],
+        "locks": [],
+        "extensions": {}
+      }
+    },
+    {
       "name": "unicode and CRLF",
       "path": "agents/unicode.md",
       "source_utf8": "---\r\nname: Résumé 🧭\r\ndescription: Répond en français.\r\nlabels:\r\n  café: 東京\r\n---\r\nRéponds “oui”.\r\n",
@@ -431,16 +499,6 @@
       "source_utf8": "---\nname: Worker\ndescription: Works.\nmetadata:\n  number: 18446744073709551616\n---\n"
     },
     {
-      "name": "relative base directory",
-      "path": "agents/worker.md",
-      "source_utf8": "---\nname: Worker\ndescription: Works.\nbase_dir: notes/vault\n---\n"
-    },
-    {
-      "name": "named home base directory",
-      "path": "agents/worker.md",
-      "source_utf8": "---\nname: Worker\ndescription: Works.\nbase_dir: ~root/vault\n---\n"
-    },
-    {
       "name": "custom YAML tag",
       "path": "agents/worker.md",
       "source_utf8": "---\nname: Worker\ndescription: Works.\nmetadata: !secret value\n---\n"
@@ -661,8 +719,8 @@
   "projects": {
     "language_neutral_contract": true,
     "fixture": "portable_project",
-    "expected_project_id": "project:b3:dbf4ad600cadfcd6f51c98ee8b714357926bc1da3fbd906f7b2f878bb396f6b6",
-    "expected_worker_execution_id": "execution_manifest:b3:f583c76734c191e8ed558992a8cd35e1064d5e6c61dc7f925ed756c12230bb03",
+    "expected_project_id": "project:b3:1ae998acedf3dae1aa8c1ebd3ed19c932355ea4db56e2d0c7dd35c69cc93d9ef",
+    "expected_worker_execution_id": "execution_manifest:b3:1676ca151895e1a96845af7418558884397e48f3375bc13c57a99cbcfb16779b",
     "excluded_fields": ["command", "callable", "source_path"]
   }
 }

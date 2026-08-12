@@ -1028,14 +1028,7 @@ fn take_base_dir(values: &mut Map<String, Value>) -> Result<Option<PathBuf>, Spe
             if value.trim().is_empty() {
                 return Err(invalid_field("base_dir", "expected a path string"));
             }
-            let base_dir = PathBuf::from(&value);
-            if !base_dir.is_absolute() && value != "~" && !value.starts_with("~/") {
-                return Err(invalid_field(
-                    "base_dir",
-                    "expected an absolute or home-relative path",
-                ));
-            }
-            Ok(Some(base_dir))
+            Ok(Some(PathBuf::from(value)))
         }
         Some(Value::Bool(_) | Value::Number(_) | Value::Array(_) | Value::Object(_)) => {
             Err(invalid_field("base_dir", "expected a path string"))

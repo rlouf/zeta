@@ -484,11 +484,11 @@ fn validate_agent_declaration(spec: &AgentSpec) -> Result<(), AuthoringError> {
                 "base directory must be UTF-8",
             ));
         };
-        if !base_dir.starts_with('/') && base_dir != "~" && !base_dir.starts_with("~/") {
+        if base_dir.trim().is_empty() {
             return Err(invalid_agent(
                 spec,
                 Some("base_dir"),
-                "base directory must be absolute or home-relative",
+                "base directory must be non-empty",
             ));
         }
     }
@@ -614,6 +614,22 @@ fn validate_model_selection(model: &ModelSelectionSpec) -> Result<(), AuthoringE
                 format!("model selection {field} must be non-empty"),
             ));
         }
+    }
+    if model.api != "chat-completions" && model.api != "codex-responses" {
+        return Err(AuthoringError::new(
+            AuthoringErrorKind::InvalidModel,
+            Some(&model.profile),
+            Some("api"),
+            format!("unsupported model API {:?}", model.api),
+        ));
+    }
+    if model.tool_profile != "native" && model.tool_profile != "codex" {
+        return Err(AuthoringError::new(
+            AuthoringErrorKind::InvalidModel,
+            Some(&model.profile),
+            Some("tool_profile"),
+            format!("unsupported model tool profile {:?}", model.tool_profile),
+        ));
     }
     Ok(())
 }

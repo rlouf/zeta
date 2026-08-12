@@ -629,10 +629,6 @@ fn nested_declarations_reject_unsupported_fields_and_values() {
             b"---\nname: Worker\ndescription: Works.\npublishes:\n  - event: work.completed\n    filter: {}\n---\n",
             "publishes",
         ),
-        (
-            b"---\nname: Worker\ndescription: Works.\nbase_dir: relative/path\n---\n",
-            "base_dir",
-        ),
     ];
 
     for (source, expected_field) in cases {
@@ -719,6 +715,7 @@ fn every_core_declaration_rejects_the_wrong_shape() {
         ("retry:\n  max_attempts: true\n", "retry"),
         ("retry:\n  backoff_seconds: -1\n", "retry"),
         ("retry:\n  jitter: true\n", "retry"),
+        ("base_dir: ''\n", "base_dir"),
         ("base_dir: false\n", "base_dir"),
     ];
 
@@ -731,15 +728,24 @@ fn every_core_declaration_rejects_the_wrong_shape() {
 }
 
 #[test]
-fn session_templates_and_home_relative_base_directories_are_preserved() {
-    let spec = parse_agent(
+fn session_templates_and_authored_base_directories_are_preserved() {
+    let home_relative = parse_agent(
         "support",
         b"---\nname: Support\ndescription: Helps.\nsession: 'chat:{chat_id}'\nbase_dir: ~/vaults/CEO\n---\nHelp.\n",
     )
     .unwrap();
+    let project_relative = parse_agent(
+        "support",
+        b"---\nname: Support\ndescription: Helps.\nbase_dir: worktrees/review\n---\nHelp.\n",
+    )
+    .unwrap();
 
-    assert_eq!(spec.session, "chat:{chat_id}");
-    assert_eq!(spec.base_dir, Some(PathBuf::from("~/vaults/CEO")));
+    assert_eq!(home_relative.session, "chat:{chat_id}");
+    assert_eq!(home_relative.base_dir, Some(PathBuf::from("~/vaults/CEO")));
+    assert_eq!(
+        project_relative.base_dir,
+        Some(PathBuf::from("worktrees/review"))
+    );
 }
 
 #[test]
@@ -1041,6 +1047,18 @@ fn compiler_capability(
     }
 }
 
+fn compiler_model_selection(api: &str, tool_profile: &str) -> zeta_authoring::ModelSelectionSpec {
+    zeta_authoring::ModelSelectionSpec {
+        profile: "native".to_owned(),
+        model: "test-model".to_owned(),
+        url: "https://model.invalid/v1".to_owned(),
+        thinking: Some("medium".to_owned()),
+        api: api.to_owned(),
+        tool_profile: tool_profile.to_owned(),
+        implementation: compiler_fingerprint("model-adapter"),
+    }
+}
+
 fn compiler_agent(slug: &str, frontmatter: &str) -> zeta_authoring::AgentSpec {
     let source = format!(
         "---\nname: {slug}\ndescription: Compiles {slug}.\n{frontmatter}---\n{{{{ event.payload }}}}\n"
@@ -1188,6 +1206,38 @@ fn project_compilation_rejects_ambiguous_aliases_and_invalid_typed_declarations(
     invalid_agent.locks.push(String::new());
     let error = zeta_authoring::compile_project(compiler_input(vec![invalid_agent])).unwrap_err();
     assert_eq!(error.kind(), AuthoringErrorKind::InvalidAgent);
+
+    let mut empty_base_dir = compiler_agent("worker", "");
+    empty_base_dir.base_dir = Some(PathBuf::new());
+    let error = zeta_authoring::compile_project(compiler_input(vec![empty_base_dir])).unwrap_err();
+    assert_eq!(error.kind(), AuthoringErrorKind::InvalidAgent);
+    assert_eq!(error.field(), Some("base_dir"));
+
+    #[cfg(unix)]
+    {
+        use std::ffi::OsString;
+        use std::os::unix::ffi::OsStringExt;
+
+        let mut non_utf8_base_dir = compiler_agent("worker", "");
+        non_utf8_base_dir.base_dir = Some(PathBuf::from(OsString::from_vec(vec![0xff])));
+        let error =
+            zeta_authoring::compile_project(compiler_input(vec![non_utf8_base_dir])).unwrap_err();
+        assert_eq!(error.kind(), AuthoringErrorKind::InvalidAgent);
+        assert_eq!(error.field(), Some("base_dir"));
+    }
+}
+
+#[test]
+fn project_compilation_preserves_relative_base_directories_in_manifests() {
+    let agent = compiler_agent("worker", "base_dir: worktrees/review\n");
+
+    let project = zeta_authoring::compile_project(compiler_input(vec![agent])).unwrap();
+    let manifest = zeta_authoring::project_manifest(&project).unwrap();
+
+    assert_eq!(
+        manifest.agents["worker"].base_dir,
+        Some(PathBuf::from("worktrees/review"))
+    );
 }
 
 #[test]
@@ -1229,6 +1279,52 @@ fn project_compilation_rejects_unknown_reserved_and_cross_owner_references() {
     )];
     let error = zeta_authoring::compile_project(cross_owner).unwrap_err();
     assert_eq!(error.kind(), AuthoringErrorKind::UnknownTool);
+}
+
+#[test]
+fn project_compilation_accepts_exact_model_vocabulary() {
+    for api in ["chat-completions", "codex-responses"] {
+        for tool_profile in ["native", "codex"] {
+            let mut input = compiler_input(Vec::new());
+            input.model = Some(compiler_model_selection(api, tool_profile));
+
+            zeta_authoring::compile_project(input).unwrap();
+        }
+    }
+}
+
+#[test]
+fn project_compilation_rejects_other_model_api_spellings() {
+    for api in [
+        "responses",
+        "chat_completions",
+        "codex_responses",
+        "Chat-Completions",
+        "codex-responses ",
+    ] {
+        let mut input = compiler_input(Vec::new());
+        input.model = Some(compiler_model_selection(api, "native"));
+
+        let error = zeta_authoring::compile_project(input).unwrap_err();
+        assert_eq!(error.kind(), AuthoringErrorKind::InvalidModel, "{api}");
+        assert_eq!(error.field(), Some("api"), "{api}");
+    }
+}
+
+#[test]
+fn project_compilation_rejects_other_tool_profile_spellings() {
+    for tool_profile in ["default", "openai", "Native", "codex-tools", "native "] {
+        let mut input = compiler_input(Vec::new());
+        input.model = Some(compiler_model_selection("chat-completions", tool_profile));
+
+        let error = zeta_authoring::compile_project(input).unwrap_err();
+        assert_eq!(
+            error.kind(),
+            AuthoringErrorKind::InvalidModel,
+            "{tool_profile}"
+        );
+        assert_eq!(error.field(), Some("tool_profile"), "{tool_profile}");
+    }
 }
 
 #[test]
@@ -1316,15 +1412,7 @@ fn manifest_project_input(reverse: bool) -> zeta_authoring::AgentProjectInput {
     input.skill_resources =
         vec![zeta_authoring::SkillResource::new("review", b"Review carefully.\n").unwrap()];
     input.capabilities = vec![compiler_capability("native.read", "read", None)];
-    input.model = Some(zeta_authoring::ModelSelectionSpec {
-        profile: "native".to_owned(),
-        model: "test-model".to_owned(),
-        url: "https://model.invalid/v1".to_owned(),
-        thinking: Some("medium".to_owned()),
-        api: "responses".to_owned(),
-        tool_profile: "native".to_owned(),
-        implementation: compiler_fingerprint("model-adapter"),
-    });
+    input.model = Some(compiler_model_selection("codex-responses", "native"));
     input
 }
 

@@ -6,7 +6,7 @@ use serde_json::{Map, Value};
 use zeta_journal::Event;
 
 use super::journal::{
-    append_in_transaction, entry_by_field, same_lifecycle_intention, same_logical_event,
+    append_lifecycle_candidate, entry_by_field, same_lifecycle_intention, same_logical_event,
     validate_event_identity,
 };
 use super::projection::index_event;
@@ -84,7 +84,7 @@ impl Dispatch {
         for event in lifecycle {
             validate_event_identity(&event)?;
             let candidate = event.clone();
-            let outcome = append_in_transaction(&transaction, event)?;
+            let outcome = append_lifecycle_candidate(&transaction, event)?;
             if !outcome.inserted && !same_logical_event(&candidate, &outcome.event) {
                 return Err(DispatchError::RuntimeEventIdentityCollision {
                     event_id: candidate.id,

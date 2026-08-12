@@ -11,7 +11,7 @@
           "z": 1,
           "a": "root"
         },
-        "idempotency_key": "task:α",
+        "idempotency_key": "task:\u03b1",
         "caused_by": null,
         "session_id": "session/shared",
         "run_id": "run_1",
@@ -34,7 +34,7 @@
         "payload": {
           "ok": true
         },
-        "idempotency_key": "task:α:done",
+        "idempotency_key": "task:\u03b1:done",
         "caused_by": "evt_00000000000000000000000000000101",
         "session_id": "session/shared",
         "run_id": "run_1",
@@ -170,9 +170,10 @@
         "type": "conflicting.event",
         "source": "retry",
         "payload": {
-          "different": true
+          "z": 1,
+          "a": "root"
         },
-        "idempotency_key": "task:α:done",
+        "idempotency_key": "task:\u03b1:done",
         "caused_by": null,
         "session_id": null,
         "run_id": null,
@@ -187,6 +188,26 @@
       }
     },
     {
+      "name": "duplicate-id-divergent-payload",
+      "event": {
+        "id": "evt_00000000000000000000000000000101",
+        "type": "conflicting.event",
+        "source": "retry",
+        "payload": {
+          "different": true
+        },
+        "idempotency_key": "task:\u03b1:done",
+        "caused_by": null,
+        "session_id": null,
+        "run_id": null,
+        "turn_id": null,
+        "timestamp_ms": 1786422001004
+      },
+      "expected": {
+        "error": "duplicate_id_payload_mismatch"
+      }
+    },
+    {
       "name": "duplicate-idempotency-key",
       "event": {
         "id": "evt_00000000000000000000000000000199",
@@ -195,7 +216,7 @@
         "payload": {
           "different": "again"
         },
-        "idempotency_key": "task:α:done",
+        "idempotency_key": "task:\u03b1:done",
         "caused_by": null,
         "session_id": null,
         "run_id": null,

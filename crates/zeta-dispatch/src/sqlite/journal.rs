@@ -188,13 +188,33 @@ pub(super) fn same_lifecycle_intention(candidate: &Event, retained: &Event) -> b
         && candidate.turn_id == retained.turn_id
 }
 
+/// Appends a runtime lifecycle candidate, classifying divergent id
+/// duplicates as identity collisions.
+///
+/// Every lifecycle path already treated a payload difference under a reused
+/// id as a collision, so the journal-level mismatch keeps that shape instead
+/// of surfacing as a bare append failure.
+pub(super) fn append_lifecycle_candidate(
+    transaction: &Transaction<'_>,
+    event: Event,
+) -> Result<AppendOutcome, DispatchError> {
+    let event_id = event.id.clone();
+    match append_in_transaction(transaction, event) {
+        Ok(outcome) => Ok(outcome),
+        Err(DispatchError::Append(AppendError::DuplicateIdPayloadMismatch)) => {
+            Err(DispatchError::RuntimeEventIdentityCollision { event_id })
+        }
+        Err(error) => Err(error),
+    }
+}
+
 pub(super) fn append_runtime_event(
     transaction: &Transaction<'_>,
     event: Event,
 ) -> Result<AppendOutcome, DispatchError> {
     validate_event_identity(&event)?;
     let candidate = event.clone();
-    let outcome = append_in_transaction(transaction, event)?;
+    let outcome = append_lifecycle_candidate(transaction, event)?;
     if !outcome.inserted && !same_lifecycle_intention(&candidate, &outcome.event) {
         return Err(DispatchError::RuntimeEventIdentityCollision {
             event_id: candidate.id,

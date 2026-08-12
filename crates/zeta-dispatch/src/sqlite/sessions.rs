@@ -7,7 +7,7 @@ use zeta_journal::Event;
 
 use super::attempts::load_attempts;
 use super::journal::{
-    append_in_transaction, append_runtime_event, entry_by_field, same_lifecycle_intention,
+    append_lifecycle_candidate, append_runtime_event, entry_by_field, same_lifecycle_intention,
     validate_distinct_runtime_identities, validate_event_identity,
 };
 use super::projection::{index_event, load_queue_items};
@@ -116,7 +116,7 @@ impl Dispatch {
         let (requested, requested_inserted) = match retained {
             Some(retained) => (retained, false),
             None => {
-                let outcome = append_in_transaction(&transaction, candidate)?;
+                let outcome = append_lifecycle_candidate(&transaction, candidate)?;
                 if !outcome.inserted {
                     return Err(DispatchError::RuntimeEventIdentityCollision {
                         event_id: identities.requested.id().to_owned(),

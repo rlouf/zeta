@@ -104,8 +104,13 @@ def test_current_memory_store_matches_journal_operation_vectors() -> None:
     store = MemoryEventStore()
     head = None
     for append in document["appends"]:
-        outcome = store.append(_event_from_mapping(append["event"]))
         expected = append["expected"]
+        if "error" in expected:
+            with pytest.raises(journal_types.AppendError) as failure:
+                store.append(_event_from_mapping(append["event"]))
+            assert failure.value.reason == expected["error"], append["name"]
+            continue
+        outcome = store.append(_event_from_mapping(append["event"]))
         assert outcome.inserted is expected["inserted"], append["name"]
         assert outcome.event.id == expected["returned_id"], append["name"]
         assert outcome.event.cursor == expected["cursor"], append["name"]
@@ -325,7 +330,9 @@ def test_filter_rejects_invalid_limits(limit: int) -> None:
         pytest.param(lambda: SqliteEventStore(":memory:"), id="sqlite"),
     ],
 )
-def test_stores_validate_new_events_but_ignore_duplicate_content(store_factory) -> None:
+def test_stores_reject_divergent_id_duplicates_but_ignore_key_duplicate_content(
+    store_factory,
+) -> None:
     store = store_factory()
     event = Event(
         id="evt_valid",
@@ -340,10 +347,15 @@ def test_stores_validate_new_events_but_ignore_duplicate_content(store_factory) 
         timestamp_ms=1,
     )
     inserted = store.append(event)
-    duplicate = store.append(replace(event, payload={"value": float("nan")}))
+    duplicate = store.append(replace(event))
     assert inserted.inserted
     assert not duplicate.inserted
     assert duplicate.event == inserted.event
+    with pytest.raises(journal_types.AppendError) as failure:
+        store.append(replace(event, payload={"value": 2}))
+    assert failure.value.reason == "duplicate_id_payload_mismatch"
+    with pytest.raises(ValueError):
+        store.append(replace(event, payload={"value": float("nan")}))
     accepted_duplicate = store.accept(
         DraftEvent(
             event_type="valid.event",

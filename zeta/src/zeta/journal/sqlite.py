@@ -16,7 +16,12 @@ from typing import Any, Protocol
 
 from zeta.events import DraftEvent, Event, json_native_payload
 from zeta.journal.store import Filter
-from zeta.journal.types import AppendOutcome, validate_event, validate_event_identity
+from zeta.journal.types import (
+    AppendOutcome,
+    require_id_duplicate_payload_match,
+    validate_event,
+    validate_event_identity,
+)
 from zeta.paths import resolve_state_dir
 from zeta.substrate.objects import Derivation, Object
 from zeta.substrate.sqlite import SqliteObjectStore, sqlite_read_only_uri
@@ -628,7 +633,12 @@ class SqliteEventStore:
                     """,
                     (event.id,),
                 ).fetchone()
-        return _row_to_event(row) if row is not None else None
+        if row is None:
+            return None
+        duplicate = _row_to_event(row)
+        if duplicate.id == event.id:
+            require_id_duplicate_payload_match(event, duplicate)
+        return duplicate
 
 
 def event_store_path(root: Path | None = None) -> Path:

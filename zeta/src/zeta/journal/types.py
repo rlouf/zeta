@@ -13,7 +13,7 @@ from enum import StrEnum
 from typing import Any, Protocol
 
 from zeta import addresses
-from zeta.events import DraftEvent, Event
+from zeta.events import DraftEvent, Event, json_native_payload
 
 TURN_EVENT_COMPLETED = "zeta.turn.completed"
 TURN_EVENT_FAILED = "zeta.turn.failed"
@@ -63,6 +63,35 @@ class AppendOutcome:
 
     event: Event
     inserted: bool
+
+
+class AppendError(ValueError):
+    """Append rejected with a stable machine-readable reason.
+
+    Mirrors the Rust journal's append taxonomy so conformance vectors can pin
+    failures by reason across implementations.
+    """
+
+    def __init__(self, reason: str, event_id: str) -> None:
+        self.reason = reason
+        self.event_id = event_id
+        super().__init__(f"{reason}: event {event_id}")
+
+
+def require_id_duplicate_payload_match(candidate: Event, stored: Event) -> None:
+    """Reject id duplicates whose payload diverges from the retained event.
+
+    An id names one immutable event, so a divergent candidate is a caller bug
+    that silent duplicate resolution would turn into data loss. Idempotency-key
+    duplicates are deliberately not compared: the key exists to absorb retries
+    whose payloads may legitimately differ.
+    """
+    candidate_bytes = addresses.canonical_json_bytes(
+        json_native_payload(candidate.payload)
+    )
+    stored_bytes = addresses.canonical_json_bytes(json_native_payload(stored.payload))
+    if candidate_bytes != stored_bytes:
+        raise AppendError("duplicate_id_payload_mismatch", candidate.id)
 
 
 @dataclass(frozen=True)

@@ -58,8 +58,15 @@ fn python_operation_vectors_replay_exactly() {
 
     for append in document["appends"].as_array().unwrap() {
         let event: Event = serde_json::from_value(append["event"].clone()).unwrap();
-        let outcome = journal.append(event).unwrap();
         let expected = &append["expected"];
+        if let Some(reason) = expected["error"].as_str() {
+            let head = journal.head();
+            let error = journal.append(event).unwrap_err();
+            assert_eq!(error.reason(), reason, "{}", append["name"]);
+            assert_eq!(journal.head(), head, "{}", append["name"]);
+            continue;
+        }
+        let outcome = journal.append(event).unwrap();
         assert_eq!(outcome.inserted, expected["inserted"].as_bool().unwrap());
         assert_eq!(outcome.event.id, expected["returned_id"]);
         assert_eq!(

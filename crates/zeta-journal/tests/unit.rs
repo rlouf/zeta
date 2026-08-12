@@ -145,12 +145,38 @@ fn new_events_require_identity_fields_and_a_canonical_payload() {
 }
 
 #[test]
-fn duplicate_candidates_are_resolved_before_content_validation() {
+fn id_duplicates_must_match_the_retained_payload() {
     let mut journal = MemoryJournal::new();
     let inserted = journal.append(event("evt_1")).unwrap();
     let head = journal.head();
 
-    let mut duplicate = event("evt_1");
+    let duplicate = journal.append(event("evt_1")).unwrap();
+    assert!(!duplicate.inserted);
+    assert_eq!(duplicate.event, inserted.event);
+
+    let mut divergent = event("evt_1");
+    divergent.payload = fields(json!({"value": 2}));
+    assert_eq!(
+        journal.append(divergent),
+        Err(AppendError::DuplicateIdPayloadMismatch)
+    );
+
+    let mut unencodable = event("evt_1");
+    unencodable.payload = serde_json::from_str("{\"value\":18446744073709551616}").unwrap();
+    let error = journal.append(unencodable).unwrap_err();
+    assert_eq!(error.reason(), "payload_encoding");
+
+    assert_eq!(journal.head(), head);
+    assert_eq!(journal.entries().len(), 1);
+}
+
+#[test]
+fn key_duplicates_are_resolved_before_content_validation() {
+    let mut journal = MemoryJournal::new();
+    let inserted = journal.append(event("evt_1")).unwrap();
+    let head = journal.head();
+
+    let mut duplicate = event("evt_2");
     duplicate.payload = serde_json::from_str("{\"value\":18446744073709551616}").unwrap();
     let outcome = journal.append(duplicate).unwrap();
 

@@ -4,7 +4,7 @@ use std::collections::{HashMap, HashSet};
 
 use zeta_substrate::Hash;
 
-use crate::chain::{validate_identity_fields, JournalEntry};
+use crate::chain::{canonical_payload, payload_address, validate_identity_fields, JournalEntry};
 use crate::error::AppendError;
 use crate::event::{AppendOutcome, Event, Filter};
 
@@ -50,8 +50,11 @@ impl MemoryJournal {
     /// Appends a new event or returns the existing id-first duplicate.
     ///
     /// Required identity fields are validated before duplicate resolution.
-    /// Payload encoding is validated only for a new event because duplicate
-    /// candidate content has no effect on the retained journal.
+    /// An id duplicate must carry the retained payload because an id names
+    /// one immutable event; a divergent payload is a caller bug surfaced as
+    /// [`AppendError::DuplicateIdPayloadMismatch`] instead of silent loss.
+    /// An idempotency-key duplicate is never compared because the key exists
+    /// to absorb retries whose payloads may legitimately differ.
     ///
     /// # Examples
     ///
@@ -76,7 +79,8 @@ impl MemoryJournal {
     /// # Errors
     ///
     /// Returns [`AppendError`] when a required identity field is empty, the
-    /// new payload is not canonicalizable, or the cursor range is exhausted.
+    /// candidate payload is not canonicalizable, an id duplicate diverges
+    /// from the retained payload, or the cursor range is exhausted.
     pub fn append(&mut self, event: Event) -> Result<AppendOutcome, AppendError> {
         validate_identity_fields(&event)?;
         let Event {
@@ -92,19 +96,25 @@ impl MemoryJournal {
             timestamp_ms: _timestamp_ms,
             cursor: _cursor,
         } = &event;
-        let duplicate_index = match self.by_id.get(id) {
-            Some(duplicate_index) => Some(*duplicate_index),
-            None => match idempotency_key {
-                Some(idempotency_key) => self.by_idempotency_key.get(idempotency_key).copied(),
-                None => None,
-            },
-        };
-        if let Some(duplicate_index) = duplicate_index {
+        if let Some(duplicate_index) = self.by_id.get(id).copied() {
             let duplicate = &self.entries[duplicate_index];
+            let payload = canonical_payload(&event.payload).map_err(AppendError::PayloadEncoding)?;
+            if payload_address(&payload) != duplicate.payload_address {
+                return Err(AppendError::DuplicateIdPayloadMismatch);
+            }
             return Ok(AppendOutcome {
                 event: duplicate.event.clone(),
                 inserted: false,
             });
+        }
+        if let Some(idempotency_key) = idempotency_key {
+            if let Some(duplicate_index) = self.by_idempotency_key.get(idempotency_key).copied() {
+                let duplicate = &self.entries[duplicate_index];
+                return Ok(AppendOutcome {
+                    event: duplicate.event.clone(),
+                    inserted: false,
+                });
+            }
         }
 
         let cursor = self.next_cursor;

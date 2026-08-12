@@ -8,7 +8,12 @@ from __future__ import annotations
 
 from zeta.events import DraftEvent, Event, json_native_payload
 from zeta.journal.store import Filter
-from zeta.journal.types import AppendOutcome, validate_event, validate_event_identity
+from zeta.journal.types import (
+    AppendOutcome,
+    require_id_duplicate_payload_match,
+    validate_event,
+    validate_event_identity,
+)
 from zeta.substrate.memory import InMemoryStore
 
 __all__ = ["InMemoryStore", "MemoryEventStore"]
@@ -104,6 +109,7 @@ class MemoryEventStore:
     def _duplicate_for(self, event: Event) -> Event | None:
         duplicate = self._by_id.get(event.id)
         if duplicate is not None:
+            require_id_duplicate_payload_match(event, duplicate)
             return duplicate
         if event.idempotency_key is None:
             return None

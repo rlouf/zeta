@@ -711,8 +711,18 @@ fn sqlite_journal_replays_normative_operations() {
 
     for append in document["appends"].as_array().unwrap() {
         let event: Event = serde_json::from_value(append["event"].clone()).unwrap();
-        let outcome = dispatch.append_event(event).unwrap();
         let expected = &append["expected"];
+        if let Some(reason) = expected["error"].as_str() {
+            let head = dispatch.head().unwrap();
+            let error = dispatch.append_event(event).unwrap_err();
+            let DispatchError::Append(error) = error else {
+                panic!("expected append error, got {error:?}");
+            };
+            assert_eq!(error.reason(), reason, "{}", append["name"]);
+            assert_eq!(dispatch.head().unwrap(), head, "{}", append["name"]);
+            continue;
+        }
+        let outcome = dispatch.append_event(event).unwrap();
         assert_eq!(outcome.inserted, expected["inserted"].as_bool().unwrap());
         assert_eq!(outcome.event.id, expected["returned_id"]);
         assert_eq!(outcome.event.cursor, expected["cursor"].as_u64());

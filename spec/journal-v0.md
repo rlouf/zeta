@@ -133,10 +133,15 @@ A conforming implementation MUST:
 1. Require non-empty `id`, `type`, and `source` strings.
 2. Look up the candidate `id`.
 3. If no id matches and `idempotency_key` is non-null, look it up globally.
-4. On a match, return the existing event with `inserted = false`. An id match
-   takes precedence when the candidate id and key name different events. The
-   candidate payload and remaining metadata are not compared. Step 1 still
-   applies to every attempt before duplicate resolution.
+4. On an id match, canonicalize the candidate payload and require its payload
+   address to equal the retained entry's; a divergent candidate MUST fail with
+   stable reason `duplicate_id_payload_mismatch` because an id names one
+   immutable event. On a matching id or on a key match, return the existing
+   event with `inserted = false`. An id match takes precedence when the
+   candidate id and key name different events. A key-matched candidate's
+   payload and remaining metadata are not compared, so the key can absorb
+   retries whose payloads legitimately differ. Step 1 still applies to every
+   attempt before duplicate resolution.
 5. For a new event, validate and canonicalize the payload, read the current
    head, assign a cursor greater than every prior cursor, and compute §3–4.
 6. Publish the Event, identity values, and new head atomically, then return the

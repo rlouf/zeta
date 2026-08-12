@@ -26,6 +26,8 @@ pub enum AppendError {
     CursorExhausted,
     /// The payload falls outside the canonical JSON value domain.
     PayloadEncoding(CanonicalJsonError),
+    /// The candidate reuses a stored event id with a different payload.
+    DuplicateIdPayloadMismatch,
 }
 
 impl AppendError {
@@ -44,6 +46,7 @@ impl AppendError {
             AppendError::CursorZero => "cursor_zero",
             AppendError::CursorExhausted => "cursor_exhausted",
             AppendError::PayloadEncoding(_) => "payload_encoding",
+            AppendError::DuplicateIdPayloadMismatch => "duplicate_id_payload_mismatch",
         }
     }
 }
@@ -59,6 +62,9 @@ impl fmt::Display for AppendError {
             AppendError::CursorZero => write!(formatter, "event cursor must be positive"),
             AppendError::CursorExhausted => write!(formatter, "event cursor range is exhausted"),
             AppendError::PayloadEncoding(error) => error.fmt(formatter),
+            AppendError::DuplicateIdPayloadMismatch => {
+                write!(formatter, "duplicate event id carries a different payload")
+            }
         }
     }
 }
@@ -72,6 +78,7 @@ impl std::error::Error for AppendError {
             AppendError::CursorZero => None,
             AppendError::CursorExhausted => None,
             AppendError::PayloadEncoding(error) => Some(error),
+            AppendError::DuplicateIdPayloadMismatch => None,
         }
     }
 }

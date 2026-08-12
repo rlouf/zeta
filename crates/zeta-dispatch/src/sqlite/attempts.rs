@@ -9,7 +9,7 @@ use zeta_journal::Event;
 use super::cancellation::live_cancelled_events;
 use super::coordination::{claim_is_current_in, release_claim_in_transaction};
 use super::journal::{
-    append_in_transaction, append_runtime_event, entry_by_field, same_lifecycle_intention,
+    append_lifecycle_candidate, append_runtime_event, entry_by_field, same_lifecycle_intention,
     validate_distinct_runtime_identities, validate_event_identity,
 };
 use super::projection::{index_event, load_queue_item};
@@ -191,7 +191,7 @@ impl Dispatch {
         for event in [queue_event, attempt_event] {
             validate_event_identity(&event)?;
             let candidate = event.clone();
-            let outcome = append_in_transaction(&transaction, event)?;
+            let outcome = append_lifecycle_candidate(&transaction, event)?;
             if !outcome.inserted && !same_lifecycle_intention(&candidate, &outcome.event) {
                 return Err(DispatchError::RuntimeEventIdentityCollision {
                     event_id: candidate.id,
@@ -328,7 +328,7 @@ impl Dispatch {
         for event in [failed, disposition] {
             validate_event_identity(&event)?;
             let candidate = event.clone();
-            let outcome = append_in_transaction(&transaction, event)?;
+            let outcome = append_lifecycle_candidate(&transaction, event)?;
             if !outcome.inserted && !same_lifecycle_intention(&candidate, &outcome.event) {
                 return Err(DispatchError::RuntimeEventIdentityCollision {
                     event_id: candidate.id,

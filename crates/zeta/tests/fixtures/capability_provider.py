@@ -4,7 +4,6 @@ import subprocess
 import sys
 import time
 
-
 marker = pathlib.Path(sys.argv[1])
 run_number = int(marker.read_text()) + 1 if marker.exists() else 1
 marker.write_text(str(run_number))

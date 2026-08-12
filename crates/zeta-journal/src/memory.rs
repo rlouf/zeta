@@ -98,7 +98,8 @@ impl MemoryJournal {
         } = &event;
         if let Some(duplicate_index) = self.by_id.get(id).copied() {
             let duplicate = &self.entries[duplicate_index];
-            let payload = canonical_payload(&event.payload).map_err(AppendError::PayloadEncoding)?;
+            let payload =
+                canonical_payload(&event.payload).map_err(AppendError::PayloadEncoding)?;
             if payload_address(&payload) != duplicate.payload_address {
                 return Err(AppendError::DuplicateIdPayloadMismatch);
             }

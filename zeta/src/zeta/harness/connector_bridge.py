@@ -58,7 +58,7 @@ class ConnectorCalls:
         return await peer.call(
             operation,
             {"payload": payload, "options": options},
-            effect_key,
+            effect_key=effect_key,
         )
 
     async def _peer_for(self, connector: ConnectorManifest) -> SubprocessPeer:

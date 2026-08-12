@@ -813,8 +813,12 @@ MANIFEST: dict[str, Any] = {
 def run() -> None:
     client = telegram_client_from_env()
 
-    async def send(payload: dict[str, Any], effect_key: str) -> dict[str, Any]:
-        del effect_key  # sendMessage has no dedup key; semantics say so.
+    async def send(
+        payload: dict[str, Any],
+        base_dir: str | None,
+        effect_key: str | None,
+    ) -> dict[str, Any]:
+        del base_dir, effect_key  # sendMessage has no dedup key; semantics say so.
         return await send_telegram_message(client, payload.get("payload", {}))
 
     run_peer(

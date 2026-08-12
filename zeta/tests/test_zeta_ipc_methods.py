@@ -24,7 +24,8 @@ PROVIDER_CHILD = """
     from zeta.ipc.client import EventType, ProviderError, SourceEvent, run_peer
 
 
-    async def deliver(input_value, effect_key):
+    async def deliver(input_value, base_dir, effect_key):
+        del base_dir
         if input_value.get("boom"):
             raise ProviderError("provider_rejected", "provider rejected", retryable=True)
         if input_value.get("slow"):
@@ -112,6 +113,18 @@ async def test_provider_methods_return_jsonrpc_results_and_errors(tmp_path) -> N
     await send(
         process,
         request(
+            "runtime-read",
+            "note.deliver",
+            {"input": {"text": "read"}, "base_dir": "/workspace/zeta"},
+        ),
+    )
+    assert await read_message(reader) == success_response(
+        "runtime-read", {"delivered": "read", "effect_key": None}
+    )
+
+    await send(
+        process,
+        request(
             "runtime-2",
             "note.deliver",
             {"input": {"boom": True}, "effect_key": "k-2"},
@@ -150,21 +163,27 @@ async def test_subprocess_peer_calls_provider_methods_out_of_order(tmp_path) -> 
             assert asyncio.get_running_loop().time() < deadline
             await asyncio.sleep(0.02)
         slow = asyncio.create_task(
-            peer.call("note.deliver", {"text": "slow", "slow": True}, "k-1")
+            peer.call(
+                "note.deliver",
+                {"text": "slow", "slow": True},
+                effect_key="k-1",
+            )
         )
-        fast = asyncio.create_task(peer.call("note.deliver", {"text": "fast"}, "k-2"))
+        fast = asyncio.create_task(
+            peer.call("note.deliver", {"text": "fast"}, effect_key="k-2")
+        )
         fast_result = await fast
         slow_result = await slow
         assert fast_result["delivered"] == "fast"
         assert slow_result["delivered"] == "slow"
         try:
-            await peer.call("note.deliver", {"boom": True}, "k-3")
+            await peer.call("note.deliver", {"boom": True}, effect_key="k-3")
             raise AssertionError("expected ProviderCallError")
         except ProviderCallError as error:
             assert error.code == "provider_rejected"
             assert error.retryable
         try:
-            await peer.call("undeclared.method", {}, "k-4")
+            await peer.call("undeclared.method", {}, effect_key="k-4")
             raise AssertionError("expected ProviderCallError")
         except ProviderCallError as error:
             assert error.code == "method_not_found"
@@ -188,7 +207,7 @@ async def test_calls_to_a_dead_peer_fail_as_retryable(tmp_path) -> None:
     async with peer:
         assert [publication async for publication in peer.publications()] == []
         try:
-            await peer.call("anything", {}, "k-1")
+            await peer.call("anything", {}, effect_key="k-1")
             raise AssertionError("expected ProviderCallError")
         except ProviderCallError as error:
             assert error.retryable

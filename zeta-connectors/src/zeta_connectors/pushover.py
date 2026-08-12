@@ -269,12 +269,20 @@ MANIFEST: dict[str, Any] = {
 def run() -> None:
     client = pushover_client_from_env()
 
-    async def send(payload: dict[str, Any], effect_key: str) -> dict[str, Any]:
-        del effect_key  # Pushover offers no dedup key; semantics say so.
+    async def send(
+        payload: dict[str, Any],
+        base_dir: str | None,
+        effect_key: str | None,
+    ) -> dict[str, Any]:
+        del base_dir, effect_key  # Pushover offers no dedup key; semantics say so.
         return await send_pushover_message(client, payload.get("payload", {}))
 
-    async def glance(payload: dict[str, Any], effect_key: str) -> dict[str, Any]:
-        del effect_key
+    async def glance(
+        payload: dict[str, Any],
+        base_dir: str | None,
+        effect_key: str | None,
+    ) -> dict[str, Any]:
+        del base_dir, effect_key
         return await update_pushover_glance(client, payload.get("payload", {}))
 
     run_peer(

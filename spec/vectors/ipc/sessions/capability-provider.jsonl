@@ -1,0 +1,10 @@
+{"_dir":"peer_to_runtime","id":"peer-initialize","jsonrpc":"2.0","method":"initialize","params":{"heartbeat_seconds":10.0,"max_in_flight":64,"methods":[{"name":"zeta.read"}],"peer":{"name":"reference-provider","version":"0.0.1"},"protocol_versions":[0],"roles":["provider"]}}
+{"_dir":"runtime_to_peer","id":"peer-initialize","jsonrpc":"2.0","result":{"config":{},"heartbeat_seconds":10.0,"max_in_flight":64,"protocol_version":0,"roles":["provider"],"runtime":{"name":"zeta","version":"0.1.0"}}}
+{"_dir":"runtime_to_peer","id":"runtime-1","jsonrpc":"2.0","method":"zeta.read","params":{"base_dir":"/workspace/zeta","effect_key":null,"input":{"path":"notes.md"}}}
+{"_dir":"peer_to_runtime","id":"runtime-1","jsonrpc":"2.0","result":{"content":[{"text":"notes","type":"text"}],"metadata":{"path":"notes.md"},"ok":true}}
+{"_dir":"runtime_to_peer","id":"runtime-2","jsonrpc":"2.0","method":"zeta.read","params":{"base_dir":"/workspace/zeta","effect_key":null,"input":{"path":"missing.md"}}}
+{"_dir":"peer_to_runtime","error":{"code":-32000,"data":{"code":"provider_rejected","retryable":true},"message":"provider rejected the request"},"id":"runtime-2","jsonrpc":"2.0"}
+{"_dir":"runtime_to_peer","id":"runtime-3","jsonrpc":"2.0","method":"undeclared.method","params":{"base_dir":null,"effect_key":null,"input":{}}}
+{"_dir":"peer_to_runtime","error":{"code":-32601,"data":{"code":"method_not_found"},"message":"Method not found"},"id":"runtime-3","jsonrpc":"2.0"}
+{"_dir":"runtime_to_peer","id":"runtime-4","jsonrpc":"2.0","method":"shutdown","params":{"reason":"runtime stopping"}}
+{"_dir":"peer_to_runtime","id":"runtime-4","jsonrpc":"2.0","result":{}}

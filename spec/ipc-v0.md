@@ -358,18 +358,20 @@ The runtime invokes a provider's declared method name directly:
 {
   "jsonrpc":"2.0",
   "id":"runtime-7",
-  "method":"slack.message.post",
-  "params":{
-    "input":{"channel":"general","text":"Hello"},
-    "effect_key":"effect-123"
+    "method":"slack.message.post",
+    "params":{
+      "input":{"channel":"general","text":"Hello"},
+      "base_dir":null,
+      "effect_key":"effect-123"
   }
 }
 ```
 
-`input` is an object and `effect_key` is a non-empty string. No other parameter
-is valid. The effect key remains stable across retries and process restarts.
-The success result is an object. A provider failure is an error response whose
-`data` object contains a stable `code` and Boolean `retryable`.
+`input` is an object. `base_dir` and `effect_key` are optional non-empty
+strings; explicit `null` is equivalent to omission. A supplied effect key
+remains stable across retries and process restarts. The success result is an
+object. A provider failure is an error response whose `data` object contains a
+stable `code` and Boolean `retryable`.
 
 ## 9. Correlation and flow control
 

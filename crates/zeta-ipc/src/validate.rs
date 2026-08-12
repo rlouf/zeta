@@ -222,14 +222,15 @@ pub(crate) fn validate_fixed_request(
 }
 
 pub(crate) fn validate_direct_request(params: &Map<String, Value>) -> Result<(), IpcError> {
-    validate_keys(params, &["input", "effect_key"], &["input", "effect_key"])?;
+    validate_keys(params, &["input", "base_dir", "effect_key"], &["input"])?;
     let Some(input) = params.get("input") else {
         unreachable!("validate_keys checked input");
     };
     if !input.is_object() {
         return invalid_params("`input` must be an object");
     }
-    required_string(params, "effect_key")?;
+    optional_string(params, "base_dir")?;
+    optional_string(params, "effect_key")?;
     Ok(())
 }
 

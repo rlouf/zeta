@@ -472,10 +472,11 @@ def _validate_empty(params: dict[str, Any]) -> None:
 
 
 def _validate_provider_params(params: dict[str, Any]) -> None:
-    _validate_keys(params, {"input", "effect_key"}, {"input", "effect_key"})
+    _validate_keys(params, {"input", "base_dir", "effect_key"}, {"input"})
     if not isinstance(params["input"], dict):
         raise MessageError(INVALID_PARAMS, "`input` must be an object")
-    _required_string(params, "effect_key")
+    _optional_string(params, "base_dir")
+    _optional_string(params, "effect_key")
 
 
 def _validate_event_notification(params: dict[str, Any]) -> None:

@@ -144,8 +144,9 @@ class SubprocessPeer:
         self,
         method: str,
         input_value: dict[str, Any],
-        effect_key: str,
         *,
+        base_dir: str | None = None,
+        effect_key: str | None = None,
         timeout: float = 30.0,
     ) -> dict[str, Any]:
         """Call one method declared by the initialized provider peer."""
@@ -178,7 +179,11 @@ class SubprocessPeer:
                 request(
                     message_id,
                     method,
-                    {"input": input_value, "effect_key": effect_key},
+                    {
+                        "input": input_value,
+                        "base_dir": base_dir,
+                        "effect_key": effect_key,
+                    },
                 ),
             )
             return await asyncio.wait_for(future, timeout=timeout)

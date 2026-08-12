@@ -251,6 +251,24 @@ fn equal_ids_in_opposite_directions_and_out_of_order_results_do_not_collide() {
 }
 
 #[test]
+fn direct_provider_params_support_read_only_scoped_calls() {
+    let message = Message::Request(Request::new(
+        RequestId::from("read-1"),
+        "file.read",
+        json!({
+            "input": {"path": "notes.md"},
+            "base_dir": "/workspace/zeta",
+            "effect_key": null,
+        })
+        .as_object()
+        .unwrap()
+        .clone(),
+    ));
+
+    zeta_ipc::validate_message(&message).unwrap();
+}
+
+#[test]
 fn duplicate_outgoing_ids_and_stray_responses_are_violations() {
     let mut peer = Session::peer(
         source_provider_params(),

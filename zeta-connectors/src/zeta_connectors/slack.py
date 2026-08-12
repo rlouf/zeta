@@ -342,7 +342,14 @@ def run() -> None:
         raise SystemExit("SLACK_BOT_TOKEN is required for the Slack event connector")
     client = HttpSlackClient(token=bot_token)
 
-    async def post(payload: dict[str, Any], effect_key: str) -> dict[str, Any]:
+    async def post(
+        payload: dict[str, Any],
+        base_dir: str | None,
+        effect_key: str | None,
+    ) -> dict[str, Any]:
+        del base_dir
+        if effect_key is None:
+            raise ValueError("Slack delivery requires an effect key")
         return await post_slack_message(
             client,
             payload.get("payload", {}),

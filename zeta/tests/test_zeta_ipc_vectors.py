@@ -8,13 +8,19 @@ from pathlib import Path
 from typing import Any, cast
 
 import pytest
+import zeta.ipc.client as ipc_client
 from ipc_test_support import VECTORS_DIR
 from zeta.ipc.framing import FrameReader, FrameViolation, decode_frame, encode_frame
 from zeta.ipc.messages import (
     INVALID_REQUEST,
+    METHOD_NOT_FOUND,
+    PROTOCOL_VERSION,
+    SERVER_ERROR,
     MessageError,
+    error_response,
     message_kind,
     request,
+    success_response,
     validate_initialize_result,
     validate_message,
 )
@@ -22,6 +28,7 @@ from zeta.ipc.messages import (
 VALID_DIR = VECTORS_DIR / "ipc" / "messages" / "valid"
 INVALID_DIR = VECTORS_DIR / "ipc" / "messages" / "invalid"
 SESSIONS_DIR = VECTORS_DIR / "ipc" / "sessions"
+CAPABILITY_PROVIDER_SESSION = SESSIONS_DIR / "capability-provider.jsonl"
 
 
 def json_paths(directory: Path) -> list[Path]:
@@ -157,3 +164,114 @@ async def test_frame_reader_recovers_after_an_oversized_line() -> None:
     assert isinstance(recovered, dict)
     recovered = cast(dict[str, Any], recovered)
     assert recovered["method"] == "ping"
+
+
+def directed_message(direction: str, message: dict[str, Any]) -> dict[str, Any]:
+    return {"_dir": direction, **message}
+
+
+def python_capability_provider_session_vector() -> list[dict[str, Any]]:
+    initialization = request(
+        "peer-initialize",
+        "initialize",
+        {
+            "protocol_versions": [PROTOCOL_VERSION],
+            "peer": {"name": "reference-provider", "version": "0.0.1"},
+            "roles": ["provider"],
+            "heartbeat_seconds": ipc_client.DEFAULT_HEARTBEAT_SECONDS,
+            "max_in_flight": ipc_client.DEFAULT_MAX_IN_FLIGHT,
+            "methods": [{"name": "zeta.read"}],
+        },
+    )
+    initialized = success_response(
+        "peer-initialize",
+        {
+            "protocol_version": PROTOCOL_VERSION,
+            "runtime": {"name": "zeta", "version": "0.1.0"},
+            "roles": ["provider"],
+            "config": {},
+            "heartbeat_seconds": ipc_client.DEFAULT_HEARTBEAT_SECONDS,
+            "max_in_flight": ipc_client.DEFAULT_MAX_IN_FLIGHT,
+        },
+    )
+    return [
+        directed_message("peer_to_runtime", initialization),
+        directed_message("runtime_to_peer", initialized),
+        directed_message(
+            "runtime_to_peer",
+            request(
+                "runtime-1",
+                "zeta.read",
+                {
+                    "input": {"path": "notes.md"},
+                    "base_dir": "/workspace/zeta",
+                    "effect_key": None,
+                },
+            ),
+        ),
+        directed_message(
+            "peer_to_runtime",
+            success_response(
+                "runtime-1",
+                {
+                    "ok": True,
+                    "content": [{"type": "text", "text": "notes"}],
+                    "metadata": {"path": "notes.md"},
+                },
+            ),
+        ),
+        directed_message(
+            "runtime_to_peer",
+            request(
+                "runtime-2",
+                "zeta.read",
+                {
+                    "input": {"path": "missing.md"},
+                    "base_dir": "/workspace/zeta",
+                    "effect_key": None,
+                },
+            ),
+        ),
+        directed_message(
+            "peer_to_runtime",
+            error_response(
+                "runtime-2",
+                SERVER_ERROR,
+                "provider rejected the request",
+                {"code": "provider_rejected", "retryable": True},
+            ),
+        ),
+        directed_message(
+            "runtime_to_peer",
+            request(
+                "runtime-3",
+                "undeclared.method",
+                {"input": {}, "base_dir": None, "effect_key": None},
+            ),
+        ),
+        directed_message(
+            "peer_to_runtime",
+            error_response(
+                "runtime-3",
+                METHOD_NOT_FOUND,
+                "Method not found",
+                {"code": "method_not_found"},
+            ),
+        ),
+        directed_message(
+            "runtime_to_peer",
+            request("runtime-4", "shutdown", {"reason": "runtime stopping"}),
+        ),
+        directed_message(
+            "peer_to_runtime",
+            success_response("runtime-4", {}),
+        ),
+    ]
+
+
+def test_capability_provider_session_matches_python_ground_truth() -> None:
+    expected = [
+        json.loads(line)
+        for line in CAPABILITY_PROVIDER_SESSION.read_text(encoding="utf-8").splitlines()
+    ]
+    assert python_capability_provider_session_vector() == expected

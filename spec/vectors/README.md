@@ -42,7 +42,9 @@ Strip `_dir` before message validation. `source-provider.jsonl` covers durable
 event publication, a direct provider request, equal ids open in opposite
 directions, source responses resolved out of order, ping, and orderly shutdown.
 `client.jsonl` covers queries, session submission, a committed-event
-notification, cancellation, and shutdown.
+notification, cancellation, and shutdown. `capability-provider.jsonl` covers
+provider initialization, a direct capability request with its execution
+context, the matching result, and orderly shutdown.
 
 ## `addresses/vectors.json`
 

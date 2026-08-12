@@ -81,7 +81,7 @@ class ProviderError(RuntimeError):
         self.retryable = retryable
 
 
-ProviderHandler = Callable[[dict[str, Any], str], Any]
+ProviderHandler = Callable[[dict[str, Any], str | None, str | None], Any]
 Source = (
     AsyncIterable[SourceEvent]
     | Callable[[dict[str, Any]], "AsyncIterable[SourceEvent] | None"]
@@ -381,7 +381,11 @@ async def _serve_provider_request(
 ) -> None:
     try:
         params = frame["params"]
-        outcome = handler(params["input"], params["effect_key"])
+        outcome = handler(
+            params["input"],
+            params.get("base_dir"),
+            params.get("effect_key"),
+        )
         if inspect.isawaitable(outcome):
             outcome = await outcome
         result = dict(outcome or {})

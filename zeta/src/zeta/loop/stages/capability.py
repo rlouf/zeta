@@ -164,7 +164,7 @@ async def run_capability_step(
         tool_registry=ctx.tool_registry,
         tool_executor=ctx.tool_executor,
         base_dir=config.base_dir,
-        effect_scope=config.effect_scope,
+        effect_scope=config.effect_scope or ctx.source_queue_item_id,
         internal_tool_executor=run_internal_tool,
         event_id_factory=ctx.event_id_factory,
     )

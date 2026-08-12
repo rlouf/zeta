@@ -880,6 +880,61 @@ def agent_invocation_vector_inputs() -> list[dict[str, Any]]:
             "capture_recorded_events": True,
         },
         {
+            "name": "effect_scope_falls_back_to_queue_item",
+            "invocation": {
+                "objective": "Run a command.",
+                "timeline": [],
+                "context": "",
+                "system_prompt": "Answer plainly.",
+                "allowed_capabilities": ["zeta.bash"],
+                "max_model_calls": 2,
+                "model_name": "unit-model",
+                "base_directory": "/workspace/zeta",
+                "source_queue_item_id": "qi_fallback_1",
+            },
+            "capabilities": [
+                {**bash_capability, "delivery_semantics": "idempotent_with_key"}
+            ],
+            "model_script": [
+                {
+                    "message": {
+                        "content": "",
+                        "tool_calls": [
+                            {
+                                "id": "call-fallback-1",
+                                "type": "function",
+                                "function": {
+                                    "name": "bash",
+                                    "arguments": '{"command":"pytest"}',
+                                },
+                            }
+                        ],
+                    },
+                    "stream": [],
+                    "telemetry": {},
+                },
+                {
+                    "message": {"content": "The command passed."},
+                    "stream": [],
+                    "telemetry": {},
+                },
+            ],
+            "tool_results": {
+                "zeta.bash": [
+                    {
+                        "ok": True,
+                        "content": [{"type": "text", "text": "tests passed"}],
+                    }
+                ]
+            },
+            "event_ids": [
+                "model-fallback-1",
+                "result-fallback-1",
+                "model-fallback-2",
+            ],
+            "cancelled": False,
+        },
+        {
             "name": "control_timestamp_validation",
             "invocation": {
                 "objective": "Schedule updates and wait.",

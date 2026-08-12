@@ -1823,6 +1823,7 @@ fn effect_identity(
     let scope = invocation
         .effect_scope
         .as_deref()
+        .or(invocation.source_queue_item_id.as_deref())
         .unwrap_or(parsed.call_id.as_str());
     let value = json!({
         "scope": scope,

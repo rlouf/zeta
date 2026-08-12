@@ -3309,6 +3309,655 @@
       }
     },
     {
+      "name": "effect_scope_falls_back_to_queue_item",
+      "invocation": {
+        "objective": "Run a command.",
+        "timeline": [],
+        "context": "",
+        "system_prompt": "Answer plainly.",
+        "allowed_capabilities": [
+          "zeta.bash"
+        ],
+        "max_model_calls": 2,
+        "model_name": "unit-model",
+        "base_directory": "/workspace/zeta",
+        "source_queue_item_id": "qi_fallback_1"
+      },
+      "capabilities": [
+        {
+          "id": "zeta.bash",
+          "description": "Execute a shell command.",
+          "input_schema": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "command"
+            ],
+            "properties": {
+              "command": {
+                "type": "string"
+              }
+            }
+          },
+          "delivery_semantics": "idempotent_with_key"
+        }
+      ],
+      "model_script": [
+        {
+          "message": {
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "call-fallback-1",
+                "type": "function",
+                "function": {
+                  "name": "bash",
+                  "arguments": "{\"command\":\"pytest\"}"
+                }
+              }
+            ]
+          },
+          "stream": [],
+          "telemetry": {}
+        },
+        {
+          "message": {
+            "content": "The command passed."
+          },
+          "stream": [],
+          "telemetry": {}
+        }
+      ],
+      "tool_results": {
+        "zeta.bash": [
+          {
+            "ok": true,
+            "content": [
+              {
+                "type": "text",
+                "text": "tests passed"
+              }
+            ]
+          }
+        ]
+      },
+      "event_ids": [
+        "model-fallback-1",
+        "result-fallback-1",
+        "model-fallback-2"
+      ],
+      "cancelled": false,
+      "expected": {
+        "aborted": false,
+        "abort_reason": null,
+        "final_answer": "The command passed.",
+        "final_object_id": null,
+        "stop_reason": "finished",
+        "answer_streamed": false,
+        "telemetry": {},
+        "model_telemetry_calls": [],
+        "events": [
+          {
+            "type": "zeta.model_call.completed",
+            "source": "zeta",
+            "payload": {
+              "tool_calls": [
+                {
+                  "id": "call-fallback-1",
+                  "type": "function",
+                  "function": {
+                    "name": "bash",
+                    "arguments": "{\"command\":\"pytest\"}"
+                  }
+                }
+              ],
+              "prompt_object_id": "b3:4a05a28d5b8bf744b0af756806dcb16b30a00270a72690343a92522653a9d7a4",
+              "_timeline_type": "model"
+            },
+            "idempotency_key": "zeta.model_call.completed:model-fallback-1",
+            "caused_by": null,
+            "session_id": null,
+            "run_id": null,
+            "turn_id": null
+          },
+          {
+            "type": "zeta.tool_call.started",
+            "source": "zeta",
+            "payload": {
+              "tool_call_id": "call-fallback-1",
+              "status": "pending",
+              "name": "bash",
+              "input": {
+                "command": "pytest"
+              },
+              "arguments": "{\"command\":\"pytest\"}",
+              "capability_id": "zeta.bash",
+              "_timeline_type": "tool_call"
+            },
+            "idempotency_key": "zeta.tool_call.started:call-fallback-1",
+            "caused_by": "model-fallback-1",
+            "session_id": null,
+            "run_id": null,
+            "turn_id": null
+          },
+          {
+            "type": "runtime.effect.planned",
+            "source": "capability:zeta.bash",
+            "payload": {
+              "effect_key": "effect:b3:aa1bcf869b0b01abdbcb8c87a9d0221a2b608295e641f9eb927f0e9d90f78970",
+              "operation": "zeta.bash",
+              "semantics": "idempotent_with_key",
+              "scope": "qi_fallback_1",
+              "queue_item_id": "qi_fallback_1",
+              "params": {
+                "command": "pytest"
+              },
+              "status": "planned"
+            },
+            "idempotency_key": "runtime.effect.planned:effect:b3:aa1bcf869b0b01abdbcb8c87a9d0221a2b608295e641f9eb927f0e9d90f78970",
+            "caused_by": "call-fallback-1",
+            "session_id": null,
+            "run_id": null,
+            "turn_id": null
+          },
+          {
+            "type": "runtime.effect.started",
+            "source": "capability:zeta.bash",
+            "payload": {
+              "effect_key": "effect:b3:aa1bcf869b0b01abdbcb8c87a9d0221a2b608295e641f9eb927f0e9d90f78970",
+              "operation": "zeta.bash",
+              "semantics": "idempotent_with_key",
+              "scope": "qi_fallback_1",
+              "queue_item_id": "qi_fallback_1",
+              "params": {
+                "command": "pytest"
+              },
+              "status": "started"
+            },
+            "idempotency_key": "runtime.effect.started:effect:b3:aa1bcf869b0b01abdbcb8c87a9d0221a2b608295e641f9eb927f0e9d90f78970",
+            "caused_by": "call-fallback-1",
+            "session_id": null,
+            "run_id": null,
+            "turn_id": null
+          },
+          {
+            "type": "zeta.tool_call.completed",
+            "source": "zeta",
+            "payload": {
+              "tool_call_id": "call-fallback-1",
+              "status": "completed",
+              "name": "bash",
+              "result": {
+                "ok": true,
+                "content": [
+                  {
+                    "type": "text",
+                    "text": "tests passed"
+                  }
+                ]
+              },
+              "capability_id": "zeta.bash",
+              "_timeline_type": "tool_result"
+            },
+            "idempotency_key": "zeta.tool_call.completed:result-fallback-1",
+            "caused_by": "model-fallback-1",
+            "session_id": null,
+            "run_id": null,
+            "turn_id": null
+          },
+          {
+            "type": "runtime.effect.completed",
+            "source": "capability:zeta.bash",
+            "payload": {
+              "effect_key": "effect:b3:aa1bcf869b0b01abdbcb8c87a9d0221a2b608295e641f9eb927f0e9d90f78970",
+              "operation": "zeta.bash",
+              "semantics": "idempotent_with_key",
+              "scope": "qi_fallback_1",
+              "queue_item_id": "qi_fallback_1",
+              "params": {
+                "command": "pytest"
+              },
+              "status": "completed",
+              "result": {
+                "ok": true,
+                "content": [
+                  {
+                    "type": "text",
+                    "text": "tests passed"
+                  }
+                ]
+              }
+            },
+            "idempotency_key": "runtime.effect.completed:effect:b3:aa1bcf869b0b01abdbcb8c87a9d0221a2b608295e641f9eb927f0e9d90f78970",
+            "caused_by": "call-fallback-1",
+            "session_id": null,
+            "run_id": null,
+            "turn_id": null
+          },
+          {
+            "type": "zeta.model_call.completed",
+            "source": "zeta",
+            "payload": {
+              "content": "The command passed.",
+              "prompt_object_id": "b3:f7d0d77de2978742181e74cdb3a2b4cc2e7cf3f8a81e47de8c3d6a8989112fc1",
+              "_timeline_type": "model"
+            },
+            "idempotency_key": "zeta.model_call.completed:model-fallback-2",
+            "caused_by": "result-fallback-1",
+            "session_id": null,
+            "run_id": null,
+            "turn_id": null
+          }
+        ],
+        "observations": [],
+        "requests": [],
+        "prompt_traces": [
+          {
+            "prompt_object_id": "b3:4a05a28d5b8bf744b0af756806dcb16b30a00270a72690343a92522653a9d7a4",
+            "assistant_message_object_id": "b3:1ada4559bc7f758dbb2fdc4e378c6b011e57e5269b06781ddd1ccbeaeefaf4bf"
+          },
+          {
+            "prompt_object_id": "b3:f7d0d77de2978742181e74cdb3a2b4cc2e7cf3f8a81e47de8c3d6a8989112fc1",
+            "assistant_message_object_id": "b3:9165fb14b91009e0eff86e8ffe576414bf692aa679827eacbcf25c23be0dd0aa"
+          }
+        ],
+        "steps": [
+          "check_budget",
+          "build_prompt",
+          "call_model",
+          "record_assistant",
+          "check_budget",
+          "record_capability_call",
+          "execute_capability",
+          "record_capability_result",
+          "check_budget",
+          "build_prompt",
+          "call_model",
+          "record_assistant",
+          "finish_run"
+        ],
+        "model_call_count": 2,
+        "executor_calls": [
+          {
+            "capability_id": "zeta.bash",
+            "params": {
+              "command": "pytest"
+            },
+            "base_directory": "/workspace/zeta",
+            "effect_key": "effect:b3:aa1bcf869b0b01abdbcb8c87a9d0221a2b608295e641f9eb927f0e9d90f78970"
+          }
+        ],
+        "trace": {
+          "objects": [
+            {
+              "id": "b3:1ada4559bc7f758dbb2fdc4e378c6b011e57e5269b06781ddd1ccbeaeefaf4bf",
+              "kind": "assistant_message",
+              "schema": "zeta.model_output.v1",
+              "data": {
+                "message": {
+                  "tool_calls": [
+                    {
+                      "id": "call-fallback-1",
+                      "type": "function",
+                      "function": {
+                        "name": "bash",
+                        "arguments": "{\"command\":\"pytest\"}"
+                      }
+                    }
+                  ]
+                },
+                "model_output": {
+                  "message": {
+                    "tool_calls": [
+                      {
+                        "id": "call-fallback-1",
+                        "type": "function",
+                        "function": {
+                          "name": "bash",
+                          "arguments": "{\"command\":\"pytest\"}"
+                        }
+                      }
+                    ]
+                  }
+                }
+              },
+              "links": [
+                "b3:4a05a28d5b8bf744b0af756806dcb16b30a00270a72690343a92522653a9d7a4"
+              ]
+            },
+            {
+              "id": "b3:23810bbb64c0d4be63727cd25ebcde118211bcad12ac8e75b167aae567945172",
+              "kind": "tool_result",
+              "schema": "zeta.tool_result.v1",
+              "data": {
+                "tool_call_id": "call-fallback-1",
+                "name": "bash",
+                "result": {
+                  "ok": true,
+                  "content": [
+                    {
+                      "type": "text",
+                      "text": "tests passed"
+                    }
+                  ]
+                }
+              },
+              "links": [
+                "b3:62ff42415b5b18f6a3e51a5866eb4fd7c4c4b16674947e0322f98c64e47705d7"
+              ]
+            },
+            {
+              "id": "b3:4a05a28d5b8bf744b0af756806dcb16b30a00270a72690343a92522653a9d7a4",
+              "kind": "prompt",
+              "schema": "zeta.prompt.v2",
+              "data": {
+                "payload_address": "b3:f4b9171a1baffc2e5951e5df8e05ee980cad48902d2c0a455e796d64e3e9a812"
+              },
+              "links": [
+                "b3:ca3e05f57f00782077ca1ec3b5aa2fa3d7a4ca8eaad079df81382110a841a22b",
+                "b3:a9db3fa9f0252099dc51d56b86f5ef38a5e76fb525ad44704229b60feb0237a1",
+                "b3:58ea1f925bbfdf2da317ffff096055c68d26264c2ffd636579a08e5762121174"
+              ]
+            },
+            {
+              "id": "b3:58ea1f925bbfdf2da317ffff096055c68d26264c2ffd636579a08e5762121174",
+              "kind": "user_message",
+              "schema": "zeta.prompt_component.v2",
+              "data": {
+                "objective": "Run a command.",
+                "expanded_objective": "Run a command.",
+                "context": "",
+                "message": {
+                  "role": "user",
+                  "content": "Run a command.\n\ncwd:\n/workspace/zeta"
+                },
+                "representation": "full"
+              },
+              "links": []
+            },
+            {
+              "id": "b3:62ff42415b5b18f6a3e51a5866eb4fd7c4c4b16674947e0322f98c64e47705d7",
+              "kind": "tool_call",
+              "schema": "zeta.tool_call.v1",
+              "data": {
+                "tool_call_id": "call-fallback-1",
+                "name": "bash",
+                "input": {
+                  "command": "pytest"
+                },
+                "arguments": "{\"command\":\"pytest\"}"
+              },
+              "links": [
+                "b3:1ada4559bc7f758dbb2fdc4e378c6b011e57e5269b06781ddd1ccbeaeefaf4bf"
+              ]
+            },
+            {
+              "id": "b3:825a7108cee0f0619e8e8266e030dc7adccdb672ccfa314790c66ba9577b65e0",
+              "kind": "assistant_message",
+              "schema": "zeta.prompt_component.v2",
+              "data": {
+                "index": 0,
+                "event_index": 0,
+                "message": {
+                  "role": "assistant",
+                  "content": null,
+                  "tool_calls": [
+                    {
+                      "id": "call-fallback-1",
+                      "type": "function",
+                      "function": {
+                        "name": "bash",
+                        "arguments": "{\"command\":\"pytest\"}"
+                      }
+                    }
+                  ]
+                },
+                "source_event_type": "model",
+                "source_event_role": "",
+                "source_model_tool_calls": [
+                  {
+                    "id": "call-fallback-1",
+                    "type": "function",
+                    "function": {
+                      "name": "bash",
+                      "arguments": "{\"command\":\"pytest\"}"
+                    }
+                  }
+                ],
+                "source_assistant_message_object_id": "b3:1ada4559bc7f758dbb2fdc4e378c6b011e57e5269b06781ddd1ccbeaeefaf4bf",
+                "representation": "full"
+              },
+              "links": [
+                "b3:1ada4559bc7f758dbb2fdc4e378c6b011e57e5269b06781ddd1ccbeaeefaf4bf"
+              ]
+            },
+            {
+              "id": "b3:9165fb14b91009e0eff86e8ffe576414bf692aa679827eacbcf25c23be0dd0aa",
+              "kind": "assistant_message",
+              "schema": "zeta.model_output.v1",
+              "data": {
+                "message": {
+                  "content": "The command passed."
+                },
+                "model_output": {
+                  "message": {
+                    "content": "The command passed."
+                  }
+                }
+              },
+              "links": [
+                "b3:f7d0d77de2978742181e74cdb3a2b4cc2e7cf3f8a81e47de8c3d6a8989112fc1"
+              ]
+            },
+            {
+              "id": "b3:a9db3fa9f0252099dc51d56b86f5ef38a5e76fb525ad44704229b60feb0237a1",
+              "kind": "tool_descriptor_set",
+              "schema": "zeta.prompt_component.v2",
+              "data": {
+                "allowed_tools": [
+                  "zeta.bash",
+                  "zeta.wait_for"
+                ],
+                "tools": [
+                  {
+                    "type": "function",
+                    "function": {
+                      "name": "bash",
+                      "description": "Execute a shell command.",
+                      "parameters": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "command"
+                        ],
+                        "properties": {
+                          "command": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    }
+                  },
+                  {
+                    "type": "function",
+                    "function": {
+                      "name": "wait_for",
+                      "description": "End this run and resume when a matching event arrives.",
+                      "parameters": {
+                        "type": "object",
+                        "required": [
+                          "event_type"
+                        ],
+                        "properties": {
+                          "event_type": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "fields": {
+                            "type": "object"
+                          },
+                          "deadline": {
+                            "type": "string"
+                          }
+                        },
+                        "additionalProperties": false
+                      }
+                    }
+                  }
+                ],
+                "representation": "full"
+              },
+              "links": []
+            },
+            {
+              "id": "b3:ca3e05f57f00782077ca1ec3b5aa2fa3d7a4ca8eaad079df81382110a841a22b",
+              "kind": "system_prompt",
+              "schema": "zeta.prompt_component.v2",
+              "data": {
+                "content": "Answer plainly.\n\nToday is 2026-08-12 (Wednesday).\n\nTool protocol:\n\n- Tools are native Chat Completions function tools exposed by the runtime.\n- You may request multiple read-only tool calls in one turn when useful.\n- Mutating tools apply their effects when you call them.\n- Use a tool only when its schema matches the needed action.\n- Do not mention unavailable tools.\n- If no tool is needed, return a final answer.\n\nAvailable tools:\n- bash(command): Execute a shell command.\n- wait_for(event_type, fields?, deadline?): End this run and resume when a matching event arrives.",
+                "base_prompt": "Answer plainly.",
+                "allowed_tools": [
+                  "zeta.bash",
+                  "zeta.wait_for"
+                ],
+                "message": {
+                  "role": "system",
+                  "content": "Answer plainly.\n\nToday is 2026-08-12 (Wednesday).\n\nTool protocol:\n\n- Tools are native Chat Completions function tools exposed by the runtime.\n- You may request multiple read-only tool calls in one turn when useful.\n- Mutating tools apply their effects when you call them.\n- Use a tool only when its schema matches the needed action.\n- Do not mention unavailable tools.\n- If no tool is needed, return a final answer.\n\nAvailable tools:\n- bash(command): Execute a shell command.\n- wait_for(event_type, fields?, deadline?): End this run and resume when a matching event arrives."
+                },
+                "representation": "full"
+              },
+              "links": []
+            },
+            {
+              "id": "b3:f7d0d77de2978742181e74cdb3a2b4cc2e7cf3f8a81e47de8c3d6a8989112fc1",
+              "kind": "prompt",
+              "schema": "zeta.prompt.v2",
+              "data": {
+                "payload_address": "b3:fd91b9fa001b269642581823b5297b06dbf0e5e3c8498bdc68394ea87f101384"
+              },
+              "links": [
+                "b3:ca3e05f57f00782077ca1ec3b5aa2fa3d7a4ca8eaad079df81382110a841a22b",
+                "b3:a9db3fa9f0252099dc51d56b86f5ef38a5e76fb525ad44704229b60feb0237a1",
+                "b3:58ea1f925bbfdf2da317ffff096055c68d26264c2ffd636579a08e5762121174",
+                "b3:825a7108cee0f0619e8e8266e030dc7adccdb672ccfa314790c66ba9577b65e0",
+                "b3:fedfde2bf1280653a64fd466c7cfabf9acb105643c6362608b17b01b85444a99"
+              ]
+            },
+            {
+              "id": "b3:fedfde2bf1280653a64fd466c7cfabf9acb105643c6362608b17b01b85444a99",
+              "kind": "tool_result",
+              "schema": "zeta.prompt_component.v2",
+              "data": {
+                "index": 1,
+                "event_index": 4,
+                "message": {
+                  "role": "tool",
+                  "tool_call_id": "call-fallback-1",
+                  "content": "{\"ok\":true,\"content\":[{\"type\":\"text\",\"text\":\"tests passed\"}]}"
+                },
+                "source_event_type": "tool_result",
+                "source_event_role": "",
+                "source_tool_name": "bash",
+                "source_tool_call_id": "call-fallback-1",
+                "source_tool_result": {
+                  "ok": true,
+                  "content": [
+                    {
+                      "type": "text",
+                      "text": "tests passed"
+                    }
+                  ]
+                },
+                "source_tool_result_object_id": "b3:23810bbb64c0d4be63727cd25ebcde118211bcad12ac8e75b167aae567945172",
+                "source_tool_call_object_id": "b3:62ff42415b5b18f6a3e51a5866eb4fd7c4c4b16674947e0322f98c64e47705d7",
+                "representation": "full"
+              },
+              "links": [
+                "b3:23810bbb64c0d4be63727cd25ebcde118211bcad12ac8e75b167aae567945172",
+                "b3:62ff42415b5b18f6a3e51a5866eb4fd7c4c4b16674947e0322f98c64e47705d7"
+              ]
+            }
+          ],
+          "derivations": [
+            {
+              "id": "b3:027e5e010e0db079bc6c7b3cfb53c1e0d57709e437751f4d88610dd856f68e23",
+              "producer": "PromptBuilder",
+              "output_id": "b3:4a05a28d5b8bf744b0af756806dcb16b30a00270a72690343a92522653a9d7a4",
+              "input_ids": [
+                "b3:ca3e05f57f00782077ca1ec3b5aa2fa3d7a4ca8eaad079df81382110a841a22b",
+                "b3:a9db3fa9f0252099dc51d56b86f5ef38a5e76fb525ad44704229b60feb0237a1",
+                "b3:58ea1f925bbfdf2da317ffff096055c68d26264c2ffd636579a08e5762121174"
+              ],
+              "params": {
+                "max_tokens": 8192,
+                "selected_model": "unit-model",
+                "thinking": null
+              }
+            },
+            {
+              "id": "b3:42b0c357bfa23ec3a3e16202ff3c734a88ea82cf085144621b1c90ba94137c2b",
+              "producer": "ToolCallProjection",
+              "output_id": "b3:62ff42415b5b18f6a3e51a5866eb4fd7c4c4b16674947e0322f98c64e47705d7",
+              "input_ids": [
+                "b3:1ada4559bc7f758dbb2fdc4e378c6b011e57e5269b06781ddd1ccbeaeefaf4bf"
+              ],
+              "params": {
+                "tool_call_id": "call-fallback-1",
+                "name": "bash"
+              }
+            },
+            {
+              "id": "b3:492a4b582dd142e4233f70db1c6b279af73cffbb74bc6f946f809e81c6c1be2b",
+              "producer": "PromptBuilder",
+              "output_id": "b3:f7d0d77de2978742181e74cdb3a2b4cc2e7cf3f8a81e47de8c3d6a8989112fc1",
+              "input_ids": [
+                "b3:ca3e05f57f00782077ca1ec3b5aa2fa3d7a4ca8eaad079df81382110a841a22b",
+                "b3:a9db3fa9f0252099dc51d56b86f5ef38a5e76fb525ad44704229b60feb0237a1",
+                "b3:58ea1f925bbfdf2da317ffff096055c68d26264c2ffd636579a08e5762121174",
+                "b3:825a7108cee0f0619e8e8266e030dc7adccdb672ccfa314790c66ba9577b65e0",
+                "b3:fedfde2bf1280653a64fd466c7cfabf9acb105643c6362608b17b01b85444a99"
+              ],
+              "params": {
+                "max_tokens": 8192,
+                "selected_model": "unit-model",
+                "thinking": null
+              }
+            },
+            {
+              "id": "b3:4e210b4cb7eacb4b9d78706cb70f8911823c8e49a7ca44224d06d2e3c218d415",
+              "producer": "ModelResponse",
+              "output_id": "b3:9165fb14b91009e0eff86e8ffe576414bf692aa679827eacbcf25c23be0dd0aa",
+              "input_ids": [
+                "b3:f7d0d77de2978742181e74cdb3a2b4cc2e7cf3f8a81e47de8c3d6a8989112fc1"
+              ],
+              "params": {}
+            },
+            {
+              "id": "b3:7e60b54ad63e64e15bb1ccd3a5a532f982148c6601a9f466e6f9753cae5b18e2",
+              "producer": "ModelResponse",
+              "output_id": "b3:1ada4559bc7f758dbb2fdc4e378c6b011e57e5269b06781ddd1ccbeaeefaf4bf",
+              "input_ids": [
+                "b3:4a05a28d5b8bf744b0af756806dcb16b30a00270a72690343a92522653a9d7a4"
+              ],
+              "params": {}
+            },
+            {
+              "id": "b3:dbc318cb1413fd004c41f6c14f02b4125667fa22aafad5048f920e3d946cfaa2",
+              "producer": "ToolExecution",
+              "output_id": "b3:23810bbb64c0d4be63727cd25ebcde118211bcad12ac8e75b167aae567945172",
+              "input_ids": [
+                "b3:62ff42415b5b18f6a3e51a5866eb4fd7c4c4b16674947e0322f98c64e47705d7"
+              ],
+              "params": {
+                "tool_call_id": "call-fallback-1",
+                "name": "bash"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
       "name": "control_timestamp_validation",
       "invocation": {
         "objective": "Schedule updates and wait.",

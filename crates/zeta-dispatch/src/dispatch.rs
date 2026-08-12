@@ -1210,19 +1210,178 @@ pub struct AttemptFailure {
     pub(crate) retry_policy: RetryPolicy,
 }
 
-/// Carries one successful agent result proposed for an atomic commit.
+/// Names the terminal state proposed for one claimed attempt.
+///
+/// # Examples
+///
+/// ```
+/// let disposition = zeta_dispatch::AttemptCompletionDisposition::Succeeded;
+/// assert_eq!(
+///     disposition,
+///     zeta_dispatch::AttemptCompletionDisposition::Succeeded,
+/// );
+/// ```
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AttemptCompletionDisposition {
+    /// Completes the attempt and its queue item successfully.
+    Succeeded,
+    /// Cancels the attempt and its queue item without applying controls.
+    Cancelled,
+}
+
+/// Carries one typed control proposal in global tool-call order.
+///
+/// # Examples
+///
+/// ```
+/// let control = zeta_dispatch::AttemptControl::publish(
+///     "pub-example",
+///     "example.created",
+///     serde_json::Map::new(),
+///     None,
+///     2,
+/// );
+/// assert_eq!(control.position(), 2);
+/// ```
+#[derive(Clone, Debug, PartialEq)]
+pub enum AttemptControl {
+    /// Proposes immediate or scheduled publication of a durable event.
+    Publish {
+        /// Identifies the retry-stable proposal.
+        handle: String,
+        /// Names the event vocabulary entry.
+        event_type: String,
+        /// Carries the event payload.
+        payload: Map<String, Value>,
+        /// Schedules publication at an optional RFC 3339 timestamp.
+        at: Option<String>,
+        /// Preserves global tool-call order.
+        position: u64,
+    },
+    /// Proposes waiting for a matching durable event.
+    Wait {
+        /// Identifies the retry-stable wait.
+        handle: String,
+        /// Names the event vocabulary entry to match.
+        event_type: String,
+        /// Narrows the match to exact payload fields.
+        fields: Map<String, Value>,
+        /// Stops waiting at an optional RFC 3339 timestamp.
+        deadline: Option<String>,
+        /// Preserves global tool-call order.
+        position: u64,
+    },
+    /// Proposes cancelling an existing wait or scheduled publication.
+    Cancel {
+        /// Identifies the resource to cancel.
+        handle: String,
+        /// Explains the cancellation when supplied.
+        reason: Option<String>,
+        /// Associates the request with an agent.
+        source_agent_id: String,
+        /// Associates the request with a session.
+        source_session_id: String,
+        /// Preserves global tool-call order.
+        position: u64,
+    },
+}
+
+impl AttemptControl {
+    /// Creates a typed event-publication proposal.
+    pub fn publish(
+        handle: impl Into<String>,
+        event_type: impl Into<String>,
+        payload: Map<String, Value>,
+        at: Option<String>,
+        position: u64,
+    ) -> Self {
+        AttemptControl::Publish {
+            handle: handle.into(),
+            event_type: event_type.into(),
+            payload,
+            at,
+            position,
+        }
+    }
+
+    /// Creates a typed event-wait proposal.
+    pub fn wait(
+        handle: impl Into<String>,
+        event_type: impl Into<String>,
+        fields: Map<String, Value>,
+        deadline: Option<String>,
+        position: u64,
+    ) -> Self {
+        AttemptControl::Wait {
+            handle: handle.into(),
+            event_type: event_type.into(),
+            fields,
+            deadline,
+            position,
+        }
+    }
+
+    /// Creates a typed resource-cancellation proposal.
+    pub fn cancel(
+        handle: impl Into<String>,
+        reason: Option<String>,
+        source_agent_id: impl Into<String>,
+        source_session_id: impl Into<String>,
+        position: u64,
+    ) -> Self {
+        AttemptControl::Cancel {
+            handle: handle.into(),
+            reason,
+            source_agent_id: source_agent_id.into(),
+            source_session_id: source_session_id.into(),
+            position,
+        }
+    }
+
+    /// Returns the global tool-call position.
+    pub fn position(&self) -> u64 {
+        match self {
+            AttemptControl::Publish { position, .. } => *position,
+            AttemptControl::Wait { position, .. } => *position,
+            AttemptControl::Cancel { position, .. } => *position,
+        }
+    }
+}
+
+/// Carries one typed attempt terminal proposal for an atomic commit.
+///
+/// # Examples
+///
+/// ```
+/// let completion = zeta_dispatch::AttemptCompletion::new(
+///     "2026-08-12T10:00:01Z",
+///     zeta_dispatch::AttemptCompletionDisposition::Succeeded,
+///     serde_json::Map::new(),
+///     Vec::new(),
+/// );
+/// assert!(completion.controls().is_empty());
+/// ```
 #[derive(Clone, Debug, PartialEq)]
 pub struct AttemptCompletion {
     pub(crate) finished_at: String,
-    pub(crate) result: Map<String, Value>,
+    pub(crate) disposition: AttemptCompletionDisposition,
+    pub(crate) metadata: Map<String, Value>,
+    pub(crate) controls: Vec<AttemptControl>,
 }
 
 impl AttemptCompletion {
     /// Creates a completion proposal without mutating durable state.
-    pub fn new(finished_at: impl Into<String>, result: Map<String, Value>) -> Self {
+    pub fn new(
+        finished_at: impl Into<String>,
+        disposition: AttemptCompletionDisposition,
+        metadata: Map<String, Value>,
+        controls: Vec<AttemptControl>,
+    ) -> Self {
         AttemptCompletion {
             finished_at: finished_at.into(),
-            result,
+            disposition,
+            metadata,
+            controls,
         }
     }
 
@@ -1231,9 +1390,19 @@ impl AttemptCompletion {
         &self.finished_at
     }
 
-    /// Returns the proposed result and ordered control requests.
-    pub fn result(&self) -> &Map<String, Value> {
-        &self.result
+    /// Returns the proposed terminal disposition.
+    pub fn disposition(&self) -> AttemptCompletionDisposition {
+        self.disposition
+    }
+
+    /// Returns the open durable result metadata.
+    pub fn metadata(&self) -> &Map<String, Value> {
+        &self.metadata
+    }
+
+    /// Returns typed control proposals in caller order.
+    pub fn controls(&self) -> &[AttemptControl] {
+        &self.controls
     }
 }
 

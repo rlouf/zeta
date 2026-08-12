@@ -1,11 +1,14 @@
 import asyncio
+import json
 from collections.abc import Awaitable, Callable
 from contextlib import nullcontext
 from dataclasses import asdict
+from pathlib import Path
 
 from zeta.context.transforms import ContentWorkspace
 from zeta.events import DraftEvent, Event
 from zeta.harness.coordinator import AttemptCoordinator
+from zeta.harness.dispatch import QueueingDispatcher
 from zeta.harness.lifecycle import LifecycleRecorder
 from zeta.harness.queue import RoutedQueueItem
 from zeta.harness.retry import RetryPolicy
@@ -14,6 +17,55 @@ from zeta.harness.store import RuntimeEventStore
 from zeta.journal.memory import MemoryEventStore
 from zeta.journal.store import Filter
 from zeta.substrate import SqliteObjectStore
+
+RUNTIME_VECTORS_PATH = (
+    Path(__file__).resolve().parents[2] / "spec/vectors/dispatch/runtime.json"
+)
+
+
+def _dispatch_scripted_case(section: str, name: str) -> dict:
+    document = json.loads(RUNTIME_VECTORS_PATH.read_text(encoding="utf-8"))
+    return next(
+        case for case in document["scripted_cases"][section] if case["name"] == name
+    )
+
+
+def _normalize_event_contract(
+    events: list[Event],
+    expected: list[dict],
+) -> list[dict]:
+    assert [event.event_type for event in events] == [item["type"] for item in expected]
+    aliases = {
+        event.id: item["alias"] for event, item in zip(events, expected, strict=True)
+    }
+
+    def normalize(value):
+        if isinstance(value, dict):
+            return {key: normalize(item) for key, item in value.items()}
+        if isinstance(value, list):
+            return [normalize(item) for item in value]
+        if isinstance(value, str):
+            for event_id, alias in sorted(
+                aliases.items(), key=lambda item: len(item[0]), reverse=True
+            ):
+                value = value.replace(event_id, alias)
+        return value
+
+    contracts = []
+    for event, item in zip(events, expected, strict=True):
+        contract = {
+            "alias": item["alias"],
+            "type": event.event_type,
+            "idempotency_key": normalize(event.idempotency_key),
+            "caused_by": normalize(event.caused_by),
+        }
+        expected_payload = item.get("payload")
+        if expected_payload is not None:
+            contract["payload"] = normalize(
+                {key: event.payload[key] for key in expected_payload}
+            )
+        contracts.append(contract)
+    return contracts
 
 
 def triggering_event() -> Event:
@@ -1096,5 +1148,146 @@ def test_attempt_coordinator_rejects_a_second_active_wait(tmp_path) -> None:
             "handle"
         ]
         == "wait-existing"
+    )
+    store.close()
+
+
+def test_dispatch_completion_script_preserves_result_and_control_order(
+    tmp_path: Path,
+) -> None:
+    case = _dispatch_scripted_case("completion", "ordered_atomic_success")
+    store = RuntimeEventStore.open(tmp_path / "runtime.sqlite3")
+
+    async def run(_invocation):
+        return case["result"]
+
+    agent = ExecutableAgent(
+        AgentDefinition(
+            case["agent_id"],
+            (EventPattern(case["triggering_event"]["event_type"]),),
+            project_generation=case["project_generation"],
+        ),
+        run,
+    )
+    trigger = Event(**case["triggering_event"])
+    item = RoutedQueueItem(**case["queue_item"])
+
+    returned = asyncio.run(durable_coordinator(store).run(agent, trigger, item))
+    journal = store.list_events(Filter())
+
+    assert (
+        _normalize_event_contract(journal, case["expected"]["events"])
+        == case["expected"]["events"]
+    )
+    assert [event.id for event in returned] == [event.id for event in journal]
+    completed = next(
+        event for event in journal if event.event_type == "runtime.attempt.completed"
+    )
+    assert completed.payload["events"] == case["result"]["events"]
+    assert completed.payload["result"]["events"] == case["result"]["events"]
+    assert [
+        event.event_type
+        for event in journal
+        if event.event_type
+        in {
+            "work.first",
+            "runtime.wait.created",
+            "runtime.scheduled_event.created",
+        }
+    ] == case["expected"]["ordered_controls"]
+    queue_record = store.queue_item(item.queue_item_id)
+    assert queue_record is not None
+    assert queue_record["status"] == case["expected"]["queue_status"]
+    assert store.list_attempts()[0]["status"] == case["expected"]["attempt_status"]
+    store.close()
+
+
+def test_dispatch_completion_script_rolls_back_invalid_proposals(
+    tmp_path: Path,
+) -> None:
+    case = _dispatch_scripted_case("completion", "invalid_proposal_is_atomic_failure")
+    store = RuntimeEventStore.open(tmp_path / "runtime.sqlite3")
+
+    async def run(_invocation):
+        return case["result"]
+
+    returned = asyncio.run(
+        durable_coordinator(store).run(
+            ExecutableAgent(
+                AgentDefinition(
+                    case["agent_id"],
+                    (EventPattern(case["triggering_event"]["event_type"]),),
+                ),
+                run,
+            ),
+            Event(**case["triggering_event"]),
+            RoutedQueueItem(**case["queue_item"]),
+        )
+    )
+    journal = store.list_events(Filter())
+
+    assert (
+        _normalize_event_contract(journal, case["expected"]["events"])
+        == case["expected"]["events"]
+    )
+    assert [event.id for event in returned] == [event.id for event in journal]
+    assert not store.list_events(Filter(event_type="runtime.attempt.completed"))
+    assert store.list_waits() == []
+    assert store.list_scheduled_events() == []
+    queue_record = store.queue_item(case["queue_item"]["queue_item_id"])
+    assert queue_record is not None
+    assert queue_record["status"] == case["expected"]["queue_status"]
+    assert store.list_attempts()[0]["status"] == case["expected"]["attempt_status"]
+    store.close()
+
+
+def test_dispatch_attempt_outcome_script_retries_then_dead_letters(
+    tmp_path: Path,
+) -> None:
+    case = _dispatch_scripted_case(
+        "attempt_outcomes",
+        "retry_then_dead_letter",
+    )
+    store = RuntimeEventStore.open(tmp_path / "runtime.sqlite3")
+    trigger = Event(**case["triggering_event"])
+    store.append(trigger)
+
+    async def fail(_invocation):
+        raise RuntimeError(case["failure_message"])
+
+    policy = RetryPolicy(**case["retry_policy"])
+    agent = ExecutableAgent(
+        AgentDefinition(
+            case["agent_id"],
+            (EventPattern(trigger.event_type),),
+            retry_policy=policy,
+        ),
+        fail,
+    )
+    dispatcher = QueueingDispatcher(
+        store,
+        store,
+        executors=(agent,),
+        retry_policy=policy,
+    )
+    item = RoutedQueueItem(**case["queue_item"])
+
+    asyncio.run(dispatcher.run_queue_item(item))
+    asyncio.run(dispatcher.run_queue_item(item))
+    lifecycle = store.list_events(Filter())[1:]
+
+    assert (
+        _normalize_event_contract(lifecycle, case["expected"]["events"])
+        == case["expected"]["events"]
+    )
+    queue_record = store.queue_item(item.queue_item_id)
+    assert queue_record is not None
+    assert queue_record["status"] == case["expected"]["queue_status"]
+    assert [attempt["status"] for attempt in store.list_attempts()] == case["expected"][
+        "attempt_statuses"
+    ]
+    assert (
+        store.queue_item_attempt_count(item.queue_item_id)
+        == case["expected"]["attempt_count"]
     )
     store.close()

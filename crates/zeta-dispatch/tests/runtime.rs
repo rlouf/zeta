@@ -13,9 +13,10 @@ use zeta_dispatch::{
     pending_queue_item_id, publish_event_handle, queue_item_attempt_idempotency_key, queue_item_id,
     queue_item_idempotency_key, route_event, run_id_for_attempt, safe_agent_id,
     unhandled_queue_item_id, unhandled_queue_item_idempotency_key, wait_handle, AttemptCompletion,
-    AttemptFailure, AttemptStatus, CancellationFinalizationIdentities, CancellationIdentities,
-    CancellationStatus, ClaimToken, Dispatch, DispatchErrorCode, EffectStatus, EventPattern,
-    FailureClass, QueueItemId, QueueItemStatus, RecurringSchedule, RecurringScheduleActivation,
+    AttemptCompletionDisposition, AttemptControl, AttemptFailure, AttemptStatus,
+    CancellationFinalizationIdentities, CancellationIdentities, CancellationStatus, ClaimToken,
+    Dispatch, DispatchError, DispatchErrorCode, EffectStatus, EventPattern, FailureClass,
+    QueueClaim, QueueItemId, QueueItemStatus, RecurringSchedule, RecurringScheduleActivation,
     RecurringScheduleTick, ResourceCancellationStatus, ResourceKind, RetryPolicy, Route, RunId,
     RuntimeEventIdentity, ScheduleTickStatus, ScheduledEventStatus, SessionId,
     SessionMessageIdentities, SessionMessageRequest, SessionRule, WaitStatus,
@@ -282,6 +283,46 @@ fn route_specific_work(
         })
         .unwrap();
     queue_item_id
+}
+
+fn running_completion_attempt(prefix: &str) -> (Dispatch, QueueClaim, QueueItemId) {
+    let mut dispatch = Dispatch::open_in_memory().unwrap();
+    let event_id = format!("evt-{prefix}");
+    let session_id = format!("agent/worker/{event_id}");
+    let event = Event {
+        id: event_id,
+        event_type: "work.requested".to_owned(),
+        source: "test".to_owned(),
+        payload: Map::new(),
+        idempotency_key: Some(format!("ingress:{prefix}")),
+        caused_by: None,
+        session_id: None,
+        run_id: None,
+        turn_id: None,
+        timestamp_ms: 100,
+        cursor: None,
+    };
+    let queue_item_id = route_specific_work(&mut dispatch, event, "worker", &session_id, None);
+    let claim = dispatch
+        .claim_next_queue_item(
+            "local",
+            ClaimToken::new(format!("{prefix}-token")).unwrap(),
+            1_000,
+            200,
+        )
+        .unwrap()
+        .unwrap();
+    dispatch
+        .start_claimed_attempt(
+            &claim,
+            201,
+            RuntimeEventIdentity::new(format!("{prefix}-claimed"), 201).unwrap(),
+            RuntimeEventIdentity::new(format!("{prefix}-started"), 202).unwrap(),
+            "2026-08-12T10:00:00Z",
+            None,
+        )
+        .unwrap();
+    (dispatch, claim, queue_item_id)
 }
 
 #[test]
@@ -2280,6 +2321,32 @@ fn completion_vector_commits_ordered_controls_atomically() {
         })
         .collect();
 
+    let mut metadata = case["result"].as_object().unwrap().clone();
+    metadata.remove("publish_event_requests");
+    metadata.remove("wait_requests");
+    let controls = vec![
+        AttemptControl::publish(
+            "pub-first",
+            "work.first",
+            serde_json::from_value(json!({"position": 0})).unwrap(),
+            None,
+            0,
+        ),
+        AttemptControl::wait(
+            "wait-middle",
+            "work.ready",
+            serde_json::from_value(json!({"work_id": "42"})).unwrap(),
+            Some("2030-01-02T03:04:05+00:00".to_owned()),
+            1,
+        ),
+        AttemptControl::publish(
+            "pub-future",
+            "work.future",
+            serde_json::from_value(json!({"position": 2})).unwrap(),
+            Some("2999-01-01T00:00:00Z".to_owned()),
+            2,
+        ),
+    ];
     let terminal = dispatch
         .complete_claimed_attempt(
             &claim,
@@ -2287,7 +2354,9 @@ fn completion_vector_commits_ordered_controls_atomically() {
             &completion_identities,
             &AttemptCompletion::new(
                 "2026-08-12T10:00:01Z",
-                case["result"].as_object().unwrap().clone(),
+                AttemptCompletionDisposition::Succeeded,
+                metadata,
+                controls,
             ),
         )
         .unwrap();
@@ -2415,17 +2484,18 @@ fn completion_cancels_owned_resources_in_control_order() {
             ],
             &AttemptCompletion::new(
                 "2026-08-12T10:00:01Z",
+                AttemptCompletionDisposition::Succeeded,
                 serde_json::from_value(json!({
                     "final_answer": "done",
-                    "cancel_requests": [{
-                        "handle": "wait_control",
-                        "reason": "superseded",
-                        "source_agent_id": "worker",
-                        "source_session_id": session_id,
-                        "position": 0,
-                    }],
                 }))
                 .unwrap(),
+                vec![AttemptControl::cancel(
+                    "wait_control",
+                    Some("superseded".to_owned()),
+                    "worker",
+                    session_id,
+                    0,
+                )],
             ),
         )
         .unwrap();
@@ -2495,7 +2565,15 @@ fn invalid_completion_proposal_writes_no_partial_success() {
             ],
             &AttemptCompletion::new(
                 "2026-08-12T10:00:01Z",
-                case["result"].as_object().unwrap().clone(),
+                AttemptCompletionDisposition::Succeeded,
+                serde_json::from_value(json!({"final_answer": "invalid"})).unwrap(),
+                vec![AttemptControl::cancel(
+                    "wait_999999999999999999999999",
+                    Some("missing".to_owned()),
+                    "worker",
+                    "agent/worker/evt_complete",
+                    0,
+                )],
             ),
         )
         .unwrap_err();
@@ -2537,6 +2615,324 @@ fn invalid_completion_proposal_writes_no_partial_success() {
         .unwrap();
     assert_eq!(failed[0].event_type, "runtime.attempt.failed");
     assert_eq!(failed[1].event_type, "runtime.queue_item.dead_lettered");
+}
+
+#[test]
+fn explicit_cancelled_completion_records_proposals_without_applying_them() {
+    let (mut dispatch, claim, queue_item_id) = running_completion_attempt("typed-cancelled");
+    let controls = vec![AttemptControl::publish(
+        "pub-cancelled",
+        "work.must-not-publish",
+        Map::new(),
+        None,
+        0,
+    )];
+
+    let events = dispatch
+        .complete_claimed_attempt(
+            &claim,
+            203,
+            &[
+                RuntimeEventIdentity::new("typed-cancelled-attempt", 203).unwrap(),
+                RuntimeEventIdentity::new("typed-cancelled-unused", 204).unwrap(),
+                RuntimeEventIdentity::new("typed-cancelled-queue", 205).unwrap(),
+            ],
+            &AttemptCompletion::new(
+                "2026-08-12T10:00:01Z",
+                AttemptCompletionDisposition::Cancelled,
+                serde_json::from_value(json!({"final_answer": "partial"})).unwrap(),
+                controls,
+            ),
+        )
+        .unwrap();
+
+    assert_eq!(events.len(), 2);
+    assert_eq!(events[0].event_type, "runtime.attempt.cancelled");
+    assert_eq!(events[1].event_type, "runtime.queue_item.cancelled");
+    assert_eq!(events[0].payload["result"]["outcome"], "cancelled");
+    assert_eq!(events[0].payload["result"]["stop_reason"], "aborted");
+    assert_eq!(
+        events[0].payload["result"]["publish_event_requests"][0]["handle"],
+        "pub-cancelled"
+    );
+    assert_eq!(
+        dispatch
+            .list_events(&Filter::default())
+            .unwrap()
+            .iter()
+            .filter(|event| event.event_type == "work.must-not-publish")
+            .count(),
+        0
+    );
+    assert_eq!(
+        dispatch
+            .queue_item(&queue_item_id)
+            .unwrap()
+            .unwrap()
+            .status(),
+        QueueItemStatus::Cancelled
+    );
+}
+
+#[test]
+fn cancelled_disposition_still_validates_typed_controls() {
+    let (mut dispatch, claim, _queue_item_id) = running_completion_attempt("cancel-validation");
+    let before = dispatch.list_events(&Filter::default()).unwrap().len();
+
+    let error = dispatch
+        .complete_claimed_attempt(
+            &claim,
+            203,
+            &[
+                RuntimeEventIdentity::new("cancel-validation-attempt", 203).unwrap(),
+                RuntimeEventIdentity::new("cancel-validation-first", 204).unwrap(),
+                RuntimeEventIdentity::new("cancel-validation-second", 205).unwrap(),
+                RuntimeEventIdentity::new("cancel-validation-queue", 206).unwrap(),
+            ],
+            &AttemptCompletion::new(
+                "2026-08-12T10:00:01Z",
+                AttemptCompletionDisposition::Cancelled,
+                Map::new(),
+                vec![
+                    AttemptControl::publish("pub-first", "work.first", Map::new(), None, 0),
+                    AttemptControl::wait("wait-second", "work.second", Map::new(), None, 0),
+                ],
+            ),
+        )
+        .unwrap_err();
+
+    match error {
+        DispatchError::InvalidCompletion { field } => assert_eq!(field, "control.position"),
+        error => panic!("unexpected error: {error}"),
+    }
+    assert_eq!(
+        dispatch.list_events(&Filter::default()).unwrap().len(),
+        before
+    );
+    assert!(dispatch.claim_is_current(&claim, 203).unwrap());
+}
+
+#[test]
+fn durable_cancellation_wins_over_a_valid_success_proposal() {
+    let (mut dispatch, claim, queue_item_id) = running_completion_attempt("late-cancel");
+    let cancellation = dispatch
+        .cancel_queue_item(
+            &queue_item_id,
+            Some("agent/worker/evt-late-cancel"),
+            Some("changed direction"),
+            CancellationIdentities::new(
+                RuntimeEventIdentity::new("late-cancel-requested", 203).unwrap(),
+                RuntimeEventIdentity::new("late-cancel-unused", 204).unwrap(),
+            ),
+        )
+        .unwrap();
+    assert_eq!(cancellation.status(), CancellationStatus::Cancelling);
+
+    let events = dispatch
+        .complete_claimed_attempt(
+            &claim,
+            204,
+            &[
+                RuntimeEventIdentity::new("late-cancel-attempt", 204).unwrap(),
+                RuntimeEventIdentity::new("late-cancel-control-unused", 205).unwrap(),
+                RuntimeEventIdentity::new("late-cancel-queue", 206).unwrap(),
+            ],
+            &AttemptCompletion::new(
+                "2026-08-12T10:00:01Z",
+                AttemptCompletionDisposition::Succeeded,
+                Map::new(),
+                vec![AttemptControl::publish(
+                    "pub-late-cancel",
+                    "work.must-not-publish",
+                    Map::new(),
+                    None,
+                    0,
+                )],
+            ),
+        )
+        .unwrap();
+
+    assert_eq!(events.len(), 2);
+    assert_eq!(events[0].event_type, "runtime.attempt.cancelled");
+    assert_eq!(events[1].event_type, "runtime.queue_item.cancelled");
+    assert_eq!(
+        events[0].payload["result"]["publish_event_requests"][0]["handle"],
+        "pub-late-cancel"
+    );
+    assert_eq!(
+        dispatch
+            .list_events(&Filter::default())
+            .unwrap()
+            .iter()
+            .filter(|event| event.event_type == "work.must-not-publish")
+            .count(),
+        0
+    );
+}
+
+#[test]
+fn successful_disposition_does_not_infer_cancellation_from_metadata() {
+    let (mut dispatch, claim, queue_item_id) = running_completion_attempt("typed-succeeded");
+
+    let events = dispatch
+        .complete_claimed_attempt(
+            &claim,
+            203,
+            &[
+                RuntimeEventIdentity::new("typed-succeeded-attempt", 203).unwrap(),
+                RuntimeEventIdentity::new("typed-succeeded-queue", 204).unwrap(),
+            ],
+            &AttemptCompletion::new(
+                "2026-08-12T10:00:01Z",
+                AttemptCompletionDisposition::Succeeded,
+                serde_json::from_value(json!({"outcome": "cancelled"})).unwrap(),
+                Vec::new(),
+            ),
+        )
+        .unwrap();
+
+    assert_eq!(events[0].event_type, "runtime.attempt.completed");
+    assert_eq!(events[1].event_type, "runtime.queue_item.completed");
+    assert_eq!(
+        dispatch
+            .queue_item(&queue_item_id)
+            .unwrap()
+            .unwrap()
+            .status(),
+        QueueItemStatus::Completed
+    );
+}
+
+#[test]
+fn reserved_control_metadata_is_rejected_before_any_success_fact() {
+    let (mut dispatch, claim, _queue_item_id) = running_completion_attempt("typed-reserved");
+    let before = dispatch.list_events(&Filter::default()).unwrap().len();
+
+    let error = dispatch
+        .complete_claimed_attempt(
+            &claim,
+            203,
+            &[
+                RuntimeEventIdentity::new("typed-reserved-attempt", 203).unwrap(),
+                RuntimeEventIdentity::new("typed-reserved-queue", 204).unwrap(),
+            ],
+            &AttemptCompletion::new(
+                "2026-08-12T10:00:01Z",
+                AttemptCompletionDisposition::Succeeded,
+                serde_json::from_value(json!({"publish_event_requests": []})).unwrap(),
+                Vec::new(),
+            ),
+        )
+        .unwrap_err();
+
+    match error {
+        DispatchError::InvalidCompletion { field } => {
+            assert_eq!(field, "publish_event_requests")
+        }
+        error => panic!("unexpected error: {error}"),
+    }
+    assert_eq!(
+        dispatch.list_events(&Filter::default()).unwrap().len(),
+        before
+    );
+    assert!(dispatch.claim_is_current(&claim, 203).unwrap());
+}
+
+#[test]
+fn duplicate_typed_control_positions_are_rejected_atomically() {
+    let (mut dispatch, claim, _queue_item_id) = running_completion_attempt("typed-duplicate");
+    let before = dispatch.list_events(&Filter::default()).unwrap().len();
+    let controls = vec![
+        AttemptControl::publish("pub-first", "work.first", Map::new(), None, 0),
+        AttemptControl::wait("wait-second", "work.second", Map::new(), None, 0),
+    ];
+
+    let error = dispatch
+        .complete_claimed_attempt(
+            &claim,
+            203,
+            &[
+                RuntimeEventIdentity::new("typed-duplicate-attempt", 203).unwrap(),
+                RuntimeEventIdentity::new("typed-duplicate-first", 204).unwrap(),
+                RuntimeEventIdentity::new("typed-duplicate-second", 205).unwrap(),
+                RuntimeEventIdentity::new("typed-duplicate-queue", 206).unwrap(),
+            ],
+            &AttemptCompletion::new(
+                "2026-08-12T10:00:01Z",
+                AttemptCompletionDisposition::Succeeded,
+                Map::new(),
+                controls,
+            ),
+        )
+        .unwrap_err();
+
+    match error {
+        DispatchError::InvalidCompletion { field } => assert_eq!(field, "control.position"),
+        error => panic!("unexpected error: {error}"),
+    }
+    assert_eq!(
+        dispatch.list_events(&Filter::default()).unwrap().len(),
+        before
+    );
+    assert!(dispatch.claim_is_current(&claim, 203).unwrap());
+}
+
+#[test]
+fn invalid_typed_control_fields_are_rejected_before_any_success_fact() {
+    let cases = [
+        (
+            "typed-empty-event",
+            AttemptControl::publish("pub-invalid", "", Map::new(), None, 0),
+            "publish_event_requests.event_type",
+        ),
+        (
+            "typed-deadline",
+            AttemptControl::wait(
+                "wait-invalid",
+                "work.ready",
+                Map::new(),
+                Some("tomorrow".to_owned()),
+                0,
+            ),
+            "wait_requests.deadline",
+        ),
+        (
+            "typed-reason",
+            AttemptControl::cancel("wait-invalid", Some(String::new()), "worker", "session", 0),
+            "cancel_requests.reason",
+        ),
+    ];
+
+    for (prefix, control, field) in cases {
+        let (mut dispatch, claim, _queue_item_id) = running_completion_attempt(prefix);
+        let before = dispatch.list_events(&Filter::default()).unwrap().len();
+        let error = dispatch
+            .complete_claimed_attempt(
+                &claim,
+                203,
+                &[
+                    RuntimeEventIdentity::new(format!("{prefix}-attempt"), 203).unwrap(),
+                    RuntimeEventIdentity::new(format!("{prefix}-control"), 204).unwrap(),
+                    RuntimeEventIdentity::new(format!("{prefix}-queue"), 205).unwrap(),
+                ],
+                &AttemptCompletion::new(
+                    "2026-08-12T10:00:01Z",
+                    AttemptCompletionDisposition::Succeeded,
+                    Map::new(),
+                    vec![control],
+                ),
+            )
+            .unwrap_err();
+        match error {
+            DispatchError::InvalidCompletion { field: actual } => assert_eq!(actual, field),
+            error => panic!("unexpected error: {error}"),
+        }
+        assert_eq!(
+            dispatch.list_events(&Filter::default()).unwrap().len(),
+            before
+        );
+        assert!(dispatch.claim_is_current(&claim, 203).unwrap());
+    }
 }
 
 #[test]

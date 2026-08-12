@@ -1,4 +1,13 @@
+import json
+from pathlib import Path
+from typing import get_args
+
 import pytest
+from zeta.harness.retry import (
+    DispatchErrorCode,
+    RetryPolicy,
+    classify_error_code,
+)
 from zeta.harness.sessions import (
     SessionNotFound,
     SessionOwnerConflict,
@@ -12,6 +21,120 @@ from zeta.harness.state import (
     validate_attempt_transition,
     validate_queue_transition,
 )
+
+from zeta import ids
+
+RUNTIME_VECTORS_PATH = (
+    Path(__file__).resolve().parents[2] / "spec/vectors/dispatch/runtime.json"
+)
+
+
+def _runtime_vectors() -> dict:
+    return json.loads(RUNTIME_VECTORS_PATH.read_text(encoding="utf-8"))
+
+
+def test_runtime_identity_derivations_match_dispatch_vectors() -> None:
+    document = _runtime_vectors()
+
+    assert document["format"] == "zeta-dispatch-runtime-v0"
+    for case in document["identity_cases"]:
+        values = case["input"]
+        queue_item_id = ids.queue_item_id(values["event_id"], values["agent_id"])
+        attempt_id = ids.attempt_id(queue_item_id, values["attempt_number"])
+        actual = {
+            "safe_agent_id": ids.safe_agent_id(values["agent_id"]),
+            "pending_queue_item_id": ids.pending_queue_item_id(values["event_id"]),
+            "queue_item_id": queue_item_id,
+            "unhandled_queue_item_id": ids.unhandled_queue_item_id(values["event_id"]),
+            "attempt_id": attempt_id,
+            "derived_run_id": ids.derived_run_id(attempt_id),
+            "selected_run_id": ids.run_id_for_attempt(
+                values["claimed_run_id"], attempt_id
+            ),
+            "publish_event_handle": ids.publish_event_handle(
+                queue_item_id, values["request_position"]
+            ),
+            "wait_handle": ids.wait_handle(queue_item_id, values["request_position"]),
+            "queue_item_idempotency_key": ids.queue_item_idempotency_key(
+                values["event_id"],
+                values["agent_id"],
+                values["queue_status"],
+            ),
+            "queue_item_attempt_idempotency_key": ids.queue_item_idempotency_key(
+                values["event_id"],
+                values["agent_id"],
+                values["queue_status"],
+                attempt_number=values["attempt_number"],
+            ),
+            "unhandled_queue_item_idempotency_key": (
+                ids.unhandled_queue_item_idempotency_key(values["event_id"])
+            ),
+            "attempt_idempotency_key": ids.attempt_idempotency_key(
+                queue_item_id,
+                values["attempt_number"],
+                values["attempt_status"],
+            ),
+        }
+
+        assert actual == case["expected"], case["name"]
+
+
+@pytest.mark.parametrize(
+    ("vector_name", "transitions", "validator"),
+    [
+        ("queue", QUEUE_TRANSITIONS, validate_queue_transition),
+        ("attempt", ATTEMPT_TRANSITIONS, validate_attempt_transition),
+    ],
+)
+def test_runtime_transition_tables_match_dispatch_vectors_exhaustively(
+    vector_name,
+    transitions,
+    validator,
+) -> None:
+    vector = _runtime_vectors()["transitions"][vector_name]
+    states = vector["states"]
+    rows = vector["rows"]
+
+    assert set(states) == set(transitions) - {None}
+    assert [row["previous"] for row in rows] == [None, *states]
+    for row in rows:
+        previous = row["previous"]
+        expected_allowed = row["allowed"]
+        assert expected_allowed == [
+            state for state in states if state in transitions[previous]
+        ]
+        for current in states:
+            if current in expected_allowed:
+                validator(previous, current)
+            else:
+                with pytest.raises(InvalidRuntimeTransition):
+                    validator(previous, current)
+
+
+def test_retry_delays_match_dispatch_vectors() -> None:
+    for case in _runtime_vectors()["retry_policies"]:
+        policy = RetryPolicy(**case["policy"])
+        actual = [
+            {
+                "attempt_number": attempt["attempt_number"],
+                "delay_seconds": policy.delay_seconds(attempt["attempt_number"]),
+                "delay_ms": policy.delay_ms(attempt["attempt_number"]),
+            }
+            for attempt in case["attempts"]
+        ]
+
+        assert actual == case["attempts"], case["name"]
+
+
+def test_retry_classification_matches_dispatch_vectors_exhaustively() -> None:
+    vectors = _runtime_vectors()["failure_classification"]
+    error_codes = set(get_args(DispatchErrorCode))
+
+    assert {vector["error_code"] for vector in vectors} == error_codes
+    policy = RetryPolicy()
+    for vector in vectors:
+        assert classify_error_code(vector["error_code"]) == vector["failure_class"]
+        assert policy.classify(vector["error_code"]) == vector["failure_class"]
 
 
 def test_queue_transition_table_is_exhaustively_enforced() -> None:
@@ -230,3 +353,19 @@ def test_session_projection_reports_conflicting_owners() -> None:
 def test_session_projection_rejects_an_unknown_session() -> None:
     with pytest.raises(SessionNotFound, match="unknown session"):
         session_record([], "session-missing")
+
+
+def test_dispatch_session_read_script_freezes_activity_priority() -> None:
+    case = next(
+        case
+        for case in _runtime_vectors()["scripted_cases"]["session_reads"]
+        if case["name"] == "running_queued_waiting_idle_priority"
+    )
+
+    actual = project_sessions(
+        case["queue_items"],
+        case["attempts"],
+        case["waits"],
+    )
+
+    assert actual == case["expected"]

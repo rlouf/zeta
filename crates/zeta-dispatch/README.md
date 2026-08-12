@@ -50,11 +50,18 @@ later claims. Starting an attempt then commits its `queue_item.claimed` and
 update coordination only; projection rebuilds intentionally clear all claims,
 heartbeats, and locks.
 
-Successful completion validates the entire result before appending its first
-fact. Immediate publications, future publications, and waits retain their
-global result order between `attempt.completed` and `queue_item.completed`.
-Cancellation controls use the same ordering and ownership checks, and an
-invalid target rolls back the complete success batch.
+Attempt completion accepts an explicit succeeded-or-cancelled disposition,
+open durable result metadata, and typed publish, wait, and cancellation
+controls. Dispatch rejects legacy control arrays in caller metadata and
+materializes them itself in durable result payloads, keeping executable
+controls and recorded evidence identical. Every proposal is validated before
+opening the completion transaction. Immediate publications, future
+publications, and waits retain their global position order between
+`attempt.completed` and `queue_item.completed`. Cancellation controls use the
+same ordering and ownership checks, and an invalid target rolls back the
+complete success batch. A requested or explicit cancellation records the
+proposals without applying them and closes the attempt and queue item as
+cancelled.
 Matching an external event consumes every compatible active wait and creates
 its session continuation atomically. Deadline expiry likewise records the wait
 timeout and continuation together. Authorized resource cancellation competes

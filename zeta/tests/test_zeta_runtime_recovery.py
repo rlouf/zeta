@@ -1,10 +1,19 @@
 import asyncio
+import json
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime
 from pathlib import Path
 from threading import Barrier
 
 import pytest
+from zeta.authoring.spec import AgentSpec, ScheduleEntry
 from zeta.events import DraftEvent, Event
+from zeta.harness.dispatch import (
+    QueueingDispatcher,
+    ReservedRuntimeEventError,
+)
+from zeta.harness.routing import AgentRoute, EventPattern
+from zeta.harness.scheduling import request_due_schedules, schedule_status
 from zeta.harness.sessions import submit_session_message
 from zeta.harness.store import (
     InvalidCancellationHandle,
@@ -12,8 +21,58 @@ from zeta.harness.store import (
     UnauthorizedCancellation,
     UnknownCancellationHandle,
 )
+from zeta.journal.memory import MemoryEventStore
 from zeta.journal.sqlite import SqliteEventStore
 from zeta.journal.store import Filter
+
+RUNTIME_VECTORS_PATH = (
+    Path(__file__).resolve().parents[2] / "spec/vectors/dispatch/runtime.json"
+)
+
+
+def _dispatch_scripted_case(section: str, name: str) -> dict:
+    document = json.loads(RUNTIME_VECTORS_PATH.read_text(encoding="utf-8"))
+    return next(
+        case for case in document["scripted_cases"][section] if case["name"] == name
+    )
+
+
+def _normalize_event_contract(
+    events: list[Event],
+    expected: list[dict],
+) -> list[dict]:
+    assert [event.event_type for event in events] == [item["type"] for item in expected]
+    aliases = {
+        event.id: item["alias"] for event, item in zip(events, expected, strict=True)
+    }
+
+    def normalize(value):
+        if isinstance(value, dict):
+            return {key: normalize(item) for key, item in value.items()}
+        if isinstance(value, list):
+            return [normalize(item) for item in value]
+        if isinstance(value, str):
+            for event_id, alias in sorted(
+                aliases.items(), key=lambda item: len(item[0]), reverse=True
+            ):
+                value = value.replace(event_id, alias)
+        return value
+
+    contracts = []
+    for event, item in zip(events, expected, strict=True):
+        contract = {
+            "alias": item["alias"],
+            "type": event.event_type,
+            "idempotency_key": normalize(event.idempotency_key),
+            "caused_by": normalize(event.caused_by),
+        }
+        expected_payload = item.get("payload")
+        if expected_payload is not None:
+            contract["payload"] = normalize(
+                {key: event.payload[key] for key in expected_payload}
+            )
+        contracts.append(contract)
+    return contracts
 
 
 def _scheduled_event_created(
@@ -1308,4 +1367,329 @@ def test_due_publication_rolls_back_when_terminal_fact_fails(
     assert store.list_events(Filter(event_type="report.ready")) == []
     assert store.list_queue_items() == []
     assert store.list_scheduled_events()[0]["status"] == "pending"
+    store.close()
+
+
+def test_dispatch_ingress_script_is_idempotent_and_reserves_runtime_namespace(
+    tmp_path: Path,
+) -> None:
+    case = _dispatch_scripted_case(
+        "ingress",
+        "idempotent_external_event_and_reserved_namespace",
+    )
+    store = RuntimeEventStore.open(tmp_path / "runtime.sqlite3")
+    dispatcher = QueueingDispatcher(store, store)
+    draft = DraftEvent(**case["draft"])
+
+    first = asyncio.run(dispatcher.publish_event(draft))
+    repeated = asyncio.run(dispatcher.publish_event(draft))
+
+    assert [first.inserted, repeated.inserted] == case["expected"]["inserted"]
+    assert repeated.event.id == first.event.id
+    assert len(store.list_events(Filter())) == case["expected"]["event_count"]
+    queue_item = store.list_queue_items()[0]
+    assert {
+        "queue_item_id": queue_item["queue_item_id"].replace(first.event.id, "$input"),
+        "event_id": "$input",
+        "target_agent": queue_item["target_agent"],
+        "status": queue_item["status"],
+    } == case["expected"]["queue_item"]
+    with pytest.raises(ReservedRuntimeEventError):
+        asyncio.run(
+            dispatcher.publish_event(DraftEvent(case["reserved_type"], "external", {}))
+        )
+    assert len(store.list_events(Filter())) == case["expected"]["event_count"]
+    store.close()
+
+
+@pytest.mark.parametrize(
+    "case_name",
+    ["fan_out_closes_unbound_barrier", "unhandled_closes_unbound_barrier"],
+)
+def test_dispatch_routing_scripts_freeze_lifecycle_order(
+    tmp_path: Path,
+    case_name: str,
+) -> None:
+    case = _dispatch_scripted_case("routing", case_name)
+    store = RuntimeEventStore.open(tmp_path / f"{case_name}.sqlite3")
+    trigger = Event(**case["event"])
+    store.append(trigger)
+    routes = tuple(
+        AgentRoute(
+            route["agent_id"],
+            tuple(EventPattern(pattern) for pattern in route["accepts"]),
+            session=route["session"],
+            project_generation=route.get("project_generation"),
+        )
+        for route in case["routes"]
+    )
+    dispatcher = QueueingDispatcher(store, store, routes=routes)
+    pending = store.list_queue_items()[0]
+
+    lifecycle = asyncio.run(dispatcher.run_queue_item(pending["queue_item_id"]))
+
+    assert (
+        _normalize_event_contract(lifecycle, case["expected"]["events"])
+        == case["expected"]["events"]
+    )
+    actual_queue_items = sorted(
+        (
+            {
+                "queue_item_id": item["queue_item_id"],
+                "target_agent": item["target_agent"],
+                "session_id": item.get("session_id"),
+                "project_generation": item.get("project_generation"),
+                "status": item["status"],
+            }
+            for item in store.list_queue_items()
+        ),
+        key=lambda item: item["queue_item_id"],
+    )
+    assert actual_queue_items == case["expected"]["queue_items"]
+    store.close()
+
+
+def test_dispatch_claim_fencing_script_rejects_stale_ownership(
+    tmp_path: Path,
+) -> None:
+    case = _dispatch_scripted_case("claim_fencing", "released_token_stays_stale")
+    store = RuntimeEventStore.open(tmp_path / "runtime.sqlite3")
+    store.append(Event(**case["event"]))
+    now_ms = case["now_ms"]
+
+    first = store.claim_next_queue_item(
+        case["workers"][0],
+        lease_ms=case["lease_ms"],
+        now_ms=now_ms,
+    )
+    assert first is not None
+    wrong_token_current = store.queue_claim_is_current(
+        first.queue_item_id,
+        case["workers"][0],
+        "stale-token",
+        now_ms=now_ms,
+    )
+    released = store.release_queue_claim(
+        first.queue_item_id,
+        case["workers"][0],
+        claim_token=first.token,
+        now_ms=now_ms + 1,
+    )
+    second = store.claim_next_queue_item(
+        case["workers"][1],
+        lease_ms=case["lease_ms"],
+        now_ms=now_ms + 2,
+    )
+    assert second is not None
+    queue_record = store.queue_item(second.queue_item_id)
+    assert queue_record is not None
+
+    actual = {
+        "tokens_differ": first.token != second.token,
+        "wrong_token_current": wrong_token_current,
+        "released": released,
+        "released_token_current": store.queue_claim_is_current(
+            first.queue_item_id,
+            case["workers"][0],
+            first.token,
+            now_ms=now_ms + 2,
+        ),
+        "new_token_current": store.queue_claim_is_current(
+            second.queue_item_id,
+            case["workers"][1],
+            second.token,
+            now_ms=now_ms + 2,
+        ),
+        "queue_status": queue_record["status"],
+    }
+    assert actual == case["expected"]
+    store.close()
+
+
+def test_dispatch_cancellation_script_is_durable_and_idempotent(
+    tmp_path: Path,
+) -> None:
+    case = _dispatch_scripted_case("cancellation", "queued_turn_cancels_once")
+    store = RuntimeEventStore.open(tmp_path / "runtime.sqlite3")
+    queued = submit_session_message(store, **case["message"])
+
+    first = store.cancel_queue_item(
+        queued["queue_item_id"],
+        expected_session_id=case["message"]["session_id"],
+        reason=case["reason"],
+        now_ms=case["now_ms"],
+    )
+    repeated = store.cancel_queue_item(
+        queued["queue_item_id"],
+        expected_session_id=case["message"]["session_id"],
+        reason="ignored repeat",
+        now_ms=case["now_ms"] + 1,
+    )
+    journal = store.list_events(Filter())
+
+    assert (
+        _normalize_event_contract(journal, case["expected"]["events"])
+        == case["expected"]["events"]
+    )
+    assert [first.status, repeated.status] == case["expected"]["results"]
+    assert [first.changed, repeated.changed] == case["expected"]["changed"]
+    queue_record = store.queue_item(queued["queue_item_id"])
+    assert queue_record is not None
+    assert queue_record["status"] == case["expected"]["queue_status"]
+    store.rebuild_projections()
+    queue_record = store.queue_item(queued["queue_item_id"])
+    assert queue_record is not None
+    assert queue_record["status"] == case["expected"]["queue_status"]
+    store.close()
+
+
+def test_dispatch_wait_script_matches_once_and_keeps_input_routable(
+    tmp_path: Path,
+) -> None:
+    case = _dispatch_scripted_case("waits", "matching_event_resumes_once")
+    store = RuntimeEventStore.open(tmp_path / "runtime.sqlite3")
+    store.append(Event(**case["created_event"]))
+    draft = DraftEvent(**case["matching_draft"])
+
+    first = store.accept(draft)
+    repeated = store.accept(draft)
+    journal = store.list_events(Filter())
+
+    assert [first.inserted, repeated.inserted] == case["expected"]["inserted"]
+    assert (
+        _normalize_event_contract(journal, case["expected"]["events"])
+        == case["expected"]["events"]
+    )
+    wait = store.list_waits()[0]
+    assert {
+        "status": wait["status"],
+        "matched_event_id": "$matching_input"
+        if wait["matched_event_id"] == first.event.id
+        else wait["matched_event_id"],
+    } == case["expected"]["wait"]
+    assert (
+        sorted(item["status"] for item in store.list_queue_items())
+        == case["expected"]["queue_statuses"]
+    )
+    store.close()
+
+
+def test_dispatch_one_shot_schedule_script_publishes_exactly_once(
+    tmp_path: Path,
+) -> None:
+    case = _dispatch_scripted_case(
+        "scheduled_events",
+        "due_publication_consumes_pending_schedule",
+    )
+    store = RuntimeEventStore.open(tmp_path / "runtime.sqlite3")
+    store.append(Event(**case["created_event"]))
+
+    first = store.publish_next_due_scheduled_event(now_ms=case["now_ms"])
+    repeated = store.publish_next_due_scheduled_event(now_ms=case["now_ms"])
+    journal = store.list_events(Filter())
+
+    assert first is not None
+    assert repeated is None
+    assert (
+        _normalize_event_contract(journal, case["expected"]["events"])
+        == case["expected"]["events"]
+    )
+    assert (
+        store.list_scheduled_events()[0]["status"]
+        == case["expected"]["schedule_status"]
+    )
+    store.close()
+
+
+def test_dispatch_recurring_schedule_script_records_activation_and_decision() -> None:
+    case = _dispatch_scripted_case(
+        "recurring_schedules",
+        "latest_catchup_activates_before_publishing",
+    )
+    event_store = MemoryEventStore()
+    schedule = ScheduleEntry(**case["schedule"])
+    spec = AgentSpec(
+        slug=case["agent_id"],
+        name="Reporter",
+        description="Reports on schedule.",
+        instructions="Report.",
+        path=Path("agents/reporter.md"),
+        content_address="b3:fixture",
+        schedules=(schedule,),
+    )
+
+    first = request_due_schedules(
+        event_store,
+        (spec,),
+        now=datetime.fromisoformat(case["ticks"][0]),
+    )
+    second = request_due_schedules(
+        event_store,
+        (spec,),
+        now=datetime.fromisoformat(case["ticks"][1]),
+    )
+    journal = event_store.list_events(Filter())
+
+    assert [len(first), len(second)] == case["expected"]["published_per_tick"]
+    assert (
+        _normalize_event_contract(journal, case["expected"]["events"])
+        == case["expected"]["events"]
+    )
+    assert [
+        row.as_record()
+        for row in schedule_status(
+            event_store,
+            (spec,),
+            now=datetime.fromisoformat(case["ticks"][1]),
+        )
+    ] == case["expected"]["read_model"]
+
+
+def test_dispatch_projection_recovery_script_discards_live_ownership(
+    tmp_path: Path,
+) -> None:
+    case = _dispatch_scripted_case(
+        "projection_recovery",
+        "rebuild_preserves_history_and_releases_claim",
+    )
+    store = RuntimeEventStore.open(tmp_path / "runtime.sqlite3")
+    for value in case["events"]:
+        store.append(Event(**value))
+    claim = store.claim_next_queue_item(
+        case["worker"],
+        lease_ms=case["lease_ms"],
+        now_ms=case["now_ms"],
+    )
+    assert claim is not None
+    assert store.acquire_locks(
+        case["lock_keys"],
+        claim.token,
+        lease_ms=case["lease_ms"],
+        now_ms=case["now_ms"],
+    )
+    ownership_before_rebuild = store.queue_claim_is_current(
+        claim.queue_item_id,
+        case["worker"],
+        claim.token,
+        now_ms=case["now_ms"],
+    )
+    for value in case["lifecycle_events"]:
+        store.append(Event(**value))
+
+    store.rebuild_projections()
+    after = store.queue_item(claim.queue_item_id)
+
+    assert after is not None
+    assert {
+        "ownership_before_rebuild": ownership_before_rebuild,
+        "after": {
+            "status": after["status"],
+            "claimed_by": after.get("claimed_by"),
+            "claimed_until": after.get("claimed_until"),
+        },
+        "attempt_statuses": [attempt["status"] for attempt in store.list_attempts()],
+        "attempt_count": store.queue_item_attempt_count(claim.queue_item_id),
+        "locks": store.list_locks(),
+        "journal_event_ids": [event.id for event in store.list_events(Filter())],
+    } == case["expected"]
     store.close()

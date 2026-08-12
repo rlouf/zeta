@@ -7,13 +7,13 @@ mod sqlite;
 mod state;
 
 pub use dispatch::{
-    Attempt, AttemptCompletion, AttemptFailure, CancellationFinalizationIdentities,
-    CancellationIdentities, CancellationOutcome, CancellationStatus, Effect,
-    EffectDeliverySemantics, EffectStatus, LockLease, QueueClaim, QueueItem, RecurringSchedule,
-    RecurringScheduleActivation, RecurringScheduleStatus, RecurringScheduleTick,
-    ResourceCancellationOutcome, ResourceCancellationStatus, ResourceKind, RoutingOutcome,
-    RuntimeEventIdentity, ScheduleTickStatus, ScheduledEvent, ScheduledEventStatus, Session,
-    SessionActiveWait, SessionActivityStatus, SessionLatestRun, SessionMessageIdentities,
+    Attempt, AttemptCompletion, AttemptCompletionDisposition, AttemptControl, AttemptFailure,
+    CancellationFinalizationIdentities, CancellationIdentities, CancellationOutcome,
+    CancellationStatus, Effect, EffectDeliverySemantics, EffectStatus, LockLease, QueueClaim,
+    QueueItem, RecurringSchedule, RecurringScheduleActivation, RecurringScheduleStatus,
+    RecurringScheduleTick, ResourceCancellationOutcome, ResourceCancellationStatus, ResourceKind,
+    RoutingOutcome, RuntimeEventIdentity, ScheduleTickStatus, ScheduledEvent, ScheduledEventStatus,
+    Session, SessionActiveWait, SessionActivityStatus, SessionLatestRun, SessionMessageIdentities,
     SessionMessageRequest, StartedAttempt, SubmittedSessionMessage, Wait, WaitStatus,
 };
 pub use identity::{

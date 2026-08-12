@@ -7,8 +7,12 @@
 //! discovery, process launch, model calls, execution, and persistence remain
 //! host concerns.
 
+mod connector;
 mod error;
+mod event;
+mod manifest;
 mod parse;
+mod project;
 mod spec;
 
 pub use error::{AuthoringError, AuthoringErrorKind, SpecError, SpecErrorKind};

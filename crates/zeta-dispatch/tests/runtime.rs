@@ -1349,6 +1349,58 @@ fn projection_rebuild_preserves_running_attempt_and_releases_claimed_item() {
 }
 
 #[test]
+fn unrouted_ingress_events_recover_a_stalled_queue_after_restart() {
+    let mut dispatch = Dispatch::open_in_memory().unwrap();
+    let stalled = journal_event("evt_stalled", None);
+    let routed = Event {
+        timestamp_ms: 2,
+        ..journal_event("evt_routed", None)
+    };
+    dispatch.ingest_event(stalled.clone()).unwrap();
+    dispatch.ingest_event(routed.clone()).unwrap();
+
+    let route = Route::new(
+        "worker",
+        vec![EventPattern::new("dispatch.test")],
+        SessionRule::PerEvent,
+        Vec::new(),
+        None,
+    );
+    dispatch
+        .route_ingress_event(
+            &routed.id,
+            std::slice::from_ref(&route),
+            &[RuntimeEventIdentity::new("route-evt_routed", 3).unwrap()],
+        )
+        .unwrap();
+
+    let token = ClaimToken::new("recovery-token").unwrap();
+    let blocked = dispatch
+        .claim_next_queue_item("local", token.clone(), 1_000, 10)
+        .unwrap();
+    assert!(blocked.is_none());
+    assert_eq!(dispatch.unrouted_ingress_events().unwrap(), ["evt_stalled"]);
+
+    dispatch
+        .route_ingress_event(
+            &stalled.id,
+            &[route],
+            &[RuntimeEventIdentity::new("route-evt_stalled", 4).unwrap()],
+        )
+        .unwrap();
+    assert!(dispatch.unrouted_ingress_events().unwrap().is_empty());
+
+    let claim = dispatch
+        .claim_next_queue_item("local", token, 1_000, 10)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        claim.queue_item_id().as_str(),
+        pending_queue_item_id(&stalled.id).as_str()
+    );
+}
+
+#[test]
 fn ingress_projection_failure_rolls_back_the_journal_append() {
     let directory = tempdir().unwrap();
     let path = directory.path().join("projection-rollback.sqlite3");

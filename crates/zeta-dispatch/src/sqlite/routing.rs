@@ -100,6 +100,38 @@ impl Dispatch {
             .map_err(|error| database_error("commit route", error))?;
         Ok(RoutingOutcome { decisions, events })
     }
+
+    /// Returns ingress event ids whose unbound work items still await routing.
+    ///
+    /// An unbound pending item is a barrier that blocks every later claim, so
+    /// a crash between [`Dispatch::ingest_event`] and
+    /// [`Dispatch::route_ingress_event`] would stall the queue forever unless
+    /// restart recovery can discover these events and re-drive routing in
+    /// input order.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DispatchError`] when the queue projection cannot be read.
+    pub fn unrouted_ingress_events(&self) -> Result<Vec<String>, DispatchError> {
+        let mut statement = self
+            .connection
+            .prepare(
+                "SELECT event_id FROM queue_items
+                 WHERE status = 'pending' AND target_agent = ''
+                 ORDER BY input_cursor ASC",
+            )
+            .map_err(|error| database_error("prepare unrouted ingress events", error))?;
+        let rows = statement
+            .query_map([], |row| row.get::<_, String>(0))
+            .map_err(|error| database_error("read unrouted ingress events", error))?;
+        let mut event_ids = Vec::new();
+        for row in rows {
+            let event_id =
+                row.map_err(|error| database_error("read unrouted ingress event", error))?;
+            event_ids.push(event_id);
+        }
+        Ok(event_ids)
+    }
 }
 
 fn lifecycle_for_route(

@@ -1,0 +1,1926 @@
+{
+  "format": "zeta-dispatch-runtime-v0",
+  "identity_cases": [
+    {
+      "name": "derived_first_attempt",
+      "input": {
+        "event_id": "evt_01J00000000000000000000000",
+        "agent_id": "triage",
+        "attempt_number": 1,
+        "claimed_run_id": null,
+        "request_position": 0,
+        "queue_status": "available",
+        "attempt_status": "running"
+      },
+      "expected": {
+        "safe_agent_id": "triage",
+        "pending_queue_item_id": "qi_evt_01J00000000000000000000000",
+        "queue_item_id": "qi_evt_01J00000000000000000000000_triage",
+        "unhandled_queue_item_id": "qi_evt_01J00000000000000000000000_unhandled",
+        "attempt_id": "att_qi_evt_01J00000000000000000000000_triage_1",
+        "derived_run_id": "run_att_qi_evt_01J00000000000000000000000_triage_1",
+        "selected_run_id": "run_att_qi_evt_01J00000000000000000000000_triage_1",
+        "publish_event_handle": "pub_b3:afe9d7037e33e022ee177cfdf49a9895f4e80210bebd05cc1f1b9790627f9e02",
+        "wait_handle": "wait_b3:afe9d7037e33e022ee177cfdf49a9895f4e80210bebd05cc1f1b9790627f9e02",
+        "queue_item_idempotency_key": "queue_item:evt_01J00000000000000000000000:triage:available",
+        "queue_item_attempt_idempotency_key": "queue_item:evt_01J00000000000000000000000:triage:available:1",
+        "unhandled_queue_item_idempotency_key": "queue_item:evt_01J00000000000000000000000:unhandled",
+        "attempt_idempotency_key": "attempt:qi_evt_01J00000000000000000000000_triage:1:running"
+      }
+    },
+    {
+      "name": "claimed_run_and_safe_agent_id",
+      "input": {
+        "event_id": "evt_webhook:42",
+        "agent_id": "release.bot:v2",
+        "attempt_number": 7,
+        "claimed_run_id": "run_client_01J00000000000000000000000",
+        "request_position": 12,
+        "queue_status": "retry_scheduled",
+        "attempt_status": "failed"
+      },
+      "expected": {
+        "safe_agent_id": "release_bot_v2",
+        "pending_queue_item_id": "qi_evt_webhook:42",
+        "queue_item_id": "qi_evt_webhook:42_release_bot_v2",
+        "unhandled_queue_item_id": "qi_evt_webhook:42_unhandled",
+        "attempt_id": "att_qi_evt_webhook:42_release_bot_v2_7",
+        "derived_run_id": "run_att_qi_evt_webhook:42_release_bot_v2_7",
+        "selected_run_id": "run_client_01J00000000000000000000000",
+        "publish_event_handle": "pub_b3:cfea6aaf9ab1370dd563654995a8a2062b34939b7124c0e2df82ee71362d5dc4",
+        "wait_handle": "wait_b3:cfea6aaf9ab1370dd563654995a8a2062b34939b7124c0e2df82ee71362d5dc4",
+        "queue_item_idempotency_key": "queue_item:evt_webhook:42:release.bot:v2:retry_scheduled",
+        "queue_item_attempt_idempotency_key": "queue_item:evt_webhook:42:release.bot:v2:retry_scheduled:7",
+        "unhandled_queue_item_idempotency_key": "queue_item:evt_webhook:42:unhandled",
+        "attempt_idempotency_key": "attempt:qi_evt_webhook:42_release_bot_v2:7:failed"
+      }
+    },
+    {
+      "name": "unicode_identity_inputs",
+      "input": {
+        "event_id": "evt_unicode_雪",
+        "agent_id": "ops.équipe:v1",
+        "attempt_number": 2,
+        "claimed_run_id": null,
+        "request_position": 3,
+        "queue_status": "completed",
+        "attempt_status": "completed"
+      },
+      "expected": {
+        "safe_agent_id": "ops_équipe_v1",
+        "pending_queue_item_id": "qi_evt_unicode_雪",
+        "queue_item_id": "qi_evt_unicode_雪_ops_équipe_v1",
+        "unhandled_queue_item_id": "qi_evt_unicode_雪_unhandled",
+        "attempt_id": "att_qi_evt_unicode_雪_ops_équipe_v1_2",
+        "derived_run_id": "run_att_qi_evt_unicode_雪_ops_équipe_v1_2",
+        "selected_run_id": "run_att_qi_evt_unicode_雪_ops_équipe_v1_2",
+        "publish_event_handle": "pub_b3:41dbe3e9ddde08f3ee789f6b056ec356120df080603faed15c62effd48cb667f",
+        "wait_handle": "wait_b3:41dbe3e9ddde08f3ee789f6b056ec356120df080603faed15c62effd48cb667f",
+        "queue_item_idempotency_key": "queue_item:evt_unicode_雪:ops.équipe:v1:completed",
+        "queue_item_attempt_idempotency_key": "queue_item:evt_unicode_雪:ops.équipe:v1:completed:2",
+        "unhandled_queue_item_idempotency_key": "queue_item:evt_unicode_雪:unhandled",
+        "attempt_idempotency_key": "attempt:qi_evt_unicode_雪_ops_équipe_v1:2:completed"
+      }
+    }
+  ],
+  "transitions": {
+    "queue": {
+      "states": [
+        "pending",
+        "available",
+        "claimed",
+        "completed",
+        "failed",
+        "cancelled",
+        "retry_scheduled",
+        "dead_lettered",
+        "unhandled"
+      ],
+      "rows": [
+        {
+          "previous": null,
+          "allowed": [
+            "pending",
+            "available",
+            "unhandled"
+          ]
+        },
+        {
+          "previous": "pending",
+          "allowed": [
+            "available",
+            "claimed",
+            "unhandled"
+          ]
+        },
+        {
+          "previous": "available",
+          "allowed": [
+            "claimed",
+            "cancelled"
+          ]
+        },
+        {
+          "previous": "claimed",
+          "allowed": [
+            "available",
+            "completed",
+            "failed",
+            "cancelled",
+            "dead_lettered"
+          ]
+        },
+        {
+          "previous": "completed",
+          "allowed": []
+        },
+        {
+          "previous": "failed",
+          "allowed": [
+            "retry_scheduled",
+            "dead_lettered"
+          ]
+        },
+        {
+          "previous": "cancelled",
+          "allowed": []
+        },
+        {
+          "previous": "retry_scheduled",
+          "allowed": [
+            "available",
+            "cancelled"
+          ]
+        },
+        {
+          "previous": "dead_lettered",
+          "allowed": []
+        },
+        {
+          "previous": "unhandled",
+          "allowed": []
+        }
+      ]
+    },
+    "attempt": {
+      "states": [
+        "running",
+        "completed",
+        "failed",
+        "cancelled"
+      ],
+      "rows": [
+        {
+          "previous": null,
+          "allowed": [
+            "running"
+          ]
+        },
+        {
+          "previous": "running",
+          "allowed": [
+            "completed",
+            "failed",
+            "cancelled"
+          ]
+        },
+        {
+          "previous": "completed",
+          "allowed": []
+        },
+        {
+          "previous": "failed",
+          "allowed": []
+        },
+        {
+          "previous": "cancelled",
+          "allowed": []
+        }
+      ]
+    }
+  },
+  "retry_policies": [
+    {
+      "name": "bounded_exponential_backoff",
+      "policy": {
+        "max_attempts": 8,
+        "backoff_base_seconds": 5.0,
+        "backoff_factor": 2.0,
+        "backoff_max_seconds": 300.0
+      },
+      "attempts": [
+        {
+          "attempt_number": 1,
+          "delay_seconds": 5.0,
+          "delay_ms": 5000
+        },
+        {
+          "attempt_number": 2,
+          "delay_seconds": 10.0,
+          "delay_ms": 10000
+        },
+        {
+          "attempt_number": 3,
+          "delay_seconds": 20.0,
+          "delay_ms": 20000
+        },
+        {
+          "attempt_number": 7,
+          "delay_seconds": 300.0,
+          "delay_ms": 300000
+        },
+        {
+          "attempt_number": 8,
+          "delay_seconds": 300.0,
+          "delay_ms": 300000
+        }
+      ]
+    },
+    {
+      "name": "fractional_delay_truncates_to_milliseconds",
+      "policy": {
+        "max_attempts": 5,
+        "backoff_base_seconds": 0.125,
+        "backoff_factor": 1.5,
+        "backoff_max_seconds": 0.5
+      },
+      "attempts": [
+        {
+          "attempt_number": 1,
+          "delay_seconds": 0.125,
+          "delay_ms": 125
+        },
+        {
+          "attempt_number": 2,
+          "delay_seconds": 0.1875,
+          "delay_ms": 187
+        },
+        {
+          "attempt_number": 3,
+          "delay_seconds": 0.28125,
+          "delay_ms": 281
+        },
+        {
+          "attempt_number": 4,
+          "delay_seconds": 0.421875,
+          "delay_ms": 421
+        },
+        {
+          "attempt_number": 5,
+          "delay_seconds": 0.5,
+          "delay_ms": 500
+        }
+      ]
+    }
+  ],
+  "failure_classification": [
+    {
+      "error_code": "agent_spec_invalid",
+      "failure_class": "permanent"
+    },
+    {
+      "error_code": "malformed_event_payload",
+      "failure_class": "permanent"
+    },
+    {
+      "error_code": "provider_timeout",
+      "failure_class": "retryable"
+    },
+    {
+      "error_code": "network_error",
+      "failure_class": "retryable"
+    },
+    {
+      "error_code": "tool_failed",
+      "failure_class": "retryable"
+    },
+    {
+      "error_code": "agent_execution_failed",
+      "failure_class": "retryable"
+    },
+    {
+      "error_code": "effect_delivery_failed",
+      "failure_class": "retryable"
+    },
+    {
+      "error_code": "unsafe_effect_ambiguous",
+      "failure_class": "permanent"
+    }
+  ],
+  "route_cases": [
+    {
+      "name": "fan_out_preserves_route_declaration_order",
+      "event": {
+        "id": "evt_route_1",
+        "type": "github.issue.opened",
+        "source": "github",
+        "payload": {
+          "repository": "dottxt-ai/zeta",
+          "thread_id": "issue-7"
+        },
+        "idempotency_key": null,
+        "caused_by": null,
+        "session_id": null,
+        "run_id": null,
+        "turn_id": null,
+        "timestamp_ms": 1720000000000
+      },
+      "routes": [
+        {
+          "agent_id": "release",
+          "accepts": [
+            "github.release.*"
+          ]
+        },
+        {
+          "agent_id": "audit.bot:v1",
+          "accepts": [
+            "github.*",
+            "github.issue.*"
+          ],
+          "session": "shared",
+          "project_generation": "project:audit"
+        },
+        {
+          "agent_id": "triage",
+          "accepts": [
+            "github.issue.*"
+          ],
+          "session": "{thread_id}",
+          "project_generation": "project:triage"
+        },
+        {
+          "agent_id": "notify",
+          "accepts": [
+            "github.issue.opened"
+          ]
+        }
+      ],
+      "expected_decisions": [
+        {
+          "agent_id": "audit.bot:v1",
+          "queue_item_id": "qi_evt_route_1_audit_bot_v1",
+          "session_id": "agent/audit.bot:v1",
+          "project_generation": "project:audit"
+        },
+        {
+          "agent_id": "triage",
+          "queue_item_id": "qi_evt_route_1_triage",
+          "session_id": "agent/triage/issue-7",
+          "project_generation": "project:triage"
+        },
+        {
+          "agent_id": "notify",
+          "queue_item_id": "qi_evt_route_1_notify",
+          "session_id": "agent/notify/evt_route_1",
+          "project_generation": null
+        }
+      ]
+    },
+    {
+      "name": "no_match_has_no_route_decisions",
+      "event": {
+        "id": "evt_route_2",
+        "type": "billing.invoice.paid",
+        "source": "billing",
+        "payload": {},
+        "idempotency_key": "billing:invoice:42",
+        "caused_by": null,
+        "session_id": null,
+        "run_id": null,
+        "turn_id": null,
+        "timestamp_ms": 1720000000001
+      },
+      "routes": [
+        {
+          "agent_id": "triage",
+          "accepts": [
+            "github.issue.*"
+          ]
+        }
+      ],
+      "expected_decisions": []
+    }
+  ],
+  "session_cases": [
+    {
+      "name": "shared_session",
+      "agent_id": "worker",
+      "session": "shared",
+      "event": {
+        "id": "evt_session_shared",
+        "type": "work.requested",
+        "source": "test",
+        "payload": {},
+        "idempotency_key": null,
+        "caused_by": null,
+        "session_id": null,
+        "run_id": null,
+        "turn_id": null,
+        "timestamp_ms": 1720000000010
+      },
+      "expected_session_id": "agent/worker"
+    },
+    {
+      "name": "per_event_session",
+      "agent_id": "worker",
+      "session": "per-event",
+      "event": {
+        "id": "evt_session_per_event",
+        "type": "work.requested",
+        "source": "test",
+        "payload": {},
+        "idempotency_key": null,
+        "caused_by": null,
+        "session_id": null,
+        "run_id": null,
+        "turn_id": null,
+        "timestamp_ms": 1720000000011
+      },
+      "expected_session_id": "agent/worker/evt_session_per_event"
+    },
+    {
+      "name": "payload_and_event_template_session",
+      "agent_id": "responder",
+      "session": "{tenant}/{event.id}",
+      "event": {
+        "id": "evt_session_template",
+        "type": "chat.message.received",
+        "source": "chat",
+        "payload": {
+          "tenant": "acme",
+          "thread_id": "thread-7"
+        },
+        "idempotency_key": null,
+        "caused_by": null,
+        "session_id": null,
+        "run_id": null,
+        "turn_id": null,
+        "timestamp_ms": 1720000000012
+      },
+      "expected_session_id": "agent/responder/acme/evt_session_template"
+    }
+  ],
+  "scripted_cases": {
+    "ingress": [
+      {
+        "name": "idempotent_external_event_and_reserved_namespace",
+        "draft": {
+          "event_type": "work.requested",
+          "source": "external",
+          "payload": {
+            "work_id": "42"
+          },
+          "idempotency_key": "ingress:work:42"
+        },
+        "reserved_type": "runtime.queue_item.claimed",
+        "expected": {
+          "inserted": [
+            true,
+            false
+          ],
+          "event_count": 1,
+          "queue_item": {
+            "queue_item_id": "qi_$input",
+            "event_id": "$input",
+            "target_agent": "",
+            "status": "pending"
+          }
+        }
+      }
+    ],
+    "routing": [
+      {
+        "name": "fan_out_closes_unbound_barrier",
+        "event": {
+          "id": "evt_fanout",
+          "event_type": "work.requested",
+          "source": "test",
+          "payload": {
+            "tenant": "acme"
+          },
+          "idempotency_key": "ingress:fanout",
+          "caused_by": null,
+          "session_id": null,
+          "run_id": null,
+          "turn_id": "turn-1",
+          "timestamp_ms": 100
+        },
+        "routes": [
+          {
+            "agent_id": "alpha",
+            "accepts": [
+              "work.*"
+            ],
+            "session": "shared",
+            "project_generation": "gen-a"
+          },
+          {
+            "agent_id": "beta",
+            "accepts": [
+              "work.requested"
+            ],
+            "session": "per-event",
+            "project_generation": "gen-b"
+          }
+        ],
+        "expected": {
+          "events": [
+            {
+              "alias": "$barrier_completed",
+              "type": "runtime.queue_item.completed",
+              "idempotency_key": "queue_item:evt_fanout::completed",
+              "caused_by": "evt_fanout",
+              "payload": {
+                "queue_item_id": "qi_evt_fanout",
+                "event_id": "evt_fanout",
+                "target_agent": "",
+                "status": "completed"
+              }
+            },
+            {
+              "alias": "$alpha_available",
+              "type": "runtime.queue_item.available",
+              "idempotency_key": "queue_item:evt_fanout:alpha:available",
+              "caused_by": "evt_fanout",
+              "payload": {
+                "queue_item_id": "qi_evt_fanout_alpha",
+                "event_id": "evt_fanout",
+                "target_agent": "alpha",
+                "status": "available",
+                "session_id": "agent/alpha",
+                "project_generation": "gen-a"
+              }
+            },
+            {
+              "alias": "$beta_available",
+              "type": "runtime.queue_item.available",
+              "idempotency_key": "queue_item:evt_fanout:beta:available",
+              "caused_by": "evt_fanout",
+              "payload": {
+                "queue_item_id": "qi_evt_fanout_beta",
+                "event_id": "evt_fanout",
+                "target_agent": "beta",
+                "status": "available",
+                "session_id": "agent/beta/evt_fanout",
+                "project_generation": "gen-b"
+              }
+            }
+          ],
+          "queue_items": [
+            {
+              "queue_item_id": "qi_evt_fanout_alpha",
+              "target_agent": "alpha",
+              "session_id": "agent/alpha",
+              "project_generation": "gen-a",
+              "status": "available"
+            },
+            {
+              "queue_item_id": "qi_evt_fanout_beta",
+              "target_agent": "beta",
+              "session_id": "agent/beta/evt_fanout",
+              "project_generation": "gen-b",
+              "status": "available"
+            }
+          ]
+        }
+      },
+      {
+        "name": "unhandled_closes_unbound_barrier",
+        "event": {
+          "id": "evt_unhandled",
+          "event_type": "work.unknown",
+          "source": "test",
+          "payload": {},
+          "idempotency_key": "ingress:unhandled",
+          "caused_by": null,
+          "session_id": null,
+          "run_id": null,
+          "turn_id": null,
+          "timestamp_ms": 101
+        },
+        "routes": [],
+        "expected": {
+          "events": [
+            {
+              "alias": "$unhandled",
+              "type": "runtime.queue_item.unhandled",
+              "idempotency_key": "queue_item:evt_unhandled::unhandled",
+              "caused_by": "evt_unhandled",
+              "payload": {
+                "queue_item_id": "qi_evt_unhandled",
+                "event_id": "evt_unhandled",
+                "target_agent": "",
+                "status": "unhandled"
+              }
+            }
+          ],
+          "queue_items": [
+            {
+              "queue_item_id": "qi_evt_unhandled",
+              "target_agent": "",
+              "session_id": null,
+              "project_generation": null,
+              "status": "unhandled"
+            }
+          ]
+        }
+      }
+    ],
+    "claim_fencing": [
+      {
+        "name": "released_token_stays_stale",
+        "event": {
+          "id": "evt_claim",
+          "event_type": "work.requested",
+          "source": "test",
+          "payload": {},
+          "idempotency_key": "ingress:claim",
+          "caused_by": null,
+          "session_id": null,
+          "run_id": null,
+          "turn_id": null,
+          "timestamp_ms": 100
+        },
+        "workers": [
+          "worker-a",
+          "worker-b"
+        ],
+        "lease_ms": 1000,
+        "now_ms": 1000,
+        "expected": {
+          "tokens_differ": true,
+          "wrong_token_current": false,
+          "released": true,
+          "released_token_current": false,
+          "new_token_current": true,
+          "queue_status": "claimed"
+        }
+      }
+    ],
+    "attempt_outcomes": [
+      {
+        "name": "retry_then_dead_letter",
+        "triggering_event": {
+          "id": "evt_retry",
+          "event_type": "work.requested",
+          "source": "test",
+          "payload": {},
+          "idempotency_key": "ingress:retry",
+          "caused_by": null,
+          "session_id": null,
+          "run_id": null,
+          "turn_id": null,
+          "timestamp_ms": 100
+        },
+        "agent_id": "worker",
+        "queue_item": {
+          "queue_item_id": "qi_evt_retry_worker",
+          "event_id": "evt_retry",
+          "target_agent": "worker",
+          "project_generation": null,
+          "session_id": "agent/worker/evt_retry"
+        },
+        "failure_message": "temporary outage",
+        "retry_policy": {
+          "max_attempts": 2,
+          "backoff_base_seconds": 0.0,
+          "backoff_factor": 2.0,
+          "backoff_max_seconds": 0.0
+        },
+        "expected": {
+          "events": [
+            {
+              "alias": "$claimed_1",
+              "type": "runtime.queue_item.claimed",
+              "idempotency_key": "queue_item:evt_retry:worker:claimed:1",
+              "caused_by": "evt_retry",
+              "payload": {
+                "queue_item_id": "qi_evt_retry_worker",
+                "event_id": "evt_retry",
+                "target_agent": "worker",
+                "status": "claimed",
+                "session_id": "agent/worker/evt_retry"
+              }
+            },
+            {
+              "alias": "$attempt_started_1",
+              "type": "runtime.attempt.started",
+              "idempotency_key": "attempt:qi_evt_retry_worker:1:started",
+              "caused_by": "evt_retry",
+              "payload": {
+                "attempt_id": "att_qi_evt_retry_worker_1",
+                "queue_item_id": "qi_evt_retry_worker",
+                "event_id": "evt_retry",
+                "attempt_number": 1,
+                "target_agent": "worker",
+                "status": "running",
+                "session_id": "agent/worker/evt_retry",
+                "run_id": "run_att_qi_evt_retry_worker_1",
+                "worker_name": "local"
+              }
+            },
+            {
+              "alias": "$attempt_failed_1",
+              "type": "runtime.attempt.failed",
+              "idempotency_key": "attempt:qi_evt_retry_worker:1:failed",
+              "caused_by": "evt_retry",
+              "payload": {
+                "attempt_id": "att_qi_evt_retry_worker_1",
+                "queue_item_id": "qi_evt_retry_worker",
+                "event_id": "evt_retry",
+                "attempt_number": 1,
+                "target_agent": "worker",
+                "status": "failed",
+                "session_id": "agent/worker/evt_retry",
+                "run_id": "run_att_qi_evt_retry_worker_1",
+                "worker_name": "local",
+                "error_code": "agent_execution_failed"
+              }
+            },
+            {
+              "alias": "$retry_available",
+              "type": "runtime.queue_item.available",
+              "idempotency_key": "queue_item:evt_retry:worker:available:2",
+              "caused_by": "evt_retry",
+              "payload": {
+                "queue_item_id": "qi_evt_retry_worker",
+                "event_id": "evt_retry",
+                "target_agent": "worker",
+                "status": "available",
+                "session_id": "agent/worker/evt_retry"
+              }
+            },
+            {
+              "alias": "$claimed_2",
+              "type": "runtime.queue_item.claimed",
+              "idempotency_key": "queue_item:evt_retry:worker:claimed:2",
+              "caused_by": "evt_retry",
+              "payload": {
+                "queue_item_id": "qi_evt_retry_worker",
+                "event_id": "evt_retry",
+                "target_agent": "worker",
+                "status": "claimed",
+                "session_id": "agent/worker/evt_retry"
+              }
+            },
+            {
+              "alias": "$attempt_started_2",
+              "type": "runtime.attempt.started",
+              "idempotency_key": "attempt:qi_evt_retry_worker:2:started",
+              "caused_by": "evt_retry",
+              "payload": {
+                "attempt_id": "att_qi_evt_retry_worker_2",
+                "queue_item_id": "qi_evt_retry_worker",
+                "event_id": "evt_retry",
+                "attempt_number": 2,
+                "target_agent": "worker",
+                "status": "running",
+                "session_id": "agent/worker/evt_retry",
+                "run_id": "run_att_qi_evt_retry_worker_2",
+                "worker_name": "local"
+              }
+            },
+            {
+              "alias": "$attempt_failed_2",
+              "type": "runtime.attempt.failed",
+              "idempotency_key": "attempt:qi_evt_retry_worker:2:failed",
+              "caused_by": "evt_retry",
+              "payload": {
+                "attempt_id": "att_qi_evt_retry_worker_2",
+                "queue_item_id": "qi_evt_retry_worker",
+                "event_id": "evt_retry",
+                "attempt_number": 2,
+                "target_agent": "worker",
+                "status": "failed",
+                "session_id": "agent/worker/evt_retry",
+                "run_id": "run_att_qi_evt_retry_worker_2",
+                "worker_name": "local",
+                "error_code": "agent_execution_failed"
+              }
+            },
+            {
+              "alias": "$dead_lettered",
+              "type": "runtime.queue_item.dead_lettered",
+              "idempotency_key": "queue_item:evt_retry:worker:dead_lettered:2",
+              "caused_by": "evt_retry",
+              "payload": {
+                "queue_item_id": "qi_evt_retry_worker",
+                "event_id": "evt_retry",
+                "target_agent": "worker",
+                "status": "dead_lettered",
+                "session_id": "agent/worker/evt_retry",
+                "reason": "exhausted",
+                "attempt_count": 2,
+                "last_attempt_id": "att_qi_evt_retry_worker_2"
+              }
+            }
+          ],
+          "queue_status": "dead_lettered",
+          "attempt_statuses": [
+            "failed",
+            "failed"
+          ],
+          "attempt_count": 2
+        }
+      }
+    ],
+    "cancellation": [
+      {
+        "name": "queued_turn_cancels_once",
+        "message": {
+          "message": "Stop this turn",
+          "agent_id": "master",
+          "session_id": "session-1",
+          "project_generation": "generation-1",
+          "idempotency_key": "cancel-turn"
+        },
+        "reason": "user changed direction",
+        "now_ms": 1000,
+        "expected": {
+          "events": [
+            {
+              "alias": "$message",
+              "type": "session.message.requested",
+              "idempotency_key": "session.message:session-1:cancel-turn",
+              "caused_by": null,
+              "payload": {
+                "message": "Stop this turn",
+                "agent_id": "master",
+                "session_id": "session-1"
+              }
+            },
+            {
+              "alias": "$available",
+              "type": "runtime.queue_item.available",
+              "idempotency_key": "queue_item:$message:master:available",
+              "caused_by": "$message",
+              "payload": {
+                "queue_item_id": "qi_$message_master",
+                "event_id": "$message",
+                "target_agent": "master",
+                "project_generation": "generation-1",
+                "session_id": "session-1",
+                "status": "available"
+              }
+            },
+            {
+              "alias": "$cancel_requested",
+              "type": "runtime.queue_item.cancel_requested",
+              "idempotency_key": "queue_item:$message:master:cancel_requested",
+              "caused_by": "$message",
+              "payload": {
+                "queue_item_id": "qi_$message_master",
+                "event_id": "$message",
+                "target_agent": "master",
+                "status": "available",
+                "project_generation": "generation-1",
+                "session_id": "session-1",
+                "reason": "user changed direction"
+              }
+            },
+            {
+              "alias": "$cancelled",
+              "type": "runtime.queue_item.cancelled",
+              "idempotency_key": "queue_item:$message:master:cancelled",
+              "caused_by": "$cancel_requested",
+              "payload": {
+                "queue_item_id": "qi_$message_master",
+                "event_id": "$message",
+                "target_agent": "master",
+                "status": "cancelled",
+                "project_generation": "generation-1",
+                "session_id": "session-1",
+                "result": {
+                  "outcome": "cancelled",
+                  "reason": "user changed direction"
+                },
+                "reason": "user changed direction"
+              }
+            }
+          ],
+          "results": [
+            "cancelled",
+            "already_cancelled"
+          ],
+          "changed": [
+            true,
+            false
+          ],
+          "queue_status": "cancelled"
+        }
+      }
+    ],
+    "completion": [
+      {
+        "name": "ordered_atomic_success",
+        "agent_id": "worker",
+        "project_generation": "generation-1",
+        "triggering_event": {
+          "id": "evt_complete",
+          "event_type": "work.requested",
+          "source": "test",
+          "payload": {
+            "work_id": "42"
+          },
+          "idempotency_key": "ingress:complete",
+          "caused_by": null,
+          "session_id": null,
+          "run_id": null,
+          "turn_id": "turn-42",
+          "timestamp_ms": 100
+        },
+        "queue_item": {
+          "queue_item_id": "qi_evt_complete_worker",
+          "event_id": "evt_complete",
+          "target_agent": "worker",
+          "project_generation": "generation-1",
+          "session_id": "agent/worker/evt_complete"
+        },
+        "result": {
+          "final_answer": "done",
+          "events": [
+            {
+              "event_type": "trace.first",
+              "source": "agent:worker",
+              "payload": {
+                "position": 0
+              }
+            },
+            {
+              "event_type": "trace.second",
+              "source": "agent:worker",
+              "payload": {
+                "position": 1
+              }
+            }
+          ],
+          "publish_event_requests": [
+            {
+              "handle": "pub-first",
+              "event_type": "work.first",
+              "payload": {
+                "position": 0
+              },
+              "at": null,
+              "position": 0
+            },
+            {
+              "handle": "pub-future",
+              "event_type": "work.future",
+              "payload": {
+                "position": 2
+              },
+              "at": "2999-01-01T00:00:00Z",
+              "position": 2
+            }
+          ],
+          "wait_requests": [
+            {
+              "handle": "wait-middle",
+              "event_type": "work.ready",
+              "fields": {
+                "work_id": "42"
+              },
+              "deadline": "2030-01-02T03:04:05+00:00",
+              "position": 1
+            }
+          ]
+        },
+        "expected": {
+          "events": [
+            {
+              "alias": "$claimed",
+              "type": "runtime.queue_item.claimed",
+              "idempotency_key": "queue_item:evt_complete:worker:claimed:1",
+              "caused_by": "evt_complete",
+              "payload": {
+                "queue_item_id": "qi_evt_complete_worker",
+                "event_id": "evt_complete",
+                "target_agent": "worker",
+                "status": "claimed",
+                "session_id": "agent/worker/evt_complete",
+                "project_generation": "generation-1"
+              }
+            },
+            {
+              "alias": "$attempt_started",
+              "type": "runtime.attempt.started",
+              "idempotency_key": "attempt:qi_evt_complete_worker:1:started",
+              "caused_by": "evt_complete",
+              "payload": {
+                "attempt_id": "att_qi_evt_complete_worker_1",
+                "queue_item_id": "qi_evt_complete_worker",
+                "event_id": "evt_complete",
+                "attempt_number": 1,
+                "target_agent": "worker",
+                "status": "running",
+                "session_id": "agent/worker/evt_complete",
+                "run_id": "run_att_qi_evt_complete_worker_1",
+                "project_generation": "generation-1"
+              }
+            },
+            {
+              "alias": "$attempt_completed",
+              "type": "runtime.attempt.completed",
+              "idempotency_key": "attempt:qi_evt_complete_worker:1:completed",
+              "caused_by": "evt_complete",
+              "payload": {
+                "attempt_id": "att_qi_evt_complete_worker_1",
+                "queue_item_id": "qi_evt_complete_worker",
+                "event_id": "evt_complete",
+                "attempt_number": 1,
+                "target_agent": "worker",
+                "status": "completed",
+                "session_id": "agent/worker/evt_complete",
+                "run_id": "run_att_qi_evt_complete_worker_1",
+                "project_generation": "generation-1",
+                "result": {
+                  "final_answer": "done",
+                  "events": [
+                    {
+                      "event_type": "trace.first",
+                      "source": "agent:worker",
+                      "payload": {
+                        "position": 0
+                      }
+                    },
+                    {
+                      "event_type": "trace.second",
+                      "source": "agent:worker",
+                      "payload": {
+                        "position": 1
+                      }
+                    }
+                  ],
+                  "publish_event_requests": [
+                    {
+                      "handle": "pub-first",
+                      "event_type": "work.first",
+                      "payload": {
+                        "position": 0
+                      },
+                      "at": null,
+                      "position": 0
+                    },
+                    {
+                      "handle": "pub-future",
+                      "event_type": "work.future",
+                      "payload": {
+                        "position": 2
+                      },
+                      "at": "2999-01-01T00:00:00Z",
+                      "position": 2
+                    }
+                  ],
+                  "wait_requests": [
+                    {
+                      "handle": "wait-middle",
+                      "event_type": "work.ready",
+                      "fields": {
+                        "work_id": "42"
+                      },
+                      "deadline": "2030-01-02T03:04:05+00:00",
+                      "position": 1
+                    }
+                  ]
+                },
+                "summary": "done",
+                "events": [
+                  {
+                    "event_type": "trace.first",
+                    "source": "agent:worker",
+                    "payload": {
+                      "position": 0
+                    }
+                  },
+                  {
+                    "event_type": "trace.second",
+                    "source": "agent:worker",
+                    "payload": {
+                      "position": 1
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "alias": "$published",
+              "type": "work.first",
+              "idempotency_key": "agent.publish:qi_evt_complete_worker:0",
+              "caused_by": "$attempt_completed",
+              "payload": {
+                "position": 0
+              }
+            },
+            {
+              "alias": "$wait_created",
+              "type": "runtime.wait.created",
+              "idempotency_key": "agent.wait:qi_evt_complete_worker:1",
+              "caused_by": "$attempt_completed",
+              "payload": {
+                "handle": "wait-middle",
+                "agent_id": "worker",
+                "session_id": "agent/worker/evt_complete",
+                "event_type": "work.ready",
+                "fields": {
+                  "work_id": "42"
+                },
+                "deadline": "2030-01-02T03:04:05+00:00",
+                "source_queue_item_id": "qi_evt_complete_worker",
+                "project_generation": "generation-1"
+              }
+            },
+            {
+              "alias": "$scheduled",
+              "type": "runtime.scheduled_event.created",
+              "idempotency_key": "agent.schedule:qi_evt_complete_worker:2",
+              "caused_by": "$attempt_completed",
+              "payload": {
+                "handle": "pub-future",
+                "event_type": "work.future",
+                "payload": {
+                  "position": 2
+                },
+                "publish_at": "2999-01-01T00:00:00Z",
+                "source_agent_id": "worker",
+                "source_session_id": "agent/worker/evt_complete",
+                "source_queue_item_id": "qi_evt_complete_worker",
+                "position": 2
+              }
+            },
+            {
+              "alias": "$queue_completed",
+              "type": "runtime.queue_item.completed",
+              "idempotency_key": "queue_item:evt_complete:worker:completed",
+              "caused_by": "evt_complete",
+              "payload": {
+                "queue_item_id": "qi_evt_complete_worker",
+                "event_id": "evt_complete",
+                "target_agent": "worker",
+                "status": "completed",
+                "session_id": "agent/worker/evt_complete",
+                "project_generation": "generation-1",
+                "result": {
+                  "final_answer": "done",
+                  "events": [
+                    {
+                      "event_type": "trace.first",
+                      "source": "agent:worker",
+                      "payload": {
+                        "position": 0
+                      }
+                    },
+                    {
+                      "event_type": "trace.second",
+                      "source": "agent:worker",
+                      "payload": {
+                        "position": 1
+                      }
+                    }
+                  ],
+                  "publish_event_requests": [
+                    {
+                      "handle": "pub-first",
+                      "event_type": "work.first",
+                      "payload": {
+                        "position": 0
+                      },
+                      "at": null,
+                      "position": 0
+                    },
+                    {
+                      "handle": "pub-future",
+                      "event_type": "work.future",
+                      "payload": {
+                        "position": 2
+                      },
+                      "at": "2999-01-01T00:00:00Z",
+                      "position": 2
+                    }
+                  ],
+                  "wait_requests": [
+                    {
+                      "handle": "wait-middle",
+                      "event_type": "work.ready",
+                      "fields": {
+                        "work_id": "42"
+                      },
+                      "deadline": "2030-01-02T03:04:05+00:00",
+                      "position": 1
+                    }
+                  ]
+                }
+              }
+            }
+          ],
+          "ordered_controls": [
+            "work.first",
+            "runtime.wait.created",
+            "runtime.scheduled_event.created"
+          ],
+          "queue_status": "completed",
+          "attempt_status": "completed"
+        }
+      },
+      {
+        "name": "invalid_proposal_is_atomic_failure",
+        "agent_id": "worker",
+        "triggering_event": {
+          "id": "evt_complete",
+          "event_type": "work.requested",
+          "source": "test",
+          "payload": {
+            "work_id": "42"
+          },
+          "idempotency_key": "ingress:complete",
+          "caused_by": null,
+          "session_id": null,
+          "run_id": null,
+          "turn_id": "turn-42",
+          "timestamp_ms": 100
+        },
+        "queue_item": {
+          "queue_item_id": "qi_evt_complete_worker",
+          "event_id": "evt_complete",
+          "target_agent": "worker",
+          "project_generation": "generation-1",
+          "session_id": "agent/worker/evt_complete"
+        },
+        "result": {
+          "final_answer": "invalid",
+          "cancel_requests": [
+            {
+              "handle": "wait_999999999999999999999999",
+              "reason": "missing",
+              "source_agent_id": "worker",
+              "source_session_id": "agent/worker/evt_complete",
+              "position": 0
+            }
+          ]
+        },
+        "expected": {
+          "events": [
+            {
+              "alias": "$claimed",
+              "type": "runtime.queue_item.claimed",
+              "idempotency_key": "queue_item:evt_complete:worker:claimed:1",
+              "caused_by": "evt_complete",
+              "payload": {
+                "queue_item_id": "qi_evt_complete_worker",
+                "event_id": "evt_complete",
+                "target_agent": "worker",
+                "status": "claimed",
+                "session_id": "agent/worker/evt_complete"
+              }
+            },
+            {
+              "alias": "$attempt_started",
+              "type": "runtime.attempt.started",
+              "idempotency_key": "attempt:qi_evt_complete_worker:1:started",
+              "caused_by": "evt_complete",
+              "payload": {
+                "attempt_id": "att_qi_evt_complete_worker_1",
+                "queue_item_id": "qi_evt_complete_worker",
+                "event_id": "evt_complete",
+                "attempt_number": 1,
+                "target_agent": "worker",
+                "status": "running",
+                "session_id": "agent/worker/evt_complete",
+                "run_id": "run_att_qi_evt_complete_worker_1"
+              }
+            },
+            {
+              "alias": "$attempt_failed",
+              "type": "runtime.attempt.failed",
+              "idempotency_key": "attempt:qi_evt_complete_worker:1:failed",
+              "caused_by": "evt_complete",
+              "payload": {
+                "attempt_id": "att_qi_evt_complete_worker_1",
+                "queue_item_id": "qi_evt_complete_worker",
+                "event_id": "evt_complete",
+                "attempt_number": 1,
+                "target_agent": "worker",
+                "status": "failed",
+                "session_id": "agent/worker/evt_complete",
+                "run_id": "run_att_qi_evt_complete_worker_1",
+                "error_code": "malformed_event_payload"
+              }
+            },
+            {
+              "alias": "$dead_lettered",
+              "type": "runtime.queue_item.dead_lettered",
+              "idempotency_key": "queue_item:evt_complete:worker:dead_lettered:1",
+              "caused_by": "evt_complete",
+              "payload": {
+                "queue_item_id": "qi_evt_complete_worker",
+                "event_id": "evt_complete",
+                "target_agent": "worker",
+                "status": "dead_lettered",
+                "session_id": "agent/worker/evt_complete",
+                "reason": "permanent",
+                "attempt_count": 1,
+                "last_attempt_id": "att_qi_evt_complete_worker_1"
+              }
+            }
+          ],
+          "queue_status": "dead_lettered",
+          "attempt_status": "failed"
+        }
+      }
+    ],
+    "waits": [
+      {
+        "name": "matching_event_resumes_once",
+        "created_event": {
+          "id": "wait-created-1",
+          "event_type": "runtime.wait.created",
+          "source": "zeta",
+          "payload": {
+            "handle": "wait-1",
+            "agent_id": "issue-agent",
+            "session_id": "session-1",
+            "event_type": "github.issue.updated",
+            "fields": {
+              "repository": "zeta"
+            },
+            "deadline": null,
+            "source_queue_item_id": "qi-source",
+            "project_generation": "generation-1"
+          },
+          "idempotency_key": "agent.wait:qi-source:0",
+          "caused_by": "attempt-completed-1",
+          "session_id": "session-1",
+          "run_id": "run-1",
+          "turn_id": null,
+          "timestamp_ms": 500
+        },
+        "matching_draft": {
+          "event_type": "github.issue.updated",
+          "source": "github",
+          "payload": {
+            "repository": "zeta",
+            "issue": 5
+          },
+          "idempotency_key": "github-delivery-1"
+        },
+        "expected": {
+          "inserted": [
+            true,
+            false
+          ],
+          "events": [
+            {
+              "alias": "$wait_created",
+              "type": "runtime.wait.created",
+              "idempotency_key": "agent.wait:qi-source:0",
+              "caused_by": "attempt-completed-1",
+              "payload": {
+                "handle": "wait-1",
+                "agent_id": "issue-agent",
+                "session_id": "session-1",
+                "event_type": "github.issue.updated",
+                "fields": {
+                  "repository": "zeta"
+                },
+                "deadline": null,
+                "source_queue_item_id": "qi-source",
+                "project_generation": "generation-1"
+              }
+            },
+            {
+              "alias": "$matching_input",
+              "type": "github.issue.updated",
+              "idempotency_key": "github-delivery-1",
+              "caused_by": null,
+              "payload": {
+                "repository": "zeta",
+                "issue": 5
+              }
+            },
+            {
+              "alias": "$wait_matched",
+              "type": "runtime.wait.matched",
+              "idempotency_key": "wait.matched:wait-1",
+              "caused_by": "$matching_input",
+              "payload": {
+                "handle": "wait-1",
+                "agent_id": "issue-agent",
+                "session_id": "session-1",
+                "matched_event_id": "$matching_input",
+                "event_type": "github.issue.updated",
+                "payload": {
+                  "repository": "zeta",
+                  "issue": 5
+                },
+                "project_generation": "generation-1"
+              }
+            },
+            {
+              "alias": "$continuation",
+              "type": "runtime.queue_item.available",
+              "idempotency_key": "queue_item:$wait_matched:issue-agent:available",
+              "caused_by": "$wait_matched",
+              "payload": {
+                "queue_item_id": "qi_$wait_matched_issue-agent",
+                "event_id": "$wait_matched",
+                "target_agent": "issue-agent",
+                "status": "available",
+                "project_generation": "generation-1"
+              }
+            }
+          ],
+          "wait": {
+            "status": "matched",
+            "matched_event_id": "$matching_input"
+          },
+          "queue_statuses": [
+            "available",
+            "pending"
+          ]
+        }
+      }
+    ],
+    "scheduled_events": [
+      {
+        "name": "due_publication_consumes_pending_schedule",
+        "created_event": {
+          "id": "schedule-created-1",
+          "event_type": "runtime.scheduled_event.created",
+          "source": "zeta",
+          "payload": {
+            "handle": "publication-1",
+            "event_type": "report.ready",
+            "payload": {
+              "report_id": "publication-1"
+            },
+            "publish_at": "1970-01-01T00:00:01+00:00",
+            "source_agent_id": "reporter",
+            "source_session_id": "session-1",
+            "source_queue_item_id": "queue-item-1",
+            "position": 0
+          },
+          "idempotency_key": "agent.schedule:queue-item-1:0",
+          "caused_by": "attempt-completed-1",
+          "session_id": "session-1",
+          "run_id": "run-1",
+          "turn_id": null,
+          "timestamp_ms": 500
+        },
+        "now_ms": 2000,
+        "expected": {
+          "events": [
+            {
+              "alias": "$scheduled",
+              "type": "runtime.scheduled_event.created",
+              "idempotency_key": "agent.schedule:queue-item-1:0",
+              "caused_by": "attempt-completed-1",
+              "payload": {
+                "handle": "publication-1",
+                "event_type": "report.ready",
+                "payload": {
+                  "report_id": "publication-1"
+                },
+                "publish_at": "1970-01-01T00:00:01+00:00",
+                "source_agent_id": "reporter",
+                "source_session_id": "session-1",
+                "source_queue_item_id": "queue-item-1",
+                "position": 0
+              }
+            },
+            {
+              "alias": "$published_event",
+              "type": "report.ready",
+              "idempotency_key": "agent.publish:queue-item-1:0",
+              "caused_by": "$scheduled",
+              "payload": {
+                "report_id": "publication-1"
+              }
+            },
+            {
+              "alias": "$published_fact",
+              "type": "runtime.scheduled_event.published",
+              "idempotency_key": "scheduled_event.published:publication-1",
+              "caused_by": "$published_event",
+              "payload": {
+                "handle": "publication-1",
+                "source_agent_id": "reporter",
+                "source_queue_item_id": "queue-item-1",
+                "position": 0,
+                "published_event_id": "$published_event"
+              }
+            }
+          ],
+          "schedule_status": "published"
+        }
+      }
+    ],
+    "recurring_schedules": [
+      {
+        "name": "latest_catchup_activates_before_publishing",
+        "agent_id": "reporter",
+        "schedule": {
+          "cron": "* * * * *",
+          "timezone": "UTC",
+          "catchup": "latest"
+        },
+        "ticks": [
+          "2026-08-12T10:05:30+00:00",
+          "2026-08-12T10:06:10+00:00"
+        ],
+        "expected": {
+          "published_per_tick": [
+            1,
+            1
+          ],
+          "events": [
+            {
+              "alias": "$activation",
+              "type": "scheduler.tick.activated",
+              "idempotency_key": "scheduler:activated:reporter:0:* * * * *:UTC:latest",
+              "caused_by": null,
+              "payload": {
+                "agent": "reporter",
+                "schedule_index": 0,
+                "event_type": "agent.reporter.scheduled",
+                "cron": "* * * * *",
+                "timezone": "UTC",
+                "catchup": "latest",
+                "observed_at": "2026-08-12T10:05:30+00:00",
+                "status": "activated",
+                "reason": "schedule first observed"
+              }
+            },
+            {
+              "alias": "$scheduled_1",
+              "type": "agent.reporter.scheduled",
+              "idempotency_key": "schedule:reporter:* * * * *:2026-08-12T10:05:00+00:00",
+              "caused_by": null,
+              "payload": {
+                "date": "2026-08-12",
+                "timestamp": "2026-08-12T10:05:00+00:00"
+              }
+            },
+            {
+              "alias": "$decision_1",
+              "type": "scheduler.tick.published",
+              "idempotency_key": "scheduler:published:reporter:0:* * * * *:UTC:2026-08-12T10:05:00+00:00",
+              "caused_by": "$scheduled_1",
+              "payload": {
+                "agent": "reporter",
+                "schedule_index": 0,
+                "event_type": "agent.reporter.scheduled",
+                "cron": "* * * * *",
+                "timezone": "UTC",
+                "scheduled_at": "2026-08-12T10:05:00+00:00",
+                "observed_at": "2026-08-12T10:05:30+00:00",
+                "next_at": "2026-08-12T10:06:00+00:00",
+                "status": "published",
+                "reason": "due now",
+                "published_event_id": "$scheduled_1"
+              }
+            },
+            {
+              "alias": "$scheduled_2",
+              "type": "agent.reporter.scheduled",
+              "idempotency_key": "schedule:reporter:* * * * *:2026-08-12T10:06:00+00:00",
+              "caused_by": null,
+              "payload": {
+                "date": "2026-08-12",
+                "timestamp": "2026-08-12T10:06:00+00:00"
+              }
+            },
+            {
+              "alias": "$decision_2",
+              "type": "scheduler.tick.published",
+              "idempotency_key": "scheduler:published:reporter:0:* * * * *:UTC:2026-08-12T10:06:00+00:00",
+              "caused_by": "$scheduled_2",
+              "payload": {
+                "agent": "reporter",
+                "schedule_index": 0,
+                "event_type": "agent.reporter.scheduled",
+                "cron": "* * * * *",
+                "timezone": "UTC",
+                "scheduled_at": "2026-08-12T10:06:00+00:00",
+                "observed_at": "2026-08-12T10:06:10+00:00",
+                "next_at": "2026-08-12T10:07:00+00:00",
+                "status": "published",
+                "reason": "due now",
+                "published_event_id": "$scheduled_2"
+              }
+            }
+          ],
+          "read_model": [
+            {
+              "agent": "reporter",
+              "cron": "* * * * *",
+              "timezone": "UTC",
+              "status": "published",
+              "last_published_at": "2026-08-12T10:06:00+00:00",
+              "next_at": "2026-08-12T10:07:00+00:00",
+              "reason": "due now"
+            }
+          ]
+        }
+      }
+    ],
+    "session_reads": [
+      {
+        "name": "running_queued_waiting_idle_priority",
+        "queue_items": [
+          {
+            "queue_item_id": "qi_running",
+            "target_agent": "worker",
+            "session_id": "session-running",
+            "status": "claimed",
+            "cancel_requested_event_id": "evt_cancel_request",
+            "cancel_requested_at": 45,
+            "updated_at": 40
+          },
+          {
+            "queue_item_id": "qi_behind",
+            "target_agent": "worker",
+            "session_id": "session-running",
+            "status": "available",
+            "updated_at": 50
+          },
+          {
+            "queue_item_id": "qi_queued",
+            "target_agent": "worker",
+            "session_id": "session-queued",
+            "status": "retry_scheduled",
+            "updated_at": 30
+          },
+          {
+            "queue_item_id": "qi_waiting",
+            "target_agent": "worker",
+            "session_id": "session-waiting",
+            "status": "completed",
+            "updated_at": 20
+          },
+          {
+            "queue_item_id": "qi_idle",
+            "target_agent": "worker",
+            "session_id": "session-idle",
+            "status": "completed",
+            "updated_at": 10
+          }
+        ],
+        "attempts": [
+          {
+            "attempt_id": "att_running",
+            "queue_item_id": "qi_running",
+            "target_agent": "worker",
+            "session_id": "session-running",
+            "run_id": "run_running",
+            "status": "running",
+            "started_at": "2026-08-06T10:00:00+00:00"
+          }
+        ],
+        "waits": [
+          {
+            "handle": "wait_active",
+            "agent_id": "worker",
+            "session_id": "session-waiting",
+            "event_type": "work.ready",
+            "fields": {
+              "work_id": 7
+            },
+            "deadline_ms": null,
+            "status": "active",
+            "updated_at": 25
+          }
+        ],
+        "expected": [
+          {
+            "session_id": "session-running",
+            "agent_id": "worker",
+            "status": "running",
+            "cancellation_requested": true,
+            "active_run_id": "run_running",
+            "queued_turns": 1,
+            "active_wait": null,
+            "latest_run": {
+              "run_id": "run_running",
+              "status": "running"
+            },
+            "updated_at": "2026-08-06T10:00:00Z"
+          },
+          {
+            "session_id": "session-queued",
+            "agent_id": "worker",
+            "status": "queued",
+            "cancellation_requested": false,
+            "active_run_id": null,
+            "queued_turns": 1,
+            "active_wait": null,
+            "latest_run": null,
+            "updated_at": "1970-01-01T00:00:00.030000Z"
+          },
+          {
+            "session_id": "session-waiting",
+            "agent_id": "worker",
+            "status": "waiting",
+            "cancellation_requested": false,
+            "active_run_id": null,
+            "queued_turns": 0,
+            "active_wait": {
+              "handle": "wait_active",
+              "event_type": "work.ready",
+              "fields": {
+                "work_id": 7
+              },
+              "deadline_ms": null
+            },
+            "latest_run": null,
+            "updated_at": "1970-01-01T00:00:00.025000Z"
+          },
+          {
+            "session_id": "session-idle",
+            "agent_id": "worker",
+            "status": "idle",
+            "cancellation_requested": false,
+            "active_run_id": null,
+            "queued_turns": 0,
+            "active_wait": null,
+            "latest_run": null,
+            "updated_at": "1970-01-01T00:00:00.010000Z"
+          }
+        ]
+      }
+    ],
+    "effects": [
+      {
+        "name": "unsafe_failure_becomes_ambiguous",
+        "scope": "qi_effect",
+        "operation": "test.bash",
+        "params": {
+          "command": "post"
+        },
+        "semantics": "unsafe_to_retry",
+        "caused_by": "call-7",
+        "actions": [
+          {
+            "status": "planned"
+          },
+          {
+            "status": "started"
+          },
+          {
+            "status": "ambiguous",
+            "result": {
+              "ok": false,
+              "error": {
+                "code": "failed",
+                "message": "boom"
+              }
+            }
+          }
+        ],
+        "expected": [
+          {
+            "type": "runtime.effect.planned",
+            "idempotency_key": "runtime.effect.planned:$effect",
+            "caused_by": "call-7",
+            "payload": {
+              "effect_key": "$effect",
+              "operation": "test.bash",
+              "semantics": "unsafe_to_retry",
+              "scope": "qi_effect",
+              "queue_item_id": "qi_effect",
+              "params": {
+                "command": "post"
+              },
+              "status": "planned"
+            }
+          },
+          {
+            "type": "runtime.effect.started",
+            "idempotency_key": "runtime.effect.started:$effect",
+            "caused_by": "call-7",
+            "payload": {
+              "effect_key": "$effect",
+              "operation": "test.bash",
+              "semantics": "unsafe_to_retry",
+              "scope": "qi_effect",
+              "queue_item_id": "qi_effect",
+              "params": {
+                "command": "post"
+              },
+              "status": "started"
+            }
+          },
+          {
+            "type": "runtime.effect.ambiguous",
+            "idempotency_key": "runtime.effect.ambiguous:$effect",
+            "caused_by": "call-7",
+            "payload": {
+              "effect_key": "$effect",
+              "operation": "test.bash",
+              "semantics": "unsafe_to_retry",
+              "scope": "qi_effect",
+              "queue_item_id": "qi_effect",
+              "params": {
+                "command": "post"
+              },
+              "status": "ambiguous",
+              "result": {
+                "ok": false,
+                "error": {
+                  "code": "failed",
+                  "message": "boom"
+                }
+              }
+            }
+          }
+        ]
+      }
+    ],
+    "projection_recovery": [
+      {
+        "name": "rebuild_preserves_history_and_releases_claim",
+        "events": [
+          {
+            "id": "evt_recover",
+            "event_type": "work.requested",
+            "source": "test",
+            "payload": {},
+            "idempotency_key": "ingress:recover",
+            "caused_by": null,
+            "session_id": null,
+            "run_id": null,
+            "turn_id": null,
+            "timestamp_ms": 100
+          }
+        ],
+        "worker": "worker-a",
+        "lease_ms": 1000,
+        "now_ms": 1000,
+        "lock_keys": [
+          "repo:zeta"
+        ],
+        "lifecycle_events": [
+          {
+            "id": "queue-claimed",
+            "event_type": "runtime.queue_item.claimed",
+            "source": "zeta",
+            "payload": {
+              "queue_item_id": "qi_evt_recover",
+              "event_id": "evt_recover",
+              "target_agent": "worker",
+              "session_id": "agent/worker/evt_recover",
+              "status": "claimed"
+            },
+            "idempotency_key": "queue_item:evt_recover:worker:claimed:1",
+            "caused_by": "evt_recover",
+            "session_id": "agent/worker/evt_recover",
+            "run_id": "run_att_qi_evt_recover_1",
+            "turn_id": null,
+            "timestamp_ms": 1001
+          },
+          {
+            "id": "attempt-started",
+            "event_type": "runtime.attempt.started",
+            "source": "zeta",
+            "payload": {
+              "attempt_id": "att_qi_evt_recover_1",
+              "queue_item_id": "qi_evt_recover",
+              "event_id": "evt_recover",
+              "attempt_number": 1,
+              "target_agent": "worker",
+              "worker_name": "worker-a",
+              "status": "running",
+              "started_at": "2026-08-12T10:00:00Z",
+              "session_id": "agent/worker/evt_recover",
+              "run_id": "run_att_qi_evt_recover_1"
+            },
+            "idempotency_key": "attempt:qi_evt_recover:1:started",
+            "caused_by": "evt_recover",
+            "session_id": "agent/worker/evt_recover",
+            "run_id": "run_att_qi_evt_recover_1",
+            "turn_id": null,
+            "timestamp_ms": 1002
+          }
+        ],
+        "expected": {
+          "ownership_before_rebuild": true,
+          "after": {
+            "status": "available",
+            "claimed_by": null,
+            "claimed_until": null
+          },
+          "attempt_statuses": [
+            "running"
+          ],
+          "attempt_count": 1,
+          "locks": [],
+          "journal_event_ids": [
+            "evt_recover",
+            "queue-claimed",
+            "attempt-started"
+          ]
+        }
+      }
+    ]
+  }
+}

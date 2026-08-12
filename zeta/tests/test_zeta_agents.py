@@ -33,7 +33,9 @@ from zeta.authoring.resources import (
     load_skill_registry,
     validate_agent_project,
 )
-from zeta.authoring.schemas import EventRegistry
+from zeta.authoring.returns import derive_returns_schema
+from zeta.authoring.schemas import EventRegistry, EventRegistryError
+from zeta.authoring.skills import load_skill
 from zeta.authoring.spec import (
     AgentSpec,
     ExecutorSpec,
@@ -136,12 +138,17 @@ def _write_spec(path: Path, content: str) -> Path:
     return path
 
 
-def _agent_vector_value(spec: AgentSpec) -> dict[str, Any]:
+def _agent_vector_value(spec: AgentSpec, source: str) -> dict[str, Any]:
+    extensions = dict(spec.manifest)
+    raw_locks = extensions.pop("locks", [])
+    lock_values = [raw_locks] if isinstance(raw_locks, str) else list(raw_locks)
+    locks = list(dict.fromkeys(lock_values))
     return {
         "slug": spec.slug,
         "name": spec.name,
         "description": spec.description,
         "instructions": spec.instructions,
+        "source": source,
         "content_address": spec.content_address,
         "enabled": spec.enabled,
         "session": spec.session,
@@ -194,7 +201,8 @@ def _agent_vector_value(spec: AgentSpec) -> dict[str, Any]:
             }
             for entry in spec.egress
         ],
-        "extensions": spec.manifest,
+        "locks": locks,
+        "extensions": extensions,
     }
 
 
@@ -620,18 +628,89 @@ def test_zeta_agent_conformance_vectors(tmp_path: Path) -> None:
     )
     vectors = json.loads(vectors_path.read_text(encoding="utf-8"))
 
-    assert vectors["format"] == "zeta-authoring-agent-v0"
-    for vector in vectors["valid"]:
+    assert vectors["format"] == "zeta-authoring-v1"
+    for vector in vectors["agents"]["valid"]:
         path = tmp_path / vector["path"]
         path.parent.mkdir(parents=True, exist_ok=True)
         spec = load_spec(_write_spec(path, vector["source_utf8"]))
-        assert _agent_vector_value(spec) == vector["expected"], vector["name"]
+        assert _agent_vector_value(spec, vector["source_utf8"]) == vector["expected"], (
+            vector["name"]
+        )
 
-    for vector in vectors["invalid"]:
+    for vector in vectors["agents"]["invalid"]:
         path = tmp_path / vector["path"]
         path.parent.mkdir(parents=True, exist_ok=True)
         with pytest.raises(SpecError):
             load_spec(_write_spec(path, vector["source_utf8"]))
+
+    for vector in vectors["event_schemas"]:
+        if vector.get("language_neutral_contract"):
+            continue
+        events = EventRegistry()
+        failure = None
+        try:
+            for declaration in vector["declarations"]:
+                events.register(declaration["event_type"], declaration["schema"])
+        except EventRegistryError as exc:
+            failure = exc
+        if "error" in vector:
+            assert failure is not None, vector["name"]
+            continue
+        assert failure is None, vector["name"]
+        assert [[name, schema] for name, schema in events.items()] == vector["expected"]
+
+    for index, vector in enumerate(vectors["returned_schemas"]):
+        if vector.get("language_neutral_contract"):
+            continue
+        returns = "\n".join(f"  - {name}" for name in vector["returns"])
+        declaration = f"returns:\n{returns}\n" if returns else "returns: []\n"
+        spec = load_spec(
+            _write_spec(
+                tmp_path / f"returns-{index}.md",
+                f"---\nname: Returns\ndescription: Returns events.\n{declaration}---\n",
+            )
+        )
+        events = EventRegistry(vector["events"])
+        assert derive_returns_schema(spec, events) == vector["expected"], vector["name"]
+
+    for index, vector in enumerate(vectors["prompts"]):
+        spec = load_spec(
+            _write_spec(tmp_path / f"prompt-{index}.md", vector["source_utf8"])
+        )
+        if "validation_error" in vector:
+            with pytest.raises(TemplateError):
+                validate_prompt(spec)
+            continue
+        validate_prompt(spec)
+        assert render_prompt(spec, vector["event"]) == vector["expected"]
+
+    for vector in vectors["skills"]["flat"]:
+        skill = Object(
+            kind="skill",
+            schema="zeta.skill.v1",
+            data={"body": vector["body_utf8"]},
+        )
+        assert skill.content_address() == vector["expected_object_id"]
+
+    for index, vector in enumerate(vectors["skills"]["skill_markdown"]):
+        if vector.get("language_neutral_contract"):
+            continue
+        root = tmp_path / f"skill-{index}"
+        root.mkdir()
+        _write_spec(root / "SKILL.md", vector["source_utf8"])
+        skill, diagnostic = load_skill(root)
+        if "error" in vector:
+            assert skill is None
+            assert diagnostic is not None
+            continue
+        assert diagnostic is None
+        assert skill is not None
+        assert {
+            "name": skill.name,
+            "description": skill.description,
+            "body": skill.body,
+            "disable_model_invocation": skill.disable_model_invocation,
+        } == vector["expected"]
 
 
 def test_zeta_agent_project_rejects_unknown_tool_executor_provider(

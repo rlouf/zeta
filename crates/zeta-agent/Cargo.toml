@@ -8,7 +8,7 @@ license.workspace = true
 publish = false
 
 [dependencies]
-jsonschema = { version = "0.33", default-features = false }
+jsonschema.workspace = true
 serde.workspace = true
 serde_json = { workspace = true, features = ["preserve_order"] }
 zeta-journal = { path = "../zeta-journal" }

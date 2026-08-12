@@ -700,6 +700,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "memo-map"
+version = "0.3.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "38d1115007560874e373613744c6fba374c17688327a71c1476d1a5954cc857b"
+
+[[package]]
+name = "minijinja"
+version = "2.23.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "42d74234349a775546a83af0f0c0c0e3a73227dee4950a542cda81a47240b3e6"
+dependencies = [
+ "memo-map",
+ "serde",
+]
+
+[[package]]
 name = "mio"
 version = "1.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1755,6 +1771,8 @@ dependencies = [
 name = "zeta-authoring"
 version = "0.1.0"
 dependencies = [
+ "jsonschema",
+ "minijinja",
  "serde",
  "serde_json",
  "tempfile",

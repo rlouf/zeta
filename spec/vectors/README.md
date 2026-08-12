@@ -85,19 +85,20 @@ schema or payload-placement assumptions.
 
 ## `authoring/agents.json`
 
-Agent Markdown inputs with their complete parsed declaration values. Python
-generated the expected values and exact source-byte addresses; Python and Rust
-verify the same frozen file. The valid cases cover defaults, every declaration
-field, connector bindings, capability inheritance, schedules, Unicode, CRLF,
-home-relative paths, and the portable YAML scalar profile. The invalid cases
-cover delimiters, YAML shape, slugs, required fields, relative and named-home
-paths, duplicate and merge keys, non-JSON values, integer bounds, tags, and
-cycles.
+The versioned `zeta-authoring-v1` document freezes the complete portable
+authoring boundary. Its sections cover agent parsing and typed locks; sorted
+Draft 2020-12 event schemas; returned-schema definition rewriting; prompt
+validation and rendering; flat and `SKILL.md` skills; language-neutral
+connector descriptions; semantic diagnostics; and exact project/execution
+manifest identities.
 
-The expected declaration contains no source path because source provenance is
-not part of the parsed value. Each vector still supplies a path: Python loads
-it from the filesystem, while Rust derives its slug before parsing the source
-bytes directly.
+Python and Rust recompute the portable parser, event, returned-schema, prompt,
+and skill cases. Cases marked `language_neutral_contract` intentionally replace
+Python snapshot behavior and are checked directly in Rust: equal event merges,
+strict unknown returned events, caller-supplied skill fallback names,
+connector implementation fingerprints without commands, and version 1
+manifests. The expected declarations contain no source path; paths in parser
+cases only let Python exercise its loader while Rust parses the supplied bytes.
 
 ## `agent/prompts.json`
 

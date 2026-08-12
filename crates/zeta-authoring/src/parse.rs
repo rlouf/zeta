@@ -1,15 +1,18 @@
 //! Loads and parses authored agent Markdown into declaration values.
 
 use std::{
+    collections::{BTreeMap, BTreeSet},
     fs,
     path::{Path, PathBuf},
 };
 
+use minijinja::{AutoEscape, Environment};
+use serde::{Deserialize, Serialize};
 use serde_json::{Map, Number, Value};
 use yaml_serde::Value as YamlValue;
-use zeta_substrate::hash_bytes;
+use zeta_substrate::{hash_bytes, Hash, Object};
 
-use crate::error::{SpecError, SpecErrorKind};
+use crate::error::{AuthoringError, AuthoringErrorKind, SpecError, SpecErrorKind};
 use crate::spec::{
     scheduled_event_type, AgentSpec, EgressBinding, ExecutorSpec, IngressBinding, ModelSpec,
     RetrySpec, ScheduleEntry,
@@ -89,6 +92,7 @@ pub fn parse_agent(slug: &str, source: &[u8]) -> Result<AgentSpec, SpecError> {
     let schedules = take_schedules(&mut frontmatter)?;
     let retry = take_retry(&mut frontmatter)?;
     let base_dir = take_base_dir(&mut frontmatter)?;
+    let locks = take_locks(&mut frontmatter)?;
 
     if !schedules.is_empty() {
         let scheduled = scheduled_event_type(&slug);
@@ -102,6 +106,7 @@ pub fn parse_agent(slug: &str, source: &[u8]) -> Result<AgentSpec, SpecError> {
         name,
         description,
         instructions: instructions.to_owned(),
+        source: content.to_owned(),
         content_address: hash_bytes(source),
         enabled,
         session,
@@ -119,8 +124,363 @@ pub fn parse_agent(slug: &str, source: &[u8]) -> Result<AgentSpec, SpecError> {
         base_dir,
         ingress,
         egress,
+        locks,
         extensions: frontmatter,
     })
+}
+
+/// Stores one flat authored skill with its content identity.
+///
+/// The supplied bytes must be UTF-8 and are retained exactly as a string. The
+/// identity uses a `skill` substrate object with the `zeta.skill.v1` schema.
+///
+/// # Examples
+///
+/// ```
+/// let skill = zeta_authoring::SkillResource::new(
+///     "code-review",
+///     b"Review for correctness.\n",
+/// )?;
+/// assert_eq!(skill.name, "code-review");
+/// assert!(skill.object_id.to_string().starts_with("b3:"));
+/// # Ok::<(), zeta_authoring::AuthoringError>(())
+/// ```
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SkillResource {
+    /// Names the resource within its authored project.
+    pub name: String,
+    /// Preserves the exact UTF-8 source text.
+    pub body: String,
+    /// Identifies the `zeta.skill.v1` substrate object.
+    pub object_id: Hash,
+}
+
+impl SkillResource {
+    /// Creates a flat skill resource from a supplied name and exact bytes.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AuthoringError`] when `source` is not valid UTF-8.
+    ///
+    /// [`AuthoringError`]: crate::AuthoringError
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let skill = zeta_authoring::SkillResource::new("review", b"Review.\n")?;
+    /// assert_eq!(skill.body, "Review.\n");
+    /// # Ok::<(), zeta_authoring::AuthoringError>(())
+    /// ```
+    pub fn new(name: &str, source: &[u8]) -> Result<Self, AuthoringError> {
+        let body = std::str::from_utf8(source).map_err(|error| {
+            AuthoringError::new(
+                AuthoringErrorKind::InvalidSkill,
+                Some(name),
+                Some("body"),
+                format!("skill body is not valid UTF-8: {error}"),
+            )
+        })?;
+        let mut data = Map::new();
+        data.insert("body".to_owned(), Value::String(body.to_owned()));
+        let object = Object {
+            kind: "skill".to_owned(),
+            schema: "zeta.skill.v1".to_owned(),
+            data,
+            links: Vec::new(),
+        };
+        let object_id = object
+            .content_address()
+            .expect("a skill body contains no fallible canonical JSON numbers");
+        Ok(SkillResource {
+            name: name.to_owned(),
+            body: body.to_owned(),
+            object_id,
+        })
+    }
+}
+
+/// Describes metadata and body parsed from supplied `SKILL.md` bytes.
+///
+/// Unlike [`SkillResource`], this declaration follows the `SKILL.md`
+/// frontmatter convention and carries model-invocation metadata.
+///
+/// [`SkillResource`]: crate::SkillResource
+///
+/// # Examples
+///
+/// ```
+/// let skill = zeta_authoring::parse_skill(
+///     "review",
+///     b"---\ndescription: Reviews changes.\n---\nReview.\n",
+/// )?;
+/// assert_eq!(skill.name, "review");
+/// # Ok::<(), zeta_authoring::AuthoringError>(())
+/// ```
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SkillSpec {
+    /// Names the skill using lowercase letters, digits, and hyphens.
+    pub name: String,
+    /// Describes when the skill applies.
+    pub description: String,
+    /// Preserves the authored body after frontmatter.
+    pub body: String,
+    /// Prevents the skill from being advertised for model invocation.
+    pub disable_model_invocation: bool,
+}
+
+/// Validates one agent's authored prompt template.
+///
+/// Templates can read `event` and can introduce local variables. MiniJinja's
+/// built-in globals remain available, while all other undeclared roots are
+/// rejected.
+///
+/// # Errors
+///
+/// Returns [`AuthoringError`] when the template has invalid syntax or refers
+/// to an undeclared root other than `event`.
+///
+/// [`AuthoringError`]: crate::AuthoringError
+///
+/// # Examples
+///
+/// ```
+/// let spec = zeta_authoring::parse_agent(
+///     "worker",
+///     b"---\nname: Worker\ndescription: Works.\n---\n{{ event.payload.text }}\n",
+/// )?;
+/// zeta_authoring::validate_prompt(&spec).unwrap();
+/// # Ok::<(), zeta_authoring::SpecError>(())
+/// ```
+pub fn validate_prompt(spec: &AgentSpec) -> Result<(), AuthoringError> {
+    let environment = prompt_environment();
+    let template = environment
+        .template_from_str(&spec.instructions)
+        .map_err(|error| prompt_error(spec, AuthoringErrorKind::InvalidPromptSyntax, error))?;
+    let globals = BTreeSet::from(["dict", "namespace", "range"]);
+    let mut roots = Vec::new();
+    for root in template.undeclared_variables(false) {
+        if root != "event" && !globals.contains(root.as_str()) {
+            roots.push(root);
+        }
+    }
+    roots.sort();
+    let Some(root) = roots.first() else {
+        return Ok(());
+    };
+    Err(AuthoringError::new(
+        AuthoringErrorKind::UnknownPromptRoot,
+        Some(&spec.slug),
+        Some("instructions"),
+        format!("template references unknown variable {root:?}"),
+    ))
+}
+
+/// Renders one agent prompt against a supplied event value.
+///
+/// Rendering performs no autoescaping. Missing terminal members render as an
+/// empty string, following the portable lenient undefined-value contract.
+///
+/// # Errors
+///
+/// Returns [`AuthoringError`] when the template has invalid syntax or fails at
+/// runtime, such as when it traverses through an undefined intermediate value.
+///
+/// [`AuthoringError`]: crate::AuthoringError
+///
+/// # Examples
+///
+/// ```
+/// let spec = zeta_authoring::parse_agent(
+///     "worker",
+///     b"---\nname: Worker\ndescription: Works.\n---\n{{ event.payload.text }}",
+/// )?;
+/// let event = serde_json::json!({"payload": {"text": "hello"}});
+/// assert_eq!(zeta_authoring::render_prompt(&spec, &event).unwrap(), "hello");
+/// # Ok::<(), zeta_authoring::SpecError>(())
+/// ```
+pub fn render_prompt(spec: &AgentSpec, event: &Value) -> Result<String, AuthoringError> {
+    let environment = prompt_environment();
+    let template = environment
+        .template_from_str(&spec.instructions)
+        .map_err(|error| prompt_error(spec, AuthoringErrorKind::InvalidPromptSyntax, error))?;
+    template
+        .render(minijinja::context! { event => event })
+        .map_err(|error| prompt_error(spec, AuthoringErrorKind::PromptRender, error))
+}
+
+/// Parses one `SKILL.md` declaration from supplied exact bytes.
+///
+/// `fallback_name` is used when frontmatter does not provide a non-empty name.
+/// The function performs no filesystem access or skill discovery.
+///
+/// # Errors
+///
+/// Returns [`AuthoringError`] when the bytes are not UTF-8, the resolved name
+/// is invalid, or the description is absent or empty.
+///
+/// [`AuthoringError`]: crate::AuthoringError
+///
+/// # Examples
+///
+/// ```
+/// let skill = zeta_authoring::parse_skill(
+///     "review",
+///     b"---\ndescription: Reviews changes.\n---\nReview.\n",
+/// )?;
+/// assert_eq!(skill.body, "Review.\n");
+/// # Ok::<(), zeta_authoring::AuthoringError>(())
+/// ```
+pub fn parse_skill(fallback_name: &str, source: &[u8]) -> Result<SkillSpec, AuthoringError> {
+    let source = std::str::from_utf8(source).map_err(|error| {
+        AuthoringError::new(
+            AuthoringErrorKind::InvalidSkill,
+            Some(fallback_name),
+            Some("body"),
+            format!("SKILL.md is not valid UTF-8: {error}"),
+        )
+    })?;
+    let (metadata, body) = split_skill_frontmatter(source);
+    let metadata = parse_skill_metadata(metadata);
+    let name = skill_metadata_text(metadata.get("name"), fallback_name);
+    let name = name.trim();
+    if !valid_skill_name(name) {
+        return Err(AuthoringError::new(
+            AuthoringErrorKind::InvalidSkill,
+            Some(name),
+            Some("name"),
+            format!("invalid skill name {name:?}: use lowercase letters, digits, and hyphens"),
+        ));
+    }
+    let description = skill_metadata_text(metadata.get("description"), "");
+    let description = description.trim();
+    if description.is_empty() {
+        return Err(AuthoringError::new(
+            AuthoringErrorKind::InvalidSkill,
+            Some(name),
+            Some("description"),
+            "missing non-empty description",
+        ));
+    }
+    let disable_model_invocation = skill_metadata_bool(metadata.get("disable-model-invocation"));
+    Ok(SkillSpec {
+        name: name.to_owned(),
+        description: description.to_owned(),
+        body: body.to_owned(),
+        disable_model_invocation,
+    })
+}
+
+fn prompt_environment<'source>() -> Environment<'source> {
+    let mut environment = Environment::new();
+    environment.set_auto_escape_callback(|_name| AutoEscape::None);
+    environment
+}
+
+fn prompt_error(
+    spec: &AgentSpec,
+    kind: AuthoringErrorKind,
+    error: minijinja::Error,
+) -> AuthoringError {
+    AuthoringError::new(
+        kind,
+        Some(&spec.slug),
+        Some("instructions"),
+        error.to_string(),
+    )
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum SkillMetadataValue {
+    Bool(bool),
+    String(String),
+}
+
+fn split_skill_frontmatter(content: &str) -> (&str, &str) {
+    let mut lines = content.split_inclusive('\n');
+    let Some(first) = lines.next() else {
+        return ("", content);
+    };
+    if first.trim() != "---" {
+        return ("", content);
+    }
+    let metadata_start = first.len();
+    let mut line_start = metadata_start;
+    for line in lines {
+        if line.trim() == "---" {
+            let metadata = &content[metadata_start..line_start];
+            let body = &content[line_start + line.len()..];
+            return (metadata, body);
+        }
+        line_start += line.len();
+    }
+    ("", content)
+}
+
+fn parse_skill_metadata(source: &str) -> BTreeMap<String, SkillMetadataValue> {
+    let mut metadata = BTreeMap::new();
+    for line in source.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let Some((key, value)) = line.split_once(':') else {
+            continue;
+        };
+        let key = key.trim();
+        if key.is_empty() {
+            continue;
+        }
+        metadata.insert(key.to_owned(), parse_skill_scalar(value.trim()));
+    }
+    metadata
+}
+
+fn parse_skill_scalar(value: &str) -> SkillMetadataValue {
+    if value.eq_ignore_ascii_case("true") {
+        return SkillMetadataValue::Bool(true);
+    }
+    if value.eq_ignore_ascii_case("false") {
+        return SkillMetadataValue::Bool(false);
+    }
+    let bytes = value.as_bytes();
+    if bytes.len() >= 2 {
+        let quote = bytes[0];
+        if (quote == b'\'' || quote == b'"') && bytes[bytes.len() - 1] == quote {
+            return SkillMetadataValue::String(value[1..value.len() - 1].to_owned());
+        }
+    }
+    SkillMetadataValue::String(value.to_owned())
+}
+
+fn skill_metadata_text<'a>(value: Option<&'a SkillMetadataValue>, fallback: &'a str) -> &'a str {
+    match value {
+        None | Some(SkillMetadataValue::Bool(false)) => fallback,
+        Some(SkillMetadataValue::Bool(true)) => "True",
+        Some(SkillMetadataValue::String(value)) if value.is_empty() => fallback,
+        Some(SkillMetadataValue::String(value)) => value,
+    }
+}
+
+fn skill_metadata_bool(value: Option<&SkillMetadataValue>) -> bool {
+    match value {
+        None | Some(SkillMetadataValue::Bool(false)) => false,
+        Some(SkillMetadataValue::Bool(true)) => true,
+        Some(SkillMetadataValue::String(value)) => value.trim().eq_ignore_ascii_case("true"),
+    }
+}
+
+fn valid_skill_name(name: &str) -> bool {
+    if name.is_empty() {
+        return false;
+    }
+    for byte in name.bytes() {
+        if !byte.is_ascii_lowercase() && !byte.is_ascii_digit() && byte != b'-' {
+            return false;
+        }
+    }
+    true
 }
 
 fn split_frontmatter(content: &str) -> Result<(&str, &str), SpecError> {
@@ -681,6 +1041,40 @@ fn take_base_dir(values: &mut Map<String, Value>) -> Result<Option<PathBuf>, Spe
             Err(invalid_field("base_dir", "expected a path string"))
         }
     }
+}
+
+fn take_locks(values: &mut Map<String, Value>) -> Result<Vec<String>, SpecError> {
+    let Some(value) = values.remove("locks") else {
+        return Ok(Vec::new());
+    };
+    if value.is_null() {
+        return Ok(Vec::new());
+    }
+    if let Some(value) = value.as_str() {
+        if value.is_empty() {
+            return Err(invalid_field("locks", "lock identities must be non-empty"));
+        }
+        return Ok(vec![value.to_owned()]);
+    }
+    let Some(values) = value.as_array() else {
+        return Err(invalid_field(
+            "locks",
+            "expected a string or list of strings",
+        ));
+    };
+    let mut locks = Vec::new();
+    for value in values {
+        let Some(value) = value.as_str() else {
+            return Err(invalid_field("locks", "expected a list of strings"));
+        };
+        if value.is_empty() {
+            return Err(invalid_field("locks", "lock identities must be non-empty"));
+        }
+        if !locks.contains(&value.to_owned()) {
+            locks.push(value.to_owned());
+        }
+    }
+    Ok(locks)
 }
 
 fn reject_unknown_fields(

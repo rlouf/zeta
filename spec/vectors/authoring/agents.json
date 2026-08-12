@@ -1,6 +1,7 @@
 {
-  "format": "zeta-authoring-agent-v0",
-  "description": "Agent Markdown declarations generated from the Python authoring parser. Expected values omit the environment-normalized source path.",
+  "format": "zeta-authoring-v1",
+  "description": "Portable authored declarations, validation, normalization, and language-neutral manifest identities. Filesystem discovery and executable process metadata are excluded.",
+  "agents": {
   "valid": [
     {
       "name": "minimal defaults",
@@ -11,6 +12,7 @@
         "name": "Worker",
         "description": "Does work.",
         "instructions": "Do the work.\n",
+        "source": "---\nname: Worker\ndescription: Does work.\n---\nDo the work.\n",
         "content_address": "b3:37f517e40482fbcee122a2ba8024212e0cfef74ac49214887a7056776439ef13",
         "enabled": true,
         "session": "per-event",
@@ -31,6 +33,7 @@
         "base_dir": null,
         "ingress": [],
         "egress": [],
+        "locks": [],
         "extensions": {}
       }
     },
@@ -43,6 +46,7 @@
         "name": "Slack Q&A",
         "description": "Answers workspace questions.",
         "instructions": "User asked: {{ event.payload.text }}\n",
+        "source": "---\nname: Slack Q&A\ndescription: Answers workspace questions.\nenabled: true\nsession: shared\nmodel:\n  name: qwen3.6\n  url: http://127.0.0.1:8080/v1/chat/completions\nexecutor:\n  provider: modal\n  config:\n    retries: 3\n    timeout: 1.5\n    enabled: true\n    regions: [eu-west, us-east]\n    fallback: null\naccepts:\n  - event: slack.message.received\n    filter:\n      channel_ids: [C123]\n    idempotency_key: \"slack:{team_id}:{message_ts}\"\npublishes:\n  - event: slack.message.post\n    with:\n      channel_ids: [C123]\n    idempotency_key: \"post:{message_id}\"\nreturns:\n  - support.completed\nskills:\n  - code-review\ntools:\n  - read\nschedules:\n  - cron: \"0 18 * * 0\"\n    timezone: Europe/Paris\n    catchup: latest\nretry:\n  max_attempts: 3\n  backoff_seconds: 1.5\nbase_dir: /srv/zeta\nwrites:\n  paths: [docs/**.md]\n---\nUser asked: {{ event.payload.text }}\n",
         "content_address": "b3:998166c0a4d954c44b77123ed9b27f1a47e60757b2df2899baaa106759a4235b",
         "enabled": true,
         "session": "shared",
@@ -115,6 +119,7 @@
             "idempotency_key": "post:{message_id}"
           }
         ],
+        "locks": [],
         "extensions": {
           "writes": {
             "paths": [
@@ -133,6 +138,7 @@
         "name": "Empty",
         "description": "Selects no capabilities.",
         "instructions": "",
+        "source": "---\nname: Empty\ndescription: Selects no capabilities.\nskills: null\ntools: []\naccepts: null\npublishes: []\nreturns: null\n---\n",
         "content_address": "b3:bbac2a57471ef81d6def1a6b24d42f218c4678f12eda6f5159a9b4928b99df8b",
         "enabled": true,
         "session": "per-event",
@@ -153,6 +159,7 @@
         "base_dir": null,
         "ingress": [],
         "egress": [],
+        "locks": [],
         "extensions": {}
       }
     },
@@ -165,6 +172,7 @@
         "name": "Home",
         "description": "Uses an authored home path.",
         "instructions": "Work.\n",
+        "source": "---\nname: Home\ndescription: Uses an authored home path.\nbase_dir: ~/vaults/CEO\n---\nWork.\n",
         "content_address": "b3:08ef9ae8ba4f3d2776933d61d2bded35d84acd95a407f7cc1145d0d82da96483",
         "enabled": true,
         "session": "per-event",
@@ -185,6 +193,7 @@
         "base_dir": "~/vaults/CEO",
         "ingress": [],
         "egress": [],
+        "locks": [],
         "extensions": {}
       }
     },
@@ -197,6 +206,7 @@
         "name": "Résumé 🧭",
         "description": "Répond en français.",
         "instructions": "Réponds “oui”.\r\n",
+        "source": "---\r\nname: Résumé 🧭\r\ndescription: Répond en français.\r\nlabels:\r\n  café: 東京\r\n---\r\nRéponds “oui”.\r\n",
         "content_address": "b3:6914f0c1c975a7b5d27d38b3a6bbd601d582b7e20d098c4058abe6c4c4def1e8",
         "enabled": true,
         "session": "per-event",
@@ -217,6 +227,7 @@
         "base_dir": null,
         "ingress": [],
         "egress": [],
+        "locks": [],
         "extensions": {
           "labels": {
             "café": "東京"
@@ -233,6 +244,7 @@
         "name": "yes",
         "description": "2026-08-11",
         "instructions": "Work.\n",
+        "source": "---\nname: yes\ndescription: 2026-08-11\nretry:\n  max_attempts: 0o12\n  backoff_seconds: 1e3\nmetadata:\n  affirmative: yes\n  disabled: off\n  leading_zero: 012\n  sexagesimal: 1:20\n  separated: 1_000\n  date: 2026-08-11\n  binary: 0b101\n  hexadecimal: 0x2a\n  true_value: TRUE\n  false_value: False\n  null_value: ~\n  overflow: 1e400\n---\nWork.\n",
         "content_address": "b3:daf9ea75b1df0d6ebf80b33f323039a4378c8c2013e38b20dbb04ff5ff5b8409",
         "enabled": true,
         "session": "per-event",
@@ -256,6 +268,7 @@
         "base_dir": null,
         "ingress": [],
         "egress": [],
+        "locks": [],
         "extensions": {
           "metadata": {
             "affirmative": "yes",
@@ -283,6 +296,7 @@
         "name": "Digest",
         "description": "Summarizes updates.",
         "instructions": "Summarize.\n",
+        "source": "---\nname: Digest\ndescription: Summarizes updates.\naccepts: [agent.digest.scheduled]\nschedules:\n  - cron: \"* * * * *\"\n  - cron: \"0 18 * * 0\"\n    timezone: UTC\n    catchup: latest\n---\nSummarize.\n",
         "content_address": "b3:e885460f48289ecd46689d82ecf760f71ae997efca4bdaba9befd2ae912e58af",
         "enabled": true,
         "session": "per-event",
@@ -316,6 +330,41 @@
         "base_dir": null,
         "ingress": [],
         "egress": [],
+        "locks": [],
+        "extensions": {}
+      }
+    },
+    {
+      "name": "typed locks",
+      "path": "agents/locked.md",
+      "source_utf8": "---\nname: Locked\ndescription: Uses typed locks.\nlocks: [repo, network, repo]\n---\nWork.\n",
+      "expected": {
+        "slug": "locked",
+        "name": "Locked",
+        "description": "Uses typed locks.",
+        "instructions": "Work.\n",
+        "source": "---\nname: Locked\ndescription: Uses typed locks.\nlocks: [repo, network, repo]\n---\nWork.\n",
+        "content_address": "b3:6402266b97f448d1a835becd308b8d01f413cd2cbeac88455f7ff68c2323d475",
+        "enabled": true,
+        "session": "per-event",
+        "model": null,
+        "executor": {
+          "provider": "local",
+          "config": {}
+        },
+        "accepts": [],
+        "publishes": [],
+        "returns": [],
+        "skills": [],
+        "skills_inherit": true,
+        "tools": [],
+        "tools_inherit": true,
+        "schedules": [],
+        "retry": null,
+        "base_dir": null,
+        "ingress": [],
+        "egress": [],
+        "locks": ["repo", "network"],
         "extensions": {}
       }
     }
@@ -402,4 +451,218 @@
       "source_utf8": "---\nname: Worker\ndescription: Works.\nmetadata: &metadata\n  self: *metadata\n---\n"
     }
   ]
+  },
+  "event_schemas": [
+    {
+      "name": "sorted declarations",
+      "declarations": [
+        {"event_type": "z.last", "schema": null},
+        {"event_type": "a.first", "schema": {"type": "object"}}
+      ],
+      "expected": [
+        ["a.first", {"type": "object"}],
+        ["z.last", null]
+      ]
+    },
+    {
+      "name": "equal declarations are idempotent",
+      "language_neutral_contract": true,
+      "declarations": [
+        {"event_type": "work.ready", "schema": {"type": "object"}},
+        {"event_type": "work.ready", "schema": {"type": "object"}}
+      ],
+      "expected": [["work.ready", {"type": "object"}]]
+    },
+    {
+      "name": "conflicting declarations",
+      "declarations": [
+        {"event_type": "work.ready", "schema": {"type": "object"}},
+        {"event_type": "work.ready", "schema": {"type": "string"}}
+      ],
+      "error": "conflicting_declaration"
+    },
+    {
+      "name": "invalid Draft 2020-12 schema",
+      "declarations": [
+        {"event_type": "work.ready", "schema": {"type": "not-a-json-type"}}
+      ],
+      "error": "invalid_schema"
+    }
+  ],
+  "returned_schemas": [
+    {
+      "name": "no returned events",
+      "returns": [],
+      "events": {},
+      "expected": null
+    },
+    {
+      "name": "schema-less returned event",
+      "returns": ["work.completed"],
+      "events": {"work.completed": null},
+      "expected": {
+        "type": "object",
+        "oneOf": [
+          {
+            "type": "object",
+            "required": ["type", "payload"],
+            "properties": {
+              "type": {"const": "work.completed"},
+              "payload": {}
+            },
+            "additionalProperties": false
+          }
+        ]
+      }
+    },
+    {
+      "name": "recursive local definitions are isolated",
+      "returns": ["work.completed"],
+      "events": {
+        "work.completed": {
+          "type": "object",
+          "properties": {"item": {"$ref": "#/$defs/Item"}},
+          "$defs": {
+            "Item": {
+              "type": "object",
+              "properties": {"next": {"$ref": "#/$defs/Item"}}
+            }
+          }
+        }
+      },
+      "expected": {
+        "type": "object",
+        "oneOf": [
+          {
+            "type": "object",
+            "required": ["type", "payload"],
+            "properties": {
+              "type": {"const": "work.completed"},
+              "payload": {
+                "type": "object",
+                "properties": {"item": {"$ref": "#/$defs/event_0_Item"}}
+              }
+            },
+            "additionalProperties": false
+          }
+        ],
+        "$defs": {
+          "event_0_Item": {
+            "type": "object",
+            "properties": {"next": {"$ref": "#/$defs/event_0_Item"}}
+          }
+        }
+      }
+    },
+    {
+      "name": "unknown returned event",
+      "language_neutral_contract": true,
+      "returns": ["missing.event"],
+      "events": {},
+      "error": "unknown_event"
+    }
+  ],
+  "prompts": [
+    {
+      "name": "Unicode without autoescaping",
+      "source_utf8": "---\nname: Worker\ndescription: Works.\n---\nRéponse: {{ event.payload.text }}\n",
+      "event": {"payload": {"text": "<café & 東京>"}},
+      "expected": "Réponse: <café & 東京>"
+    },
+    {
+      "name": "lenient terminal missing member",
+      "source_utf8": "---\nname: Worker\ndescription: Works.\n---\n{{ event.payload.missing }}",
+      "event": {"payload": {}},
+      "expected": ""
+    },
+    {
+      "name": "unknown prompt root",
+      "source_utf8": "---\nname: Worker\ndescription: Works.\n---\n{{ system.name }}",
+      "validation_error": "unknown_prompt_root"
+    },
+    {
+      "name": "invalid prompt syntax",
+      "source_utf8": "---\nname: Worker\ndescription: Works.\n---\n{% if event.payload %}",
+      "validation_error": "invalid_prompt_syntax"
+    },
+    {
+      "name": "engine-specific global is rejected",
+      "source_utf8": "---\nname: Worker\ndescription: Works.\n---\n{{ debug() }}",
+      "validation_error": "unknown_prompt_root"
+    }
+  ],
+  "skills": {
+    "flat": [
+      {
+        "name": "review",
+        "body_utf8": "Review.\n",
+        "expected_object_id": "b3:643b381d7ea7b744b62191889dee1ed95a61208945298b581086b47f970ee8c0"
+      }
+    ],
+    "skill_markdown": [
+      {
+        "fallback_name": "review",
+        "source_utf8": "---\nname: code-review\ndescription: Reviews changes.\ndisable-model-invocation: true\n---\nReview carefully.\n",
+        "expected": {
+          "name": "code-review",
+          "description": "Reviews changes.",
+          "body": "Review carefully.\n",
+          "disable_model_invocation": true
+        }
+      },
+      {
+        "fallback_name": "Bad Name",
+        "language_neutral_contract": true,
+        "source_utf8": "---\ndescription: Invalid.\n---\nBody.\n",
+        "error": "invalid_skill"
+      }
+    ]
+  },
+  "connectors": [
+    {
+      "name": "language-neutral mail connector",
+      "language_neutral_contract": true,
+      "implementation_utf8": "mail",
+      "describe": {
+        "id": "mail",
+        "protocol_versions": [0],
+        "events": {"mail.received": null, "mail.send": null},
+        "operations": [
+          {"name": "mail.send", "semantics": "idempotent_with_key"}
+        ],
+        "settings": ["TOKEN"],
+        "command": ["python", "-m", "mail_connector"]
+      },
+      "expected": {
+        "id": "mail",
+        "protocol_versions": [0],
+        "events": {"mail.received": null, "mail.send": null},
+        "filters": {},
+        "operations": {
+          "mail.send": {
+            "name": "mail.send",
+            "semantics": "idempotent_with_key",
+            "options_schema": null
+          }
+        },
+        "settings": ["TOKEN"],
+        "implementation": "b3:a5d56811b40efd3460119439d14d5228cfa45b30462a00e6ddbf33a1c98a1da9"
+      }
+    }
+  ],
+  "semantic_diagnostics": [
+    {"fixture": "unknown_event", "error": "unknown_event"},
+    {"fixture": "reserved_tool", "error": "reserved_tool"},
+    {"fixture": "unknown_skill", "error": "unknown_skill"},
+    {"fixture": "unknown_executor_provider", "error": "unknown_executor_provider"},
+    {"fixture": "unknown_extension", "error": "unknown_extension"},
+    {"fixture": "invalid_connector_binding", "error": "invalid_binding"}
+  ],
+  "projects": {
+    "language_neutral_contract": true,
+    "fixture": "portable_project",
+    "expected_project_id": "project:b3:dbf4ad600cadfcd6f51c98ee8b714357926bc1da3fbd906f7b2f878bb396f6b6",
+    "expected_worker_execution_id": "execution_manifest:b3:f583c76734c191e8ed558992a8cd35e1064d5e6c61dc7f925ed756c12230bb03",
+    "excluded_fields": ["command", "callable", "source_path"]
+  }
 }

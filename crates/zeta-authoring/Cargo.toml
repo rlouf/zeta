@@ -8,6 +8,8 @@ license.workspace = true
 publish = false
 
 [dependencies]
+jsonschema.workspace = true
+minijinja.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 yaml_serde.workspace = true

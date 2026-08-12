@@ -5,8 +5,10 @@ use std::path::{Path, PathBuf};
 
 use serde_json::{json, Map, Value};
 use zeta_authoring::{
-    load_agent, matches, parse_agent, scheduled_event_type, AgentSpec, EgressBinding, ExecutorSpec,
-    IngressBinding, ModelSpec, RetrySpec, ScheduleEntry, SpecErrorKind,
+    derive_returns_schema, load_agent, matches, parse_agent, parse_skill, render_prompt,
+    scheduled_event_type, validate_prompt, AgentSpec, AuthoringErrorKind, EgressBinding,
+    EventRegistry, ExecutorSpec, IngressBinding, ModelSpec, RetrySpec, ScheduleEntry,
+    SkillResource, SkillSpec, SpecErrorKind,
 };
 
 const COMPLETE_AGENT: &[u8] = br#"---
@@ -76,6 +78,7 @@ fn complete_agent_matches_python_declaration_behavior() {
         name,
         description,
         instructions,
+        source,
         content_address,
         enabled,
         session,
@@ -93,6 +96,7 @@ fn complete_agent_matches_python_declaration_behavior() {
         base_dir,
         ingress,
         egress,
+        locks,
         extensions,
     } = spec;
 
@@ -100,6 +104,7 @@ fn complete_agent_matches_python_declaration_behavior() {
     assert_eq!(name, "Slack Q&A");
     assert_eq!(description, "Answers workspace questions.");
     assert_eq!(instructions, "User asked: {{ event.payload.text }}\n");
+    assert_eq!(source.as_bytes(), COMPLETE_AGENT);
     assert_eq!(
         content_address.to_string(),
         "b3:3b11502a246625eee17b4262ef24f46d85e0d8cafe0167adc281058b64d131dc"
@@ -171,6 +176,7 @@ fn complete_agent_matches_python_declaration_behavior() {
             idempotency_key: None,
         }]
     );
+    assert!(locks.is_empty());
     assert_eq!(
         extensions,
         object(json!({"writes": {"paths": ["docs/**.md"]}}))
@@ -253,9 +259,9 @@ fn non_json_yaml_constructs_are_rejected() {
 #[test]
 fn shared_authoring_vectors_match_parser() {
     let vectors = authoring_vectors();
-    assert_eq!(vectors["format"], "zeta-authoring-agent-v0");
+    assert_eq!(vectors["format"], "zeta-authoring-v1");
 
-    for vector in vectors["valid"].as_array().unwrap() {
+    for vector in vectors["agents"]["valid"].as_array().unwrap() {
         let name = vector["name"].as_str().unwrap();
         let path = Path::new(vector["path"].as_str().unwrap());
         let slug = path.file_stem().unwrap().to_str().unwrap();
@@ -265,12 +271,174 @@ fn shared_authoring_vectors_match_parser() {
         assert_eq!(actual, vector["expected"], "{name}");
     }
 
-    for vector in vectors["invalid"].as_array().unwrap() {
+    for vector in vectors["agents"]["invalid"].as_array().unwrap() {
         let name = vector["name"].as_str().unwrap();
         let path = Path::new(vector["path"].as_str().unwrap());
         let slug = path.file_stem().unwrap().to_str().unwrap();
         let source = vector["source_utf8"].as_str().unwrap().as_bytes();
         assert!(parse_agent(slug, source).is_err(), "{name}");
+    }
+
+    for vector in vectors["event_schemas"].as_array().unwrap() {
+        let mut events = EventRegistry::new();
+        let mut failure = None;
+        for declaration in vector["declarations"].as_array().unwrap() {
+            let event_type = declaration["event_type"].as_str().unwrap();
+            let schema = if declaration["schema"].is_null() {
+                None
+            } else {
+                Some(declaration["schema"].as_object().unwrap().clone())
+            };
+            if let Err(error) = events.register(event_type, schema) {
+                failure = Some(error);
+                break;
+            }
+        }
+        if let Some(reason) = vector.get("error").and_then(Value::as_str) {
+            assert_eq!(
+                failure.unwrap().kind().reason(),
+                reason,
+                "{}",
+                vector["name"]
+            );
+            continue;
+        }
+        assert!(failure.is_none(), "{}", vector["name"]);
+        let mut actual = Vec::new();
+        for (event_type, schema) in events.iter() {
+            actual.push(Value::Array(vec![
+                Value::String(event_type.clone()),
+                schema.clone().map(Value::Object).unwrap_or(Value::Null),
+            ]));
+        }
+        let actual = Value::Array(actual);
+        assert_eq!(actual, vector["expected"], "{}", vector["name"]);
+    }
+
+    for vector in vectors["returned_schemas"].as_array().unwrap() {
+        let mut spec = parse_agent(
+            "worker",
+            b"---\nname: Worker\ndescription: Works.\n---\nWork.\n",
+        )
+        .unwrap();
+        let mut returns = Vec::new();
+        for value in vector["returns"].as_array().unwrap() {
+            returns.push(value.as_str().unwrap().to_owned());
+        }
+        spec.returns = returns;
+        let mut events = EventRegistry::new();
+        for (event_type, schema) in vector["events"].as_object().unwrap() {
+            let schema = schema.as_object().cloned();
+            events.register(event_type, schema).unwrap();
+        }
+        let result = derive_returns_schema(&spec, &events);
+        if let Some(reason) = vector.get("error").and_then(Value::as_str) {
+            assert_eq!(
+                result.unwrap_err().kind().reason(),
+                reason,
+                "{}",
+                vector["name"]
+            );
+            continue;
+        }
+        assert_eq!(
+            result.unwrap().unwrap_or(Value::Null),
+            vector["expected"],
+            "{}",
+            vector["name"]
+        );
+    }
+
+    for vector in vectors["prompts"].as_array().unwrap() {
+        let spec =
+            parse_agent("worker", vector["source_utf8"].as_str().unwrap().as_bytes()).unwrap();
+        let validation = validate_prompt(&spec);
+        if let Some(reason) = vector.get("validation_error").and_then(Value::as_str) {
+            assert_eq!(
+                validation.unwrap_err().kind().reason(),
+                reason,
+                "{}",
+                vector["name"]
+            );
+            continue;
+        }
+        validation.unwrap();
+        let rendered = render_prompt(&spec, &vector["event"]).unwrap();
+        assert_eq!(
+            rendered,
+            vector["expected"].as_str().unwrap(),
+            "{}",
+            vector["name"]
+        );
+    }
+
+    for vector in vectors["skills"]["flat"].as_array().unwrap() {
+        let skill = SkillResource::new(
+            vector["name"].as_str().unwrap(),
+            vector["body_utf8"].as_str().unwrap().as_bytes(),
+        )
+        .unwrap();
+        assert_eq!(
+            skill.object_id.to_string(),
+            vector["expected_object_id"].as_str().unwrap()
+        );
+    }
+    for vector in vectors["skills"]["skill_markdown"].as_array().unwrap() {
+        let result = parse_skill(
+            vector["fallback_name"].as_str().unwrap(),
+            vector["source_utf8"].as_str().unwrap().as_bytes(),
+        );
+        if let Some(reason) = vector.get("error").and_then(Value::as_str) {
+            assert_eq!(
+                result.unwrap_err().kind().reason(),
+                reason,
+                "{}",
+                vector["fallback_name"]
+            );
+            continue;
+        }
+        assert_eq!(
+            serde_json::to_value(result.unwrap()).unwrap(),
+            vector["expected"]
+        );
+    }
+
+    for vector in vectors["connectors"].as_array().unwrap() {
+        let implementation = zeta_authoring::ImplementationFingerprint::new(
+            zeta_substrate::hash_bytes(vector["implementation_utf8"].as_str().unwrap().as_bytes()),
+        );
+        let connector = zeta_authoring::parse_connector(&vector["describe"], implementation)
+            .unwrap_or_else(|error| panic!("{}: {error}", vector["name"]));
+        assert_eq!(serde_json::to_value(connector).unwrap(), vector["expected"]);
+    }
+
+    for vector in vectors["semantic_diagnostics"].as_array().unwrap() {
+        let error = semantic_fixture_error(vector["fixture"].as_str().unwrap());
+        assert_eq!(
+            error.kind().reason(),
+            vector["error"].as_str().unwrap(),
+            "{}",
+            vector["fixture"]
+        );
+    }
+
+    let project = zeta_authoring::compile_project(manifest_project_input(false)).unwrap();
+    let project_manifest = zeta_authoring::project_manifest(&project).unwrap();
+    let execution =
+        zeta_authoring::execution_manifest(&project, &project_manifest.id, "worker").unwrap();
+    assert_eq!(
+        project_manifest.id.to_string(),
+        vectors["projects"]["expected_project_id"].as_str().unwrap()
+    );
+    assert_eq!(
+        execution.id.to_string(),
+        vectors["projects"]["expected_worker_execution_id"]
+            .as_str()
+            .unwrap()
+    );
+    let encoded = serde_json::to_string(&project_manifest).unwrap();
+    for field in vectors["projects"]["excluded_fields"].as_array().unwrap() {
+        assert!(!encoded.contains(field.as_str().unwrap()));
     }
 }
 
@@ -583,4 +751,795 @@ fn authored_accepts_do_not_duplicate_the_synthetic_schedule_event() {
     .unwrap();
 
     assert_eq!(spec.accepts, vec!["agent.digest.scheduled"]);
+}
+
+#[test]
+fn locks_are_typed_core_declarations() {
+    let one = parse_agent(
+        "worker",
+        b"---\nname: Worker\ndescription: Works.\nlocks: context:repo\n---\n",
+    )
+    .unwrap();
+    let several = parse_agent(
+        "worker",
+        b"---\nname: Worker\ndescription: Works.\nlocks: [context:repo, branch:main, context:repo]\n---\n",
+    )
+    .unwrap();
+
+    assert_eq!(one.locks, vec!["context:repo"]);
+    assert_eq!(several.locks, vec!["context:repo", "branch:main"]);
+    assert!(!one.extensions.contains_key("locks"));
+
+    for declaration in ["locks: 1\n", "locks: ['']\n", "locks: [context:repo, 1]\n"] {
+        let source = format!("---\nname: Worker\ndescription: Works.\n{declaration}---\n");
+        let error = parse_agent("worker", source.as_bytes()).unwrap_err();
+        assert_eq!(error.kind(), SpecErrorKind::InvalidField);
+        assert_eq!(error.field(), Some("locks"));
+    }
+}
+
+#[test]
+fn event_registry_validates_schemas_and_merges_equal_declarations() {
+    let mut events = EventRegistry::new();
+    let schema = object(json!({
+        "type": "object",
+        "properties": {"title": {"type": "string"}},
+        "required": ["title"],
+        "additionalProperties": false,
+    }));
+
+    events
+        .register("work.requested", Some(schema.clone()))
+        .unwrap();
+    events
+        .register("work.requested", Some(schema.clone()))
+        .unwrap();
+
+    assert!(events.knows("work.requested"));
+    assert_eq!(events.schema("work.requested"), Some(Some(&schema)));
+    assert_eq!(events.iter().count(), 1);
+
+    let conflict = events
+        .register("work.requested", Some(object(json!({"type": "string"}))))
+        .unwrap_err();
+    assert_eq!(conflict.kind(), AuthoringErrorKind::ConflictingDeclaration);
+    assert_eq!(conflict.subject(), Some("work.requested"));
+
+    let malformed = events
+        .register(
+            "work.invalid",
+            Some(object(json!({"type": "definitely-not-a-json-type"}))),
+        )
+        .unwrap_err();
+    assert_eq!(malformed.kind(), AuthoringErrorKind::InvalidSchema);
+    assert_eq!(malformed.subject(), Some("work.invalid"));
+}
+
+#[test]
+fn event_registry_iteration_is_sorted_and_scheduled_events_have_empty_payloads() {
+    let mut events = EventRegistry::new();
+    events.register("z.last", None).unwrap();
+    events.register("a.first", None).unwrap();
+    events.register_scheduled("digest").unwrap();
+
+    let mut names = Vec::new();
+    for (name, _schema) in events.iter() {
+        names.push(name.as_str());
+    }
+    assert_eq!(names, vec!["a.first", "agent.digest.scheduled", "z.last"]);
+    assert_eq!(
+        events.schema("agent.digest.scheduled"),
+        Some(Some(&object(json!({
+            "type": "object",
+            "additionalProperties": false,
+        }))))
+    );
+}
+
+#[test]
+fn returned_schema_hoists_and_rewrites_branch_local_definitions() {
+    let spec = parse_agent(
+        "worker",
+        b"---\nname: Worker\ndescription: Works.\nreturns: [work.completed, audit.recorded]\n---\n",
+    )
+    .unwrap();
+    let mut events = EventRegistry::new();
+    events
+        .register(
+            "work.completed",
+            Some(object(json!({
+                "type": "object",
+                "$defs": {
+                    "result": {
+                        "type": "object",
+                        "properties": {"value": {"$ref": "#/$defs/value"}},
+                    },
+                    "value": {"type": "string"},
+                },
+                "properties": {"result": {"$ref": "#/$defs/result"}},
+            }))),
+        )
+        .unwrap();
+    events
+        .register(
+            "audit.recorded",
+            Some(object(json!({
+                "$defs": {"result": {"type": "integer"}},
+                "$ref": "#/$defs/result",
+            }))),
+        )
+        .unwrap();
+
+    let schema = derive_returns_schema(&spec, &events).unwrap().unwrap();
+
+    assert_eq!(schema["type"], "object");
+    assert_eq!(
+        schema["oneOf"][0]["properties"]["type"]["const"],
+        "work.completed"
+    );
+    assert_eq!(
+        schema["oneOf"][0]["properties"]["payload"]["properties"]["result"]["$ref"],
+        "#/$defs/event_0_result"
+    );
+    assert_eq!(
+        schema["$defs"]["event_0_result"]["properties"]["value"]["$ref"],
+        "#/$defs/event_0_value"
+    );
+    assert_eq!(
+        schema["oneOf"][1]["properties"]["payload"]["$ref"],
+        "#/$defs/event_1_result"
+    );
+    assert_eq!(schema["$defs"]["event_1_result"]["type"], "integer");
+}
+
+#[test]
+fn returned_schema_handles_none_and_rejects_unknown_events() {
+    let without_returns =
+        parse_agent("worker", b"---\nname: Worker\ndescription: Works.\n---\n").unwrap();
+    assert_eq!(
+        derive_returns_schema(&without_returns, &EventRegistry::new()).unwrap(),
+        None
+    );
+
+    let unknown = parse_agent(
+        "worker",
+        b"---\nname: Worker\ndescription: Works.\nreturns: [missing.event]\n---\n",
+    )
+    .unwrap();
+    let error = derive_returns_schema(&unknown, &EventRegistry::new()).unwrap_err();
+    assert_eq!(error.kind(), AuthoringErrorKind::UnknownEvent);
+    assert_eq!(error.subject(), Some("missing.event"));
+}
+
+#[test]
+fn connector_descriptions_become_language_neutral_declarations() {
+    let description = json!({
+        "id": "slack",
+        "protocol_versions": [0],
+        "events": {
+            "slack.message.received": {
+                "type": "object",
+                "properties": {"text": {"type": "string"}}
+            },
+            "slack.message.post": {
+                "type": "object",
+                "properties": {"text": {"type": "string"}}
+            }
+        },
+        "filters": {
+            "slack.message.received": {
+                "type": "object",
+                "properties": {
+                    "channel_ids": {
+                        "type": "array",
+                        "items": {"type": "string"}
+                    }
+                }
+            }
+        },
+        "operations": [{
+            "name": "slack.message.post",
+            "semantics": "idempotent_with_key",
+            "options_schema": {
+                "type": "object",
+                "properties": {"channel_id": {"type": "string"}}
+            }
+        }],
+        "settings": ["SLACK_TOKEN"],
+        "command": ["python", "-m", "connector"]
+    });
+    let fingerprint = zeta_authoring::ImplementationFingerprint::new(zeta_substrate::hash_bytes(
+        b"slack implementation",
+    ));
+
+    let connector = zeta_authoring::parse_connector(&description, fingerprint).unwrap();
+
+    assert_eq!(connector.id, "slack");
+    assert_eq!(connector.protocol_versions, vec![0]);
+    assert!(connector.events.knows("slack.message.received"));
+    assert!(connector.ingress_event("slack.message.received"));
+    assert!(!connector.ingress_event("slack.message.post"));
+    assert_eq!(
+        connector.operations["slack.message.post"].semantics,
+        zeta_authoring::DeliverySemantics::IdempotentWithKey
+    );
+    let serialized = serde_json::to_value(&connector).unwrap();
+    assert!(serialized.get("command").is_none());
+}
+
+#[test]
+fn connector_descriptions_reject_invalid_protocols_operations_and_schemas() {
+    let fingerprint =
+        zeta_authoring::ImplementationFingerprint::new(zeta_substrate::hash_bytes(b"connector"));
+    let cases = [
+        json!({"id": "future", "protocol_versions": [1], "events": {}}),
+        json!({
+            "id": "missing-event",
+            "protocol_versions": [0],
+            "events": {},
+            "operations": [{"name": "work.run", "semantics": "at_least_once"}]
+        }),
+        json!({
+            "id": "unsafe",
+            "protocol_versions": [0],
+            "events": {"work.run": null},
+            "operations": [{"name": "work.run", "semantics": "whenever"}]
+        }),
+        json!({
+            "id": "bad-schema",
+            "protocol_versions": [0],
+            "events": {"work.run": {"type": "not-a-type"}}
+        }),
+        json!({
+            "id": "duplicate-setting",
+            "protocol_versions": [0],
+            "events": {},
+            "settings": ["TOKEN", "TOKEN"]
+        }),
+        json!({
+            "id": "unknown-field",
+            "protocol_versions": [0],
+            "events": {},
+            "future": true
+        }),
+    ];
+
+    for description in cases {
+        let error = zeta_authoring::parse_connector(&description, fingerprint.clone()).unwrap_err();
+        assert_eq!(error.kind(), AuthoringErrorKind::InvalidConnector);
+    }
+}
+
+fn compiler_fingerprint(label: &str) -> zeta_authoring::ImplementationFingerprint {
+    zeta_authoring::ImplementationFingerprint::new(zeta_substrate::hash_bytes(label.as_bytes()))
+}
+
+fn compiler_provider(id: &str) -> zeta_authoring::ExecutorProviderSpec {
+    zeta_authoring::ExecutorProviderSpec {
+        id: id.to_owned(),
+        implementation: compiler_fingerprint(id),
+    }
+}
+
+fn compiler_capability(
+    id: &str,
+    name: &str,
+    owner: Option<&str>,
+) -> zeta_authoring::CapabilitySpec {
+    zeta_authoring::CapabilitySpec {
+        id: id.parse().unwrap(),
+        name: name.to_owned(),
+        description: format!("Run {name}."),
+        input_schema: serde_json::from_value(serde_json::json!({
+            "type": "object",
+            "additionalProperties": false
+        }))
+        .unwrap(),
+        delivery_semantics: None,
+        owner: owner.map(str::to_owned),
+        implementation: compiler_fingerprint(id),
+    }
+}
+
+fn compiler_agent(slug: &str, frontmatter: &str) -> zeta_authoring::AgentSpec {
+    let source = format!(
+        "---\nname: {slug}\ndescription: Compiles {slug}.\n{frontmatter}---\n{{{{ event.payload }}}}\n"
+    );
+    zeta_authoring::parse_agent(slug, source.as_bytes()).unwrap()
+}
+
+fn compiler_input(agents: Vec<zeta_authoring::AgentSpec>) -> zeta_authoring::AgentProjectInput {
+    zeta_authoring::AgentProjectInput {
+        agents,
+        events: zeta_authoring::EventRegistry::new(),
+        skill_resources: Vec::new(),
+        skill_specs: Vec::new(),
+        connectors: Vec::new(),
+        capabilities: Vec::new(),
+        executor_providers: vec![compiler_provider("local")],
+        model: None,
+        runtime_fingerprint: compiler_fingerprint("zeta-runtime"),
+    }
+}
+
+fn semantic_fixture_error(fixture: &str) -> zeta_authoring::AuthoringError {
+    let agent = match fixture {
+        "unknown_event" => compiler_agent("worker", "accepts: [missing.event]\n"),
+        "reserved_tool" => compiler_agent("worker", "tools: [publish_event]\n"),
+        "unknown_skill" => compiler_agent("worker", "skills: [missing]\n"),
+        "unknown_executor_provider" => compiler_agent("worker", "executor:\n  provider: missing\n"),
+        "unknown_extension" => compiler_agent("worker", "future_section: true\n"),
+        "invalid_connector_binding" => compiler_agent(
+            "worker",
+            "accepts:\n  - event: mail.received\n    idempotency_key: 'mail:{id}'\n",
+        ),
+        unknown => panic!("unknown semantic fixture {unknown:?}"),
+    };
+    let mut input = compiler_input(vec![agent]);
+    if fixture == "invalid_connector_binding" {
+        input.events.register("mail.received", None).unwrap();
+    }
+    zeta_authoring::compile_project(input).unwrap_err()
+}
+
+#[test]
+fn project_compilation_normalizes_inheritance_and_owner_grants() {
+    let inherited = compiler_agent(
+        "inherited",
+        "enabled: false\nschedules:\n  - cron: '0 * * * *'\n",
+    );
+    let explicit = compiler_agent("explicit", "tools: []\nskills: []\n");
+    let mut input = compiler_input(vec![inherited, explicit]);
+    input.capabilities = vec![
+        compiler_capability("native.write", "write", None),
+        compiler_capability("agent.inherited.echo", "echo", Some("inherited")),
+        compiler_capability("native.read", "read", None),
+    ];
+    input.skill_resources = vec![
+        zeta_authoring::SkillResource::new("review", b"Review.\n").unwrap(),
+        zeta_authoring::SkillResource::new("build", b"Build.\n").unwrap(),
+    ];
+
+    let project = zeta_authoring::compile_project(input).unwrap();
+
+    assert_eq!(
+        project
+            .agents
+            .keys()
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
+        vec!["explicit", "inherited"]
+    );
+    let inherited = project.agents.get("inherited").unwrap();
+    assert!(!inherited.enabled);
+    assert_eq!(
+        inherited.tools,
+        ["agent.inherited.echo", "native.read", "native.write"]
+    );
+    assert_eq!(inherited.skills, ["build", "review"]);
+    assert!(project.events.knows("agent.inherited.scheduled"));
+    let explicit = project.agents.get("explicit").unwrap();
+    assert!(explicit.tools.is_empty());
+    assert!(explicit.skills.is_empty());
+}
+
+#[test]
+fn project_compilation_rejects_duplicate_and_conflicting_declarations() {
+    let agent = compiler_agent("worker", "");
+    let mut duplicate_agent = compiler_input(vec![agent.clone(), agent.clone()]);
+    let error = zeta_authoring::compile_project(duplicate_agent.clone()).unwrap_err();
+    assert_eq!(error.kind(), AuthoringErrorKind::DuplicateDeclaration);
+    duplicate_agent.agents.pop();
+
+    duplicate_agent.capabilities = vec![
+        compiler_capability("native.read", "read", None),
+        compiler_capability("native.read", "read", None),
+    ];
+    let error = zeta_authoring::compile_project(duplicate_agent).unwrap_err();
+    assert_eq!(error.kind(), AuthoringErrorKind::DuplicateDeclaration);
+
+    let describe = serde_json::json!({
+        "id": "mail",
+        "protocol_versions": [0],
+        "events": {"mail.received": {"type": "string"}}
+    });
+    let connector =
+        zeta_authoring::parse_connector(&describe, compiler_fingerprint("mail")).unwrap();
+    let mut conflict = compiler_input(vec![agent]);
+    conflict.connectors.push(connector);
+    conflict
+        .events
+        .register(
+            "mail.received",
+            Some(serde_json::from_value(serde_json::json!({"type": "object"})).unwrap()),
+        )
+        .unwrap();
+    let error = zeta_authoring::compile_project(conflict).unwrap_err();
+    assert_eq!(error.kind(), AuthoringErrorKind::ConflictingDeclaration);
+}
+
+#[test]
+fn project_compilation_rejects_ambiguous_aliases_and_invalid_typed_declarations() {
+    let agent = compiler_agent("worker", "tools: [read]\n");
+    let mut ambiguous = compiler_input(vec![agent]);
+    ambiguous.capabilities = vec![
+        compiler_capability("native.read", "read", None),
+        compiler_capability("remote.read", "read", None),
+    ];
+    let error = zeta_authoring::compile_project(ambiguous).unwrap_err();
+    assert_eq!(error.kind(), AuthoringErrorKind::ConflictingDeclaration);
+
+    let mut invalid_connector = zeta_authoring::parse_connector(
+        &serde_json::json!({
+            "id": "mail",
+            "protocol_versions": [0],
+            "events": {"mail.received": null}
+        }),
+        compiler_fingerprint("mail"),
+    )
+    .unwrap();
+    invalid_connector.protocol_versions.clear();
+    let mut input = compiler_input(vec![compiler_agent("worker", "")]);
+    input.connectors.push(invalid_connector);
+    let error = zeta_authoring::compile_project(input).unwrap_err();
+    assert_eq!(error.kind(), AuthoringErrorKind::InvalidConnector);
+
+    let mut invalid_agent = compiler_agent("worker", "");
+    invalid_agent.locks.push(String::new());
+    let error = zeta_authoring::compile_project(compiler_input(vec![invalid_agent])).unwrap_err();
+    assert_eq!(error.kind(), AuthoringErrorKind::InvalidAgent);
+}
+
+#[test]
+fn project_compilation_rejects_unknown_reserved_and_cross_owner_references() {
+    let cases = [
+        (
+            compiler_agent("worker", "accepts: [missing.event]\n"),
+            AuthoringErrorKind::UnknownEvent,
+        ),
+        (
+            compiler_agent("worker", "tools: [publish_event]\n"),
+            AuthoringErrorKind::ReservedTool,
+        ),
+        (
+            compiler_agent("worker", "skills: [missing]\n"),
+            AuthoringErrorKind::UnknownSkill,
+        ),
+        (
+            compiler_agent("worker", "executor:\n  provider: missing\n"),
+            AuthoringErrorKind::UnknownExecutorProvider,
+        ),
+        (
+            compiler_agent("worker", "future_section: true\n"),
+            AuthoringErrorKind::UnknownExtension,
+        ),
+    ];
+    for (agent, expected) in cases {
+        let error = zeta_authoring::compile_project(compiler_input(vec![agent])).unwrap_err();
+        assert_eq!(error.kind(), expected);
+    }
+
+    let worker = compiler_agent("worker", "tools: [other-secret]\n");
+    let other = compiler_agent("other", "");
+    let mut cross_owner = compiler_input(vec![worker, other]);
+    cross_owner.capabilities = vec![compiler_capability(
+        "agent.other.secret",
+        "other-secret",
+        Some("other"),
+    )];
+    let error = zeta_authoring::compile_project(cross_owner).unwrap_err();
+    assert_eq!(error.kind(), AuthoringErrorKind::UnknownTool);
+}
+
+#[test]
+fn project_compilation_validates_connector_bindings() {
+    let describe = serde_json::json!({
+        "id": "mail",
+        "protocol_versions": [0],
+        "events": {
+            "mail.received": null,
+            "mail.send": null
+        },
+        "filters": {
+            "mail.received": {
+                "type": "object",
+                "properties": {"folder": {"type": "string"}},
+                "required": ["folder"],
+                "additionalProperties": false
+            }
+        },
+        "operations": [{
+            "name": "mail.send",
+            "semantics": "idempotent_with_key",
+            "options_schema": {
+                "type": "object",
+                "properties": {"priority": {"type": "integer"}},
+                "required": ["priority"],
+                "additionalProperties": false
+            }
+        }]
+    });
+    let connector =
+        zeta_authoring::parse_connector(&describe, compiler_fingerprint("mail")).unwrap();
+    let valid = compiler_agent(
+        "worker",
+        "accepts:\n  - event: mail.received\n    filter: {folder: inbox}\n    idempotency_key: 'mail:{id}'\npublishes:\n  - event: mail.send\n    with: {priority: 1}\n",
+    );
+    let mut input = compiler_input(vec![valid]);
+    input.connectors.push(connector.clone());
+    zeta_authoring::compile_project(input).unwrap();
+
+    let missing_key = compiler_agent(
+        "worker",
+        "accepts:\n  - event: mail.received\n    filter: {folder: inbox}\n",
+    );
+    let mut input = compiler_input(vec![missing_key]);
+    input.connectors.push(connector.clone());
+    let error = zeta_authoring::compile_project(input).unwrap_err();
+    assert_eq!(error.kind(), AuthoringErrorKind::InvalidBinding);
+
+    let invalid_options = compiler_agent(
+        "worker",
+        "publishes:\n  - event: mail.send\n    with: {priority: urgent}\n",
+    );
+    let mut input = compiler_input(vec![invalid_options]);
+    input.connectors.push(connector);
+    let error = zeta_authoring::compile_project(input).unwrap_err();
+    assert_eq!(error.kind(), AuthoringErrorKind::InvalidBinding);
+}
+
+fn manifest_project_input(reverse: bool) -> zeta_authoring::AgentProjectInput {
+    let worker = compiler_agent(
+        "worker",
+        "accepts: [work.requested]\nreturns: [work.completed]\ntools: [read]\nskills: [review]\n",
+    );
+    let idle = compiler_agent("idle", "tools: []\nskills: []\n");
+    let mut input = compiler_input(if reverse {
+        vec![idle, worker]
+    } else {
+        vec![worker, idle]
+    });
+    input
+        .events
+        .register(
+            "work.requested",
+            Some(serde_json::from_value(serde_json::json!({"type": "object"})).unwrap()),
+        )
+        .unwrap();
+    input
+        .events
+        .register(
+            "work.completed",
+            Some(serde_json::from_value(serde_json::json!({"type": "object"})).unwrap()),
+        )
+        .unwrap();
+    input.skill_resources =
+        vec![zeta_authoring::SkillResource::new("review", b"Review carefully.\n").unwrap()];
+    input.capabilities = vec![compiler_capability("native.read", "read", None)];
+    input.model = Some(zeta_authoring::ModelSelectionSpec {
+        profile: "native".to_owned(),
+        model: "test-model".to_owned(),
+        url: "https://model.invalid/v1".to_owned(),
+        thinking: Some("medium".to_owned()),
+        api: "responses".to_owned(),
+        tool_profile: "native".to_owned(),
+        implementation: compiler_fingerprint("model-adapter"),
+    });
+    input
+}
+
+#[test]
+fn project_manifests_are_order_invariant_strict_and_content_addressed() {
+    let project = zeta_authoring::compile_project(manifest_project_input(false)).unwrap();
+    let reordered = zeta_authoring::compile_project(manifest_project_input(true)).unwrap();
+    let manifest = zeta_authoring::project_manifest(&project).unwrap();
+    let reordered_manifest = zeta_authoring::project_manifest(&reordered).unwrap();
+
+    assert_eq!(manifest.id, reordered_manifest.id);
+    assert!(manifest.id.to_string().starts_with("project:b3:"));
+    let value = serde_json::to_value(&manifest).unwrap();
+    let encoded = serde_json::to_string(&value).unwrap();
+    assert!(!encoded.contains("command"));
+    assert!(!encoded.contains("callable"));
+    assert!(!encoded.contains("source_path"));
+    let (restored, restored_project) = zeta_authoring::restore_project_manifest(&value).unwrap();
+    assert_eq!(restored, manifest);
+    assert_eq!(restored_project, project);
+
+    let mut unknown = value.clone();
+    unknown
+        .as_object_mut()
+        .unwrap()
+        .insert("future".to_owned(), serde_json::Value::Bool(true));
+    let error = zeta_authoring::restore_project_manifest(&unknown).unwrap_err();
+    assert_eq!(error.kind(), AuthoringErrorKind::InvalidManifest);
+
+    let mut invalid_capability_id = value.clone();
+    invalid_capability_id["capabilities"]["native.read"]["id"] = serde_json::json!("read");
+    let error = zeta_authoring::restore_project_manifest(&invalid_capability_id).unwrap_err();
+    assert_eq!(error.kind(), AuthoringErrorKind::InvalidManifest);
+
+    let mut tampered = value;
+    tampered["skill_resources"]["review"]["body"] = serde_json::json!("Changed.\n");
+    let error = zeta_authoring::restore_project_manifest(&tampered).unwrap_err();
+    assert_eq!(error.kind(), AuthoringErrorKind::InvalidIdentity);
+
+    let mut tampered_source = serde_json::to_value(&manifest).unwrap();
+    tampered_source["agents"]["worker"]["source"] =
+        serde_json::json!("---\nname: Worker\ndescription: Changed.\n---\nChanged.\n");
+    let error = zeta_authoring::restore_project_manifest(&tampered_source).unwrap_err();
+    assert_eq!(error.kind(), AuthoringErrorKind::InvalidIdentity);
+}
+
+#[test]
+fn execution_manifests_select_only_agent_relevant_declarations() {
+    let project = zeta_authoring::compile_project(manifest_project_input(false)).unwrap();
+    let project_manifest = zeta_authoring::project_manifest(&project).unwrap();
+
+    let manifest =
+        zeta_authoring::execution_manifest(&project, &project_manifest.id, "worker").unwrap();
+
+    assert!(manifest
+        .id
+        .to_string()
+        .starts_with("execution_manifest:b3:"));
+    assert_eq!(manifest.project_generation, project_manifest.id);
+    assert_eq!(
+        manifest
+            .events
+            .iter()
+            .map(|(name, _schema)| name.as_str())
+            .collect::<Vec<_>>(),
+        ["work.completed", "work.requested"]
+    );
+    assert_eq!(manifest.skill_resources.keys().next().unwrap(), "review");
+    assert_eq!(manifest.capabilities.keys().next().unwrap(), "native.read");
+    assert!(manifest.connectors.is_empty());
+    assert_eq!(manifest.executor_provider.id, "local");
+
+    let value = serde_json::to_value(&manifest).unwrap();
+    let restored = zeta_authoring::restore_execution_manifest(&value, &project_manifest).unwrap();
+    assert_eq!(restored, manifest);
+
+    let wrong_project =
+        zeta_authoring::compile_project(compiler_input(vec![compiler_agent("other", "")])).unwrap();
+    let wrong_project = zeta_authoring::project_manifest(&wrong_project).unwrap();
+    let error = zeta_authoring::restore_execution_manifest(&value, &wrong_project).unwrap_err();
+    assert_eq!(error.kind(), AuthoringErrorKind::InvalidIdentity);
+}
+
+#[test]
+fn prompt_validation_allows_only_event_and_template_locals() {
+    let spec = parse_agent(
+        "worker",
+        b"---\nname: Worker\ndescription: Works.\n---\n{% set label = event.payload.label %}{{ label | upper }}\n",
+    )
+    .unwrap();
+
+    validate_prompt(&spec).unwrap();
+
+    let unknown = parse_agent(
+        "worker",
+        b"---\nname: Worker\ndescription: Works.\n---\n{{ payload.text }} {{ system.name }}\n",
+    )
+    .unwrap();
+    let error = validate_prompt(&unknown).unwrap_err();
+    assert_eq!(error.kind(), AuthoringErrorKind::UnknownPromptRoot);
+    assert_eq!(error.subject(), Some("worker"));
+    assert_eq!(error.field(), Some("instructions"));
+    assert!(error.detail().contains("payload"));
+}
+
+#[test]
+fn prompt_validation_reports_syntax_errors() {
+    let spec = parse_agent(
+        "worker",
+        b"---\nname: Worker\ndescription: Works.\n---\n{% if event.payload %}\n",
+    )
+    .unwrap();
+
+    let error = validate_prompt(&spec).unwrap_err();
+
+    assert_eq!(error.kind(), AuthoringErrorKind::InvalidPromptSyntax);
+    assert_eq!(error.subject(), Some("worker"));
+    assert_eq!(error.field(), Some("instructions"));
+}
+
+#[test]
+fn prompt_rendering_preserves_unicode_and_does_not_autoescape() {
+    let spec = parse_agent(
+        "worker",
+        b"---\nname: Worker\ndescription: Works.\n---\nR\xc3\xa9ponse: {{ event.payload.text }}; missing={{ event.payload.missing }}\n",
+    )
+    .unwrap();
+
+    let rendered = render_prompt(&spec, &json!({"payload": {"text": "<café & 東京>"}})).unwrap();
+
+    assert_eq!(rendered, "Réponse: <café & 東京>; missing=");
+}
+
+#[test]
+fn prompt_rendering_reports_runtime_errors() {
+    let spec = parse_agent(
+        "worker",
+        b"---\nname: Worker\ndescription: Works.\n---\n{{ event.missing.deep }}\n",
+    )
+    .unwrap();
+
+    let error = render_prompt(&spec, &json!({})).unwrap_err();
+
+    assert_eq!(error.kind(), AuthoringErrorKind::PromptRender);
+    assert_eq!(error.subject(), Some("worker"));
+    assert_eq!(error.field(), Some("instructions"));
+}
+
+#[test]
+fn flat_skill_resources_use_exact_bytes_and_the_skill_object_identity() {
+    let source = "Révise <ceci>.\r\n".as_bytes();
+
+    let skill = SkillResource::new("code-review", source).unwrap();
+
+    assert_eq!(skill.name, "code-review");
+    assert_eq!(skill.body, "Révise <ceci>.\r\n");
+    assert_eq!(
+        skill.object_id.to_string(),
+        "b3:c7a82e80c103adb406fa92c561ab8cccfea84c11d58a69b2c720ac661c31f7a9"
+    );
+}
+
+#[test]
+fn flat_skill_resources_reject_non_utf8_bytes() {
+    let error = SkillResource::new("code-review", b"Review \xff").unwrap_err();
+
+    assert_eq!(error.kind(), AuthoringErrorKind::InvalidSkill);
+    assert_eq!(error.subject(), Some("code-review"));
+    assert_eq!(error.field(), Some("body"));
+}
+
+#[test]
+fn skill_markdown_parses_metadata_and_preserves_the_body() {
+    let source = b"---\r\nname: code-review\r\ndescription: 'Reviews changes: carefully'\r\ndisable-model-invocation: TRUE\r\nignored: metadata\r\n---\r\n# Review\r\nCheck the change.\r\n";
+
+    let skill = parse_skill("fallback", source).unwrap();
+
+    assert_eq!(
+        skill,
+        SkillSpec {
+            name: "code-review".to_owned(),
+            description: "Reviews changes: carefully".to_owned(),
+            body: "# Review\r\nCheck the change.\r\n".to_owned(),
+            disable_model_invocation: true,
+        }
+    );
+}
+
+#[test]
+fn skill_markdown_uses_the_caller_supplied_fallback_name() {
+    let skill = parse_skill(
+        "incident-response",
+        b"---\ndescription: Responds to incidents.\n---\nRespond safely.\n",
+    )
+    .unwrap();
+
+    assert_eq!(skill.name, "incident-response");
+    assert_eq!(skill.description, "Responds to incidents.");
+    assert_eq!(skill.body, "Respond safely.\n");
+    assert!(!skill.disable_model_invocation);
+}
+
+#[test]
+fn skill_markdown_rejects_invalid_names_and_missing_descriptions() {
+    let invalid_name = parse_skill(
+        "fallback",
+        b"---\nname: Bad_Name\ndescription: Reviews changes.\n---\nReview.\n",
+    )
+    .unwrap_err();
+    assert_eq!(invalid_name.kind(), AuthoringErrorKind::InvalidSkill);
+    assert_eq!(invalid_name.subject(), Some("Bad_Name"));
+    assert_eq!(invalid_name.field(), Some("name"));
+
+    let missing_description = parse_skill("code-review", b"Review changes.\n").unwrap_err();
+    assert_eq!(missing_description.kind(), AuthoringErrorKind::InvalidSkill);
+    assert_eq!(missing_description.subject(), Some("code-review"));
+    assert_eq!(missing_description.field(), Some("description"));
 }

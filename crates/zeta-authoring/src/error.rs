@@ -165,3 +165,252 @@ impl fmt::Display for SpecError {
 }
 
 impl std::error::Error for SpecError {}
+
+/// Classifies why authored declarations cannot form a valid project.
+///
+/// # Examples
+///
+/// ```
+/// assert_eq!(
+///     zeta_authoring::AuthoringErrorKind::InvalidSchema.reason(),
+///     "invalid_schema"
+/// );
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AuthoringErrorKind {
+    /// A declaration carries a malformed Draft 2020-12 JSON Schema.
+    InvalidSchema,
+    /// Two declarations assign different values to the same identity.
+    ConflictingDeclaration,
+    /// A declaration identity occurs more than once where merging is forbidden.
+    DuplicateDeclaration,
+    /// An agent references an event outside the supplied vocabulary.
+    UnknownEvent,
+    /// An authored prompt is not valid template syntax.
+    InvalidPromptSyntax,
+    /// An authored prompt references a root other than `event`.
+    UnknownPromptRoot,
+    /// A valid authored prompt cannot render its supplied event.
+    PromptRender,
+    /// A supplied skill declaration is malformed.
+    InvalidSkill,
+    /// A supplied connector declaration is malformed.
+    InvalidConnector,
+    /// A supplied capability declaration is malformed.
+    InvalidCapability,
+    /// A supplied executor-provider declaration is malformed.
+    InvalidExecutorProvider,
+    /// A supplied model-selection declaration is malformed.
+    InvalidModel,
+    /// A supplied typed agent declaration violates the parser contract.
+    InvalidAgent,
+    /// An agent references a tool outside the supplied vocabulary.
+    UnknownTool,
+    /// An agent lists a runtime-reserved tool.
+    ReservedTool,
+    /// An agent references a skill outside the supplied vocabulary.
+    UnknownSkill,
+    /// An agent selects an executor provider outside the supplied vocabulary.
+    UnknownExecutorProvider,
+    /// An agent carries a frontmatter extension without a declared owner.
+    UnknownExtension,
+    /// A connector binding does not satisfy its declaration or schema.
+    InvalidBinding,
+    /// A project or execution manifest has an invalid shape or version.
+    InvalidManifest,
+    /// A content-addressed declaration fails identity verification.
+    InvalidIdentity,
+    /// An operation names an agent outside the compiled project.
+    UnknownAgent,
+}
+
+impl AuthoringErrorKind {
+    /// Returns a stable machine-readable reason.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// assert_eq!(
+    ///     zeta_authoring::AuthoringErrorKind::UnknownEvent.reason(),
+    ///     "unknown_event"
+    /// );
+    /// ```
+    pub fn reason(self) -> &'static str {
+        match self {
+            AuthoringErrorKind::InvalidSchema => "invalid_schema",
+            AuthoringErrorKind::ConflictingDeclaration => "conflicting_declaration",
+            AuthoringErrorKind::DuplicateDeclaration => "duplicate_declaration",
+            AuthoringErrorKind::UnknownEvent => "unknown_event",
+            AuthoringErrorKind::InvalidPromptSyntax => "invalid_prompt_syntax",
+            AuthoringErrorKind::UnknownPromptRoot => "unknown_prompt_root",
+            AuthoringErrorKind::PromptRender => "prompt_render",
+            AuthoringErrorKind::InvalidSkill => "invalid_skill",
+            AuthoringErrorKind::InvalidConnector => "invalid_connector",
+            AuthoringErrorKind::InvalidCapability => "invalid_capability",
+            AuthoringErrorKind::InvalidExecutorProvider => "invalid_executor_provider",
+            AuthoringErrorKind::InvalidModel => "invalid_model",
+            AuthoringErrorKind::InvalidAgent => "invalid_agent",
+            AuthoringErrorKind::UnknownTool => "unknown_tool",
+            AuthoringErrorKind::ReservedTool => "reserved_tool",
+            AuthoringErrorKind::UnknownSkill => "unknown_skill",
+            AuthoringErrorKind::UnknownExecutorProvider => "unknown_executor_provider",
+            AuthoringErrorKind::UnknownExtension => "unknown_extension",
+            AuthoringErrorKind::InvalidBinding => "invalid_binding",
+            AuthoringErrorKind::InvalidManifest => "invalid_manifest",
+            AuthoringErrorKind::InvalidIdentity => "invalid_identity",
+            AuthoringErrorKind::UnknownAgent => "unknown_agent",
+        }
+    }
+}
+
+/// Reports one pure authoring validation or compilation failure.
+///
+/// The kind is stable for machine handling. Subject and field context identify
+/// the declaration without introducing filesystem provenance.
+///
+/// # Examples
+///
+/// ```
+/// let error = zeta_authoring::derive_returns_schema(
+///     &zeta_authoring::parse_agent(
+///         "worker",
+///         b"---\nname: Worker\ndescription: Works.\nreturns: [missing]\n---\n",
+///     )?,
+///     &zeta_authoring::EventRegistry::new(),
+/// )
+/// .unwrap_err();
+/// assert_eq!(error.subject(), Some("missing"));
+/// # Ok::<(), zeta_authoring::SpecError>(())
+/// ```
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AuthoringError {
+    kind: AuthoringErrorKind,
+    subject: Option<String>,
+    field: Option<String>,
+    detail: String,
+}
+
+impl AuthoringError {
+    pub(crate) fn new(
+        kind: AuthoringErrorKind,
+        subject: Option<&str>,
+        field: Option<&str>,
+        detail: impl Into<String>,
+    ) -> Self {
+        AuthoringError {
+            kind,
+            subject: subject.map(str::to_owned),
+            field: field.map(str::to_owned),
+            detail: detail.into(),
+        }
+    }
+
+    /// Returns the stable failure class.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let mut events = zeta_authoring::EventRegistry::new();
+    /// let error = events
+    ///     .register(
+    ///         "bad",
+    ///         Some(serde_json::from_value(serde_json::json!({"type": "bad"})).unwrap()),
+    ///     )
+    ///     .unwrap_err();
+    /// assert_eq!(error.kind(), zeta_authoring::AuthoringErrorKind::InvalidSchema);
+    /// ```
+    pub fn kind(&self) -> AuthoringErrorKind {
+        self.kind
+    }
+
+    /// Returns the declaration identity responsible for the failure.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let spec = zeta_authoring::parse_agent(
+    ///     "worker",
+    ///     b"---\nname: Worker\ndescription: Works.\nreturns: [missing]\n---\n",
+    /// )?;
+    /// let error = zeta_authoring::derive_returns_schema(
+    ///     &spec,
+    ///     &zeta_authoring::EventRegistry::new(),
+    /// )
+    /// .unwrap_err();
+    /// assert_eq!(error.subject(), Some("missing"));
+    /// # Ok::<(), zeta_authoring::SpecError>(())
+    /// ```
+    pub fn subject(&self) -> Option<&str> {
+        self.subject.as_deref()
+    }
+
+    /// Returns the declaration field responsible for the failure.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let spec = zeta_authoring::parse_agent(
+    ///     "worker",
+    ///     b"---\nname: Worker\ndescription: Works.\nreturns: [missing]\n---\n",
+    /// )?;
+    /// let error = zeta_authoring::derive_returns_schema(
+    ///     &spec,
+    ///     &zeta_authoring::EventRegistry::new(),
+    /// )
+    /// .unwrap_err();
+    /// assert_eq!(error.field(), Some("returns"));
+    /// # Ok::<(), zeta_authoring::SpecError>(())
+    /// ```
+    pub fn field(&self) -> Option<&str> {
+        self.field.as_deref()
+    }
+
+    /// Returns the human-readable failure detail.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let spec = zeta_authoring::parse_agent(
+    ///     "worker",
+    ///     b"---\nname: Worker\ndescription: Works.\nreturns: [missing]\n---\n",
+    /// )?;
+    /// let error = zeta_authoring::derive_returns_schema(
+    ///     &spec,
+    ///     &zeta_authoring::EventRegistry::new(),
+    /// )
+    /// .unwrap_err();
+    /// assert!(error.detail().contains("unknown event"));
+    /// # Ok::<(), zeta_authoring::SpecError>(())
+    /// ```
+    pub fn detail(&self) -> &str {
+        &self.detail
+    }
+}
+
+impl fmt::Display for AuthoringError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match (&self.subject, &self.field) {
+            (Some(subject), Some(field)) => write!(
+                formatter,
+                "{} for {subject:?} in {field}: {}",
+                self.kind.reason(),
+                self.detail
+            ),
+            (Some(subject), None) => write!(
+                formatter,
+                "{} for {subject:?}: {}",
+                self.kind.reason(),
+                self.detail
+            ),
+            (None, Some(field)) => write!(
+                formatter,
+                "{} in {field}: {}",
+                self.kind.reason(),
+                self.detail
+            ),
+            (None, None) => write!(formatter, "{}: {}", self.kind.reason(), self.detail),
+        }
+    }
+}
+
+impl std::error::Error for AuthoringError {}

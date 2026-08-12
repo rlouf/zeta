@@ -1,4 +1,11 @@
-use super::*;
+use std::collections::HashSet;
+use std::str::FromStr;
+
+use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
+
+use super::{corrupt_projection, database_error, Dispatch, DispatchError};
+use crate::dispatch::{LockLease, QueueClaim};
+use crate::identity::{ClaimToken, QueueItemId};
 
 impl Dispatch {
     /// Claims the oldest eligible queue item and all of its authored locks.

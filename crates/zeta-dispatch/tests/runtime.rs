@@ -2412,6 +2412,117 @@ fn completion_vector_commits_ordered_controls_atomically() {
 }
 
 #[test]
+fn unsorted_typed_controls_use_global_position_for_execution_and_durable_arrays() {
+    let (mut dispatch, claim, _queue_item_id) = running_completion_attempt("unsorted-controls");
+    let controls = vec![
+        AttemptControl::publish(
+            "pub-third",
+            "work.third",
+            serde_json::from_value(json!({"position": 3})).unwrap(),
+            None,
+            3,
+        ),
+        AttemptControl::publish(
+            "pub-second",
+            "work.second",
+            serde_json::from_value(json!({"position": 2})).unwrap(),
+            None,
+            2,
+        ),
+        AttemptControl::publish(
+            "pub-first",
+            "work.first",
+            serde_json::from_value(json!({"position": 1})).unwrap(),
+            None,
+            1,
+        ),
+        AttemptControl::wait(
+            "wait-zero",
+            "work.zero",
+            serde_json::from_value(json!({"position": 0})).unwrap(),
+            None,
+            0,
+        ),
+    ];
+
+    let events = dispatch
+        .complete_claimed_attempt(
+            &claim,
+            203,
+            &[
+                RuntimeEventIdentity::new("unsorted-attempt", 203).unwrap(),
+                RuntimeEventIdentity::new("unsorted-zero", 204).unwrap(),
+                RuntimeEventIdentity::new("unsorted-first", 205).unwrap(),
+                RuntimeEventIdentity::new("unsorted-second", 206).unwrap(),
+                RuntimeEventIdentity::new("unsorted-third", 207).unwrap(),
+                RuntimeEventIdentity::new("unsorted-queue", 208).unwrap(),
+            ],
+            &AttemptCompletion::new(
+                "2026-08-12T10:00:01Z",
+                AttemptCompletionDisposition::Succeeded,
+                Map::new(),
+                controls,
+            ),
+        )
+        .unwrap();
+
+    let mut event_types = Vec::new();
+    for event in &events {
+        event_types.push(event.event_type.as_str());
+    }
+    assert_eq!(
+        event_types,
+        [
+            "runtime.attempt.completed",
+            "runtime.wait.created",
+            "work.first",
+            "work.second",
+            "work.third",
+            "runtime.queue_item.completed",
+        ]
+    );
+    assert_eq!(
+        events[0].payload["result"]["publish_event_requests"],
+        json!([
+            {
+                "handle": "pub-first",
+                "event_type": "work.first",
+                "payload": {"position": 1},
+                "at": null,
+                "position": 1,
+            },
+            {
+                "handle": "pub-second",
+                "event_type": "work.second",
+                "payload": {"position": 2},
+                "at": null,
+                "position": 2,
+            },
+            {
+                "handle": "pub-third",
+                "event_type": "work.third",
+                "payload": {"position": 3},
+                "at": null,
+                "position": 3,
+            },
+        ])
+    );
+    assert_eq!(
+        events[0].payload["result"]["wait_requests"],
+        json!([
+            {
+                "handle": "wait-zero",
+                "event_type": "work.zero",
+                "fields": {"position": 0},
+                "deadline": null,
+                "position": 0,
+            },
+        ])
+    );
+    assert_eq!(events[5].payload["result"], events[0].payload["result"]);
+}
+
+#[test]
 fn completion_cancels_owned_resources_in_control_order() {
     let mut dispatch = Dispatch::open_in_memory().unwrap();
     let event = Event {
@@ -2647,6 +2758,8 @@ fn explicit_cancelled_completion_records_proposals_without_applying_them() {
         .unwrap();
 
     assert_eq!(events.len(), 2);
+    assert_eq!(events[0].id, "typed-cancelled-attempt");
+    assert_eq!(events[1].id, "typed-cancelled-queue");
     assert_eq!(events[0].event_type, "runtime.attempt.cancelled");
     assert_eq!(events[1].event_type, "runtime.queue_item.cancelled");
     assert_eq!(events[0].payload["result"]["outcome"], "cancelled");
@@ -2672,6 +2785,55 @@ fn explicit_cancelled_completion_records_proposals_without_applying_them() {
             .status(),
         QueueItemStatus::Cancelled
     );
+}
+
+#[test]
+fn cancelled_completion_rejects_excess_identities_atomically() {
+    let (mut dispatch, claim, _queue_item_id) =
+        running_completion_attempt("cancelled-excess-identities");
+    let before = dispatch.list_events(&Filter::default()).unwrap().len();
+
+    let error = dispatch
+        .complete_claimed_attempt(
+            &claim,
+            203,
+            &[
+                RuntimeEventIdentity::new("cancelled-excess-attempt", 203).unwrap(),
+                RuntimeEventIdentity::new("cancelled-excess-control", 204).unwrap(),
+                RuntimeEventIdentity::new("cancelled-excess-arbitrary", 205).unwrap(),
+                RuntimeEventIdentity::new("cancelled-excess-queue", 206).unwrap(),
+            ],
+            &AttemptCompletion::new(
+                "2026-08-12T10:00:01Z",
+                AttemptCompletionDisposition::Cancelled,
+                Map::new(),
+                vec![AttemptControl::publish(
+                    "pub-cancelled-excess",
+                    "work.must-not-publish",
+                    Map::new(),
+                    None,
+                    0,
+                )],
+            ),
+        )
+        .unwrap_err();
+
+    match error {
+        DispatchError::RuntimeEventIdentityCount { expected, actual } => {
+            assert_eq!(expected, 3);
+            assert_eq!(actual, 4);
+        }
+        error => panic!("unexpected error: {error}"),
+    }
+    assert_eq!(
+        dispatch.list_events(&Filter::default()).unwrap().len(),
+        before
+    );
+    assert_eq!(
+        dispatch.list_attempts().unwrap()[0].status(),
+        AttemptStatus::Running
+    );
+    assert!(dispatch.claim_is_current(&claim, 203).unwrap());
 }
 
 #[test]

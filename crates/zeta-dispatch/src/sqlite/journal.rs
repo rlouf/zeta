@@ -1,4 +1,16 @@
-use super::*;
+use std::collections::HashSet;
+
+use rusqlite::{params, Connection, OptionalExtension, Row, Transaction, TransactionBehavior};
+use serde_json::{Map, Value};
+use zeta_journal::{
+    canonical_payload, payload_address, verify, AppendError, AppendOutcome, Event, Filter,
+    HeadExpectation, JournalEntry, VerificationReport,
+};
+use zeta_substrate::Hash;
+
+use super::projection::index_event;
+use super::{database_error, Dispatch, DispatchError};
+use crate::dispatch::RuntimeEventIdentity;
 
 const ENTRY_COLUMNS: &str = "cursor, event_id, event_type, source, payload_bytes, \
     payload_address, idempotency_key, caused_by, session_id, run_id, turn_id, \
@@ -7,8 +19,9 @@ const ENTRY_COLUMNS: &str = "cursor, event_id, event_type, source, payload_bytes
 impl Dispatch {
     /// Appends an event or resolves its id-first duplicate atomically.
     ///
-    /// Candidate payload content is intentionally validated only after both
-    /// duplicate lookups, matching journal-v0 retry semantics.
+    /// An id duplicate must match the retained payload address; a divergent
+    /// candidate fails instead of silently resolving. An idempotency-key
+    /// duplicate is never compared, matching journal-v0 retry semantics.
     ///
     /// # Errors
     ///
@@ -225,6 +238,10 @@ pub(super) fn append_in_transaction(
     event: Event,
 ) -> Result<AppendOutcome, DispatchError> {
     if let Some(entry) = entry_by_field(transaction, "event_id", &event.id)? {
+        let payload = canonical_payload(&event.payload).map_err(AppendError::PayloadEncoding)?;
+        if payload_address(&payload) != entry.payload_address {
+            return Err(AppendError::DuplicateIdPayloadMismatch.into());
+        }
         return Ok(AppendOutcome {
             event: entry.event,
             inserted: false,

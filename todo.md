@@ -2,12 +2,8 @@
 
 ## Broken
 
-- [ ] `zeta-dispatch` does not compile: `sqlite.rs` calls six helpers that don't
-  exist yet — `completion_controls`, `completed_attempt_event`,
-  `completion_control_event`, `completed_queue_event`,
-  `result_requests_cancellation`, `validate_distinct_runtime_identities`
-  (`crates/zeta-dispatch/src/sqlite.rs:991-1070`). Finish the in-flight
-  `complete_claimed_attempt` / `AttemptCompletion` work.
+- [x] `zeta-dispatch` compiles again; the `complete_claimed_attempt` /
+  `AttemptCompletion` work landed in 7ad36ac and 4e91632.
 
 ## Correctness
 

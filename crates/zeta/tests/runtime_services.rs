@@ -296,16 +296,17 @@ fn agent_result_becomes_typed_dispatch_completion_without_reordering_controls() 
         json!({"input_tokens": 12, "output_tokens": 4})
     );
     assert_eq!(
-        completion.metadata()["events"][0]["type"],
-        "runtime.effect.started"
-    );
-    assert_eq!(
-        completion.metadata()["events"][0]["source"],
-        "capability:test.effect"
-    );
-    assert_eq!(
-        completion.metadata()["events"][0]["session_id"],
-        "session-1"
+        completion.metadata()["events"],
+        json!([{
+            "type": "runtime.effect.started",
+            "source": "capability:test.effect",
+            "payload": {},
+            "idempotency_key": "runtime.effect.started:effect-1",
+            "caused_by": "call-1",
+            "session_id": "session-1",
+            "run_id": "run-1",
+            "turn_id": "turn-1",
+        }])
     );
     assert_eq!(
         completion.controls(),
@@ -334,6 +335,39 @@ fn agent_result_becomes_typed_dispatch_completion_without_reordering_controls() 
         ]
     );
     assert!(!completion.metadata().contains_key("publish_event_requests"));
+}
+
+#[test]
+fn agent_result_preserves_null_draft_event_evidence_fields() {
+    let result = AgentRunResult {
+        events: vec![DraftEvent {
+            event_type: "trace.empty".to_owned(),
+            source: "agent:worker".to_owned(),
+            payload: object(json!({"nested": {"value": 1}})),
+            idempotency_key: None,
+            caused_by: None,
+            session_id: None,
+            run_id: None,
+            turn_id: None,
+        }],
+        ..AgentRunResult::default()
+    };
+
+    let completion = attempt_completion("2026-08-12T10:00:01Z", &result).unwrap();
+
+    assert_eq!(
+        completion.metadata()["events"],
+        json!([{
+            "type": "trace.empty",
+            "source": "agent:worker",
+            "payload": {"nested": {"value": 1}},
+            "idempotency_key": null,
+            "caused_by": null,
+            "session_id": null,
+            "run_id": null,
+            "turn_id": null,
+        }])
+    );
 }
 
 #[test]

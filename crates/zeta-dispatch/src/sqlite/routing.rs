@@ -1,4 +1,20 @@
-use super::*;
+use std::collections::HashSet;
+use std::str::FromStr;
+
+use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
+use serde_json::{Map, Value};
+use zeta_journal::Event;
+
+use super::journal::{
+    append_in_transaction, entry_by_field, same_lifecycle_intention, same_logical_event,
+    validate_event_identity,
+};
+use super::projection::index_event;
+use super::{database_error, Dispatch, DispatchError};
+use crate::dispatch::{QueueItem, RoutingOutcome, RuntimeEventIdentity};
+use crate::identity::{pending_queue_item_id, queue_item_idempotency_key, QueueItemId, SessionId};
+use crate::routing::{route_event, Route};
+use crate::state::QueueItemStatus;
 
 impl Dispatch {
     /// Resolves and persists one ingress event's route plan atomically.

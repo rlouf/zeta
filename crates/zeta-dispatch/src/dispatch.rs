@@ -717,7 +717,7 @@ impl SubmittedSessionMessage {
 /// Describes the durable lifecycle of a future publication.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
-pub enum ScheduledEventStatus {
+pub enum DeferredPublicationStatus {
     /// The publication time has not been consumed.
     Pending,
     /// A transaction is currently publishing the event.
@@ -730,7 +730,7 @@ pub enum ScheduledEventStatus {
 
 /// Describes one durable future publication read model.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct ScheduledEvent {
+pub struct DeferredPublication {
     pub(crate) handle: String,
     pub(crate) event_type: String,
     pub(crate) payload: Map<String, Value>,
@@ -741,13 +741,13 @@ pub struct ScheduledEvent {
     pub(crate) source_queue_item_id: QueueItemId,
     pub(crate) position: u64,
     pub(crate) created_event_id: String,
-    pub(crate) status: ScheduledEventStatus,
+    pub(crate) status: DeferredPublicationStatus,
     pub(crate) published_event_id: Option<String>,
     pub(crate) terminal_event_id: Option<String>,
     pub(crate) updated_at: i64,
 }
 
-impl ScheduledEvent {
+impl DeferredPublication {
     /// Returns the retry-stable publication handle.
     pub fn handle(&self) -> &str {
         &self.handle
@@ -793,13 +793,13 @@ impl ScheduledEvent {
         self.position
     }
 
-    /// Returns the lifecycle fact that created the schedule.
+    /// Returns the lifecycle fact that created the publication.
     pub fn created_event_id(&self) -> &str {
         &self.created_event_id
     }
 
     /// Returns the current event-sourced state.
-    pub fn status(&self) -> ScheduledEventStatus {
+    pub fn status(&self) -> DeferredPublicationStatus {
         self.status
     }
 
@@ -826,7 +826,7 @@ pub enum ResourceKind {
     /// An event wait owned by one agent session.
     Wait,
     /// A pending one-shot publication.
-    ScheduledEvent,
+    DeferredPublication,
 }
 
 /// Describes the terminal winner observed by resource cancellation.
@@ -839,7 +839,7 @@ pub enum ResourceCancellationStatus {
     Matched,
     /// The deadline already consumed the wait.
     TimedOut,
-    /// The scheduled publication already committed.
+    /// The deferred publication already committed.
     Published,
 }
 
@@ -877,224 +877,6 @@ impl ResourceCancellationOutcome {
     /// Returns the newly appended cancellation fact when this call won.
     pub fn event(&self) -> Option<&Event> {
         self.event.as_ref()
-    }
-}
-
-/// Identifies one authored recurring schedule definition.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct RecurringSchedule {
-    pub(crate) agent_id: String,
-    pub(crate) schedule_index: u64,
-    pub(crate) cron: String,
-    pub(crate) timezone: Option<String>,
-}
-
-impl RecurringSchedule {
-    /// Creates the durable identity of one schedule in authored order.
-    pub fn new(
-        agent_id: impl Into<String>,
-        schedule_index: u64,
-        cron: impl Into<String>,
-        timezone: Option<String>,
-    ) -> Self {
-        RecurringSchedule {
-            agent_id: agent_id.into(),
-            schedule_index,
-            cron: cron.into(),
-            timezone,
-        }
-    }
-
-    /// Returns the agent that receives each occurrence.
-    pub fn agent_id(&self) -> &str {
-        &self.agent_id
-    }
-
-    /// Returns the schedule's declaration-order position.
-    pub fn schedule_index(&self) -> u64 {
-        self.schedule_index
-    }
-
-    /// Returns the authored five-field cron expression.
-    pub fn cron(&self) -> &str {
-        &self.cron
-    }
-
-    /// Returns the authored timezone when one exists.
-    pub fn timezone(&self) -> Option<&str> {
-        self.timezone.as_deref()
-    }
-}
-
-/// Carries an explicit scheduler decision to activate one schedule.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct RecurringScheduleActivation {
-    pub(crate) catchup: String,
-    pub(crate) reason: String,
-}
-
-impl RecurringScheduleActivation {
-    /// Creates activation metadata already resolved by the scheduler.
-    pub fn new(catchup: impl Into<String>, reason: impl Into<String>) -> Self {
-        RecurringScheduleActivation {
-            catchup: catchup.into(),
-            reason: reason.into(),
-        }
-    }
-
-    /// Returns the policy the scheduler applied before this boundary.
-    pub fn catchup(&self) -> &str {
-        &self.catchup
-    }
-
-    /// Returns the scheduler's activation reason.
-    pub fn reason(&self) -> &str {
-        &self.reason
-    }
-}
-
-/// Carries one calendar-resolved recurring occurrence into persistence.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct RecurringScheduleTick {
-    pub(crate) schedule: RecurringSchedule,
-    pub(crate) scheduled_at: String,
-    pub(crate) observed_at: String,
-    pub(crate) next_at: String,
-    pub(crate) reason: String,
-    pub(crate) activation: Option<RecurringScheduleActivation>,
-}
-
-impl RecurringScheduleTick {
-    /// Creates a resolved occurrence without performing calendar evaluation.
-    pub fn new(
-        schedule: RecurringSchedule,
-        scheduled_at: impl Into<String>,
-        observed_at: impl Into<String>,
-        next_at: impl Into<String>,
-        reason: impl Into<String>,
-    ) -> Self {
-        RecurringScheduleTick {
-            schedule,
-            scheduled_at: scheduled_at.into(),
-            observed_at: observed_at.into(),
-            next_at: next_at.into(),
-            reason: reason.into(),
-            activation: None,
-        }
-    }
-
-    /// Adds an activation fact already selected by the scheduler.
-    pub fn with_activation(mut self, activation: RecurringScheduleActivation) -> Self {
-        self.activation = Some(activation);
-        self
-    }
-
-    /// Returns the authored schedule identity.
-    pub fn schedule(&self) -> &RecurringSchedule {
-        &self.schedule
-    }
-
-    /// Returns the selected local occurrence in RFC 3339 form.
-    pub fn scheduled_at(&self) -> &str {
-        &self.scheduled_at
-    }
-
-    /// Returns the scheduler observation time in RFC 3339 form.
-    pub fn observed_at(&self) -> &str {
-        &self.observed_at
-    }
-
-    /// Returns the caller-computed next occurrence in RFC 3339 form.
-    pub fn next_at(&self) -> &str {
-        &self.next_at
-    }
-
-    /// Returns the caller-computed publication reason.
-    pub fn reason(&self) -> &str {
-        &self.reason
-    }
-
-    /// Returns explicit activation metadata when the scheduler requested it.
-    pub fn activation(&self) -> Option<&RecurringScheduleActivation> {
-        self.activation.as_ref()
-    }
-}
-
-/// Describes the latest durable decision for a recurring schedule.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ScheduleTickStatus {
-    /// Catch-up started at the first scheduler observation.
-    Activated,
-    /// The selected occurrence committed its input event.
-    Published,
-    /// The occurrence had already been published.
-    Skipped,
-    /// Policy deliberately did not backfill the occurrence.
-    Missed,
-}
-
-/// Describes the latest projected state of one recurring schedule.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct RecurringScheduleStatus {
-    pub(crate) schedule: RecurringSchedule,
-    pub(crate) event_type: String,
-    pub(crate) status: ScheduleTickStatus,
-    pub(crate) last_published_at: Option<String>,
-    pub(crate) next_at: Option<String>,
-    pub(crate) reason: String,
-    pub(crate) updated_at: i64,
-}
-
-impl RecurringScheduleStatus {
-    /// Returns the receiving agent id.
-    pub fn agent_id(&self) -> &str {
-        self.schedule.agent_id()
-    }
-
-    /// Returns the declaration-order schedule position.
-    pub fn schedule_index(&self) -> u64 {
-        self.schedule.schedule_index()
-    }
-
-    /// Returns the authored cron expression.
-    pub fn cron(&self) -> &str {
-        self.schedule.cron()
-    }
-
-    /// Returns the authored timezone when one exists.
-    pub fn timezone(&self) -> Option<&str> {
-        self.schedule.timezone()
-    }
-
-    /// Returns the generated agent event type.
-    pub fn event_type(&self) -> &str {
-        &self.event_type
-    }
-
-    /// Returns the latest durable scheduler decision.
-    pub fn status(&self) -> ScheduleTickStatus {
-        self.status
-    }
-
-    /// Returns the most recent published occurrence.
-    pub fn last_published_at(&self) -> Option<&str> {
-        self.last_published_at.as_deref()
-    }
-
-    /// Returns the caller-computed next occurrence.
-    pub fn next_at(&self) -> Option<&str> {
-        self.next_at.as_deref()
-    }
-
-    /// Returns the latest scheduler decision reason.
-    pub fn reason(&self) -> &str {
-        &self.reason
-    }
-
-    /// Returns the latest decision time in Unix milliseconds.
-    pub fn updated_at(&self) -> i64 {
-        self.updated_at
     }
 }
 
@@ -1245,7 +1027,7 @@ pub enum AttemptCompletionDisposition {
 /// ```
 #[derive(Clone, Debug, PartialEq)]
 pub enum AttemptControl {
-    /// Proposes immediate or scheduled publication of a durable event.
+    /// Proposes immediate or deferred publication of a durable event.
     Publish {
         /// Identifies the retry-stable proposal.
         handle: String,
@@ -1271,7 +1053,7 @@ pub enum AttemptControl {
         /// Preserves global tool-call order.
         position: u64,
     },
-    /// Proposes cancelling an existing wait or scheduled publication.
+    /// Proposes cancelling an existing wait or deferred publication.
     Cancel {
         /// Identifies the resource to cancel.
         handle: String,

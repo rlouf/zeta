@@ -9,12 +9,12 @@ mod state;
 pub use dispatch::{
     Attempt, AttemptCompletion, AttemptCompletionDisposition, AttemptControl, AttemptFailure,
     CancellationFinalizationIdentities, CancellationIdentities, CancellationOutcome,
-    CancellationStatus, Effect, EffectDeliverySemantics, EffectStatus, LockLease, QueueClaim,
-    QueueItem, RecurringSchedule, RecurringScheduleActivation, RecurringScheduleStatus,
-    RecurringScheduleTick, ResourceCancellationOutcome, ResourceCancellationStatus, ResourceKind,
-    RoutingOutcome, RuntimeEventIdentity, ScheduleTickStatus, ScheduledEvent, ScheduledEventStatus,
-    Session, SessionActiveWait, SessionActivityStatus, SessionLatestRun, SessionMessageIdentities,
-    SessionMessageRequest, StartedAttempt, SubmittedSessionMessage, Wait, WaitStatus,
+    CancellationStatus, DeferredPublication, DeferredPublicationStatus, Effect,
+    EffectDeliverySemantics, EffectStatus, LockLease, QueueClaim, QueueItem,
+    ResourceCancellationOutcome, ResourceCancellationStatus, ResourceKind, RoutingOutcome,
+    RuntimeEventIdentity, Session, SessionActiveWait, SessionActivityStatus, SessionLatestRun,
+    SessionMessageIdentities, SessionMessageRequest, StartedAttempt, SubmittedSessionMessage, Wait,
+    WaitStatus,
 };
 pub use identity::{
     attempt_id, attempt_idempotency_key, derived_run_id, effect_key, pending_queue_item_id,

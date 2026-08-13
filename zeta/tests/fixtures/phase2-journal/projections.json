@@ -185,7 +185,7 @@
       "updated_at": 1786421957940
     }
   ],
-  "scheduled_events": [],
+  "deferred_publications": [],
   "session_mappings": [
     {
       "run_id": "run_att_qi_evt_403fc268546d444daa784255155ceb20_1",

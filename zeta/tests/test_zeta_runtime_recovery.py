@@ -28,6 +28,9 @@ from zeta.journal.store import Filter
 RUNTIME_VECTORS_PATH = (
     Path(__file__).resolve().parents[2] / "spec/vectors/dispatch/runtime.json"
 )
+SCHEDULING_RUNTIME_VECTORS_PATH = (
+    Path(__file__).resolve().parents[2] / "spec/vectors/scheduling/runtime.json"
+)
 
 
 def _dispatch_scripted_case(section: str, name: str) -> dict:
@@ -75,7 +78,7 @@ def _normalize_event_contract(
     return contracts
 
 
-def _scheduled_event_created(
+def _deferred_publication_created(
     *,
     event_id: str,
     handle: str,
@@ -84,7 +87,7 @@ def _scheduled_event_created(
 ) -> Event:
     return Event(
         id=event_id,
-        event_type="runtime.scheduled_event.created",
+        event_type="runtime.deferred_publication.created",
         source="zeta",
         payload={
             "handle": handle,
@@ -96,7 +99,7 @@ def _scheduled_event_created(
             "source_queue_item_id": "queue-item-1",
             "position": position,
         },
-        idempotency_key=f"agent.schedule:queue-item-1:{position}",
+        idempotency_key=f"agent.defer:queue-item-1:{position}",
         caused_by="attempt-completed-1",
         session_id="session-1",
         run_id="run-1",
@@ -479,36 +482,99 @@ def test_queue_item_cancel_request_reports_unknown_and_terminal_items(
     store.close()
 
 
-def test_scheduled_event_created_projection_survives_close_and_reopen(
+def test_deferred_publication_created_projection_survives_close_and_reopen(
     tmp_path: Path,
 ) -> None:
     path = tmp_path / "runtime.sqlite3"
     store = RuntimeEventStore.open(path)
-    created = _scheduled_event_created(
-        event_id="schedule-created-1",
+    created = _deferred_publication_created(
+        event_id="deferred-publication-created-1",
         handle="publication-1",
         publish_at="2026-08-04T10:00:00+00:00",
         position=0,
     )
     store.append(created)
 
-    scheduled = store.list_scheduled_events()
+    deferred_publications = store.list_deferred_publications()
 
-    assert len(scheduled) == 1
-    assert scheduled[0]["handle"] == "publication-1"
-    assert scheduled[0]["event_type"] == "report.ready"
-    assert scheduled[0]["payload"] == {"report_id": "publication-1"}
-    assert scheduled[0]["publish_at_ms"] == 1_785_837_600_000
-    assert scheduled[0]["source_queue_item_id"] == "queue-item-1"
-    assert scheduled[0]["position"] == 0
-    assert scheduled[0]["created_event_id"] == created.id
-    assert scheduled[0]["status"] == "pending"
+    assert len(deferred_publications) == 1
+    assert deferred_publications[0]["handle"] == "publication-1"
+    assert deferred_publications[0]["event_type"] == "report.ready"
+    assert deferred_publications[0]["payload"] == {"report_id": "publication-1"}
+    assert deferred_publications[0]["publish_at_ms"] == 1_785_837_600_000
+    assert deferred_publications[0]["source_queue_item_id"] == "queue-item-1"
+    assert deferred_publications[0]["position"] == 0
+    assert deferred_publications[0]["created_event_id"] == created.id
+    assert deferred_publications[0]["status"] == "pending"
     store.close()
 
     reopened = RuntimeEventStore.open(path)
 
-    assert reopened.list_scheduled_events() == scheduled
+    assert reopened.list_deferred_publications() == deferred_publications
     reopened.close()
+
+
+def test_projection_upgrade_drops_scheduled_events_without_dual_read(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "runtime.sqlite3"
+    store = RuntimeEventStore.open(path)
+    store.append(
+        Event(
+            id="legacy-scheduled-event-created",
+            event_type="runtime.scheduled_event.created",
+            source="zeta",
+            payload={
+                "handle": "publication-legacy",
+                "event_type": "report.ready",
+                "payload": {"report_id": "publication-legacy"},
+                "publish_at": "2030-01-01T00:00:00+00:00",
+                "source_agent_id": "reporter",
+                "source_session_id": "session-1",
+                "source_queue_item_id": "queue-item-legacy",
+                "position": 0,
+            },
+            idempotency_key="agent.schedule:queue-item-legacy:0",
+            caused_by="attempt-completed-legacy",
+            session_id="session-1",
+            run_id="run-1",
+            timestamp_ms=500,
+        )
+    )
+    store.connection.execute(
+        "ALTER TABLE deferred_publications RENAME TO scheduled_events"
+    )
+    store.connection.execute(
+        """
+        UPDATE event_projection_versions
+        SET version = 11
+        WHERE name = 'zeta.harness.runtime'
+        """
+    )
+    store.connection.commit()
+    store.close()
+
+    upgraded = RuntimeEventStore.open(path)
+    table_names = {
+        str(row["name"])
+        for row in upgraded.connection.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table'"
+        ).fetchall()
+    }
+    version = upgraded.connection.execute(
+        """
+        SELECT version
+        FROM event_projection_versions
+        WHERE name = 'zeta.harness.runtime'
+        """
+    ).fetchone()
+
+    assert "scheduled_events" not in table_names
+    assert "deferred_publications" in table_names
+    assert version is not None
+    assert version["version"] == 12
+    assert upgraded.list_deferred_publications() == []
+    upgraded.close()
 
 
 def test_wait_created_projection_survives_reopen_and_rebuild(tmp_path: Path) -> None:
@@ -784,7 +850,7 @@ def test_concurrent_matching_events_consume_wait_once(tmp_path: Path) -> None:
         second_store.close()
 
 
-def test_due_scheduled_event_can_match_an_active_wait(tmp_path: Path) -> None:
+def test_due_deferred_publication_can_match_an_active_wait(tmp_path: Path) -> None:
     store = RuntimeEventStore.open(tmp_path / "runtime.sqlite3")
     store.append(
         _wait_created(
@@ -795,15 +861,15 @@ def test_due_scheduled_event_can_match_an_active_wait(tmp_path: Path) -> None:
         )
     )
     store.append(
-        _scheduled_event_created(
-            event_id="schedule-created-1",
+        _deferred_publication_created(
+            event_id="deferred-publication-created-1",
             handle="publication-1",
             publish_at="1970-01-01T00:00:01+00:00",
             position=0,
         )
     )
 
-    requested = store.publish_next_due_scheduled_event(now_ms=2_000)
+    requested = store.publish_next_due_deferred_publication(now_ms=2_000)
 
     assert requested is not None
     assert store.list_waits()[0]["status"] == "matched"
@@ -961,12 +1027,14 @@ def test_cancel_active_wait_records_one_terminal_fact_and_survives_rebuild(
     store.close()
 
 
-def test_cancel_pending_scheduled_event_records_terminal_state(tmp_path: Path) -> None:
+def test_cancel_pending_deferred_publication_records_terminal_state(
+    tmp_path: Path,
+) -> None:
     store = RuntimeEventStore.open(tmp_path / "runtime.sqlite3")
     handle = "pub_0123456789abcdef01234567"
     store.append(
-        _scheduled_event_created(
-            event_id="schedule-created-1",
+        _deferred_publication_created(
+            event_id="deferred-publication-created-1",
             handle=handle,
             publish_at="2030-01-01T00:00:00+00:00",
             position=0,
@@ -983,23 +1051,23 @@ def test_cancel_pending_scheduled_event_records_terminal_state(tmp_path: Path) -
     second = store.cancel_resource(handle, now_ms=1_001)
 
     assert (first.resource_type, first.status, first.changed) == (
-        "scheduled_event",
+        "deferred_publication",
         "cancelled",
         True,
     )
     assert (second.resource_type, second.status, second.changed) == (
-        "scheduled_event",
+        "deferred_publication",
         "cancelled",
         False,
     )
     cancelled = store.list_events(
-        Filter(event_type="runtime.scheduled_event.cancelled")
+        Filter(event_type="runtime.deferred_publication.cancelled")
     )
     assert len(cancelled) == 1
     assert cancelled[0].payload["reason"] == "Superseded"
     assert cancelled[0].payload["cancelled_by_agent_id"] == "reporter"
     assert cancelled[0].payload["cancelled_by_session_id"] == "session-1"
-    assert store.list_scheduled_events()[0]["status"] == "cancelled"
+    assert store.list_deferred_publications()[0]["status"] == "cancelled"
     store.close()
 
 
@@ -1020,14 +1088,14 @@ def test_cancel_returns_the_existing_terminal_state(tmp_path: Path) -> None:
     )
     store.timeout_next_due_wait(now_ms=2_000)
     store.append(
-        _scheduled_event_created(
-            event_id="schedule-created-published",
+        _deferred_publication_created(
+            event_id="deferred-publication-created-published",
             handle=published_handle,
             publish_at="1970-01-01T00:00:01+00:00",
             position=0,
         )
     )
-    store.publish_next_due_scheduled_event(now_ms=2_000)
+    store.publish_next_due_deferred_publication(now_ms=2_000)
 
     assert store.cancel_resource(matched_handle).status == "matched"
     assert store.cancel_resource(timed_out_handle).status == "timed_out"
@@ -1117,24 +1185,24 @@ def test_cancel_and_wait_completion_race_has_one_terminal_fact(
         completion_store.close()
 
 
-def test_projection_rebuild_restores_scheduled_event_terminal_states(
+def test_projection_rebuild_restores_deferred_publication_terminal_states(
     tmp_path: Path,
 ) -> None:
     store = RuntimeEventStore.open(tmp_path / "runtime.sqlite3")
-    pending = _scheduled_event_created(
-        event_id="schedule-created-pending",
+    pending = _deferred_publication_created(
+        event_id="deferred-publication-created-pending",
         handle="publication-pending",
         publish_at="2026-08-04T10:00:00+00:00",
         position=0,
     )
-    published = _scheduled_event_created(
-        event_id="schedule-created-published",
+    published = _deferred_publication_created(
+        event_id="deferred-publication-created-published",
         handle="publication-published",
         publish_at="2026-08-04T10:01:00+00:00",
         position=1,
     )
-    cancelled = _scheduled_event_created(
-        event_id="schedule-created-cancelled",
+    cancelled = _deferred_publication_created(
+        event_id="deferred-publication-created-cancelled",
         handle="publication-cancelled",
         publish_at="2026-08-04T10:02:00+00:00",
         position=2,
@@ -1154,25 +1222,25 @@ def test_projection_rebuild_restores_scheduled_event_terminal_states(
     )
     store.append(requested)
     published_fact = Event(
-        id="schedule-published-1",
-        event_type="runtime.scheduled_event.published",
+        id="deferred-publication-published-1",
+        event_type="runtime.deferred_publication.published",
         source="zeta",
         payload={
             "handle": "publication-published",
             "published_event_id": requested.id,
         },
-        idempotency_key="scheduled_event.published:publication-published",
+        idempotency_key="deferred_publication.published:publication-published",
         caused_by=requested.id,
         session_id="session-1",
         run_id="run-1",
         timestamp_ms=1_001,
     )
     cancelled_fact = Event(
-        id="schedule-cancelled-1",
-        event_type="runtime.scheduled_event.cancelled",
+        id="deferred-publication-cancelled-1",
+        event_type="runtime.deferred_publication.cancelled",
         source="zeta",
         payload={"handle": "publication-cancelled"},
-        idempotency_key="scheduled_event.cancelled:publication-cancelled",
+        idempotency_key="deferred_publication.cancelled:publication-cancelled",
         caused_by=cancelled.id,
         session_id="session-1",
         run_id="run-1",
@@ -1183,32 +1251,34 @@ def test_projection_rebuild_restores_scheduled_event_terminal_states(
 
     store.rebuild_projections()
 
-    scheduled_by_handle = {row["handle"]: row for row in store.list_scheduled_events()}
-    assert scheduled_by_handle["publication-pending"]["status"] == "pending"
-    assert scheduled_by_handle["publication-published"]["status"] == "published"
+    publication_by_handle = {
+        row["handle"]: row for row in store.list_deferred_publications()
+    }
+    assert publication_by_handle["publication-pending"]["status"] == "pending"
+    assert publication_by_handle["publication-published"]["status"] == "published"
     assert (
-        scheduled_by_handle["publication-published"]["published_event_id"]
+        publication_by_handle["publication-published"]["published_event_id"]
         == requested.id
     )
     assert (
-        scheduled_by_handle["publication-published"]["terminal_event_id"]
+        publication_by_handle["publication-published"]["terminal_event_id"]
         == published_fact.id
     )
-    assert scheduled_by_handle["publication-cancelled"]["status"] == "cancelled"
+    assert publication_by_handle["publication-cancelled"]["status"] == "cancelled"
     assert (
-        scheduled_by_handle["publication-cancelled"]["terminal_event_id"]
+        publication_by_handle["publication-cancelled"]["terminal_event_id"]
         == cancelled_fact.id
     )
     store.close()
 
 
-def test_two_connections_publish_one_due_scheduled_event_exactly_once(
+def test_two_connections_publish_one_due_deferred_publication_exactly_once(
     tmp_path: Path,
 ) -> None:
     path = tmp_path / "runtime.sqlite3"
     setup_store = RuntimeEventStore.open(path)
-    created = _scheduled_event_created(
-        event_id="schedule-created-due",
+    created = _deferred_publication_created(
+        event_id="deferred-publication-created-due",
         handle="publication-due",
         publish_at="1970-01-01T00:00:01+00:00",
         position=0,
@@ -1221,7 +1291,7 @@ def test_two_connections_publish_one_due_scheduled_event_exactly_once(
 
     def publish(store: RuntimeEventStore) -> object:
         ready.wait()
-        return store.publish_next_due_scheduled_event(now_ms=2_000)
+        return store.publish_next_due_deferred_publication(now_ms=2_000)
 
     try:
         with ThreadPoolExecutor(max_workers=2) as executor:
@@ -1230,7 +1300,7 @@ def test_two_connections_publish_one_due_scheduled_event_exactly_once(
         assert sum(bool(outcome) for outcome in outcomes) == 1
         requested = first.list_events(Filter(event_type="report.ready"))
         published_facts = first.list_events(
-            Filter(event_type="runtime.scheduled_event.published")
+            Filter(event_type="runtime.deferred_publication.published")
         )
         assert len(requested) == 1
         assert len(published_facts) == 1
@@ -1240,19 +1310,19 @@ def test_two_connections_publish_one_due_scheduled_event_exactly_once(
         assert published_facts[0].caused_by == requested[0].id
         assert published_facts[0].payload["handle"] == "publication-due"
         assert published_facts[0].payload["published_event_id"] == requested[0].id
-        assert first.list_scheduled_events()[0]["status"] == "published"
+        assert first.list_deferred_publications()[0]["status"] == "published"
     finally:
         first.close()
         second.close()
 
 
-def test_cancel_and_publish_race_has_one_terminal_scheduled_event(
+def test_cancel_and_publish_race_has_one_terminal_deferred_publication(
     tmp_path: Path,
 ) -> None:
     path = tmp_path / "runtime.sqlite3"
     setup_store = RuntimeEventStore.open(path)
-    created = _scheduled_event_created(
-        event_id="schedule-created-race",
+    created = _deferred_publication_created(
+        event_id="deferred-publication-created-race",
         handle="pub_0123456789abcdef01234567",
         publish_at="1970-01-01T00:00:01+00:00",
         position=0,
@@ -1274,7 +1344,7 @@ def test_cancel_and_publish_race_has_one_terminal_scheduled_event(
 
     def publish() -> object:
         ready.wait()
-        return publish_store.publish_next_due_scheduled_event(now_ms=2_000)
+        return publish_store.publish_next_due_deferred_publication(now_ms=2_000)
 
     try:
         with ThreadPoolExecutor(max_workers=2) as executor:
@@ -1283,16 +1353,16 @@ def test_cancel_and_publish_race_has_one_terminal_scheduled_event(
                 future.result()
 
         published_facts = cancel_store.list_events(
-            Filter(event_type="runtime.scheduled_event.published")
+            Filter(event_type="runtime.deferred_publication.published")
         )
         cancelled_facts = cancel_store.list_events(
-            Filter(event_type="runtime.scheduled_event.cancelled")
+            Filter(event_type="runtime.deferred_publication.cancelled")
         )
         requested = cancel_store.list_events(Filter(event_type="report.ready"))
         assert len(published_facts) + len(cancelled_facts) == 1
         assert len(requested) == len(published_facts)
         expected_status = "published" if published_facts else "cancelled"
-        assert cancel_store.list_scheduled_events()[0]["status"] == expected_status
+        assert cancel_store.list_deferred_publications()[0]["status"] == expected_status
     finally:
         cancel_store.close()
         publish_store.close()
@@ -1341,8 +1411,8 @@ def test_due_publication_rolls_back_when_terminal_fact_fails(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     store = RuntimeEventStore.open(tmp_path / "runtime.sqlite3")
-    created = _scheduled_event_created(
-        event_id="schedule-created-rollback",
+    created = _deferred_publication_created(
+        event_id="deferred-publication-created-rollback",
         handle="publication-rollback",
         publish_at="1970-01-01T00:00:01+00:00",
         position=0,
@@ -1351,7 +1421,7 @@ def test_due_publication_rolls_back_when_terminal_fact_fails(
     append_in_transaction = SqliteEventStore.append_in_transaction
 
     def fail_terminal_fact(event_store: SqliteEventStore, event: Event) -> object:
-        if event.event_type == "runtime.scheduled_event.published":
+        if event.event_type == "runtime.deferred_publication.published":
             raise RuntimeError("terminal append failed")
         return append_in_transaction(event_store, event)
 
@@ -1362,11 +1432,11 @@ def test_due_publication_rolls_back_when_terminal_fact_fails(
     )
 
     with pytest.raises(RuntimeError, match="terminal append failed"):
-        store.publish_next_due_scheduled_event(now_ms=2_000)
+        store.publish_next_due_deferred_publication(now_ms=2_000)
 
     assert store.list_events(Filter(event_type="report.ready")) == []
     assert store.list_queue_items() == []
-    assert store.list_scheduled_events()[0]["status"] == "pending"
+    assert store.list_deferred_publications()[0]["status"] == "pending"
     store.close()
 
 
@@ -1574,18 +1644,18 @@ def test_dispatch_wait_script_matches_once_and_keeps_input_routable(
     store.close()
 
 
-def test_dispatch_one_shot_schedule_script_publishes_exactly_once(
+def test_dispatch_deferred_publication_script_publishes_exactly_once(
     tmp_path: Path,
 ) -> None:
     case = _dispatch_scripted_case(
-        "scheduled_events",
-        "due_publication_consumes_pending_schedule",
+        "deferred_publications",
+        "due_publication_consumes_pending_deferred_publication",
     )
     store = RuntimeEventStore.open(tmp_path / "runtime.sqlite3")
     store.append(Event(**case["created_event"]))
 
-    first = store.publish_next_due_scheduled_event(now_ms=case["now_ms"])
-    repeated = store.publish_next_due_scheduled_event(now_ms=case["now_ms"])
+    first = store.publish_next_due_deferred_publication(now_ms=case["now_ms"])
+    repeated = store.publish_next_due_deferred_publication(now_ms=case["now_ms"])
     journal = store.list_events(Filter())
 
     assert first is not None
@@ -1595,16 +1665,18 @@ def test_dispatch_one_shot_schedule_script_publishes_exactly_once(
         == case["expected"]["events"]
     )
     assert (
-        store.list_scheduled_events()[0]["status"]
-        == case["expected"]["schedule_status"]
+        store.list_deferred_publications()[0]["status"]
+        == case["expected"]["publication_status"]
     )
     store.close()
 
 
-def test_dispatch_recurring_schedule_script_records_activation_and_decision() -> None:
-    case = _dispatch_scripted_case(
-        "recurring_schedules",
-        "latest_catchup_activates_before_publishing",
+def test_scheduler_runtime_vector_records_activation_and_decision() -> None:
+    document = json.loads(SCHEDULING_RUNTIME_VECTORS_PATH.read_text(encoding="utf-8"))
+    case = next(
+        case
+        for case in document["recurring_schedules"]
+        if case["name"] == "latest_catchup_activates_before_publishing"
     )
     event_store = MemoryEventStore()
     schedule = ScheduleEntry(**case["schedule"])
@@ -1643,6 +1715,86 @@ def test_dispatch_recurring_schedule_script_records_activation_and_decision() ->
             now=datetime.fromisoformat(case["ticks"][1]),
         )
     ] == case["expected"]["read_model"]
+
+
+def test_scheduler_repairs_activation_without_occurrence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    event_store = MemoryEventStore()
+    schedule = ScheduleEntry(cron="* * * * *", timezone="UTC", catchup="latest")
+    spec = AgentSpec(
+        slug="reporter",
+        name="Reporter",
+        description="Reports on schedule.",
+        instructions="Report.",
+        path=Path("agents/reporter.md"),
+        content_address="b3:fixture",
+        schedules=(schedule,),
+    )
+    now = datetime.fromisoformat("2026-08-12T10:05:30+00:00")
+    accept = event_store.accept
+
+    def interrupt_before_occurrence(draft: DraftEvent):
+        if draft.event_type == "agent.reporter.scheduled":
+            raise RuntimeError("interrupted before occurrence")
+        return accept(draft)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(event_store, "accept", interrupt_before_occurrence)
+        with pytest.raises(RuntimeError, match="interrupted before occurrence"):
+            request_due_schedules(event_store, (spec,), now=now)
+
+    repaired = request_due_schedules(event_store, (spec,), now=now)
+    journal = event_store.list_events(Filter())
+
+    assert [event.event_type for event in repaired] == ["agent.reporter.scheduled"]
+    assert [event.event_type for event in journal] == [
+        "zeta.scheduler.tick.activated",
+        "agent.reporter.scheduled",
+        "zeta.scheduler.tick.published",
+    ]
+
+
+def test_scheduler_repairs_occurrence_without_decision_without_republishing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    event_store = MemoryEventStore()
+    schedule = ScheduleEntry(cron="* * * * *", timezone="UTC", catchup="latest")
+    spec = AgentSpec(
+        slug="reporter",
+        name="Reporter",
+        description="Reports on schedule.",
+        instructions="Report.",
+        path=Path("agents/reporter.md"),
+        content_address="b3:fixture",
+        schedules=(schedule,),
+    )
+    now = datetime.fromisoformat("2026-08-12T10:05:30+00:00")
+    accept = event_store.accept
+
+    def interrupt_after_occurrence(draft: DraftEvent):
+        outcome = accept(draft)
+        if draft.event_type == "agent.reporter.scheduled":
+            raise RuntimeError("interrupted after occurrence")
+        return outcome
+
+    with monkeypatch.context() as patch:
+        patch.setattr(event_store, "accept", interrupt_after_occurrence)
+        with pytest.raises(RuntimeError, match="interrupted after occurrence"):
+            request_due_schedules(event_store, (spec,), now=now)
+
+    repaired = request_due_schedules(event_store, (spec,), now=now)
+    journal = event_store.list_events(Filter())
+
+    assert repaired == []
+    assert [event.event_type for event in journal] == [
+        "zeta.scheduler.tick.activated",
+        "agent.reporter.scheduled",
+        "zeta.scheduler.tick.published",
+    ]
+    assert journal[-1].payload["published_event_id"] == journal[-2].id
+    assert journal[-1].payload["reason"] == "due now"
+    assert journal[-1].caused_by == journal[-2].id
 
 
 def test_dispatch_projection_recovery_script_discards_live_ownership(

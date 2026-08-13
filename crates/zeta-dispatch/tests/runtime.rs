@@ -15,11 +15,10 @@ use zeta_dispatch::{
     unhandled_queue_item_id, unhandled_queue_item_idempotency_key, wait_handle, AttemptCompletion,
     AttemptCompletionDisposition, AttemptControl, AttemptFailure, AttemptStatus,
     CancellationFinalizationIdentities, CancellationIdentities, CancellationStatus, ClaimToken,
-    Dispatch, DispatchError, DispatchErrorCode, EffectStatus, EventPattern, FailureClass,
-    QueueClaim, QueueItemId, QueueItemStatus, RecurringSchedule, RecurringScheduleActivation,
-    RecurringScheduleTick, ResourceCancellationStatus, ResourceKind, RetryPolicy, Route, RunId,
-    RuntimeEventIdentity, ScheduleTickStatus, ScheduledEventStatus, SessionId,
-    SessionMessageIdentities, SessionMessageRequest, SessionRule, WaitStatus,
+    DeferredPublicationStatus, Dispatch, DispatchError, DispatchErrorCode, EffectStatus,
+    EventPattern, FailureClass, QueueClaim, QueueItemId, QueueItemStatus,
+    ResourceCancellationStatus, ResourceKind, RetryPolicy, Route, RunId, RuntimeEventIdentity,
+    SessionId, SessionMessageIdentities, SessionMessageRequest, SessionRule, WaitStatus,
 };
 use zeta_journal::{Event, Filter, HeadExpectation};
 
@@ -834,17 +833,26 @@ fn sqlite_journal_rejects_legacy_and_unknown_schema_epochs() {
 }
 
 #[test]
-fn older_projection_epochs_rebuild_and_release_live_ownership() {
+fn older_projection_epochs_drop_scheduler_state_and_rebuild_scheduled_occurrence() {
     let directory = tempdir().unwrap();
     let path = directory.path().join("older-projection.sqlite3");
     let queue_item_id = {
         let mut dispatch = Dispatch::open(&path).unwrap();
-        let mut event = journal_event("evt_epoch_rebuild", Some("ingress:epoch-rebuild"));
-        event.event_type = "work.requested".to_owned();
+        let mut event = journal_event(
+            "scheduled-occurrence",
+            Some("schedule:digest:0 8 * * *:2026-08-13T08:00:00+02:00"),
+        );
+        event.event_type = "agent.digest.scheduled".to_owned();
+        event.source = "zeta:scheduler".to_owned();
+        event.payload = serde_json::from_value(json!({
+            "date": "2026-08-13",
+            "timestamp": "2026-08-13T08:00:00+02:00",
+        }))
+        .unwrap();
         route_available_work(
             &mut dispatch,
             event,
-            "worker",
+            "digest",
             SessionRule::PerEvent,
             vec!["repo:zeta".to_owned()],
         );
@@ -861,15 +869,39 @@ fn older_projection_epochs_rebuild_and_release_live_ownership() {
     };
     rusqlite::Connection::open(&path)
         .unwrap()
-        .execute("UPDATE dispatch_schema SET projection_epoch = 2", [])
+        .execute_batch(
+            "CREATE TABLE IF NOT EXISTS recurring_schedules (obsolete INTEGER);
+             CREATE TABLE IF NOT EXISTS scheduled_events (obsolete INTEGER);
+             UPDATE dispatch_schema SET projection_epoch = 6;",
+        )
         .unwrap();
 
     let dispatch = Dispatch::open(&path).unwrap();
 
     let item = dispatch.queue_item(&queue_item_id).unwrap().unwrap();
     assert_eq!(item.status(), QueueItemStatus::Available);
+    assert_eq!(item.target_agent(), "digest");
     assert_eq!(item.claimed_by(), None);
     assert!(dispatch.list_locks().unwrap().is_empty());
+    assert_eq!(
+        dispatch
+            .get_event("scheduled-occurrence")
+            .unwrap()
+            .unwrap()
+            .event_type,
+        "agent.digest.scheduled"
+    );
+    let obsolete_tables = rusqlite::Connection::open(&path)
+        .unwrap()
+        .query_row(
+            "SELECT count(*) FROM sqlite_master
+             WHERE type = 'table'
+               AND name IN ('recurring_schedules', 'scheduled_events')",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .unwrap();
+    assert_eq!(obsolete_tables, 0);
     assert_eq!(
         dispatch
             .verify_journal(HeadExpectation::Unanchored)
@@ -2467,7 +2499,7 @@ fn completion_vector_commits_ordered_controls_atomically() {
             "runtime.attempt.completed",
             "work.first",
             "runtime.wait.created",
-            "runtime.scheduled_event.created",
+            "runtime.deferred_publication.created",
             "runtime.queue_item.completed",
         ]
     );
@@ -3437,8 +3469,8 @@ fn resource_cancellation_is_authorized_atomic_and_idempotent() {
 
     dispatch
         .append_event(Event {
-            id: "schedule-cancel-created".to_owned(),
-            event_type: "runtime.scheduled_event.created".to_owned(),
+            id: "deferred-cancel-created".to_owned(),
+            event_type: "runtime.deferred_publication.created".to_owned(),
             source: "zeta".to_owned(),
             payload: serde_json::from_value(json!({
                 "handle": "pub_cancel",
@@ -3451,7 +3483,7 @@ fn resource_cancellation_is_authorized_atomic_and_idempotent() {
                 "position": 0,
             }))
             .unwrap(),
-            idempotency_key: Some("agent.schedule:qi-report-source:0".to_owned()),
+            idempotency_key: Some("agent.defer:qi-report-source:0".to_owned()),
             caused_by: Some("attempt-report-completed".to_owned()),
             session_id: Some("session-report".to_owned()),
             run_id: Some("run-report".to_owned()),
@@ -3466,22 +3498,27 @@ fn resource_cancellation_is_authorized_atomic_and_idempotent() {
             None,
             Some("reporter"),
             Some("session-report"),
-            RuntimeEventIdentity::new("schedule-cancel-terminal", 700).unwrap(),
+            RuntimeEventIdentity::new("deferred-cancel-terminal", 700).unwrap(),
         )
         .unwrap();
-    assert_eq!(cancelled.resource_kind(), ResourceKind::ScheduledEvent);
+    assert_eq!(cancelled.resource_kind(), ResourceKind::DeferredPublication);
     assert_eq!(cancelled.status(), ResourceCancellationStatus::Cancelled);
+    let cancelled_event = cancelled.event().unwrap();
     assert_eq!(
-        cancelled.event().unwrap().event_type,
-        "runtime.scheduled_event.cancelled"
+        cancelled_event.event_type,
+        "runtime.deferred_publication.cancelled"
+    );
+    assert_eq!(
+        cancelled_event.idempotency_key.as_deref(),
+        Some("deferred_publication.cancelled:pub_cancel")
     );
     assert!(dispatch
-        .publish_next_due_scheduled_event(1_000, &[])
+        .publish_next_due_deferred_publication(1_000, &[])
         .unwrap()
         .is_none());
     assert_eq!(
-        dispatch.list_scheduled_events().unwrap()[0].status(),
-        ScheduledEventStatus::Cancelled
+        dispatch.list_deferred_publications().unwrap()[0].status(),
+        DeferredPublicationStatus::Cancelled
     );
 
     let invalid = dispatch
@@ -3692,10 +3729,10 @@ fn direct_session_message_owner_conflict_writes_nothing() {
 }
 
 #[test]
-fn due_publication_consumes_pending_schedule_once() {
+fn due_publication_consumes_pending_deferred_publication_once() {
     let case = scripted_case(
-        "scheduled_events",
-        "due_publication_consumes_pending_schedule",
+        "deferred_publications",
+        "due_publication_consumes_pending_deferred_publication",
     );
     let mut dispatch = Dispatch::open_in_memory().unwrap();
     dispatch
@@ -3703,18 +3740,18 @@ fn due_publication_consumes_pending_schedule_once() {
         .unwrap();
 
     let published = dispatch
-        .publish_next_due_scheduled_event(
+        .publish_next_due_deferred_publication(
             case["now_ms"].as_i64().unwrap(),
             &[
-                RuntimeEventIdentity::new("scheduled-publication-1", 2_000).unwrap(),
-                RuntimeEventIdentity::new("scheduled-published-fact-1", 2_001).unwrap(),
+                RuntimeEventIdentity::new("deferred-publication-1", 2_000).unwrap(),
+                RuntimeEventIdentity::new("deferred-published-fact-1", 2_001).unwrap(),
             ],
         )
         .unwrap()
         .unwrap();
     assert_eq!(published.len(), 2);
     assert!(dispatch
-        .publish_next_due_scheduled_event(case["now_ms"].as_i64().unwrap(), &[])
+        .publish_next_due_deferred_publication(case["now_ms"].as_i64().unwrap(), &[])
         .unwrap()
         .is_none());
 
@@ -3728,27 +3765,149 @@ fn due_publication_consumes_pending_schedule_once() {
             expected["idempotency_key"].as_str()
         );
     }
-    assert_eq!(events[1].caused_by.as_deref(), Some("schedule-created-1"));
+    assert_eq!(events[1].caused_by.as_deref(), Some("deferred-created-1"));
     assert_eq!(
         Value::Object(events[1].payload.clone()),
         json!({"report_id": "publication-1"})
     );
     assert_eq!(
         events[2].caused_by.as_deref(),
-        Some("scheduled-publication-1")
+        Some("deferred-publication-1")
     );
     assert_eq!(
         events[2].payload["published_event_id"],
-        "scheduled-publication-1"
+        "deferred-publication-1"
     );
 
-    let schedules = dispatch.list_scheduled_events().unwrap();
-    assert_eq!(schedules.len(), 1);
-    assert_eq!(schedules[0].status(), ScheduledEventStatus::Published);
+    let publications = dispatch.list_deferred_publications().unwrap();
+    assert_eq!(publications.len(), 1);
     assert_eq!(
-        schedules[0].published_event_id(),
-        Some("scheduled-publication-1")
+        publications[0].status(),
+        DeferredPublicationStatus::Published
     );
+    assert_eq!(
+        publications[0].published_event_id(),
+        Some("deferred-publication-1")
+    );
+}
+
+#[test]
+fn due_publication_and_matching_waits_commit_or_roll_back_together() {
+    let mut dispatch = Dispatch::open_in_memory().unwrap();
+    dispatch
+        .append_event(Event {
+            id: "publication-wait-created".to_owned(),
+            event_type: "runtime.wait.created".to_owned(),
+            source: "zeta".to_owned(),
+            payload: serde_json::from_value(json!({
+                "handle": "wait_publication",
+                "agent_id": "consumer",
+                "session_id": "session-consumer",
+                "event_type": "report.ready",
+                "fields": {"report_id": "atomic"},
+                "deadline": null,
+                "source_queue_item_id": "qi-consumer-source",
+            }))
+            .unwrap(),
+            idempotency_key: Some("agent.wait:qi-consumer-source:0".to_owned()),
+            caused_by: Some("consumer-attempt-completed".to_owned()),
+            session_id: Some("session-consumer".to_owned()),
+            run_id: Some("run-consumer".to_owned()),
+            turn_id: None,
+            timestamp_ms: 100,
+            cursor: None,
+        })
+        .unwrap();
+    dispatch
+        .append_event(Event {
+            id: "publication-created".to_owned(),
+            event_type: "runtime.deferred_publication.created".to_owned(),
+            source: "zeta".to_owned(),
+            payload: serde_json::from_value(json!({
+                "handle": "pub_atomic",
+                "event_type": "report.ready",
+                "payload": {"report_id": "atomic"},
+                "publish_at": "1970-01-01T00:00:01+00:00",
+                "source_agent_id": "reporter",
+                "source_session_id": "session-reporter",
+                "source_queue_item_id": "qi-reporter-source",
+                "position": 0,
+            }))
+            .unwrap(),
+            idempotency_key: Some("agent.defer:qi-reporter-source:0".to_owned()),
+            caused_by: Some("reporter-attempt-completed".to_owned()),
+            session_id: Some("session-reporter".to_owned()),
+            run_id: Some("run-reporter".to_owned()),
+            turn_id: None,
+            timestamp_ms: 101,
+            cursor: None,
+        })
+        .unwrap();
+    let mut collision = journal_event("publication-terminal-collision", None);
+    collision.event_type = "zeta.test".to_owned();
+    dispatch.append_event(collision).unwrap();
+
+    let error = dispatch
+        .publish_next_due_deferred_publication(
+            1_000,
+            &[
+                RuntimeEventIdentity::new("publication-event-rollback", 200).unwrap(),
+                RuntimeEventIdentity::new("publication-wait-match-rollback", 201).unwrap(),
+                RuntimeEventIdentity::new("publication-continuation-rollback", 202).unwrap(),
+                RuntimeEventIdentity::new("publication-terminal-collision", 203).unwrap(),
+            ],
+        )
+        .unwrap_err();
+
+    assert_eq!(error.reason(), "runtime_event_identity_collision");
+    assert_eq!(dispatch.list_events(&Filter::default()).unwrap().len(), 3);
+    assert_eq!(
+        dispatch.list_waits().unwrap()[0].status(),
+        WaitStatus::Active
+    );
+    assert_eq!(
+        dispatch.list_deferred_publications().unwrap()[0].status(),
+        DeferredPublicationStatus::Pending
+    );
+    assert!(dispatch.list_queue_items().unwrap().is_empty());
+
+    let events = dispatch
+        .publish_next_due_deferred_publication(
+            1_000,
+            &[
+                RuntimeEventIdentity::new("publication-event", 300).unwrap(),
+                RuntimeEventIdentity::new("publication-wait-match", 301).unwrap(),
+                RuntimeEventIdentity::new("publication-continuation", 302).unwrap(),
+                RuntimeEventIdentity::new("publication-terminal", 303).unwrap(),
+            ],
+        )
+        .unwrap()
+        .unwrap();
+    let mut event_types = Vec::new();
+    for event in &events {
+        event_types.push(event.event_type.as_str());
+    }
+    assert_eq!(
+        event_types,
+        [
+            "report.ready",
+            "runtime.wait.matched",
+            "runtime.queue_item.available",
+            "runtime.deferred_publication.published",
+        ]
+    );
+    assert_eq!(
+        dispatch.list_waits().unwrap()[0].status(),
+        WaitStatus::Matched
+    );
+    assert_eq!(
+        dispatch.list_deferred_publications().unwrap()[0].status(),
+        DeferredPublicationStatus::Published
+    );
+    let queue_items = dispatch.list_queue_items().unwrap();
+    assert_eq!(queue_items.len(), 2);
+    assert_eq!(queue_items[0].status(), QueueItemStatus::Pending);
+    assert_eq!(queue_items[1].status(), QueueItemStatus::Available);
 }
 
 #[test]
@@ -3843,150 +4002,6 @@ fn effect_key_is_canonical_across_parameter_order() {
     let second = effect_key("qi_1", "slack.post_message", &second).unwrap();
     assert_eq!(first, second);
     assert!(first.starts_with("effect:b3:"));
-}
-
-#[test]
-fn explicit_schedule_activation_precedes_recurring_publication() {
-    let case = scripted_case(
-        "recurring_schedules",
-        "latest_catchup_activates_before_publishing",
-    );
-    let expected_events = case["expected"]["events"].as_array().unwrap();
-    let schedule = RecurringSchedule::new(
-        case["agent_id"].as_str().unwrap(),
-        0,
-        case["schedule"]["cron"].as_str().unwrap(),
-        case["schedule"]["timezone"].as_str().map(str::to_owned),
-    );
-    let first_tick = RecurringScheduleTick::new(
-        schedule.clone(),
-        expected_events[1]["payload"]["timestamp"].as_str().unwrap(),
-        case["ticks"][0].as_str().unwrap(),
-        expected_events[2]["payload"]["next_at"].as_str().unwrap(),
-        expected_events[2]["payload"]["reason"].as_str().unwrap(),
-    )
-    .with_activation(RecurringScheduleActivation::new(
-        case["schedule"]["catchup"].as_str().unwrap(),
-        expected_events[0]["payload"]["reason"].as_str().unwrap(),
-    ));
-    let second_tick = RecurringScheduleTick::new(
-        schedule,
-        expected_events[3]["payload"]["timestamp"].as_str().unwrap(),
-        case["ticks"][1].as_str().unwrap(),
-        expected_events[4]["payload"]["next_at"].as_str().unwrap(),
-        expected_events[4]["payload"]["reason"].as_str().unwrap(),
-    );
-    let mut dispatch = Dispatch::open_in_memory().unwrap();
-
-    let first = dispatch
-        .publish_recurring_schedule_tick(
-            &first_tick,
-            &[
-                RuntimeEventIdentity::new("recurring-activation", 800).unwrap(),
-                RuntimeEventIdentity::new("recurring-published-1", 801).unwrap(),
-                RuntimeEventIdentity::new("recurring-decision-1", 802).unwrap(),
-            ],
-        )
-        .unwrap();
-    let second = dispatch
-        .publish_recurring_schedule_tick(
-            &second_tick,
-            &[
-                RuntimeEventIdentity::new("recurring-published-2", 803).unwrap(),
-                RuntimeEventIdentity::new("recurring-decision-2", 804).unwrap(),
-            ],
-        )
-        .unwrap();
-    assert_eq!([first.len(), second.len()], [3, 2]);
-    assert!(dispatch
-        .publish_recurring_schedule_tick(&second_tick, &[])
-        .unwrap()
-        .is_empty());
-
-    let events = dispatch.list_events(&Filter::default()).unwrap();
-    assert_eq!(events.len(), expected_events.len());
-    for (actual, expected) in events.iter().zip(expected_events) {
-        assert_eq!(actual.event_type, expected["type"]);
-        assert_eq!(
-            actual.idempotency_key.as_deref(),
-            expected["idempotency_key"].as_str()
-        );
-        assert_eq!(actual.source, "zeta:scheduler");
-        for (field, value) in expected["payload"].as_object().unwrap() {
-            if value.as_str() == Some("$scheduled_1") {
-                assert_eq!(actual.payload[field], "recurring-published-1");
-            } else if value.as_str() == Some("$scheduled_2") {
-                assert_eq!(actual.payload[field], "recurring-published-2");
-            } else {
-                assert_eq!(&actual.payload[field], value, "payload field {field}");
-            }
-        }
-    }
-    assert_eq!(
-        events[2].caused_by.as_deref(),
-        Some("recurring-published-1")
-    );
-    assert_eq!(
-        events[4].caused_by.as_deref(),
-        Some("recurring-published-2")
-    );
-
-    let statuses = dispatch.list_recurring_schedules().unwrap();
-    assert_eq!(statuses.len(), 1);
-    let expected = &case["expected"]["read_model"][0];
-    assert_eq!(statuses[0].agent_id(), expected["agent"]);
-    assert_eq!(statuses[0].cron(), expected["cron"]);
-    assert_eq!(statuses[0].timezone(), expected["timezone"].as_str());
-    assert_eq!(statuses[0].status(), ScheduleTickStatus::Published);
-    assert_eq!(
-        statuses[0].last_published_at(),
-        expected["last_published_at"].as_str()
-    );
-    assert_eq!(statuses[0].next_at(), expected["next_at"].as_str());
-    assert_eq!(statuses[0].reason(), expected["reason"]);
-
-    let before_rebuild = statuses;
-    dispatch.rebuild_projections().unwrap();
-    assert_eq!(dispatch.list_recurring_schedules().unwrap(), before_rebuild);
-}
-
-#[test]
-fn recurring_schedule_failure_rolls_back_activation_and_publication() {
-    let schedule = RecurringSchedule::new("reporter", 0, "* * * * *", Some("UTC".to_owned()));
-    let tick = RecurringScheduleTick::new(
-        schedule,
-        "2026-08-12T10:05:00+00:00",
-        "2026-08-12T10:05:30+00:00",
-        "2026-08-12T10:06:00+00:00",
-        "due now",
-    )
-    .with_activation(RecurringScheduleActivation::new(
-        "latest",
-        "schedule first observed",
-    ));
-    let mut dispatch = Dispatch::open_in_memory().unwrap();
-    dispatch
-        .append_event(journal_event("recurring-collision", None))
-        .unwrap();
-
-    let error = dispatch
-        .publish_recurring_schedule_tick(
-            &tick,
-            &[
-                RuntimeEventIdentity::new("rolled-back-activation", 900).unwrap(),
-                RuntimeEventIdentity::new("rolled-back-publication", 901).unwrap(),
-                RuntimeEventIdentity::new("recurring-collision", 902).unwrap(),
-            ],
-        )
-        .unwrap_err();
-
-    assert_eq!(error.reason(), "runtime_event_identity_collision");
-    assert_eq!(dispatch.list_events(&Filter::default()).unwrap().len(), 1);
-    assert!(dispatch.list_recurring_schedules().unwrap().is_empty());
-    assert!(dispatch
-        .get_event("rolled-back-publication")
-        .unwrap()
-        .is_none());
 }
 
 #[test]

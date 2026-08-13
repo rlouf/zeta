@@ -6,7 +6,6 @@ mod coordination;
 mod effects;
 mod journal;
 mod projection;
-mod recurring;
 mod resources;
 mod routing;
 mod sessions;
@@ -26,7 +25,7 @@ use crate::routing::SessionError;
 use crate::state::TransitionError;
 
 const BASE_EPOCH: i64 = 1;
-const PROJECTION_EPOCH: i64 = 6;
+const PROJECTION_EPOCH: i64 = 7;
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 
 const CREATE_SCHEMA: &str = "
@@ -36,7 +35,7 @@ const CREATE_SCHEMA: &str = "
         projection_epoch INTEGER NOT NULL CHECK (projection_epoch >= 0)
     ) STRICT;
     INSERT INTO dispatch_schema (singleton, base_epoch, projection_epoch)
-    VALUES (1, 1, 6);
+    VALUES (1, 1, 7);
 
     CREATE TABLE journal_entries (
         cursor INTEGER PRIMARY KEY CHECK (cursor > 0),
@@ -168,7 +167,7 @@ const CREATE_PROJECTIONS: &str = "
         ON waits(status, event_type, created_event_id, handle);
     CREATE INDEX waits_deadline_order
         ON waits(status, deadline_ms, created_event_id, handle);
-    CREATE TABLE scheduled_events (
+    CREATE TABLE deferred_publications (
         handle TEXT PRIMARY KEY CHECK (length(handle) > 0),
         event_type TEXT NOT NULL CHECK (length(event_type) > 0),
         payload_json TEXT NOT NULL,
@@ -189,8 +188,8 @@ const CREATE_PROJECTIONS: &str = "
         FOREIGN KEY (published_event_id) REFERENCES journal_entries(event_id),
         FOREIGN KEY (terminal_event_id) REFERENCES journal_entries(event_id)
     ) STRICT;
-    CREATE INDEX scheduled_events_due_order
-        ON scheduled_events(status, publish_at_ms, created_event_id, handle);
+    CREATE INDEX deferred_publications_due_order
+        ON deferred_publications(status, publish_at_ms, created_event_id, handle);
     CREATE TABLE effects (
         effect_key TEXT PRIMARY KEY CHECK (length(effect_key) > 0),
         operation TEXT NOT NULL CHECK (length(operation) > 0),
@@ -214,32 +213,13 @@ const CREATE_PROJECTIONS: &str = "
     ) STRICT;
     CREATE INDEX effects_retry_blocker
         ON effects(queue_item_id, semantics, status);
-    CREATE TABLE recurring_schedules (
-        agent_id TEXT NOT NULL CHECK (length(agent_id) > 0),
-        schedule_index INTEGER NOT NULL CHECK (schedule_index >= 0),
-        cron TEXT NOT NULL CHECK (length(cron) > 0),
-        timezone TEXT NOT NULL,
-        catchup TEXT,
-        event_type TEXT NOT NULL CHECK (length(event_type) > 0),
-        activation_event_id TEXT,
-        status TEXT NOT NULL CHECK (status IN (
-            'activated', 'published', 'skipped', 'missed'
-        )),
-        last_published_at TEXT,
-        next_at TEXT,
-        reason TEXT NOT NULL CHECK (length(reason) > 0),
-        updated_at INTEGER NOT NULL,
-        PRIMARY KEY (agent_id, schedule_index, cron, timezone),
-        FOREIGN KEY (activation_event_id) REFERENCES journal_entries(event_id)
-    ) STRICT, WITHOUT ROWID;
-    CREATE INDEX recurring_schedules_agent_order
-        ON recurring_schedules(agent_id, schedule_index);
 ";
 
 const DROP_PROJECTIONS: &str = "
     DROP TABLE IF EXISTS recurring_schedules;
     DROP TABLE IF EXISTS effects;
     DROP TABLE IF EXISTS scheduled_events;
+    DROP TABLE IF EXISTS deferred_publications;
     DROP TABLE IF EXISTS waits;
     DROP TABLE IF EXISTS locks;
     DROP TABLE IF EXISTS queue_claims;
@@ -404,11 +384,6 @@ pub enum DispatchError {
         /// Names the malformed or unsupported result field.
         field: &'static str,
     },
-    /// A calendar-resolved recurring occurrence is malformed.
-    InvalidScheduleTick {
-        /// Names the rejected occurrence or schedule field.
-        field: &'static str,
-    },
     /// A retained journal row cannot reconstruct its logical proof value.
     CorruptJournal {
         /// Locates the malformed row when its cursor was readable.
@@ -508,7 +483,6 @@ impl DispatchError {
                 "cancellation_authority_mismatch"
             }
             DispatchError::InvalidCompletion { field: _field } => "invalid_completion",
-            DispatchError::InvalidScheduleTick { field: _field } => "invalid_schedule_tick",
             DispatchError::CorruptJournal {
                 cursor: _cursor,
                 field: _field,
@@ -598,7 +572,7 @@ impl fmt::Display for DispatchError {
             ),
             DispatchError::InvalidCancellationHandle { handle } => write!(
                 formatter,
-                "cancellation handle {handle:?} must identify a wait or scheduled event"
+                "cancellation handle {handle:?} must identify a wait or deferred publication"
             ),
             DispatchError::CancellationResourceNotFound { handle } => {
                 write!(formatter, "unknown cancellation resource {handle:?}")
@@ -608,9 +582,6 @@ impl fmt::Display for DispatchError {
             }
             DispatchError::InvalidCompletion { field } => {
                 write!(formatter, "invalid attempt completion field {field:?}")
-            }
-            DispatchError::InvalidScheduleTick { field } => {
-                write!(formatter, "invalid recurring schedule tick field {field:?}")
             }
             DispatchError::CorruptJournal { cursor, field } => {
                 write!(
@@ -696,7 +667,6 @@ impl std::error::Error for DispatchError {
             DispatchError::CancellationResourceNotFound { handle: _handle } => None,
             DispatchError::CancellationAuthorityMismatch { handle: _handle } => None,
             DispatchError::InvalidCompletion { field: _field } => None,
-            DispatchError::InvalidScheduleTick { field: _field } => None,
             DispatchError::CorruptJournal {
                 cursor: _cursor,
                 field: _field,
@@ -838,9 +808,8 @@ fn initialize_schema(connection: &mut Connection) -> Result<(), DispatchError> {
         "queue_claims",
         "locks",
         "waits",
-        "scheduled_events",
+        "deferred_publications",
         "effects",
-        "recurring_schedules",
     ] {
         if !has_table(&tables, expected) {
             projections_present = false;

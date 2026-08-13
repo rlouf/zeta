@@ -787,7 +787,7 @@ def test_attempt_coordinator_treats_past_request_as_immediate() -> None:
 
     event_types = [event.event_type for event in stored_events(store)]
     assert "work.finished" in event_types
-    assert "runtime.scheduled_event.created" not in event_types
+    assert "runtime.deferred_publication.created" not in event_types
 
 
 def test_attempt_coordinator_records_future_request_inside_success_barrier() -> None:
@@ -824,7 +824,7 @@ def test_attempt_coordinator_records_future_request_inside_success_barrier() -> 
         "runtime.queue_item.claimed",
         "runtime.attempt.started",
         "runtime.attempt.completed",
-        "runtime.scheduled_event.created",
+        "runtime.deferred_publication.created",
         "runtime.queue_item.completed",
     ]
     assert journal[3].caused_by == journal[2].id
@@ -968,7 +968,7 @@ def test_attempt_coordinator_applies_cancel_before_a_later_wait(tmp_path) -> Non
     store.close()
 
 
-def test_attempt_coordinator_can_cancel_a_schedule_created_earlier_in_the_run(
+def test_attempt_coordinator_can_cancel_a_deferred_publication_created_earlier_in_the_run(
     tmp_path,
 ) -> None:
     store = RuntimeEventStore.open(tmp_path / "runtime.sqlite3")
@@ -1000,11 +1000,11 @@ def test_attempt_coordinator_can_cancel_a_schedule_created_earlier_in_the_run(
 
     assert [event.event_type for event in events[-4:]] == [
         "runtime.attempt.completed",
-        "runtime.scheduled_event.created",
-        "runtime.scheduled_event.cancelled",
+        "runtime.deferred_publication.created",
+        "runtime.deferred_publication.cancelled",
         "runtime.queue_item.completed",
     ]
-    assert store.list_scheduled_events()[0]["status"] == "cancelled"
+    assert store.list_deferred_publications()[0]["status"] == "cancelled"
     store.close()
 
 
@@ -1192,7 +1192,7 @@ def test_dispatch_completion_script_preserves_result_and_control_order(
         in {
             "work.first",
             "runtime.wait.created",
-            "runtime.scheduled_event.created",
+            "runtime.deferred_publication.created",
         }
     ] == case["expected"]["ordered_controls"]
     queue_record = store.queue_item(item.queue_item_id)
@@ -1233,7 +1233,7 @@ def test_dispatch_completion_script_rolls_back_invalid_proposals(
     assert [event.id for event in returned] == [event.id for event in journal]
     assert not store.list_events(Filter(event_type="runtime.attempt.completed"))
     assert store.list_waits() == []
-    assert store.list_scheduled_events() == []
+    assert store.list_deferred_publications() == []
     queue_record = store.queue_item(case["queue_item"]["queue_item_id"])
     assert queue_record is not None
     assert queue_record["status"] == case["expected"]["queue_status"]

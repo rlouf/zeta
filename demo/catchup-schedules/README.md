@@ -6,14 +6,14 @@ scheduled occurrences came due while nothing was running. On reopening, one
 `catchup: latest` fires exactly once, for the most recent missed occurrence,
 with a journaled reason of `latest catch-up`; a second agent on the same cron
 with the default policy does not fire, and its miss is itself recorded as a
-durable `scheduler.tick.missed` event. Nothing is silently dropped, and
+durable `zeta.scheduler.tick.missed` event. Nothing is silently dropped, and
 nothing is blindly replayed N times.
 
 Zeta has exactly two catch-up policies, and this demo shows both:
 
 - **default** (no `catchup` key): a missed occurrence is backfilled only later
   on the same calendar day. Across days it never fires — but the miss is
-  journaled as a `scheduler.tick.missed` event with a reason, so it is
+  journaled as a `zeta.scheduler.tick.missed` event with a reason, so it is
   queryable data, not an absence.
 - **`catchup: latest`**: the single most recent missed occurrence stays
   eligible across days. It fires once, is anchored at schedule activation (an
@@ -85,11 +85,12 @@ real wall-clock time.
    `catchup-latest` agent, dated with the missed occurrence's date (not
    today). The script asserts the count is 1 and fails otherwise.
 6. **The durable record** — the journal holds the whole decision trail:
-   `scheduler.tick.missed` for the default agent (reason: `previous-day tick
-   not backfilled`), `scheduler.tick.published` for the latest agent with
-   reason `latest catch-up` (the runtime states it knew this was a catch-up,
-   not an on-time fire), the `agent.weekly-digest-latest.scheduled` occurrence
-   event whose payload carries the intended occurrence timestamp, and the
+   `zeta.scheduler.tick.missed` for the default agent (reason: `previous-day
+   tick not backfilled`), `zeta.scheduler.tick.published` for the latest agent
+   with reason `latest catch-up` (the runtime states it knew this was a
+   catch-up, not an on-time fire), the
+   `agent.weekly-digest-latest.scheduled` occurrence event whose payload
+   carries the intended occurrence timestamp, and the
    completed run in `zeta ps`. `zeta schedules status` now shows `missed` vs
    `skipped: already published`.
 7. **Idempotence** — a second `zeta run` processes 0 items and `digest.md`

@@ -45,11 +45,11 @@ RUNTIME_PROJECTION_TABLES = frozenset(
         "attempts",
         "attempt_results",
         "locks",
-        "scheduled_events",
+        "deferred_publications",
         "waits",
     }
 )
-ScheduledEventCancellationStatus = Literal[
+DeferredPublicationCancellationStatus = Literal[
     "cancelled",
     "already_cancelled",
     "already_published",
@@ -240,7 +240,7 @@ class RuntimeJournalStore(_SqliteBacked):
             event_type_prefix=event_type_prefix,
         )
 
-    def list_scheduled_events(self) -> list[dict[str, Any]]:
+    def list_deferred_publications(self) -> list[dict[str, Any]]:
         with self.events.write_lock:
             rows = self.connection.execute(
                 """
@@ -248,11 +248,11 @@ class RuntimeJournalStore(_SqliteBacked):
                        source_agent_id, source_session_id, source_run_id,
                        source_queue_item_id, position, created_event_id, status,
                        published_event_id, terminal_event_id, updated_at
-                FROM scheduled_events
+                FROM deferred_publications
                 ORDER BY publish_at_ms ASC, source_queue_item_id ASC, position ASC
                 """
             ).fetchall()
-        return [_row_to_scheduled_event(row) for row in rows]
+        return [_row_to_deferred_publication(row) for row in rows]
 
     def list_waits(self) -> list[dict[str, Any]]:
         with self.events.write_lock:
@@ -283,7 +283,7 @@ class RuntimeJournalStore(_SqliteBacked):
             creator_agent_column = "agent_id"
             creator_session_column = "session_id"
         elif handle.startswith("pub_"):
-            resource_type = "scheduled_event"
+            resource_type = "deferred_publication"
             creator_agent_column = "source_agent_id"
             creator_session_column = "source_session_id"
         else:
@@ -297,7 +297,7 @@ class RuntimeJournalStore(_SqliteBacked):
                 ).fetchone()
             else:
                 row = self.connection.execute(
-                    "SELECT * FROM scheduled_events WHERE handle = ?",
+                    "SELECT * FROM deferred_publications WHERE handle = ?",
                     (handle,),
                 ).fetchone()
             if row is None:
@@ -336,10 +336,10 @@ class RuntimeJournalStore(_SqliteBacked):
                     cancelled_by_session_id=source_session_id,
                 )
             else:
-                cancelled = _scheduled_terminal_event(
+                cancelled = _deferred_publication_terminal_event(
                     row,
-                    event_type="runtime.scheduled_event.cancelled",
-                    idempotency_key=f"scheduled_event.cancelled:{handle}",
+                    event_type="runtime.deferred_publication.cancelled",
+                    idempotency_key=f"deferred_publication.cancelled:{handle}",
                     caused_by=str(row["created_event_id"]),
                     timestamp_ms=cancellation_time,
                     reason=reason,
@@ -357,7 +357,7 @@ class RuntimeJournalStore(_SqliteBacked):
                 event=outcome.event,
             )
 
-    def publish_next_due_scheduled_event(
+    def publish_next_due_deferred_publication(
         self,
         *,
         now_ms: int | None = None,
@@ -371,7 +371,7 @@ class RuntimeJournalStore(_SqliteBacked):
                     SELECT handle, event_type, payload_json, source_agent_id,
                            source_session_id, source_run_id, source_queue_item_id,
                            position, created_event_id
-                    FROM scheduled_events
+                    FROM deferred_publications
                     WHERE status = 'pending'
                       AND publish_at_ms <= ?
                     ORDER BY publish_at_ms ASC, source_queue_item_id ASC, position ASC
@@ -384,7 +384,7 @@ class RuntimeJournalStore(_SqliteBacked):
                     return None
                 claimed = self.connection.execute(
                     """
-                    UPDATE scheduled_events
+                    UPDATE deferred_publications
                     SET status = 'claimed', updated_at = ?
                     WHERE handle = ? AND status = 'pending'
                     """,
@@ -393,13 +393,13 @@ class RuntimeJournalStore(_SqliteBacked):
                 if claimed.rowcount != 1:
                     self.connection.rollback()
                     return None
-                requested = _scheduled_requested_event(row, publication_time)
+                requested = _deferred_publication_event(row, publication_time)
                 requested = self.events.append_in_transaction(requested).event
                 self._match_waits(requested)
-                published = _scheduled_terminal_event(
+                published = _deferred_publication_terminal_event(
                     row,
-                    event_type="runtime.scheduled_event.published",
-                    idempotency_key=f"scheduled_event.published:{row['handle']}",
+                    event_type="runtime.deferred_publication.published",
+                    idempotency_key=f"deferred_publication.published:{row['handle']}",
                     caused_by=requested.id,
                     timestamp_ms=publication_time,
                     published_event_id=requested.id,
@@ -452,12 +452,12 @@ class RuntimeJournalStore(_SqliteBacked):
                 self.connection.rollback()
                 raise
 
-    def cancel_scheduled_event(
+    def cancel_deferred_publication(
         self,
         handle: str,
         *,
         now_ms: int | None = None,
-    ) -> ScheduledEventCancellationStatus:
+    ) -> DeferredPublicationCancellationStatus:
         cancellation_time = _now_ms(now_ms)
         with self.events.write_lock:
             self.events.begin_immediate()
@@ -466,7 +466,7 @@ class RuntimeJournalStore(_SqliteBacked):
                     """
                     SELECT handle, source_agent_id, source_session_id, source_run_id,
                            source_queue_item_id, position, created_event_id, status
-                    FROM scheduled_events
+                    FROM deferred_publications
                     WHERE handle = ?
                     """,
                     (handle,),
@@ -482,21 +482,25 @@ class RuntimeJournalStore(_SqliteBacked):
                     self.connection.commit()
                     return "already_published"
                 if status != "pending":
-                    raise RuntimeError(f"invalid scheduled event status {status!r}")
+                    raise RuntimeError(
+                        f"invalid deferred publication status {status!r}"
+                    )
                 claimed = self.connection.execute(
                     """
-                    UPDATE scheduled_events
+                    UPDATE deferred_publications
                     SET status = 'claimed', updated_at = ?
                     WHERE handle = ? AND status = 'pending'
                     """,
                     (cancellation_time, handle),
                 )
                 if claimed.rowcount != 1:
-                    raise RuntimeError(f"failed to claim scheduled event {handle!r}")
-                cancelled = _scheduled_terminal_event(
+                    raise RuntimeError(
+                        f"failed to claim deferred publication {handle!r}"
+                    )
+                cancelled = _deferred_publication_terminal_event(
                     row,
-                    event_type="runtime.scheduled_event.cancelled",
-                    idempotency_key=f"scheduled_event.cancelled:{handle}",
+                    event_type="runtime.deferred_publication.cancelled",
+                    idempotency_key=f"deferred_publication.cancelled:{handle}",
                     caused_by=str(row["created_event_id"]),
                     timestamp_ms=cancellation_time,
                 )
@@ -1471,8 +1475,8 @@ class RuntimeEventStore:
             session_id, event_type_prefix=event_type_prefix
         )
 
-    def list_scheduled_events(self) -> list[dict[str, Any]]:
-        return self._journal.list_scheduled_events()
+    def list_deferred_publications(self) -> list[dict[str, Any]]:
+        return self._journal.list_deferred_publications()
 
     def list_waits(self) -> list[dict[str, Any]]:
         return self._journal.list_waits()
@@ -1487,12 +1491,12 @@ class RuntimeEventStore:
     def session_status(self, session_id: str) -> dict[str, Any]:
         return session_record(self.list_sessions(), session_id)
 
-    def publish_next_due_scheduled_event(
+    def publish_next_due_deferred_publication(
         self,
         *,
         now_ms: int | None = None,
     ) -> Event | None:
-        return self._journal.publish_next_due_scheduled_event(now_ms=now_ms)
+        return self._journal.publish_next_due_deferred_publication(now_ms=now_ms)
 
     def timeout_next_due_wait(
         self,
@@ -1501,13 +1505,13 @@ class RuntimeEventStore:
     ) -> Event | None:
         return self._journal.timeout_next_due_wait(now_ms=now_ms)
 
-    def cancel_scheduled_event(
+    def cancel_deferred_publication(
         self,
         handle: str,
         *,
         now_ms: int | None = None,
-    ) -> ScheduledEventCancellationStatus:
-        return self._journal.cancel_scheduled_event(handle, now_ms=now_ms)
+    ) -> DeferredPublicationCancellationStatus:
+        return self._journal.cancel_deferred_publication(handle, now_ms=now_ms)
 
     def cancel_resource(
         self,
@@ -1690,7 +1694,7 @@ class RuntimeEventStore:
         return self._journal.observe_runtime_metric(name, value, **attributes)
 
 
-def _row_to_scheduled_event(row: sqlite3.Row) -> dict[str, Any]:
+def _row_to_deferred_publication(row: sqlite3.Row) -> dict[str, Any]:
     return {
         "handle": str(row["handle"]),
         "event_type": str(row["event_type"]),
@@ -1835,7 +1839,7 @@ def _wait_cancelled_event(
     return replace(Event.from_draft(draft), timestamp_ms=timestamp_ms)
 
 
-def _scheduled_requested_event(row: sqlite3.Row, timestamp_ms: int) -> Event:
+def _deferred_publication_event(row: sqlite3.Row, timestamp_ms: int) -> Event:
     draft = DraftEvent(
         event_type=str(row["event_type"]),
         source=f"agent:{row['source_agent_id']}",
@@ -1850,7 +1854,7 @@ def _scheduled_requested_event(row: sqlite3.Row, timestamp_ms: int) -> Event:
     return replace(Event.from_draft(draft), timestamp_ms=timestamp_ms)
 
 
-def _scheduled_terminal_event(
+def _deferred_publication_terminal_event(
     row: sqlite3.Row,
     *,
     event_type: str,

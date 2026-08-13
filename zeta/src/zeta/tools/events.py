@@ -55,7 +55,7 @@ WAIT_FOR_SPEC = Capability(
 
 CANCEL_SPEC = Capability(
     CapabilityId("zeta", "cancel"),
-    "Cancel an active wait or pending scheduled event from this session.",
+    "Cancel an active wait or pending deferred publication from this session.",
     {
         "type": "object",
         "required": ["handle"],

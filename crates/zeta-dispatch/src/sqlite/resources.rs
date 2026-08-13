@@ -8,8 +8,8 @@ use zeta_journal::Event;
 use super::journal::{append_runtime_event, entry_by_field, validate_distinct_runtime_identities};
 use super::{corrupt_projection, database_error, Dispatch, DispatchError};
 use crate::dispatch::{
-    ResourceCancellationOutcome, ResourceCancellationStatus, ResourceKind, RuntimeEventIdentity,
-    ScheduledEvent, ScheduledEventStatus, Wait, WaitStatus,
+    DeferredPublication, DeferredPublicationStatus, ResourceCancellationOutcome,
+    ResourceCancellationStatus, ResourceKind, RuntimeEventIdentity, Wait, WaitStatus,
 };
 use crate::identity::{queue_item_id, queue_item_idempotency_key, QueueItemId, RunId, SessionId};
 use crate::state::QueueItemStatus;
@@ -25,14 +25,14 @@ impl Dispatch {
         load_waits(&self.connection)
     }
 
-    /// Returns durable scheduled publications in due-time order.
+    /// Returns durable deferred publications in due-time order.
     ///
     /// # Errors
     ///
     /// Returns [`DispatchError`] when a projection row cannot be read or
     /// rehydrated as the public typed model.
-    pub fn list_scheduled_events(&self) -> Result<Vec<ScheduledEvent>, DispatchError> {
-        load_scheduled_events(&self.connection)
+    pub fn list_deferred_publications(&self) -> Result<Vec<DeferredPublication>, DispatchError> {
+        load_deferred_publications(&self.connection)
     }
 
     /// Resumes every active wait matched by one retained external event.
@@ -163,17 +163,18 @@ impl Dispatch {
         Ok(outcome)
     }
 
-    /// Publishes the oldest pending scheduled event whose due time has passed.
+    /// Publishes the oldest pending deferred publication whose due time has passed.
     ///
-    /// The published event, any wait resumptions it triggers, and the schedule
-    /// terminal fact share one transaction. `None` means no schedule is due.
+    /// The published event, any wait resumptions it triggers, and the
+    /// publication terminal fact share one transaction. `None` means no
+    /// publication is due.
     ///
     /// # Errors
     ///
     /// Returns [`DispatchError`] when explicit identities do not cover the
     /// publication, every wait continuation, and the terminal fact, or when
     /// the complete transaction cannot be persisted.
-    pub fn publish_next_due_scheduled_event(
+    pub fn publish_next_due_deferred_publication(
         &mut self,
         now_ms: i64,
         identities: &[RuntimeEventIdentity],
@@ -181,17 +182,17 @@ impl Dispatch {
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(|database| database_error("begin scheduled publication", database))?;
-        let Some(scheduled) = next_due_scheduled_event(&transaction, now_ms)? else {
+            .map_err(|database| database_error("begin deferred publication", database))?;
+        let Some(publication) = next_due_deferred_publication(&transaction, now_ms)? else {
             if !identities.is_empty() {
                 return Err(DispatchError::RuntimeEventIdentityCount {
                     expected: 0,
                     actual: identities.len(),
                 });
             }
-            transaction
-                .commit()
-                .map_err(|database| database_error("commit empty schedule poll", database))?;
+            transaction.commit().map_err(|database| {
+                database_error("commit empty deferred publication poll", database)
+            })?;
             return Ok(None);
         };
         if identities.len() < 2 {
@@ -200,7 +201,7 @@ impl Dispatch {
                 actual: identities.len(),
             });
         }
-        let published = scheduled_publication_event(&identities[0], &scheduled);
+        let published = deferred_publication_event(&identities[0], &publication);
         let waits = matching_waits(&transaction, &published)?;
         let expected_identities = 2 + waits.len() * 2;
         if identities.len() != expected_identities {
@@ -222,12 +223,15 @@ impl Dispatch {
             let continuation = append_runtime_event(&transaction, continuation)?.event;
             events.extend([matched, continuation]);
         }
-        let terminal =
-            scheduled_published_event(&identities[identities.len() - 1], &scheduled, &published);
+        let terminal = deferred_publication_published_event(
+            &identities[identities.len() - 1],
+            &publication,
+            &published,
+        );
         events.push(append_runtime_event(&transaction, terminal)?.event);
         transaction
             .commit()
-            .map_err(|database| database_error("commit scheduled publication", database))?;
+            .map_err(|database| database_error("commit deferred publication", database))?;
         Ok(Some(events))
     }
 }
@@ -283,7 +287,7 @@ pub(super) fn resource_kind_for_handle(handle: &str) -> Result<ResourceKind, Dis
         return Ok(ResourceKind::Wait);
     }
     if handle.starts_with("pub_") {
-        return Ok(ResourceKind::ScheduledEvent);
+        return Ok(ResourceKind::DeferredPublication);
     }
     Err(DispatchError::InvalidCancellationHandle {
         handle: handle.to_owned(),
@@ -351,31 +355,34 @@ pub(super) fn cancel_resource_in_transaction(
                 )),
             }
         }
-        ResourceKind::ScheduledEvent => {
-            let Some(scheduled) = load_scheduled_event(transaction, handle)? else {
+        ResourceKind::DeferredPublication => {
+            let Some(publication) = load_deferred_publication(transaction, handle)? else {
                 return Err(DispatchError::CancellationResourceNotFound {
                     handle: handle.to_owned(),
                 });
             };
             authorize_resource_cancellation(
                 handle,
-                &scheduled.source_agent_id,
-                scheduled.source_session_id.as_ref().map(SessionId::as_str),
+                &publication.source_agent_id,
+                publication
+                    .source_session_id
+                    .as_ref()
+                    .map(SessionId::as_str),
                 source_agent_id,
                 source_session_id,
             )?;
-            match scheduled.status {
-                ScheduledEventStatus::Pending => {
-                    let event = scheduled_cancelled_event(
+            match publication.status {
+                DeferredPublicationStatus::Pending => {
+                    let event = deferred_publication_cancelled_event(
                         identity,
-                        &scheduled,
+                        &publication,
                         reason,
                         source_agent_id,
                         source_session_id,
                     );
                     let event = append_runtime_event(transaction, event)?;
                     if !event.inserted {
-                        return Err(corrupt_projection("scheduled_events", "status"));
+                        return Err(corrupt_projection("deferred_publications", "status"));
                     }
                     Ok(ResourceCancellationOutcome {
                         handle: handle.to_owned(),
@@ -385,18 +392,18 @@ pub(super) fn cancel_resource_in_transaction(
                         event: Some(event.event),
                     })
                 }
-                ScheduledEventStatus::Published => Ok(terminal_resource_cancellation(
+                DeferredPublicationStatus::Published => Ok(terminal_resource_cancellation(
                     handle,
                     resource_kind,
                     ResourceCancellationStatus::Published,
                 )),
-                ScheduledEventStatus::Cancelled => Ok(terminal_resource_cancellation(
+                DeferredPublicationStatus::Cancelled => Ok(terminal_resource_cancellation(
                     handle,
                     resource_kind,
                     ResourceCancellationStatus::Cancelled,
                 )),
-                ScheduledEventStatus::Claimed => {
-                    Err(corrupt_projection("scheduled_events", "status"))
+                DeferredPublicationStatus::Claimed => {
+                    Err(corrupt_projection("deferred_publications", "status"))
                 }
             }
         }
@@ -454,25 +461,27 @@ fn next_due_wait(connection: &Connection, now_ms: i64) -> Result<Option<Wait>, D
     stored.map(StoredWait::into_model).transpose()
 }
 
-fn next_due_scheduled_event(
+fn next_due_deferred_publication(
     connection: &Connection,
     now_ms: i64,
-) -> Result<Option<ScheduledEvent>, DispatchError> {
+) -> Result<Option<DeferredPublication>, DispatchError> {
     let sql = format!(
-        "SELECT {SCHEDULED_EVENT_COLUMNS}
-         FROM scheduled_events AS scheduled
+        "SELECT {DEFERRED_PUBLICATION_COLUMNS}
+         FROM deferred_publications AS publication
          JOIN journal_entries AS created
-           ON created.event_id = scheduled.created_event_id
-         WHERE scheduled.status = 'pending' AND scheduled.publish_at_ms <= ?1
-         ORDER BY scheduled.publish_at_ms ASC, created.cursor ASC,
-                  scheduled.handle ASC
+           ON created.event_id = publication.created_event_id
+         WHERE publication.status = 'pending' AND publication.publish_at_ms <= ?1
+         ORDER BY publication.publish_at_ms ASC, created.cursor ASC,
+                  publication.handle ASC
          LIMIT 1"
     );
     let stored = connection
-        .query_row(&sql, params![now_ms], StoredScheduledEvent::from_row)
+        .query_row(&sql, params![now_ms], StoredDeferredPublication::from_row)
         .optional()
-        .map_err(|database| database_error("read next due scheduled event", database))?;
-    stored.map(StoredScheduledEvent::into_model).transpose()
+        .map_err(|database| database_error("read next due deferred publication", database))?;
+    stored
+        .map(StoredDeferredPublication::into_model)
+        .transpose()
 }
 
 fn wait_matched_event(identity: &RuntimeEventIdentity, wait: &Wait, input: &Event) -> Event {
@@ -658,87 +667,96 @@ fn wait_continuation_event(identity: &RuntimeEventIdentity, wait: &Wait, matched
     }
 }
 
-fn scheduled_publication_event(
+fn deferred_publication_event(
     identity: &RuntimeEventIdentity,
-    scheduled: &ScheduledEvent,
+    publication: &DeferredPublication,
 ) -> Event {
     Event {
         id: identity.id().to_owned(),
-        event_type: scheduled.event_type.clone(),
-        source: format!("agent:{}", scheduled.source_agent_id),
-        payload: scheduled.payload.clone(),
+        event_type: publication.event_type.clone(),
+        source: format!("agent:{}", publication.source_agent_id),
+        payload: publication.payload.clone(),
         idempotency_key: Some(format!(
             "agent.publish:{}:{}",
-            scheduled.source_queue_item_id, scheduled.position
+            publication.source_queue_item_id, publication.position
         )),
-        caused_by: Some(scheduled.created_event_id.clone()),
-        session_id: scheduled
+        caused_by: Some(publication.created_event_id.clone()),
+        session_id: publication
             .source_session_id
             .as_ref()
             .map(ToString::to_string),
-        run_id: scheduled.source_run_id.as_ref().map(ToString::to_string),
+        run_id: publication.source_run_id.as_ref().map(ToString::to_string),
         turn_id: None,
         timestamp_ms: identity.timestamp_ms(),
         cursor: None,
     }
 }
 
-fn scheduled_published_event(
+fn deferred_publication_published_event(
     identity: &RuntimeEventIdentity,
-    scheduled: &ScheduledEvent,
+    publication: &DeferredPublication,
     published: &Event,
 ) -> Event {
     let mut payload = Map::new();
-    payload.insert("handle".to_owned(), Value::String(scheduled.handle.clone()));
+    payload.insert(
+        "handle".to_owned(),
+        Value::String(publication.handle.clone()),
+    );
     payload.insert(
         "source_agent_id".to_owned(),
-        Value::String(scheduled.source_agent_id.clone()),
+        Value::String(publication.source_agent_id.clone()),
     );
     payload.insert(
         "source_queue_item_id".to_owned(),
-        Value::String(scheduled.source_queue_item_id.to_string()),
+        Value::String(publication.source_queue_item_id.to_string()),
     );
-    payload.insert("position".to_owned(), Value::from(scheduled.position));
+    payload.insert("position".to_owned(), Value::from(publication.position));
     payload.insert(
         "published_event_id".to_owned(),
         Value::String(published.id.clone()),
     );
     Event {
         id: identity.id().to_owned(),
-        event_type: "runtime.scheduled_event.published".to_owned(),
+        event_type: "runtime.deferred_publication.published".to_owned(),
         source: "zeta".to_owned(),
         payload,
-        idempotency_key: Some(format!("scheduled_event.published:{}", scheduled.handle)),
+        idempotency_key: Some(format!(
+            "deferred_publication.published:{}",
+            publication.handle
+        )),
         caused_by: Some(published.id.clone()),
-        session_id: scheduled
+        session_id: publication
             .source_session_id
             .as_ref()
             .map(ToString::to_string),
-        run_id: scheduled.source_run_id.as_ref().map(ToString::to_string),
+        run_id: publication.source_run_id.as_ref().map(ToString::to_string),
         turn_id: published.turn_id.clone(),
         timestamp_ms: identity.timestamp_ms(),
         cursor: None,
     }
 }
 
-fn scheduled_cancelled_event(
+fn deferred_publication_cancelled_event(
     identity: &RuntimeEventIdentity,
-    scheduled: &ScheduledEvent,
+    publication: &DeferredPublication,
     reason: Option<&str>,
     source_agent_id: Option<&str>,
     source_session_id: Option<&str>,
 ) -> Event {
     let mut payload = Map::new();
-    payload.insert("handle".to_owned(), Value::String(scheduled.handle.clone()));
+    payload.insert(
+        "handle".to_owned(),
+        Value::String(publication.handle.clone()),
+    );
     payload.insert(
         "source_agent_id".to_owned(),
-        Value::String(scheduled.source_agent_id.clone()),
+        Value::String(publication.source_agent_id.clone()),
     );
     payload.insert(
         "source_queue_item_id".to_owned(),
-        Value::String(scheduled.source_queue_item_id.to_string()),
+        Value::String(publication.source_queue_item_id.to_string()),
     );
-    payload.insert("position".to_owned(), Value::from(scheduled.position));
+    payload.insert("position".to_owned(), Value::from(publication.position));
     if let Some(reason) = reason {
         payload.insert("reason".to_owned(), Value::String(reason.to_owned()));
     }
@@ -756,16 +774,19 @@ fn scheduled_cancelled_event(
     }
     Event {
         id: identity.id().to_owned(),
-        event_type: "runtime.scheduled_event.cancelled".to_owned(),
+        event_type: "runtime.deferred_publication.cancelled".to_owned(),
         source: "zeta".to_owned(),
         payload,
-        idempotency_key: Some(format!("scheduled_event.cancelled:{}", scheduled.handle)),
-        caused_by: Some(scheduled.created_event_id.clone()),
-        session_id: scheduled
+        idempotency_key: Some(format!(
+            "deferred_publication.cancelled:{}",
+            publication.handle
+        )),
+        caused_by: Some(publication.created_event_id.clone()),
+        session_id: publication
             .source_session_id
             .as_ref()
             .map(ToString::to_string),
-        run_id: scheduled.source_run_id.as_ref().map(ToString::to_string),
+        run_id: publication.source_run_id.as_ref().map(ToString::to_string),
         turn_id: None,
         timestamp_ms: identity.timestamp_ms(),
         cursor: None,
@@ -878,54 +899,59 @@ impl StoredWait {
     }
 }
 
-const SCHEDULED_EVENT_COLUMNS: &str = "scheduled.handle,
-    scheduled.event_type, scheduled.payload_json, scheduled.publish_at_ms,
-    scheduled.source_agent_id, scheduled.source_session_id,
-    scheduled.source_run_id, scheduled.source_queue_item_id,
-    scheduled.position, scheduled.created_event_id, scheduled.status,
-    scheduled.published_event_id, scheduled.terminal_event_id,
-    scheduled.updated_at";
+const DEFERRED_PUBLICATION_COLUMNS: &str = "publication.handle,
+    publication.event_type, publication.payload_json, publication.publish_at_ms,
+    publication.source_agent_id, publication.source_session_id,
+    publication.source_run_id, publication.source_queue_item_id,
+    publication.position, publication.created_event_id, publication.status,
+    publication.published_event_id, publication.terminal_event_id,
+    publication.updated_at";
 
-fn load_scheduled_event(
+fn load_deferred_publication(
     connection: &Connection,
     handle: &str,
-) -> Result<Option<ScheduledEvent>, DispatchError> {
+) -> Result<Option<DeferredPublication>, DispatchError> {
     let sql = format!(
-        "SELECT {SCHEDULED_EVENT_COLUMNS}
-         FROM scheduled_events AS scheduled
-         WHERE scheduled.handle = ?1"
+        "SELECT {DEFERRED_PUBLICATION_COLUMNS}
+         FROM deferred_publications AS publication
+         WHERE publication.handle = ?1"
     );
     let stored = connection
-        .query_row(&sql, params![handle], StoredScheduledEvent::from_row)
+        .query_row(&sql, params![handle], StoredDeferredPublication::from_row)
         .optional()
-        .map_err(|database| database_error("read scheduled event", database))?;
-    stored.map(StoredScheduledEvent::into_model).transpose()
+        .map_err(|database| database_error("read deferred publication", database))?;
+    stored
+        .map(StoredDeferredPublication::into_model)
+        .transpose()
 }
 
-fn load_scheduled_events(connection: &Connection) -> Result<Vec<ScheduledEvent>, DispatchError> {
+fn load_deferred_publications(
+    connection: &Connection,
+) -> Result<Vec<DeferredPublication>, DispatchError> {
     let sql = format!(
-        "SELECT {SCHEDULED_EVENT_COLUMNS}
-         FROM scheduled_events AS scheduled
+        "SELECT {DEFERRED_PUBLICATION_COLUMNS}
+         FROM deferred_publications AS publication
          JOIN journal_entries AS created
-           ON created.event_id = scheduled.created_event_id
-         ORDER BY scheduled.publish_at_ms ASC, created.cursor ASC,
-                  scheduled.handle ASC"
+           ON created.event_id = publication.created_event_id
+         ORDER BY publication.publish_at_ms ASC, created.cursor ASC,
+                  publication.handle ASC"
     );
     let mut statement = connection
         .prepare(&sql)
-        .map_err(|database| database_error("prepare scheduled event read", database))?;
+        .map_err(|database| database_error("prepare deferred publication read", database))?;
     let rows = statement
-        .query_map([], StoredScheduledEvent::from_row)
-        .map_err(|database| database_error("read scheduled events", database))?;
-    let mut scheduled_events = Vec::new();
+        .query_map([], StoredDeferredPublication::from_row)
+        .map_err(|database| database_error("read deferred publications", database))?;
+    let mut publications = Vec::new();
     for row in rows {
-        let stored = row.map_err(|database| database_error("read scheduled event", database))?;
-        scheduled_events.push(stored.into_model()?);
+        let stored =
+            row.map_err(|database| database_error("read deferred publication", database))?;
+        publications.push(stored.into_model()?);
     }
-    Ok(scheduled_events)
+    Ok(publications)
 }
 
-struct StoredScheduledEvent {
+struct StoredDeferredPublication {
     handle: String,
     event_type: String,
     payload_json: String,
@@ -942,9 +968,9 @@ struct StoredScheduledEvent {
     updated_at: i64,
 }
 
-impl StoredScheduledEvent {
+impl StoredDeferredPublication {
     fn from_row(row: &Row<'_>) -> rusqlite::Result<Self> {
-        Ok(StoredScheduledEvent {
+        Ok(StoredDeferredPublication {
             handle: row.get(0)?,
             event_type: row.get(1)?,
             payload_json: row.get(2)?,
@@ -962,33 +988,35 @@ impl StoredScheduledEvent {
         })
     }
 
-    fn into_model(self) -> Result<ScheduledEvent, DispatchError> {
+    fn into_model(self) -> Result<DeferredPublication, DispatchError> {
         let payload = match serde_json::from_str(&self.payload_json) {
             Ok(Value::Object(payload)) => payload,
-            _ => return Err(corrupt_projection("scheduled_events", "payload_json")),
+            _ => return Err(corrupt_projection("deferred_publications", "payload_json")),
         };
         let source_session_id = self
             .source_session_id
             .map(|value| SessionId::from_str(&value))
             .transpose()
-            .map_err(|_error| corrupt_projection("scheduled_events", "source_session_id"))?;
+            .map_err(|_error| corrupt_projection("deferred_publications", "source_session_id"))?;
         let source_run_id = self
             .source_run_id
             .map(|value| RunId::from_str(&value))
             .transpose()
-            .map_err(|_error| corrupt_projection("scheduled_events", "source_run_id"))?;
-        let source_queue_item_id = QueueItemId::from_str(&self.source_queue_item_id)
-            .map_err(|_error| corrupt_projection("scheduled_events", "source_queue_item_id"))?;
+            .map_err(|_error| corrupt_projection("deferred_publications", "source_run_id"))?;
+        let source_queue_item_id =
+            QueueItemId::from_str(&self.source_queue_item_id).map_err(|_error| {
+                corrupt_projection("deferred_publications", "source_queue_item_id")
+            })?;
         let position = u64::try_from(self.position)
-            .map_err(|_error| corrupt_projection("scheduled_events", "position"))?;
+            .map_err(|_error| corrupt_projection("deferred_publications", "position"))?;
         let status = match self.status.as_str() {
-            "pending" => ScheduledEventStatus::Pending,
-            "claimed" => ScheduledEventStatus::Claimed,
-            "published" => ScheduledEventStatus::Published,
-            "cancelled" => ScheduledEventStatus::Cancelled,
-            _ => return Err(corrupt_projection("scheduled_events", "status")),
+            "pending" => DeferredPublicationStatus::Pending,
+            "claimed" => DeferredPublicationStatus::Claimed,
+            "published" => DeferredPublicationStatus::Published,
+            "cancelled" => DeferredPublicationStatus::Cancelled,
+            _ => return Err(corrupt_projection("deferred_publications", "status")),
         };
-        Ok(ScheduledEvent {
+        Ok(DeferredPublication {
             handle: self.handle,
             event_type: self.event_type,
             payload,

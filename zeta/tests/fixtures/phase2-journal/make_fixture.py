@@ -37,7 +37,7 @@ PROJECTION_TABLES = (
     "queue_items",
     "attempts",
     "attempt_results",
-    "scheduled_events",
+    "deferred_publications",
     "waits",
     "session_mappings",
 )

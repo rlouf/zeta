@@ -1996,8 +1996,8 @@ Handle the work.
     )
     initial.events.append(
         Event(
-            id="scheduled-created",
-            event_type="runtime.scheduled_event.created",
+            id="deferred-publication-created",
+            event_type="runtime.deferred_publication.created",
             source="zeta",
             payload={
                 "handle": "publication-restart",
@@ -2009,7 +2009,7 @@ Handle the work.
                 "source_queue_item_id": "qi-source",
                 "position": 0,
             },
-            idempotency_key="agent.schedule:qi-source:0",
+            idempotency_key="agent.defer:qi-source:0",
             caused_by="attempt-completed",
             session_id="session-1",
             run_id="run-1",
@@ -2027,10 +2027,10 @@ Handle the work.
             message = runner.run(harness_worker.run_once(runtime))
             requested = runtime.events.list_events(Filter(event_type="work.ready"))[0]
             published = runtime.events.list_events(
-                Filter(event_type="runtime.scheduled_event.published")
+                Filter(event_type="runtime.deferred_publication.published")
             )
             queue_items = runtime.events.list_queue_items()
-            scheduled = runtime.events.list_scheduled_events()
+            deferred_publications = runtime.events.list_deferred_publications()
         finally:
             runner.run(runtime.aclose())
 
@@ -2038,7 +2038,7 @@ Handle the work.
     assert requested.payload == {"work_id": "work-1"}
     assert len(published) == 1
     assert published[0].payload["published_event_id"] == requested.id
-    assert scheduled[0]["status"] == "published"
+    assert deferred_publications[0]["status"] == "published"
     assert any(
         item["event_id"] == requested.id
         and item["target_agent"] == "worker"

@@ -75,7 +75,6 @@ TERMINAL_QUEUE_ITEM_EVENT_TYPES = {
 NON_QUEUEABLE_EVENT_PREFIXES = (
     "runtime.",
     "zeta.",
-    "scheduler.tick.",
 )
 
 

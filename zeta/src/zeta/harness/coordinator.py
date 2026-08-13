@@ -558,7 +558,7 @@ class AttemptCoordinator:
                 )
             )
         return self.lifecycle.append(
-            "runtime.scheduled_event.created",
+            "runtime.deferred_publication.created",
             completed_attempt,
             {
                 "handle": request["handle"],
@@ -570,7 +570,7 @@ class AttemptCoordinator:
                 "source_queue_item_id": queue_item_id,
                 "position": position,
             },
-            idempotency_key=f"agent.schedule:{queue_item_id}:{position}",
+            idempotency_key=f"agent.defer:{queue_item_id}:{position}",
             session_id=session_id,
             run_id=run_id,
         )

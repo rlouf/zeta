@@ -23,7 +23,7 @@ from zeta.journal.sqlite import event_store_path
 from zeta.journal.store import EventReader, EventWriter, Filter
 from zeta.paths import resolve_state_dir
 
-SCHEDULER_TICK_PREFIX = "scheduler.tick."
+SCHEDULER_TICK_PREFIX = "zeta.scheduler.tick."
 
 
 @dataclass(frozen=True)
@@ -139,12 +139,24 @@ def request_due_schedules(
                 continue
             draft = schedule_event_draft(spec, schedule, scheduled_time)
             outcome = event_sink.accept(draft)
-            status = "published" if outcome.inserted else "skipped"
+            missing_decision = (
+                not outcome.inserted
+                and isinstance(event_sink, EventReader)
+                and not schedule_tick_recorded(
+                    event_sink,
+                    spec,
+                    schedule_index,
+                    schedule,
+                    scheduled_time,
+                )
+            )
+            published = outcome.inserted or missing_decision
+            status = "published" if published else "skipped"
             reason = (
                 schedule_tick_reason(
                     scheduled_time, schedule_current_time(schedule, current)
                 )
-                if outcome.inserted
+                if published
                 else "already published"
             )
             event_sink.accept(

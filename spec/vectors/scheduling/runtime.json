@@ -1,0 +1,112 @@
+{
+  "format": "zeta-scheduling-runtime-v0",
+  "recurring_schedules": [
+    {
+      "name": "latest_catchup_activates_before_publishing",
+      "agent_id": "reporter",
+      "schedule": {
+        "cron": "* * * * *",
+        "timezone": "UTC",
+        "catchup": "latest"
+      },
+      "ticks": [
+        "2026-08-12T10:05:30+00:00",
+        "2026-08-12T10:06:10+00:00"
+      ],
+      "expected": {
+        "published_per_tick": [
+          1,
+          1
+        ],
+        "events": [
+          {
+            "alias": "$activation",
+            "type": "zeta.scheduler.tick.activated",
+            "idempotency_key": "scheduler:activated:reporter:0:* * * * *:UTC:latest",
+            "caused_by": null,
+            "payload": {
+              "agent": "reporter",
+              "schedule_index": 0,
+              "event_type": "agent.reporter.scheduled",
+              "cron": "* * * * *",
+              "timezone": "UTC",
+              "catchup": "latest",
+              "observed_at": "2026-08-12T10:05:30+00:00",
+              "status": "activated",
+              "reason": "schedule first observed"
+            }
+          },
+          {
+            "alias": "$scheduled_1",
+            "type": "agent.reporter.scheduled",
+            "idempotency_key": "schedule:reporter:* * * * *:2026-08-12T10:05:00+00:00",
+            "caused_by": null,
+            "payload": {
+              "date": "2026-08-12",
+              "timestamp": "2026-08-12T10:05:00+00:00"
+            }
+          },
+          {
+            "alias": "$decision_1",
+            "type": "zeta.scheduler.tick.published",
+            "idempotency_key": "scheduler:published:reporter:0:* * * * *:UTC:2026-08-12T10:05:00+00:00",
+            "caused_by": "$scheduled_1",
+            "payload": {
+              "agent": "reporter",
+              "schedule_index": 0,
+              "event_type": "agent.reporter.scheduled",
+              "cron": "* * * * *",
+              "timezone": "UTC",
+              "scheduled_at": "2026-08-12T10:05:00+00:00",
+              "observed_at": "2026-08-12T10:05:30+00:00",
+              "next_at": "2026-08-12T10:06:00+00:00",
+              "status": "published",
+              "reason": "due now",
+              "published_event_id": "$scheduled_1"
+            }
+          },
+          {
+            "alias": "$scheduled_2",
+            "type": "agent.reporter.scheduled",
+            "idempotency_key": "schedule:reporter:* * * * *:2026-08-12T10:06:00+00:00",
+            "caused_by": null,
+            "payload": {
+              "date": "2026-08-12",
+              "timestamp": "2026-08-12T10:06:00+00:00"
+            }
+          },
+          {
+            "alias": "$decision_2",
+            "type": "zeta.scheduler.tick.published",
+            "idempotency_key": "scheduler:published:reporter:0:* * * * *:UTC:2026-08-12T10:06:00+00:00",
+            "caused_by": "$scheduled_2",
+            "payload": {
+              "agent": "reporter",
+              "schedule_index": 0,
+              "event_type": "agent.reporter.scheduled",
+              "cron": "* * * * *",
+              "timezone": "UTC",
+              "scheduled_at": "2026-08-12T10:06:00+00:00",
+              "observed_at": "2026-08-12T10:06:10+00:00",
+              "next_at": "2026-08-12T10:07:00+00:00",
+              "status": "published",
+              "reason": "due now",
+              "published_event_id": "$scheduled_2"
+            }
+          }
+        ],
+        "read_model": [
+          {
+            "agent": "reporter",
+            "cron": "* * * * *",
+            "timezone": "UTC",
+            "status": "published",
+            "last_published_at": "2026-08-12T10:06:00+00:00",
+            "next_at": "2026-08-12T10:07:00+00:00",
+            "reason": "due now"
+          }
+        ]
+      }
+    }
+  ]
+}

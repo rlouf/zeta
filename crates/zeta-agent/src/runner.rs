@@ -971,7 +971,7 @@ impl CapabilitySet {
             set.add_internal(
                 "cancel",
                 "zeta.cancel",
-                "Cancel an active wait or pending scheduled event from this session.",
+                "Cancel an active wait or pending deferred publication from this session.",
                 object(json!({
                     "type": "object",
                     "required": ["handle"],

@@ -17,7 +17,7 @@ from zeta.harness.metrics import MetricAttribute
 from zeta.journal.store import Filter
 from zeta.journal.types import AppendOutcome
 
-CancellationResourceType = Literal["wait", "scheduled_event"]
+CancellationResourceType = Literal["wait", "deferred_publication"]
 CancellationStatus = Literal["cancelled", "matched", "timed_out", "published"]
 QueueItemCancellationStatus = Literal[
     "cancelling",

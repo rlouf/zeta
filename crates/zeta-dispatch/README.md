@@ -65,10 +65,10 @@ cancelled.
 Matching an external event consumes every compatible active wait and creates
 its session continuation atomically. Deadline expiry likewise records the wait
 timeout and continuation together. Authorized resource cancellation competes
-with wait matching, expiry, and scheduled publication under the same immediate
+with wait matching, expiry, and deferred publication under the same immediate
 transaction; whichever terminal fact commits first is retained on retries.
-Publishing a due scheduled event also matches waits in the same transaction
-before recording the schedule's terminal fact.
+Publishing a due deferred publication also matches waits in the same
+transaction before recording the publication's terminal fact.
 
 Session catalog reads are derived from queue, attempt, and wait projections so
 replay cannot disagree with a separate session table. Activity follows the
@@ -85,11 +85,11 @@ and domain-separated hashing as the Rust agent. A started or ambiguous
 `unsafe_to_retry` effect remains discoverable after projection rebuild so a
 later attempt can dead-letter the item without repeating the external call.
 
-Recurring cron and catch-up evaluation remain an authoring/runner concern.
-Dispatch accepts one already-resolved occurrence plus an optional explicit
-activation fact, then atomically records that batch with the external scheduled
-event and scheduler decision. Occurrence keys make repeated ticks safe and the
-decision projection makes rebuild exact.
+Recurring cron, timezone, catch-up, and scheduler audit facts remain an
+authoring/runner concern. A scheduler submits `agent.<slug>.scheduled` as
+ordinary application ingress, so routing, wait matching, idempotency, and
+recovery use the same Dispatch path as connector events. Dispatch does not
+parse calendar policy or maintain a recurring-schedule projection.
 
 `ingest_event` is the external authority boundary. `append_event` is the
 lower-level trusted journal adapter used for runtime-owned lifecycle facts and

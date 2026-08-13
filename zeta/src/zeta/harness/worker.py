@@ -259,7 +259,7 @@ def build_worker_services(
 async def run_once(runtime: WorkerServices) -> str:
     record_project_snapshot(runtime.events, runtime.project_snapshot)
     publish_due_schedules(runtime)
-    runtime.events.publish_next_due_scheduled_event()
+    runtime.events.publish_next_due_deferred_publication()
     runtime.events.timeout_next_due_wait()
     executors = project_executors(runtime)
     return await run_available_queue_item(

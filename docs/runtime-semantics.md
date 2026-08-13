@@ -60,7 +60,7 @@ contains:
 
 ```text
 runtime.attempt.completed
-requested events or runtime.scheduled_event.created facts
+requested events or runtime.deferred_publication.created facts
 runtime.queue_item.completed
 ```
 
@@ -81,7 +81,7 @@ rebuilt:
 - `queue_items`
 - `attempts`
 - `attempt_results`
-- `scheduled_events`
+- `deferred_publications`
 - `waits`
 - `session_mappings`
 
@@ -239,28 +239,41 @@ successful completion transaction. The attempt reaches a terminal state before
 the event becomes downstream work. No recursive dispatch path remains: an
 agent never runs a downstream event inside its own attempt.
 
-## One-Shot Scheduled Events
+## Recurring Schedules
+
+The scheduler owns cron evaluation, timezones, activation, and catch-up policy.
+For each selected occurrence it emits an ordinary
+`agent.<slug>.scheduled` event through Dispatch ingress. Dispatch journals,
+routes, and retries that event exactly like any other application event; it
+does not keep recurring-schedule state or interpret calendar policy.
+
+Scheduler decisions are durable `zeta.scheduler.tick.*` audit facts. They are
+runtime-owned evidence, so generic routing does not turn them into queue work.
+The worker process hosts the scheduler, but this ownership boundary does not
+require a separate scheduler service.
+
+## Deferred Publications
 
 A future `publish_event` request creates a
-`runtime.scheduled_event.created` fact. The `scheduled_events` projection keeps
-its target time and terminal state. A rebuild restores this state from created,
-published, and cancelled facts.
+`runtime.deferred_publication.created` fact. The `deferred_publications`
+projection keeps its target time and terminal state. A rebuild restores this
+state from created, published, and cancelled facts.
 
-Before a worker claims queue work, it publishes one due scheduled event. It
-uses one SQLite transaction to claim the row, append the normal event, append
-`runtime.scheduled_event.published`, and update the projections. If a crash
-occurs, SQLite rolls back the transaction. The scheduled event stays pending.
-Two workers cannot publish the same row.
+Before a worker claims queue work, it publishes one due deferred publication.
+It uses one SQLite transaction to claim the row, append the normal event,
+append `runtime.deferred_publication.published`, and update the projections. If
+a crash occurs, SQLite rolls back the transaction. The deferred publication
+stays pending. Two workers cannot publish the same row.
 
-Cancellation appends `runtime.scheduled_event.cancelled`. Publication and
-cancellation use the same conditional claim, so only one can win.
+Cancellation appends `runtime.deferred_publication.cancelled`. Publication
+and cancellation use the same conditional claim, so only one can win.
 
 Inspect and cancel these requests with:
 
 ```sh
-zeta events scheduled
-zeta events scheduled --json
-zeta events cancel-scheduled <handle>
+zeta events deferred
+zeta events deferred --json
+zeta events cancel-deferred <handle>
 ```
 
 ## Durable Agent Waits
@@ -351,9 +364,9 @@ not depend on the client connection that started or queued the turn.
 ### Agent-created resources
 
 An authored agent can request cancellation of an active wait or a pending
-scheduled event. The model loop returns a `CancelRequest`; it does not change
-runtime state. The request contains the handle, optional reason, source agent,
-source session, and tool-call position.
+deferred publication. The model loop returns a `CancelRequest`; it does not
+change runtime state. The request contains the handle, optional reason, source
+agent, source session, and tool-call position.
 
 The coordinator applies cancellation inside the successful attempt completion
 transaction. Failed, cancelled, and stale attempts do not cancel work. An
@@ -361,12 +374,12 @@ agent request can cancel only a resource created by the same session. Runtime
 operators can cancel any resource through the CLI.
 
 Cancellation appends `runtime.wait.cancelled` or
-`runtime.scheduled_event.cancelled`. The projection keeps that terminal state
-after restart or rebuild. A cancelled wait does not create a continuation. A
-cancelled scheduled event is never published.
+`runtime.deferred_publication.cancelled`. The projection keeps that terminal
+state after restart or rebuild. A cancelled wait does not create a
+continuation. A cancelled deferred publication is never published.
 
 Cancellation uses the same transaction boundary as wait matching, wait
-timeout, and scheduled publication. Only one terminal operation can win. A
+timeout, and deferred publication. Only one terminal operation can win. A
 repeated request returns the existing terminal state and adds no event.
 
 ## Claim Fencing

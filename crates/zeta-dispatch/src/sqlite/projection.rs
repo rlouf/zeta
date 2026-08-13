@@ -6,14 +6,13 @@ use serde_json::{Map, Value};
 use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 use zeta_journal::{verify, Event, HeadExpectation};
 
-use super::journal::{entry_by_field, load_entries};
+use super::journal::load_entries;
 use super::{
     corrupt_projection, database_error, nonnegative_u32_projection, positive_u64_projection,
     Dispatch, DispatchError, CREATE_PROJECTIONS, DROP_PROJECTIONS, PROJECTION_EPOCH,
 };
 use crate::dispatch::{
-    EffectDeliverySemantics, EffectStatus, QueueItem, ScheduleTickStatus, ScheduledEventStatus,
-    WaitStatus,
+    DeferredPublicationStatus, EffectDeliverySemantics, EffectStatus, QueueItem, WaitStatus,
 };
 use crate::identity::{pending_queue_item_id, AttemptId, QueueItemId, RunId, SessionId};
 use crate::state::{AttemptStatus, QueueItemStatus};
@@ -69,17 +68,17 @@ impl Dispatch {
 }
 
 pub(super) fn index_event(connection: &Connection, event: &Event) -> Result<(), DispatchError> {
-    if event.event_type.starts_with("scheduler.tick.") {
-        return index_recurring_schedule_tick(connection, event);
-    }
     if event.event_type.starts_with("runtime.effect.") {
         return index_effect(connection, event);
     }
     if event.event_type.starts_with("runtime.wait.") {
         return index_wait(connection, event);
     }
-    if event.event_type.starts_with("runtime.scheduled_event.") {
-        return index_scheduled_event(connection, event);
+    if event
+        .event_type
+        .starts_with("runtime.deferred_publication.")
+    {
+        return index_deferred_publication(connection, event);
     }
     if event.event_type == "runtime.queue_item.cancel_requested" {
         return index_queue_item_cancel_requested(connection, event);
@@ -93,148 +92,6 @@ pub(super) fn index_event(connection: &Connection, event: &Event) -> Result<(), 
     if is_queueable_event(event) {
         index_pending_queue_item(connection, event)?;
     }
-    Ok(())
-}
-
-fn index_recurring_schedule_tick(
-    connection: &Connection,
-    event: &Event,
-) -> Result<(), DispatchError> {
-    if event.source != "zeta:scheduler" {
-        return Err(invalid_lifecycle(event, "source"));
-    }
-    let suffix = event.event_type.rsplit('.').next().unwrap_or_default();
-    let status = parse_schedule_tick_status(event, suffix)?;
-    if required_payload_string(event, "status", false)? != suffix {
-        return Err(invalid_lifecycle(event, "status"));
-    }
-    let agent_id = required_runtime_id(event, "agent")?;
-    let schedule_index = required_nonnegative_u64(event, "schedule_index")?;
-    let schedule_index = i64::try_from(schedule_index)
-        .map_err(|_error| invalid_lifecycle(event, "schedule_index"))?;
-    let event_type = required_runtime_id(event, "event_type")?;
-    if event_type != format!("agent.{agent_id}.scheduled") {
-        return Err(invalid_lifecycle(event, "event_type"));
-    }
-    let cron = required_runtime_id(event, "cron")?;
-    let timezone = optional_payload_string(event, "timezone")?.unwrap_or_default();
-    let reason = required_runtime_id(event, "reason")?;
-    let observed_at = required_runtime_id(event, "observed_at")?;
-    lifecycle_timestamp_ms(event, "observed_at", &observed_at)?;
-
-    if status == ScheduleTickStatus::Activated {
-        let catchup = required_runtime_id(event, "catchup")?;
-        if event.caused_by.is_some() {
-            return Err(invalid_lifecycle(event, "caused_by"));
-        }
-        let expected_key =
-            format!("scheduler:activated:{agent_id}:{schedule_index}:{cron}:{timezone}:{catchup}");
-        if event.idempotency_key.as_deref() != Some(expected_key.as_str()) {
-            return Err(invalid_lifecycle(event, "idempotency_key"));
-        }
-        connection
-            .execute(
-                "INSERT INTO recurring_schedules (
-                    agent_id, schedule_index, cron, timezone, catchup,
-                    event_type, activation_event_id, status,
-                    last_published_at, next_at, reason, updated_at
-                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7,
-                           'activated', NULL, NULL, ?8, ?9)",
-                params![
-                    agent_id,
-                    schedule_index,
-                    cron,
-                    timezone,
-                    catchup,
-                    event_type,
-                    &event.id,
-                    reason,
-                    event.timestamp_ms,
-                ],
-            )
-            .map_err(|database| database_error("project schedule activation", database))?;
-        return Ok(());
-    }
-
-    let scheduled_at = required_runtime_id(event, "scheduled_at")?;
-    let next_at = required_runtime_id(event, "next_at")?;
-    lifecycle_timestamp_ms(event, "scheduled_at", &scheduled_at)?;
-    lifecycle_timestamp_ms(event, "next_at", &next_at)?;
-    let published_event_id = optional_payload_string(event, "published_event_id")?;
-    if status == ScheduleTickStatus::Published || status == ScheduleTickStatus::Skipped {
-        let published_event_id = published_event_id
-            .as_deref()
-            .ok_or_else(|| invalid_lifecycle(event, "published_event_id"))?;
-        if event.caused_by.as_deref() != Some(published_event_id) {
-            return Err(invalid_lifecycle(event, "published_event_id"));
-        }
-        let published = entry_by_field(connection, "event_id", published_event_id)?
-            .ok_or_else(|| invalid_lifecycle(event, "published_event_id"))?
-            .event;
-        let expected_publication_key = format!("schedule:{agent_id}:{cron}:{scheduled_at}");
-        if published.event_type != event_type
-            || published.idempotency_key.as_deref() != Some(expected_publication_key.as_str())
-            || published.payload.get("timestamp") != Some(&Value::String(scheduled_at.clone()))
-        {
-            return Err(invalid_lifecycle(event, "published_event_id"));
-        }
-    } else if published_event_id.is_some() || event.caused_by.is_some() {
-        return Err(invalid_lifecycle(event, "published_event_id"));
-    }
-    let expected_key =
-        format!("scheduler:{suffix}:{agent_id}:{schedule_index}:{cron}:{timezone}:{scheduled_at}");
-    if event.idempotency_key.as_deref() != Some(expected_key.as_str()) {
-        return Err(invalid_lifecycle(event, "idempotency_key"));
-    }
-    let existing = connection
-        .query_row(
-            "SELECT event_type FROM recurring_schedules
-             WHERE agent_id = ?1 AND schedule_index = ?2
-               AND cron = ?3 AND timezone = ?4",
-            params![agent_id, schedule_index, cron, timezone],
-            |row| row.get::<_, String>(0),
-        )
-        .optional()
-        .map_err(|database| database_error("read recurring schedule decision", database))?;
-    if existing
-        .as_deref()
-        .is_some_and(|stored| stored != event_type)
-    {
-        return Err(invalid_lifecycle(event, "event_type"));
-    }
-    let last_published_at =
-        (status == ScheduleTickStatus::Published).then_some(scheduled_at.as_str());
-    connection
-        .execute(
-            "INSERT INTO recurring_schedules (
-                agent_id, schedule_index, cron, timezone, catchup,
-                event_type, activation_event_id, status,
-                last_published_at, next_at, reason, updated_at
-             ) VALUES (?1, ?2, ?3, ?4, NULL, ?5, NULL, ?6,
-                       ?7, ?8, ?9, ?10)
-             ON CONFLICT(agent_id, schedule_index, cron, timezone) DO UPDATE SET
-                status = excluded.status,
-                last_published_at = COALESCE(
-                    excluded.last_published_at,
-                    recurring_schedules.last_published_at
-                ),
-                next_at = excluded.next_at,
-                reason = excluded.reason,
-                updated_at = excluded.updated_at",
-            params![
-                agent_id,
-                schedule_index,
-                cron,
-                timezone,
-                event_type,
-                schedule_tick_status_str(status),
-                last_published_at,
-                next_at,
-                reason,
-                event.timestamp_ms,
-            ],
-        )
-        .map_err(|database| database_error("project recurring schedule decision", database))?;
     Ok(())
 }
 
@@ -489,20 +346,26 @@ fn index_wait_terminal(
     Ok(())
 }
 
-fn index_scheduled_event(connection: &Connection, event: &Event) -> Result<(), DispatchError> {
+fn index_deferred_publication(connection: &Connection, event: &Event) -> Result<(), DispatchError> {
     match event.event_type.as_str() {
-        "runtime.scheduled_event.created" => index_scheduled_event_created(connection, event),
-        "runtime.scheduled_event.published" => {
-            index_scheduled_event_terminal(connection, event, ScheduledEventStatus::Published)
+        "runtime.deferred_publication.created" => {
+            index_deferred_publication_created(connection, event)
         }
-        "runtime.scheduled_event.cancelled" => {
-            index_scheduled_event_terminal(connection, event, ScheduledEventStatus::Cancelled)
-        }
+        "runtime.deferred_publication.published" => index_deferred_publication_terminal(
+            connection,
+            event,
+            DeferredPublicationStatus::Published,
+        ),
+        "runtime.deferred_publication.cancelled" => index_deferred_publication_terminal(
+            connection,
+            event,
+            DeferredPublicationStatus::Cancelled,
+        ),
         _ => Err(invalid_lifecycle(event, "event_type")),
     }
 }
 
-fn index_scheduled_event_created(
+fn index_deferred_publication_created(
     connection: &Connection,
     event: &Event,
 ) -> Result<(), DispatchError> {
@@ -536,7 +399,7 @@ fn index_scheduled_event_created(
     }
     connection
         .execute(
-            "INSERT INTO scheduled_events (
+            "INSERT INTO deferred_publications (
                 handle, event_type, payload_json, publish_at_ms,
                 source_agent_id, source_session_id, source_run_id,
                 source_queue_item_id, position, created_event_id, status,
@@ -557,17 +420,17 @@ fn index_scheduled_event_created(
                 event.timestamp_ms,
             ],
         )
-        .map_err(|database| database_error("project scheduled event creation", database))?;
+        .map_err(|database| database_error("project deferred publication creation", database))?;
     Ok(())
 }
 
-fn index_scheduled_event_terminal(
+fn index_deferred_publication_terminal(
     connection: &Connection,
     event: &Event,
-    status: ScheduledEventStatus,
+    status: DeferredPublicationStatus,
 ) -> Result<(), DispatchError> {
     let handle = required_runtime_id(event, "handle")?;
-    let published_event_id = if status == ScheduledEventStatus::Published {
+    let published_event_id = if status == DeferredPublicationStatus::Published {
         Some(required_runtime_id(event, "published_event_id")?)
     } else {
         None
@@ -580,19 +443,19 @@ fn index_scheduled_event_terminal(
     }
     let changed = connection
         .execute(
-            "UPDATE scheduled_events
+            "UPDATE deferred_publications
              SET status = ?1, published_event_id = ?2,
                  terminal_event_id = ?3, updated_at = ?4
              WHERE handle = ?5 AND status IN ('pending', 'claimed')",
             params![
-                scheduled_event_status_str(status),
+                deferred_publication_status_str(status),
                 published_event_id,
                 &event.id,
                 event.timestamp_ms,
                 handle,
             ],
         )
-        .map_err(|database| database_error("project scheduled event terminal", database))?;
+        .map_err(|database| database_error("project deferred publication terminal", database))?;
     if changed != 1 {
         return Err(invalid_lifecycle(event, "handle"));
     }
@@ -649,7 +512,7 @@ fn index_queue_item_cancel_requested(
 }
 
 fn is_queueable_event(event: &Event) -> bool {
-    for prefix in ["runtime.", "zeta.", "scheduler.tick."] {
+    for prefix in ["runtime.", "zeta."] {
         if event.event_type.starts_with(prefix) {
             return false;
         }
@@ -1161,12 +1024,12 @@ fn wait_status_str(status: WaitStatus) -> &'static str {
     }
 }
 
-fn scheduled_event_status_str(status: ScheduledEventStatus) -> &'static str {
+fn deferred_publication_status_str(status: DeferredPublicationStatus) -> &'static str {
     match status {
-        ScheduledEventStatus::Pending => "pending",
-        ScheduledEventStatus::Claimed => "claimed",
-        ScheduledEventStatus::Published => "published",
-        ScheduledEventStatus::Cancelled => "cancelled",
+        DeferredPublicationStatus::Pending => "pending",
+        DeferredPublicationStatus::Claimed => "claimed",
+        DeferredPublicationStatus::Published => "published",
+        DeferredPublicationStatus::Cancelled => "cancelled",
     }
 }
 
@@ -1227,28 +1090,6 @@ fn effect_semantics_str(semantics: EffectDeliverySemantics) -> &'static str {
         EffectDeliverySemantics::ConnectorDeduplicated => "connector_deduplicated",
         EffectDeliverySemantics::AtLeastOnce => "at_least_once",
         EffectDeliverySemantics::UnsafeToRetry => "unsafe_to_retry",
-    }
-}
-
-fn parse_schedule_tick_status(
-    event: &Event,
-    value: &str,
-) -> Result<ScheduleTickStatus, DispatchError> {
-    match value {
-        "activated" => Ok(ScheduleTickStatus::Activated),
-        "published" => Ok(ScheduleTickStatus::Published),
-        "skipped" => Ok(ScheduleTickStatus::Skipped),
-        "missed" => Ok(ScheduleTickStatus::Missed),
-        _ => Err(invalid_lifecycle(event, "status")),
-    }
-}
-
-fn schedule_tick_status_str(status: ScheduleTickStatus) -> &'static str {
-    match status {
-        ScheduleTickStatus::Activated => "activated",
-        ScheduleTickStatus::Published => "published",
-        ScheduleTickStatus::Skipped => "skipped",
-        ScheduleTickStatus::Missed => "missed",
     }
 }
 
@@ -1474,10 +1315,10 @@ pub(super) fn rebuild_projections_in_transaction(
         .map_err(|error| database_error("clear replayed attempt ownership", error))?;
     connection
         .execute(
-            "UPDATE scheduled_events SET status = 'pending' WHERE status = 'claimed'",
+            "UPDATE deferred_publications SET status = 'pending' WHERE status = 'claimed'",
             [],
         )
-        .map_err(|error| database_error("recover claimed scheduled events", error))?;
+        .map_err(|error| database_error("recover claimed deferred publications", error))?;
     Ok(entries.len())
 }
 

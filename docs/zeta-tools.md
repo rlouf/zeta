@@ -291,8 +291,9 @@ The handle must belong to the same agent session. A request for another
 session's handle fails the attempt.
 
 Cancelling an active wait records `runtime.wait.cancelled`. Zeta does not
-start a continuation for that wait. Cancelling a pending scheduled event
-records `runtime.scheduled_event.cancelled`. Zeta does not publish that event.
+start a continuation for that wait. Cancelling a pending deferred publication
+records `runtime.deferred_publication.cancelled`. Zeta does not publish that
+event.
 
 Matching, timeout, publication, and cancellation are atomic. Only one terminal
 state can win. Repeating a cancellation is safe. Zeta returns the resource's

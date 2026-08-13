@@ -26,7 +26,7 @@ class RuntimeEventProjection:
     """Projects runtime queue and attempt events into queryable tables."""
 
     name = "zeta.harness.runtime"
-    version = 11
+    version = 12
 
     def init_schema(self, connection: sqlite3.Connection) -> None:
         connection.executescript(
@@ -99,7 +99,7 @@ class RuntimeEventProjection:
               expires_at INTEGER NOT NULL
             ) STRICT;
 
-            CREATE TABLE IF NOT EXISTS scheduled_events (
+            CREATE TABLE IF NOT EXISTS deferred_publications (
               handle TEXT PRIMARY KEY,
               event_type TEXT NOT NULL,
               payload_json TEXT NOT NULL,
@@ -116,8 +116,8 @@ class RuntimeEventProjection:
               updated_at INTEGER NOT NULL
             ) STRICT;
 
-            CREATE INDEX IF NOT EXISTS idx_scheduled_events_due
-              ON scheduled_events(
+            CREATE INDEX IF NOT EXISTS idx_deferred_publications_due
+              ON deferred_publications(
                 status,
                 publish_at_ms,
                 source_queue_item_id,
@@ -158,7 +158,7 @@ class RuntimeEventProjection:
             """
             DELETE FROM locks;
             DELETE FROM waits;
-            DELETE FROM scheduled_events;
+            DELETE FROM deferred_publications;
             DELETE FROM attempt_results;
             DELETE FROM attempts;
             DELETE FROM queue_items;
@@ -170,6 +170,7 @@ class RuntimeEventProjection:
             """
             DROP TABLE IF EXISTS locks;
             DROP TABLE IF EXISTS waits;
+            DROP TABLE IF EXISTS deferred_publications;
             DROP TABLE IF EXISTS scheduled_events;
             DROP TABLE IF EXISTS attempt_results;
             DROP TABLE IF EXISTS attempts;
@@ -194,7 +195,7 @@ class RuntimeEventProjection:
         )
         connection.execute(
             """
-            UPDATE scheduled_events
+            UPDATE deferred_publications
             SET status = 'pending'
             WHERE status = 'claimed'
             """
@@ -204,8 +205,8 @@ class RuntimeEventProjection:
         if event.event_type.startswith("runtime.wait."):
             _index_one_wait(connection, event)
             return
-        if event.event_type.startswith("runtime.scheduled_event."):
-            _index_one_scheduled_event(connection, event)
+        if event.event_type.startswith("runtime.deferred_publication."):
+            _index_one_deferred_publication(connection, event)
             return
         if is_queueable_event(event):
             _index_pending_queue_item(connection, event)
@@ -335,21 +336,21 @@ def _index_wait_terminal(
     )
 
 
-def _index_one_scheduled_event(
+def _index_one_deferred_publication(
     connection: sqlite3.Connection,
     event: Event,
 ) -> None:
     handle = _optional_str(event.payload.get("handle"))
     if handle is None:
         return
-    if event.event_type == "runtime.scheduled_event.created":
-        _index_scheduled_event_created(connection, event, handle)
+    if event.event_type == "runtime.deferred_publication.created":
+        _index_deferred_publication_created(connection, event, handle)
         return
-    if event.event_type == "runtime.scheduled_event.published":
+    if event.event_type == "runtime.deferred_publication.published":
         published_event_id = _optional_str(event.payload.get("published_event_id"))
         if published_event_id is None:
             return
-        _index_scheduled_event_terminal(
+        _index_deferred_publication_terminal(
             connection,
             event,
             handle,
@@ -357,8 +358,8 @@ def _index_one_scheduled_event(
             published_event_id=published_event_id,
         )
         return
-    if event.event_type == "runtime.scheduled_event.cancelled":
-        _index_scheduled_event_terminal(
+    if event.event_type == "runtime.deferred_publication.cancelled":
+        _index_deferred_publication_terminal(
             connection,
             event,
             handle,
@@ -367,7 +368,7 @@ def _index_one_scheduled_event(
         )
 
 
-def _index_scheduled_event_created(
+def _index_deferred_publication_created(
     connection: sqlite3.Connection,
     event: Event,
     handle: str,
@@ -394,7 +395,7 @@ def _index_scheduled_event_created(
     source_session_id = _optional_str(event.payload.get("source_session_id"))
     connection.execute(
         """
-        INSERT INTO scheduled_events
+        INSERT INTO deferred_publications
           (handle, event_type, payload_json, publish_at_ms, source_agent_id,
            source_session_id, source_run_id, source_queue_item_id, position,
            created_event_id, status, updated_at)
@@ -417,7 +418,7 @@ def _index_scheduled_event_created(
     )
 
 
-def _index_scheduled_event_terminal(
+def _index_deferred_publication_terminal(
     connection: sqlite3.Connection,
     event: Event,
     handle: str,
@@ -427,7 +428,7 @@ def _index_scheduled_event_terminal(
 ) -> None:
     connection.execute(
         """
-        UPDATE scheduled_events
+        UPDATE deferred_publications
         SET status = ?,
             published_event_id = ?,
             terminal_event_id = ?,

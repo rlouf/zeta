@@ -24,7 +24,7 @@ use zeta_authoring::{
     AgentProjectInput, CapabilitySpec, EventRegistry, ExecutorProviderSpec,
     ImplementationFingerprint, ModelSelectionSpec,
 };
-use zeta_dispatch::route_event;
+use zeta_dispatch::{route_event, Dispatch, QueueItemStatus, RuntimeEventIdentity};
 use zeta_journal::{DraftEvent, Event};
 
 async fn scripted_chat_server(responses: Vec<String>) -> (String, JoinHandle<Vec<Value>>) {
@@ -750,6 +750,68 @@ fn authored_project_routes_use_slug_order_and_exact_accepts() {
     let mut tampered = manifest.clone();
     tampered.agents.get_mut("alpha").unwrap().session = "per-event".to_owned();
     assert!(zeta::routes_from_project(&tampered).is_err());
+}
+
+#[test]
+fn authored_schedule_occurrence_uses_ordinary_idempotent_dispatch_ingress() {
+    let digest = parse_agent(
+        "digest",
+        b"---\nname: Digest\ndescription: Summarizes.\nschedules:\n  - cron: '0 8 * * *'\n    timezone: Europe/Paris\n---\nSummarize.\n",
+    )
+    .unwrap();
+    let project = compile_project(AgentProjectInput {
+        agents: vec![digest],
+        events: EventRegistry::new(),
+        skill_resources: Vec::new(),
+        skill_specs: Vec::new(),
+        connectors: Vec::new(),
+        capabilities: Vec::new(),
+        executor_providers: vec![ExecutorProviderSpec {
+            id: "local".to_owned(),
+            implementation: authored_implementation(7),
+        }],
+        model: None,
+        runtime_fingerprint: authored_implementation(8),
+    })
+    .unwrap();
+    let manifest = project_manifest(&project).unwrap();
+    let routes = zeta::routes_from_project(&manifest).unwrap();
+    let occurrence = Event {
+        id: "schedule-digest-2026-08-13".to_owned(),
+        event_type: "agent.digest.scheduled".to_owned(),
+        source: "zeta:scheduler".to_owned(),
+        payload: object(json!({
+            "date": "2026-08-13",
+            "timestamp": "2026-08-13T08:00:00+02:00",
+        })),
+        idempotency_key: Some("schedule:digest:0 8 * * *:2026-08-13T08:00:00+02:00".to_owned()),
+        caused_by: None,
+        session_id: None,
+        run_id: None,
+        turn_id: None,
+        timestamp_ms: 1_755_066_000_000,
+        cursor: None,
+    };
+    let mut dispatch = Dispatch::open_in_memory().unwrap();
+
+    let retained = dispatch.ingest_event(occurrence.clone()).unwrap();
+    let routed = dispatch
+        .route_ingress_event(
+            &retained.event.id,
+            &routes,
+            &[RuntimeEventIdentity::new("scheduled-digest-available", 1_755_066_000_001).unwrap()],
+        )
+        .unwrap();
+    let retried = dispatch.ingest_event(occurrence).unwrap();
+
+    assert!(retained.inserted);
+    assert!(!retried.inserted);
+    assert_eq!(retried.event.id, retained.event.id);
+    assert_eq!(routed.events().len(), 1);
+    let queue_items = dispatch.list_queue_items().unwrap();
+    assert_eq!(queue_items.len(), 1);
+    assert_eq!(queue_items[0].target_agent(), "digest");
+    assert_eq!(queue_items[0].status(), QueueItemStatus::Available);
 }
 
 fn object(value: Value) -> Map<String, Value> {

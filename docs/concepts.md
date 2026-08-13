@@ -56,7 +56,7 @@ Each arrow is one-to-many. One event can fan out to several queue items, and
 one queue item can hold several attempts.
 
 The `events` table is the only source of truth. `queue_items`, `attempts`,
-`attempt_results`, `scheduled_events`, `waits`, and `session_mappings` are
+`attempt_results`, `deferred_publications`, `waits`, and `session_mappings` are
 projections. You can delete them and rebuild them from the journal. Claims,
 leases, and locks are neither facts nor projections. They are live coordination
 state, and a rebuild discards them.
@@ -782,11 +782,11 @@ zeta events publish github.pr.opened \
   --payload-json '{"number":17,"title":"Fix release notes"}'
 ```
 
-Inspect or cancel future events requested by agents:
+Inspect or cancel deferred publications requested by agents:
 
 ```sh
-zeta events scheduled
-zeta events cancel-scheduled pub_0123456789abcdef
+zeta events deferred
+zeta events cancel-deferred pub_0123456789abcdef
 ```
 
 Fire due schedules and drain the queue until it is empty, then exit:
@@ -801,8 +801,10 @@ Run the worker continuously instead:
 zeta serve
 ```
 
-Both `zeta run` and `zeta serve` fire due schedules before processing work.
-Schedule publication belongs to workers; no separate scheduler process is
+Both `zeta run` and `zeta serve` ask the scheduler to emit due occurrences
+before processing work. The scheduler owns cron, timezone, and catch-up policy;
+Dispatch sees the resulting `agent.<slug>.scheduled` event as ordinary ingress.
+The scheduler runs inside the worker, so no separate scheduler process is
 required.
 
 Narrow the connector allowlist for one runtime process:

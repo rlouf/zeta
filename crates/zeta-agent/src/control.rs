@@ -33,7 +33,7 @@ pub enum AgentRequest {
         /// Preserves global tool-call order.
         position: usize,
     },
-    /// Proposes cancelling an existing wait or scheduled publication.
+    /// Proposes cancelling an existing wait or deferred publication.
     Cancel {
         /// Identifies the proposal to cancel.
         handle: String,

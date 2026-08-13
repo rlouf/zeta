@@ -6,7 +6,7 @@ set -euo pipefail
 # Story: a weekly digest agent lives on a laptop that was closed for three
 # weeks. On reopening, the `catchup: latest` agent fires exactly once for the
 # most recent missed occurrence; the default-policy agent does not fire, and
-# the miss is journaled as a durable `scheduler.tick.missed` event.
+# the miss is journaled as a durable `zeta.scheduler.tick.missed` event.
 
 DEMO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$DEMO_DIR/../.." && pwd)"
@@ -89,7 +89,7 @@ echo
 
 seed_published_tick() {
   local slug="$1"
-  zeta_cmd events publish scheduler.tick.published \
+  zeta_cmd events publish zeta.scheduler.tick.published \
     --source demo:time-simulation \
     --idempotency-key "scheduler:published:$slug:0:$CRON::$ANCHOR_AT" \
     --payload-json "{\"agent\":\"$slug\",\"schedule_index\":0,\"event_type\":\"agent.$slug.scheduled\",\"cron\":\"$CRON\",\"timezone\":null,\"scheduled_at\":\"$ANCHOR_AT\",\"observed_at\":\"$ANCHOR_AT\",\"next_at\":\"$ANCHOR_NEXT_AT\",\"status\":\"published\",\"reason\":\"due now\",\"published_event_id\":null}"
@@ -98,7 +98,7 @@ seed_published_tick() {
 seed_published_tick "weekly-digest-latest"
 seed_published_tick "weekly-digest-default"
 
-zeta_cmd events publish scheduler.tick.activated \
+zeta_cmd events publish zeta.scheduler.tick.activated \
   --source demo:time-simulation \
   --idempotency-key "scheduler:activated:weekly-digest-latest:0:$CRON::latest" \
   --payload-json "{\"agent\":\"weekly-digest-latest\",\"schedule_index\":0,\"event_type\":\"agent.weekly-digest-latest.scheduled\",\"cron\":\"$CRON\",\"timezone\":null,\"catchup\":\"latest\",\"observed_at\":\"$ANCHOR_AT\",\"status\":\"activated\",\"reason\":\"schedule first observed\"}"
@@ -146,19 +146,19 @@ echo
 
 echo "==> [6/7] The durable record: every scheduler decision is a journaled event"
 echo
-echo "--- scheduler decisions (zeta events list --type-prefix scheduler.tick) ---"
-zeta_cmd events list --type-prefix scheduler.tick
+echo "--- scheduler decisions (zeta events list --type-prefix zeta.scheduler.tick) ---"
+zeta_cmd events list --type-prefix zeta.scheduler.tick
 echo
-MISSED_JSON="$(zeta_cmd events list --type-prefix scheduler.tick.missed --json)"
+MISSED_JSON="$(zeta_cmd events list --type-prefix zeta.scheduler.tick.missed --json)"
 if ! printf '%s' "$MISSED_JSON" | grep -qF "weekly-digest-default"; then
-  echo "FAIL: no durable scheduler.tick.missed record for weekly-digest-default" >&2
+  echo "FAIL: no durable zeta.scheduler.tick.missed record for weekly-digest-default" >&2
   exit 1
 fi
-echo "    OK: the default agent's miss is recorded as scheduler.tick.missed"
+echo "    OK: the default agent's miss is recorded as zeta.scheduler.tick.missed"
 echo "    (reason: previous-day tick not backfilled) — dropped, but never silently."
-PUBLISHED_JSON="$(zeta_cmd events list --type-prefix scheduler.tick.published --json)"
+PUBLISHED_JSON="$(zeta_cmd events list --type-prefix zeta.scheduler.tick.published --json)"
 if ! printf '%s' "$PUBLISHED_JSON" | grep -qF "latest catch-up"; then
-  echo "FAIL: no scheduler.tick.published record with reason 'latest catch-up'" >&2
+  echo "FAIL: no zeta.scheduler.tick.published record with reason 'latest catch-up'" >&2
   exit 1
 fi
 echo "    OK: the fired tick's journaled reason is 'latest catch-up' (not 'due now'):"
@@ -194,7 +194,7 @@ echo "    side effect of a process being awake:"
 echo "      - catchup: latest  -> the most recent missed occurrence fired exactly ONCE,"
 echo "                            anchored at activation, idempotent across runs."
 echo "      - default          -> cross-day misses never fire, and the miss itself is"
-echo "                            journaled as a scheduler.tick.missed event."
+echo "                            journaled as a zeta.scheduler.tick.missed event."
 echo "    A plain cron would have either done nothing (machine was off, no record) or,"
 echo "    naively replayed, fired 3 stale digests. Here missed work is data: recorded,"
 echo "    queryable, and resolved by an explicit policy."
@@ -203,7 +203,7 @@ echo
 echo "==> Inspect it yourself (run from $PROJECT)"
 echo
 echo "    export ZETA_STATE_DIR=\"$PROJECT/.zeta\""
-echo "    uv run --project \"$REPO_ROOT\" zeta events list --type-prefix scheduler.tick --json"
+echo "    uv run --project \"$REPO_ROOT\" zeta events list --type-prefix zeta.scheduler.tick --json"
 echo "    uv run --project \"$REPO_ROOT\" zeta schedules status"
 echo "    uv run --project \"$REPO_ROOT\" zeta ps"
 echo "    cat \"$PROJECT/digest.md\""

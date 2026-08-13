@@ -1132,9 +1132,9 @@
               }
             },
             {
-              "alias": "$scheduled",
-              "type": "runtime.scheduled_event.created",
-              "idempotency_key": "agent.schedule:qi_evt_complete_worker:2",
+              "alias": "$deferred",
+              "type": "runtime.deferred_publication.created",
+              "idempotency_key": "agent.defer:qi_evt_complete_worker:2",
               "caused_by": "$attempt_completed",
               "payload": {
                 "handle": "pub-future",
@@ -1217,7 +1217,7 @@
           "ordered_controls": [
             "work.first",
             "runtime.wait.created",
-            "runtime.scheduled_event.created"
+            "runtime.deferred_publication.created"
           ],
           "queue_status": "completed",
           "attempt_status": "completed"
@@ -1441,12 +1441,12 @@
         }
       }
     ],
-    "scheduled_events": [
+    "deferred_publications": [
       {
-        "name": "due_publication_consumes_pending_schedule",
+        "name": "due_publication_consumes_pending_deferred_publication",
         "created_event": {
-          "id": "schedule-created-1",
-          "event_type": "runtime.scheduled_event.created",
+          "id": "deferred-created-1",
+          "event_type": "runtime.deferred_publication.created",
           "source": "zeta",
           "payload": {
             "handle": "publication-1",
@@ -1460,7 +1460,7 @@
             "source_queue_item_id": "queue-item-1",
             "position": 0
           },
-          "idempotency_key": "agent.schedule:queue-item-1:0",
+          "idempotency_key": "agent.defer:queue-item-1:0",
           "caused_by": "attempt-completed-1",
           "session_id": "session-1",
           "run_id": "run-1",
@@ -1471,9 +1471,9 @@
         "expected": {
           "events": [
             {
-              "alias": "$scheduled",
-              "type": "runtime.scheduled_event.created",
-              "idempotency_key": "agent.schedule:queue-item-1:0",
+              "alias": "$deferred",
+              "type": "runtime.deferred_publication.created",
+              "idempotency_key": "agent.defer:queue-item-1:0",
               "caused_by": "attempt-completed-1",
               "payload": {
                 "handle": "publication-1",
@@ -1492,15 +1492,15 @@
               "alias": "$published_event",
               "type": "report.ready",
               "idempotency_key": "agent.publish:queue-item-1:0",
-              "caused_by": "$scheduled",
+              "caused_by": "$deferred",
               "payload": {
                 "report_id": "publication-1"
               }
             },
             {
               "alias": "$published_fact",
-              "type": "runtime.scheduled_event.published",
-              "idempotency_key": "scheduled_event.published:publication-1",
+              "type": "runtime.deferred_publication.published",
+              "idempotency_key": "deferred_publication.published:publication-1",
               "caused_by": "$published_event",
               "payload": {
                 "handle": "publication-1",
@@ -1511,116 +1511,7 @@
               }
             }
           ],
-          "schedule_status": "published"
-        }
-      }
-    ],
-    "recurring_schedules": [
-      {
-        "name": "latest_catchup_activates_before_publishing",
-        "agent_id": "reporter",
-        "schedule": {
-          "cron": "* * * * *",
-          "timezone": "UTC",
-          "catchup": "latest"
-        },
-        "ticks": [
-          "2026-08-12T10:05:30+00:00",
-          "2026-08-12T10:06:10+00:00"
-        ],
-        "expected": {
-          "published_per_tick": [
-            1,
-            1
-          ],
-          "events": [
-            {
-              "alias": "$activation",
-              "type": "scheduler.tick.activated",
-              "idempotency_key": "scheduler:activated:reporter:0:* * * * *:UTC:latest",
-              "caused_by": null,
-              "payload": {
-                "agent": "reporter",
-                "schedule_index": 0,
-                "event_type": "agent.reporter.scheduled",
-                "cron": "* * * * *",
-                "timezone": "UTC",
-                "catchup": "latest",
-                "observed_at": "2026-08-12T10:05:30+00:00",
-                "status": "activated",
-                "reason": "schedule first observed"
-              }
-            },
-            {
-              "alias": "$scheduled_1",
-              "type": "agent.reporter.scheduled",
-              "idempotency_key": "schedule:reporter:* * * * *:2026-08-12T10:05:00+00:00",
-              "caused_by": null,
-              "payload": {
-                "date": "2026-08-12",
-                "timestamp": "2026-08-12T10:05:00+00:00"
-              }
-            },
-            {
-              "alias": "$decision_1",
-              "type": "scheduler.tick.published",
-              "idempotency_key": "scheduler:published:reporter:0:* * * * *:UTC:2026-08-12T10:05:00+00:00",
-              "caused_by": "$scheduled_1",
-              "payload": {
-                "agent": "reporter",
-                "schedule_index": 0,
-                "event_type": "agent.reporter.scheduled",
-                "cron": "* * * * *",
-                "timezone": "UTC",
-                "scheduled_at": "2026-08-12T10:05:00+00:00",
-                "observed_at": "2026-08-12T10:05:30+00:00",
-                "next_at": "2026-08-12T10:06:00+00:00",
-                "status": "published",
-                "reason": "due now",
-                "published_event_id": "$scheduled_1"
-              }
-            },
-            {
-              "alias": "$scheduled_2",
-              "type": "agent.reporter.scheduled",
-              "idempotency_key": "schedule:reporter:* * * * *:2026-08-12T10:06:00+00:00",
-              "caused_by": null,
-              "payload": {
-                "date": "2026-08-12",
-                "timestamp": "2026-08-12T10:06:00+00:00"
-              }
-            },
-            {
-              "alias": "$decision_2",
-              "type": "scheduler.tick.published",
-              "idempotency_key": "scheduler:published:reporter:0:* * * * *:UTC:2026-08-12T10:06:00+00:00",
-              "caused_by": "$scheduled_2",
-              "payload": {
-                "agent": "reporter",
-                "schedule_index": 0,
-                "event_type": "agent.reporter.scheduled",
-                "cron": "* * * * *",
-                "timezone": "UTC",
-                "scheduled_at": "2026-08-12T10:06:00+00:00",
-                "observed_at": "2026-08-12T10:06:10+00:00",
-                "next_at": "2026-08-12T10:07:00+00:00",
-                "status": "published",
-                "reason": "due now",
-                "published_event_id": "$scheduled_2"
-              }
-            }
-          ],
-          "read_model": [
-            {
-              "agent": "reporter",
-              "cron": "* * * * *",
-              "timezone": "UTC",
-              "status": "published",
-              "last_published_at": "2026-08-12T10:06:00+00:00",
-              "next_at": "2026-08-12T10:07:00+00:00",
-              "reason": "due now"
-            }
-          ]
+          "publication_status": "published"
         }
       }
     ],

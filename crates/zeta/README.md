@@ -29,6 +29,11 @@ group on cancellation, timeout, exit, shutdown, or drop.
 between `zeta-authoring` and `zeta-dispatch`; those domain crates remain
 independent.
 
+Scheduler policy stays outside Dispatch. Authored `agent.<slug>.scheduled`
+occurrences enter through ordinary idempotent ingress and use the same routes
+as connector events, while future agent publications remain Dispatch-owned
+deferred publications.
+
 `attempt_completion` is the corresponding composition point between
 `zeta-agent` and `zeta-dispatch`. It retains durable answer, event, and usage
 metadata; converts ordered publish, wait, and cancellation requests without

@@ -923,35 +923,35 @@ fn completion_control_event(
                     cursor: None,
                 });
             }
-            let mut scheduled = Map::new();
-            scheduled.insert("handle".to_owned(), Value::String(handle.clone()));
-            scheduled.insert("event_type".to_owned(), Value::String(event_type.clone()));
-            scheduled.insert("payload".to_owned(), Value::Object(payload.clone()));
-            scheduled.insert(
+            let mut deferred = Map::new();
+            deferred.insert("handle".to_owned(), Value::String(handle.clone()));
+            deferred.insert("event_type".to_owned(), Value::String(event_type.clone()));
+            deferred.insert("payload".to_owned(), Value::Object(payload.clone()));
+            deferred.insert(
                 "publish_at".to_owned(),
                 at.as_ref()
                     .map(|at| Value::String(at.clone()))
                     .unwrap_or(Value::Null),
             );
-            scheduled.insert(
+            deferred.insert(
                 "source_agent_id".to_owned(),
                 Value::String(attempt.target_agent.clone()),
             );
-            scheduled.insert(
+            deferred.insert(
                 "source_session_id".to_owned(),
                 session_id.clone().map(Value::String).unwrap_or(Value::Null),
             );
-            scheduled.insert(
+            deferred.insert(
                 "source_queue_item_id".to_owned(),
                 Value::String(queue_item.id.to_string()),
             );
-            scheduled.insert("position".to_owned(), Value::from(*position));
+            deferred.insert("position".to_owned(), Value::from(*position));
             Ok(Event {
                 id: identity.id().to_owned(),
-                event_type: "runtime.scheduled_event.created".to_owned(),
+                event_type: "runtime.deferred_publication.created".to_owned(),
                 source: "zeta".to_owned(),
-                payload: scheduled,
-                idempotency_key: Some(format!("agent.schedule:{}:{position}", queue_item.id)),
+                payload: deferred,
+                idempotency_key: Some(format!("agent.defer:{}:{position}", queue_item.id)),
                 caused_by: Some(completed_attempt.id.clone()),
                 session_id,
                 run_id,

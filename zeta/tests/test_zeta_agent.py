@@ -7331,12 +7331,14 @@ def test_zeta_cli_events_json_lists_durable_events(tmp_path: Path) -> None:
     ]
 
 
-def test_zeta_cli_events_lists_and_cancels_scheduled_events(tmp_path: Path) -> None:
+def test_zeta_cli_events_lists_and_cancels_deferred_publications(
+    tmp_path: Path,
+) -> None:
     state_dir = tmp_path / ".zeta"
     event_store = zeta_events.SqliteEventStore(event_store_path(state_dir))
     event_store.accept(
         DraftEvent(
-            "runtime.scheduled_event.created",
+            "runtime.deferred_publication.created",
             "zeta",
             {
                 "handle": "publication-1",
@@ -7348,24 +7350,24 @@ def test_zeta_cli_events_lists_and_cancels_scheduled_events(tmp_path: Path) -> N
                 "source_queue_item_id": "qi-report",
                 "position": 0,
             },
-            idempotency_key="agent.schedule:qi-report:0",
+            idempotency_key="agent.defer:qi-report:0",
         )
     )
     event_store.close()
 
     listed = CliRunner().invoke(
         cli_main.cli,
-        ["events", "scheduled", "--state-dir", str(state_dir), "--json"],
+        ["events", "deferred", "--state-dir", str(state_dir), "--json"],
     )
     text_listed = CliRunner().invoke(
         cli_main.cli,
-        ["events", "scheduled", "--state-dir", str(state_dir)],
+        ["events", "deferred", "--state-dir", str(state_dir)],
     )
     cancelled = CliRunner().invoke(
         cli_main.cli,
         [
             "events",
-            "cancel-scheduled",
+            "cancel-deferred",
             "publication-1",
             "--state-dir",
             str(state_dir),
@@ -7375,7 +7377,7 @@ def test_zeta_cli_events_lists_and_cancels_scheduled_events(tmp_path: Path) -> N
         cli_main.cli,
         [
             "events",
-            "cancel-scheduled",
+            "cancel-deferred",
             "publication-1",
             "--state-dir",
             str(state_dir),
@@ -7385,7 +7387,7 @@ def test_zeta_cli_events_lists_and_cancels_scheduled_events(tmp_path: Path) -> N
         cli_main.cli,
         [
             "events",
-            "cancel-scheduled",
+            "cancel-deferred",
             "missing",
             "--state-dir",
             str(state_dir),
@@ -7403,9 +7405,9 @@ def test_zeta_cli_events_lists_and_cancels_scheduled_events(tmp_path: Path) -> N
     assert cancelled.exit_code == 0
     assert cancelled.output == "cancelled publication-1\n"
     assert repeated.exit_code == 1
-    assert "scheduled event is already cancelled: publication-1" in repeated.output
+    assert "deferred publication is already cancelled: publication-1" in repeated.output
     assert unknown.exit_code == 1
-    assert "scheduled event not found: missing" in unknown.output
+    assert "deferred publication not found: missing" in unknown.output
 
 
 def test_zeta_cli_cancel_handles_any_supported_resource(tmp_path: Path) -> None:
@@ -10069,6 +10071,15 @@ Summarize the repo.
     )
 
 
+def test_zeta_scheduler_facts_need_no_special_queue_exclusion() -> None:
+    scheduler_fact = Event.from_draft(
+        DraftEvent("zeta.scheduler.tick.published", "zeta:scheduler", {})
+    )
+
+    assert harness_queue.NON_QUEUEABLE_EVENT_PREFIXES == ("runtime.", "zeta.")
+    assert not harness_queue.is_queueable_event(scheduler_fact)
+
+
 def test_zeta_scheduler_payload_uses_the_intended_local_occurrence(
     tmp_path: Path,
 ) -> None:
@@ -10154,7 +10165,7 @@ Summarize the repo.
         decisions = [
             event
             for event in durable_events
-            if event.event_type.startswith("scheduler.")
+            if event.event_type.startswith("zeta.scheduler.")
         ]
     finally:
         event_store.close()
@@ -10168,8 +10179,8 @@ Summarize the repo.
         "timestamp": "2026-06-22T08:00:00+00:00",
     }
     assert [event.event_type for event in decisions] == [
-        "scheduler.tick.published",
-        "scheduler.tick.skipped",
+        "zeta.scheduler.tick.published",
+        "zeta.scheduler.tick.skipped",
     ]
     assert decisions[0].payload["status"] == "published"
     assert decisions[0].payload["reason"] == "same-day backfill"
@@ -10215,7 +10226,7 @@ Summarize the repo.
             now=datetime(2026, 6, 23, 7, 0, tzinfo=UTC),
         )
         decisions = event_store.list_events(
-            zeta_events.Filter(event_type_prefix="scheduler.tick.")
+            zeta_events.Filter(event_type_prefix="zeta.scheduler.tick.")
         )
     finally:
         event_store.close()
@@ -10225,8 +10236,8 @@ Summarize the repo.
     ]
     assert scheduled_events == []
     assert [event.event_type for event in decisions] == [
-        "scheduler.tick.published",
-        "scheduler.tick.missed",
+        "zeta.scheduler.tick.published",
+        "zeta.scheduler.tick.missed",
     ]
     assert decisions[1].payload["status"] == "missed"
     assert decisions[1].payload["reason"] == "previous-day tick not backfilled"
@@ -10271,7 +10282,7 @@ Summarize the repo.
             now=datetime(2026, 6, 22, 10, 0, tzinfo=UTC),
         )
         decisions = event_store.list_events(
-            zeta_events.Filter(event_type_prefix="scheduler.tick.")
+            zeta_events.Filter(event_type_prefix="zeta.scheduler.tick.")
         )
     finally:
         event_store.close()
@@ -10287,10 +10298,10 @@ Summarize the repo.
         "schedule:scheduled:0 18 * * 0:2026-06-21T18:00:00+00:00"
     )
     assert [decision.event_type for decision in decisions] == [
-        "scheduler.tick.activated",
-        "scheduler.tick.missed",
-        "scheduler.tick.published",
-        "scheduler.tick.skipped",
+        "zeta.scheduler.tick.activated",
+        "zeta.scheduler.tick.missed",
+        "zeta.scheduler.tick.published",
+        "zeta.scheduler.tick.skipped",
     ]
     assert decisions[2].payload["reason"] == "latest catch-up"
     assert decisions[2].payload["scheduled_at"] == "2026-06-21T18:00:00+00:00"
@@ -10391,7 +10402,7 @@ Summarize the repo.
             now=datetime(2026, 6, 22, 7, 30, tzinfo=UTC),
         )
         decisions = event_store.list_events(
-            zeta_events.Filter(event_type_prefix="scheduler.tick.")
+            zeta_events.Filter(event_type_prefix="zeta.scheduler.tick.")
         )
     finally:
         event_store.close()

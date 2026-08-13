@@ -807,6 +807,12 @@ Dispatch sees the resulting `agent.<slug>.scheduled` event as ordinary ingress.
 The scheduler runs inside the worker, so no separate scheduler process is
 required.
 
+The native Rust host exposes the same operation as `Scheduler::tick`, compiled
+from a verified project manifest and backed by durable
+`zeta.scheduler.tick.*` facts. The native worker loop is not implemented yet;
+when it is, it must call this operation at the same point in each pass. Calendar
+policy stays in the host rather than moving into Dispatch.
+
 Narrow the connector allowlist for one runtime process:
 
 ```sh

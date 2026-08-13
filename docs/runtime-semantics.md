@@ -241,16 +241,21 @@ agent never runs a downstream event inside its own attempt.
 
 ## Recurring Schedules
 
-The scheduler owns cron evaluation, timezones, activation, and catch-up policy.
-For each selected occurrence it emits an ordinary
-`agent.<slug>.scheduled` event through Dispatch ingress. Dispatch journals,
-routes, and retries that event exactly like any other application event; it
-does not keep recurring-schedule state or interpret calendar policy.
+The application host owns cron evaluation, timezones, DST behavior, activation,
+and catch-up policy. The native `zeta` crate compiles every enabled schedule
+from a verified project before a tick can write. For each selected occurrence
+it emits an ordinary `agent.<slug>.scheduled` event through Dispatch ingress.
+Dispatch journals, routes, and retries that event exactly like any other
+application event; it does not keep recurring-schedule state or interpret
+calendar policy.
 
 Scheduler decisions are durable `zeta.scheduler.tick.*` audit facts. They are
 runtime-owned evidence, so generic routing does not turn them into queue work.
-The worker process hosts the scheduler, but this ownership boundary does not
-require a separate scheduler service.
+Both the current Python worker and the native Rust scheduler implementation use
+this contract. The Rust crate does not yet have a worker loop; when that loop is
+added, it must tick the scheduler before deferred publications, wait timeouts,
+and queue claims. Scheduling remains in the worker process and does not require
+a separate service.
 
 ## Deferred Publications
 

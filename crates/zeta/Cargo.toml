@@ -8,6 +8,10 @@ license.workspace = true
 publish = false
 
 [dependencies]
+chrono.workspace = true
+chrono-tz.workspace = true
+croner.workspace = true
+serde.workspace = true
 serde_json.workspace = true
 uuid = { version = "1", features = ["v4"] }
 zeta-agent = { path = "../zeta-agent" }

@@ -94,7 +94,7 @@ impl EventRegistry {
         Ok(())
     }
 
-    /// Registers the empty payload schema for one agent schedule.
+    /// Registers the occurrence payload schema for one agent schedule.
     ///
     /// # Errors
     ///
@@ -114,7 +114,7 @@ impl EventRegistry {
     pub fn register_scheduled(&mut self, agent_slug: &str) -> Result<(), AuthoringError> {
         self.register(
             &scheduled_event_type(agent_slug),
-            Some(empty_payload_schema()),
+            Some(scheduled_payload_schema()),
         )
     }
 
@@ -271,9 +271,35 @@ pub(crate) fn validate_schema(
     ))
 }
 
-fn empty_payload_schema() -> Map<String, Value> {
+fn scheduled_payload_schema() -> Map<String, Value> {
     Map::from_iter([
         ("type".to_owned(), Value::String("object".to_owned())),
+        (
+            "properties".to_owned(),
+            Value::Object(Map::from_iter([
+                (
+                    "date".to_owned(),
+                    Value::Object(Map::from_iter([(
+                        "type".to_owned(),
+                        Value::String("string".to_owned()),
+                    )])),
+                ),
+                (
+                    "timestamp".to_owned(),
+                    Value::Object(Map::from_iter([(
+                        "type".to_owned(),
+                        Value::String("string".to_owned()),
+                    )])),
+                ),
+            ])),
+        ),
+        (
+            "required".to_owned(),
+            Value::Array(vec![
+                Value::String("date".to_owned()),
+                Value::String("timestamp".to_owned()),
+            ]),
+        ),
         ("additionalProperties".to_owned(), Value::Bool(false)),
     ])
 }

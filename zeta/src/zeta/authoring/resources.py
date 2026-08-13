@@ -147,11 +147,19 @@ def register_scheduled_events(
         event_type = scheduled_event_type(spec.slug)
         if events.knows(event_type):
             continue
-        events.register(event_type, empty_payload_schema())
+        events.register(event_type, scheduled_payload_schema())
 
 
-def empty_payload_schema() -> dict[str, object]:
-    return {"type": "object", "additionalProperties": False}
+def scheduled_payload_schema() -> dict[str, object]:
+    return {
+        "type": "object",
+        "properties": {
+            "date": {"type": "string"},
+            "timestamp": {"type": "string"},
+        },
+        "required": ["date", "timestamp"],
+        "additionalProperties": False,
+    }
 
 
 def load_connector_registry(

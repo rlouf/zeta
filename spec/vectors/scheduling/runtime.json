@@ -107,6 +107,553 @@
           }
         ]
       }
+    },
+    {
+      "name": "default_same_day_backfill_skips_duplicate",
+      "agent_id": "reporter",
+      "schedule": {
+        "cron": "0 8 * * *"
+      },
+      "ticks": [
+        "2026-06-22T10:00:00+00:00",
+        "2026-06-22T10:01:00+00:00"
+      ],
+      "expected": {
+        "published_per_tick": [
+          1,
+          0
+        ],
+        "events": [
+          {
+            "alias": "$scheduled_1",
+            "type": "agent.reporter.scheduled",
+            "idempotency_key": "schedule:reporter:0 8 * * *:2026-06-22T08:00:00+00:00",
+            "caused_by": null,
+            "payload": {
+              "date": "2026-06-22",
+              "timestamp": "2026-06-22T08:00:00+00:00"
+            }
+          },
+          {
+            "alias": "$decision_1",
+            "type": "zeta.scheduler.tick.published",
+            "idempotency_key": "scheduler:published:reporter:0:0 8 * * *::2026-06-22T08:00:00+00:00",
+            "caused_by": "$scheduled_1",
+            "payload": {
+              "agent": "reporter",
+              "schedule_index": 0,
+              "event_type": "agent.reporter.scheduled",
+              "cron": "0 8 * * *",
+              "timezone": null,
+              "scheduled_at": "2026-06-22T08:00:00+00:00",
+              "observed_at": "2026-06-22T10:00:00+00:00",
+              "next_at": "2026-06-23T08:00:00+00:00",
+              "status": "published",
+              "reason": "same-day backfill",
+              "published_event_id": "$scheduled_1"
+            }
+          },
+          {
+            "alias": "$decision_2",
+            "type": "zeta.scheduler.tick.skipped",
+            "idempotency_key": "scheduler:skipped:reporter:0:0 8 * * *::2026-06-22T08:00:00+00:00",
+            "caused_by": "$scheduled_1",
+            "payload": {
+              "agent": "reporter",
+              "schedule_index": 0,
+              "event_type": "agent.reporter.scheduled",
+              "cron": "0 8 * * *",
+              "timezone": null,
+              "scheduled_at": "2026-06-22T08:00:00+00:00",
+              "observed_at": "2026-06-22T10:01:00+00:00",
+              "next_at": "2026-06-23T08:00:00+00:00",
+              "status": "skipped",
+              "reason": "already published",
+              "published_event_id": "$scheduled_1"
+            }
+          }
+        ],
+        "read_model": [
+          {
+            "agent": "reporter",
+            "cron": "0 8 * * *",
+            "timezone": null,
+            "status": "skipped",
+            "last_published_at": "2026-06-22T08:00:00+00:00",
+            "next_at": "2026-06-23T08:00:00+00:00",
+            "reason": "already published"
+          }
+        ]
+      }
+    },
+    {
+      "name": "default_prior_day_occurrence_is_missed",
+      "agent_id": "reporter",
+      "schedule": {
+        "cron": "0 8 * * *"
+      },
+      "ticks": [
+        "2026-06-21T10:00:00+00:00",
+        "2026-06-23T07:00:00+00:00"
+      ],
+      "expected": {
+        "published_per_tick": [
+          1,
+          0
+        ],
+        "events": [
+          {
+            "alias": "$scheduled_1",
+            "type": "agent.reporter.scheduled",
+            "idempotency_key": "schedule:reporter:0 8 * * *:2026-06-21T08:00:00+00:00",
+            "caused_by": null,
+            "payload": {
+              "date": "2026-06-21",
+              "timestamp": "2026-06-21T08:00:00+00:00"
+            }
+          },
+          {
+            "alias": "$decision_1",
+            "type": "zeta.scheduler.tick.published",
+            "idempotency_key": "scheduler:published:reporter:0:0 8 * * *::2026-06-21T08:00:00+00:00",
+            "caused_by": "$scheduled_1",
+            "payload": {
+              "agent": "reporter",
+              "schedule_index": 0,
+              "event_type": "agent.reporter.scheduled",
+              "cron": "0 8 * * *",
+              "timezone": null,
+              "scheduled_at": "2026-06-21T08:00:00+00:00",
+              "observed_at": "2026-06-21T10:00:00+00:00",
+              "next_at": "2026-06-22T08:00:00+00:00",
+              "status": "published",
+              "reason": "same-day backfill",
+              "published_event_id": "$scheduled_1"
+            }
+          },
+          {
+            "alias": "$decision_2",
+            "type": "zeta.scheduler.tick.missed",
+            "idempotency_key": "scheduler:missed:reporter:0:0 8 * * *::2026-06-22T08:00:00+00:00",
+            "caused_by": null,
+            "payload": {
+              "agent": "reporter",
+              "schedule_index": 0,
+              "event_type": "agent.reporter.scheduled",
+              "cron": "0 8 * * *",
+              "timezone": null,
+              "scheduled_at": "2026-06-22T08:00:00+00:00",
+              "observed_at": "2026-06-23T07:00:00+00:00",
+              "next_at": "2026-06-23T08:00:00+00:00",
+              "status": "missed",
+              "reason": "previous-day tick not backfilled",
+              "published_event_id": null
+            }
+          }
+        ],
+        "read_model": [
+          {
+            "agent": "reporter",
+            "cron": "0 8 * * *",
+            "timezone": null,
+            "status": "missed",
+            "last_published_at": "2026-06-21T08:00:00+00:00",
+            "next_at": "2026-06-23T08:00:00+00:00",
+            "reason": "previous-day tick not backfilled"
+          }
+        ]
+      }
+    },
+    {
+      "name": "latest_catchup_respects_activation_boundary",
+      "agent_id": "reporter",
+      "schedule": {
+        "cron": "0 18 * * 0",
+        "timezone": "UTC",
+        "catchup": "latest"
+      },
+      "ticks": [
+        "2026-06-19T12:00:00+00:00",
+        "2026-06-22T09:00:00+00:00",
+        "2026-06-22T10:00:00+00:00"
+      ],
+      "expected": {
+        "published_per_tick": [
+          0,
+          1,
+          0
+        ],
+        "events": [
+          {
+            "alias": "$activation",
+            "type": "zeta.scheduler.tick.activated",
+            "idempotency_key": "scheduler:activated:reporter:0:0 18 * * 0:UTC:latest",
+            "caused_by": null,
+            "payload": {
+              "agent": "reporter",
+              "schedule_index": 0,
+              "event_type": "agent.reporter.scheduled",
+              "cron": "0 18 * * 0",
+              "timezone": "UTC",
+              "catchup": "latest",
+              "observed_at": "2026-06-19T12:00:00+00:00",
+              "status": "activated",
+              "reason": "schedule first observed"
+            }
+          },
+          {
+            "alias": "$decision_1",
+            "type": "zeta.scheduler.tick.missed",
+            "idempotency_key": "scheduler:missed:reporter:0:0 18 * * 0:UTC:2026-06-14T18:00:00+00:00",
+            "caused_by": null,
+            "payload": {
+              "agent": "reporter",
+              "schedule_index": 0,
+              "event_type": "agent.reporter.scheduled",
+              "cron": "0 18 * * 0",
+              "timezone": "UTC",
+              "scheduled_at": "2026-06-14T18:00:00+00:00",
+              "observed_at": "2026-06-19T12:00:00+00:00",
+              "next_at": "2026-06-21T18:00:00+00:00",
+              "status": "missed",
+              "reason": "previous-day tick not backfilled",
+              "published_event_id": null
+            }
+          },
+          {
+            "alias": "$scheduled_1",
+            "type": "agent.reporter.scheduled",
+            "idempotency_key": "schedule:reporter:0 18 * * 0:2026-06-21T18:00:00+00:00",
+            "caused_by": null,
+            "payload": {
+              "date": "2026-06-21",
+              "timestamp": "2026-06-21T18:00:00+00:00"
+            }
+          },
+          {
+            "alias": "$decision_2",
+            "type": "zeta.scheduler.tick.published",
+            "idempotency_key": "scheduler:published:reporter:0:0 18 * * 0:UTC:2026-06-21T18:00:00+00:00",
+            "caused_by": "$scheduled_1",
+            "payload": {
+              "agent": "reporter",
+              "schedule_index": 0,
+              "event_type": "agent.reporter.scheduled",
+              "cron": "0 18 * * 0",
+              "timezone": "UTC",
+              "scheduled_at": "2026-06-21T18:00:00+00:00",
+              "observed_at": "2026-06-22T09:00:00+00:00",
+              "next_at": "2026-06-28T18:00:00+00:00",
+              "status": "published",
+              "reason": "latest catch-up",
+              "published_event_id": "$scheduled_1"
+            }
+          },
+          {
+            "alias": "$decision_3",
+            "type": "zeta.scheduler.tick.skipped",
+            "idempotency_key": "scheduler:skipped:reporter:0:0 18 * * 0:UTC:2026-06-21T18:00:00+00:00",
+            "caused_by": "$scheduled_1",
+            "payload": {
+              "agent": "reporter",
+              "schedule_index": 0,
+              "event_type": "agent.reporter.scheduled",
+              "cron": "0 18 * * 0",
+              "timezone": "UTC",
+              "scheduled_at": "2026-06-21T18:00:00+00:00",
+              "observed_at": "2026-06-22T10:00:00+00:00",
+              "next_at": "2026-06-28T18:00:00+00:00",
+              "status": "skipped",
+              "reason": "already published",
+              "published_event_id": "$scheduled_1"
+            }
+          }
+        ],
+        "read_model": [
+          {
+            "agent": "reporter",
+            "cron": "0 18 * * 0",
+            "timezone": "UTC",
+            "status": "skipped",
+            "last_published_at": "2026-06-21T18:00:00+00:00",
+            "next_at": "2026-06-28T18:00:00+00:00",
+            "reason": "already published"
+          }
+        ]
+      }
+    },
+    {
+      "name": "named_timezone_uses_local_occurrence",
+      "agent_id": "reporter",
+      "schedule": {
+        "cron": "0 7 * * *",
+        "timezone": "America/Denver"
+      },
+      "ticks": [
+        "2026-08-09T13:42:00+00:00",
+        "2026-08-11T12:00:00+00:00"
+      ],
+      "expected": {
+        "published_per_tick": [
+          1,
+          0
+        ],
+        "events": [
+          {
+            "alias": "$scheduled_1",
+            "type": "agent.reporter.scheduled",
+            "idempotency_key": "schedule:reporter:0 7 * * *:2026-08-09T07:00:00-06:00",
+            "caused_by": null,
+            "payload": {
+              "date": "2026-08-09",
+              "timestamp": "2026-08-09T07:00:00-06:00"
+            }
+          },
+          {
+            "alias": "$decision_1",
+            "type": "zeta.scheduler.tick.published",
+            "idempotency_key": "scheduler:published:reporter:0:0 7 * * *:America/Denver:2026-08-09T07:00:00-06:00",
+            "caused_by": "$scheduled_1",
+            "payload": {
+              "agent": "reporter",
+              "schedule_index": 0,
+              "event_type": "agent.reporter.scheduled",
+              "cron": "0 7 * * *",
+              "timezone": "America/Denver",
+              "scheduled_at": "2026-08-09T07:00:00-06:00",
+              "observed_at": "2026-08-09T07:42:00-06:00",
+              "next_at": "2026-08-10T07:00:00-06:00",
+              "status": "published",
+              "reason": "same-day backfill",
+              "published_event_id": "$scheduled_1"
+            }
+          },
+          {
+            "alias": "$decision_2",
+            "type": "zeta.scheduler.tick.missed",
+            "idempotency_key": "scheduler:missed:reporter:0:0 7 * * *:America/Denver:2026-08-10T07:00:00-06:00",
+            "caused_by": null,
+            "payload": {
+              "agent": "reporter",
+              "schedule_index": 0,
+              "event_type": "agent.reporter.scheduled",
+              "cron": "0 7 * * *",
+              "timezone": "America/Denver",
+              "scheduled_at": "2026-08-10T07:00:00-06:00",
+              "observed_at": "2026-08-11T12:00:00+00:00",
+              "next_at": "2026-08-11T07:00:00-06:00",
+              "status": "missed",
+              "reason": "previous-day tick not backfilled",
+              "published_event_id": null
+            }
+          }
+        ],
+        "read_model": [
+          {
+            "agent": "reporter",
+            "cron": "0 7 * * *",
+            "timezone": "America/Denver",
+            "status": "missed",
+            "last_published_at": "2026-08-09T07:00:00-06:00",
+            "next_at": "2026-08-11T07:00:00-06:00",
+            "reason": "previous-day tick not backfilled"
+          }
+        ]
+      }
+    },
+    {
+      "name": "disabled_schedule_has_no_runtime_state",
+      "agent_id": "reporter",
+      "enabled": false,
+      "schedule": {
+        "cron": "* * * * *",
+        "timezone": "UTC",
+        "catchup": "latest"
+      },
+      "ticks": [
+        "2026-08-12T10:05:30+00:00"
+      ],
+      "expected": {
+        "published_per_tick": [
+          0
+        ],
+        "events": [],
+        "read_model": []
+      }
+    },
+    {
+      "name": "future_schedule_status_is_pending",
+      "agent_id": "reporter",
+      "schedule": {
+        "cron": "0 8 * * *"
+      },
+      "ticks": [
+        "2026-06-22T07:30:00+00:00"
+      ],
+      "expected": {
+        "published_per_tick": [
+          0
+        ],
+        "events": [],
+        "read_model": [
+          {
+            "agent": "reporter",
+            "cron": "0 8 * * *",
+            "timezone": null,
+            "status": "pending",
+            "last_published_at": null,
+            "next_at": "2026-06-22T08:00:00+00:00",
+            "reason": "next tick is in the future"
+          }
+        ]
+      }
+    },
+    {
+      "name": "europe_paris_spring_gap_moves_to_first_valid_minute",
+      "agent_id": "reporter",
+      "schedule": {
+        "cron": "30 2 * * *",
+        "timezone": "Europe/Paris"
+      },
+      "ticks": [
+        "2026-03-29T01:00:00+00:00"
+      ],
+      "expected": {
+        "published_per_tick": [
+          1
+        ],
+        "events": [
+          {
+            "alias": "$scheduled_1",
+            "type": "agent.reporter.scheduled",
+            "idempotency_key": "schedule:reporter:30 2 * * *:2026-03-29T03:00:00+02:00",
+            "caused_by": null,
+            "payload": {
+              "date": "2026-03-29",
+              "timestamp": "2026-03-29T03:00:00+02:00"
+            }
+          },
+          {
+            "alias": "$decision_1",
+            "type": "zeta.scheduler.tick.published",
+            "idempotency_key": "scheduler:published:reporter:0:30 2 * * *:Europe/Paris:2026-03-29T03:00:00+02:00",
+            "caused_by": "$scheduled_1",
+            "payload": {
+              "agent": "reporter",
+              "schedule_index": 0,
+              "event_type": "agent.reporter.scheduled",
+              "cron": "30 2 * * *",
+              "timezone": "Europe/Paris",
+              "scheduled_at": "2026-03-29T03:00:00+02:00",
+              "observed_at": "2026-03-29T03:00:00+02:00",
+              "next_at": "2026-03-30T02:30:00+02:00",
+              "status": "published",
+              "reason": "due now",
+              "published_event_id": "$scheduled_1"
+            }
+          }
+        ],
+        "read_model": [
+          {
+            "agent": "reporter",
+            "cron": "30 2 * * *",
+            "timezone": "Europe/Paris",
+            "status": "published",
+            "last_published_at": "2026-03-29T03:00:00+02:00",
+            "next_at": "2026-03-30T02:30:00+02:00",
+            "reason": "due now"
+          }
+        ]
+      }
+    },
+    {
+      "name": "europe_paris_fall_fold_publishes_both_occurrences",
+      "agent_id": "reporter",
+      "schedule": {
+        "cron": "30 2 * * *",
+        "timezone": "Europe/Paris"
+      },
+      "ticks": [
+        "2026-10-25T00:45:00+00:00",
+        "2026-10-25T01:45:00+00:00"
+      ],
+      "expected": {
+        "published_per_tick": [
+          1,
+          1
+        ],
+        "events": [
+          {
+            "alias": "$scheduled_1",
+            "type": "agent.reporter.scheduled",
+            "idempotency_key": "schedule:reporter:30 2 * * *:2026-10-25T02:30:00+02:00",
+            "caused_by": null,
+            "payload": {
+              "date": "2026-10-25",
+              "timestamp": "2026-10-25T02:30:00+02:00"
+            }
+          },
+          {
+            "alias": "$decision_1",
+            "type": "zeta.scheduler.tick.published",
+            "idempotency_key": "scheduler:published:reporter:0:30 2 * * *:Europe/Paris:2026-10-25T02:30:00+02:00",
+            "caused_by": "$scheduled_1",
+            "payload": {
+              "agent": "reporter",
+              "schedule_index": 0,
+              "event_type": "agent.reporter.scheduled",
+              "cron": "30 2 * * *",
+              "timezone": "Europe/Paris",
+              "scheduled_at": "2026-10-25T02:30:00+02:00",
+              "observed_at": "2026-10-25T02:45:00+02:00",
+              "next_at": "2026-10-25T02:30:00+01:00",
+              "status": "published",
+              "reason": "same-day backfill",
+              "published_event_id": "$scheduled_1"
+            }
+          },
+          {
+            "alias": "$scheduled_2",
+            "type": "agent.reporter.scheduled",
+            "idempotency_key": "schedule:reporter:30 2 * * *:2026-10-25T02:30:00+01:00",
+            "caused_by": null,
+            "payload": {
+              "date": "2026-10-25",
+              "timestamp": "2026-10-25T02:30:00+01:00"
+            }
+          },
+          {
+            "alias": "$decision_2",
+            "type": "zeta.scheduler.tick.published",
+            "idempotency_key": "scheduler:published:reporter:0:30 2 * * *:Europe/Paris:2026-10-25T02:30:00+01:00",
+            "caused_by": "$scheduled_2",
+            "payload": {
+              "agent": "reporter",
+              "schedule_index": 0,
+              "event_type": "agent.reporter.scheduled",
+              "cron": "30 2 * * *",
+              "timezone": "Europe/Paris",
+              "scheduled_at": "2026-10-25T02:30:00+01:00",
+              "observed_at": "2026-10-25T02:45:00+01:00",
+              "next_at": "2026-10-26T02:30:00+01:00",
+              "status": "published",
+              "reason": "same-day backfill",
+              "published_event_id": "$scheduled_2"
+            }
+          }
+        ],
+        "read_model": [
+          {
+            "agent": "reporter",
+            "cron": "30 2 * * *",
+            "timezone": "Europe/Paris",
+            "status": "published",
+            "last_published_at": "2026-10-25T02:30:00+01:00",
+            "next_at": "2026-10-26T02:30:00+01:00",
+            "reason": "same-day backfill"
+          }
+        ]
+      }
     }
   ]
 }

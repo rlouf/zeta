@@ -1,12 +1,15 @@
+use std::collections::{BTreeMap, VecDeque};
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Barrier, Mutex};
+use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde_json::{json, Map, Value};
+use tempfile::tempdir;
 use zeta::{
     attempt_completion, prepare_agent, CallbackDraftRecorder, CallbackObserver, CancellationToken,
     CompletionHandoffErrorKind, ExecutorSelection, InvocationInputs, PrepareAgentErrorKind,
-    SystemClock, UuidIdSource,
+    ScheduleStatus, Scheduler, SchedulerErrorKind, SystemClock, UuidIdSource,
 };
 use zeta_agent::{
     AbortReason, AbortSignal, AgentErrorKind, AgentInvocation, AgentObserver, AgentProposal,
@@ -24,7 +27,7 @@ use zeta_dispatch::{
     AttemptCompletionDisposition, AttemptControl, ClaimToken, Dispatch, EventPattern,
     QueueItemStatus, Route, RuntimeEventIdentity, SessionRule, WaitStatus,
 };
-use zeta_journal::{DraftEvent, Event};
+use zeta_journal::{DraftEvent, Event, EventFilter};
 
 fn draft() -> DraftEvent {
     DraftEvent {
@@ -126,6 +129,117 @@ fn manifest_pair(
     let execution = execution_manifest(&project, &project_manifest.id, "worker")
         .expect("the execution manifest must build");
     (project_manifest, execution)
+}
+
+fn scheduled_manifest(declarations: &str) -> ProjectManifest {
+    let (project, _execution) = manifest_pair(declarations, EventRegistry::new(), Vec::new(), None);
+    project
+}
+
+struct ScriptedIds {
+    values: VecDeque<String>,
+}
+
+impl ScriptedIds {
+    fn new(values: &[&str]) -> Self {
+        let mut ids = VecDeque::new();
+        for value in values {
+            ids.push_back((*value).to_owned());
+        }
+        Self { values: ids }
+    }
+}
+
+impl IdSource for ScriptedIds {
+    fn next_id(&mut self) -> Result<String, zeta_agent::AgentError> {
+        let Some(id) = self.values.pop_front() else {
+            return Err(zeta_agent::AgentError::identity(
+                "the scripted scheduler identity source is exhausted",
+            ));
+        };
+        Ok(id)
+    }
+}
+
+#[derive(Default)]
+struct CountingIds {
+    next: u64,
+}
+
+impl IdSource for CountingIds {
+    fn next_id(&mut self) -> Result<String, zeta_agent::AgentError> {
+        self.next += 1;
+        Ok(format!("scheduler-event-{}", self.next))
+    }
+}
+
+fn scheduling_vector_manifest(case: &Value) -> ProjectManifest {
+    let agent = case["agent_id"]
+        .as_str()
+        .expect("the vector agent id must be a string");
+    let cron = case["schedule"]["cron"]
+        .as_str()
+        .expect("the vector cron must be a string");
+    let enabled = case.get("enabled").and_then(Value::as_bool).unwrap_or(true);
+    let mut schedule = format!(
+        "enabled: {enabled}\nschedules:\n  - cron: {}\n",
+        serde_json::to_string(cron).expect("the vector cron must serialize")
+    );
+    if let Some(timezone) = case["schedule"].get("timezone").and_then(Value::as_str) {
+        schedule.push_str(&format!(
+            "    timezone: {}\n",
+            serde_json::to_string(timezone).expect("the vector timezone must serialize")
+        ));
+    }
+    if let Some(catchup) = case["schedule"].get("catchup").and_then(Value::as_str) {
+        schedule.push_str(&format!(
+            "    catchup: {}\n",
+            serde_json::to_string(catchup).expect("the vector catch-up value must serialize")
+        ));
+    }
+    let source = format!(
+        "---\nname: Reporter\ndescription: Reports on schedule.\nexecutor:\n  provider: scripted\n  config: {{}}\n{schedule}---\nReport.\n"
+    );
+    let agent = parse_agent(agent, source.as_bytes()).expect("the vector agent must parse");
+    let project = compile_project(AgentProjectInput {
+        agents: vec![agent],
+        events: EventRegistry::new(),
+        skill_resources: Vec::new(),
+        skill_specs: Vec::new(),
+        connectors: Vec::new(),
+        capabilities: Vec::new(),
+        executor_providers: vec![ExecutorProviderSpec {
+            id: "scripted".to_owned(),
+            implementation: implementation(2),
+        }],
+        model: None,
+        runtime_fingerprint: implementation(1),
+    })
+    .expect("the vector project must compile");
+    project_manifest(&project).expect("the vector project manifest must build")
+}
+
+fn normalize_scheduler_aliases(value: &mut Value, aliases: &BTreeMap<String, String>) {
+    match value {
+        Value::Null => {}
+        Value::Bool(_value) => {}
+        Value::Number(_value) => {}
+        Value::String(value) => {
+            if let Some(alias) = aliases.get(value) {
+                *value = alias.clone();
+            }
+        }
+        Value::Array(values) => {
+            for value in values {
+                normalize_scheduler_aliases(value, aliases);
+            }
+        }
+        Value::Object(values) => {
+            for value in values.values_mut() {
+                normalize_scheduler_aliases(value, aliases);
+            }
+        }
+    }
 }
 
 fn invocation_inputs(project_directory: PathBuf) -> InvocationInputs {
@@ -1018,4 +1132,493 @@ fn invocation_rejects_a_non_utf8_resolved_directory() {
     };
 
     assert_eq!(error.kind(), PrepareAgentErrorKind::NonUtf8Directory);
+}
+
+#[test]
+fn scheduler_rejects_invalid_calendar_declarations_before_writing() {
+    let cases = [
+        (
+            "schedules:\n  - cron: '* * * * * *'\n    timezone: UTC\n",
+            SchedulerErrorKind::InvalidCron,
+            "* * * * * *",
+        ),
+        (
+            "schedules:\n  - cron: '61 * * * *'\n    timezone: UTC\n",
+            SchedulerErrorKind::InvalidCron,
+            "61 * * * *",
+        ),
+        (
+            "schedules:\n  - cron: '* * * * *'\n    timezone: Mars/Olympus\n",
+            SchedulerErrorKind::UnknownTimezone,
+            "Mars/Olympus",
+        ),
+    ];
+
+    for (declarations, expected_kind, expected_detail) in cases {
+        let manifest = scheduled_manifest(declarations);
+        let error = Scheduler::from_project(&manifest)
+            .expect_err("the invalid calendar declaration must fail before a tick");
+
+        assert_eq!(error.kind(), expected_kind);
+        assert_eq!(error.reason(), expected_kind.reason());
+        assert!(error.detail().contains(expected_detail));
+    }
+}
+
+#[test]
+fn scheduler_emits_the_current_utc_minute_and_exact_audit_fact() {
+    let manifest = scheduled_manifest("schedules:\n  - cron: '* * * * *'\n    timezone: UTC\n");
+    let scheduler = Scheduler::from_project(&manifest).expect("the schedule must compile");
+    let mut dispatch = Dispatch::open_in_memory().expect("the journal must open");
+    let mut ids = ScriptedIds::new(&["scheduled-current", "decision-current"]);
+    let now_ms = 1_786_615_633_000;
+
+    let requested = scheduler
+        .tick(&mut dispatch, now_ms, &mut ids)
+        .expect("the current minute must tick");
+
+    assert_eq!(requested.len(), 1);
+    let occurrence = &requested[0];
+    assert_eq!(occurrence.id, "scheduled-current");
+    assert_eq!(occurrence.event_type, "agent.worker.scheduled");
+    assert_eq!(occurrence.source, "zeta:scheduler");
+    assert_eq!(
+        occurrence.payload,
+        object(json!({
+            "date": "2026-08-13",
+            "timestamp": "2026-08-13T10:07:00+00:00",
+        }))
+    );
+    assert_eq!(
+        occurrence.idempotency_key.as_deref(),
+        Some("schedule:worker:* * * * *:2026-08-13T10:07:00+00:00")
+    );
+    assert_eq!(occurrence.caused_by, None);
+    assert_eq!(occurrence.timestamp_ms, now_ms);
+
+    let events = dispatch
+        .list_events(&EventFilter::default())
+        .expect("the scheduler facts must be readable");
+    assert_eq!(events.len(), 2);
+    let decision = &events[1];
+    assert_eq!(decision.id, "decision-current");
+    assert_eq!(decision.event_type, "zeta.scheduler.tick.published");
+    assert_eq!(decision.source, "zeta:scheduler");
+    assert_eq!(decision.caused_by.as_deref(), Some("scheduled-current"));
+    assert_eq!(
+        decision.idempotency_key.as_deref(),
+        Some("scheduler:published:worker:0:* * * * *:UTC:2026-08-13T10:07:00+00:00")
+    );
+    assert_eq!(
+        decision.payload,
+        object(json!({
+            "agent": "worker",
+            "schedule_index": 0,
+            "event_type": "agent.worker.scheduled",
+            "cron": "* * * * *",
+            "timezone": "UTC",
+            "scheduled_at": "2026-08-13T10:07:00+00:00",
+            "observed_at": "2026-08-13T10:07:13+00:00",
+            "next_at": "2026-08-13T10:08:00+00:00",
+            "status": "published",
+            "reason": "due now",
+            "published_event_id": "scheduled-current",
+        }))
+    );
+    assert_eq!(
+        dispatch
+            .unrouted_ingress_events()
+            .expect("unrouted ingress must remain discoverable"),
+        ["scheduled-current"]
+    );
+    assert_eq!(dispatch.list_queue_items().expect("queue items").len(), 1);
+}
+
+#[test]
+fn latest_schedule_activates_before_publishing() {
+    let manifest = scheduled_manifest(
+        "schedules:\n  - cron: '* * * * *'\n    timezone: UTC\n    catchup: latest\n",
+    );
+    let scheduler = Scheduler::from_project(&manifest).expect("the schedule must compile");
+    let mut dispatch = Dispatch::open_in_memory().expect("the journal must open");
+    let mut ids = ScriptedIds::new(&["activation-first", "scheduled-first", "decision-first"]);
+
+    let requested = scheduler
+        .tick(&mut dispatch, 1_786_615_530_000, &mut ids)
+        .expect("the latest schedule must tick");
+
+    assert_eq!(requested.len(), 1);
+    let events = dispatch
+        .list_events(&EventFilter::default())
+        .expect("the scheduler facts must be readable");
+    let mut event_types = Vec::new();
+    for event in &events {
+        event_types.push(event.event_type.as_str());
+    }
+    assert_eq!(
+        event_types,
+        [
+            "zeta.scheduler.tick.activated",
+            "agent.worker.scheduled",
+            "zeta.scheduler.tick.published",
+        ]
+    );
+    let activation = &events[0];
+    assert_eq!(
+        activation.idempotency_key.as_deref(),
+        Some("scheduler:activated:worker:0:* * * * *:UTC:latest")
+    );
+    assert_eq!(
+        activation.payload,
+        object(json!({
+            "agent": "worker",
+            "schedule_index": 0,
+            "event_type": "agent.worker.scheduled",
+            "cron": "* * * * *",
+            "timezone": "UTC",
+            "catchup": "latest",
+            "observed_at": "2026-08-13T10:05:30+00:00",
+            "status": "activated",
+            "reason": "schedule first observed",
+        }))
+    );
+}
+
+#[test]
+fn duplicate_scheduler_tick_records_one_skipped_decision() {
+    let manifest = scheduled_manifest("schedules:\n  - cron: '* * * * *'\n    timezone: UTC\n");
+    let scheduler = Scheduler::from_project(&manifest).expect("the schedule must compile");
+    let mut dispatch = Dispatch::open_in_memory().expect("the journal must open");
+    let mut ids = ScriptedIds::new(&[
+        "scheduled-first",
+        "published-first",
+        "scheduled-retry",
+        "skipped-retry",
+        "scheduled-later-retry",
+        "skipped-later-retry",
+    ]);
+    let now_ms = 1_786_615_633_000;
+
+    let first = scheduler
+        .tick(&mut dispatch, now_ms, &mut ids)
+        .expect("the first tick must publish");
+    let retry = scheduler
+        .tick(&mut dispatch, now_ms, &mut ids)
+        .expect("the retry must resolve its duplicate");
+    let later_retry = scheduler
+        .tick(&mut dispatch, now_ms, &mut ids)
+        .expect("the complete retry must remain idempotent");
+
+    assert_eq!(first.len(), 1);
+    assert!(retry.is_empty());
+    assert!(later_retry.is_empty());
+    let events = dispatch
+        .list_events(&EventFilter::default())
+        .expect("the scheduler facts must be readable");
+    assert_eq!(events.len(), 3);
+    assert_eq!(events[2].event_type, "zeta.scheduler.tick.skipped");
+    assert_eq!(events[2].caused_by.as_deref(), Some("scheduled-first"));
+    assert_eq!(
+        events[2].idempotency_key.as_deref(),
+        Some("scheduler:skipped:worker:0:* * * * *:UTC:2026-08-13T10:07:00+00:00")
+    );
+    assert_eq!(events[2].payload["status"], "skipped");
+    assert_eq!(events[2].payload["reason"], "already published");
+    assert_eq!(events[2].payload["published_event_id"], "scheduled-first");
+}
+
+#[test]
+fn two_scheduler_handles_resolve_one_occurrence_key() {
+    let manifest = scheduled_manifest("schedules:\n  - cron: '* * * * *'\n    timezone: UTC\n");
+    let scheduler = Scheduler::from_project(&manifest).expect("the schedule must compile");
+    let directory = tempdir().expect("the scheduler directory must exist");
+    let path = directory.path().join("scheduler-race.sqlite3");
+    drop(Dispatch::open(&path).expect("the shared journal must initialize"));
+    let barrier = Arc::new(Barrier::new(3));
+    let mut threads = Vec::new();
+    for number in 1..=2 {
+        let scheduler = scheduler.clone();
+        let path = path.clone();
+        let barrier = Arc::clone(&barrier);
+        threads.push(thread::spawn(move || {
+            let mut dispatch = Dispatch::open(path).expect("the scheduler handle must open");
+            let occurrence = format!("scheduled-race-{number}");
+            let decision = format!("decision-race-{number}");
+            let mut ids = ScriptedIds::new(&[&occurrence, &decision]);
+            barrier.wait();
+            scheduler
+                .tick(&mut dispatch, 1_786_615_633_000, &mut ids)
+                .expect("the concurrent tick must resolve")
+        }));
+    }
+    barrier.wait();
+    let mut published = 0;
+    for thread in threads {
+        published += thread
+            .join()
+            .expect("the concurrent scheduler must finish")
+            .len();
+    }
+
+    assert_eq!(published, 1);
+    let dispatch = Dispatch::open(&path).expect("the shared journal must reopen");
+    let events = dispatch
+        .list_events(&EventFilter::default())
+        .expect("the scheduler facts must be readable");
+    let occurrences: Vec<_> = events
+        .iter()
+        .filter(|event| event.event_type == "agent.worker.scheduled")
+        .collect();
+    let published_decisions: Vec<_> = events
+        .iter()
+        .filter(|event| event.event_type == "zeta.scheduler.tick.published")
+        .collect();
+    let skipped_decisions: Vec<_> = events
+        .iter()
+        .filter(|event| event.event_type == "zeta.scheduler.tick.skipped")
+        .collect();
+    assert_eq!(occurrences.len(), 1);
+    assert_eq!(published_decisions.len(), 1);
+    assert!(skipped_decisions.len() <= 1);
+    for decision in published_decisions.iter().chain(&skipped_decisions) {
+        assert_eq!(
+            decision.caused_by.as_deref(),
+            Some(occurrences[0].id.as_str())
+        );
+    }
+    assert_eq!(dispatch.list_queue_items().expect("queue items").len(), 1);
+}
+
+#[test]
+fn scheduler_reuses_a_retained_activation_after_interruption() {
+    let manifest = scheduled_manifest(
+        "schedules:\n  - cron: '* * * * *'\n    timezone: UTC\n    catchup: latest\n",
+    );
+    let scheduler = Scheduler::from_project(&manifest).expect("the schedule must compile");
+    let mut dispatch = Dispatch::open_in_memory().expect("the journal must open");
+    dispatch
+        .append_trusted_event(Event {
+            id: "activation-retained".to_owned(),
+            event_type: "zeta.scheduler.tick.activated".to_owned(),
+            source: "zeta:scheduler".to_owned(),
+            payload: object(json!({
+                "agent": "worker",
+                "schedule_index": 0,
+                "event_type": "agent.worker.scheduled",
+                "cron": "* * * * *",
+                "timezone": "UTC",
+                "catchup": "latest",
+                "observed_at": "2026-08-13T10:05:30+00:00",
+                "status": "activated",
+                "reason": "schedule first observed",
+            })),
+            idempotency_key: Some("scheduler:activated:worker:0:* * * * *:UTC:latest".to_owned()),
+            caused_by: None,
+            session_id: None,
+            run_id: None,
+            turn_id: None,
+            timestamp_ms: 1_786_615_530_000,
+            cursor: None,
+        })
+        .expect("the retained activation must be seeded");
+    let mut ids = ScriptedIds::new(&[
+        "activation-retry",
+        "scheduled-after-activation",
+        "decision-after-activation",
+    ]);
+
+    let requested = scheduler
+        .tick(&mut dispatch, 1_786_615_570_000, &mut ids)
+        .expect("the interrupted tick must resume");
+
+    assert_eq!(requested.len(), 1);
+    let events = dispatch
+        .list_events(&EventFilter::default())
+        .expect("the scheduler facts must be readable");
+    assert_eq!(events.len(), 3);
+    assert_eq!(events[0].id, "activation-retained");
+    assert_eq!(events[1].event_type, "agent.worker.scheduled");
+    assert_eq!(events[2].payload["status"], "published");
+}
+
+#[test]
+fn scheduler_repairs_an_occurrence_without_a_decision() {
+    let manifest = scheduled_manifest("schedules:\n  - cron: '* * * * *'\n    timezone: UTC\n");
+    let scheduler = Scheduler::from_project(&manifest).expect("the schedule must compile");
+    let mut dispatch = Dispatch::open_in_memory().expect("the journal must open");
+    dispatch
+        .ingest_event(Event {
+            id: "scheduled-retained".to_owned(),
+            event_type: "agent.worker.scheduled".to_owned(),
+            source: "zeta:scheduler".to_owned(),
+            payload: object(json!({
+                "date": "2026-08-13",
+                "timestamp": "2026-08-13T10:07:00+00:00",
+            })),
+            idempotency_key: Some("schedule:worker:* * * * *:2026-08-13T10:07:00+00:00".to_owned()),
+            caused_by: None,
+            session_id: None,
+            run_id: None,
+            turn_id: None,
+            timestamp_ms: 1_786_615_620_000,
+            cursor: None,
+        })
+        .expect("the retained occurrence must be seeded");
+    let mut ids = ScriptedIds::new(&["scheduled-retry", "decision-repair"]);
+
+    let requested = scheduler
+        .tick(&mut dispatch, 1_786_615_633_000, &mut ids)
+        .expect("the missing decision must be repaired");
+
+    assert!(requested.is_empty());
+    let events = dispatch
+        .list_events(&EventFilter::default())
+        .expect("the scheduler facts must be readable");
+    assert_eq!(events.len(), 2);
+    assert_eq!(events[1].id, "decision-repair");
+    assert_eq!(events[1].event_type, "zeta.scheduler.tick.published");
+    assert_eq!(events[1].caused_by.as_deref(), Some("scheduled-retained"));
+    assert_eq!(
+        events[1].payload["published_event_id"],
+        "scheduled-retained"
+    );
+}
+
+#[test]
+fn scheduler_status_is_derived_from_retained_tick_facts() {
+    let manifest = scheduled_manifest("schedules:\n  - cron: '* * * * *'\n    timezone: UTC\n");
+    let scheduler = Scheduler::from_project(&manifest).expect("the schedule must compile");
+    let mut dispatch = Dispatch::open_in_memory().expect("the journal must open");
+    let now_ms = 1_786_615_633_000;
+
+    let pending = scheduler
+        .status(&dispatch, now_ms)
+        .expect("pending status must be readable");
+    assert_eq!(
+        pending,
+        [ScheduleStatus {
+            agent: "worker".to_owned(),
+            cron: "* * * * *".to_owned(),
+            timezone: Some("UTC".to_owned()),
+            status: "pending".to_owned(),
+            last_published_at: None,
+            next_at: "2026-08-13T10:08:00+00:00".to_owned(),
+            reason: "next tick is in the future".to_owned(),
+        }]
+    );
+
+    let mut ids = ScriptedIds::new(&["scheduled-status", "decision-status"]);
+    scheduler
+        .tick(&mut dispatch, now_ms, &mut ids)
+        .expect("the current minute must publish");
+    let published = scheduler
+        .status(&dispatch, now_ms)
+        .expect("published status must be readable");
+
+    assert_eq!(
+        published,
+        [ScheduleStatus {
+            agent: "worker".to_owned(),
+            cron: "* * * * *".to_owned(),
+            timezone: Some("UTC".to_owned()),
+            status: "published".to_owned(),
+            last_published_at: Some("2026-08-13T10:07:00+00:00".to_owned()),
+            next_at: "2026-08-13T10:08:00+00:00".to_owned(),
+            reason: "due now".to_owned(),
+        }]
+    );
+}
+
+#[test]
+fn scheduler_runtime_vectors_match_the_python_ground_truth() {
+    let document: Value = serde_json::from_str(include_str!(
+        "../../../spec/vectors/scheduling/runtime.json"
+    ))
+    .expect("the scheduling runtime vector must be valid JSON");
+    assert_eq!(document["format"], "zeta-scheduling-runtime-v0");
+    let cases = document["recurring_schedules"]
+        .as_array()
+        .expect("the scheduling runtime cases must be an array");
+
+    for case in cases {
+        let name = case["name"]
+            .as_str()
+            .expect("the vector case name must be a string");
+        let manifest = scheduling_vector_manifest(case);
+        let scheduler = Scheduler::from_project(&manifest)
+            .unwrap_or_else(|error| panic!("scheduler vector {name:?} must compile: {error}"));
+        let mut dispatch = Dispatch::open_in_memory().expect("the vector journal must open");
+        let mut ids = CountingIds::default();
+        let ticks = case["ticks"]
+            .as_array()
+            .expect("the vector ticks must be an array");
+        let mut published_per_tick = Vec::new();
+        for tick in ticks {
+            let tick = tick
+                .as_str()
+                .expect("the vector tick must be an RFC 3339 string");
+            let tick = chrono::DateTime::parse_from_rfc3339(tick)
+                .expect("the vector tick must be valid RFC 3339");
+            let published = scheduler
+                .tick(&mut dispatch, tick.timestamp_millis(), &mut ids)
+                .unwrap_or_else(|error| panic!("scheduler vector {name:?} tick failed: {error}"));
+            published_per_tick.push(published.len());
+        }
+        assert_eq!(
+            serde_json::to_value(&published_per_tick).expect("the published counts must serialize"),
+            case["expected"]["published_per_tick"],
+            "scheduler vector {name:?} published counts diverged"
+        );
+
+        let events = dispatch
+            .list_events(&EventFilter::default())
+            .unwrap_or_else(|error| panic!("scheduler vector {name:?} journal failed: {error}"));
+        let expected_events = case["expected"]["events"]
+            .as_array()
+            .expect("the expected scheduler events must be an array");
+        assert_eq!(
+            events.len(),
+            expected_events.len(),
+            "scheduler vector {name:?} event count diverged"
+        );
+        let mut aliases = BTreeMap::new();
+        for (event, expected) in events.iter().zip(expected_events) {
+            let alias = expected["alias"]
+                .as_str()
+                .expect("the expected scheduler alias must be a string");
+            aliases.insert(event.id.clone(), alias.to_owned());
+        }
+        let mut contracts = Vec::new();
+        for (event, expected) in events.iter().zip(expected_events) {
+            let mut contract = json!({
+                "alias": expected["alias"],
+                "type": event.event_type,
+                "idempotency_key": event.idempotency_key,
+                "caused_by": event.caused_by,
+                "payload": event.payload,
+            });
+            normalize_scheduler_aliases(&mut contract, &aliases);
+            contracts.push(contract);
+        }
+        assert_eq!(
+            Value::Array(contracts),
+            case["expected"]["events"],
+            "scheduler vector {name:?} event contract diverged"
+        );
+
+        let tick = ticks
+            .last()
+            .and_then(Value::as_str)
+            .expect("the vector must have a final RFC 3339 tick");
+        let tick = chrono::DateTime::parse_from_rfc3339(tick)
+            .expect("the final vector tick must be valid RFC 3339");
+        let status = scheduler
+            .status(&dispatch, tick.timestamp_millis())
+            .unwrap_or_else(|error| panic!("scheduler vector {name:?} status failed: {error}"));
+        assert_eq!(
+            serde_json::to_value(status).expect("the scheduler status must serialize"),
+            case["expected"]["read_model"],
+            "scheduler vector {name:?} status diverged"
+        );
+    }
 }

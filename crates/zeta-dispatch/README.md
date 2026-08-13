@@ -86,7 +86,7 @@ and domain-separated hashing as the Rust agent. A started or ambiguous
 later attempt can dead-letter the item without repeating the external call.
 
 Recurring cron, timezone, catch-up, and scheduler audit facts remain an
-authoring/runner concern. A scheduler submits `agent.<slug>.scheduled` as
+application-host concern. A scheduler submits `agent.<slug>.scheduled` as
 ordinary application ingress, so routing, wait matching, idempotency, and
 recovery use the same Dispatch path as connector events. Dispatch does not
 parse calendar policy or maintain a recurring-schedule projection.

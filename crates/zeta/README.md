@@ -14,6 +14,7 @@ embed and test.
 
 - A supervised executor for installed capability providers that speak Zeta IPC.
 - A verified bridge from authored manifests to portable agent invocations.
+- A compiled recurring scheduler backed by durable Dispatch journal facts.
 - Conversion from verified project manifests to deterministic Dispatch routes.
 - Conversion from successful agent results to typed Dispatch completions.
 - Lifecycle timeouts and automatic process recycling after failures.
@@ -29,10 +30,32 @@ group on cancellation, timeout, exit, shutdown, or drop.
 between `zeta-authoring` and `zeta-dispatch`; those domain crates remain
 independent.
 
-Scheduler policy stays outside Dispatch. Authored `agent.<slug>.scheduled`
-occurrences enter through ordinary idempotent ingress and use the same routes
-as connector events, while future agent publications remain Dispatch-owned
-deferred publications.
+`Scheduler` compiles cron expressions and IANA timezones from a verified project
+before a tick writes anything. It owns activation, same-day backfill,
+`catchup: latest`, missed-tick evidence, DST behavior, and the scheduler status
+read model. Durable state is reconstructed from `zeta.scheduler.tick.*` journal
+facts. Selected `agent.<slug>.scheduled` occurrences enter Dispatch through
+ordinary idempotent ingress and use the same routes as connector events.
+Dispatch does not parse calendar policy; future agent publications remain its
+separate deferred-publication concern.
+
+The native crate currently exposes this host operation without a native worker
+loop. A future Rust `run` or `serve` lifecycle must construct `Scheduler` for
+the active project generation and call `tick` before deferred publications,
+wait timeouts, and queue claims, matching the existing Python worker order.
+
+```rust
+use zeta::Scheduler;
+
+fn fire_due(
+    project: &zeta_authoring::ProjectManifest,
+    dispatch: &mut zeta_dispatch::Dispatch,
+    now_ms: i64,
+    ids: &mut dyn zeta_agent::IdSource,
+) -> Result<Vec<zeta_journal::Event>, zeta::SchedulerError> {
+    Scheduler::from_project(project)?.tick(dispatch, now_ms, ids)
+}
+```
 
 `attempt_completion` is the corresponding composition point between
 `zeta-agent` and `zeta-dispatch`. It retains durable answer, event, and usage

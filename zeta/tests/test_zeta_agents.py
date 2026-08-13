@@ -981,10 +981,9 @@ Ignore.
 def test_zeta_agent_spec_adds_synthetic_schedule_event(
     tmp_path: Path,
 ) -> None:
-    spec = zeta_agents.load_spec(
-        _write_spec(
-            tmp_path / "scheduled.md",
-            """---
+    spec_path = _write_spec(
+        tmp_path / "scheduled.md",
+        """---
 name: Scheduled
 description: Runs on a schedule.
 schedules:
@@ -992,7 +991,11 @@ schedules:
 ---
 Summarize the repo.
 """,
-        )
+    )
+    spec = zeta_agents.load_spec(spec_path)
+    project = zeta_agents.load_agent_project(
+        tmp_path,
+        registry=EventConnectorRegistry(),
     )
 
     assert spec.accepts == ("agent.scheduled.scheduled",)
@@ -1004,6 +1007,15 @@ Summarize the repo.
         ),
     )
     assert zeta_agents.scheduled_event_type("scheduled") == "agent.scheduled.scheduled"
+    assert project.events.schema("agent.scheduled.scheduled") == {
+        "type": "object",
+        "properties": {
+            "date": {"type": "string"},
+            "timestamp": {"type": "string"},
+        },
+        "required": ["date", "timestamp"],
+        "additionalProperties": False,
+    }
 
 
 def test_zeta_agent_spec_parses_latest_schedule_catchup(tmp_path: Path) -> None:

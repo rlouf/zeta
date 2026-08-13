@@ -1671,13 +1671,32 @@ def test_dispatch_deferred_publication_script_publishes_exactly_once(
     store.close()
 
 
-def test_scheduler_runtime_vector_records_activation_and_decision() -> None:
+def _scheduling_runtime_cases() -> list[dict]:
     document = json.loads(SCHEDULING_RUNTIME_VECTORS_PATH.read_text(encoding="utf-8"))
-    case = next(
-        case
-        for case in document["recurring_schedules"]
-        if case["name"] == "latest_catchup_activates_before_publishing"
-    )
+    return document["recurring_schedules"]
+
+
+def test_scheduler_runtime_vectors_cover_calendar_and_policy_edges() -> None:
+    names = {case["name"] for case in _scheduling_runtime_cases()}
+
+    assert {
+        "default_same_day_backfill_skips_duplicate",
+        "default_prior_day_occurrence_is_missed",
+        "latest_catchup_respects_activation_boundary",
+        "named_timezone_uses_local_occurrence",
+        "disabled_schedule_has_no_runtime_state",
+        "future_schedule_status_is_pending",
+        "europe_paris_spring_gap_moves_to_first_valid_minute",
+        "europe_paris_fall_fold_publishes_both_occurrences",
+    } <= names
+
+
+@pytest.mark.parametrize(
+    "case",
+    _scheduling_runtime_cases(),
+    ids=lambda case: case["name"],
+)
+def test_scheduler_runtime_vectors_match_python_ground_truth(case: dict) -> None:
     event_store = MemoryEventStore()
     schedule = ScheduleEntry(**case["schedule"])
     spec = AgentSpec(
@@ -1687,22 +1706,23 @@ def test_scheduler_runtime_vector_records_activation_and_decision() -> None:
         instructions="Report.",
         path=Path("agents/reporter.md"),
         content_address="b3:fixture",
+        enabled=case.get("enabled", True),
         schedules=(schedule,),
     )
 
-    first = request_due_schedules(
-        event_store,
-        (spec,),
-        now=datetime.fromisoformat(case["ticks"][0]),
-    )
-    second = request_due_schedules(
-        event_store,
-        (spec,),
-        now=datetime.fromisoformat(case["ticks"][1]),
-    )
+    published_per_tick = [
+        len(
+            request_due_schedules(
+                event_store,
+                (spec,),
+                now=datetime.fromisoformat(tick),
+            )
+        )
+        for tick in case["ticks"]
+    ]
     journal = event_store.list_events(Filter())
 
-    assert [len(first), len(second)] == case["expected"]["published_per_tick"]
+    assert published_per_tick == case["expected"]["published_per_tick"]
     assert (
         _normalize_event_contract(journal, case["expected"]["events"])
         == case["expected"]["events"]
@@ -1712,7 +1732,7 @@ def test_scheduler_runtime_vector_records_activation_and_decision() -> None:
         for row in schedule_status(
             event_store,
             (spec,),
-            now=datetime.fromisoformat(case["ticks"][1]),
+            now=datetime.fromisoformat(case["ticks"][-1]),
         )
     ] == case["expected"]["read_model"]
 

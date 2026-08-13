@@ -11,7 +11,7 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::task::JoinHandle;
 use zeta::{
     prepare_agent, CallbackDraftRecorder, CallbackObserver, CancellationToken, ExecutorSelection,
-    InvocationInputs, ProcessExecutor, ProcessLaunch, SystemClock, UuidIdSource,
+    InvocationInputs, ProcessExecutor, ProcessLaunch, Scheduler, SystemClock, UuidIdSource,
 };
 use zeta_agent::{
     native_capabilities, resolve_capabilities, AgentInvocation, AgentRunResult, AgentRunner,
@@ -25,7 +25,7 @@ use zeta_authoring::{
     ImplementationFingerprint, ModelSelectionSpec,
 };
 use zeta_dispatch::{route_event, Dispatch, QueueItemStatus, RuntimeEventIdentity};
-use zeta_journal::{DraftEvent, Event};
+use zeta_journal::{DraftEvent, Event, EventFilter};
 
 async fn scripted_chat_server(responses: Vec<String>) -> (String, JoinHandle<Vec<Value>>) {
     let listener = TcpListener::bind("127.0.0.1:0")
@@ -776,38 +776,62 @@ fn authored_schedule_occurrence_uses_ordinary_idempotent_dispatch_ingress() {
     .unwrap();
     let manifest = project_manifest(&project).unwrap();
     let routes = zeta::routes_from_project(&manifest).unwrap();
-    let occurrence = Event {
-        id: "schedule-digest-2026-08-13".to_owned(),
-        event_type: "agent.digest.scheduled".to_owned(),
-        source: "zeta:scheduler".to_owned(),
-        payload: object(json!({
+    let scheduler = Scheduler::from_project(&manifest).unwrap();
+    let mut dispatch = Dispatch::open_in_memory().unwrap();
+    let mut scheduler_ids = UuidIdSource::new("scheduler");
+    let now_ms = 1_786_600_830_000;
+
+    let requested = scheduler
+        .tick(&mut dispatch, now_ms, &mut scheduler_ids)
+        .unwrap();
+
+    assert_eq!(requested.len(), 1);
+    let occurrence = &requested[0];
+    assert_eq!(occurrence.event_type, "agent.digest.scheduled");
+    assert_eq!(
+        occurrence.payload,
+        object(json!({
             "date": "2026-08-13",
             "timestamp": "2026-08-13T08:00:00+02:00",
-        })),
-        idempotency_key: Some("schedule:digest:0 8 * * *:2026-08-13T08:00:00+02:00".to_owned()),
-        caused_by: None,
-        session_id: None,
-        run_id: None,
-        turn_id: None,
-        timestamp_ms: 1_755_066_000_000,
-        cursor: None,
-    };
-    let mut dispatch = Dispatch::open_in_memory().unwrap();
+        }))
+    );
+    assert_eq!(
+        occurrence.idempotency_key.as_deref(),
+        Some("schedule:digest:0 8 * * *:2026-08-13T08:00:00+02:00")
+    );
+    assert_eq!(
+        dispatch.unrouted_ingress_events().unwrap(),
+        [occurrence.id.as_str()]
+    );
+    let queue_items = dispatch.list_queue_items().unwrap();
+    assert_eq!(queue_items.len(), 1);
+    assert_eq!(queue_items[0].target_agent(), "");
+    assert_eq!(queue_items[0].status(), QueueItemStatus::Pending);
+    assert_eq!(
+        dispatch
+            .list_events(&EventFilter {
+                event_type_prefix: Some("zeta.scheduler.tick.".to_owned()),
+                ..EventFilter::default()
+            })
+            .unwrap()
+            .len(),
+        1
+    );
 
-    let retained = dispatch.ingest_event(occurrence.clone()).unwrap();
     let routed = dispatch
         .route_ingress_event(
-            &retained.event.id,
+            &occurrence.id,
             &routes,
-            &[RuntimeEventIdentity::new("scheduled-digest-available", 1_755_066_000_001).unwrap()],
+            &[RuntimeEventIdentity::new("scheduled-digest-available", now_ms + 1).unwrap()],
         )
         .unwrap();
-    let retried = dispatch.ingest_event(occurrence).unwrap();
+    let retried = scheduler
+        .tick(&mut dispatch, now_ms, &mut scheduler_ids)
+        .unwrap();
 
-    assert!(retained.inserted);
-    assert!(!retried.inserted);
-    assert_eq!(retried.event.id, retained.event.id);
+    assert!(retried.is_empty());
     assert_eq!(routed.events().len(), 1);
+    assert!(dispatch.unrouted_ingress_events().unwrap().is_empty());
     let queue_items = dispatch.list_queue_items().unwrap();
     assert_eq!(queue_items.len(), 1);
     assert_eq!(queue_items[0].target_agent(), "digest");

@@ -12,8 +12,8 @@ pub mod runtime_services;
 pub use process_executor::{ProcessExecutor, ProcessExecutorConfig, ProcessLaunch};
 pub use runtime_services::{
     prepare_agent, CallbackDraftRecorder, CallbackObserver, CancellationToken, ExecutorSelection,
-    InvocationInputs, PrepareAgentError, PrepareAgentErrorKind, PreparedAgent, SystemClock,
-    UuidIdSource,
+    InvocationInputs, PrepareAgentError, PrepareAgentErrorKind, PreparedAgent, ScheduleStatus,
+    Scheduler, SchedulerError, SchedulerErrorKind, SystemClock, UuidIdSource,
 };
 
 /// Classifies a failure while handing an agent result to Dispatch.

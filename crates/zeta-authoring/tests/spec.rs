@@ -822,7 +822,7 @@ fn event_registry_validates_schemas_and_merges_equal_declarations() {
 }
 
 #[test]
-fn event_registry_iteration_is_sorted_and_scheduled_events_have_empty_payloads() {
+fn event_registry_iteration_is_sorted_and_scheduled_events_describe_occurrences() {
     let mut events = EventRegistry::new();
     events.register("z.last", None).unwrap();
     events.register("a.first", None).unwrap();
@@ -837,6 +837,11 @@ fn event_registry_iteration_is_sorted_and_scheduled_events_have_empty_payloads()
         events.schema("agent.digest.scheduled"),
         Some(Some(&object(json!({
             "type": "object",
+            "properties": {
+                "date": {"type": "string"},
+                "timestamp": {"type": "string"},
+            },
+            "required": ["date", "timestamp"],
             "additionalProperties": false,
         }))))
     );
